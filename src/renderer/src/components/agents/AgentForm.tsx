@@ -56,9 +56,7 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
         return
       }
       
-      console.log('[AgentForm] Fetching providers from server:', serverUrl)
       const result = await agentConfigApi.getProviders(serverUrl)
-      console.log('[AgentForm] Providers result:', result)
       
       if (result && result.providers) {
         // Flatten all models from all providers
@@ -66,7 +64,6 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
         
         if (Array.isArray(result.providers) && result.providers.length > 0) {
           result.providers.forEach((provider: any) => {
-            console.log('[AgentForm] Processing provider:', provider)
             // Models can be either an array or an object with model IDs as keys
             if (provider.models) {
               if (Array.isArray(provider.models)) {
@@ -91,8 +88,6 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
             }
           })
         }
-        
-        console.log('[AgentForm] Total models found:', models.length)
         
         if (models.length > 0) {
           setAvailableModels(models)

@@ -417,15 +417,11 @@ export class AgentManager extends EventEmitter {
         return null
       }
 
-      console.log('[AgentManager] Fetching providers from:', baseUrl)
-
       const ocClient = OpenCodeSDK.createOpencodeClient({
         baseUrl
       })
 
       const result: any = await ocClient.config.providers()
-      
-      console.log('[AgentManager] Providers response:', result)
       
       if (result.error) {
         console.error('[AgentManager] Failed to get providers:', result.error)
