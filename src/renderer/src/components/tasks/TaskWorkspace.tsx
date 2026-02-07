@@ -37,9 +37,9 @@ export function TaskWorkspace({
       const existingSession = getSessionForTask(task.id)
       if (!existingSession) {
         // Auto-start session when agent is assigned
-        start(task.agent_id, task.id).then(() => {
+        start(task.agent_id, task.id).then((sessionId) => {
           addActiveSession({
-            sessionId: session.sessionId!,
+            sessionId,
             agentId: task.agent_id!,
             taskId: task.id,
             status: 'working'

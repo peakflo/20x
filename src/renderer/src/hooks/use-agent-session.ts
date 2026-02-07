@@ -20,7 +20,7 @@ interface UseAgentSessionResult {
   session: AgentSessionState
   isLoading: boolean
   error: string | null
-  start: (agentId: string, taskId: string) => Promise<void>
+  start: (agentId: string, taskId: string) => Promise<string>
   stop: () => Promise<void>
   sendMessage: (message: string) => Promise<void>
   approve: (approved: boolean, message?: string) => Promise<void>
@@ -47,20 +47,52 @@ export function useAgentSession(): UseAgentSessionResult {
     cleanupOutputRef.current = onAgentOutput((event: AgentOutputEvent) => {
       if (event.sessionId !== session.sessionId) return
 
-      setSession(prev => ({
-        ...prev,
-        messages: [
-          ...prev.messages,
-          {
-            id: `msg-${Date.now()}`,
-            role: event.type === 'message' ? 'assistant' : 'system',
-            content: typeof event.data === 'object' && event.data !== null && 'content' in event.data
-              ? String(event.data.content)
-              : JSON.stringify(event.data),
-            timestamp: new Date()
+      setSession(prev => {
+        // Extract role and content from the event data
+        let role: 'user' | 'assistant' | 'system' = 'system'
+        let content = ''
+        
+        if (typeof event.data === 'object' && event.data !== null) {
+          const data = event.data as any
+          if (data.role === 'user') {
+            role = 'user'
+          } else if (data.role === 'assistant') {
+            role = 'assistant'
           }
-        ]
-      }))
+          
+          if (data.content !== undefined) {
+            content = String(data.content)
+          } else if (data.text !== undefined) {
+            content = String(data.text)
+          } else {
+            content = JSON.stringify(data)
+          }
+        } else {
+          content = String(event.data)
+        }
+
+        // Avoid duplicate messages by checking if this exact content already exists
+        const isDuplicate = prev.messages.some(
+          m => m.content === content && m.role === role
+        )
+        
+        if (isDuplicate) {
+          return prev
+        }
+
+        return {
+          ...prev,
+          messages: [
+            ...prev.messages,
+            {
+              id: `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+              role,
+              content,
+              timestamp: new Date()
+            }
+          ]
+        }
+      })
     })
 
     cleanupStatusRef.current = onAgentStatus((event: AgentStatusEvent) => {
@@ -101,6 +133,7 @@ export function useAgentSession(): UseAgentSessionResult {
         messages: [],
         pendingApproval: null
       })
+      return sessionId
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to start session')
       throw err

@@ -189,8 +189,30 @@ export class AgentManager extends EventEmitter {
 
           if (promptResult.error) {
             console.error('[AgentManager] Failed to send initial message:', promptResult.error)
+            this.sendToRenderer('agent:output', {
+              sessionId,
+              type: 'error',
+              data: { message: 'Failed to send initial message: ' + (promptResult.error.data?.message || promptResult.error.name || 'Unknown error') }
+            })
           } else {
-            console.log('[AgentManager] Initial message sent successfully')
+            // Send the user message to transcript
+            this.sendToRenderer('agent:output', {
+              sessionId,
+              type: 'message',
+              data: { role: 'user', content: `Working on task: "${task.title}"\n\n${task.description || ''}` }
+            })
+            
+            // Send the assistant response to transcript if available
+            if (promptResult.data) {
+              const responseText = this.extractTextFromResponse(promptResult.data)
+              if (responseText) {
+                this.sendToRenderer('agent:output', {
+                  sessionId,
+                  type: 'message',
+                  data: { role: 'assistant', content: responseText }
+                })
+              }
+            }
           }
         }
 
@@ -220,42 +242,40 @@ export class AgentManager extends EventEmitter {
     if (!session || !session.ocClient || !session.ocSessionId) return
 
     try {
-      // Get global events from OpenCode
-      const eventResult: any = await session.ocClient.global.event()
+      // Get session messages instead of global events
+      const messagesResult: any = await session.ocClient.session.messages({
+        path: { id: session.ocSessionId }
+      })
       
-      if (eventResult.data && Array.isArray(eventResult.data)) {
-        // Process events
-        for (const event of eventResult.data) {
-          this.sendToRenderer('agent:output', {
-            sessionId,
-            type: 'message',
-            data: event
-          })
-
-          // Check for permission requests
-          if (event.type === 'permission') {
-            session.status = 'waiting_approval'
-            this.sendToRenderer('agent:approval', {
-              sessionId,
-              action: event.action,
-              description: event.description || event.action
-            })
-            this.sendToRenderer('agent:status', {
-              sessionId,
-              agentId: session.agentId,
-              taskId: session.taskId,
-              status: 'waiting_approval'
-            })
+      if (messagesResult.data && Array.isArray(messagesResult.data)) {
+        // Process new messages
+        messagesResult.data.forEach((msg: any) => {
+          if (msg.info && msg.parts) {
+            const content = msg.parts
+              .filter((p: any) => p.type === 'text')
+              .map((p: any) => p.text)
+              .join('\n')
+            
+            if (content) {
+              this.sendToRenderer('agent:output', {
+                sessionId,
+                type: 'message',
+                data: { 
+                  role: msg.info.role,
+                  content: content
+                }
+              })
+            }
           }
-        }
+        })
       }
     } catch (error) {
-      console.error(`[AgentManager] Error polling events for session ${sessionId}:`, error)
+      console.error(`[AgentManager] Error polling messages for session ${sessionId}:`, error)
     }
 
     // Continue polling if session is still active
     if (this.sessions.has(sessionId) && session.status !== 'error') {
-      setTimeout(() => this.pollSessionEvents(sessionId), 2000)
+      setTimeout(() => this.pollSessionEvents(sessionId), 3000)
     }
   }
 
@@ -433,6 +453,34 @@ export class AgentManager extends EventEmitter {
       console.error('[AgentManager] Error getting providers:', error)
       return null
     }
+  }
+
+  private extractTextFromResponse(data: any): string | null {
+    // Try to extract text from various response formats
+    if (typeof data === 'string') {
+      return data
+    }
+    
+    if (data.text) {
+      return data.text
+    }
+    
+    if (data.content) {
+      return typeof data.content === 'string' ? data.content : JSON.stringify(data.content)
+    }
+    
+    if (data.parts && Array.isArray(data.parts)) {
+      return data.parts
+        .filter((p: any) => p.type === 'text' || p.text)
+        .map((p: any) => p.text || p.content || '')
+        .join('\n')
+    }
+    
+    if (data.message) {
+      return typeof data.message === 'string' ? data.message : this.extractTextFromResponse(data.message)
+    }
+    
+    return null
   }
 
   private sendToRenderer(channel: string, data: unknown): void {
