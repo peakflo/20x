@@ -3,7 +3,7 @@ import type { TaskStatus, TaskPriority } from '@/types'
 
 export type SortField = 'created_at' | 'updated_at' | 'priority' | 'due_date' | 'title'
 export type SortDirection = 'asc' | 'desc'
-export type ActiveModal = 'create' | 'edit' | 'delete' | 'agent-settings' | null
+export type ActiveModal = 'create' | 'edit' | 'delete' | 'agent-settings' | 'repo-selector' | 'gh-setup' | null
 
 interface UIState {
   statusFilter: TaskStatus | 'all'

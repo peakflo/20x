@@ -1,24 +1,32 @@
 import { EventEmitter } from 'events'
 import { spawn, type ChildProcess } from 'child_process'
+import { join } from 'path'
+import { existsSync } from 'fs'
 import type { BrowserWindow } from 'electron'
-import type { DatabaseManager } from './database'
+import type { DatabaseManager, AgentMcpServerEntry } from './database'
 
-// Import OpenCode SDK dynamically
 let OpenCodeSDK: typeof import('@opencode-ai/sdk') | null = null
 
 interface AgentSession {
   id: string
   agentId: string
   taskId: string
+  workspaceDir?: string
   status: 'idle' | 'working' | 'error' | 'waiting_approval'
   createdAt: Date
-  ocClient?: ReturnType<typeof import('@opencode-ai/sdk').createOpencodeClient>
+  ocClient?: any
   ocSessionId?: string
+  seenMessageIds: Set<string>
+  seenPartIds: Set<string>
+  partContentLengths: Map<string, string>
+  pollTimer?: ReturnType<typeof setTimeout>
+  lastOcStatus?: string
 }
 
 export class AgentManager extends EventEmitter {
   private sessions: Map<string, AgentSession> = new Map()
   private serverProcess: ChildProcess | null = null
+  private serverUrl: string | null = null
   private db: DatabaseManager
   private mainWindow: BrowserWindow | null = null
 
@@ -39,6 +47,40 @@ export class AgentManager extends EventEmitter {
 
   setMainWindow(window: BrowserWindow): void {
     this.mainWindow = window
+  }
+
+  /**
+   * Builds a `tools: { [name: string]: boolean }` filter from agent config.
+   * If any MCP server has a subset of tools selected, we build an explicit
+   * allow/deny map so OpenCode only enables those tools.
+   * Returns undefined if all tools are enabled (no filtering needed).
+   */
+  private buildToolsFilter(agentId: string): Record<string, boolean> | undefined {
+    const agent = this.db.getAgent(agentId)
+    if (!agent?.config?.mcp_servers || agent.config.mcp_servers.length === 0) return undefined
+
+    const entries = agent.config.mcp_servers
+    let hasFiltering = false
+    const toolsMap: Record<string, boolean> = {}
+
+    for (const entry of entries) {
+      const serverId = typeof entry === 'string' ? entry : (entry as AgentMcpServerEntry).serverId
+      const enabledTools = typeof entry === 'string' ? undefined : (entry as AgentMcpServerEntry).enabledTools
+      const mcpServer = this.db.getMcpServer(serverId)
+      if (!mcpServer) continue
+
+      if (enabledTools !== undefined && mcpServer.tools.length > 0) {
+        // Selective — mark enabled tools true, others false
+        hasFiltering = true
+        const enabledSet = new Set(enabledTools)
+        for (const tool of mcpServer.tools) {
+          toolsMap[tool.name] = enabledSet.has(tool.name)
+        }
+      }
+      // If enabledTools is undefined, all tools are allowed — no entries needed
+    }
+
+    return hasFiltering ? toolsMap : undefined
   }
 
   async startServer(): Promise<void> {
@@ -67,18 +109,30 @@ export class AgentManager extends EventEmitter {
         const output = data.toString()
         console.log('[OpenCode Server]', output)
 
+        // Parse the actual server URL from stdout
+        const urlMatch = output.match(/https?:\/\/[\w.:]+/)
+        if (urlMatch) {
+          this.serverUrl = urlMatch[0]
+        }
+
         if (output.includes('ready') || output.includes('listening') || output.includes('http://')) {
           if (!isReady) {
             isReady = true
             clearTimeout(timeout)
-            console.log('[AgentManager] Server ready')
+            console.log(`[AgentManager] Server ready at ${this.serverUrl}`)
             resolve()
           }
         }
       })
 
       this.serverProcess.stderr?.on('data', (data) => {
-        console.error('[OpenCode Server Error]', data.toString())
+        const output = data.toString()
+        console.error('[OpenCode Server Error]', output)
+        // Some servers output to stderr
+        const urlMatch = output.match(/https?:\/\/[\w.:]+/)
+        if (urlMatch && !this.serverUrl) {
+          this.serverUrl = urlMatch[0]
+        }
       })
 
       this.serverProcess.on('error', (error) => {
@@ -87,16 +141,15 @@ export class AgentManager extends EventEmitter {
           clearTimeout(timeout)
           reject(error)
         }
-        this.emit('serverError', error)
       })
 
       this.serverProcess.on('exit', (code) => {
         console.log(`[AgentManager] Server exited with code ${code}`)
         this.serverProcess = null
-        this.emit('serverExit', code)
+        this.serverUrl = null
 
-        // Notify all active sessions
         for (const session of this.sessions.values()) {
+          session.status = 'error'
           this.sendToRenderer('agent:status', {
             sessionId: session.id,
             agentId: session.agentId,
@@ -113,10 +166,26 @@ export class AgentManager extends EventEmitter {
       console.log('[AgentManager] Stopping OpenCode server...')
       this.serverProcess.kill('SIGTERM')
       this.serverProcess = null
+      this.serverUrl = null
     }
   }
 
-  async startSession(agentId: string, taskId: string): Promise<string> {
+  /**
+   * Resolves the actual server URL to use for an agent.
+   * Uses the dynamically detected server URL from our spawned process,
+   * falling back to the agent's configured URL.
+   */
+  private getServerUrl(agentServerUrl: string): string {
+    // If we spawned the server and know its actual URL, use that
+    if (this.serverUrl) return this.serverUrl
+    return agentServerUrl
+  }
+
+  /**
+   * Creates an OpenCode session and returns the sessionId immediately.
+   * Uses promptAsync to send the initial prompt without blocking.
+   */
+  async startSession(agentId: string, taskId: string, workspaceDir?: string): Promise<string> {
     if (!OpenCodeSDK) {
       throw new Error('OpenCode SDK not loaded')
     }
@@ -126,107 +195,161 @@ export class AgentManager extends EventEmitter {
       throw new Error(`Agent not found: ${agentId}`)
     }
 
-    // Check if session already exists for this task
+    // Reuse existing session for this task
     for (const [sessionId, session] of this.sessions.entries()) {
       if (session.taskId === taskId && session.status !== 'error') {
-        console.log(`[AgentManager] Session already exists for task ${taskId}: ${sessionId}`)
         return sessionId
       }
     }
 
     const sessionId = `session-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+    const baseUrl = this.getServerUrl(agent.server_url)
+    console.log(`[AgentManager] Starting session ${sessionId} for agent ${agentId}, server: ${baseUrl}`)
 
-    console.log(`[AgentManager] Starting session ${sessionId} for agent ${agentId} on task ${taskId}`)
-
-    const ocClient = OpenCodeSDK.createOpencodeClient({
-      baseUrl: agent.server_url
-    })
+    const ocClient = OpenCodeSDK.createOpencodeClient({ baseUrl })
 
     const session: AgentSession = {
       id: sessionId,
       agentId,
       taskId,
+      workspaceDir,
       status: 'working',
       createdAt: new Date(),
-      ocClient
+      ocClient,
+      seenMessageIds: new Set(),
+      seenPartIds: new Set(),
+      partContentLengths: new Map()
     }
 
     this.sessions.set(sessionId, session)
 
     try {
+      // Register MCP servers BEFORE creating session so the session picks them up
+      const mcpEntries = agent.config?.mcp_servers || []
+      const mcpServerIds = mcpEntries.map((e) => typeof e === 'string' ? e : (e as AgentMcpServerEntry).serverId)
+      for (const serverId of mcpServerIds) {
+        const mcpServer = this.db.getMcpServer(serverId)
+        if (!mcpServer) continue
+
+        try {
+          const mcpConfig = mcpServer.type === 'remote'
+            ? { type: 'remote' as const, url: mcpServer.url, headers: mcpServer.headers }
+            : { type: 'local' as const, command: [mcpServer.command, ...mcpServer.args], environment: mcpServer.environment }
+          const addResult: any = await ocClient.mcp.add({
+            body: {
+              name: mcpServer.name,
+              config: mcpConfig
+            },
+            ...(workspaceDir && { query: { directory: workspaceDir } })
+          })
+          if (addResult.error) {
+            console.error(`[AgentManager] mcp.add error for ${mcpServer.name}:`, addResult.error)
+            continue
+          }
+
+          const connectResult = await ocClient.mcp.connect({
+            path: { name: mcpServer.name },
+            ...(workspaceDir && { query: { directory: workspaceDir } })
+          })
+          if (connectResult.error) {
+            console.error(`[AgentManager] mcp.connect error for ${mcpServer.name}:`, connectResult.error)
+            continue
+          }
+
+        } catch (mcpError) {
+          console.error(`[AgentManager] Failed to register MCP server ${mcpServer.name}:`, mcpError)
+        }
+      }
+
       // Create OpenCode session
       const result: any = await ocClient.session.create({
-        body: {
-          title: `Task ${taskId}`
-        }
+        body: { title: `Task ${taskId}` },
+        ...(workspaceDir && { query: { directory: workspaceDir } })
       })
 
       if (result.error) {
-        const errorMsg = result.error.data?.message || result.error.name || 'Failed to create session'
-        throw new Error(errorMsg)
+        throw new Error(result.error.data?.message || result.error.name || 'Failed to create session')
+      }
+      if (!result.data?.id) {
+        throw new Error('No session ID returned from OpenCode')
       }
 
-      if (result.data) {
-        session.ocSessionId = result.data.id
-        console.log(`[AgentManager] OpenCode session created: ${result.data.id}`)
+      session.ocSessionId = result.data.id
+      console.log(`[AgentManager] OpenCode session created: ${result.data.id}`)
 
-        // Send initial task message
-        const task = this.db.getTask(taskId)
-        if (task && session.ocSessionId) {
-          const promptResult: any = await ocClient.session.prompt({
-            path: {
-              id: session.ocSessionId
-            },
-            body: {
-              parts: [
-                {
-                  type: 'text',
-                  text: `Working on task: "${task.title}"\n\n${task.description || ''}`
-                }
-              ]
-            }
-          })
+      // Notify renderer that session is live
+      this.sendToRenderer('agent:status', {
+        sessionId, agentId, taskId, status: 'working'
+      })
 
-          if (promptResult.error) {
-            console.error('[AgentManager] Failed to send initial message:', promptResult.error)
-            this.sendToRenderer('agent:output', {
-              sessionId,
-              type: 'error',
-              data: { message: 'Failed to send initial message: ' + (promptResult.error.data?.message || promptResult.error.name || 'Unknown error') }
+      // Start polling for messages (SSE uses TextDecoderStream which isn't in Node)
+      this.startPolling(sessionId)
+
+      // Build the initial prompt
+      const task = this.db.getTask(taskId)
+      const promptText = task
+        ? `Working on task: "${task.title}"\n\n${task.description || ''}`
+        : `Working on task ${taskId}`
+
+      // Build parts array: text + any file attachments
+      const parts: any[] = [{ type: 'text', text: promptText }]
+      if (task?.attachments?.length) {
+        const attachDir = this.db.getAttachmentsDir(taskId)
+        for (const att of task.attachments) {
+          const filePath = join(attachDir, `${att.id}-${att.filename}`)
+          if (existsSync(filePath)) {
+            parts.push({
+              type: 'file',
+              mime: att.mime_type,
+              filename: att.filename,
+              url: filePath
             })
-          } else {
-            // Send the user message to transcript
-            this.sendToRenderer('agent:output', {
-              sessionId,
-              type: 'message',
-              data: { role: 'user', content: `Working on task: "${task.title}"\n\n${task.description || ''}` }
-            })
-            
-            // Send the assistant response to transcript if available
-            if (promptResult.data) {
-              const responseText = this.extractTextFromResponse(promptResult.data)
-              if (responseText) {
-                this.sendToRenderer('agent:output', {
-                  sessionId,
-                  type: 'message',
-                  data: { role: 'assistant', content: responseText }
-                })
-              }
-            }
           }
         }
-
-        // Start polling for events
-        this.pollSessionEvents(sessionId)
       }
 
-      // Send status update
-      this.sendToRenderer('agent:status', {
-        sessionId,
-        agentId,
-        taskId,
-        status: 'working'
+      // Parse model from agent config (stored as "providerID/modelID")
+      const agentConfig = agent.config as any
+      let modelParam: { providerID: string; modelID: string } | undefined
+      if (agentConfig?.model) {
+        const slashIdx = agentConfig.model.indexOf('/')
+        if (slashIdx > 0) {
+          modelParam = {
+            providerID: agentConfig.model.slice(0, slashIdx),
+            modelID: agentConfig.model.slice(slashIdx + 1)
+          }
+        }
+        console.log(`[AgentManager] Using model: ${agentConfig.model} →`, modelParam)
+      }
+
+      // Build tool filter from agent config
+      const toolsFilter = this.buildToolsFilter(agentId)
+
+      // Use promptAsync — sends the prompt and returns immediately
+      console.log(`[AgentManager] Sending async prompt for session ${sessionId}${workspaceDir ? `, dir: ${workspaceDir}` : ''}`)
+      const promptResult: any = await ocClient.session.promptAsync({
+        path: { id: session.ocSessionId },
+        body: {
+          parts,
+          ...(modelParam && { model: modelParam }),
+          ...(toolsFilter && { tools: toolsFilter })
+        },
+        ...(workspaceDir && { query: { directory: workspaceDir } })
       })
+
+      if (promptResult.error) {
+        console.error('[AgentManager] promptAsync error:', promptResult.error)
+        this.sendToRenderer('agent:output', {
+          sessionId,
+          type: 'error',
+          data: {
+            message: 'Failed to send prompt: ' + (promptResult.error.data?.message || promptResult.error.name || 'Unknown error'),
+            id: `error-${Date.now()}`
+          }
+        })
+      } else {
+        console.log(`[AgentManager] Async prompt sent successfully`)
+      }
 
       return sessionId
     } catch (error) {
@@ -237,48 +360,397 @@ export class AgentManager extends EventEmitter {
     }
   }
 
-  private async pollSessionEvents(sessionId: string): Promise<void> {
-    const session = this.sessions.get(sessionId)
-    if (!session || !session.ocClient || !session.ocSessionId) return
-
-    try {
-      // Get session messages instead of global events
-      const messagesResult: any = await session.ocClient.session.messages({
-        path: { id: session.ocSessionId }
-      })
-      
-      if (messagesResult.data && Array.isArray(messagesResult.data)) {
-        // Process new messages
-        messagesResult.data.forEach((msg: any) => {
-          if (msg.info && msg.parts) {
-            const content = msg.parts
-              .filter((p: any) => p.type === 'text')
-              .map((p: any) => p.text)
-              .join('\n')
-            
-            if (content) {
-              this.sendToRenderer('agent:output', {
-                sessionId,
-                type: 'message',
-                data: { 
-                  role: msg.info.role,
-                  content: content
-                }
-              })
-            }
-          }
-        })
+  /**
+   * Polls session status + messages every 2s to forward new content to the renderer.
+   */
+  private startPolling(sessionId: string): void {
+    const poll = async (): Promise<void> => {
+      const session = this.sessions.get(sessionId)
+      if (!session || session.status === 'error') {
+        console.log(`[AgentManager] Polling stopped for ${sessionId} (session gone or error)`)
+        return
       }
-    } catch (error) {
-      console.error(`[AgentManager] Error polling messages for session ${sessionId}:`, error)
+
+      await this.pollSessionStatus(sessionId)
+      await this.fetchNewMessages(sessionId)
+
+      // Schedule next poll
+      if (this.sessions.has(sessionId)) {
+        session.pollTimer = setTimeout(poll, 2000)
+      }
     }
 
-    // Continue polling if session is still active
-    if (this.sessions.has(sessionId) && session.status !== 'error') {
-      setTimeout(() => this.pollSessionEvents(sessionId), 3000)
+    // First poll after 1s (give promptAsync time to register)
+    const session = this.sessions.get(sessionId)
+    if (session) {
+      session.pollTimer = setTimeout(poll, 1000)
     }
   }
 
+  /**
+   * Checks the OpenCode session status and forwards changes to the renderer.
+   */
+  private async pollSessionStatus(sessionId: string): Promise<void> {
+    const session = this.sessions.get(sessionId)
+    if (!session?.ocClient || !session.ocSessionId) return
+
+    try {
+      const statusResult: any = await session.ocClient.session.status({
+        ...(session.workspaceDir && { query: { directory: session.workspaceDir } })
+      })
+
+      if (!statusResult.data) {
+        console.log(`[AgentManager] Status poll returned no data for ${sessionId}`)
+        return
+      }
+
+      const ocStatus = statusResult.data[session.ocSessionId]
+      const statusKey = ocStatus ? JSON.stringify(ocStatus) : undefined
+
+      // Only log + notify on change
+      if (statusKey === session.lastOcStatus) return
+      session.lastOcStatus = statusKey
+
+      if (!ocStatus || ocStatus.type === 'idle') {
+        console.log(`[AgentManager] Session ${session.ocSessionId} is idle (ocStatus=${JSON.stringify(ocStatus)})`)
+        this.transitionToIdle(sessionId, session)
+      } else if (ocStatus.type === 'busy') {
+        console.log(`[AgentManager] Session ${session.ocSessionId} is busy`)
+        session.status = 'working'
+        this.sendToRenderer('agent:status', {
+          sessionId, agentId: session.agentId, taskId: session.taskId, status: 'working'
+        })
+      } else if (ocStatus.type === 'retry') {
+        console.log(`[AgentManager] Session ${session.ocSessionId} retry #${ocStatus.attempt}: ${ocStatus.message}`)
+        this.sendToRenderer('agent:output', {
+          sessionId,
+          type: 'message',
+          data: {
+            id: `retry-${Date.now()}`,
+            role: 'system',
+            content: ocStatus.message || 'Rate limit exceeded',
+            partType: 'error'
+          }
+        })
+        await this.abortSession(sessionId)
+      }
+    } catch (error) {
+      console.error(`[AgentManager] Error checking session status:`, error)
+    }
+  }
+
+  /**
+   * Transitions a session to idle and notifies the renderer.
+   * Does one final message fetch to pick up any remaining parts.
+   */
+  private transitionToIdle(sessionId: string, session: AgentSession): void {
+    if (session.status === 'idle') return
+    session.status = 'idle'
+    console.log(`[AgentManager] Session ${sessionId} → idle`)
+    this.sendToRenderer('agent:status', {
+      sessionId, agentId: session.agentId, taskId: session.taskId, status: 'idle'
+    })
+  }
+
+  /**
+   * Builds the renderer payload for a single Part.
+   * Returns null for internal parts that should be skipped.
+   */
+  private buildPartPayload(part: any): { content: string; partType: string; tool?: any } | null {
+    switch (part.type) {
+      case 'text':
+        return part.text ? { content: part.text, partType: 'text' } : null
+
+      case 'reasoning':
+        return part.text ? { content: part.text, partType: 'reasoning' } : null
+
+      case 'tool': {
+        const toolName = part.tool || 'unknown'
+        const state = part.state || {}
+        const status = state.status || 'unknown'
+        const title = state.title || ''
+        const inputStr = state.input && Object.keys(state.input).length > 0
+          ? JSON.stringify(state.input, null, 2) : undefined
+        const outputStr = status === 'completed' && state.output
+          ? state.output.slice(0, 2000) : undefined
+        const errorStr = status === 'error' && state.error ? state.error : undefined
+
+        // Interactive question tool — detect by questions array in input
+        let questions = state.input?.questions
+        if (typeof questions === 'string') {
+          try { questions = JSON.parse(questions) } catch {}
+        }
+        if (Array.isArray(questions) && questions.length > 0) {
+          return {
+            content: title || 'Question',
+            partType: 'question',
+            tool: {
+              name: toolName,
+              status,
+              title,
+              input: inputStr,
+              output: outputStr,
+              error: errorStr,
+              questions
+            }
+          }
+        }
+
+        // TodoWrite tool — detect by todos array in input
+        let todos = state.input?.todos
+        if (typeof todos === 'string') {
+          try { todos = JSON.parse(todos) } catch {}
+        }
+        if (Array.isArray(todos) && todos.length > 0) {
+          return {
+            content: title || 'Todo List',
+            partType: 'todowrite',
+            tool: {
+              name: toolName,
+              status,
+              title,
+              input: inputStr,
+              output: outputStr,
+              error: errorStr,
+              todos
+            }
+          }
+        }
+
+        return {
+          content: title ? `${toolName} — ${title}` : toolName,
+          partType: 'tool',
+          tool: { name: toolName, status, title, input: inputStr, output: outputStr, error: errorStr }
+        }
+      }
+
+      case 'file':
+        return { content: `📎 ${part.filename || part.url || 'file'} (${part.mime || ''})`, partType: 'file' }
+
+      case 'step-start':
+        return { content: 'Step started', partType: 'step-start' }
+
+      case 'step-finish': {
+        const t = part.tokens
+        const info = t ? ` (in:${t.input} out:${t.output} cache:${t.cache?.read || 0})` : ''
+        return { content: `Step finished: ${part.reason || ''}${info}`, partType: 'step-finish' }
+      }
+
+      case 'agent':
+        return { content: `Agent: ${part.name || 'unknown'}`, partType: 'agent' }
+
+      case 'subtask':
+        return { content: `Subtask: ${part.description || part.prompt || ''}`, partType: 'subtask' }
+
+      case 'retry':
+        return { content: `Retry #${part.attempt}: ${part.error?.message || JSON.stringify(part.error)}`, partType: 'retry' }
+
+      case 'compaction':
+        return { content: `Context compaction${part.auto ? ' (auto)' : ''}`, partType: 'compaction' }
+
+      case 'snapshot':
+      case 'patch':
+        return null
+
+      default:
+        return { content: part.text || JSON.stringify(part).slice(0, 200), partType: part.type || 'unknown' }
+    }
+  }
+
+  /**
+   * Fetches messages from OpenCode and forwards new parts to the renderer.
+   * Sends each part individually so the UI gets incremental updates.
+   */
+  private async fetchNewMessages(sessionId: string): Promise<void> {
+    const session = this.sessions.get(sessionId)
+    if (!session?.ocClient || !session.ocSessionId) return
+
+    try {
+      const messagesResult: any = await session.ocClient.session.messages({
+        path: { id: session.ocSessionId },
+        ...(session.workspaceDir && { query: { directory: session.workspaceDir } })
+      })
+
+      if (!messagesResult.data || !Array.isArray(messagesResult.data)) {
+        return
+      }
+
+      let newPartCount = 0
+
+      for (const msg of messagesResult.data) {
+        if (!msg.info) continue
+
+        const msgId = msg.info.id
+        const role = msg.info.role || 'assistant'
+        const parts = msg.parts && Array.isArray(msg.parts) ? msg.parts : []
+        const isCompleted = msg.info.time?.completed != null
+
+        // Log assistant messages we haven't seen before
+        if (!session.seenMessageIds.has(msgId)) {
+          session.seenMessageIds.add(msgId)
+          console.log(`[AgentManager] New ${role} message ${msgId}: ${parts.length} parts, completed=${isCompleted}`)
+          if (role === 'assistant') {
+            console.log(`[AgentManager]   Assistant msg info:`, JSON.stringify({
+              id: msg.info.id,
+              time: msg.info.time,
+              modelID: msg.info.modelID,
+              providerID: msg.info.providerID,
+              finish: msg.info.finish,
+              error: msg.info.error,
+              tokens: msg.info.tokens
+            }))
+          }
+        }
+
+        // Process each part — send new ones, update streaming text/reasoning parts
+        for (const part of parts) {
+          const partId = part.id
+          if (!partId) continue
+
+          const payload = this.buildPartPayload(part)
+          if (payload === null) {
+            session.seenPartIds.add(partId)
+            continue
+          }
+
+          const isUpdatable = part.type === 'text' || part.type === 'reasoning' || part.type === 'tool'
+          // For text/reasoning track content length; for tools track status+output+partType
+          const fingerprint = part.type === 'tool'
+            ? `${part.state?.status}:${payload.partType}:${payload.content.length}:${payload.tool?.output?.length ?? 0}`
+            : String(payload.content.length)
+
+          if (session.seenPartIds.has(partId)) {
+            // Already sent — check if content has changed
+            if (isUpdatable) {
+              const prevFingerprint = session.partContentLengths.get(partId)
+              if (fingerprint !== prevFingerprint) {
+                session.partContentLengths.set(partId, fingerprint)
+                this.sendToRenderer('agent:output', {
+                  sessionId,
+                  type: 'message',
+                  data: {
+                    id: partId,
+                    role,
+                    content: payload.content,
+                    partType: payload.partType,
+                    tool: payload.tool,
+                    update: true
+                  }
+                })
+              }
+            }
+            continue
+          }
+
+          session.seenPartIds.add(partId)
+          if (isUpdatable) {
+            session.partContentLengths.set(partId, fingerprint)
+          }
+          newPartCount++
+
+          console.log(`[AgentManager]   Part ${partId} type="${part.type}" → ${payload.content.slice(0, 100)}`)
+
+          this.sendToRenderer('agent:output', {
+            sessionId,
+            type: 'message',
+            data: {
+              id: partId,
+              role,
+              content: payload.content,
+              partType: payload.partType,
+              tool: payload.tool
+            }
+          })
+        }
+
+        // If assistant message has an error, forward it with readable message
+        if (role === 'assistant' && msg.info.error) {
+          const errId = `error-${msgId}`
+          if (!session.seenPartIds.has(errId)) {
+            session.seenPartIds.add(errId)
+            const err = msg.info.error
+            const errMsg = err.data?.message || err.message || err.name || JSON.stringify(err)
+            console.log(`[AgentManager]   Error on message ${msgId}: ${errMsg}`)
+            this.sendToRenderer('agent:output', {
+              sessionId,
+              type: 'message',
+              data: { id: errId, role: 'system', content: errMsg, partType: 'error' }
+            })
+          }
+        }
+
+        // Empty incomplete assistant message — model hasn't started producing parts yet, just wait
+        if (
+          role === 'assistant' &&
+          !isCompleted &&
+          parts.length === 0 &&
+          !msg.info.error
+        ) {
+          const pendingId = `pending-${msgId}`
+          if (!session.seenPartIds.has(pendingId)) {
+            session.seenPartIds.add(pendingId)
+            console.log(`[AgentManager]   Assistant message ${msgId} incomplete with 0 parts — waiting for model response`)
+          }
+        }
+      }
+
+      if (newPartCount > 0) {
+        console.log(`[AgentManager] Poll: ${newPartCount} new part(s) for ${sessionId}`)
+      }
+
+      // Detect completion from messages: if the last assistant message is completed
+      // and session is still 'working', transition to idle
+      if (session.status === 'working') {
+        const lastAssistantMsg = [...messagesResult.data]
+          .reverse()
+          .find((m: any) => m.info?.role === 'assistant')
+
+        if (lastAssistantMsg?.info?.time?.completed) {
+          console.log(`[AgentManager] Last assistant message completed — transitioning to idle`)
+          this.transitionToIdle(sessionId, session)
+        }
+      }
+    } catch (error) {
+      console.error(`[AgentManager] Error fetching messages for ${sessionId}:`, error)
+    }
+  }
+
+  /**
+   * Interrupts the current generation but keeps the session alive.
+   * Polling continues so any final messages get picked up.
+   */
+  async abortSession(sessionId: string): Promise<void> {
+    const session = this.sessions.get(sessionId)
+    if (!session) {
+      console.log(`[AgentManager] Session ${sessionId} not found`)
+      return
+    }
+
+    console.log(`[AgentManager] Aborting session ${sessionId}`)
+
+    if (session.ocClient && session.ocSessionId) {
+      try {
+        await session.ocClient.session.abort({
+          path: { id: session.ocSessionId }
+        })
+        console.log(`[AgentManager] OpenCode session ${session.ocSessionId} aborted`)
+      } catch (error) {
+        console.error(`[AgentManager] Error aborting session:`, error)
+      }
+    }
+
+    session.status = 'idle'
+    this.sendToRenderer('agent:status', {
+      sessionId,
+      agentId: session.agentId,
+      taskId: session.taskId,
+      status: 'idle'
+    })
+  }
+
+  /**
+   * Fully destroys the session — stops polling, removes from map.
+   */
   async stopSession(sessionId: string): Promise<void> {
     const session = this.sessions.get(sessionId)
     if (!session) {
@@ -286,19 +758,19 @@ export class AgentManager extends EventEmitter {
       return
     }
 
-    console.log(`[AgentManager] Stopping session ${sessionId}`)
+    console.log(`[AgentManager] Destroying session ${sessionId}`)
 
-    // Try to delete the OpenCode session
+    if (session.pollTimer) {
+      clearTimeout(session.pollTimer)
+    }
+
     if (session.ocClient && session.ocSessionId) {
       try {
-        await session.ocClient.session.delete({
-          path: {
-            id: session.ocSessionId
-          }
+        await session.ocClient.session.abort({
+          path: { id: session.ocSessionId }
         })
-        console.log(`[AgentManager] OpenCode session ${session.ocSessionId} deleted`)
       } catch (error) {
-        console.error(`[AgentManager] Error deleting OpenCode session:`, error)
+        console.error(`[AgentManager] Error aborting session:`, error)
       }
     }
 
@@ -313,73 +785,56 @@ export class AgentManager extends EventEmitter {
 
   async sendMessage(sessionId: string, message: string): Promise<void> {
     const session = this.sessions.get(sessionId)
-    if (!session) {
-      throw new Error(`Session not found: ${sessionId}`)
-    }
+    if (!session) throw new Error(`Session not found: ${sessionId}`)
+    if (session.status === 'error') throw new Error('Session is in error state')
+    if (!session.ocClient || !session.ocSessionId) throw new Error('OpenCode session not initialized')
 
-    if (session.status === 'error') {
-      throw new Error('Session is in error state')
-    }
+    console.log(`[AgentManager] Sending message to session ${sessionId}`)
 
-    if (!session.ocClient || !session.ocSessionId) {
-      throw new Error('OpenCode session not initialized')
-    }
-
-    console.log(`[AgentManager] Sending message to session ${sessionId}:`, message)
-
-    try {
-      const result: any = await session.ocClient.session.prompt({
-        path: {
-          id: session.ocSessionId
-        },
-        body: {
-          parts: [
-            {
-              type: 'text',
-              text: message
-            }
-          ]
+    // Resolve model from agent config
+    const agent = this.db.getAgent(session.agentId)
+    const agentConfig = agent?.config as any
+    let modelParam: { providerID: string; modelID: string } | undefined
+    if (agentConfig?.model) {
+      const slashIdx = agentConfig.model.indexOf('/')
+      if (slashIdx > 0) {
+        modelParam = {
+          providerID: agentConfig.model.slice(0, slashIdx),
+          modelID: agentConfig.model.slice(slashIdx + 1)
         }
-      })
-
-      if (result.error) {
-        const errorMsg = result.error.data?.message || result.error.name || 'Failed to send message'
-        throw new Error(errorMsg)
       }
-
-      // Echo back to transcript
-      this.sendToRenderer('agent:output', {
-        sessionId,
-        type: 'message',
-        data: { role: 'user', content: message }
-      })
-    } catch (error) {
-      console.error(`[AgentManager] Error sending message:`, error)
-      throw error
     }
+
+    // Build tool filter
+    const toolsFilter = this.buildToolsFilter(session.agentId)
+
+    // Use promptAsync so we don't block
+    const result: any = await session.ocClient.session.promptAsync({
+      path: { id: session.ocSessionId },
+      body: {
+        parts: [{ type: 'text', text: message }],
+        ...(modelParam && { model: modelParam }),
+        ...(toolsFilter && { tools: toolsFilter })
+      },
+      ...(session.workspaceDir && { query: { directory: session.workspaceDir } })
+    })
+
+    if (result.error) {
+      throw new Error(result.error.data?.message || result.error.name || 'Failed to send message')
+    }
+
+    // Polling will pick up both the user message and the AI response
   }
 
   async respondToPermission(sessionId: string, approved: boolean, _message?: string): Promise<void> {
     const session = this.sessions.get(sessionId)
-    if (!session) {
-      throw new Error(`Session not found: ${sessionId}`)
-    }
-
-    if (session.status !== 'waiting_approval') {
-      console.warn(`[AgentManager] Session ${sessionId} is not waiting for approval`)
-      return
-    }
+    if (!session) throw new Error(`Session not found: ${sessionId}`)
 
     console.log(`[AgentManager] Permission ${approved ? 'approved' : 'rejected'} for session ${sessionId}`)
 
-    // TODO: Send permission response via OpenCode SDK when API is available
-    // For now, just update the status
-
-    if (approved) {
-      session.status = 'working'
-    } else {
-      session.status = 'idle'
-    }
+    // TODO: Use postSessionIdPermissionsPermissionId when we have the permissionID
+    // For now, update status
+    session.status = approved ? 'working' : 'idle'
 
     this.sendToRenderer('agent:status', {
       sessionId,
@@ -391,7 +846,7 @@ export class AgentManager extends EventEmitter {
 
   stopAllSessions(): void {
     console.log(`[AgentManager] Stopping all ${this.sessions.size} sessions`)
-    for (const sessionId of this.sessions.keys()) {
+    for (const sessionId of [...this.sessions.keys()]) {
       this.stopSession(sessionId)
     }
   }
@@ -399,11 +854,7 @@ export class AgentManager extends EventEmitter {
   getSessionStatus(sessionId: string): { status: string; agentId: string; taskId: string } | null {
     const session = this.sessions.get(sessionId)
     if (!session) return null
-    return {
-      status: session.status,
-      agentId: session.agentId,
-      taskId: session.taskId
-    }
+    return { status: session.status, agentId: session.agentId, taskId: session.taskId }
   }
 
   getActiveSessionsForTask(taskId: string): string[] {
@@ -416,35 +867,198 @@ export class AgentManager extends EventEmitter {
     return sessionIds
   }
 
-  async getProviders(serverUrl?: string): Promise<{ providers: any[]; default: Record<string, string> } | null> {
-    if (!OpenCodeSDK) {
-      console.error('[AgentManager] OpenCode SDK not loaded')
-      return null
+  /**
+   * Tests an MCP server by speaking the MCP protocol directly
+   * (JSON-RPC over stdio for local, HTTP POST for remote).
+   */
+  async testMcpServer(serverData: { name: string; type?: string; command?: string; args?: string[]; url?: string; headers?: Record<string, string>; environment?: Record<string, string> }): Promise<{ status: 'connected' | 'failed'; error?: string; toolCount?: number; tools?: { name: string; description: string }[] }> {
+    if (serverData.type === 'remote') {
+      return this.testRemoteMcpServer(serverData)
+    }
+    return this.testLocalMcpServer(serverData)
+  }
+
+  private testLocalMcpServer(serverData: { name: string; command?: string; args?: string[]; environment?: Record<string, string> }): Promise<{ status: 'connected' | 'failed'; error?: string; toolCount?: number; tools?: { name: string; description: string }[] }> {
+    if (!serverData.command) {
+      return Promise.resolve({ status: 'failed', error: 'No command specified' })
+    }
+
+    return new Promise((resolve) => {
+      let resolved = false
+      const finish = (result: { status: 'connected' | 'failed'; error?: string; toolCount?: number; tools?: { name: string; description: string }[] }): void => {
+        if (resolved) return
+        resolved = true
+        clearTimeout(timer)
+        try { proc.kill('SIGTERM') } catch {}
+        resolve(result)
+      }
+
+      const timer = setTimeout(() => {
+        finish({ status: 'failed', error: 'Connection timeout (30s)' })
+      }, 30000)
+
+      // Build a single shell command with proper quoting — args containing spaces
+      // must be quoted so the shell doesn't split them (e.g. "Authorization: Bearer ...")
+      const shellCmd = [serverData.command!, ...(serverData.args || [])].map((arg) =>
+        /[\s"'\\$`!#&|;()<>]/.test(arg) ? `'${arg.replace(/'/g, "'\\''")}'` : arg
+      ).join(' ')
+      const proc = spawn(shellCmd, [], {
+        stdio: ['pipe', 'pipe', 'pipe'],
+        shell: true,
+        env: { ...process.env, npm_config_yes: 'true', ...(serverData.environment || {}) }
+      })
+
+      let buffer = ''
+      let stderrBuf = ''
+      let phase: 'init' | 'tools' = 'init'
+
+      proc.stderr.on('data', (chunk: Buffer) => {
+        stderrBuf += chunk.toString()
+      })
+
+      const handleMessage = (msg: any): void => {
+        if (msg.error) {
+          finish({ status: 'failed', error: msg.error.message || JSON.stringify(msg.error) })
+          return
+        }
+
+        if (phase === 'init' && msg.id === 1 && msg.result) {
+          phase = 'tools'
+          // Send initialized notification + tools/list request
+          proc.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n')
+          proc.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list' }) + '\n')
+        } else if (phase === 'tools' && msg.id === 2 && msg.result) {
+          const rawTools = Array.isArray(msg.result.tools) ? msg.result.tools : []
+          const tools = rawTools.map((t: any) => ({ name: t.name || '', description: t.description || '' }))
+          finish({ status: 'connected', toolCount: tools.length, tools })
+        }
+      }
+
+      proc.stdout.on('data', (chunk: Buffer) => {
+        buffer += chunk.toString()
+        // Parse newline-delimited JSON messages
+        let idx: number
+        while ((idx = buffer.indexOf('\n')) !== -1) {
+          const line = buffer.slice(0, idx).trim()
+          buffer = buffer.slice(idx + 1)
+          if (!line) continue
+          try { handleMessage(JSON.parse(line)) } catch {}
+        }
+        // Try parsing buffer as complete JSON (server may not send trailing newline)
+        if (buffer.trim()) {
+          try {
+            const msg = JSON.parse(buffer.trim())
+            buffer = ''
+            handleMessage(msg)
+          } catch {}
+        }
+      })
+
+      proc.on('error', (err) => {
+        finish({ status: 'failed', error: err.message })
+      })
+
+      proc.on('exit', (code) => {
+        const errMsg = stderrBuf.trim().split('\n').pop() || `Process exited with code ${code}`
+        finish({ status: 'failed', error: errMsg })
+      })
+
+      // Send initialize
+      proc.stdin.write(JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'initialize',
+        params: {
+          protocolVersion: '2024-11-05',
+          capabilities: {},
+          clientInfo: { name: 'pf-desktop', version: '1.0.0' }
+        }
+      }) + '\n')
+    })
+  }
+
+  private async testRemoteMcpServer(serverData: { name: string; url?: string; headers?: Record<string, string> }): Promise<{ status: 'connected' | 'failed'; error?: string; toolCount?: number; tools?: { name: string; description: string }[] }> {
+    if (!serverData.url) {
+      return { status: 'failed', error: 'No URL specified' }
     }
 
     try {
-      // Use provided server URL or fall back to default agent's server URL
-      let baseUrl = serverUrl
-      
-      if (!baseUrl) {
-        const agents = this.db.getAgents()
-        const defaultAgent = agents.find(a => a.is_default) || agents[0]
-        baseUrl = defaultAgent?.server_url
-      }
-      
-      if (!baseUrl) {
-        console.error('[AgentManager] No server URL available')
-        return null
-      }
+      const headers: Record<string, string> = { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream', ...serverData.headers }
 
-      const ocClient = OpenCodeSDK.createOpencodeClient({
-        baseUrl
+      // Try streamable HTTP — POST initialize directly
+      const initRes = await fetch(serverData.url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          jsonrpc: '2.0', id: 1, method: 'initialize',
+          params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'pf-desktop', version: '1.0.0' } }
+        }),
+        signal: AbortSignal.timeout(10000)
       })
 
-      const result: any = await ocClient.config.providers()
-      
+      if (!initRes.ok) {
+        return { status: 'failed', error: `HTTP ${initRes.status}: ${initRes.statusText}` }
+      }
+
+      const contentType = initRes.headers.get('content-type') || ''
+
+      if (contentType.includes('application/json')) {
+        const initData = await initRes.json()
+        if (initData.error) {
+          return { status: 'failed', error: initData.error.message || 'Initialize failed' }
+        }
+
+        // Send initialized notification (fire-and-forget)
+        fetch(serverData.url, {
+          method: 'POST', headers,
+          body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' })
+        }).catch(() => {})
+
+        // Request tools
+        const toolsRes = await fetch(serverData.url, {
+          method: 'POST', headers,
+          body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list' }),
+          signal: AbortSignal.timeout(10000)
+        })
+        const toolsData = await toolsRes.json()
+        const rawTools = Array.isArray(toolsData.result?.tools) ? toolsData.result.tools : []
+        const tools = rawTools.map((t: any) => ({ name: t.name || '', description: t.description || '' }))
+        return { status: 'connected', toolCount: tools.length, tools }
+      }
+
+      // Non-JSON response (SSE or other) — server is reachable but uses SSE transport
+      return { status: 'connected' }
+    } catch (error: any) {
+      return { status: 'failed', error: error?.message || 'Connection failed' }
+    }
+  }
+
+  async getProviders(serverUrl?: string, directory?: string): Promise<{ providers: any[]; default: Record<string, string> } | null> {
+    if (!OpenCodeSDK) return null
+
+    try {
+      let baseUrl = serverUrl
+      if (!baseUrl) {
+        // Use actual server URL if we have it
+        baseUrl = this.serverUrl || undefined
+      }
+      if (!baseUrl) {
+        const agents = this.db.getAgents()
+        const defaultAgent = agents.find((a) => a.is_default) || agents[0]
+        baseUrl = defaultAgent?.server_url
+      }
+      if (!baseUrl) return null
+
+      // Default to home directory so project-scoped OpenCode configs are picked up
+      const dir = directory || require('os').homedir()
+
+      const ocClient = OpenCodeSDK.createOpencodeClient({ baseUrl })
+      const result: any = await ocClient.config.providers({
+        query: { directory: dir }
+      })
+
       if (result.error) {
-        console.error('[AgentManager] Failed to get providers:', result.error)
+        console.error('[AgentManager] Providers API error:', result.error)
         return null
       }
 
@@ -453,34 +1067,6 @@ export class AgentManager extends EventEmitter {
       console.error('[AgentManager] Error getting providers:', error)
       return null
     }
-  }
-
-  private extractTextFromResponse(data: any): string | null {
-    // Try to extract text from various response formats
-    if (typeof data === 'string') {
-      return data
-    }
-    
-    if (data.text) {
-      return data.text
-    }
-    
-    if (data.content) {
-      return typeof data.content === 'string' ? data.content : JSON.stringify(data.content)
-    }
-    
-    if (data.parts && Array.isArray(data.parts)) {
-      return data.parts
-        .filter((p: any) => p.type === 'text' || p.text)
-        .map((p: any) => p.text || p.content || '')
-        .join('\n')
-    }
-    
-    if (data.message) {
-      return typeof data.message === 'string' ? data.message : this.extractTextFromResponse(data.message)
-    }
-    
-    return null
   }
 
   private sendToRenderer(channel: string, data: unknown): void {

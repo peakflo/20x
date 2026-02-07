@@ -5,7 +5,10 @@ import type {
   FileAttachment,
   Agent,
   CreateAgentDTO,
-  UpdateAgentDTO
+  UpdateAgentDTO,
+  McpServer,
+  CreateMcpServerDTO,
+  UpdateMcpServerDTO
 } from './index'
 
 export interface AgentSessionStartResult {
@@ -35,6 +38,36 @@ export interface AgentApprovalRequest {
   description: string
 }
 
+export interface McpTestResult {
+  status: 'connected' | 'failed'
+  error?: string
+  toolCount?: number
+  tools?: { name: string; description: string }[]
+}
+
+export interface GhCliStatus {
+  installed: boolean
+  authenticated: boolean
+  username?: string
+}
+
+export interface GitHubRepo {
+  name: string
+  fullName: string
+  defaultBranch: string
+  cloneUrl: string
+  description: string
+  isPrivate: boolean
+}
+
+export interface WorktreeProgressEvent {
+  taskId: string
+  repo: string
+  step: string
+  done: boolean
+  error?: string
+}
+
 interface ElectronAPI {
   db: {
     getTasks: () => Promise<WorkfloTask[]>
@@ -42,6 +75,14 @@ interface ElectronAPI {
     createTask: (data: CreateTaskDTO) => Promise<WorkfloTask>
     updateTask: (id: string, data: UpdateTaskDTO) => Promise<WorkfloTask | undefined>
     deleteTask: (id: string) => Promise<boolean>
+  }
+  mcpServers: {
+    getAll: () => Promise<McpServer[]>
+    get: (id: string) => Promise<McpServer | undefined>
+    create: (data: CreateMcpServerDTO) => Promise<McpServer>
+    update: (id: string, data: UpdateMcpServerDTO) => Promise<McpServer | undefined>
+    delete: (id: string) => Promise<boolean>
+    testConnection: (data: { id?: string; name: string; type?: 'local' | 'remote'; command?: string; args?: string[]; url?: string; headers?: Record<string, string>; environment?: Record<string, string> }) => Promise<McpTestResult>
   }
   agents: {
     getAll: () => Promise<Agent[]>
@@ -51,7 +92,8 @@ interface ElectronAPI {
     delete: (id: string) => Promise<boolean>
   }
   agentSession: {
-    start: (agentId: string, taskId: string) => Promise<AgentSessionStartResult>
+    start: (agentId: string, taskId: string, workspaceDir?: string) => Promise<AgentSessionStartResult>
+    abort: (sessionId: string) => Promise<AgentSessionSuccessResult>
     stop: (sessionId: string) => Promise<AgentSessionSuccessResult>
     send: (sessionId: string, message: string) => Promise<AgentSessionSuccessResult>
     approve: (sessionId: string, approved: boolean, message?: string) => Promise<AgentSessionSuccessResult>
@@ -68,10 +110,26 @@ interface ElectronAPI {
   notifications: {
     show: (title: string, body: string) => Promise<void>
   }
+  settings: {
+    get: (key: string) => Promise<string | null>
+    set: (key: string, value: string) => Promise<void>
+    getAll: () => Promise<Record<string, string>>
+  }
+  github: {
+    checkCli: () => Promise<GhCliStatus>
+    startAuth: () => Promise<void>
+    fetchOrgs: () => Promise<string[]>
+    fetchOrgRepos: (org: string) => Promise<GitHubRepo[]>
+  }
+  worktree: {
+    setup: (taskId: string, repos: { fullName: string; defaultBranch: string }[], org: string) => Promise<string>
+    cleanup: (taskId: string, repos: { fullName: string }[], org: string) => Promise<void>
+  }
   onOverdueCheck: (callback: () => void) => () => void
   onAgentOutput: (callback: (event: AgentOutputEvent) => void) => () => void
   onAgentStatus: (callback: (event: AgentStatusEvent) => void) => () => void
   onAgentApproval: (callback: (event: AgentApprovalRequest) => void) => () => void
+  onWorktreeProgress: (callback: (event: WorktreeProgressEvent) => void) => () => void
 }
 
 declare global {

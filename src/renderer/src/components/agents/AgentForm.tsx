@@ -1,11 +1,13 @@
 import { useState, useEffect } from 'react'
-import { Plus, X, Loader2 } from 'lucide-react'
+import { Loader2, ChevronRight } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
 import { Textarea } from '@/components/ui/Textarea'
 import { Label } from '@/components/ui/Label'
+import { Checkbox } from '@/components/ui/Checkbox'
 import { agentConfigApi } from '@/lib/ipc-client'
-import type { Agent, CreateAgentDTO, UpdateAgentDTO, McpServerConfig, CodingAgentType } from '@/types'
+import { useMcpStore } from '@/stores/mcp-store'
+import type { Agent, CreateAgentDTO, UpdateAgentDTO, CodingAgentType, AgentMcpServerEntry } from '@/types'
 import { CODING_AGENTS } from '@/types'
 
 interface AgentFormProps {
@@ -19,16 +21,37 @@ interface Model {
   name: string
 }
 
+/** Parse agent config mcp_servers into a map of serverId → enabledTools (undefined = all tools) */
+function parseMcpSelection(entries?: Array<string | AgentMcpServerEntry>): Map<string, string[] | undefined> {
+  const map = new Map<string, string[] | undefined>()
+  if (!entries) return map
+  for (const entry of entries) {
+    if (typeof entry === 'string') {
+      map.set(entry, undefined) // all tools
+    } else {
+      map.set(entry.serverId, entry.enabledTools)
+    }
+  }
+  return map
+}
+
 export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
   const [name, setName] = useState(agent?.name ?? '')
   const [serverUrl, setServerUrl] = useState(agent?.server_url ?? 'http://localhost:4096')
   const [codingAgent, setCodingAgent] = useState<CodingAgentType | ''>(agent?.config.coding_agent ?? '')
   const [model, setModel] = useState(agent?.config.model ?? '')
   const [systemPrompt, setSystemPrompt] = useState(agent?.config.system_prompt ?? '')
-  const [mcpServers, setMcpServers] = useState<McpServerConfig[]>(
-    agent?.config.mcp_servers ?? []
+  const [mcpSelection, setMcpSelection] = useState<Map<string, string[] | undefined>>(
+    () => parseMcpSelection(agent?.config.mcp_servers)
   )
-  
+  const [expandedServers, setExpandedServers] = useState<Set<string>>(new Set())
+
+  const { servers: globalMcpServers, fetchServers: fetchMcpServers } = useMcpStore()
+
+  useEffect(() => {
+    fetchMcpServers()
+  }, [])
+
   // Model fetching state
   const [availableModels, setAvailableModels] = useState<Model[]>([])
   const [isLoadingModels, setIsLoadingModels] = useState(false)
@@ -110,6 +133,16 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
     e.preventDefault()
     if (!name.trim()) return
 
+    // Serialize mcp_servers selection
+    const mcpServersConfig: Array<string | AgentMcpServerEntry> = []
+    for (const [serverId, enabledTools] of mcpSelection) {
+      if (enabledTools === undefined) {
+        mcpServersConfig.push(serverId) // all tools
+      } else {
+        mcpServersConfig.push({ serverId, enabledTools })
+      }
+    }
+
     onSubmit({
       name: name.trim(),
       server_url: serverUrl.trim(),
@@ -117,21 +150,62 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
         coding_agent: codingAgent || undefined,
         model: model.trim() || undefined,
         system_prompt: systemPrompt.trim() || undefined,
-        mcp_servers: mcpServers.length > 0 ? mcpServers : undefined
+        mcp_servers: mcpServersConfig.length > 0 ? mcpServersConfig : undefined
       }
     })
   }
 
-  const addMcpServer = () => {
-    setMcpServers([...mcpServers, { name: '', command: '', args: [] }])
+  const toggleMcpServer = (serverId: string) => {
+    setMcpSelection((prev) => {
+      const next = new Map(prev)
+      if (next.has(serverId)) {
+        next.delete(serverId)
+        setExpandedServers((s) => { const n = new Set(s); n.delete(serverId); return n })
+      } else {
+        next.set(serverId, undefined) // all tools by default
+      }
+      return next
+    })
   }
 
-  const removeMcpServer = (index: number) => {
-    setMcpServers(mcpServers.filter((_, i) => i !== index))
+  const toggleExpand = (serverId: string) => {
+    setExpandedServers((prev) => {
+      const next = new Set(prev)
+      if (next.has(serverId)) next.delete(serverId)
+      else next.add(serverId)
+      return next
+    })
   }
 
-  const updateMcpServer = (index: number, field: keyof McpServerConfig, value: string | string[]) => {
-    setMcpServers(mcpServers.map((s, i) => (i === index ? { ...s, [field]: value } : s)))
+  const toggleTool = (serverId: string, toolName: string, allToolNames: string[]) => {
+    setMcpSelection((prev) => {
+      const next = new Map(prev)
+      const current = next.get(serverId)
+      // If currently "all tools" (undefined), switch to explicit list minus this tool
+      if (current === undefined) {
+        next.set(serverId, allToolNames.filter((t) => t !== toolName))
+      } else if (current.includes(toolName)) {
+        const updated = current.filter((t) => t !== toolName)
+        // If we just removed the last tool, uncheck the server entirely
+        if (updated.length === 0) {
+          next.delete(serverId)
+          setExpandedServers((s) => { const n = new Set(s); n.delete(serverId); return n })
+        } else {
+          next.set(serverId, updated)
+        }
+      } else {
+        const updated = [...current, toolName]
+        // If all tools are now selected, switch back to undefined (all)
+        next.set(serverId, updated.length === allToolNames.length ? undefined : updated)
+      }
+      return next
+    })
+  }
+
+  const isToolEnabled = (serverId: string, toolName: string): boolean => {
+    const entry = mcpSelection.get(serverId)
+    if (entry === undefined) return true // all tools
+    return entry.includes(toolName)
   }
 
   return (
@@ -246,36 +320,74 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
       </div>
 
       <div className="space-y-2">
-        <div className="flex items-center justify-between">
-          <Label>MCP Servers</Label>
-          <Button type="button" variant="ghost" size="sm" onClick={addMcpServer}>
-            <Plus className="h-3 w-3" /> Add
-          </Button>
-        </div>
-        {mcpServers.map((server, i) => (
-          <div key={i} className="flex items-start gap-2 rounded-md border border-border p-3">
-            <div className="flex-1 space-y-2">
-              <Input
-                value={server.name}
-                onChange={(e) => updateMcpServer(i, 'name', e.target.value)}
-                placeholder="Server name"
-              />
-              <Input
-                value={server.command}
-                onChange={(e) => updateMcpServer(i, 'command', e.target.value)}
-                placeholder="Command (e.g. npx)"
-              />
-              <Input
-                value={server.args.join(' ')}
-                onChange={(e) => updateMcpServer(i, 'args', e.target.value.split(' ').filter(Boolean))}
-                placeholder="Args (space-separated)"
-              />
-            </div>
-            <Button type="button" variant="ghost" size="icon" onClick={() => removeMcpServer(i)}>
-              <X className="h-3.5 w-3.5 text-muted-foreground" />
-            </Button>
+        <Label>MCP Servers</Label>
+        {globalMcpServers.length === 0 ? (
+          <p className="text-xs text-muted-foreground">
+            No MCP servers configured. Add them in Agent Settings.
+          </p>
+        ) : (
+          <div className="space-y-1.5">
+            {globalMcpServers.map((server) => {
+              const isChecked = mcpSelection.has(server.id)
+              const hasTools = server.tools && server.tools.length > 0
+              const isExpanded = expandedServers.has(server.id)
+              const enabledTools = mcpSelection.get(server.id)
+              const enabledCount = enabledTools === undefined
+                ? server.tools?.length ?? 0
+                : enabledTools.length
+
+              return (
+                <div key={server.id} className="rounded-md border border-border overflow-hidden">
+                  <label className="flex items-center gap-2.5 px-3 py-2 cursor-pointer hover:bg-accent/50">
+                    <Checkbox
+                      checked={isChecked}
+                      onCheckedChange={() => toggleMcpServer(server.id)}
+                    />
+                    <div className="min-w-0 flex-1 flex items-center gap-2">
+                      <span className="text-sm">{server.name}</span>
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded ${
+                        server.type === 'remote' ? 'bg-blue-500/20 text-blue-400' : 'bg-muted text-muted-foreground'
+                      }`}>
+                        {server.type === 'remote' ? 'remote' : 'local'}
+                      </span>
+                      {hasTools && isChecked && (
+                        <span className="text-[10px] text-muted-foreground">
+                          {enabledCount}/{server.tools.length} tools
+                        </span>
+                      )}
+                    </div>
+                    {hasTools && isChecked && (
+                      <button
+                        type="button"
+                        onClick={(e) => { e.preventDefault(); toggleExpand(server.id) }}
+                        className="p-0.5 text-muted-foreground hover:text-foreground"
+                      >
+                        <ChevronRight className={`h-3.5 w-3.5 transition-transform ${isExpanded ? 'rotate-90' : ''}`} />
+                      </button>
+                    )}
+                  </label>
+                  {hasTools && isChecked && isExpanded && (
+                    <div className="border-t border-border/50 px-3 py-1.5 space-y-0.5 bg-muted/20">
+                      {server.tools.map((tool) => (
+                        <label key={tool.name} className="flex items-center gap-2 py-0.5 cursor-pointer">
+                          <Checkbox
+                            className="h-3.5 w-3.5"
+                            checked={isToolEnabled(server.id, tool.name)}
+                            onCheckedChange={() => toggleTool(server.id, tool.name, server.tools.map((t) => t.name))}
+                          />
+                          <span className="text-xs">{tool.name}</span>
+                          {tool.description && (
+                            <span className="text-[10px] text-muted-foreground truncate">{tool.description}</span>
+                          )}
+                        </label>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
           </div>
-        ))}
+        )}
       </div>
 
       <div className="flex justify-end gap-2 pt-2">

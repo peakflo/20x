@@ -7,6 +7,26 @@ export interface AgentMessage {
   role: 'user' | 'assistant' | 'system'
   content: string
   timestamp: Date
+  partType?: string
+  tool?: {
+    name: string
+    status: string
+    title?: string
+    input?: string
+    output?: string
+    error?: string
+    questions?: Array<{
+      header: string
+      question: string
+      options: Array<{ label: string; description: string }>
+    }>
+    todos?: Array<{
+      id: string
+      content: string
+      status: 'pending' | 'in_progress' | 'completed'
+      priority?: string
+    }>
+  }
 }
 
 export interface AgentSessionState {
@@ -20,7 +40,8 @@ interface UseAgentSessionResult {
   session: AgentSessionState
   isLoading: boolean
   error: string | null
-  start: (agentId: string, taskId: string) => Promise<string>
+  start: (agentId: string, taskId: string, workspaceDir?: string) => Promise<string>
+  abort: () => Promise<void>
   stop: () => Promise<void>
   sendMessage: (message: string) => Promise<void>
   approve: (approved: boolean, message?: string) => Promise<void>
@@ -37,77 +58,86 @@ export function useAgentSession(): UseAgentSessionResult {
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  // Use refs to track cleanup functions
-  const cleanupOutputRef = useRef<(() => void) | null>(null)
-  const cleanupStatusRef = useRef<(() => void) | null>(null)
-  const cleanupApprovalRef = useRef<(() => void) | null>(null)
+  // Use a ref to track the sessionId so event handlers always see the latest value
+  // (avoids stale closure from React state)
+  const sessionIdRef = useRef<string | null>(null)
+  const seenIdsRef = useRef<Set<string>>(new Set())
 
-  // Setup event listeners
+  // Subscribe to IPC events once on mount, filter by ref
   useEffect(() => {
-    cleanupOutputRef.current = onAgentOutput((event: AgentOutputEvent) => {
-      if (event.sessionId !== session.sessionId) return
+    const cleanupOutput = onAgentOutput((event: AgentOutputEvent) => {
+      if (!sessionIdRef.current || event.sessionId !== sessionIdRef.current) return
 
-      setSession(prev => {
-        // Extract role and content from the event data
-        let role: 'user' | 'assistant' | 'system' = 'system'
-        let content = ''
-        
-        if (typeof event.data === 'object' && event.data !== null) {
-          const data = event.data as any
-          if (data.role === 'user') {
-            role = 'user'
-          } else if (data.role === 'assistant') {
-            role = 'assistant'
-          }
-          
-          if (data.content !== undefined) {
-            content = String(data.content)
-          } else if (data.text !== undefined) {
-            content = String(data.text)
-          } else {
-            content = JSON.stringify(data)
-          }
-        } else {
-          content = String(event.data)
-        }
+      const data = event.data as any
 
-        // Avoid duplicate messages by checking if this exact content already exists
-        const isDuplicate = prev.messages.some(
-          m => m.content === content && m.role === role
-        )
-        
-        if (isDuplicate) {
-          return prev
-        }
+      let role: 'user' | 'assistant' | 'system' = 'system'
+      let content = ''
+      let msgId = ''
 
-        return {
+      if (typeof data === 'object' && data !== null) {
+        role = data.role === 'user' ? 'user' : data.role === 'assistant' ? 'assistant' : 'system'
+        content = data.content ?? data.text ?? data.message ?? JSON.stringify(data)
+        msgId = data.id || ''
+      } else {
+        content = String(data)
+      }
+
+      if (!content) return
+
+      // Generate stable ID for dedup
+      if (!msgId) {
+        msgId = `${role}-${content.slice(0, 50)}-${content.length}`
+      }
+
+      // Streaming update — replace content, tool, and partType of existing message
+      if (data.update && seenIdsRef.current.has(msgId)) {
+        setSession((prev) => ({
           ...prev,
-          messages: [
-            ...prev.messages,
-            {
-              id: `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-              role,
+          messages: prev.messages.map((m) =>
+            m.id === msgId ? {
+              ...m,
               content,
-              timestamp: new Date()
-            }
-          ]
-        }
-      })
+              ...(data.partType && { partType: data.partType }),
+              ...(data.tool && { tool: data.tool })
+            } : m
+          )
+        }))
+        return
+      }
+
+      // Skip already-seen messages
+      if (seenIdsRef.current.has(msgId)) return
+      seenIdsRef.current.add(msgId)
+
+      setSession((prev) => ({
+        ...prev,
+        messages: [
+          ...prev.messages,
+          {
+            id: msgId,
+            role,
+            content,
+            timestamp: new Date(),
+            partType: data.partType,
+            tool: data.tool
+          }
+        ]
+      }))
     })
 
-    cleanupStatusRef.current = onAgentStatus((event: AgentStatusEvent) => {
-      if (event.sessionId !== session.sessionId) return
+    const cleanupStatus = onAgentStatus((event: AgentStatusEvent) => {
+      if (!sessionIdRef.current || event.sessionId !== sessionIdRef.current) return
 
-      setSession(prev => ({
+      setSession((prev) => ({
         ...prev,
         status: event.status
       }))
     })
 
-    cleanupApprovalRef.current = onAgentApproval((event: AgentApprovalRequest) => {
-      if (event.sessionId !== session.sessionId) return
+    const cleanupApproval = onAgentApproval((event: AgentApprovalRequest) => {
+      if (!sessionIdRef.current || event.sessionId !== sessionIdRef.current) return
 
-      setSession(prev => ({
+      setSession((prev) => ({
         ...prev,
         pendingApproval: event,
         status: 'waiting_approval'
@@ -115,24 +145,32 @@ export function useAgentSession(): UseAgentSessionResult {
     })
 
     return () => {
-      cleanupOutputRef.current?.()
-      cleanupStatusRef.current?.()
-      cleanupApprovalRef.current?.()
+      cleanupOutput()
+      cleanupStatus()
+      cleanupApproval()
     }
-  }, [session.sessionId])
+  }, []) // Subscribe once — sessionIdRef handles filtering
 
-  const start = useCallback(async (agentId: string, taskIdParam: string) => {
+  const start = useCallback(async (agentId: string, taskId: string, workspaceDir?: string) => {
     setIsLoading(true)
     setError(null)
 
+    // Reset seen messages for new session
+    seenIdsRef.current = new Set()
+
     try {
-      const { sessionId } = await agentSessionApi.start(agentId, taskIdParam)
+      const { sessionId } = await agentSessionApi.start(agentId, taskId, workspaceDir)
+
+      // Update ref FIRST so event handlers can match immediately
+      sessionIdRef.current = sessionId
+
       setSession({
         sessionId,
         status: 'working',
         messages: [],
         pendingApproval: null
       })
+
       return sessionId
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to start session')
@@ -142,12 +180,28 @@ export function useAgentSession(): UseAgentSessionResult {
     }
   }, [])
 
+  const abort = useCallback(async () => {
+    const currentId = sessionIdRef.current
+    if (!currentId) return
+
+    try {
+      await agentSessionApi.abort(currentId)
+      setSession((prev) => ({ ...prev, status: 'idle' }))
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to abort session')
+      throw err
+    }
+  }, [])
+
   const stop = useCallback(async () => {
-    if (!session.sessionId) return
+    const currentId = sessionIdRef.current
+    if (!currentId) return
 
     setIsLoading(true)
     try {
-      await agentSessionApi.stop(session.sessionId)
+      await agentSessionApi.stop(currentId)
+      sessionIdRef.current = null
+      seenIdsRef.current = new Set()
       setSession({
         sessionId: null,
         status: 'idle',
@@ -160,43 +214,27 @@ export function useAgentSession(): UseAgentSessionResult {
     } finally {
       setIsLoading(false)
     }
-  }, [session.sessionId])
+  }, [])
 
   const sendMessage = useCallback(async (message: string) => {
-    if (!session.sessionId) {
-      throw new Error('No active session')
-    }
-
-    // Add user message to transcript
-    setSession(prev => ({
-      ...prev,
-      messages: [
-        ...prev.messages,
-        {
-          id: `msg-${Date.now()}`,
-          role: 'user',
-          content: message,
-          timestamp: new Date()
-        }
-      ]
-    }))
+    const currentId = sessionIdRef.current
+    if (!currentId) throw new Error('No active session')
 
     try {
-      await agentSessionApi.send(session.sessionId, message)
+      await agentSessionApi.send(currentId, message)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to send message')
       throw err
     }
-  }, [session.sessionId])
+  }, [])
 
   const approve = useCallback(async (approved: boolean, message?: string) => {
-    if (!session.sessionId) {
-      throw new Error('No active session')
-    }
+    const currentId = sessionIdRef.current
+    if (!currentId) throw new Error('No active session')
 
     try {
-      await agentSessionApi.approve(session.sessionId, approved, message)
-      setSession(prev => ({
+      await agentSessionApi.approve(currentId, approved, message)
+      setSession((prev) => ({
         ...prev,
         pendingApproval: null,
         status: approved ? 'working' : 'idle'
@@ -205,17 +243,16 @@ export function useAgentSession(): UseAgentSessionResult {
       setError(err instanceof Error ? err.message : 'Failed to respond to permission request')
       throw err
     }
-  }, [session.sessionId])
-
-  const clearError = useCallback(() => {
-    setError(null)
   }, [])
+
+  const clearError = useCallback(() => setError(null), [])
 
   return {
     session,
     isLoading,
     error,
     start,
+    abort,
     stop,
     sendMessage,
     approve,

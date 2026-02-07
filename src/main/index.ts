@@ -3,11 +3,15 @@ import { join } from 'path'
 import { is } from '@electron-toolkit/utils'
 import { DatabaseManager } from './database'
 import { AgentManager } from './agent-manager'
+import { GitHubManager } from './github-manager'
+import { WorktreeManager } from './worktree-manager'
 import { registerIpcHandlers } from './ipc-handlers'
 
 let mainWindow: BrowserWindow | null = null
 let db: DatabaseManager | null = null
 let agentManager: AgentManager | null = null
+let githubManager: GitHubManager | null = null
+let worktreeManager: WorktreeManager | null = null
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
@@ -51,8 +55,9 @@ function createWindow(): void {
     mainWindow = null
   })
 
-  // Set main window for agent manager
+  // Set main window for managers
   agentManager?.setMainWindow(mainWindow)
+  worktreeManager?.setMainWindow(mainWindow)
 }
 
 app.whenReady().then(async () => {
@@ -60,8 +65,15 @@ app.whenReady().then(async () => {
   db.initialize()
 
   agentManager = new AgentManager(db)
+  githubManager = new GitHubManager()
+  worktreeManager = new WorktreeManager()
 
-  registerIpcHandlers(db, agentManager)
+  registerIpcHandlers(db, agentManager, githubManager, worktreeManager)
+
+  // Check gh CLI status on startup (log only)
+  githubManager.checkGhCli().then((status) => {
+    console.log('[GitHub] CLI status:', status)
+  }).catch(() => {})
 
   createWindow()
 

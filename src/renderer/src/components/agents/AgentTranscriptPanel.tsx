@@ -1,5 +1,5 @@
-import { useRef, useEffect } from 'react'
-import { StopCircle, Loader2, Terminal } from 'lucide-react'
+import { useRef, useEffect, useState, useMemo } from 'react'
+import { StopCircle, Loader2, Terminal, Send, ChevronRight, Wrench, AlertTriangle, CheckCircle2, Circle, Clock } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import type { AgentMessage } from '@/hooks/use-agent-session'
 
@@ -7,61 +7,269 @@ interface AgentTranscriptPanelProps {
   messages: AgentMessage[]
   status: 'idle' | 'working' | 'error' | 'waiting_approval'
   onStop: () => void
+  onSend?: (message: string) => void
   className?: string
 }
 
-export function AgentTranscriptPanel({ messages, status, onStop, className }: AgentTranscriptPanelProps) {
-  const scrollRef = useRef<HTMLDivElement>(null)
+function QuestionMessage({ message, onAnswer }: { message: AgentMessage; onAnswer?: (answer: string) => void }) {
+  const questions = message.tool?.questions || []
+  const [answered, setAnswered] = useState<string | null>(null)
 
-  // Auto-scroll to bottom when new messages arrive
-  useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight
+  const handleSelect = (questionIdx: number, optionLabel: string) => {
+    if (answered) return
+    setAnswered(optionLabel)
+    onAnswer?.(optionLabel)
+  }
+
+  return (
+    <div className="rounded-md bg-[#161b22] border border-primary/30 overflow-hidden">
+      {questions.map((q, qi) => (
+        <div key={qi} className="px-4 py-3 space-y-2.5">
+          {q.header && <span className="text-[10px] text-primary font-medium uppercase tracking-wide">{q.header}</span>}
+          <p className="text-xs text-foreground">{q.question}</p>
+          <div className="space-y-1.5">
+            {q.options.map((opt, oi) => {
+              const isSelected = answered === opt.label
+              return (
+                <button
+                  key={oi}
+                  onClick={() => handleSelect(qi, opt.label)}
+                  disabled={!!answered}
+                  className={`w-full text-left rounded px-3 py-2 text-xs transition-colors border ${
+                    isSelected
+                      ? 'bg-primary/20 border-primary/50 text-foreground'
+                      : answered
+                        ? 'border-border/30 text-muted-foreground opacity-50 cursor-default'
+                        : 'border-border/50 hover:bg-white/5 hover:border-border text-gray-300 cursor-pointer'
+                  }`}
+                >
+                  <span className="font-medium">{opt.label}</span>
+                  {opt.description && (
+                    <span className="block text-[11px] text-muted-foreground mt-0.5">{opt.description}</span>
+                  )}
+                </button>
+              )
+            })}
+          </div>
+        </div>
+      ))}
+      <div className="px-4 pb-2">
+        <span className="text-[10px] text-muted-foreground">{message.timestamp.toLocaleTimeString()}</span>
+      </div>
+    </div>
+  )
+}
+
+function TodoWriteMessage({ message }: { message: AgentMessage }) {
+  const todos = message.tool?.todos || []
+  const completed = todos.filter((t) => t.status === 'completed').length
+
+  const statusIcon = (status: string) => {
+    switch (status) {
+      case 'completed': return <CheckCircle2 className="h-3.5 w-3.5 text-green-400 shrink-0" />
+      case 'in_progress': return <Clock className="h-3.5 w-3.5 text-yellow-400 shrink-0" />
+      default: return <Circle className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
     }
-  }, [messages])
+  }
+
+  return (
+    <div className="rounded-md bg-[#161b22] border border-border/50 overflow-hidden">
+      <div className="flex items-center gap-2 px-4 py-2.5 border-b border-border/30">
+        <span className="text-[10px] text-muted-foreground font-medium uppercase tracking-wide">Tasks</span>
+        <span className="text-[10px] text-muted-foreground ml-auto">{completed}/{todos.length} done</span>
+      </div>
+      <div className="px-3 py-2 space-y-1">
+        {todos.map((todo) => (
+          <div
+            key={todo.id}
+            className={`flex items-start gap-2.5 rounded px-2 py-1.5 text-xs ${
+              todo.status === 'completed' ? 'opacity-60' : ''
+            }`}
+          >
+            {statusIcon(todo.status)}
+            <span className={`${todo.status === 'completed' ? 'line-through text-muted-foreground' : 'text-foreground'}`}>
+              {todo.content}
+            </span>
+          </div>
+        ))}
+      </div>
+      <div className="px-4 pb-2">
+        <span className="text-[10px] text-muted-foreground">{message.timestamp.toLocaleTimeString()}</span>
+      </div>
+    </div>
+  )
+}
+
+function ToolCallMessage({ message }: { message: AgentMessage }) {
+  const [expanded, setExpanded] = useState(false)
+  const tool = message.tool!
+  const statusColor = tool.status === 'completed' ? 'text-green-400'
+    : tool.status === 'error' ? 'text-red-400'
+    : 'text-yellow-400'
+
+  return (
+    <div className="rounded-md bg-[#161b22] border border-border/50 overflow-hidden">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="w-full flex items-center gap-2 px-3 py-2 text-xs font-mono hover:bg-white/5 transition-colors"
+      >
+        <ChevronRight className={`h-3 w-3 text-muted-foreground shrink-0 transition-transform ${expanded ? 'rotate-90' : ''}`} />
+        <Wrench className="h-3 w-3 text-muted-foreground shrink-0" />
+        <span className="text-foreground">{tool.name}</span>
+        {tool.title && <span className="text-muted-foreground truncate">— {tool.title}</span>}
+        <span className={`ml-auto text-[10px] shrink-0 ${statusColor}`}>{tool.status}</span>
+      </button>
+      {expanded && (
+        <div className="border-t border-border/30 px-3 py-2 text-[11px] font-mono space-y-2">
+          {tool.input && (
+            <div>
+              <span className="text-muted-foreground">Input:</span>
+              <pre className="mt-0.5 text-gray-400 whitespace-pre-wrap break-words max-h-40 overflow-y-auto">{tool.input}</pre>
+            </div>
+          )}
+          {tool.output && (
+            <div>
+              <span className="text-muted-foreground">Output:</span>
+              <pre className="mt-0.5 text-gray-400 whitespace-pre-wrap break-words max-h-40 overflow-y-auto">{tool.output}</pre>
+            </div>
+          )}
+          {tool.error && (
+            <div>
+              <span className="text-red-400">Error:</span>
+              <pre className="mt-0.5 text-red-300 whitespace-pre-wrap break-words">{tool.error}</pre>
+            </div>
+          )}
+        </div>
+      )}
+      <div className="px-3 pb-1.5">
+        <span className="text-[10px] text-muted-foreground">{message.timestamp.toLocaleTimeString()}</span>
+      </div>
+    </div>
+  )
+}
+
+function MessageBubble({ message, onAnswer }: { message: AgentMessage; onAnswer?: (answer: string) => void }) {
+  if (message.partType === 'question' && message.tool?.questions) {
+    return <QuestionMessage message={message} onAnswer={onAnswer} />
+  }
+
+  if (message.partType === 'todowrite' && message.tool?.todos) {
+    return <TodoWriteMessage message={message} />
+  }
+
+  if (message.partType === 'tool' && message.tool) {
+    return <ToolCallMessage message={message} />
+  }
+
+  // Step markers — compact single line
+  if (message.partType === 'step-start' || message.partType === 'step-finish') {
+    return (
+      <div className="text-[10px] text-muted-foreground font-mono px-1">
+        {message.partType === 'step-start' ? '▶' : '⏹'} {message.content}
+        <span className="ml-2">{message.timestamp.toLocaleTimeString()}</span>
+      </div>
+    )
+  }
+
+  const isUser = message.role === 'user'
+  const isSystem = message.role === 'system'
+  const isReasoning = message.partType === 'reasoning'
+  const isError = message.partType === 'error' || message.partType === 'retry'
+
+  return (
+    <div className={`flex gap-2 ${isUser ? 'justify-end' : 'justify-start'}`}>
+      <div
+        className={`max-w-[90%] rounded-md px-3 py-2 ${
+          isError
+            ? 'bg-red-500/10 text-red-200 border border-red-500/20'
+            : isUser
+              ? 'bg-primary/20 text-foreground'
+              : isSystem
+                ? 'bg-yellow-500/10 text-yellow-200'
+                : isReasoning
+                  ? 'bg-purple-500/10 text-purple-200 border border-purple-500/20'
+                  : 'bg-[#161b22] text-gray-300 border border-border/50'
+        }`}
+      >
+        {isError && (
+          <span className="text-[10px] text-red-400 flex items-center gap-1 mb-1">
+            <AlertTriangle className="h-3 w-3" /> Error
+          </span>
+        )}
+        {isReasoning && <span className="text-[10px] text-purple-400 block mb-1">Thinking</span>}
+        <pre className="whitespace-pre-wrap break-words font-mono text-xs">
+          {message.content}
+        </pre>
+        <span className="text-[10px] text-muted-foreground mt-1 block">
+          {message.timestamp.toLocaleTimeString()}
+        </span>
+      </div>
+    </div>
+  )
+}
+
+export function AgentTranscriptPanel({ messages, status, onStop, onSend, className }: AgentTranscriptPanelProps) {
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  // Detect if the session ended due to an error (last message is error/retry and status is idle)
+  const lastErrorMessage = useMemo(() => {
+    if (status !== 'idle' || messages.length === 0) return null
+    const last = messages[messages.length - 1]
+    if (last.partType === 'error' || last.partType === 'retry') return last
+    return null
+  }, [messages, status])
+
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    // Use setTimeout to ensure DOM has rendered the new messages
+    const timer = setTimeout(() => {
+      el.scrollTop = el.scrollHeight
+    }, 50)
+    return () => clearTimeout(timer)
+  }, [messages.length])
 
   const getStatusColor = () => {
     switch (status) {
-      case 'working':
-        return 'text-green-400'
-      case 'error':
-        return 'text-red-400'
-      case 'waiting_approval':
-        return 'text-yellow-400'
-      default:
-        return 'text-muted-foreground'
+      case 'working': return 'text-green-400'
+      case 'error': return 'text-red-400'
+      case 'waiting_approval': return 'text-yellow-400'
+      default: return 'text-muted-foreground'
     }
   }
 
   const getStatusLabel = () => {
     switch (status) {
-      case 'working':
-        return 'Working'
-      case 'error':
-        return 'Error'
-      case 'waiting_approval':
-        return 'Waiting for approval'
-      default:
-        return 'Idle'
+      case 'working': return 'Working'
+      case 'error': return 'Error'
+      case 'waiting_approval': return 'Waiting for approval'
+      default: return 'Idle'
+    }
+  }
+
+  const handleSend = () => {
+    const value = inputRef.current?.value.trim()
+    if (value && onSend) {
+      onSend(value)
+      inputRef.current!.value = ''
     }
   }
 
   return (
-    <div className={`flex flex-col h-full bg-[#0d1117] border-l border-border ${className}`}>
+    <div className={`flex flex-col h-full bg-[#0d1117] border-l border-border ${className ?? ''}`}>
       {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-border/50">
+      <div className="flex items-center justify-between px-4 py-3 border-b border-border/50 shrink-0">
         <div className="flex items-center gap-2">
           <Terminal className="h-4 w-4 text-muted-foreground" />
           <span className="text-sm font-medium">Agent Transcript</span>
         </div>
         <div className="flex items-center gap-3">
-          <div className="flex items-center gap-2">
-            <span className={`text-xs ${getStatusColor()}`}>
-              {status === 'working' && <Loader2 className="h-3 w-3 inline animate-spin mr-1" />}
-              {getStatusLabel()}
-            </span>
-          </div>
-          {status === 'working' && (
+          <span className={`text-xs flex items-center gap-1 ${getStatusColor()}`}>
+            {status === 'working' && <Loader2 className="h-3 w-3 animate-spin" />}
+            {getStatusLabel()}
+          </span>
+          {(status === 'working' || status === 'waiting_approval') && (
             <Button variant="ghost" size="sm" onClick={onStop} className="h-7 px-2">
               <StopCircle className="h-3.5 w-3.5" />
             </Button>
@@ -69,51 +277,68 @@ export function AgentTranscriptPanel({ messages, status, onStop, className }: Ag
         </div>
       </div>
 
+      {/* Error banner */}
+      {lastErrorMessage && (
+        <div className="flex items-center gap-2 px-4 py-2.5 bg-red-500/10 border-b border-red-500/20 shrink-0">
+          <AlertTriangle className="h-3.5 w-3.5 text-red-400 shrink-0" />
+          <span className="text-xs text-red-300 truncate">{lastErrorMessage.content}</span>
+        </div>
+      )}
+
       {/* Messages */}
       <div
         ref={scrollRef}
-        className="flex-1 overflow-y-auto p-4 font-mono text-sm space-y-3"
+        className="flex-1 min-h-0 overflow-y-auto p-4 font-mono text-sm space-y-2"
       >
         {messages.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-muted-foreground text-xs">
-            <Terminal className="h-8 w-8 mb-2 opacity-20" />
-            <p>No messages yet</p>
-            <p className="mt-1">Agent will start working soon...</p>
+            {status === 'working' ? (
+              <>
+                <Loader2 className="h-8 w-8 mb-3 animate-spin opacity-30" />
+                <p>Agent is starting...</p>
+                <p className="mt-1 text-[10px]">Sending task to OpenCode</p>
+              </>
+            ) : (
+              <>
+                <Terminal className="h-8 w-8 mb-2 opacity-20" />
+                <p>No messages yet</p>
+              </>
+            )}
           </div>
         ) : (
-          messages.map((message, index) => (
-            <div
-              key={message.id || index}
-              className={`flex gap-2 ${
-                message.role === 'user'
-                  ? 'justify-end'
-                  : 'justify-start'
-              }`}
-            >
-              <div
-                className={`max-w-[90%] rounded-md px-3 py-2 ${
-                  message.role === 'user'
-                    ? 'bg-primary/20 text-foreground'
-                    : message.role === 'system'
-                    ? 'bg-yellow-500/10 text-yellow-200'
-                    : 'bg-[#161b22] text-gray-300 border border-border/50'
-                }`}
-              >
-                <pre className="whitespace-pre-wrap break-words font-mono text-xs">
-                  {message.content}
-                </pre>
-                <span className="text-[10px] text-muted-foreground mt-1 block">
-                  {message.timestamp.toLocaleTimeString()}
-                </span>
+          <>
+            {messages.map((message) => (
+              <MessageBubble key={message.id} message={message} onAnswer={onSend} />
+            ))}
+            {status === 'working' && (
+              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <Loader2 className="h-3 w-3 animate-spin" />
+                Agent is working...
               </div>
-            </div>
-          ))
+            )}
+          </>
         )}
       </div>
 
-      {/* Footer */}
-      <div className="px-4 py-2 border-t border-border/50 text-[10px] text-muted-foreground font-mono">
-        {messages.length} message{messages.length !== 1 ? 's' : ''}
+      {/* Input + Footer */}
+      <div className="border-t border-border/50 shrink-0">
+        {onSend && (
+          <div className="flex items-center gap-2 px-4 py-2">
+            <input
+              ref={inputRef}
+              type="text"
+              placeholder="Send a message..."
+              className="flex-1 bg-transparent border border-border/50 rounded px-3 py-1.5 text-xs font-mono text-foreground placeholder:text-muted-foreground focus:border-ring focus:ring-1 focus:ring-ring/30"
+              onKeyDown={(e) => e.key === 'Enter' && handleSend()}
+            />
+            <Button variant="ghost" size="icon" onClick={handleSend} className="h-7 w-7">
+              <Send className="h-3 w-3" />
+            </Button>
+          </div>
+        )}
+        <div className="px-4 py-2 text-[10px] text-muted-foreground font-mono">
+          {messages.length} message{messages.length !== 1 ? 's' : ''}
+        </div>
       </div>
     </div>
   )

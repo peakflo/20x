@@ -8,7 +8,7 @@ import { useTasks } from '@/hooks/use-tasks'
 import { useUIStore } from '@/stores/ui-store'
 import { useAgentStore } from '@/stores/agent-store'
 import { useOverdueNotifications } from '@/hooks/use-overdue-notifications'
-import { attachmentApi, agentSessionApi } from '@/lib/ipc-client'
+import { attachmentApi, agentSessionApi, worktreeApi, settingsApi } from '@/lib/ipc-client'
 import { isOverdue } from '@/lib/utils'
 import { useEffect } from 'react'
 import type { FileAttachment } from '@/types'
@@ -78,6 +78,9 @@ export function AppLayout() {
             }}
             onAssignAgent={async (taskId, agentId) => {
               await updateTask(taskId, { agent_id: agentId })
+            }}
+            onUpdateTask={async (taskId, data) => {
+              await updateTask(taskId, data)
             }}
           />
         </div>
@@ -149,6 +152,21 @@ export function AppLayout() {
                 } catch (error) {
                   console.error('Failed to stop session:', error)
                 }
+              }
+            }
+            // Cleanup worktrees if task has repos
+            if (deletingTask && deletingTask.repos?.length > 0) {
+              try {
+                const org = await settingsApi.get('github_org')
+                if (org) {
+                  await worktreeApi.cleanup(
+                    deletingTaskId,
+                    deletingTask.repos.map((r) => ({ fullName: r })),
+                    org
+                  )
+                }
+              } catch (error) {
+                console.error('Failed to cleanup worktrees:', error)
               }
             }
             await deleteTask(deletingTaskId)

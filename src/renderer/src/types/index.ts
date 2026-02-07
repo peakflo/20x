@@ -12,11 +12,55 @@ export interface McpServerConfig {
   args: string[]
 }
 
+export interface McpServerTool {
+  name: string
+  description: string
+}
+
+export interface McpServer {
+  id: string
+  name: string
+  type: 'local' | 'remote'
+  command: string
+  args: string[]
+  url: string
+  headers: Record<string, string>
+  environment: Record<string, string>
+  tools: McpServerTool[]
+  created_at: string
+  updated_at: string
+}
+
+export interface AgentMcpServerEntry {
+  serverId: string
+  enabledTools?: string[]
+}
+
+export interface CreateMcpServerDTO {
+  name: string
+  type?: 'local' | 'remote'
+  command?: string
+  args?: string[]
+  url?: string
+  headers?: Record<string, string>
+  environment?: Record<string, string>
+}
+
+export interface UpdateMcpServerDTO {
+  name?: string
+  type?: 'local' | 'remote'
+  command?: string
+  args?: string[]
+  url?: string
+  headers?: Record<string, string>
+  environment?: Record<string, string>
+}
+
 export interface AgentConfig {
   coding_agent?: CodingAgentType
   model?: string
   system_prompt?: string
-  mcp_servers?: McpServerConfig[]
+  mcp_servers?: Array<string | AgentMcpServerEntry>
 }
 
 export interface Agent {
@@ -83,6 +127,7 @@ export interface WorkfloTask {
   labels: string[]
   checklist: ChecklistItem[]
   attachments: FileAttachment[]
+  repos: string[]
   agent_id: string | null
   source: string
   created_at: string
@@ -100,6 +145,7 @@ export interface CreateTaskDTO {
   labels?: string[]
   checklist?: ChecklistItem[]
   attachments?: FileAttachment[]
+  repos?: string[]
 }
 
 export interface UpdateTaskDTO {
@@ -113,6 +159,7 @@ export interface UpdateTaskDTO {
   labels?: string[]
   checklist?: ChecklistItem[]
   attachments?: FileAttachment[]
+  repos?: string[]
   agent_id?: string | null
 }
 

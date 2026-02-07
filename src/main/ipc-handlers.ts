@@ -7,9 +7,13 @@ import type {
   UpdateTaskData,
   FileAttachmentRecord,
   CreateAgentData,
-  UpdateAgentData
+  UpdateAgentData,
+  CreateMcpServerData,
+  UpdateMcpServerData
 } from './database'
 import type { AgentManager } from './agent-manager'
+import type { GitHubManager } from './github-manager'
+import type { WorktreeManager } from './worktree-manager'
 
 const MIME_MAP: Record<string, string> = {
   '.pdf': 'application/pdf',
@@ -40,7 +44,12 @@ function getMimeType(filename: string): string {
   return MIME_MAP[extname(filename).toLowerCase()] || 'application/octet-stream'
 }
 
-export function registerIpcHandlers(db: DatabaseManager, agentManager: AgentManager): void {
+export function registerIpcHandlers(
+  db: DatabaseManager,
+  agentManager: AgentManager,
+  githubManager: GitHubManager,
+  worktreeManager: WorktreeManager
+): void {
   ipcMain.handle('db:getTasks', () => {
     return db.getTasks()
   })
@@ -136,9 +145,14 @@ export function registerIpcHandlers(db: DatabaseManager, agentManager: AgentMana
   })
 
   // Agent Session handlers
-  ipcMain.handle('agentSession:start', async (_, agentId: string, taskId: string) => {
-    const sessionId = await agentManager.startSession(agentId, taskId)
+  ipcMain.handle('agentSession:start', async (_, agentId: string, taskId: string, workspaceDir?: string) => {
+    const sessionId = await agentManager.startSession(agentId, taskId, workspaceDir)
     return { sessionId }
+  })
+
+  ipcMain.handle('agentSession:abort', async (_, sessionId: string) => {
+    await agentManager.abortSession(sessionId)
+    return { success: true }
   })
 
   ipcMain.handle('agentSession:stop', async (_, sessionId: string) => {
@@ -159,5 +173,74 @@ export function registerIpcHandlers(db: DatabaseManager, agentManager: AgentMana
   // Agent Config handlers
   ipcMain.handle('agentConfig:getProviders', async (_, serverUrl?: string) => {
     return await agentManager.getProviders(serverUrl)
+  })
+
+  // MCP Server handlers
+  ipcMain.handle('mcp:getAll', () => {
+    return db.getMcpServers()
+  })
+
+  ipcMain.handle('mcp:get', (_, id: string) => {
+    return db.getMcpServer(id)
+  })
+
+  ipcMain.handle('mcp:create', (_, data: CreateMcpServerData) => {
+    return db.createMcpServer(data)
+  })
+
+  ipcMain.handle('mcp:update', (_, id: string, data: UpdateMcpServerData) => {
+    return db.updateMcpServer(id, data)
+  })
+
+  ipcMain.handle('mcp:delete', (_, id: string) => {
+    return db.deleteMcpServer(id)
+  })
+
+  ipcMain.handle('mcp:testConnection', async (_, serverData: { id?: string; name: string; type?: string; command?: string; args?: string[]; url?: string; headers?: Record<string, string>; environment?: Record<string, string> }) => {
+    const result = await agentManager.testMcpServer(serverData)
+    // Persist discovered tools to DB if a server ID was provided and test succeeded
+    if (serverData.id && result.status === 'connected' && result.tools) {
+      db.updateMcpServerTools(serverData.id, result.tools)
+    }
+    return result
+  })
+
+  // Settings handlers
+  ipcMain.handle('settings:get', (_, key: string) => {
+    return db.getSetting(key) ?? null
+  })
+
+  ipcMain.handle('settings:set', (_, key: string, value: string) => {
+    db.setSetting(key, value)
+  })
+
+  ipcMain.handle('settings:getAll', () => {
+    return db.getAllSettings()
+  })
+
+  // GitHub handlers
+  ipcMain.handle('github:checkCli', async () => {
+    return await githubManager.checkGhCli()
+  })
+
+  ipcMain.handle('github:startAuth', async () => {
+    await githubManager.startWebAuth()
+  })
+
+  ipcMain.handle('github:fetchOrgs', async () => {
+    return await githubManager.fetchUserOrgs()
+  })
+
+  ipcMain.handle('github:fetchOrgRepos', async (_, org: string) => {
+    return await githubManager.fetchOrgRepos(org)
+  })
+
+  // Worktree handlers
+  ipcMain.handle('worktree:setup', async (_, taskId: string, repos: { fullName: string; defaultBranch: string }[], org: string) => {
+    return await worktreeManager.setupWorkspaceForTask(taskId, repos, org)
+  })
+
+  ipcMain.handle('worktree:cleanup', async (_, taskId: string, repos: { fullName: string }[], org: string) => {
+    await worktreeManager.cleanupTaskWorkspace(taskId, repos, org)
   })
 }

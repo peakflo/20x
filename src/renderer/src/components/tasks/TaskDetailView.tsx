@@ -1,4 +1,4 @@
-import { Pencil, Trash2, Calendar, User, Tag, Clock, Bot } from 'lucide-react'
+import { Pencil, Trash2, Calendar, User, Tag, Clock, Bot, Play, GitBranch } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { TaskStatusBadge } from './TaskStatusBadge'
 import { TaskPriorityBadge } from './TaskPriorityBadge'
@@ -17,9 +17,11 @@ interface TaskDetailViewProps {
   onUpdateChecklist: (checklist: ChecklistItem[]) => void
   onUpdateAttachments: (attachments: FileAttachment[]) => void
   onAssignAgent: (agentId: string | null) => void
+  onStartAgent?: () => void
+  canStartAgent?: boolean
 }
 
-export function TaskDetailView({ task, agents, onEdit, onDelete, onUpdateChecklist, onUpdateAttachments, onAssignAgent }: TaskDetailViewProps) {
+export function TaskDetailView({ task, agents, onEdit, onDelete, onUpdateChecklist, onUpdateAttachments, onAssignAgent, onStartAgent, canStartAgent }: TaskDetailViewProps) {
   const isActive = task.status !== 'completed' && task.status !== 'cancelled'
   const overdue = isActive && isOverdue(task.due_date)
   const dueSoon = isActive && !overdue && isDueSoon(task.due_date)
@@ -61,17 +63,35 @@ export function TaskDetailView({ task, agents, onEdit, onDelete, onUpdateCheckli
             )}
             <>
               <span className="text-muted-foreground flex items-center gap-2"><Bot className="h-3.5 w-3.5" /> Agent</span>
-              <select
-                value={task.agent_id || ''}
-                onChange={(e) => onAssignAgent(e.target.value || null)}
-                className="bg-transparent border border-border rounded px-2 py-1 text-sm cursor-pointer"
-              >
-                <option value="">No agent assigned</option>
-                {agents.map((agent) => (
-                  <option key={agent.id} value={agent.id}>{agent.name}</option>
-                ))}
-              </select>
+              <div className="flex items-center gap-2">
+                <select
+                  value={task.agent_id || ''}
+                  onChange={(e) => onAssignAgent(e.target.value || null)}
+                  className="bg-transparent border border-border rounded px-2 py-1 text-sm cursor-pointer"
+                >
+                  <option value="">No agent assigned</option>
+                  {agents.map((agent) => (
+                    <option key={agent.id} value={agent.id}>{agent.name}</option>
+                  ))}
+                </select>
+                {canStartAgent && onStartAgent && (
+                  <Button variant="default" size="sm" onClick={onStartAgent} className="h-7 gap-1.5 px-3">
+                    <Play className="h-3 w-3" />
+                    Start
+                  </Button>
+                )}
+              </div>
             </>
+            {task.repos.length > 0 && (
+              <>
+                <span className="text-muted-foreground flex items-center gap-2"><GitBranch className="h-3.5 w-3.5" /> Repos</span>
+                <div className="flex flex-wrap gap-1.5">
+                  {task.repos.map((repo) => (
+                    <Badge key={repo}>{repo.split('/').pop()}</Badge>
+                  ))}
+                </div>
+              </>
+            )}
             {task.due_date && (
               <>
                 <span className="text-muted-foreground flex items-center gap-2"><Calendar className="h-3.5 w-3.5" /> Due date</span>

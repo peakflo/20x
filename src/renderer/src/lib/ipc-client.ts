@@ -1,5 +1,5 @@
-import type { WorkfloTask, CreateTaskDTO, UpdateTaskDTO, FileAttachment, Agent, CreateAgentDTO, UpdateAgentDTO } from '@/types'
-import type { AgentOutputEvent, AgentStatusEvent, AgentApprovalRequest } from '@/types/electron'
+import type { WorkfloTask, CreateTaskDTO, UpdateTaskDTO, FileAttachment, Agent, CreateAgentDTO, UpdateAgentDTO, McpServer, CreateMcpServerDTO, UpdateMcpServerDTO } from '@/types'
+import type { AgentOutputEvent, AgentStatusEvent, AgentApprovalRequest, GhCliStatus, GitHubRepo, WorktreeProgressEvent, McpTestResult } from '@/types/electron'
 
 export const taskApi = {
   getAll: (): Promise<WorkfloTask[]> => {
@@ -20,6 +20,32 @@ export const taskApi = {
 
   delete: (id: string): Promise<boolean> => {
     return window.electronAPI.db.deleteTask(id)
+  }
+}
+
+export const mcpServerApi = {
+  getAll: (): Promise<McpServer[]> => {
+    return window.electronAPI.mcpServers.getAll()
+  },
+
+  getById: (id: string): Promise<McpServer | undefined> => {
+    return window.electronAPI.mcpServers.get(id)
+  },
+
+  create: (data: CreateMcpServerDTO): Promise<McpServer> => {
+    return window.electronAPI.mcpServers.create(data)
+  },
+
+  update: (id: string, data: UpdateMcpServerDTO): Promise<McpServer | undefined> => {
+    return window.electronAPI.mcpServers.update(id, data)
+  },
+
+  delete: (id: string): Promise<boolean> => {
+    return window.electronAPI.mcpServers.delete(id)
+  },
+
+  testConnection: (data: { id?: string; name: string; type?: 'local' | 'remote'; command?: string; args?: string[]; url?: string; headers?: Record<string, string>; environment?: Record<string, string> }): Promise<McpTestResult> => {
+    return window.electronAPI.mcpServers.testConnection(data)
   }
 }
 
@@ -46,8 +72,12 @@ export const agentApi = {
 }
 
 export const agentSessionApi = {
-  start: (agentId: string, taskId: string): Promise<{ sessionId: string }> => {
-    return window.electronAPI.agentSession.start(agentId, taskId)
+  start: (agentId: string, taskId: string, workspaceDir?: string): Promise<{ sessionId: string }> => {
+    return window.electronAPI.agentSession.start(agentId, taskId, workspaceDir)
+  },
+
+  abort: (sessionId: string): Promise<{ success: boolean }> => {
+    return window.electronAPI.agentSession.abort(sessionId)
   },
 
   stop: (sessionId: string): Promise<{ success: boolean }> => {
@@ -107,4 +137,44 @@ export const onAgentStatus = (callback: (event: AgentStatusEvent) => void): (() 
 
 export const onAgentApproval = (callback: (event: AgentApprovalRequest) => void): (() => void) => {
   return window.electronAPI.onAgentApproval(callback)
+}
+
+export const settingsApi = {
+  get: (key: string): Promise<string | null> => {
+    return window.electronAPI.settings.get(key)
+  },
+  set: (key: string, value: string): Promise<void> => {
+    return window.electronAPI.settings.set(key, value)
+  },
+  getAll: (): Promise<Record<string, string>> => {
+    return window.electronAPI.settings.getAll()
+  }
+}
+
+export const githubApi = {
+  checkCli: (): Promise<GhCliStatus> => {
+    return window.electronAPI.github.checkCli()
+  },
+  startAuth: (): Promise<void> => {
+    return window.electronAPI.github.startAuth()
+  },
+  fetchOrgs: (): Promise<string[]> => {
+    return window.electronAPI.github.fetchOrgs()
+  },
+  fetchOrgRepos: (org: string): Promise<GitHubRepo[]> => {
+    return window.electronAPI.github.fetchOrgRepos(org)
+  }
+}
+
+export const worktreeApi = {
+  setup: (taskId: string, repos: { fullName: string; defaultBranch: string }[], org: string): Promise<string> => {
+    return window.electronAPI.worktree.setup(taskId, repos, org)
+  },
+  cleanup: (taskId: string, repos: { fullName: string }[], org: string): Promise<void> => {
+    return window.electronAPI.worktree.cleanup(taskId, repos, org)
+  }
+}
+
+export const onWorktreeProgress = (callback: (event: WorktreeProgressEvent) => void): (() => void) => {
+  return window.electronAPI.onWorktreeProgress(callback)
 }

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Plus, Search, ChevronDown, X, Settings } from 'lucide-react'
+import { Plus, Search, ChevronDown, X, Settings, FileText } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { TaskList } from '@/components/tasks/TaskList'
 import { useUIStore, type SortField } from '@/stores/ui-store'
@@ -66,8 +66,16 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="Search tasks..."
-            className="w-full rounded-md border border-input bg-transparent pl-9 pr-3 py-2 text-sm placeholder:text-muted-foreground focus:border-ring focus:ring-1 focus:ring-ring/30"
+            className="w-full rounded-md border border-input bg-transparent pl-9 pr-8 py-2 text-sm placeholder:text-muted-foreground focus:border-ring focus:ring-1 focus:ring-ring/30"
           />
+          {searchQuery && (
+            <button
+              onClick={() => setSearchQuery('')}
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          )}
         </div>
       </div>
 
@@ -117,6 +125,15 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
                 <option key={opt.value} value={opt.value}>{opt.label}</option>
               ))}
             </select>
+          </div>
+          <div className="flex items-center gap-2 pt-1">
+            <button
+              onClick={() => setSearchQuery('bill')}
+              className="flex items-center gap-1.5 rounded-md px-2 py-1.5 text-xs bg-blue-500/10 text-blue-400 hover:bg-blue-500/20 cursor-pointer"
+            >
+              <FileText className="h-3 w-3" />
+              Find all bills
+            </button>
           </div>
           {hasActiveFilters && (
             <button
