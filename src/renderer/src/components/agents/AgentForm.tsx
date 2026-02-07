@@ -49,6 +49,13 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
     setModelError(null)
     
     try {
+      // Check if agentConfigApi is available (requires app restart after preload changes)
+      if (!agentConfigApi || typeof agentConfigApi.getProviders !== 'function') {
+        setModelError('API not available. Please restart the application.')
+        setIsLoadingModels(false)
+        return
+      }
+      
       const result = await agentConfigApi.getProviders()
       
       if (result && result.providers) {
@@ -153,15 +160,18 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
               </div>
             ) : modelError ? (
               <div className="space-y-2">
-                <select
+                <Input
                   id="agent-model"
                   value={model}
                   onChange={(e) => setModel(e.target.value)}
-                  className="w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm cursor-pointer"
-                >
-                  <option value="">Select a model...</option>
-                </select>
+                  placeholder="provider/model-id"
+                />
                 <p className="text-xs text-destructive">{modelError}</p>
+                {modelError.includes('restart') && (
+                  <p className="text-xs text-muted-foreground">
+                    The application needs to be restarted to load the latest changes.
+                  </p>
+                )}
                 <Button 
                   type="button" 
                   variant="ghost" 
