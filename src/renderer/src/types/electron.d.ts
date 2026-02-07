@@ -57,7 +57,7 @@ interface ElectronAPI {
     approve: (sessionId: string, approved: boolean, message?: string) => Promise<AgentSessionSuccessResult>
   }
   agentConfig: {
-    getProviders: () => Promise<{ providers: any[]; default: Record<string, string> } | null>
+    getProviders: (serverUrl?: string) => Promise<{ providers: any[]; default: Record<string, string> } | null>
   }
   attachments: {
     pick: () => Promise<string[]>

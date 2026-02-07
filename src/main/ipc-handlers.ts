@@ -157,7 +157,7 @@ export function registerIpcHandlers(db: DatabaseManager, agentManager: AgentMana
   })
 
   // Agent Config handlers
-  ipcMain.handle('agentConfig:getProviders', async () => {
-    return await agentManager.getProviders()
+  ipcMain.handle('agentConfig:getProviders', async (_, serverUrl?: string) => {
+    return await agentManager.getProviders(serverUrl)
   })
 }

@@ -43,8 +43,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('agentSession:approve', sessionId, approved, message)
   },
   agentConfig: {
-    getProviders: (): Promise<{ providers: any[]; default: Record<string, string> } | null> =>
-      ipcRenderer.invoke('agentConfig:getProviders')
+    getProviders: (serverUrl?: string): Promise<{ providers: any[]; default: Record<string, string> } | null> =>
+      ipcRenderer.invoke('agentConfig:getProviders', serverUrl)
   },
   onOverdueCheck: (callback: () => void): (() => void) => {
     const handler = (): void => callback()

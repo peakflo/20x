@@ -56,28 +56,56 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
         return
       }
       
-      const result = await agentConfigApi.getProviders()
+      console.log('[AgentForm] Fetching providers from server:', serverUrl)
+      const result = await agentConfigApi.getProviders(serverUrl)
+      console.log('[AgentForm] Providers result:', result)
       
       if (result && result.providers) {
         // Flatten all models from all providers
         const models: Model[] = []
-        result.providers.forEach((provider: any) => {
-          if (provider.models && Array.isArray(provider.models)) {
-            provider.models.forEach((m: any) => {
-              models.push({
-                id: `${provider.id}/${m.id}`,
-                name: `${provider.name} - ${m.name || m.id}`
-              })
-            })
-          }
-        })
-        setAvailableModels(models)
+        
+        if (Array.isArray(result.providers) && result.providers.length > 0) {
+          result.providers.forEach((provider: any) => {
+            console.log('[AgentForm] Processing provider:', provider)
+            // Models can be either an array or an object with model IDs as keys
+            if (provider.models) {
+              if (Array.isArray(provider.models)) {
+                // Handle array format
+                provider.models.forEach((m: any) => {
+                  models.push({
+                    id: `${provider.id}/${m.id}`,
+                    name: `${provider.name} - ${m.name || m.id}`
+                  })
+                })
+              } else if (typeof provider.models === 'object') {
+                // Handle object format (model IDs as keys)
+                Object.values(provider.models).forEach((m: any) => {
+                  if (m && m.id) {
+                    models.push({
+                      id: `${provider.id}/${m.id}`,
+                      name: `${provider.name} - ${m.name || m.id}`
+                    })
+                  }
+                })
+              }
+            }
+          })
+        }
+        
+        console.log('[AgentForm] Total models found:', models.length)
+        
+        if (models.length > 0) {
+          setAvailableModels(models)
+        } else {
+          setModelError('No models available from server. You can manually enter a model ID.')
+        }
       } else {
+        console.log('[AgentForm] No providers in result:', result)
         setModelError('Failed to load models from server')
       }
     } catch (error) {
-      console.error('Error fetching models:', error)
-      setModelError('Failed to load models. Is the OpenCode server running?')
+      console.error('[AgentForm] Error fetching models:', error)
+      setModelError(`Failed to load models: ${error instanceof Error ? error.message : 'Unknown error'}`)
     } finally {
       setIsLoadingModels(false)
     }

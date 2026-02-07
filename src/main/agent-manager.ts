@@ -396,27 +396,36 @@ export class AgentManager extends EventEmitter {
     return sessionIds
   }
 
-  async getProviders(): Promise<{ providers: any[]; default: Record<string, string> } | null> {
+  async getProviders(serverUrl?: string): Promise<{ providers: any[]; default: Record<string, string> } | null> {
     if (!OpenCodeSDK) {
       console.error('[AgentManager] OpenCode SDK not loaded')
       return null
     }
 
     try {
-      // Get the default agent's server URL
-      const agents = this.db.getAgents()
-      const defaultAgent = agents.find(a => a.is_default) || agents[0]
+      // Use provided server URL or fall back to default agent's server URL
+      let baseUrl = serverUrl
       
-      if (!defaultAgent) {
-        console.error('[AgentManager] No agent configured')
+      if (!baseUrl) {
+        const agents = this.db.getAgents()
+        const defaultAgent = agents.find(a => a.is_default) || agents[0]
+        baseUrl = defaultAgent?.server_url
+      }
+      
+      if (!baseUrl) {
+        console.error('[AgentManager] No server URL available')
         return null
       }
 
+      console.log('[AgentManager] Fetching providers from:', baseUrl)
+
       const ocClient = OpenCodeSDK.createOpencodeClient({
-        baseUrl: defaultAgent.server_url
+        baseUrl
       })
 
       const result: any = await ocClient.config.providers()
+      
+      console.log('[AgentManager] Providers response:', result)
       
       if (result.error) {
         console.error('[AgentManager] Failed to get providers:', result.error)
