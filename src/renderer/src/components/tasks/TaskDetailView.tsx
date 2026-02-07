@@ -1,4 +1,4 @@
-import { Pencil, Trash2, Calendar, User, Tag, Clock } from 'lucide-react'
+import { Pencil, Trash2, Calendar, User, Tag, Clock, Bot } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { TaskStatusBadge } from './TaskStatusBadge'
 import { TaskPriorityBadge } from './TaskPriorityBadge'
@@ -7,17 +7,19 @@ import { TaskChecklist } from './TaskChecklist'
 import { TaskAttachments } from './TaskAttachments'
 import { Badge } from '@/components/ui/Badge'
 import { formatDate, formatRelativeDate, isOverdue, isDueSoon } from '@/lib/utils'
-import type { WorkfloTask, ChecklistItem, FileAttachment } from '@/types'
+import type { WorkfloTask, ChecklistItem, FileAttachment, Agent } from '@/types'
 
 interface TaskDetailViewProps {
   task: WorkfloTask
+  agents: Agent[]
   onEdit: () => void
   onDelete: () => void
   onUpdateChecklist: (checklist: ChecklistItem[]) => void
   onUpdateAttachments: (attachments: FileAttachment[]) => void
+  onAssignAgent: (agentId: string | null) => void
 }
 
-export function TaskDetailView({ task, onEdit, onDelete, onUpdateChecklist, onUpdateAttachments }: TaskDetailViewProps) {
+export function TaskDetailView({ task, agents, onEdit, onDelete, onUpdateChecklist, onUpdateAttachments, onAssignAgent }: TaskDetailViewProps) {
   const isActive = task.status !== 'completed' && task.status !== 'cancelled'
   const overdue = isActive && isOverdue(task.due_date)
   const dueSoon = isActive && !overdue && isDueSoon(task.due_date)
@@ -57,6 +59,19 @@ export function TaskDetailView({ task, onEdit, onDelete, onUpdateChecklist, onUp
                 <span>{task.assignee}</span>
               </>
             )}
+            <>
+              <span className="text-muted-foreground flex items-center gap-2"><Bot className="h-3.5 w-3.5" /> Agent</span>
+              <select
+                value={task.agent_id || ''}
+                onChange={(e) => onAssignAgent(e.target.value || null)}
+                className="bg-transparent border border-border rounded px-2 py-1 text-sm cursor-pointer"
+              >
+                <option value="">No agent assigned</option>
+                {agents.map((agent) => (
+                  <option key={agent.id} value={agent.id}>{agent.name}</option>
+                ))}
+              </select>
+            </>
             {task.due_date && (
               <>
                 <span className="text-muted-foreground flex items-center gap-2"><Calendar className="h-3.5 w-3.5" /> Due date</span>

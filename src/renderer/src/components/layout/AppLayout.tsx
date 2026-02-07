@@ -2,16 +2,20 @@ import { Sidebar } from './Sidebar'
 import { TaskWorkspace } from '@/components/tasks/TaskWorkspace'
 import { TaskForm, type TaskFormSubmitData } from '@/components/tasks/TaskForm'
 import { DeleteConfirmDialog } from '@/components/tasks/DeleteConfirmDialog'
+import { AgentSettingsDialog } from '@/components/agents/AgentSettingsDialog'
 import { Dialog, DialogContent, DialogHeader, DialogBody, DialogTitle } from '@/components/ui/Dialog'
 import { useTasks } from '@/hooks/use-tasks'
 import { useUIStore } from '@/stores/ui-store'
+import { useAgentStore } from '@/stores/agent-store'
 import { useOverdueNotifications } from '@/hooks/use-overdue-notifications'
-import { attachmentApi } from '@/lib/ipc-client'
+import { attachmentApi, agentSessionApi } from '@/lib/ipc-client'
 import { isOverdue } from '@/lib/utils'
+import { useEffect } from 'react'
 import type { FileAttachment } from '@/types'
 
 export function AppLayout() {
   const { tasks, selectedTask, createTask, updateTask, deleteTask, selectTask } = useTasks()
+  const { agents, fetchAgents, activeSessions, removeActiveSession } = useAgentStore()
   const {
     activeModal,
     editingTaskId,
@@ -19,8 +23,13 @@ export function AppLayout() {
     openCreateModal,
     openEditModal,
     openDeleteModal,
+    openAgentSettings,
     closeModal
   } = useUIStore()
+
+  useEffect(() => {
+    fetchAgents()
+  }, [])
 
   const editingTask = editingTaskId ? tasks.find((t) => t.id === editingTaskId) || selectedTask : undefined
   const deletingTask = deletingTaskId ? tasks.find((t) => t.id === deletingTaskId) : undefined
@@ -40,6 +49,7 @@ export function AppLayout() {
         overdueCount={overdueCount}
         onSelectTask={selectTask}
         onCreateTask={openCreateModal}
+        onOpenSettings={openAgentSettings}
       />
 
       {/* Workspace — fills remaining space via CSS Grid 1fr */}
@@ -49,6 +59,7 @@ export function AppLayout() {
         <div className="flex-1 overflow-hidden">
           <TaskWorkspace
             task={selectedTask}
+            agents={agents}
             onEdit={() => {
               if (selectedTask) openEditModal(selectedTask.id)
             }}
@@ -64,6 +75,9 @@ export function AppLayout() {
               if (selectedTask) {
                 await updateTask(selectedTask.id, { attachments })
               }
+            }}
+            onAssignAgent={async (taskId, agentId) => {
+              await updateTask(taskId, { agent_id: agentId })
             }}
           />
         </div>
@@ -126,12 +140,26 @@ export function AppLayout() {
         taskTitle={deletingTask?.title || ''}
         onConfirm={async () => {
           if (deletingTaskId) {
+            // Stop any active sessions for this task
+            for (const [sessionId, session] of activeSessions.entries()) {
+              if (session.taskId === deletingTaskId) {
+                try {
+                  await agentSessionApi.stop(sessionId)
+                  removeActiveSession(sessionId)
+                } catch (error) {
+                  console.error('Failed to stop session:', error)
+                }
+              }
+            }
             await deleteTask(deletingTaskId)
             closeModal()
           }
         }}
         onCancel={closeModal}
       />
+
+      {/* Agent Settings Dialog */}
+      <AgentSettingsDialog />
     </>
   )
 }

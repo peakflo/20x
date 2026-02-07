@@ -1,10 +1,12 @@
-import { useState } from 'react'
-import { Plus, X } from 'lucide-react'
+import { useState, useEffect } from 'react'
+import { Plus, X, Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
 import { Textarea } from '@/components/ui/Textarea'
 import { Label } from '@/components/ui/Label'
-import type { Agent, CreateAgentDTO, UpdateAgentDTO, McpServerConfig } from '@/types'
+import { agentConfigApi } from '@/lib/ipc-client'
+import type { Agent, CreateAgentDTO, UpdateAgentDTO, McpServerConfig, CodingAgentType } from '@/types'
+import { CODING_AGENTS } from '@/types'
 
 interface AgentFormProps {
   agent?: Agent
@@ -12,14 +14,67 @@ interface AgentFormProps {
   onCancel: () => void
 }
 
+interface Model {
+  id: string
+  name: string
+}
+
 export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
   const [name, setName] = useState(agent?.name ?? '')
   const [serverUrl, setServerUrl] = useState(agent?.server_url ?? 'http://localhost:4096')
+  const [codingAgent, setCodingAgent] = useState<CodingAgentType | ''>(agent?.config.coding_agent ?? '')
   const [model, setModel] = useState(agent?.config.model ?? '')
   const [systemPrompt, setSystemPrompt] = useState(agent?.config.system_prompt ?? '')
   const [mcpServers, setMcpServers] = useState<McpServerConfig[]>(
     agent?.config.mcp_servers ?? []
   )
+  
+  // Model fetching state
+  const [availableModels, setAvailableModels] = useState<Model[]>([])
+  const [isLoadingModels, setIsLoadingModels] = useState(false)
+  const [modelError, setModelError] = useState<string | null>(null)
+
+  // Fetch models when coding agent is selected
+  useEffect(() => {
+    if (codingAgent === 'opencode') {
+      fetchModels()
+    } else {
+      setAvailableModels([])
+      setModel('')
+    }
+  }, [codingAgent, serverUrl])
+
+  const fetchModels = async () => {
+    setIsLoadingModels(true)
+    setModelError(null)
+    
+    try {
+      const result = await agentConfigApi.getProviders()
+      
+      if (result && result.providers) {
+        // Flatten all models from all providers
+        const models: Model[] = []
+        result.providers.forEach((provider: any) => {
+          if (provider.models && Array.isArray(provider.models)) {
+            provider.models.forEach((m: any) => {
+              models.push({
+                id: `${provider.id}/${m.id}`,
+                name: `${provider.name} - ${m.name || m.id}`
+              })
+            })
+          }
+        })
+        setAvailableModels(models)
+      } else {
+        setModelError('Failed to load models from server')
+      }
+    } catch (error) {
+      console.error('Error fetching models:', error)
+      setModelError('Failed to load models. Is the OpenCode server running?')
+    } finally {
+      setIsLoadingModels(false)
+    }
+  }
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
@@ -29,6 +84,7 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
       name: name.trim(),
       server_url: serverUrl.trim(),
       config: {
+        coding_agent: codingAgent || undefined,
         model: model.trim() || undefined,
         system_prompt: systemPrompt.trim() || undefined,
         mcp_servers: mcpServers.length > 0 ? mcpServers : undefined
@@ -72,14 +128,78 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
       </div>
 
       <div className="space-y-1.5">
-        <Label htmlFor="agent-model">Model</Label>
-        <Input
-          id="agent-model"
-          value={model}
-          onChange={(e) => setModel(e.target.value)}
-          placeholder="claude-sonnet-4-5-20250929"
-        />
+        <Label htmlFor="coding-agent">Coding Agent</Label>
+        <select
+          id="coding-agent"
+          value={codingAgent}
+          onChange={(e) => setCodingAgent(e.target.value as CodingAgentType | '')}
+          className="w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm cursor-pointer"
+        >
+          <option value="">Select a coding agent...</option>
+          {CODING_AGENTS.map((ca) => (
+            <option key={ca.value} value={ca.value}>{ca.label}</option>
+          ))}
+        </select>
       </div>
+
+      {codingAgent === 'opencode' && (
+        <div className="space-y-1.5">
+          <Label htmlFor="agent-model">Model</Label>
+          <div className="relative">
+            {isLoadingModels ? (
+              <div className="flex items-center gap-2 px-3 py-2 text-sm text-muted-foreground border border-input rounded-md">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Loading models...
+              </div>
+            ) : modelError ? (
+              <div className="space-y-2">
+                <select
+                  id="agent-model"
+                  value={model}
+                  onChange={(e) => setModel(e.target.value)}
+                  className="w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm cursor-pointer"
+                >
+                  <option value="">Select a model...</option>
+                </select>
+                <p className="text-xs text-destructive">{modelError}</p>
+                <Button 
+                  type="button" 
+                  variant="ghost" 
+                  size="sm" 
+                  onClick={fetchModels}
+                  className="text-xs"
+                >
+                  Retry
+                </Button>
+              </div>
+            ) : availableModels.length > 0 ? (
+              <select
+                id="agent-model"
+                value={model}
+                onChange={(e) => setModel(e.target.value)}
+                className="w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm cursor-pointer"
+              >
+                <option value="">Select a model...</option>
+                {availableModels.map((m) => (
+                  <option key={m.id} value={m.id}>{m.name}</option>
+                ))}
+              </select>
+            ) : (
+              <div className="space-y-2">
+                <Input
+                  id="agent-model"
+                  value={model}
+                  onChange={(e) => setModel(e.target.value)}
+                  placeholder="provider/model-id"
+                />
+                <p className="text-xs text-muted-foreground">
+                  No models fetched. You can manually enter a model ID (e.g., anthropic/claude-3-5-sonnet-20241022)
+                </p>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       <div className="space-y-1.5">
         <Label htmlFor="agent-prompt">System Prompt</Label>

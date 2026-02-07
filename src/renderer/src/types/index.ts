@@ -1,5 +1,11 @@
 // ── Agent types ─────────────────────────────────────────────
 
+export type CodingAgentType = 'opencode'
+
+export const CODING_AGENTS: { value: CodingAgentType; label: string }[] = [
+  { value: 'opencode', label: 'Opencode' }
+]
+
 export interface McpServerConfig {
   name: string
   command: string
@@ -7,6 +13,7 @@ export interface McpServerConfig {
 }
 
 export interface AgentConfig {
+  coding_agent?: CodingAgentType
   model?: string
   system_prompt?: string
   mcp_servers?: McpServerConfig[]

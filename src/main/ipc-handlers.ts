@@ -9,6 +9,7 @@ import type {
   CreateAgentData,
   UpdateAgentData
 } from './database'
+import type { AgentManager } from './agent-manager'
 
 const MIME_MAP: Record<string, string> = {
   '.pdf': 'application/pdf',
@@ -39,7 +40,7 @@ function getMimeType(filename: string): string {
   return MIME_MAP[extname(filename).toLowerCase()] || 'application/octet-stream'
 }
 
-export function registerIpcHandlers(db: DatabaseManager): void {
+export function registerIpcHandlers(db: DatabaseManager, agentManager: AgentManager): void {
   ipcMain.handle('db:getTasks', () => {
     return db.getTasks()
   })
@@ -132,5 +133,31 @@ export function registerIpcHandlers(db: DatabaseManager): void {
 
   ipcMain.handle('agent:delete', (_, id: string) => {
     return db.deleteAgent(id)
+  })
+
+  // Agent Session handlers
+  ipcMain.handle('agentSession:start', async (_, agentId: string, taskId: string) => {
+    const sessionId = await agentManager.startSession(agentId, taskId)
+    return { sessionId }
+  })
+
+  ipcMain.handle('agentSession:stop', async (_, sessionId: string) => {
+    await agentManager.stopSession(sessionId)
+    return { success: true }
+  })
+
+  ipcMain.handle('agentSession:send', async (_, sessionId: string, message: string) => {
+    await agentManager.sendMessage(sessionId, message)
+    return { success: true }
+  })
+
+  ipcMain.handle('agentSession:approve', async (_, sessionId: string, approved: boolean, message?: string) => {
+    await agentManager.respondToPermission(sessionId, approved, message)
+    return { success: true }
+  })
+
+  // Agent Config handlers
+  ipcMain.handle('agentConfig:getProviders', async () => {
+    return await agentManager.getProviders()
   })
 }

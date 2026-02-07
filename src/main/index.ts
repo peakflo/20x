@@ -2,10 +2,12 @@ import { app, BrowserWindow, shell } from 'electron'
 import { join } from 'path'
 import { is } from '@electron-toolkit/utils'
 import { DatabaseManager } from './database'
+import { AgentManager } from './agent-manager'
 import { registerIpcHandlers } from './ipc-handlers'
 
 let mainWindow: BrowserWindow | null = null
 let db: DatabaseManager | null = null
+let agentManager: AgentManager | null = null
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
@@ -48,15 +50,27 @@ function createWindow(): void {
   mainWindow.on('closed', () => {
     mainWindow = null
   })
+
+  // Set main window for agent manager
+  agentManager?.setMainWindow(mainWindow)
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   db = new DatabaseManager()
   db.initialize()
 
-  registerIpcHandlers(db)
+  agentManager = new AgentManager(db)
+
+  registerIpcHandlers(db, agentManager)
 
   createWindow()
+
+  // Start OpenCode server
+  try {
+    await agentManager.startServer()
+  } catch (error) {
+    console.error('Failed to start OpenCode server:', error)
+  }
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -66,7 +80,17 @@ app.whenReady().then(() => {
 })
 
 app.on('window-all-closed', () => {
+  // Stop all agent sessions and server
+  agentManager?.stopAllSessions()
+  agentManager?.stopServer()
+
   if (process.platform !== 'darwin') {
     app.quit()
   }
+})
+
+app.on('before-quit', () => {
+  // Ensure cleanup before quitting
+  agentManager?.stopAllSessions()
+  agentManager?.stopServer()
 })

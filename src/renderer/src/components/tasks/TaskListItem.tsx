@@ -1,6 +1,7 @@
-import { Calendar } from 'lucide-react'
+import { Calendar, Bot } from 'lucide-react'
 import { cn, formatDate, isOverdue, isDueSoon } from '@/lib/utils'
 import { TaskPriorityBadge } from './TaskPriorityBadge'
+import { useAgentStore } from '@/stores/agent-store'
 import type { WorkfloTask, TaskStatus } from '@/types'
 
 const statusDotColor: Record<TaskStatus, string> = {
@@ -22,6 +23,8 @@ export function TaskListItem({ task, isSelected, onSelect }: TaskListItemProps) 
   const isActive = task.status !== 'completed' && task.status !== 'cancelled'
   const overdue = isActive && isOverdue(task.due_date)
   const dueSoon = isActive && !overdue && isDueSoon(task.due_date)
+  const { getSessionForTask } = useAgentStore()
+  const activeSession = getSessionForTask(task.id)
 
   return (
     <button
@@ -42,6 +45,18 @@ export function TaskListItem({ task, isSelected, onSelect }: TaskListItemProps) 
               <span className={cn('flex items-center gap-1 text-xs', overdue ? 'text-destructive' : dueSoon ? 'text-amber-400' : 'text-muted-foreground')}>
                 <Calendar className="h-3 w-3" />
                 {formatDate(task.due_date)}
+              </span>
+            )}
+            {task.agent_id && (
+              <span className={cn(
+                'flex items-center gap-1 text-xs',
+                activeSession?.status === 'working' ? 'text-green-400' : 
+                activeSession?.status === 'error' ? 'text-red-400' :
+                activeSession?.status === 'waiting_approval' ? 'text-yellow-400' :
+                'text-muted-foreground'
+              )}>
+                <Bot className="h-3 w-3" />
+                {activeSession?.status === 'working' && <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />}
               </span>
             )}
           </div>

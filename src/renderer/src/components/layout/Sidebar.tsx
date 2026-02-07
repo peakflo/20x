@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Plus, Search, ChevronDown, X } from 'lucide-react'
+import { Plus, Search, ChevronDown, X, Settings } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { TaskList } from '@/components/tasks/TaskList'
 import { useUIStore, type SortField } from '@/stores/ui-store'
@@ -12,6 +12,7 @@ interface SidebarProps {
   overdueCount: number
   onSelectTask: (id: string) => void
   onCreateTask: () => void
+  onOpenSettings: () => void
 }
 
 const statusFilterOptions = [{ value: 'all', label: 'All Statuses' }, ...TASK_STATUSES]
@@ -24,7 +25,7 @@ const sortOptions: { value: SortField; label: string }[] = [
   { value: 'title', label: 'Title' }
 ]
 
-export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onCreateTask }: SidebarProps) {
+export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onCreateTask, onOpenSettings }: SidebarProps) {
   const [filtersOpen, setFiltersOpen] = useState(false)
   const {
     statusFilter, priorityFilter, sortField, searchQuery,
@@ -46,10 +47,15 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
             </span>
           )}
         </div>
-        <Button size="sm" onClick={onCreateTask}>
-          <Plus className="h-3.5 w-3.5" />
-          New
-        </Button>
+        <div className="flex items-center gap-1">
+          <Button size="sm" variant="ghost" onClick={onOpenSettings} title="Agent Settings">
+            <Settings className="h-3.5 w-3.5" />
+          </Button>
+          <Button size="sm" onClick={onCreateTask}>
+            <Plus className="h-3.5 w-3.5" />
+            New
+          </Button>
+        </div>
       </div>
 
       <div className="no-drag px-3 pb-3">

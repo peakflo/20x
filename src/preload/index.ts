@@ -32,9 +32,38 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('agent:update', id, data),
     delete: (id: string): Promise<boolean> => ipcRenderer.invoke('agent:delete', id)
   },
+  agentSession: {
+    start: (agentId: string, taskId: string): Promise<{ sessionId: string }> =>
+      ipcRenderer.invoke('agentSession:start', agentId, taskId),
+    stop: (sessionId: string): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke('agentSession:stop', sessionId),
+    send: (sessionId: string, message: string): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke('agentSession:send', sessionId, message),
+    approve: (sessionId: string, approved: boolean, message?: string): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke('agentSession:approve', sessionId, approved, message)
+  },
+  agentConfig: {
+    getProviders: (): Promise<{ providers: any[]; default: Record<string, string> } | null> =>
+      ipcRenderer.invoke('agentConfig:getProviders')
+  },
   onOverdueCheck: (callback: () => void): (() => void) => {
     const handler = (): void => callback()
     ipcRenderer.on('overdue:check', handler)
     return () => ipcRenderer.removeListener('overdue:check', handler)
+  },
+  onAgentOutput: (callback: (event: unknown) => void): (() => void) => {
+    const handler = (_: unknown, data: unknown): void => callback(data)
+    ipcRenderer.on('agent:output', handler)
+    return () => ipcRenderer.removeListener('agent:output', handler)
+  },
+  onAgentStatus: (callback: (event: unknown) => void): (() => void) => {
+    const handler = (_: unknown, data: unknown): void => callback(data)
+    ipcRenderer.on('agent:status', handler)
+    return () => ipcRenderer.removeListener('agent:status', handler)
+  },
+  onAgentApproval: (callback: (event: unknown) => void): (() => void) => {
+    const handler = (_: unknown, data: unknown): void => callback(data)
+    ipcRenderer.on('agent:approval', handler)
+    return () => ipcRenderer.removeListener('agent:approval', handler)
   }
 })

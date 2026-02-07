@@ -1,4 +1,5 @@
 import type { WorkfloTask, CreateTaskDTO, UpdateTaskDTO, FileAttachment, Agent, CreateAgentDTO, UpdateAgentDTO } from '@/types'
+import type { AgentOutputEvent, AgentStatusEvent, AgentApprovalRequest } from '@/types/electron'
 
 export const taskApi = {
   getAll: (): Promise<WorkfloTask[]> => {
@@ -44,6 +45,30 @@ export const agentApi = {
   }
 }
 
+export const agentSessionApi = {
+  start: (agentId: string, taskId: string): Promise<{ sessionId: string }> => {
+    return window.electronAPI.agentSession.start(agentId, taskId)
+  },
+
+  stop: (sessionId: string): Promise<{ success: boolean }> => {
+    return window.electronAPI.agentSession.stop(sessionId)
+  },
+
+  send: (sessionId: string, message: string): Promise<{ success: boolean }> => {
+    return window.electronAPI.agentSession.send(sessionId, message)
+  },
+
+  approve: (sessionId: string, approved: boolean, message?: string): Promise<{ success: boolean }> => {
+    return window.electronAPI.agentSession.approve(sessionId, approved, message)
+  }
+}
+
+export const agentConfigApi = {
+  getProviders: (): Promise<{ providers: any[]; default: Record<string, string> } | null> => {
+    return window.electronAPI.agentConfig.getProviders()
+  }
+}
+
 export const notificationApi = {
   show: (title: string, body: string): Promise<void> => {
     return window.electronAPI.notifications.show(title, body)
@@ -70,4 +95,16 @@ export const attachmentApi = {
   open: (taskId: string, attachmentId: string): Promise<void> => {
     return window.electronAPI.attachments.open(taskId, attachmentId)
   }
+}
+
+export const onAgentOutput = (callback: (event: AgentOutputEvent) => void): (() => void) => {
+  return window.electronAPI.onAgentOutput(callback)
+}
+
+export const onAgentStatus = (callback: (event: AgentStatusEvent) => void): (() => void) => {
+  return window.electronAPI.onAgentStatus(callback)
+}
+
+export const onAgentApproval = (callback: (event: AgentApprovalRequest) => void): (() => void) => {
+  return window.electronAPI.onAgentApproval(callback)
 }
