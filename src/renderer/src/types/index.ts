@@ -87,19 +87,53 @@ export interface UpdateAgentDTO {
   is_default?: boolean
 }
 
+// ── Output field types ──────────────────────────────────────
+
+export type OutputFieldType =
+  | 'text'
+  | 'number'
+  | 'email'
+  | 'textarea'
+  | 'list'
+  | 'date'
+  | 'file'
+  | 'boolean'
+  | 'country'
+  | 'currency'
+  | 'url'
+
+export interface OutputField {
+  id: string
+  name: string
+  type: OutputFieldType
+  multiple?: boolean
+  options?: string[]
+  required?: boolean
+  value?: unknown
+}
+
+export const OUTPUT_FIELD_TYPES: { value: OutputFieldType; label: string }[] = [
+  { value: 'text', label: 'Text' },
+  { value: 'number', label: 'Number' },
+  { value: 'email', label: 'Email' },
+  { value: 'textarea', label: 'Textarea' },
+  { value: 'list', label: 'List' },
+  { value: 'date', label: 'Date' },
+  { value: 'file', label: 'File' },
+  { value: 'boolean', label: 'Boolean' },
+  { value: 'country', label: 'Country' },
+  { value: 'currency', label: 'Currency' },
+  { value: 'url', label: 'URL' }
+]
+
+// ── Re-export shared constants ──────────────────────────────
+export { TaskStatus, TASK_STATUSES } from '@shared/constants'
+
 // ── Task types ──────────────────────────────────────────────
 
 export type TaskType = 'coding' | 'manual' | 'review' | 'approval' | 'general'
 
 export type TaskPriority = 'critical' | 'high' | 'medium' | 'low'
-
-export type TaskStatus =
-  | 'inbox'
-  | 'accepted'
-  | 'in_progress'
-  | 'pending_review'
-  | 'completed'
-  | 'cancelled'
 
 export interface ChecklistItem {
   id: string
@@ -128,7 +162,10 @@ export interface WorkfloTask {
   checklist: ChecklistItem[]
   attachments: FileAttachment[]
   repos: string[]
+  output_fields: OutputField[]
   agent_id: string | null
+  external_id: string | null
+  source_id: string | null
   source: string
   created_at: string
   updated_at: string
@@ -146,6 +183,7 @@ export interface CreateTaskDTO {
   checklist?: ChecklistItem[]
   attachments?: FileAttachment[]
   repos?: string[]
+  output_fields?: OutputField[]
 }
 
 export interface UpdateTaskDTO {
@@ -160,6 +198,7 @@ export interface UpdateTaskDTO {
   checklist?: ChecklistItem[]
   attachments?: FileAttachment[]
   repos?: string[]
+  output_fields?: OutputField[]
   agent_id?: string | null
 }
 
@@ -178,11 +217,104 @@ export const TASK_PRIORITIES: { value: TaskPriority; label: string }[] = [
   { value: 'low', label: 'Low' }
 ]
 
-export const TASK_STATUSES: { value: TaskStatus; label: string }[] = [
-  { value: 'inbox', label: 'Inbox' },
-  { value: 'accepted', label: 'Accepted' },
-  { value: 'in_progress', label: 'In Progress' },
-  { value: 'pending_review', label: 'Pending Review' },
-  { value: 'completed', label: 'Completed' },
-  { value: 'cancelled', label: 'Cancelled' }
-]
+
+// ── Task Source types ────────────────────────────────────────
+
+export interface TaskSource {
+  id: string
+  mcp_server_id: string
+  name: string
+  plugin_id: string
+  config: Record<string, unknown>
+  list_tool: string
+  list_tool_args: Record<string, unknown>
+  update_tool: string
+  update_tool_args: Record<string, unknown>
+  last_synced_at: string | null
+  enabled: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface CreateTaskSourceDTO {
+  mcp_server_id: string
+  name: string
+  plugin_id: string
+  config?: Record<string, unknown>
+  list_tool?: string
+  list_tool_args?: Record<string, unknown>
+  update_tool?: string
+  update_tool_args?: Record<string, unknown>
+}
+
+export interface UpdateTaskSourceDTO {
+  name?: string
+  plugin_id?: string
+  config?: Record<string, unknown>
+  mcp_server_id?: string
+  list_tool?: string
+  list_tool_args?: Record<string, unknown>
+  update_tool?: string
+  update_tool_args?: Record<string, unknown>
+  enabled?: boolean
+}
+
+export interface SyncResult {
+  source_id: string
+  imported: number
+  updated: number
+  errors: string[]
+}
+
+// ── Plugin types ─────────────────────────────────────────────
+
+export interface PluginMeta {
+  id: string
+  displayName: string
+  description: string
+  icon: string
+  requiresMcpServer: boolean
+}
+
+export type ConfigFieldType =
+  | 'text'
+  | 'number'
+  | 'checkbox'
+  | 'select'
+  | 'dynamic-select'
+  | 'key-value'
+  | 'password'
+
+export interface ConfigFieldOption {
+  value: string
+  label: string
+}
+
+export interface ConfigFieldSchema {
+  key: string
+  label: string
+  type: ConfigFieldType
+  placeholder?: string
+  required?: boolean
+  default?: unknown
+  description?: string
+  options?: ConfigFieldOption[]
+  optionsResolver?: string
+  dependsOn?: { field: string; value: unknown }
+}
+
+export interface PluginAction {
+  id: string
+  label: string
+  icon?: string
+  variant?: 'default' | 'destructive'
+  requiresInput?: boolean
+  inputLabel?: string
+  inputPlaceholder?: string
+}
+
+export interface ActionResult {
+  success: boolean
+  error?: string
+  taskUpdate?: Record<string, unknown>
+}

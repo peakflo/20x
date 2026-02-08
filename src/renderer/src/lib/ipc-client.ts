@@ -1,4 +1,4 @@
-import type { WorkfloTask, CreateTaskDTO, UpdateTaskDTO, FileAttachment, Agent, CreateAgentDTO, UpdateAgentDTO, McpServer, CreateMcpServerDTO, UpdateMcpServerDTO } from '@/types'
+import type { WorkfloTask, CreateTaskDTO, UpdateTaskDTO, FileAttachment, Agent, CreateAgentDTO, UpdateAgentDTO, McpServer, CreateMcpServerDTO, UpdateMcpServerDTO, TaskSource, CreateTaskSourceDTO, UpdateTaskSourceDTO, SyncResult, PluginMeta, ConfigFieldSchema, ConfigFieldOption, PluginAction, ActionResult } from '@/types'
 import type { AgentOutputEvent, AgentStatusEvent, AgentApprovalRequest, GhCliStatus, GitHubRepo, WorktreeProgressEvent, McpTestResult } from '@/types/electron'
 
 export const taskApi = {
@@ -99,6 +99,18 @@ export const agentConfigApi = {
   }
 }
 
+export const shellApi = {
+  openPath: (filePath: string): Promise<void> => {
+    return window.electronAPI.shell.openPath(filePath)
+  },
+  showItemInFolder: (filePath: string): Promise<void> => {
+    return window.electronAPI.shell.showItemInFolder(filePath)
+  },
+  readTextFile: (filePath: string): Promise<{ content: string; size: number } | null> => {
+    return window.electronAPI.shell.readTextFile(filePath)
+  }
+}
+
 export const notificationApi = {
   show: (title: string, body: string): Promise<void> => {
     return window.electronAPI.notifications.show(title, body)
@@ -163,6 +175,58 @@ export const githubApi = {
   },
   fetchOrgRepos: (org: string): Promise<GitHubRepo[]> => {
     return window.electronAPI.github.fetchOrgRepos(org)
+  }
+}
+
+export const taskSourceApi = {
+  getAll: (): Promise<TaskSource[]> => {
+    return window.electronAPI.taskSources.getAll()
+  },
+
+  getById: (id: string): Promise<TaskSource | undefined> => {
+    return window.electronAPI.taskSources.get(id)
+  },
+
+  create: (data: CreateTaskSourceDTO): Promise<TaskSource> => {
+    return window.electronAPI.taskSources.create(data)
+  },
+
+  update: (id: string, data: UpdateTaskSourceDTO): Promise<TaskSource | undefined> => {
+    return window.electronAPI.taskSources.update(id, data)
+  },
+
+  delete: (id: string): Promise<boolean> => {
+    return window.electronAPI.taskSources.delete(id)
+  },
+
+  sync: (sourceId: string): Promise<SyncResult> => {
+    return window.electronAPI.taskSources.sync(sourceId)
+  },
+
+  exportUpdate: (taskId: string, fields: Record<string, unknown>): Promise<void> => {
+    return window.electronAPI.taskSources.exportUpdate(taskId, fields)
+  }
+}
+
+export const pluginApi = {
+  list: (): Promise<PluginMeta[]> => {
+    return window.electronAPI.plugins.list()
+  },
+
+  getConfigSchema: (pluginId: string): Promise<ConfigFieldSchema[]> => {
+    return window.electronAPI.plugins.getConfigSchema(pluginId)
+  },
+
+  resolveOptions: (pluginId: string, resolverKey: string, config: Record<string, unknown>, mcpServerId?: string): Promise<ConfigFieldOption[]> => {
+    return window.electronAPI.plugins.resolveOptions(pluginId, resolverKey, config, mcpServerId)
+  },
+
+  getActions: (pluginId: string, config: Record<string, unknown>): Promise<PluginAction[]> => {
+    return window.electronAPI.plugins.getActions(pluginId, config)
+  },
+
+  executeAction: (actionId: string, taskId: string, sourceId: string, input?: string): Promise<ActionResult> => {
+    return window.electronAPI.plugins.executeAction(actionId, taskId, sourceId, input)
   }
 }
 

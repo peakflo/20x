@@ -1,5 +1,5 @@
 import { ipcMain, dialog, shell, Notification } from 'electron'
-import { copyFileSync, existsSync, unlinkSync, readdirSync, statSync } from 'fs'
+import { copyFileSync, existsSync, unlinkSync, readdirSync, statSync, readFileSync } from 'fs'
 import { join, basename, extname } from 'path'
 import type {
   DatabaseManager,
@@ -9,11 +9,15 @@ import type {
   CreateAgentData,
   UpdateAgentData,
   CreateMcpServerData,
-  UpdateMcpServerData
+  UpdateMcpServerData,
+  CreateTaskSourceData,
+  UpdateTaskSourceData
 } from './database'
 import type { AgentManager } from './agent-manager'
 import type { GitHubManager } from './github-manager'
 import type { WorktreeManager } from './worktree-manager'
+import type { SyncManager } from './sync-manager'
+import type { PluginRegistry } from './plugins/registry'
 
 const MIME_MAP: Record<string, string> = {
   '.pdf': 'application/pdf',
@@ -48,7 +52,10 @@ export function registerIpcHandlers(
   db: DatabaseManager,
   agentManager: AgentManager,
   githubManager: GitHubManager,
-  worktreeManager: WorktreeManager
+  worktreeManager: WorktreeManager,
+  syncManager: SyncManager,
+  pluginRegistry: PluginRegistry,
+  mcpToolCaller?: import('./mcp-tool-caller').McpToolCaller
 ): void {
   ipcMain.handle('db:getTasks', () => {
     return db.getTasks()
@@ -116,6 +123,24 @@ export function registerIpcHandlers(
     const files = readdirSync(dir)
     const match = files.find((f) => f.startsWith(`${attachmentId}-`))
     if (match) shell.openPath(join(dir, match))
+  })
+
+  // Shell handlers
+  ipcMain.handle('shell:openPath', (_, filePath: string) => {
+    if (existsSync(filePath)) shell.openPath(filePath)
+  })
+
+  ipcMain.handle('shell:showItemInFolder', (_, filePath: string) => {
+    if (existsSync(filePath)) shell.showItemInFolder(filePath)
+  })
+
+  ipcMain.handle('shell:readTextFile', (_, filePath: string): { content: string; size: number } | null => {
+    if (!existsSync(filePath)) return null
+    const stat = statSync(filePath)
+    // Limit preview to 50KB
+    if (stat.size > 50 * 1024) return { content: '', size: stat.size }
+    const content = readFileSync(filePath, 'utf-8')
+    return { content, size: stat.size }
   })
 
   // Notification handler
@@ -242,5 +267,63 @@ export function registerIpcHandlers(
 
   ipcMain.handle('worktree:cleanup', async (_, taskId: string, repos: { fullName: string }[], org: string) => {
     await worktreeManager.cleanupTaskWorkspace(taskId, repos, org)
+  })
+
+  // Task Source handlers
+  ipcMain.handle('taskSource:getAll', () => {
+    return db.getTaskSources()
+  })
+
+  ipcMain.handle('taskSource:get', (_, id: string) => {
+    return db.getTaskSource(id)
+  })
+
+  ipcMain.handle('taskSource:create', (_, data: CreateTaskSourceData) => {
+    return db.createTaskSource(data)
+  })
+
+  ipcMain.handle('taskSource:update', (_, id: string, data: UpdateTaskSourceData) => {
+    return db.updateTaskSource(id, data)
+  })
+
+  ipcMain.handle('taskSource:delete', (_, id: string) => {
+    return db.deleteTaskSource(id)
+  })
+
+  ipcMain.handle('taskSource:sync', async (_, sourceId: string) => {
+    return await syncManager.importTasks(sourceId)
+  })
+
+  ipcMain.handle('taskSource:exportUpdate', async (_, taskId: string, fields: Record<string, unknown>) => {
+    await syncManager.exportTaskUpdate(taskId, fields)
+  })
+
+  // Plugin handlers
+  ipcMain.handle('plugin:list', () => {
+    return pluginRegistry.list()
+  })
+
+  ipcMain.handle('plugin:getConfigSchema', (_, pluginId: string) => {
+    const plugin = pluginRegistry.get(pluginId)
+    return plugin ? plugin.getConfigSchema() : []
+  })
+
+  ipcMain.handle('plugin:resolveOptions', async (_, pluginId: string, resolverKey: string, config: Record<string, unknown>, mcpServerId?: string) => {
+    const plugin = pluginRegistry.get(pluginId)
+    if (!plugin || !mcpToolCaller) return []
+    const mcpServer = mcpServerId ? db.getMcpServer(mcpServerId) : undefined
+    const ctx = { db, toolCaller: mcpToolCaller, mcpServer }
+    return await plugin.resolveOptions(resolverKey, config, ctx)
+  })
+
+  ipcMain.handle('plugin:getActions', (_, pluginId: string, config: Record<string, unknown>) => {
+    const plugin = pluginRegistry.get(pluginId)
+    return plugin ? plugin.getActions(config) : []
+  })
+
+  ipcMain.handle('plugin:executeAction', async (_, actionId: string, taskId: string, sourceId: string, input?: string) => {
+    const task = db.getTask(taskId)
+    if (!task) return { success: false, error: 'Task not found' }
+    return await syncManager.executeAction(actionId, task, input, sourceId)
   })
 }

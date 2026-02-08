@@ -123,8 +123,8 @@ export function RepoSelectorDialog({ open, onOpenChange, org, initialRepos, onCo
             <span className="text-xs text-muted-foreground">
               {selected.size} repo{selected.size !== 1 ? 's' : ''} selected
             </span>
-            <Button onClick={handleConfirm}>
-              {selected.size > 0 ? 'Confirm & Start Agent' : 'Start Without Repos'}
+            <Button onClick={handleConfirm} disabled={selected.size === 0}>
+              Confirm
             </Button>
           </div>
         </DialogBody>

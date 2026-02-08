@@ -3,6 +3,7 @@ import { app } from 'electron'
 import { join } from 'path'
 import { existsSync, mkdirSync, rmSync } from 'fs'
 import { createId } from '@paralleldrive/cuid2'
+import { TaskStatus } from '../shared/constants'
 
 export interface AgentRow {
   id: string
@@ -108,6 +109,71 @@ export interface UpdateAgentData {
   is_default?: boolean
 }
 
+export interface TaskSourceRow {
+  id: string
+  mcp_server_id: string
+  name: string
+  plugin_id: string
+  config: string
+  list_tool: string
+  list_tool_args: string
+  update_tool: string
+  update_tool_args: string
+  last_synced_at: string | null
+  enabled: number
+  created_at: string
+  updated_at: string
+}
+
+export interface TaskSourceRecord {
+  id: string
+  mcp_server_id: string
+  name: string
+  plugin_id: string
+  config: Record<string, unknown>
+  list_tool: string
+  list_tool_args: Record<string, unknown>
+  update_tool: string
+  update_tool_args: Record<string, unknown>
+  last_synced_at: string | null
+  enabled: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface CreateTaskSourceData {
+  mcp_server_id: string
+  name: string
+  plugin_id: string
+  config?: Record<string, unknown>
+  list_tool?: string
+  list_tool_args?: Record<string, unknown>
+  update_tool?: string
+  update_tool_args?: Record<string, unknown>
+}
+
+export interface UpdateTaskSourceData {
+  name?: string
+  plugin_id?: string
+  config?: Record<string, unknown>
+  mcp_server_id?: string
+  list_tool?: string
+  list_tool_args?: Record<string, unknown>
+  update_tool?: string
+  update_tool_args?: Record<string, unknown>
+  enabled?: boolean
+}
+
+export interface OutputFieldRecord {
+  id: string
+  name: string
+  type: string
+  multiple?: boolean
+  options?: string[]
+  required?: boolean
+  value?: unknown
+}
+
 export interface TaskRow {
   id: string
   title: string
@@ -121,7 +187,10 @@ export interface TaskRow {
   checklist: string
   attachments: string
   repos: string
+  output_fields: string
   agent_id: string | null
+  external_id: string | null
+  source_id: string | null
   source: string
   created_at: string
   updated_at: string
@@ -140,7 +209,10 @@ export interface TaskRecord {
   checklist: ChecklistItemRecord[]
   attachments: FileAttachmentRecord[]
   repos: string[]
+  output_fields: OutputFieldRecord[]
   agent_id: string | null
+  external_id: string | null
+  source_id: string | null
   source: string
   created_at: string
   updated_at: string
@@ -172,6 +244,10 @@ export interface CreateTaskData {
   checklist?: ChecklistItemRecord[]
   attachments?: FileAttachmentRecord[]
   repos?: string[]
+  output_fields?: OutputFieldRecord[]
+  external_id?: string
+  source_id?: string
+  source?: string
 }
 
 export interface UpdateTaskData {
@@ -186,6 +262,7 @@ export interface UpdateTaskData {
   checklist?: ChecklistItemRecord[]
   attachments?: FileAttachmentRecord[]
   repos?: string[]
+  output_fields?: OutputFieldRecord[]
   agent_id?: string | null
 }
 
@@ -202,10 +279,11 @@ const UPDATABLE_COLUMNS = new Set([
   'checklist',
   'attachments',
   'repos',
+  'output_fields',
   'agent_id'
 ])
 
-const JSON_COLUMNS = new Set(['labels', 'checklist', 'attachments', 'repos'])
+const JSON_COLUMNS = new Set(['labels', 'checklist', 'attachments', 'repos', 'output_fields'])
 
 function deserializeTask(row: TaskRow): TaskRecord {
   return {
@@ -214,7 +292,21 @@ function deserializeTask(row: TaskRow): TaskRecord {
     checklist: JSON.parse(row.checklist) as ChecklistItemRecord[],
     attachments: JSON.parse(row.attachments) as FileAttachmentRecord[],
     repos: JSON.parse(row.repos) as string[],
-    agent_id: row.agent_id ?? null
+    output_fields: JSON.parse(row.output_fields || '[]') as OutputFieldRecord[],
+    agent_id: row.agent_id ?? null,
+    external_id: row.external_id ?? null,
+    source_id: row.source_id ?? null
+  }
+}
+
+function deserializeTaskSource(row: TaskSourceRow): TaskSourceRecord {
+  return {
+    ...row,
+    plugin_id: row.plugin_id || 'peakflo',
+    config: JSON.parse(row.config || '{}') as Record<string, unknown>,
+    list_tool_args: JSON.parse(row.list_tool_args) as Record<string, unknown>,
+    update_tool_args: JSON.parse(row.update_tool_args) as Record<string, unknown>,
+    enabled: row.enabled === 1
   }
 }
 
@@ -260,7 +352,7 @@ export class DatabaseManager {
         description TEXT NOT NULL DEFAULT '',
         type TEXT NOT NULL DEFAULT 'general',
         priority TEXT NOT NULL DEFAULT 'medium',
-        status TEXT NOT NULL DEFAULT 'inbox',
+        status TEXT NOT NULL DEFAULT '${TaskStatus.NotStarted}',
         assignee TEXT NOT NULL DEFAULT '',
         due_date TEXT,
         labels TEXT NOT NULL DEFAULT '[]',
@@ -301,6 +393,20 @@ export class DatabaseManager {
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
+
+      CREATE TABLE IF NOT EXISTS task_sources (
+        id TEXT PRIMARY KEY,
+        mcp_server_id TEXT NOT NULL REFERENCES mcp_servers(id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        list_tool TEXT NOT NULL,
+        list_tool_args TEXT NOT NULL DEFAULT '{}',
+        update_tool TEXT NOT NULL DEFAULT '',
+        update_tool_args TEXT NOT NULL DEFAULT '{}',
+        last_synced_at TEXT,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
     `)
 
     this.runMigrations()
@@ -320,6 +426,18 @@ export class DatabaseManager {
 
     if (!columnNames.has('repos')) {
       this.db.exec(`ALTER TABLE tasks ADD COLUMN repos TEXT NOT NULL DEFAULT '[]'`)
+    }
+
+    if (!columnNames.has('output_fields')) {
+      this.db.exec(`ALTER TABLE tasks ADD COLUMN output_fields TEXT NOT NULL DEFAULT '[]'`)
+    }
+
+    if (!columnNames.has('external_id')) {
+      this.db.exec(`ALTER TABLE tasks ADD COLUMN external_id TEXT`)
+    }
+    if (!columnNames.has('source_id')) {
+      this.db.exec(`ALTER TABLE tasks ADD COLUMN source_id TEXT REFERENCES task_sources(id) ON DELETE SET NULL`)
+      this.db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_source_external ON tasks(source_id, external_id) WHERE external_id IS NOT NULL`)
     }
 
     // Migrate mcp_servers table — add new columns for remote support
@@ -345,6 +463,43 @@ export class DatabaseManager {
     // Migrate inline MCP servers from agent configs → mcp_servers table
     this.migrateInlineMcpServers()
 
+    // Migrate task_sources: add plugin_id + config columns
+    const tsColumns = this.db.pragma('table_info(task_sources)') as { name: string }[]
+    const tsColumnNames = new Set(tsColumns.map((c) => c.name))
+
+    if (!tsColumnNames.has('plugin_id')) {
+      this.db.exec(`ALTER TABLE task_sources ADD COLUMN plugin_id TEXT NOT NULL DEFAULT 'peakflo'`)
+    }
+    if (!tsColumnNames.has('config')) {
+      this.db.exec(`ALTER TABLE task_sources ADD COLUMN config TEXT NOT NULL DEFAULT '{}'`)
+      // Migrate existing rows: pack old columns into config JSON
+      const sources = this.db.prepare('SELECT id, list_tool, list_tool_args, update_tool, update_tool_args FROM task_sources').all() as {
+        id: string; list_tool: string; list_tool_args: string; update_tool: string; update_tool_args: string
+      }[]
+      for (const src of sources) {
+        const config = {
+          list_tool: src.list_tool,
+          list_tool_args: JSON.parse(src.list_tool_args || '{}'),
+          update_tool: src.update_tool || undefined,
+          update_tool_args: JSON.parse(src.update_tool_args || '{}')
+        }
+        this.db.prepare('UPDATE task_sources SET config = ? WHERE id = ?').run(JSON.stringify(config), src.id)
+      }
+    }
+
+    // Migrate task statuses: old 6-status → new 4-status
+    const hasOldStatuses = (this.db.prepare(
+      "SELECT COUNT(*) as count FROM tasks WHERE status IN ('inbox', 'accepted', 'in_progress', 'pending_review', 'cancelled')"
+    ).get() as { count: number }).count > 0
+
+    if (hasOldStatuses) {
+      this.db.exec(`
+        UPDATE tasks SET status = 'not_started' WHERE status IN ('inbox', 'accepted', 'cancelled');
+        UPDATE tasks SET status = 'agent_working' WHERE status = 'in_progress';
+        UPDATE tasks SET status = 'ready_for_review' WHERE status = 'pending_review';
+      `)
+    }
+
     // Seed default agent if none exist
     const agentCount = this.db.prepare('SELECT COUNT(*) as count FROM agents').get() as { count: number }
     if (agentCount.count === 0) {
@@ -365,8 +520,9 @@ export class DatabaseManager {
       try { config = JSON.parse(agent.config) } catch { continue }
 
       if (!Array.isArray(config.mcp_servers) || config.mcp_servers.length === 0) continue
-      // Already migrated if first element is a string (ID)
-      if (typeof config.mcp_servers[0] === 'string') continue
+      // Already migrated if first element is a string (ID) or an AgentMcpServerEntry object
+      const first = config.mcp_servers[0]
+      if (typeof first === 'string' || (typeof first === 'object' && first.serverId)) continue
 
       const ids: string[] = []
       for (const srv of config.mcp_servers as McpServerConfigRecord[]) {
@@ -389,6 +545,12 @@ export class DatabaseManager {
       config.mcp_servers = ids
       this.db.prepare('UPDATE agents SET config = ? WHERE id = ?').run(JSON.stringify(config), agent.id)
     }
+  }
+
+  getWorkspaceDir(taskId: string): string {
+    const dir = join(app.getPath('userData'), 'workspaces', taskId)
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+    return dir
   }
 
   getAttachmentsDir(taskId: string): string {
@@ -423,21 +585,25 @@ export class DatabaseManager {
     const now = new Date().toISOString()
 
     this.db.prepare(`
-      INSERT INTO tasks (id, title, description, type, priority, status, assignee, due_date, labels, checklist, attachments, repos, source, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'local', ?, ?)
+      INSERT INTO tasks (id, title, description, type, priority, status, assignee, due_date, labels, checklist, attachments, repos, output_fields, external_id, source_id, source, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id,
       data.title,
       data.description ?? '',
       data.type ?? 'general',
       data.priority ?? 'medium',
-      data.status ?? 'inbox',
+      data.status ?? TaskStatus.NotStarted,
       data.assignee ?? '',
       data.due_date ?? null,
       JSON.stringify(data.labels ?? []),
       JSON.stringify(data.checklist ?? []),
       JSON.stringify(data.attachments ?? []),
       JSON.stringify(data.repos ?? []),
+      JSON.stringify(data.output_fields ?? []),
+      data.external_id ?? null,
+      data.source_id ?? null,
+      data.source ?? 'local',
       now,
       now
     )
@@ -613,6 +779,80 @@ export class DatabaseManager {
   deleteMcpServer(id: string): boolean {
     const result = this.db.prepare('DELETE FROM mcp_servers WHERE id = ?').run(id)
     return result.changes > 0
+  }
+
+  // ── Task Source CRUD ─────────────────────────────────────────
+
+  getTaskSources(): TaskSourceRecord[] {
+    const rows = this.db.prepare('SELECT * FROM task_sources ORDER BY created_at ASC').all() as TaskSourceRow[]
+    return rows.map(deserializeTaskSource)
+  }
+
+  getTaskSource(id: string): TaskSourceRecord | undefined {
+    const row = this.db.prepare('SELECT * FROM task_sources WHERE id = ?').get(id) as TaskSourceRow | undefined
+    return row ? deserializeTaskSource(row) : undefined
+  }
+
+  createTaskSource(data: CreateTaskSourceData): TaskSourceRecord | undefined {
+    const id = createId()
+    const now = new Date().toISOString()
+    this.db.prepare(
+      'INSERT INTO task_sources (id, mcp_server_id, name, plugin_id, config, list_tool, list_tool_args, update_tool, update_tool_args, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)'
+    ).run(
+      id,
+      data.mcp_server_id,
+      data.name,
+      data.plugin_id || 'peakflo',
+      JSON.stringify(data.config ?? {}),
+      data.list_tool ?? '',
+      JSON.stringify(data.list_tool_args ?? {}),
+      data.update_tool ?? '',
+      JSON.stringify(data.update_tool_args ?? {}),
+      now,
+      now
+    )
+    return this.getTaskSource(id)
+  }
+
+  updateTaskSource(id: string, data: UpdateTaskSourceData): TaskSourceRecord | undefined {
+    const setClauses: string[] = []
+    const values: (string | number | null)[] = []
+
+    if (data.name !== undefined) { setClauses.push('name = ?'); values.push(data.name) }
+    if (data.plugin_id !== undefined) { setClauses.push('plugin_id = ?'); values.push(data.plugin_id) }
+    if (data.config !== undefined) { setClauses.push('config = ?'); values.push(JSON.stringify(data.config)) }
+    if (data.mcp_server_id !== undefined) { setClauses.push('mcp_server_id = ?'); values.push(data.mcp_server_id) }
+    if (data.list_tool !== undefined) { setClauses.push('list_tool = ?'); values.push(data.list_tool) }
+    if (data.list_tool_args !== undefined) { setClauses.push('list_tool_args = ?'); values.push(JSON.stringify(data.list_tool_args)) }
+    if (data.update_tool !== undefined) { setClauses.push('update_tool = ?'); values.push(data.update_tool) }
+    if (data.update_tool_args !== undefined) { setClauses.push('update_tool_args = ?'); values.push(JSON.stringify(data.update_tool_args)) }
+    if (data.enabled !== undefined) { setClauses.push('enabled = ?'); values.push(data.enabled ? 1 : 0) }
+
+    if (setClauses.length === 0) return this.getTaskSource(id)
+
+    setClauses.push('updated_at = ?')
+    values.push(new Date().toISOString())
+    values.push(id)
+
+    this.db.prepare(`UPDATE task_sources SET ${setClauses.join(', ')} WHERE id = ?`).run(...values)
+    return this.getTaskSource(id)
+  }
+
+  updateTaskSourceLastSynced(id: string): void {
+    this.db.prepare('UPDATE task_sources SET last_synced_at = ?, updated_at = ? WHERE id = ?')
+      .run(new Date().toISOString(), new Date().toISOString(), id)
+  }
+
+  deleteTaskSource(id: string): boolean {
+    const result = this.db.prepare('DELETE FROM task_sources WHERE id = ?').run(id)
+    return result.changes > 0
+  }
+
+  getTaskByExternalId(sourceId: string, externalId: string): TaskRecord | undefined {
+    const row = this.db.prepare(
+      'SELECT * FROM tasks WHERE source_id = ? AND external_id = ?'
+    ).get(sourceId, externalId) as TaskRow | undefined
+    return row ? deserializeTask(row) : undefined
   }
 
   // ── Settings CRUD ──────────────────────────────────────────

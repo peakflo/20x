@@ -2,13 +2,15 @@
   "extends": "@electron-toolkit/tsconfig/tsconfig.web.json",
   "include": [
     "src/renderer/src/**/*",
-    "src/renderer/src/**/*.d.ts"
+    "src/renderer/src/**/*.d.ts",
+    "src/shared/**/*"
   ],
   "compilerOptions": {
     "composite": true,
     "baseUrl": ".",
     "paths": {
-      "@/*": ["src/renderer/src/*"]
+      "@/*": ["src/renderer/src/*"],
+      "@shared/*": ["src/shared/*"]
     },
     "jsx": "react-jsx"
   }

@@ -19,6 +19,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
     open: (taskId: string, attachmentId: string): Promise<void> =>
       ipcRenderer.invoke('attachments:open', taskId, attachmentId)
   },
+  shell: {
+    openPath: (filePath: string): Promise<void> =>
+      ipcRenderer.invoke('shell:openPath', filePath),
+    showItemInFolder: (filePath: string): Promise<void> =>
+      ipcRenderer.invoke('shell:showItemInFolder', filePath),
+    readTextFile: (filePath: string): Promise<{ content: string; size: number } | null> =>
+      ipcRenderer.invoke('shell:readTextFile', filePath)
+  },
   notifications: {
     show: (title: string, body: string): Promise<void> =>
       ipcRenderer.invoke('notifications:show', title, body)
@@ -97,6 +105,29 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('worktree:setup', taskId, repos, org),
     cleanup: (taskId: string, repos: { fullName: string }[], org: string): Promise<void> =>
       ipcRenderer.invoke('worktree:cleanup', taskId, repos, org)
+  },
+  taskSources: {
+    getAll: (): Promise<unknown[]> => ipcRenderer.invoke('taskSource:getAll'),
+    get: (id: string): Promise<unknown> => ipcRenderer.invoke('taskSource:get', id),
+    create: (data: Record<string, unknown>): Promise<unknown> =>
+      ipcRenderer.invoke('taskSource:create', data),
+    update: (id: string, data: Record<string, unknown>): Promise<unknown> =>
+      ipcRenderer.invoke('taskSource:update', id, data),
+    delete: (id: string): Promise<boolean> => ipcRenderer.invoke('taskSource:delete', id),
+    sync: (sourceId: string): Promise<unknown> => ipcRenderer.invoke('taskSource:sync', sourceId),
+    exportUpdate: (taskId: string, fields: Record<string, unknown>): Promise<void> =>
+      ipcRenderer.invoke('taskSource:exportUpdate', taskId, fields)
+  },
+  plugins: {
+    list: (): Promise<unknown[]> => ipcRenderer.invoke('plugin:list'),
+    getConfigSchema: (pluginId: string): Promise<unknown[]> =>
+      ipcRenderer.invoke('plugin:getConfigSchema', pluginId),
+    resolveOptions: (pluginId: string, resolverKey: string, config: Record<string, unknown>, mcpServerId?: string): Promise<unknown[]> =>
+      ipcRenderer.invoke('plugin:resolveOptions', pluginId, resolverKey, config, mcpServerId),
+    getActions: (pluginId: string, config: Record<string, unknown>): Promise<unknown[]> =>
+      ipcRenderer.invoke('plugin:getActions', pluginId, config),
+    executeAction: (actionId: string, taskId: string, sourceId: string, input?: string): Promise<unknown> =>
+      ipcRenderer.invoke('plugin:executeAction', actionId, taskId, sourceId, input)
   },
   onWorktreeProgress: (callback: (event: unknown) => void): (() => void) => {
     const handler = (_: unknown, data: unknown): void => callback(data)

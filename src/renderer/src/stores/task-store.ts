@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import type { WorkfloTask, CreateTaskDTO, UpdateTaskDTO } from '@/types'
-import { taskApi } from '@/lib/ipc-client'
+import { taskApi, taskSourceApi } from '@/lib/ipc-client'
 
 interface TaskState {
   tasks: WorkfloTask[]
@@ -49,6 +49,10 @@ export const useTaskStore = create<TaskState>((set, get) => ({
         set((state) => ({
           tasks: state.tasks.map((t) => (t.id === id ? updated : t))
         }))
+        // Fire background export if task has a source
+        if (updated.source_id && updated.external_id) {
+          taskSourceApi.exportUpdate(id, data as Record<string, unknown>).catch(console.error)
+        }
       }
       return updated || null
     } catch (err) {

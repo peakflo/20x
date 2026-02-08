@@ -1,10 +1,12 @@
-import { useState } from 'react'
-import { Plus, Search, ChevronDown, X, Settings, FileText } from 'lucide-react'
+import { useState, useEffect } from 'react'
+import { Plus, Search, ChevronDown, X, Settings, FileText, RefreshCw, Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { TaskList } from '@/components/tasks/TaskList'
 import { useUIStore, type SortField } from '@/stores/ui-store'
-import { TASK_STATUSES, TASK_PRIORITIES } from '@/types'
-import type { WorkfloTask, TaskStatus, TaskPriority } from '@/types'
+import { useTaskSourceStore } from '@/stores/task-source-store'
+import { useTaskStore } from '@/stores/task-store'
+import { TaskStatus, TASK_STATUSES, TASK_PRIORITIES } from '@/types'
+import type { WorkfloTask, TaskPriority } from '@/types'
 
 interface SidebarProps {
   tasks: WorkfloTask[]
@@ -21,6 +23,7 @@ const sortOptions: { value: SortField; label: string }[] = [
   { value: 'created_at', label: 'Date Created' },
   { value: 'updated_at', label: 'Last Updated' },
   { value: 'priority', label: 'Priority' },
+  { value: 'status', label: 'Status' },
   { value: 'due_date', label: 'Due Date' },
   { value: 'title', label: 'Title' }
 ]
@@ -28,11 +31,25 @@ const sortOptions: { value: SortField; label: string }[] = [
 export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onCreateTask, onOpenSettings }: SidebarProps) {
   const [filtersOpen, setFiltersOpen] = useState(false)
   const {
-    statusFilter, priorityFilter, sortField, searchQuery,
-    setStatusFilter, setPriorityFilter, setSortField, setSearchQuery
+    statusFilter, priorityFilter, sourceFilter, sortField, searchQuery,
+    setStatusFilter, setPriorityFilter, setSourceFilter, setSortField, setSearchQuery
   } = useUIStore()
+  const { sources, syncingIds, fetchSources, syncAllEnabled } = useTaskSourceStore()
+  const { fetchTasks } = useTaskStore()
+  const [isSyncingAll, setIsSyncingAll] = useState(false)
 
-  const hasActiveFilters = statusFilter !== 'all' || priorityFilter !== 'all'
+  useEffect(() => {
+    fetchSources()
+  }, [fetchSources])
+
+  const handleSyncAll = async () => {
+    setIsSyncingAll(true)
+    await syncAllEnabled()
+    await fetchTasks()
+    setIsSyncingAll(false)
+  }
+
+  const hasActiveFilters = statusFilter !== 'all' || priorityFilter !== 'all' || sourceFilter !== 'all'
 
   return (
     <aside className="flex flex-col h-full border-r bg-sidebar overflow-hidden">
@@ -48,6 +65,11 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
           )}
         </div>
         <div className="flex items-center gap-1">
+          {sources.length > 0 && (
+            <Button size="sm" variant="ghost" onClick={handleSyncAll} disabled={isSyncingAll || syncingIds.size > 0} title="Sync all sources">
+              {isSyncingAll ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+            </Button>
+          )}
           <Button size="sm" variant="ghost" onClick={onOpenSettings} title="Agent Settings">
             <Settings className="h-3.5 w-3.5" />
           </Button>
@@ -88,7 +110,7 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
           Filters
           {hasActiveFilters && (
             <span className="bg-primary/20 text-primary rounded-full px-1.5 text-[10px]">
-              {(statusFilter !== 'all' ? 1 : 0) + (priorityFilter !== 'all' ? 1 : 0)}
+              {(statusFilter !== 'all' ? 1 : 0) + (priorityFilter !== 'all' ? 1 : 0) + (sourceFilter !== 'all' ? 1 : 0)}
             </span>
           )}
         </button>
@@ -126,6 +148,19 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
               ))}
             </select>
           </div>
+          {sources.length > 0 && (
+            <select
+              value={sourceFilter}
+              onChange={(e) => setSourceFilter(e.target.value)}
+              className="w-full rounded-md border border-input bg-transparent px-2 py-1.5 text-xs cursor-pointer"
+            >
+              <option value="all">All Sources</option>
+              <option value="local">Local</option>
+              {sources.map((s) => (
+                <option key={s.id} value={s.id}>{s.name}</option>
+              ))}
+            </select>
+          )}
           <div className="flex items-center gap-2 pt-1">
             <button
               onClick={() => setSearchQuery('bill')}
@@ -137,7 +172,7 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
           </div>
           {hasActiveFilters && (
             <button
-              onClick={() => { setStatusFilter('all'); setPriorityFilter('all') }}
+              onClick={() => { setStatusFilter('all'); setPriorityFilter('all'); setSourceFilter('all') }}
               className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground cursor-pointer"
             >
               <X className="h-3 w-3" /> Clear filters
@@ -153,7 +188,7 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
       </div>
 
       <div className="px-4 py-2.5 border-t text-xs text-muted-foreground tabular-nums">
-        {tasks.length} task{tasks.length !== 1 ? 's' : ''}
+        {tasks.filter((t) => t.status !== TaskStatus.Completed).length} active · {tasks.length} total
       </div>
     </aside>
   )

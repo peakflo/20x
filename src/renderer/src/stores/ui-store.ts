@@ -1,13 +1,15 @@
 import { create } from 'zustand'
-import type { TaskStatus, TaskPriority } from '@/types'
+import { TaskStatus } from '@/types'
+import type { TaskPriority } from '@/types'
 
-export type SortField = 'created_at' | 'updated_at' | 'priority' | 'due_date' | 'title'
+export type SortField = 'created_at' | 'updated_at' | 'priority' | 'due_date' | 'title' | 'status'
 export type SortDirection = 'asc' | 'desc'
 export type ActiveModal = 'create' | 'edit' | 'delete' | 'agent-settings' | 'repo-selector' | 'gh-setup' | null
 
 interface UIState {
   statusFilter: TaskStatus | 'all'
   priorityFilter: TaskPriority | 'all'
+  sourceFilter: string
   sortField: SortField
   sortDirection: SortDirection
   searchQuery: string
@@ -17,6 +19,7 @@ interface UIState {
 
   setStatusFilter: (filter: TaskStatus | 'all') => void
   setPriorityFilter: (filter: TaskPriority | 'all') => void
+  setSourceFilter: (filter: string) => void
   setSortField: (field: SortField) => void
   setSortDirection: (dir: SortDirection) => void
   setSearchQuery: (query: string) => void
@@ -30,6 +33,7 @@ interface UIState {
 export const useUIStore = create<UIState>((set) => ({
   statusFilter: 'all',
   priorityFilter: 'all',
+  sourceFilter: 'all',
   sortField: 'created_at',
   sortDirection: 'desc',
   searchQuery: '',
@@ -39,6 +43,7 @@ export const useUIStore = create<UIState>((set) => ({
 
   setStatusFilter: (statusFilter) => set({ statusFilter }),
   setPriorityFilter: (priorityFilter) => set({ priorityFilter }),
+  setSourceFilter: (sourceFilter) => set({ sourceFilter }),
   setSortField: (sortField) => set({ sortField }),
   setSortDirection: (sortDirection) => set({ sortDirection }),
   setSearchQuery: (searchQuery) => set({ searchQuery }),

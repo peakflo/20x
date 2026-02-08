@@ -8,7 +8,16 @@ import type {
   UpdateAgentDTO,
   McpServer,
   CreateMcpServerDTO,
-  UpdateMcpServerDTO
+  UpdateMcpServerDTO,
+  TaskSource,
+  CreateTaskSourceDTO,
+  UpdateTaskSourceDTO,
+  SyncResult,
+  PluginMeta,
+  ConfigFieldSchema,
+  ConfigFieldOption,
+  PluginAction,
+  ActionResult
 } from './index'
 
 export interface AgentSessionStartResult {
@@ -107,6 +116,11 @@ interface ElectronAPI {
     remove: (taskId: string, attachmentId: string) => Promise<void>
     open: (taskId: string, attachmentId: string) => Promise<void>
   }
+  shell: {
+    openPath: (filePath: string) => Promise<void>
+    showItemInFolder: (filePath: string) => Promise<void>
+    readTextFile: (filePath: string) => Promise<{ content: string; size: number } | null>
+  }
   notifications: {
     show: (title: string, body: string) => Promise<void>
   }
@@ -124,6 +138,22 @@ interface ElectronAPI {
   worktree: {
     setup: (taskId: string, repos: { fullName: string; defaultBranch: string }[], org: string) => Promise<string>
     cleanup: (taskId: string, repos: { fullName: string }[], org: string) => Promise<void>
+  }
+  taskSources: {
+    getAll: () => Promise<TaskSource[]>
+    get: (id: string) => Promise<TaskSource | undefined>
+    create: (data: CreateTaskSourceDTO) => Promise<TaskSource>
+    update: (id: string, data: UpdateTaskSourceDTO) => Promise<TaskSource | undefined>
+    delete: (id: string) => Promise<boolean>
+    sync: (sourceId: string) => Promise<SyncResult>
+    exportUpdate: (taskId: string, fields: Record<string, unknown>) => Promise<void>
+  }
+  plugins: {
+    list: () => Promise<PluginMeta[]>
+    getConfigSchema: (pluginId: string) => Promise<ConfigFieldSchema[]>
+    resolveOptions: (pluginId: string, resolverKey: string, config: Record<string, unknown>, mcpServerId?: string) => Promise<ConfigFieldOption[]>
+    getActions: (pluginId: string, config: Record<string, unknown>) => Promise<PluginAction[]>
+    executeAction: (actionId: string, taskId: string, sourceId: string, input?: string) => Promise<ActionResult>
   }
   onOverdueCheck: (callback: () => void) => () => void
   onAgentOutput: (callback: (event: AgentOutputEvent) => void) => () => void

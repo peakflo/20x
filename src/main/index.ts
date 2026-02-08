@@ -5,6 +5,10 @@ import { DatabaseManager } from './database'
 import { AgentManager } from './agent-manager'
 import { GitHubManager } from './github-manager'
 import { WorktreeManager } from './worktree-manager'
+import { McpToolCaller } from './mcp-tool-caller'
+import { SyncManager } from './sync-manager'
+import { PluginRegistry } from './plugins/registry'
+import { PeakfloPlugin } from './plugins/peakflo-plugin'
 import { registerIpcHandlers } from './ipc-handlers'
 
 let mainWindow: BrowserWindow | null = null
@@ -12,6 +16,8 @@ let db: DatabaseManager | null = null
 let agentManager: AgentManager | null = null
 let githubManager: GitHubManager | null = null
 let worktreeManager: WorktreeManager | null = null
+let syncManager: SyncManager | null = null
+let pluginRegistry: PluginRegistry | null = null
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
@@ -68,7 +74,14 @@ app.whenReady().then(async () => {
   githubManager = new GitHubManager()
   worktreeManager = new WorktreeManager()
 
-  registerIpcHandlers(db, agentManager, githubManager, worktreeManager)
+  const mcpToolCaller = new McpToolCaller()
+
+  pluginRegistry = new PluginRegistry()
+  pluginRegistry.register(new PeakfloPlugin())
+
+  syncManager = new SyncManager(db, mcpToolCaller, pluginRegistry)
+
+  registerIpcHandlers(db, agentManager, githubManager, worktreeManager, syncManager, pluginRegistry, mcpToolCaller)
 
   // Check gh CLI status on startup (log only)
   githubManager.checkGhCli().then((status) => {

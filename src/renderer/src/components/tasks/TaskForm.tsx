@@ -6,17 +6,18 @@ import { Textarea } from '@/components/ui/Textarea'
 import { Label } from '@/components/ui/Label'
 import { TaskChecklist } from './TaskChecklist'
 import { TaskAttachments, type PendingFile } from './TaskAttachments'
+import { OutputFieldsEditor } from './OutputFieldsEditor'
+import { TaskStatus, TASK_TYPES, TASK_PRIORITIES, TASK_STATUSES } from '@/types'
 import type {
   WorkfloTask,
   CreateTaskDTO,
   UpdateTaskDTO,
   ChecklistItem,
   FileAttachment,
+  OutputField,
   TaskType,
-  TaskPriority,
-  TaskStatus
+  TaskPriority
 } from '@/types'
-import { TASK_TYPES, TASK_PRIORITIES, TASK_STATUSES } from '@/types'
 
 export interface TaskFormSubmitData extends CreateTaskDTO {
   _pendingFiles?: PendingFile[]
@@ -33,12 +34,13 @@ export function TaskForm({ task, onSubmit, onCancel }: TaskFormProps) {
   const [description, setDescription] = useState('')
   const [type, setType] = useState<TaskType>('general')
   const [priority, setPriority] = useState<TaskPriority>('medium')
-  const [status, setStatus] = useState<TaskStatus>('inbox')
+  const [status, setStatus] = useState<TaskStatus>(TaskStatus.NotStarted)
   const [assignee, setAssignee] = useState('')
   const [dueDate, setDueDate] = useState('')
   const [labels, setLabels] = useState('')
   const [checklist, setChecklist] = useState<ChecklistItem[]>([])
   const [attachments, setAttachments] = useState<FileAttachment[]>([])
+  const [outputFields, setOutputFields] = useState<OutputField[]>([])
   const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([])
   const [isSubmitting, setIsSubmitting] = useState(false)
 
@@ -54,6 +56,7 @@ export function TaskForm({ task, onSubmit, onCancel }: TaskFormProps) {
       setLabels(task.labels.join(', '))
       setChecklist(task.checklist)
       setAttachments(task.attachments)
+      setOutputFields(task.output_fields)
     }
   }, [task])
 
@@ -78,7 +81,8 @@ export function TaskForm({ task, onSubmit, onCancel }: TaskFormProps) {
         due_date: dueDate ? new Date(dueDate).toISOString() : null,
         labels: parsedLabels,
         checklist,
-        attachments
+        attachments,
+        output_fields: outputFields
       }
 
       if (!task && pendingFiles.length > 0) {
@@ -158,6 +162,10 @@ export function TaskForm({ task, onSubmit, onCancel }: TaskFormProps) {
           pendingFiles={pendingFiles}
           onPendingChange={setPendingFiles}
         />
+      </div>
+
+      <div className="rounded-md border p-4">
+        <OutputFieldsEditor fields={outputFields} onChange={setOutputFields} />
       </div>
 
       <div className="flex justify-end gap-3 pt-4 border-t">

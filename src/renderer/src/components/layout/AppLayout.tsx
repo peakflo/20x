@@ -11,6 +11,7 @@ import { useOverdueNotifications } from '@/hooks/use-overdue-notifications'
 import { attachmentApi, agentSessionApi, worktreeApi, settingsApi } from '@/lib/ipc-client'
 import { isOverdue } from '@/lib/utils'
 import { useEffect } from 'react'
+import { TaskStatus } from '@/types'
 import type { FileAttachment } from '@/types'
 
 export function AppLayout() {
@@ -35,7 +36,7 @@ export function AppLayout() {
   const deletingTask = deletingTaskId ? tasks.find((t) => t.id === deletingTaskId) : undefined
 
   const overdueCount = tasks.filter(
-    (t) => isOverdue(t.due_date) && t.status !== 'completed' && t.status !== 'cancelled'
+    (t) => isOverdue(t.due_date) && t.status !== TaskStatus.Completed
   ).length
 
   useOverdueNotifications(tasks)
@@ -74,6 +75,16 @@ export function AppLayout() {
             onUpdateAttachments={async (attachments: FileAttachment[]) => {
               if (selectedTask) {
                 await updateTask(selectedTask.id, { attachments })
+              }
+            }}
+            onUpdateOutputFields={async (output_fields) => {
+              if (selectedTask) {
+                await updateTask(selectedTask.id, { output_fields })
+              }
+            }}
+            onCompleteTask={async () => {
+              if (selectedTask) {
+                await updateTask(selectedTask.id, { status: TaskStatus.Completed })
               }
             }}
             onAssignAgent={async (taskId, agentId) => {

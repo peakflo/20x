@@ -9,9 +9,11 @@ import { WorktreeProgressOverlay } from '@/components/github/WorktreeProgressOve
 import { useAgentSession } from '@/hooks/use-agent-session'
 import { useAgentStore } from '@/stores/agent-store'
 import { useSettingsStore } from '@/stores/settings-store'
-import { taskApi, worktreeApi } from '@/lib/ipc-client'
+import { useTaskStore } from '@/stores/task-store'
+import { taskApi, worktreeApi, githubApi } from '@/lib/ipc-client'
 import { useEffect, useCallback, useRef, useState } from 'react'
-import type { WorkfloTask, ChecklistItem, FileAttachment, Agent } from '@/types'
+import { TaskStatus } from '@/types'
+import type { WorkfloTask, ChecklistItem, FileAttachment, OutputField, Agent } from '@/types'
 import type { GitHubRepo } from '@/types/electron'
 
 interface TaskWorkspaceProps {
@@ -21,6 +23,8 @@ interface TaskWorkspaceProps {
   onDelete: () => void
   onUpdateChecklist: (checklist: ChecklistItem[]) => void
   onUpdateAttachments: (attachments: FileAttachment[]) => void
+  onUpdateOutputFields: (fields: OutputField[]) => void
+  onCompleteTask: () => void
   onAssignAgent: (taskId: string, agentId: string | null) => void
   onUpdateTask?: (taskId: string, data: Partial<WorkfloTask>) => Promise<void>
 }
@@ -32,6 +36,8 @@ export function TaskWorkspace({
   onDelete,
   onUpdateChecklist,
   onUpdateAttachments,
+  onUpdateOutputFields,
+  onCompleteTask,
   onAssignAgent,
   onUpdateTask
 }: TaskWorkspaceProps) {
@@ -39,17 +45,34 @@ export function TaskWorkspace({
   const { addActiveSession, removeActiveSession } = useAgentStore()
   const { githubOrg, ghCliStatus, checkGhCli, fetchSettings } = useSettingsStore()
 
-  const startingRef = useRef(false)
+  const [isStarting, setIsStarting] = useState(false)
   const [showGhSetup, setShowGhSetup] = useState(false)
   const [showRepoSelector, setShowRepoSelector] = useState(false)
   const [isSettingUpWorktree, setIsSettingUpWorktree] = useState(false)
 
+  const { fetchTasks } = useTaskStore()
+
   // Fetch settings on mount
   useEffect(() => { fetchSettings() }, [])
 
-  // Fully destroy session when task is completed/cancelled
+  // Clear starting state once session is established
   useEffect(() => {
-    if (session.sessionId && (task?.status === 'completed' || task?.status === 'cancelled')) {
+    if (session.sessionId && isStarting) setIsStarting(false)
+  }, [session.sessionId, isStarting])
+
+  // Re-fetch tasks when agent status changes (status is updated in DB by agent-manager)
+  const prevStatusRef = useRef(session.status)
+  useEffect(() => {
+    const prev = prevStatusRef.current
+    prevStatusRef.current = session.status
+    if (prev !== session.status) {
+      fetchTasks()
+    }
+  }, [session.status, fetchTasks])
+
+  // Fully destroy session when task is completed
+  useEffect(() => {
+    if (session.sessionId && task?.status === TaskStatus.Completed) {
       stop()
         .then(() => {
           removeActiveSession(session.sessionId!)
@@ -62,90 +85,79 @@ export function TaskWorkspace({
     }
   }, [task?.status, session.sessionId])
 
-  const startSessionDirectly = useCallback(async () => {
-    if (!task?.agent_id) return
-    startingRef.current = true
+  const handleStartSession = useCallback(async () => {
+    if (!task?.agent_id || isStarting || session.sessionId) return
+    setIsStarting(true)
+
     try {
+      // If task has repos and gh is configured, setup worktrees first
+      if (task.repos.length > 0 && githubOrg) {
+        setIsSettingUpWorktree(true)
+        const repoData = await githubApi.fetchOrgRepos(githubOrg)
+        const matched = task.repos
+          .map((name) => repoData.find((r) => r.fullName === name))
+          .filter(Boolean) as GitHubRepo[]
+
+        if (matched.length > 0) {
+          const workspaceDir = await worktreeApi.setup(
+            task.id,
+            matched.map((r) => ({ fullName: r.fullName, defaultBranch: r.defaultBranch })),
+            githubOrg
+          )
+          setIsSettingUpWorktree(false)
+          const sessionId = await start(task.agent_id, task.id, workspaceDir)
+          addActiveSession({ sessionId, agentId: task.agent_id, taskId: task.id, status: 'working' })
+          return
+        }
+        setIsSettingUpWorktree(false)
+      }
+
+      // No repos or gh not configured — start without worktree
       const sessionId = await start(task.agent_id, task.id)
-      addActiveSession({
-        sessionId,
-        agentId: task.agent_id,
-        taskId: task.id,
-        status: 'working'
-      })
+      addActiveSession({ sessionId, agentId: task.agent_id, taskId: task.id, status: 'working' })
     } catch (err) {
       console.error('Failed to start session:', err)
-    } finally {
-      startingRef.current = false
+      setIsSettingUpWorktree(false)
+      setIsStarting(false)
     }
-  }, [task?.agent_id, task?.id, start, addActiveSession])
-
-  const handleStartSession = useCallback(async () => {
-    if (!task?.agent_id || startingRef.current || session.sessionId) return
-
-    // Check if gh CLI is configured — if not, start without repos
-    const cliStatus = await checkGhCli()
-    if (!cliStatus.installed || !cliStatus.authenticated || !githubOrg) {
-      await startSessionDirectly()
-      return
-    }
-
-    // gh is configured — open repo selector (user can skip by confirming with no repos)
-    setShowRepoSelector(true)
-  }, [task?.agent_id, task?.id, session.sessionId, githubOrg, checkGhCli, startSessionDirectly])
+  }, [task?.agent_id, task?.id, task?.repos, session.sessionId, isStarting, githubOrg, start, addActiveSession])
 
   const handleGhSetupComplete = useCallback(() => {
     setShowGhSetup(false)
-    if (!githubOrg) return
-    // After setup, open repo selector
-    setShowRepoSelector(true)
-  }, [githubOrg])
+  }, [])
 
-  const handleReposConfirmed = useCallback(async (selectedRepos: GitHubRepo[]) => {
-    if (!task?.agent_id || !task) return
-    setShowRepoSelector(false)
-
-    // No repos selected — start without worktree
-    if (selectedRepos.length === 0) {
-      await startSessionDirectly()
+  const handleAddRepos = useCallback(async () => {
+    const cliStatus = await checkGhCli()
+    if (!cliStatus.installed || !cliStatus.authenticated || !githubOrg) {
+      setShowGhSetup(true)
       return
     }
+    setShowRepoSelector(true)
+  }, [githubOrg, checkGhCli])
 
-    if (!githubOrg) return
-
-    // Save repos to task
+  const handleReposConfirmed = useCallback(async (selectedRepos: GitHubRepo[]) => {
+    if (!task) return
+    setShowRepoSelector(false)
     const repoNames = selectedRepos.map((r) => r.fullName)
+    // Merge with existing repos (avoid duplicates)
+    const merged = [...new Set([...task.repos, ...repoNames])]
     if (onUpdateTask) {
-      await onUpdateTask(task.id, { repos: repoNames })
+      await onUpdateTask(task.id, { repos: merged })
     } else {
-      await taskApi.update(task.id, { repos: repoNames })
+      await taskApi.update(task.id, { repos: merged })
     }
+    fetchTasks()
+  }, [task, onUpdateTask, fetchTasks])
 
-    // Setup worktrees
-    setIsSettingUpWorktree(true)
-    try {
-      const workspaceDir = await worktreeApi.setup(
-        task.id,
-        selectedRepos.map((r) => ({ fullName: r.fullName, defaultBranch: r.defaultBranch })),
-        githubOrg
-      )
-
-      // Start agent session with workspace directory
-      startingRef.current = true
-      const sessionId = await start(task.agent_id, task.id, workspaceDir)
-      addActiveSession({
-        sessionId,
-        agentId: task.agent_id!,
-        taskId: task.id,
-        status: 'working'
-      })
-    } catch (err) {
-      console.error('Failed to setup workspace:', err)
-    } finally {
-      setIsSettingUpWorktree(false)
-      startingRef.current = false
+  const handleUpdateRepos = useCallback(async (repos: string[]) => {
+    if (!task) return
+    if (onUpdateTask) {
+      await onUpdateTask(task.id, { repos })
+    } else {
+      await taskApi.update(task.id, { repos })
     }
-  }, [task, githubOrg, start, addActiveSession, onUpdateTask, startSessionDirectly])
+    fetchTasks()
+  }, [task, onUpdateTask, fetchTasks])
 
   const handleAssignAgent = useCallback(
     (agentId: string | null) => {
@@ -197,14 +209,14 @@ export function TaskWorkspace({
     )
   }
 
-  // Show panel if we have a session (even if idle/interrupted)
-  const hasSession = !!session.sessionId
-  const canStart = task.agent_id && !session.sessionId && !startingRef.current
-    && task.status !== 'completed' && task.status !== 'cancelled'
+  // Show panel if we have a session or are starting one
+  const showPanel = !!session.sessionId || isStarting
+  const canStart = task.agent_id && !session.sessionId && !isStarting
+    && task.status !== TaskStatus.Completed
 
   return (
     <>
-      <div className={`grid ${hasSession ? 'grid-cols-2' : 'grid-cols-1'} relative`} style={{ height: '100%' }}>
+      <div className={`grid ${showPanel ? 'grid-cols-2' : 'grid-cols-1'} relative`} style={{ height: '100%' }}>
         <div className="min-h-0 min-w-0 flex flex-col">
           <AgentApprovalBanner
             request={session.pendingApproval}
@@ -218,17 +230,21 @@ export function TaskWorkspace({
             onDelete={onDelete}
             onUpdateChecklist={onUpdateChecklist}
             onUpdateAttachments={onUpdateAttachments}
+            onUpdateOutputFields={onUpdateOutputFields}
+            onCompleteTask={onCompleteTask}
             onAssignAgent={handleAssignAgent}
+            onUpdateRepos={handleUpdateRepos}
+            onAddRepos={handleAddRepos}
             onStartAgent={handleStartSession}
             canStartAgent={!!canStart}
           />
         </div>
 
-        {hasSession && (
+        {showPanel && (
           <div className="min-h-0 min-w-0">
             <AgentTranscriptPanel
               messages={session.messages}
-              status={session.status}
+              status={isStarting && !session.sessionId ? 'working' : session.status}
               onStop={handleAbort}
               onSend={handleSend}
             />

@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { isOverdue, isDueSoon } from '@/lib/utils'
 import { notificationApi, onOverdueCheck } from '@/lib/ipc-client'
+import { TaskStatus } from '@/types'
 import type { WorkfloTask } from '@/types'
 
 export function useOverdueNotifications(tasks: WorkfloTask[]): void {
@@ -13,16 +14,16 @@ export function useOverdueNotifications(tasks: WorkfloTask[]): void {
       const current = tasksRef.current
       const notified = notifiedRef.current
 
-      // Remove completed/cancelled tasks from notified set
+      // Remove completed tasks from notified set
       for (const id of notified) {
         const task = current.find((t) => t.id === id)
-        if (!task || task.status === 'completed' || task.status === 'cancelled') {
+        if (!task || task.status === TaskStatus.Completed) {
           notified.delete(id)
         }
       }
 
       for (const task of current) {
-        if (task.status === 'completed' || task.status === 'cancelled') continue
+        if (task.status === TaskStatus.Completed) continue
         if (notified.has(task.id)) continue
 
         if (isOverdue(task.due_date)) {

@@ -1,6 +1,7 @@
 import { useEffect, useMemo } from 'react'
 import { useTaskStore } from '@/stores/task-store'
 import { useUIStore } from '@/stores/ui-store'
+import { TaskStatus } from '@/types'
 import type { WorkfloTask, TaskPriority } from '@/types'
 
 const PRIORITY_ORDER: Record<TaskPriority, number> = {
@@ -10,10 +11,17 @@ const PRIORITY_ORDER: Record<TaskPriority, number> = {
   low: 3
 }
 
+const STATUS_ORDER: Record<TaskStatus, number> = {
+  [TaskStatus.AgentWorking]: 0,
+  [TaskStatus.ReadyForReview]: 1,
+  [TaskStatus.NotStarted]: 2,
+  [TaskStatus.Completed]: 3
+}
+
 export function useTasks() {
   const { tasks, selectedTaskId, isLoading, error, fetchTasks, createTask, updateTask, deleteTask, selectTask } =
     useTaskStore()
-  const { statusFilter, priorityFilter, sortField, sortDirection, searchQuery } = useUIStore()
+  const { statusFilter, priorityFilter, sourceFilter, sortField, sortDirection, searchQuery } = useUIStore()
 
   useEffect(() => {
     fetchTasks()
@@ -21,6 +29,15 @@ export function useTasks() {
 
   const filteredTasks = useMemo(() => {
     let result = [...tasks]
+
+    // Source filter
+    if (sourceFilter !== 'all') {
+      if (sourceFilter === 'local') {
+        result = result.filter((t) => !t.source_id)
+      } else {
+        result = result.filter((t) => t.source_id === sourceFilter)
+      }
+    }
 
     // Status filter
     if (statusFilter !== 'all') {
@@ -56,6 +73,9 @@ export function useTasks() {
           cmp = aDate - bDate
           break
         }
+        case 'status':
+          cmp = STATUS_ORDER[a.status] - STATUS_ORDER[b.status]
+          break
         case 'title':
           cmp = a.title.localeCompare(b.title)
           break
@@ -71,7 +91,7 @@ export function useTasks() {
     })
 
     return result
-  }, [tasks, statusFilter, priorityFilter, searchQuery, sortField, sortDirection])
+  }, [tasks, sourceFilter, statusFilter, priorityFilter, searchQuery, sortField, sortDirection])
 
   const selectedTask: WorkfloTask | undefined = useMemo(
     () => (selectedTaskId ? tasks.find((t) => t.id === selectedTaskId) : undefined),

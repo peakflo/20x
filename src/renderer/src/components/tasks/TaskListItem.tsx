@@ -1,16 +1,14 @@
-import { Calendar, Bot } from 'lucide-react'
+import { Calendar } from 'lucide-react'
 import { cn, formatDate, isOverdue, isDueSoon } from '@/lib/utils'
 import { TaskPriorityBadge } from './TaskPriorityBadge'
-import { useAgentStore } from '@/stores/agent-store'
-import type { WorkfloTask, TaskStatus } from '@/types'
+import { TaskStatus } from '@/types'
+import type { WorkfloTask } from '@/types'
 
 const statusDotColor: Record<TaskStatus, string> = {
-  inbox: 'bg-muted-foreground',
-  accepted: 'bg-blue-400',
-  in_progress: 'bg-purple-400',
-  pending_review: 'bg-amber-400',
-  completed: 'bg-emerald-400',
-  cancelled: 'bg-red-400'
+  [TaskStatus.NotStarted]: 'bg-muted-foreground',
+  [TaskStatus.AgentWorking]: 'bg-amber-400',
+  [TaskStatus.ReadyForReview]: 'bg-purple-400',
+  [TaskStatus.Completed]: 'bg-emerald-400'
 }
 
 interface TaskListItemProps {
@@ -20,11 +18,9 @@ interface TaskListItemProps {
 }
 
 export function TaskListItem({ task, isSelected, onSelect }: TaskListItemProps) {
-  const isActive = task.status !== 'completed' && task.status !== 'cancelled'
+  const isActive = task.status !== TaskStatus.Completed
   const overdue = isActive && isOverdue(task.due_date)
   const dueSoon = isActive && !overdue && isDueSoon(task.due_date)
-  const { getSessionForTask } = useAgentStore()
-  const activeSession = getSessionForTask(task.id)
 
   return (
     <button
@@ -36,7 +32,11 @@ export function TaskListItem({ task, isSelected, onSelect }: TaskListItemProps) 
       )}
     >
       <div className="flex items-start gap-3">
-        <div className={cn('mt-[7px] h-2 w-2 rounded-full shrink-0', statusDotColor[task.status])} />
+        <div className={cn(
+          'mt-[7px] h-2 w-2 rounded-full shrink-0',
+          statusDotColor[task.status],
+          task.status === TaskStatus.AgentWorking && 'animate-pulse'
+        )} />
         <div className="min-w-0 flex-1">
           <div className="text-sm font-medium truncate">{task.title}</div>
           <div className="flex items-center gap-2 mt-1">
@@ -47,17 +47,8 @@ export function TaskListItem({ task, isSelected, onSelect }: TaskListItemProps) 
                 {formatDate(task.due_date)}
               </span>
             )}
-            {task.agent_id && (
-              <span className={cn(
-                'flex items-center gap-1 text-xs',
-                activeSession?.status === 'working' ? 'text-green-400' : 
-                activeSession?.status === 'error' ? 'text-red-400' :
-                activeSession?.status === 'waiting_approval' ? 'text-yellow-400' :
-                'text-muted-foreground'
-              )}>
-                <Bot className="h-3 w-3" />
-                {activeSession?.status === 'working' && <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />}
-              </span>
+            {task.source !== 'local' && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-accent text-muted-foreground">{task.source}</span>
             )}
           </div>
         </div>

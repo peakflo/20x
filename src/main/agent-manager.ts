@@ -2,8 +2,10 @@ import { EventEmitter } from 'events'
 import { spawn, type ChildProcess } from 'child_process'
 import { join } from 'path'
 import { existsSync } from 'fs'
+import { app } from 'electron'
 import type { BrowserWindow } from 'electron'
-import type { DatabaseManager, AgentMcpServerEntry } from './database'
+import type { DatabaseManager, AgentMcpServerEntry, OutputFieldRecord } from './database'
+import { TaskStatus } from '../shared/constants'
 
 let OpenCodeSDK: typeof import('@opencode-ai/sdk') | null = null
 
@@ -150,6 +152,7 @@ export class AgentManager extends EventEmitter {
 
         for (const session of this.sessions.values()) {
           session.status = 'error'
+          this.db.updateTask(session.taskId, { status: TaskStatus.NotStarted })
           this.sendToRenderer('agent:status', {
             sessionId: session.id,
             agentId: session.agentId,
@@ -200,6 +203,11 @@ export class AgentManager extends EventEmitter {
       if (session.taskId === taskId && session.status !== 'error') {
         return sessionId
       }
+    }
+
+    // Always use a dedicated workspace directory
+    if (!workspaceDir) {
+      workspaceDir = this.db.getWorkspaceDir(taskId)
     }
 
     const sessionId = `session-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
@@ -277,6 +285,9 @@ export class AgentManager extends EventEmitter {
       session.ocSessionId = result.data.id
       console.log(`[AgentManager] OpenCode session created: ${result.data.id}`)
 
+      // Update task status to agent_working
+      this.db.updateTask(taskId, { status: TaskStatus.AgentWorking })
+
       // Notify renderer that session is live
       this.sendToRenderer('agent:status', {
         sessionId, agentId, taskId, status: 'working'
@@ -287,9 +298,14 @@ export class AgentManager extends EventEmitter {
 
       // Build the initial prompt
       const task = this.db.getTask(taskId)
-      const promptText = task
+      let promptText = task
         ? `Working on task: "${task.title}"\n\n${task.description || ''}`
         : `Working on task ${taskId}`
+
+      // Append output field instructions if task has output fields
+      if (task?.output_fields && task.output_fields.length > 0) {
+        promptText += this.buildOutputFieldInstructions(task.output_fields)
+      }
 
       // Build parts array: text + any file attachments
       const parts: any[] = [{ type: 'text', text: promptText }]
@@ -356,6 +372,8 @@ export class AgentManager extends EventEmitter {
       console.error(`[AgentManager] Failed to start session ${sessionId}:`, error)
       session.status = 'error'
       this.sessions.delete(sessionId)
+      // Revert task status on error
+      this.db.updateTask(taskId, { status: TaskStatus.NotStarted })
       throw error
     }
   }
@@ -413,7 +431,7 @@ export class AgentManager extends EventEmitter {
 
       if (!ocStatus || ocStatus.type === 'idle') {
         console.log(`[AgentManager] Session ${session.ocSessionId} is idle (ocStatus=${JSON.stringify(ocStatus)})`)
-        this.transitionToIdle(sessionId, session)
+        await this.transitionToIdle(sessionId, session)
       } else if (ocStatus.type === 'busy') {
         console.log(`[AgentManager] Session ${session.ocSessionId} is busy`)
         session.status = 'working'
@@ -441,12 +459,24 @@ export class AgentManager extends EventEmitter {
 
   /**
    * Transitions a session to idle and notifies the renderer.
-   * Does one final message fetch to pick up any remaining parts.
+   * Extracts output field values BEFORE notifying so the renderer
+   * picks up the updated task data on re-fetch.
    */
-  private transitionToIdle(sessionId: string, session: AgentSession): void {
+  private async transitionToIdle(sessionId: string, session: AgentSession): Promise<void> {
     if (session.status === 'idle') return
     session.status = 'idle'
     console.log(`[AgentManager] Session ${sessionId} → idle`)
+
+    // Extract output field values BEFORE notifying the renderer
+    try {
+      await this.extractOutputValues(sessionId)
+    } catch (err) {
+      console.error(`[AgentManager] extractOutputValues error:`, err)
+    }
+
+    // Update task status to ready_for_review
+    this.db.updateTask(session.taskId, { status: TaskStatus.ReadyForReview })
+
     this.sendToRenderer('agent:status', {
       sessionId, agentId: session.agentId, taskId: session.taskId, status: 'idle'
     })
@@ -707,7 +737,7 @@ export class AgentManager extends EventEmitter {
 
         if (lastAssistantMsg?.info?.time?.completed) {
           console.log(`[AgentManager] Last assistant message completed — transitioning to idle`)
-          this.transitionToIdle(sessionId, session)
+          await this.transitionToIdle(sessionId, session)
         }
       }
     } catch (error) {
@@ -740,6 +770,8 @@ export class AgentManager extends EventEmitter {
     }
 
     session.status = 'idle'
+    // Revert task status on abort
+    this.db.updateTask(session.taskId, { status: TaskStatus.NotStarted })
     this.sendToRenderer('agent:status', {
       sessionId,
       agentId: session.agentId,
@@ -775,6 +807,8 @@ export class AgentManager extends EventEmitter {
     }
 
     this.sessions.delete(sessionId)
+    // Revert task status on stop
+    this.db.updateTask(session.taskId, { status: TaskStatus.NotStarted })
     this.sendToRenderer('agent:status', {
       sessionId,
       agentId: session.agentId,
@@ -1066,6 +1100,148 @@ export class AgentManager extends EventEmitter {
     } catch (error) {
       console.error('[AgentManager] Error getting providers:', error)
       return null
+    }
+  }
+
+  /**
+   * Builds instructions for the agent about output fields to fill.
+   */
+  private buildOutputFieldInstructions(fields: OutputFieldRecord[]): string {
+    const lines: string[] = [
+      '\n\n---',
+      'When you complete this task, provide the following outputs.',
+      'Include your answers in a JSON code block at the end of your final message.',
+      'Use the exact field names as keys:\n'
+    ]
+
+    // Build example JSON
+    const exampleObj: Record<string, string> = {}
+    for (const field of fields) {
+      const attrs: string[] = [field.type]
+      if (field.required) attrs.push('required')
+      if (field.multiple) attrs.push('multiple')
+      if (field.options?.length) attrs.push(`options: ${field.options.join(', ')}`)
+
+      lines.push(`- ${field.name} (${attrs.join(', ')})`)
+      exampleObj[field.name] = field.type === 'file' ? '</absolute/path/to/file>' : `<${field.type} value>`
+    }
+
+    const hasFileFields = fields.some((f) => f.type === 'file')
+    if (hasFileFields) {
+      lines.push('\nFor file fields, return the absolute path to the file you created.')
+    }
+
+    lines.push('\nExample format:')
+    lines.push('```json')
+    lines.push(JSON.stringify(exampleObj, null, 2))
+    lines.push('```')
+
+    return lines.join('\n')
+  }
+
+  /**
+   * Extracts output field values from the last assistant message
+   * and from the outputs directory on session completion.
+   */
+  private async extractOutputValues(sessionId: string): Promise<void> {
+    const session = this.sessions.get(sessionId)
+    if (!session?.ocClient || !session.ocSessionId) return
+
+    const task = this.db.getTask(session.taskId)
+    if (!task?.output_fields || task.output_fields.length === 0) return
+
+    try {
+      // Fetch messages to find last assistant text
+      const messagesResult: any = await session.ocClient.session.messages({
+        path: { id: session.ocSessionId },
+        ...(session.workspaceDir && { query: { directory: session.workspaceDir } })
+      })
+
+      if (!messagesResult.data || !Array.isArray(messagesResult.data)) return
+
+      // Collect all assistant messages (not just last) for text + tool extraction
+      const assistantMessages = messagesResult.data.filter((m: any) => m.info?.role === 'assistant')
+
+      let parsedValues: Record<string, unknown> = {}
+
+      // Collect file paths from completed write/edit tool calls
+      const writtenFiles: string[] = []
+      for (const msg of assistantMessages) {
+        if (!msg.parts) continue
+        for (const part of msg.parts) {
+          if (part.type !== 'tool' || part.state?.status !== 'completed') continue
+          const toolName = (part.tool || '').toLowerCase()
+          if (toolName === 'write' || toolName === 'edit' || toolName === 'create_file') {
+            const input = part.state?.input || {}
+            const filePath = input.file_path || input.path || input.filename
+            if (filePath) writtenFiles.push(filePath)
+          }
+        }
+      }
+      if (writtenFiles.length > 0) {
+        console.log(`[AgentManager] Found ${writtenFiles.length} written file(s):`, writtenFiles)
+      }
+
+      // Extract JSON block from ALL assistant text (search last message first, then earlier ones)
+      for (let i = assistantMessages.length - 1; i >= 0; i--) {
+        const msg = assistantMessages[i]
+        if (!msg.parts) continue
+        const fullText = msg.parts
+          .filter((p: any) => p.type === 'text' && p.text)
+          .map((p: any) => p.text)
+          .join('\n')
+        if (!fullText) continue
+
+        const jsonMatch = fullText.match(/```json\s*\n?([\s\S]*?)\n?\s*```/)
+          || fullText.match(/```\s*\n?([\s\S]*?)\n?\s*```/)
+        if (jsonMatch) {
+          try {
+            parsedValues = JSON.parse(jsonMatch[1].trim())
+            console.log(`[AgentManager] Parsed output values:`, parsedValues)
+            break
+          } catch (e) {
+            console.log(`[AgentManager] Failed to parse output JSON: "${jsonMatch[1].trim()}"`, e)
+          }
+        }
+      }
+
+      if (Object.keys(parsedValues).length === 0) {
+        console.log(`[AgentManager] No JSON output block found in assistant messages`)
+      }
+
+      // Build lookup maps: name → value and id → value (case-insensitive name match)
+      const byName = new Map<string, unknown>()
+      const byId = new Map<string, unknown>()
+      for (const [key, value] of Object.entries(parsedValues)) {
+        byId.set(key, value)
+        byName.set(key.toLowerCase(), value)
+      }
+
+      // Map parsed values to fields — match by name first, then by id
+      const updatedFields = task.output_fields.map((field) => {
+        const updated = { ...field }
+
+        const valueByName = byName.get(field.name.toLowerCase())
+        const valueById = byId.get(field.id)
+        if (valueByName !== undefined) {
+          updated.value = valueByName
+        } else if (valueById !== undefined) {
+          updated.value = valueById
+        }
+
+        // For file fields: use written file paths from tool calls
+        if (field.type === 'file' && !updated.value && writtenFiles.length > 0) {
+          updated.value = field.multiple ? writtenFiles : writtenFiles[0]
+        }
+
+        return updated
+      })
+
+      // Save updated output fields
+      this.db.updateTask(session.taskId, { output_fields: updatedFields })
+      console.log(`[AgentManager] Extracted output values for task ${session.taskId}`)
+    } catch (error) {
+      console.error(`[AgentManager] Error extracting output values:`, error)
     }
   }
 
