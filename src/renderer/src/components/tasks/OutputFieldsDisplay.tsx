@@ -134,15 +134,22 @@ function OutputFieldInput({ field, onValueChange }: { field: OutputField; onValu
         </div>
       )
 
-    case 'file':
+    case 'file': {
+      const filePaths = Array.isArray(field.value)
+        ? field.value.map(String)
+        : field.value ? [String(field.value)] : []
       return (
         <div className="space-y-1.5">
           <Label className="text-xs">
             {field.name}
             {field.required && <span className="text-destructive ml-0.5">*</span>}
           </Label>
-          {field.value ? (
-            <FileFieldPreview filePath={String(field.value)} />
+          {filePaths.length > 0 ? (
+            <div className="space-y-1.5">
+              {filePaths.map((fp) => (
+                <FileFieldPreview key={fp} filePath={fp} />
+              ))}
+            </div>
           ) : (
             <div className="text-xs text-muted-foreground rounded-md border px-3 py-2">
               No file — agent will create one
@@ -150,6 +157,7 @@ function OutputFieldInput({ field, onValueChange }: { field: OutputField; onValu
           )}
         </div>
       )
+    }
 
     case 'number':
       return (
