@@ -5,8 +5,10 @@ import type { TaskPriority } from '@/types'
 export type SortField = 'created_at' | 'updated_at' | 'priority' | 'due_date' | 'title' | 'status'
 export type SortDirection = 'asc' | 'desc'
 export type ActiveModal = 'create' | 'edit' | 'delete' | 'agent-settings' | 'repo-selector' | 'gh-setup' | null
+export type SidebarView = 'tasks' | 'skills'
 
 interface UIState {
+  sidebarView: SidebarView
   statusFilter: TaskStatus | 'all'
   priorityFilter: TaskPriority | 'all'
   sourceFilter: string
@@ -17,6 +19,7 @@ interface UIState {
   editingTaskId: string | null
   deletingTaskId: string | null
 
+  setSidebarView: (view: SidebarView) => void
   setStatusFilter: (filter: TaskStatus | 'all') => void
   setPriorityFilter: (filter: TaskPriority | 'all') => void
   setSourceFilter: (filter: string) => void
@@ -31,6 +34,7 @@ interface UIState {
 }
 
 export const useUIStore = create<UIState>((set) => ({
+  sidebarView: 'tasks',
   statusFilter: 'all',
   priorityFilter: 'all',
   sourceFilter: 'all',
@@ -41,6 +45,7 @@ export const useUIStore = create<UIState>((set) => ({
   editingTaskId: null,
   deletingTaskId: null,
 
+  setSidebarView: (sidebarView) => set({ sidebarView }),
   setStatusFilter: (statusFilter) => set({ statusFilter }),
   setPriorityFilter: (priorityFilter) => set({ priorityFilter }),
   setSourceFilter: (sourceFilter) => set({ sourceFilter }),

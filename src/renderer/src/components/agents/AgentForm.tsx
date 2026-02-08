@@ -7,6 +7,7 @@ import { Label } from '@/components/ui/Label'
 import { Checkbox } from '@/components/ui/Checkbox'
 import { agentConfigApi } from '@/lib/ipc-client'
 import { useMcpStore } from '@/stores/mcp-store'
+import { SkillSelector } from '@/components/skills/SkillSelector'
 import type { Agent, CreateAgentDTO, UpdateAgentDTO, CodingAgentType, AgentMcpServerEntry } from '@/types'
 import { CODING_AGENTS } from '@/types'
 
@@ -41,6 +42,7 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
   const [codingAgent, setCodingAgent] = useState<CodingAgentType | ''>(agent?.config.coding_agent ?? '')
   const [model, setModel] = useState(agent?.config.model ?? '')
   const [systemPrompt, setSystemPrompt] = useState(agent?.config.system_prompt ?? '')
+  const [skillIds, setSkillIds] = useState<string[] | undefined>(agent?.config.skill_ids)
   const [mcpSelection, setMcpSelection] = useState<Map<string, string[] | undefined>>(
     () => parseMcpSelection(agent?.config.mcp_servers)
   )
@@ -150,7 +152,8 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
         coding_agent: codingAgent || undefined,
         model: model.trim() || undefined,
         system_prompt: systemPrompt.trim() || undefined,
-        mcp_servers: mcpServersConfig.length > 0 ? mcpServersConfig : undefined
+        mcp_servers: mcpServersConfig.length > 0 ? mcpServersConfig : undefined,
+        skill_ids: skillIds
       }
     })
   }
@@ -388,6 +391,11 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
             })}
           </div>
         )}
+      </div>
+
+      <div className="space-y-2">
+        <Label>Skills</Label>
+        <SkillSelector selectedIds={skillIds} onChange={setSkillIds} />
       </div>
 
       <div className="flex justify-end gap-2 pt-2">

@@ -1,5 +1,5 @@
-import type { WorkfloTask, CreateTaskDTO, UpdateTaskDTO, FileAttachment, Agent, CreateAgentDTO, UpdateAgentDTO, McpServer, CreateMcpServerDTO, UpdateMcpServerDTO, TaskSource, CreateTaskSourceDTO, UpdateTaskSourceDTO, SyncResult, PluginMeta, ConfigFieldSchema, ConfigFieldOption, PluginAction, ActionResult } from '@/types'
-import type { AgentOutputEvent, AgentStatusEvent, AgentApprovalRequest, GhCliStatus, GitHubRepo, WorktreeProgressEvent, McpTestResult } from '@/types/electron'
+import type { WorkfloTask, CreateTaskDTO, UpdateTaskDTO, FileAttachment, Agent, CreateAgentDTO, UpdateAgentDTO, McpServer, CreateMcpServerDTO, UpdateMcpServerDTO, Skill, CreateSkillDTO, UpdateSkillDTO, TaskSource, CreateTaskSourceDTO, UpdateTaskSourceDTO, SyncResult, PluginMeta, ConfigFieldSchema, ConfigFieldOption, PluginAction, ActionResult } from '@/types'
+import type { AgentOutputEvent, AgentStatusEvent, AgentApprovalRequest, GhCliStatus, GitHubRepo, WorktreeProgressEvent, McpTestResult, SkillSyncResult } from '@/types/electron'
 
 export const taskApi = {
   getAll: (): Promise<WorkfloTask[]> => {
@@ -90,6 +90,18 @@ export const agentSessionApi = {
 
   approve: (sessionId: string, approved: boolean, message?: string): Promise<{ success: boolean }> => {
     return window.electronAPI.agentSession.approve(sessionId, approved, message)
+  },
+
+  syncSkills: (sessionId: string): Promise<SkillSyncResult> => {
+    return window.electronAPI.agentSession.syncSkills(sessionId)
+  },
+
+  syncSkillsForTask: (taskId: string): Promise<SkillSyncResult> => {
+    return window.electronAPI.agentSession.syncSkillsForTask(taskId)
+  },
+
+  learnFromSession: (sessionId: string, message: string): Promise<SkillSyncResult> => {
+    return window.electronAPI.agentSession.learnFromSession(sessionId, message)
   }
 }
 
@@ -205,6 +217,28 @@ export const taskSourceApi = {
 
   exportUpdate: (taskId: string, fields: Record<string, unknown>): Promise<void> => {
     return window.electronAPI.taskSources.exportUpdate(taskId, fields)
+  }
+}
+
+export const skillApi = {
+  getAll: (): Promise<Skill[]> => {
+    return window.electronAPI.skills.getAll()
+  },
+
+  getById: (id: string): Promise<Skill | undefined> => {
+    return window.electronAPI.skills.get(id)
+  },
+
+  create: (data: CreateSkillDTO): Promise<Skill> => {
+    return window.electronAPI.skills.create(data)
+  },
+
+  update: (id: string, data: UpdateSkillDTO): Promise<Skill | undefined> => {
+    return window.electronAPI.skills.update(id, data)
+  },
+
+  delete: (id: string): Promise<boolean> => {
+    return window.electronAPI.skills.delete(id)
   }
 }
 

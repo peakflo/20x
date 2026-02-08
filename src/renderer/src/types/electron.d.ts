@@ -9,6 +9,9 @@ import type {
   McpServer,
   CreateMcpServerDTO,
   UpdateMcpServerDTO,
+  Skill,
+  CreateSkillDTO,
+  UpdateSkillDTO,
   TaskSource,
   CreateTaskSourceDTO,
   UpdateTaskSourceDTO,
@@ -46,6 +49,12 @@ export interface AgentApprovalRequest {
   sessionId: string
   action: string
   description: string
+}
+
+export interface SkillSyncResult {
+  created: string[]
+  updated: string[]
+  unchanged: string[]
 }
 
 export interface McpTestResult {
@@ -107,6 +116,9 @@ interface ElectronAPI {
     stop: (sessionId: string) => Promise<AgentSessionSuccessResult>
     send: (sessionId: string, message: string) => Promise<AgentSessionSuccessResult>
     approve: (sessionId: string, approved: boolean, message?: string) => Promise<AgentSessionSuccessResult>
+    syncSkills: (sessionId: string) => Promise<SkillSyncResult>
+    syncSkillsForTask: (taskId: string) => Promise<SkillSyncResult>
+    learnFromSession: (sessionId: string, message: string) => Promise<SkillSyncResult>
   }
   agentConfig: {
     getProviders: (serverUrl?: string) => Promise<{ providers: any[]; default: Record<string, string> } | null>
@@ -148,6 +160,13 @@ interface ElectronAPI {
     delete: (id: string) => Promise<boolean>
     sync: (sourceId: string) => Promise<SyncResult>
     exportUpdate: (taskId: string, fields: Record<string, unknown>) => Promise<void>
+  }
+  skills: {
+    getAll: () => Promise<Skill[]>
+    get: (id: string) => Promise<Skill | undefined>
+    create: (data: CreateSkillDTO) => Promise<Skill>
+    update: (id: string, data: UpdateSkillDTO) => Promise<Skill | undefined>
+    delete: (id: string) => Promise<boolean>
   }
   plugins: {
     list: () => Promise<PluginMeta[]>
