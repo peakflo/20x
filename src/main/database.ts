@@ -34,6 +34,7 @@ export interface AgentConfigRecord {
   model?: string
   system_prompt?: string
   mcp_servers?: Array<string | AgentMcpServerEntry>
+  skill_ids?: string[]
 }
 
 export interface McpServerConfigRecord {
@@ -192,6 +193,7 @@ export interface TaskRow {
   external_id: string | null
   source_id: string | null
   source: string
+  skill_ids: string | null
   created_at: string
   updated_at: string
 }
@@ -214,6 +216,7 @@ export interface TaskRecord {
   external_id: string | null
   source_id: string | null
   source: string
+  skill_ids: string[] | null
   created_at: string
   updated_at: string
 }
@@ -264,6 +267,7 @@ export interface UpdateTaskData {
   repos?: string[]
   output_fields?: OutputFieldRecord[]
   agent_id?: string | null
+  skill_ids?: string[] | null
 }
 
 /** Columns that can be dynamically updated via updateTask. */
@@ -280,10 +284,11 @@ const UPDATABLE_COLUMNS = new Set([
   'attachments',
   'repos',
   'output_fields',
-  'agent_id'
+  'agent_id',
+  'skill_ids'
 ])
 
-const JSON_COLUMNS = new Set(['labels', 'checklist', 'attachments', 'repos', 'output_fields'])
+const JSON_COLUMNS = new Set(['labels', 'checklist', 'attachments', 'repos', 'output_fields', 'skill_ids'])
 
 function deserializeTask(row: TaskRow): TaskRecord {
   return {
@@ -295,7 +300,8 @@ function deserializeTask(row: TaskRow): TaskRecord {
     output_fields: JSON.parse(row.output_fields || '[]') as OutputFieldRecord[],
     agent_id: row.agent_id ?? null,
     external_id: row.external_id ?? null,
-    source_id: row.source_id ?? null
+    source_id: row.source_id ?? null,
+    skill_ids: row.skill_ids ? JSON.parse(row.skill_ids) as string[] : null
   }
 }
 
@@ -327,6 +333,53 @@ function deserializeAgent(row: AgentRow): AgentRecord {
     ...row,
     config: JSON.parse(row.config) as AgentConfigRecord,
     is_default: row.is_default === 1
+  }
+}
+
+// ── Skill types ───────────────────────────────────────────
+
+export interface SkillRow {
+  id: string
+  name: string
+  description: string
+  content: string
+  version: number
+  is_deleted: number
+  created_at: string
+  updated_at: string
+}
+
+export interface SkillRecord {
+  id: string
+  name: string
+  description: string
+  content: string
+  version: number
+  created_at: string
+  updated_at: string
+}
+
+export interface CreateSkillData {
+  name: string
+  description: string
+  content: string
+}
+
+export interface UpdateSkillData {
+  name?: string
+  description?: string
+  content?: string
+}
+
+function deserializeSkill(row: SkillRow): SkillRecord {
+  return {
+    id: row.id,
+    name: row.name,
+    description: row.description,
+    content: row.content,
+    version: row.version,
+    created_at: row.created_at,
+    updated_at: row.updated_at
   }
 }
 
@@ -407,6 +460,17 @@ export class DatabaseManager {
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
+
+      CREATE TABLE IF NOT EXISTS skills (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        description TEXT NOT NULL,
+        content TEXT NOT NULL,
+        version INTEGER NOT NULL DEFAULT 1,
+        is_deleted INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
     `)
 
     this.runMigrations()
@@ -438,6 +502,10 @@ export class DatabaseManager {
     if (!columnNames.has('source_id')) {
       this.db.exec(`ALTER TABLE tasks ADD COLUMN source_id TEXT REFERENCES task_sources(id) ON DELETE SET NULL`)
       this.db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_source_external ON tasks(source_id, external_id) WHERE external_id IS NOT NULL`)
+    }
+
+    if (!columnNames.has('skill_ids')) {
+      this.db.exec(`ALTER TABLE tasks ADD COLUMN skill_ids TEXT DEFAULT NULL`)
     }
 
     // Migrate mcp_servers table — add new columns for remote support
@@ -853,6 +921,81 @@ export class DatabaseManager {
       'SELECT * FROM tasks WHERE source_id = ? AND external_id = ?'
     ).get(sourceId, externalId) as TaskRow | undefined
     return row ? deserializeTask(row) : undefined
+  }
+
+  // ── Skill CRUD ────────────────────────────────────────────
+
+  getSkills(): SkillRecord[] {
+    const rows = this.db.prepare(
+      'SELECT * FROM skills WHERE is_deleted = 0 ORDER BY name ASC'
+    ).all() as SkillRow[]
+    return rows.map(deserializeSkill)
+  }
+
+  getSkill(id: string): SkillRecord | undefined {
+    const row = this.db.prepare(
+      'SELECT * FROM skills WHERE id = ? AND is_deleted = 0'
+    ).get(id) as SkillRow | undefined
+    return row ? deserializeSkill(row) : undefined
+  }
+
+  getSkillsByIds(ids: string[]): SkillRecord[] {
+    if (ids.length === 0) return []
+    const placeholders = ids.map(() => '?').join(', ')
+    const rows = this.db.prepare(
+      `SELECT * FROM skills WHERE id IN (${placeholders}) AND is_deleted = 0 ORDER BY name ASC`
+    ).all(...ids) as SkillRow[]
+    return rows.map(deserializeSkill)
+  }
+
+  createSkill(data: CreateSkillData): SkillRecord | undefined {
+    const id = createId()
+    const now = new Date().toISOString()
+    this.db.prepare(`
+      INSERT INTO skills (id, name, description, content, version, is_deleted, created_at, updated_at)
+      VALUES (?, ?, ?, ?, 1, 0, ?, ?)
+    `).run(id, data.name, data.description, data.content, now, now)
+    return this.getSkill(id)
+  }
+
+  updateSkill(id: string, data: UpdateSkillData): SkillRecord | undefined {
+    const existing = this.getSkill(id)
+    if (!existing) return undefined
+
+    const setClauses: string[] = []
+    const values: string[] = []
+
+    if (data.name !== undefined) { setClauses.push('name = ?'); values.push(data.name) }
+    if (data.description !== undefined) { setClauses.push('description = ?'); values.push(data.description) }
+    if (data.content !== undefined) { setClauses.push('content = ?'); values.push(data.content) }
+
+    if (setClauses.length === 0) return existing
+
+    // Increment version on any update
+    setClauses.push('version = version + 1')
+    setClauses.push('updated_at = ?')
+    values.push(new Date().toISOString())
+    values.push(id)
+
+    this.db.prepare(
+      `UPDATE skills SET ${setClauses.join(', ')} WHERE id = ?`
+    ).run(...values)
+
+    return this.getSkill(id)
+  }
+
+  getSkillByName(name: string): SkillRecord | undefined {
+    const row = this.db.prepare(
+      'SELECT * FROM skills WHERE name = ? AND is_deleted = 0'
+    ).get(name) as SkillRow | undefined
+    return row ? deserializeSkill(row) : undefined
+  }
+
+  deleteSkill(id: string): boolean {
+    const result = this.db.prepare(
+      'UPDATE skills SET is_deleted = 1, updated_at = ? WHERE id = ? AND is_deleted = 0'
+    ).run(new Date().toISOString(), id)
+    return result.changes > 0
   }
 
   // ── Settings CRUD ──────────────────────────────────────────

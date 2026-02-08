@@ -61,6 +61,7 @@ export interface AgentConfig {
   model?: string
   system_prompt?: string
   mcp_servers?: Array<string | AgentMcpServerEntry>
+  skill_ids?: string[]
 }
 
 export interface Agent {
@@ -167,6 +168,7 @@ export interface WorkfloTask {
   external_id: string | null
   source_id: string | null
   source: string
+  skill_ids: string[] | null
   created_at: string
   updated_at: string
 }
@@ -200,6 +202,7 @@ export interface UpdateTaskDTO {
   repos?: string[]
   output_fields?: OutputField[]
   agent_id?: string | null
+  skill_ids?: string[] | null
 }
 
 export const TASK_TYPES: { value: TaskType; label: string }[] = [
@@ -264,6 +267,30 @@ export interface SyncResult {
   imported: number
   updated: number
   errors: string[]
+}
+
+// ── Skill types ──────────────────────────────────────────────
+
+export interface Skill {
+  id: string
+  name: string
+  description: string
+  content: string
+  version: number
+  created_at: string
+  updated_at: string
+}
+
+export interface CreateSkillDTO {
+  name: string
+  description: string
+  content: string
+}
+
+export interface UpdateSkillDTO {
+  name?: string
+  description?: string
+  content?: string
 }
 
 // ── Plugin types ─────────────────────────────────────────────

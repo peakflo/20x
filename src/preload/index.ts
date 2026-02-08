@@ -61,7 +61,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
     send: (sessionId: string, message: string): Promise<{ success: boolean }> =>
       ipcRenderer.invoke('agentSession:send', sessionId, message),
     approve: (sessionId: string, approved: boolean, message?: string): Promise<{ success: boolean }> =>
-      ipcRenderer.invoke('agentSession:approve', sessionId, approved, message)
+      ipcRenderer.invoke('agentSession:approve', sessionId, approved, message),
+    syncSkills: (sessionId: string): Promise<{ created: string[]; updated: string[]; unchanged: string[] }> =>
+      ipcRenderer.invoke('agentSession:syncSkills', sessionId),
+    syncSkillsForTask: (taskId: string): Promise<{ created: string[]; updated: string[]; unchanged: string[] }> =>
+      ipcRenderer.invoke('agentSession:syncSkillsForTask', taskId),
+    learnFromSession: (sessionId: string, message: string): Promise<{ created: string[]; updated: string[]; unchanged: string[] }> =>
+      ipcRenderer.invoke('agentSession:learnFromSession', sessionId, message)
   },
   agentConfig: {
     getProviders: (serverUrl?: string): Promise<{ providers: any[]; default: Record<string, string> } | null> =>
@@ -117,6 +123,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
     sync: (sourceId: string): Promise<unknown> => ipcRenderer.invoke('taskSource:sync', sourceId),
     exportUpdate: (taskId: string, fields: Record<string, unknown>): Promise<void> =>
       ipcRenderer.invoke('taskSource:exportUpdate', taskId, fields)
+  },
+  skills: {
+    getAll: (): Promise<unknown[]> => ipcRenderer.invoke('skills:getAll'),
+    get: (id: string): Promise<unknown> => ipcRenderer.invoke('skills:get', id),
+    create: (data: Record<string, unknown>): Promise<unknown> =>
+      ipcRenderer.invoke('skills:create', data),
+    update: (id: string, data: Record<string, unknown>): Promise<unknown> =>
+      ipcRenderer.invoke('skills:update', id, data),
+    delete: (id: string): Promise<boolean> => ipcRenderer.invoke('skills:delete', id)
   },
   plugins: {
     list: (): Promise<unknown[]> => ipcRenderer.invoke('plugin:list'),

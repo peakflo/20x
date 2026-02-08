@@ -1,5 +1,6 @@
 import { LayoutList } from 'lucide-react'
 import { EmptyState } from '@/components/ui/EmptyState'
+import { FeedbackDialog } from './FeedbackDialog'
 import { TaskDetailView } from './TaskDetailView'
 import { AgentTranscriptPanel } from '@/components/agents/AgentTranscriptPanel'
 import { AgentApprovalBanner } from '@/components/agents/AgentApprovalBanner'
@@ -10,7 +11,7 @@ import { useAgentSession } from '@/hooks/use-agent-session'
 import { useAgentStore } from '@/stores/agent-store'
 import { useSettingsStore } from '@/stores/settings-store'
 import { useTaskStore } from '@/stores/task-store'
-import { taskApi, worktreeApi, githubApi } from '@/lib/ipc-client'
+import { taskApi, worktreeApi, githubApi, agentSessionApi } from '@/lib/ipc-client'
 import { useEffect, useCallback, useRef, useState } from 'react'
 import { TaskStatus } from '@/types'
 import type { WorkfloTask, ChecklistItem, FileAttachment, OutputField, Agent } from '@/types'
@@ -48,6 +49,8 @@ export function TaskWorkspace({
   const [showGhSetup, setShowGhSetup] = useState(false)
   const [showRepoSelector, setShowRepoSelector] = useState(false)
   const [isSettingUpWorktree, setIsSettingUpWorktree] = useState(false)
+  const [showFeedback, setShowFeedback] = useState(false)
+  const learningRef = useRef(false)
   const startingRef = useRef(false)
 
   const { fetchTasks } = useTaskStore()
@@ -66,8 +69,9 @@ export function TaskWorkspace({
   }, [session.status, fetchTasks])
 
   // Stop session when task is completed, but keep transcript
+  // Skip if learning is in progress — learnFromSession cleans up on main process
   useEffect(() => {
-    if (session.sessionId && task?.status === TaskStatus.Completed) {
+    if (session.sessionId && task?.status === TaskStatus.Completed && !learningRef.current) {
       stop()
         .then(() => {
           if (task && task.repos.length > 0 && githubOrg) {
@@ -184,6 +188,39 @@ export function TaskWorkspace({
     [sendMessage]
   )
 
+  // ── Feedback orchestration ──────────────────────────────────
+
+  const handleCompleteTask = useCallback(() => {
+    // Only show feedback if there's an active session with messages
+    if (session.sessionId && session.messages.length > 0) {
+      setShowFeedback(true)
+    } else {
+      onCompleteTask()
+    }
+  }, [session.sessionId, session.messages.length, onCompleteTask])
+
+  const handleFeedbackSubmit = useCallback((rating: number, comment: string) => {
+    const sid = session.sessionId
+    setShowFeedback(false)
+
+    // Guard stop-on-completed useEffect — learnFromSession cleans up the session
+    learningRef.current = true
+    onCompleteTask()
+
+    if (!sid) return
+
+    const commentPart = comment ? ` Comment: "${comment}".` : ''
+    const prompt = `User rated this session ${rating}/5.${commentPart} Review the session and update SKILL.md files in .agents/skills/ with any improvements or learnings from this session.`
+
+    // Fire and forget — runs entirely on main process
+    agentSessionApi.learnFromSession(sid, prompt).catch(console.error)
+  }, [session.sessionId, onCompleteTask])
+
+  const handleFeedbackSkip = useCallback(() => {
+    setShowFeedback(false)
+    onCompleteTask()
+  }, [onCompleteTask])
+
   if (!task) {
     return (
       <div className="flex items-center justify-center h-full">
@@ -218,10 +255,13 @@ export function TaskWorkspace({
             onUpdateChecklist={onUpdateChecklist}
             onUpdateAttachments={onUpdateAttachments}
             onUpdateOutputFields={onUpdateOutputFields}
-            onCompleteTask={onCompleteTask}
+            onCompleteTask={handleCompleteTask}
             onAssignAgent={handleAssignAgent}
             onUpdateRepos={handleUpdateRepos}
             onAddRepos={handleAddRepos}
+            onUpdateSkillIds={async (skillIds) => {
+              if (onUpdateTask) await onUpdateTask(task.id, { skill_ids: skillIds })
+            }}
             onStartAgent={handleStartSession}
             canStartAgent={!!canStart}
           />
@@ -256,6 +296,12 @@ export function TaskWorkspace({
           onConfirm={handleReposConfirmed}
         />
       )}
+
+      <FeedbackDialog
+        open={showFeedback}
+        onSubmit={handleFeedbackSubmit}
+        onSkip={handleFeedbackSkip}
+      />
     </>
   )
 }

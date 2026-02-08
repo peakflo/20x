@@ -1,5 +1,6 @@
 import { Sidebar } from './Sidebar'
 import { TaskWorkspace } from '@/components/tasks/TaskWorkspace'
+import { SkillWorkspace } from '@/components/skills/SkillWorkspace'
 import { TaskForm, type TaskFormSubmitData } from '@/components/tasks/TaskForm'
 import { DeleteConfirmDialog } from '@/components/tasks/DeleteConfirmDialog'
 import { AgentSettingsDialog } from '@/components/agents/AgentSettingsDialog'
@@ -18,6 +19,7 @@ export function AppLayout() {
   const { tasks, selectedTask, createTask, updateTask, deleteTask, selectTask } = useTasks()
   const { agents, fetchAgents, stopAndRemoveSessionForTask } = useAgentStore()
   const {
+    sidebarView,
     activeModal,
     editingTaskId,
     deletingTaskId,
@@ -58,42 +60,46 @@ export function AppLayout() {
         {/* Drag region for macOS traffic lights */}
         <div className="drag-region h-12 flex-shrink-0" />
         <div className="flex-1 overflow-hidden">
-          <TaskWorkspace
-            task={selectedTask}
-            agents={agents}
-            onEdit={() => {
-              if (selectedTask) openEditModal(selectedTask.id)
-            }}
-            onDelete={() => {
-              if (selectedTask) openDeleteModal(selectedTask.id)
-            }}
-            onUpdateChecklist={async (checklist) => {
-              if (selectedTask) {
-                await updateTask(selectedTask.id, { checklist })
-              }
-            }}
-            onUpdateAttachments={async (attachments: FileAttachment[]) => {
-              if (selectedTask) {
-                await updateTask(selectedTask.id, { attachments })
-              }
-            }}
-            onUpdateOutputFields={async (output_fields) => {
-              if (selectedTask) {
-                await updateTask(selectedTask.id, { output_fields })
-              }
-            }}
-            onCompleteTask={async () => {
-              if (selectedTask) {
-                await updateTask(selectedTask.id, { status: TaskStatus.Completed })
-              }
-            }}
-            onAssignAgent={async (taskId, agentId) => {
-              await updateTask(taskId, { agent_id: agentId })
-            }}
-            onUpdateTask={async (taskId, data) => {
-              await updateTask(taskId, data)
-            }}
-          />
+          {sidebarView === 'skills' ? (
+            <SkillWorkspace />
+          ) : (
+            <TaskWorkspace
+              task={selectedTask}
+              agents={agents}
+              onEdit={() => {
+                if (selectedTask) openEditModal(selectedTask.id)
+              }}
+              onDelete={() => {
+                if (selectedTask) openDeleteModal(selectedTask.id)
+              }}
+              onUpdateChecklist={async (checklist) => {
+                if (selectedTask) {
+                  await updateTask(selectedTask.id, { checklist })
+                }
+              }}
+              onUpdateAttachments={async (attachments: FileAttachment[]) => {
+                if (selectedTask) {
+                  await updateTask(selectedTask.id, { attachments })
+                }
+              }}
+              onUpdateOutputFields={async (output_fields) => {
+                if (selectedTask) {
+                  await updateTask(selectedTask.id, { output_fields })
+                }
+              }}
+              onCompleteTask={async () => {
+                if (selectedTask) {
+                  await updateTask(selectedTask.id, { status: TaskStatus.Completed })
+                }
+              }}
+              onAssignAgent={async (taskId, agentId) => {
+                await updateTask(taskId, { agent_id: agentId })
+              }}
+              onUpdateTask={async (taskId, data) => {
+                await updateTask(taskId, data)
+              }}
+            />
+          )}
         </div>
       </main>
 

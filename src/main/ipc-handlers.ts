@@ -11,7 +11,9 @@ import type {
   CreateMcpServerData,
   UpdateMcpServerData,
   CreateTaskSourceData,
-  UpdateTaskSourceData
+  UpdateTaskSourceData,
+  CreateSkillData,
+  UpdateSkillData
 } from './database'
 import type { AgentManager } from './agent-manager'
 import type { GitHubManager } from './github-manager'
@@ -195,6 +197,18 @@ export function registerIpcHandlers(
     return { success: true }
   })
 
+  ipcMain.handle('agentSession:syncSkills', (_, sessionId: string) => {
+    return agentManager.syncSkillsFromWorkspace(sessionId)
+  })
+
+  ipcMain.handle('agentSession:syncSkillsForTask', (_, taskId: string) => {
+    return agentManager.syncSkillsForTask(taskId)
+  })
+
+  ipcMain.handle('agentSession:learnFromSession', async (_, sessionId: string, message: string) => {
+    return await agentManager.learnFromSession(sessionId, message)
+  })
+
   // Agent Config handlers
   ipcMain.handle('agentConfig:getProviders', async (_, serverUrl?: string) => {
     return await agentManager.getProviders(serverUrl)
@@ -296,6 +310,27 @@ export function registerIpcHandlers(
 
   ipcMain.handle('taskSource:exportUpdate', async (_, taskId: string, fields: Record<string, unknown>) => {
     await syncManager.exportTaskUpdate(taskId, fields)
+  })
+
+  // Skill handlers
+  ipcMain.handle('skills:getAll', () => {
+    return db.getSkills()
+  })
+
+  ipcMain.handle('skills:get', (_, id: string) => {
+    return db.getSkill(id)
+  })
+
+  ipcMain.handle('skills:create', (_, data: CreateSkillData) => {
+    return db.createSkill(data)
+  })
+
+  ipcMain.handle('skills:update', (_, id: string, data: UpdateSkillData) => {
+    return db.updateSkill(id, data)
+  })
+
+  ipcMain.handle('skills:delete', (_, id: string) => {
+    return db.deleteSkill(id)
   })
 
   // Plugin handlers

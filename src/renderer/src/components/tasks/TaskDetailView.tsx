@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Pencil, Trash2, Calendar, User, Tag, Clock, Bot, Play, GitBranch, CheckCircle, XCircle, Loader2, Plus, X } from 'lucide-react'
+import { Pencil, Trash2, Calendar, User, Tag, Clock, Bot, Play, GitBranch, CheckCircle, XCircle, Loader2, Plus, X, BookOpen, ChevronDown } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
 import { TaskStatusBadge } from './TaskStatusBadge'
@@ -13,6 +13,7 @@ import { pluginApi } from '@/lib/ipc-client'
 import { useTaskSourceStore } from '@/stores/task-source-store'
 import { useTaskStore } from '@/stores/task-store'
 import { OutputFieldsDisplay } from './OutputFieldsDisplay'
+import { SkillSelector } from '@/components/skills/SkillSelector'
 import { TaskStatus } from '@/types'
 import type { WorkfloTask, ChecklistItem, FileAttachment, OutputField, Agent, PluginAction } from '@/types'
 
@@ -28,6 +29,7 @@ interface TaskDetailViewProps {
   onAssignAgent: (agentId: string | null) => void
   onUpdateRepos: (repos: string[]) => void
   onAddRepos: () => void
+  onUpdateSkillIds?: (skillIds: string[] | null) => void
   onStartAgent?: () => void
   canStartAgent?: boolean
 }
@@ -130,7 +132,8 @@ function PluginActions({ task }: { task: WorkfloTask }) {
   )
 }
 
-export function TaskDetailView({ task, agents, onEdit, onDelete, onUpdateChecklist, onUpdateAttachments, onUpdateOutputFields, onCompleteTask, onAssignAgent, onUpdateRepos, onAddRepos, onStartAgent, canStartAgent }: TaskDetailViewProps) {
+export function TaskDetailView({ task, agents, onEdit, onDelete, onUpdateChecklist, onUpdateAttachments, onUpdateOutputFields, onCompleteTask, onAssignAgent, onUpdateRepos, onAddRepos, onUpdateSkillIds, onStartAgent, canStartAgent }: TaskDetailViewProps) {
+  const [skillsExpanded, setSkillsExpanded] = useState(false)
   const isActive = task.status !== TaskStatus.Completed
   const overdue = isActive && isOverdue(task.due_date)
   const dueSoon = isActive && !overdue && isDueSoon(task.due_date)
@@ -211,6 +214,41 @@ export function TaskDetailView({ task, agents, onEdit, onDelete, onUpdateCheckli
                 </Button>
               </div>
             </>
+            {task.agent_id && onUpdateSkillIds && (
+              <>
+                <span className="text-muted-foreground flex items-center gap-2"><BookOpen className="h-3.5 w-3.5" /> Skills</span>
+                <div>
+                  {task.skill_ids === null && !skillsExpanded ? (
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm text-muted-foreground">Using agent defaults</span>
+                      <Button variant="ghost" size="sm" onClick={() => setSkillsExpanded(true)} className="h-6 text-xs">
+                        Customize
+                      </Button>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      <SkillSelector
+                        selectedIds={task.skill_ids === null ? undefined : task.skill_ids}
+                        onChange={(ids) => {
+                          // undefined → null (agent defaults), string[] → string[]
+                          onUpdateSkillIds(ids === undefined ? null : ids)
+                        }}
+                      />
+                      {task.skill_ids !== null && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => { onUpdateSkillIds(null); setSkillsExpanded(false) }}
+                          className="h-6 text-xs text-muted-foreground"
+                        >
+                          Reset to agent defaults
+                        </Button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
             {task.due_date && (
               <>
                 <span className="text-muted-foreground flex items-center gap-2"><Calendar className="h-3.5 w-3.5" /> Due date</span>

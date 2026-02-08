@@ -1,7 +1,7 @@
 import { EventEmitter } from 'events'
 import { spawn, type ChildProcess } from 'child_process'
 import { join } from 'path'
-import { existsSync, copyFileSync, mkdirSync } from 'fs'
+import { existsSync, copyFileSync, mkdirSync, writeFileSync, readFileSync, readdirSync, statSync } from 'fs'
 import { pathToFileURL } from 'url'
 import { Agent as UndiciAgent } from 'undici'
 import type { BrowserWindow } from 'electron'
@@ -29,6 +29,7 @@ interface AgentSession {
   pollTimer?: ReturnType<typeof setTimeout>
   promptAbort?: AbortController
   lastOcStatus?: string
+  learningMode?: boolean
 }
 
 export class AgentManager extends EventEmitter {
@@ -89,6 +90,46 @@ export class AgentManager extends EventEmitter {
     }
 
     return hasFiltering ? toolsMap : undefined
+  }
+
+  /**
+   * Resolves and writes SKILL.md files to the workspace directory.
+   * Priority: task.skill_ids > agent.config.skill_ids > all skills.
+   */
+  private writeSkillFiles(taskId: string, agentId: string, workspaceDir: string): void {
+    try {
+      const task = this.db.getTask(taskId)
+      const agent = this.db.getAgent(agentId)
+      const agentConfig = agent?.config as any
+
+      // Resolve which skill IDs to use
+      let skillIds: string[] | undefined
+      if (task?.skill_ids !== null && task?.skill_ids !== undefined) {
+        skillIds = task.skill_ids
+      } else if (agentConfig?.skill_ids !== undefined) {
+        skillIds = agentConfig.skill_ids
+      }
+      // undefined = all skills
+
+      const skills = skillIds === undefined
+        ? this.db.getSkills()
+        : this.db.getSkillsByIds(skillIds)
+
+      if (skills.length === 0) return
+
+      const skillsDir = join(workspaceDir, '.agents', 'skills')
+      for (const skill of skills) {
+        const dir = join(skillsDir, skill.name)
+        mkdirSync(dir, { recursive: true })
+        const desc = skill.description || skill.name
+        const content = `---\nname: ${skill.name}\ndescription: ${desc}\n---\n\n${skill.content}`
+        writeFileSync(join(dir, 'SKILL.md'), content, 'utf-8')
+      }
+
+      console.log(`[AgentManager] Wrote ${skills.length} SKILL.md file(s) to ${skillsDir}`)
+    } catch (error) {
+      console.error('[AgentManager] Error writing skill files:', error)
+    }
   }
 
   async startServer(): Promise<void> {
@@ -238,6 +279,9 @@ export class AgentManager extends EventEmitter {
     this.sessions.set(sessionId, session)
 
     try {
+      // Write SKILL.md files to workspace before session creation
+      this.writeSkillFiles(taskId, agentId, workspaceDir!)
+
       // Register MCP servers BEFORE creating session so the session picks them up
       const mcpEntries = agent.config?.mcp_servers || []
       const mcpServerIds = mcpEntries.map((e) => typeof e === 'string' ? e : (e as AgentMcpServerEntry).serverId)
@@ -450,9 +494,11 @@ export class AgentManager extends EventEmitter {
         await this.transitionToIdle(sessionId, session)
       } else if (ocStatus.type === 'busy') {
         session.status = 'working'
-        this.sendToRenderer('agent:status', {
-          sessionId, agentId: session.agentId, taskId: session.taskId, status: 'working'
-        })
+        if (!session.learningMode) {
+          this.sendToRenderer('agent:status', {
+            sessionId, agentId: session.agentId, taskId: session.taskId, status: 'working'
+          })
+        }
       } else if (ocStatus.type === 'retry') {
         this.sendToRenderer('agent:output', {
           sessionId,
@@ -481,6 +527,9 @@ export class AgentManager extends EventEmitter {
     if (session.status === 'idle') return
     session.status = 'idle'
     console.log(`[AgentManager] Session ${sessionId} → idle`)
+
+    // In learning mode, skip output extraction, task status, and renderer notification
+    if (session.learningMode) return
 
     // Extract output field values BEFORE notifying the renderer
     try {
@@ -1262,6 +1311,200 @@ export class AgentManager extends EventEmitter {
     } catch (error) {
       console.error(`[AgentManager] Error extracting output values:`, error)
     }
+  }
+
+  /**
+   * Parses a SKILL.md file's raw content into name, description, and content.
+   * Expected format: ---\nname: ...\ndescription: ...\n---\n\ncontent
+   */
+  private parseSkillMd(raw: string): { name: string; description: string; content: string } | null {
+    const match = raw.match(/^---\s*\n([\s\S]*?)\n---\s*\n\n?([\s\S]*)$/)
+    if (!match) return null
+
+    const frontmatter = match[1]
+    const content = match[2].trim()
+
+    const nameMatch = frontmatter.match(/^name:\s*(.+)$/m)
+    const descMatch = frontmatter.match(/^description:\s*(.+)$/m)
+    if (!nameMatch) return null
+
+    const name = nameMatch[1].trim()
+    const description = descMatch ? descMatch[1].trim() : ''
+
+    // Validate name pattern
+    if (!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(name)) return null
+
+    return { name, description, content }
+  }
+
+  /**
+   * Scans .opencode/skills/ in the session's workspace, compares with DB,
+   * and creates/updates skills that have changed.
+   */
+  syncSkillsFromWorkspace(sessionId: string): { created: string[]; updated: string[]; unchanged: string[] } {
+    const session = this.sessions.get(sessionId)
+    if (!session?.workspaceDir) {
+      return { created: [], updated: [], unchanged: [] }
+    }
+
+    // Scan both .agents/skills/ (new) and .opencode/skills/ (legacy/agent-created)
+    const skillsDirs = [
+      join(session.workspaceDir, '.agents', 'skills'),
+      join(session.workspaceDir, '.opencode', 'skills')
+    ].filter(existsSync)
+    if (skillsDirs.length === 0) {
+      return { created: [], updated: [], unchanged: [] }
+    }
+
+    const result = { created: [] as string[], updated: [] as string[], unchanged: [] as string[] }
+    const seen = new Set<string>()
+
+    for (const skillsDir of skillsDirs) {
+    let entries: string[]
+    try {
+      entries = readdirSync(skillsDir)
+    } catch {
+      continue
+    }
+
+    for (const entry of entries) {
+      const entryPath = join(skillsDir, entry)
+      let skillFile: string
+      let fallbackName: string | undefined
+
+      try {
+        const st = statSync(entryPath)
+        if (st.isDirectory()) {
+          // .opencode/skills/<name>/SKILL.md
+          skillFile = join(entryPath, 'SKILL.md')
+          if (!existsSync(skillFile)) continue
+          fallbackName = entry.replace(/_/g, '-')
+        } else if (entry.endsWith('.md')) {
+          // .opencode/skills/<name>.md (flat file)
+          skillFile = entryPath
+          fallbackName = entry.replace(/\.md$/, '').replace(/_/g, '-')
+        } else {
+          continue
+        }
+      } catch {
+        continue
+      }
+
+      let raw: string
+      try {
+        raw = readFileSync(skillFile, 'utf-8')
+      } catch {
+        continue
+      }
+
+      // Try frontmatter parse; fall back to deriving name from filename
+      let parsed = this.parseSkillMd(raw)
+      if (!parsed && fallbackName && /^[a-z0-9]+(-[a-z0-9]+)*$/.test(fallbackName)) {
+        parsed = { name: fallbackName, description: '', content: raw.trim() }
+      }
+      if (!parsed) continue
+      if (seen.has(parsed.name)) continue
+      seen.add(parsed.name)
+
+      const existing = this.db.getSkillByName(parsed.name)
+      if (existing) {
+        // Only update if content or description changed
+        if (existing.content !== parsed.content || existing.description !== parsed.description) {
+          this.db.updateSkill(existing.id, {
+            description: parsed.description,
+            content: parsed.content
+          })
+          result.updated.push(parsed.name)
+        } else {
+          result.unchanged.push(parsed.name)
+        }
+      } else {
+        this.db.createSkill({
+          name: parsed.name,
+          description: parsed.description,
+          content: parsed.content
+        })
+        result.created.push(parsed.name)
+      }
+    }
+    } // end skillsDirs loop
+
+    console.log(`[AgentManager] Skill sync: created=${result.created.length}, updated=${result.updated.length}, unchanged=${result.unchanged.length}`)
+    return result
+  }
+
+  /**
+   * Finds the session for a given taskId and syncs skills from its workspace.
+   */
+  syncSkillsForTask(taskId: string): { created: string[]; updated: string[]; unchanged: string[] } {
+    for (const [sessionId, session] of this.sessions.entries()) {
+      if (session.taskId === taskId) {
+        return this.syncSkillsFromWorkspace(sessionId)
+      }
+    }
+    return { created: [], updated: [], unchanged: [] }
+  }
+
+  /**
+   * Sends feedback to the agent, waits for completion, syncs skills, and cleans up.
+   * Runs entirely on main process — renderer can fire-and-forget.
+   * Does NOT change task status at any point.
+   */
+  async learnFromSession(sessionId: string, feedbackMessage: string): Promise<{ created: string[]; updated: string[]; unchanged: string[] }> {
+    const session = this.sessions.get(sessionId)
+    if (!session?.ocClient || !session.ocSessionId) {
+      return { created: [], updated: [], unchanged: [] }
+    }
+
+    console.log(`[AgentManager] Learning from session ${sessionId}`)
+    session.learningMode = true
+
+    // Resolve model from agent config
+    const agent = this.db.getAgent(session.agentId)
+    const agentConfig = agent?.config as any
+    let modelParam: { providerID: string; modelID: string } | undefined
+    if (agentConfig?.model) {
+      const slashIdx = agentConfig.model.indexOf('/')
+      if (slashIdx > 0) {
+        modelParam = {
+          providerID: agentConfig.model.slice(0, slashIdx),
+          modelID: agentConfig.model.slice(slashIdx + 1)
+        }
+      }
+    }
+
+    const toolsFilter = this.buildToolsFilter(session.agentId)
+
+    // Send feedback prompt — await blocks until agent finishes
+    try {
+      await session.ocClient.session.prompt({
+        path: { id: session.ocSessionId },
+        body: {
+          parts: [{ type: 'text', text: feedbackMessage }],
+          ...(modelParam && { model: modelParam }),
+          ...(toolsFilter && { tools: toolsFilter })
+        },
+        ...(session.workspaceDir && { query: { directory: session.workspaceDir } })
+      })
+    } catch (err: any) {
+      if (err.name !== 'AbortError') {
+        console.error('[AgentManager] learnFromSession prompt error:', err)
+      }
+    }
+
+    // Stop polling
+    if (session.pollTimer) {
+      clearTimeout(session.pollTimer)
+      session.pollTimer = undefined
+    }
+
+    // Sync skills from workspace
+    const result = this.syncSkillsFromWorkspace(sessionId)
+
+    // Clean up session without changing task status
+    this.sessions.delete(sessionId)
+    console.log(`[AgentManager] Learning complete for session ${sessionId}:`, result)
+    return result
   }
 
   private sendToRenderer(channel: string, data: unknown): void {
