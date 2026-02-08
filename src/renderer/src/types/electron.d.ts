@@ -30,6 +30,7 @@ export interface AgentSessionSuccessResult {
 
 export interface AgentOutputEvent {
   sessionId: string
+  taskId?: string
   type: 'message' | 'error' | 'status'
   data: unknown
 }
