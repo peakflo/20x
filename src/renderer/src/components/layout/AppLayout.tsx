@@ -8,7 +8,7 @@ import { useTasks } from '@/hooks/use-tasks'
 import { useUIStore } from '@/stores/ui-store'
 import { useAgentStore } from '@/stores/agent-store'
 import { useOverdueNotifications } from '@/hooks/use-overdue-notifications'
-import { attachmentApi, agentSessionApi, worktreeApi, settingsApi } from '@/lib/ipc-client'
+import { attachmentApi, worktreeApi, settingsApi } from '@/lib/ipc-client'
 import { isOverdue } from '@/lib/utils'
 import { useEffect } from 'react'
 import { TaskStatus } from '@/types'
@@ -16,7 +16,7 @@ import type { FileAttachment } from '@/types'
 
 export function AppLayout() {
   const { tasks, selectedTask, createTask, updateTask, deleteTask, selectTask } = useTasks()
-  const { agents, fetchAgents, activeSessions, removeActiveSession } = useAgentStore()
+  const { agents, fetchAgents, stopAndRemoveSessionForTask } = useAgentStore()
   const {
     activeModal,
     editingTaskId,
@@ -155,16 +155,7 @@ export function AppLayout() {
         onConfirm={async () => {
           if (deletingTaskId) {
             // Stop any active sessions for this task
-            for (const [sessionId, session] of activeSessions.entries()) {
-              if (session.taskId === deletingTaskId) {
-                try {
-                  await agentSessionApi.stop(sessionId)
-                  removeActiveSession(sessionId)
-                } catch (error) {
-                  console.error('Failed to stop session:', error)
-                }
-              }
-            }
+            await stopAndRemoveSessionForTask(deletingTaskId)
             // Cleanup worktrees if task has repos
             if (deletingTask && deletingTask.repos?.length > 0) {
               try {

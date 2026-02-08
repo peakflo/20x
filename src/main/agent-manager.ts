@@ -2,7 +2,6 @@ import { EventEmitter } from 'events'
 import { spawn, type ChildProcess } from 'child_process'
 import { join } from 'path'
 import { existsSync } from 'fs'
-import { app } from 'electron'
 import type { BrowserWindow } from 'electron'
 import type { DatabaseManager, AgentMcpServerEntry, OutputFieldRecord } from './database'
 import { TaskStatus } from '../shared/constants'
@@ -357,6 +356,7 @@ export class AgentManager extends EventEmitter {
         console.error('[AgentManager] promptAsync error:', promptResult.error)
         this.sendToRenderer('agent:output', {
           sessionId,
+          taskId,
           type: 'error',
           data: {
             message: 'Failed to send prompt: ' + (promptResult.error.data?.message || promptResult.error.name || 'Unknown error'),
@@ -364,7 +364,55 @@ export class AgentManager extends EventEmitter {
           }
         })
       } else {
-        console.log(`[AgentManager] Async prompt sent successfully`)
+        console.log(`[AgentManager] Async prompt sent successfully, promptResult:`, JSON.stringify(promptResult).slice(0, 500))
+
+        // Diagnostic: immediate API check after prompt
+        setTimeout(async () => {
+          try {
+            console.log(`[DIAG] ocSessionId=${session.ocSessionId}, workspaceDir=${workspaceDir}`)
+
+            // WITH directory param
+            const statusWithDir: any = await ocClient.session.status({
+              ...(workspaceDir && { query: { directory: workspaceDir } })
+            })
+            console.log(`[DIAG] status WITH dir:`, JSON.stringify(statusWithDir).slice(0, 500))
+
+            // WITHOUT directory param
+            const statusNoDir: any = await ocClient.session.status({})
+            console.log(`[DIAG] status NO dir:`, JSON.stringify(statusNoDir).slice(0, 500))
+
+            // Messages WITH directory
+            const msgWithDir: any = await ocClient.session.messages({
+              path: { id: session.ocSessionId! },
+              ...(workspaceDir && { query: { directory: workspaceDir } })
+            })
+            console.log(`[DIAG] messages WITH dir: ${Array.isArray(msgWithDir.data) ? msgWithDir.data.length : typeof msgWithDir.data} items`)
+
+            // Messages WITHOUT directory
+            const msgNoDir: any = await ocClient.session.messages({
+              path: { id: session.ocSessionId! }
+            })
+            console.log(`[DIAG] messages NO dir: ${Array.isArray(msgNoDir.data) ? msgNoDir.data.length : typeof msgNoDir.data} items`)
+
+            // Session list (supports directory officially)
+            const listWithDir: any = await ocClient.session.list({
+              ...(workspaceDir && { query: { directory: workspaceDir } })
+            })
+            console.log(`[DIAG] list WITH dir: ${Array.isArray(listWithDir.data) ? listWithDir.data.length : typeof listWithDir.data} sessions`)
+
+            const listNoDir: any = await ocClient.session.list({})
+            console.log(`[DIAG] list NO dir: ${Array.isArray(listNoDir.data) ? listNoDir.data.length : typeof listNoDir.data} sessions`)
+
+            // Get session directly
+            const getCheck: any = await ocClient.session.get({
+              path: { id: session.ocSessionId! },
+              ...(workspaceDir && { query: { directory: workspaceDir } })
+            })
+            console.log(`[DIAG] session.get:`, JSON.stringify(getCheck).slice(0, 500))
+          } catch (e) {
+            console.error(`[DIAG] error:`, e)
+          }
+        }, 3000)
       }
 
       return sessionId
@@ -384,10 +432,7 @@ export class AgentManager extends EventEmitter {
   private startPolling(sessionId: string): void {
     const poll = async (): Promise<void> => {
       const session = this.sessions.get(sessionId)
-      if (!session || session.status === 'error') {
-        console.log(`[AgentManager] Polling stopped for ${sessionId} (session gone or error)`)
-        return
-      }
+      if (!session || session.status === 'error') return
 
       await this.pollSessionStatus(sessionId)
       await this.fetchNewMessages(sessionId)
@@ -417,10 +462,7 @@ export class AgentManager extends EventEmitter {
         ...(session.workspaceDir && { query: { directory: session.workspaceDir } })
       })
 
-      if (!statusResult.data) {
-        console.log(`[AgentManager] Status poll returned no data for ${sessionId}`)
-        return
-      }
+      if (!statusResult.data) return
 
       const ocStatus = statusResult.data[session.ocSessionId]
       const statusKey = ocStatus ? JSON.stringify(ocStatus) : undefined
@@ -430,18 +472,16 @@ export class AgentManager extends EventEmitter {
       session.lastOcStatus = statusKey
 
       if (!ocStatus || ocStatus.type === 'idle') {
-        console.log(`[AgentManager] Session ${session.ocSessionId} is idle (ocStatus=${JSON.stringify(ocStatus)})`)
         await this.transitionToIdle(sessionId, session)
       } else if (ocStatus.type === 'busy') {
-        console.log(`[AgentManager] Session ${session.ocSessionId} is busy`)
         session.status = 'working'
         this.sendToRenderer('agent:status', {
           sessionId, agentId: session.agentId, taskId: session.taskId, status: 'working'
         })
       } else if (ocStatus.type === 'retry') {
-        console.log(`[AgentManager] Session ${session.ocSessionId} retry #${ocStatus.attempt}: ${ocStatus.message}`)
         this.sendToRenderer('agent:output', {
           sessionId,
+          taskId: session.taskId,
           type: 'message',
           data: {
             id: `retry-${Date.now()}`,
@@ -601,9 +641,7 @@ export class AgentManager extends EventEmitter {
         ...(session.workspaceDir && { query: { directory: session.workspaceDir } })
       })
 
-      if (!messagesResult.data || !Array.isArray(messagesResult.data)) {
-        return
-      }
+      if (!messagesResult.data || !Array.isArray(messagesResult.data)) return
 
       let newPartCount = 0
 
@@ -615,21 +653,8 @@ export class AgentManager extends EventEmitter {
         const parts = msg.parts && Array.isArray(msg.parts) ? msg.parts : []
         const isCompleted = msg.info.time?.completed != null
 
-        // Log assistant messages we haven't seen before
         if (!session.seenMessageIds.has(msgId)) {
           session.seenMessageIds.add(msgId)
-          console.log(`[AgentManager] New ${role} message ${msgId}: ${parts.length} parts, completed=${isCompleted}`)
-          if (role === 'assistant') {
-            console.log(`[AgentManager]   Assistant msg info:`, JSON.stringify({
-              id: msg.info.id,
-              time: msg.info.time,
-              modelID: msg.info.modelID,
-              providerID: msg.info.providerID,
-              finish: msg.info.finish,
-              error: msg.info.error,
-              tokens: msg.info.tokens
-            }))
-          }
         }
 
         // Process each part — send new ones, update streaming text/reasoning parts
@@ -657,6 +682,7 @@ export class AgentManager extends EventEmitter {
                 session.partContentLengths.set(partId, fingerprint)
                 this.sendToRenderer('agent:output', {
                   sessionId,
+                  taskId: session.taskId,
                   type: 'message',
                   data: {
                     id: partId,
@@ -678,10 +704,9 @@ export class AgentManager extends EventEmitter {
           }
           newPartCount++
 
-          console.log(`[AgentManager]   Part ${partId} type="${part.type}" → ${payload.content.slice(0, 100)}`)
-
           this.sendToRenderer('agent:output', {
             sessionId,
+            taskId: session.taskId,
             type: 'message',
             data: {
               id: partId,
@@ -700,9 +725,9 @@ export class AgentManager extends EventEmitter {
             session.seenPartIds.add(errId)
             const err = msg.info.error
             const errMsg = err.data?.message || err.message || err.name || JSON.stringify(err)
-            console.log(`[AgentManager]   Error on message ${msgId}: ${errMsg}`)
             this.sendToRenderer('agent:output', {
               sessionId,
+              taskId: session.taskId,
               type: 'message',
               data: { id: errId, role: 'system', content: errMsg, partType: 'error' }
             })
@@ -719,13 +744,8 @@ export class AgentManager extends EventEmitter {
           const pendingId = `pending-${msgId}`
           if (!session.seenPartIds.has(pendingId)) {
             session.seenPartIds.add(pendingId)
-            console.log(`[AgentManager]   Assistant message ${msgId} incomplete with 0 parts — waiting for model response`)
           }
         }
-      }
-
-      if (newPartCount > 0) {
-        console.log(`[AgentManager] Poll: ${newPartCount} new part(s) for ${sessionId}`)
       }
 
       // Detect completion from messages: if the last assistant message is completed
@@ -736,7 +756,6 @@ export class AgentManager extends EventEmitter {
           .find((m: any) => m.info?.role === 'assistant')
 
         if (lastAssistantMsg?.info?.time?.completed) {
-          console.log(`[AgentManager] Last assistant message completed — transitioning to idle`)
           await this.transitionToIdle(sessionId, session)
         }
       }

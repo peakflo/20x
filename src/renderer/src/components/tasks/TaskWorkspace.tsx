@@ -41,24 +41,19 @@ export function TaskWorkspace({
   onAssignAgent,
   onUpdateTask
 }: TaskWorkspaceProps) {
-  const { session, start, abort, stop, sendMessage, approve } = useAgentSession()
-  const { addActiveSession, removeActiveSession } = useAgentStore()
-  const { githubOrg, ghCliStatus, checkGhCli, fetchSettings } = useSettingsStore()
+  const { session, start, abort, stop, sendMessage, approve } = useAgentSession(task?.id)
+  const { endSession, removeSession } = useAgentStore()
+  const { githubOrg, checkGhCli, fetchSettings } = useSettingsStore()
 
-  const [isStarting, setIsStarting] = useState(false)
   const [showGhSetup, setShowGhSetup] = useState(false)
   const [showRepoSelector, setShowRepoSelector] = useState(false)
   const [isSettingUpWorktree, setIsSettingUpWorktree] = useState(false)
+  const startingRef = useRef(false)
 
   const { fetchTasks } = useTaskStore()
 
   // Fetch settings on mount
   useEffect(() => { fetchSettings() }, [])
-
-  // Clear starting state once session is established
-  useEffect(() => {
-    if (session.sessionId && isStarting) setIsStarting(false)
-  }, [session.sessionId, isStarting])
 
   // Re-fetch tasks when agent status changes (status is updated in DB by agent-manager)
   const prevStatusRef = useRef(session.status)
@@ -70,13 +65,11 @@ export function TaskWorkspace({
     }
   }, [session.status, fetchTasks])
 
-  // Fully destroy session when task is completed
+  // Stop session when task is completed, but keep transcript
   useEffect(() => {
     if (session.sessionId && task?.status === TaskStatus.Completed) {
       stop()
         .then(() => {
-          removeActiveSession(session.sessionId!)
-          // Cleanup worktrees
           if (task && task.repos.length > 0 && githubOrg) {
             worktreeApi.cleanup(task.id, task.repos.map((r) => ({ fullName: r })), githubOrg).catch(console.error)
           }
@@ -86,8 +79,8 @@ export function TaskWorkspace({
   }, [task?.status, session.sessionId])
 
   const handleStartSession = useCallback(async () => {
-    if (!task?.agent_id || isStarting || session.sessionId) return
-    setIsStarting(true)
+    if (!task?.agent_id || startingRef.current || session.sessionId) return
+    startingRef.current = true
 
     try {
       // If task has repos and gh is configured, setup worktrees first
@@ -105,22 +98,20 @@ export function TaskWorkspace({
             githubOrg
           )
           setIsSettingUpWorktree(false)
-          const sessionId = await start(task.agent_id, task.id, workspaceDir)
-          addActiveSession({ sessionId, agentId: task.agent_id, taskId: task.id, status: 'working' })
+          await start(task.agent_id, task.id, workspaceDir)
           return
         }
         setIsSettingUpWorktree(false)
       }
 
-      // No repos or gh not configured — start without worktree
-      const sessionId = await start(task.agent_id, task.id)
-      addActiveSession({ sessionId, agentId: task.agent_id, taskId: task.id, status: 'working' })
+      await start(task.agent_id, task.id)
     } catch (err) {
       console.error('Failed to start session:', err)
       setIsSettingUpWorktree(false)
-      setIsStarting(false)
+    } finally {
+      startingRef.current = false
     }
-  }, [task?.agent_id, task?.id, task?.repos, session.sessionId, isStarting, githubOrg, start, addActiveSession])
+  }, [task?.agent_id, task?.id, task?.repos, session.sessionId, githubOrg, start])
 
   const handleGhSetupComplete = useCallback(() => {
     setShowGhSetup(false)
@@ -139,7 +130,6 @@ export function TaskWorkspace({
     if (!task) return
     setShowRepoSelector(false)
     const repoNames = selectedRepos.map((r) => r.fullName)
-    // Merge with existing repos (avoid duplicates)
     const merged = [...new Set([...task.repos, ...repoNames])]
     if (onUpdateTask) {
       await onUpdateTask(task.id, { repos: merged })
@@ -163,19 +153,16 @@ export function TaskWorkspace({
     (agentId: string | null) => {
       if (!task) return
 
-      // If unassigning, fully destroy the session
+      // If unassigning, stop and remove session entirely
       if (!agentId && session.sessionId) {
-        stop()
-          .then(() => removeActiveSession(session.sessionId!))
-          .catch(console.error)
+        stop().then(() => removeSession(task.id)).catch(console.error)
       }
 
       onAssignAgent(task.id, agentId)
     },
-    [task, session.sessionId, stop, onAssignAgent, removeActiveSession]
+    [task, session.sessionId, stop, onAssignAgent, removeSession]
   )
 
-  // Abort = interrupt current generation, keep panel open
   const handleAbort = useCallback(() => {
     if (session.sessionId) {
       abort().catch(console.error)
@@ -209,9 +196,9 @@ export function TaskWorkspace({
     )
   }
 
-  // Show panel if we have a session or are starting one
-  const showPanel = !!session.sessionId || isStarting
-  const canStart = task.agent_id && !session.sessionId && !isStarting
+  // Show panel if session exists (active or past transcript with messages)
+  const showPanel = session.status !== 'idle' || session.messages.length > 0
+  const canStart = task.agent_id && !session.sessionId && session.status === 'idle'
     && task.status !== TaskStatus.Completed
 
   return (
@@ -244,7 +231,7 @@ export function TaskWorkspace({
           <div className="min-h-0 min-w-0">
             <AgentTranscriptPanel
               messages={session.messages}
-              status={isStarting && !session.sessionId ? 'working' : session.status}
+              status={session.status}
               onStop={handleAbort}
               onSend={handleSend}
             />
