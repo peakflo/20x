@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Pencil, Trash2, Calendar, User, Tag, Clock, Bot, Play, GitBranch, CheckCircle, XCircle, Loader2, Plus, X, BookOpen, ChevronDown } from 'lucide-react'
+import { Pencil, Trash2, Calendar, User, Tag, Clock, Bot, Play, GitBranch, CheckCircle, XCircle, Loader2, Plus, X, BookOpen } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
 import { TaskStatusBadge } from './TaskStatusBadge'

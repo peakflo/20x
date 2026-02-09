@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { SyncManager } from './sync-manager'
 import { TaskStatus } from '../shared/constants'
-import type { DatabaseManager, TaskRecord, TaskSourceRecord, McpServerRecord } from './database'
+import type { DatabaseManager, TaskRecord } from './database'
 import type { McpToolCaller } from './mcp-tool-caller'
 import type { PluginRegistry } from './plugins/registry'
 import type { TaskSourcePlugin } from './plugins/types'

@@ -43,7 +43,7 @@ export function TaskWorkspace({
   onUpdateTask
 }: TaskWorkspaceProps) {
   const { session, start, abort, stop, sendMessage, approve } = useAgentSession(task?.id)
-  const { endSession, removeSession } = useAgentStore()
+  const { removeSession } = useAgentStore()
   const { githubOrg, checkGhCli, fetchSettings } = useSettingsStore()
 
   const [showGhSetup, setShowGhSetup] = useState(false)

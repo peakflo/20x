@@ -13,7 +13,9 @@
     "test": "vitest",
     "test:run": "vitest run",
     "test:main": "vitest --project main",
-    "test:renderer": "vitest --project renderer"
+    "test:renderer": "vitest --project renderer",
+    "typecheck": "tsc --build --noEmit",
+    "prepare": "husky"
   },
   "dependencies": {
     "@electron-toolkit/utils": "^4.0.0",
@@ -50,6 +52,7 @@
     "electron-builder": "^25.1.8",
     "electron-vite": "^3.0.0",
     "happy-dom": "^20.5.0",
+    "husky": "^9.1.7",
     "tailwindcss": "^4.0.0",
     "typescript": "^5.7.0",
     "vite": "^6.0.0",

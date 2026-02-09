@@ -8,7 +8,7 @@ import { TaskStatus } from '../../src/shared/constants'
  * We cannot use the real `initialize()` because it calls `app.getPath()`.
  * Instead, we inject the DB instance directly and create tables manually.
  */
-export function createTestDb() {
+export function createTestDb(): { db: DatabaseManager; rawDb: InstanceType<typeof Database> } {
   const db = new Database(':memory:')
   db.pragma('journal_mode = WAL')
   db.pragma('foreign_keys = ON')

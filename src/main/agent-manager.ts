@@ -418,7 +418,7 @@ export class AgentManager extends EventEmitter {
       const promptAbort = new AbortController()
       session.promptAbort = promptAbort
       ocClient.session.prompt({
-        path: { id: session.ocSessionId },
+        path: { id: session.ocSessionId! },
         body: {
           parts,
           ...(modelParam && { model: modelParam }),

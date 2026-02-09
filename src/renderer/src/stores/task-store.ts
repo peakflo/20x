@@ -15,7 +15,7 @@ interface TaskState {
   selectTask: (id: string | null) => void
 }
 
-export const useTaskStore = create<TaskState>((set, get) => ({
+export const useTaskStore = create<TaskState>((set) => ({
   tasks: [],
   selectedTaskId: null,
   isLoading: false,

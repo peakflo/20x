@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { useUIStore } from './ui-store'
+import { TaskStatus } from '@/types'
 
 describe('useUIStore', () => {
   beforeEach(() => {
@@ -38,8 +39,8 @@ describe('useUIStore', () => {
   })
 
   it('setStatusFilter updates filter', () => {
-    useUIStore.getState().setStatusFilter('completed')
-    expect(useUIStore.getState().statusFilter).toBe('completed')
+    useUIStore.getState().setStatusFilter(TaskStatus.Completed)
+    expect(useUIStore.getState().statusFilter).toBe(TaskStatus.Completed)
   })
 
   it('setPriorityFilter updates filter', () => {

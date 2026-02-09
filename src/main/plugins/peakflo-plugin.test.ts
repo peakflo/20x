@@ -54,13 +54,13 @@ describe('PeakfloPlugin', () => {
   })
 
   it('returns field mapping', () => {
-    const mapping = plugin.getFieldMapping({})
+    const mapping = plugin.getFieldMapping()
     expect(mapping.external_id).toBe('taskId|id')
     expect(mapping.title).toBe('title|name')
   })
 
   it('returns approve and reject actions', () => {
-    const actions = plugin.getActions({})
+    const actions = plugin.getActions()
     expect(actions).toHaveLength(2)
     expect(actions[0].id).toBe('approve')
     expect(actions[1].id).toBe('reject')
