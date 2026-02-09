@@ -28,5 +28,8 @@ jobs:
       - name: Build
         run: pnpm build
 
+      - name: Rebuild native modules for Node.js
+        run: pnpm rebuild better-sqlite3
+
       - name: Test
         run: pnpm test:run
