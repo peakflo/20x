@@ -1,6 +1,7 @@
 {
   "name": "pf-desktop",
   "version": "1.0.0",
+  "packageManager": "pnpm@9.15.2",
   "description": "Workflo Workspace - Task Management Desktop App",
   "main": "./out/main/index.js",
   "author": "Peakflo",
