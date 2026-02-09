@@ -1,6 +1,7 @@
 {
   "name": "pf-desktop",
   "version": "1.0.0",
+  "packageManager": "pnpm@9.15.2",
   "description": "Workflo Workspace - Task Management Desktop App",
   "main": "./out/main/index.js",
   "author": "Peakflo",
@@ -9,7 +10,13 @@
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "preview": "electron-vite preview",
-    "postinstall": "electron-builder install-app-deps"
+    "postinstall": "electron-builder install-app-deps",
+    "test": "vitest",
+    "test:run": "vitest run",
+    "test:main": "vitest --project main",
+    "test:renderer": "vitest --project renderer",
+    "typecheck": "tsc --build --noEmit",
+    "prepare": "husky"
   },
   "dependencies": {
     "@electron-toolkit/utils": "^4.0.0",
@@ -36,6 +43,8 @@
     "@electron-toolkit/preload": "^3.0.1",
     "@electron-toolkit/tsconfig": "^1.0.1",
     "@tailwindcss/vite": "^4.0.0",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
     "@types/better-sqlite3": "^7.6.12",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
@@ -43,9 +52,12 @@
     "electron": "^34.0.0",
     "electron-builder": "^25.1.8",
     "electron-vite": "^3.0.0",
+    "happy-dom": "^20.5.0",
+    "husky": "^9.1.7",
     "tailwindcss": "^4.0.0",
     "typescript": "^5.7.0",
-    "vite": "^6.0.0"
+    "vite": "^6.0.0",
+    "vitest": "^4.0.18"
   },
   "build": {
     "appId": "com.peakflo.workflo-workspace",

@@ -15,7 +15,7 @@ function QuestionMessage({ message, onAnswer }: { message: AgentMessage; onAnswe
   const questions = message.tool?.questions || []
   const [answered, setAnswered] = useState<string | null>(null)
 
-  const handleSelect = (questionIdx: number, optionLabel: string) => {
+  const handleSelect = (_questionIdx: number, optionLabel: string) => {
     if (answered) return
     setAnswered(optionLabel)
     onAnswer?.(optionLabel)

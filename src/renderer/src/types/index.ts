@@ -128,7 +128,8 @@ export const OUTPUT_FIELD_TYPES: { value: OutputFieldType; label: string }[] = [
 ]
 
 // ── Re-export shared constants ──────────────────────────────
-export { TaskStatus, TASK_STATUSES } from '@shared/constants'
+import { TaskStatus, TASK_STATUSES } from '@shared/constants'
+export { TaskStatus, TASK_STATUSES }
 
 // ── Task types ──────────────────────────────────────────────
 

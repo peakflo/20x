@@ -13,7 +13,7 @@ interface SettingsState {
   startGhAuth: () => Promise<void>
 }
 
-export const useSettingsStore = create<SettingsState>((set, get) => ({
+export const useSettingsStore = create<SettingsState>((set) => ({
   githubOrg: null,
   ghCliStatus: null,
   isLoading: false,

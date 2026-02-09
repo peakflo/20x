@@ -15,7 +15,7 @@ interface SkillState {
   selectSkill: (id: string | null) => void
 }
 
-export const useSkillStore = create<SkillState>((set, get) => ({
+export const useSkillStore = create<SkillState>((set) => ({
   skills: [],
   selectedSkillId: null,
   isLoading: false,
