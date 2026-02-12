@@ -2,6 +2,7 @@ import type { DatabaseManager, TaskRecord } from './database'
 import type { McpToolCaller } from './mcp-tool-caller'
 import type { PluginRegistry } from './plugins/registry'
 import type { PluginContext, PluginSyncResult, ActionResult } from './plugins/types'
+import type { SourceUser, ReassignResult } from '../shared/types'
 
 export interface SyncResult {
   source_id: string
@@ -28,16 +29,19 @@ export class SyncManager {
     const source = this.db.getTaskSource(sourceId)
     if (!source) {
       result.errors.push('Task source not found')
+      console.error('[sync] Task source not found:', sourceId)
       return result
     }
 
     const plugin = this.pluginRegistry.get(source.plugin_id)
     if (!plugin) {
       result.errors.push(`Plugin "${source.plugin_id}" not found`)
+      console.error('[sync] Plugin not found:', source.plugin_id)
       return result
     }
 
     const ctx = this.buildContext(source.mcp_server_id)
+    console.log('[sync] Importing from:', source.name)
 
     // Merge legacy columns into config for backward compat
     const config = this.getConfig(source)
@@ -47,8 +51,11 @@ export class SyncManager {
       result.imported = pluginResult.imported
       result.updated = pluginResult.updated
       result.errors = pluginResult.errors
-    } catch (err: any) {
-      result.errors.push(err?.message || 'Import failed')
+      console.log('[sync] Result:', { imported: result.imported, updated: result.updated, errors: result.errors })
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Import failed'
+      result.errors.push(msg)
+      console.error('[sync] Import error:', err)
     }
 
     return result
@@ -92,6 +99,46 @@ export class SyncManager {
       this.db.updateTask(task.id, result.taskUpdate)
     }
 
+    return result
+  }
+
+  async getSourceUsers(sourceId: string): Promise<SourceUser[]> {
+    const source = this.db.getTaskSource(sourceId)
+    if (!source) return []
+
+    const plugin = this.pluginRegistry.get(source.plugin_id)
+    if (!plugin?.getUsers) return []
+
+    const ctx = this.buildContext(source.mcp_server_id)
+    const config = this.getConfig(source)
+    return plugin.getUsers(config, ctx)
+  }
+
+  async reassignTask(
+    taskId: string,
+    userIds: string[],
+    assigneeDisplay: string
+  ): Promise<ReassignResult> {
+    const task = this.db.getTask(taskId)
+    if (!task?.source_id || !task.external_id) {
+      return { success: false, error: 'Task not found or not linked to a source' }
+    }
+
+    const source = this.db.getTaskSource(task.source_id)
+    if (!source) return { success: false, error: 'Task source not found' }
+
+    const plugin = this.pluginRegistry.get(source.plugin_id)
+    if (!plugin?.reassignTask) {
+      return { success: false, error: 'Plugin does not support reassignment' }
+    }
+
+    const ctx = this.buildContext(source.mcp_server_id)
+    const config = this.getConfig(source)
+
+    const result = await plugin.reassignTask(task, userIds, config, ctx)
+    if (result.success) {
+      this.db.updateTask(taskId, { assignee: assigneeDisplay })
+    }
     return result
   }
 

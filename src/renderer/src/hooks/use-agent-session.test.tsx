@@ -105,7 +105,7 @@ describe('useAgentSession', () => {
         await result.current.sendMessage('Hello agent')
       })
 
-      expect(mockElectronAPI.agentSession.send).toHaveBeenCalledWith('sess-1', 'Hello agent')
+      expect(mockElectronAPI.agentSession.send).toHaveBeenCalledWith('sess-1', 'Hello agent', 'task-1')
     })
 
     it('throws when no active session', async () => {

@@ -1,6 +1,7 @@
 import { LayoutList } from 'lucide-react'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { FeedbackDialog } from './FeedbackDialog'
+import { SnoozeDialog } from './SnoozeDialog'
 import { TaskDetailView } from './TaskDetailView'
 import { AgentTranscriptPanel } from '@/components/agents/AgentTranscriptPanel'
 import { AgentApprovalBanner } from '@/components/agents/AgentApprovalBanner'
@@ -11,10 +12,10 @@ import { useAgentSession } from '@/hooks/use-agent-session'
 import { useAgentStore } from '@/stores/agent-store'
 import { useSettingsStore } from '@/stores/settings-store'
 import { useTaskStore } from '@/stores/task-store'
-import { taskApi, worktreeApi, githubApi, agentSessionApi } from '@/lib/ipc-client'
+import { taskApi, worktreeApi, githubApi, agentSessionApi, taskSourceApi } from '@/lib/ipc-client'
 import { useEffect, useCallback, useRef, useState } from 'react'
 import { TaskStatus } from '@/types'
-import type { WorkfloTask, ChecklistItem, FileAttachment, OutputField, Agent } from '@/types'
+import type { WorkfloTask, FileAttachment, OutputField, Agent } from '@/types'
 import type { GitHubRepo } from '@/types/electron'
 
 interface TaskWorkspaceProps {
@@ -22,7 +23,6 @@ interface TaskWorkspaceProps {
   agents: Agent[]
   onEdit: () => void
   onDelete: () => void
-  onUpdateChecklist: (checklist: ChecklistItem[]) => void
   onUpdateAttachments: (attachments: FileAttachment[]) => void
   onUpdateOutputFields: (fields: OutputField[]) => void
   onCompleteTask: () => void
@@ -35,14 +35,13 @@ export function TaskWorkspace({
   agents,
   onEdit,
   onDelete,
-  onUpdateChecklist,
   onUpdateAttachments,
   onUpdateOutputFields,
   onCompleteTask,
   onAssignAgent,
   onUpdateTask
 }: TaskWorkspaceProps) {
-  const { session, start, abort, stop, sendMessage, approve } = useAgentSession(task?.id)
+  const { session, start, resume, abort, stop, sendMessage, approve } = useAgentSession(task?.id)
   const { removeSession } = useAgentStore()
   const { githubOrg, checkGhCli, fetchSettings } = useSettingsStore()
 
@@ -50,6 +49,7 @@ export function TaskWorkspace({
   const [showRepoSelector, setShowRepoSelector] = useState(false)
   const [isSettingUpWorktree, setIsSettingUpWorktree] = useState(false)
   const [showFeedback, setShowFeedback] = useState(false)
+  const [showSnooze, setShowSnooze] = useState(false)
   const learningRef = useRef(false)
   const startingRef = useRef(false)
 
@@ -116,6 +116,20 @@ export function TaskWorkspace({
       startingRef.current = false
     }
   }, [task?.agent_id, task?.id, task?.repos, session.sessionId, githubOrg, start])
+
+  const handleResumeSession = useCallback(async () => {
+    if (!task?.agent_id || !task?.oc_session_id || startingRef.current || session.sessionId) return
+    startingRef.current = true
+    try {
+      await resume(task.agent_id, task.id, task.oc_session_id)
+    } catch (err) {
+      console.error('Failed to resume session:', err)
+      // Session expired — refresh tasks to clear oc_session_id in UI
+      fetchTasks()
+    } finally {
+      startingRef.current = false
+    }
+  }, [task?.agent_id, task?.id, task?.oc_session_id, session.sessionId, resume, fetchTasks])
 
   const handleGhSetupComplete = useCallback(() => {
     setShowGhSetup(false)
@@ -190,22 +204,22 @@ export function TaskWorkspace({
 
   // ── Feedback orchestration ──────────────────────────────────
 
-  const handleCompleteTask = useCallback(() => {
+  const handleCompleteTask = useCallback(async () => {
     // Only show feedback if there's an active session with messages
     if (session.sessionId && session.messages.length > 0) {
       setShowFeedback(true)
     } else {
-      onCompleteTask()
+      await onCompleteTask()
     }
   }, [session.sessionId, session.messages.length, onCompleteTask])
 
-  const handleFeedbackSubmit = useCallback((rating: number, comment: string) => {
+  const handleFeedbackSubmit = useCallback(async (rating: number, comment: string) => {
     const sid = session.sessionId
     setShowFeedback(false)
 
     // Guard stop-on-completed useEffect — learnFromSession cleans up the session
     learningRef.current = true
-    onCompleteTask()
+    await onCompleteTask()
 
     if (!sid) return
 
@@ -216,10 +230,42 @@ export function TaskWorkspace({
     agentSessionApi.learnFromSession(sid, prompt).catch(console.error)
   }, [session.sessionId, onCompleteTask])
 
-  const handleFeedbackSkip = useCallback(() => {
+  const handleFeedbackSkip = useCallback(async () => {
     setShowFeedback(false)
-    onCompleteTask()
+    await onCompleteTask()
   }, [onCompleteTask])
+
+  const handleSnooze = useCallback(async (isoString: string) => {
+    if (!task) return
+    setShowSnooze(false)
+    if (onUpdateTask) {
+      await onUpdateTask(task.id, { snoozed_until: isoString })
+    } else {
+      await taskApi.update(task.id, { snoozed_until: isoString })
+    }
+    fetchTasks()
+  }, [task, onUpdateTask, fetchTasks])
+
+  const handleUnsnooze = useCallback(async () => {
+    if (!task) return
+    if (onUpdateTask) {
+      await onUpdateTask(task.id, { snoozed_until: null })
+    } else {
+      await taskApi.update(task.id, { snoozed_until: null })
+    }
+    fetchTasks()
+  }, [task, onUpdateTask, fetchTasks])
+
+  const handleReassign = useCallback(async (userIds: string[], displayName: string) => {
+    if (!task) return
+    const result = await taskSourceApi.reassign(task.id, userIds, displayName)
+    if (result.success) {
+      if (onUpdateTask) await onUpdateTask(task.id, { assignee: displayName })
+      fetchTasks()
+    } else {
+      console.error('[workspace] Reassign failed:', result.error)
+    }
+  }, [task, onUpdateTask, fetchTasks])
 
   if (!task) {
     return (
@@ -235,7 +281,8 @@ export function TaskWorkspace({
 
   // Show panel if session exists (active or past transcript with messages)
   const showPanel = session.status !== 'idle' || session.messages.length > 0
-  const canStart = task.agent_id && !session.sessionId && session.status === 'idle'
+  const canResume = task.agent_id && task.oc_session_id && !session.sessionId && session.status === 'idle'
+  const canStart = task.agent_id && !task.oc_session_id && !session.sessionId && session.status === 'idle'
     && task.status !== TaskStatus.Completed
 
   return (
@@ -252,7 +299,7 @@ export function TaskWorkspace({
             agents={agents}
             onEdit={onEdit}
             onDelete={onDelete}
-            onUpdateChecklist={onUpdateChecklist}
+
             onUpdateAttachments={onUpdateAttachments}
             onUpdateOutputFields={onUpdateOutputFields}
             onCompleteTask={handleCompleteTask}
@@ -264,6 +311,11 @@ export function TaskWorkspace({
             }}
             onStartAgent={handleStartSession}
             canStartAgent={!!canStart}
+            onResumeAgent={handleResumeSession}
+            canResumeAgent={!!canResume}
+            onSnooze={() => setShowSnooze(true)}
+            onUnsnooze={handleUnsnooze}
+            onReassign={handleReassign}
           />
         </div>
 
@@ -301,6 +353,12 @@ export function TaskWorkspace({
         open={showFeedback}
         onSubmit={handleFeedbackSubmit}
         onSkip={handleFeedbackSkip}
+      />
+
+      <SnoozeDialog
+        open={showSnooze}
+        onOpenChange={setShowSnooze}
+        onSnooze={handleSnooze}
       />
     </>
   )

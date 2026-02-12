@@ -54,12 +54,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
   agentSession: {
     start: (agentId: string, taskId: string, workspaceDir?: string): Promise<{ sessionId: string }> =>
       ipcRenderer.invoke('agentSession:start', agentId, taskId, workspaceDir),
+    resume: (agentId: string, taskId: string, ocSessionId: string): Promise<{ sessionId: string }> =>
+      ipcRenderer.invoke('agentSession:resume', agentId, taskId, ocSessionId),
     abort: (sessionId: string): Promise<{ success: boolean }> =>
       ipcRenderer.invoke('agentSession:abort', sessionId),
     stop: (sessionId: string): Promise<{ success: boolean }> =>
       ipcRenderer.invoke('agentSession:stop', sessionId),
-    send: (sessionId: string, message: string): Promise<{ success: boolean }> =>
-      ipcRenderer.invoke('agentSession:send', sessionId, message),
+    send: (sessionId: string, message: string, taskId?: string): Promise<{ success: boolean; newSessionId?: string }> =>
+      ipcRenderer.invoke('agentSession:send', sessionId, message, taskId),
     approve: (sessionId: string, approved: boolean, message?: string): Promise<{ success: boolean }> =>
       ipcRenderer.invoke('agentSession:approve', sessionId, approved, message),
     syncSkills: (sessionId: string): Promise<{ created: string[]; updated: string[]; unchanged: string[] }> =>
@@ -122,7 +124,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     delete: (id: string): Promise<boolean> => ipcRenderer.invoke('taskSource:delete', id),
     sync: (sourceId: string): Promise<unknown> => ipcRenderer.invoke('taskSource:sync', sourceId),
     exportUpdate: (taskId: string, fields: Record<string, unknown>): Promise<void> =>
-      ipcRenderer.invoke('taskSource:exportUpdate', taskId, fields)
+      ipcRenderer.invoke('taskSource:exportUpdate', taskId, fields),
+    getUsers: (sourceId: string): Promise<unknown[]> =>
+      ipcRenderer.invoke('taskSource:getUsers', sourceId),
+    reassign: (taskId: string, userIds: string[], assigneeDisplay: string): Promise<unknown> =>
+      ipcRenderer.invoke('taskSource:reassign', taskId, userIds, assigneeDisplay)
   },
   skills: {
     getAll: (): Promise<unknown[]> => ipcRenderer.invoke('skills:getAll'),
@@ -132,6 +138,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     update: (id: string, data: Record<string, unknown>): Promise<unknown> =>
       ipcRenderer.invoke('skills:update', id, data),
     delete: (id: string): Promise<boolean> => ipcRenderer.invoke('skills:delete', id)
+  },
+  deps: {
+    check: (): Promise<{ gh: boolean; opencode: boolean }> =>
+      ipcRenderer.invoke('deps:check')
   },
   plugins: {
     list: (): Promise<unknown[]> => ipcRenderer.invoke('plugin:list'),

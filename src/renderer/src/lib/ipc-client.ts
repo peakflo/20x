@@ -1,5 +1,5 @@
-import type { WorkfloTask, CreateTaskDTO, UpdateTaskDTO, FileAttachment, Agent, CreateAgentDTO, UpdateAgentDTO, McpServer, CreateMcpServerDTO, UpdateMcpServerDTO, Skill, CreateSkillDTO, UpdateSkillDTO, TaskSource, CreateTaskSourceDTO, UpdateTaskSourceDTO, SyncResult, PluginMeta, ConfigFieldSchema, ConfigFieldOption, PluginAction, ActionResult } from '@/types'
-import type { AgentOutputEvent, AgentStatusEvent, AgentApprovalRequest, GhCliStatus, GitHubRepo, WorktreeProgressEvent, McpTestResult, SkillSyncResult } from '@/types/electron'
+import type { WorkfloTask, CreateTaskDTO, UpdateTaskDTO, FileAttachment, Agent, CreateAgentDTO, UpdateAgentDTO, McpServer, CreateMcpServerDTO, UpdateMcpServerDTO, Skill, CreateSkillDTO, UpdateSkillDTO, TaskSource, CreateTaskSourceDTO, UpdateTaskSourceDTO, SyncResult, PluginMeta, ConfigFieldSchema, ConfigFieldOption, PluginAction, ActionResult, SourceUser, ReassignResult } from '@/types'
+import type { AgentOutputEvent, AgentStatusEvent, AgentApprovalRequest, GhCliStatus, GitHubRepo, WorktreeProgressEvent, McpTestResult, SkillSyncResult, DepsStatus } from '@/types/electron'
 
 export const taskApi = {
   getAll: (): Promise<WorkfloTask[]> => {
@@ -76,6 +76,10 @@ export const agentSessionApi = {
     return window.electronAPI.agentSession.start(agentId, taskId, workspaceDir)
   },
 
+  resume: (agentId: string, taskId: string, ocSessionId: string): Promise<{ sessionId: string }> => {
+    return window.electronAPI.agentSession.resume(agentId, taskId, ocSessionId)
+  },
+
   abort: (sessionId: string): Promise<{ success: boolean }> => {
     return window.electronAPI.agentSession.abort(sessionId)
   },
@@ -84,8 +88,8 @@ export const agentSessionApi = {
     return window.electronAPI.agentSession.stop(sessionId)
   },
 
-  send: (sessionId: string, message: string): Promise<{ success: boolean }> => {
-    return window.electronAPI.agentSession.send(sessionId, message)
+  send: (sessionId: string, message: string, taskId?: string): Promise<{ success: boolean; newSessionId?: string }> => {
+    return window.electronAPI.agentSession.send(sessionId, message, taskId)
   },
 
   approve: (sessionId: string, approved: boolean, message?: string): Promise<{ success: boolean }> => {
@@ -217,6 +221,14 @@ export const taskSourceApi = {
 
   exportUpdate: (taskId: string, fields: Record<string, unknown>): Promise<void> => {
     return window.electronAPI.taskSources.exportUpdate(taskId, fields)
+  },
+
+  getUsers: (sourceId: string): Promise<SourceUser[]> => {
+    return window.electronAPI.taskSources.getUsers(sourceId)
+  },
+
+  reassign: (taskId: string, userIds: string[], assigneeDisplay: string): Promise<ReassignResult> => {
+    return window.electronAPI.taskSources.reassign(taskId, userIds, assigneeDisplay)
   }
 }
 
@@ -240,6 +252,10 @@ export const skillApi = {
   delete: (id: string): Promise<boolean> => {
     return window.electronAPI.skills.delete(id)
   }
+}
+
+export const depsApi = {
+  check: (): Promise<DepsStatus> => window.electronAPI.deps.check()
 }
 
 export const pluginApi = {

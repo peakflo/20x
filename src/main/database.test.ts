@@ -92,12 +92,6 @@ describe('JSON deserialization', () => {
     expect(task.labels).toEqual(['bug', 'urgent'])
   })
 
-  it('deserializes checklist as objects', () => {
-    const checklist = [{ id: 'c1', text: 'Step 1', completed: false }]
-    const task = db.createTask(makeTask({ checklist }))!
-    expect(task.checklist).toEqual(checklist)
-  })
-
   it('deserializes attachments as objects', () => {
     const attachments = [{
       id: 'a1',

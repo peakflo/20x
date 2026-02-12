@@ -149,7 +149,7 @@ describe('PeakfloPlugin', () => {
       const ctx = makeContext()
       ;(ctx.toolCaller.callTool as any).mockResolvedValue({ success: true })
 
-      const task = { id: 'local-1', external_id: 'ext-1' } as TaskRecord
+      const task = { id: 'local-1', external_id: 'ext-1', output_fields: [] } as unknown as TaskRecord
       const result = await plugin.executeAction('approve', task, undefined, {}, ctx)
 
       expect(result.success).toBe(true)
@@ -159,7 +159,7 @@ describe('PeakfloPlugin', () => {
         'task_complete',
         expect.objectContaining({
           taskId: 'ext-1',
-          outputs: expect.stringContaining('approved')
+          outputs: expect.objectContaining({ action: 'approve' })
         })
       )
     })
@@ -168,11 +168,11 @@ describe('PeakfloPlugin', () => {
       const ctx = makeContext()
       ;(ctx.toolCaller.callTool as any).mockResolvedValue({ success: true })
 
-      const task = { id: 'local-1', external_id: 'ext-1' } as TaskRecord
+      const task = { id: 'local-1', external_id: 'ext-1', output_fields: [] } as unknown as TaskRecord
       const result = await plugin.executeAction('reject', task, 'Bad quality', {}, ctx)
 
       expect(result.success).toBe(true)
-      expect(result.taskUpdate).toEqual({ status: TaskStatus.NotStarted })
+      expect(result.taskUpdate).toEqual({ status: TaskStatus.Completed })
     })
 
     it('returns error when no external_id', async () => {

@@ -5,12 +5,18 @@ import type { AgentOutputEvent, AgentStatusEvent, AgentApprovalRequest } from '@
 
 // ── Message type ──────────────────────────────────────────────
 
+export interface StepMeta {
+  durationMs?: number
+  tokens?: { input: number; output: number; cache: number }
+}
+
 export interface AgentMessage {
   id: string
   role: 'user' | 'assistant' | 'system'
   content: string
   timestamp: Date
   partType?: string
+  stepMeta?: StepMeta
   tool?: {
     name: string
     status: string
@@ -47,6 +53,8 @@ export interface TaskSession {
 
 // Module-level dedup tracking (avoids unnecessary Zustand re-renders)
 const seenIds = new Map<string, Set<string>>()
+// Track last step-start timestamp per task for duration calculation
+const stepStartTimes = new Map<string, number>()
 
 function getSeen(taskId: string): Set<string> {
   if (!seenIds.has(taskId)) seenIds.set(taskId, new Set())
@@ -122,12 +130,50 @@ export const useAgentStore = create<AgentState>((set, get) => {
     if (!content) return
     if (!msgId) msgId = `${role}-${content.slice(0, 50)}-${content.length}`
 
-    const seen = getSeen(resolvedSession.taskId)
+    const taskId = resolvedSession.taskId
+    const seen = getSeen(taskId)
+
+    // Absorb step-start: record timestamp, don't add as message
+    if (data.partType === 'step-start') {
+      seen.add(msgId)
+      stepStartTimes.set(taskId, Date.now())
+      return
+    }
+
+    // Absorb step-finish: annotate last message with duration + tokens
+    if (data.partType === 'step-finish') {
+      seen.add(msgId)
+      const msgs = resolvedSession.messages
+      if (msgs.length === 0) return
+
+      const now = Date.now()
+      const startTime = stepStartTimes.get(taskId)
+      const durationMs = startTime ? now - startTime : undefined
+      const tokens = data.stepTokens as { input: number; output: number; cache: number } | undefined
+      stepStartTimes.delete(taskId)
+
+      // Find last assistant message to annotate
+      let targetIdx = -1
+      for (let i = msgs.length - 1; i >= 0; i--) {
+        if (msgs[i].role === 'assistant') { targetIdx = i; break }
+      }
+      if (targetIdx === -1) return
+
+      const updated = [...msgs]
+      updated[targetIdx] = { ...updated[targetIdx], stepMeta: { durationMs, tokens } }
+      set({
+        sessions: new Map(state.sessions).set(taskId, {
+          ...resolvedSession,
+          messages: updated
+        })
+      })
+      return
+    }
 
     // Streaming update — replace content of existing message
     if (data.update && seen.has(msgId)) {
       set({
-        sessions: new Map(state.sessions).set(resolvedSession.taskId, {
+        sessions: new Map(state.sessions).set(taskId, {
           ...resolvedSession,
           messages: resolvedSession.messages.map((m) =>
             m.id === msgId
@@ -143,7 +189,7 @@ export const useAgentStore = create<AgentState>((set, get) => {
     seen.add(msgId)
 
     set({
-      sessions: new Map(state.sessions).set(resolvedSession.taskId, {
+      sessions: new Map(state.sessions).set(taskId, {
         ...resolvedSession,
         messages: [
           ...resolvedSession.messages,
@@ -256,6 +302,7 @@ export const useAgentStore = create<AgentState>((set, get) => {
 
     removeSession: (taskId) => {
       seenIds.delete(taskId)
+      stepStartTimes.delete(taskId)
       set((state) => {
         const next = new Map(state.sessions)
         next.delete(taskId)

@@ -4,7 +4,6 @@ import { Input } from '@/components/ui/Input'
 import { Select } from '@/components/ui/Select'
 import { Textarea } from '@/components/ui/Textarea'
 import { Label } from '@/components/ui/Label'
-import { TaskChecklist } from './TaskChecklist'
 import { TaskAttachments, type PendingFile } from './TaskAttachments'
 import { OutputFieldsEditor } from './OutputFieldsEditor'
 import { TaskStatus, TASK_TYPES, TASK_PRIORITIES, TASK_STATUSES } from '@/types'
@@ -12,7 +11,6 @@ import type {
   WorkfloTask,
   CreateTaskDTO,
   UpdateTaskDTO,
-  ChecklistItem,
   FileAttachment,
   OutputField,
   TaskType,
@@ -38,7 +36,6 @@ export function TaskForm({ task, onSubmit, onCancel }: TaskFormProps) {
   const [assignee, setAssignee] = useState('')
   const [dueDate, setDueDate] = useState('')
   const [labels, setLabels] = useState('')
-  const [checklist, setChecklist] = useState<ChecklistItem[]>([])
   const [attachments, setAttachments] = useState<FileAttachment[]>([])
   const [outputFields, setOutputFields] = useState<OutputField[]>([])
   const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([])
@@ -54,7 +51,6 @@ export function TaskForm({ task, onSubmit, onCancel }: TaskFormProps) {
       setAssignee(task.assignee)
       setDueDate(task.due_date ? task.due_date.slice(0, 10) : '')
       setLabels(task.labels.join(', '))
-      setChecklist(task.checklist)
       setAttachments(task.attachments)
       setOutputFields(task.output_fields)
     }
@@ -80,7 +76,6 @@ export function TaskForm({ task, onSubmit, onCancel }: TaskFormProps) {
         assignee,
         due_date: dueDate ? new Date(dueDate).toISOString() : null,
         labels: parsedLabels,
-        checklist,
         attachments,
         output_fields: outputFields
       }
@@ -133,10 +128,12 @@ export function TaskForm({ task, onSubmit, onCancel }: TaskFormProps) {
           <Label htmlFor="status">Status</Label>
           <Select id="status" value={status} onChange={(e) => setStatus(e.target.value as TaskStatus)} options={TASK_STATUSES} />
         </div>
-        <div className="space-y-2">
-          <Label htmlFor="assignee">Assignee</Label>
-          <Input id="assignee" value={assignee} onChange={(e) => setAssignee(e.target.value)} placeholder="Name..." />
-        </div>
+        {task?.source_id && (
+          <div className="space-y-2">
+            <Label htmlFor="assignee">Assignee</Label>
+            <p className="text-sm text-muted-foreground py-1">{assignee || 'Unassigned'}</p>
+          </div>
+        )}
       </div>
 
       <div className="grid grid-cols-2 gap-4">
@@ -148,10 +145,6 @@ export function TaskForm({ task, onSubmit, onCancel }: TaskFormProps) {
           <Label htmlFor="labels">Labels</Label>
           <Input id="labels" value={labels} onChange={(e) => setLabels(e.target.value)} placeholder="bug, feature..." />
         </div>
-      </div>
-
-      <div className="rounded-md border p-4">
-        <TaskChecklist items={checklist} onChange={setChecklist} />
       </div>
 
       <div className="rounded-md border p-4">

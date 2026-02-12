@@ -1,3 +1,4 @@
+import { DepsWarningBanner } from './DepsWarningBanner'
 import { Sidebar } from './Sidebar'
 import { TaskWorkspace } from '@/components/tasks/TaskWorkspace'
 import { SkillWorkspace } from '@/components/skills/SkillWorkspace'
@@ -10,14 +11,16 @@ import { useUIStore } from '@/stores/ui-store'
 import { useAgentStore } from '@/stores/agent-store'
 import { useOverdueNotifications } from '@/hooks/use-overdue-notifications'
 import { attachmentApi, worktreeApi, settingsApi } from '@/lib/ipc-client'
-import { isOverdue } from '@/lib/utils'
-import { useEffect } from 'react'
+import { useTaskSourceStore } from '@/stores/task-source-store'
+import { isOverdue, isSnoozed } from '@/lib/utils'
+import { useEffect, useState, useCallback } from 'react'
 import { TaskStatus } from '@/types'
 import type { FileAttachment } from '@/types'
 
 export function AppLayout() {
   const { tasks, selectedTask, createTask, updateTask, deleteTask, selectTask } = useTasks()
   const { agents, fetchAgents, stopAndRemoveSessionForTask } = useAgentStore()
+  const { executeAction } = useTaskSourceStore()
   const {
     sidebarView,
     activeModal,
@@ -38,10 +41,16 @@ export function AppLayout() {
   const deletingTask = deletingTaskId ? tasks.find((t) => t.id === deletingTaskId) : undefined
 
   const overdueCount = tasks.filter(
-    (t) => isOverdue(t.due_date) && t.status !== TaskStatus.Completed
+    (t) => isOverdue(t.due_date) && t.status !== TaskStatus.Completed && !isSnoozed(t.snoozed_until)
   ).length
 
   useOverdueNotifications(tasks)
+
+  const [toast, setToast] = useState<{ message: string; isError?: boolean } | null>(null)
+  const showToast = useCallback((message: string, isError?: boolean) => {
+    setToast({ message, isError })
+    setTimeout(() => setToast(null), isError ? 5000 : 3000)
+  }, [])
 
   return (
     <>
@@ -59,6 +68,7 @@ export function AppLayout() {
       <main className="flex flex-col min-w-0 overflow-hidden bg-background">
         {/* Drag region for macOS traffic lights */}
         <div className="drag-region h-12 flex-shrink-0" />
+        <DepsWarningBanner />
         <div className="flex-1 overflow-hidden">
           {sidebarView === 'skills' ? (
             <SkillWorkspace />
@@ -72,11 +82,6 @@ export function AppLayout() {
               onDelete={() => {
                 if (selectedTask) openDeleteModal(selectedTask.id)
               }}
-              onUpdateChecklist={async (checklist) => {
-                if (selectedTask) {
-                  await updateTask(selectedTask.id, { checklist })
-                }
-              }}
               onUpdateAttachments={async (attachments: FileAttachment[]) => {
                 if (selectedTask) {
                   await updateTask(selectedTask.id, { attachments })
@@ -88,9 +93,30 @@ export function AppLayout() {
                 }
               }}
               onCompleteTask={async () => {
-                if (selectedTask) {
+                if (!selectedTask) return
+                const taskTitle = selectedTask.title
+                try {
+                  if (selectedTask.source_id) {
+                    const actionField = selectedTask.output_fields.find((f) => f.id === 'action')
+                    const actionValue = actionField?.value ? String(actionField.value) : undefined
+                    if (actionValue) {
+                      const result = await executeAction(actionValue, selectedTask.id, selectedTask.source_id)
+                      if (!result.success) {
+                        showToast(result.error || 'Failed to complete task', true)
+                        return
+                      }
+                    }
+                  }
                   await updateTask(selectedTask.id, { status: TaskStatus.Completed })
+                } catch (err) {
+                  console.error('Failed to complete task:', err)
+                  showToast('Failed to complete task', true)
+                  return
                 }
+                // Select next active task
+                const activeTasks = tasks.filter((t) => t.id !== selectedTask.id && t.status !== TaskStatus.Completed)
+                selectTask(activeTasks.length > 0 ? activeTasks[0].id : null)
+                showToast(`"${taskTitle}" completed`)
               }}
               onAssignAgent={async (taskId, agentId) => {
                 await updateTask(taskId, { agent_id: agentId })
@@ -186,6 +212,13 @@ export function AppLayout() {
 
       {/* Agent Settings Dialog */}
       <AgentSettingsDialog />
+
+      {/* Toast */}
+      {toast && (
+        <div className={`fixed bottom-6 left-1/2 -translate-x-1/2 z-50 px-4 py-2.5 border rounded-lg shadow-lg text-sm animate-in fade-in slide-in-from-bottom-2 ${toast.isError ? 'bg-destructive text-destructive-foreground' : 'bg-card'}`}>
+          {toast.message}
+        </div>
+      )}
     </>
   )
 }

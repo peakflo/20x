@@ -45,6 +45,16 @@ export function useAgentSession(taskId: string | undefined) {
     [initSession]
   )
 
+  const resume = useCallback(
+    async (agentId: string, tId: string, ocSessionId: string) => {
+      initSession(tId, '', agentId)
+      const { sessionId } = await agentSessionApi.resume(agentId, tId, ocSessionId)
+      initSession(tId, sessionId, agentId)
+      return sessionId
+    },
+    [initSession]
+  )
+
   const abort = useCallback(async () => {
     if (!session?.sessionId) return
     await agentSessionApi.abort(session.sessionId)
@@ -59,9 +69,13 @@ export function useAgentSession(taskId: string | undefined) {
   const sendMessage = useCallback(
     async (message: string) => {
       if (!session?.sessionId) throw new Error('No active session')
-      await agentSessionApi.send(session.sessionId, message)
+      const result = await agentSessionApi.send(session.sessionId, message, taskId)
+      // Session was recreated on the main process — update renderer store
+      if (result.newSessionId && taskId) {
+        initSession(taskId, result.newSessionId, session.agentId)
+      }
     },
-    [session?.sessionId]
+    [session?.sessionId, session?.agentId, taskId, initSession]
   )
 
   const approve = useCallback(
@@ -72,5 +86,5 @@ export function useAgentSession(taskId: string | undefined) {
     [session?.sessionId]
   )
 
-  return { session: sessionState, start, abort, stop, sendMessage, approve }
+  return { session: sessionState, start, resume, abort, stop, sendMessage, approve }
 }

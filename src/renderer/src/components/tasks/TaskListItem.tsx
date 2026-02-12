@@ -1,6 +1,7 @@
-import { Calendar } from 'lucide-react'
-import { cn, formatDate, isOverdue, isDueSoon } from '@/lib/utils'
+import { Calendar, AlarmClockOff } from 'lucide-react'
+import { cn, formatDate, isOverdue, isDueSoon, isSnoozed } from '@/lib/utils'
 import { TaskPriorityBadge } from './TaskPriorityBadge'
+import { useAgentStore } from '@/stores/agent-store'
 import { TaskStatus } from '@/types'
 import type { WorkfloTask } from '@/types'
 
@@ -21,6 +22,9 @@ export function TaskListItem({ task, isSelected, onSelect }: TaskListItemProps) 
   const isActive = task.status !== TaskStatus.Completed
   const overdue = isActive && isOverdue(task.due_date)
   const dueSoon = isActive && !overdue && isDueSoon(task.due_date)
+  const session = useAgentStore((s) => s.sessions.get(task.id))
+  const hasActiveAgent = session && session.status !== 'idle'
+  const hasIdleAgent = session?.status === 'idle'
 
   return (
     <button
@@ -34,8 +38,7 @@ export function TaskListItem({ task, isSelected, onSelect }: TaskListItemProps) 
       <div className="flex items-start gap-3">
         <div className={cn(
           'mt-[7px] h-2 w-2 rounded-full shrink-0',
-          statusDotColor[task.status],
-          task.status === TaskStatus.AgentWorking && 'animate-pulse'
+          hasActiveAgent ? 'bg-amber-400 animate-pulse' : hasIdleAgent ? 'bg-amber-400' : statusDotColor[task.status]
         )} />
         <div className="min-w-0 flex-1">
           <div className="text-sm font-medium truncate">{task.title}</div>
@@ -46,6 +49,9 @@ export function TaskListItem({ task, isSelected, onSelect }: TaskListItemProps) 
                 <Calendar className="h-3 w-3" />
                 {formatDate(task.due_date)}
               </span>
+            )}
+            {isSnoozed(task.snoozed_until) && (
+              <AlarmClockOff className="h-3 w-3 text-muted-foreground" />
             )}
             {task.source !== 'local' && (
               <span className="text-[10px] px-1.5 py-0.5 rounded bg-accent text-muted-foreground">{task.source}</span>
