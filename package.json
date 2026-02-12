@@ -10,7 +10,7 @@
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "preview": "electron-vite preview",
-    "postinstall": "electron-builder install-app-deps",
+    "postinstall": "node scripts/rebuild-native.mjs",
     "test": "ELECTRON_RUN_AS_NODE=1 electron ./node_modules/vitest/vitest.mjs",
     "test:run": "ELECTRON_RUN_AS_NODE=1 electron ./node_modules/vitest/vitest.mjs run",
     "test:main": "ELECTRON_RUN_AS_NODE=1 electron ./node_modules/vitest/vitest.mjs --project main",
