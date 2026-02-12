@@ -34,6 +34,8 @@ export function createTestDb(): { db: DatabaseManager; rawDb: InstanceType<typeo
       source_id TEXT,
       source TEXT NOT NULL DEFAULT 'local',
       skill_ids TEXT DEFAULT NULL,
+      oc_session_id TEXT DEFAULT NULL,
+      snoozed_until TEXT DEFAULT NULL,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );

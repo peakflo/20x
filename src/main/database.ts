@@ -194,6 +194,8 @@ export interface TaskRow {
   source_id: string | null
   source: string
   skill_ids: string | null
+  oc_session_id: string | null
+  snoozed_until: string | null
   created_at: string
   updated_at: string
 }
@@ -208,7 +210,6 @@ export interface TaskRecord {
   assignee: string
   due_date: string | null
   labels: string[]
-  checklist: ChecklistItemRecord[]
   attachments: FileAttachmentRecord[]
   repos: string[]
   output_fields: OutputFieldRecord[]
@@ -217,14 +218,10 @@ export interface TaskRecord {
   source_id: string | null
   source: string
   skill_ids: string[] | null
+  oc_session_id: string | null
+  snoozed_until: string | null
   created_at: string
   updated_at: string
-}
-
-export interface ChecklistItemRecord {
-  id: string
-  text: string
-  completed: boolean
 }
 
 export interface FileAttachmentRecord {
@@ -244,7 +241,6 @@ export interface CreateTaskData {
   assignee?: string
   due_date?: string | null
   labels?: string[]
-  checklist?: ChecklistItemRecord[]
   attachments?: FileAttachmentRecord[]
   repos?: string[]
   output_fields?: OutputFieldRecord[]
@@ -262,12 +258,13 @@ export interface UpdateTaskData {
   assignee?: string
   due_date?: string | null
   labels?: string[]
-  checklist?: ChecklistItemRecord[]
   attachments?: FileAttachmentRecord[]
   repos?: string[]
   output_fields?: OutputFieldRecord[]
   agent_id?: string | null
   skill_ids?: string[] | null
+  oc_session_id?: string | null
+  snoozed_until?: string | null
 }
 
 /** Columns that can be dynamically updated via updateTask. */
@@ -280,28 +277,30 @@ const UPDATABLE_COLUMNS = new Set([
   'assignee',
   'due_date',
   'labels',
-  'checklist',
   'attachments',
   'repos',
   'output_fields',
   'agent_id',
-  'skill_ids'
+  'skill_ids',
+  'oc_session_id',
+  'snoozed_until'
 ])
 
-const JSON_COLUMNS = new Set(['labels', 'checklist', 'attachments', 'repos', 'output_fields', 'skill_ids'])
+const JSON_COLUMNS = new Set(['labels', 'attachments', 'repos', 'output_fields', 'skill_ids'])
 
 function deserializeTask(row: TaskRow): TaskRecord {
   return {
     ...row,
     labels: JSON.parse(row.labels) as string[],
-    checklist: JSON.parse(row.checklist) as ChecklistItemRecord[],
     attachments: JSON.parse(row.attachments) as FileAttachmentRecord[],
     repos: JSON.parse(row.repos) as string[],
     output_fields: JSON.parse(row.output_fields || '[]') as OutputFieldRecord[],
     agent_id: row.agent_id ?? null,
     external_id: row.external_id ?? null,
     source_id: row.source_id ?? null,
-    skill_ids: row.skill_ids ? JSON.parse(row.skill_ids) as string[] : null
+    skill_ids: row.skill_ids ? JSON.parse(row.skill_ids) as string[] : null,
+    oc_session_id: row.oc_session_id ?? null,
+    snoozed_until: row.snoozed_until ?? null
   }
 }
 
@@ -508,6 +507,14 @@ export class DatabaseManager {
       this.db.exec(`ALTER TABLE tasks ADD COLUMN skill_ids TEXT DEFAULT NULL`)
     }
 
+    if (!columnNames.has('oc_session_id')) {
+      this.db.exec(`ALTER TABLE tasks ADD COLUMN oc_session_id TEXT DEFAULT NULL`)
+    }
+
+    if (!columnNames.has('snoozed_until')) {
+      this.db.exec(`ALTER TABLE tasks ADD COLUMN snoozed_until TEXT DEFAULT NULL`)
+    }
+
     // Migrate mcp_servers table — add new columns for remote support
     const mcpColumns = this.db.pragma('table_info(mcp_servers)') as { name: string }[]
     const mcpColumnNames = new Set(mcpColumns.map((c) => c.name))
@@ -653,8 +660,8 @@ export class DatabaseManager {
     const now = new Date().toISOString()
 
     this.db.prepare(`
-      INSERT INTO tasks (id, title, description, type, priority, status, assignee, due_date, labels, checklist, attachments, repos, output_fields, external_id, source_id, source, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO tasks (id, title, description, type, priority, status, assignee, due_date, labels, attachments, repos, output_fields, external_id, source_id, source, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id,
       data.title,
@@ -665,7 +672,6 @@ export class DatabaseManager {
       data.assignee ?? '',
       data.due_date ?? null,
       JSON.stringify(data.labels ?? []),
-      JSON.stringify(data.checklist ?? []),
       JSON.stringify(data.attachments ?? []),
       JSON.stringify(data.repos ?? []),
       JSON.stringify(data.output_fields ?? []),

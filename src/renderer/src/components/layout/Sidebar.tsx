@@ -6,7 +6,9 @@ import { SkillList } from '@/components/skills/SkillList'
 import { useUIStore, type SortField, type SidebarView } from '@/stores/ui-store'
 import { useTaskSourceStore } from '@/stores/task-source-store'
 import { useTaskStore } from '@/stores/task-store'
+import { useUserStore } from '@/stores/user-store'
 import { useSkillStore } from '@/stores/skill-store'
+import { isSnoozed } from '@/lib/utils'
 import { TaskStatus, TASK_STATUSES, TASK_PRIORITIES } from '@/types'
 import type { WorkfloTask, TaskPriority } from '@/types'
 
@@ -44,6 +46,7 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
 
   useEffect(() => {
     fetchSources()
+    useUserStore.getState().loadCurrentUser()
   }, [fetchSources])
 
   useEffect(() => {
@@ -52,8 +55,13 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
 
   const handleSyncAll = async () => {
     setIsSyncingAll(true)
+    const userStore = useUserStore.getState()
+    userStore.invalidateCache()
     await syncAllEnabled()
     await fetchTasks()
+    // Re-fetch users for all enabled sources
+    const enabled = sources.filter((s) => s.enabled)
+    await Promise.allSettled(enabled.map((s) => userStore.fetchUsers(s.id)))
     setIsSyncingAll(false)
   }
 
@@ -226,7 +234,11 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
           </div>
 
           <div className="px-4 py-2.5 border-t text-xs text-muted-foreground tabular-nums">
-            {tasks.filter((t) => t.status !== TaskStatus.Completed).length} active · {tasks.length} total
+            {tasks.filter((t) => t.status !== TaskStatus.Completed && !isSnoozed(t.snoozed_until)).length} active
+            {tasks.filter((t) => t.status !== TaskStatus.Completed && isSnoozed(t.snoozed_until)).length > 0 && (
+              <> · {tasks.filter((t) => t.status !== TaskStatus.Completed && isSnoozed(t.snoozed_until)).length} hidden</>
+            )}
+            {' '}· {tasks.length} total
           </div>
         </>
       ) : (

@@ -53,19 +53,20 @@ describe('McpToolCaller', () => {
     it('returns result on success', async () => {
       const server = makeServer({ type: 'remote', url: 'https://api.test.com' })
 
+      const jsonHeaders = { get: () => 'application/json' }
       let callCount = 0
       const mockFetch = vi.fn().mockImplementation(async () => {
         callCount++
         if (callCount === 1) {
           // Initialize response
-          return { ok: true, json: async () => ({ id: 1, result: { capabilities: {} } }) }
+          return { ok: true, headers: jsonHeaders, json: async () => ({ id: 1, result: { capabilities: {} } }) }
         }
         if (callCount === 2) {
           // Notification (fire-and-forget)
           return { ok: true }
         }
         // Tool call response
-        return { ok: true, json: async () => ({ id: 2, result: { content: [{ type: 'text', text: 'hello' }] } }) }
+        return { ok: true, headers: jsonHeaders, json: async () => ({ id: 2, result: { content: [{ type: 'text', text: 'hello' }] } }) }
       })
       vi.stubGlobal('fetch', mockFetch)
 

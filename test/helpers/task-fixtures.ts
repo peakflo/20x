@@ -10,7 +10,6 @@ export function makeTask(overrides: Partial<CreateTaskData> = {}): CreateTaskDat
     assignee: '',
     due_date: null,
     labels: [],
-    checklist: [],
     attachments: [],
     repos: [],
     output_fields: [],

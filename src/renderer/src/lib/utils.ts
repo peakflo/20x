@@ -48,3 +48,8 @@ export function isDueSoon(dueDate: string | null): boolean {
   if (due < today) return false
   return due.getTime() - today.getTime() <= 24 * 60 * 60 * 1000
 }
+
+export function isSnoozed(snoozedUntil: string | null): boolean {
+  if (!snoozedUntil) return false
+  return new Date(snoozedUntil) > new Date()
+}

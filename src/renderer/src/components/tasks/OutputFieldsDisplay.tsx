@@ -69,10 +69,9 @@ function OutputFieldInput({ field, onValueChange }: { field: OutputField; onValu
     setLocalValue(String(field.value ?? ''))
   }, [field.value])
 
-  const handleBlur = () => {
-    if (localValue !== String(field.value ?? '')) {
-      onValueChange(field.type === 'number' ? (localValue ? Number(localValue) : null) : localValue)
-    }
+  const handleChange = (val: string) => {
+    setLocalValue(val)
+    onValueChange(field.type === 'number' ? (val ? Number(val) : null) : val)
   }
 
   switch (field.type) {
@@ -85,8 +84,7 @@ function OutputFieldInput({ field, onValueChange }: { field: OutputField; onValu
           </Label>
           <Textarea
             value={localValue}
-            onChange={(e) => setLocalValue(e.target.value)}
-            onBlur={handleBlur}
+            onChange={(e) => handleChange(e.target.value)}
             placeholder={`Enter ${field.name.toLowerCase()}...`}
             rows={3}
           />
@@ -126,8 +124,7 @@ function OutputFieldInput({ field, onValueChange }: { field: OutputField; onValu
           ) : (
             <Input
               value={localValue}
-              onChange={(e) => setLocalValue(e.target.value)}
-              onBlur={handleBlur}
+              onChange={(e) => handleChange(e.target.value)}
               placeholder={`Enter ${field.name.toLowerCase()}...`}
             />
           )}
@@ -169,8 +166,7 @@ function OutputFieldInput({ field, onValueChange }: { field: OutputField; onValu
           <Input
             type="number"
             value={localValue}
-            onChange={(e) => setLocalValue(e.target.value)}
-            onBlur={handleBlur}
+            onChange={(e) => handleChange(e.target.value)}
             placeholder={`Enter ${field.name.toLowerCase()}...`}
           />
         </div>
@@ -202,8 +198,7 @@ function OutputFieldInput({ field, onValueChange }: { field: OutputField; onValu
           <Input
             type={field.type === 'email' ? 'email' : field.type === 'url' ? 'url' : 'text'}
             value={localValue}
-            onChange={(e) => setLocalValue(e.target.value)}
-            onBlur={handleBlur}
+            onChange={(e) => handleChange(e.target.value)}
             placeholder={`Enter ${field.name.toLowerCase()}...`}
           />
         </div>

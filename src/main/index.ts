@@ -16,6 +16,7 @@ let db: DatabaseManager | null = null
 let agentManager: AgentManager | null = null
 let githubManager: GitHubManager | null = null
 let worktreeManager: WorktreeManager | null = null
+let mcpToolCaller: McpToolCaller | null = null
 let syncManager: SyncManager | null = null
 let pluginRegistry: PluginRegistry | null = null
 
@@ -74,7 +75,7 @@ app.whenReady().then(async () => {
   githubManager = new GitHubManager()
   worktreeManager = new WorktreeManager()
 
-  const mcpToolCaller = new McpToolCaller()
+  mcpToolCaller = new McpToolCaller()
 
   pluginRegistry = new PluginRegistry()
   pluginRegistry.register(new PeakfloPlugin())
@@ -118,4 +119,5 @@ app.on('before-quit', () => {
   // Ensure cleanup before quitting
   agentManager?.stopAllSessions()
   agentManager?.stopServer()
+  mcpToolCaller?.destroy()
 })

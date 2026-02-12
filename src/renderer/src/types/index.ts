@@ -127,21 +127,16 @@ export const OUTPUT_FIELD_TYPES: { value: OutputFieldType; label: string }[] = [
   { value: 'url', label: 'URL' }
 ]
 
-// ── Re-export shared constants ──────────────────────────────
+// ── Re-export shared constants & types ──────────────────────
 import { TaskStatus, TASK_STATUSES } from '@shared/constants'
 export { TaskStatus, TASK_STATUSES }
+export type { SourceUser, ReassignResult } from '@shared/types'
 
 // ── Task types ──────────────────────────────────────────────
 
 export type TaskType = 'coding' | 'manual' | 'review' | 'approval' | 'general'
 
 export type TaskPriority = 'critical' | 'high' | 'medium' | 'low'
-
-export interface ChecklistItem {
-  id: string
-  text: string
-  completed: boolean
-}
 
 export interface FileAttachment {
   id: string
@@ -161,15 +156,16 @@ export interface WorkfloTask {
   assignee: string
   due_date: string | null
   labels: string[]
-  checklist: ChecklistItem[]
   attachments: FileAttachment[]
   repos: string[]
   output_fields: OutputField[]
   agent_id: string | null
+  oc_session_id: string | null
   external_id: string | null
   source_id: string | null
   source: string
   skill_ids: string[] | null
+  snoozed_until: string | null
   created_at: string
   updated_at: string
 }
@@ -183,7 +179,6 @@ export interface CreateTaskDTO {
   assignee?: string
   due_date?: string | null
   labels?: string[]
-  checklist?: ChecklistItem[]
   attachments?: FileAttachment[]
   repos?: string[]
   output_fields?: OutputField[]
@@ -198,12 +193,12 @@ export interface UpdateTaskDTO {
   assignee?: string
   due_date?: string | null
   labels?: string[]
-  checklist?: ChecklistItem[]
   attachments?: FileAttachment[]
   repos?: string[]
   output_fields?: OutputField[]
   agent_id?: string | null
   skill_ids?: string[] | null
+  snoozed_until?: string | null
 }
 
 export const TASK_TYPES: { value: TaskType; label: string }[] = [

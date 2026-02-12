@@ -1,6 +1,10 @@
 import { ipcMain, dialog, shell, Notification } from 'electron'
 import { copyFileSync, existsSync, unlinkSync, readdirSync, statSync, readFileSync } from 'fs'
+import { execFile } from 'child_process'
+import { promisify } from 'util'
 import { join, basename, extname } from 'path'
+
+const execFileAsync = promisify(execFile)
 import type {
   DatabaseManager,
   CreateTaskData,
@@ -177,6 +181,11 @@ export function registerIpcHandlers(
     return { sessionId }
   })
 
+  ipcMain.handle('agentSession:resume', async (_, agentId: string, taskId: string, ocSessionId: string) => {
+    const sessionId = await agentManager.resumeSession(agentId, taskId, ocSessionId)
+    return { sessionId }
+  })
+
   ipcMain.handle('agentSession:abort', async (_, sessionId: string) => {
     await agentManager.abortSession(sessionId)
     return { success: true }
@@ -187,9 +196,9 @@ export function registerIpcHandlers(
     return { success: true }
   })
 
-  ipcMain.handle('agentSession:send', async (_, sessionId: string, message: string) => {
-    await agentManager.sendMessage(sessionId, message)
-    return { success: true }
+  ipcMain.handle('agentSession:send', async (_, sessionId: string, message: string, taskId?: string) => {
+    const result = await agentManager.sendMessage(sessionId, message, taskId)
+    return { success: true, ...result }
   })
 
   ipcMain.handle('agentSession:approve', async (_, sessionId: string, approved: boolean, message?: string) => {
@@ -228,10 +237,12 @@ export function registerIpcHandlers(
   })
 
   ipcMain.handle('mcp:update', (_, id: string, data: UpdateMcpServerData) => {
+    mcpToolCaller?.killSession(id)
     return db.updateMcpServer(id, data)
   })
 
   ipcMain.handle('mcp:delete', (_, id: string) => {
+    mcpToolCaller?.killSession(id)
     return db.deleteMcpServer(id)
   })
 
@@ -312,6 +323,14 @@ export function registerIpcHandlers(
     await syncManager.exportTaskUpdate(taskId, fields)
   })
 
+  ipcMain.handle('taskSource:getUsers', (_, sourceId: string) => {
+    return syncManager.getSourceUsers(sourceId)
+  })
+
+  ipcMain.handle('taskSource:reassign', (_, taskId: string, userIds: string[], assigneeDisplay: string) => {
+    return syncManager.reassignTask(taskId, userIds, assigneeDisplay)
+  })
+
   // Skill handlers
   ipcMain.handle('skills:getAll', () => {
     return db.getSkills()
@@ -331,6 +350,23 @@ export function registerIpcHandlers(
 
   ipcMain.handle('skills:delete', (_, id: string) => {
     return db.deleteSkill(id)
+  })
+
+  // Dependency check handler
+  ipcMain.handle('deps:check', async () => {
+    // Packaged macOS apps don't inherit the user's shell PATH —
+    // use a login shell so .zprofile / .bash_profile are sourced
+    const shell = existsSync('/bin/zsh') ? '/bin/zsh' : '/bin/bash'
+    const check = (cmd: string) =>
+      execFileAsync(shell, ['-l', '-c', cmd])
+    const [gh, opencode] = await Promise.allSettled([
+      check('gh --version'),
+      check('opencode --version')
+    ])
+    return {
+      gh: gh.status === 'fulfilled',
+      opencode: opencode.status === 'fulfilled'
+    }
   })
 
   // Plugin handlers

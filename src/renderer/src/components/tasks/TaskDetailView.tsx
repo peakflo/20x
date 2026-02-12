@@ -1,28 +1,23 @@
-import { useEffect, useState } from 'react'
-import { Pencil, Trash2, Calendar, User, Tag, Clock, Bot, Play, GitBranch, CheckCircle, XCircle, Loader2, Plus, X, BookOpen } from 'lucide-react'
+import { useState } from 'react'
+import { Pencil, Trash2, Calendar, User, Tag, Clock, Bot, Play, History, GitBranch, Plus, X, BookOpen, AlarmClockOff, BellRing } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
-import { Input } from '@/components/ui/Input'
 import { TaskStatusBadge } from './TaskStatusBadge'
 import { TaskPriorityBadge } from './TaskPriorityBadge'
 import { TaskTypeBadge } from './TaskTypeBadge'
-import { TaskChecklist } from './TaskChecklist'
 import { TaskAttachments } from './TaskAttachments'
 import { Badge } from '@/components/ui/Badge'
-import { formatDate, formatRelativeDate, isOverdue, isDueSoon } from '@/lib/utils'
-import { pluginApi } from '@/lib/ipc-client'
-import { useTaskSourceStore } from '@/stores/task-source-store'
-import { useTaskStore } from '@/stores/task-store'
+import { formatDate, formatRelativeDate, isOverdue, isDueSoon, isSnoozed } from '@/lib/utils'
 import { OutputFieldsDisplay } from './OutputFieldsDisplay'
 import { SkillSelector } from '@/components/skills/SkillSelector'
+import { AssigneeSelect } from './AssigneeSelect'
 import { TaskStatus } from '@/types'
-import type { WorkfloTask, ChecklistItem, FileAttachment, OutputField, Agent, PluginAction } from '@/types'
+import type { WorkfloTask, FileAttachment, OutputField, Agent } from '@/types'
 
 interface TaskDetailViewProps {
   task: WorkfloTask
   agents: Agent[]
   onEdit: () => void
   onDelete: () => void
-  onUpdateChecklist: (checklist: ChecklistItem[]) => void
   onUpdateAttachments: (attachments: FileAttachment[]) => void
   onUpdateOutputFields: (fields: OutputField[]) => void
   onCompleteTask: () => void
@@ -32,107 +27,14 @@ interface TaskDetailViewProps {
   onUpdateSkillIds?: (skillIds: string[] | null) => void
   onStartAgent?: () => void
   canStartAgent?: boolean
+  onResumeAgent?: () => void
+  canResumeAgent?: boolean
+  onSnooze?: () => void
+  onUnsnooze?: () => void
+  onReassign?: (userIds: string[], displayName: string) => Promise<void>
 }
 
-function PluginActions({ task }: { task: WorkfloTask }) {
-  const { sources, executeAction } = useTaskSourceStore()
-  const { fetchTasks } = useTaskStore()
-  const [actions, setActions] = useState<PluginAction[]>([])
-  const [executing, setExecuting] = useState<string | null>(null)
-  const [inputFor, setInputFor] = useState<PluginAction | null>(null)
-  const [inputValue, setInputValue] = useState('')
-  const [error, setError] = useState<string | null>(null)
-
-  const source = sources.find((s) => s.id === task.source_id)
-
-  useEffect(() => {
-    if (source) {
-      pluginApi.getActions(source.plugin_id, source.config).then(setActions)
-    }
-  }, [source?.plugin_id, source?.id])
-
-  if (!source || actions.length === 0) return null
-
-  const isCompleted = task.status === TaskStatus.Completed
-
-  const handleAction = async (action: PluginAction) => {
-    if (action.requiresInput) {
-      setInputFor(action)
-      return
-    }
-    await doExecute(action.id)
-  }
-
-  const doExecute = async (actionId: string, input?: string) => {
-    setExecuting(actionId)
-    setError(null)
-    const result = await executeAction(actionId, task.id, source!.id, input)
-    setExecuting(null)
-    setInputFor(null)
-    setInputValue('')
-    if (!result.success) {
-      setError(result.error || 'Action failed')
-    } else {
-      // Refetch tasks to reflect local updates from the action
-      fetchTasks()
-    }
-  }
-
-  const iconMap: Record<string, typeof CheckCircle> = { CheckCircle, XCircle }
-
-  return (
-    <div className="space-y-2 pt-2 border-t">
-      <span className="text-xs text-muted-foreground">Actions</span>
-      {isCompleted ? (
-        <p className="text-xs text-muted-foreground">No actions available for completed tasks.</p>
-      ) : inputFor ? (
-        <div className="space-y-2">
-          <label className="text-xs text-muted-foreground">{inputFor.inputLabel || 'Input'}</label>
-          <Input
-            value={inputValue}
-            onChange={(e) => setInputValue(e.target.value)}
-            placeholder={inputFor.inputPlaceholder}
-            autoFocus
-          />
-          <div className="flex gap-2">
-            <Button size="sm" onClick={() => doExecute(inputFor.id, inputValue)} disabled={!inputValue.trim()}>
-              {executing === inputFor.id ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : null}
-              Submit
-            </Button>
-            <Button size="sm" variant="outline" onClick={() => { setInputFor(null); setInputValue('') }}>
-              Cancel
-            </Button>
-          </div>
-        </div>
-      ) : (
-        <div className="flex gap-2">
-          {actions.map((action) => {
-            const Icon = action.icon ? iconMap[action.icon] : undefined
-            return (
-              <Button
-                key={action.id}
-                size="sm"
-                variant={action.variant === 'destructive' ? 'destructive' : 'outline'}
-                onClick={() => handleAction(action)}
-                disabled={executing !== null}
-              >
-                {executing === action.id ? (
-                  <Loader2 className="h-3 w-3 animate-spin mr-1" />
-                ) : Icon ? (
-                  <Icon className="h-3 w-3 mr-1" />
-                ) : null}
-                {action.label}
-              </Button>
-            )
-          })}
-        </div>
-      )}
-      {error && <p className="text-xs text-destructive">{error}</p>}
-    </div>
-  )
-}
-
-export function TaskDetailView({ task, agents, onEdit, onDelete, onUpdateChecklist, onUpdateAttachments, onUpdateOutputFields, onCompleteTask, onAssignAgent, onUpdateRepos, onAddRepos, onUpdateSkillIds, onStartAgent, canStartAgent }: TaskDetailViewProps) {
+export function TaskDetailView({ task, agents, onEdit, onDelete, onUpdateAttachments, onUpdateOutputFields, onCompleteTask, onAssignAgent, onUpdateRepos, onAddRepos, onUpdateSkillIds, onStartAgent, canStartAgent, onResumeAgent, canResumeAgent, onSnooze, onUnsnooze, onReassign }: TaskDetailViewProps) {
   const [skillsExpanded, setSkillsExpanded] = useState(false)
   const isActive = task.status !== TaskStatus.Completed
   const overdue = isActive && isOverdue(task.due_date)
@@ -147,6 +49,18 @@ export function TaskDetailView({ task, agents, onEdit, onDelete, onUpdateCheckli
           <TaskPriorityBadge priority={task.priority} />
         </div>
         <div className="flex items-center gap-1">
+          {isActive && isSnoozed(task.snoozed_until) && onUnsnooze && (
+            <Button variant="ghost" size="sm" onClick={onUnsnooze}>
+              <BellRing className="h-3.5 w-3.5" />
+              Unsnooze
+            </Button>
+          )}
+          {isActive && !isSnoozed(task.snoozed_until) && onSnooze && (
+            <Button variant="ghost" size="sm" onClick={onSnooze}>
+              <AlarmClockOff className="h-3.5 w-3.5" />
+              Snooze
+            </Button>
+          )}
           <Button variant="ghost" size="sm" onClick={onEdit}>
             <Pencil className="h-3.5 w-3.5" />
             Edit
@@ -167,12 +81,15 @@ export function TaskDetailView({ task, agents, onEdit, onDelete, onUpdateCheckli
           </div>
 
           <div className="grid grid-cols-[auto_1fr] gap-x-10 gap-y-4 text-sm">
-            {task.assignee && (
-              <>
-                <span className="text-muted-foreground flex items-center gap-2"><User className="h-3.5 w-3.5" /> Assignee</span>
-                <span>{task.assignee}</span>
-              </>
-            )}
+            <>
+              <span className="text-muted-foreground flex items-center gap-2"><User className="h-3.5 w-3.5" /> Assignee</span>
+              <AssigneeSelect
+                assignee={task.assignee}
+                sourceId={task.source_id}
+                taskId={task.id}
+                onReassign={(userIds, displayName) => onReassign?.(userIds, displayName)}
+              />
+            </>
             <>
               <span className="text-muted-foreground flex items-center gap-2"><Bot className="h-3.5 w-3.5" /> Agent</span>
               <div className="flex items-center gap-2">
@@ -186,6 +103,12 @@ export function TaskDetailView({ task, agents, onEdit, onDelete, onUpdateCheckli
                     <option key={agent.id} value={agent.id}>{agent.name}</option>
                   ))}
                 </select>
+                {canResumeAgent && onResumeAgent && (
+                  <Button variant="default" size="sm" onClick={onResumeAgent} className="h-7 gap-1.5 px-3">
+                    <History className="h-3 w-3" />
+                    Resume session
+                  </Button>
+                )}
                 {canStartAgent && onStartAgent && (
                   <Button variant="default" size="sm" onClick={onStartAgent} className="h-7 gap-1.5 px-3">
                     <Play className="h-3 w-3" />
@@ -259,6 +182,14 @@ export function TaskDetailView({ task, agents, onEdit, onDelete, onUpdateCheckli
                 </span>
               </>
             )}
+            {isSnoozed(task.snoozed_until) && (
+              <>
+                <span className="text-muted-foreground flex items-center gap-2"><AlarmClockOff className="h-3.5 w-3.5" /> Hidden until</span>
+                <span className="text-muted-foreground">
+                  {task.snoozed_until === '9999-12-31T00:00:00.000Z' ? 'Someday' : formatDate(task.snoozed_until)}
+                </span>
+              </>
+            )}
             <span className="text-muted-foreground flex items-center gap-2"><Clock className="h-3.5 w-3.5" /> Created</span>
             <span className="text-muted-foreground">{formatRelativeDate(task.created_at)}</span>
             <span className="text-muted-foreground flex items-center gap-2"><Clock className="h-3.5 w-3.5" /> Updated</span>
@@ -278,12 +209,6 @@ export function TaskDetailView({ task, agents, onEdit, onDelete, onUpdateCheckli
             </div>
           )}
 
-          {task.checklist.length > 0 && (
-            <div className="rounded-md border p-4">
-              <TaskChecklist items={task.checklist} onChange={onUpdateChecklist} />
-            </div>
-          )}
-
           {task.attachments.length > 0 && (
             <div className="rounded-md border p-4">
               <TaskAttachments
@@ -294,7 +219,7 @@ export function TaskDetailView({ task, agents, onEdit, onDelete, onUpdateCheckli
             </div>
           )}
 
-          {task.output_fields.length > 0 && (
+          {task.output_fields.length > 0 ? (
             <div className="rounded-md border p-4">
               <OutputFieldsDisplay
                 fields={task.output_fields}
@@ -303,9 +228,11 @@ export function TaskDetailView({ task, agents, onEdit, onDelete, onUpdateCheckli
                 onComplete={onCompleteTask}
               />
             </div>
+          ) : isActive && (
+            <Button onClick={onCompleteTask} className="w-full">
+              Complete Task
+            </Button>
           )}
-
-          {task.source_id && <PluginActions task={task} />}
 
           <div className="pt-2 border-t text-xs text-muted-foreground">
             Source: <Badge className="ml-1">{task.source}</Badge>

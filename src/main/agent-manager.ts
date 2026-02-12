@@ -2,7 +2,6 @@ import { EventEmitter } from 'events'
 import { spawn, type ChildProcess } from 'child_process'
 import { join } from 'path'
 import { existsSync, copyFileSync, mkdirSync, writeFileSync, readFileSync, readdirSync, statSync } from 'fs'
-import { pathToFileURL } from 'url'
 import { Agent as UndiciAgent } from 'undici'
 import type { BrowserWindow } from 'electron'
 import type { DatabaseManager, AgentMcpServerEntry, OutputFieldRecord } from './database'
@@ -235,7 +234,7 @@ export class AgentManager extends EventEmitter {
    * Creates an OpenCode session and returns the sessionId immediately.
    * Uses promptAsync to send the initial prompt without blocking.
    */
-  async startSession(agentId: string, taskId: string, workspaceDir?: string): Promise<string> {
+  async startSession(agentId: string, taskId: string, workspaceDir?: string, skipInitialPrompt?: boolean): Promise<string> {
     if (!OpenCodeSDK) {
       throw new Error('OpenCode SDK not loaded')
     }
@@ -333,6 +332,7 @@ export class AgentManager extends EventEmitter {
       }
 
       session.ocSessionId = result.data.id
+      this.db.updateTask(taskId, { oc_session_id: result.data.id })
       console.log(`[AgentManager] OpenCode session created: ${result.data.id}`)
 
       // Update task status to agent_working
@@ -346,93 +346,77 @@ export class AgentManager extends EventEmitter {
       // Start polling for messages (SSE uses TextDecoderStream which isn't in Node)
       this.startPolling(sessionId)
 
-      // Build the initial prompt
-      const task = this.db.getTask(taskId)
-      let promptText = task
-        ? `Working on task: "${task.title}"\n\n${task.description || ''}`
-        : `Working on task ${taskId}`
+      if (!skipInitialPrompt) {
+        // Build the initial prompt
+        const task = this.db.getTask(taskId)
+        let promptText = task
+          ? `Working on task: "${task.title}"\n\n${task.description || ''}`
+          : `Working on task ${taskId}`
 
-      // Append output field instructions if task has output fields
-      if (task?.output_fields && task.output_fields.length > 0) {
-        promptText += this.buildOutputFieldInstructions(task.output_fields)
-      }
-
-      // Copy all attachments to workspace and build parts
-      const INLINE_MIMES = new Set([
-        'image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/svg+xml',
-        'application/pdf',
-        'text/plain', 'text/csv', 'text/markdown', 'text/html',
-        'application/json', 'application/xml'
-      ])
-      const attachmentRefs: string[] = []
-      const parts: any[] = []
-      if (task?.attachments?.length && workspaceDir) {
-        const attachDir = this.db.getAttachmentsDir(taskId)
-        const destDir = join(workspaceDir, 'attachments')
-        if (!existsSync(destDir)) mkdirSync(destDir, { recursive: true })
-
-        for (const att of task.attachments) {
-          const srcPath = join(attachDir, `${att.id}-${att.filename}`)
-          if (!existsSync(srcPath)) continue
-
-          // Copy to workspace
-          const destPath = join(destDir, att.filename)
-          try { copyFileSync(srcPath, destPath) } catch { continue }
-
-          const canInline = INLINE_MIMES.has(att.mime_type) || att.mime_type.startsWith('text/')
-          if (canInline) {
-            parts.push({
-              type: 'file',
-              mime: att.mime_type,
-              filename: att.filename,
-              url: pathToFileURL(destPath).href
-            })
-          }
-          attachmentRefs.push(`- attachments/${att.filename}`)
+        // Append output field instructions if task has output fields
+        if (task?.output_fields && task.output_fields.length > 0) {
+          promptText += this.buildOutputFieldInstructions(task.output_fields)
         }
-      }
-      if (attachmentRefs.length > 0) {
-        promptText += `\n\nAttached files (relative to your working directory):\n${attachmentRefs.join('\n')}`
-      }
-      parts.unshift({ type: 'text', text: promptText })
 
-      // Parse model from agent config (stored as "providerID/modelID")
-      const agentConfig = agent.config as any
-      let modelParam: { providerID: string; modelID: string } | undefined
-      if (agentConfig?.model) {
-        const slashIdx = agentConfig.model.indexOf('/')
-        if (slashIdx > 0) {
-          modelParam = {
-            providerID: agentConfig.model.slice(0, slashIdx),
-            modelID: agentConfig.model.slice(slashIdx + 1)
+        // Copy attachments to workspace — agent reads them via fs tools
+        const attachmentRefs: string[] = []
+        const parts: any[] = []
+        if (task?.attachments?.length && workspaceDir) {
+          const attachDir = this.db.getAttachmentsDir(taskId)
+          const destDir = join(workspaceDir, 'attachments')
+          if (!existsSync(destDir)) mkdirSync(destDir, { recursive: true })
+
+          for (const att of task.attachments) {
+            const srcPath = join(attachDir, `${att.id}-${att.filename}`)
+            if (!existsSync(srcPath)) continue
+            const destPath = join(destDir, att.filename)
+            try { copyFileSync(srcPath, destPath) } catch { continue }
+            attachmentRefs.push(`- attachments/${att.filename}`)
           }
         }
-        console.log(`[AgentManager] Using model: ${agentConfig.model} →`, modelParam)
-      }
-
-      // Build tool filter from agent config
-      const toolsFilter = this.buildToolsFilter(agentId)
-
-      // Fire-and-forget prompt via SDK (SDK disables Node.js timeout internally)
-      console.log(`[AgentManager] Sending prompt for session ${sessionId}${workspaceDir ? `, dir: ${workspaceDir}` : ''}`)
-      const promptAbort = new AbortController()
-      session.promptAbort = promptAbort
-      ocClient.session.prompt({
-        path: { id: session.ocSessionId! },
-        body: {
-          parts,
-          ...(modelParam && { model: modelParam }),
-          ...(toolsFilter && { tools: toolsFilter })
-        },
-        ...(workspaceDir && { query: { directory: workspaceDir } }),
-        signal: promptAbort.signal
-      }).catch((err: any) => {
-        if (err.name !== 'AbortError') {
-          console.error('[AgentManager] prompt error:', err)
+        if (attachmentRefs.length > 0) {
+          promptText += `\n\nAttached files (relative to your working directory):\n${attachmentRefs.join('\n')}`
         }
-      }).finally(() => {
-        session.promptAbort = undefined
-      })
+        parts.unshift({ type: 'text', text: promptText })
+
+        // Parse model from agent config (stored as "providerID/modelID")
+        const agentConfig = agent.config as any
+        let modelParam: { providerID: string; modelID: string } | undefined
+        if (agentConfig?.model) {
+          const slashIdx = agentConfig.model.indexOf('/')
+          if (slashIdx > 0) {
+            modelParam = {
+              providerID: agentConfig.model.slice(0, slashIdx),
+              modelID: agentConfig.model.slice(slashIdx + 1)
+            }
+          }
+          console.log(`[AgentManager] Using model: ${agentConfig.model} →`, modelParam)
+        }
+
+        // Build tool filter from agent config
+        const toolsFilter = this.buildToolsFilter(agentId)
+
+        // Fire-and-forget prompt via SDK (SDK disables Node.js timeout internally)
+        console.log(`[AgentManager] Sending prompt for session ${sessionId}${workspaceDir ? `, dir: ${workspaceDir}` : ''}`)
+        const promptAbort = new AbortController()
+        session.promptAbort = promptAbort
+        ocClient.session.prompt({
+          path: { id: session.ocSessionId! },
+          body: {
+            parts,
+            ...(modelParam && { model: modelParam }),
+            ...(toolsFilter && { tools: toolsFilter })
+          },
+          ...(workspaceDir && { query: { directory: workspaceDir } }),
+          signal: promptAbort.signal
+        }).catch((err: any) => {
+          if (err.name !== 'AbortError') {
+            console.error('[AgentManager] prompt error:', err)
+          }
+        }).finally(() => {
+          session.promptAbort = undefined
+        })
+      }
 
       return sessionId
     } catch (error) {
@@ -441,6 +425,146 @@ export class AgentManager extends EventEmitter {
       this.sessions.delete(sessionId)
       // Revert task status on error
       this.db.updateTask(taskId, { status: TaskStatus.NotStarted })
+      throw error
+    }
+  }
+
+  /**
+   * Reconnects to an existing OpenCode session by its persisted ocSessionId.
+   * Replays all messages to the renderer and resumes polling.
+   */
+  async resumeSession(agentId: string, taskId: string, ocSessionId: string): Promise<string> {
+    if (!OpenCodeSDK) {
+      throw new Error('OpenCode SDK not loaded')
+    }
+
+    const agent = this.db.getAgent(agentId)
+    if (!agent) {
+      throw new Error(`Agent not found: ${agentId}`)
+    }
+
+    // Check no active in-memory session for this task
+    for (const [sid, s] of this.sessions.entries()) {
+      if (s.taskId === taskId && s.status !== 'error') {
+        return sid
+      }
+    }
+
+    const workspaceDir = this.db.getWorkspaceDir(taskId)
+    const sessionId = `session-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+    const baseUrl = this.getServerUrl(agent.server_url)
+    console.log(`[AgentManager] Resuming session ${sessionId} for OC session ${ocSessionId}`)
+
+    const ocClient = OpenCodeSDK.createOpencodeClient({ baseUrl, fetch: noTimeoutFetch as any })
+
+    // Validate session still exists server-side
+    try {
+      const getResult: any = await ocClient.session.get({
+        path: { id: ocSessionId },
+        ...(workspaceDir && { query: { directory: workspaceDir } })
+      })
+      if (getResult.error || !getResult.data) {
+        this.db.updateTask(taskId, { oc_session_id: null })
+        throw new Error('Session no longer exists on server')
+      }
+    } catch (error: any) {
+      if (error.message === 'Session no longer exists on server') throw error
+      this.db.updateTask(taskId, { oc_session_id: null })
+      throw new Error(`Failed to validate session: ${error.message}`)
+    }
+
+    const session: AgentSession = {
+      id: sessionId,
+      agentId,
+      taskId,
+      workspaceDir,
+      status: 'idle',
+      createdAt: new Date(),
+      ocClient,
+      ocSessionId,
+      seenMessageIds: new Set(),
+      seenPartIds: new Set(),
+      partContentLengths: new Map()
+    }
+
+    this.sessions.set(sessionId, session)
+
+    try {
+      // Replay existing messages to renderer
+      const messagesResult: any = await ocClient.session.messages({
+        path: { id: ocSessionId },
+        ...(workspaceDir && { query: { directory: workspaceDir } })
+      })
+
+      if (messagesResult.data && Array.isArray(messagesResult.data)) {
+        for (const msg of messagesResult.data) {
+          if (!msg.info) continue
+          const msgId = msg.info.id
+          const role = msg.info.role || 'assistant'
+          const parts = msg.parts && Array.isArray(msg.parts) ? msg.parts : []
+
+          session.seenMessageIds.add(msgId)
+
+          for (const part of parts) {
+            const partId = part.id
+            if (!partId) continue
+
+            const payload = this.buildPartPayload(part)
+            if (payload === null) {
+              session.seenPartIds.add(partId)
+              continue
+            }
+
+            session.seenPartIds.add(partId)
+            const isUpdatable = part.type === 'text' || part.type === 'reasoning' || part.type === 'tool'
+            if (isUpdatable) {
+              const fingerprint = part.type === 'tool'
+                ? `${part.state?.status}:${payload.partType}:${payload.content.length}:${payload.tool?.output?.length ?? 0}`
+                : String(payload.content.length)
+              session.partContentLengths.set(partId, fingerprint)
+            }
+
+            this.sendToRenderer('agent:output', {
+              sessionId,
+              taskId,
+              type: 'message',
+              data: {
+                id: partId,
+                role,
+                content: payload.content,
+                partType: payload.partType,
+                tool: payload.tool
+              }
+            })
+          }
+        }
+      }
+
+      // Check current status — set working if busy
+      try {
+        const statusResult: any = await ocClient.session.status({
+          ...(workspaceDir && { query: { directory: workspaceDir } })
+        })
+        if (statusResult.data) {
+          const ocStatus = statusResult.data[ocSessionId]
+          if (ocStatus?.type === 'busy') {
+            session.status = 'working'
+            this.db.updateTask(taskId, { status: TaskStatus.AgentWorking })
+          }
+        }
+      } catch {
+        // Non-fatal — just stay idle
+      }
+
+      this.sendToRenderer('agent:status', {
+        sessionId, agentId, taskId, status: session.status
+      })
+
+      this.startPolling(sessionId)
+      return sessionId
+    } catch (error) {
+      console.error(`[AgentManager] Failed to resume session ${sessionId}:`, error)
+      this.sessions.delete(sessionId)
       throw error
     }
   }
@@ -550,7 +674,7 @@ export class AgentManager extends EventEmitter {
    * Builds the renderer payload for a single Part.
    * Returns null for internal parts that should be skipped.
    */
-  private buildPartPayload(part: any): { content: string; partType: string; tool?: any } | null {
+  private buildPartPayload(part: any): { content: string; partType: string; tool?: any; stepTokens?: { input: number; output: number; cache: number } } | null {
     switch (part.type) {
       case 'text':
         return part.text ? { content: part.text, partType: 'text' } : null
@@ -626,8 +750,11 @@ export class AgentManager extends EventEmitter {
 
       case 'step-finish': {
         const t = part.tokens
-        const info = t ? ` (in:${t.input} out:${t.output} cache:${t.cache?.read || 0})` : ''
-        return { content: `Step finished: ${part.reason || ''}${info}`, partType: 'step-finish' }
+        return {
+          content: part.reason || 'step-finish',
+          partType: 'step-finish',
+          stepTokens: t ? { input: t.input || 0, output: t.output || 0, cache: t.cache?.read || 0 } : undefined
+        }
       }
 
       case 'agent':
@@ -737,7 +864,8 @@ export class AgentManager extends EventEmitter {
               role,
               content: payload.content,
               partType: payload.partType,
-              tool: payload.tool
+              tool: payload.tool,
+              stepTokens: payload.stepTokens
             }
           })
         }
@@ -862,7 +990,7 @@ export class AgentManager extends EventEmitter {
     }
 
     this.sessions.delete(sessionId)
-    // Revert task status on stop
+    // Revert task status on stop — keep oc_session_id so session is resumable
     this.db.updateTask(session.taskId, { status: TaskStatus.NotStarted })
     this.sendToRenderer('agent:status', {
       sessionId,
@@ -872,9 +1000,30 @@ export class AgentManager extends EventEmitter {
     })
   }
 
-  async sendMessage(sessionId: string, message: string): Promise<void> {
-    const session = this.sessions.get(sessionId)
+  async sendMessage(sessionId: string, message: string, taskId?: string): Promise<{ newSessionId?: string }> {
+    let session = this.sessions.get(sessionId)
+
+    // Session was destroyed — restart without initial prompt, then send user's message
+    if (!session && taskId) {
+      const task = this.db.getTask(taskId)
+      if (task?.agent_id) {
+        console.log(`[AgentManager] Session ${sessionId} not found, restarting for task ${taskId}`)
+        const newSessionId = await this.startSession(task.agent_id, taskId, undefined, true)
+        session = this.sessions.get(newSessionId)
+        if (!session) throw new Error('Failed to restart session')
+        // Fall through to send the user's message as the first prompt
+        sessionId = newSessionId
+        await this.doSendMessage(session, sessionId, message)
+        return { newSessionId }
+      }
+    }
+
     if (!session) throw new Error(`Session not found: ${sessionId}`)
+    await this.doSendMessage(session, sessionId, message)
+    return {}
+  }
+
+  private async doSendMessage(session: AgentSession, sessionId: string, message: string): Promise<void> {
     if (session.status === 'error') throw new Error('Session is in error state')
     if (!session.ocClient || !session.ocSessionId) throw new Error('OpenCode session not initialized')
 
@@ -1263,12 +1412,18 @@ export class AgentManager extends EventEmitter {
         const jsonMatch = fullText.match(/```json\s*\n?([\s\S]*?)\n?\s*```/)
           || fullText.match(/```\s*\n?([\s\S]*?)\n?\s*```/)
         if (jsonMatch) {
+          const raw = jsonMatch[1].trim()
           try {
-            parsedValues = JSON.parse(jsonMatch[1].trim())
+            parsedValues = JSON.parse(raw)
             console.log(`[AgentManager] Parsed output values:`, parsedValues)
             break
-          } catch (e) {
-            console.log(`[AgentManager] Failed to parse output JSON: "${jsonMatch[1].trim()}"`, e)
+          } catch {
+            // JSON truncated — extract complete key-value pairs via regex
+            parsedValues = this.extractPartialJson(raw)
+            if (Object.keys(parsedValues).length > 0) {
+              console.log(`[AgentManager] Extracted partial output values:`, parsedValues)
+              break
+            }
           }
         }
       }
@@ -1311,6 +1466,25 @@ export class AgentManager extends EventEmitter {
     } catch (error) {
       console.error(`[AgentManager] Error extracting output values:`, error)
     }
+  }
+
+  /**
+   * Extracts complete key-value pairs from truncated JSON.
+   * Handles cases where LLM output was cut off mid-value.
+   */
+  private extractPartialJson(raw: string): Record<string, unknown> {
+    const result: Record<string, unknown> = {}
+    // Match "key": "value" pairs that are fully closed (string values)
+    const stringPairs = raw.matchAll(/"([^"]+)"\s*:\s*"((?:[^"\\]|\\.)*)"/g)
+    for (const m of stringPairs) {
+      result[m[1]] = m[2].replace(/\\n/g, '\n').replace(/\\"/g, '"').replace(/\\\\/g, '\\')
+    }
+    // Match "key": number/boolean/null pairs
+    const literalPairs = raw.matchAll(/"([^"]+)"\s*:\s*(true|false|null|-?\d+(?:\.\d+)?)\s*[,}\n]/g)
+    for (const m of literalPairs) {
+      result[m[1]] = JSON.parse(m[2])
+    }
+    return result
   }
 
   /**

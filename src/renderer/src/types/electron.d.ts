@@ -20,7 +20,9 @@ import type {
   ConfigFieldSchema,
   ConfigFieldOption,
   PluginAction,
-  ActionResult
+  ActionResult,
+  SourceUser,
+  ReassignResult
 } from './index'
 
 export interface AgentSessionStartResult {
@@ -87,6 +89,11 @@ export interface WorktreeProgressEvent {
   error?: string
 }
 
+export interface DepsStatus {
+  gh: boolean
+  opencode: boolean
+}
+
 interface ElectronAPI {
   db: {
     getTasks: () => Promise<WorkfloTask[]>
@@ -112,9 +119,10 @@ interface ElectronAPI {
   }
   agentSession: {
     start: (agentId: string, taskId: string, workspaceDir?: string) => Promise<AgentSessionStartResult>
+    resume: (agentId: string, taskId: string, ocSessionId: string) => Promise<AgentSessionStartResult>
     abort: (sessionId: string) => Promise<AgentSessionSuccessResult>
     stop: (sessionId: string) => Promise<AgentSessionSuccessResult>
-    send: (sessionId: string, message: string) => Promise<AgentSessionSuccessResult>
+    send: (sessionId: string, message: string, taskId?: string) => Promise<AgentSessionSuccessResult & { newSessionId?: string }>
     approve: (sessionId: string, approved: boolean, message?: string) => Promise<AgentSessionSuccessResult>
     syncSkills: (sessionId: string) => Promise<SkillSyncResult>
     syncSkillsForTask: (taskId: string) => Promise<SkillSyncResult>
@@ -160,6 +168,8 @@ interface ElectronAPI {
     delete: (id: string) => Promise<boolean>
     sync: (sourceId: string) => Promise<SyncResult>
     exportUpdate: (taskId: string, fields: Record<string, unknown>) => Promise<void>
+    getUsers: (sourceId: string) => Promise<SourceUser[]>
+    reassign: (taskId: string, userIds: string[], assigneeDisplay: string) => Promise<ReassignResult>
   }
   skills: {
     getAll: () => Promise<Skill[]>
@@ -167,6 +177,9 @@ interface ElectronAPI {
     create: (data: CreateSkillDTO) => Promise<Skill>
     update: (id: string, data: UpdateSkillDTO) => Promise<Skill | undefined>
     delete: (id: string) => Promise<boolean>
+  }
+  deps: {
+    check: () => Promise<DepsStatus>
   }
   plugins: {
     list: () => Promise<PluginMeta[]>

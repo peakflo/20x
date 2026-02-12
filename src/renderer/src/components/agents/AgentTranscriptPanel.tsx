@@ -3,6 +3,21 @@ import { StopCircle, Loader2, Terminal, Send, ChevronRight, Wrench, AlertTriangl
 import { Button } from '@/components/ui/Button'
 import type { AgentMessage } from '@/hooks/use-agent-session'
 
+function formatStepMeta(meta: NonNullable<AgentMessage['stepMeta']>): string {
+  const parts: string[] = []
+  if (meta.durationMs != null) {
+    const sec = (meta.durationMs / 1000).toFixed(1)
+    parts.push(`${sec}s`)
+  }
+  if (meta.tokens) {
+    const t = meta.tokens
+    const items = [`in:${t.input}`, `out:${t.output}`]
+    if (t.cache) items.push(`cache:${t.cache}`)
+    parts.push(items.join(' '))
+  }
+  return parts.join(' · ')
+}
+
 interface AgentTranscriptPanelProps {
   messages: AgentMessage[]
   status: 'idle' | 'working' | 'error' | 'waiting_approval'
@@ -141,8 +156,11 @@ function ToolCallMessage({ message }: { message: AgentMessage }) {
           )}
         </div>
       )}
-      <div className="px-3 pb-1.5">
+      <div className="flex items-center gap-2 px-3 pb-1.5">
         <span className="text-[10px] text-muted-foreground">{message.timestamp.toLocaleTimeString()}</span>
+        {message.stepMeta && (
+          <span className="text-[10px] text-muted-foreground">{formatStepMeta(message.stepMeta)}</span>
+        )}
       </div>
     </div>
   )
@@ -161,14 +179,9 @@ function MessageBubble({ message, onAnswer }: { message: AgentMessage; onAnswer?
     return <ToolCallMessage message={message} />
   }
 
-  // Step markers — compact single line
+  // Step markers are absorbed into message stepMeta — skip if any slip through
   if (message.partType === 'step-start' || message.partType === 'step-finish') {
-    return (
-      <div className="text-[10px] text-muted-foreground font-mono px-1">
-        {message.partType === 'step-start' ? '▶' : '⏹'} {message.content}
-        <span className="ml-2">{message.timestamp.toLocaleTimeString()}</span>
-      </div>
-    )
+    return null
   }
 
   const isUser = message.role === 'user'
@@ -200,9 +213,12 @@ function MessageBubble({ message, onAnswer }: { message: AgentMessage; onAnswer?
         <pre className="whitespace-pre-wrap break-words font-mono text-xs">
           {message.content}
         </pre>
-        <span className="text-[10px] text-muted-foreground mt-1 block">
-          {message.timestamp.toLocaleTimeString()}
-        </span>
+        <div className="flex items-center gap-2 mt-1">
+          <span className="text-[10px] text-muted-foreground">{message.timestamp.toLocaleTimeString()}</span>
+          {message.stepMeta && (
+            <span className="text-[10px] text-muted-foreground">{formatStepMeta(message.stepMeta)}</span>
+          )}
+        </div>
       </div>
     </div>
   )

@@ -1,5 +1,6 @@
 import type { DatabaseManager, McpServerRecord, TaskRecord } from '../database'
 import type { McpToolCaller } from '../mcp-tool-caller'
+import type { SourceUser, ReassignResult } from '../../shared/types'
 
 // ── Config Schema (declarative, JSON-serializable) ──────────
 
@@ -126,4 +127,16 @@ export interface TaskSourcePlugin {
     config: Record<string, unknown>,
     ctx: PluginContext
   ): Promise<ActionResult>
+
+  getUsers?(
+    config: Record<string, unknown>,
+    ctx: PluginContext
+  ): Promise<SourceUser[]>
+
+  reassignTask?(
+    task: TaskRecord,
+    userIds: string[],
+    config: Record<string, unknown>,
+    ctx: PluginContext
+  ): Promise<ReassignResult>
 }

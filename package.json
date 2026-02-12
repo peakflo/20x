@@ -1,6 +1,6 @@
 {
   "name": "pf-desktop",
-  "version": "1.0.0",
+  "version": "0.0.3",
   "packageManager": "pnpm@9.15.2",
   "description": "Workflo Workspace - Task Management Desktop App",
   "main": "./out/main/index.js",
@@ -10,12 +10,15 @@
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "preview": "electron-vite preview",
-    "postinstall": "electron-builder install-app-deps",
-    "test": "vitest",
-    "test:run": "vitest run",
-    "test:main": "vitest --project main",
-    "test:renderer": "vitest --project renderer",
+    "postinstall": "node scripts/rebuild-native.mjs",
+    "test": "ELECTRON_RUN_AS_NODE=1 electron ./node_modules/vitest/vitest.mjs",
+    "test:run": "ELECTRON_RUN_AS_NODE=1 electron ./node_modules/vitest/vitest.mjs run",
+    "test:main": "ELECTRON_RUN_AS_NODE=1 electron ./node_modules/vitest/vitest.mjs --project main",
+    "test:renderer": "ELECTRON_RUN_AS_NODE=1 electron ./node_modules/vitest/vitest.mjs --project renderer",
     "typecheck": "tsc --build --noEmit",
+    "build:mac": "electron-vite build && electron-builder --mac",
+    "build:win": "electron-vite build && electron-builder --win",
+    "build:linux": "electron-vite build && electron-builder --linux",
     "prepare": "husky"
   },
   "dependencies": {
@@ -66,8 +69,10 @@
       "buildResources": "resources"
     },
     "files": [
-      "out/**/*",
-      "!node_modules/**/*"
+      "out/**/*"
+    ],
+    "asarUnpack": [
+      "node_modules/better-sqlite3/**/*.node"
     ],
     "mac": {
       "target": [
