@@ -354,18 +354,26 @@ export function registerIpcHandlers(
 
   // Dependency check handler
   ipcMain.handle('deps:check', async () => {
-    // Packaged macOS apps don't inherit the user's shell PATH —
-    // use a login shell so .zprofile / .bash_profile are sourced
+    // OpenCode: Check if SDK is installed (it's an npm package)
+    let opencodeAvailable = false
+    try {
+      await import('@opencode-ai/sdk')
+      opencodeAvailable = true
+    } catch {
+      opencodeAvailable = false
+    }
+
+    // GitHub CLI: Check using shell (still need the binary)
     const shell = existsSync('/bin/zsh') ? '/bin/zsh' : '/bin/bash'
     const check = (cmd: string) =>
       execFileAsync(shell, ['-l', '-c', cmd])
-    const [gh, opencode] = await Promise.allSettled([
-      check('gh --version'),
-      check('opencode --version')
+    const [gh] = await Promise.allSettled([
+      check('gh --version')
     ])
+
     return {
       gh: gh.status === 'fulfilled',
-      opencode: opencode.status === 'fulfilled'
+      opencode: opencodeAvailable
     }
   })
 

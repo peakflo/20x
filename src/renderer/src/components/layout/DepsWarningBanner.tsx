@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/Input'
 import { Label } from '@/components/ui/Label'
 import { depsApi, agentConfigApi } from '@/lib/ipc-client'
 import { useAgentStore } from '@/stores/agent-store'
+import { ProviderSetupStep } from '@/components/providers/ProviderSetupDialog'
 import type { DepsStatus } from '@/types/electron'
 
 /* ─── Types ─── */
@@ -28,24 +29,16 @@ interface AgentStepDef {
   kind: 'agent'
 }
 
-type StepDef = DepStepDef | AgentStepDef
+interface ProviderStepDef {
+  kind: 'provider'
+}
+
+type StepDef = DepStepDef | AgentStepDef | ProviderStepDef
 
 /* ─── Constants ─── */
 
 const DEP_STEPS: DepStepDef[] = [
-  {
-    kind: 'dep',
-    key: 'opencode',
-    title: 'OpenCode',
-    description: 'The open source AI coding agent. Free models included or connect any model from any provider.',
-    url: 'https://opencode.ai/',
-    methods: [
-      { label: 'curl', command: 'curl -fsSL https://opencode.ai/install | bash' },
-      { label: 'npm', command: 'npm i -g opencode-ai' },
-      { label: 'bun', command: 'bun add -g opencode-ai' },
-      { label: 'brew', command: 'brew install anomalyco/tap/opencode' }
-    ]
-  },
+  // OpenCode is now bundled as npm dependency - no installation needed!
   {
     kind: 'dep',
     key: 'gh',
@@ -59,6 +52,7 @@ const DEP_STEPS: DepStepDef[] = [
   }
 ]
 
+const PROVIDER_STEP: ProviderStepDef = { kind: 'provider' }
 const AGENT_STEP: AgentStepDef = { kind: 'agent' }
 
 /* ─── Sub-components ─── */
@@ -289,15 +283,24 @@ export function DepsWarningBanner() {
 
   useEffect(() => {
     const force = FORCE_ONBOARDING()
-    Promise.all([check(), fetchAgents()]).then(([result]) => {
+    Promise.all([check(), fetchAgents(), agentConfigApi.getProviders()]).then(([result, _, providers]) => {
       if (!result) return
       const depSteps = force
         ? (DEP_STEPS as StepDef[])
         : (DEP_STEPS.filter((s) => !result[s.key]) as StepDef[])
+
+      // Only show provider setup if no existing providers are configured
+      const hasProviders = providers && providers.providers && providers.providers.length > 0
+      const providerSteps = (force || !hasProviders) ? [PROVIDER_STEP] : []
+
+      if (hasProviders) {
+        console.log('[Onboarding] Found existing providers, skipping provider setup:', providers.providers.map(p => p.id))
+      }
+
       // Read fresh agent count from store (not stale closure)
       const hasAgents = useAgentStore.getState().agents.length > 0
       const agentSteps = force || !hasAgents ? [AGENT_STEP] : []
-      setSteps([...depSteps, ...agentSteps])
+      setSteps([...depSteps, ...providerSteps, ...agentSteps])
     })
   }, [])
 
@@ -409,6 +412,19 @@ export function DepsWarningBanner() {
                 </button>
               </div>
             </>
+          ) : current.kind === 'provider' ? (
+            /* Provider setup step */
+            <ProviderSetupStep
+              error={error}
+              setError={setError}
+              onComplete={() => {
+                if (isLast) {
+                  setDismissed(true)
+                } else {
+                  setStep(step + 1)
+                }
+              }}
+            />
           ) : (
             /* Agent setup step */
             <AgentSetupStep

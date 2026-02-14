@@ -1,5 +1,5 @@
 import { EventEmitter } from 'events'
-import { spawn, type ChildProcess } from 'child_process'
+import { spawn } from 'child_process'
 import { join } from 'path'
 import { existsSync, copyFileSync, mkdirSync, writeFileSync, readFileSync, readdirSync, statSync } from 'fs'
 import { Agent as UndiciAgent } from 'undici'
@@ -12,6 +12,9 @@ let OpenCodeSDK: typeof import('@opencode-ai/sdk') | null = null
 // Custom fetch with no timeout — agent prompts can run indefinitely
 const noTimeoutAgent = new UndiciAgent({ headersTimeout: 0, bodyTimeout: 0 })
 const noTimeoutFetch = (req: any) => (globalThis as any).fetch(req, { dispatcher: noTimeoutAgent })
+
+// Default OpenCode server URL (matches database default)
+const DEFAULT_SERVER_URL = 'http://localhost:4096'
 
 interface AgentSession {
   id: string
@@ -33,15 +36,17 @@ interface AgentSession {
 
 export class AgentManager extends EventEmitter {
   private sessions: Map<string, AgentSession> = new Map()
-  private serverProcess: ChildProcess | null = null
+  private serverInstance: any = null  // OpenCode SDK server instance
   private serverUrl: string | null = null
+  private serverStarting: Promise<void> | null = null  // Track server startup
+  private sdkLoading: Promise<void> | null = null  // Track SDK loading
   private db: DatabaseManager
   private mainWindow: BrowserWindow | null = null
 
   constructor(db: DatabaseManager) {
     super()
     this.db = db
-    this.loadSDK()
+    this.sdkLoading = this.loadSDK()
   }
 
   private async loadSDK(): Promise<void> {
@@ -50,6 +55,19 @@ export class AgentManager extends EventEmitter {
       console.log('[AgentManager] OpenCode SDK loaded successfully')
     } catch (error) {
       console.error('[AgentManager] Failed to load OpenCode SDK:', error)
+    } finally {
+      this.sdkLoading = null
+    }
+  }
+
+  /**
+   * Ensures the SDK is loaded before proceeding with any operations.
+   * Waits for the loading promise if SDK is currently loading.
+   */
+  private async ensureSDKLoaded(): Promise<void> {
+    if (OpenCodeSDK) return
+    if (this.sdkLoading) {
+      await this.sdkLoading
     }
   }
 
@@ -131,90 +149,173 @@ export class AgentManager extends EventEmitter {
     }
   }
 
-  async startServer(): Promise<void> {
-    if (this.serverProcess) {
-      console.log('[AgentManager] Server already running')
-      return
+  /**
+   * Ensures API keys are loaded from settings into process.env
+   */
+  private loadApiKeysToEnv(): void {
+    const providers = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'GOOGLE_API_KEY']
+    const envVars: Record<string, string> = {}
+
+    for (const key of providers) {
+      const value = this.db.getSetting(key)
+      if (value) {
+        if (!process.env[key]) {
+          envVars[key] = value
+          process.env[key] = value
+        } else {
+          console.log(`[AgentManager] ${key} already set in environment, skipping`)
+        }
+      }
     }
 
-    return new Promise((resolve, reject) => {
-      console.log('[AgentManager] Starting OpenCode server...')
-
-      this.serverProcess = spawn('opencode', ['serve'], {
-        stdio: ['ignore', 'pipe', 'pipe'],
-        env: process.env
-      })
-
-      let isReady = false
-      const timeout = setTimeout(() => {
-        if (!isReady) {
-          this.stopServer()
-          reject(new Error('Server startup timeout'))
-        }
-      }, 30000)
-
-      this.serverProcess.stdout?.on('data', (data) => {
-        const output = data.toString()
-        console.log('[OpenCode Server]', output)
-
-        // Parse the actual server URL from stdout
-        const urlMatch = output.match(/https?:\/\/[\w.:]+/)
-        if (urlMatch) {
-          this.serverUrl = urlMatch[0]
-        }
-
-        if (output.includes('ready') || output.includes('listening') || output.includes('http://')) {
-          if (!isReady) {
-            isReady = true
-            clearTimeout(timeout)
-            console.log(`[AgentManager] Server ready at ${this.serverUrl}`)
-            resolve()
-          }
-        }
-      })
-
-      this.serverProcess.stderr?.on('data', (data) => {
-        const output = data.toString()
-        console.error('[OpenCode Server Error]', output)
-        // Some servers output to stderr
-        const urlMatch = output.match(/https?:\/\/[\w.:]+/)
-        if (urlMatch && !this.serverUrl) {
-          this.serverUrl = urlMatch[0]
-        }
-      })
-
-      this.serverProcess.on('error', (error) => {
-        console.error('[AgentManager] Server process error:', error)
-        if (!isReady) {
-          clearTimeout(timeout)
-          reject(error)
-        }
-      })
-
-      this.serverProcess.on('exit', (code) => {
-        console.log(`[AgentManager] Server exited with code ${code}`)
-        this.serverProcess = null
-        this.serverUrl = null
-
-        for (const session of this.sessions.values()) {
-          session.status = 'error'
-          this.db.updateTask(session.taskId, { status: TaskStatus.NotStarted })
-          this.sendToRenderer('agent:status', {
-            sessionId: session.id,
-            agentId: session.agentId,
-            taskId: session.taskId,
-            status: 'error'
-          })
-        }
-      })
-    })
+    if (Object.keys(envVars).length > 0) {
+      console.log(`[AgentManager] Loaded ${Object.keys(envVars).length} API key(s) from settings:`, Object.keys(envVars))
+    } else {
+      console.log('[AgentManager] No new API keys loaded (may already be in environment)')
+    }
   }
 
-  stopServer(): void {
-    if (this.serverProcess) {
-      console.log('[AgentManager] Stopping OpenCode server...')
-      this.serverProcess.kill('SIGTERM')
-      this.serverProcess = null
+  /**
+   * Checks if a server is accessible at the given URL
+   * Tries both the given URL and its localhost/127.0.0.1 variant
+   * Returns the working URL if found, null otherwise
+   */
+  private async findAccessibleServer(url: string): Promise<string | null> {
+    const urls = [url]
+
+    // Add localhost variant if URL uses 127.0.0.1 (and vice versa)
+    // This handles macOS DNS resolution issues when launched from UI
+    if (url.includes('localhost')) {
+      urls.push(url.replace('localhost', '127.0.0.1'))
+    } else if (url.includes('127.0.0.1')) {
+      urls.push(url.replace('127.0.0.1', 'localhost'))
+    }
+
+    for (const testUrl of urls) {
+      try {
+        console.log('[AgentManager] Checking server at', testUrl)
+        // Use the correct OpenCode health endpoint: /global/health
+        const response = await fetch(`${testUrl}/global/health`, {
+          signal: AbortSignal.timeout(2000)
+        })
+        if (response.ok) {
+          const health = await response.json()
+          console.log('[AgentManager] Server accessible at', testUrl, 'version:', health.version)
+          return testUrl
+        }
+      } catch (error: any) {
+        console.log('[AgentManager] Server not accessible at', testUrl, ':', error.message)
+      }
+    }
+
+    return null
+  }
+
+  /**
+   * Starts or detects an OpenCode server.
+   * Only creates embedded server if targetUrl is the default and no server is running.
+   * For custom URLs, just validates they're accessible.
+   */
+  async startServer(targetUrl: string = DEFAULT_SERVER_URL): Promise<void> {
+    // Always load API keys first (for both embedded and external servers)
+    this.loadApiKeysToEnv()
+
+    // If we already have a server running, check if it matches the target
+    if (this.serverUrl) {
+      if (this.serverUrl === targetUrl) {
+        console.log('[AgentManager] Server already available at', this.serverUrl)
+        return
+      }
+      // Different URL requested, will need to start/detect a different server
+      console.log('[AgentManager] Different server URL requested:', targetUrl)
+    }
+
+    // If server is starting, wait for it
+    if (this.serverStarting) {
+      console.log('[AgentManager] Server startup in progress, waiting...')
+      return this.serverStarting
+    }
+
+    // Ensure SDK is loaded
+    await this.ensureSDKLoaded()
+    if (!OpenCodeSDK) {
+      throw new Error('OpenCode SDK not loaded')
+    }
+
+    const isDefaultUrl = targetUrl === DEFAULT_SERVER_URL ||
+                         targetUrl === 'http://127.0.0.1:4096' // Also accept 127.0.0.1 variant
+
+    // Create startup promise to prevent race conditions
+    this.serverStarting = (async () => {
+      try {
+        console.log('[AgentManager] Checking for server at', targetUrl)
+
+        // Check if server is already accessible (tries localhost and 127.0.0.1 variants)
+        const accessibleUrl = await this.findAccessibleServer(targetUrl)
+        if (accessibleUrl) {
+          console.log('[AgentManager] Found existing server at', accessibleUrl)
+          this.serverUrl = accessibleUrl
+          this.serverInstance = null // External server
+          return
+        }
+
+        // Server not accessible
+        if (!isDefaultUrl) {
+          // Custom URL but not accessible - fail
+          throw new Error(`OpenCode server not accessible at ${targetUrl}`)
+        }
+
+        // Default URL and not accessible - create embedded server
+        console.log('[AgentManager] Creating embedded OpenCode server...')
+
+        // Parse hostname and port from URL
+        const url = new URL(targetUrl)
+        const hostname = url.hostname
+        const port = parseInt(url.port || '4096', 10)
+
+        const result = await OpenCodeSDK.createOpencode({
+          hostname,
+          port
+        })
+
+        this.serverInstance = result.server
+        this.serverUrl = targetUrl
+
+        console.log(`[AgentManager] Embedded server created at ${this.serverUrl}`)
+
+        // Give server a moment to start listening
+        await new Promise(resolve => setTimeout(resolve, 1000))
+
+        console.log(`[AgentManager] Server ready at ${this.serverUrl}`)
+      } catch (error) {
+        console.error('[AgentManager] Failed to start server:', error)
+        this.serverInstance = null
+        this.serverUrl = null
+        this.serverStarting = null
+        throw error
+      } finally {
+        this.serverStarting = null
+      }
+    })()
+
+    return this.serverStarting
+  }
+
+  async stopServer(): Promise<void> {
+    if (this.serverInstance) {
+      // Only stop if we created the server (embedded server)
+      console.log('[AgentManager] Stopping embedded OpenCode server...')
+      try {
+        await this.serverInstance.close()
+        console.log('[AgentManager] Embedded OpenCode server stopped')
+      } catch (error) {
+        console.error('[AgentManager] Error stopping server:', error)
+      }
+      this.serverInstance = null
+      this.serverUrl = null
+    } else if (this.serverUrl) {
+      // We're using an external server, just clear the URL
+      console.log('[AgentManager] Disconnecting from external OpenCode server')
       this.serverUrl = null
     }
   }
@@ -235,6 +336,7 @@ export class AgentManager extends EventEmitter {
    * Uses promptAsync to send the initial prompt without blocking.
    */
   async startSession(agentId: string, taskId: string, workspaceDir?: string, skipInitialPrompt?: boolean): Promise<string> {
+    await this.ensureSDKLoaded()
     if (!OpenCodeSDK) {
       throw new Error('OpenCode SDK not loaded')
     }
@@ -249,6 +351,12 @@ export class AgentManager extends EventEmitter {
       if (session.taskId === taskId && session.status !== 'error') {
         return sessionId
       }
+    }
+
+    // Ensure server is running before starting session
+    if (!this.serverUrl) {
+      console.log('[AgentManager] Server not running, starting...')
+      await this.startServer(agent.server_url)
     }
 
     // Always use a dedicated workspace directory
@@ -434,6 +542,7 @@ export class AgentManager extends EventEmitter {
    * Replays all messages to the renderer and resumes polling.
    */
   async resumeSession(agentId: string, taskId: string, ocSessionId: string): Promise<string> {
+    await this.ensureSDKLoaded()
     if (!OpenCodeSDK) {
       throw new Error('OpenCode SDK not loaded')
     }
@@ -448,6 +557,12 @@ export class AgentManager extends EventEmitter {
       if (s.taskId === taskId && s.status !== 'error') {
         return sid
       }
+    }
+
+    // Ensure server is running before resuming
+    if (!this.serverUrl) {
+      console.log('[AgentManager] Server not running, starting before resume...')
+      await this.startServer(agent.server_url)
     }
 
     const workspaceDir = this.db.getWorkspaceDir(taskId)
@@ -1285,20 +1400,33 @@ export class AgentManager extends EventEmitter {
   }
 
   async getProviders(serverUrl?: string, directory?: string): Promise<{ providers: any[]; default: Record<string, string> } | null> {
+    await this.ensureSDKLoaded()
     if (!OpenCodeSDK) return null
 
     try {
+      // Determine which server URL to use
       let baseUrl = serverUrl
       if (!baseUrl) {
-        // Use actual server URL if we have it
-        baseUrl = this.serverUrl || undefined
+        // Try to get from existing server or agent config
+        if (this.serverUrl) {
+          baseUrl = this.serverUrl
+        } else {
+          const agents = this.db.getAgents()
+          const defaultAgent = agents.find((a) => a.is_default) || agents[0]
+          baseUrl = defaultAgent?.server_url || DEFAULT_SERVER_URL
+        }
       }
-      if (!baseUrl) {
-        const agents = this.db.getAgents()
-        const defaultAgent = agents.find((a) => a.is_default) || agents[0]
-        baseUrl = defaultAgent?.server_url
+
+      // Try to detect/start server - if it fails, return null gracefully
+      try {
+        if (!this.serverUrl || this.serverUrl !== baseUrl) {
+          console.log('[AgentManager] Checking for OpenCode server to fetch providers...')
+          await this.startServer(baseUrl)
+        }
+      } catch (serverError: any) {
+        console.log('[AgentManager] No OpenCode server available:', serverError.message)
+        return null // No server, no providers - this is OK during onboarding
       }
-      if (!baseUrl) return null
 
       // Default to home directory so project-scoped OpenCode configs are picked up
       const dir = directory || require('os').homedir()
@@ -1309,14 +1437,15 @@ export class AgentManager extends EventEmitter {
       })
 
       if (result.error) {
-        console.error('[AgentManager] Providers API error:', result.error)
+        console.log('[AgentManager] No providers configured on server')
         return null
       }
 
+      console.log('[AgentManager] Found providers:', result.data?.providers?.map((p: any) => p.id))
       return result.data || null
-    } catch (error) {
-      console.error('[AgentManager] Error getting providers:', error)
-      return null
+    } catch (error: any) {
+      console.log('[AgentManager] Could not get providers:', error.message)
+      return null // Gracefully return null - no providers available
     }
   }
 
