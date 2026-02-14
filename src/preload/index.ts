@@ -95,10 +95,23 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('agent:approval', handler)
     return () => ipcRenderer.removeListener('agent:approval', handler)
   },
+  onAgentIncompatibleSession: (callback: (event: unknown) => void): (() => void) => {
+    const handler = (_: unknown, data: unknown): void => callback(data)
+    ipcRenderer.on('agent:incompatible-session', handler)
+    return () => ipcRenderer.removeListener('agent:incompatible-session', handler)
+  },
+  onTaskUpdated: (callback: (event: unknown) => void): (() => void) => {
+    const handler = (_: unknown, data: unknown): void => callback(data)
+    ipcRenderer.on('task:updated', handler)
+    return () => ipcRenderer.removeListener('task:updated', handler)
+  },
   settings: {
     get: (key: string): Promise<string | null> => ipcRenderer.invoke('settings:get', key),
     set: (key: string, value: string): Promise<void> => ipcRenderer.invoke('settings:set', key, value),
     getAll: (): Promise<Record<string, string>> => ipcRenderer.invoke('settings:getAll')
+  },
+  env: {
+    get: (key: string): Promise<string | null> => ipcRenderer.invoke('env:get', key)
   },
   github: {
     checkCli: (): Promise<{ installed: boolean; authenticated: boolean; username?: string }> =>

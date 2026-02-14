@@ -167,6 +167,14 @@ export const onAgentApproval = (callback: (event: AgentApprovalRequest) => void)
   return window.electronAPI.onAgentApproval(callback)
 }
 
+export const onAgentIncompatibleSession = (callback: (event: { taskId: string; agentId: string; error: string }) => void): (() => void) => {
+  return window.electronAPI.onAgentIncompatibleSession(callback)
+}
+
+export const onTaskUpdated = (callback: (event: { taskId: string; updates: Partial<WorkfloTask> }) => void): (() => void) => {
+  return window.electronAPI.onTaskUpdated(callback)
+}
+
 export const settingsApi = {
   get: (key: string): Promise<string | null> => {
     return window.electronAPI.settings.get(key)

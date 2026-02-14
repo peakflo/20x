@@ -1,34 +1,25 @@
 // Fix PATH for macOS GUI apps - must be first
 import { execSync } from 'child_process'
 
-// Try the package, fallback to manual if it fails
-try {
-  const fixPath = require('fix-path')
-  fixPath()
-  console.log('[Main] PATH fixed via fix-path package')
-} catch (error: any) {
-  console.warn('[Main] fix-path package failed, using manual approach:', error?.message)
+// Manual PATH fix for macOS (fix-path package is ES module and can't be required)
+if (process.platform === 'darwin') {
+  try {
+    const shell = process.env.SHELL || '/bin/zsh'
+    const shellPath = execSync(`${shell} -ilc 'echo $PATH'`, {
+      encoding: 'utf8',
+      timeout: 5000
+    }).trim()
 
-  // Manual PATH fix: read from user's shell
-  if (process.platform === 'darwin') {
-    try {
-      const shell = process.env.SHELL || '/bin/zsh'
-      const shellPath = execSync(`${shell} -ilc 'echo $PATH'`, {
-        encoding: 'utf8',
-        timeout: 5000
-      }).trim()
-
-      if (shellPath && shellPath.length > 0) {
-        console.log('[Main] Setting PATH from shell:', shell)
-        process.env.PATH = shellPath
-      }
-    } catch (shellError) {
-      console.error('[Main] Failed to read shell PATH, using fallback')
-      // Add common paths as last resort
-      const commonPaths = ['/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin']
-      const existingPath = process.env.PATH || ''
-      process.env.PATH = [...new Set([...commonPaths, ...existingPath.split(':')])].filter(Boolean).join(':')
+    if (shellPath && shellPath.length > 0) {
+      console.log('[Main] Setting PATH from shell:', shell)
+      process.env.PATH = shellPath
     }
+  } catch (shellError) {
+    console.error('[Main] Failed to read shell PATH, using fallback')
+    // Add common paths as last resort
+    const commonPaths = ['/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin', process.env.HOME + '/.nvm/versions/node/v22.14.0/bin']
+    const existingPath = process.env.PATH || ''
+    process.env.PATH = [...new Set([...commonPaths, ...existingPath.split(':')])].filter(Boolean).join(':')
   }
 }
 

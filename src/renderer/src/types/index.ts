@@ -1,9 +1,53 @@
 // ── Agent types ─────────────────────────────────────────────
 
-export type CodingAgentType = 'opencode'
+export enum CodingAgentType {
+  OPENCODE = 'opencode',
+  CLAUDE_CODE = 'claude-code',
+  CODEX = 'codex'
+}
 
 export const CODING_AGENTS: { value: CodingAgentType; label: string }[] = [
-  { value: 'opencode', label: 'Opencode' }
+  { value: CodingAgentType.OPENCODE, label: 'OpenCode' },
+  { value: CodingAgentType.CLAUDE_CODE, label: 'Claude Code' },
+  { value: CodingAgentType.CODEX, label: 'Codex' }
+]
+
+export enum ClaudeModel {
+  SONNET_4_5 = 'claude-sonnet-4-5',
+  OPUS_4_6 = 'claude-opus-4-6',
+  HAIKU_4_5 = 'claude-haiku-4-5',
+  SONNET_3_7 = 'claude-3-7-sonnet-20250219',
+  SONNET_3_5_OCT = 'claude-3-5-sonnet-20241022',
+  SONNET_3_5_JUN = 'claude-3-5-sonnet-20240620'
+}
+
+export const CLAUDE_MODELS: { id: ClaudeModel; name: string }[] = [
+  { id: ClaudeModel.SONNET_4_5, name: 'Claude Sonnet 4.5' },
+  { id: ClaudeModel.OPUS_4_6, name: 'Claude Opus 4.6' },
+  { id: ClaudeModel.HAIKU_4_5, name: 'Claude Haiku 4.5' },
+  { id: ClaudeModel.SONNET_3_7, name: 'Claude 3.7 Sonnet' },
+  { id: ClaudeModel.SONNET_3_5_OCT, name: 'Claude 3.5 Sonnet (Oct)' },
+  { id: ClaudeModel.SONNET_3_5_JUN, name: 'Claude 3.5 Sonnet (Jun)' }
+]
+
+export enum CodexModel {
+  GPT_5_2_CODEX = 'gpt-5.2-codex',
+  GPT_5_1_CODEX_MAX = 'gpt-5.1-codex-max',
+  GPT_5_1_CODEX = 'gpt-5.1-codex',
+  GPT_5_1_CODEX_MINI = 'gpt-5.1-codex-mini',
+  GPT_5_CODEX = 'gpt-5-codex',
+  GPT_5 = 'gpt-5',
+  GPT_5_MINI = 'gpt-5-mini'
+}
+
+export const CODEX_MODELS: { id: CodexModel; name: string }[] = [
+  { id: CodexModel.GPT_5_2_CODEX, name: 'GPT-5.2 Codex (Recommended)' },
+  { id: CodexModel.GPT_5_1_CODEX_MAX, name: 'GPT-5.1 Codex Max' },
+  { id: CodexModel.GPT_5_1_CODEX, name: 'GPT-5.1 Codex' },
+  { id: CodexModel.GPT_5_1_CODEX_MINI, name: 'GPT-5.1 Codex Mini' },
+  { id: CodexModel.GPT_5_CODEX, name: 'GPT-5 Codex' },
+  { id: CodexModel.GPT_5, name: 'GPT-5' },
+  { id: CodexModel.GPT_5_MINI, name: 'GPT-5 Mini (Fastest)' }
 ]
 
 export interface McpServerConfig {
@@ -62,6 +106,10 @@ export interface AgentConfig {
   system_prompt?: string
   mcp_servers?: Array<string | AgentMcpServerEntry>
   skill_ids?: string[]
+  api_keys?: {
+    openai?: string  // For Codex
+    anthropic?: string  // For Claude Code
+  }
 }
 
 export interface Agent {
@@ -160,7 +208,7 @@ export interface WorkfloTask {
   repos: string[]
   output_fields: OutputField[]
   agent_id: string | null
-  oc_session_id: string | null
+  session_id: string | null
   external_id: string | null
   source_id: string | null
   source: string

@@ -312,7 +312,6 @@ export function AgentTranscriptPanel({ messages, status, onStop, onSend, classNa
               <>
                 <Loader2 className="h-8 w-8 mb-3 animate-spin opacity-30" />
                 <p>Agent is starting...</p>
-                <p className="mt-1 text-[10px]">Sending task to OpenCode</p>
               </>
             ) : (
               <>

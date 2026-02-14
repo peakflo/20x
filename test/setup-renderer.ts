@@ -10,6 +10,7 @@ export const eventCallbacks = {
   onAgentStatus: null as ((event: any) => void) | null,
   onAgentApproval: null as ((event: any) => void) | null,
   onOverdueCheck: null as (() => void) | null,
+  onTaskUpdated: null as ((event: any) => void) | null,
   onWorktreeProgress: null as ((event: any) => void) | null
 }
 
@@ -38,6 +39,7 @@ const mockElectronAPI = {
   },
   agentSession: {
     start: vi.fn().mockResolvedValue({ sessionId: 'test-session-id' }),
+    resume: vi.fn().mockResolvedValue({ sessionId: 'test-session-id' }),
     abort: vi.fn().mockResolvedValue({ success: true }),
     stop: vi.fn().mockResolvedValue({ success: true }),
     send: vi.fn().mockResolvedValue({ success: true }),
@@ -85,7 +87,9 @@ const mockElectronAPI = {
     update: vi.fn().mockResolvedValue({}),
     delete: vi.fn().mockResolvedValue(true),
     sync: vi.fn().mockResolvedValue({ source_id: '', imported: 0, updated: 0, errors: [] }),
-    exportUpdate: vi.fn().mockResolvedValue(undefined)
+    exportUpdate: vi.fn().mockResolvedValue(undefined),
+    getUsers: vi.fn().mockResolvedValue([]),
+    reassign: vi.fn().mockResolvedValue({ success: true })
   },
   skills: {
     getAll: vi.fn().mockResolvedValue([]),
@@ -93,6 +97,12 @@ const mockElectronAPI = {
     create: vi.fn().mockResolvedValue({}),
     update: vi.fn().mockResolvedValue({}),
     delete: vi.fn().mockResolvedValue(true)
+  },
+  deps: {
+    check: vi.fn().mockResolvedValue({ gh: false, opencode: false })
+  },
+  env: {
+    get: vi.fn().mockResolvedValue(null)
   },
   plugins: {
     list: vi.fn().mockResolvedValue([]),
@@ -115,6 +125,13 @@ const mockElectronAPI = {
   }),
   onAgentApproval: vi.fn((cb: (event: any) => void) => {
     eventCallbacks.onAgentApproval = cb
+    return vi.fn()
+  }),
+  onAgentIncompatibleSession: vi.fn((_cb: (event: any) => void) => {
+    return vi.fn()
+  }),
+  onTaskUpdated: vi.fn((cb: (event: any) => void) => {
+    eventCallbacks.onTaskUpdated = cb
     return vi.fn()
   }),
   onWorktreeProgress: vi.fn((cb: (event: any) => void) => {

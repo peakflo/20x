@@ -14,6 +14,7 @@ import { useUIStore } from '@/stores/ui-store'
 import { useSettingsStore } from '@/stores/settings-store'
 import { agentConfigApi, pluginApi } from '@/lib/ipc-client'
 import type { Agent, CreateAgentDTO, UpdateAgentDTO, McpServer, CreateMcpServerDTO, TaskSource, CreateTaskSourceDTO, PluginMeta } from '@/types'
+import { CodingAgentType } from '@/types'
 
 // ── Shared types ────────────────────────────────────────────
 
@@ -41,6 +42,10 @@ function AgentCard({ agent, connection, onTest, onEdit, onDelete }: {
     : connection.status === 'testing' ? 'bg-yellow-400 animate-pulse'
     : 'bg-muted-foreground/40'
 
+  const isClaudeCode = agent.config.coding_agent === CodingAgentType.CLAUDE_CODE
+  const isCodex = agent.config.coding_agent === CodingAgentType.CODEX
+  const isCliAgent = isClaudeCode || isCodex
+
   return (
     <div className="rounded-lg border border-border bg-card/50 overflow-hidden">
       <div className="flex items-center gap-3 px-4 py-3">
@@ -51,9 +56,15 @@ function AgentCard({ agent, connection, onTest, onEdit, onDelete }: {
             {agent.is_default && (
               <span className="text-[10px] bg-primary/20 text-primary px-1.5 py-0.5 rounded">Default</span>
             )}
+            {isClaudeCode && (
+              <span className="text-[10px] bg-purple-500/20 text-purple-400 px-1.5 py-0.5 rounded">Claude Code</span>
+            )}
+            {isCodex && (
+              <span className="text-[10px] bg-blue-500/20 text-blue-400 px-1.5 py-0.5 rounded">Codex</span>
+            )}
           </div>
           <div className="text-xs text-muted-foreground truncate mt-0.5">
-            {agent.server_url}
+            {isCliAgent ? 'Local CLI' : agent.server_url}
             {agent.config.model && <span className="text-foreground/60"> · {agent.config.model}</span>}
           </div>
         </div>
@@ -74,14 +85,20 @@ function AgentCard({ agent, connection, onTest, onEdit, onDelete }: {
           : 'bg-muted/30 text-muted-foreground'
         }`}>
           {connection.status === 'testing' ? (
-            <><Loader2 className="h-3 w-3 animate-spin" />Testing connection...</>
+            <><Loader2 className="h-3 w-3 animate-spin" />{isCliAgent ? 'Checking CLI...' : 'Testing connection...'}</>
           ) : connection.status === 'connected' ? (
             <>
-              <Wifi className="h-3 w-3" />Connected
-              {connection.providerCount != null && (
+              <Wifi className="h-3 w-3" />
+              {isCliAgent ? 'Ready' : 'Connected'}
+              {connection.providerCount != null && !isCliAgent && (
                 <span className="text-green-400/70">
                   · {connection.providerCount} provider{connection.providerCount !== 1 ? 's' : ''}
                   {connection.modelCount != null && `, ${connection.modelCount} model${connection.modelCount !== 1 ? 's' : ''}`}
+                </span>
+              )}
+              {isCliAgent && connection.modelCount != null && (
+                <span className="text-green-400/70">
+                  · {connection.modelCount} models available
                 </span>
               )}
               {connection.testedAt && <span className="ml-auto text-muted-foreground">{connection.testedAt.toLocaleTimeString()}</span>}
@@ -515,6 +532,29 @@ export function AgentSettingsDialog() {
 
   const testConnection = async (agent: Agent) => {
     setConnections((prev) => new Map(prev).set(agent.id, { status: 'testing' }))
+
+    // CLI-based agents (Claude Code, Codex) run locally and don't need server connection test
+    if (agent.config.coding_agent === CodingAgentType.CLAUDE_CODE) {
+      setConnections((prev) => new Map(prev).set(agent.id, {
+        status: 'connected',
+        providerCount: 1,
+        modelCount: 6, // Number of Claude models available
+        testedAt: new Date()
+      }))
+      return
+    }
+
+    if (agent.config.coding_agent === CodingAgentType.CODEX) {
+      setConnections((prev) => new Map(prev).set(agent.id, {
+        status: 'connected',
+        providerCount: 1,
+        modelCount: 4, // Number of Codex models available
+        testedAt: new Date()
+      }))
+      return
+    }
+
+    // Test OpenCode server connection
     try {
       const result = await agentConfigApi.getProviders(agent.server_url)
       if (result && result.providers) {

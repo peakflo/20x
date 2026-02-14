@@ -24,7 +24,22 @@ export function TaskListItem({ task, isSelected, onSelect }: TaskListItemProps) 
   const dueSoon = isActive && !overdue && isDueSoon(task.due_date)
   const session = useAgentStore((s) => s.sessions.get(task.id))
   const hasActiveAgent = session && session.status !== 'idle'
-  const hasIdleAgent = session?.status === 'idle'
+  const hasPendingQuestion = Boolean(
+    session?.pendingApproval &&
+    session.status !== 'idle' &&
+    (session.pendingApproval as any).action
+  )
+
+  // Determine status indicator color
+  const getStatusColor = () => {
+    if (hasPendingQuestion) {
+      return 'bg-blue-400 animate-pulse' // Waiting for user input
+    }
+    if (hasActiveAgent) {
+      return 'bg-amber-400 animate-pulse' // Agent working
+    }
+    return statusDotColor[task.status] // Task status
+  }
 
   return (
     <button
@@ -38,7 +53,7 @@ export function TaskListItem({ task, isSelected, onSelect }: TaskListItemProps) 
       <div className="flex items-start gap-3">
         <div className={cn(
           'mt-[7px] h-2 w-2 rounded-full shrink-0',
-          hasActiveAgent ? 'bg-amber-400 animate-pulse' : hasIdleAgent ? 'bg-amber-400' : statusDotColor[task.status]
+          getStatusColor()
         )} />
         <div className="min-w-0 flex-1">
           <div className="text-sm font-medium truncate">{task.title}</div>

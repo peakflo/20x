@@ -6,8 +6,19 @@ import { Agent as UndiciAgent } from 'undici'
 import type { BrowserWindow } from 'electron'
 import type { DatabaseManager, AgentMcpServerEntry, OutputFieldRecord } from './database'
 import { TaskStatus } from '../shared/constants'
+import { ClaudeCodeAdapter } from './adapters/claude-code-adapter'
+import { AcpAdapter } from './adapters/acp-adapter'
+import type { CodingAgentAdapter, SessionConfig, MessagePart, SessionMessage } from './adapters/coding-agent-adapter'
+import { SessionStatusType, MessagePartType } from './adapters/coding-agent-adapter'
 
 let OpenCodeSDK: typeof import('@opencode-ai/sdk') | null = null
+
+// Coding agent backend type enum
+enum CodingAgentType {
+  OPENCODE = 'opencode',
+  CLAUDE_CODE = 'claude-code',
+  CODEX = 'codex'
+}
 
 // Custom fetch with no timeout — agent prompts can run indefinitely
 const noTimeoutAgent = new UndiciAgent({ headersTimeout: 0, bodyTimeout: 0 })
@@ -32,6 +43,8 @@ interface AgentSession {
   promptAbort?: AbortController
   lastOcStatus?: string
   learningMode?: boolean
+  adapter?: CodingAgentAdapter
+  pollingStarted?: boolean
 }
 
 export class AgentManager extends EventEmitter {
@@ -42,6 +55,7 @@ export class AgentManager extends EventEmitter {
   private sdkLoading: Promise<void> | null = null  // Track SDK loading
   private db: DatabaseManager
   private mainWindow: BrowserWindow | null = null
+  private adapters: Map<string, CodingAgentAdapter> = new Map()  // Adapter instances
 
   constructor(db: DatabaseManager) {
     super()
@@ -73,6 +87,104 @@ export class AgentManager extends EventEmitter {
 
   setMainWindow(window: BrowserWindow): void {
     this.mainWindow = window
+  }
+
+  /**
+   * Gets or creates the appropriate adapter for an agent based on its coding_agent config.
+   * Returns null if agent uses OpenCode (handled by legacy code path).
+   */
+  private getAdapter(agentId: string): CodingAgentAdapter | null {
+    const agent = this.db.getAgent(agentId)
+    if (!agent) return null
+
+    const backendType = (agent.config?.coding_agent as string) || CodingAgentType.OPENCODE
+    console.log('[AgentManager] getAdapter - backendType:', backendType)
+
+    // For OpenCode, return null to use legacy code path
+    if (backendType === CodingAgentType.OPENCODE) {
+      console.log('[AgentManager] getAdapter - returning null for OpenCode')
+      return null
+    }
+
+    // Return cached adapter
+    if (this.adapters.has(backendType)) {
+      console.log('[AgentManager] getAdapter - returning cached adapter')
+      return this.adapters.get(backendType)!
+    }
+
+    // Create new adapter
+    let adapter: CodingAgentAdapter
+
+    switch (backendType) {
+      case CodingAgentType.CLAUDE_CODE:
+        // Claude Code uses direct SDK (supports session tokens from 'claude code setup-token')
+        adapter = new ClaudeCodeAdapter()
+        break
+      case CodingAgentType.CODEX:
+        // Codex uses ACP (Agent Client Protocol) via codex-acp wrapper
+        adapter = new AcpAdapter('codex')
+        break
+      default:
+        console.warn(`[AgentManager] Unknown coding agent type: ${backendType}, falling back to OpenCode`)
+        return null
+    }
+
+    this.adapters.set(backendType, adapter)
+    return adapter
+  }
+
+  /**
+   * Builds MCP servers config for adapters (Claude Code, etc.)
+   * Converts from database format to adapter format
+   */
+  private buildMcpServersForAdapter(agentId: string): Record<string, any> {
+    const agent = this.db.getAgent(agentId)
+    if (!agent?.config?.mcp_servers) return {}
+
+    const mcpEntries = agent.config.mcp_servers
+    const result: Record<string, any> = {}
+
+    for (const entry of mcpEntries) {
+      const serverId = typeof entry === 'string' ? entry : (entry as AgentMcpServerEntry).serverId
+      const mcpServer = this.db.getMcpServer(serverId)
+      if (!mcpServer) continue
+
+      if (mcpServer.type === 'local') {
+        result[mcpServer.name] = {
+          type: 'stdio',
+          command: mcpServer.command,
+          args: mcpServer.args,
+          env: mcpServer.environment
+        }
+      } else if (mcpServer.type === 'remote') {
+        result[mcpServer.name] = {
+          type: 'http',
+          url: mcpServer.url,
+          headers: mcpServer.headers
+        }
+      }
+    }
+
+    return result
+  }
+
+  private buildSessionConfig(agentId: string, taskId: string, workspaceDir?: string): SessionConfig {
+    const agent = this.db.getAgent(agentId)
+    if (!agent) {
+      throw new Error(`Agent not found: ${agentId}`)
+    }
+
+    const mcpServers = this.buildMcpServersForAdapter(agentId)
+
+    return {
+      agentId,
+      taskId,
+      workspaceDir: workspaceDir || this.db.getWorkspaceDir(taskId),
+      model: agent.config?.model,
+      systemPrompt: agent.config?.system_prompt,
+      mcpServers,
+      apiKeys: agent.config?.api_keys
+    }
   }
 
   /**
@@ -330,20 +442,438 @@ export class AgentManager extends EventEmitter {
     return agentServerUrl
   }
 
+  /**
+   * Starts a session using a coding agent adapter (Claude Code, etc.)
+   */
+  private async startAdapterSession(
+    adapter: CodingAgentAdapter,
+    agentId: string,
+    taskId: string,
+    workspaceDir?: string,
+    skipInitialPrompt?: boolean
+  ): Promise<string> {
+    const agent = this.db.getAgent(agentId)!
+
+    // Always use a dedicated workspace directory
+    if (!workspaceDir) {
+      workspaceDir = this.db.getWorkspaceDir(taskId)
+    }
+
+    // Write SKILL.md files to workspace
+    this.writeSkillFiles(taskId, agentId, workspaceDir)
+
+    // Build MCP servers config for adapter
+    const mcpServers = this.buildMcpServersForAdapter(agentId)
+
+    // Build session config
+    const sessionConfig: SessionConfig = {
+      agentId,
+      taskId,
+      workspaceDir,
+      model: agent.config?.model,
+      systemPrompt: agent.config?.system_prompt,
+      mcpServers,
+      apiKeys: agent.config?.api_keys
+    }
+
+    // Initialize adapter
+    await adapter.initialize()
+
+    // Create session via adapter
+    const adapterSessionId = await adapter.createSession(sessionConfig)
+
+    // Store session in sessions map
+    this.sessions.set(adapterSessionId, {
+      id: adapterSessionId,
+      agentId,
+      taskId,
+      workspaceDir,
+      status: 'working',
+      createdAt: new Date(),
+      seenMessageIds: new Set(),
+      seenPartIds: new Set(),
+      partContentLengths: new Map(),
+      adapter
+    })
+
+    // Store session ID in database
+    this.db.updateTask(taskId, { session_id: adapterSessionId })
+
+    // Update task status
+    this.db.updateTask(taskId, { status: TaskStatus.AgentWorking })
+
+    // Notify renderer about task status change
+    this.sendToRenderer('task:updated', {
+      taskId,
+      updates: { status: TaskStatus.AgentWorking }
+    })
+
+    // Notify renderer
+    this.sendToRenderer('agent:status', {
+      sessionId: adapterSessionId,
+      agentId,
+      taskId,
+      status: 'working'
+    })
+
+    // Start polling adapter for messages
+    this.startAdapterPolling(adapterSessionId, adapter, sessionConfig)
+
+    // Send initial prompt if not skipped
+    if (!skipInitialPrompt) {
+      const task = this.db.getTask(taskId)
+      let promptText = task
+        ? `Working on task: "${task.title}"\n\n${task.description || ''}`
+        : `Working on task ${taskId}`
+
+      // Append output field instructions
+      if (task?.output_fields && task.output_fields.length > 0) {
+        promptText += this.buildOutputFieldInstructions(task.output_fields)
+      }
+
+      // Copy attachments and build references
+      const attachmentRefs: string[] = []
+      if (task?.attachments?.length && workspaceDir) {
+        const attachDir = this.db.getAttachmentsDir(taskId)
+        const destDir = join(workspaceDir, 'attachments')
+        if (!existsSync(destDir)) mkdirSync(destDir, { recursive: true })
+
+        for (const att of task.attachments) {
+          const srcPath = join(attachDir, `${att.id}-${att.filename}`)
+          if (!existsSync(srcPath)) continue
+          const destPath = join(destDir, att.filename)
+          try {
+            copyFileSync(srcPath, destPath)
+            attachmentRefs.push(`- attachments/${att.filename}`)
+          } catch {
+            continue
+          }
+        }
+      }
+      if (attachmentRefs.length > 0) {
+        promptText += `\n\nAttached files (relative to your working directory):\n${attachmentRefs.join('\n')}`
+      }
+
+      // Show user's prompt in UI first
+      this.sendToRenderer('agent:output', {
+        sessionId: adapterSessionId,
+        taskId,
+        type: 'message',
+        data: {
+          id: `user-initial-${Date.now()}`,
+          role: 'user',
+          content: promptText,
+          partType: 'text'
+        }
+      })
+
+      // Send prompt via adapter
+      const parts: MessagePart[] = [
+        { type: MessagePartType.TEXT, text: promptText }
+      ]
+      await adapter.sendPrompt(adapterSessionId, parts, sessionConfig)
+    }
+
+    return adapterSessionId
+  }
+
+  /**
+   * Polls adapter for new messages and forwards to renderer
+   */
+  private startAdapterPolling(
+    initialSessionId: string,
+    adapter: CodingAgentAdapter,
+    config: SessionConfig
+  ): void {
+    const seenMessageIds = new Set<string>()
+    const seenPartIds = new Set<string>()
+    const partContentLengths = new Map<string, string>()
+
+    const poll = async (): Promise<void> => {
+      try {
+        // Find current session ID (might have changed due to re-keying)
+        let sessionId = initialSessionId
+        const sessionByOldId = this.sessions.get(sessionId)
+        if (!sessionByOldId) {
+          // Session might have been re-keyed, find it by taskId
+          for (const [sid, sess] of this.sessions.entries()) {
+            if (sess.taskId === config.taskId) {
+              sessionId = sid
+              break
+            }
+          }
+        }
+
+        // Poll for new messages
+        const newParts = await adapter.pollMessages(
+          sessionId,
+          seenMessageIds,
+          seenPartIds,
+          partContentLengths,
+          config
+        )
+
+        // Check if the real session ID has been provided by the adapter
+        const realSessionId = newParts.find(p => p.realSessionId)?.realSessionId
+        if (realSessionId && realSessionId !== sessionId) {
+          console.log(`[AgentManager] Session ID updated: ${sessionId} -> ${realSessionId}`)
+
+          // Update database with real session ID
+          this.db.updateTask(config.taskId, { session_id: realSessionId })
+
+          // Re-key the sessions map
+          const session = this.sessions.get(sessionId)
+          if (session) {
+            this.sessions.delete(sessionId)
+            this.sessions.set(realSessionId, session)
+            sessionId = realSessionId // Update local variable for subsequent code
+          }
+        }
+
+        // Forward to renderer
+        for (const part of newParts) {
+          console.log(`[AgentManager] Sending to UI: id=${part.id}, partType=${part.type}, update=${part.update}, contentLength=${(part.content || part.text || '').length}`)
+          this.sendToRenderer('agent:output', {
+            sessionId,
+            taskId: config.taskId,
+            type: 'message',
+            data: {
+              id: part.id,
+              role: part.role || 'assistant', // Use part role if available
+              content: part.content || part.text || '',
+              partType: part.type,
+              tool: part.tool,
+              update: part.update // Pass through update flag
+            }
+          })
+        }
+
+        // Check for pending approval (ACP adapters only)
+        if ('getPendingApproval' in adapter && typeof adapter.getPendingApproval === 'function') {
+          const approval = (adapter as any).getPendingApproval(sessionId)
+          if (approval && !seenPartIds.has(`approval-${approval.toolCallId}`)) {
+            seenPartIds.add(`approval-${approval.toolCallId}`)
+
+            // Emit as a question message (like OpenCode questions)
+            this.sendToRenderer('agent:output', {
+              sessionId,
+              taskId: config.taskId,
+              type: 'message',
+              data: {
+                id: `question-${approval.toolCallId}`,
+                role: 'assistant',
+                content: approval.question,
+                partType: 'question',
+                tool: {
+                  name: 'permission',
+                  questions: [{
+                    header: 'Permission Required',
+                    question: approval.question,
+                    options: approval.options.map(opt => ({
+                      label: opt.name
+                    }))
+                  }]
+                }
+              }
+            })
+          }
+        }
+
+        // Check status
+        const status = await adapter.getStatus(sessionId, config)
+        const session = this.sessions.get(sessionId)
+
+        console.log(`[AgentManager] Polling session ${sessionId}: adapter status=${status.type}, session.status=${session?.status}`)
+
+        // Check for errors first (higher priority than idle)
+        if (status.type === SessionStatusType.ERROR) {
+          // Check if it's an incompatible session error
+          if (status.message?.includes('INCOMPATIBLE_SESSION_ID')) {
+            console.warn('[AgentManager] Incompatible session detected during polling:', sessionId)
+
+            // Clear the session_id in the database
+            this.db.updateTask(config.taskId, { session_id: null })
+
+            // Emit event to show dialog
+            this.sendToRenderer('agent:incompatible-session', {
+              taskId: config.taskId,
+              agentId: config.agentId,
+              error: status.message.replace('INCOMPATIBLE_SESSION_ID: ', '')
+            })
+
+            // Stop polling by not scheduling next poll
+            return
+          }
+
+          // Regular error - send to UI
+          this.sendToRenderer('agent:output', {
+            sessionId,
+            taskId: config.taskId,
+            type: 'message',
+            data: {
+              id: `error-${Date.now()}`,
+              role: 'system',
+              content: status.message || 'Unknown error',
+              partType: 'error'
+            }
+          })
+        } else if (status.type === SessionStatusType.IDLE && session) {
+          // Use transitionToIdle to extract output values and update status
+          console.log(`[AgentManager] Detected IDLE status for ${sessionId}, calling transitionToIdle`)
+          await this.transitionToIdle(sessionId, session)
+          // Stop polling - session is now idle
+          console.log(`[AgentManager] Stopping polling for idle session ${sessionId}`)
+          return
+        }
+      } catch (error: any) {
+        console.error('[AgentManager] Adapter polling error:', error)
+      }
+
+      // Schedule next poll (2 second interval like OpenCode)
+      setTimeout(poll, 2000)
+    }
+
+    // Start polling after a short delay
+    setTimeout(poll, 1000)
+  }
+
+  /**
+   * Resumes a session using a coding agent adapter (Claude Code, etc.)
+   */
+  private async resumeAdapterSession(
+    adapter: CodingAgentAdapter,
+    agentId: string,
+    taskId: string,
+    adapterSessionId: string
+  ): Promise<string> {
+    const agent = this.db.getAgent(agentId)!
+    const workspaceDir = this.db.getWorkspaceDir(taskId)
+
+    // Build MCP servers config
+    const mcpServers = this.buildMcpServersForAdapter(agentId)
+
+    // Build session config
+    const sessionConfig: SessionConfig = {
+      agentId,
+      taskId,
+      workspaceDir,
+      model: agent.config?.model,
+      systemPrompt: agent.config?.system_prompt,
+      mcpServers,
+      apiKeys: agent.config?.api_keys
+    }
+
+    // Initialize adapter
+    await adapter.initialize()
+
+    // Resume session via adapter
+    let messages: SessionMessage[]
+    try {
+      console.log('[AgentManager] Calling adapter.resumeSession...')
+      messages = await adapter.resumeSession(adapterSessionId, sessionConfig)
+      console.log('[AgentManager] adapter.resumeSession completed successfully')
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : String(error)
+      console.log('[AgentManager] adapter.resumeSession threw error:', errorMessage)
+
+      // Check if it's an incompatible session ID error or session not found
+      if (errorMessage.includes('INCOMPATIBLE_SESSION_ID') || errorMessage.includes('No conversation found')) {
+        console.warn(`[AgentManager] Session not found or incompatible: ${adapterSessionId}`)
+
+        // Clear the old session_id in the database
+        this.db.updateTask(taskId, { session_id: null })
+
+        // Notify renderer to show dialog asking user to start fresh
+        console.log('[AgentManager] Emitting agent:incompatible-session event')
+        this.sendToRenderer('agent:incompatible-session', {
+          taskId,
+          agentId,
+          error: errorMessage.includes('No conversation found')
+            ? 'Session not found on server. Would you like to start a new session?'
+            : errorMessage.replace('INCOMPATIBLE_SESSION_ID: ', '')
+        })
+
+        // Throw error to stop the resume flow
+        throw new Error('SESSION_INCOMPATIBLE')
+      }
+
+      // Re-throw other errors
+      throw error
+    }
+
+    // Replay messages to renderer
+    for (const message of messages) {
+      for (const part of message.parts) {
+        this.sendToRenderer('agent:output', {
+          sessionId: adapterSessionId,
+          taskId,
+          type: 'message',
+          data: {
+            id: part.id,
+            role: message.role,
+            content: part.content || part.text || '',
+            partType: part.type,
+            tool: part.tool
+          }
+        })
+      }
+    }
+
+    // Store session in sessions map
+    // Note: ClaudeCodeAdapter doesn't poll until user sends a message
+    const isClaudeCode = adapter.constructor.name === 'ClaudeCodeAdapter'
+
+    this.sessions.set(adapterSessionId, {
+      id: adapterSessionId,
+      agentId,
+      taskId,
+      workspaceDir,
+      status: 'working',
+      createdAt: new Date(),
+      seenMessageIds: new Set(),
+      seenPartIds: new Set(),
+      partContentLengths: new Map(),
+      adapter,
+      pollingStarted: !isClaudeCode // Track if polling has started
+    })
+
+    // Start polling for non-Claude Code adapters
+    // Claude Code will start polling when user sends first message
+    if (!isClaudeCode) {
+      this.startAdapterPolling(adapterSessionId, adapter, sessionConfig)
+    }
+
+    // Notify renderer
+    this.sendToRenderer('agent:status', {
+      sessionId: adapterSessionId,
+      agentId,
+      taskId,
+      status: 'working'
+    })
+
+    return adapterSessionId
+  }
 
   /**
    * Creates an OpenCode session and returns the sessionId immediately.
    * Uses promptAsync to send the initial prompt without blocking.
    */
   async startSession(agentId: string, taskId: string, workspaceDir?: string, skipInitialPrompt?: boolean): Promise<string> {
-    await this.ensureSDKLoaded()
-    if (!OpenCodeSDK) {
-      throw new Error('OpenCode SDK not loaded')
-    }
-
     const agent = this.db.getAgent(agentId)
     if (!agent) {
       throw new Error(`Agent not found: ${agentId}`)
+    }
+
+    // Check if agent uses adapter (Claude Code, etc.)
+    const adapter = this.getAdapter(agentId)
+    if (adapter) {
+      return this.startAdapterSession(adapter, agentId, taskId, workspaceDir, skipInitialPrompt)
+    }
+
+    // Legacy OpenCode path below
+    await this.ensureSDKLoaded()
+    if (!OpenCodeSDK) {
+      throw new Error('OpenCode SDK not loaded')
     }
 
     // Reuse existing session for this task
@@ -440,7 +970,7 @@ export class AgentManager extends EventEmitter {
       }
 
       session.ocSessionId = result.data.id
-      this.db.updateTask(taskId, { oc_session_id: result.data.id })
+      this.db.updateTask(taskId, { session_id: result.data.id })
       console.log(`[AgentManager] OpenCode session created: ${result.data.id}`)
 
       // Update task status to agent_working
@@ -542,14 +1072,26 @@ export class AgentManager extends EventEmitter {
    * Replays all messages to the renderer and resumes polling.
    */
   async resumeSession(agentId: string, taskId: string, ocSessionId: string): Promise<string> {
-    await this.ensureSDKLoaded()
-    if (!OpenCodeSDK) {
-      throw new Error('OpenCode SDK not loaded')
-    }
-
+    console.log('[AgentManager] resumeSession called:', { agentId, taskId, ocSessionId })
     const agent = this.db.getAgent(agentId)
     if (!agent) {
       throw new Error(`Agent not found: ${agentId}`)
+    }
+
+    // Check if agent uses adapter (Claude Code, etc.)
+    const adapter = this.getAdapter(agentId)
+    console.log('[AgentManager] getAdapter returned:', adapter ? 'adapter found' : 'no adapter')
+    if (adapter) {
+      // For adapters, ocSessionId is actually the adapter session ID
+      console.log('[AgentManager] Using adapter path, calling resumeAdapterSession')
+      return this.resumeAdapterSession(adapter, agentId, taskId, ocSessionId)
+    }
+    console.log('[AgentManager] Using legacy OpenCode path')
+
+    // Legacy OpenCode path below
+    await this.ensureSDKLoaded()
+    if (!OpenCodeSDK) {
+      throw new Error('OpenCode SDK not loaded')
     }
 
     // Check no active in-memory session for this task
@@ -579,13 +1121,31 @@ export class AgentManager extends EventEmitter {
         ...(workspaceDir && { query: { directory: workspaceDir } })
       })
       if (getResult.error || !getResult.data) {
-        this.db.updateTask(taskId, { oc_session_id: null })
-        throw new Error('Session no longer exists on server')
+        console.warn('[AgentManager] OpenCode session no longer exists on server:', ocSessionId)
+        this.db.updateTask(taskId, { session_id: null })
+
+        // Emit event to show dialog
+        this.sendToRenderer('agent:incompatible-session', {
+          taskId,
+          agentId,
+          error: 'This session no longer exists on the server. It may have expired or been deleted.'
+        })
+
+        throw new Error('SESSION_INCOMPATIBLE')
       }
     } catch (error: any) {
-      if (error.message === 'Session no longer exists on server') throw error
-      this.db.updateTask(taskId, { oc_session_id: null })
-      throw new Error(`Failed to validate session: ${error.message}`)
+      if (error.message === 'SESSION_INCOMPATIBLE') throw error
+      console.warn('[AgentManager] Failed to validate OpenCode session:', error.message)
+      this.db.updateTask(taskId, { session_id: null })
+
+      // Emit event to show dialog
+      this.sendToRenderer('agent:incompatible-session', {
+        taskId,
+        agentId,
+        error: 'Failed to connect to the session on the server. It may have expired or been deleted.'
+      })
+
+      throw new Error('SESSION_INCOMPATIBLE')
     }
 
     const session: AgentSession = {
@@ -763,7 +1323,10 @@ export class AgentManager extends EventEmitter {
    * picks up the updated task data on re-fetch.
    */
   private async transitionToIdle(sessionId: string, session: AgentSession): Promise<void> {
-    if (session.status === 'idle') return
+    if (session.status === 'idle') {
+      console.log(`[AgentManager] transitionToIdle: session ${sessionId} already idle, skipping`)
+      return
+    }
     session.status = 'idle'
     console.log(`[AgentManager] Session ${sessionId} → idle`)
 
@@ -778,7 +1341,18 @@ export class AgentManager extends EventEmitter {
     }
 
     // Update task status to ready_for_review
+    console.log(`[AgentManager] Updating task ${session.taskId} status to ReadyForReview`)
     this.db.updateTask(session.taskId, { status: TaskStatus.ReadyForReview })
+
+    // Get updated task with output fields and notify renderer
+    const updatedTask = this.db.getTask(session.taskId)
+    this.sendToRenderer('task:updated', {
+      taskId: session.taskId,
+      updates: {
+        status: TaskStatus.ReadyForReview,
+        output_fields: updatedTask?.output_fields
+      }
+    })
 
     this.sendToRenderer('agent:status', {
       sessionId, agentId: session.agentId, taskId: session.taskId, status: 'idle'
@@ -1050,7 +1624,20 @@ export class AgentManager extends EventEmitter {
       session.promptAbort = undefined
     }
 
-    if (session.ocClient && session.ocSessionId) {
+    // Check if using adapter (Codex, Claude Code, etc.)
+    const adapter = this.getAdapter(session.agentId)
+    if (adapter) {
+      try {
+        const agent = this.db.getAgent(session.agentId)
+        if (agent) {
+          const sessionConfig = this.buildSessionConfig(session.agentId, session.taskId, session.workspaceDir)
+          await adapter.abortPrompt(sessionId, sessionConfig)
+        }
+      } catch (error) {
+        console.error(`[AgentManager] Error aborting adapter session:`, error)
+      }
+    } else if (session.ocClient && session.ocSessionId) {
+      // Legacy OpenCode path
       try {
         await session.ocClient.session.abort({
           path: { id: session.ocSessionId }
@@ -1075,15 +1662,16 @@ export class AgentManager extends EventEmitter {
 
   /**
    * Fully destroys the session — stops polling, removes from map.
+   * @param resetTaskStatus - If true, resets task status to NotStarted (default: true)
    */
-  async stopSession(sessionId: string): Promise<void> {
+  async stopSession(sessionId: string, resetTaskStatus: boolean = true): Promise<void> {
     const session = this.sessions.get(sessionId)
     if (!session) {
       console.log(`[AgentManager] Session ${sessionId} not found`)
       return
     }
 
-    console.log(`[AgentManager] Destroying session ${sessionId}`)
+    console.log(`[AgentManager] Destroying session ${sessionId} (resetTaskStatus=${resetTaskStatus})`)
 
     if (session.pollTimer) {
       clearTimeout(session.pollTimer)
@@ -1094,7 +1682,20 @@ export class AgentManager extends EventEmitter {
       session.promptAbort = undefined
     }
 
-    if (session.ocClient && session.ocSessionId) {
+    // Check if using adapter (Codex, Claude Code, etc.)
+    const adapter = this.getAdapter(session.agentId)
+    if (adapter) {
+      try {
+        const agent = this.db.getAgent(session.agentId)
+        if (agent) {
+          const sessionConfig = this.buildSessionConfig(session.agentId, session.taskId, session.workspaceDir)
+          await adapter.destroySession(sessionId, sessionConfig)
+        }
+      } catch (error) {
+        console.error(`[AgentManager] Error destroying adapter session:`, error)
+      }
+    } else if (session.ocClient && session.ocSessionId) {
+      // Legacy OpenCode path
       try {
         await session.ocClient.session.abort({
           path: { id: session.ocSessionId }
@@ -1105,8 +1706,12 @@ export class AgentManager extends EventEmitter {
     }
 
     this.sessions.delete(sessionId)
-    // Revert task status on stop — keep oc_session_id so session is resumable
-    this.db.updateTask(session.taskId, { status: TaskStatus.NotStarted })
+
+    // Only reset task status if explicitly requested (e.g., user manually stopped, not app shutdown)
+    if (resetTaskStatus) {
+      this.db.updateTask(session.taskId, { status: TaskStatus.NotStarted })
+    }
+
     this.sendToRenderer('agent:status', {
       sessionId,
       agentId: session.agentId,
@@ -1128,14 +1733,82 @@ export class AgentManager extends EventEmitter {
         if (!session) throw new Error('Failed to restart session')
         // Fall through to send the user's message as the first prompt
         sessionId = newSessionId
-        await this.doSendMessage(session, sessionId, message)
+
+        // Check if this is an adapter session or legacy OpenCode
+        if (session.adapter) {
+          await this.doSendAdapterMessage(session, sessionId, message)
+        } else {
+          await this.doSendMessage(session, sessionId, message)
+        }
         return { newSessionId }
       }
     }
 
     if (!session) throw new Error(`Session not found: ${sessionId}`)
-    await this.doSendMessage(session, sessionId, message)
+
+    // Check if this is an adapter session or legacy OpenCode
+    if (session.adapter) {
+      await this.doSendAdapterMessage(session, sessionId, message)
+    } else {
+      await this.doSendMessage(session, sessionId, message)
+    }
     return {}
+  }
+
+  private async doSendAdapterMessage(session: AgentSession, sessionId: string, message: string): Promise<void> {
+    if (session.status === 'error') throw new Error('Session is in error state')
+    if (!session.adapter) throw new Error('Adapter not initialized')
+
+    console.log(`[AgentManager] Sending message to adapter session ${sessionId}`)
+
+    // Update status to working
+    session.status = 'working'
+    this.db.updateTask(session.taskId, { status: TaskStatus.AgentWorking })
+    this.sendToRenderer('agent:status', {
+      sessionId,
+      agentId: session.agentId,
+      taskId: session.taskId,
+      status: 'working'
+    })
+
+    // Show user's message in UI
+    this.sendToRenderer('agent:output', {
+      sessionId,
+      taskId: session.taskId,
+      type: 'message',
+      data: {
+        id: `user-message-${Date.now()}`,
+        role: 'user',
+        content: message,
+        partType: 'text'
+      }
+    })
+
+    // Build session config
+    const agent = this.db.getAgent(session.agentId)!
+    const mcpServers = this.buildMcpServersForAdapter(session.agentId)
+    const sessionConfig: SessionConfig = {
+      agentId: session.agentId,
+      taskId: session.taskId,
+      workspaceDir: session.workspaceDir || process.cwd(),
+      model: agent.config?.model,
+      systemPrompt: agent.config?.system_prompt,
+      mcpServers,
+      apiKeys: agent.config?.api_keys
+    }
+
+    // Send prompt via adapter
+    const parts: MessagePart[] = [
+      { type: MessagePartType.TEXT, text: message }
+    ]
+    await session.adapter.sendPrompt(sessionId, parts, sessionConfig)
+
+    // Start polling if not already started (for Claude Code after resume)
+    if (!session.pollingStarted) {
+      console.log(`[AgentManager] Starting polling for session ${sessionId}`)
+      session.pollingStarted = true
+      this.startAdapterPolling(sessionId, session.adapter, sessionConfig)
+    }
   }
 
   private async doSendMessage(session: AgentSession, sessionId: string, message: string): Promise<void> {
@@ -1192,7 +1865,33 @@ export class AgentManager extends EventEmitter {
     })
   }
 
-  async respondToPermission(sessionId: string, approved: boolean, _message?: string): Promise<void> {
+  async respondToPermission(sessionId: string, approved: boolean, message?: string, optionId?: string): Promise<void> {
+    // Check if this is an adapter session
+    const agent = [...this.sessions.values()].find(s => s.id === sessionId)?.agentId
+    if (agent) {
+      const adapter = this.getAdapter(agent)
+      if (adapter && 'respondToApproval' in adapter && typeof adapter.respondToApproval === 'function') {
+        // For ACP adapters, map the user's answer to an optionId
+        // The UI passes the selected option label as 'message'
+        let selectedOption = optionId
+        if (!selectedOption && message) {
+          // Map common answers to option IDs
+          const answerMap: Record<string, string> = {
+            'Always': 'approved-for-session',
+            'Yes': 'approved',
+            'No, provide feedback': 'abort',
+            'No': 'abort'
+          }
+          selectedOption = answerMap[message] || (approved ? 'approved' : 'abort')
+        }
+
+        console.log(`[AgentManager] Responding to adapter approval with: ${selectedOption}`)
+        await (adapter as any).respondToApproval(sessionId, approved, selectedOption)
+        return
+      }
+    }
+
+    // OpenCode session handling
     const session = this.sessions.get(sessionId)
     if (!session) throw new Error(`Session not found: ${sessionId}`)
 
@@ -1213,7 +1912,8 @@ export class AgentManager extends EventEmitter {
   stopAllSessions(): void {
     console.log(`[AgentManager] Stopping all ${this.sessions.size} sessions`)
     for (const sessionId of [...this.sessions.keys()]) {
-      this.stopSession(sessionId)
+      // Don't reset task status during app shutdown - preserve current status
+      this.stopSession(sessionId, false)
     }
   }
 
@@ -1399,6 +2099,7 @@ export class AgentManager extends EventEmitter {
     }
   }
 
+
   async getProviders(serverUrl?: string, directory?: string): Promise<{ providers: any[]; default: Record<string, string> } | null> {
     await this.ensureSDKLoaded()
     if (!OpenCodeSDK) return null
@@ -1474,10 +2175,10 @@ export class AgentManager extends EventEmitter {
 
     const hasFileFields = fields.some((f) => f.type === 'file')
     if (hasFileFields) {
-      lines.push('\nFor file fields, return the absolute path to the file you created.')
+      lines.push('\nFor file fields, return the absolute path to the file you created in the workspace.')
     }
 
-    lines.push('\nExample format:')
+    lines.push('\nExample output format (if you have ``` inside the output - escape with \\`\\`\\`):')
     lines.push('```json')
     lines.push(JSON.stringify(exampleObj, null, 2))
     lines.push('```')
@@ -1491,22 +2192,37 @@ export class AgentManager extends EventEmitter {
    */
   private async extractOutputValues(sessionId: string): Promise<void> {
     const session = this.sessions.get(sessionId)
-    if (!session?.ocClient || !session.ocSessionId) return
+    if (!session?.adapter) return
 
     const task = this.db.getTask(session.taskId)
     if (!task?.output_fields || task.output_fields.length === 0) return
 
+    console.log(`[AgentManager] Extracting output values for task ${session.taskId}`)
+
     try {
-      // Fetch messages to find last assistant text
-      const messagesResult: any = await session.ocClient.session.messages({
-        path: { id: session.ocSessionId },
-        ...(session.workspaceDir && { query: { directory: session.workspaceDir } })
-      })
+      // Use standardized getAllMessages from adapter
+      let messages: any[] = []
 
-      if (!messagesResult.data || !Array.isArray(messagesResult.data)) return
+      if (session.adapter.getAllMessages) {
+        messages = await session.adapter.getAllMessages(sessionId, {
+          agentId: session.agentId,
+          taskId: session.taskId,
+          workspaceDir: session.workspaceDir || process.cwd()
+        })
+        console.log(`[AgentManager] Retrieved ${messages.length} messages from adapter`)
+      } else {
+        console.warn('[AgentManager] Adapter does not implement getAllMessages')
+        return
+      }
 
-      // Collect all assistant messages (not just last) for text + tool extraction
-      const assistantMessages = messagesResult.data.filter((m: any) => m.info?.role === 'assistant')
+      if (messages.length === 0) {
+        console.log('[AgentManager] No messages found')
+        return
+      }
+
+      // Filter for assistant messages
+      const assistantMessages = messages.filter((m: any) => m.role === 'assistant')
+      console.log(`[AgentManager] Found ${assistantMessages.length} assistant messages`)
 
       let parsedValues: Record<string, unknown> = {}
 
@@ -1531,11 +2247,20 @@ export class AgentManager extends EventEmitter {
       // Extract JSON block from ALL assistant text (search last message first, then earlier ones)
       for (let i = assistantMessages.length - 1; i >= 0; i--) {
         const msg = assistantMessages[i]
+        console.log(`[AgentManager] Processing message ${i}, parts count:`, msg.parts?.length)
         if (!msg.parts) continue
+
+        // Debug: log part types
+        msg.parts.forEach((p: any, idx: number) => {
+          console.log(`[AgentManager]   Part ${idx}: type=${p.type}, hasText=${!!p.text}, textLength=${p.text?.length || 0}`)
+        })
+
         const fullText = msg.parts
           .filter((p: any) => p.type === 'text' && p.text)
           .map((p: any) => p.text)
           .join('\n')
+
+        console.log(`[AgentManager] Full text length: ${fullText.length}, preview:`, fullText.slice(0, 200))
         if (!fullText) continue
 
         const jsonMatch = fullText.match(/```json\s*\n?([\s\S]*?)\n?\s*```/)

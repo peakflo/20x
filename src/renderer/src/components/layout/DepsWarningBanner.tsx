@@ -8,6 +8,7 @@ import { depsApi, agentConfigApi } from '@/lib/ipc-client'
 import { useAgentStore } from '@/stores/agent-store'
 import { ProviderSetupStep } from '@/components/providers/ProviderSetupDialog'
 import type { DepsStatus } from '@/types/electron'
+import { CodingAgentType } from '@/types'
 
 /* ─── Types ─── */
 
@@ -171,7 +172,7 @@ function AgentSetupStep({
       await createAgent({
         name: name.trim(),
         config: {
-          coding_agent: 'opencode',
+          coding_agent: CodingAgentType.OPENCODE,
           model: model || undefined
         },
         is_default: true

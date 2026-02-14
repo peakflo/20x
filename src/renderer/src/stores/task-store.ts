@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import type { WorkfloTask, CreateTaskDTO, UpdateTaskDTO } from '@/types'
-import { taskApi, taskSourceApi } from '@/lib/ipc-client'
+import { taskApi, taskSourceApi, onTaskUpdated } from '@/lib/ipc-client'
 
 interface TaskState {
   tasks: WorkfloTask[]
@@ -79,3 +79,12 @@ export const useTaskStore = create<TaskState>((set) => ({
 
   selectTask: (id) => set({ selectedTaskId: id })
 }))
+
+// Listen for task updates from the backend (e.g., when agent changes task status)
+onTaskUpdated((event) => {
+  useTaskStore.setState((state) => ({
+    tasks: state.tasks.map((t) =>
+      t.id === event.taskId ? { ...t, ...event.updates } : t
+    )
+  }))
+})

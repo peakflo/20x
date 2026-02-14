@@ -10,7 +10,7 @@ import { formatDate, formatRelativeDate, isOverdue, isDueSoon, isSnoozed } from 
 import { OutputFieldsDisplay } from './OutputFieldsDisplay'
 import { SkillSelector } from '@/components/skills/SkillSelector'
 import { AssigneeSelect } from './AssigneeSelect'
-import { TaskStatus } from '@/types'
+import { TaskStatus, CodingAgentType } from '@/types'
 import type { WorkfloTask, FileAttachment, OutputField, Agent } from '@/types'
 
 interface TaskDetailViewProps {
@@ -29,12 +29,14 @@ interface TaskDetailViewProps {
   canStartAgent?: boolean
   onResumeAgent?: () => void
   canResumeAgent?: boolean
+  onRestartAgent?: () => void
+  canRestartAgent?: boolean
   onSnooze?: () => void
   onUnsnooze?: () => void
   onReassign?: (userIds: string[], displayName: string) => Promise<void>
 }
 
-export function TaskDetailView({ task, agents, onEdit, onDelete, onUpdateAttachments, onUpdateOutputFields, onCompleteTask, onAssignAgent, onUpdateRepos, onAddRepos, onUpdateSkillIds, onStartAgent, canStartAgent, onResumeAgent, canResumeAgent, onSnooze, onUnsnooze, onReassign }: TaskDetailViewProps) {
+export function TaskDetailView({ task, agents, onEdit, onDelete, onUpdateAttachments, onUpdateOutputFields, onCompleteTask, onAssignAgent, onUpdateRepos, onAddRepos, onUpdateSkillIds, onStartAgent, canStartAgent, onResumeAgent, canResumeAgent, onRestartAgent, canRestartAgent, onSnooze, onUnsnooze, onReassign }: TaskDetailViewProps) {
   const [skillsExpanded, setSkillsExpanded] = useState(false)
   const isActive = task.status !== TaskStatus.Completed
   const overdue = isActive && isOverdue(task.due_date)
@@ -103,10 +105,21 @@ export function TaskDetailView({ task, agents, onEdit, onDelete, onUpdateAttachm
                     <option key={agent.id} value={agent.id}>{agent.name}</option>
                   ))}
                 </select>
+                {task.agent_id && agents.find(a => a.id === task.agent_id)?.config.coding_agent && (
+                  <Badge className="text-[10px] px-1.5 py-0.5">
+                    {agents.find(a => a.id === task.agent_id)?.config.coding_agent === CodingAgentType.CLAUDE_CODE ? 'Claude Code' : 'OpenCode'}
+                  </Badge>
+                )}
                 {canResumeAgent && onResumeAgent && (
                   <Button variant="default" size="sm" onClick={onResumeAgent} className="h-7 gap-1.5 px-3">
                     <History className="h-3 w-3" />
                     Resume session
+                  </Button>
+                )}
+                {canRestartAgent && onRestartAgent && (
+                  <Button variant="default" size="sm" onClick={onRestartAgent} className="h-7 gap-1.5 px-3">
+                    <Play className="h-3 w-3" />
+                    Restart session
                   </Button>
                 )}
                 {canStartAgent && onStartAgent && (
@@ -226,6 +239,7 @@ export function TaskDetailView({ task, agents, onEdit, onDelete, onUpdateAttachm
                 onChange={onUpdateOutputFields}
                 isActive={isActive}
                 onComplete={onCompleteTask}
+                taskUpdatedAt={task.updated_at}
               />
             </div>
           ) : isActive && (
