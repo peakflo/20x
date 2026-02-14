@@ -44,6 +44,10 @@ export interface SessionConfig {
   tools?: Record<string, boolean>
   promptAbort?: AbortController
   mcpServers?: Record<string, McpServerConfig>
+  apiKeys?: {
+    openai?: string
+    anthropic?: string
+  }
 }
 
 export interface SessionStatus {
@@ -73,6 +77,7 @@ export interface MessagePart {
     status?: string
   }
   update?: boolean // Mark as update to existing message
+  realSessionId?: string // Real session ID from backend (for updating database)
 }
 
 export interface MessagePayload {
@@ -134,6 +139,13 @@ export interface CodingAgentAdapter {
     partContentLengths: Map<string, string>,
     config: SessionConfig
   ): Promise<MessagePart[]>
+
+  /**
+   * Get all session messages in a standardized format
+   * Used for extracting output fields and other post-processing
+   * @returns All messages from the session
+   */
+  getAllMessages?(sessionId: string, config: SessionConfig): Promise<SessionMessage[]>
 
   /**
    * Abort ongoing prompt

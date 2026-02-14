@@ -364,6 +364,34 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     this.clients.delete(sessionId)
   }
 
+  async getAllMessages(sessionId: string, config: SessionConfig): Promise<SessionMessage[]> {
+    const ocClient = this.clients.get(sessionId)
+    if (!ocClient) {
+      return []
+    }
+
+    try {
+      // Fetch all messages from OpenCode API
+      const messagesResult: any = await ocClient.session.messages({
+        path: { id: sessionId },
+        ...(config.workspaceDir && { query: { directory: config.workspaceDir } })
+      })
+
+      if (!messagesResult.data || !Array.isArray(messagesResult.data)) {
+        return []
+      }
+
+      // Convert OpenCode messages to SessionMessage format
+      return messagesResult.data.map((msg: any) => ({
+        role: msg.info?.role || 'assistant',
+        parts: msg.parts || []
+      }))
+    } catch (error) {
+      console.error('[OpencodeAdapter] Error fetching messages:', error)
+      return []
+    }
+  }
+
   async registerMcpServer(
     _serverName: string,
     _mcpConfig: {

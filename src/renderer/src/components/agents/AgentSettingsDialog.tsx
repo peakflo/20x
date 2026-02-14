@@ -43,6 +43,8 @@ function AgentCard({ agent, connection, onTest, onEdit, onDelete }: {
     : 'bg-muted-foreground/40'
 
   const isClaudeCode = agent.config.coding_agent === CodingAgentType.CLAUDE_CODE
+  const isCodex = agent.config.coding_agent === CodingAgentType.CODEX
+  const isCliAgent = isClaudeCode || isCodex
 
   return (
     <div className="rounded-lg border border-border bg-card/50 overflow-hidden">
@@ -57,9 +59,12 @@ function AgentCard({ agent, connection, onTest, onEdit, onDelete }: {
             {isClaudeCode && (
               <span className="text-[10px] bg-purple-500/20 text-purple-400 px-1.5 py-0.5 rounded">Claude Code</span>
             )}
+            {isCodex && (
+              <span className="text-[10px] bg-blue-500/20 text-blue-400 px-1.5 py-0.5 rounded">Codex</span>
+            )}
           </div>
           <div className="text-xs text-muted-foreground truncate mt-0.5">
-            {isClaudeCode ? 'Local SDK' : agent.server_url}
+            {isCliAgent ? 'Local CLI' : agent.server_url}
             {agent.config.model && <span className="text-foreground/60"> · {agent.config.model}</span>}
           </div>
         </div>
@@ -80,18 +85,18 @@ function AgentCard({ agent, connection, onTest, onEdit, onDelete }: {
           : 'bg-muted/30 text-muted-foreground'
         }`}>
           {connection.status === 'testing' ? (
-            <><Loader2 className="h-3 w-3 animate-spin" />{isClaudeCode ? 'Checking SDK...' : 'Testing connection...'}</>
+            <><Loader2 className="h-3 w-3 animate-spin" />{isCliAgent ? 'Checking CLI...' : 'Testing connection...'}</>
           ) : connection.status === 'connected' ? (
             <>
               <Wifi className="h-3 w-3" />
-              {isClaudeCode ? 'Ready' : 'Connected'}
-              {connection.providerCount != null && !isClaudeCode && (
+              {isCliAgent ? 'Ready' : 'Connected'}
+              {connection.providerCount != null && !isCliAgent && (
                 <span className="text-green-400/70">
                   · {connection.providerCount} provider{connection.providerCount !== 1 ? 's' : ''}
                   {connection.modelCount != null && `, ${connection.modelCount} model${connection.modelCount !== 1 ? 's' : ''}`}
                 </span>
               )}
-              {isClaudeCode && connection.modelCount != null && (
+              {isCliAgent && connection.modelCount != null && (
                 <span className="text-green-400/70">
                   · {connection.modelCount} models available
                 </span>
@@ -528,12 +533,22 @@ export function AgentSettingsDialog() {
   const testConnection = async (agent: Agent) => {
     setConnections((prev) => new Map(prev).set(agent.id, { status: 'testing' }))
 
-    // Claude Code runs locally and doesn't need server connection test
+    // CLI-based agents (Claude Code, Codex) run locally and don't need server connection test
     if (agent.config.coding_agent === CodingAgentType.CLAUDE_CODE) {
       setConnections((prev) => new Map(prev).set(agent.id, {
         status: 'connected',
         providerCount: 1,
         modelCount: 6, // Number of Claude models available
+        testedAt: new Date()
+      }))
+      return
+    }
+
+    if (agent.config.coding_agent === CodingAgentType.CODEX) {
+      setConnections((prev) => new Map(prev).set(agent.id, {
+        status: 'connected',
+        providerCount: 1,
+        modelCount: 4, // Number of Codex models available
         testedAt: new Date()
       }))
       return

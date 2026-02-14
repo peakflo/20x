@@ -29,12 +29,14 @@ interface TaskDetailViewProps {
   canStartAgent?: boolean
   onResumeAgent?: () => void
   canResumeAgent?: boolean
+  onRestartAgent?: () => void
+  canRestartAgent?: boolean
   onSnooze?: () => void
   onUnsnooze?: () => void
   onReassign?: (userIds: string[], displayName: string) => Promise<void>
 }
 
-export function TaskDetailView({ task, agents, onEdit, onDelete, onUpdateAttachments, onUpdateOutputFields, onCompleteTask, onAssignAgent, onUpdateRepos, onAddRepos, onUpdateSkillIds, onStartAgent, canStartAgent, onResumeAgent, canResumeAgent, onSnooze, onUnsnooze, onReassign }: TaskDetailViewProps) {
+export function TaskDetailView({ task, agents, onEdit, onDelete, onUpdateAttachments, onUpdateOutputFields, onCompleteTask, onAssignAgent, onUpdateRepos, onAddRepos, onUpdateSkillIds, onStartAgent, canStartAgent, onResumeAgent, canResumeAgent, onRestartAgent, canRestartAgent, onSnooze, onUnsnooze, onReassign }: TaskDetailViewProps) {
   const [skillsExpanded, setSkillsExpanded] = useState(false)
   const isActive = task.status !== TaskStatus.Completed
   const overdue = isActive && isOverdue(task.due_date)
@@ -112,6 +114,12 @@ export function TaskDetailView({ task, agents, onEdit, onDelete, onUpdateAttachm
                   <Button variant="default" size="sm" onClick={onResumeAgent} className="h-7 gap-1.5 px-3">
                     <History className="h-3 w-3" />
                     Resume session
+                  </Button>
+                )}
+                {canRestartAgent && onRestartAgent && (
+                  <Button variant="default" size="sm" onClick={onRestartAgent} className="h-7 gap-1.5 px-3">
+                    <Play className="h-3 w-3" />
+                    Restart session
                   </Button>
                 )}
                 {canStartAgent && onStartAgent && (
@@ -231,6 +239,7 @@ export function TaskDetailView({ task, agents, onEdit, onDelete, onUpdateAttachm
                 onChange={onUpdateOutputFields}
                 isActive={isActive}
                 onComplete={onCompleteTask}
+                taskUpdatedAt={task.updated_at}
               />
             </div>
           ) : isActive && (

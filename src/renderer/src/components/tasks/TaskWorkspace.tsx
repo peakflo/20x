@@ -219,8 +219,19 @@ export function TaskWorkspace({
   )
 
   const handleSend = useCallback(
-    (message: string) => sendMessage(message).catch(console.error),
-    [sendMessage]
+    (message: string) => {
+      // Check if this is a question answer (for permission requests)
+      // Question answers should use approve() instead of sendMessage()
+      const lastMessage = session.messages[session.messages.length - 1]
+      if (lastMessage?.partType === 'question' && lastMessage?.tool?.questions) {
+        // This is an answer to a question - use approve
+        approve(true, message).catch(console.error)
+      } else {
+        // Regular message
+        sendMessage(message).catch(console.error)
+      }
+    },
+    [sendMessage, approve, session.messages]
   )
 
   // ── Feedback orchestration ──────────────────────────────────
@@ -314,7 +325,8 @@ export function TaskWorkspace({
 
   // Show panel if session exists (active or past transcript with messages)
   const showPanel = session.status !== 'idle' || session.messages.length > 0
-  const canResume = task.agent_id && task.session_id && !session.sessionId && session.status === 'idle'
+  const canResume = task.agent_id && task.session_id && !session.sessionId && session.status === 'idle' && session.messages.length === 0
+  const canRestart = task.agent_id && task.session_id && !session.sessionId && session.status === 'idle' && session.messages.length > 0
   const canStart = task.agent_id && !task.session_id && !session.sessionId && session.status === 'idle'
     && task.status !== TaskStatus.Completed
 
@@ -346,6 +358,8 @@ export function TaskWorkspace({
             canStartAgent={!!canStart}
             onResumeAgent={handleResumeSession}
             canResumeAgent={!!canResume}
+            onRestartAgent={handleStartFreshSession}
+            canRestartAgent={!!canRestart}
             onSnooze={() => setShowSnooze(true)}
             onUnsnooze={handleUnsnooze}
             onReassign={handleReassign}

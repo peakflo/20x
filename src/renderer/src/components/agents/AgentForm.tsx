@@ -9,7 +9,7 @@ import { agentConfigApi } from '@/lib/ipc-client'
 import { useMcpStore } from '@/stores/mcp-store'
 import { SkillSelector } from '@/components/skills/SkillSelector'
 import type { Agent, CreateAgentDTO, UpdateAgentDTO, AgentMcpServerEntry } from '@/types'
-import { CodingAgentType, CODING_AGENTS, CLAUDE_MODELS } from '@/types'
+import { CodingAgentType, CODING_AGENTS, CLAUDE_MODELS, CODEX_MODELS } from '@/types'
 
 interface AgentFormProps {
   agent?: Agent
@@ -48,10 +48,26 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
   )
   const [expandedServers, setExpandedServers] = useState<Set<string>>(new Set())
 
+  // API keys state
+  const [openaiApiKey, setOpenaiApiKey] = useState(agent?.config.api_keys?.openai ?? '')
+  const [anthropicApiKey, setAnthropicApiKey] = useState(agent?.config.api_keys?.anthropic ?? '')
+
+  // Environment variable detection state
+  const [hasOpenaiEnv, setHasOpenaiEnv] = useState(false)
+  const [hasAnthropicEnv, setHasAnthropicEnv] = useState(false)
+
   const { servers: globalMcpServers, fetchServers: fetchMcpServers } = useMcpStore()
 
   useEffect(() => {
     fetchMcpServers()
+
+    // Check for environment variables
+    window.electronAPI.env.get('OPENAI_API_KEY').then(value => {
+      setHasOpenaiEnv(!!value)
+    })
+    window.electronAPI.env.get('ANTHROPIC_API_KEY').then(value => {
+      setHasAnthropicEnv(!!value)
+    })
   }, [])
 
   // Model fetching state
@@ -66,6 +82,9 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
     } else if (codingAgent === CodingAgentType.CLAUDE_CODE) {
       // For Claude Code, show predefined Claude models
       setAvailableModels(CLAUDE_MODELS)
+    } else if (codingAgent === CodingAgentType.CODEX) {
+      // For Codex, fetch models dynamically from Codex CLI
+      fetchCodexModels()
     } else {
       setAvailableModels([])
       setModel('')
@@ -75,7 +94,7 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
   const fetchModels = async () => {
     setIsLoadingModels(true)
     setModelError(null)
-    
+
     try {
       // Check if agentConfigApi is available (requires app restart after preload changes)
       if (!agentConfigApi || typeof agentConfigApi.getProviders !== 'function') {
@@ -83,13 +102,13 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
         setIsLoadingModels(false)
         return
       }
-      
+
       const result = await agentConfigApi.getProviders(serverUrl)
-      
+
       if (result && result.providers) {
         // Flatten all models from all providers
         const models: Model[] = []
-        
+
         if (Array.isArray(result.providers) && result.providers.length > 0) {
           result.providers.forEach((provider: any) => {
             // Models can be either an array or an object with model IDs as keys
@@ -116,7 +135,7 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
             }
           })
         }
-        
+
         if (models.length > 0) {
           setAvailableModels(models)
         } else {
@@ -132,6 +151,11 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
     } finally {
       setIsLoadingModels(false)
     }
+  }
+
+  const fetchCodexModels = () => {
+    // Use hardcoded models for Codex
+    setAvailableModels(CODEX_MODELS)
   }
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -156,7 +180,11 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
         model: model.trim() || undefined,
         system_prompt: systemPrompt.trim() || undefined,
         mcp_servers: mcpServersConfig.length > 0 ? mcpServersConfig : undefined,
-        skill_ids: skillIds
+        skill_ids: skillIds,
+        api_keys: {
+          openai: openaiApiKey.trim() || undefined,
+          anthropic: anthropicApiKey.trim() || undefined
+        }
       }
     })
   }
@@ -227,21 +255,30 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
         />
       </div>
 
-      <div className="space-y-1.5">
-        <Label htmlFor="agent-url">Server URL</Label>
-        <Input
-          id="agent-url"
-          value={serverUrl}
-          onChange={(e) => setServerUrl(e.target.value)}
-          placeholder="http://localhost:4096"
-          disabled={codingAgent === CodingAgentType.CLAUDE_CODE}
-        />
-        {codingAgent === CodingAgentType.CLAUDE_CODE && (
-          <p className="text-xs text-muted-foreground">
-            Claude Code runs locally and doesn't require a server URL
-          </p>
-        )}
-      </div>
+      {/* Only show Server URL for OpenCode */}
+      {codingAgent !== CodingAgentType.CLAUDE_CODE && codingAgent !== CodingAgentType.CODEX && (
+        <div className="space-y-1.5">
+          <Label htmlFor="agent-url">Server URL</Label>
+          <Input
+            id="agent-url"
+            value={serverUrl}
+            onChange={(e) => setServerUrl(e.target.value)}
+            placeholder="http://localhost:4096"
+          />
+        </div>
+      )}
+
+      {/* Show info for CLI-based agents */}
+      {codingAgent === CodingAgentType.CLAUDE_CODE && (
+        <p className="text-sm text-muted-foreground">
+          Claude Code runs locally via CLI and doesn't require a server URL
+        </p>
+      )}
+      {codingAgent === CodingAgentType.CODEX && (
+        <p className="text-sm text-muted-foreground">
+          Codex runs locally via CLI and doesn't require a server URL
+        </p>
+      )}
 
       <div className="space-y-1.5">
         <Label htmlFor="coding-agent">Coding Agent</Label>
@@ -258,7 +295,7 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
         </select>
       </div>
 
-      {(codingAgent === CodingAgentType.OPENCODE || codingAgent === CodingAgentType.CLAUDE_CODE) && (
+      {(codingAgent === CodingAgentType.OPENCODE || codingAgent === CodingAgentType.CLAUDE_CODE || codingAgent === CodingAgentType.CODEX) && (
         <div className="space-y-1.5">
           <Label htmlFor="agent-model">Model</Label>
           <div className="relative">
@@ -317,6 +354,54 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
               </div>
             )}
           </div>
+        </div>
+      )}
+
+      {/* API Key Configuration for Codex */}
+      {codingAgent === CodingAgentType.CODEX && (
+        <div className="space-y-1.5">
+          <Label htmlFor="openai-api-key">OpenAI API Key</Label>
+          <Input
+            id="openai-api-key"
+            type="password"
+            value={openaiApiKey}
+            onChange={(e) => setOpenaiApiKey(e.target.value)}
+            placeholder={hasOpenaiEnv ? '••••••••' : 'sk-proj-...'}
+          />
+          {!openaiApiKey && hasOpenaiEnv && (
+            <p className="text-xs text-muted-foreground">
+              ✓ Using OPENAI_API_KEY from environment
+            </p>
+          )}
+          {!openaiApiKey && !hasOpenaiEnv && (
+            <p className="text-xs text-destructive">
+              Required: Enter your OpenAI API key or set OPENAI_API_KEY environment variable
+            </p>
+          )}
+        </div>
+      )}
+
+      {/* API Key Configuration for Claude Code */}
+      {codingAgent === CodingAgentType.CLAUDE_CODE && (
+        <div className="space-y-1.5">
+          <Label htmlFor="anthropic-api-key">Anthropic API Key</Label>
+          <Input
+            id="anthropic-api-key"
+            type="password"
+            value={anthropicApiKey}
+            onChange={(e) => setAnthropicApiKey(e.target.value)}
+            placeholder={hasAnthropicEnv ? '••••••••' : 'sk-ant-...'}
+          />
+          {!anthropicApiKey && hasAnthropicEnv && (
+            <p className="text-xs text-muted-foreground">
+              ✓ Using ANTHROPIC_API_KEY from environment
+            </p>
+          )}
+          {!anthropicApiKey && !hasAnthropicEnv && (
+            <p className="text-xs text-destructive">
+              Required: Enter your Anthropic API key or set ANTHROPIC_API_KEY environment variable
+            </p>
+          )}
         </div>
       )}
 

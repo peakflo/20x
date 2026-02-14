@@ -16,7 +16,7 @@ import type {
   SessionMessage,
   MessagePart,
 } from './coding-agent-adapter'
-import { SessionStatusType, MessagePartType } from './coding-agent-adapter'
+import { SessionStatusType, MessagePartType, MessageRole } from './coding-agent-adapter'
 
 type ClaudeSDK = typeof import('@anthropic-ai/claude-agent-sdk')
 type Query = import('@anthropic-ai/claude-agent-sdk').Query
@@ -35,6 +35,7 @@ interface ClaudeSession {
   streamTask: Promise<void> | null
   lastError: string | null
   config: SessionConfig // Store config for later use
+  isResumed?: boolean // True if this session was resumed from persistence
 }
 
 export class ClaudeCodeAdapter implements CodingAgentAdapter {
@@ -142,6 +143,7 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
       streamTask: null,
       lastError: null,
       config, // Store config for use in sendPrompt
+      isResumed: false, // New session, not resumed
     }
 
     // Generate UUID-format session ID (required by Claude Code)
@@ -162,6 +164,104 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
     return uuidRegex.test(sessionId)
   }
 
+  /**
+   * Check if session file has corrupt messages (empty text blocks)
+   */
+  private async checkForCorruptMessages(sessionId: string, workspaceDir: string): Promise<boolean> {
+    try {
+      const { readFileSync } = await import('fs')
+      const { join } = await import('path')
+      const { homedir } = await import('os')
+
+      const claudeDir = join(homedir(), '.claude', 'projects')
+      const encodedWorkspace = workspaceDir.replace(/[\/\s]/g, '-')
+      const sessionFile = join(claudeDir, encodedWorkspace, `${sessionId}.jsonl`)
+
+      const content = readFileSync(sessionFile, 'utf-8')
+      return content.includes('"text":""')
+    } catch (error) {
+      return false
+    }
+  }
+
+  /**
+   * Load conversation history from Claude session file
+   */
+  private async loadSessionHistory(sessionId: string, workspaceDir: string): Promise<SessionMessage[]> {
+    try {
+      const { readFileSync } = await import('fs')
+      const { join } = await import('path')
+      const { homedir } = await import('os')
+
+      // Session files are stored in: ~/.claude/projects/[encoded-workspace]/[sessionId].jsonl
+      // Claude encodes workspace paths by replacing / and spaces with -
+      const claudeDir = join(homedir(), '.claude', 'projects')
+      const encodedWorkspace = workspaceDir.replace(/[\/\s]/g, '-')
+      const sessionFile = join(claudeDir, encodedWorkspace, `${sessionId}.jsonl`)
+
+      console.log(`[ClaudeCodeAdapter] Loading session history from: ${sessionFile}`)
+
+      const content = readFileSync(sessionFile, 'utf-8')
+      const lines = content.trim().split('\n')
+      const messages: SessionMessage[] = []
+
+      for (const line of lines) {
+        const entry = JSON.parse(line)
+
+        // Skip non-message entries (queue-operation, etc.)
+        if (entry.type !== 'user' && entry.type !== 'assistant') continue
+
+        const message: SessionMessage = {
+          id: entry.uuid,
+          role: entry.type === 'user' ? MessageRole.USER : MessageRole.ASSISTANT,
+          parts: []
+        }
+
+        // Parse message content
+        if (entry.message?.content) {
+          for (const contentPart of entry.message.content) {
+            if (contentPart.type === 'text') {
+              // Skip empty text blocks (corrupt messages)
+              if (!contentPart.text || contentPart.text.trim() === '') continue
+
+              message.parts.push({
+                type: MessagePartType.TEXT,
+                text: contentPart.text,
+                content: contentPart.text
+              })
+            } else if (contentPart.type === 'tool_use') {
+              message.parts.push({
+                type: MessagePartType.TOOL,
+                tool: {
+                  name: contentPart.name,
+                  input: contentPart.input
+                }
+              })
+            } else if (contentPart.type === 'tool_result') {
+              message.parts.push({
+                type: MessagePartType.TOOL,
+                tool: {
+                  name: 'tool_result',
+                  output: contentPart.content
+                }
+              })
+            }
+          }
+        }
+
+        if (message.parts.length > 0) {
+          messages.push(message)
+        }
+      }
+
+      console.log(`[ClaudeCodeAdapter] Loaded ${messages.length} messages from session history`)
+      return messages
+    } catch (error: any) {
+      console.warn(`[ClaudeCodeAdapter] Failed to load session history:`, error.message)
+      return []
+    }
+  }
+
   async resumeSession(
     sessionId: string,
     config: SessionConfig
@@ -179,50 +279,37 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
       )
     }
 
-    // Find Claude executable
-    const claudePath = await this.findClaudeExecutable()
-
-    // Create abort controller
-    const abortController = new AbortController()
-
-    // Build options with resume
-    const options: Options = {
-      cwd: config.workspaceDir,
-      pathToClaudeCodeExecutable: claudePath,
-      env: this.buildClaudeEnvironment(),
-      mcpServers: config.mcpServers as Record<string, McpServerConfig> | undefined,
-      model: config.model,
-      systemPrompt: config.systemPrompt,
-      abortController,
-      permissionMode: 'acceptEdits',
-      resume: sessionId, // Resume existing session
-    }
-
-    // Start query
-    const query = ClaudeAgentSDK.query({
-      prompt: '', // Resume doesn't need initial prompt
-      options,
-    })
-
-    // Create session state
+    // Create session state (idle until user sends a message)
     const session: ClaudeSession = {
       sessionId,
-      queryIterator: query,
-      abortController,
+      queryIterator: null, // Will be created when user sends first message
+      abortController: null,
       status: 'idle',
       messageBuffer: [],
       streamTask: null,
       lastError: null,
-      config, // Store config
+      config, // Store config for later use
+      isResumed: true, // Resumed from persistence
     }
 
     this.sessions.set(sessionId, session)
 
-    // Start consuming stream
-    session.streamTask = this.consumeStream(sessionId, session)
+    // Don't start query yet - wait for user to send a message
+    // The query will be started in sendPrompt with resume option
+    console.log(`[ClaudeCodeAdapter] Session resumed: ${sessionId} (waiting for user prompt)`)
 
-    // Return empty messages - polling will pick up the session replay or error
-    return []
+    // Load conversation history from session file
+    const messages = await this.loadSessionHistory(sessionId, config.workspaceDir)
+
+    // Check if session file has corrupt messages (empty text blocks)
+    // If so, don't use resume to avoid API errors
+    const hasCorruptMessages = await this.checkForCorruptMessages(sessionId, config.workspaceDir)
+    if (hasCorruptMessages) {
+      console.warn(`[ClaudeCodeAdapter] Session has corrupt messages, will not use resume option`)
+      session.isResumed = false
+    }
+
+    return messages
   }
 
   async sendPrompt(
@@ -249,17 +336,8 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
       throw new Error('No text content in prompt parts')
     }
 
-    // Add user message to buffer so it shows in transcript
-    const userMessage = {
-      type: 'user',
-      message: {
-        role: 'user',
-        content: [{ type: 'text', text: promptText }]
-      },
-      uuid: `user-prompt-${Date.now()}`,
-      session_id: sessionId
-    }
-    session.messageBuffer.push(userMessage as SDKMessage)
+    // Note: Don't add user message to buffer - agent-manager already shows it
+    // to avoid duplicate messages in UI
 
     // Check if this is the first prompt (no query running yet)
     const isFirstPrompt = !session.queryIterator
@@ -288,8 +366,18 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
       systemPrompt: config.systemPrompt,
       abortController,
       permissionMode: 'acceptEdits',
-      continue: !isFirstPrompt, // First prompt: new session, subsequent: continue
     }
+
+    // Determine session continuation mode
+    if (isFirstPrompt && session.isResumed) {
+      // First prompt after resume: use resume to load persisted session
+      ;(options as any).resume = sessionId
+      // Don't use continue with resume - they're mutually exclusive
+    } else if (!isFirstPrompt) {
+      // Subsequent prompts: continue existing session in same process
+      options.continue = true
+    }
+    // Otherwise: new session, no continue/resume needed
 
     console.log('[ClaudeCodeAdapter] Starting query with options:', {
       cwd: options.cwd,
@@ -297,6 +385,11 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
       model: options.model,
       permissionMode: options.permissionMode,
       continue: options.continue,
+      resume: (options as any).resume,
+      isFirstPrompt,
+      isResumed: session.isResumed,
+      promptLength: promptText.length,
+      promptPreview: promptText.substring(0, 100),
       hasEnv: !!options.env,
       hasMcpServers: !!options.mcpServers,
     })
@@ -313,6 +406,11 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
     session.status = 'busy'
     if (!isFirstPrompt) {
       session.messageBuffer = [] // Clear buffer for new messages (but keep history for first prompt)
+    }
+
+    // After first prompt in a resumed session, clear the flag so subsequent prompts use continue
+    if (isFirstPrompt && session.isResumed) {
+      session.isResumed = false
     }
 
     // Start consuming stream
@@ -360,6 +458,12 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
       newParts.push(...parts)
     }
 
+    // If we have the real Claude session ID and it's different from the map key,
+    // include it in the first part so agent-manager can update the database
+    if (session.sessionId && session.sessionId !== sessionId && newParts.length > 0) {
+      newParts[0].realSessionId = session.sessionId
+    }
+
     return newParts
   }
 
@@ -393,6 +497,66 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
 
     // Remove session
     this.sessions.delete(sessionId)
+  }
+
+  async getAllMessages(sessionId: string, _config: SessionConfig): Promise<SessionMessage[]> {
+    const session = this.sessions.get(sessionId)
+    if (!session) {
+      return []
+    }
+
+    // Get all messages from the buffer
+    const messages: SessionMessage[] = []
+    let currentMessage: SessionMessage | null = null
+    let messageIdCounter = 0
+
+    for (const msg of session.messageBuffer) {
+      // Derive role from message type
+      const msgAny = msg as any
+      const roleStr = (msgAny.role || (msg.type === 'user' ? 'user' : 'assistant')) as string
+      const role = roleStr === 'user' ? MessageRole.USER :
+                   roleStr === 'system' ? MessageRole.SYSTEM :
+                   MessageRole.ASSISTANT
+
+      // Start new message if role changed
+      if (!currentMessage || currentMessage.role !== role) {
+        if (currentMessage) {
+          messages.push(currentMessage)
+        }
+        currentMessage = {
+          id: `msg-${messageIdCounter++}`,
+          role,
+          parts: []
+        }
+      }
+
+      // Convert SDKMessage to MessagePart
+      if (msgAny.text) {
+        currentMessage!.parts.push({
+          type: MessagePartType.TEXT,
+          text: msgAny.text,
+          role: roleStr as any
+        })
+      } else if (msgAny.name || msgAny.tool_use_id) {
+        currentMessage!.parts.push({
+          type: MessagePartType.TOOL,
+          tool: {
+            name: msgAny.name || 'unknown',
+            status: msgAny.type === 'tool_result' ? 'completed' : 'in_progress',
+            input: msgAny.input ? JSON.stringify(msgAny.input) : '',
+            output: msgAny.content || ''
+          },
+          role: roleStr as any
+        })
+      }
+    }
+
+    // Push last message
+    if (currentMessage) {
+      messages.push(currentMessage)
+    }
+
+    return messages
   }
 
   async registerMcpServer(
@@ -443,10 +607,12 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
         // Log all messages for debugging
         console.log('[ClaudeCodeAdapter] Received message:', JSON.stringify(msg, null, 2))
 
-        // Extract session ID from first message if not set
+        // Extract real Claude Code session ID from first message
         if (!session.sessionId && 'session_id' in msg) {
           session.sessionId = msg.session_id
-          console.log(`[ClaudeCodeAdapter] Session ID set: ${session.sessionId}`)
+          console.log(`[ClaudeCodeAdapter] Claude Code session ID: ${session.sessionId}`)
+          // Note: We keep the temp UUID as the map key for database compatibility
+          // session.sessionId stores the real Claude session ID for SDK calls
         }
 
         // Check for session not found error BEFORE buffering

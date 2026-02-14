@@ -100,6 +100,8 @@ export const useAgentStore = create<AgentState>((set, get) => {
     const updated = { ...session, status: event.status }
     // Patch in real sessionId if session was pre-registered with empty string
     if (!session.sessionId && event.sessionId) updated.sessionId = event.sessionId
+    // Clear pending approval when session goes idle
+    if (event.status === 'idle') updated.pendingApproval = null
     set({ sessions: new Map(state.sessions).set(session.taskId, updated) })
   })
 
@@ -121,14 +123,15 @@ export const useAgentStore = create<AgentState>((set, get) => {
 
     if (typeof data === 'object' && data !== null) {
       role = data.role === 'user' ? 'user' : data.role === 'assistant' ? 'assistant' : 'system'
-      content = data.content ?? data.text ?? data.message ?? JSON.stringify(data)
+      content = data.content ?? data.text ?? data.message ?? ''
       msgId = data.id || ''
     } else {
       content = String(data)
     }
 
-    if (!content) return
-    if (!msgId) msgId = `${role}-${content.slice(0, 50)}-${content.length}`
+    // Allow empty content for tool/question messages (they have tool/questions field instead)
+    if (!content && !data.tool && !data.questions && !data.todos) return
+    if (!msgId) msgId = data.id || `${role}-${content.slice(0, 50)}-${Date.now()}`
 
     const taskId = resolvedSession.taskId
     const seen = getSeen(taskId)
@@ -280,7 +283,7 @@ export const useAgentStore = create<AgentState>((set, get) => {
           taskId,
           status: existing?.status || 'working',
           messages: existing?.messages || [],
-          pendingApproval: existing?.pendingApproval || null
+          pendingApproval: null  // Always reset on init
         })
       }))
     },

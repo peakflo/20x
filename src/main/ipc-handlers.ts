@@ -223,6 +223,7 @@ export function registerIpcHandlers(
     return await agentManager.getProviders(serverUrl)
   })
 
+
   // MCP Server handlers
   ipcMain.handle('mcp:getAll', () => {
     return db.getMcpServers()
@@ -266,6 +267,11 @@ export function registerIpcHandlers(
 
   ipcMain.handle('settings:getAll', () => {
     return db.getAllSettings()
+  })
+
+  // Environment variable handlers
+  ipcMain.handle('env:get', (_, key: string) => {
+    return process.env[key] ?? null
   })
 
   // GitHub handlers

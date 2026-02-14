@@ -31,11 +31,15 @@ export interface AgentMcpServerEntry {
 }
 
 export interface AgentConfigRecord {
-  coding_agent?: 'opencode' | 'claude-code'
+  coding_agent?: 'opencode' | 'claude-code' | 'codex'
   model?: string
   system_prompt?: string
   mcp_servers?: Array<string | AgentMcpServerEntry>
   skill_ids?: string[]
+  api_keys?: {
+    openai?: string
+    anthropic?: string
+  }
 }
 
 export interface McpServerConfigRecord {

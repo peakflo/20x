@@ -23,9 +23,10 @@ interface OutputFieldsDisplayProps {
   onChange: (fields: OutputField[]) => void
   isActive?: boolean
   onComplete?: () => void
+  taskUpdatedAt?: string  // Timestamp to force file preview refresh
 }
 
-export function OutputFieldsDisplay({ fields, onChange, isActive, onComplete }: OutputFieldsDisplayProps) {
+export function OutputFieldsDisplay({ fields, onChange, isActive, onComplete, taskUpdatedAt }: OutputFieldsDisplayProps) {
   if (fields.length === 0) return null
 
   const updateValue = useCallback(
@@ -48,7 +49,7 @@ export function OutputFieldsDisplay({ fields, onChange, isActive, onComplete }: 
       </div>
       <div className="space-y-3">
         {fields.map((field) => (
-          <OutputFieldInput key={field.id} field={field} onValueChange={(v) => updateValue(field.id, v)} />
+          <OutputFieldInput key={field.id} field={field} onValueChange={(v) => updateValue(field.id, v)} taskUpdatedAt={taskUpdatedAt} />
         ))}
       </div>
       {isActive && onComplete && allFilled && (
@@ -61,7 +62,7 @@ export function OutputFieldsDisplay({ fields, onChange, isActive, onComplete }: 
   )
 }
 
-function OutputFieldInput({ field, onValueChange }: { field: OutputField; onValueChange: (value: unknown) => void }) {
+function OutputFieldInput({ field, onValueChange, taskUpdatedAt }: { field: OutputField; onValueChange: (value: unknown) => void; taskUpdatedAt?: string }) {
   const [localValue, setLocalValue] = useState<string>(String(field.value ?? ''))
 
   // Sync local state when field.value changes externally (e.g. agent extraction)
@@ -144,7 +145,7 @@ function OutputFieldInput({ field, onValueChange }: { field: OutputField; onValu
           {filePaths.length > 0 ? (
             <div className="space-y-1.5">
               {filePaths.map((fp) => (
-                <FileFieldPreview key={fp} filePath={fp} />
+                <FileFieldPreview key={`${fp}-${taskUpdatedAt || ''}`} filePath={fp} taskUpdatedAt={taskUpdatedAt} />
               ))}
             </div>
           ) : (
@@ -208,7 +209,7 @@ function OutputFieldInput({ field, onValueChange }: { field: OutputField; onValu
 
 const TEXT_EXTENSIONS = new Set(['.md', '.txt', '.json', '.csv', '.html', '.xml', '.yaml', '.yml', '.log', '.ts', '.tsx', '.js', '.jsx', '.py', '.sh', '.css', '.sql'])
 
-function FileFieldPreview({ filePath }: { filePath: string }) {
+function FileFieldPreview({ filePath, taskUpdatedAt }: { filePath: string; taskUpdatedAt?: string }) {
   const [preview, setPreview] = useState<string | null>(null)
   const [expanded, setExpanded] = useState(false)
 
@@ -221,7 +222,7 @@ function FileFieldPreview({ filePath }: { filePath: string }) {
     shellApi.readTextFile(filePath).then((result) => {
       if (result?.content) setPreview(result.content)
     })
-  }, [filePath, isText])
+  }, [filePath, isText, taskUpdatedAt])  // Re-read when task is updated
 
   return (
     <div className="rounded-md border overflow-hidden">

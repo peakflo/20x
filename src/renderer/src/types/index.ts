@@ -2,12 +2,14 @@
 
 export enum CodingAgentType {
   OPENCODE = 'opencode',
-  CLAUDE_CODE = 'claude-code'
+  CLAUDE_CODE = 'claude-code',
+  CODEX = 'codex'
 }
 
 export const CODING_AGENTS: { value: CodingAgentType; label: string }[] = [
   { value: CodingAgentType.OPENCODE, label: 'OpenCode' },
-  { value: CodingAgentType.CLAUDE_CODE, label: 'Claude Code' }
+  { value: CodingAgentType.CLAUDE_CODE, label: 'Claude Code' },
+  { value: CodingAgentType.CODEX, label: 'Codex' }
 ]
 
 export enum ClaudeModel {
@@ -26,6 +28,26 @@ export const CLAUDE_MODELS: { id: ClaudeModel; name: string }[] = [
   { id: ClaudeModel.SONNET_3_7, name: 'Claude 3.7 Sonnet' },
   { id: ClaudeModel.SONNET_3_5_OCT, name: 'Claude 3.5 Sonnet (Oct)' },
   { id: ClaudeModel.SONNET_3_5_JUN, name: 'Claude 3.5 Sonnet (Jun)' }
+]
+
+export enum CodexModel {
+  GPT_5_2_CODEX = 'gpt-5.2-codex',
+  GPT_5_1_CODEX_MAX = 'gpt-5.1-codex-max',
+  GPT_5_1_CODEX = 'gpt-5.1-codex',
+  GPT_5_1_CODEX_MINI = 'gpt-5.1-codex-mini',
+  GPT_5_CODEX = 'gpt-5-codex',
+  GPT_5 = 'gpt-5',
+  GPT_5_MINI = 'gpt-5-mini'
+}
+
+export const CODEX_MODELS: { id: CodexModel; name: string }[] = [
+  { id: CodexModel.GPT_5_2_CODEX, name: 'GPT-5.2 Codex (Recommended)' },
+  { id: CodexModel.GPT_5_1_CODEX_MAX, name: 'GPT-5.1 Codex Max' },
+  { id: CodexModel.GPT_5_1_CODEX, name: 'GPT-5.1 Codex' },
+  { id: CodexModel.GPT_5_1_CODEX_MINI, name: 'GPT-5.1 Codex Mini' },
+  { id: CodexModel.GPT_5_CODEX, name: 'GPT-5 Codex' },
+  { id: CodexModel.GPT_5, name: 'GPT-5' },
+  { id: CodexModel.GPT_5_MINI, name: 'GPT-5 Mini (Fastest)' }
 ]
 
 export interface McpServerConfig {
@@ -84,6 +106,10 @@ export interface AgentConfig {
   system_prompt?: string
   mcp_servers?: Array<string | AgentMcpServerEntry>
   skill_ids?: string[]
+  api_keys?: {
+    openai?: string  // For Codex
+    anthropic?: string  // For Claude Code
+  }
 }
 
 export interface Agent {

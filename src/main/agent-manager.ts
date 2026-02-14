@@ -7,6 +7,7 @@ import type { BrowserWindow } from 'electron'
 import type { DatabaseManager, AgentMcpServerEntry, OutputFieldRecord } from './database'
 import { TaskStatus } from '../shared/constants'
 import { ClaudeCodeAdapter } from './adapters/claude-code-adapter'
+import { AcpAdapter } from './adapters/acp-adapter'
 import type { CodingAgentAdapter, SessionConfig, MessagePart, SessionMessage } from './adapters/coding-agent-adapter'
 import { SessionStatusType, MessagePartType } from './adapters/coding-agent-adapter'
 
@@ -15,7 +16,8 @@ let OpenCodeSDK: typeof import('@opencode-ai/sdk') | null = null
 // Coding agent backend type enum
 enum CodingAgentType {
   OPENCODE = 'opencode',
-  CLAUDE_CODE = 'claude-code'
+  CLAUDE_CODE = 'claude-code',
+  CODEX = 'codex'
 }
 
 // Custom fetch with no timeout — agent prompts can run indefinitely
@@ -41,6 +43,8 @@ interface AgentSession {
   promptAbort?: AbortController
   lastOcStatus?: string
   learningMode?: boolean
+  adapter?: CodingAgentAdapter
+  pollingStarted?: boolean
 }
 
 export class AgentManager extends EventEmitter {
@@ -113,7 +117,12 @@ export class AgentManager extends EventEmitter {
 
     switch (backendType) {
       case CodingAgentType.CLAUDE_CODE:
+        // Claude Code uses direct SDK (supports session tokens from 'claude code setup-token')
         adapter = new ClaudeCodeAdapter()
+        break
+      case CodingAgentType.CODEX:
+        // Codex uses ACP (Agent Client Protocol) via codex-acp wrapper
+        adapter = new AcpAdapter('codex')
         break
       default:
         console.warn(`[AgentManager] Unknown coding agent type: ${backendType}, falling back to OpenCode`)
@@ -157,6 +166,25 @@ export class AgentManager extends EventEmitter {
     }
 
     return result
+  }
+
+  private buildSessionConfig(agentId: string, taskId: string, workspaceDir?: string): SessionConfig {
+    const agent = this.db.getAgent(agentId)
+    if (!agent) {
+      throw new Error(`Agent not found: ${agentId}`)
+    }
+
+    const mcpServers = this.buildMcpServersForAdapter(agentId)
+
+    return {
+      agentId,
+      taskId,
+      workspaceDir: workspaceDir || this.db.getWorkspaceDir(taskId),
+      model: agent.config?.model,
+      systemPrompt: agent.config?.system_prompt,
+      mcpServers,
+      apiKeys: agent.config?.api_keys
+    }
   }
 
   /**
@@ -444,7 +472,8 @@ export class AgentManager extends EventEmitter {
       workspaceDir,
       model: agent.config?.model,
       systemPrompt: agent.config?.system_prompt,
-      mcpServers
+      mcpServers,
+      apiKeys: agent.config?.api_keys
     }
 
     // Initialize adapter
@@ -453,11 +482,31 @@ export class AgentManager extends EventEmitter {
     // Create session via adapter
     const adapterSessionId = await adapter.createSession(sessionConfig)
 
+    // Store session in sessions map
+    this.sessions.set(adapterSessionId, {
+      id: adapterSessionId,
+      agentId,
+      taskId,
+      workspaceDir,
+      status: 'working',
+      createdAt: new Date(),
+      seenMessageIds: new Set(),
+      seenPartIds: new Set(),
+      partContentLengths: new Map(),
+      adapter
+    })
+
     // Store session ID in database
     this.db.updateTask(taskId, { session_id: adapterSessionId })
 
     // Update task status
     this.db.updateTask(taskId, { status: TaskStatus.AgentWorking })
+
+    // Notify renderer about task status change
+    this.sendToRenderer('task:updated', {
+      taskId,
+      updates: { status: TaskStatus.AgentWorking }
+    })
 
     // Notify renderer
     this.sendToRenderer('agent:status', {
@@ -505,6 +554,19 @@ export class AgentManager extends EventEmitter {
         promptText += `\n\nAttached files (relative to your working directory):\n${attachmentRefs.join('\n')}`
       }
 
+      // Show user's prompt in UI first
+      this.sendToRenderer('agent:output', {
+        sessionId: adapterSessionId,
+        taskId,
+        type: 'message',
+        data: {
+          id: `user-initial-${Date.now()}`,
+          role: 'user',
+          content: promptText,
+          partType: 'text'
+        }
+      })
+
       // Send prompt via adapter
       const parts: MessagePart[] = [
         { type: MessagePartType.TEXT, text: promptText }
@@ -519,7 +581,7 @@ export class AgentManager extends EventEmitter {
    * Polls adapter for new messages and forwards to renderer
    */
   private startAdapterPolling(
-    sessionId: string,
+    initialSessionId: string,
     adapter: CodingAgentAdapter,
     config: SessionConfig
   ): void {
@@ -529,6 +591,19 @@ export class AgentManager extends EventEmitter {
 
     const poll = async (): Promise<void> => {
       try {
+        // Find current session ID (might have changed due to re-keying)
+        let sessionId = initialSessionId
+        const sessionByOldId = this.sessions.get(sessionId)
+        if (!sessionByOldId) {
+          // Session might have been re-keyed, find it by taskId
+          for (const [sid, sess] of this.sessions.entries()) {
+            if (sess.taskId === config.taskId) {
+              sessionId = sid
+              break
+            }
+          }
+        }
+
         // Poll for new messages
         const newParts = await adapter.pollMessages(
           sessionId,
@@ -538,8 +613,26 @@ export class AgentManager extends EventEmitter {
           config
         )
 
+        // Check if the real session ID has been provided by the adapter
+        const realSessionId = newParts.find(p => p.realSessionId)?.realSessionId
+        if (realSessionId && realSessionId !== sessionId) {
+          console.log(`[AgentManager] Session ID updated: ${sessionId} -> ${realSessionId}`)
+
+          // Update database with real session ID
+          this.db.updateTask(config.taskId, { session_id: realSessionId })
+
+          // Re-key the sessions map
+          const session = this.sessions.get(sessionId)
+          if (session) {
+            this.sessions.delete(sessionId)
+            this.sessions.set(realSessionId, session)
+            sessionId = realSessionId // Update local variable for subsequent code
+          }
+        }
+
         // Forward to renderer
         for (const part of newParts) {
+          console.log(`[AgentManager] Sending to UI: id=${part.id}, partType=${part.type}, update=${part.update}, contentLength=${(part.content || part.text || '').length}`)
           this.sendToRenderer('agent:output', {
             sessionId,
             taskId: config.taskId,
@@ -555,17 +648,45 @@ export class AgentManager extends EventEmitter {
           })
         }
 
+        // Check for pending approval (ACP adapters only)
+        if ('getPendingApproval' in adapter && typeof adapter.getPendingApproval === 'function') {
+          const approval = (adapter as any).getPendingApproval(sessionId)
+          if (approval && !seenPartIds.has(`approval-${approval.toolCallId}`)) {
+            seenPartIds.add(`approval-${approval.toolCallId}`)
+
+            // Emit as a question message (like OpenCode questions)
+            this.sendToRenderer('agent:output', {
+              sessionId,
+              taskId: config.taskId,
+              type: 'message',
+              data: {
+                id: `question-${approval.toolCallId}`,
+                role: 'assistant',
+                content: approval.question,
+                partType: 'question',
+                tool: {
+                  name: 'permission',
+                  questions: [{
+                    header: 'Permission Required',
+                    question: approval.question,
+                    options: approval.options.map(opt => ({
+                      label: opt.name
+                    }))
+                  }]
+                }
+              }
+            })
+          }
+        }
+
         // Check status
         const status = await adapter.getStatus(sessionId, config)
-        if (status.type === SessionStatusType.IDLE) {
-          this.db.updateTask(config.taskId, { status: TaskStatus.ReadyForReview })
-          this.sendToRenderer('agent:status', {
-            sessionId,
-            agentId: config.agentId,
-            taskId: config.taskId,
-            status: 'idle'
-          })
-        } else if (status.type === SessionStatusType.ERROR) {
+        const session = this.sessions.get(sessionId)
+
+        console.log(`[AgentManager] Polling session ${sessionId}: adapter status=${status.type}, session.status=${session?.status}`)
+
+        // Check for errors first (higher priority than idle)
+        if (status.type === SessionStatusType.ERROR) {
           // Check if it's an incompatible session error
           if (status.message?.includes('INCOMPATIBLE_SESSION_ID')) {
             console.warn('[AgentManager] Incompatible session detected during polling:', sessionId)
@@ -596,6 +717,13 @@ export class AgentManager extends EventEmitter {
               partType: 'error'
             }
           })
+        } else if (status.type === SessionStatusType.IDLE && session) {
+          // Use transitionToIdle to extract output values and update status
+          console.log(`[AgentManager] Detected IDLE status for ${sessionId}, calling transitionToIdle`)
+          await this.transitionToIdle(sessionId, session)
+          // Stop polling - session is now idle
+          console.log(`[AgentManager] Stopping polling for idle session ${sessionId}`)
+          return
         }
       } catch (error: any) {
         console.error('[AgentManager] Adapter polling error:', error)
@@ -631,7 +759,8 @@ export class AgentManager extends EventEmitter {
       workspaceDir,
       model: agent.config?.model,
       systemPrompt: agent.config?.system_prompt,
-      mcpServers
+      mcpServers,
+      apiKeys: agent.config?.api_keys
     }
 
     // Initialize adapter
@@ -647,11 +776,11 @@ export class AgentManager extends EventEmitter {
       const errorMessage = error instanceof Error ? error.message : String(error)
       console.log('[AgentManager] adapter.resumeSession threw error:', errorMessage)
 
-      // Check if it's an incompatible session ID error
-      if (errorMessage.includes('INCOMPATIBLE_SESSION_ID')) {
-        console.warn(`[AgentManager] Incompatible session ID detected: ${adapterSessionId}`)
+      // Check if it's an incompatible session ID error or session not found
+      if (errorMessage.includes('INCOMPATIBLE_SESSION_ID') || errorMessage.includes('No conversation found')) {
+        console.warn(`[AgentManager] Session not found or incompatible: ${adapterSessionId}`)
 
-        // Clear the session_id in the database
+        // Clear the old session_id in the database
         this.db.updateTask(taskId, { session_id: null })
 
         // Notify renderer to show dialog asking user to start fresh
@@ -659,10 +788,12 @@ export class AgentManager extends EventEmitter {
         this.sendToRenderer('agent:incompatible-session', {
           taskId,
           agentId,
-          error: errorMessage.replace('INCOMPATIBLE_SESSION_ID: ', '')
+          error: errorMessage.includes('No conversation found')
+            ? 'Session not found on server. Would you like to start a new session?'
+            : errorMessage.replace('INCOMPATIBLE_SESSION_ID: ', '')
         })
 
-        // Throw a silent error that won't be shown to user (dialog already shown)
+        // Throw error to stop the resume flow
         throw new Error('SESSION_INCOMPATIBLE')
       }
 
@@ -688,15 +819,36 @@ export class AgentManager extends EventEmitter {
       }
     }
 
-    // Start polling
-    this.startAdapterPolling(adapterSessionId, adapter, sessionConfig)
+    // Store session in sessions map
+    // Note: ClaudeCodeAdapter doesn't poll until user sends a message
+    const isClaudeCode = adapter.constructor.name === 'ClaudeCodeAdapter'
+
+    this.sessions.set(adapterSessionId, {
+      id: adapterSessionId,
+      agentId,
+      taskId,
+      workspaceDir,
+      status: 'working',
+      createdAt: new Date(),
+      seenMessageIds: new Set(),
+      seenPartIds: new Set(),
+      partContentLengths: new Map(),
+      adapter,
+      pollingStarted: !isClaudeCode // Track if polling has started
+    })
+
+    // Start polling for non-Claude Code adapters
+    // Claude Code will start polling when user sends first message
+    if (!isClaudeCode) {
+      this.startAdapterPolling(adapterSessionId, adapter, sessionConfig)
+    }
 
     // Notify renderer
     this.sendToRenderer('agent:status', {
       sessionId: adapterSessionId,
       agentId,
       taskId,
-      status: 'idle'
+      status: 'working'
     })
 
     return adapterSessionId
@@ -1171,7 +1323,10 @@ export class AgentManager extends EventEmitter {
    * picks up the updated task data on re-fetch.
    */
   private async transitionToIdle(sessionId: string, session: AgentSession): Promise<void> {
-    if (session.status === 'idle') return
+    if (session.status === 'idle') {
+      console.log(`[AgentManager] transitionToIdle: session ${sessionId} already idle, skipping`)
+      return
+    }
     session.status = 'idle'
     console.log(`[AgentManager] Session ${sessionId} → idle`)
 
@@ -1186,7 +1341,18 @@ export class AgentManager extends EventEmitter {
     }
 
     // Update task status to ready_for_review
+    console.log(`[AgentManager] Updating task ${session.taskId} status to ReadyForReview`)
     this.db.updateTask(session.taskId, { status: TaskStatus.ReadyForReview })
+
+    // Get updated task with output fields and notify renderer
+    const updatedTask = this.db.getTask(session.taskId)
+    this.sendToRenderer('task:updated', {
+      taskId: session.taskId,
+      updates: {
+        status: TaskStatus.ReadyForReview,
+        output_fields: updatedTask?.output_fields
+      }
+    })
 
     this.sendToRenderer('agent:status', {
       sessionId, agentId: session.agentId, taskId: session.taskId, status: 'idle'
@@ -1458,7 +1624,20 @@ export class AgentManager extends EventEmitter {
       session.promptAbort = undefined
     }
 
-    if (session.ocClient && session.ocSessionId) {
+    // Check if using adapter (Codex, Claude Code, etc.)
+    const adapter = this.getAdapter(session.agentId)
+    if (adapter) {
+      try {
+        const agent = this.db.getAgent(session.agentId)
+        if (agent) {
+          const sessionConfig = this.buildSessionConfig(session.agentId, session.taskId, session.workspaceDir)
+          await adapter.abortPrompt(sessionId, sessionConfig)
+        }
+      } catch (error) {
+        console.error(`[AgentManager] Error aborting adapter session:`, error)
+      }
+    } else if (session.ocClient && session.ocSessionId) {
+      // Legacy OpenCode path
       try {
         await session.ocClient.session.abort({
           path: { id: session.ocSessionId }
@@ -1483,15 +1662,16 @@ export class AgentManager extends EventEmitter {
 
   /**
    * Fully destroys the session — stops polling, removes from map.
+   * @param resetTaskStatus - If true, resets task status to NotStarted (default: true)
    */
-  async stopSession(sessionId: string): Promise<void> {
+  async stopSession(sessionId: string, resetTaskStatus: boolean = true): Promise<void> {
     const session = this.sessions.get(sessionId)
     if (!session) {
       console.log(`[AgentManager] Session ${sessionId} not found`)
       return
     }
 
-    console.log(`[AgentManager] Destroying session ${sessionId}`)
+    console.log(`[AgentManager] Destroying session ${sessionId} (resetTaskStatus=${resetTaskStatus})`)
 
     if (session.pollTimer) {
       clearTimeout(session.pollTimer)
@@ -1502,7 +1682,20 @@ export class AgentManager extends EventEmitter {
       session.promptAbort = undefined
     }
 
-    if (session.ocClient && session.ocSessionId) {
+    // Check if using adapter (Codex, Claude Code, etc.)
+    const adapter = this.getAdapter(session.agentId)
+    if (adapter) {
+      try {
+        const agent = this.db.getAgent(session.agentId)
+        if (agent) {
+          const sessionConfig = this.buildSessionConfig(session.agentId, session.taskId, session.workspaceDir)
+          await adapter.destroySession(sessionId, sessionConfig)
+        }
+      } catch (error) {
+        console.error(`[AgentManager] Error destroying adapter session:`, error)
+      }
+    } else if (session.ocClient && session.ocSessionId) {
+      // Legacy OpenCode path
       try {
         await session.ocClient.session.abort({
           path: { id: session.ocSessionId }
@@ -1513,8 +1706,12 @@ export class AgentManager extends EventEmitter {
     }
 
     this.sessions.delete(sessionId)
-    // Revert task status on stop — keep session_id so session is resumable
-    this.db.updateTask(session.taskId, { status: TaskStatus.NotStarted })
+
+    // Only reset task status if explicitly requested (e.g., user manually stopped, not app shutdown)
+    if (resetTaskStatus) {
+      this.db.updateTask(session.taskId, { status: TaskStatus.NotStarted })
+    }
+
     this.sendToRenderer('agent:status', {
       sessionId,
       agentId: session.agentId,
@@ -1536,14 +1733,82 @@ export class AgentManager extends EventEmitter {
         if (!session) throw new Error('Failed to restart session')
         // Fall through to send the user's message as the first prompt
         sessionId = newSessionId
-        await this.doSendMessage(session, sessionId, message)
+
+        // Check if this is an adapter session or legacy OpenCode
+        if (session.adapter) {
+          await this.doSendAdapterMessage(session, sessionId, message)
+        } else {
+          await this.doSendMessage(session, sessionId, message)
+        }
         return { newSessionId }
       }
     }
 
     if (!session) throw new Error(`Session not found: ${sessionId}`)
-    await this.doSendMessage(session, sessionId, message)
+
+    // Check if this is an adapter session or legacy OpenCode
+    if (session.adapter) {
+      await this.doSendAdapterMessage(session, sessionId, message)
+    } else {
+      await this.doSendMessage(session, sessionId, message)
+    }
     return {}
+  }
+
+  private async doSendAdapterMessage(session: AgentSession, sessionId: string, message: string): Promise<void> {
+    if (session.status === 'error') throw new Error('Session is in error state')
+    if (!session.adapter) throw new Error('Adapter not initialized')
+
+    console.log(`[AgentManager] Sending message to adapter session ${sessionId}`)
+
+    // Update status to working
+    session.status = 'working'
+    this.db.updateTask(session.taskId, { status: TaskStatus.AgentWorking })
+    this.sendToRenderer('agent:status', {
+      sessionId,
+      agentId: session.agentId,
+      taskId: session.taskId,
+      status: 'working'
+    })
+
+    // Show user's message in UI
+    this.sendToRenderer('agent:output', {
+      sessionId,
+      taskId: session.taskId,
+      type: 'message',
+      data: {
+        id: `user-message-${Date.now()}`,
+        role: 'user',
+        content: message,
+        partType: 'text'
+      }
+    })
+
+    // Build session config
+    const agent = this.db.getAgent(session.agentId)!
+    const mcpServers = this.buildMcpServersForAdapter(session.agentId)
+    const sessionConfig: SessionConfig = {
+      agentId: session.agentId,
+      taskId: session.taskId,
+      workspaceDir: session.workspaceDir || process.cwd(),
+      model: agent.config?.model,
+      systemPrompt: agent.config?.system_prompt,
+      mcpServers,
+      apiKeys: agent.config?.api_keys
+    }
+
+    // Send prompt via adapter
+    const parts: MessagePart[] = [
+      { type: MessagePartType.TEXT, text: message }
+    ]
+    await session.adapter.sendPrompt(sessionId, parts, sessionConfig)
+
+    // Start polling if not already started (for Claude Code after resume)
+    if (!session.pollingStarted) {
+      console.log(`[AgentManager] Starting polling for session ${sessionId}`)
+      session.pollingStarted = true
+      this.startAdapterPolling(sessionId, session.adapter, sessionConfig)
+    }
   }
 
   private async doSendMessage(session: AgentSession, sessionId: string, message: string): Promise<void> {
@@ -1600,7 +1865,33 @@ export class AgentManager extends EventEmitter {
     })
   }
 
-  async respondToPermission(sessionId: string, approved: boolean, _message?: string): Promise<void> {
+  async respondToPermission(sessionId: string, approved: boolean, message?: string, optionId?: string): Promise<void> {
+    // Check if this is an adapter session
+    const agent = [...this.sessions.values()].find(s => s.id === sessionId)?.agentId
+    if (agent) {
+      const adapter = this.getAdapter(agent)
+      if (adapter && 'respondToApproval' in adapter && typeof adapter.respondToApproval === 'function') {
+        // For ACP adapters, map the user's answer to an optionId
+        // The UI passes the selected option label as 'message'
+        let selectedOption = optionId
+        if (!selectedOption && message) {
+          // Map common answers to option IDs
+          const answerMap: Record<string, string> = {
+            'Always': 'approved-for-session',
+            'Yes': 'approved',
+            'No, provide feedback': 'abort',
+            'No': 'abort'
+          }
+          selectedOption = answerMap[message] || (approved ? 'approved' : 'abort')
+        }
+
+        console.log(`[AgentManager] Responding to adapter approval with: ${selectedOption}`)
+        await (adapter as any).respondToApproval(sessionId, approved, selectedOption)
+        return
+      }
+    }
+
+    // OpenCode session handling
     const session = this.sessions.get(sessionId)
     if (!session) throw new Error(`Session not found: ${sessionId}`)
 
@@ -1621,7 +1912,8 @@ export class AgentManager extends EventEmitter {
   stopAllSessions(): void {
     console.log(`[AgentManager] Stopping all ${this.sessions.size} sessions`)
     for (const sessionId of [...this.sessions.keys()]) {
-      this.stopSession(sessionId)
+      // Don't reset task status during app shutdown - preserve current status
+      this.stopSession(sessionId, false)
     }
   }
 
@@ -1807,6 +2099,7 @@ export class AgentManager extends EventEmitter {
     }
   }
 
+
   async getProviders(serverUrl?: string, directory?: string): Promise<{ providers: any[]; default: Record<string, string> } | null> {
     await this.ensureSDKLoaded()
     if (!OpenCodeSDK) return null
@@ -1882,10 +2175,10 @@ export class AgentManager extends EventEmitter {
 
     const hasFileFields = fields.some((f) => f.type === 'file')
     if (hasFileFields) {
-      lines.push('\nFor file fields, return the absolute path to the file you created.')
+      lines.push('\nFor file fields, return the absolute path to the file you created in the workspace.')
     }
 
-    lines.push('\nExample format:')
+    lines.push('\nExample output format (if you have ``` inside the output - escape with \\`\\`\\`):')
     lines.push('```json')
     lines.push(JSON.stringify(exampleObj, null, 2))
     lines.push('```')
@@ -1899,22 +2192,37 @@ export class AgentManager extends EventEmitter {
    */
   private async extractOutputValues(sessionId: string): Promise<void> {
     const session = this.sessions.get(sessionId)
-    if (!session?.ocClient || !session.ocSessionId) return
+    if (!session?.adapter) return
 
     const task = this.db.getTask(session.taskId)
     if (!task?.output_fields || task.output_fields.length === 0) return
 
+    console.log(`[AgentManager] Extracting output values for task ${session.taskId}`)
+
     try {
-      // Fetch messages to find last assistant text
-      const messagesResult: any = await session.ocClient.session.messages({
-        path: { id: session.ocSessionId },
-        ...(session.workspaceDir && { query: { directory: session.workspaceDir } })
-      })
+      // Use standardized getAllMessages from adapter
+      let messages: any[] = []
 
-      if (!messagesResult.data || !Array.isArray(messagesResult.data)) return
+      if (session.adapter.getAllMessages) {
+        messages = await session.adapter.getAllMessages(sessionId, {
+          agentId: session.agentId,
+          taskId: session.taskId,
+          workspaceDir: session.workspaceDir || process.cwd()
+        })
+        console.log(`[AgentManager] Retrieved ${messages.length} messages from adapter`)
+      } else {
+        console.warn('[AgentManager] Adapter does not implement getAllMessages')
+        return
+      }
 
-      // Collect all assistant messages (not just last) for text + tool extraction
-      const assistantMessages = messagesResult.data.filter((m: any) => m.info?.role === 'assistant')
+      if (messages.length === 0) {
+        console.log('[AgentManager] No messages found')
+        return
+      }
+
+      // Filter for assistant messages
+      const assistantMessages = messages.filter((m: any) => m.role === 'assistant')
+      console.log(`[AgentManager] Found ${assistantMessages.length} assistant messages`)
 
       let parsedValues: Record<string, unknown> = {}
 
@@ -1939,11 +2247,20 @@ export class AgentManager extends EventEmitter {
       // Extract JSON block from ALL assistant text (search last message first, then earlier ones)
       for (let i = assistantMessages.length - 1; i >= 0; i--) {
         const msg = assistantMessages[i]
+        console.log(`[AgentManager] Processing message ${i}, parts count:`, msg.parts?.length)
         if (!msg.parts) continue
+
+        // Debug: log part types
+        msg.parts.forEach((p: any, idx: number) => {
+          console.log(`[AgentManager]   Part ${idx}: type=${p.type}, hasText=${!!p.text}, textLength=${p.text?.length || 0}`)
+        })
+
         const fullText = msg.parts
           .filter((p: any) => p.type === 'text' && p.text)
           .map((p: any) => p.text)
           .join('\n')
+
+        console.log(`[AgentManager] Full text length: ${fullText.length}, preview:`, fullText.slice(0, 200))
         if (!fullText) continue
 
         const jsonMatch = fullText.match(/```json\s*\n?([\s\S]*?)\n?\s*```/)

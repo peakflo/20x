@@ -14,6 +14,8 @@ export type {
 } from './coding-agent-adapter'
 
 export { ClaudeCodeAdapter } from './claude-code-adapter'
+export { CodexAdapter } from './codex-adapter'
+export { AcpAdapter, type AcpAgentType } from './acp-adapter'
 
 // TODO: Extract OpencodeAdapter from AgentManager once ready
 // export { OpencodeAdapter } from './opencode-adapter'

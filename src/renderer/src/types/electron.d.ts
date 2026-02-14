@@ -150,6 +150,9 @@ interface ElectronAPI {
     set: (key: string, value: string) => Promise<void>
     getAll: () => Promise<Record<string, string>>
   }
+  env: {
+    get: (key: string) => Promise<string | null>
+  }
   github: {
     checkCli: () => Promise<GhCliStatus>
     startAuth: () => Promise<void>
@@ -193,6 +196,7 @@ interface ElectronAPI {
   onAgentStatus: (callback: (event: AgentStatusEvent) => void) => () => void
   onAgentApproval: (callback: (event: AgentApprovalRequest) => void) => () => void
   onAgentIncompatibleSession: (callback: (event: { taskId: string; agentId: string; error: string }) => void) => () => void
+  onTaskUpdated: (callback: (event: { taskId: string; updates: Partial<WorkfloTask> }) => void) => () => void
   onWorktreeProgress: (callback: (event: WorktreeProgressEvent) => void) => () => void
 }
 
