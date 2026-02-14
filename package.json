@@ -1,6 +1,6 @@
 {
   "name": "pf-desktop",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "packageManager": "pnpm@9.15.2",
   "description": "Workflo Workspace - Task Management Desktop App",
   "main": "./out/main/index.js",
@@ -35,6 +35,7 @@
     "better-sqlite3": "^11.7.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "fix-path": "^5.0.0",
     "lucide-react": "^0.468.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
