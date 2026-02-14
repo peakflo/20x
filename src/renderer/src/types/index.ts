@@ -1,9 +1,31 @@
 // ── Agent types ─────────────────────────────────────────────
 
-export type CodingAgentType = 'opencode'
+export enum CodingAgentType {
+  OPENCODE = 'opencode',
+  CLAUDE_CODE = 'claude-code'
+}
 
 export const CODING_AGENTS: { value: CodingAgentType; label: string }[] = [
-  { value: 'opencode', label: 'Opencode' }
+  { value: CodingAgentType.OPENCODE, label: 'OpenCode' },
+  { value: CodingAgentType.CLAUDE_CODE, label: 'Claude Code' }
+]
+
+export enum ClaudeModel {
+  SONNET_4_5 = 'claude-sonnet-4-5',
+  OPUS_4_6 = 'claude-opus-4-6',
+  HAIKU_4_5 = 'claude-haiku-4-5',
+  SONNET_3_7 = 'claude-3-7-sonnet-20250219',
+  SONNET_3_5_OCT = 'claude-3-5-sonnet-20241022',
+  SONNET_3_5_JUN = 'claude-3-5-sonnet-20240620'
+}
+
+export const CLAUDE_MODELS: { id: ClaudeModel; name: string }[] = [
+  { id: ClaudeModel.SONNET_4_5, name: 'Claude Sonnet 4.5' },
+  { id: ClaudeModel.OPUS_4_6, name: 'Claude Opus 4.6' },
+  { id: ClaudeModel.HAIKU_4_5, name: 'Claude Haiku 4.5' },
+  { id: ClaudeModel.SONNET_3_7, name: 'Claude 3.7 Sonnet' },
+  { id: ClaudeModel.SONNET_3_5_OCT, name: 'Claude 3.5 Sonnet (Oct)' },
+  { id: ClaudeModel.SONNET_3_5_JUN, name: 'Claude 3.5 Sonnet (Jun)' }
 ]
 
 export interface McpServerConfig {
@@ -160,7 +182,7 @@ export interface WorkfloTask {
   repos: string[]
   output_fields: OutputField[]
   agent_id: string | null
-  oc_session_id: string | null
+  session_id: string | null
   external_id: string | null
   source_id: string | null
   source: string

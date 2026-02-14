@@ -31,6 +31,7 @@ export interface AgentMcpServerEntry {
 }
 
 export interface AgentConfigRecord {
+  coding_agent?: 'opencode' | 'claude-code'
   model?: string
   system_prompt?: string
   mcp_servers?: Array<string | AgentMcpServerEntry>
@@ -194,7 +195,7 @@ export interface TaskRow {
   source_id: string | null
   source: string
   skill_ids: string | null
-  oc_session_id: string | null
+  session_id: string | null
   snoozed_until: string | null
   created_at: string
   updated_at: string
@@ -218,7 +219,7 @@ export interface TaskRecord {
   source_id: string | null
   source: string
   skill_ids: string[] | null
-  oc_session_id: string | null
+  session_id: string | null
   snoozed_until: string | null
   created_at: string
   updated_at: string
@@ -263,7 +264,7 @@ export interface UpdateTaskData {
   output_fields?: OutputFieldRecord[]
   agent_id?: string | null
   skill_ids?: string[] | null
-  oc_session_id?: string | null
+  session_id?: string | null
   snoozed_until?: string | null
 }
 
@@ -282,7 +283,7 @@ const UPDATABLE_COLUMNS = new Set([
   'output_fields',
   'agent_id',
   'skill_ids',
-  'oc_session_id',
+  'session_id',
   'snoozed_until'
 ])
 
@@ -299,7 +300,7 @@ function deserializeTask(row: TaskRow): TaskRecord {
     external_id: row.external_id ?? null,
     source_id: row.source_id ?? null,
     skill_ids: row.skill_ids ? JSON.parse(row.skill_ids) as string[] : null,
-    oc_session_id: row.oc_session_id ?? null,
+    session_id: row.session_id ?? null,
     snoozed_until: row.snoozed_until ?? null
   }
 }
@@ -507,8 +508,15 @@ export class DatabaseManager {
       this.db.exec(`ALTER TABLE tasks ADD COLUMN skill_ids TEXT DEFAULT NULL`)
     }
 
-    if (!columnNames.has('oc_session_id')) {
-      this.db.exec(`ALTER TABLE tasks ADD COLUMN oc_session_id TEXT DEFAULT NULL`)
+    // Migrate oc_session_id to session_id (for backward compatibility)
+    if (columnNames.has('oc_session_id') && !columnNames.has('session_id')) {
+      // Rename column by creating new column, copying data, dropping old
+      this.db.exec(`ALTER TABLE tasks ADD COLUMN session_id TEXT DEFAULT NULL`)
+      this.db.exec(`UPDATE tasks SET session_id = oc_session_id WHERE oc_session_id IS NOT NULL`)
+      // Note: SQLite doesn't support DROP COLUMN in all versions, so we leave oc_session_id for now
+      // It will be unused going forward
+    } else if (!columnNames.has('session_id')) {
+      this.db.exec(`ALTER TABLE tasks ADD COLUMN session_id TEXT DEFAULT NULL`)
     }
 
     if (!columnNames.has('snoozed_until')) {
@@ -573,6 +581,16 @@ export class DatabaseManager {
         UPDATE tasks SET status = 'agent_working' WHERE status = 'in_progress';
         UPDATE tasks SET status = 'ready_for_review' WHERE status = 'pending_review';
       `)
+    }
+
+    // Add coding_agent column to agents table for multi-backend support
+    const agentColumns = this.db.pragma('table_info(agents)') as { name: string }[]
+    const agentColumnNames = new Set(agentColumns.map((c) => c.name))
+
+    if (!agentColumnNames.has('coding_agent')) {
+      this.db.exec(`ALTER TABLE agents ADD COLUMN coding_agent TEXT NOT NULL DEFAULT 'opencode'`)
+      // Update existing agents to explicitly have 'opencode' as their coding_agent
+      this.db.exec(`UPDATE agents SET coding_agent = 'opencode' WHERE coding_agent IS NULL OR coding_agent = ''`)
     }
 
     // Seed default agent if none exist

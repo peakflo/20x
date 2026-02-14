@@ -8,8 +8,8 @@ import { Checkbox } from '@/components/ui/Checkbox'
 import { agentConfigApi } from '@/lib/ipc-client'
 import { useMcpStore } from '@/stores/mcp-store'
 import { SkillSelector } from '@/components/skills/SkillSelector'
-import type { Agent, CreateAgentDTO, UpdateAgentDTO, CodingAgentType, AgentMcpServerEntry } from '@/types'
-import { CODING_AGENTS } from '@/types'
+import type { Agent, CreateAgentDTO, UpdateAgentDTO, AgentMcpServerEntry } from '@/types'
+import { CodingAgentType, CODING_AGENTS, CLAUDE_MODELS } from '@/types'
 
 interface AgentFormProps {
   agent?: Agent
@@ -61,8 +61,11 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
 
   // Fetch models when coding agent is selected
   useEffect(() => {
-    if (codingAgent === 'opencode') {
+    if (codingAgent === CodingAgentType.OPENCODE) {
       fetchModels()
+    } else if (codingAgent === CodingAgentType.CLAUDE_CODE) {
+      // For Claude Code, show predefined Claude models
+      setAvailableModels(CLAUDE_MODELS)
     } else {
       setAvailableModels([])
       setModel('')
@@ -231,7 +234,13 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
           value={serverUrl}
           onChange={(e) => setServerUrl(e.target.value)}
           placeholder="http://localhost:4096"
+          disabled={codingAgent === CodingAgentType.CLAUDE_CODE}
         />
+        {codingAgent === CodingAgentType.CLAUDE_CODE && (
+          <p className="text-xs text-muted-foreground">
+            Claude Code runs locally and doesn't require a server URL
+          </p>
+        )}
       </div>
 
       <div className="space-y-1.5">
@@ -249,7 +258,7 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
         </select>
       </div>
 
-      {codingAgent === 'opencode' && (
+      {(codingAgent === CodingAgentType.OPENCODE || codingAgent === CodingAgentType.CLAUDE_CODE) && (
         <div className="space-y-1.5">
           <Label htmlFor="agent-model">Model</Label>
           <div className="relative">

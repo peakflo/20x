@@ -2,6 +2,7 @@ import { LayoutList } from 'lucide-react'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { FeedbackDialog } from './FeedbackDialog'
 import { SnoozeDialog } from './SnoozeDialog'
+import { IncompatibleSessionDialog } from './IncompatibleSessionDialog'
 import { TaskDetailView } from './TaskDetailView'
 import { AgentTranscriptPanel } from '@/components/agents/AgentTranscriptPanel'
 import { AgentApprovalBanner } from '@/components/agents/AgentApprovalBanner'
@@ -12,7 +13,7 @@ import { useAgentSession } from '@/hooks/use-agent-session'
 import { useAgentStore } from '@/stores/agent-store'
 import { useSettingsStore } from '@/stores/settings-store'
 import { useTaskStore } from '@/stores/task-store'
-import { taskApi, worktreeApi, githubApi, agentSessionApi, taskSourceApi } from '@/lib/ipc-client'
+import { taskApi, worktreeApi, githubApi, agentSessionApi, taskSourceApi, onAgentIncompatibleSession } from '@/lib/ipc-client'
 import { useEffect, useCallback, useRef, useState } from 'react'
 import { TaskStatus } from '@/types'
 import type { WorkfloTask, FileAttachment, OutputField, Agent } from '@/types'
@@ -50,6 +51,8 @@ export function TaskWorkspace({
   const [isSettingUpWorktree, setIsSettingUpWorktree] = useState(false)
   const [showFeedback, setShowFeedback] = useState(false)
   const [showSnooze, setShowSnooze] = useState(false)
+  const [showIncompatibleSession, setShowIncompatibleSession] = useState(false)
+  const [incompatibleSessionError, setIncompatibleSessionError] = useState<string>()
   const learningRef = useRef(false)
   const startingRef = useRef(false)
 
@@ -57,6 +60,24 @@ export function TaskWorkspace({
 
   // Fetch settings on mount
   useEffect(() => { fetchSettings() }, [])
+
+  // Listen for incompatible session events
+  useEffect(() => {
+    if (!task?.id) return
+
+    const handleIncompatibleSession = (data: { taskId: string; error: string }) => {
+      if (data.taskId === task.id) {
+        setIncompatibleSessionError(data.error)
+        setShowIncompatibleSession(true)
+      }
+    }
+
+    const unsubscribe = onAgentIncompatibleSession(handleIncompatibleSession)
+
+    return () => {
+      unsubscribe()
+    }
+  }, [task?.id])
 
   // Re-fetch tasks when agent status changes (status is updated in DB by agent-manager)
   const prevStatusRef = useRef(session.status)
@@ -118,18 +139,18 @@ export function TaskWorkspace({
   }, [task?.agent_id, task?.id, task?.repos, session.sessionId, githubOrg, start])
 
   const handleResumeSession = useCallback(async () => {
-    if (!task?.agent_id || !task?.oc_session_id || startingRef.current || session.sessionId) return
+    if (!task?.agent_id || !task?.session_id || startingRef.current || session.sessionId) return
     startingRef.current = true
     try {
-      await resume(task.agent_id, task.id, task.oc_session_id)
+      await resume(task.agent_id, task.id, task.session_id)
     } catch (err) {
       console.error('Failed to resume session:', err)
-      // Session expired — refresh tasks to clear oc_session_id in UI
+      // Session expired — refresh tasks to clear session_id in UI
       fetchTasks()
     } finally {
       startingRef.current = false
     }
-  }, [task?.agent_id, task?.id, task?.oc_session_id, session.sessionId, resume, fetchTasks])
+  }, [task?.agent_id, task?.id, task?.session_id, session.sessionId, resume, fetchTasks])
 
   const handleGhSetupComplete = useCallback(() => {
     setShowGhSetup(false)
@@ -267,6 +288,18 @@ export function TaskWorkspace({
     }
   }, [task, onUpdateTask, fetchTasks])
 
+  const handleStartFreshSession = useCallback(async () => {
+    if (!task?.agent_id) return
+    startingRef.current = true
+    try {
+      await start(task.agent_id, task.id)
+    } catch (err) {
+      console.error('Failed to start fresh session:', err)
+    } finally {
+      startingRef.current = false
+    }
+  }, [task?.agent_id, task?.id, start])
+
   if (!task) {
     return (
       <div className="flex items-center justify-center h-full">
@@ -281,8 +314,8 @@ export function TaskWorkspace({
 
   // Show panel if session exists (active or past transcript with messages)
   const showPanel = session.status !== 'idle' || session.messages.length > 0
-  const canResume = task.agent_id && task.oc_session_id && !session.sessionId && session.status === 'idle'
-  const canStart = task.agent_id && !task.oc_session_id && !session.sessionId && session.status === 'idle'
+  const canResume = task.agent_id && task.session_id && !session.sessionId && session.status === 'idle'
+  const canStart = task.agent_id && !task.session_id && !session.sessionId && session.status === 'idle'
     && task.status !== TaskStatus.Completed
 
   return (
@@ -359,6 +392,13 @@ export function TaskWorkspace({
         open={showSnooze}
         onOpenChange={setShowSnooze}
         onSnooze={handleSnooze}
+      />
+
+      <IncompatibleSessionDialog
+        open={showIncompatibleSession}
+        onOpenChange={setShowIncompatibleSession}
+        onStartFresh={handleStartFreshSession}
+        error={incompatibleSessionError}
       />
     </>
   )

@@ -21,7 +21,7 @@ function makeWorkfloTask(overrides: Partial<WorkfloTask> = {}): WorkfloTask {
     repos: [],
     output_fields: [],
     agent_id: null,
-    oc_session_id: null,
+    session_id: null,
     external_id: null,
     source_id: null,
     source: 'local',
