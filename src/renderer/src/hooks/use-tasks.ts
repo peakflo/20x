@@ -13,9 +13,10 @@ const PRIORITY_ORDER: Record<TaskPriority, number> = {
 
 const STATUS_ORDER: Record<TaskStatus, number> = {
   [TaskStatus.AgentWorking]: 0,
-  [TaskStatus.ReadyForReview]: 1,
-  [TaskStatus.NotStarted]: 2,
-  [TaskStatus.Completed]: 3
+  [TaskStatus.AgentLearning]: 1,
+  [TaskStatus.ReadyForReview]: 2,
+  [TaskStatus.NotStarted]: 3,
+  [TaskStatus.Completed]: 4
 }
 
 export function useTasks() {

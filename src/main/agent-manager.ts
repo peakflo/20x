@@ -1333,11 +1333,49 @@ export class AgentManager extends EventEmitter {
     // In learning mode, skip output extraction, task status, and renderer notification
     if (session.learningMode) return
 
+    // Check if task is in learning mode (feedback flow)
+    const task = this.db.getTask(session.taskId)
+    console.log(`[AgentManager] transitionToIdle checking task status: ${task?.status} (looking for ${TaskStatus.AgentLearning})`)
+    if (task?.status === TaskStatus.AgentLearning) {
+      console.log(`[AgentManager] Task in learning mode, syncing skills and marking as completed`)
+
+      // Sync skills from workspace
+      try {
+        await this.syncSkillsFromWorkspace(session.taskId)
+      } catch (err) {
+        console.error(`[AgentManager] Skill sync error:`, err)
+      }
+
+      // Mark task as completed
+      this.db.updateTask(session.taskId, { status: TaskStatus.Completed })
+
+      this.sendToRenderer('task:updated', {
+        taskId: session.taskId,
+        updates: { status: TaskStatus.Completed }
+      })
+
+      this.sendToRenderer('agent:status', {
+        sessionId, agentId: session.agentId, taskId: session.taskId, status: 'idle'
+      })
+      return
+    }
+
     // Extract output field values BEFORE notifying the renderer
     try {
       await this.extractOutputValues(sessionId)
     } catch (err) {
       console.error(`[AgentManager] extractOutputValues error:`, err)
+    }
+
+    // Check again if task is still in a state where we should update it
+    // (frontend might have already completed it during feedback flow)
+    const taskAfterExtract = this.db.getTask(session.taskId)
+    if (taskAfterExtract?.status === TaskStatus.AgentLearning || taskAfterExtract?.status === TaskStatus.Completed) {
+      console.log(`[AgentManager] Task already in final state (${taskAfterExtract.status}), skipping status update`)
+      this.sendToRenderer('agent:status', {
+        sessionId, agentId: session.agentId, taskId: session.taskId, status: 'idle'
+      })
+      return
     }
 
     // Update task status to ready_for_review
@@ -1651,7 +1689,7 @@ export class AgentManager extends EventEmitter {
     await this.fetchNewMessages(sessionId)
 
     session.status = 'idle'
-    this.db.updateTask(session.taskId, { status: TaskStatus.NotStarted })
+    this.db.updateTask(session.taskId, { status: TaskStatus.AgentWorking })
     this.sendToRenderer('agent:status', {
       sessionId,
       agentId: session.agentId,
@@ -1708,8 +1746,12 @@ export class AgentManager extends EventEmitter {
     this.sessions.delete(sessionId)
 
     // Only reset task status if explicitly requested (e.g., user manually stopped, not app shutdown)
+    // But never reset if task is already Completed
     if (resetTaskStatus) {
-      this.db.updateTask(session.taskId, { status: TaskStatus.NotStarted })
+      const task = this.db.getTask(session.taskId)
+      if (task?.status !== TaskStatus.Completed) {
+        this.db.updateTask(session.taskId, { status: TaskStatus.NotStarted })
+      }
     }
 
     this.sendToRenderer('agent:status', {
@@ -1761,9 +1803,12 @@ export class AgentManager extends EventEmitter {
 
     console.log(`[AgentManager] Sending message to adapter session ${sessionId}`)
 
-    // Update status to working
+    // Update status to working (but preserve AgentLearning if set)
     session.status = 'working'
-    this.db.updateTask(session.taskId, { status: TaskStatus.AgentWorking })
+    const currentTask = this.db.getTask(session.taskId)
+    if (currentTask?.status !== TaskStatus.AgentLearning) {
+      this.db.updateTask(session.taskId, { status: TaskStatus.AgentWorking })
+    }
     this.sendToRenderer('agent:status', {
       sessionId,
       agentId: session.agentId,
@@ -2345,7 +2390,7 @@ export class AgentManager extends EventEmitter {
    * Parses a SKILL.md file's raw content into name, description, and content.
    * Expected format: ---\nname: ...\ndescription: ...\n---\n\ncontent
    */
-  private parseSkillMd(raw: string): { name: string; description: string; content: string } | null {
+  private parseSkillMd(raw: string): { name: string; description: string; content: string; confidence?: number; uses?: number; last_used?: string | null; tags?: string[] } | null {
     const match = raw.match(/^---\s*\n([\s\S]*?)\n---\s*\n\n?([\s\S]*)$/)
     if (!match) return null
 
@@ -2362,7 +2407,25 @@ export class AgentManager extends EventEmitter {
     // Validate name pattern
     if (!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(name)) return null
 
-    return { name, description, content }
+    // Parse optional metadata
+    const confidenceMatch = frontmatter.match(/^confidence:\s*([0-9.]+)$/m)
+    const usesMatch = frontmatter.match(/^uses:\s*(\d+)$/m)
+    const lastUsedMatch = frontmatter.match(/^lastUsed:\s*(.+)$/m)
+    const tagsMatch = frontmatter.match(/^tags:\s*\n((?:  - .+\n?)+)/m)
+
+    const confidence = confidenceMatch ? parseFloat(confidenceMatch[1]) : undefined
+    const uses = usesMatch ? parseInt(usesMatch[1], 10) : undefined
+    const last_used = lastUsedMatch ? lastUsedMatch[1].trim() : undefined
+
+    let tags: string[] | undefined
+    if (tagsMatch) {
+      tags = tagsMatch[1]
+        .split('\n')
+        .map(line => line.trim().replace(/^- /, ''))
+        .filter(Boolean)
+    }
+
+    return { name, description, content, confidence, uses, last_used, tags }
   }
 
   /**
@@ -2436,11 +2499,22 @@ export class AgentManager extends EventEmitter {
 
       const existing = this.db.getSkillByName(parsed.name)
       if (existing) {
-        // Only update if content or description changed
-        if (existing.content !== parsed.content || existing.description !== parsed.description) {
+        // Check if any field changed
+        const contentChanged = existing.content !== parsed.content
+        const descChanged = existing.description !== parsed.description
+        const confidenceChanged = parsed.confidence !== undefined && existing.confidence !== parsed.confidence
+        const usesChanged = parsed.uses !== undefined && existing.uses !== parsed.uses
+        const lastUsedChanged = parsed.last_used !== undefined && existing.last_used !== parsed.last_used
+        const tagsChanged = parsed.tags !== undefined && JSON.stringify(existing.tags) !== JSON.stringify(parsed.tags)
+
+        if (contentChanged || descChanged || confidenceChanged || usesChanged || lastUsedChanged || tagsChanged) {
           this.db.updateSkill(existing.id, {
             description: parsed.description,
-            content: parsed.content
+            content: parsed.content,
+            ...(parsed.confidence !== undefined && { confidence: parsed.confidence }),
+            ...(parsed.uses !== undefined && { uses: parsed.uses }),
+            ...(parsed.last_used !== undefined && { last_used: parsed.last_used }),
+            ...(parsed.tags !== undefined && { tags: parsed.tags })
           })
           result.updated.push(parsed.name)
         } else {
@@ -2450,7 +2524,11 @@ export class AgentManager extends EventEmitter {
         this.db.createSkill({
           name: parsed.name,
           description: parsed.description,
-          content: parsed.content
+          content: parsed.content,
+          confidence: parsed.confidence,
+          uses: parsed.uses,
+          last_used: parsed.last_used,
+          tags: parsed.tags
         })
         result.created.push(parsed.name)
       }

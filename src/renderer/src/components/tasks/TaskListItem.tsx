@@ -9,6 +9,7 @@ const statusDotColor: Record<TaskStatus, string> = {
   [TaskStatus.NotStarted]: 'bg-muted-foreground',
   [TaskStatus.AgentWorking]: 'bg-amber-400',
   [TaskStatus.ReadyForReview]: 'bg-purple-400',
+  [TaskStatus.AgentLearning]: 'bg-blue-400',
   [TaskStatus.Completed]: 'bg-emerald-400'
 }
 

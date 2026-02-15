@@ -41,12 +41,14 @@ export function SkillWorkspace() {
 
 function SkillEditor({ skill, onUpdate, onDelete, onDeselect }: {
   skill: Skill
-  onUpdate: (id: string, data: { name?: string; description?: string; content?: string }) => Promise<Skill | null>
+  onUpdate: (id: string, data: { name?: string; description?: string; content?: string; confidence?: number; tags?: string[] }) => Promise<Skill | null>
   onDelete: (id: string) => Promise<boolean>
   onDeselect: () => void
 }) {
   const [name, setName] = useState(skill.name)
   const [description, setDescription] = useState(skill.description)
+  const [confidence, setConfidence] = useState(skill.confidence)
+  const [tagsInput, setTagsInput] = useState(skill.tags.join(', '))
   const [content, setContent] = useState(skill.content)
   const [showDelete, setShowDelete] = useState(false)
   const [nameError, setNameError] = useState<string | null>(null)
@@ -54,11 +56,17 @@ function SkillEditor({ skill, onUpdate, onDelete, onDeselect }: {
   useEffect(() => {
     setName(skill.name)
     setDescription(skill.description)
+    setConfidence(skill.confidence)
+    setTagsInput(skill.tags.join(', '))
     setContent(skill.content)
     setNameError(null)
   }, [skill.id])
 
-  const isDirty = name !== skill.name || description !== skill.description || content !== skill.content
+  const isDirty = name !== skill.name ||
+                  description !== skill.description ||
+                  confidence !== skill.confidence ||
+                  tagsInput !== skill.tags.join(', ') ||
+                  content !== skill.content
 
   const handleSave = async () => {
     if (!NAME_PATTERN.test(name)) {
@@ -70,9 +78,15 @@ function SkillEditor({ skill, onUpdate, onDelete, onDeselect }: {
     }
     setNameError(null)
 
-    const data: { name?: string; description?: string; content?: string } = {}
+    const data: { name?: string; description?: string; content?: string; confidence?: number; tags?: string[] } = {}
     if (name !== skill.name) data.name = name
     if (description !== skill.description) data.description = description
+    if (confidence !== skill.confidence) data.confidence = confidence
+
+    // Parse tags from comma-separated input
+    const newTags = tagsInput.split(',').map(t => t.trim()).filter(t => t.length > 0)
+    if (tagsInput !== skill.tags.join(', ')) data.tags = newTags
+
     if (content !== skill.content) data.content = content
 
     if (Object.keys(data).length > 0) {
@@ -102,6 +116,18 @@ function SkillEditor({ skill, onUpdate, onDelete, onDeselect }: {
 
       <div className="flex-1 overflow-y-auto">
         <div className="max-w-2xl mx-auto px-8 py-8 space-y-5">
+          {/* Read-only Metadata */}
+          <div className="grid grid-cols-2 gap-4 p-4 rounded-lg bg-accent/50">
+            <div>
+              <Label className="text-xs text-muted-foreground">Uses</Label>
+              <p className="text-sm font-medium">{skill.uses}</p>
+            </div>
+            <div>
+              <Label className="text-xs text-muted-foreground">Last Used</Label>
+              <p className="text-sm font-medium">{skill.last_used ? formatRelativeDate(skill.last_used) : 'Never'}</p>
+            </div>
+          </div>
+
           <div className="space-y-1.5">
             <Label htmlFor="skill-name">Name</Label>
             <Input
@@ -127,6 +153,36 @@ function SkillEditor({ skill, onUpdate, onDelete, onDeselect }: {
               maxLength={1024}
             />
             <p className="text-[10px] text-muted-foreground text-right">{description.length}/1024</p>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="skill-confidence">Confidence (0.0 - 1.0)</Label>
+            <Input
+              id="skill-confidence"
+              type="number"
+              min="0"
+              max="1"
+              step="0.05"
+              value={confidence}
+              onChange={(e) => {
+                const val = parseFloat(e.target.value)
+                if (!isNaN(val) && val >= 0 && val <= 1) {
+                  setConfidence(val)
+                }
+              }}
+            />
+            <p className="text-[10px] text-muted-foreground">{Math.round(confidence * 100)}%</p>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="skill-tags">Tags (comma-separated)</Label>
+            <Input
+              id="skill-tags"
+              value={tagsInput}
+              onChange={(e) => setTagsInput(e.target.value)}
+              placeholder="api, database, authentication"
+            />
+            <p className="text-[10px] text-muted-foreground">Separate tags with commas</p>
           </div>
 
           <div className="space-y-1.5">

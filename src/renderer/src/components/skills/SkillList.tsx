@@ -31,10 +31,18 @@ export function SkillList({ skills, selectedSkillId, onSelectSkill }: SkillListP
         >
           <div className="flex items-center gap-2">
             <span className="text-sm font-medium truncate flex-1">{skill.name}</span>
-            <Badge className="shrink-0">v{skill.version}</Badge>
+            <div className="flex items-center gap-1.5 shrink-0">
+              <span className="text-[10px] text-muted-foreground">{Math.round(skill.confidence * 100)}%</span>
+              <Badge className="shrink-0">v{skill.version}</Badge>
+            </div>
           </div>
           <p className="text-xs text-muted-foreground mt-0.5 truncate">{skill.description}</p>
-          <p className="text-[10px] text-muted-foreground/70 mt-0.5">{formatRelativeDate(skill.updated_at)}</p>
+          <div className="flex items-center gap-2 mt-0.5">
+            <p className="text-[10px] text-muted-foreground/70">{formatRelativeDate(skill.updated_at)}</p>
+            {skill.uses > 0 && (
+              <span className="text-[10px] text-muted-foreground/70">• {skill.uses} uses</span>
+            )}
+          </div>
         </button>
       ))}
     </div>

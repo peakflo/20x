@@ -164,12 +164,17 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
     return uuidRegex.test(sessionId)
   }
 
+
   /**
-   * Check if session file has corrupt messages (empty text blocks)
+   * Load conversation history from Claude session file
    */
-  private async checkForCorruptMessages(sessionId: string, workspaceDir: string): Promise<boolean> {
+  /**
+   * Cleans the session file by removing messages with empty text blocks
+   * This prevents API errors when resuming sessions
+   */
+  private async cleanSessionFile(sessionId: string, workspaceDir: string): Promise<void> {
     try {
-      const { readFileSync } = await import('fs')
+      const { readFileSync, writeFileSync } = await import('fs')
       const { join } = await import('path')
       const { homedir } = await import('os')
 
@@ -177,16 +182,50 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
       const encodedWorkspace = workspaceDir.replace(/[\/\s]/g, '-')
       const sessionFile = join(claudeDir, encodedWorkspace, `${sessionId}.jsonl`)
 
+      console.log(`[ClaudeCodeAdapter] Cleaning session file: ${sessionFile}`)
+
       const content = readFileSync(sessionFile, 'utf-8')
-      return content.includes('"text":""')
+      const lines = content.trim().split('\n')
+      const cleanedLines: string[] = []
+
+      for (const line of lines) {
+        const entry = JSON.parse(line)
+
+        // Keep non-message entries as-is
+        if (entry.type !== 'user' && entry.type !== 'assistant') {
+          cleanedLines.push(line)
+          continue
+        }
+
+        // Check if message has content with empty text blocks
+        if (entry.message?.content) {
+          let hasEmptyText = false
+          for (const contentPart of entry.message.content) {
+            if (contentPart.type === 'text' && (!contentPart.text || contentPart.text.trim() === '')) {
+              hasEmptyText = true
+              break
+            }
+          }
+
+          // Skip messages with empty text blocks
+          if (hasEmptyText) {
+            console.log(`[ClaudeCodeAdapter] Removing message with empty text block: ${entry.uuid}`)
+            continue
+          }
+        }
+
+        cleanedLines.push(line)
+      }
+
+      // Write cleaned content back
+      writeFileSync(sessionFile, cleanedLines.join('\n') + '\n', 'utf-8')
+      console.log(`[ClaudeCodeAdapter] Session file cleaned: ${lines.length} -> ${cleanedLines.length} lines`)
     } catch (error) {
-      return false
+      console.warn(`[ClaudeCodeAdapter] Failed to clean session file:`, error)
+      // Don't throw - let resume attempt proceed even if cleaning fails
     }
   }
 
-  /**
-   * Load conversation history from Claude session file
-   */
   private async loadSessionHistory(sessionId: string, workspaceDir: string): Promise<SessionMessage[]> {
     try {
       const { readFileSync } = await import('fs')
@@ -279,6 +318,9 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
       )
     }
 
+    // Clean session file to remove empty text blocks before resuming
+    await this.cleanSessionFile(sessionId, config.workspaceDir)
+
     // Create session state (idle until user sends a message)
     const session: ClaudeSession = {
       sessionId,
@@ -301,13 +343,7 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
     // Load conversation history from session file
     const messages = await this.loadSessionHistory(sessionId, config.workspaceDir)
 
-    // Check if session file has corrupt messages (empty text blocks)
-    // If so, don't use resume to avoid API errors
-    const hasCorruptMessages = await this.checkForCorruptMessages(sessionId, config.workspaceDir)
-    if (hasCorruptMessages) {
-      console.warn(`[ClaudeCodeAdapter] Session has corrupt messages, will not use resume option`)
-      session.isResumed = false
-    }
+    console.log(`[ClaudeCodeAdapter] Session loaded with ${messages.length} messages`)
 
     return messages
   }

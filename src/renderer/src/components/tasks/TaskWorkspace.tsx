@@ -13,7 +13,7 @@ import { useAgentSession } from '@/hooks/use-agent-session'
 import { useAgentStore } from '@/stores/agent-store'
 import { useSettingsStore } from '@/stores/settings-store'
 import { useTaskStore } from '@/stores/task-store'
-import { taskApi, worktreeApi, githubApi, agentSessionApi, taskSourceApi, onAgentIncompatibleSession } from '@/lib/ipc-client'
+import { taskApi, worktreeApi, githubApi, taskSourceApi, onAgentIncompatibleSession } from '@/lib/ipc-client'
 import { useEffect, useCallback, useRef, useState } from 'react'
 import { TaskStatus } from '@/types'
 import type { WorkfloTask, FileAttachment, OutputField, Agent } from '@/types'
@@ -53,7 +53,6 @@ export function TaskWorkspace({
   const [showSnooze, setShowSnooze] = useState(false)
   const [showIncompatibleSession, setShowIncompatibleSession] = useState(false)
   const [incompatibleSessionError, setIncompatibleSessionError] = useState<string>()
-  const learningRef = useRef(false)
   const startingRef = useRef(false)
 
   const { fetchTasks } = useTaskStore()
@@ -90,9 +89,8 @@ export function TaskWorkspace({
   }, [session.status, fetchTasks])
 
   // Stop session when task is completed, but keep transcript
-  // Skip if learning is in progress — learnFromSession cleans up on main process
   useEffect(() => {
-    if (session.sessionId && task?.status === TaskStatus.Completed && !learningRef.current) {
+    if (session.sessionId && task?.status === TaskStatus.Completed) {
       stop()
         .then(() => {
           if (task && task.repos.length > 0 && githubOrg) {
@@ -101,7 +99,7 @@ export function TaskWorkspace({
         })
         .catch(console.error)
     }
-  }, [task?.status, session.sessionId])
+  }, [task?.status, session.sessionId, stop, task, githubOrg])
 
   const handleStartSession = useCallback(async () => {
     if (!task?.agent_id || startingRef.current || session.sessionId) return
@@ -237,35 +235,119 @@ export function TaskWorkspace({
   // ── Feedback orchestration ──────────────────────────────────
 
   const handleCompleteTask = useCallback(async () => {
-    // Only show feedback if there's an active session with messages
-    if (session.sessionId && session.messages.length > 0) {
+    // Show feedback if there's an active session OR a resumable session
+    const hasActiveSession = session.sessionId && session.messages.length > 0
+    const hasResumableSession = !session.sessionId && task?.session_id
+
+    console.log('[TaskWorkspace] Complete check:', {
+      hasActiveSession,
+      hasResumableSession,
+      sessionId: session.sessionId,
+      taskSessionId: task?.session_id,
+      messagesCount: session.messages.length
+    })
+
+    if (hasActiveSession || hasResumableSession) {
       setShowFeedback(true)
     } else {
       await onCompleteTask()
     }
-  }, [session.sessionId, session.messages.length, onCompleteTask])
+  }, [session.sessionId, session.messages.length, task?.session_id, onCompleteTask])
 
   const handleFeedbackSubmit = useCallback(async (rating: number, comment: string) => {
-    const sid = session.sessionId
+    if (!task?.agent_id || !task?.id) return
     setShowFeedback(false)
 
-    // Guard stop-on-completed useEffect — learnFromSession cleans up the session
-    learningRef.current = true
-    await onCompleteTask()
+    // Set task to Learning status - prevents auto-stop useEffect
+    console.log('[TaskWorkspace] Setting task status to AgentLearning:', task.id)
+    await taskApi.update(task.id, { status: TaskStatus.AgentLearning })
+    console.log('[TaskWorkspace] Task status set to AgentLearning')
 
-    if (!sid) return
-
+    // Build feedback prompt
     const commentPart = comment ? ` Comment: "${comment}".` : ''
-    const prompt = `User rated this session ${rating}/5.${commentPart} Review the session and update SKILL.md files in .agents/skills/ with any improvements or learnings from this session.`
+    const today = new Date().toISOString().split('T')[0]
+    const prompt = `User rated this session ${rating}/5.${commentPart}
 
-    // Fire and forget — runs entirely on main process
-    agentSessionApi.learnFromSession(sid, prompt).catch(console.error)
-  }, [session.sessionId, onCompleteTask])
+Review the session and update skills in .agents/skills/:
+
+**For skills you used:**
+Update the YAML frontmatter:
+- confidence: ${rating >= 4 ? '+0.05 (was helpful)' : rating <= 2 ? '-0.10 (was wrong/outdated)' : 'no change'}
+- uses: increment by 1
+- lastUsed: ${today}
+- tags: add relevant keywords if missing
+
+**If you discovered a new reusable pattern:**
+Create a new skill file with:
+\`\`\`yaml
+---
+name: skill-name
+description: Brief description of when to use this skill
+confidence: 0.5
+uses: 1
+lastUsed: ${today}
+tags:
+  - relevant-tag
+---
+# Skill content here
+\`\`\`
+
+Update existing skills that were helpful or create new ones for patterns worth reusing.`
+
+    try {
+      // If no active session, resume from task.session_id
+      if (!session.sessionId && task.session_id) {
+        console.log('[TaskWorkspace] Resuming session for feedback:', task.session_id)
+        console.log('[TaskWorkspace] Current session state before resume:', session)
+
+        await resume(task.agent_id, task.id, task.session_id)
+        console.log('[TaskWorkspace] Resume completed successfully')
+
+        const afterResumeSession = useAgentStore.getState().sessions.get(task.id)
+        console.log('[TaskWorkspace] Session state after resume:', afterResumeSession)
+
+        // Wait for messages to load (poll for session to be ready)
+        console.log('[TaskWorkspace] Waiting for messages to load...')
+        await new Promise<void>((resolve) => {
+          const checkReady = () => {
+            const latestSession = useAgentStore.getState().sessions.get(task.id)
+            console.log('[TaskWorkspace] Checking session ready:', {
+              hasSession: !!latestSession,
+              messageCount: latestSession?.messages.length || 0
+            })
+            if (latestSession?.messages && latestSession.messages.length > 0) {
+              console.log('[TaskWorkspace] Messages loaded, proceeding')
+              resolve()
+            } else {
+              setTimeout(checkReady, 500)
+            }
+          }
+          setTimeout(checkReady, 500)
+          // Timeout after 10 seconds
+          setTimeout(() => {
+            console.log('[TaskWorkspace] Timeout waiting for messages, proceeding anyway')
+            resolve()
+          }, 10000)
+        })
+      }
+
+      console.log('[TaskWorkspace] About to send feedback message')
+      // Send feedback message through normal flow so it shows in UI
+      await sendMessage(prompt)
+      console.log('[TaskWorkspace] Feedback message sent')
+
+      // Backend will handle skill sync and task completion when session goes idle
+    } catch (error) {
+      console.error('Failed to send feedback:', error)
+      await taskApi.update(task.id, { status: TaskStatus.ReadyForReview })
+    }
+  }, [task?.agent_id, task?.id, task?.session_id, session.sessionId, resume, sendMessage])
 
   const handleFeedbackSkip = useCallback(async () => {
+    if (!task?.id) return
     setShowFeedback(false)
-    await onCompleteTask()
-  }, [onCompleteTask])
+    // Just keep it in ReadyForReview - user can complete manually
+  }, [task?.id])
 
   const handleSnooze = useCallback(async (isoString: string) => {
     if (!task) return
