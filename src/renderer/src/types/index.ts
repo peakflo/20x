@@ -1,3 +1,21 @@
+// ── Settings types ──────────────────────────────────────────
+
+export enum SettingsTab {
+  GENERAL = 'general',
+  AGENTS = 'agents',
+  TOOLS_MCP = 'tools-mcp',
+  INTEGRATIONS = 'integrations',
+  ADVANCED = 'advanced'
+}
+
+export const SETTINGS_TABS: { value: SettingsTab; label: string; icon: string }[] = [
+  { value: SettingsTab.GENERAL, label: 'General', icon: 'Settings' },
+  { value: SettingsTab.AGENTS, label: 'Agents', icon: 'Users' },
+  { value: SettingsTab.TOOLS_MCP, label: 'Tools & MCP', icon: 'Server' },
+  { value: SettingsTab.INTEGRATIONS, label: 'Integrations', icon: 'Workflow' },
+  { value: SettingsTab.ADVANCED, label: 'Advanced', icon: 'Wrench' }
+]
+
 // ── Agent types ─────────────────────────────────────────────
 
 export enum CodingAgentType {
@@ -388,4 +406,21 @@ export interface ActionResult {
   success: boolean
   error?: string
   taskUpdate?: Record<string, unknown>
+}
+
+// ── OAuth types ──────────────────────────────────────────────
+
+export type OAuthProvider = 'linear'
+
+export interface OAuthToken {
+  id: string
+  provider: OAuthProvider
+  source_id: string
+  access_token: string
+  refresh_token: string | null
+  expires_at: string
+  scope: string | null
+  token_type: string
+  created_at: string
+  updated_at: string
 }

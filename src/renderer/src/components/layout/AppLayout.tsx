@@ -2,9 +2,9 @@ import { DepsWarningBanner } from './DepsWarningBanner'
 import { Sidebar } from './Sidebar'
 import { TaskWorkspace } from '@/components/tasks/TaskWorkspace'
 import { SkillWorkspace } from '@/components/skills/SkillWorkspace'
+import { SettingsWorkspace } from '@/components/settings/SettingsWorkspace'
 import { TaskForm, type TaskFormSubmitData } from '@/components/tasks/TaskForm'
 import { DeleteConfirmDialog } from '@/components/tasks/DeleteConfirmDialog'
-import { AgentSettingsDialog } from '@/components/agents/AgentSettingsDialog'
 import { Dialog, DialogContent, DialogHeader, DialogBody, DialogTitle } from '@/components/ui/Dialog'
 import { useTasks } from '@/hooks/use-tasks'
 import { useUIStore } from '@/stores/ui-store'
@@ -29,7 +29,7 @@ export function AppLayout() {
     openCreateModal,
     openEditModal,
     openDeleteModal,
-    openAgentSettings,
+    openSettings,
     closeModal
   } = useUIStore()
 
@@ -61,7 +61,7 @@ export function AppLayout() {
         overdueCount={overdueCount}
         onSelectTask={selectTask}
         onCreateTask={openCreateModal}
-        onOpenSettings={openAgentSettings}
+        onOpenSettings={openSettings}
       />
 
       {/* Workspace — fills remaining space via CSS Grid 1fr */}
@@ -70,7 +70,9 @@ export function AppLayout() {
         <div className="drag-region h-12 flex-shrink-0" />
         <DepsWarningBanner />
         <div className="flex-1 overflow-hidden">
-          {sidebarView === 'skills' ? (
+          {activeModal === 'settings' ? (
+            <SettingsWorkspace />
+          ) : sidebarView === 'skills' ? (
             <SkillWorkspace />
           ) : (
             <TaskWorkspace
@@ -209,9 +211,6 @@ export function AppLayout() {
         }}
         onCancel={closeModal}
       />
-
-      {/* Agent Settings Dialog */}
-      <AgentSettingsDialog />
 
       {/* Toast */}
       {toast && (

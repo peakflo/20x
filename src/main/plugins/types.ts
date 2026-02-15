@@ -1,5 +1,6 @@
 import type { DatabaseManager, McpServerRecord, TaskRecord } from '../database'
 import type { McpToolCaller } from '../mcp-tool-caller'
+import type { OAuthManager } from '../oauth-manager'
 import type { SourceUser, ReassignResult } from '../../shared/types'
 
 // ── Config Schema (declarative, JSON-serializable) ──────────
@@ -82,6 +83,8 @@ export interface PluginContext {
   db: DatabaseManager
   toolCaller: McpToolCaller
   mcpServer?: McpServerRecord
+  oauthManager?: OAuthManager
+  sourceId?: string
 }
 
 // ── Plugin Interface ────────────────────────────────────────

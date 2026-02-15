@@ -116,7 +116,7 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
                   {isSyncingAll ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
                 </Button>
               )}
-              <Button size="sm" variant="ghost" onClick={onOpenSettings} title="Agent Settings">
+              <Button size="sm" variant="ghost" onClick={onOpenSettings} title="Settings">
                 <Settings className="h-3.5 w-3.5" />
               </Button>
               <Button size="sm" onClick={onCreateTask}>

@@ -1,10 +1,10 @@
 import { create } from 'zustand'
-import { TaskStatus } from '@/types'
+import { TaskStatus, SettingsTab } from '@/types'
 import type { TaskPriority } from '@/types'
 
 export type SortField = 'created_at' | 'updated_at' | 'priority' | 'due_date' | 'title' | 'status'
 export type SortDirection = 'asc' | 'desc'
-export type ActiveModal = 'create' | 'edit' | 'delete' | 'agent-settings' | 'repo-selector' | 'gh-setup' | null
+export type ActiveModal = 'create' | 'edit' | 'delete' | 'settings' | 'repo-selector' | 'gh-setup' | null
 export type SidebarView = 'tasks' | 'skills'
 
 interface UIState {
@@ -18,6 +18,7 @@ interface UIState {
   activeModal: ActiveModal
   editingTaskId: string | null
   deletingTaskId: string | null
+  settingsTab: SettingsTab
 
   setSidebarView: (view: SidebarView) => void
   setStatusFilter: (filter: TaskStatus | 'all') => void
@@ -26,10 +27,11 @@ interface UIState {
   setSortField: (field: SortField) => void
   setSortDirection: (dir: SortDirection) => void
   setSearchQuery: (query: string) => void
+  setSettingsTab: (tab: SettingsTab) => void
   openCreateModal: () => void
   openEditModal: (taskId: string) => void
   openDeleteModal: (taskId: string) => void
-  openAgentSettings: () => void
+  openSettings: () => void
   closeModal: () => void
 }
 
@@ -44,6 +46,7 @@ export const useUIStore = create<UIState>((set) => ({
   activeModal: null,
   editingTaskId: null,
   deletingTaskId: null,
+  settingsTab: SettingsTab.GENERAL,
 
   setSidebarView: (sidebarView) => set({ sidebarView }),
   setStatusFilter: (statusFilter) => set({ statusFilter }),
@@ -52,10 +55,11 @@ export const useUIStore = create<UIState>((set) => ({
   setSortField: (sortField) => set({ sortField }),
   setSortDirection: (sortDirection) => set({ sortDirection }),
   setSearchQuery: (searchQuery) => set({ searchQuery }),
+  setSettingsTab: (settingsTab) => set({ settingsTab }),
 
   openCreateModal: () => set({ activeModal: 'create', editingTaskId: null }),
   openEditModal: (taskId) => set({ activeModal: 'edit', editingTaskId: taskId }),
   openDeleteModal: (taskId) => set({ activeModal: 'delete', deletingTaskId: taskId }),
-  openAgentSettings: () => set({ activeModal: 'agent-settings' }),
+  openSettings: () => set({ activeModal: 'settings' }),
   closeModal: () => set({ activeModal: null, editingTaskId: null, deletingTaskId: null })
 }))

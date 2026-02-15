@@ -141,6 +141,13 @@ interface ElectronAPI {
     openPath: (filePath: string) => Promise<void>
     showItemInFolder: (filePath: string) => Promise<void>
     readTextFile: (filePath: string) => Promise<{ content: string; size: number } | null>
+    openExternal: (url: string) => Promise<void>
+  }
+  oauth: {
+    startFlow: (provider: string, config: Record<string, unknown>) => Promise<string>
+    exchangeCode: (provider: string, code: string, state: string, sourceId: string) => Promise<void>
+    getValidToken: (sourceId: string) => Promise<string | null>
+    revokeToken: (sourceId: string) => Promise<void>
   }
   notifications: {
     show: (title: string, body: string) => Promise<void>
@@ -187,9 +194,17 @@ interface ElectronAPI {
   plugins: {
     list: () => Promise<PluginMeta[]>
     getConfigSchema: (pluginId: string) => Promise<ConfigFieldSchema[]>
-    resolveOptions: (pluginId: string, resolverKey: string, config: Record<string, unknown>, mcpServerId?: string) => Promise<ConfigFieldOption[]>
+    resolveOptions: (pluginId: string, resolverKey: string, config: Record<string, unknown>, mcpServerId?: string, sourceId?: string) => Promise<ConfigFieldOption[]>
     getActions: (pluginId: string, config: Record<string, unknown>) => Promise<PluginAction[]>
     executeAction: (actionId: string, taskId: string, sourceId: string, input?: string) => Promise<ActionResult>
+  }
+  app: {
+    getLoginItemSettings: () => Promise<{ openAtLogin: boolean; openAsHidden: boolean }>
+    setLoginItemSettings: (openAtLogin: boolean) => Promise<{ openAtLogin: boolean; openAsHidden: boolean }>
+    getNotificationPermission: () => Promise<'granted' | 'denied'>
+    requestNotificationPermission: () => Promise<'granted' | 'denied'>
+    getMinimizeToTray: () => Promise<boolean>
+    setMinimizeToTray: (enabled: boolean) => Promise<boolean>
   }
   onOverdueCheck: (callback: () => void) => () => void
   onAgentOutput: (callback: (event: AgentOutputEvent) => void) => () => void
@@ -198,6 +213,7 @@ interface ElectronAPI {
   onAgentIncompatibleSession: (callback: (event: { taskId: string; agentId: string; error: string }) => void) => () => void
   onTaskUpdated: (callback: (event: { taskId: string; updates: Partial<WorkfloTask> }) => void) => () => void
   onWorktreeProgress: (callback: (event: WorktreeProgressEvent) => void) => () => void
+  onOAuthCallback: (callback: (event: { code: string; state: string }) => void) => () => void
 }
 
 declare global {

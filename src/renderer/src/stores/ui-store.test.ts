@@ -15,7 +15,8 @@ describe('useUIStore', () => {
       searchQuery: '',
       activeModal: null,
       editingTaskId: null,
-      deletingTaskId: null
+      deletingTaskId: null,
+      settingsTab: 'general' as any
     })
   })
 
@@ -90,9 +91,9 @@ describe('useUIStore', () => {
       expect(state.deletingTaskId).toBe('task-456')
     })
 
-    it('openAgentSettings sets modal', () => {
-      useUIStore.getState().openAgentSettings()
-      expect(useUIStore.getState().activeModal).toBe('agent-settings')
+    it('openSettings sets modal', () => {
+      useUIStore.getState().openSettings()
+      expect(useUIStore.getState().activeModal).toBe('settings')
     })
 
     it('closeModal resets all modal state', () => {
