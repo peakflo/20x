@@ -76,6 +76,22 @@ describe('useAgentSession', () => {
 
       expect(mockElectronAPI.agentSession.abort).not.toHaveBeenCalled()
     })
+
+    it('uses latest sessionId from store', async () => {
+      useAgentStore.getState().initSession('task-1', 'sess-1', 'agent-1')
+      const { result } = renderHook(() => useAgentSession('task-1'))
+
+      // Update sessionId in store
+      act(() => {
+        useAgentStore.getState().initSession('task-1', 'sess-updated', 'agent-1')
+      })
+
+      await act(async () => {
+        await result.current.abort()
+      })
+
+      expect(mockElectronAPI.agentSession.abort).toHaveBeenCalledWith('sess-updated')
+    })
   })
 
   describe('stop', () => {
@@ -92,6 +108,22 @@ describe('useAgentSession', () => {
       const session = useAgentStore.getState().sessions.get('task-1')
       expect(session!.status).toBe('idle')
       expect(session!.sessionId).toBeNull()
+    })
+
+    it('uses latest sessionId from store', async () => {
+      useAgentStore.getState().initSession('task-1', 'sess-1', 'agent-1')
+      const { result } = renderHook(() => useAgentSession('task-1'))
+
+      // Update sessionId in store
+      act(() => {
+        useAgentStore.getState().initSession('task-1', 'sess-updated', 'agent-1')
+      })
+
+      await act(async () => {
+        await result.current.stop()
+      })
+
+      expect(mockElectronAPI.agentSession.stop).toHaveBeenCalledWith('sess-updated')
     })
   })
 
@@ -117,6 +149,30 @@ describe('useAgentSession', () => {
         })
       ).rejects.toThrow('No active session')
     })
+
+    it('uses latest sessionId from store, not stale closure', async () => {
+      // Initialize with first sessionId
+      useAgentStore.getState().initSession('task-1', 'sess-1', 'agent-1')
+
+      const { result } = renderHook(() => useAgentSession('task-1'))
+
+      // Simulate session being resumed with new sessionId (like after resume)
+      act(() => {
+        useAgentStore.getState().initSession('task-1', 'sess-2-new', 'agent-1')
+      })
+
+      // Mock the send to return a new sessionId
+      ;(mockElectronAPI.agentSession.send as any).mockResolvedValue({
+        newSessionId: 'sess-2-new'
+      })
+
+      await act(async () => {
+        await result.current.sendMessage('After resume')
+      })
+
+      // Should use the NEW sessionId from store, not the old one from closure
+      expect(mockElectronAPI.agentSession.send).toHaveBeenCalledWith('sess-2-new', 'After resume', 'task-1')
+    })
   })
 
   describe('approve', () => {
@@ -140,6 +196,22 @@ describe('useAgentSession', () => {
           await result.current.approve(false)
         })
       ).rejects.toThrow('No active session')
+    })
+
+    it('uses latest sessionId from store', async () => {
+      useAgentStore.getState().initSession('task-1', 'sess-1', 'agent-1')
+      const { result } = renderHook(() => useAgentSession('task-1'))
+
+      // Update sessionId in store
+      act(() => {
+        useAgentStore.getState().initSession('task-1', 'sess-updated', 'agent-1')
+      })
+
+      await act(async () => {
+        await result.current.approve(true, 'approved')
+      })
+
+      expect(mockElectronAPI.agentSession.approve).toHaveBeenCalledWith('sess-updated', true, 'approved')
     })
   })
 })

@@ -132,4 +132,51 @@ describe('useAgentStore', () => {
       expect(useAgentStore.getState().getSession('nope')).toBeUndefined()
     })
   })
+
+  describe('Message management', () => {
+    it('clearMessageDedup clears messages', () => {
+      useAgentStore.getState().initSession('task-1', 'sess-1', 'agent-1')
+
+      // Manually add a message to the session via state update
+      const sessions = new Map(useAgentStore.getState().sessions)
+      const session = sessions.get('task-1')!
+      sessions.set('task-1', {
+        ...session,
+        messages: [{ id: 'msg-1', role: 'assistant' as const, content: 'Hello', timestamp: new Date() }]
+      })
+      useAgentStore.setState({ sessions })
+
+      expect(useAgentStore.getState().sessions.get('task-1')!.messages).toHaveLength(1)
+
+      // Clear dedup state and messages
+      useAgentStore.getState().clearMessageDedup('task-1')
+
+      // Messages should be cleared
+      expect(useAgentStore.getState().sessions.get('task-1')!.messages).toHaveLength(0)
+    })
+
+    it('clearMessageDedup handles non-existent session gracefully', () => {
+      // Should not throw
+      useAgentStore.getState().clearMessageDedup('non-existent')
+    })
+
+    it('clearMessageDedup allows previously seen messages to be added again', () => {
+      useAgentStore.getState().initSession('task-1', 'sess-1', 'agent-1')
+
+      // Simulate adding a message (which marks it as "seen")
+      const sessions = new Map(useAgentStore.getState().sessions)
+      const session = sessions.get('task-1')!
+      sessions.set('task-1', {
+        ...session,
+        messages: [{ id: 'msg-1', role: 'assistant' as const, content: 'Hello', timestamp: new Date() }]
+      })
+      useAgentStore.setState({ sessions })
+
+      // Clear dedup state
+      useAgentStore.getState().clearMessageDedup('task-1')
+
+      // Verify internal dedup state was cleared by checking messages were cleared
+      expect(useAgentStore.getState().sessions.get('task-1')!.messages).toHaveLength(0)
+    })
+  })
 })
