@@ -75,8 +75,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('agentSession:resume', agentId, taskId, ocSessionId),
     abort: (sessionId: string): Promise<{ success: boolean }> =>
       ipcRenderer.invoke('agentSession:abort', sessionId),
-    stop: (sessionId: string): Promise<{ success: boolean }> =>
-      ipcRenderer.invoke('agentSession:stop', sessionId),
+    stop: (sessionId: string, resetTaskStatus?: boolean): Promise<{ success: boolean }> => {
+      const reset = resetTaskStatus ?? false
+      console.log(`[Preload] stop called with sessionId=${sessionId}, resetTaskStatus=${resetTaskStatus} (resolved to ${reset})`)
+      return ipcRenderer.invoke('agentSession:stop', sessionId, reset)
+    },
     send: (sessionId: string, message: string, taskId?: string): Promise<{ success: boolean; newSessionId?: string }> =>
       ipcRenderer.invoke('agentSession:send', sessionId, message, taskId),
     approve: (sessionId: string, approved: boolean, message?: string): Promise<{ success: boolean }> =>
@@ -85,8 +88,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('agentSession:syncSkills', sessionId),
     syncSkillsForTask: (taskId: string): Promise<{ created: string[]; updated: string[]; unchanged: string[] }> =>
       ipcRenderer.invoke('agentSession:syncSkillsForTask', taskId),
-    learnFromSession: (sessionId: string, message: string): Promise<{ created: string[]; updated: string[]; unchanged: string[] }> =>
-      ipcRenderer.invoke('agentSession:learnFromSession', sessionId, message)
+    learnFromSession: (sessionId: string, rating: number, comment?: string): Promise<{ created: string[]; updated: string[]; unchanged: string[] }> =>
+      ipcRenderer.invoke('agentSession:learnFromSession', sessionId, rating, comment)
   },
   agentConfig: {
     getProviders: (serverUrl?: string): Promise<{ providers: any[]; default: Record<string, string> } | null> =>

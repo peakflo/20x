@@ -84,8 +84,8 @@ export const agentSessionApi = {
     return window.electronAPI.agentSession.abort(sessionId)
   },
 
-  stop: (sessionId: string): Promise<{ success: boolean }> => {
-    return window.electronAPI.agentSession.stop(sessionId)
+  stop: (sessionId: string, resetTaskStatus?: boolean): Promise<{ success: boolean }> => {
+    return window.electronAPI.agentSession.stop(sessionId, resetTaskStatus)
   },
 
   send: (sessionId: string, message: string, taskId?: string): Promise<{ success: boolean; newSessionId?: string }> => {
@@ -104,8 +104,8 @@ export const agentSessionApi = {
     return window.electronAPI.agentSession.syncSkillsForTask(taskId)
   },
 
-  learnFromSession: (sessionId: string, message: string): Promise<SkillSyncResult> => {
-    return window.electronAPI.agentSession.learnFromSession(sessionId, message)
+  learnFromSession: (sessionId: string, rating: number, comment?: string): Promise<SkillSyncResult> => {
+    return window.electronAPI.agentSession.learnFromSession(sessionId, rating, comment)
   }
 }
 

@@ -88,7 +88,7 @@ describe('useAgentSession', () => {
         await result.current.stop()
       })
 
-      expect(mockElectronAPI.agentSession.stop).toHaveBeenCalledWith('sess-1')
+      expect(mockElectronAPI.agentSession.stop).toHaveBeenCalledWith('sess-1', undefined)
       const session = useAgentStore.getState().sessions.get('task-1')
       expect(session!.status).toBe('idle')
       expect(session!.sessionId).toBeNull()
