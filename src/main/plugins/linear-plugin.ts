@@ -78,7 +78,7 @@ export class LinearPlugin implements TaskSourcePlugin {
 
   async resolveOptions(
     resolverKey: string,
-    config: Record<string, unknown>,
+    _config: Record<string, unknown>,
     ctx: PluginContext
   ): Promise<ConfigFieldOption[]> {
     if (resolverKey === 'users') {
@@ -231,11 +231,16 @@ export class LinearPlugin implements TaskSourcePlugin {
             // Create new task
             const created = ctx.db.createTask({
               ...mapped,
+              title: mapped.title || issue.title,
               source_id: sourceId,
               external_id: issue.id,
               source: 'Linear',
               status: mapped.status || 'not_started'
             })
+            if (!created) {
+              console.error('[linear-plugin] Failed to create task:', issue.id)
+              continue
+            }
             taskId = created.id
             result.imported++
           }
@@ -269,7 +274,7 @@ export class LinearPlugin implements TaskSourcePlugin {
   async exportUpdate(
     task: TaskRecord,
     changedFields: Record<string, unknown>,
-    config: Record<string, unknown>,
+    _config: Record<string, unknown>,
     ctx: PluginContext
   ): Promise<void> {
     if (!ctx.oauthManager || !task.source_id || !task.external_id) return
@@ -362,7 +367,7 @@ export class LinearPlugin implements TaskSourcePlugin {
     actionId: string,
     task: TaskRecord,
     input: string | undefined,
-    config: Record<string, unknown>,
+    _config: Record<string, unknown>,
     ctx: PluginContext
   ): Promise<ActionResult> {
     if (!ctx.oauthManager || !task.source_id || !task.external_id) {
