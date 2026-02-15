@@ -23,6 +23,7 @@ export function useAgentSession(taskId: string | undefined) {
   const session = useAgentStore((s) => (taskId ? s.sessions.get(taskId) : undefined))
   const initSession = useAgentStore((s) => s.initSession)
   const endSession = useAgentStore((s) => s.endSession)
+  const clearMessageDedup = useAgentStore((s) => s.clearMessageDedup)
 
   const sessionState: AgentSessionState = session
     ? {
@@ -47,43 +48,53 @@ export function useAgentSession(taskId: string | undefined) {
 
   const resume = useCallback(
     async (agentId: string, tId: string, ocSessionId: string) => {
+      // Clear message dedup so replayed messages will be added
+      clearMessageDedup(tId)
       initSession(tId, '', agentId)
       const { sessionId } = await agentSessionApi.resume(agentId, tId, ocSessionId)
       initSession(tId, sessionId, agentId)
       return sessionId
     },
-    [initSession]
+    [initSession, clearMessageDedup]
   )
 
   const abort = useCallback(async () => {
-    if (!session?.sessionId) return
-    await agentSessionApi.abort(session.sessionId)
-  }, [session?.sessionId])
+    const currentSession = useAgentStore.getState().sessions.get(taskId!)
+    if (!currentSession?.sessionId) return
+    await agentSessionApi.abort(currentSession.sessionId)
+  }, [taskId])
 
   const stop = useCallback(async () => {
-    if (!session?.sessionId || !taskId) return
-    await agentSessionApi.stop(session.sessionId)
+    if (!taskId) return
+    const currentSession = useAgentStore.getState().sessions.get(taskId)
+    if (!currentSession?.sessionId) return
+    console.log('[use-agent-session] stop() called for session:', currentSession.sessionId)
+    console.trace('[use-agent-session] stop() stack trace')
+    await agentSessionApi.stop(currentSession.sessionId)
     endSession(taskId)
-  }, [session?.sessionId, taskId, endSession])
+  }, [taskId, endSession])
 
   const sendMessage = useCallback(
     async (message: string) => {
-      if (!session?.sessionId) throw new Error('No active session')
-      const result = await agentSessionApi.send(session.sessionId, message, taskId)
+      // Get latest session from store, not from closure
+      const currentSession = useAgentStore.getState().sessions.get(taskId!)
+      if (!currentSession?.sessionId) throw new Error('No active session')
+      const result = await agentSessionApi.send(currentSession.sessionId, message, taskId)
       // Session was recreated on the main process — update renderer store
       if (result.newSessionId && taskId) {
-        initSession(taskId, result.newSessionId, session.agentId)
+        initSession(taskId, result.newSessionId, currentSession.agentId)
       }
     },
-    [session?.sessionId, session?.agentId, taskId, initSession]
+    [taskId, initSession]
   )
 
   const approve = useCallback(
     async (approved: boolean, message?: string) => {
-      if (!session?.sessionId) throw new Error('No active session')
-      await agentSessionApi.approve(session.sessionId, approved, message)
+      const currentSession = useAgentStore.getState().sessions.get(taskId!)
+      if (!currentSession?.sessionId) throw new Error('No active session')
+      await agentSessionApi.approve(currentSession.sessionId, approved, message)
     },
-    [session?.sessionId]
+    [taskId]
   )
 
   return { session: sessionState, start, resume, abort, stop, sendMessage, approve }

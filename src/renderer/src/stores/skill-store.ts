@@ -25,7 +25,9 @@ export const useSkillStore = create<SkillState>((set) => ({
     set({ isLoading: true, error: null })
     try {
       const skills = await skillApi.getAll()
-      set({ skills, isLoading: false })
+      // Sort by confidence (high to low)
+      const sortedSkills = skills.sort((a, b) => b.confidence - a.confidence)
+      set({ skills: sortedSkills, isLoading: false })
     } catch (err) {
       set({ error: String(err), isLoading: false })
     }
@@ -34,7 +36,8 @@ export const useSkillStore = create<SkillState>((set) => ({
   createSkill: async (data) => {
     try {
       const skill = await skillApi.create(data)
-      set((state) => ({ skills: [...state.skills, skill].sort((a, b) => a.name.localeCompare(b.name)) }))
+      // Sort by confidence (high to low)
+      set((state) => ({ skills: [...state.skills, skill].sort((a, b) => b.confidence - a.confidence) }))
       return skill
     } catch (err) {
       set({ error: String(err) })
@@ -47,7 +50,8 @@ export const useSkillStore = create<SkillState>((set) => ({
       const updated = await skillApi.update(id, data)
       if (updated) {
         set((state) => ({
-          skills: state.skills.map((s) => (s.id === id ? updated : s))
+          // Sort by confidence (high to low) after update
+          skills: state.skills.map((s) => (s.id === id ? updated : s)).sort((a, b) => b.confidence - a.confidence)
         }))
       }
       return updated || null

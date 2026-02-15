@@ -96,6 +96,10 @@ export function createTestDb(): { db: DatabaseManager; rawDb: InstanceType<typeo
       description TEXT NOT NULL,
       content TEXT NOT NULL,
       version INTEGER NOT NULL DEFAULT 1,
+      confidence REAL NOT NULL DEFAULT 0.5,
+      uses INTEGER NOT NULL DEFAULT 0,
+      last_used TEXT,
+      tags TEXT NOT NULL DEFAULT '[]',
       is_deleted INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL

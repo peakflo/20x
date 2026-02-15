@@ -348,6 +348,10 @@ export interface SkillRow {
   description: string
   content: string
   version: number
+  confidence: number
+  uses: number
+  last_used: string | null
+  tags: string
   is_deleted: number
   created_at: string
   updated_at: string
@@ -359,6 +363,10 @@ export interface SkillRecord {
   description: string
   content: string
   version: number
+  confidence: number
+  uses: number
+  last_used: string | null
+  tags: string[]
   created_at: string
   updated_at: string
 }
@@ -367,12 +375,20 @@ export interface CreateSkillData {
   name: string
   description: string
   content: string
+  confidence?: number
+  uses?: number
+  last_used?: string | null
+  tags?: string[]
 }
 
 export interface UpdateSkillData {
   name?: string
   description?: string
   content?: string
+  confidence?: number
+  uses?: number
+  last_used?: string | null
+  tags?: string[]
 }
 
 // ── OAuth Token types ────────────────────────────────────────
@@ -413,12 +429,22 @@ export interface CreateOAuthTokenData {
 }
 
 function deserializeSkill(row: SkillRow): SkillRecord {
+  let tags: string[] = []
+  try {
+    tags = JSON.parse(row.tags)
+  } catch {
+    tags = []
+  }
   return {
     id: row.id,
     name: row.name,
     description: row.description,
     content: row.content,
     version: row.version,
+    confidence: row.confidence,
+    uses: row.uses,
+    last_used: row.last_used,
+    tags,
     created_at: row.created_at,
     updated_at: row.updated_at
   }
@@ -532,6 +558,10 @@ export class DatabaseManager {
         description TEXT NOT NULL,
         content TEXT NOT NULL,
         version INTEGER NOT NULL DEFAULT 1,
+        confidence REAL NOT NULL DEFAULT 0.5,
+        uses INTEGER NOT NULL DEFAULT 0,
+        last_used TEXT,
+        tags TEXT NOT NULL DEFAULT '[]',
         is_deleted INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
@@ -1056,10 +1086,14 @@ export class DatabaseManager {
   createSkill(data: CreateSkillData): SkillRecord | undefined {
     const id = createId()
     const now = new Date().toISOString()
+    const confidence = data.confidence ?? 0.5
+    const uses = data.uses ?? 0
+    const lastUsed = data.last_used ?? null
+    const tags = JSON.stringify(data.tags ?? [])
     this.db.prepare(`
-      INSERT INTO skills (id, name, description, content, version, is_deleted, created_at, updated_at)
-      VALUES (?, ?, ?, ?, 1, 0, ?, ?)
-    `).run(id, data.name, data.description, data.content, now, now)
+      INSERT INTO skills (id, name, description, content, version, confidence, uses, last_used, tags, is_deleted, created_at, updated_at)
+      VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, 0, ?, ?)
+    `).run(id, data.name, data.description, data.content, confidence, uses, lastUsed, tags, now, now)
     return this.getSkill(id)
   }
 
@@ -1068,11 +1102,15 @@ export class DatabaseManager {
     if (!existing) return undefined
 
     const setClauses: string[] = []
-    const values: string[] = []
+    const values: (string | number | null)[] = []
 
     if (data.name !== undefined) { setClauses.push('name = ?'); values.push(data.name) }
     if (data.description !== undefined) { setClauses.push('description = ?'); values.push(data.description) }
     if (data.content !== undefined) { setClauses.push('content = ?'); values.push(data.content) }
+    if (data.confidence !== undefined) { setClauses.push('confidence = ?'); values.push(data.confidence) }
+    if (data.uses !== undefined) { setClauses.push('uses = ?'); values.push(data.uses) }
+    if (data.last_used !== undefined) { setClauses.push('last_used = ?'); values.push(data.last_used) }
+    if (data.tags !== undefined) { setClauses.push('tags = ?'); values.push(JSON.stringify(data.tags)) }
 
     if (setClauses.length === 0) return existing
 

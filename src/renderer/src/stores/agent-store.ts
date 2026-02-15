@@ -84,6 +84,7 @@ interface AgentState {
   initSession: (taskId: string, sessionId: string, agentId: string) => void
   endSession: (taskId: string) => void
   removeSession: (taskId: string) => void
+  clearMessageDedup: (taskId: string) => void
   getSession: (taskId: string) => TaskSession | undefined
   stopAndRemoveSessionForTask: (taskId: string) => Promise<void>
 }
@@ -109,6 +110,14 @@ export const useAgentStore = create<AgentState>((set, get) => {
     const state = get()
     const session = findBySessionId(state.sessions, event.sessionId)
       || (event.taskId ? state.sessions.get(event.taskId) : undefined)
+
+    console.log('[agent-store] onAgentOutput received:', {
+      eventSessionId: event.sessionId,
+      eventTaskId: event.taskId,
+      foundSession: !!session,
+      messageId: (event.data as any)?.id
+    })
+
     if (!session) return
 
     // Patch in real sessionId if needed
@@ -188,8 +197,13 @@ export const useAgentStore = create<AgentState>((set, get) => {
       return
     }
 
-    if (seen.has(msgId)) return
+    if (seen.has(msgId)) {
+      console.log('[agent-store] Message already seen, skipping:', msgId)
+      return
+    }
     seen.add(msgId)
+
+    console.log('[agent-store] Adding new message:', { taskId, msgId, role, contentLength: content.length })
 
     set({
       sessions: new Map(state.sessions).set(taskId, {
@@ -273,6 +287,7 @@ export const useAgentStore = create<AgentState>((set, get) => {
 
     initSession: (taskId, sessionId, agentId) => {
       const existing = get().sessions.get(taskId)
+      console.log('[agent-store] initSession:', { taskId, sessionId, agentId, hasExisting: !!existing })
       // Only clear dedup state for a truly new session (not a sessionId update)
       if (!existing) seenIds.delete(taskId)
 
@@ -310,6 +325,24 @@ export const useAgentStore = create<AgentState>((set, get) => {
         const next = new Map(state.sessions)
         next.delete(taskId)
         return { sessions: next }
+      })
+    },
+
+    clearMessageDedup: (taskId) => {
+      console.log('[agent-store] clearMessageDedup called for task:', taskId)
+      seenIds.delete(taskId)
+      stepStartTimes.delete(taskId)
+      // Clear messages array so replayed messages will be added fresh
+      set((state) => {
+        const session = state.sessions.get(taskId)
+        if (!session) return state
+        console.log('[agent-store] Cleared messages for task:', taskId)
+        return {
+          sessions: new Map(state.sessions).set(taskId, {
+            ...session,
+            messages: []
+          })
+        }
       })
     },
 
