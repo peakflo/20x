@@ -41,13 +41,15 @@ export function SkillWorkspace() {
 
 function SkillEditor({ skill, onUpdate, onDelete, onDeselect }: {
   skill: Skill
-  onUpdate: (id: string, data: { name?: string; description?: string; content?: string }) => Promise<Skill | null>
+  onUpdate: (id: string, data: { name?: string; description?: string; content?: string; confidence?: number; tags?: string[] }) => Promise<Skill | null>
   onDelete: (id: string) => Promise<boolean>
   onDeselect: () => void
 }) {
   const [name, setName] = useState(skill.name)
   const [description, setDescription] = useState(skill.description)
   const [content, setContent] = useState(skill.content)
+  const [confidence, setConfidence] = useState(skill.confidence)
+  const [tags, setTags] = useState(skill.tags.join(', '))
   const [showDelete, setShowDelete] = useState(false)
   const [nameError, setNameError] = useState<string | null>(null)
 
@@ -55,10 +57,17 @@ function SkillEditor({ skill, onUpdate, onDelete, onDeselect }: {
     setName(skill.name)
     setDescription(skill.description)
     setContent(skill.content)
+    setConfidence(skill.confidence)
+    setTags(skill.tags.join(', '))
     setNameError(null)
   }, [skill.id])
 
-  const isDirty = name !== skill.name || description !== skill.description || content !== skill.content
+  const isDirty =
+    name !== skill.name ||
+    description !== skill.description ||
+    content !== skill.content ||
+    confidence !== skill.confidence ||
+    tags !== skill.tags.join(', ')
 
   const handleSave = async () => {
     if (!NAME_PATTERN.test(name)) {
@@ -68,12 +77,21 @@ function SkillEditor({ skill, onUpdate, onDelete, onDeselect }: {
     if (!description.trim() || description.length > 1024) {
       return
     }
+    if (confidence < 0 || confidence > 1) {
+      return
+    }
     setNameError(null)
 
-    const data: { name?: string; description?: string; content?: string } = {}
+    const data: { name?: string; description?: string; content?: string; confidence?: number; tags?: string[] } = {}
     if (name !== skill.name) data.name = name
     if (description !== skill.description) data.description = description
     if (content !== skill.content) data.content = content
+    if (confidence !== skill.confidence) data.confidence = confidence
+
+    const newTags = tags.split(',').map(t => t.trim()).filter(Boolean)
+    if (JSON.stringify(newTags) !== JSON.stringify(skill.tags)) {
+      data.tags = newTags
+    }
 
     if (Object.keys(data).length > 0) {
       await onUpdate(skill.id, data)
@@ -129,6 +147,44 @@ function SkillEditor({ skill, onUpdate, onDelete, onDeselect }: {
             <p className="text-[10px] text-muted-foreground text-right">{description.length}/1024</p>
           </div>
 
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-1.5">
+              <Label htmlFor="skill-confidence">Confidence (0.0-1.0)</Label>
+              <Input
+                id="skill-confidence"
+                type="number"
+                min="0"
+                max="1"
+                step="0.05"
+                value={confidence}
+                onChange={(e) => setConfidence(parseFloat(e.target.value) || 0)}
+                placeholder="0.5"
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="skill-uses">Uses</Label>
+              <Input
+                id="skill-uses"
+                type="number"
+                value={skill.uses}
+                disabled
+                className="bg-muted"
+              />
+              <p className="text-[10px] text-muted-foreground">Auto-incremented by agent</p>
+            </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="skill-tags">Tags (comma-separated)</Label>
+            <Input
+              id="skill-tags"
+              value={tags}
+              onChange={(e) => setTags(e.target.value)}
+              placeholder="api, rest, validation"
+            />
+          </div>
+
           <div className="space-y-1.5">
             <Label htmlFor="skill-content">Content (Markdown)</Label>
             <Textarea
@@ -136,7 +192,7 @@ function SkillEditor({ skill, onUpdate, onDelete, onDeselect }: {
               value={content}
               onChange={(e) => setContent(e.target.value)}
               placeholder="Skill instructions in markdown..."
-              rows={16}
+              rows={12}
               className="font-mono text-xs"
             />
           </div>

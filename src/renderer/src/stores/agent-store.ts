@@ -85,7 +85,7 @@ interface AgentState {
   endSession: (taskId: string) => void
   removeSession: (taskId: string) => void
   getSession: (taskId: string) => TaskSession | undefined
-  stopAndRemoveSessionForTask: (taskId: string) => Promise<void>
+  stopAndRemoveSessionForTask: (taskId: string, resetTaskStatus?: boolean) => Promise<void>
 }
 
 export const useAgentStore = create<AgentState>((set, get) => {
@@ -109,7 +109,10 @@ export const useAgentStore = create<AgentState>((set, get) => {
     const state = get()
     const session = findBySessionId(state.sessions, event.sessionId)
       || (event.taskId ? state.sessions.get(event.taskId) : undefined)
-    if (!session) return
+    if (!session) {
+      console.log(`[agent-store] onAgentOutput: session not found for sessionId=${event.sessionId}, taskId=${event.taskId}`)
+      return
+    }
 
     // Patch in real sessionId if needed
     const resolvedSession = (!session.sessionId && event.sessionId)
@@ -129,12 +132,27 @@ export const useAgentStore = create<AgentState>((set, get) => {
       content = String(data)
     }
 
+    // Debug logging for feedback messages
+    if (data?.id?.startsWith('user-feedback-')) {
+      console.log(`[agent-store] Received feedback message: id=${data.id}, role=${role}, content length=${content.length}`)
+    }
+
     // Allow empty content for tool/question messages (they have tool/questions field instead)
-    if (!content && !data.tool && !data.questions && !data.todos) return
+    if (!content && !data.tool && !data.questions && !data.todos) {
+      if (data?.id?.startsWith('user-feedback-')) {
+        console.log(`[agent-store] REJECTED feedback message - no content!`)
+      }
+      return
+    }
     if (!msgId) msgId = data.id || `${role}-${content.slice(0, 50)}-${Date.now()}`
 
     const taskId = resolvedSession.taskId
     const seen = getSeen(taskId)
+
+    // More debug logging for feedback messages
+    if (msgId?.startsWith('user-feedback-')) {
+      console.log(`[agent-store] Processing feedback message: msgId=${msgId}, seen=${seen.has(msgId)}, currentMessages=${resolvedSession.messages.length}`)
+    }
 
     // Absorb step-start: record timestamp, don't add as message
     if (data.partType === 'step-start') {
@@ -188,8 +206,17 @@ export const useAgentStore = create<AgentState>((set, get) => {
       return
     }
 
-    if (seen.has(msgId)) return
+    if (seen.has(msgId)) {
+      if (msgId?.startsWith('user-feedback-')) {
+        console.log(`[agent-store] REJECTED feedback message - already seen!`)
+      }
+      return
+    }
     seen.add(msgId)
+
+    if (msgId?.startsWith('user-feedback-')) {
+      console.log(`[agent-store] ADDING feedback message to messages array`)
+    }
 
     set({
       sessions: new Map(state.sessions).set(taskId, {
@@ -200,6 +227,10 @@ export const useAgentStore = create<AgentState>((set, get) => {
         ]
       })
     })
+
+    if (msgId?.startsWith('user-feedback-')) {
+      console.log(`[agent-store] Feedback message ADDED successfully. Total messages now: ${resolvedSession.messages.length + 1}`)
+    }
   })
 
   onAgentApproval((event: AgentApprovalRequest) => {
@@ -313,11 +344,11 @@ export const useAgentStore = create<AgentState>((set, get) => {
       })
     },
 
-    stopAndRemoveSessionForTask: async (taskId) => {
+    stopAndRemoveSessionForTask: async (taskId, resetTaskStatus = false) => {
       const session = get().sessions.get(taskId)
       if (session?.sessionId) {
         try {
-          await agentSessionApi.stop(session.sessionId)
+          await agentSessionApi.stop(session.sessionId, resetTaskStatus)
         } catch (err) {
           console.error('Failed to stop session:', err)
         }

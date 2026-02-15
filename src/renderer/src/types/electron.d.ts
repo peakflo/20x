@@ -121,12 +121,12 @@ interface ElectronAPI {
     start: (agentId: string, taskId: string, workspaceDir?: string) => Promise<AgentSessionStartResult>
     resume: (agentId: string, taskId: string, ocSessionId: string) => Promise<AgentSessionStartResult>
     abort: (sessionId: string) => Promise<AgentSessionSuccessResult>
-    stop: (sessionId: string) => Promise<AgentSessionSuccessResult>
+    stop: (sessionId: string, resetTaskStatus?: boolean) => Promise<AgentSessionSuccessResult>
     send: (sessionId: string, message: string, taskId?: string) => Promise<AgentSessionSuccessResult & { newSessionId?: string }>
     approve: (sessionId: string, approved: boolean, message?: string) => Promise<AgentSessionSuccessResult>
     syncSkills: (sessionId: string) => Promise<SkillSyncResult>
     syncSkillsForTask: (taskId: string) => Promise<SkillSyncResult>
-    learnFromSession: (sessionId: string, message: string) => Promise<SkillSyncResult>
+    learnFromSession: (sessionId: string, rating: number, comment?: string) => Promise<SkillSyncResult>
   }
   agentConfig: {
     getProviders: (serverUrl?: string) => Promise<{ providers: any[]; default: Record<string, string> } | null>

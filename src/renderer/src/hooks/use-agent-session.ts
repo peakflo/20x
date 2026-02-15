@@ -60,9 +60,10 @@ export function useAgentSession(taskId: string | undefined) {
     await agentSessionApi.abort(session.sessionId)
   }, [session?.sessionId])
 
-  const stop = useCallback(async () => {
+  const stop = useCallback(async (resetTaskStatus?: boolean) => {
     if (!session?.sessionId || !taskId) return
-    await agentSessionApi.stop(session.sessionId)
+    console.log(`[useAgentSession] stop called with resetTaskStatus=${resetTaskStatus}`)
+    await agentSessionApi.stop(session.sessionId, resetTaskStatus)
     endSession(taskId)
   }, [session?.sessionId, taskId, endSession])
 

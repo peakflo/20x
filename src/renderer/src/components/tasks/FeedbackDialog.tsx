@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Star } from 'lucide-react'
 import { Dialog, DialogContent, DialogHeader, DialogBody, DialogTitle, DialogDescription } from '@/components/ui/Dialog'
 import { Button } from '@/components/ui/Button'
@@ -14,6 +14,15 @@ export function FeedbackDialog({ open, onSubmit, onSkip }: FeedbackDialogProps) 
   const [rating, setRating] = useState(0)
   const [hoveredStar, setHoveredStar] = useState(0)
   const [comment, setComment] = useState('')
+
+  // Reset state when dialog opens
+  useEffect(() => {
+    if (open) {
+      setRating(0)
+      setHoveredStar(0)
+      setComment('')
+    }
+  }, [open])
 
   const handleSubmit = () => {
     if (rating > 0) onSubmit(rating, comment)

@@ -339,6 +339,11 @@ export interface Skill {
   description: string
   content: string
   version: number
+  confidence: number
+  uses: number
+  last_used: string | null
+  learned_from: string[]
+  tags: string[]
   created_at: string
   updated_at: string
 }
@@ -347,12 +352,20 @@ export interface CreateSkillDTO {
   name: string
   description: string
   content: string
+  confidence?: number
+  tags?: string[]
+  learned_from?: string[]
 }
 
 export interface UpdateSkillDTO {
   name?: string
   description?: string
   content?: string
+  confidence?: number
+  uses?: number
+  last_used?: string | null
+  learned_from?: string[]
+  tags?: string[]
 }
 
 // ── Plugin types ─────────────────────────────────────────────

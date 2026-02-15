@@ -110,7 +110,7 @@ describe('useAgentStore', () => {
 
       await useAgentStore.getState().stopAndRemoveSessionForTask('task-1')
 
-      expect(mockElectronAPI.agentSession.stop).toHaveBeenCalledWith('sess-1')
+      expect(mockElectronAPI.agentSession.stop).toHaveBeenCalledWith('sess-1', false)
       expect(useAgentStore.getState().sessions.has('task-1')).toBe(false)
     })
 
