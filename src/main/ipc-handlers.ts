@@ -1,4 +1,4 @@
-import { ipcMain, dialog, shell, Notification } from 'electron'
+import { ipcMain, dialog, shell, Notification, app } from 'electron'
 import { copyFileSync, existsSync, unlinkSync, readdirSync, statSync, readFileSync } from 'fs'
 import { execFile } from 'child_process'
 import { promisify } from 'util'
@@ -437,5 +437,39 @@ export function registerIpcHandlers(
   ipcMain.handle('oauth:revokeToken', async (_, sourceId: string) => {
     if (!oauthManager) throw new Error('OAuth manager not initialized')
     await oauthManager.revokeToken(sourceId)
+  })
+
+  // App preferences handlers
+  ipcMain.handle('app:getLoginItemSettings', () => {
+    return app.getLoginItemSettings()
+  })
+
+  ipcMain.handle('app:setLoginItemSettings', (_, openAtLogin: boolean) => {
+    app.setLoginItemSettings({
+      openAtLogin,
+      openAsHidden: false
+    })
+    return app.getLoginItemSettings()
+  })
+
+  ipcMain.handle('app:getNotificationPermission', async () => {
+    if (Notification.isSupported()) {
+      return 'granted'
+    }
+    return 'denied'
+  })
+
+  ipcMain.handle('app:requestNotificationPermission', async () => {
+    return Notification.isSupported() ? 'granted' : 'denied'
+  })
+
+  ipcMain.handle('app:getMinimizeToTray', async () => {
+    const result = await db.getSetting('minimize_to_tray')
+    return result === 'true'
+  })
+
+  ipcMain.handle('app:setMinimizeToTray', async (_, enabled: boolean) => {
+    await db.setSetting('minimize_to_tray', enabled.toString())
+    return enabled
   })
 }

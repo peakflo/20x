@@ -1,3 +1,21 @@
+// ── Settings types ──────────────────────────────────────────
+
+export enum SettingsTab {
+  GENERAL = 'general',
+  AGENTS = 'agents',
+  TOOLS_MCP = 'tools-mcp',
+  INTEGRATIONS = 'integrations',
+  ADVANCED = 'advanced'
+}
+
+export const SETTINGS_TABS: { value: SettingsTab; label: string; icon: string }[] = [
+  { value: SettingsTab.GENERAL, label: 'General', icon: 'Settings' },
+  { value: SettingsTab.AGENTS, label: 'Agents', icon: 'Users' },
+  { value: SettingsTab.TOOLS_MCP, label: 'Tools & MCP', icon: 'Server' },
+  { value: SettingsTab.INTEGRATIONS, label: 'Integrations', icon: 'Workflow' },
+  { value: SettingsTab.ADVANCED, label: 'Advanced', icon: 'Wrench' }
+]
+
 // ── Agent types ─────────────────────────────────────────────
 
 export enum CodingAgentType {

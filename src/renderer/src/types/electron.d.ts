@@ -198,6 +198,14 @@ interface ElectronAPI {
     getActions: (pluginId: string, config: Record<string, unknown>) => Promise<PluginAction[]>
     executeAction: (actionId: string, taskId: string, sourceId: string, input?: string) => Promise<ActionResult>
   }
+  app: {
+    getLoginItemSettings: () => Promise<{ openAtLogin: boolean; openAsHidden: boolean }>
+    setLoginItemSettings: (openAtLogin: boolean) => Promise<{ openAtLogin: boolean; openAsHidden: boolean }>
+    getNotificationPermission: () => Promise<'granted' | 'denied'>
+    requestNotificationPermission: () => Promise<'granted' | 'denied'>
+    getMinimizeToTray: () => Promise<boolean>
+    setMinimizeToTray: (enabled: boolean) => Promise<boolean>
+  }
   onOverdueCheck: (callback: () => void) => () => void
   onAgentOutput: (callback: (event: AgentOutputEvent) => void) => () => void
   onAgentStatus: (callback: (event: AgentStatusEvent) => void) => () => void

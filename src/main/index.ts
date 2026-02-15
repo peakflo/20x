@@ -23,7 +23,7 @@ if (process.platform === 'darwin') {
   }
 }
 
-import { app, BrowserWindow, shell } from 'electron'
+import { app, BrowserWindow, shell, Tray, Menu, nativeImage } from 'electron'
 import { join } from 'path'
 import { is } from '@electron-toolkit/utils'
 import { DatabaseManager } from './database'
@@ -39,6 +39,8 @@ import { LinearPlugin } from './plugins/linear-plugin'
 import { registerIpcHandlers } from './ipc-handlers'
 
 let mainWindow: BrowserWindow | null = null
+let tray: Tray | null = null
+let isQuitting = false
 let db: DatabaseManager | null = null
 let agentManager: AgentManager | null = null
 let githubManager: GitHubManager | null = null
@@ -86,6 +88,22 @@ function createWindow(): void {
     mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
   }
 
+  mainWindow.on('close', async (event) => {
+    if (!isQuitting) {
+      const minimizeToTray = await db?.getSetting('minimize_to_tray')
+      if (minimizeToTray === 'true') {
+        event.preventDefault()
+        mainWindow?.hide()
+
+        // Create tray if it doesn't exist
+        if (!tray && db) {
+          createTray()
+        }
+        return
+      }
+    }
+  })
+
   mainWindow.on('closed', () => {
     mainWindow = null
   })
@@ -93,6 +111,44 @@ function createWindow(): void {
   // Set main window for managers
   agentManager?.setMainWindow(mainWindow)
   worktreeManager?.setMainWindow(mainWindow)
+}
+
+function createTray(): void {
+  if (tray) return
+
+  // Create a simple tray icon (16x16 transparent icon)
+  const icon = nativeImage.createFromDataURL(
+    'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAABHNCSVQICAgIfAhkiAAAAAlwSFlzAAAAdgAAAHYBTnsmCAAAABl0RVh0U29mdHdhcmUAd3d3Lmlua3NjYXBlLm9yZ5vuPBoAAAESSURBVDiNrdI9S8NAGMDx/5Wk1YKDi4ODQ3FQcHMQP4CDg4uDk4ubk4iDnyAf4O/gIji4CA5FEBwcnJycHBwcXBwcXJRSq7aJ8VDSpk0VfMbj7rn/cffcI6SUOKWllNhKKeF0OhGllLBtG9M0kVLidDqoqsrl5SWxWIxoNIphGOi6Trlcplgskkql8Pl8AMD3+0ilUuF6vZZKqYLruigI+Hw+FAoF3t/fJZPJ0O/3WSwW/H6/bDQaXF9fs1gsMAwDy7Jwu91Eo1EcDgfFYpFsNovH46FarZJMJpmammJjY4N6vY6qqgSDQdrtNgC2bTMYDOh0Oui6jqIoKIqCZVmYponf72cwGGDbNgBCCIQQf9o/6Ad8dIxRqBjmAAAAAElFTkSuQmCC'
+  )
+
+  tray = new Tray(icon)
+
+  const contextMenu = Menu.buildFromTemplate([
+    {
+      label: 'Show Workflo',
+      click: () => {
+        mainWindow?.show()
+      }
+    },
+    {
+      type: 'separator'
+    },
+    {
+      label: 'Quit',
+      click: () => {
+        isQuitting = true
+        app.quit()
+      }
+    }
+  ])
+
+  tray.setToolTip('Workflo Workspace')
+  tray.setContextMenu(contextMenu)
+
+  // Show window on tray icon click (platform specific)
+  tray.on('click', () => {
+    mainWindow?.show()
+  })
 }
 
 // Register custom protocol for OAuth callback
@@ -205,9 +261,16 @@ app.on('window-all-closed', () => {
 })
 
 app.on('before-quit', () => {
+  isQuitting = true
   // Ensure cleanup before quitting
   agentManager?.stopAllSessions()
   agentManager?.stopServer()
   mcpToolCaller?.destroy()
   oauthManager?.destroy()
+
+  // Destroy tray
+  if (tray) {
+    tray.destroy()
+    tray = null
+  }
 })

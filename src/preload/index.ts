@@ -188,5 +188,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const handler = (_: unknown, data: unknown): void => callback(data)
     ipcRenderer.on('worktree:progress', handler)
     return () => ipcRenderer.removeListener('worktree:progress', handler)
+  },
+  app: {
+    getLoginItemSettings: (): Promise<{ openAtLogin: boolean; openAsHidden: boolean }> =>
+      ipcRenderer.invoke('app:getLoginItemSettings'),
+    setLoginItemSettings: (openAtLogin: boolean): Promise<{ openAtLogin: boolean; openAsHidden: boolean }> =>
+      ipcRenderer.invoke('app:setLoginItemSettings', openAtLogin),
+    getNotificationPermission: (): Promise<'granted' | 'denied'> =>
+      ipcRenderer.invoke('app:getNotificationPermission'),
+    requestNotificationPermission: (): Promise<'granted' | 'denied'> =>
+      ipcRenderer.invoke('app:requestNotificationPermission'),
+    getMinimizeToTray: (): Promise<boolean> =>
+      ipcRenderer.invoke('app:getMinimizeToTray'),
+    setMinimizeToTray: (enabled: boolean): Promise<boolean> =>
+      ipcRenderer.invoke('app:setMinimizeToTray', enabled)
   }
 })
