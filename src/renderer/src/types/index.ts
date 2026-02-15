@@ -389,3 +389,20 @@ export interface ActionResult {
   error?: string
   taskUpdate?: Record<string, unknown>
 }
+
+// ── OAuth types ──────────────────────────────────────────────
+
+export type OAuthProvider = 'linear'
+
+export interface OAuthToken {
+  id: string
+  provider: OAuthProvider
+  source_id: string
+  access_token: string
+  refresh_token: string | null
+  expires_at: string
+  scope: string | null
+  token_type: string
+  created_at: string
+  updated_at: string
+}

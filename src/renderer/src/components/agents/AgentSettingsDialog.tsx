@@ -171,21 +171,27 @@ function McpServerCard({ server, connection, onTest, onEdit, onDelete }: {
 
 // ── Task Source Card ─────────────────────────────────────────
 
-function TaskSourceCard({ source, mcpServerName, pluginName, isSyncing, onSync, onEdit, onDelete }: {
-  source: TaskSource; mcpServerName: string; pluginName: string; isSyncing: boolean; onSync: () => void; onEdit: () => void; onDelete: () => void
+function TaskSourceCard({ source, mcpServerName, pluginName, requiresMcpServer, requiresOAuth, oauthConnected, isSyncing, onSync, onEdit, onDelete }: {
+  source: TaskSource; mcpServerName: string; pluginName: string; requiresMcpServer: boolean; requiresOAuth: boolean; oauthConnected: boolean; isSyncing: boolean; onSync: () => void; onEdit: () => void; onDelete: () => void
 }) {
+  // For OAuth sources, only show green if both enabled AND OAuth connected
+  const isConnected = source.enabled && (!requiresOAuth || oauthConnected)
+
   return (
     <div className="rounded-lg border border-border bg-card/50 overflow-hidden">
       <div className="flex items-center gap-3 px-4 py-3">
-        <span className={`h-2 w-2 rounded-full shrink-0 ${source.enabled ? 'bg-green-400' : 'bg-muted-foreground/40'}`} />
+        <span className={`h-2 w-2 rounded-full shrink-0 ${isConnected ? 'bg-green-400' : 'bg-muted-foreground/40'}`} />
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
             <span className="font-medium text-sm truncate">{source.name}</span>
             <span className="text-[10px] bg-muted text-muted-foreground px-1.5 py-0.5 rounded">{pluginName}</span>
           </div>
           <div className="text-xs text-muted-foreground truncate mt-0.5">
-            {mcpServerName}
-            {source.last_synced_at && <span className="text-foreground/60"> · Synced {new Date(source.last_synced_at).toLocaleString()}</span>}
+            {requiresMcpServer && mcpServerName}
+            {!requiresMcpServer && source.last_synced_at && (
+              <span className="text-foreground/60">Synced {new Date(source.last_synced_at).toLocaleString()}</span>
+            )}
+            {requiresMcpServer && source.last_synced_at && <span className="text-foreground/60"> · Synced {new Date(source.last_synced_at).toLocaleString()}</span>}
           </div>
         </div>
         <div className="flex items-center gap-1 shrink-0">
@@ -401,7 +407,14 @@ function TaskSourceFormDialog({ source, mcpServers, plugins, open, onClose, onSu
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
     if (!isValid) return
-    onSubmit({ mcp_server_id: mcpServerId, name: name.trim(), plugin_id: pluginId, config: pluginConfig })
+    // Only include mcp_server_id if the plugin requires it
+    const data: CreateTaskSourceDTO = {
+      mcp_server_id: selectedPlugin?.requiresMcpServer ? mcpServerId : (mcpServers[0]?.id ?? ''),
+      name: name.trim(),
+      plugin_id: pluginId,
+      config: pluginConfig
+    }
+    onSubmit(data)
     onClose()
   }
 
@@ -434,7 +447,13 @@ function TaskSourceFormDialog({ source, mcpServers, plugins, open, onClose, onSu
                 </select>
               </div>
             )}
-            <PluginConfigForm pluginId={pluginId} mcpServerId={mcpServerId} value={pluginConfig} onChange={setPluginConfig} />
+            <PluginConfigForm
+              pluginId={pluginId}
+              mcpServerId={mcpServerId}
+              sourceId={source?.id}
+              value={pluginConfig}
+              onChange={setPluginConfig}
+            />
             <div className="flex justify-end gap-2 pt-1">
               <Button type="button" variant="outline" size="sm" onClick={onClose}>Cancel</Button>
               <Button type="submit" size="sm" disabled={!isValid}>{source ? 'Save' : 'Add'}</Button>
@@ -463,6 +482,7 @@ export function AgentSettingsDialog() {
   const [orgInput, setOrgInput] = useState('')
   const [isAuthenticating, setIsAuthenticating] = useState(false)
   const [plugins, setPlugins] = useState<PluginMeta[]>([])
+  const [oauthStatus, setOauthStatus] = useState<Map<string, boolean>>(new Map())
 
   // Sub-dialog state
   const [agentDialog, setAgentDialog] = useState<{ open: boolean; agent?: Agent }>({ open: false })
@@ -475,6 +495,32 @@ export function AgentSettingsDialog() {
       pluginApi.list().then(setPlugins)
     }
   }, [isOpen])
+
+  // Check OAuth status for all task sources
+  const checkOAuthStatus = async () => {
+    if (taskSources.length > 0 && window.electronAPI?.oauth) {
+      const statusMap = new Map<string, boolean>()
+      for (const source of taskSources) {
+        const plugin = plugins.find(p => p.id === source.plugin_id)
+        // Only check OAuth for plugins that require it (currently just Linear)
+        if (plugin?.id === 'linear') {
+          try {
+            const token = await window.electronAPI.oauth.getValidToken(source.id)
+            statusMap.set(source.id, !!token)
+          } catch {
+            statusMap.set(source.id, false)
+          }
+        }
+      }
+      setOauthStatus(statusMap)
+    }
+  }
+
+  useEffect(() => {
+    if (isOpen) {
+      checkOAuthStatus()
+    }
+  }, [isOpen, taskSources.length, plugins.length])
 
   useEffect(() => { if (isOpen && githubOrg) setOrgInput(githubOrg) }, [isOpen, githubOrg])
   useEffect(() => { if (isOpen && agents.length > 0) agents.forEach((a) => testConnection(a)) }, [isOpen, agents.length])
@@ -661,16 +707,26 @@ export function AgentSettingsDialog() {
                     </p>
                   ) : (
                     <div className="space-y-2">
-                      {taskSources.map((source) => (
-                        <TaskSourceCard key={source.id} source={source}
-                          mcpServerName={mcpServers.find((s) => s.id === source.mcp_server_id)?.name ?? 'Unknown'}
-                          pluginName={plugins.find((p) => p.id === source.plugin_id)?.displayName ?? source.plugin_id}
-                          isSyncing={syncingIds.has(source.id)}
-                          onSync={() => handleSyncTaskSource(source.id)}
-                          onEdit={() => setTsDialog({ open: true, source })}
-                          onDelete={() => handleDeleteTaskSource(source.id)}
-                        />
-                      ))}
+                      {taskSources.map((source) => {
+                        const plugin = plugins.find((p) => p.id === source.plugin_id)
+                        const requiresOAuth = plugin?.id === 'linear'
+                        const oauthConnected = requiresOAuth ? (oauthStatus.get(source.id) ?? false) : true
+                        return (
+                          <TaskSourceCard
+                            key={source.id}
+                            source={source}
+                            mcpServerName={mcpServers.find((s) => s.id === source.mcp_server_id)?.name ?? 'Unknown'}
+                            pluginName={plugin?.displayName ?? source.plugin_id}
+                            requiresMcpServer={plugin?.requiresMcpServer ?? false}
+                            requiresOAuth={requiresOAuth}
+                            oauthConnected={oauthConnected}
+                            isSyncing={syncingIds.has(source.id)}
+                            onSync={() => handleSyncTaskSource(source.id)}
+                            onEdit={() => setTsDialog({ open: true, source })}
+                            onDelete={() => handleDeleteTaskSource(source.id)}
+                          />
+                        )
+                      })}
                     </div>
                   )}
                 </div>
@@ -733,7 +789,11 @@ export function AgentSettingsDialog() {
         source={tsDialog.source}
         mcpServers={mcpServers}
         plugins={plugins}
-        onClose={() => setTsDialog({ open: false })}
+        onClose={() => {
+          setTsDialog({ open: false })
+          // Refresh OAuth status after closing dialog (in case OAuth was connected)
+          setTimeout(() => checkOAuthStatus(), 500)
+        }}
         onSubmit={tsDialog.source ? handleUpdateTaskSource : handleCreateTaskSource}
       />
     </>

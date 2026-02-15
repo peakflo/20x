@@ -1,5 +1,5 @@
 import Database from 'better-sqlite3'
-import { app } from 'electron'
+import { app, safeStorage } from 'electron'
 import { join } from 'path'
 import { existsSync, mkdirSync, rmSync } from 'fs'
 import { createId } from '@paralleldrive/cuid2'
@@ -375,6 +375,43 @@ export interface UpdateSkillData {
   content?: string
 }
 
+// ── OAuth Token types ────────────────────────────────────────
+
+export interface OAuthTokenRow {
+  id: string
+  provider: string
+  source_id: string
+  access_token: Buffer
+  refresh_token: Buffer | null
+  expires_at: string
+  scope: string | null
+  token_type: string
+  created_at: string
+  updated_at: string
+}
+
+export interface OAuthTokenRecord {
+  id: string
+  provider: string
+  source_id: string
+  access_token: string
+  refresh_token: string | null
+  expires_at: string
+  scope: string | null
+  token_type: string
+  created_at: string
+  updated_at: string
+}
+
+export interface CreateOAuthTokenData {
+  provider: string
+  source_id: string
+  access_token: string
+  refresh_token: string | null
+  expires_in: number
+  scope: string | null
+}
+
 function deserializeSkill(row: SkillRow): SkillRecord {
   return {
     id: row.id,
@@ -382,6 +419,30 @@ function deserializeSkill(row: SkillRow): SkillRecord {
     description: row.description,
     content: row.content,
     version: row.version,
+    created_at: row.created_at,
+    updated_at: row.updated_at
+  }
+}
+
+function deserializeOAuthToken(row: OAuthTokenRow): OAuthTokenRecord {
+  // Decrypt tokens using safeStorage
+  const accessToken = safeStorage.isEncryptionAvailable()
+    ? safeStorage.decryptString(row.access_token)
+    : row.access_token.toString('utf8')
+
+  const refreshToken = row.refresh_token && safeStorage.isEncryptionAvailable()
+    ? safeStorage.decryptString(row.refresh_token)
+    : row.refresh_token?.toString('utf8') || null
+
+  return {
+    id: row.id,
+    provider: row.provider,
+    source_id: row.source_id,
+    access_token: accessToken,
+    refresh_token: refreshToken,
+    expires_at: row.expires_at,
+    scope: row.scope,
+    token_type: row.token_type,
     created_at: row.created_at,
     updated_at: row.updated_at
   }
@@ -475,6 +536,22 @@ export class DatabaseManager {
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
+
+      CREATE TABLE IF NOT EXISTS oauth_tokens (
+        id TEXT PRIMARY KEY,
+        provider TEXT NOT NULL,
+        source_id TEXT NOT NULL REFERENCES task_sources(id) ON DELETE CASCADE,
+        access_token BLOB NOT NULL,
+        refresh_token BLOB,
+        expires_at TEXT NOT NULL,
+        scope TEXT,
+        token_type TEXT NOT NULL DEFAULT 'Bearer',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_oauth_tokens_source ON oauth_tokens(source_id);
+      CREATE INDEX IF NOT EXISTS idx_oauth_tokens_provider ON oauth_tokens(provider);
     `)
 
     this.runMigrations()
@@ -1046,5 +1123,86 @@ export class DatabaseManager {
     const result: Record<string, string> = {}
     for (const row of rows) result[row.key] = row.value
     return result
+  }
+
+  // ── OAuth Token CRUD ────────────────────────────────────────
+
+  createOAuthToken(data: CreateOAuthTokenData): OAuthTokenRecord | undefined {
+    const id = createId()
+    const now = new Date().toISOString()
+    const expiresAt = new Date(Date.now() + data.expires_in * 1000).toISOString()
+
+    // Encrypt tokens before storing
+    const encryptedAccessToken = safeStorage.isEncryptionAvailable()
+      ? safeStorage.encryptString(data.access_token)
+      : Buffer.from(data.access_token, 'utf8')
+
+    const encryptedRefreshToken = data.refresh_token && safeStorage.isEncryptionAvailable()
+      ? safeStorage.encryptString(data.refresh_token)
+      : data.refresh_token ? Buffer.from(data.refresh_token, 'utf8') : null
+
+    this.db.prepare(`
+      INSERT INTO oauth_tokens (id, provider, source_id, access_token, refresh_token, expires_at, scope, token_type, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      id,
+      data.provider,
+      data.source_id,
+      encryptedAccessToken,
+      encryptedRefreshToken,
+      expiresAt,
+      data.scope,
+      'Bearer',
+      now,
+      now
+    )
+
+    return this.getOAuthToken(id)
+  }
+
+  getOAuthToken(id: string): OAuthTokenRecord | undefined {
+    const row = this.db.prepare(
+      'SELECT * FROM oauth_tokens WHERE id = ?'
+    ).get(id) as OAuthTokenRow | undefined
+
+    return row ? deserializeOAuthToken(row) : undefined
+  }
+
+  getOAuthTokenBySource(sourceId: string): OAuthTokenRecord | undefined {
+    const row = this.db.prepare(
+      'SELECT * FROM oauth_tokens WHERE source_id = ?'
+    ).get(sourceId) as OAuthTokenRow | undefined
+
+    return row ? deserializeOAuthToken(row) : undefined
+  }
+
+  updateOAuthToken(id: string, accessToken: string, refreshToken: string | null, expiresIn: number): OAuthTokenRecord | undefined {
+    const now = new Date().toISOString()
+    const expiresAt = new Date(Date.now() + expiresIn * 1000).toISOString()
+
+    // Encrypt tokens before storing
+    const encryptedAccessToken = safeStorage.isEncryptionAvailable()
+      ? safeStorage.encryptString(accessToken)
+      : Buffer.from(accessToken, 'utf8')
+
+    const encryptedRefreshToken = refreshToken && safeStorage.isEncryptionAvailable()
+      ? safeStorage.encryptString(refreshToken)
+      : refreshToken ? Buffer.from(refreshToken, 'utf8') : null
+
+    this.db.prepare(
+      'UPDATE oauth_tokens SET access_token = ?, refresh_token = ?, expires_at = ?, updated_at = ? WHERE id = ?'
+    ).run(encryptedAccessToken, encryptedRefreshToken, expiresAt, now, id)
+
+    return this.getOAuthToken(id)
+  }
+
+  deleteOAuthToken(id: string): boolean {
+    const result = this.db.prepare('DELETE FROM oauth_tokens WHERE id = ?').run(id)
+    return result.changes > 0
+  }
+
+  deleteOAuthTokenBySource(sourceId: string): boolean {
+    const result = this.db.prepare('DELETE FROM oauth_tokens WHERE source_id = ?').run(sourceId)
+    return result.changes > 0
   }
 }

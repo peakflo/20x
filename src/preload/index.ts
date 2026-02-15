@@ -25,7 +25,24 @@ contextBridge.exposeInMainWorld('electronAPI', {
     showItemInFolder: (filePath: string): Promise<void> =>
       ipcRenderer.invoke('shell:showItemInFolder', filePath),
     readTextFile: (filePath: string): Promise<{ content: string; size: number } | null> =>
-      ipcRenderer.invoke('shell:readTextFile', filePath)
+      ipcRenderer.invoke('shell:readTextFile', filePath),
+    openExternal: (url: string): Promise<void> =>
+      ipcRenderer.invoke('shell:openExternal', url)
+  },
+  oauth: {
+    startFlow: (provider: string, config: Record<string, unknown>): Promise<string> =>
+      ipcRenderer.invoke('oauth:startFlow', provider, config),
+    exchangeCode: (provider: string, code: string, state: string, sourceId: string): Promise<void> =>
+      ipcRenderer.invoke('oauth:exchangeCode', provider, code, state, sourceId),
+    getValidToken: (sourceId: string): Promise<string | null> =>
+      ipcRenderer.invoke('oauth:getValidToken', sourceId),
+    revokeToken: (sourceId: string): Promise<void> =>
+      ipcRenderer.invoke('oauth:revokeToken', sourceId)
+  },
+  onOAuthCallback: (callback: (event: { code: string; state: string }) => void): (() => void) => {
+    const handler = (_: unknown, data: { code: string; state: string }): void => callback(data)
+    ipcRenderer.on('oauth:callback', handler)
+    return () => ipcRenderer.removeListener('oauth:callback', handler)
   },
   notifications: {
     show: (title: string, body: string): Promise<void> =>
@@ -160,8 +177,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     list: (): Promise<unknown[]> => ipcRenderer.invoke('plugin:list'),
     getConfigSchema: (pluginId: string): Promise<unknown[]> =>
       ipcRenderer.invoke('plugin:getConfigSchema', pluginId),
-    resolveOptions: (pluginId: string, resolverKey: string, config: Record<string, unknown>, mcpServerId?: string): Promise<unknown[]> =>
-      ipcRenderer.invoke('plugin:resolveOptions', pluginId, resolverKey, config, mcpServerId),
+    resolveOptions: (pluginId: string, resolverKey: string, config: Record<string, unknown>, mcpServerId?: string, sourceId?: string): Promise<unknown[]> =>
+      ipcRenderer.invoke('plugin:resolveOptions', pluginId, resolverKey, config, mcpServerId, sourceId),
     getActions: (pluginId: string, config: Record<string, unknown>): Promise<unknown[]> =>
       ipcRenderer.invoke('plugin:getActions', pluginId, config),
     executeAction: (actionId: string, taskId: string, sourceId: string, input?: string): Promise<unknown> =>

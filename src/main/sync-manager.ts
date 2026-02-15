@@ -1,6 +1,7 @@
 import type { DatabaseManager, TaskRecord } from './database'
 import type { McpToolCaller } from './mcp-tool-caller'
 import type { PluginRegistry } from './plugins/registry'
+import type { OAuthManager } from './oauth-manager'
 import type { PluginContext, PluginSyncResult, ActionResult } from './plugins/types'
 import type { SourceUser, ReassignResult } from '../shared/types'
 
@@ -15,12 +16,19 @@ export class SyncManager {
   constructor(
     private db: DatabaseManager,
     private toolCaller: McpToolCaller,
-    private pluginRegistry: PluginRegistry
+    private pluginRegistry: PluginRegistry,
+    private oauthManager?: OAuthManager
   ) {}
 
-  private buildContext(mcpServerId?: string): PluginContext {
+  private buildContext(mcpServerId?: string, sourceId?: string): PluginContext {
     const mcpServer = mcpServerId ? this.db.getMcpServer(mcpServerId) : undefined
-    return { db: this.db, toolCaller: this.toolCaller, mcpServer }
+    return {
+      db: this.db,
+      toolCaller: this.toolCaller,
+      mcpServer,
+      oauthManager: this.oauthManager,
+      sourceId
+    }
   }
 
   async importTasks(sourceId: string): Promise<SyncResult> {
@@ -40,7 +48,7 @@ export class SyncManager {
       return result
     }
 
-    const ctx = this.buildContext(source.mcp_server_id)
+    const ctx = this.buildContext(source.mcp_server_id, sourceId)
     console.log('[sync] Importing from:', source.name)
 
     // Merge legacy columns into config for backward compat
@@ -71,7 +79,7 @@ export class SyncManager {
     const plugin = this.pluginRegistry.get(source.plugin_id)
     if (!plugin) return
 
-    const ctx = this.buildContext(source.mcp_server_id)
+    const ctx = this.buildContext(source.mcp_server_id, task.source_id)
     const config = this.getConfig(source)
 
     await plugin.exportUpdate(task, changedFields, config, ctx)
@@ -89,7 +97,7 @@ export class SyncManager {
     const plugin = this.pluginRegistry.get(source.plugin_id)
     if (!plugin) return { success: false, error: `Plugin "${source.plugin_id}" not found` }
 
-    const ctx = this.buildContext(source.mcp_server_id)
+    const ctx = this.buildContext(source.mcp_server_id, sourceId)
     const config = this.getConfig(source)
 
     const result = await plugin.executeAction(actionId, task, input, config, ctx)
@@ -109,7 +117,7 @@ export class SyncManager {
     const plugin = this.pluginRegistry.get(source.plugin_id)
     if (!plugin?.getUsers) return []
 
-    const ctx = this.buildContext(source.mcp_server_id)
+    const ctx = this.buildContext(source.mcp_server_id, sourceId)
     const config = this.getConfig(source)
     return plugin.getUsers(config, ctx)
   }
@@ -132,7 +140,7 @@ export class SyncManager {
       return { success: false, error: 'Plugin does not support reassignment' }
     }
 
-    const ctx = this.buildContext(source.mcp_server_id)
+    const ctx = this.buildContext(source.mcp_server_id, task.source_id)
     const config = this.getConfig(source)
 
     const result = await plugin.reassignTask(task, userIds, config, ctx)
