@@ -4,7 +4,7 @@ import { join } from 'path'
 import { existsSync, copyFileSync, mkdirSync, writeFileSync, readFileSync, readdirSync, statSync } from 'fs'
 import { Agent as UndiciAgent } from 'undici'
 import type { BrowserWindow } from 'electron'
-import type { DatabaseManager, AgentMcpServerEntry, OutputFieldRecord } from './database'
+import type { DatabaseManager, AgentMcpServerEntry, OutputFieldRecord, SkillRecord } from './database'
 import { TaskStatus } from '../shared/constants'
 import { ClaudeCodeAdapter } from './adapters/claude-code-adapter'
 import { AcpAdapter } from './adapters/acp-adapter'
@@ -224,6 +224,7 @@ export class AgentManager extends EventEmitter {
   /**
    * Resolves and writes SKILL.md files to the workspace directory.
    * Priority: task.skill_ids > agent.config.skill_ids > all skills.
+   * Also generates AGENTS.md and CLAUDE.md with skill directory.
    */
   private writeSkillFiles(taskId: string, agentId: string, workspaceDir: string): void {
     try {
@@ -244,21 +245,138 @@ export class AgentManager extends EventEmitter {
         ? this.db.getSkills()
         : this.db.getSkillsByIds(skillIds)
 
-      if (skills.length === 0) return
-
-      const skillsDir = join(workspaceDir, '.agents', 'skills')
-      for (const skill of skills) {
-        const dir = join(skillsDir, skill.name)
-        mkdirSync(dir, { recursive: true })
-        const desc = skill.description || skill.name
-        const content = `---\nname: ${skill.name}\ndescription: ${desc}\n---\n\n${skill.content}`
-        writeFileSync(join(dir, 'SKILL.md'), content, 'utf-8')
+      // Write individual SKILL.md files
+      if (skills.length > 0) {
+        const skillsDir = join(workspaceDir, '.agents', 'skills')
+        for (const skill of skills) {
+          const dir = join(skillsDir, skill.name)
+          mkdirSync(dir, { recursive: true })
+          const desc = skill.description || skill.name
+          const content = `---\nname: ${skill.name}\ndescription: ${desc}\n---\n\n${skill.content}`
+          writeFileSync(join(dir, 'SKILL.md'), content, 'utf-8')
+        }
+        console.log(`[AgentManager] Wrote ${skills.length} SKILL.md file(s) to ${skillsDir}`)
       }
 
-      console.log(`[AgentManager] Wrote ${skills.length} SKILL.md file(s) to ${skillsDir}`)
+      // Generate AGENTS.md and CLAUDE.md with skill directory
+      this.writeAgentsDocumentation(workspaceDir, skills)
     } catch (error) {
       console.error('[AgentManager] Error writing skill files:', error)
     }
+  }
+
+  /**
+   * Generates AGENTS.md and CLAUDE.md with skill directory and metadata.
+   */
+  private writeAgentsDocumentation(
+    workspaceDir: string,
+    skills: SkillRecord[]
+  ): void {
+    try {
+      const agentsDir = join(workspaceDir, '.agents')
+      mkdirSync(agentsDir, { recursive: true })
+
+      // Sort skills by confidence (high to low)
+      const sortedSkills = [...skills].sort((a, b) => b.confidence - a.confidence)
+
+      // Generate AGENTS.md
+      const agentsMd = this.generateAgentsMd(sortedSkills)
+      writeFileSync(join(agentsDir, 'AGENTS.md'), agentsMd, 'utf-8')
+
+      // Generate CLAUDE.md
+      const claudeMd = this.generateClaudeMd(sortedSkills)
+      writeFileSync(join(agentsDir, 'CLAUDE.md'), claudeMd, 'utf-8')
+
+      console.log('[AgentManager] Generated AGENTS.md and CLAUDE.md with skill directory')
+    } catch (error) {
+      console.error('[AgentManager] Error writing agent documentation:', error)
+    }
+  }
+
+  /**
+   * Generates AGENTS.md content with skill directory.
+   */
+  private generateAgentsMd(skills: SkillRecord[]): string {
+    const now = new Date().toISOString()
+
+    let md = `# Agent Session Configuration\n\n`
+    md += `**Generated:** ${now}\n`
+    md += `---\n\n`
+
+    md += `## Available Skills\n\n`
+
+    if (skills.length === 0) {
+      md += `No skills configured for this session.\n\n`
+    } else {
+      md += `This session has access to ${skills.length} skill(s), sorted by confidence level:\n\n`
+
+      for (const skill of skills) {
+        const confidencePercent = (skill.confidence * 100).toFixed(0)
+        const lastUsed = skill.last_used ? new Date(skill.last_used).toISOString().split('T')[0] : 'Never'
+        const tags = skill.tags && skill.tags.length > 0 ? skill.tags.join(', ') : 'none'
+
+        md += `### [${skill.name}](skills/${skill.name}/SKILL.md)\n\n`
+        md += `**Confidence:** ${confidencePercent}% | **Uses:** ${skill.uses} | **Last Used:** ${lastUsed}\n\n`
+        md += `**Tags:** ${tags}\n\n`
+        md += `${skill.description}\n\n`
+        md += `---\n\n`
+      }
+    }
+
+    return md
+  }
+
+  /**
+   * Generates CLAUDE.md content with skill directory.
+   */
+  private generateClaudeMd(skills: SkillRecord[]): string {
+    const now = new Date().toISOString()
+
+    let md = `# Claude Code Configuration\n\n`
+    md += `**Session Started:** ${now}\n`
+    md += `---\n\n`
+
+    md += `## Skills Reference\n\n`
+
+    if (skills.length === 0) {
+      md += `No skills are available for this session.\n\n`
+    } else {
+      md += `You have access to ${skills.length} specialized skill(s). Each skill contains proven patterns and approaches from previous successful sessions.\n\n`
+      md += `### Quick Reference\n\n`
+
+      for (const skill of skills) {
+        const confidencePercent = (skill.confidence * 100).toFixed(0)
+        md += `- **[${skill.name}](skills/${skill.name}/SKILL.md)** (${confidencePercent}% confidence)\n`
+        md += `  ${skill.description}\n\n`
+      }
+
+      md += `### Detailed Skills\n\n`
+
+      for (const skill of skills) {
+        const confidencePercent = (skill.confidence * 100).toFixed(0)
+        const lastUsed = skill.last_used ? new Date(skill.last_used).toISOString().split('T')[0] : 'Never'
+
+        md += `#### ${skill.name}\n\n`
+        md += `**Path:** [skills/${skill.name}/SKILL.md](skills/${skill.name}/SKILL.md)\n\n`
+        md += `**Confidence:** ${confidencePercent}%\n\n`
+        md += `**Description:** ${skill.description}\n\n`
+        md += `**Usage Stats:** ${skill.uses} uses | Last used: ${lastUsed}\n\n`
+
+        if (skill.tags && skill.tags.length > 0) {
+          md += `**Tags:** ${skill.tags.map((t: string) => `\`${t}\``).join(', ')}\n\n`
+        }
+
+        md += `---\n\n`
+      }
+    }
+
+    md += `## Usage Notes\n\n`
+    md += `- Skills are sorted by confidence level (highest first)\n`
+    md += `- Confidence indicates how well the skill has performed in past sessions\n`
+    md += `- Higher usage count suggests more battle-tested approaches\n`
+    md += `- Check the SKILL.md files for detailed implementation guidance\n\n`
+
+    return md
   }
 
   /**
