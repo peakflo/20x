@@ -64,9 +64,9 @@ export class HubSpotPlugin implements TaskSourcePlugin {
         label: 'OAuth Setup',
         type: 'text',
         required: false,
-        placeholder: 'https://developers.hubspot.com/apps',
+        placeholder: 'https://developers.hubspot.com/docs/getting-started/quickstart',
         description:
-          '👉 Create OAuth app at https://developers.hubspot.com/apps. Set redirect URI to: http://localhost:3000/callback (or ports 3000-3010)'
+          '👉 Follow the HubSpot quickstart guide at https://developers.hubspot.com/docs/getting-started/quickstart. Set redirect URI to: http://localhost:3000/callback (or ports 3000-3010)'
       },
       {
         key: 'client_id',

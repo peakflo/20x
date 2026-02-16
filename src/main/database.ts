@@ -797,6 +797,89 @@ export class DatabaseManager {
       }
     }
 
+    // Migrate tasks table: change source_id foreign key from ON DELETE SET NULL to ON DELETE CASCADE
+    const taskTableInfo = this.db.pragma('foreign_key_list(tasks)') as Array<{
+      id: number
+      seq: number
+      table: string
+      from: string
+      to: string
+      on_update: string
+      on_delete: string
+    }>
+
+    const sourceIdFk = taskTableInfo.find(fk => fk.from === 'source_id' && fk.table === 'task_sources')
+    if (sourceIdFk && sourceIdFk.on_delete === 'SET NULL') {
+      console.log('[Database Migration] Updating source_id foreign key to CASCADE delete')
+
+      // Recreate tasks table with CASCADE delete for source_id
+      this.db.exec(`
+        PRAGMA foreign_keys = OFF;
+
+        -- Create new tasks table with CASCADE delete
+        CREATE TABLE tasks_new (
+          id TEXT PRIMARY KEY,
+          title TEXT NOT NULL,
+          description TEXT NOT NULL DEFAULT '',
+          type TEXT NOT NULL DEFAULT 'general',
+          priority TEXT NOT NULL DEFAULT 'medium',
+          status TEXT NOT NULL DEFAULT '${TaskStatus.NotStarted}',
+          assignee TEXT NOT NULL DEFAULT '',
+          due_date TEXT,
+          labels TEXT NOT NULL DEFAULT '[]',
+          checklist TEXT NOT NULL DEFAULT '[]',
+          attachments TEXT NOT NULL DEFAULT '[]',
+          repos TEXT NOT NULL DEFAULT '[]',
+          output_fields TEXT NOT NULL DEFAULT '[]',
+          agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL,
+          external_id TEXT,
+          source_id TEXT REFERENCES task_sources(id) ON DELETE CASCADE,
+          source TEXT NOT NULL DEFAULT 'local',
+          skill_ids TEXT DEFAULT NULL,
+          session_id TEXT DEFAULT NULL,
+          snoozed_until TEXT DEFAULT NULL,
+          resolution TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+
+        -- Copy all data (handle both old and new schema columns)
+        INSERT INTO tasks_new
+        SELECT
+          id, title, description, type, priority, status, assignee, due_date,
+          labels, checklist,
+          COALESCE(attachments, '[]'),
+          COALESCE(repos, '[]'),
+          COALESCE(output_fields, '[]'),
+          agent_id,
+          external_id,
+          source_id,
+          source,
+          skill_ids,
+          session_id,
+          snoozed_until,
+          resolution,
+          created_at, updated_at
+        FROM tasks;
+
+        -- Drop old table
+        DROP TABLE tasks;
+
+        -- Rename new table
+        ALTER TABLE tasks_new RENAME TO tasks;
+
+        -- Recreate indexes
+        CREATE INDEX idx_tasks_status ON tasks(status);
+        CREATE INDEX idx_tasks_priority ON tasks(priority);
+        CREATE INDEX idx_tasks_source ON tasks(source);
+        CREATE UNIQUE INDEX idx_tasks_source_external ON tasks(source_id, external_id) WHERE external_id IS NOT NULL;
+
+        PRAGMA foreign_keys = ON;
+      `)
+
+      console.log('[Database Migration] Successfully updated source_id foreign key to CASCADE')
+    }
+
     // Seed default agent if none exist
     const agentCount = this.db.prepare('SELECT COUNT(*) as count FROM agents').get() as { count: number }
     if (agentCount.count === 0) {

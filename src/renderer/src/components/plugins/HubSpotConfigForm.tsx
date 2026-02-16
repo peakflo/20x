@@ -128,17 +128,17 @@ export function HubSpotConfigForm({ value, onChange, sourceId, onRequestSave }: 
             <div className="space-y-1.5">
               <Label>OAuth Setup</Label>
               <p className="text-xs text-muted-foreground">
-                👉 Create OAuth app at{' '}
+                👉 Follow the{' '}
                 <button
                   type="button"
                   onClick={() =>
-                    window.electronAPI.shell.openExternal('https://developers.hubspot.com/apps')
+                    window.electronAPI.shell.openExternal('https://developers.hubspot.com/docs/getting-started/quickstart')
                   }
                   className="text-primary hover:underline"
                 >
-                  developers.hubspot.com/apps
+                  HubSpot quickstart guide
                 </button>
-                . Set redirect URI to:{' '}
+                {' '}to create an OAuth app. Set redirect URI to:{' '}
                 <code className="text-xs bg-muted px-1 rounded">http://localhost:3000/callback</code> (or
                 ports 3000-3010)
               </p>
