@@ -174,7 +174,7 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
    */
   private async cleanSessionFile(sessionId: string, workspaceDir: string): Promise<void> {
     try {
-      const { readFileSync, writeFileSync } = await import('fs')
+      const { readFileSync, writeFileSync, existsSync } = await import('fs')
       const { join } = await import('path')
       const { homedir } = await import('os')
 
@@ -183,6 +183,12 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
       const sessionFile = join(claudeDir, encodedWorkspace, `${sessionId}.jsonl`)
 
       console.log(`[ClaudeCodeAdapter] Cleaning session file: ${sessionFile}`)
+
+      // Check if session file exists
+      if (!existsSync(sessionFile)) {
+        console.log(`[ClaudeCodeAdapter] Session file not found, skipping clean: ${sessionFile}`)
+        return
+      }
 
       const content = readFileSync(sessionFile, 'utf-8')
       const lines = content.trim().split('\n')
@@ -228,7 +234,7 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
 
   private async loadSessionHistory(sessionId: string, workspaceDir: string): Promise<SessionMessage[]> {
     try {
-      const { readFileSync } = await import('fs')
+      const { readFileSync, existsSync } = await import('fs')
       const { join } = await import('path')
       const { homedir } = await import('os')
 
@@ -239,6 +245,12 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
       const sessionFile = join(claudeDir, encodedWorkspace, `${sessionId}.jsonl`)
 
       console.log(`[ClaudeCodeAdapter] Loading session history from: ${sessionFile}`)
+
+      // Check if session file exists
+      if (!existsSync(sessionFile)) {
+        console.warn(`[ClaudeCodeAdapter] Session file not found: ${sessionFile}`)
+        throw new Error('SESSION_FILE_NOT_FOUND: The Claude Code session file does not exist. This may happen if the session was deleted or never synced.')
+      }
 
       const content = readFileSync(sessionFile, 'utf-8')
       const lines = content.trim().split('\n')
@@ -296,6 +308,11 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
       console.log(`[ClaudeCodeAdapter] Loaded ${messages.length} messages from session history`)
       return messages
     } catch (error: any) {
+      // Re-throw session file not found errors
+      if (error.message?.includes('SESSION_FILE_NOT_FOUND')) {
+        throw error
+      }
+      // For other errors, warn and return empty array
       console.warn(`[ClaudeCodeAdapter] Failed to load session history:`, error.message)
       return []
     }
@@ -567,7 +584,14 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
       }
 
       // Convert SDKMessage to MessagePart
-      if (msgAny.text) {
+      // Handle result messages (final output from Claude Code)
+      if (msgAny.type === 'result' && msgAny.result) {
+        currentMessage!.parts.push({
+          type: MessagePartType.TEXT,
+          text: msgAny.result,
+          role: roleStr as any
+        })
+      } else if (msgAny.text) {
         currentMessage!.parts.push({
           type: MessagePartType.TEXT,
           text: msgAny.text,
@@ -629,6 +653,35 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
   // ========================================================================
 
   /**
+   * Safely logs a message by truncating large base64 content
+   */
+  private safeLogMessage(msg: any): void {
+    const MAX_LOG_LENGTH = 1000 // Max chars for any single field
+
+    try {
+      // Create a deep copy and truncate large fields
+      const truncated = JSON.parse(JSON.stringify(msg, (_key, value) => {
+        if (typeof value === 'string' && value.length > MAX_LOG_LENGTH) {
+          // Check if it looks like base64 data (high ratio of base64 chars)
+          const base64Chars = (value.match(/[A-Za-z0-9+/=]/g) || []).length
+          const isLikelyBase64 = base64Chars / value.length > 0.9
+
+          if (isLikelyBase64) {
+            return `<base64 data: ${value.length} chars, truncated...>`
+          }
+          return value.substring(0, MAX_LOG_LENGTH) + `... (${value.length} chars total)`
+        }
+        return value
+      }))
+
+      console.log('[ClaudeCodeAdapter] Received message:', JSON.stringify(truncated, null, 2))
+    } catch (error) {
+      // Fallback to basic logging if parsing fails
+      console.log('[ClaudeCodeAdapter] Received message (logging failed):', msg.type, msg.subtype)
+    }
+  }
+
+  /**
    * Consumes the query stream in the background and buffers messages
    */
   private async consumeStream(_sessionId: string, session: ClaudeSession): Promise<void> {
@@ -640,8 +693,8 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
       for await (const message of session.queryIterator) {
         const msg = message as any
 
-        // Log all messages for debugging
-        console.log('[ClaudeCodeAdapter] Received message:', JSON.stringify(msg, null, 2))
+        // Log message with truncation for large content
+        this.safeLogMessage(msg)
 
         // Extract real Claude Code session ID from first message
         if (!session.sessionId && 'session_id' in msg) {

@@ -841,6 +841,8 @@ export class AgentManager extends EventEmitter {
           await this.transitionToIdle(sessionId, session)
           // Stop polling - session is now idle
           console.log(`[AgentManager] Stopping polling for idle session ${sessionId}`)
+          // Reset polling flag so it can be restarted on next message
+          session.pollingStarted = false
           return
         }
       } catch (error: any) {
@@ -894,21 +896,33 @@ export class AgentManager extends EventEmitter {
       const errorMessage = error instanceof Error ? error.message : String(error)
       console.log('[AgentManager] adapter.resumeSession threw error:', errorMessage)
 
-      // Check if it's an incompatible session ID error or session not found
-      if (errorMessage.includes('INCOMPATIBLE_SESSION_ID') || errorMessage.includes('No conversation found')) {
+      // Check if it's an incompatible session ID error, session not found, or missing session file
+      if (
+        errorMessage.includes('INCOMPATIBLE_SESSION_ID') ||
+        errorMessage.includes('No conversation found') ||
+        errorMessage.includes('SESSION_FILE_NOT_FOUND')
+      ) {
         console.warn(`[AgentManager] Session not found or incompatible: ${adapterSessionId}`)
 
         // Clear the old session_id in the database
         this.db.updateTask(taskId, { session_id: null })
+
+        // Determine user-friendly error message
+        let userMessage = 'Session not found. Would you like to start a new session?'
+        if (errorMessage.includes('SESSION_FILE_NOT_FOUND')) {
+          userMessage = 'Session file not found. The session may have been deleted or never synced. Would you like to start a new session?'
+        } else if (errorMessage.includes('No conversation found')) {
+          userMessage = 'Session not found on server. Would you like to start a new session?'
+        } else {
+          userMessage = errorMessage.replace('INCOMPATIBLE_SESSION_ID: ', '')
+        }
 
         // Notify renderer to show dialog asking user to start fresh
         console.log('[AgentManager] Emitting agent:incompatible-session event')
         this.sendToRenderer('agent:incompatible-session', {
           taskId,
           agentId,
-          error: errorMessage.includes('No conversation found')
-            ? 'Session not found on server. Would you like to start a new session?'
-            : errorMessage.replace('INCOMPATIBLE_SESSION_ID: ', '')
+          error: userMessage
         })
 
         // Throw error to stop the resume flow

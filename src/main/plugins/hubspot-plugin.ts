@@ -660,6 +660,17 @@ export class HubSpotPlugin implements TaskSourcePlugin {
 
     const description = parts.join('\n')
 
+    // Build output fields for custom HubSpot fields
+    const outputFields = [
+      {
+        id: 'resolution',
+        name: 'Resolution',
+        type: 'text',
+        required: false,
+        value: ticket.properties.hs_resolution || ''
+      }
+    ]
+
     return {
       title: ticket.properties.subject || 'Untitled Ticket',
       description,
@@ -668,6 +679,7 @@ export class HubSpotPlugin implements TaskSourcePlugin {
       assignee: ownerName || '',
       due_date: ticket.properties.hs_due_date || null,
       labels: ticket.properties.hs_ticket_category ? [ticket.properties.hs_ticket_category] : [],
+      output_fields: outputFields,
       resolution: ticket.properties.hs_resolution || null
     }
   }

@@ -18,6 +18,49 @@ function formatStepMeta(meta: NonNullable<AgentMessage['stepMeta']>): string {
   return parts.join(' · ')
 }
 
+/**
+ * Truncates large content (like base64 data) for display
+ */
+function sanitizeToolContent(content: any): string {
+  // Handle null/undefined
+  if (content == null) {
+    return ''
+  }
+
+  // Handle objects (like image data from Read tool)
+  if (typeof content === 'object') {
+    // Check if it's an image object
+    if (content.type === 'image' && content.source) {
+      const dataLength = content.source.data?.length || 0
+      return `[Image content: ${dataLength} characters of base64 data]`
+    }
+    // For other objects, stringify but truncate
+    const stringified = JSON.stringify(content, null, 2)
+    if (stringified.length > 1000) {
+      return `[Object: ${stringified.substring(0, 1000)}...]`
+    }
+    return stringified
+  }
+
+  // Convert to string if not already
+  const str = String(content)
+  const MAX_DISPLAY_LENGTH = 5000 // Max chars to display
+
+  if (str.length <= MAX_DISPLAY_LENGTH) {
+    return str
+  }
+
+  // Check if it looks like base64 data
+  const base64Chars = (str.match(/[A-Za-z0-9+/=]/g) || []).length
+  const isLikelyBase64 = base64Chars / str.length > 0.9
+
+  if (isLikelyBase64) {
+    return `[Binary content: ${str.length} characters]`
+  }
+
+  return str.substring(0, MAX_DISPLAY_LENGTH) + `\n\n... (${str.length - MAX_DISPLAY_LENGTH} more characters)`
+}
+
 interface AgentTranscriptPanelProps {
   messages: AgentMessage[]
   status: 'idle' | 'working' | 'error' | 'waiting_approval'
@@ -139,13 +182,13 @@ function ToolCallMessage({ message }: { message: AgentMessage }) {
           {tool.input && (
             <div>
               <span className="text-muted-foreground">Input:</span>
-              <pre className="mt-0.5 text-gray-400 whitespace-pre-wrap break-words max-h-40 overflow-y-auto">{tool.input}</pre>
+              <pre className="mt-0.5 text-gray-400 whitespace-pre-wrap break-words max-h-40 overflow-y-auto">{sanitizeToolContent(tool.input)}</pre>
             </div>
           )}
           {tool.output && (
             <div>
               <span className="text-muted-foreground">Output:</span>
-              <pre className="mt-0.5 text-gray-400 whitespace-pre-wrap break-words max-h-40 overflow-y-auto">{tool.output}</pre>
+              <pre className="mt-0.5 text-gray-400 whitespace-pre-wrap break-words max-h-40 overflow-y-auto">{sanitizeToolContent(tool.output)}</pre>
             </div>
           )}
           {tool.error && (
