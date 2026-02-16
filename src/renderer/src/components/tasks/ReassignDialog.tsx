@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { Users, Loader2 } from 'lucide-react'
-import { Dialog, DialogContent } from '@/components/ui/Dialog'
+import { Dialog, DialogContent, DialogTitle } from '@/components/ui/Dialog'
+import { VisuallyHidden } from '@/components/ui/VisuallyHidden'
 import { useUserStore } from '@/stores/user-store'
 import { cn } from '@/lib/utils'
 import type { SourceUser } from '@/types'
@@ -39,6 +40,9 @@ export function ReassignDialog({ open, onOpenChange, sourceId, currentAssignee, 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-sm p-0">
+        <VisuallyHidden>
+          <DialogTitle>Reassign Task</DialogTitle>
+        </VisuallyHidden>
         <div className="flex items-center gap-2 px-5 pt-5 pb-4">
           <Users className="h-4 w-4 text-muted-foreground" />
           <span className="text-sm font-semibold">Reassign to</span>

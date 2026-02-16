@@ -232,6 +232,7 @@ export interface WorkfloTask {
   source: string
   skill_ids: string[] | null
   snoozed_until: string | null
+  resolution: string | null
   created_at: string
   updated_at: string
 }
@@ -262,6 +263,7 @@ export interface UpdateTaskDTO {
   attachments?: FileAttachment[]
   repos?: string[]
   output_fields?: OutputField[]
+  resolution?: string | null
   agent_id?: string | null
   skill_ids?: string[] | null
   snoozed_until?: string | null
@@ -302,7 +304,7 @@ export interface TaskSource {
 }
 
 export interface CreateTaskSourceDTO {
-  mcp_server_id: string
+  mcp_server_id: string | null
   name: string
   plugin_id: string
   config?: Record<string, unknown>
@@ -375,6 +377,8 @@ export interface PluginMeta {
   description: string
   icon: string
   requiresMcpServer: boolean
+  requiresOAuth?: boolean
+  oauthProvider?: string
 }
 
 export type ConfigFieldType =

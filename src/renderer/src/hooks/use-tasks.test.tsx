@@ -27,6 +27,7 @@ function makeWorkfloTask(overrides: Partial<WorkfloTask> = {}): WorkfloTask {
     source: 'local',
     skill_ids: null,
     snoozed_until: null,
+    resolution: null,
     created_at: '2024-06-15T12:00:00Z',
     updated_at: '2024-06-15T12:00:00Z',
     ...overrides

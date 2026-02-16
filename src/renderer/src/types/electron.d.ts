@@ -136,6 +136,7 @@ interface ElectronAPI {
     save: (taskId: string, filePath: string) => Promise<FileAttachment>
     remove: (taskId: string, attachmentId: string) => Promise<void>
     open: (taskId: string, attachmentId: string) => Promise<void>
+    download: (taskId: string, attachmentId: string) => Promise<void>
   }
   shell: {
     openPath: (filePath: string) => Promise<void>
@@ -146,6 +147,7 @@ interface ElectronAPI {
   oauth: {
     startFlow: (provider: string, config: Record<string, unknown>) => Promise<string>
     exchangeCode: (provider: string, code: string, state: string, sourceId: string) => Promise<void>
+    startLocalhostFlow: (provider: string, config: Record<string, unknown>, sourceId: string) => Promise<void>
     getValidToken: (sourceId: string) => Promise<string | null>
     revokeToken: (sourceId: string) => Promise<void>
   }

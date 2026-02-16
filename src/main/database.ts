@@ -117,7 +117,7 @@ export interface UpdateAgentData {
 
 export interface TaskSourceRow {
   id: string
-  mcp_server_id: string
+  mcp_server_id: string | null
   name: string
   plugin_id: string
   config: string
@@ -133,7 +133,7 @@ export interface TaskSourceRow {
 
 export interface TaskSourceRecord {
   id: string
-  mcp_server_id: string
+  mcp_server_id: string | null
   name: string
   plugin_id: string
   config: Record<string, unknown>
@@ -148,7 +148,7 @@ export interface TaskSourceRecord {
 }
 
 export interface CreateTaskSourceData {
-  mcp_server_id: string
+  mcp_server_id: string | null
   name: string
   plugin_id: string
   config?: Record<string, unknown>
@@ -201,6 +201,7 @@ export interface TaskRow {
   skill_ids: string | null
   session_id: string | null
   snoozed_until: string | null
+  resolution: string | null
   created_at: string
   updated_at: string
 }
@@ -225,6 +226,7 @@ export interface TaskRecord {
   skill_ids: string[] | null
   session_id: string | null
   snoozed_until: string | null
+  resolution: string | null
   created_at: string
   updated_at: string
 }
@@ -305,18 +307,31 @@ function deserializeTask(row: TaskRow): TaskRecord {
     source_id: row.source_id ?? null,
     skill_ids: row.skill_ids ? JSON.parse(row.skill_ids) as string[] : null,
     session_id: row.session_id ?? null,
-    snoozed_until: row.snoozed_until ?? null
+    snoozed_until: row.snoozed_until ?? null,
+    resolution: row.resolution ?? null
   }
 }
 
 function deserializeTaskSource(row: TaskSourceRow): TaskSourceRecord {
-  return {
-    ...row,
-    plugin_id: row.plugin_id || 'peakflo',
-    config: JSON.parse(row.config || '{}') as Record<string, unknown>,
-    list_tool_args: JSON.parse(row.list_tool_args) as Record<string, unknown>,
-    update_tool_args: JSON.parse(row.update_tool_args) as Record<string, unknown>,
-    enabled: row.enabled === 1
+  try {
+    return {
+      ...row,
+      plugin_id: row.plugin_id || 'peakflo',
+      config: JSON.parse(row.config || '{}') as Record<string, unknown>,
+      list_tool_args: JSON.parse(row.list_tool_args) as Record<string, unknown>,
+      update_tool_args: JSON.parse(row.update_tool_args) as Record<string, unknown>,
+      enabled: row.enabled === 1
+    }
+  } catch (err) {
+    console.error('[Database] Failed to deserialize task source:', {
+      id: row.id,
+      name: row.name,
+      config: row.config,
+      list_tool_args: row.list_tool_args,
+      update_tool_args: row.update_tool_args,
+      error: err instanceof Error ? err.message : String(err)
+    })
+    throw err
   }
 }
 
@@ -486,6 +501,7 @@ export class DatabaseManager {
     this.db.pragma('foreign_keys = ON')
 
     this.createTables()
+    this.runMigrations()
   }
 
   private createTables(): void {
@@ -502,6 +518,7 @@ export class DatabaseManager {
         labels TEXT NOT NULL DEFAULT '[]',
         checklist TEXT NOT NULL DEFAULT '[]',
         source TEXT NOT NULL DEFAULT 'local',
+        resolution TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
@@ -540,13 +557,15 @@ export class DatabaseManager {
 
       CREATE TABLE IF NOT EXISTS task_sources (
         id TEXT PRIMARY KEY,
-        mcp_server_id TEXT NOT NULL REFERENCES mcp_servers(id) ON DELETE CASCADE,
+        mcp_server_id TEXT REFERENCES mcp_servers(id) ON DELETE CASCADE,
         name TEXT NOT NULL,
         list_tool TEXT NOT NULL,
         list_tool_args TEXT NOT NULL DEFAULT '{}',
         update_tool TEXT NOT NULL DEFAULT '',
         update_tool_args TEXT NOT NULL DEFAULT '{}',
         last_synced_at TEXT,
+        plugin_id TEXT NOT NULL DEFAULT 'peakflo',
+        config TEXT NOT NULL DEFAULT '{}',
         enabled INTEGER NOT NULL DEFAULT 1,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
@@ -634,6 +653,10 @@ export class DatabaseManager {
       this.db.exec(`ALTER TABLE tasks ADD COLUMN snoozed_until TEXT DEFAULT NULL`)
     }
 
+    if (!columnNames.has('resolution')) {
+      this.db.exec(`ALTER TABLE tasks ADD COLUMN resolution TEXT DEFAULT NULL`)
+    }
+
     // Migrate mcp_servers table — add new columns for remote support
     const mcpColumns = this.db.pragma('table_info(mcp_servers)') as { name: string }[]
     const mcpColumnNames = new Set(mcpColumns.map((c) => c.name))
@@ -702,6 +725,76 @@ export class DatabaseManager {
       this.db.exec(`ALTER TABLE agents ADD COLUMN coding_agent TEXT NOT NULL DEFAULT 'opencode'`)
       // Update existing agents to explicitly have 'opencode' as their coding_agent
       this.db.exec(`UPDATE agents SET coding_agent = 'opencode' WHERE coding_agent IS NULL OR coding_agent = ''`)
+    }
+
+    // Migrate task_sources: make mcp_server_id nullable (for plugins that don't need MCP)
+    const tsInfo = this.db.pragma('table_info(task_sources)') as Array<{name: string, notnull: number}>
+    const mcpServerIdCol = tsInfo.find(col => col.name === 'mcp_server_id')
+
+    if (mcpServerIdCol && mcpServerIdCol.notnull === 1) {
+      // Column exists and is NOT NULL, need to recreate table
+      this.db.exec(`
+        -- Disable foreign keys temporarily
+        PRAGMA foreign_keys = OFF;
+
+        -- Create new table with nullable mcp_server_id
+        CREATE TABLE task_sources_new (
+          id TEXT PRIMARY KEY,
+          mcp_server_id TEXT REFERENCES mcp_servers(id) ON DELETE CASCADE,
+          name TEXT NOT NULL,
+          list_tool TEXT NOT NULL,
+          list_tool_args TEXT NOT NULL DEFAULT '{}',
+          update_tool TEXT NOT NULL DEFAULT '',
+          update_tool_args TEXT NOT NULL DEFAULT '{}',
+          last_synced_at TEXT,
+          plugin_id TEXT NOT NULL DEFAULT 'peakflo',
+          config TEXT NOT NULL DEFAULT '{}',
+          enabled INTEGER NOT NULL DEFAULT 1,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+
+        -- Copy data
+        INSERT INTO task_sources_new SELECT * FROM task_sources;
+
+        -- Drop old table
+        DROP TABLE task_sources;
+
+        -- Rename new table
+        ALTER TABLE task_sources_new RENAME TO task_sources;
+
+        -- Re-enable foreign keys
+        PRAGMA foreign_keys = ON;
+      `)
+    }
+
+    // Fix corrupted task_sources config fields (cleanup after migration issues)
+    const allSources = this.db.prepare('SELECT id, config, name FROM task_sources').all() as Array<{
+      id: string
+      config: string
+      name: string
+    }>
+
+    for (const src of allSources) {
+      try {
+        // Try to parse config as JSON
+        JSON.parse(src.config)
+      } catch {
+        // Invalid JSON - reset to empty object and set appropriate plugin_id
+        console.log(`[Database Migration] Fixing corrupted config for task source: ${src.name} (${src.id})`)
+
+        // Determine plugin_id based on name
+        let pluginId = 'peakflo'
+        if (src.name.toLowerCase().includes('linear')) {
+          pluginId = 'linear'
+        } else if (src.name.toLowerCase().includes('hubspot')) {
+          pluginId = 'hubspot'
+        }
+
+        // Reset config to empty object and set plugin_id
+        this.db.prepare('UPDATE task_sources SET config = ?, plugin_id = ? WHERE id = ?')
+          .run('{}', pluginId, src.id)
+      }
     }
 
     // Seed default agent if none exist
@@ -1023,7 +1116,18 @@ export class DatabaseManager {
 
     if (data.name !== undefined) { setClauses.push('name = ?'); values.push(data.name) }
     if (data.plugin_id !== undefined) { setClauses.push('plugin_id = ?'); values.push(data.plugin_id) }
-    if (data.config !== undefined) { setClauses.push('config = ?'); values.push(JSON.stringify(data.config)) }
+    if (data.config !== undefined) {
+      // IMPORTANT: Merge new config with existing config to preserve OAuth credentials
+      const existing = this.getTaskSource(id)
+      const mergedConfig = existing ? { ...existing.config, ...data.config } : data.config
+
+      setClauses.push('config = ?')
+      values.push(JSON.stringify(mergedConfig))
+      // Reset last_synced_at when config changes (filters changed, need fresh sync)
+      setClauses.push('last_synced_at = ?')
+      values.push(null)
+      console.log(`[Database] Resetting last_synced_at for task source ${id} due to config change`)
+    }
     if (data.mcp_server_id !== undefined) { setClauses.push('mcp_server_id = ?'); values.push(data.mcp_server_id) }
     if (data.list_tool !== undefined) { setClauses.push('list_tool = ?'); values.push(data.list_tool) }
     if (data.list_tool_args !== undefined) { setClauses.push('list_tool_args = ?'); values.push(JSON.stringify(data.list_tool_args)) }

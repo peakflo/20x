@@ -32,10 +32,11 @@ import { GitHubManager } from './github-manager'
 import { WorktreeManager } from './worktree-manager'
 import { McpToolCaller } from './mcp-tool-caller'
 import { SyncManager } from './sync-manager'
-import { OAuthManager } from './oauth-manager'
+import { OAuthManager } from './oauth/oauth-manager'
 import { PluginRegistry } from './plugins/registry'
 import { PeakfloPlugin } from './plugins/peakflo-plugin'
 import { LinearPlugin } from './plugins/linear-plugin'
+import { HubSpotPlugin } from './plugins/hubspot-plugin'
 import { registerIpcHandlers } from './ipc-handlers'
 
 let mainWindow: BrowserWindow | null = null
@@ -223,6 +224,7 @@ app.whenReady().then(async () => {
   pluginRegistry = new PluginRegistry()
   pluginRegistry.register(new PeakfloPlugin())
   pluginRegistry.register(new LinearPlugin())
+  pluginRegistry.register(new HubSpotPlugin())
 
   syncManager = new SyncManager(db, mcpToolCaller, pluginRegistry, oauthManager)
 

@@ -14,19 +14,34 @@ interface PluginConfigFormProps {
   sourceId?: string
   value: Record<string, unknown>
   onChange: (config: Record<string, unknown>) => void
+  onRequestSave?: () => boolean // Returns true if save was triggered
 }
 
-export function PluginConfigForm({ pluginId, mcpServerId, sourceId, value, onChange }: PluginConfigFormProps) {
+export function PluginConfigForm({ pluginId, mcpServerId, sourceId, value, onChange, onRequestSave }: PluginConfigFormProps) {
   const [schema, setSchema] = useState<ConfigFieldSchema[]>([])
   const [dynamicOptions, setDynamicOptions] = useState<Record<string, ConfigFieldOption[]>>({})
   const [showOAuthDialog, setShowOAuthDialog] = useState(false)
   const [oauthConnected, setOauthConnected] = useState(false)
 
   // Check if this plugin requires OAuth
-  const requiresOAuth = pluginId === 'linear'
+  const requiresOAuth = pluginId === 'linear' || pluginId === 'hubspot'
 
   useEffect(() => {
-    pluginApi.getConfigSchema(pluginId).then(setSchema)
+    pluginApi.getConfigSchema(pluginId).then((newSchema) => {
+      setSchema(newSchema)
+
+      // Initialize default values for fields that have defaults but no current value
+      const updates: Record<string, unknown> = {}
+      for (const field of newSchema) {
+        if (field.default !== undefined && value[field.key] === undefined) {
+          updates[field.key] = field.default
+        }
+      }
+
+      if (Object.keys(updates).length > 0) {
+        onChange({ ...value, ...updates })
+      }
+    })
   }, [pluginId])
 
   // Check if OAuth token exists when editing an existing source
@@ -92,7 +107,11 @@ export function PluginConfigForm({ pluginId, mcpServerId, sourceId, value, onCha
     }, 100)
   }
 
-  const canStartOAuth = requiresOAuth && value.client_id && value.client_secret && sourceId
+  // For HubSpot, show OAuth if auth_type is 'oauth' OR undefined (defaults to oauth)
+  const hubspotAuthType = value.auth_type as string | undefined
+  const showOAuthButton = pluginId === 'linear' || (pluginId === 'hubspot' && (!hubspotAuthType || hubspotAuthType === 'oauth'))
+  const hasCredentials = value.client_id && value.client_secret
+  const canStartOAuth = showOAuthButton && hasCredentials
 
   const shouldShowField = (field: ConfigFieldSchema): boolean => {
     // For Linear plugin, hide teams field until OAuth is connected
@@ -137,23 +156,43 @@ export function PluginConfigForm({ pluginId, mcpServerId, sourceId, value, onCha
           ))}
 
         {/* OAuth Connect Button */}
-        {requiresOAuth && (
+        {showOAuthButton && (
           <div className="space-y-1.5 pt-2">
             <Button
               type="button"
-              onClick={() => setShowOAuthDialog(true)}
+              onClick={() => {
+                // If no sourceId, try to auto-save first
+                if (!sourceId && onRequestSave) {
+                  const saved = onRequestSave()
+                  if (!saved) {
+                    // Can't auto-save, show message
+                    return
+                  }
+                  // Source will be saved and dialog will close, then user reopens to connect
+                  return
+                }
+                // Otherwise, start OAuth flow normally
+                setShowOAuthDialog(true)
+              }}
               disabled={!canStartOAuth}
               variant={oauthConnected ? 'outline' : 'default'}
               className="w-full"
             >
-              {oauthConnected ? '✓ Connected to Linear' : 'Connect to Linear'}
+              {oauthConnected
+                ? `✓ Connected to ${pluginId === 'linear' ? 'Linear' : 'HubSpot'}`
+                : `Connect to ${pluginId === 'linear' ? 'Linear' : 'HubSpot'}`}
             </Button>
-            {!sourceId && (
+            {!sourceId && !hasCredentials && (
               <p className="text-xs text-muted-foreground">
-                ℹ️ Save the source first, then click to authenticate
+                ℹ️ Fill in Client ID and Client Secret above to continue
               </p>
             )}
-            {sourceId && !canStartOAuth && (
+            {!sourceId && hasCredentials ? (
+              <p className="text-xs text-muted-foreground">
+                ℹ️ Click to save source and start OAuth flow
+              </p>
+            ) : null}
+            {sourceId && !hasCredentials && (
               <p className="text-xs text-muted-foreground">
                 ℹ️ Fill in Client ID and Client Secret above to continue
               </p>
@@ -163,10 +202,10 @@ export function PluginConfigForm({ pluginId, mcpServerId, sourceId, value, onCha
       </div>
 
       {/* OAuth Dialog */}
-      {requiresOAuth && sourceId && showOAuthDialog && (
+      {showOAuthButton && sourceId && showOAuthDialog && (
         <OAuthDialog
           open={showOAuthDialog}
-          provider="linear"
+          provider={pluginId as 'linear' | 'hubspot'}
           config={value}
           sourceId={sourceId}
           onSuccess={handleOAuthSuccess}
@@ -186,6 +225,15 @@ function renderField(
 ) {
   // Special handling for setup link fields (fields starting with _)
   if (field.key.startsWith('_') && field.placeholder?.startsWith('http')) {
+    // Extract provider name from URL (e.g., "hubspot.com" -> "HubSpot")
+    const url = field.placeholder
+    let providerName = 'OAuth'
+    if (url.includes('hubspot.com')) {
+      providerName = 'HubSpot'
+    } else if (url.includes('linear.app')) {
+      providerName = 'Linear'
+    }
+
     return (
       <Button
         type="button"
@@ -196,7 +244,7 @@ function renderField(
         <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
         </svg>
-        Create Linear OAuth App
+        Create {providerName} OAuth App
       </Button>
     )
   }
