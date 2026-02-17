@@ -10,6 +10,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('db:updateTask', id, data),
     deleteTask: (id: string): Promise<boolean> => ipcRenderer.invoke('db:deleteTask', id)
   },
+  tasks: {
+    getWorkspaceDir: (taskId: string): Promise<string> =>
+      ipcRenderer.invoke('tasks:getWorkspaceDir', taskId)
+  },
   attachments: {
     pick: (): Promise<string[]> => ipcRenderer.invoke('attachments:pick'),
     save: (taskId: string, filePath: string): Promise<unknown> =>

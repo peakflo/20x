@@ -124,6 +124,10 @@ export function registerIpcHandlers(
     if (match) unlinkSync(join(dir, match))
   })
 
+  ipcMain.handle('tasks:getWorkspaceDir', (_, taskId: string): string => {
+    return db.getWorkspaceDir(taskId)
+  })
+
   ipcMain.handle('attachments:open', (_, taskId: string, attachmentId: string) => {
     console.log('[IPC] attachments:open called:', { taskId, attachmentId })
 

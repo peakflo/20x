@@ -1,7 +1,13 @@
 import { useRef, useEffect, useState, useMemo } from 'react'
-import { StopCircle, Loader2, Terminal, Send, ChevronRight, Wrench, AlertTriangle, CheckCircle2, Circle, Clock } from 'lucide-react'
+import ReactMarkdown from 'react-markdown'
+import { StopCircle, Loader2, Terminal, Send, ChevronRight, Wrench, AlertTriangle, CheckCircle2, Circle, Clock, RotateCcw, Code2, Eye } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import type { AgentMessage } from '@/hooks/use-agent-session'
+
+enum ViewMode {
+  MARKDOWN = 'markdown',
+  RAW = 'raw'
+}
 
 function formatStepMeta(meta: NonNullable<AgentMessage['stepMeta']>): string {
   const parts: string[] = []
@@ -65,6 +71,7 @@ interface AgentTranscriptPanelProps {
   messages: AgentMessage[]
   status: 'idle' | 'working' | 'error' | 'waiting_approval'
   onStop: () => void
+  onRestart?: () => void
   onSend?: (message: string) => void
   className?: string
 }
@@ -209,7 +216,7 @@ function ToolCallMessage({ message }: { message: AgentMessage }) {
   )
 }
 
-function MessageBubble({ message, onAnswer }: { message: AgentMessage; onAnswer?: (answer: string) => void }) {
+function MessageBubble({ message, onAnswer, viewMode }: { message: AgentMessage; onAnswer?: (answer: string) => void; viewMode?: ViewMode }) {
   if (message.partType === 'question' && message.tool?.questions) {
     return <QuestionMessage message={message} onAnswer={onAnswer} />
   }
@@ -253,9 +260,32 @@ function MessageBubble({ message, onAnswer }: { message: AgentMessage; onAnswer?
           </span>
         )}
         {isReasoning && <span className="text-[10px] text-purple-400 block mb-1">Thinking</span>}
-        <pre className="whitespace-pre-wrap break-words font-mono text-xs">
-          {message.content}
-        </pre>
+        {viewMode === ViewMode.MARKDOWN ? (
+          <div className="text-xs markdown-content">
+            <ReactMarkdown
+              components={{
+                h1: ({...props}) => <h1 className="text-sm font-semibold mt-3 mb-1.5 text-foreground" {...props} />,
+                h2: ({...props}) => <h2 className="text-xs font-semibold mt-2.5 mb-1.5 text-foreground" {...props} />,
+                h3: ({...props}) => <h3 className="text-xs font-semibold mt-2 mb-1 text-foreground" {...props} />,
+                p: ({...props}) => <p className="my-1.5" {...props} />,
+                ul: ({...props}) => <ul className="list-disc pl-3.5 my-1.5 space-y-0.5" {...props} />,
+                ol: ({...props}) => <ol className="list-decimal pl-3.5 my-1.5 space-y-0.5" {...props} />,
+                li: ({...props}) => <li className="ml-0.5" {...props} />,
+                code: ({...props}) => <code className="bg-muted px-1 py-0.5 rounded text-[11px] font-mono" {...props} />,
+                pre: ({...props}) => <pre className="bg-muted p-2 rounded my-1.5 overflow-x-auto text-[11px]" {...props} />,
+                blockquote: ({...props}) => <blockquote className="border-l-2 border-border pl-2.5 my-1.5 italic" {...props} />,
+                a: ({...props}) => <a className="text-primary underline hover:text-primary/80" target="_blank" rel="noopener noreferrer" {...props} />,
+                hr: ({...props}) => <hr className="border-border my-2" {...props} />
+              }}
+            >
+              {message.content}
+            </ReactMarkdown>
+          </div>
+        ) : (
+          <pre className="whitespace-pre-wrap break-words font-mono text-xs">
+            {message.content}
+          </pre>
+        )}
         <div className="flex items-center gap-2 mt-1">
           <span className="text-[10px] text-muted-foreground">{message.timestamp.toLocaleTimeString()}</span>
           {message.stepMeta && (
@@ -267,9 +297,10 @@ function MessageBubble({ message, onAnswer }: { message: AgentMessage; onAnswer?
   )
 }
 
-export function AgentTranscriptPanel({ messages, status, onStop, onSend, className }: AgentTranscriptPanelProps) {
+export function AgentTranscriptPanel({ messages, status, onStop, onRestart, onSend, className }: AgentTranscriptPanelProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
+  const [viewMode, setViewMode] = useState<ViewMode>(ViewMode.RAW)
 
   // Detect if the session ended due to an error (last message is error/retry and status is idle)
   const lastErrorMessage = useMemo(() => {
@@ -328,11 +359,33 @@ export function AgentTranscriptPanel({ messages, status, onStop, onSend, classNa
             {status === 'working' && <Loader2 className="h-3 w-3 animate-spin" />}
             {getStatusLabel()}
           </span>
-          {(status === 'working' || status === 'waiting_approval') && (
-            <Button variant="ghost" size="sm" onClick={onStop} className="h-7 px-2">
-              <StopCircle className="h-3.5 w-3.5" />
+          <div className="flex items-center gap-1">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setViewMode(viewMode === ViewMode.MARKDOWN ? ViewMode.RAW : ViewMode.MARKDOWN)}
+              className="h-7 px-2"
+              title={viewMode === ViewMode.MARKDOWN ? 'Show raw content' : 'Show markdown'}
+            >
+              {viewMode === ViewMode.MARKDOWN ? <Code2 className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
             </Button>
-          )}
+            {onRestart && messages.length > 0 && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={onRestart}
+                className="h-7 px-2"
+                title="Restart session"
+              >
+                <RotateCcw className="h-3.5 w-3.5" />
+              </Button>
+            )}
+            {(status === 'working' || status === 'waiting_approval') && (
+              <Button variant="ghost" size="sm" onClick={onStop} className="h-7 px-2" title="Stop session">
+                <StopCircle className="h-3.5 w-3.5" />
+              </Button>
+            )}
+          </div>
         </div>
       </div>
 
@@ -366,7 +419,7 @@ export function AgentTranscriptPanel({ messages, status, onStop, onSend, classNa
         ) : (
           <>
             {messages.map((message) => (
-              <MessageBubble key={message.id} message={message} onAnswer={onSend} />
+              <MessageBubble key={message.id} message={message} onAnswer={onSend} viewMode={viewMode} />
             ))}
             {status === 'working' && (
               <div className="flex items-center gap-2 text-xs text-muted-foreground">

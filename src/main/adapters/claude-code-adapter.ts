@@ -398,8 +398,14 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
     // Abort previous query if still running (only for subsequent prompts)
     if (!isFirstPrompt && session.queryIterator) {
       session.abortController?.abort()
-      // Wait a bit for cleanup
-      await new Promise(resolve => setTimeout(resolve, 100))
+      // Wait for stream cleanup to complete to avoid race conditions
+      if (session.streamTask) {
+        try {
+          await session.streamTask
+        } catch {
+          // Ignore errors during cleanup (abort errors are expected)
+        }
+      }
     }
 
     // Find Claude executable
@@ -418,7 +424,8 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
       model: config.model,
       systemPrompt: config.systemPrompt,
       abortController,
-      permissionMode: 'acceptEdits',
+      permissionMode: 'bypassPermissions', // Auto-approve all actions (user has already chosen to run agent)
+      allowDangerouslySkipPermissions: true, // Required for bypassPermissions mode
     }
 
     // Determine session continuation mode
@@ -526,8 +533,22 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
       throw new Error(`Session not found: ${sessionId}`)
     }
 
+    console.log(`[ClaudeCodeAdapter] Aborting session ${sessionId}`)
     session.abortController?.abort()
+
+    // Wait for stream to finish cleanup
+    if (session.streamTask) {
+      console.log(`[ClaudeCodeAdapter] Waiting for stream cleanup...`)
+      try {
+        await session.streamTask
+      } catch {
+        // Ignore abort errors
+      }
+      console.log(`[ClaudeCodeAdapter] Stream cleanup complete`)
+    }
+
     session.status = 'idle'
+    console.log(`[ClaudeCodeAdapter] Session ${sessionId} aborted and set to idle`)
   }
 
   async destroySession(sessionId: string, _config: SessionConfig): Promise<void> {
@@ -548,8 +569,19 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
       }
     }
 
-    // Remove session
-    this.sessions.delete(sessionId)
+    // Remove all references to this session (both temp ID and real ID)
+    // Since re-keying keeps both keys, we need to clean up both
+    const keysToDelete: string[] = []
+    for (const [key, sess] of this.sessions.entries()) {
+      if (sess === session) {
+        keysToDelete.push(key)
+      }
+    }
+
+    for (const key of keysToDelete) {
+      this.sessions.delete(key)
+      console.log(`[ClaudeCodeAdapter] Removed session key: ${key}`)
+    }
   }
 
   async getAllMessages(sessionId: string, _config: SessionConfig): Promise<SessionMessage[]> {
@@ -684,7 +716,7 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
   /**
    * Consumes the query stream in the background and buffers messages
    */
-  private async consumeStream(_sessionId: string, session: ClaudeSession): Promise<void> {
+  private async consumeStream(sessionId: string, session: ClaudeSession): Promise<void> {
     if (!session.queryIterator) return
 
     console.log('[ClaudeCodeAdapter] Starting stream consumption')
@@ -698,10 +730,19 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
 
         // Extract real Claude Code session ID from first message
         if (!session.sessionId && 'session_id' in msg) {
-          session.sessionId = msg.session_id
-          console.log(`[ClaudeCodeAdapter] Claude Code session ID: ${session.sessionId}`)
-          // Note: We keep the temp UUID as the map key for database compatibility
-          // session.sessionId stores the real Claude session ID for SDK calls
+          const realSessionId = msg.session_id
+          session.sessionId = realSessionId
+          console.log(`[ClaudeCodeAdapter] Claude Code session ID: ${realSessionId}`)
+
+          // Add the session under the real ID (keep old ID too until agent-manager updates)
+          // This allows pollMessages to work with both IDs during transition
+          if (realSessionId !== sessionId) {
+            console.log(`[ClaudeCodeAdapter] Adding session under real ID: ${realSessionId} (keeping temp ID ${sessionId} until agent-manager updates)`)
+            this.sessions.set(realSessionId, session)
+            // Don't delete the old sessionId yet - agent-manager needs to poll with it
+            // to receive the realSessionId. The old key will be deleted by destroySession
+            // or when agent-manager explicitly removes it.
+          }
         }
 
         // Check for session not found error BEFORE buffering
@@ -746,13 +787,26 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
       }
       console.log('[ClaudeCodeAdapter] Stream consumption completed normally')
     } catch (error: any) {
-      if (error.name === 'AbortError') {
+      if (error.name === 'AbortError' || error.message?.includes('aborted by user')) {
         console.log('[ClaudeCodeAdapter] Stream aborted by user')
+        // Don't set error status - this is normal when sending a new message
       } else if (error.message?.includes('INCOMPATIBLE_SESSION_ID')) {
         // Store temporarily so resumeSession can detect and re-throw it
         console.warn('[ClaudeCodeAdapter] Incompatible session error detected')
         session.status = 'error'
         session.lastError = error.message
+      } else if (error.message?.includes('exited with code 1')) {
+        // Claude Code process failed - likely a resume failure or other fatal error
+        console.error('[ClaudeCodeAdapter] Claude Code process failed:', error.message)
+        // Check if this was a resume attempt
+        if (session.isResumed || session.config) {
+          console.warn('[ClaudeCodeAdapter] Resume failed - session may not exist on Claude servers')
+          session.status = 'error'
+          session.lastError = 'INCOMPATIBLE_SESSION_ID: Failed to resume session. The session may have expired or does not exist on Claude Code servers.'
+        } else {
+          session.status = 'error'
+          session.lastError = error.message
+        }
       } else {
         console.error('[ClaudeCodeAdapter] Stream error:', error)
         console.error('[ClaudeCodeAdapter] Error stack:', error.stack)
