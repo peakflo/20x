@@ -202,8 +202,23 @@ export interface TaskRow {
   session_id: string | null
   snoozed_until: string | null
   resolution: string | null
+  is_recurring: number
+  recurrence_pattern: string | null
+  recurrence_parent_id: string | null
+  last_occurrence_at: string | null
+  next_occurrence_at: string | null
   created_at: string
   updated_at: string
+}
+
+export interface RecurrencePatternRecord {
+  type: 'daily' | 'weekly' | 'monthly' | 'custom'
+  interval: number
+  time: string
+  weekdays?: number[]
+  monthDay?: number
+  endDate?: string
+  maxOccurrences?: number
 }
 
 export interface TaskRecord {
@@ -227,6 +242,11 @@ export interface TaskRecord {
   session_id: string | null
   snoozed_until: string | null
   resolution: string | null
+  is_recurring: boolean
+  recurrence_pattern: RecurrencePatternRecord | null
+  recurrence_parent_id: string | null
+  last_occurrence_at: string | null
+  next_occurrence_at: string | null
   created_at: string
   updated_at: string
 }
@@ -254,6 +274,9 @@ export interface CreateTaskData {
   external_id?: string
   source_id?: string
   source?: string
+  is_recurring?: boolean
+  recurrence_pattern?: RecurrencePatternRecord | null
+  recurrence_parent_id?: string | null
 }
 
 export interface UpdateTaskData {
@@ -272,6 +295,10 @@ export interface UpdateTaskData {
   skill_ids?: string[] | null
   session_id?: string | null
   snoozed_until?: string | null
+  is_recurring?: boolean
+  recurrence_pattern?: RecurrencePatternRecord | null
+  last_occurrence_at?: string | null
+  next_occurrence_at?: string | null
 }
 
 /** Columns that can be dynamically updated via updateTask. */
@@ -290,10 +317,14 @@ const UPDATABLE_COLUMNS = new Set([
   'agent_id',
   'skill_ids',
   'session_id',
-  'snoozed_until'
+  'snoozed_until',
+  'is_recurring',
+  'recurrence_pattern',
+  'last_occurrence_at',
+  'next_occurrence_at'
 ])
 
-const JSON_COLUMNS = new Set(['labels', 'attachments', 'repos', 'output_fields', 'skill_ids'])
+const JSON_COLUMNS = new Set(['labels', 'attachments', 'repos', 'output_fields', 'skill_ids', 'recurrence_pattern'])
 
 function deserializeTask(row: TaskRow): TaskRecord {
   return {
@@ -308,7 +339,12 @@ function deserializeTask(row: TaskRow): TaskRecord {
     skill_ids: row.skill_ids ? JSON.parse(row.skill_ids) as string[] : null,
     session_id: row.session_id ?? null,
     snoozed_until: row.snoozed_until ?? null,
-    resolution: row.resolution ?? null
+    resolution: row.resolution ?? null,
+    is_recurring: row.is_recurring === 1,
+    recurrence_pattern: row.recurrence_pattern ? JSON.parse(row.recurrence_pattern) as RecurrencePatternRecord : null,
+    recurrence_parent_id: row.recurrence_parent_id ?? null,
+    last_occurrence_at: row.last_occurrence_at ?? null,
+    next_occurrence_at: row.next_occurrence_at ?? null
   }
 }
 
@@ -490,7 +526,7 @@ function deserializeOAuthToken(row: OAuthTokenRow): OAuthTokenRecord {
 }
 
 export class DatabaseManager {
-  private db!: Database.Database
+  public db!: Database.Database
 
   initialize(): void {
     const userDataPath = app.getPath('userData')
@@ -519,6 +555,11 @@ export class DatabaseManager {
         checklist TEXT NOT NULL DEFAULT '[]',
         source TEXT NOT NULL DEFAULT 'local',
         resolution TEXT,
+        is_recurring INTEGER NOT NULL DEFAULT 0,
+        recurrence_pattern TEXT DEFAULT NULL,
+        recurrence_parent_id TEXT REFERENCES tasks(id) ON DELETE CASCADE,
+        last_occurrence_at TEXT DEFAULT NULL,
+        next_occurrence_at TEXT DEFAULT NULL,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
@@ -526,6 +567,7 @@ export class DatabaseManager {
       CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
       CREATE INDEX IF NOT EXISTS idx_tasks_priority ON tasks(priority);
       CREATE INDEX IF NOT EXISTS idx_tasks_source ON tasks(source);
+      CREATE INDEX IF NOT EXISTS idx_tasks_next_occurrence ON tasks(next_occurrence_at) WHERE is_recurring = 1;
 
       CREATE TABLE IF NOT EXISTS agents (
         id TEXT PRIMARY KEY,
@@ -880,6 +922,25 @@ export class DatabaseManager {
       console.log('[Database Migration] Successfully updated source_id foreign key to CASCADE')
     }
 
+    // Add recurring task columns
+    if (!columnNames.has('is_recurring')) {
+      this.db.exec(`ALTER TABLE tasks ADD COLUMN is_recurring INTEGER NOT NULL DEFAULT 0`)
+    }
+    if (!columnNames.has('recurrence_pattern')) {
+      this.db.exec(`ALTER TABLE tasks ADD COLUMN recurrence_pattern TEXT DEFAULT NULL`)
+    }
+    if (!columnNames.has('recurrence_parent_id')) {
+      this.db.exec(`ALTER TABLE tasks ADD COLUMN recurrence_parent_id TEXT REFERENCES tasks(id) ON DELETE CASCADE`)
+    }
+    if (!columnNames.has('last_occurrence_at')) {
+      this.db.exec(`ALTER TABLE tasks ADD COLUMN last_occurrence_at TEXT DEFAULT NULL`)
+    }
+    if (!columnNames.has('next_occurrence_at')) {
+      this.db.exec(`ALTER TABLE tasks ADD COLUMN next_occurrence_at TEXT DEFAULT NULL`)
+      // Create index for efficient querying of recurring tasks
+      this.db.exec(`CREATE INDEX IF NOT EXISTS idx_tasks_next_occurrence ON tasks(next_occurrence_at) WHERE is_recurring = 1`)
+    }
+
     // Seed default agent if none exist
     const agentCount = this.db.prepare('SELECT COUNT(*) as count FROM agents').get() as { count: number }
     if (agentCount.count === 0) {
@@ -965,8 +1026,13 @@ export class DatabaseManager {
     const now = new Date().toISOString()
 
     this.db.prepare(`
-      INSERT INTO tasks (id, title, description, type, priority, status, assignee, due_date, labels, attachments, repos, output_fields, external_id, source_id, source, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO tasks (
+        id, title, description, type, priority, status, assignee, due_date,
+        labels, attachments, repos, output_fields, external_id, source_id, source,
+        is_recurring, recurrence_pattern, recurrence_parent_id,
+        created_at, updated_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id,
       data.title,
@@ -983,6 +1049,9 @@ export class DatabaseManager {
       data.external_id ?? null,
       data.source_id ?? null,
       data.source ?? 'local',
+      data.is_recurring ? 1 : 0,
+      data.recurrence_pattern ? JSON.stringify(data.recurrence_pattern) : null,
+      data.recurrence_parent_id ?? null,
       now,
       now
     )

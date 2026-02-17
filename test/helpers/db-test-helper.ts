@@ -84,6 +84,11 @@ export function createTestDb(): { db: DatabaseManager; rawDb: InstanceType<typeo
       session_id TEXT DEFAULT NULL,
       snoozed_until TEXT DEFAULT NULL,
       resolution TEXT,
+      is_recurring INTEGER NOT NULL DEFAULT 0,
+      recurrence_pattern TEXT DEFAULT NULL,
+      recurrence_parent_id TEXT REFERENCES tasks(id) ON DELETE CASCADE,
+      last_occurrence_at TEXT DEFAULT NULL,
+      next_occurrence_at TEXT DEFAULT NULL,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -92,6 +97,7 @@ export function createTestDb(): { db: DatabaseManager; rawDb: InstanceType<typeo
     CREATE INDEX IF NOT EXISTS idx_tasks_priority ON tasks(priority);
     CREATE INDEX IF NOT EXISTS idx_tasks_source ON tasks(source);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_source_external ON tasks(source_id, external_id) WHERE external_id IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_tasks_next_occurrence ON tasks(next_occurrence_at) WHERE is_recurring = 1;
 
     CREATE TABLE IF NOT EXISTS skills (
       id TEXT PRIMARY KEY,

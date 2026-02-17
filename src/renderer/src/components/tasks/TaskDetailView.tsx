@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import ReactMarkdown from 'react-markdown'
-import { Pencil, Trash2, Calendar, User, Tag, Clock, Bot, Play, History, GitBranch, Plus, X, BookOpen, AlarmClockOff, BellRing, Folder } from 'lucide-react'
+import { Pencil, Trash2, Calendar, User, Tag, Clock, Bot, Play, History, GitBranch, Plus, X, BookOpen, AlarmClockOff, BellRing, Folder, Repeat } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { TaskStatusBadge } from './TaskStatusBadge'
 import { TaskPriorityBadge } from './TaskPriorityBadge'
@@ -12,8 +12,29 @@ import { OutputFieldsDisplay } from './OutputFieldsDisplay'
 import { SkillSelector } from '@/components/skills/SkillSelector'
 import { AssigneeSelect } from './AssigneeSelect'
 import { TaskStatus, CodingAgentType } from '@/types'
-import type { WorkfloTask, FileAttachment, OutputField, Agent } from '@/types'
+import type { WorkfloTask, FileAttachment, OutputField, Agent, RecurrencePattern } from '@/types'
 import { AnthropicLogo, OpenCodeLogo, OpenAILogo } from '@/components/icons/AgentLogos'
+
+function formatRecurrencePattern(pattern: RecurrencePattern): string {
+  const { type, interval, time, weekdays, monthDay } = pattern
+
+  let description = ''
+
+  if (type === 'daily') {
+    description = interval === 1 ? 'Daily' : `Every ${interval} days`
+  } else if (type === 'weekly') {
+    const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+    const days = weekdays?.map(d => dayNames[d]).join(', ') || ''
+    description = `Weekly on ${days}`
+  } else if (type === 'monthly') {
+    const suffix = monthDay === 1 ? 'st' : monthDay === 2 ? 'nd' : monthDay === 3 ? 'rd' : 'th'
+    description = `Monthly on the ${monthDay}${suffix}`
+  } else {
+    description = `Every ${interval} days`
+  }
+
+  return `${description} at ${time}`
+}
 
 interface TaskDetailViewProps {
   task: WorkfloTask
@@ -249,6 +270,25 @@ export function TaskDetailView({ task, agents, onEdit, onDelete, onUpdateAttachm
                 <span className="text-muted-foreground">
                   {task.snoozed_until === '9999-12-31T00:00:00.000Z' ? 'Someday' : formatDate(task.snoozed_until)}
                 </span>
+              </>
+            )}
+            {task.is_recurring && task.recurrence_pattern && !task.recurrence_parent_id && (
+              <>
+                <span className="text-muted-foreground flex items-center gap-2"><Repeat className="h-3.5 w-3.5" /> Recurrence</span>
+                <div className="flex flex-col gap-1">
+                  <span>{formatRecurrencePattern(task.recurrence_pattern)}</span>
+                  {task.next_occurrence_at && (
+                    <span className="text-xs text-muted-foreground">
+                      Next: {formatDate(task.next_occurrence_at)}
+                    </span>
+                  )}
+                </div>
+              </>
+            )}
+            {task.recurrence_parent_id && (
+              <>
+                <span className="text-muted-foreground flex items-center gap-2"><Repeat className="h-3.5 w-3.5" /> Instance</span>
+                <Badge variant="blue" className="w-fit">Created from recurring template</Badge>
               </>
             )}
             <span className="text-muted-foreground flex items-center gap-2"><Clock className="h-3.5 w-3.5" /> Created</span>
