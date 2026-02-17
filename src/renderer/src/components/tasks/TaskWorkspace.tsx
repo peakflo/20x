@@ -385,13 +385,49 @@ Update existing skills that were helpful or create new ones for patterns worth r
     if (!task?.agent_id) return
     startingRef.current = true
     try {
+      // Stop current session if it exists
+      if (session.sessionId) {
+        await stop()
+      }
+      // Remove session from store and clear task's session_id
+      await removeSession(task.id)
+      if (onUpdateTask) {
+        await onUpdateTask(task.id, { session_id: null })
+      }
+
+      console.log('[TaskWorkspace] Starting fresh session, repos:', task.repos, 'githubOrg:', githubOrg)
+
+      // If task has repos and gh is configured, setup worktrees first
+      if (task.repos.length > 0 && githubOrg) {
+        console.log('[TaskWorkspace] Setting up worktrees for', task.repos.length, 'repos')
+        setIsSettingUpWorktree(true)
+        const repoData = await githubApi.fetchOrgRepos(githubOrg)
+        const matched = task.repos
+          .map((name) => repoData.find((r) => r.fullName === name))
+          .filter(Boolean) as GitHubRepo[]
+
+        if (matched.length > 0) {
+          const workspaceDir = await worktreeApi.setup(
+            task.id,
+            matched.map((r) => ({ fullName: r.fullName, defaultBranch: r.defaultBranch })),
+            githubOrg
+          )
+          setIsSettingUpWorktree(false)
+          await start(task.agent_id, task.id, workspaceDir)
+          return
+        }
+        setIsSettingUpWorktree(false)
+      }
+
+      // Start fresh session
       await start(task.agent_id, task.id)
     } catch (err) {
       console.error('Failed to start fresh session:', err)
+      setIsSettingUpWorktree(false)
     } finally {
       startingRef.current = false
     }
-  }, [task?.agent_id, task?.id, start])
+  }, [task?.agent_id, task?.id, task?.repos, session.sessionId, start, stop, removeSession, onUpdateTask, githubOrg])
 
   if (!task) {
     return (
@@ -454,6 +490,7 @@ Update existing skills that were helpful or create new ones for patterns worth r
               messages={session.messages}
               status={session.status}
               onStop={handleAbort}
+              onRestart={handleStartFreshSession}
               onSend={handleSend}
             />
           </div>
