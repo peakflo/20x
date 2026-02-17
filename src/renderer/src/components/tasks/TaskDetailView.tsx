@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import ReactMarkdown from 'react-markdown'
-import { Pencil, Trash2, Calendar, User, Tag, Clock, Bot, Play, History, GitBranch, Plus, X, BookOpen, AlarmClockOff, BellRing } from 'lucide-react'
+import { Pencil, Trash2, Calendar, User, Tag, Clock, Bot, Play, History, GitBranch, Plus, X, BookOpen, AlarmClockOff, BellRing, Folder } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { TaskStatusBadge } from './TaskStatusBadge'
 import { TaskPriorityBadge } from './TaskPriorityBadge'
@@ -13,6 +13,7 @@ import { SkillSelector } from '@/components/skills/SkillSelector'
 import { AssigneeSelect } from './AssigneeSelect'
 import { TaskStatus, CodingAgentType } from '@/types'
 import type { WorkfloTask, FileAttachment, OutputField, Agent } from '@/types'
+import { AnthropicLogo, OpenCodeLogo, OpenAILogo } from '@/components/icons/AgentLogos'
 
 interface TaskDetailViewProps {
   task: WorkfloTask
@@ -42,6 +43,11 @@ export function TaskDetailView({ task, agents, onEdit, onDelete, onUpdateAttachm
   const isActive = task.status !== TaskStatus.Completed
   const overdue = isActive && isOverdue(task.due_date)
   const dueSoon = isActive && !overdue && isDueSoon(task.due_date)
+
+  const handleOpenFolder = async () => {
+    const workspaceDir = await window.electronAPI.tasks.getWorkspaceDir(task.id)
+    await window.electronAPI.shell.openPath(workspaceDir)
+  }
 
   return (
     <div className="flex flex-col h-full">
@@ -125,11 +131,24 @@ export function TaskDetailView({ task, agents, onEdit, onDelete, onUpdateAttachm
                     <option key={agent.id} value={agent.id}>{agent.name}</option>
                   ))}
                 </select>
-                {task.agent_id && agents.find(a => a.id === task.agent_id)?.config.coding_agent && (
-                  <Badge className="text-[10px] px-1.5 py-0.5">
-                    {agents.find(a => a.id === task.agent_id)?.config.coding_agent === CodingAgentType.CLAUDE_CODE ? 'Claude Code' : 'OpenCode'}
-                  </Badge>
-                )}
+                {task.agent_id && agents.find(a => a.id === task.agent_id)?.config.coding_agent && (() => {
+                  const agent = agents.find(a => a.id === task.agent_id)
+                  const codingAgent = agent?.config.coding_agent
+                  const agentName = codingAgent === CodingAgentType.CLAUDE_CODE ? 'Claude Code' :
+                                   codingAgent === CodingAgentType.OPENCODE ? 'OpenCode' :
+                                   'Codex'
+                  const LogoComponent = codingAgent === CodingAgentType.CLAUDE_CODE ? AnthropicLogo :
+                                       codingAgent === CodingAgentType.OPENCODE ? OpenCodeLogo :
+                                       OpenAILogo
+                  return (
+                    <div
+                      className="w-4 h-4 flex items-center justify-center opacity-70 hover:opacity-100 transition-opacity"
+                      title={agentName}
+                    >
+                      <LogoComponent className="w-full h-full" />
+                    </div>
+                  )
+                })()}
                 {canResumeAgent && onResumeAgent && (
                   <Button variant="default" size="sm" onClick={onResumeAgent} className="h-7 gap-1.5 px-3">
                     <History className="h-3 w-3" />
@@ -148,6 +167,15 @@ export function TaskDetailView({ task, agents, onEdit, onDelete, onUpdateAttachm
                     Start
                   </Button>
                 )}
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={handleOpenFolder}
+                  className="h-7 w-7"
+                  title="Open workspace folder"
+                >
+                  <Folder className="h-3.5 w-3.5" />
+                </Button>
               </div>
             </>
             <>

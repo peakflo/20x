@@ -102,6 +102,9 @@ interface ElectronAPI {
     updateTask: (id: string, data: UpdateTaskDTO) => Promise<WorkfloTask | undefined>
     deleteTask: (id: string) => Promise<boolean>
   }
+  tasks: {
+    getWorkspaceDir: (taskId: string) => Promise<string>
+  }
   mcpServers: {
     getAll: () => Promise<McpServer[]>
     get: (id: string) => Promise<McpServer | undefined>

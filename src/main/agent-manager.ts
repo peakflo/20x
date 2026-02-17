@@ -259,7 +259,7 @@ export class AgentManager extends EventEmitter {
       }
 
       // Generate AGENTS.md and CLAUDE.md with skill directory
-      this.writeAgentsDocumentation(workspaceDir, skills)
+      this.writeAgentsDocumentation(workspaceDir, skills, task?.repos || [])
     } catch (error) {
       console.error('[AgentManager] Error writing skill files:', error)
     }
@@ -270,7 +270,8 @@ export class AgentManager extends EventEmitter {
    */
   private writeAgentsDocumentation(
     workspaceDir: string,
-    skills: SkillRecord[]
+    skills: SkillRecord[],
+    repos: string[]
   ): void {
     try {
       const agentsDir = join(workspaceDir, '.agents')
@@ -280,11 +281,11 @@ export class AgentManager extends EventEmitter {
       const sortedSkills = [...skills].sort((a, b) => b.confidence - a.confidence)
 
       // Generate AGENTS.md
-      const agentsMd = this.generateAgentsMd(sortedSkills)
+      const agentsMd = this.generateAgentsMd(sortedSkills, repos, workspaceDir)
       writeFileSync(join(agentsDir, 'AGENTS.md'), agentsMd, 'utf-8')
 
       // Generate CLAUDE.md
-      const claudeMd = this.generateClaudeMd(sortedSkills)
+      const claudeMd = this.generateClaudeMd(sortedSkills, repos, workspaceDir)
       writeFileSync(join(agentsDir, 'CLAUDE.md'), claudeMd, 'utf-8')
 
       console.log('[AgentManager] Generated AGENTS.md and CLAUDE.md with skill directory')
@@ -296,12 +297,27 @@ export class AgentManager extends EventEmitter {
   /**
    * Generates AGENTS.md content with skill directory.
    */
-  private generateAgentsMd(skills: SkillRecord[]): string {
+  private generateAgentsMd(skills: SkillRecord[], repos: string[], workspaceDir: string): string {
     const now = new Date().toISOString()
 
     let md = `# Agent Session Configuration\n\n`
     md += `**Generated:** ${now}\n`
     md += `---\n\n`
+
+    // Add repository information
+    if (repos.length > 0) {
+      md += `## Repositories\n\n`
+      md += `This task has ${repos.length} repository/repositories checked out in the workspace:\n\n`
+      for (const repo of repos) {
+        const repoName = repo.split('/').pop() || repo
+        const repoPath = `${repoName}/`
+        md += `- **${repo}** → \`${repoPath}\`\n`
+      }
+      md += `\n`
+      md += `**Workspace Directory:** \`${workspaceDir}\`\n\n`
+      md += `**Important:** All repository code is in subdirectories. For example, to access files in ${repos[0].split('/').pop()}, use \`${repos[0].split('/').pop()}/src/...\` as paths.\n\n`
+      md += `---\n\n`
+    }
 
     md += `## Available Skills\n\n`
 
@@ -329,12 +345,26 @@ export class AgentManager extends EventEmitter {
   /**
    * Generates CLAUDE.md content with skill directory.
    */
-  private generateClaudeMd(skills: SkillRecord[]): string {
+  private generateClaudeMd(skills: SkillRecord[], repos: string[], workspaceDir: string): string {
     const now = new Date().toISOString()
 
     let md = `# Claude Code Configuration\n\n`
     md += `**Session Started:** ${now}\n`
     md += `---\n\n`
+
+    // Add repository information
+    if (repos.length > 0) {
+      md += `## Workspace Structure\n\n`
+      md += `Your working directory is \`${workspaceDir}\`\n\n`
+      md += `This task has ${repos.length} repository/repositories checked out:\n\n`
+      for (const repo of repos) {
+        const repoName = repo.split('/').pop() || repo
+        md += `- **${repo}** is checked out in \`./${repoName}/\`\n`
+      }
+      md += `\n`
+      md += `**IMPORTANT:** All repository code is in subdirectories, not in the root workspace directory. When reading or editing files, use paths like \`${repos[0].split('/').pop()}/src/...\`, not just \`src/...\`\n\n`
+      md += `---\n\n`
+    }
 
     md += `## Skills Reference\n\n`
 
@@ -706,17 +736,19 @@ export class AgentManager extends EventEmitter {
     const seenMessageIds = new Set<string>()
     const seenPartIds = new Set<string>()
     const partContentLengths = new Map<string, string>()
+    let currentSessionId = initialSessionId // Persists across poll iterations
 
     const poll = async (): Promise<void> => {
       try {
         // Find current session ID (might have changed due to re-keying)
-        let sessionId = initialSessionId
+        let sessionId = currentSessionId
         const sessionByOldId = this.sessions.get(sessionId)
         if (!sessionByOldId) {
           // Session might have been re-keyed, find it by taskId
           for (const [sid, sess] of this.sessions.entries()) {
             if (sess.taskId === config.taskId) {
               sessionId = sid
+              currentSessionId = sid // Update persistent reference
               break
             }
           }
@@ -745,6 +777,7 @@ export class AgentManager extends EventEmitter {
             this.sessions.delete(sessionId)
             this.sessions.set(realSessionId, session)
             sessionId = realSessionId // Update local variable for subsequent code
+            currentSessionId = realSessionId // Update persistent reference for future iterations
           }
         }
 
