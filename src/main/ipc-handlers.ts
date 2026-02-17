@@ -24,7 +24,7 @@ import type { GitHubManager } from './github-manager'
 import type { WorktreeManager } from './worktree-manager'
 import type { SyncManager } from './sync-manager'
 import type { PluginRegistry } from './plugins/registry'
-import type { OAuthManager } from './oauth-manager'
+import type { OAuthManager } from './oauth/oauth-manager'
 
 const MIME_MAP: Record<string, string> = {
   '.pdf': 'application/pdf',
@@ -125,12 +125,70 @@ export function registerIpcHandlers(
   })
 
   ipcMain.handle('attachments:open', (_, taskId: string, attachmentId: string) => {
+    console.log('[IPC] attachments:open called:', { taskId, attachmentId })
+
     const dir = db.getAttachmentsDir(taskId)
-    if (!existsSync(dir)) return
+    console.log('[IPC] Attachments directory:', dir)
+
+    if (!existsSync(dir)) {
+      console.log('[IPC] Attachments directory does not exist')
+      return
+    }
+
+    const files = readdirSync(dir)
+    console.log('[IPC] Files in directory:', files)
+
+    const match = files.find((f) => f.startsWith(`${attachmentId}-`))
+    console.log('[IPC] Matched file:', match)
+
+    if (match) {
+      const filePath = join(dir, match)
+      console.log('[IPC] Opening file:', filePath)
+      shell.openPath(filePath)
+    } else {
+      console.log('[IPC] No matching file found for attachment ID:', attachmentId)
+    }
+  })
+
+  ipcMain.handle('attachments:download', (_, taskId: string, attachmentId: string) => {
+    console.log('[IPC] attachments:download called:', { taskId, attachmentId })
+
+    const dir = db.getAttachmentsDir(taskId)
+    if (!existsSync(dir)) {
+      console.error('[IPC] Attachments directory does not exist')
+      return
+    }
 
     const files = readdirSync(dir)
     const match = files.find((f) => f.startsWith(`${attachmentId}-`))
-    if (match) shell.openPath(join(dir, match))
+
+    if (match) {
+      const sourcePath = join(dir, match)
+      // Extract filename without the UUID prefix
+      // Format: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx-filename.ext" (UUID is 36 chars)
+      const filename = match.substring(37) // Skip UUID (36 chars) + dash (1 char)
+
+      // Get user's Downloads folder
+      const downloadsPath = app.getPath('downloads')
+      const destPath = join(downloadsPath, filename)
+
+      console.log('[IPC] Copying file from:', sourcePath)
+      console.log('[IPC] Copying file to:', destPath)
+
+      try {
+        copyFileSync(sourcePath, destPath)
+        console.log('[IPC] File copied successfully')
+
+        // Show the file in Finder/Explorer
+        shell.showItemInFolder(destPath)
+      } catch (error) {
+        console.error('[IPC] Failed to copy file:', error)
+        throw error
+      }
+    } else {
+      console.error('[IPC] No matching file found for attachment ID:', attachmentId)
+      throw new Error('Attachment file not found')
+    }
   })
 
   // Shell handlers
@@ -427,6 +485,11 @@ export function registerIpcHandlers(
   ipcMain.handle('oauth:exchangeCode', async (_, provider: string, code: string, state: string, sourceId: string) => {
     if (!oauthManager) throw new Error('OAuth manager not initialized')
     await oauthManager.exchangeCode(provider, code, state, sourceId)
+  })
+
+  ipcMain.handle('oauth:startLocalhostFlow', async (_, provider: string, config: Record<string, unknown>, sourceId: string) => {
+    if (!oauthManager) throw new Error('OAuth manager not initialized')
+    await oauthManager.startLocalhostOAuthFlow(provider, config, sourceId)
   })
 
   ipcMain.handle('oauth:getValidToken', async (_, sourceId: string) => {

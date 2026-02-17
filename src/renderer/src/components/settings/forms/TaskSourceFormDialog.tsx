@@ -3,7 +3,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogBody } from '@/
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
 import { Label } from '@/components/ui/Label'
-import { PluginConfigForm } from '@/components/agents/PluginConfigForm'
+import { getPluginForm } from '@/components/plugins'
 import type { McpServer, TaskSource, CreateTaskSourceDTO, PluginMeta } from '@/types'
 
 interface TaskSourceFormDialogProps {
@@ -45,7 +45,7 @@ export function TaskSourceFormDialog({
     if (!isValid) return
 
     const data: CreateTaskSourceDTO = {
-      mcp_server_id: selectedPlugin?.requiresMcpServer ? mcpServerId : (mcpServers[0]?.id ?? ''),
+      mcp_server_id: selectedPlugin?.requiresMcpServer ? mcpServerId : null,
       name: name.trim(),
       plugin_id: pluginId,
       config: pluginConfig
@@ -119,14 +119,38 @@ export function TaskSourceFormDialog({
               </div>
             )}
 
-            {selectedPlugin && (
-              <PluginConfigForm
-                pluginId={selectedPlugin.id}
-                value={pluginConfig}
-                onChange={setPluginConfig}
-                sourceId={source?.id}
-              />
-            )}
+            {selectedPlugin && (() => {
+              const PluginForm = getPluginForm(selectedPlugin.id)
+              if (!PluginForm) {
+                return (
+                  <div className="text-sm text-muted-foreground py-4">
+                    No configuration form available for this plugin.
+                  </div>
+                )
+              }
+
+              return (
+                <PluginForm
+                  value={pluginConfig}
+                  onChange={setPluginConfig}
+                  sourceId={source?.id}
+                  onRequestSave={() => {
+                    // Auto-save source before OAuth when creating new source
+                    if (!source && isValid) {
+                      const data: CreateTaskSourceDTO = {
+                        mcp_server_id: selectedPlugin?.requiresMcpServer ? mcpServerId : null,
+                        name: name.trim(),
+                        plugin_id: pluginId,
+                        config: pluginConfig
+                      }
+                      onSubmit(data)
+                      return true
+                    }
+                    return false
+                  }}
+                />
+              )
+            })()}
 
             <div className="flex justify-end gap-2 pt-1">
               <Button type="button" variant="outline" size="sm" onClick={onClose}>

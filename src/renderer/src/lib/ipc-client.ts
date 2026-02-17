@@ -152,6 +152,10 @@ export const attachmentApi = {
 
   open: (taskId: string, attachmentId: string): Promise<void> => {
     return window.electronAPI.attachments.open(taskId, attachmentId)
+  },
+
+  download: (taskId: string, attachmentId: string): Promise<void> => {
+    return window.electronAPI.attachments.download(taskId, attachmentId)
   }
 }
 

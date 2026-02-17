@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Clock } from 'lucide-react'
-import { Dialog, DialogContent } from '@/components/ui/Dialog'
+import { Dialog, DialogContent, DialogTitle } from '@/components/ui/Dialog'
+import { VisuallyHidden } from '@/components/ui/VisuallyHidden'
 import { getSnoozeOptions } from '@/lib/snooze-options'
 
 interface SnoozeDialogProps {
@@ -26,6 +27,9 @@ export function SnoozeDialog({ open, onOpenChange, onSnooze }: SnoozeDialogProps
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-sm p-0">
+        <VisuallyHidden>
+          <DialogTitle>Snooze Task</DialogTitle>
+        </VisuallyHidden>
         <div className="flex items-center gap-2 px-5 pt-5 pb-4">
           <Clock className="h-4 w-4 text-muted-foreground" />
           <span className="text-sm font-semibold">Remind me</span>

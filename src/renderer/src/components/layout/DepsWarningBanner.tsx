@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import { Check, Copy, RefreshCw, ArrowRight, ExternalLink, Loader2, Bot } from 'lucide-react'
-import { Dialog, DialogContent } from '@/components/ui/Dialog'
+import { Dialog, DialogContent, DialogTitle } from '@/components/ui/Dialog'
+import { VisuallyHidden } from '@/components/ui/VisuallyHidden'
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
 import { Label } from '@/components/ui/Label'
@@ -357,6 +358,9 @@ export function DepsWarningBanner() {
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && setDismissed(true)}>
       <DialogContent className="max-w-lg">
+        <VisuallyHidden>
+          <DialogTitle>Setup Required Dependencies</DialogTitle>
+        </VisuallyHidden>
         <div className="px-8 pt-8 pb-6">
           {/* Step indicator */}
           {totalSteps > 1 && (
