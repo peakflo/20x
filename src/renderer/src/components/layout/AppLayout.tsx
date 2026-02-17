@@ -154,6 +154,10 @@ export function AppLayout() {
                   await updateTask(newTask.id, { attachments })
                 }
                 closeModal()
+                // Automatically select and open the newly created task
+                if (newTask) {
+                  selectTask(newTask.id)
+                }
               }}
               onCancel={closeModal}
             />
