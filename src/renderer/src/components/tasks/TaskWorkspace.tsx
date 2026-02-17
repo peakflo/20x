@@ -55,7 +55,7 @@ export function TaskWorkspace({
   const [incompatibleSessionError, setIncompatibleSessionError] = useState<string>()
   const startingRef = useRef(false)
 
-  const { fetchTasks } = useTaskStore()
+  const { fetchTasks, updateTask: updateTaskInStore } = useTaskStore()
 
   // Fetch settings on mount
   useEffect(() => { fetchSettings() }, [])
@@ -346,8 +346,13 @@ Update existing skills that were helpful or create new ones for patterns worth r
   const handleFeedbackSkip = useCallback(async () => {
     if (!task?.id) return
     setShowFeedback(false)
-    // Just keep it in ReadyForReview - user can complete manually
-  }, [task?.id])
+    // Mark task as completed when skipping feedback (updates local state without refetch)
+    if (onUpdateTask) {
+      await onUpdateTask(task.id, { status: TaskStatus.Completed })
+    } else {
+      await updateTaskInStore(task.id, { status: TaskStatus.Completed })
+    }
+  }, [task?.id, onUpdateTask, updateTaskInStore])
 
   const handleSnooze = useCallback(async (isoString: string) => {
     if (!task) return

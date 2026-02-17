@@ -39,6 +39,9 @@ export function TaskListItem({ task, isSelected, onSelect }: TaskListItemProps) 
     if (hasActiveAgent) {
       return 'bg-amber-400 animate-pulse' // Agent working
     }
+    if (task.status === TaskStatus.AgentLearning) {
+      return 'bg-blue-400 animate-pulse' // Agent learning
+    }
     return statusDotColor[task.status] // Task status
   }
 
