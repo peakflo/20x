@@ -384,7 +384,7 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
       {/* API Key Configuration for Claude Code */}
       {codingAgent === CodingAgentType.CLAUDE_CODE && (
         <div className="space-y-1.5">
-          <Label htmlFor="anthropic-api-key">Anthropic API Key</Label>
+          <Label htmlFor="anthropic-api-key">Anthropic API Key (Optional)</Label>
           <Input
             id="anthropic-api-key"
             type="password"
@@ -392,14 +392,19 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
             onChange={(e) => setAnthropicApiKey(e.target.value)}
             placeholder={hasAnthropicEnv ? '••••••••' : 'sk-ant-...'}
           />
+          {anthropicApiKey && (
+            <p className="text-xs text-muted-foreground">
+              Using provided API key
+            </p>
+          )}
           {!anthropicApiKey && hasAnthropicEnv && (
             <p className="text-xs text-muted-foreground">
               ✓ Using ANTHROPIC_API_KEY from environment
             </p>
           )}
           {!anthropicApiKey && !hasAnthropicEnv && (
-            <p className="text-xs text-destructive">
-              Required: Enter your Anthropic API key or set ANTHROPIC_API_KEY environment variable
+            <p className="text-xs text-muted-foreground">
+              Claude Code uses CLI authentication - no API key required
             </p>
           )}
         </div>
