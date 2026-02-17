@@ -15,13 +15,18 @@ interface TaskListProps {
 export function TaskList({ tasks, selectedTaskId, onSelectTask }: TaskListProps) {
   const [completedOpen, setCompletedOpen] = useState(false)
   const [hiddenOpen, setHiddenOpen] = useState(false)
+  const [recurringOpen, setRecurringOpen] = useState(false)
 
-  const { activeTasks, snoozedTasks, completedTasks } = useMemo(() => {
+  const { activeTasks, snoozedTasks, recurringTasks, completedTasks } = useMemo(() => {
     const active: WorkfloTask[] = []
     const snoozed: WorkfloTask[] = []
+    const recurring: WorkfloTask[] = []
     const completed: WorkfloTask[] = []
     for (const task of tasks) {
-      if (task.status === TaskStatus.Completed) {
+      // Template tasks only (not instances)
+      if (task.is_recurring && !task.recurrence_parent_id) {
+        recurring.push(task)
+      } else if (task.status === TaskStatus.Completed) {
         completed.push(task)
       } else if (isSnoozed(task.snoozed_until)) {
         snoozed.push(task)
@@ -29,7 +34,7 @@ export function TaskList({ tasks, selectedTaskId, onSelectTask }: TaskListProps)
         active.push(task)
       }
     }
-    return { activeTasks: active, snoozedTasks: snoozed, completedTasks: completed }
+    return { activeTasks: active, snoozedTasks: snoozed, recurringTasks: recurring, completedTasks: completed }
   }, [tasks])
 
   if (tasks.length === 0) {
@@ -58,6 +63,27 @@ export function TaskList({ tasks, selectedTaskId, onSelectTask }: TaskListProps)
             <span className="ml-auto tabular-nums">{snoozedTasks.length}</span>
           </button>
           {hiddenOpen && snoozedTasks.map((task) => (
+            <TaskListItem
+              key={task.id}
+              task={task}
+              isSelected={task.id === selectedTaskId}
+              onSelect={() => onSelectTask(task.id)}
+            />
+          ))}
+        </>
+      )}
+
+      {recurringTasks.length > 0 && (
+        <>
+          <button
+            onClick={() => setRecurringOpen(!recurringOpen)}
+            className="flex items-center gap-1.5 px-3 py-2 mt-1 text-xs text-muted-foreground hover:text-foreground cursor-pointer"
+          >
+            <ChevronRight className={`h-3 w-3 transition-transform ${recurringOpen ? 'rotate-90' : ''}`} />
+            Recurring
+            <span className="ml-auto tabular-nums">{recurringTasks.length}</span>
+          </button>
+          {recurringOpen && recurringTasks.map((task) => (
             <TaskListItem
               key={task.id}
               task={task}

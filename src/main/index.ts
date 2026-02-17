@@ -38,6 +38,7 @@ import { PeakfloPlugin } from './plugins/peakflo-plugin'
 import { LinearPlugin } from './plugins/linear-plugin'
 import { HubSpotPlugin } from './plugins/hubspot-plugin'
 import { registerIpcHandlers } from './ipc-handlers'
+import { RecurrenceScheduler } from './recurrence-scheduler'
 
 let mainWindow: BrowserWindow | null = null
 let tray: Tray | null = null
@@ -50,6 +51,7 @@ let mcpToolCaller: McpToolCaller | null = null
 let syncManager: SyncManager | null = null
 let pluginRegistry: PluginRegistry | null = null
 let oauthManager: OAuthManager | null = null
+let recurrenceScheduler: RecurrenceScheduler | null = null
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
@@ -71,6 +73,11 @@ function createWindow(): void {
 
   mainWindow.on('ready-to-show', () => {
     mainWindow?.show()
+
+    // Start recurrence scheduler
+    if (recurrenceScheduler && mainWindow) {
+      recurrenceScheduler.start(mainWindow)
+    }
 
     // Periodic overdue check — nudges renderer every 60s
     setInterval(() => {
@@ -228,7 +235,9 @@ app.whenReady().then(async () => {
 
   syncManager = new SyncManager(db, mcpToolCaller, pluginRegistry, oauthManager)
 
-  registerIpcHandlers(db, agentManager, githubManager, worktreeManager, syncManager, pluginRegistry, mcpToolCaller, oauthManager)
+  recurrenceScheduler = new RecurrenceScheduler(db)
+
+  registerIpcHandlers(db, agentManager, githubManager, worktreeManager, syncManager, pluginRegistry, mcpToolCaller, oauthManager, recurrenceScheduler)
 
   // Check gh CLI status on startup (log only)
   githubManager.checkGhCli().then((status) => {

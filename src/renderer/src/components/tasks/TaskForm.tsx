@@ -6,6 +6,7 @@ import { Textarea } from '@/components/ui/Textarea'
 import { Label } from '@/components/ui/Label'
 import { TaskAttachments, type PendingFile } from './TaskAttachments'
 import { OutputFieldsEditor } from './OutputFieldsEditor'
+import { RecurrenceEditor } from './RecurrenceEditor'
 import { TaskStatus, TASK_TYPES, TASK_PRIORITIES, TASK_STATUSES } from '@/types'
 import type {
   WorkfloTask,
@@ -14,7 +15,8 @@ import type {
   FileAttachment,
   OutputField,
   TaskType,
-  TaskPriority
+  TaskPriority,
+  RecurrencePattern
 } from '@/types'
 
 export interface TaskFormSubmitData extends CreateTaskDTO {
@@ -39,6 +41,7 @@ export function TaskForm({ task, onSubmit, onCancel }: TaskFormProps) {
   const [attachments, setAttachments] = useState<FileAttachment[]>([])
   const [outputFields, setOutputFields] = useState<OutputField[]>([])
   const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([])
+  const [recurrencePattern, setRecurrencePattern] = useState<RecurrencePattern | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
 
   useEffect(() => {
@@ -53,6 +56,7 @@ export function TaskForm({ task, onSubmit, onCancel }: TaskFormProps) {
       setLabels(task.labels.join(', '))
       setAttachments(task.attachments)
       setOutputFields(task.output_fields)
+      setRecurrencePattern(task.recurrence_pattern)
     }
   }, [task])
 
@@ -77,7 +81,9 @@ export function TaskForm({ task, onSubmit, onCancel }: TaskFormProps) {
         due_date: dueDate ? new Date(dueDate).toISOString() : null,
         labels: parsedLabels,
         attachments,
-        output_fields: outputFields
+        output_fields: outputFields,
+        is_recurring: !!recurrencePattern,
+        recurrence_pattern: recurrencePattern
       }
 
       if (!task && pendingFiles.length > 0) {
@@ -159,6 +165,10 @@ export function TaskForm({ task, onSubmit, onCancel }: TaskFormProps) {
 
       <div className="rounded-md border p-4">
         <OutputFieldsEditor fields={outputFields} onChange={setOutputFields} />
+      </div>
+
+      <div className="rounded-md border p-4">
+        <RecurrenceEditor value={recurrencePattern} onChange={setRecurrencePattern} />
       </div>
 
       <div className="flex justify-end gap-3 pt-4 border-t">

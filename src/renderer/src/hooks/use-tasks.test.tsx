@@ -28,6 +28,11 @@ function makeWorkfloTask(overrides: Partial<WorkfloTask> = {}): WorkfloTask {
     skill_ids: null,
     snoozed_until: null,
     resolution: null,
+    is_recurring: false,
+    recurrence_pattern: null,
+    recurrence_parent_id: null,
+    last_occurrence_at: null,
+    next_occurrence_at: null,
     created_at: '2024-06-15T12:00:00Z',
     updated_at: '2024-06-15T12:00:00Z',
     ...overrides

@@ -63,7 +63,8 @@ export function registerIpcHandlers(
   syncManager: SyncManager,
   pluginRegistry: PluginRegistry,
   mcpToolCaller?: import('./mcp-tool-caller').McpToolCaller,
-  oauthManager?: OAuthManager
+  oauthManager?: OAuthManager,
+  recurrenceScheduler?: import('./recurrence-scheduler').RecurrenceScheduler
 ): void {
   ipcMain.handle('db:getTasks', () => {
     return db.getTasks()
@@ -74,7 +75,12 @@ export function registerIpcHandlers(
   })
 
   ipcMain.handle('db:createTask', (_, data: CreateTaskData) => {
-    return db.createTask(data)
+    const task = db.createTask(data)
+    // Initialize recurring task if it has a recurrence pattern
+    if (task && task.is_recurring && recurrenceScheduler) {
+      recurrenceScheduler.initializeRecurringTask(task.id)
+    }
+    return task
   })
 
   ipcMain.handle('db:updateTask', (_, id: string, data: UpdateTaskData) => {

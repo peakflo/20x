@@ -212,6 +212,16 @@ export interface FileAttachment {
   added_at: string
 }
 
+export interface RecurrencePattern {
+  type: 'daily' | 'weekly' | 'monthly' | 'custom'
+  interval: number
+  time: string
+  weekdays?: number[]
+  monthDay?: number
+  endDate?: string
+  maxOccurrences?: number
+}
+
 export interface WorkfloTask {
   id: string
   title: string
@@ -233,6 +243,11 @@ export interface WorkfloTask {
   skill_ids: string[] | null
   snoozed_until: string | null
   resolution: string | null
+  is_recurring: boolean
+  recurrence_pattern: RecurrencePattern | null
+  recurrence_parent_id: string | null
+  last_occurrence_at: string | null
+  next_occurrence_at: string | null
   created_at: string
   updated_at: string
 }
@@ -249,6 +264,9 @@ export interface CreateTaskDTO {
   attachments?: FileAttachment[]
   repos?: string[]
   output_fields?: OutputField[]
+  is_recurring?: boolean
+  recurrence_pattern?: RecurrencePattern | null
+  recurrence_parent_id?: string | null
 }
 
 export interface UpdateTaskDTO {
@@ -267,6 +285,10 @@ export interface UpdateTaskDTO {
   agent_id?: string | null
   skill_ids?: string[] | null
   snoozed_until?: string | null
+  is_recurring?: boolean
+  recurrence_pattern?: RecurrencePattern | null
+  last_occurrence_at?: string | null
+  next_occurrence_at?: string | null
 }
 
 export const TASK_TYPES: { value: TaskType; label: string }[] = [

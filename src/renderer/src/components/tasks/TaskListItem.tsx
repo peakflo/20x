@@ -1,4 +1,4 @@
-import { Calendar, AlarmClockOff } from 'lucide-react'
+import { Calendar, AlarmClockOff, Repeat } from 'lucide-react'
 import { cn, formatDate, isOverdue, isDueSoon, isSnoozed } from '@/lib/utils'
 import { TaskPriorityBadge } from './TaskPriorityBadge'
 import { useAgentStore } from '@/stores/agent-store'
@@ -71,6 +71,17 @@ export function TaskListItem({ task, isSelected, onSelect }: TaskListItemProps) 
             )}
             {isSnoozed(task.snoozed_until) && (
               <AlarmClockOff className="h-3 w-3 text-muted-foreground" />
+            )}
+            {task.is_recurring && !task.recurrence_parent_id && task.next_occurrence_at && (
+              <span className="flex items-center gap-1 text-xs text-muted-foreground" title={`Next: ${formatDate(task.next_occurrence_at)}`}>
+                <Repeat className="h-3 w-3" />
+                {formatDate(task.next_occurrence_at)}
+              </span>
+            )}
+            {task.recurrence_parent_id && (
+              <span title="From recurring template">
+                <Repeat className="h-3 w-3 text-muted-foreground opacity-50" />
+              </span>
             )}
             {task.source !== 'local' && (
               <span className="text-[10px] px-1.5 py-0.5 rounded bg-accent text-muted-foreground">{task.source}</span>
