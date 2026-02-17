@@ -16,6 +16,12 @@ export const oauthApi = {
     window.electronAPI.oauth.exchangeCode(provider, code, state, sourceId),
 
   /**
+   * Start OAuth flow with localhost redirect (for HubSpot)
+   */
+  startLocalhostFlow: (provider: string, config: Record<string, unknown>, sourceId: string): Promise<void> =>
+    window.electronAPI.oauth.startLocalhostFlow(provider, config, sourceId),
+
+  /**
    * Get a valid access token (refreshes if needed)
    */
   getValidToken: (sourceId: string): Promise<string | null> =>

@@ -17,7 +17,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     remove: (taskId: string, attachmentId: string): Promise<void> =>
       ipcRenderer.invoke('attachments:remove', taskId, attachmentId),
     open: (taskId: string, attachmentId: string): Promise<void> =>
-      ipcRenderer.invoke('attachments:open', taskId, attachmentId)
+      ipcRenderer.invoke('attachments:open', taskId, attachmentId),
+    download: (taskId: string, attachmentId: string): Promise<void> =>
+      ipcRenderer.invoke('attachments:download', taskId, attachmentId)
   },
   shell: {
     openPath: (filePath: string): Promise<void> =>
@@ -34,6 +36,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('oauth:startFlow', provider, config),
     exchangeCode: (provider: string, code: string, state: string, sourceId: string): Promise<void> =>
       ipcRenderer.invoke('oauth:exchangeCode', provider, code, state, sourceId),
+    startLocalhostFlow: (provider: string, config: Record<string, unknown>, sourceId: string): Promise<void> =>
+      ipcRenderer.invoke('oauth:startLocalhostFlow', provider, config, sourceId),
     getValidToken: (sourceId: string): Promise<string | null> =>
       ipcRenderer.invoke('oauth:getValidToken', sourceId),
     revokeToken: (sourceId: string): Promise<void> =>

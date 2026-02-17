@@ -258,6 +258,52 @@ describe('TaskSource CRUD', () => {
     expect(db.deleteTaskSource(source.id)).toBe(true)
     expect(db.getTaskSource(source.id)).toBeUndefined()
   })
+
+  it('CASCADE deletes tasks when source is deleted', () => {
+    // Create task source
+    const source = db.createTaskSource({
+      mcp_server_id: mcpServerId,
+      name: 'Test Source',
+      plugin_id: 'peakflo'
+    })!
+
+    // Create tasks linked to this source
+    const task1 = db.createTask(makeTask({
+      title: 'Task 1',
+      external_id: 'ext-1',
+      source_id: source.id,
+      source: 'Test Source'
+    }))!
+
+    const task2 = db.createTask(makeTask({
+      title: 'Task 2',
+      external_id: 'ext-2',
+      source_id: source.id,
+      source: 'Test Source'
+    }))!
+
+    // Create a task without source_id (should not be deleted)
+    const task3 = db.createTask(makeTask({
+      title: 'Task 3 (no source)'
+    }))!
+
+    // Verify tasks exist
+    expect(db.getTask(task1.id)).toBeDefined()
+    expect(db.getTask(task2.id)).toBeDefined()
+    expect(db.getTask(task3.id)).toBeDefined()
+    expect(db.getTasks()).toHaveLength(3)
+
+    // Delete the task source
+    expect(db.deleteTaskSource(source.id)).toBe(true)
+
+    // Verify that tasks with source_id are CASCADE deleted
+    expect(db.getTask(task1.id)).toBeUndefined()
+    expect(db.getTask(task2.id)).toBeUndefined()
+
+    // Verify that task without source_id still exists
+    expect(db.getTask(task3.id)).toBeDefined()
+    expect(db.getTasks()).toHaveLength(1)
+  })
 })
 
 describe('Skill CRUD', () => {

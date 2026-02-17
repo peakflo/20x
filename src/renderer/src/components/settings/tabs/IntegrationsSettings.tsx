@@ -17,6 +17,10 @@ export function IntegrationsSettings() {
   const [tsDialog, setTsDialog] = useState<{ open: boolean; source?: any }>({ open: false })
   const [oauthStatus, setOauthStatus] = useState<Map<string, boolean>>(new Map())
 
+  // Check if there are any plugins that don't require MCP servers (like Linear, HubSpot)
+  const hasStandalonePlugins = plugins.some((p) => !p.requiresMcpServer)
+  const canAddSource = mcpServers.length > 0 || hasStandalonePlugins
+
   useEffect(() => {
     const loadPlugins = async () => {
       const p = await pluginApi.list()
@@ -34,7 +38,8 @@ export function IntegrationsSettings() {
       const statusMap = new Map<string, boolean>()
       for (const source of sources) {
         const plugin = plugins.find((p) => p.id === source.plugin_id)
-        if (plugin?.id === 'linear') {
+        // Check OAuth status for plugins that support OAuth (Linear, HubSpot with OAuth)
+        if (plugin?.id === 'linear' || (plugin?.id === 'hubspot' && source.config.auth_type === 'oauth')) {
           try {
             const token = await window.electronAPI.oauth.getValidToken(source.id)
             statusMap.set(source.id, !!token)
@@ -59,7 +64,7 @@ export function IntegrationsSettings() {
         name: data.name,
         plugin_id: data.plugin_id,
         config: data.config,
-        mcp_server_id: data.mcp_server_id
+        mcp_server_id: data.mcp_server_id || undefined
       })
       setTsDialog({ open: false })
       await checkOAuthStatus()
@@ -87,7 +92,7 @@ export function IntegrationsSettings() {
           <p className="text-xs text-muted-foreground">
             {sources.length} source{sources.length !== 1 ? 's' : ''} configured
           </p>
-          {mcpServers.length > 0 && (
+          {canAddSource && (
             <Button size="sm" onClick={() => setTsDialog({ open: true })}>
               <Plus className="h-3.5 w-3.5" />
               Add Source
@@ -98,11 +103,11 @@ export function IntegrationsSettings() {
         {sources.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-8 text-center border border-dashed border-border rounded-lg">
             <p className="text-sm text-muted-foreground mb-3">
-              {mcpServers.length === 0
-                ? 'Add an MCP server first, then create a task source'
+              {!canAddSource
+                ? 'No plugins available. This is unusual - please restart the app.'
                 : 'No task sources configured yet'}
             </p>
-            {mcpServers.length > 0 && (
+            {canAddSource && (
               <Button size="sm" onClick={() => setTsDialog({ open: true })}>
                 <Plus className="h-3.5 w-3.5" />
                 Add Your First Source
@@ -113,7 +118,7 @@ export function IntegrationsSettings() {
           <div className="space-y-2">
             {sources.map((source) => {
               const plugin = plugins.find((p) => p.id === source.plugin_id)
-              const requiresOAuth = plugin?.id === 'linear'
+              const requiresOAuth = plugin?.id === 'linear' || (plugin?.id === 'hubspot' && source.config.auth_type === 'oauth')
               const oauthConnected = requiresOAuth ? (oauthStatus.get(source.id) ?? false) : true
               const isConnected = source.enabled && (!requiresOAuth || oauthConnected)
 

@@ -27,10 +27,19 @@ export function OAuthDialog({ open, provider, config, sourceId, onSuccess, onCan
       setState('waiting')
       setError(null)
 
-      // Generate auth URL
-      const authUrl = await oauthApi.startFlow(provider, config)
+      // HubSpot uses localhost redirect (entire flow handled in main process)
+      if (provider === 'hubspot') {
+        await oauthApi.startLocalhostFlow(provider, config, sourceId)
+        setState('success')
+        // Auto-close after success
+        setTimeout(() => {
+          onSuccess()
+        }, 1000)
+        return
+      }
 
-      // Open in default browser
+      // Linear uses custom URL scheme (nuanu://)
+      const authUrl = await oauthApi.startFlow(provider, config)
       await window.electronAPI.shell.openExternal(authUrl)
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : 'Failed to start OAuth flow'
@@ -38,7 +47,7 @@ export function OAuthDialog({ open, provider, config, sourceId, onSuccess, onCan
       setState('error')
       flowStartedRef.current = false
     }
-  }, [provider, config])
+  }, [provider, config, sourceId, onSuccess])
 
   // Auto-start OAuth flow when dialog opens (only once)
   useEffect(() => {
@@ -76,7 +85,10 @@ export function OAuthDialog({ open, provider, config, sourceId, onSuccess, onCan
     return unlisten
   }, [open, provider, sourceId, onSuccess])
 
-  const providerDisplayName = provider === 'linear' ? 'Linear' : provider
+  const providerDisplayName =
+    provider === 'linear' ? 'Linear' :
+    provider === 'hubspot' ? 'HubSpot' :
+    provider
 
   return (
     <Dialog open={open} onOpenChange={(isOpen) => !isOpen && onCancel()}>

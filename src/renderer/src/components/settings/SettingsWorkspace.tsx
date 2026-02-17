@@ -25,7 +25,7 @@ export function SettingsWorkspace() {
     { value: SettingsTab.GENERAL, label: 'General', iconName: 'Settings' },
     { value: SettingsTab.AGENTS, label: 'Agents', iconName: 'Users' },
     { value: SettingsTab.TOOLS_MCP, label: 'Tools & MCP', iconName: 'Server' },
-    { value: SettingsTab.INTEGRATIONS, label: 'Integrations', iconName: 'Workflow' },
+    { value: SettingsTab.INTEGRATIONS, label: 'Task sources', iconName: 'Workflow' },
     { value: SettingsTab.ADVANCED, label: 'Advanced', iconName: 'Wrench' }
   ] as const
 

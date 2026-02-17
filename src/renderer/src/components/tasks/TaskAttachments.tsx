@@ -1,4 +1,4 @@
-import { Paperclip, X, FileText } from 'lucide-react'
+import { Paperclip, X, FileText, Download } from 'lucide-react'
 import { attachmentApi } from '@/lib/ipc-client'
 import type { FileAttachment } from '@/types'
 
@@ -71,6 +71,10 @@ export function TaskAttachments({
     if (taskId) attachmentApi.open(taskId, attachment.id)
   }
 
+  const handleDownload = (attachment: FileAttachment) => {
+    if (taskId) attachmentApi.download(taskId, attachment.id)
+  }
+
   const totalCount = items.length + pendingFiles.length
 
   return (
@@ -91,15 +95,25 @@ export function TaskAttachments({
                 type="button"
                 onClick={() => handleOpen(a)}
                 className="text-sm flex-1 text-left truncate hover:underline cursor-pointer"
+                title="Click to preview"
               >
                 {a.filename}
               </button>
               <span className="text-xs text-muted-foreground shrink-0">{formatFileSize(a.size)}</span>
+              <button
+                type="button"
+                onClick={() => handleDownload(a)}
+                className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-foreground cursor-pointer"
+                title="Download to Downloads folder"
+              >
+                <Download className="h-3.5 w-3.5" />
+              </button>
               {!readOnly && (
                 <button
                   type="button"
                   onClick={() => handleRemove(a)}
                   className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive cursor-pointer"
+                  title="Remove attachment"
                 >
                   <X className="h-3.5 w-3.5" />
                 </button>

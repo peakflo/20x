@@ -14,37 +14,8 @@ export function createTestDb(): { db: DatabaseManager; rawDb: InstanceType<typeo
   db.pragma('foreign_keys = ON')
 
   // Create tables (mirrors DatabaseManager.createTables — full schema)
+  // Note: Create tables in dependency order to satisfy foreign key constraints
   db.exec(`
-    CREATE TABLE IF NOT EXISTS tasks (
-      id TEXT PRIMARY KEY,
-      title TEXT NOT NULL,
-      description TEXT NOT NULL DEFAULT '',
-      type TEXT NOT NULL DEFAULT 'general',
-      priority TEXT NOT NULL DEFAULT 'medium',
-      status TEXT NOT NULL DEFAULT '${TaskStatus.NotStarted}',
-      assignee TEXT NOT NULL DEFAULT '',
-      due_date TEXT,
-      labels TEXT NOT NULL DEFAULT '[]',
-      checklist TEXT NOT NULL DEFAULT '[]',
-      attachments TEXT NOT NULL DEFAULT '[]',
-      repos TEXT NOT NULL DEFAULT '[]',
-      output_fields TEXT NOT NULL DEFAULT '[]',
-      agent_id TEXT,
-      external_id TEXT,
-      source_id TEXT,
-      source TEXT NOT NULL DEFAULT 'local',
-      skill_ids TEXT DEFAULT NULL,
-      oc_session_id TEXT DEFAULT NULL,
-      snoozed_until TEXT DEFAULT NULL,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
-    CREATE INDEX IF NOT EXISTS idx_tasks_priority ON tasks(priority);
-    CREATE INDEX IF NOT EXISTS idx_tasks_source ON tasks(source);
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_source_external ON tasks(source_id, external_id) WHERE external_id IS NOT NULL;
-
     CREATE TABLE IF NOT EXISTS agents (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
@@ -76,7 +47,7 @@ export function createTestDb(): { db: DatabaseManager; rawDb: InstanceType<typeo
 
     CREATE TABLE IF NOT EXISTS task_sources (
       id TEXT PRIMARY KEY,
-      mcp_server_id TEXT NOT NULL REFERENCES mcp_servers(id) ON DELETE CASCADE,
+      mcp_server_id TEXT REFERENCES mcp_servers(id) ON DELETE CASCADE,
       name TEXT NOT NULL,
       plugin_id TEXT NOT NULL DEFAULT 'peakflo',
       config TEXT NOT NULL DEFAULT '{}',
@@ -89,6 +60,38 @@ export function createTestDb(): { db: DatabaseManager; rawDb: InstanceType<typeo
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS tasks (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      type TEXT NOT NULL DEFAULT 'general',
+      priority TEXT NOT NULL DEFAULT 'medium',
+      status TEXT NOT NULL DEFAULT '${TaskStatus.NotStarted}',
+      assignee TEXT NOT NULL DEFAULT '',
+      due_date TEXT,
+      labels TEXT NOT NULL DEFAULT '[]',
+      checklist TEXT NOT NULL DEFAULT '[]',
+      attachments TEXT NOT NULL DEFAULT '[]',
+      repos TEXT NOT NULL DEFAULT '[]',
+      output_fields TEXT NOT NULL DEFAULT '[]',
+      agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL,
+      external_id TEXT,
+      source_id TEXT REFERENCES task_sources(id) ON DELETE CASCADE,
+      source TEXT NOT NULL DEFAULT 'local',
+      skill_ids TEXT DEFAULT NULL,
+      oc_session_id TEXT DEFAULT NULL,
+      session_id TEXT DEFAULT NULL,
+      snoozed_until TEXT DEFAULT NULL,
+      resolution TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
+    CREATE INDEX IF NOT EXISTS idx_tasks_priority ON tasks(priority);
+    CREATE INDEX IF NOT EXISTS idx_tasks_source ON tasks(source);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_source_external ON tasks(source_id, external_id) WHERE external_id IS NOT NULL;
 
     CREATE TABLE IF NOT EXISTS skills (
       id TEXT PRIMARY KEY,
@@ -104,6 +107,22 @@ export function createTestDb(): { db: DatabaseManager; rawDb: InstanceType<typeo
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS oauth_tokens (
+      id TEXT PRIMARY KEY,
+      provider TEXT NOT NULL,
+      source_id TEXT NOT NULL REFERENCES task_sources(id) ON DELETE CASCADE,
+      access_token BLOB NOT NULL,
+      refresh_token BLOB,
+      expires_at TEXT NOT NULL,
+      scope TEXT,
+      token_type TEXT NOT NULL DEFAULT 'Bearer',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_oauth_tokens_source ON oauth_tokens(source_id);
+    CREATE INDEX IF NOT EXISTS idx_oauth_tokens_provider ON oauth_tokens(provider);
   `)
 
   const manager = new DatabaseManager()
