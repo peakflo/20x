@@ -1,6 +1,6 @@
 {
   "name": "pf-desktop",
-  "version": "0.0.9",
+  "version": "0.0.10",
   "packageManager": "pnpm@9.15.2",
   "description": "Workflo Workspace - Task Management Desktop App",
   "main": "./out/main/index.js",
