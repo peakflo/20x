@@ -46,7 +46,7 @@ export async function checkClaudeCodeHealth(): Promise<HealthStatus> {
     // 1. Check if SDK can be imported
     await import('@anthropic-ai/claude-agent-sdk')
 
-    // 2. Check if Claude CLI is installed
+    // 2. Check if Claude CLI is installed and authenticated
     try {
       const { execSync } = await import('child_process')
       execSync('which claude', { stdio: 'ignore' })
@@ -57,11 +57,7 @@ export async function checkClaudeCodeHealth(): Promise<HealthStatus> {
       }
     }
 
-    // 3. Check if API key is configured
-    if (!process.env.ANTHROPIC_API_KEY) {
-      return { available: false, reason: 'API key not configured' }
-    }
-
+    // Claude Code uses CLI authentication, no API key needed
     return { available: true }
   } catch (error) {
     return { available: false, reason: 'SDK not installed' }
