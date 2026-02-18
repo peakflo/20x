@@ -1854,7 +1854,8 @@ export class AgentManager extends EventEmitter {
     await this.fetchNewMessages(sessionId)
 
     session.status = 'idle'
-    this.db.updateTask(session.taskId, { status: TaskStatus.AgentWorking })
+    // Don't change task status on abort - preserve current state
+    // (Previously this incorrectly set status to AgentWorking)
     this.sendToRenderer('agent:status', {
       sessionId,
       agentId: session.agentId,
@@ -1971,8 +1972,12 @@ export class AgentManager extends EventEmitter {
     // Update status to working (but preserve AgentLearning if set)
     session.status = 'working'
     const currentTask = this.db.getTask(session.taskId)
+    console.log(`[AgentManager] doSendAdapterMessage - current task status: ${currentTask?.status}, taskId: ${session.taskId}`)
     if (currentTask?.status !== TaskStatus.AgentLearning) {
+      console.log(`[AgentManager] Setting task status to AgentWorking (was: ${currentTask?.status})`)
       this.db.updateTask(session.taskId, { status: TaskStatus.AgentWorking })
+    } else {
+      console.log(`[AgentManager] Preserving AgentLearning status`)
     }
     this.sendToRenderer('agent:status', {
       sessionId,
@@ -2027,9 +2032,12 @@ export class AgentManager extends EventEmitter {
 
     console.log(`[AgentManager] Sending message to session ${sessionId}`)
 
-    // Resume working state and restart polling if needed
+    // Resume working state and restart polling if needed (but preserve AgentLearning if set)
     session.status = 'working'
-    this.db.updateTask(session.taskId, { status: TaskStatus.AgentWorking })
+    const currentTask = this.db.getTask(session.taskId)
+    if (currentTask?.status !== TaskStatus.AgentLearning) {
+      this.db.updateTask(session.taskId, { status: TaskStatus.AgentWorking })
+    }
     this.sendToRenderer('agent:status', {
       sessionId, agentId: session.agentId, taskId: session.taskId, status: 'working'
     })

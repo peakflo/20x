@@ -36,11 +36,12 @@ export function TaskListItem({ task, isSelected, onSelect }: TaskListItemProps) 
     if (hasPendingQuestion) {
       return 'bg-blue-400 animate-pulse' // Waiting for user input
     }
-    if (hasActiveAgent) {
-      return 'bg-amber-400 animate-pulse' // Agent working
-    }
+    // Check task status first - AgentLearning takes priority over session status
     if (task.status === TaskStatus.AgentLearning) {
       return 'bg-blue-400 animate-pulse' // Agent learning
+    }
+    if (hasActiveAgent) {
+      return 'bg-amber-400 animate-pulse' // Agent working
     }
     return statusDotColor[task.status] // Task status
   }
