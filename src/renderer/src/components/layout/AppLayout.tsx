@@ -9,6 +9,7 @@ import { Dialog, DialogContent, DialogHeader, DialogBody, DialogTitle } from '@/
 import { useTasks } from '@/hooks/use-tasks'
 import { useUIStore } from '@/stores/ui-store'
 import { useAgentStore } from '@/stores/agent-store'
+import { useAgentAutoStart } from '@/hooks/use-agent-auto-start'
 import { useOverdueNotifications } from '@/hooks/use-overdue-notifications'
 import { attachmentApi, worktreeApi, settingsApi } from '@/lib/ipc-client'
 import { useTaskSourceStore } from '@/stores/task-source-store'
@@ -18,8 +19,8 @@ import { TaskStatus } from '@/types'
 import type { FileAttachment } from '@/types'
 
 export function AppLayout() {
-  const { tasks, selectedTask, createTask, updateTask, deleteTask, selectTask } = useTasks()
-  const { agents, fetchAgents, stopAndRemoveSessionForTask } = useAgentStore()
+  const { tasks, allTasks, selectedTask, createTask, updateTask, deleteTask, selectTask } = useTasks()
+  const { agents, sessions, fetchAgents, stopAndRemoveSessionForTask } = useAgentStore()
   const { executeAction } = useTaskSourceStore()
   const {
     sidebarView,
@@ -51,6 +52,14 @@ export function AppLayout() {
     setToast({ message, isError })
     setTimeout(() => setToast(null), isError ? 5000 : 3000)
   }, [])
+
+  // Initialize auto-start feature
+  useAgentAutoStart({
+    tasks: allTasks,
+    agents,
+    sessions,
+    showToast
+  })
 
   return (
     <>

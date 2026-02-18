@@ -381,11 +381,31 @@ export class OpencodeAdapter implements CodingAgentAdapter {
         return []
       }
 
+      console.log(`[OpencodeAdapter] getAllMessages: Retrieved ${messagesResult.data.length} messages`)
+
       // Convert OpenCode messages to SessionMessage format
-      return messagesResult.data.map((msg: any) => ({
-        role: msg.info?.role || 'assistant',
-        parts: msg.parts || []
-      }))
+      const messages = messagesResult.data.map((msg: any, idx: number) => {
+        const role = msg.info?.role || 'assistant'
+        const parts = msg.parts || []
+
+        // Log raw parts for debugging
+        console.log(`[OpencodeAdapter] Message ${idx} role=${role}, parts count=${parts.length}`)
+        parts.forEach((p: any, pIdx: number) => {
+          console.log(`[OpencodeAdapter]   Part ${pIdx}:`, {
+            type: p.type,
+            hasText: !!p.text,
+            textLength: p.text?.length,
+            textPreview: p.text?.slice(0, 100)
+          })
+        })
+
+        return {
+          role,
+          parts
+        }
+      })
+
+      return messages
     } catch (error) {
       console.error('[OpencodeAdapter] Error fetching messages:', error)
       return []

@@ -6,6 +6,7 @@ import { Agent as UndiciAgent } from 'undici'
 import type { BrowserWindow } from 'electron'
 import type { DatabaseManager, AgentMcpServerEntry, OutputFieldRecord, SkillRecord } from './database'
 import { TaskStatus } from '../shared/constants'
+import { OpencodeAdapter } from './adapters/opencode-adapter'
 import { ClaudeCodeAdapter } from './adapters/claude-code-adapter'
 import { AcpAdapter } from './adapters/acp-adapter'
 import type { CodingAgentAdapter, SessionConfig, MessagePart, SessionMessage } from './adapters/coding-agent-adapter'
@@ -100,15 +101,9 @@ export class AgentManager extends EventEmitter {
     const backendType = (agent.config?.coding_agent as string) || CodingAgentType.OPENCODE
     console.log('[AgentManager] getAdapter - backendType:', backendType)
 
-    // For OpenCode, return null to use legacy code path
-    if (backendType === CodingAgentType.OPENCODE) {
-      console.log('[AgentManager] getAdapter - returning null for OpenCode')
-      return null
-    }
-
     // Return cached adapter
     if (this.adapters.has(backendType)) {
-      console.log('[AgentManager] getAdapter - returning cached adapter')
+      console.log('[AgentManager] getAdapter - returning cached adapter for', backendType)
       return this.adapters.get(backendType)!
     }
 
@@ -116,20 +111,25 @@ export class AgentManager extends EventEmitter {
     let adapter: CodingAgentAdapter
 
     switch (backendType) {
+      case CodingAgentType.OPENCODE:
+        console.log('[AgentManager] Creating new OpencodeAdapter')
+        adapter = new OpencodeAdapter()
+        break
       case CodingAgentType.CLAUDE_CODE:
-        // Claude Code uses direct SDK (supports session tokens from 'claude code setup-token')
+        console.log('[AgentManager] Creating new ClaudeCodeAdapter')
         adapter = new ClaudeCodeAdapter()
         break
       case CodingAgentType.CODEX:
-        // Codex uses ACP (Agent Client Protocol) via codex-acp wrapper
+        console.log('[AgentManager] Creating new AcpAdapter for Codex')
         adapter = new AcpAdapter('codex')
         break
       default:
-        console.warn(`[AgentManager] Unknown coding agent type: ${backendType}, falling back to OpenCode`)
+        console.warn(`[AgentManager] Unknown coding agent type: ${backendType}`)
         return null
     }
 
     this.adapters.set(backendType, adapter)
+    console.log('[AgentManager] Cached adapter for', backendType)
     return adapter
   }
 
@@ -2468,9 +2468,17 @@ export class AgentManager extends EventEmitter {
         console.log(`[AgentManager] Processing message ${i}, parts count:`, msg.parts?.length)
         if (!msg.parts) continue
 
-        // Debug: log part types
+        // Debug: log part types and small text samples
         msg.parts.forEach((p: any, idx: number) => {
           console.log(`[AgentManager]   Part ${idx}: type=${p.type}, hasText=${!!p.text}, textLength=${p.text?.length || 0}`)
+          // Log small text parts in full, large ones as preview
+          if (p.text) {
+            if (p.text.length < 300) {
+              console.log(`[AgentManager]   Part ${idx} full text:`, p.text)
+            } else {
+              console.log(`[AgentManager]   Part ${idx} text preview (first 300 chars):`, p.text.slice(0, 300) + '...')
+            }
+          }
         })
 
         const fullText = msg.parts
@@ -2478,25 +2486,36 @@ export class AgentManager extends EventEmitter {
           .map((p: any) => p.text)
           .join('\n')
 
-        console.log(`[AgentManager] Full text length: ${fullText.length}, preview:`, fullText.slice(0, 200))
+        console.log(`[AgentManager] Full text length: ${fullText.length}`)
+        if (fullText.length > 0) {
+          console.log(`[AgentManager] Full text preview (first 500 chars):`, fullText.slice(0, 500))
+        }
         if (!fullText) continue
 
         const jsonMatch = fullText.match(/```json\s*\n?([\s\S]*?)\n?\s*```/)
           || fullText.match(/```\s*\n?([\s\S]*?)\n?\s*```/)
+
         if (jsonMatch) {
+          console.log(`[AgentManager] Found JSON block in message ${i}`)
           const raw = jsonMatch[1].trim()
+          console.log(`[AgentManager] Raw JSON content (first 300 chars):`, raw.slice(0, 300))
           try {
             parsedValues = JSON.parse(raw)
-            console.log(`[AgentManager] Parsed output values:`, parsedValues)
+            console.log(`[AgentManager] Successfully parsed output values:`, parsedValues)
             break
-          } catch {
+          } catch (err) {
+            console.log(`[AgentManager] JSON parse failed:`, err)
             // JSON truncated — extract complete key-value pairs via regex
             parsedValues = this.extractPartialJson(raw)
             if (Object.keys(parsedValues).length > 0) {
               console.log(`[AgentManager] Extracted partial output values:`, parsedValues)
               break
+            } else {
+              console.log(`[AgentManager] Partial extraction also returned empty`)
             }
           }
+        } else {
+          console.log(`[AgentManager] No JSON block found in message ${i}`)
         }
       }
 
