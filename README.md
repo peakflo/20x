@@ -1,73 +1,71 @@
-# Workflo Workspace
+# 20x
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 [![Version](https://img.shields.io/badge/version-0.0.12-blue.svg)](./package.json)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey.svg)](.)
 
-AI-powered task management for developers. Local-first, agent-driven, extensible.
+**Your tasks. AI agents. One app.**
 
-Workflo Workspace is a desktop application that combines powerful task management with AI coding agents. Manage tasks locally in SQLite, assign them to AI agents (OpenCode, Claude Code, Codex), monitor streaming transcripts, and integrate with external platforms like Linear, HubSpot, and Peakflo.
+20x is a desktop app that turns your task list into an AI-powered workforce. Connect your tools — Linear, HubSpot, Peakflo — assign tasks to AI agents, and watch them work in real time.
+
+**No cloud. No subscriptions. Everything runs on your machine.**
+
+## Why 20x?
+
+Most AI tools make you copy-paste context between tabs. 20x flips it: **your tasks come to the agents, not the other way around.**
+
+- Pull a task from Linear → AI agent picks it up, reads the context, writes the code, opens a PR
+- Got a backlog of tickets? → Queue them up, agents work through them while you review
+- Need human approval? → Agents pause and ask before doing anything risky
+
+## How It Works
+
+```
+Your tools          20x              AI Agents
+┌──────────┐    ┌──────────┐    ┌──────────────┐
+│  Linear   │───>│          │───>│  Claude Code  │
+│  HubSpot  │───>│  20x     │───>│  OpenCode     │
+│  Peakflo  │───>│          │───>│  Codex        │
+└──────────┘    └──────────┘    └──────────────┘
+```
+
+1. **Tasks flow in** — from integrations or created manually
+2. **You assign an agent** — choose Claude Code, OpenCode, or Codex
+3. **Agent works the task** — with live streaming output
+4. **You stay in control** — approve, review, merge
 
 ## Features
 
-### Core Task Management
-- **Local-first SQLite storage** — All data stored on your machine with WAL mode for performance
-- **Rich task model** — Types (coding, review, approval, manual, general), priorities, statuses, due dates, labels
-- **File attachments** — Attach files directly to tasks for context
-- **Custom output fields** — Define structured outputs (text, select, multi-select) for task results
-- **Recurring tasks** — Flexible scheduling patterns (daily, weekly, monthly) with automatic instance creation
-- **Smart features** — Snooze tasks with preset/custom times, overdue notifications, full-text search
+### 🤖 Multi-Agent Support
+- **Claude Code** — Anthropic's official agent SDK
+- **OpenCode** — Open-source coding agent
+- **Codex** — Zed Industries' agent framework
+- **Live transcripts** — Watch agents think and work in real time
+- **Human-in-the-loop** — Approve risky actions before execution
 
-### AI Agent System
-- **Multi-backend support** — OpenCode, Claude Code, and Codex agents via adapter pattern
-- **Streaming transcripts** — Real-time agent output in dedicated panels
-- **Human-in-the-loop** — Review and approve agent actions before execution
-- **Session management** — Start, monitor, and control agent sessions per task
-- **Agent-specific MCP tools** — Configure which MCP tools each agent can access
+### 🔗 Smart Integrations
+- **Linear** — Pull issues, update status, post comments
+- **HubSpot** — Sync tickets and workflows
+- **Peakflo** — Connect your Peakflo tasks
+- **OAuth built-in** — Secure authentication flows
 
-### Skills System
-- **Reusable instructions** — Create skill templates with system prompts and context
-- **Confidence-based ranking** — Skills track usage and success metrics
-- **Task assignment** — Attach skills to tasks for consistent agent behavior
-- **Version control** — Skills maintain version history for rollbacks
+### 🧠 Skills System
+- **Reusable instructions** — Create skill templates for common patterns
+- **Auto-learning** — Agents update skills based on feedback
+- **Confidence tracking** — Skills improve over time
 
-### Integrations
-- **Linear** — Bidirectional sync with Linear issues, OAuth authentication
-- **HubSpot** — Sync tasks with HubSpot tickets and workflows
-- **Peakflo** — Integration with Peakflo task management
-- **OAuth flows** — Built-in OAuth client for secure integration authentication
+### 🛠 Developer-First
+- **Git worktree management** — Isolated branches per task
+- **Repository context** — Agents know which repos to work on
+- **MCP servers** — Connect Model Context Protocol tools
+- **Local-first** — SQLite database, no cloud required
 
-### Developer Tools
-- **Git worktree management** — Manage repository worktrees for isolated development
-- **Repository selection** — Attach git repos to tasks for context-aware agents
-- **GitHub CLI integration** — Leverage `gh` CLI for repository operations
-
-### MCP Servers
-- **Local & remote MCP servers** — Connect to Model Context Protocol servers
-- **Per-agent tool filtering** — Control which tools each agent can use
-- **Tool introspection** — Discover available tools from connected servers
-- **Environment management** — Configure environment variables per MCP server
-
-## Screenshots
-
-> _Coming soon: Main task list, agent transcript panel, skills editor, agent settings, integration setup_
-
-## Tech Stack
-
-| Layer | Technology |
-|-------|-----------|
-| Shell | Electron 34 |
-| Build | electron-vite |
-| Frontend | React 19 + Tailwind CSS 4 + Zustand 5 |
-| UI Components | Radix UI (Dialog, Select, Checkbox, Switch, Tabs) |
-| Styling | class-variance-authority + Tailwind CSS variable tokens |
-| Icons | Lucide React |
-| Font | Geist (CDN) |
-| Database | SQLite via better-sqlite3 (WAL mode) |
-| IDs | @paralleldrive/cuid2 |
-| Agent SDKs | @opencode-ai/sdk, @anthropic-ai/claude-agent-sdk, @zed-industries/codex-acp |
-| Integrations | @hubspot/api-client, Linear SDK |
-| Testing | Vitest + happy-dom |
+### 📋 Task Management
+- **Recurring tasks** — Daily, weekly, monthly schedules
+- **Rich metadata** — Types, priorities, due dates, labels
+- **File attachments** — Add context files to tasks
+- **Output fields** — Structured task results
+- **Smart search** — Find anything fast
 
 ## Getting Started
 
@@ -76,7 +74,7 @@ Workflo Workspace is a desktop application that combines powerful task managemen
 - **Node.js** >= 18
 - **pnpm** >= 9
 - **Git** (for worktree features)
-- **GitHub CLI** (optional, for repository features)
+- **GitHub CLI** (optional, for repo features)
 
 ### Installation
 
@@ -89,60 +87,35 @@ cd pf-desktop
 pnpm install
 ```
 
-> **Note:** Native modules (better-sqlite3) are automatically rebuilt via the postinstall script.
-
 ### Configuration
 
-**Database Location:**
-- SQLite database stored at: `~/.workflo/database.db`
-
 **API Keys:**
-Configure agent API keys in the Agent Settings panel:
-- Anthropic API key for Claude Code agents
-- OpenAI API key for OpenCode agents (if needed)
+Configure in Agent Settings:
+- Anthropic API key for Claude Code
+- OpenAI API key for OpenCode (if needed)
 
-**OAuth Setup:**
-For integrations (Linear, HubSpot, Peakflo):
-1. Obtain OAuth client ID/secret from each platform
-2. Configure in the Integrations settings panel
-3. Complete OAuth flow via in-app browser
+**Database:**
+- Stored at `~/.workflo/database.db`
+- Automatic backups before migrations
+
+**Integrations:**
+1. Get OAuth credentials from Linear/HubSpot/Peakflo
+2. Configure in Integrations settings
+3. Complete OAuth flow in-app
 
 ### Development
 
 ```bash
+# Start dev server
 pnpm run dev
-```
 
-Opens the Electron window with hot-reload:
-- **Renderer process**: Vite HMR (instant UI updates)
-- **Main process**: Automatic restart on file changes
-
-### Build
-
-```bash
-# Build the application
-pnpm run build
-
-# Package for distribution
-pnpm run build:mac    # macOS (dmg, zip)
-pnpm run build:win    # Windows (nsis)
-pnpm run build:linux  # Linux (AppImage)
-```
-
-Packaged apps are output to `dist/`.
-
-### Testing
-
-```bash
-# Run all tests
+# Run tests
 pnpm test
 
-# Run tests in watch mode
-pnpm test:run
-
-# Test specific project
-pnpm test:main      # Main process tests
-pnpm test:renderer  # Renderer process tests
+# Build for distribution
+pnpm run build:mac    # macOS
+pnpm run build:win    # Windows
+pnpm run build:linux  # Linux
 ```
 
 ## Architecture
@@ -153,14 +126,11 @@ pnpm test:renderer  # Renderer process tests
 React UI → Zustand Store → IPC Client → Preload Bridge → Main Process → SQLite
 ```
 
-- **Renderer** (React) never touches Node.js APIs directly
-- **Preload** exposes a minimal, typed API surface via `contextBridge`
-- **Main process** owns the database and handles all IPC calls
-- **Zustand** stores hold UI state and task data, calling IPC through a typed client wrapper
+- **Renderer** — React 19 + Tailwind CSS 4 + Zustand 5
+- **Main Process** — Electron 34 + SQLite + Agent orchestration
+- **Security** — Full context isolation, no Node.js in renderer
 
 ### Agent Architecture
-
-The agent system uses an **adapter pattern** to support multiple backends:
 
 ```
 ┌─────────────────────────────────────────────────┐
@@ -179,127 +149,45 @@ The agent system uses an **adapter pattern** to support multiple backends:
 ```
 
 **Session Lifecycle:**
-1. **Start** — Agent assigned to task, session created with skills applied
-2. **Streaming** — Real-time transcript output sent to UI
-3. **HITL** — Agent requests approval for actions (file writes, shell commands)
-4. **Completion** — Session ends, task updated with results
+1. **Start** — Agent assigned, skills applied, session created
+2. **Streaming** — Real-time output sent to UI
+3. **Approval** — Agent pauses for human decisions
+4. **Completion** — Results saved, task updated
 
-See [AGENTS.md](./AGENTS.md) for detailed agent architecture.
+See [AGENTS.md](./AGENTS.md) for detailed architecture.
 
-### Security Model
+## Tech Stack
 
-- `contextIsolation: true` — Renderer cannot access Node.js globals
-- `nodeIntegration: false` — No `require()` in renderer
-- `sandbox: false` — Required for better-sqlite3 native module in main process (renderer is still fully isolated)
-- All external links open in the system browser (`setWindowOpenHandler`)
-- Database writes use parameterized queries exclusively
-- Dynamic column names in `UPDATE` validated against compile-time whitelist
-
-### Task Data Model
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `id` | string | cuid2 |
-| `title` | string | Required |
-| `description` | string | Markdown-compatible |
-| `type` | enum | `coding`, `manual`, `review`, `approval`, `general` |
-| `priority` | enum | `critical`, `high`, `medium`, `low` |
-| `status` | enum | `inbox`, `accepted`, `in_progress`, `pending_review`, `completed`, `cancelled` |
-| `assignee` | string | Free text |
-| `due_date` | string \| null | ISO 8601 |
-| `labels` | string[] | Stored as JSON |
-| `attachments` | FileAttachmentRecord[] | Files with metadata |
-| `repos` | string[] | Git repository paths |
-| `output_fields` | OutputFieldRecord[] | Structured task outputs |
-| `agent_id` | string \| null | Assigned agent |
-| `session_id` | string \| null | Active agent session |
-| `skill_ids` | string[] \| null | Applied skills |
-| `external_id` | string \| null | Integration source ID |
-| `source_id` | string \| null | Task source configuration ID |
-| `source` | string | `local`, `linear`, `hubspot`, `peakflo` |
-| `snoozed_until` | string \| null | Snooze timestamp |
-| `resolution` | string \| null | Completion notes |
-| `is_recurring` | boolean | Recurring task flag |
-| `recurrence_pattern` | RecurrencePatternRecord \| null | Schedule pattern |
-| `recurrence_parent_id` | string \| null | Parent template task |
-| `last_occurrence_at` | string \| null | Last instance created |
-| `next_occurrence_at` | string \| null | Next scheduled instance |
-| `created_at` | string | ISO 8601 |
-| `updated_at` | string | ISO 8601 |
-
-### Skill Data Model
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `id` | string | cuid2 |
-| `name` | string | Skill name |
-| `description` | string | Purpose and usage |
-| `content` | string | System prompt / instructions |
-| `version` | number | Version counter |
-| `confidence` | number | Success metric (0-100) |
-| `uses` | number | Usage counter |
-| `last_used` | string \| null | Last usage timestamp |
-| `tags` | string[] | Categorization tags |
-
-## Project Structure
-
-```
-src/
-  main/                          Electron main process
-    index.ts                     App lifecycle, window creation
-    database.ts                  SQLite operations (better-sqlite3)
-    ipc-handlers.ts              IPC handler registrations
-    agent-manager.ts             Agent orchestration
-    adapters/
-      coding-agent-adapter.ts    Adapter interface
-      opencode-adapter.ts        OpenCode implementation
-      claude-code-adapter.ts     Claude Code implementation
-      codex-adapter.ts           Codex implementation
-  preload/                       Context bridge
-    index.ts                     electronAPI exposure
-  renderer/                      React app (Vite)
-    src/
-      types/                     TypeScript types and DTOs
-      stores/                    Zustand stores (task, ui, skill, agent)
-      hooks/                     Custom hooks (filtering, sorting)
-      lib/                       Utilities (IPC client, cn(), date helpers)
-      components/
-        ui/                      Radix primitives (Button, Dialog, Input, etc.)
-        tasks/                   Task-specific components
-        agents/                  Agent transcript and settings
-        skills/                  Skill editor and management
-        integrations/            OAuth and sync UI
-        layout/                  App shell (TitleBar, Sidebar)
-      styles/                    Tailwind CSS entry point
-```
+| Layer | Technology |
+|-------|-----------|
+| Shell | Electron 34 |
+| Build | electron-vite |
+| Frontend | React 19 + Tailwind CSS 4 + Zustand 5 |
+| UI Components | Radix UI primitives |
+| Styling | cva + Tailwind CSS tokens |
+| Icons | Lucide React |
+| Font | Geist |
+| Database | SQLite (better-sqlite3, WAL mode) |
+| Agent SDKs | @opencode-ai/sdk, @anthropic-ai/claude-agent-sdk, @zed-industries/codex-acp |
+| Testing | Vitest + happy-dom |
 
 ## Contributing
 
-We welcome contributions! To get started:
+We welcome contributions! Here's how:
 
-1. **Fork the repository**
-2. **Create a feature branch**: `git checkout -b feature/my-feature`
-3. **Write code**: Follow TypeScript strict mode, ESLint, and Prettier
-4. **Add tests**: Write Vitest tests for new features
-5. **Commit changes**: Use conventional commits (e.g., `feat: add skill versioning`)
-6. **Push to branch**: `git push origin feature/my-feature`
-7. **Open a Pull Request**: Describe changes, ensure CI passes
+1. **Fork** the repo
+2. **Create a branch**: `git checkout -b feature/my-feature`
+3. **Write code**: Follow TypeScript strict mode, ESLint, Prettier
+4. **Add tests**: Vitest tests for new features
+5. **Commit**: Use conventional commits (`feat:`, `fix:`, etc.)
+6. **Push**: `git push origin feature/my-feature`
+7. **Open PR**: Describe changes, ensure CI passes
 
 ### Code Style
-- TypeScript strict mode enabled
-- ESLint for linting
-- Prettier for formatting (auto-format on save recommended)
-- Minimal Tailwind classNames, prefer CSS variable tokens
-
-### Development Setup
-- Use `pnpm` (not npm) for package management
-- Read `MEMORY.md` for project-specific patterns and conventions
-- Check `AGENTS.md` for agent architecture deep-dive
-
-### Reporting Issues
-- Use GitHub Issues for bug reports and feature requests
-- Provide detailed reproduction steps
-- Include OS, Node.js version, and app version
+- TypeScript strict mode
+- Minimal Tailwind classes (prefer CSS variables)
+- Use `pnpm` (not npm)
+- Check `MEMORY.md` for project patterns
 
 ## Community
 
@@ -308,37 +196,38 @@ We welcome contributions! To get started:
 
 ## Security
 
-### Local-First Security
-- All data stored locally in SQLite (no cloud sync)
-- Database encryption available via better-sqlite3 (optional)
+### Local-First
+- All data stored locally in SQLite
+- No cloud sync, no subscriptions
+- Optional database encryption
 
-### OAuth Token Storage
-- Integration tokens stored in SQLite with Electron's `safeStorage` encryption
-- Tokens never logged or transmitted outside authorized API calls
+### OAuth & API Keys
+- Tokens encrypted with Electron `safeStorage`
+- Keys never exposed to renderer process
+- Parameterized SQL queries only
 
-### API Key Handling
-- Agent API keys stored in encrypted database
-- Keys loaded only in main process (never exposed to renderer)
-- Use environment variables for additional security layer (optional)
+### Electron Security
+- `contextIsolation: true`
+- `nodeIntegration: false`
+- External links open in system browser
 
 ## Roadmap
 
-### Planned Features
-- **Additional integrations** — Jira, Asana, GitHub Issues, Notion
-- **Team collaboration** — Shared task sources, multi-user support
-- **Cost tracking** — Monitor agent token usage and costs per session
-- **Agent templates** — Pre-configured agent profiles for common workflows
-- **Plugin marketplace** — Community-contributed skills and integrations
-- **Desktop notifications** — System notifications for overdue tasks and agent events
-- **Light theme** — Light mode option alongside dark theme
+### Planned
+- Additional integrations (Jira, Asana, GitHub Issues, Notion)
+- Team collaboration (shared task sources)
+- Cost tracking (token usage per session)
+- Agent templates (pre-configured profiles)
+- Plugin marketplace (community skills)
+- Desktop notifications
+- Light theme
 
-### Recently Completed
+### Recently Shipped
 - ✅ Multi-agent support (OpenCode, Claude Code, Codex)
-- ✅ Skills system with versioning
-- ✅ Recurring tasks with scheduling
+- ✅ Skills system with auto-learning
+- ✅ Recurring tasks
 - ✅ Linear, HubSpot, Peakflo integrations
 - ✅ MCP server management
-- ✅ File attachments and output fields
 - ✅ Git worktree management
 
 ## License
