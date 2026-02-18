@@ -248,6 +248,8 @@ export interface WorkfloTask {
   recurrence_parent_id: string | null
   last_occurrence_at: string | null
   next_occurrence_at: string | null
+  feedback_rating: number | null
+  feedback_comment: string | null
   created_at: string
   updated_at: string
 }
@@ -289,6 +291,8 @@ export interface UpdateTaskDTO {
   recurrence_pattern?: RecurrencePattern | null
   last_occurrence_at?: string | null
   next_occurrence_at?: string | null
+  feedback_rating?: number | null
+  feedback_comment?: string | null
 }
 
 export const TASK_TYPES: { value: TaskType; label: string }[] = [

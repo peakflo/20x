@@ -99,9 +99,17 @@ Configure in Agent Settings:
 - Automatic backups before migrations
 
 **Integrations:**
-1. Get OAuth credentials from Linear/HubSpot/Peakflo
-2. Configure in Integrations settings
-3. Complete OAuth flow in-app
+
+See [TASK_SOURCES.md](./TASK_SOURCES.md) for detailed setup instructions.
+
+Quick setup:
+1. **Open Settings** → **Integrations** → **Add Source**
+2. **Choose plugin** (Linear, HubSpot, or Peakflo)
+3. **Configure credentials**:
+   - **Linear**: Create OAuth app, use redirect URI `nuanu://oauth/callback`
+   - **HubSpot**: OAuth app or Private App token
+   - **Peakflo**: API key from Settings
+4. **Complete authentication** and sync tasks
 
 ### Development
 

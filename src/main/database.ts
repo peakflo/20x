@@ -207,6 +207,8 @@ export interface TaskRow {
   recurrence_parent_id: string | null
   last_occurrence_at: string | null
   next_occurrence_at: string | null
+  feedback_rating: number | null
+  feedback_comment: string | null
   created_at: string
   updated_at: string
 }
@@ -247,6 +249,8 @@ export interface TaskRecord {
   recurrence_parent_id: string | null
   last_occurrence_at: string | null
   next_occurrence_at: string | null
+  feedback_rating: number | null
+  feedback_comment: string | null
   created_at: string
   updated_at: string
 }
@@ -299,6 +303,8 @@ export interface UpdateTaskData {
   recurrence_pattern?: RecurrencePatternRecord | null
   last_occurrence_at?: string | null
   next_occurrence_at?: string | null
+  feedback_rating?: number | null
+  feedback_comment?: string | null
 }
 
 /** Columns that can be dynamically updated via updateTask. */
@@ -321,7 +327,9 @@ const UPDATABLE_COLUMNS = new Set([
   'is_recurring',
   'recurrence_pattern',
   'last_occurrence_at',
-  'next_occurrence_at'
+  'next_occurrence_at',
+  'feedback_rating',
+  'feedback_comment'
 ])
 
 const JSON_COLUMNS = new Set(['labels', 'attachments', 'repos', 'output_fields', 'skill_ids', 'recurrence_pattern'])
@@ -344,7 +352,9 @@ function deserializeTask(row: TaskRow): TaskRecord {
     recurrence_pattern: row.recurrence_pattern ? JSON.parse(row.recurrence_pattern) as RecurrencePatternRecord : null,
     recurrence_parent_id: row.recurrence_parent_id ?? null,
     last_occurrence_at: row.last_occurrence_at ?? null,
-    next_occurrence_at: row.next_occurrence_at ?? null
+    next_occurrence_at: row.next_occurrence_at ?? null,
+    feedback_rating: row.feedback_rating ?? null,
+    feedback_comment: row.feedback_comment ?? null
   }
 }
 
@@ -939,6 +949,14 @@ export class DatabaseManager {
       this.db.exec(`ALTER TABLE tasks ADD COLUMN next_occurrence_at TEXT DEFAULT NULL`)
       // Create index for efficient querying of recurring tasks
       this.db.exec(`CREATE INDEX IF NOT EXISTS idx_tasks_next_occurrence ON tasks(next_occurrence_at) WHERE is_recurring = 1`)
+    }
+
+    // Add feedback columns
+    if (!columnNames.has('feedback_rating')) {
+      this.db.exec(`ALTER TABLE tasks ADD COLUMN feedback_rating INTEGER DEFAULT NULL`)
+    }
+    if (!columnNames.has('feedback_comment')) {
+      this.db.exec(`ALTER TABLE tasks ADD COLUMN feedback_comment TEXT DEFAULT NULL`)
     }
 
     // Seed default agent if none exist

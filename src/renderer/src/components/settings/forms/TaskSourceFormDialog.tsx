@@ -3,6 +3,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogBody } from '@/
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
 import { Label } from '@/components/ui/Label'
+import { TaskSourceGuide } from './TaskSourceGuide'
 import { getPluginForm } from '@/components/plugins'
 import type { McpServer, TaskSource, CreateTaskSourceDTO, PluginMeta } from '@/types'
 
@@ -57,12 +58,19 @@ export function TaskSourceFormDialog({
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-w-lg">
+      <DialogContent className="max-w-6xl max-h-[85vh]">
         <DialogHeader>
           <DialogTitle>{source ? 'Edit Task Source' : 'New Task Source'}</DialogTitle>
         </DialogHeader>
-        <DialogBody>
-          <form onSubmit={handleSubmit} className="space-y-3">
+        <DialogBody className="grid grid-cols-2 gap-6 overflow-hidden">
+          {/* Left: Guide */}
+          <div className="border-r border-border pr-6 overflow-hidden flex flex-col">
+            <TaskSourceGuide />
+          </div>
+
+          {/* Right: Form */}
+          <div className="overflow-y-auto">
+            <form onSubmit={handleSubmit} className="space-y-3">
             <div className="space-y-1.5">
               <Label htmlFor="ts-plugin">Plugin</Label>
               <select
@@ -152,15 +160,16 @@ export function TaskSourceFormDialog({
               )
             })()}
 
-            <div className="flex justify-end gap-2 pt-1">
-              <Button type="button" variant="outline" size="sm" onClick={onClose}>
-                Cancel
-              </Button>
-              <Button type="submit" size="sm" disabled={!isValid}>
-                {source ? 'Save' : 'Add'}
-              </Button>
-            </div>
-          </form>
+              <div className="flex justify-end gap-2 pt-1">
+                <Button type="button" variant="outline" size="sm" onClick={onClose}>
+                  Cancel
+                </Button>
+                <Button type="submit" size="sm" disabled={!isValid}>
+                  {source ? 'Save' : 'Add'}
+                </Button>
+              </div>
+            </form>
+          </div>
         </DialogBody>
       </DialogContent>
     </Dialog>

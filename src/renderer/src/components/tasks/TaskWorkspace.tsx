@@ -258,7 +258,14 @@ export function TaskWorkspace({
     if (!task?.agent_id || !task?.id) return
     setShowFeedback(false)
 
-    // Set task to Learning status - prevents auto-stop useEffect
+    // STEP 1: Save feedback to database FIRST
+    console.log('[TaskWorkspace] Saving feedback:', { rating, comment })
+    await taskApi.update(task.id, {
+      feedback_rating: rating,
+      feedback_comment: comment || null  // Convert empty string to null
+    })
+
+    // STEP 2: Set task to Learning status - prevents auto-stop useEffect
     console.log('[TaskWorkspace] Setting task status to AgentLearning:', task.id)
     const updatedTask = await taskApi.update(task.id, { status: TaskStatus.AgentLearning })
     console.log('[TaskWorkspace] Task status set to AgentLearning, verified:', updatedTask?.status)
