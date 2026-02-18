@@ -1,7 +1,7 @@
 import { useRef, useEffect, useState, useMemo } from 'react'
-import ReactMarkdown from 'react-markdown'
 import { StopCircle, Loader2, Terminal, Send, ChevronRight, Wrench, AlertTriangle, CheckCircle2, Circle, Clock, RotateCcw, Code2, Eye } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
+import { Markdown } from '@/components/ui/Markdown'
 import type { AgentMessage } from '@/hooks/use-agent-session'
 
 enum ViewMode {
@@ -261,26 +261,7 @@ function MessageBubble({ message, onAnswer, viewMode }: { message: AgentMessage;
         )}
         {isReasoning && <span className="text-[10px] text-purple-400 block mb-1">Thinking</span>}
         {viewMode === ViewMode.MARKDOWN ? (
-          <div className="text-xs markdown-content">
-            <ReactMarkdown
-              components={{
-                h1: ({...props}) => <h1 className="text-sm font-semibold mt-3 mb-1.5 text-foreground" {...props} />,
-                h2: ({...props}) => <h2 className="text-xs font-semibold mt-2.5 mb-1.5 text-foreground" {...props} />,
-                h3: ({...props}) => <h3 className="text-xs font-semibold mt-2 mb-1 text-foreground" {...props} />,
-                p: ({...props}) => <p className="my-1.5" {...props} />,
-                ul: ({...props}) => <ul className="list-disc pl-3.5 my-1.5 space-y-0.5" {...props} />,
-                ol: ({...props}) => <ol className="list-decimal pl-3.5 my-1.5 space-y-0.5" {...props} />,
-                li: ({...props}) => <li className="ml-0.5" {...props} />,
-                code: ({...props}) => <code className="bg-muted px-1 py-0.5 rounded text-[11px] font-mono" {...props} />,
-                pre: ({...props}) => <pre className="bg-muted p-2 rounded my-1.5 overflow-x-auto text-[11px]" {...props} />,
-                blockquote: ({...props}) => <blockquote className="border-l-2 border-border pl-2.5 my-1.5 italic" {...props} />,
-                a: ({...props}) => <a className="text-primary underline hover:text-primary/80" target="_blank" rel="noopener noreferrer" {...props} />,
-                hr: ({...props}) => <hr className="border-border my-2" {...props} />
-              }}
-            >
-              {message.content}
-            </ReactMarkdown>
-          </div>
+          <Markdown size="xs">{message.content}</Markdown>
         ) : (
           <pre className="whitespace-pre-wrap break-words font-mono text-xs">
             {message.content}

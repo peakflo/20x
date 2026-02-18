@@ -937,20 +937,27 @@ Simpler setup but requires managing a long-lived access token. Good for testing 
 ### Step 1: Create a HubSpot OAuth App
 
 1. Go to [HubSpot Developer Account](https://app.hubspot.com/signup-hubspot/developers)
+
 2. Navigate to **Apps** → **Create app**
+
 3. Fill in basic information:
+
    - **App name**: \`nuanu\` or your app name
    - **Description**: "Task management integration"
 
 ### Step 2: Configure OAuth Settings
 
 1. Go to the **Auth** tab of your app
-2. Add **Redirect URLs**:
+
+2. Add **Redirect URLs:**
+
    - \`http://localhost:3000/callback\`
    - \`http://localhost:3001/callback\`
    - \`http://localhost:3002/callback\`
    - ... (up to port 3010)
-3. Select **Required Scopes**:
+
+3. Select **Required Scopes:**
+
    - \`tickets\` - Read and write tickets
    - \`crm.objects.contacts.read\` - Read contact info
    - \`crm.objects.owners.read\` - Read ticket owners
@@ -960,16 +967,23 @@ Simpler setup but requires managing a long-lived access token. Good for testing 
 ### Step 3: Get OAuth Credentials
 
 1. Copy the **Client ID** from the Auth tab
+
 2. Copy the **Client Secret** (show and copy)
+
 3. Paste both into the form in the app
+
 4. **Important**: Keep your Client Secret secure!
 
 ### Step 4: Connect to HubSpot
 
 1. Click **Connect to HubSpot**
+
 2. Choose which HubSpot account to authorize (if you have multiple)
+
 3. Review the requested permissions
+
 4. Click **Grant Access**
+
 5. You'll be redirected back automatically
 
 ### Step 5: Optional Filters
@@ -987,26 +1001,32 @@ After connecting, configure filters:
 ### Step 1: Create a Private App
 
 1. In HubSpot, go to **Settings** → **Integrations** → **Private Apps**
+
 2. Click **Create private app**
+
 3. Fill in basic information:
+
    - **Name**: \`nuanu\` or your app name
    - **Description**: "Task management integration"
 
 ### Step 2: Configure Scopes
 
-Go to the **Scopes** tab and select:
+1. Go to the **Scopes** tab and select:
 
-- \`tickets\` - Read and write tickets
-- \`crm.objects.contacts.read\` - Read contact info
-- \`crm.objects.owners.read\` - Read ticket owners
-- \`files\` - Access attachments
-- \`forms-uploaded-files\` - Access form uploads
+   - \`tickets\` - Read and write tickets
+   - \`crm.objects.contacts.read\` - Read contact info
+   - \`crm.objects.owners.read\` - Read ticket owners
+   - \`files\` - Access attachments
+   - \`forms-uploaded-files\` - Access form uploads
 
 ### Step 3: Generate Access Token
 
 1. Click **Create app**
+
 2. Copy the **Access token** (shown only once!)
+
 3. Paste it into the "Private App Access Token" field
+
 4. **Important**: Store this token securely - it cannot be retrieved again
 
 ---
@@ -1014,6 +1034,7 @@ Go to the **Scopes** tab and select:
 ## Features
 
 ### Import Tickets
+
 - Automatically imports HubSpot support tickets
 - Maps ticket fields to tasks:
   - Subject → Title
@@ -1024,15 +1045,18 @@ Go to the **Scopes** tab and select:
   - Attachments
 
 ### Bidirectional Sync
+
 - Update ticket priority from the app
 - Changes sync back to HubSpot automatically
 
 ### Attachments
+
 - Downloads ticket attachments automatically
 - Stores files locally with tasks
 - Preserves original filenames and MIME types
 
 ### Filtering
+
 - Filter by pipeline (e.g., only "Support" tickets)
 - Filter by owner/assignee
 - Customizable sync frequency
@@ -1052,27 +1076,32 @@ The mapping adapts to your pipeline stage names automatically.
 ## Troubleshooting
 
 ### OAuth callback not working
+
 - Ensure redirect URIs include ports 3000-3010
 - Check that http://localhost is allowed (not https)
 - Try restarting the OAuth flow
 
 ### "Insufficient permissions" error
+
 - Verify all required scopes are enabled in your app
 - For Private Apps, check the Scopes tab
 - For OAuth, review the app's Auth settings
 
 ### Tickets not importing
+
 - Check that you have tickets in HubSpot
 - Verify OAuth/token is connected (green checkmark)
 - Check pipeline/owner filters aren't too restrictive
 - Try clicking **Sync Now** manually
 
 ### Attachments not downloading
+
 - Verify \`files\` and \`forms-uploaded-files\` scopes are enabled
 - Check file size limits (HubSpot has size restrictions)
 - Look for errors in the console
 
 ### Rate limiting
+
 - HubSpot has API rate limits (100 requests/10 seconds for most)
 - The integration handles rate limits automatically with backoff
 - If you hit limits frequently, reduce sync frequency
@@ -1080,6 +1109,7 @@ The mapping adapts to your pipeline stage names automatically.
 ## Support
 
 For more help:
+
 - [HubSpot API Documentation](https://developers.hubspot.com/docs/api/overview)
 - [OAuth Guide](https://developers.hubspot.com/docs/api/working-with-oauth)
 - [Private Apps Guide](https://developers.hubspot.com/docs/api/private-apps)
