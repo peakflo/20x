@@ -185,6 +185,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     list: (): Promise<unknown[]> => ipcRenderer.invoke('plugin:list'),
     getConfigSchema: (pluginId: string): Promise<unknown[]> =>
       ipcRenderer.invoke('plugin:getConfigSchema', pluginId),
+    getDocumentation: (pluginId: string): Promise<string | null> =>
+      ipcRenderer.invoke('plugin:getDocumentation', pluginId),
     resolveOptions: (pluginId: string, resolverKey: string, config: Record<string, unknown>, mcpServerId?: string, sourceId?: string): Promise<unknown[]> =>
       ipcRenderer.invoke('plugin:resolveOptions', pluginId, resolverKey, config, mcpServerId, sourceId),
     getActions: (pluginId: string, config: Record<string, unknown>): Promise<unknown[]> =>

@@ -143,4 +143,7 @@ export interface TaskSourcePlugin {
     config: Record<string, unknown>,
     ctx: PluginContext
   ): Promise<ReassignResult>
+
+  /** Returns markdown documentation for setting up this task source */
+  getSetupDocumentation?(): string
 }
