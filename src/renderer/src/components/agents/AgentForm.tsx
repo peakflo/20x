@@ -42,6 +42,7 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
   const [codingAgent, setCodingAgent] = useState<CodingAgentType | ''>(agent?.config.coding_agent ?? '')
   const [model, setModel] = useState(agent?.config.model ?? '')
   const [systemPrompt, setSystemPrompt] = useState(agent?.config.system_prompt ?? '')
+  const [maxParallelSessions, setMaxParallelSessions] = useState(agent?.config.max_parallel_sessions ?? 1)
   const [skillIds, setSkillIds] = useState<string[] | undefined>(agent?.config.skill_ids)
   const [mcpSelection, setMcpSelection] = useState<Map<string, string[] | undefined>>(
     () => parseMcpSelection(agent?.config.mcp_servers)
@@ -179,6 +180,7 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
         coding_agent: codingAgent || undefined,
         model: model.trim() || undefined,
         system_prompt: systemPrompt.trim() || undefined,
+        max_parallel_sessions: maxParallelSessions,
         mcp_servers: mcpServersConfig.length > 0 ? mcpServersConfig : undefined,
         skill_ids: skillIds,
         api_keys: {
@@ -419,6 +421,22 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
           placeholder="Optional system prompt for the agent..."
           rows={3}
         />
+      </div>
+
+      <div className="space-y-1.5">
+        <Label htmlFor="max-parallel-sessions">Parallel Task Limit</Label>
+        <Input
+          id="max-parallel-sessions"
+          type="number"
+          min={1}
+          max={10}
+          value={maxParallelSessions}
+          onChange={(e) => setMaxParallelSessions(Number(e.target.value))}
+          placeholder="1"
+        />
+        <p className="text-xs text-muted-foreground">
+          How many tasks this agent can work on at the same time (1-10)
+        </p>
       </div>
 
       <div className="space-y-2">

@@ -124,6 +124,7 @@ export interface AgentConfig {
   system_prompt?: string
   mcp_servers?: Array<string | AgentMcpServerEntry>
   skill_ids?: string[]
+  max_parallel_sessions?: number  // Default: 1, range: 1-10
   api_keys?: {
     openai?: string  // For Codex
     anthropic?: string  // For Claude Code

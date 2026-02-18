@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Plus, Search, ChevronDown, X, Settings, FileText, RefreshCw, Loader2 } from 'lucide-react'
+import { Plus, Search, ChevronDown, X, Settings, FileText, RefreshCw, Loader2, Play, Pause } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { TaskList } from '@/components/tasks/TaskList'
 import { SkillList } from '@/components/skills/SkillList'
@@ -8,6 +8,7 @@ import { useTaskSourceStore } from '@/stores/task-source-store'
 import { useTaskStore } from '@/stores/task-store'
 import { useUserStore } from '@/stores/user-store'
 import { useSkillStore } from '@/stores/skill-store'
+import { useAgentSchedulerStore } from '@/stores/agent-scheduler-store'
 import { isSnoozed } from '@/lib/utils'
 import { TaskStatus, TASK_STATUSES, TASK_PRIORITIES } from '@/types'
 import type { WorkfloTask, TaskPriority } from '@/types'
@@ -42,6 +43,7 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
   const { sources, syncingIds, fetchSources, syncAllEnabled } = useTaskSourceStore()
   const { fetchTasks } = useTaskStore()
   const { skills, selectedSkillId, fetchSkills, selectSkill, createSkill } = useSkillStore()
+  const { isEnabled: isAutoStartEnabled, toggle: toggleAutoStart } = useAgentSchedulerStore()
   const [isSyncingAll, setIsSyncingAll] = useState(false)
 
   useEffect(() => {
@@ -116,6 +118,14 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
                   {isSyncingAll ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
                 </Button>
               )}
+              <Button
+                size="sm"
+                variant={isAutoStartEnabled ? 'default' : 'ghost'}
+                onClick={toggleAutoStart}
+                title={isAutoStartEnabled ? 'Disable auto-run' : 'Enable auto-run'}
+              >
+                {isAutoStartEnabled ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
+              </Button>
               <Button size="sm" variant="ghost" onClick={onOpenSettings} title="Settings">
                 <Settings className="h-3.5 w-3.5" />
               </Button>
