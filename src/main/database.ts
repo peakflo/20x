@@ -1061,7 +1061,7 @@ export class DatabaseManager {
 
   updateTask(id: string, data: UpdateTaskData): TaskRecord | undefined {
     const setClauses: string[] = []
-    const values: (string | null)[] = []
+    const values: (string | number | null)[] = []
 
     for (const [key, value] of Object.entries(data)) {
       if (value === undefined || !UPDATABLE_COLUMNS.has(key)) continue
@@ -1069,8 +1069,10 @@ export class DatabaseManager {
       setClauses.push(`${key} = ?`)
       if (JSON_COLUMNS.has(key)) {
         values.push(JSON.stringify(value))
+      } else if (typeof value === 'boolean') {
+        values.push(value ? 1 : 0)
       } else {
-        values.push(value as string | null)
+        values.push(value as string | number | null)
       }
     }
 

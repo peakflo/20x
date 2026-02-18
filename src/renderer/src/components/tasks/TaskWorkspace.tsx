@@ -260,8 +260,8 @@ export function TaskWorkspace({
 
     // Set task to Learning status - prevents auto-stop useEffect
     console.log('[TaskWorkspace] Setting task status to AgentLearning:', task.id)
-    await taskApi.update(task.id, { status: TaskStatus.AgentLearning })
-    console.log('[TaskWorkspace] Task status set to AgentLearning')
+    const updatedTask = await taskApi.update(task.id, { status: TaskStatus.AgentLearning })
+    console.log('[TaskWorkspace] Task status set to AgentLearning, verified:', updatedTask?.status)
 
     // Build feedback prompt
     const commentPart = comment ? ` Comment: "${comment}".` : ''
@@ -332,6 +332,9 @@ Update existing skills that were helpful or create new ones for patterns worth r
       }
 
       console.log('[TaskWorkspace] About to send feedback message')
+      // Verify task status is still AgentLearning before sending
+      const taskBeforeSend = await taskApi.getById(task.id)
+      console.log('[TaskWorkspace] Task status before sending message:', taskBeforeSend?.status)
       // Send feedback message through normal flow so it shows in UI
       await sendMessage(prompt)
       console.log('[TaskWorkspace] Feedback message sent')
