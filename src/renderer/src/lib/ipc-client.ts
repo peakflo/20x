@@ -279,6 +279,10 @@ export const pluginApi = {
     return window.electronAPI.plugins.getConfigSchema(pluginId)
   },
 
+  getDocumentation: (pluginId: string): Promise<string | null> => {
+    return window.electronAPI.plugins.getDocumentation(pluginId)
+  },
+
   resolveOptions: (pluginId: string, resolverKey: string, config: Record<string, unknown>, mcpServerId?: string, sourceId?: string): Promise<ConfigFieldOption[]> => {
     return window.electronAPI.plugins.resolveOptions(pluginId, resolverKey, config, mcpServerId, sourceId)
   },

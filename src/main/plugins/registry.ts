@@ -30,4 +30,12 @@ export class PluginRegistry {
       requiresMcpServer: p.requiresMcpServer
     }))
   }
+
+  getDocumentation(id: string): string | null {
+    const plugin = this.plugins.get(id)
+    if (!plugin || !plugin.getSetupDocumentation) {
+      return null
+    }
+    return plugin.getSetupDocumentation()
+  }
 }

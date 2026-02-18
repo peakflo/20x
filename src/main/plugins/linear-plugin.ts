@@ -876,4 +876,107 @@ export class LinearPlugin implements TaskSourcePlugin {
 
     return null
   }
+
+  /**
+   * Returns markdown documentation for setting up Linear integration
+   */
+  getSetupDocumentation(): string {
+    return `# Linear Integration Setup Guide
+
+## Overview
+
+Connect your Linear workspace to sync issues as tasks. This integration uses OAuth 2.0 for secure authentication.
+
+## Prerequisites
+
+- A Linear workspace (free or paid)
+- Admin access to create OAuth applications
+
+## Setup Steps
+
+### Step 1: Create a Linear OAuth Application
+
+1. Go to [Linear Settings → API → Applications](https://linear.app/settings/api/applications/new)
+2. Click **Create New Application**
+3. Fill in the application details:
+   - **Application name**: \`nuanu\` (or your preferred name)
+   - **Description**: "Task management integration"
+   - **Callback URLs**: \`nuanu://oauth/callback\`
+
+### Step 2: Configure OAuth Credentials
+
+1. After creating the application, you'll see your **Client ID** and **Client Secret**
+2. Copy the **Client ID** and paste it into the form
+3. Copy the **Client Secret** and paste it into the form
+4. **Important**: Keep your Client Secret secure - it's shown only once!
+
+### Step 3: Select Permissions
+
+Choose the OAuth scopes you need:
+
+- **Read**: View issues, teams, and users
+- **Write**: Update issue status, priority, and assignees
+- **Read + Write**: Recommended for bidirectional sync
+- **Issues:Create**: Allow creating new issues from tasks
+- **Comments:Create**: Allow adding comments to issues
+
+### Step 4: Connect to Linear
+
+1. Click the **Connect to Linear** button
+2. A browser window will open with Linear's authorization page
+3. Review the requested permissions
+4. Click **Authorize** to grant access
+5. You'll be redirected back to the app automatically
+
+### Step 5: Optional Filters
+
+After connecting, you can filter which issues to sync:
+
+- **Assigned to**: Only sync issues assigned to a specific user
+- Leave filters empty to sync all issues you have access to
+
+## Features
+
+### Import Issues
+- Automatically imports issues from Linear
+- Maps Linear fields to task properties:
+  - Status (Backlog, Todo, In Progress, Done, Canceled)
+  - Priority (Urgent, High, Medium, Low)
+  - Assignee, due date, labels
+
+### Bidirectional Sync
+- Changes in the app sync back to Linear
+- Update priority, status, comments
+
+### Attachments
+- Downloads attachments from Linear issues
+- Stores them locally with your tasks
+
+## Troubleshooting
+
+### Browser doesn't open for OAuth
+- Check that your default browser is set correctly
+- Try copying the authorization URL manually
+
+### "Invalid redirect URI" error
+- Ensure the redirect URI in Linear is exactly: \`nuanu://oauth/callback\`
+- No trailing slash, correct protocol scheme
+
+### Issues not importing
+- Check that you have access to the Linear workspace
+- Verify OAuth token is connected (green checkmark)
+- Try clicking **Sync Now** to force a refresh
+
+### Token expired
+- OAuth tokens are valid for 24 hours
+- The app will automatically refresh your token
+- If auto-refresh fails, reconnect via **Connect to Linear**
+
+## Support
+
+For more help:
+- [Linear API Documentation](https://developers.linear.app/docs)
+- [OAuth Guide](https://developers.linear.app/docs/oauth)
+`
+  }
 }

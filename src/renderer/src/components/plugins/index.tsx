@@ -10,6 +10,8 @@ import { HubSpotConfigForm } from './HubSpotConfigForm'
 import { PeakfloConfigForm } from './PeakfloConfigForm'
 import type { PluginFormProps } from './PluginFormProps'
 
+export { PluginSetupDocumentation } from './PluginSetupDocumentation'
+
 type PluginFormComponent = React.ComponentType<PluginFormProps>
 
 /**

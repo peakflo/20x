@@ -199,6 +199,7 @@ interface ElectronAPI {
   plugins: {
     list: () => Promise<PluginMeta[]>
     getConfigSchema: (pluginId: string) => Promise<ConfigFieldSchema[]>
+    getDocumentation: (pluginId: string) => Promise<string | null>
     resolveOptions: (pluginId: string, resolverKey: string, config: Record<string, unknown>, mcpServerId?: string, sourceId?: string) => Promise<ConfigFieldOption[]>
     getActions: (pluginId: string, config: Record<string, unknown>) => Promise<PluginAction[]>
     executeAction: (actionId: string, taskId: string, sourceId: string, input?: string) => Promise<ActionResult>

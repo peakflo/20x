@@ -508,4 +508,198 @@ export class PeakfloPlugin implements TaskSourcePlugin {
     }
     return { tasks: [] }
   }
+
+  /**
+   * Returns markdown documentation for setting up Peakflo Workflows integration
+   */
+  getSetupDocumentation(): string {
+    return `# Peakflo Workflows Integration Setup Guide
+
+## Overview
+
+Connect Peakflo Workflows to import and manage approval tasks. This integration requires an MCP server to communicate with Peakflo's API.
+
+## Prerequisites
+
+- A Peakflo account with Workflows access
+- API credentials from Peakflo
+- An MCP server configured for Peakflo
+
+---
+
+## Setup Steps
+
+### Step 1: Set up the MCP Server
+
+Before creating a Peakflo task source, you need an MCP server that can communicate with Peakflo's API.
+
+1. Go to **Settings** → **MCP Servers**
+2. Click **Add Server**
+3. Configure the Peakflo MCP server:
+   - **Name**: \`Peakflo MCP\`
+   - **Type**: Select appropriate server type
+   - **Configuration**: Add your Peakflo API connection details
+
+### Step 2: Get Peakflo API Credentials
+
+1. Log in to your [Peakflo account](https://app.peakflo.co)
+2. Go to **Settings** → **API & Integrations**
+3. Generate an API key if you don't have one
+4. Copy the **API Key**
+5. Optionally, copy your **Organization ID** for filtering
+
+### Step 3: Create the Task Source
+
+1. Select **Peakflo Workflo** as the plugin
+2. Choose the MCP server you configured in Step 1
+3. Give your source a name (e.g., "Peakflo Approvals")
+
+### Step 4: Configure API Settings
+
+Fill in the configuration form:
+
+- **API Key**: Paste your Peakflo API key
+- **Organization ID** (Optional): Filter tasks by organization
+- **Status Filter**: Choose which tasks to sync:
+  - **Pending**: Only pending approval tasks
+  - **In Progress**: Tasks being worked on
+  - **All**: Sync all tasks regardless of status
+- **Auto-sync Interval**: Set to 0 for manual sync, or specify minutes for automatic syncing
+
+### Step 5: Save and Sync
+
+1. Click **Add** to save the task source
+2. Click **Sync Now** to import tasks from Peakflo
+3. Your workflow tasks will appear in the task list
+
+---
+
+## Features
+
+### Import Workflow Tasks
+- Automatically imports tasks from Peakflo Workflows
+- Supports approval workflows and manual tasks
+- Maps Peakflo fields to task properties:
+  - Task ID → External ID
+  - Title/Name → Title
+  - Description → Description
+  - Priority (urgent, high, medium, low)
+  - Status (pending, in_progress, completed, cancelled, expired)
+  - Assignee information
+  - Due dates
+  - Labels/tags
+
+### Task Actions
+Peakflo tasks support workflow-specific actions:
+
+- **Approve**: Approve a pending task
+- **Reject**: Reject a task with a reason
+- **Complete**: Mark task as completed with output fields
+
+### Output Fields
+Many Peakflo tasks have structured output fields:
+
+- **Form fields**: Text, select, checkbox inputs
+- **Action buttons**: Approve/Reject options
+- **Custom fields**: Defined by your workflow
+
+These fields are rendered dynamically based on the task type.
+
+### Pagination
+The integration automatically handles pagination for large task lists, fetching up to 100 tasks per request.
+
+---
+
+## Status Mapping
+
+Peakflo status maps to task status:
+
+| Peakflo Status | Task Status |
+|----------------|-------------|
+| pending | Not Started |
+| in_progress | Not Started |
+| completed | Completed |
+| cancelled | Not Started |
+| expired | Not Started |
+
+---
+
+## Priority Mapping
+
+| Peakflo Priority | Task Priority |
+|------------------|---------------|
+| urgent | Critical |
+| high | High |
+| medium | Medium |
+| low | Low |
+
+---
+
+## Troubleshooting
+
+### MCP Server not available
+- Ensure you've created an MCP server first (Settings → MCP Servers)
+- Test the MCP server connection before creating the task source
+- Check that the server has the required Peakflo tools (\`task_list\`, \`task_complete\`)
+
+### No tasks importing
+- Verify your API key is correct and has proper permissions
+- Check the status filter - you might be filtering out all tasks
+- Ensure you have tasks in Peakflo that match your filters
+- Try clicking **Sync Now** to force a manual sync
+
+### "API key invalid" error
+- Double-check your API key from Peakflo settings
+- Ensure there are no extra spaces or characters
+- Regenerate the API key if needed
+
+### Organization filter not working
+- Verify the Organization ID is correct
+- Leave the Organization ID empty to sync all organizations
+- Check that you have permission to access the specified organization
+
+### Actions not working
+- Ensure the task has the required output fields filled in
+- For rejection, provide a reason when prompted
+- Check that your API key has write permissions
+
+### Auto-sync not triggering
+- Auto-sync interval must be greater than 0
+- The value is in minutes (e.g., 15 = sync every 15 minutes)
+- Manual sync always works regardless of this setting
+
+---
+
+## MCP Server Configuration
+
+The Peakflo MCP server must expose these tools:
+
+### Required Tools
+
+**\`task_list\`**: Fetch tasks from Peakflo
+- Parameters: \`limit\`, \`offset\`, \`status\` (optional)
+- Returns: Array of task objects with required fields
+
+**\`task_complete\`**: Complete a task with outputs
+- Parameters: \`taskId\`, \`outputs\` (object with field values)
+- Returns: Success/error response
+
+### Optional Tools
+
+**\`users_list\`**: Fetch available users for assignment
+- Returns: Array of user objects
+
+**\`task_update\`**: Update task assignees or other fields
+- Parameters: \`taskId\`, \`assignees\`, etc.
+
+---
+
+## Support
+
+For more help:
+- [Peakflo Workflows Documentation](https://docs.peakflo.co/workflows)
+- [Peakflo API Reference](https://docs.peakflo.co/api)
+- Contact your Peakflo account manager for API access
+`
+  }
 }

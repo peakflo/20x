@@ -467,6 +467,10 @@ export function registerIpcHandlers(
     return plugin ? plugin.getConfigSchema() : []
   })
 
+  ipcMain.handle('plugin:getDocumentation', (_, pluginId: string) => {
+    return pluginRegistry.getDocumentation(pluginId)
+  })
+
   ipcMain.handle('plugin:resolveOptions', async (_, pluginId: string, resolverKey: string, config: Record<string, unknown>, mcpServerId?: string, sourceId?: string) => {
     const plugin = pluginRegistry.get(pluginId)
     if (!plugin || !mcpToolCaller) return []
