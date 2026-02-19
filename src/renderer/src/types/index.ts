@@ -213,7 +213,7 @@ export interface FileAttachment {
   added_at: string
 }
 
-export interface RecurrencePattern {
+export interface RecurrencePatternObject {
   type: 'daily' | 'weekly' | 'monthly' | 'custom'
   interval: number
   time: string
@@ -222,6 +222,9 @@ export interface RecurrencePattern {
   endDate?: string
   maxOccurrences?: number
 }
+
+/** A cron expression string OR a legacy JSON object */
+export type RecurrencePattern = RecurrencePatternObject | string
 
 export interface WorkfloTask {
   id: string

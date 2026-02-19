@@ -5,10 +5,17 @@ import tailwindcss from '@tailwindcss/vite'
 
 export default defineConfig({
   main: {
-    plugins: [externalizeDepsPlugin({ exclude: ['@electron-toolkit/utils', '@paralleldrive/cuid2'] })],
+    plugins: [externalizeDepsPlugin({ exclude: ['@electron-toolkit/utils', '@paralleldrive/cuid2', '@modelcontextprotocol/sdk'] })],
     build: {
       rollupOptions: {
-        external: ['better-sqlite3']
+        external: ['better-sqlite3'],
+        input: {
+          index: resolve(__dirname, 'src/main/index.ts'),
+          'mcp-servers/task-management-mcp': resolve(__dirname, 'src/main/mcp-servers/task-management-mcp.ts')
+        },
+        output: {
+          entryFileNames: '[name].js'
+        }
       }
     }
   },

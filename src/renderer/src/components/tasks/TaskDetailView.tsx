@@ -12,10 +12,55 @@ import { OutputFieldsDisplay } from './OutputFieldsDisplay'
 import { SkillSelector } from '@/components/skills/SkillSelector'
 import { AssigneeSelect } from './AssigneeSelect'
 import { TaskStatus, CodingAgentType } from '@/types'
-import type { WorkfloTask, FileAttachment, OutputField, Agent, RecurrencePattern } from '@/types'
+import type { WorkfloTask, FileAttachment, OutputField, Agent, RecurrencePattern, RecurrencePatternObject } from '@/types'
 import { AnthropicLogo, OpenCodeLogo, OpenAILogo } from '@/components/icons/AgentLogos'
 
-function formatRecurrencePattern(pattern: RecurrencePattern): string {
+function ordinal(n: number): string {
+  if (n >= 11 && n <= 13) return `${n}th`
+  const last = n % 10
+  if (last === 1) return `${n}st`
+  if (last === 2) return `${n}nd`
+  if (last === 3) return `${n}rd`
+  return `${n}th`
+}
+
+function formatCronExpression(cron: string): string {
+  const parts = cron.trim().split(/\s+/)
+  if (parts.length < 5) return cron
+
+  const [minute, hour, dayOfMonth, , dayOfWeek] = parts
+  const time = `${hour.padStart(2, '0')}:${minute.padStart(2, '0')}`
+  const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+
+  // Weekly pattern
+  if (dayOfWeek !== '*') {
+    const days = dayOfWeek.split(',').flatMap(part => {
+      if (part.includes('-')) {
+        const [start, end] = part.split('-').map(Number)
+        const result: number[] = []
+        for (let i = start; i <= end; i++) result.push(i)
+        return result
+      }
+      return [parseInt(part)]
+    }).filter(n => !isNaN(n)).map(d => dayNames[d]).join(', ')
+    return `Weekly on ${days} at ${time}`
+  }
+
+  // Monthly pattern
+  if (dayOfMonth !== '*' && !dayOfMonth.startsWith('*/')) {
+    return `Monthly on the ${ordinal(parseInt(dayOfMonth))} at ${time}`
+  }
+
+  // Daily pattern
+  if (dayOfMonth.startsWith('*/')) {
+    const interval = parseInt(dayOfMonth.slice(2))
+    return `Every ${interval} days at ${time}`
+  }
+
+  return `Daily at ${time}`
+}
+
+function formatLegacyPattern(pattern: RecurrencePatternObject): string {
   const { type, interval, time, weekdays, monthDay } = pattern
 
   let description = ''
@@ -27,13 +72,17 @@ function formatRecurrencePattern(pattern: RecurrencePattern): string {
     const days = weekdays?.map(d => dayNames[d]).join(', ') || ''
     description = `Weekly on ${days}`
   } else if (type === 'monthly') {
-    const suffix = monthDay === 1 ? 'st' : monthDay === 2 ? 'nd' : monthDay === 3 ? 'rd' : 'th'
-    description = `Monthly on the ${monthDay}${suffix}`
+    description = `Monthly on the ${ordinal(monthDay ?? 1)}`
   } else {
     description = `Every ${interval} days`
   }
 
   return `${description} at ${time}`
+}
+
+function formatRecurrencePattern(pattern: RecurrencePattern): string {
+  if (typeof pattern === 'string') return formatCronExpression(pattern)
+  return formatLegacyPattern(pattern)
 }
 
 interface TaskDetailViewProps {

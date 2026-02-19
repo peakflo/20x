@@ -250,8 +250,8 @@ export function registerIpcHandlers(
   })
 
   // Agent Session handlers
-  ipcMain.handle('agentSession:start', async (_, agentId: string, taskId: string, workspaceDir?: string) => {
-    const sessionId = await agentManager.startSession(agentId, taskId, workspaceDir)
+  ipcMain.handle('agentSession:start', async (_, agentId: string, taskId: string, workspaceDir?: string, skipInitialPrompt?: boolean) => {
+    const sessionId = await agentManager.startSession(agentId, taskId, workspaceDir, skipInitialPrompt)
     return { sessionId }
   })
 

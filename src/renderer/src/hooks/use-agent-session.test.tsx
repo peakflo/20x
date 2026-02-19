@@ -45,7 +45,7 @@ describe('useAgentSession', () => {
       })
 
       expect(sessionId).toBe('real-session-id')
-      expect(mockElectronAPI.agentSession.start).toHaveBeenCalledWith('agent-1', 'task-1', undefined)
+      expect(mockElectronAPI.agentSession.start).toHaveBeenCalledWith('agent-1', 'task-1', undefined, undefined)
 
       // Session should be in the store
       const session = useAgentStore.getState().sessions.get('task-1')

@@ -77,8 +77,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('mcp:testConnection', data)
   },
   agentSession: {
-    start: (agentId: string, taskId: string, workspaceDir?: string): Promise<{ sessionId: string }> =>
-      ipcRenderer.invoke('agentSession:start', agentId, taskId, workspaceDir),
+    start: (agentId: string, taskId: string, workspaceDir?: string, skipInitialPrompt?: boolean): Promise<{ sessionId: string }> =>
+      ipcRenderer.invoke('agentSession:start', agentId, taskId, workspaceDir, skipInitialPrompt),
     resume: (agentId: string, taskId: string, ocSessionId: string): Promise<{ sessionId: string }> =>
       ipcRenderer.invoke('agentSession:resume', agentId, taskId, ocSessionId),
     abort: (sessionId: string): Promise<{ success: boolean }> =>

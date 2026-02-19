@@ -3,7 +3,63 @@ import { cn, formatDate, isOverdue, isDueSoon, isSnoozed } from '@/lib/utils'
 import { TaskPriorityBadge } from './TaskPriorityBadge'
 import { useAgentStore } from '@/stores/agent-store'
 import { TaskStatus } from '@/types'
-import type { WorkfloTask } from '@/types'
+import type { WorkfloTask, RecurrencePattern, RecurrencePatternObject } from '@/types'
+
+function ordinal(n: number): string {
+  if (n >= 11 && n <= 13) return `${n}th`
+  const last = n % 10
+  if (last === 1) return `${n}st`
+  if (last === 2) return `${n}nd`
+  if (last === 3) return `${n}rd`
+  return `${n}th`
+}
+
+function formatRecurrenceShort(pattern: RecurrencePattern): string {
+  if (typeof pattern === 'string') {
+    const parts = pattern.trim().split(/\s+/)
+    if (parts.length < 5) return pattern
+
+    const [minute, hour, dayOfMonth, , dayOfWeek] = parts
+    const time = `${hour.padStart(2, '0')}:${minute.padStart(2, '0')}`
+    const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+
+    if (dayOfWeek !== '*') {
+      const days = dayOfWeek.split(',').flatMap(part => {
+        if (part.includes('-')) {
+          const [start, end] = part.split('-').map(Number)
+          const result: number[] = []
+          for (let i = start; i <= end; i++) result.push(i)
+          return result
+        }
+        return [parseInt(part)]
+      }).filter(n => !isNaN(n)).map(d => dayNames[d]).join(', ')
+      return `${days} at ${time}`
+    }
+
+    if (dayOfMonth !== '*' && !dayOfMonth.startsWith('*/')) {
+      return `${ordinal(parseInt(dayOfMonth))} at ${time}`
+    }
+
+    if (dayOfMonth.startsWith('*/')) {
+      return `Every ${dayOfMonth.slice(2)}d at ${time}`
+    }
+
+    return `Daily at ${time}`
+  }
+
+  const p = pattern as RecurrencePatternObject
+  const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+  if (p.type === 'weekly' && p.weekdays) {
+    return `${p.weekdays.map(d => dayNames[d]).join(', ')} at ${p.time}`
+  }
+  if (p.type === 'monthly' && p.monthDay) {
+    return `${ordinal(p.monthDay)} at ${p.time}`
+  }
+  if (p.type === 'daily' && p.interval > 1) {
+    return `Every ${p.interval}d at ${p.time}`
+  }
+  return `Daily at ${p.time}`
+}
 
 const statusDotColor: Record<TaskStatus, string> = {
   [TaskStatus.NotStarted]: 'bg-muted-foreground',
@@ -73,10 +129,13 @@ export function TaskListItem({ task, isSelected, onSelect }: TaskListItemProps) 
             {isSnoozed(task.snoozed_until) && (
               <AlarmClockOff className="h-3 w-3 text-muted-foreground" />
             )}
-            {task.is_recurring && !task.recurrence_parent_id && task.next_occurrence_at && (
-              <span className="flex items-center gap-1 text-xs text-muted-foreground" title={`Next: ${formatDate(task.next_occurrence_at)}`}>
+            {task.is_recurring && !task.recurrence_parent_id && task.recurrence_pattern && (
+              <span
+                className="flex items-center gap-1 text-xs text-muted-foreground"
+                title={task.next_occurrence_at ? `Next: ${formatDate(task.next_occurrence_at)}` : undefined}
+              >
                 <Repeat className="h-3 w-3" />
-                {formatDate(task.next_occurrence_at)}
+                {formatRecurrenceShort(task.recurrence_pattern)}
               </span>
             )}
             {task.recurrence_parent_id && (

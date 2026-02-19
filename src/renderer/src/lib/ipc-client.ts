@@ -72,8 +72,8 @@ export const agentApi = {
 }
 
 export const agentSessionApi = {
-  start: (agentId: string, taskId: string, workspaceDir?: string): Promise<{ sessionId: string }> => {
-    return window.electronAPI.agentSession.start(agentId, taskId, workspaceDir)
+  start: (agentId: string, taskId: string, workspaceDir?: string, skipInitialPrompt?: boolean): Promise<{ sessionId: string }> => {
+    return window.electronAPI.agentSession.start(agentId, taskId, workspaceDir, skipInitialPrompt)
   },
 
   resume: (agentId: string, taskId: string, ocSessionId: string): Promise<{ sessionId: string }> => {

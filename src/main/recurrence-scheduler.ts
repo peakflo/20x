@@ -1,46 +1,21 @@
 import { BrowserWindow } from 'electron'
-import type { DatabaseManager, RecurrencePatternRecord, TaskRecord } from './database'
+import { CronExpressionParser } from 'cron-parser'
+import type { DatabaseManager, RecurrencePatternRecord, RecurrencePatternObject, TaskRecord } from './database'
 import { createId } from '@paralleldrive/cuid2'
 
 /**
  * RecurrenceScheduler - Manages automatic creation of recurring task instances
  *
+ * Supports two pattern formats:
+ * 1. **Cron strings** (new): e.g. `"0 9 * * 1-5"` — parsed via cron-parser
+ * 2. **Legacy JSON objects** (backward compat): `{ type, interval, time, weekdays, ... }`
+ *
  * ## How It Works:
  * 1. Recurring tasks are stored as "templates" with `is_recurring=true` and `recurrence_parent_id=NULL`
  * 2. Templates have a `next_occurrence_at` timestamp indicating when the next instance should be created
  * 3. Every 60 seconds, the scheduler queries templates where `next_occurrence_at <= NOW()`
- * 4. For each due template, it creates a new task instance (copy of template with `recurrence_parent_id` set)
- * 5. The template's `next_occurrence_at` is updated to the next scheduled time
- *
- * ## Offline Catch-Up (Backfill):
- * When the app is closed/offline, missed occurrences are automatically backfilled on startup:
- *
- * **Example Scenario:**
- * - Recurring task: "Daily standup" at 9:00 AM
- * - App closed on Monday 9:00 AM
- * - App reopened on Thursday 2:00 PM
- *
- * **What Happens:**
- * 1. On startup, scheduler runs immediately (before the 60s interval)
- * 2. Finds template with `next_occurrence_at = Monday 9:00 AM` (< NOW)
- * 3. `catchUpMissedOccurrences()` creates instances:
- *    - Monday 9:00 AM (missed)
- *    - Tuesday 9:00 AM (missed)
- *    - Wednesday 9:00 AM (missed)
- *    - Thursday 9:00 AM (missed)
- * 4. Updates template's `next_occurrence_at = Friday 9:00 AM`
- * 5. User sees all 4 missed tasks in their list
- *
- * **Safety Limits:**
- * - Max 100 instances per template per catch-up (prevents runaway creation)
- * - Uses `created_at` timestamp from occurrence time (not current time) for proper sorting
- * - Indexed query on `next_occurrence_at` for performance
- *
- * ## Pattern Support:
- * - Daily: Every N days at specific time
- * - Weekly: Specific weekdays (e.g., Mon/Wed/Fri) at specific time
- * - Monthly: Specific day of month (handles month-end edge cases)
- * - Optional end date constraint
+ * 4. For each due template, it creates ONE instance (the latest missed occurrence)
+ * 5. The template's `next_occurrence_at` is advanced to the next future time
  */
 export class RecurrenceScheduler {
   private dbManager: DatabaseManager
@@ -56,6 +31,9 @@ export class RecurrenceScheduler {
     this.mainWindow = mainWindow
     console.log('[RecurrenceScheduler] Starting scheduler...')
 
+    // Repair recurring templates missing next_occurrence_at
+    this.repairMissingNextOccurrence()
+
     // Run immediately on startup to catch up on missed occurrences
     this.checkAndCreateDueInstances()
 
@@ -70,6 +48,44 @@ export class RecurrenceScheduler {
       clearInterval(this.intervalId)
       this.intervalId = null
       console.log('[RecurrenceScheduler] Scheduler stopped')
+    }
+  }
+
+  /**
+   * Fix recurring templates that have a recurrence_pattern but no next_occurrence_at.
+   * This can happen when tasks are created via MCP without calling initializeRecurringTask.
+   */
+  private repairMissingNextOccurrence(): void {
+    try {
+      const broken = this.dbManager.db.prepare(`
+        SELECT id, recurrence_pattern FROM tasks
+        WHERE is_recurring = 1
+          AND recurrence_parent_id IS NULL
+          AND recurrence_pattern IS NOT NULL
+          AND next_occurrence_at IS NULL
+      `).all() as { id: string; recurrence_pattern: string }[]
+
+      if (broken.length === 0) return
+
+      console.log(`[RecurrenceScheduler] Repairing ${broken.length} recurring tasks missing next_occurrence_at`)
+
+      for (const row of broken) {
+        const pattern: RecurrencePatternRecord = row.recurrence_pattern.startsWith('{')
+          ? JSON.parse(row.recurrence_pattern)
+          : row.recurrence_pattern
+
+        const now = new Date().toISOString()
+        const next = this.calculateNextOccurrence(pattern, now)
+
+        if (next) {
+          this.dbManager.db.prepare(`
+            UPDATE tasks SET next_occurrence_at = ?, updated_at = ? WHERE id = ?
+          `).run(next, now, row.id)
+          console.log(`[RecurrenceScheduler] Repaired task ${row.id}: next_occurrence_at = ${next}`)
+        }
+      }
+    } catch (err) {
+      console.error('[RecurrenceScheduler] Error repairing recurring tasks:', err)
     }
   }
 
@@ -97,8 +113,6 @@ export class RecurrenceScheduler {
       for (const templateRow of dueTemplates) {
         try {
           const template = this.deserializeTaskRow(templateRow)
-
-          // Catch up on missed occurrences (if offline)
           await this.catchUpMissedOccurrences(template)
         } catch (err) {
           console.error(`[RecurrenceScheduler] Error processing template ${templateRow.id}:`, err)
@@ -115,10 +129,8 @@ export class RecurrenceScheduler {
   }
 
   /**
-   * Backfill missed occurrences when app was offline/closed
-   *
-   * Example: If app was closed for 3 days and task recurs daily,
-   * this creates 3 task instances (one for each missed day)
+   * Simplified backfill: create ONE instance for the latest missed occurrence,
+   * then fast-forward next_occurrence_at to the next future time.
    */
   private async catchUpMissedOccurrences(template: TaskRecord): Promise<void> {
     if (!template.recurrence_pattern || !template.next_occurrence_at) {
@@ -126,43 +138,35 @@ export class RecurrenceScheduler {
     }
 
     const now = new Date()
-    const maxInstances = 100 // Safety limit: prevent creating thousands if app offline for months
-    let instancesCreated = 0
-    let currentOccurrence = new Date(template.next_occurrence_at)
 
-    // Loop: create an instance for each missed occurrence until we catch up to NOW
-    // Example: If next_occurrence_at = Monday 9am and NOW = Thursday 2pm,
-    //          this creates instances for Mon 9am, Tue 9am, Wed 9am, Thu 9am
-    while (currentOccurrence <= now && instancesCreated < maxInstances) {
-      // Create the missed instance with original occurrence time as created_at
-      // This ensures proper chronological sorting in task list
-      this.createInstanceFromTemplate(template, currentOccurrence.toISOString())
-      instancesCreated++
+    // Create one instance for the current (latest missed) occurrence
+    this.createInstanceFromTemplate(template, template.next_occurrence_at)
 
-      // Calculate when the NEXT occurrence should be (after this one)
-      const nextOccurrence = this.calculateNextOccurrence(
+    // Fast-forward: find the next future occurrence after NOW
+    let nextOccurrence = this.calculateNextOccurrence(
+      template.recurrence_pattern,
+      template.next_occurrence_at
+    )
+
+    // Skip past any still-missed occurrences to find the next future one
+    let iterations = 0
+    while (nextOccurrence && new Date(nextOccurrence) <= now && iterations < 1000) {
+      nextOccurrence = this.calculateNextOccurrence(
         template.recurrence_pattern,
-        currentOccurrence.toISOString()
+        nextOccurrence
       )
-
-      if (!nextOccurrence) {
-        // No more occurrences (reached endDate constraint)
-        // Mark template as finished by clearing next_occurrence_at
-        this.dbManager.db.prepare(`
-          UPDATE tasks
-          SET next_occurrence_at = NULL, updated_at = ?
-          WHERE id = ?
-        `).run(now.toISOString(), template.id)
-        return
-      }
-
-      currentOccurrence = new Date(nextOccurrence)
+      iterations++
     }
 
-    // Update template with the next future occurrence
-    // Example: If we just created Thu 9am, next_occurrence_at becomes Fri 9am
-    const lastOccurrence = new Date(currentOccurrence)
-    lastOccurrence.setMinutes(lastOccurrence.getMinutes() - 1) // Adjust to get the actual last created time
+    if (!nextOccurrence) {
+      // No more occurrences — mark template as finished
+      this.dbManager.db.prepare(`
+        UPDATE tasks
+        SET next_occurrence_at = NULL, updated_at = ?
+        WHERE id = ?
+      `).run(now.toISOString(), template.id)
+      return
+    }
 
     this.dbManager.db.prepare(`
       UPDATE tasks
@@ -171,20 +175,19 @@ export class RecurrenceScheduler {
           updated_at = ?
       WHERE id = ?
     `).run(
-      lastOccurrence.toISOString(),
-      currentOccurrence.toISOString(),
+      template.next_occurrence_at,
+      nextOccurrence,
       now.toISOString(),
       template.id
     )
 
-    console.log(`[RecurrenceScheduler] Created ${instancesCreated} instances for template "${template.title}"`)
+    console.log(`[RecurrenceScheduler] Created 1 instance for template "${template.title}", next: ${nextOccurrence}`)
   }
 
   private createInstanceFromTemplate(template: TaskRecord, occurrenceTime: string): void {
     const id = createId()
     const now = new Date().toISOString()
 
-    // Copy task from template, but mark as non-recurring instance
     this.dbManager.db.prepare(`
       INSERT INTO tasks (
         id, title, description, type, priority, status, assignee, due_date,
@@ -219,7 +222,33 @@ export class RecurrenceScheduler {
     console.log(`[RecurrenceScheduler] Created instance ${id} from template ${template.id}`)
   }
 
+  /**
+   * Calculate the next occurrence after `after`.
+   * Accepts a cron expression string or a legacy JSON pattern object.
+   */
   calculateNextOccurrence(pattern: RecurrencePatternRecord, after: string): string | null {
+    // New path: cron string
+    if (typeof pattern === 'string') {
+      return this.calculateNextFromCron(pattern, after)
+    }
+
+    // Legacy path: JSON object
+    return this.calculateNextFromLegacy(pattern, after)
+  }
+
+  private calculateNextFromCron(cron: string, after: string): string | null {
+    try {
+      const interval = CronExpressionParser.parse(cron, {
+        currentDate: new Date(after),
+        tz: 'UTC'
+      })
+      return interval.next().toISOString()
+    } catch {
+      return null
+    }
+  }
+
+  private calculateNextFromLegacy(pattern: RecurrencePatternObject, after: string): string | null {
     const afterDate = new Date(after)
     const [hours, minutes] = pattern.time.split(':').map(Number)
 
@@ -238,9 +267,8 @@ export class RecurrenceScheduler {
           return null
         }
 
-        // Find next matching weekday
         nextDate = new Date(afterDate)
-        nextDate.setDate(nextDate.getDate() + 1) // Start from tomorrow
+        nextDate.setDate(nextDate.getDate() + 1)
 
         let daysChecked = 0
         while (daysChecked < 7 * pattern.interval) {
@@ -254,7 +282,7 @@ export class RecurrenceScheduler {
         }
 
         if (daysChecked >= 7 * pattern.interval) {
-          return null // Couldn't find matching weekday
+          return null
         }
         break
       }
@@ -267,13 +295,11 @@ export class RecurrenceScheduler {
         nextDate = new Date(afterDate)
         nextDate.setMonth(nextDate.getMonth() + pattern.interval)
 
-        // Handle edge case: if monthDay doesn't exist in target month (e.g., Feb 30)
         const targetMonth = nextDate.getMonth()
         nextDate.setDate(Math.min(pattern.monthDay, this.getDaysInMonth(nextDate)))
 
-        // If setting the date caused month to roll over, go back to last day of intended month
         if (nextDate.getMonth() !== targetMonth) {
-          nextDate.setDate(0) // Go to last day of previous month
+          nextDate.setDate(0)
         }
 
         nextDate.setHours(hours, minutes, 0, 0)
@@ -281,7 +307,6 @@ export class RecurrenceScheduler {
       }
 
       case 'custom': {
-        // For custom patterns, fall back to daily for now
         nextDate = new Date(afterDate)
         nextDate.setDate(nextDate.getDate() + pattern.interval)
         nextDate.setHours(hours, minutes, 0, 0)
@@ -297,9 +322,6 @@ export class RecurrenceScheduler {
       return null
     }
 
-    // Check maxOccurrences constraint (would need to track occurrence count)
-    // For now, we skip this check as it requires additional state tracking
-
     return nextDate.toISOString()
   }
 
@@ -307,7 +329,6 @@ export class RecurrenceScheduler {
     return new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate()
   }
 
-  // Helper to deserialize task row (simplified version of database.ts deserializeTask)
   private deserializeTaskRow(row: any): TaskRecord {
     return {
       ...row,
@@ -323,7 +344,11 @@ export class RecurrenceScheduler {
       snoozed_until: row.snoozed_until ?? null,
       resolution: row.resolution ?? null,
       is_recurring: row.is_recurring === 1,
-      recurrence_pattern: row.recurrence_pattern ? JSON.parse(row.recurrence_pattern) : null,
+      recurrence_pattern: row.recurrence_pattern
+        ? (row.recurrence_pattern.startsWith('{')
+            ? JSON.parse(row.recurrence_pattern)
+            : row.recurrence_pattern)
+        : null,
       recurrence_parent_id: row.recurrence_parent_id ?? null,
       last_occurrence_at: row.last_occurrence_at ?? null,
       next_occurrence_at: row.next_occurrence_at ?? null
