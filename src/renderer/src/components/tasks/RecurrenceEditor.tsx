@@ -26,14 +26,94 @@ const FREQUENCY_OPTIONS = [
   { value: 'monthly', label: 'Monthly' }
 ]
 
+type FrequencyType = 'daily' | 'weekly' | 'monthly'
+
+/** Parse a cron string back into visual controls state */
+function parseCronToState(cron: string): {
+  type: FrequencyType
+  interval: number
+  time: string
+  weekdays: number[]
+  monthDay: number
+} {
+  const parts = cron.trim().split(/\s+/)
+  if (parts.length < 5) {
+    return { type: 'daily', interval: 1, time: '09:00', weekdays: [1, 2, 3, 4, 5], monthDay: 1 }
+  }
+
+  const [minute, hour, dayOfMonth, , dayOfWeek] = parts
+  const time = `${hour.padStart(2, '0')}:${minute.padStart(2, '0')}`
+
+  // Monthly: specific day-of-month, any day-of-week
+  if (dayOfMonth !== '*' && !dayOfMonth.startsWith('*/') && dayOfWeek === '*') {
+    return { type: 'monthly', interval: 1, time, weekdays: [1, 2, 3, 4, 5], monthDay: parseInt(dayOfMonth) || 1 }
+  }
+
+  // Weekly: specific day-of-week
+  if (dayOfWeek !== '*') {
+    const weekdays = dayOfWeek.split(',').flatMap(part => {
+      if (part.includes('-')) {
+        const [start, end] = part.split('-').map(Number)
+        const days: number[] = []
+        for (let i = start; i <= end; i++) days.push(i)
+        return days
+      }
+      return [parseInt(part)]
+    }).filter(n => !isNaN(n))
+    return { type: 'weekly', interval: 1, time, weekdays, monthDay: 1 }
+  }
+
+  // Daily
+  let interval = 1
+  if (dayOfMonth.startsWith('*/')) {
+    interval = parseInt(dayOfMonth.slice(2)) || 1
+  }
+  return { type: 'daily', interval, time, weekdays: [1, 2, 3, 4, 5], monthDay: 1 }
+}
+
+/** Build a cron expression from visual controls */
+function buildCronExpression(
+  type: FrequencyType,
+  interval: number,
+  time: string,
+  weekdays: number[],
+  monthDay: number
+): string {
+  const [hour, minute] = time.split(':').map(s => parseInt(s) || 0)
+
+  switch (type) {
+    case 'daily':
+      return interval === 1
+        ? `${minute} ${hour} * * *`
+        : `${minute} ${hour} */${interval} * *`
+    case 'weekly':
+      return `${minute} ${hour} * * ${weekdays.sort((a, b) => a - b).join(',')}`
+    case 'monthly':
+      return `${minute} ${hour} ${monthDay} * *`
+  }
+}
+
 export function RecurrenceEditor({ value, onChange }: RecurrenceEditorProps) {
   const [enabled, setEnabled] = useState(!!value)
-  const [type, setType] = useState<RecurrencePattern['type']>(value?.type || 'daily')
-  const [interval, setInterval] = useState(value?.interval || 1)
-  const [time, setTime] = useState(value?.time || '09:00')
-  const [weekdays, setWeekdays] = useState<number[]>(value?.weekdays || [1, 2, 3, 4, 5]) // Mon-Fri default
-  const [monthDay, setMonthDay] = useState(value?.monthDay || 1)
-  const [endDate, setEndDate] = useState(value?.endDate || '')
+  const [advancedMode, setAdvancedMode] = useState(false)
+  const [rawCron, setRawCron] = useState(typeof value === 'string' ? value : '')
+
+  // Parse initial state from either cron string or legacy object
+  const initialState = typeof value === 'string'
+    ? parseCronToState(value)
+    : {
+        type: (value?.type || 'daily') as FrequencyType,
+        interval: value?.interval || 1,
+        time: value?.time || '09:00',
+        weekdays: value?.weekdays || [1, 2, 3, 4, 5],
+        monthDay: value?.monthDay || 1
+      }
+
+  const [type, setType] = useState<FrequencyType>(initialState.type)
+  const [interval, setInterval] = useState(initialState.interval)
+  const [time, setTime] = useState(initialState.time)
+  const [weekdays, setWeekdays] = useState<number[]>(initialState.weekdays)
+  const [monthDay, setMonthDay] = useState(initialState.monthDay)
 
   useEffect(() => {
     if (!enabled) {
@@ -41,24 +121,17 @@ export function RecurrenceEditor({ value, onChange }: RecurrenceEditorProps) {
       return
     }
 
-    const pattern: RecurrencePattern = {
-      type,
-      interval,
-      time
+    if (advancedMode) {
+      if (rawCron.trim()) {
+        onChange(rawCron.trim())
+      }
+      return
     }
 
-    if (type === 'weekly') {
-      pattern.weekdays = weekdays
-    } else if (type === 'monthly') {
-      pattern.monthDay = monthDay
-    }
-
-    if (endDate) {
-      pattern.endDate = endDate
-    }
-
-    onChange(pattern)
-  }, [enabled, type, interval, time, weekdays, monthDay, endDate])
+    const cron = buildCronExpression(type, interval, time, weekdays, monthDay)
+    setRawCron(cron)
+    onChange(cron)
+  }, [enabled, type, interval, time, weekdays, monthDay, advancedMode, rawCron])
 
   const toggleWeekday = (day: number) => {
     setWeekdays(prev =>
@@ -79,9 +152,35 @@ export function RecurrenceEditor({ value, onChange }: RecurrenceEditorProps) {
         <Label htmlFor="enable-recurrence" className="cursor-pointer font-medium">
           Recurring Task
         </Label>
+        {enabled && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => setAdvancedMode(!advancedMode)}
+            className="ml-auto text-xs text-muted-foreground"
+          >
+            {advancedMode ? 'Visual' : 'Cron'}
+          </Button>
+        )}
       </div>
 
-      {enabled && (
+      {enabled && advancedMode && (
+        <div className="pl-6">
+          <Label htmlFor="raw-cron">Cron expression</Label>
+          <Input
+            id="raw-cron"
+            placeholder="0 9 * * 1-5"
+            value={rawCron}
+            onChange={(e) => setRawCron(e.target.value)}
+          />
+          <p className="mt-1 text-xs text-muted-foreground">
+            minute hour day-of-month month day-of-week
+          </p>
+        </div>
+      )}
+
+      {enabled && !advancedMode && (
         <div className="space-y-4 pl-6">
           <div className="grid gap-4 sm:grid-cols-2">
             <div>
@@ -89,13 +188,13 @@ export function RecurrenceEditor({ value, onChange }: RecurrenceEditorProps) {
               <Select
                 id="recurrence-type"
                 value={type}
-                onChange={(e) => setType(e.target.value as RecurrencePattern['type'])}
+                onChange={(e) => setType(e.target.value as FrequencyType)}
                 options={FREQUENCY_OPTIONS}
               />
             </div>
 
             <div>
-              <Label htmlFor="recurrence-time">Time</Label>
+              <Label htmlFor="recurrence-time">Time (UTC)</Label>
               <Input
                 id="recurrence-time"
                 type="time"
@@ -152,15 +251,9 @@ export function RecurrenceEditor({ value, onChange }: RecurrenceEditorProps) {
             </div>
           )}
 
-          <div>
-            <Label htmlFor="recurrence-enddate">End date (optional)</Label>
-            <Input
-              id="recurrence-enddate"
-              type="date"
-              value={endDate}
-              onChange={(e) => setEndDate(e.target.value)}
-            />
-          </div>
+          <p className="text-xs text-muted-foreground">
+            Cron: <code className="bg-accent px-1 rounded">{buildCronExpression(type, interval, time, weekdays, monthDay)}</code>
+          </p>
         </div>
       )}
     </div>

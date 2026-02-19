@@ -328,7 +328,7 @@ export function AgentTranscriptPanel({ messages, status, onStop, onRestart, onSe
   }
 
   return (
-    <div className={`flex flex-col h-full bg-[#0d1117] border-l border-border ${className ?? ''}`}>
+    <div className={`flex flex-col min-h-0 bg-[#0d1117] border-l border-border ${className ?? ''}`}>
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-border/50 shrink-0">
         <div className="flex items-center gap-2">

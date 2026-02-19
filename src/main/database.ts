@@ -4,6 +4,7 @@ import { join } from 'path'
 import { existsSync, mkdirSync, rmSync } from 'fs'
 import { createId } from '@paralleldrive/cuid2'
 import { TaskStatus } from '../shared/constants'
+import { startTaskApiServer } from './task-api-server'
 
 export interface AgentRow {
   id: string
@@ -211,7 +212,7 @@ export interface TaskRow {
   updated_at: string
 }
 
-export interface RecurrencePatternRecord {
+export interface RecurrencePatternObject {
   type: 'daily' | 'weekly' | 'monthly' | 'custom'
   interval: number
   time: string
@@ -220,6 +221,9 @@ export interface RecurrencePatternRecord {
   endDate?: string
   maxOccurrences?: number
 }
+
+/** A cron expression string OR a legacy JSON object */
+export type RecurrencePatternRecord = RecurrencePatternObject | string
 
 export interface TaskRecord {
   id: string
@@ -251,6 +255,9 @@ export interface TaskRecord {
   updated_at: string
 }
 
+/** @deprecated Use RecurrencePatternRecord union type instead */
+export type LegacyRecurrencePatternRecord = RecurrencePatternObject
+
 export interface FileAttachmentRecord {
   id: string
   filename: string
@@ -277,6 +284,8 @@ export interface CreateTaskData {
   is_recurring?: boolean
   recurrence_pattern?: RecurrencePatternRecord | null
   recurrence_parent_id?: string | null
+  /** Cron expression — if provided, sets is_recurring=true and stores as recurrence_pattern */
+  cron?: string
 }
 
 export interface UpdateTaskData {
@@ -324,7 +333,7 @@ const UPDATABLE_COLUMNS = new Set([
   'next_occurrence_at'
 ])
 
-const JSON_COLUMNS = new Set(['labels', 'attachments', 'repos', 'output_fields', 'skill_ids', 'recurrence_pattern'])
+const JSON_COLUMNS = new Set(['labels', 'attachments', 'repos', 'output_fields', 'skill_ids'])
 
 function deserializeTask(row: TaskRow): TaskRecord {
   return {
@@ -341,7 +350,11 @@ function deserializeTask(row: TaskRow): TaskRecord {
     snoozed_until: row.snoozed_until ?? null,
     resolution: row.resolution ?? null,
     is_recurring: row.is_recurring === 1,
-    recurrence_pattern: row.recurrence_pattern ? JSON.parse(row.recurrence_pattern) as RecurrencePatternRecord : null,
+    recurrence_pattern: row.recurrence_pattern
+      ? (row.recurrence_pattern.startsWith('{')
+          ? JSON.parse(row.recurrence_pattern) as RecurrencePatternObject
+          : row.recurrence_pattern as string)
+      : null,
     recurrence_parent_id: row.recurrence_parent_id ?? null,
     last_occurrence_at: row.last_occurrence_at ?? null,
     next_occurrence_at: row.next_occurrence_at ?? null
@@ -950,6 +963,236 @@ export class DatabaseManager {
         VALUES (?, ?, ?, ?, 1, ?, ?)
       `).run(createId(), 'Default Agent', 'http://localhost:4096', '{}', now, now)
     }
+
+    // Initialize task management MCP server for default agent
+    this.initializeTaskManagementMcpServer()
+
+    // Initialize orchestrator skill
+    this.initializeOrchestratorSkill()
+  }
+
+  private initializeOrchestratorSkill(): void {
+    const now = new Date().toISOString()
+
+    // Check if mastermind skill already exists
+    const existingSkill = this.getSkillByName('Mastermind')
+    if (existingSkill) return
+
+    // Create the mastermind skill
+    const skillContent = `# Mastermind Skill
+
+You are helping the user manage their tasks. When analyzing tasks or making recommendations:
+
+## 1. Understanding Historical Patterns
+
+When a new task is created or user asks for recommendations:
+- Use \`find_similar_tasks\` to find tasks with similar titles/descriptions
+- Look at how those tasks were labeled, which agent handled them, and which skills were used
+- Identify patterns (e.g., "tasks with 'bug' in title are usually labeled 'bug', 'high' priority")
+
+## 2. Making Recommendations
+
+Based on historical patterns, suggest:
+- **Labels**: Common labels from similar tasks (e.g., "frontend", "backend", "bug", "feature")
+- **Skills**: Skills that were effective for similar tasks
+- **Agent**: Agent that successfully handled similar tasks
+- **Priority**: Priority level based on task urgency and type
+
+Format your recommendations clearly:
+\`\`\`
+I found 5 similar tasks about login bugs. Based on those:
+- Labels: "bug", "frontend", "authentication"
+- Agent: Frontend Agent (handled 4/5 similar tasks)
+- Priority: High (login issues are critical)
+- Skills: Authentication Debugging, Frontend Troubleshooting
+
+Should I apply these recommendations?
+\`\`\`
+
+## 3. Applying Recommendations
+
+If user approves (or if you're very confident), use \`update_task\` to apply:
+\`\`\`json
+{
+  "task_id": "task-123",
+  "labels": ["bug", "frontend", "authentication"],
+  "agent_id": "agent-frontend-001",
+  "skill_ids": ["skill-auth-debug", "skill-frontend"],
+  "priority": "high"
+}
+\`\`\`
+
+## 4. Answering Questions
+
+Handle queries like:
+- "What tasks are pending?" → Use \`list_tasks\` with status="not_started"
+- "Show high priority bugs" → Use \`list_tasks\` with priority="high" and labels=["bug"]
+- "How many tasks does Frontend Agent have?" → Use \`list_tasks\` with agent_id filter
+
+## 5. Statistics and Insights
+
+Use \`get_task_statistics\` to provide insights:
+- Label usage trends
+- Agent workload distribution
+- Completion rates
+- Priority distribution
+
+## Example Workflow
+
+User: "I just created a task: Fix payment gateway timeout"
+
+You:
+1. Call \`find_similar_tasks\` with title_keywords="payment gateway"
+2. Analyze results: Found 3 similar payment tasks
+3. Pattern: All labeled "bug", "backend", "payment", assigned to Backend Agent
+4. Recommend same pattern
+5. Ask user or apply if confident
+
+Remember: Be helpful, concise, and proactive. Learn from history, but adapt to context.`
+
+    const skillId = createId()
+    this.db
+      .prepare(
+        `
+      INSERT INTO skills (id, name, description, content, version, confidence, uses, last_used, tags, is_deleted, created_at, updated_at)
+      VALUES (?, ?, ?, ?, 1, ?, 0, NULL, ?, 0, ?, ?)
+    `
+      )
+      .run(
+        skillId,
+        'Mastermind',
+        'Helps agents analyze tasks, make recommendations based on historical patterns, and manage task metadata intelligently',
+        skillContent,
+        0.8, // Higher confidence since this is a system skill
+        JSON.stringify(['mastermind', 'task-management', 'system']),
+        now,
+        now
+      )
+
+    // Add skill to default agent's configuration
+    const defaultAgent = this.db
+      .prepare('SELECT id, config FROM agents WHERE is_default = 1')
+      .get() as { id: string; config: string } | undefined
+
+    if (defaultAgent) {
+      let config: any
+      try {
+        config = JSON.parse(defaultAgent.config)
+      } catch {
+        config = {}
+      }
+
+      const skillIds = config.skill_ids || []
+      if (!skillIds.includes(skillId)) {
+        skillIds.push(skillId)
+        config.skill_ids = skillIds
+
+        this.db
+          .prepare(
+            `
+          UPDATE agents
+          SET config = ?, updated_at = ?
+          WHERE id = ?
+        `
+          )
+          .run(JSON.stringify(config), now, defaultAgent.id)
+      }
+    }
+  }
+
+  private initializeTaskManagementMcpServer(): void {
+    const now = new Date().toISOString()
+
+    // Absolute path to the MCP server script (__dirname = out/main/)
+    const mcpServerPath = join(__dirname, 'mcp-servers', 'task-management-mcp.js')
+
+    // Start the HTTP API server so the MCP server can call back to it
+    startTaskApiServer(this).catch(err =>
+      console.error('[Database] Failed to start task API server:', err)
+    )
+
+    // Check if task-management MCP server already exists
+    const existingServer = this.db.prepare(
+      'SELECT id, args FROM mcp_servers WHERE name = ?'
+    ).get('task-management') as { id: string; args: string } | undefined
+
+    let mcpServerId: string
+
+    // Define the tools available in the MCP server
+    const tools = [
+      { name: 'list_tasks', description: 'List all tasks with optional filters (status, priority, agent, labels)' },
+      { name: 'create_task', description: 'Create a new task with title, description, type, priority, labels, assignee, agent_id, skill_ids, due date. Use cron field for recurring tasks (e.g. "0 9 * * 1-5")' },
+      { name: 'get_task', description: 'Get detailed information about a specific task by ID' },
+      { name: 'update_task', description: 'Update task metadata (labels, skills, agent assignment, priority, status)' },
+      { name: 'list_agents', description: 'List all available agents with their configurations' },
+      { name: 'list_skills', description: 'List all available skills with their descriptions' },
+      { name: 'find_similar_tasks', description: 'Find historical tasks similar to given criteria for pattern analysis' },
+      { name: 'get_task_statistics', description: 'Get aggregated statistics about tasks (label usage, agent workload, completion rate)' }
+    ]
+
+    if (!existingServer) {
+      // Create the task management MCP server
+      mcpServerId = createId()
+
+      this.db.prepare(`
+        INSERT INTO mcp_servers (id, name, type, command, args, environment, tools, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        mcpServerId,
+        'task-management',
+        'local',
+        'node',
+        JSON.stringify([mcpServerPath]),
+        JSON.stringify({}),
+        JSON.stringify(tools),
+        now,
+        now
+      )
+    } else {
+      mcpServerId = existingServer.id
+
+      // Always update path and refresh tools
+      this.db.prepare(`
+        UPDATE mcp_servers SET args = ?, environment = ?, tools = ?, updated_at = ? WHERE id = ?
+      `).run(
+        JSON.stringify([mcpServerPath]),
+        JSON.stringify({}),
+        JSON.stringify(tools),
+        now,
+        mcpServerId
+      )
+    }
+
+    // Add to default agent's MCP servers if not already present
+    const defaultAgent = this.db.prepare(
+      'SELECT id, config FROM agents WHERE is_default = 1'
+    ).get() as { id: string; config: string } | undefined
+
+    if (defaultAgent) {
+      let config: any
+      try {
+        config = JSON.parse(defaultAgent.config)
+      } catch {
+        config = {}
+      }
+
+      const mcpServers = config.mcp_servers || []
+      // Check if already present (either as string ID or AgentMcpServerEntry)
+      const alreadyPresent = mcpServers.some((s: any) =>
+        typeof s === 'string' ? s === mcpServerId : s.serverId === mcpServerId
+      )
+
+      if (!alreadyPresent) {
+        mcpServers.push(mcpServerId)
+        config.mcp_servers = mcpServers
+
+        this.db.prepare(`
+          UPDATE agents
+          SET config = ?, updated_at = ?
+          WHERE id = ?
+        `).run(JSON.stringify(config), now, defaultAgent.id)
+      }
+    }
   }
 
   private migrateInlineMcpServers(): void {
@@ -1025,6 +1268,14 @@ export class DatabaseManager {
     const id = createId()
     const now = new Date().toISOString()
 
+    // If cron shorthand is provided, use it
+    const isRecurring = data.cron ? true : !!data.is_recurring
+    const recurrencePattern = data.cron
+      ? data.cron
+      : data.recurrence_pattern
+        ? (typeof data.recurrence_pattern === 'string' ? data.recurrence_pattern : JSON.stringify(data.recurrence_pattern))
+        : null
+
     this.db.prepare(`
       INSERT INTO tasks (
         id, title, description, type, priority, status, assignee, due_date,
@@ -1049,8 +1300,8 @@ export class DatabaseManager {
       data.external_id ?? null,
       data.source_id ?? null,
       data.source ?? 'local',
-      data.is_recurring ? 1 : 0,
-      data.recurrence_pattern ? JSON.stringify(data.recurrence_pattern) : null,
+      isRecurring ? 1 : 0,
+      recurrencePattern,
       data.recurrence_parent_id ?? null,
       now,
       now
@@ -1069,6 +1320,9 @@ export class DatabaseManager {
       setClauses.push(`${key} = ?`)
       if (JSON_COLUMNS.has(key)) {
         values.push(JSON.stringify(value))
+      } else if (key === 'recurrence_pattern') {
+        // Cron string stored directly, legacy object JSON-stringified
+        values.push(value === null ? null : typeof value === 'string' ? value : JSON.stringify(value))
       } else if (typeof value === 'boolean') {
         values.push(value ? 1 : 0)
       } else {

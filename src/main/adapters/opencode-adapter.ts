@@ -152,6 +152,46 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     const baseUrl = this.serverUrl || config.serverUrl || DEFAULT_SERVER_URL
     const ocClient = OpenCodeSDK!.createOpencodeClient({ baseUrl, fetch: noTimeoutFetch as any })
 
+    // Register MCP servers BEFORE creating session so the session picks them up
+    if (config.mcpServers) {
+      for (const [name, mcpConfig] of Object.entries(config.mcpServers)) {
+        try {
+          console.log(`[OpencodeAdapter] Registering MCP server: ${name}`)
+
+          // Add MCP server
+          const addResult: any = await ocClient.mcp.add({
+            body: {
+              name,
+              config: mcpConfig.type === 'http'
+                ? { type: 'remote' as const, url: mcpConfig.url ?? '', headers: mcpConfig.headers }
+                : { type: 'local' as const, command: [mcpConfig.command ?? '', ...(mcpConfig.args ?? [])], environment: mcpConfig.env }
+            },
+            ...(config.workspaceDir && { query: { directory: config.workspaceDir } })
+          })
+
+          if (addResult.error) {
+            console.error(`[OpencodeAdapter] mcp.add error for ${name}:`, addResult.error)
+            continue
+          }
+
+          // Connect to MCP server
+          const connectResult: any = await ocClient.mcp.connect({
+            path: { name },
+            ...(config.workspaceDir && { query: { directory: config.workspaceDir } })
+          })
+
+          if (connectResult.error) {
+            console.error(`[OpencodeAdapter] mcp.connect error for ${name}:`, connectResult.error)
+            continue
+          }
+
+          console.log(`[OpencodeAdapter] Successfully registered MCP server: ${name}`)
+        } catch (mcpError) {
+          console.error(`[OpencodeAdapter] Failed to register MCP server ${name}:`, mcpError)
+        }
+      }
+    }
+
     // Create OpenCode session
     const result: any = await ocClient.session.create({
       body: { title: `Task ${config.taskId}` },
@@ -301,6 +341,7 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     for (const msg of messagesResult.data) {
       if (!msg.info) continue
       const msgId = msg.info.id
+      const msgRole = msg.info.role // Get role from message
 
       // Skip if already seen and no parts have changed
       const isNewMessage = !seenMessageIds.has(msgId)
@@ -332,8 +373,10 @@ export class OpencodeAdapter implements CodingAgentAdapter {
               type: part.type,
               text: part.text,
               content: part.text,
+              role: msgRole, // Include role from message
               tool: part.tool,
-              state: part.state
+              state: part.state,
+              update: !isNewPart  // Mark as update if part was seen before
             })
           }
         } else if (isNewPart) {
@@ -342,7 +385,8 @@ export class OpencodeAdapter implements CodingAgentAdapter {
             id: partId,
             type: part.type,
             text: part.text,
-            content: part.text
+            content: part.text,
+            role: msgRole // Include role from message
           })
         }
       }

@@ -6,6 +6,7 @@ import { SettingsWorkspace } from '@/components/settings/SettingsWorkspace'
 import { TaskForm, type TaskFormSubmitData } from '@/components/tasks/TaskForm'
 import { DeleteConfirmDialog } from '@/components/tasks/DeleteConfirmDialog'
 import { Dialog, DialogContent, DialogHeader, DialogBody, DialogTitle } from '@/components/ui/Dialog'
+import { OrchestratorPanel } from '@/components/orchestrator/OrchestratorPanel'
 import { useTasks } from '@/hooks/use-tasks'
 import { useUIStore } from '@/stores/ui-store'
 import { useAgentStore } from '@/stores/agent-store'
@@ -17,6 +18,8 @@ import { isOverdue, isSnoozed } from '@/lib/utils'
 import { useEffect, useState, useCallback } from 'react'
 import { TaskStatus } from '@/types'
 import type { FileAttachment } from '@/types'
+import { MessageSquare } from 'lucide-react'
+import { Button } from '@/components/ui/Button'
 
 export function AppLayout() {
   const { tasks, allTasks, selectedTask, createTask, updateTask, deleteTask, selectTask } = useTasks()
@@ -53,6 +56,8 @@ export function AppLayout() {
     setTimeout(() => setToast(null), isError ? 5000 : 3000)
   }, [])
 
+  const [showOrchestrator, setShowOrchestrator] = useState(false)
+
   // Initialize auto-start feature
   useAgentAutoStart({
     tasks: allTasks,
@@ -75,10 +80,21 @@ export function AppLayout() {
 
       {/* Workspace — fills remaining space via CSS Grid 1fr */}
       <main className="flex flex-col min-w-0 overflow-hidden bg-background">
-        {/* Drag region for macOS traffic lights */}
-        <div className="drag-region h-12 flex-shrink-0" />
+        {/* Drag region for macOS traffic lights with mastermind toggle */}
+        <div className="drag-region h-12 flex-shrink-0 flex items-center justify-end px-4">
+          <Button
+            variant={showOrchestrator ? 'default' : 'ghost'}
+            size="sm"
+            onClick={() => setShowOrchestrator(!showOrchestrator)}
+            className="no-drag h-7 px-2"
+          >
+            <MessageSquare className="h-3.5 w-3.5 mr-1" />
+            <span className="text-xs">Mastermind</span>
+          </Button>
+        </div>
         <DepsWarningBanner />
-        <div className="flex-1 overflow-hidden">
+        <div className="flex-1 overflow-hidden relative">
+          {/* Main workspace content */}
           {activeModal === 'settings' ? (
             <SettingsWorkspace />
           ) : sidebarView === 'skills' ? (
@@ -137,6 +153,16 @@ export function AppLayout() {
               }}
             />
           )}
+
+          {/* Orchestrator slide-in panel */}
+          <div
+            className={`absolute top-0 right-0 bottom-0 w-96 transition-transform duration-200 ${
+              showOrchestrator ? 'translate-x-0' : 'translate-x-full'
+            }`}
+            style={{ zIndex: 10 }}
+          >
+            <OrchestratorPanel onClose={() => setShowOrchestrator(false)} />
+          </div>
         </div>
       </main>
 

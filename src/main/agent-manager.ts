@@ -11,6 +11,7 @@ import { ClaudeCodeAdapter } from './adapters/claude-code-adapter'
 import { AcpAdapter } from './adapters/acp-adapter'
 import type { CodingAgentAdapter, SessionConfig, MessagePart, SessionMessage } from './adapters/coding-agent-adapter'
 import { SessionStatusType, MessagePartType } from './adapters/coding-agent-adapter'
+import { getTaskApiPort } from './task-api-server'
 
 let OpenCodeSDK: typeof import('@opencode-ai/sdk') | null = null
 
@@ -150,11 +151,20 @@ export class AgentManager extends EventEmitter {
       if (!mcpServer) continue
 
       if (mcpServer.type === 'local') {
+        // Inject TASK_API_URL for the task-management MCP server
+        let env = { ...mcpServer.environment }
+        if (mcpServer.name === 'task-management') {
+          const apiPort = getTaskApiPort()
+          if (apiPort) {
+            env = { ...env, TASK_API_URL: `http://127.0.0.1:${apiPort}` }
+          }
+        }
+
         result[mcpServer.name] = {
           type: 'stdio',
           command: mcpServer.command,
           args: mcpServer.args,
-          env: mcpServer.environment
+          env
         }
       } else if (mcpServer.type === 'remote') {
         result[mcpServer.name] = {
@@ -259,7 +269,7 @@ export class AgentManager extends EventEmitter {
       }
 
       // Generate AGENTS.md and CLAUDE.md with skill directory
-      this.writeAgentsDocumentation(workspaceDir, skills, task?.repos || [])
+      this.writeAgentsDocumentation(workspaceDir, skills, task?.repos || [], agentId)
     } catch (error) {
       console.error('[AgentManager] Error writing skill files:', error)
     }
@@ -271,7 +281,8 @@ export class AgentManager extends EventEmitter {
   private writeAgentsDocumentation(
     workspaceDir: string,
     skills: SkillRecord[],
-    repos: string[]
+    repos: string[],
+    agentId?: string
   ): void {
     try {
       const agentsDir = join(workspaceDir, '.agents')
@@ -281,12 +292,14 @@ export class AgentManager extends EventEmitter {
       const sortedSkills = [...skills].sort((a, b) => b.confidence - a.confidence)
 
       // Generate AGENTS.md
-      const agentsMd = this.generateAgentsMd(sortedSkills, repos, workspaceDir)
+      const agentsMd = this.generateAgentsMd(sortedSkills, repos, workspaceDir, agentId)
       writeFileSync(join(agentsDir, 'AGENTS.md'), agentsMd, 'utf-8')
 
-      // Generate CLAUDE.md
-      const claudeMd = this.generateClaudeMd(sortedSkills, repos, workspaceDir)
+      // Generate CLAUDE.md — write to both .agents/ and workspace root
+      // OpenCode reads CLAUDE.md from the workspace root directory
+      const claudeMd = this.generateClaudeMd(sortedSkills, repos, workspaceDir, agentId)
       writeFileSync(join(agentsDir, 'CLAUDE.md'), claudeMd, 'utf-8')
+      writeFileSync(join(workspaceDir, 'CLAUDE.md'), claudeMd, 'utf-8')
 
       console.log('[AgentManager] Generated AGENTS.md and CLAUDE.md with skill directory')
     } catch (error) {
@@ -297,12 +310,51 @@ export class AgentManager extends EventEmitter {
   /**
    * Generates AGENTS.md content with skill directory.
    */
-  private generateAgentsMd(skills: SkillRecord[], repos: string[], workspaceDir: string): string {
+  private generateAgentsMd(skills: SkillRecord[], repos: string[], workspaceDir: string, agentId?: string): string {
     const now = new Date().toISOString()
 
     let md = `# Agent Session Configuration\n\n`
     md += `**Generated:** ${now}\n`
     md += `---\n\n`
+
+    // Add MCP Servers section
+    if (agentId) {
+      const agent = this.db.getAgent(agentId)
+      if (agent?.config?.mcp_servers && agent.config.mcp_servers.length > 0) {
+        md += `## Available MCP Servers & Tools\n\n`
+        md += `This session has access to the following Model Context Protocol (MCP) servers and their tools:\n\n`
+
+        for (const entry of agent.config.mcp_servers) {
+          const serverId = typeof entry === 'string' ? entry : (entry as AgentMcpServerEntry).serverId
+          const enabledTools = typeof entry === 'string' ? undefined : (entry as AgentMcpServerEntry).enabledTools
+          const mcpServer = this.db.getMcpServer(serverId)
+          if (!mcpServer) continue
+
+          md += `### ${mcpServer.name}\n\n`
+          md += `**Type:** ${mcpServer.type === 'local' ? 'Local (stdio)' : 'Remote (HTTP)'}\n\n`
+
+          if (mcpServer.type === 'local') {
+            md += `**Command:** \`${mcpServer.command} ${mcpServer.args.join(' ')}\`\n\n`
+          } else {
+            md += `**URL:** \`${mcpServer.url}\`\n\n`
+          }
+
+          if (mcpServer.tools && mcpServer.tools.length > 0) {
+            const toolsToShow = enabledTools
+              ? mcpServer.tools.filter(t => enabledTools.includes(t.name))
+              : mcpServer.tools
+
+            md += `**Available Tools (${toolsToShow.length}):**\n\n`
+            for (const tool of toolsToShow) {
+              md += `- **\`${tool.name}\`** - ${tool.description}\n`
+            }
+            md += `\n`
+          }
+
+          md += `---\n\n`
+        }
+      }
+    }
 
     // Add repository information
     if (repos.length > 0) {
@@ -345,12 +397,43 @@ export class AgentManager extends EventEmitter {
   /**
    * Generates CLAUDE.md content with skill directory.
    */
-  private generateClaudeMd(skills: SkillRecord[], repos: string[], workspaceDir: string): string {
+  private generateClaudeMd(skills: SkillRecord[], repos: string[], workspaceDir: string, agentId?: string): string {
     const now = new Date().toISOString()
 
     let md = `# Claude Code Configuration\n\n`
     md += `**Session Started:** ${now}\n`
     md += `---\n\n`
+
+    // Add MCP Servers section
+    if (agentId) {
+      const agent = this.db.getAgent(agentId)
+      if (agent?.config?.mcp_servers && agent.config.mcp_servers.length > 0) {
+        md += `## MCP Tools Available\n\n`
+        md += `You have access to the following tools through Model Context Protocol (MCP) servers:\n\n`
+
+        for (const entry of agent.config.mcp_servers) {
+          const serverId = typeof entry === 'string' ? entry : (entry as AgentMcpServerEntry).serverId
+          const enabledTools = typeof entry === 'string' ? undefined : (entry as AgentMcpServerEntry).enabledTools
+          const mcpServer = this.db.getMcpServer(serverId)
+          if (!mcpServer) continue
+
+          if (mcpServer.tools && mcpServer.tools.length > 0) {
+            const toolsToShow = enabledTools
+              ? mcpServer.tools.filter(t => enabledTools.includes(t.name))
+              : mcpServer.tools
+
+            md += `### ${mcpServer.name} (${toolsToShow.length} tools)\n\n`
+
+            for (const tool of toolsToShow) {
+              md += `#### \`${tool.name}\`\n\n`
+              md += `${tool.description}\n\n`
+            }
+          }
+        }
+
+        md += `---\n\n`
+      }
+    }
 
     // Add repository information
     if (repos.length > 0) {
@@ -781,8 +864,14 @@ export class AgentManager extends EventEmitter {
           }
         }
 
-        // Forward to renderer
+        // Forward to renderer (skip user messages - already added when sent)
         for (const part of newParts) {
+          // Skip user messages - they're added to UI when sent via doSendAdapterMessage
+          if (part.role === 'user') {
+            console.log(`[AgentManager] Skipping user message from adapter: id=${part.id}`)
+            continue
+          }
+
           console.log(`[AgentManager] Sending to UI: id=${part.id}, partType=${part.type}, update=${part.update}, contentLength=${(part.content || part.text || '').length}`)
           this.sendToRenderer('agent:output', {
             sessionId,
@@ -1092,9 +1181,16 @@ export class AgentManager extends EventEmitter {
         if (!mcpServer) continue
 
         try {
+          // Inject TASK_API_URL for task-management server
+          let env = mcpServer.environment || {}
+          if (mcpServer.name === 'task-management') {
+            const apiPort = getTaskApiPort()
+            if (apiPort) env = { ...env, TASK_API_URL: `http://127.0.0.1:${apiPort}` }
+          }
+
           const mcpConfig = mcpServer.type === 'remote'
             ? { type: 'remote' as const, url: mcpServer.url, headers: mcpServer.headers }
-            : { type: 'local' as const, command: [mcpServer.command, ...mcpServer.args], environment: mcpServer.environment }
+            : { type: 'local' as const, command: [mcpServer.command, ...mcpServer.args], environment: env }
           const addResult: any = await ocClient.mcp.add({
             body: {
               name: mcpServer.name,
@@ -1498,10 +1594,18 @@ export class AgentManager extends EventEmitter {
     // In learning mode, skip output extraction, task status, and renderer notification
     if (session.learningMode) return
 
-    // Check if task is in learning mode (feedback flow)
+    // Check if task exists (e.g., orchestrator-session doesn't have a real task)
     const task = this.db.getTask(session.taskId)
-    console.log(`[AgentManager] transitionToIdle checking task status: ${task?.status} (looking for ${TaskStatus.AgentLearning})`)
-    if (task?.status === TaskStatus.AgentLearning) {
+    if (!task) {
+      console.log(`[AgentManager] No task found for ${session.taskId}, sending idle status only`)
+      this.sendToRenderer('agent:status', {
+        sessionId, agentId: session.agentId, taskId: session.taskId, status: 'idle'
+      })
+      return
+    }
+
+    console.log(`[AgentManager] transitionToIdle checking task status: ${task.status} (looking for ${TaskStatus.AgentLearning})`)
+    if (task.status === TaskStatus.AgentLearning) {
       console.log(`[AgentManager] Task in learning mode, syncing skills and marking as completed`)
 
       // Sync skills from workspace
@@ -1543,19 +1647,21 @@ export class AgentManager extends EventEmitter {
       return
     }
 
-    // Update task status to ready_for_review
-    console.log(`[AgentManager] Updating task ${session.taskId} status to ReadyForReview`)
-    this.db.updateTask(session.taskId, { status: TaskStatus.ReadyForReview })
+    // Update task status to ready_for_review (only if task exists)
+    if (task) {
+      console.log(`[AgentManager] Updating task ${session.taskId} status to ReadyForReview`)
+      this.db.updateTask(session.taskId, { status: TaskStatus.ReadyForReview })
 
-    // Get updated task with output fields and notify renderer
-    const updatedTask = this.db.getTask(session.taskId)
-    this.sendToRenderer('task:updated', {
-      taskId: session.taskId,
-      updates: {
-        status: TaskStatus.ReadyForReview,
-        output_fields: updatedTask?.output_fields
-      }
-    })
+      // Get updated task with output fields and notify renderer
+      const updatedTask = this.db.getTask(session.taskId)
+      this.sendToRenderer('task:updated', {
+        taskId: session.taskId,
+        updates: {
+          status: TaskStatus.ReadyForReview,
+          output_fields: updatedTask?.output_fields
+        }
+      })
+    }
 
     this.sendToRenderer('agent:status', {
       sessionId, agentId: session.agentId, taskId: session.taskId, status: 'idle'

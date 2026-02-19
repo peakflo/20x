@@ -35,10 +35,10 @@ export function useAgentSession(taskId: string | undefined) {
     : EMPTY_SESSION
 
   const start = useCallback(
-    async (agentId: string, tId: string, workspaceDir?: string) => {
+    async (agentId: string, tId: string, workspaceDir?: string, skipInitialPrompt?: boolean) => {
       // Pre-register so events arriving during start() are captured via taskId fallback
       initSession(tId, '', agentId)
-      const { sessionId } = await agentSessionApi.start(agentId, tId, workspaceDir)
+      const { sessionId } = await agentSessionApi.start(agentId, tId, workspaceDir, skipInitialPrompt)
       // Update with the real sessionId (preserves any messages that arrived early)
       initSession(tId, sessionId, agentId)
       return sessionId
