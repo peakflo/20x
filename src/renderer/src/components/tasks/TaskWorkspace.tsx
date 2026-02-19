@@ -493,13 +493,14 @@ Update existing skills that were helpful or create new ones for patterns worth r
         </div>
 
         {showPanel && (
-          <div className="min-h-0 min-w-0">
+          <div className="min-h-0 min-w-0 h-full">
             <AgentTranscriptPanel
               messages={session.messages}
               status={session.status}
               onStop={handleAbort}
               onRestart={handleStartFreshSession}
               onSend={handleSend}
+              className="h-full"
             />
           </div>
         )}

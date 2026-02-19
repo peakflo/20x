@@ -868,7 +868,7 @@ export class AgentManager extends EventEmitter {
         for (const part of newParts) {
           // Skip user messages - they're added to UI when sent via doSendAdapterMessage
           if (part.role === 'user') {
-            console.log(`[AgentManager] Skipping user message from adapter: id=${part.id}`)
+            console.log(`[AgentManager] Skipping user message from adapter: id=${part.id}, content=${(part.text || part.content || '').slice(0, 200)}`)
             continue
           }
 
