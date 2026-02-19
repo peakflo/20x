@@ -88,9 +88,13 @@ export function TaskWorkspace({
     }
   }, [session.status, fetchTasks])
 
-  // Stop session when task is completed, but keep transcript
+  // Stop session when task transitions to completed, but keep transcript
+  // Uses ref to track previous status — prevents auto-stop on resume of already-completed tasks
+  const prevTaskStatusRef = useRef(task?.status)
   useEffect(() => {
-    if (session.sessionId && task?.status === TaskStatus.Completed) {
+    const prevStatus = prevTaskStatusRef.current
+    prevTaskStatusRef.current = task?.status
+    if (session.sessionId && task?.status === TaskStatus.Completed && prevStatus !== TaskStatus.Completed) {
       stop()
         .then(() => {
           if (task && task.repos.length > 0 && githubOrg) {
@@ -258,9 +262,13 @@ export function TaskWorkspace({
     if (!task?.agent_id || !task?.id) return
     setShowFeedback(false)
 
-    // Set task to Learning status - prevents auto-stop useEffect
+    // Persist feedback + set task to Learning status - prevents auto-stop useEffect
     console.log('[TaskWorkspace] Setting task status to AgentLearning:', task.id)
-    const updatedTask = await taskApi.update(task.id, { status: TaskStatus.AgentLearning })
+    const updatedTask = await taskApi.update(task.id, {
+      status: TaskStatus.AgentLearning,
+      feedback_rating: rating,
+      feedback_comment: comment || null
+    })
     console.log('[TaskWorkspace] Task status set to AgentLearning, verified:', updatedTask?.status)
 
     // Build feedback prompt

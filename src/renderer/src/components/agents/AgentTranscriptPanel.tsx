@@ -333,7 +333,7 @@ export function AgentTranscriptPanel({ messages, status, onStop, onRestart, onSe
       <div className="flex items-center justify-between px-4 py-3 border-b border-border/50 shrink-0">
         <div className="flex items-center gap-2">
           <Terminal className="h-4 w-4 text-muted-foreground" />
-          <span className="text-sm font-medium">Agent Transcript</span>
+          <span className="text-sm font-medium">Mastermind den</span>
         </div>
         <div className="flex items-center gap-3">
           <span className={`text-xs flex items-center gap-1 ${getStatusColor()}`}>

@@ -2,6 +2,7 @@ import { BrowserWindow } from 'electron'
 import { CronExpressionParser } from 'cron-parser'
 import type { DatabaseManager, RecurrencePatternRecord, RecurrencePatternObject, TaskRecord } from './database'
 import { createId } from '@paralleldrive/cuid2'
+import { TaskStatus } from '../shared/constants'
 
 /**
  * RecurrenceScheduler - Manages automatic creation of recurring task instances
@@ -202,7 +203,7 @@ export class RecurrenceScheduler {
       template.description,
       template.type,
       template.priority,
-      template.status,
+      TaskStatus.NotStarted,
       template.assignee,
       template.due_date,
       JSON.stringify(template.labels),

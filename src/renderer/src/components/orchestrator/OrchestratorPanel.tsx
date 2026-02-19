@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { X, ChevronDown } from 'lucide-react'
+import { X } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { AgentTranscriptPanel } from '@/components/agents/AgentTranscriptPanel'
 import { useAgentStore } from '@/stores/agent-store'
@@ -79,26 +79,18 @@ export function OrchestratorPanel({ onClose }: OrchestratorPanelProps) {
     <div className="h-full flex flex-col bg-background border-l border-border">
       {/* Header with agent selector */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-border shrink-0">
-        <div className="flex-1">
-          <h2 className="text-sm font-medium mb-1">Mastermind</h2>
-
-          {/* Agent selector dropdown */}
-          <div className="relative">
-            <select
-              value={selectedAgentId || ''}
-              onChange={(e) => handleAgentChange(e.target.value)}
-              className="text-xs bg-background border border-border rounded px-2 py-1 pr-6 appearance-none cursor-pointer hover:border-primary/50 transition-colors"
-              disabled={!!currentSession?.sessionId}
-            >
-              {agents.map((agent) => (
-                <option key={agent.id} value={agent.id}>
-                  {agent.name}
-                </option>
-              ))}
-            </select>
-            <ChevronDown className="absolute right-1 top-1/2 -translate-y-1/2 h-3 w-3 text-muted-foreground pointer-events-none" />
-          </div>
-        </div>
+        <select
+          value={selectedAgentId || ''}
+          onChange={(e) => handleAgentChange(e.target.value)}
+          className="text-xs bg-background border border-border rounded px-2 py-1 cursor-pointer hover:border-primary/50 transition-colors"
+          disabled={!!currentSession?.sessionId}
+        >
+          {agents.map((agent) => (
+            <option key={agent.id} value={agent.id}>
+              {agent.name}
+            </option>
+          ))}
+        </select>
 
         <Button variant="ghost" size="sm" onClick={onClose}>
           <X className="h-4 w-4" />

@@ -837,6 +837,13 @@ export class AgentManager extends EventEmitter {
           }
         }
 
+        // Early exit if session was destroyed (e.g. by stopSession)
+        const activeSession = this.sessions.get(sessionId)
+        if (!activeSession) {
+          console.log(`[AgentManager] Session ${sessionId} no longer exists, stopping adapter polling`)
+          return
+        }
+
         // Poll for new messages
         const newParts = await adapter.pollMessages(
           sessionId,
@@ -945,6 +952,12 @@ export class AgentManager extends EventEmitter {
             return
           }
 
+          // Client not found means session was already stopped — exit silently
+          if (status.message?.includes('Client not found')) {
+            console.log(`[AgentManager] Client not found for session ${sessionId}, stopping polling`)
+            return
+          }
+
           // Regular error - send to UI
           this.sendToRenderer('agent:output', {
             sessionId,
@@ -972,11 +985,17 @@ export class AgentManager extends EventEmitter {
       }
 
       // Schedule next poll (2 second interval like OpenCode)
-      setTimeout(poll, 2000)
+      const sess = this.sessions.get(currentSessionId)
+      if (sess) {
+        sess.pollTimer = setTimeout(poll, 2000)
+      }
     }
 
     // Start polling after a short delay
-    setTimeout(poll, 1000)
+    const session = this.sessions.get(initialSessionId)
+    if (session) {
+      session.pollTimer = setTimeout(poll, 1000)
+    }
   }
 
   /**
@@ -1022,7 +1041,8 @@ export class AgentManager extends EventEmitter {
       if (
         errorMessage.includes('INCOMPATIBLE_SESSION_ID') ||
         errorMessage.includes('No conversation found') ||
-        errorMessage.includes('SESSION_FILE_NOT_FOUND')
+        errorMessage.includes('SESSION_FILE_NOT_FOUND') ||
+        errorMessage.includes('Session no longer exists on server')
       ) {
         console.warn(`[AgentManager] Session not found or incompatible: ${adapterSessionId}`)
 
