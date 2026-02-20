@@ -79,7 +79,7 @@
   },
   "build": {
     "appId": "com.peakflo.workflo-workspace",
-    "productName": "Workflo Workspace",
+    "productName": "peakflo-20x",
     "directories": {
       "buildResources": "resources"
     },
@@ -104,7 +104,8 @@
     "linux": {
       "target": [
         "AppImage"
-      ]
+      ],
+      "artifactName": "${productName}-${version}-${arch}.${ext}"
     },
     "nsis": {
       "oneClick": false,
