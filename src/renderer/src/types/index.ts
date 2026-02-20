@@ -247,6 +247,8 @@ export interface WorkfloTask {
   skill_ids: string[] | null
   snoozed_until: string | null
   resolution: string | null
+  feedback_rating: number | null
+  feedback_comment: string | null
   is_recurring: boolean
   recurrence_pattern: RecurrencePattern | null
   recurrence_parent_id: string | null
@@ -289,6 +291,8 @@ export interface UpdateTaskDTO {
   agent_id?: string | null
   skill_ids?: string[] | null
   snoozed_until?: string | null
+  feedback_rating?: number | null
+  feedback_comment?: string | null
   is_recurring?: boolean
   recurrence_pattern?: RecurrencePattern | null
   last_occurrence_at?: string | null

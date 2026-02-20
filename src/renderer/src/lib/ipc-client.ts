@@ -300,8 +300,8 @@ export const worktreeApi = {
   setup: (taskId: string, repos: { fullName: string; defaultBranch: string }[], org: string): Promise<string> => {
     return window.electronAPI.worktree.setup(taskId, repos, org)
   },
-  cleanup: (taskId: string, repos: { fullName: string }[], org: string): Promise<void> => {
-    return window.electronAPI.worktree.cleanup(taskId, repos, org)
+  cleanup: (taskId: string, repos: { fullName: string }[], org: string, removeTaskDir?: boolean): Promise<void> => {
+    return window.electronAPI.worktree.cleanup(taskId, repos, org, removeTaskDir)
   }
 }
 

@@ -173,7 +173,7 @@ interface ElectronAPI {
   }
   worktree: {
     setup: (taskId: string, repos: { fullName: string; defaultBranch: string }[], org: string) => Promise<string>
-    cleanup: (taskId: string, repos: { fullName: string }[], org: string) => Promise<void>
+    cleanup: (taskId: string, repos: { fullName: string }[], org: string, removeTaskDir?: boolean) => Promise<void>
   }
   taskSources: {
     getAll: () => Promise<TaskSource[]>

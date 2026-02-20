@@ -28,6 +28,8 @@ function makeWorkfloTask(overrides: Partial<WorkfloTask> = {}): WorkfloTask {
     skill_ids: null,
     snoozed_until: null,
     resolution: null,
+    feedback_rating: null,
+    feedback_comment: null,
     is_recurring: false,
     recurrence_pattern: null,
     recurrence_parent_id: null,

@@ -88,9 +88,13 @@ export function TaskWorkspace({
     }
   }, [session.status, fetchTasks])
 
-  // Stop session when task is completed, but keep transcript
+  // Stop session when task transitions to completed, but keep transcript
+  // Uses ref to track previous status — prevents auto-stop on resume of already-completed tasks
+  const prevTaskStatusRef = useRef(task?.status)
   useEffect(() => {
-    if (session.sessionId && task?.status === TaskStatus.Completed) {
+    const prevStatus = prevTaskStatusRef.current
+    prevTaskStatusRef.current = task?.status
+    if (session.sessionId && task?.status === TaskStatus.Completed && prevStatus !== TaskStatus.Completed) {
       stop()
         .then(() => {
           if (task && task.repos.length > 0 && githubOrg) {
@@ -168,23 +172,50 @@ export function TaskWorkspace({
     setShowRepoSelector(false)
     const repoNames = selectedRepos.map((r) => r.fullName)
     const merged = [...new Set([...task.repos, ...repoNames])]
+
+    // If session is running and there are new repos, setup worktrees immediately
+    const newRepos = selectedRepos.filter((r) => !task.repos.includes(r.fullName))
+    if (session.sessionId && newRepos.length > 0 && githubOrg) {
+      try {
+        setIsSettingUpWorktree(true)
+        await worktreeApi.setup(
+          task.id,
+          newRepos.map((r) => ({ fullName: r.fullName, defaultBranch: r.defaultBranch })),
+          githubOrg
+        )
+      } catch (err) {
+        console.error('Failed to setup worktrees for new repos:', err)
+      } finally {
+        setIsSettingUpWorktree(false)
+      }
+    }
+
     if (onUpdateTask) {
       await onUpdateTask(task.id, { repos: merged })
     } else {
       await taskApi.update(task.id, { repos: merged })
     }
     fetchTasks()
-  }, [task, onUpdateTask, fetchTasks])
+  }, [task, onUpdateTask, fetchTasks, session.sessionId, githubOrg])
 
   const handleUpdateRepos = useCallback(async (repos: string[]) => {
     if (!task) return
+
+    // If session is running and repos were removed, cleanup their worktrees
+    const removedRepos = task.repos.filter((r) => !repos.includes(r))
+    if (session.sessionId && removedRepos.length > 0 && githubOrg) {
+      worktreeApi
+        .cleanup(task.id, removedRepos.map((r) => ({ fullName: r })), githubOrg, false)
+        .catch((err) => console.error('Failed to cleanup removed repo worktrees:', err))
+    }
+
     if (onUpdateTask) {
       await onUpdateTask(task.id, { repos })
     } else {
       await taskApi.update(task.id, { repos })
     }
     fetchTasks()
-  }, [task, onUpdateTask, fetchTasks])
+  }, [task, onUpdateTask, fetchTasks, session.sessionId, githubOrg])
 
   const handleAssignAgent = useCallback(
     (agentId: string | null) => {
@@ -258,9 +289,13 @@ export function TaskWorkspace({
     if (!task?.agent_id || !task?.id) return
     setShowFeedback(false)
 
-    // Set task to Learning status - prevents auto-stop useEffect
+    // Persist feedback + set task to Learning status - prevents auto-stop useEffect
     console.log('[TaskWorkspace] Setting task status to AgentLearning:', task.id)
-    const updatedTask = await taskApi.update(task.id, { status: TaskStatus.AgentLearning })
+    const updatedTask = await taskApi.update(task.id, {
+      status: TaskStatus.AgentLearning,
+      feedback_rating: rating,
+      feedback_comment: comment || null
+    })
     console.log('[TaskWorkspace] Task status set to AgentLearning, verified:', updatedTask?.status)
 
     // Build feedback prompt

@@ -837,6 +837,13 @@ export class AgentManager extends EventEmitter {
           }
         }
 
+        // Early exit if session was destroyed (e.g. by stopSession)
+        const activeSession = this.sessions.get(sessionId)
+        if (!activeSession) {
+          console.log(`[AgentManager] Session ${sessionId} no longer exists, stopping adapter polling`)
+          return
+        }
+
         // Poll for new messages
         const newParts = await adapter.pollMessages(
           sessionId,
@@ -945,6 +952,12 @@ export class AgentManager extends EventEmitter {
             return
           }
 
+          // Client not found means session was already stopped — exit silently
+          if (status.message?.includes('Client not found')) {
+            console.log(`[AgentManager] Client not found for session ${sessionId}, stopping polling`)
+            return
+          }
+
           // Regular error - send to UI
           this.sendToRenderer('agent:output', {
             sessionId,
@@ -972,11 +985,17 @@ export class AgentManager extends EventEmitter {
       }
 
       // Schedule next poll (2 second interval like OpenCode)
-      setTimeout(poll, 2000)
+      const sess = this.sessions.get(currentSessionId)
+      if (sess) {
+        sess.pollTimer = setTimeout(poll, 2000)
+      }
     }
 
     // Start polling after a short delay
-    setTimeout(poll, 1000)
+    const session = this.sessions.get(initialSessionId)
+    if (session) {
+      session.pollTimer = setTimeout(poll, 1000)
+    }
   }
 
   /**
@@ -994,13 +1013,20 @@ export class AgentManager extends EventEmitter {
     // Build MCP servers config
     const mcpServers = this.buildMcpServersForAdapter(agentId)
 
+    // Build system prompt with task context (survives context compaction)
+    const task = this.db.getTask(taskId)
+    const baseSystemPrompt = agent.config?.system_prompt || ''
+    const taskContext = task
+      ? `\n\n[Task Context]\nTask: "${task.title}"\n${task.description || ''}`
+      : ''
+
     // Build session config
     const sessionConfig: SessionConfig = {
       agentId,
       taskId,
       workspaceDir,
       model: agent.config?.model,
-      systemPrompt: agent.config?.system_prompt,
+      systemPrompt: baseSystemPrompt + taskContext,
       mcpServers,
       apiKeys: agent.config?.api_keys
     }
@@ -1022,7 +1048,8 @@ export class AgentManager extends EventEmitter {
       if (
         errorMessage.includes('INCOMPATIBLE_SESSION_ID') ||
         errorMessage.includes('No conversation found') ||
-        errorMessage.includes('SESSION_FILE_NOT_FOUND')
+        errorMessage.includes('SESSION_FILE_NOT_FOUND') ||
+        errorMessage.includes('Session no longer exists on server')
       ) {
         console.warn(`[AgentManager] Session not found or incompatible: ${adapterSessionId}`)
 
@@ -1687,7 +1714,7 @@ export class AgentManager extends EventEmitter {
         const title = state.title || ''
         const inputStr = state.input && Object.keys(state.input).length > 0
           ? JSON.stringify(state.input, null, 2) : undefined
-        const outputStr = status === 'completed' && state.output
+        const outputStr = state.output
           ? state.output.slice(0, 2000) : undefined
         const errorStr = status === 'error' && state.error ? state.error : undefined
 
@@ -2037,24 +2064,44 @@ export class AgentManager extends EventEmitter {
   async sendMessage(sessionId: string, message: string, taskId?: string): Promise<{ newSessionId?: string }> {
     let session = this.sessions.get(sessionId)
 
-    // Session was destroyed — restart without initial prompt, then send user's message
+    // Session was destroyed — try to RESUME first (preserves conversation history),
+    // then fallback to creating a new session
     if (!session && taskId) {
       const task = this.db.getTask(taskId)
       if (task?.agent_id) {
-        console.log(`[AgentManager] Session ${sessionId} not found, restarting for task ${taskId}`)
-        const newSessionId = await this.startSession(task.agent_id, taskId, undefined, true)
-        session = this.sessions.get(newSessionId)
-        if (!session) throw new Error('Failed to restart session')
-        // Fall through to send the user's message as the first prompt
-        sessionId = newSessionId
+        // Try resuming existing session first
+        if (task.session_id) {
+          try {
+            console.log(`[AgentManager] Session ${sessionId} not found, attempting resume from ${task.session_id} for task ${taskId}`)
+            const adapter = this.getAdapter(task.agent_id)
+            if (adapter) {
+              const resumedId = await this.resumeAdapterSession(adapter, task.agent_id, taskId, task.session_id)
+              session = this.sessions.get(resumedId)
+              if (session) {
+                sessionId = resumedId
+              }
+            }
+          } catch (error) {
+            console.warn(`[AgentManager] Resume failed, will create new session:`, error)
+          }
+        }
 
-        // Check if this is an adapter session or legacy OpenCode
+        // If resume failed or no session_id, create new session
+        if (!session) {
+          console.log(`[AgentManager] Creating new session for task ${taskId}`)
+          const newSessionId = await this.startSession(task.agent_id, taskId, undefined, true)
+          session = this.sessions.get(newSessionId)
+          if (!session) throw new Error('Failed to restart session')
+          sessionId = newSessionId
+        }
+
+        // Send the user's message
         if (session.adapter) {
           await this.doSendAdapterMessage(session, sessionId, message)
         } else {
           await this.doSendMessage(session, sessionId, message)
         }
-        return { newSessionId }
+        return { newSessionId: sessionId }
       }
     }
 
