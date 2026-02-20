@@ -270,5 +270,7 @@ function parseTask(task: any) {
   task.attachments = JSON.parse(task.attachments || '[]')
   task.output_fields = JSON.parse(task.output_fields || '[]')
   task.repos = JSON.parse(task.repos || '[]')
+  task.feedback_rating = task.feedback_rating ?? null
+  task.feedback_comment = task.feedback_comment ?? null
   return task
 }

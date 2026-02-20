@@ -203,6 +203,8 @@ export interface TaskRow {
   session_id: string | null
   snoozed_until: string | null
   resolution: string | null
+  feedback_rating: number | null
+  feedback_comment: string | null
   is_recurring: number
   recurrence_pattern: string | null
   recurrence_parent_id: string | null
@@ -246,6 +248,8 @@ export interface TaskRecord {
   session_id: string | null
   snoozed_until: string | null
   resolution: string | null
+  feedback_rating: number | null
+  feedback_comment: string | null
   is_recurring: boolean
   recurrence_pattern: RecurrencePatternRecord | null
   recurrence_parent_id: string | null
@@ -304,6 +308,8 @@ export interface UpdateTaskData {
   skill_ids?: string[] | null
   session_id?: string | null
   snoozed_until?: string | null
+  feedback_rating?: number | null
+  feedback_comment?: string | null
   is_recurring?: boolean
   recurrence_pattern?: RecurrencePatternRecord | null
   last_occurrence_at?: string | null
@@ -327,6 +333,8 @@ const UPDATABLE_COLUMNS = new Set([
   'skill_ids',
   'session_id',
   'snoozed_until',
+  'feedback_rating',
+  'feedback_comment',
   'is_recurring',
   'recurrence_pattern',
   'last_occurrence_at',
@@ -349,6 +357,8 @@ function deserializeTask(row: TaskRow): TaskRecord {
     session_id: row.session_id ?? null,
     snoozed_until: row.snoozed_until ?? null,
     resolution: row.resolution ?? null,
+    feedback_rating: row.feedback_rating ?? null,
+    feedback_comment: row.feedback_comment ?? null,
     is_recurring: row.is_recurring === 1,
     recurrence_pattern: row.recurrence_pattern
       ? (row.recurrence_pattern.startsWith('{')
@@ -710,6 +720,13 @@ export class DatabaseManager {
 
     if (!columnNames.has('resolution')) {
       this.db.exec(`ALTER TABLE tasks ADD COLUMN resolution TEXT DEFAULT NULL`)
+    }
+
+    if (!columnNames.has('feedback_rating')) {
+      this.db.exec(`ALTER TABLE tasks ADD COLUMN feedback_rating INTEGER DEFAULT NULL`)
+    }
+    if (!columnNames.has('feedback_comment')) {
+      this.db.exec(`ALTER TABLE tasks ADD COLUMN feedback_comment TEXT DEFAULT NULL`)
     }
 
     // Migrate mcp_servers table — add new columns for remote support

@@ -239,10 +239,22 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     if (messagesResult.data && Array.isArray(messagesResult.data)) {
       for (const msg of messagesResult.data) {
         if (!msg.info) continue
+        const rawParts = msg.parts || []
+        const transformedParts: MessagePart[] = rawParts.map((part: any) => {
+          if (part.type === 'tool') {
+            return this.transformToolPart(part)
+          }
+          return {
+            id: part.id,
+            type: part.type,
+            text: part.text,
+            content: part.text
+          }
+        })
         messages.push({
           id: msg.info.id,
           role: msg.info.role || 'assistant',
-          parts: msg.parts || []
+          parts: transformedParts
         })
       }
     }
@@ -315,6 +327,54 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     }
   }
 
+  /**
+   * Transforms a raw OpenCode tool part into the structured format the renderer expects.
+   * OpenCode returns tool name as `part.tool` (string) and details in `part.state`.
+   */
+  private transformToolPart(part: any): MessagePart {
+    const state = part.state || {}
+    const toolName = part.tool || 'unknown'
+    const status = state.status || 'unknown'
+    const inputStr = state.input && typeof state.input === 'object' && Object.keys(state.input).length > 0
+      ? JSON.stringify(state.input, null, 2) : undefined
+    const outputStr = state.output
+      ? String(state.output).slice(0, 2000) : undefined
+    const errorStr = status === 'error' && state.error ? String(state.error) : undefined
+
+    // Detect interactive question tools
+    let questions = state.input?.questions
+    if (typeof questions === 'string') {
+      try { questions = JSON.parse(questions) } catch {}
+    }
+    // Detect TodoWrite tools
+    let todos = state.input?.todos
+    if (typeof todos === 'string') {
+      try { todos = JSON.parse(todos) } catch {}
+    }
+
+    let partType = 'tool'
+    if (Array.isArray(questions) && questions.length > 0) partType = 'question'
+    else if (Array.isArray(todos) && todos.length > 0) partType = 'todowrite'
+
+    return {
+      id: part.id,
+      type: partType as any,
+      text: part.text,
+      content: part.text,
+      tool: {
+        name: toolName,
+        status,
+        title: state.title || undefined,
+        input: inputStr,
+        output: outputStr,
+        error: errorStr,
+        ...(Array.isArray(questions) && questions.length > 0 && { questions }),
+        ...(Array.isArray(todos) && todos.length > 0 && { todos })
+      } as any,
+      state: part.state
+    }
+  }
+
   async pollMessages(
     sessionId: string,
     seenMessageIds: Set<string>,
@@ -368,16 +428,20 @@ export class OpencodeAdapter implements CodingAgentAdapter {
           if (isNewPart || hasChanged) {
             seenPartIds.add(partId)
             partContentLengths.set(partId, fingerprint)
-            newParts.push({
-              id: partId,
-              type: part.type,
-              text: part.text,
-              content: part.text,
-              role: msgRole, // Include role from message
-              tool: part.tool,
-              state: part.state,
-              update: !isNewPart  // Mark as update if part was seen before
-            })
+
+            if (part.type === 'tool') {
+              const transformed = this.transformToolPart(part)
+              newParts.push({ ...transformed, role: msgRole, update: !isNewPart })
+            } else {
+              newParts.push({
+                id: partId,
+                type: part.type,
+                text: part.text,
+                content: part.text,
+                role: msgRole,
+                update: !isNewPart
+              })
+            }
           }
         } else if (isNewPart) {
           seenPartIds.add(partId)

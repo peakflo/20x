@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Pencil, Trash2, Calendar, User, Tag, Clock, Bot, Play, History, GitBranch, Plus, X, BookOpen, AlarmClockOff, BellRing, Folder, Repeat } from 'lucide-react'
+import { Pencil, Trash2, Calendar, User, Tag, Clock, Bot, Play, History, GitBranch, Plus, X, BookOpen, AlarmClockOff, BellRing, Folder, Repeat, Star } from 'lucide-react'
 import { Markdown } from '@/components/ui/Markdown'
 import { Button } from '@/components/ui/Button'
 import { TaskStatusBadge } from './TaskStatusBadge'
@@ -321,6 +321,24 @@ export function TaskDetailView({ task, agents, onEdit, onDelete, onUpdateAttachm
               <>
                 <span className="text-muted-foreground flex items-center gap-2"><Repeat className="h-3.5 w-3.5" /> Instance</span>
                 <Badge variant="blue" className="w-fit">Created from recurring template</Badge>
+              </>
+            )}
+            {task.status === TaskStatus.Completed && task.feedback_rating && (
+              <>
+                <span className="text-muted-foreground flex items-center gap-2"><Star className="h-3.5 w-3.5" /> Feedback</span>
+                <div className="flex flex-col gap-1">
+                  <div className="flex items-center gap-0.5">
+                    {Array.from({ length: 5 }, (_, i) => (
+                      <Star
+                        key={i}
+                        className={`h-3.5 w-3.5 ${i < task.feedback_rating! ? 'fill-amber-400 text-amber-400' : 'text-muted-foreground/30'}`}
+                      />
+                    ))}
+                  </div>
+                  {task.feedback_comment && (
+                    <span className="text-muted-foreground text-xs">{task.feedback_comment}</span>
+                  )}
+                </div>
               </>
             )}
             <span className="text-muted-foreground flex items-center gap-2"><Clock className="h-3.5 w-3.5" /> Created</span>

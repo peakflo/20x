@@ -194,7 +194,8 @@ export class WorktreeManager {
   async cleanupTaskWorkspace(
     taskId: string,
     repos: { fullName: string }[],
-    org: string
+    org: string,
+    removeTaskDir = true
   ): Promise<void> {
     for (const repo of repos) {
       const repoName = repo.fullName.split('/').pop() || repo.fullName
@@ -217,13 +218,15 @@ export class WorktreeManager {
       }
     }
 
-    // Remove task directory if empty
-    const taskDir = join(WORKSPACES_DIR, taskId)
-    if (existsSync(taskDir)) {
-      try {
-        rmSync(taskDir, { recursive: true, force: true })
-      } catch {
-        // Ignore
+    // Remove task directory if requested (skip when session is still active)
+    if (removeTaskDir) {
+      const taskDir = join(WORKSPACES_DIR, taskId)
+      if (existsSync(taskDir)) {
+        try {
+          rmSync(taskDir, { recursive: true, force: true })
+        } catch {
+          // Ignore
+        }
       }
     }
   }

@@ -70,11 +70,17 @@ export interface MessagePart {
   tool?: {
     name: string
     status?: string
+    title?: string
     input?: unknown
     output?: unknown
+    error?: string
   }
   state?: {
     status?: string
+    title?: string
+    input?: unknown
+    output?: unknown
+    error?: string
   }
   update?: boolean // Mark as update to existing message
   realSessionId?: string // Real session ID from backend (for updating database)
@@ -86,8 +92,10 @@ export interface MessagePayload {
   tool?: {
     name: string
     status?: string
+    title?: string
     input?: unknown
     output?: unknown
+    error?: string
   }
 }
 
