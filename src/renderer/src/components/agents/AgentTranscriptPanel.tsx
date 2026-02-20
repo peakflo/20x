@@ -68,6 +68,7 @@ function sanitizeToolContent(content: any): string {
 }
 
 interface AgentTranscriptPanelProps {
+  title?: string
   messages: AgentMessage[]
   status: 'idle' | 'working' | 'error' | 'waiting_approval'
   onStop: () => void
@@ -278,7 +279,7 @@ function MessageBubble({ message, onAnswer, viewMode }: { message: AgentMessage;
   )
 }
 
-export function AgentTranscriptPanel({ messages, status, onStop, onRestart, onSend, className }: AgentTranscriptPanelProps) {
+export function AgentTranscriptPanel({ title = 'Agent transcript', messages, status, onStop, onRestart, onSend, className }: AgentTranscriptPanelProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const [viewMode, setViewMode] = useState<ViewMode>(ViewMode.RAW)
@@ -333,7 +334,7 @@ export function AgentTranscriptPanel({ messages, status, onStop, onRestart, onSe
       <div className="flex items-center justify-between px-4 py-3 border-b border-border/50 shrink-0">
         <div className="flex items-center gap-2">
           <Terminal className="h-4 w-4 text-muted-foreground" />
-          <span className="text-sm font-medium">Mastermind den</span>
+          <span className="text-sm font-medium">{title}</span>
         </div>
         <div className="flex items-center gap-3">
           <span className={`text-xs flex items-center gap-1 ${getStatusColor()}`}>

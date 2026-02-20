@@ -100,6 +100,7 @@ export function OrchestratorPanel({ onClose }: OrchestratorPanelProps) {
       {/* Chat interface */}
       {selectedAgentId && (
         <AgentTranscriptPanel
+          title="Mastermind den"
           messages={currentSession?.messages || []}
           status={currentSession?.status || 'idle'}
           onStop={stop}

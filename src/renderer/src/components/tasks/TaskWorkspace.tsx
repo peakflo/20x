@@ -172,23 +172,50 @@ export function TaskWorkspace({
     setShowRepoSelector(false)
     const repoNames = selectedRepos.map((r) => r.fullName)
     const merged = [...new Set([...task.repos, ...repoNames])]
+
+    // If session is running and there are new repos, setup worktrees immediately
+    const newRepos = selectedRepos.filter((r) => !task.repos.includes(r.fullName))
+    if (session.sessionId && newRepos.length > 0 && githubOrg) {
+      try {
+        setIsSettingUpWorktree(true)
+        await worktreeApi.setup(
+          task.id,
+          newRepos.map((r) => ({ fullName: r.fullName, defaultBranch: r.defaultBranch })),
+          githubOrg
+        )
+      } catch (err) {
+        console.error('Failed to setup worktrees for new repos:', err)
+      } finally {
+        setIsSettingUpWorktree(false)
+      }
+    }
+
     if (onUpdateTask) {
       await onUpdateTask(task.id, { repos: merged })
     } else {
       await taskApi.update(task.id, { repos: merged })
     }
     fetchTasks()
-  }, [task, onUpdateTask, fetchTasks])
+  }, [task, onUpdateTask, fetchTasks, session.sessionId, githubOrg])
 
   const handleUpdateRepos = useCallback(async (repos: string[]) => {
     if (!task) return
+
+    // If session is running and repos were removed, cleanup their worktrees
+    const removedRepos = task.repos.filter((r) => !repos.includes(r))
+    if (session.sessionId && removedRepos.length > 0 && githubOrg) {
+      worktreeApi
+        .cleanup(task.id, removedRepos.map((r) => ({ fullName: r })), githubOrg, false)
+        .catch((err) => console.error('Failed to cleanup removed repo worktrees:', err))
+    }
+
     if (onUpdateTask) {
       await onUpdateTask(task.id, { repos })
     } else {
       await taskApi.update(task.id, { repos })
     }
     fetchTasks()
-  }, [task, onUpdateTask, fetchTasks])
+  }, [task, onUpdateTask, fetchTasks, session.sessionId, githubOrg])
 
   const handleAssignAgent = useCallback(
     (agentId: string | null) => {

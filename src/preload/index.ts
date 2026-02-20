@@ -149,8 +149,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   worktree: {
     setup: (taskId: string, repos: { fullName: string; defaultBranch: string }[], org: string): Promise<string> =>
       ipcRenderer.invoke('worktree:setup', taskId, repos, org),
-    cleanup: (taskId: string, repos: { fullName: string }[], org: string): Promise<void> =>
-      ipcRenderer.invoke('worktree:cleanup', taskId, repos, org)
+    cleanup: (taskId: string, repos: { fullName: string }[], org: string, removeTaskDir?: boolean): Promise<void> =>
+      ipcRenderer.invoke('worktree:cleanup', taskId, repos, org, removeTaskDir)
   },
   taskSources: {
     getAll: (): Promise<unknown[]> => ipcRenderer.invoke('taskSource:getAll'),
