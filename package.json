@@ -1,5 +1,5 @@
 {
-  "name": "pf-desktop",
+  "name": "20x",
   "version": "0.0.13",
   "packageManager": "pnpm@9.15.2",
   "description": "Workflo Workspace - Task Management Desktop App",
@@ -20,7 +20,7 @@
     "build:win": "electron-vite build && electron-builder --win",
     "build:linux": "electron-vite build && electron-builder --linux",
     "prepare": "husky",
-    "release": "pnpm version patch --no-git-tag-version && git add package.json && git commit -m \"release v$(node -p require('./package.json').version)\" && git tag v$(node -p require('./package.json').version) && git push && git push --tags"
+    "release": "bash scripts/release.sh"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.42",
