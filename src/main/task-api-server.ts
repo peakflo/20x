@@ -10,9 +10,14 @@ import type { DatabaseManager } from './database'
 
 let server: HttpServer | null = null
 let port: number | null = null
+let notifyRenderer: ((channel: string, data: unknown) => void) | null = null
 
 export function getTaskApiPort(): number | null {
   return port
+}
+
+export function setTaskApiNotifier(fn: (channel: string, data: unknown) => void): void {
+  notifyRenderer = fn
 }
 
 export function startTaskApiServer(db: DatabaseManager): Promise<number> {
@@ -157,7 +162,17 @@ function handleRoute(db: DatabaseManager, route: string, params: any): any {
       )
 
       const task = rawDb.prepare('SELECT * FROM tasks WHERE id = ?').get(id)
-      return { success: true, task: parseTask(task) }
+      const parsed = parseTask(task)
+
+      // Notify renderer using properly deserialized task (matches WorkfloTask shape)
+      if (notifyRenderer) {
+        const properTask = db.getTask(id)
+        if (properTask) {
+          notifyRenderer('task:created', { task: properTask })
+        }
+      }
+
+      return { success: true, task: parsed }
     }
 
     case '/get_task': {
@@ -186,7 +201,17 @@ function handleRoute(db: DatabaseManager, route: string, params: any): any {
       if (result.changes === 0) return { error: 'Task not found' }
 
       const updated = rawDb.prepare('SELECT * FROM tasks WHERE id = ?').get(params.task_id)
-      return { success: true, task: parseTask(updated) }
+      const parsedUpdated = parseTask(updated)
+
+      // Notify renderer using properly deserialized task (matches WorkfloTask shape)
+      if (notifyRenderer) {
+        const properTask = db.getTask(params.task_id)
+        if (properTask) {
+          notifyRenderer('task:updated', { taskId: params.task_id, updates: properTask })
+        }
+      }
+
+      return { success: true, task: parsedUpdated }
     }
 
     case '/list_agents': {

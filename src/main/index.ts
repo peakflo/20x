@@ -37,8 +37,10 @@ import { PluginRegistry } from './plugins/registry'
 import { PeakfloPlugin } from './plugins/peakflo-plugin'
 import { LinearPlugin } from './plugins/linear-plugin'
 import { HubSpotPlugin } from './plugins/hubspot-plugin'
+import { GitHubIssuesPlugin } from './plugins/github-issues-plugin'
 import { registerIpcHandlers } from './ipc-handlers'
 import { RecurrenceScheduler } from './recurrence-scheduler'
+import { setTaskApiNotifier } from './task-api-server'
 
 let mainWindow: BrowserWindow | null = null
 let tray: Tray | null = null
@@ -119,6 +121,13 @@ function createWindow(): void {
   // Set main window for managers
   agentManager?.setMainWindow(mainWindow)
   worktreeManager?.setMainWindow(mainWindow)
+
+  // Wire up task-api-server notifications to the renderer
+  setTaskApiNotifier((channel, data) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send(channel, data)
+    }
+  })
 }
 
 function createTray(): void {
@@ -232,6 +241,7 @@ app.whenReady().then(async () => {
   pluginRegistry.register(new PeakfloPlugin())
   pluginRegistry.register(new LinearPlugin())
   pluginRegistry.register(new HubSpotPlugin())
+  pluginRegistry.register(new GitHubIssuesPlugin(githubManager))
 
   syncManager = new SyncManager(db, mcpToolCaller, pluginRegistry, oauthManager)
 

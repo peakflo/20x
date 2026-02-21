@@ -81,6 +81,12 @@ export interface GitHubRepo {
   isPrivate: boolean
 }
 
+export interface GitHubCollaborator {
+  login: string
+  avatar_url: string
+  type: string
+}
+
 export interface WorktreeProgressEvent {
   taskId: string
   repo: string
@@ -126,7 +132,7 @@ interface ElectronAPI {
     resume: (agentId: string, taskId: string, ocSessionId: string) => Promise<AgentSessionStartResult>
     abort: (sessionId: string) => Promise<AgentSessionSuccessResult>
     stop: (sessionId: string) => Promise<AgentSessionSuccessResult>
-    send: (sessionId: string, message: string, taskId?: string) => Promise<AgentSessionSuccessResult & { newSessionId?: string }>
+    send: (sessionId: string, message: string, taskId?: string, agentId?: string) => Promise<AgentSessionSuccessResult & { newSessionId?: string }>
     approve: (sessionId: string, approved: boolean, message?: string) => Promise<AgentSessionSuccessResult>
     syncSkills: (sessionId: string) => Promise<SkillSyncResult>
     syncSkillsForTask: (taskId: string) => Promise<SkillSyncResult>
@@ -171,6 +177,8 @@ interface ElectronAPI {
     startAuth: () => Promise<void>
     fetchOrgs: () => Promise<string[]>
     fetchOrgRepos: (org: string) => Promise<GitHubRepo[]>
+    fetchUserRepos: () => Promise<GitHubRepo[]>
+    fetchCollaborators: (owner: string, repo: string) => Promise<GitHubCollaborator[]>
   }
   worktree: {
     setup: (taskId: string, repos: { fullName: string; defaultBranch: string }[], org: string) => Promise<string>
@@ -220,6 +228,7 @@ interface ElectronAPI {
   onAgentApproval: (callback: (event: AgentApprovalRequest) => void) => () => void
   onAgentIncompatibleSession: (callback: (event: { taskId: string; agentId: string; error: string }) => void) => () => void
   onTaskUpdated: (callback: (event: { taskId: string; updates: Partial<WorkfloTask> }) => void) => () => void
+  onTaskCreated: (callback: (event: { task: WorkfloTask }) => void) => () => void
   onWorktreeProgress: (callback: (event: WorktreeProgressEvent) => void) => () => void
   onOAuthCallback: (callback: (event: { code: string; state: string }) => void) => () => void
 }

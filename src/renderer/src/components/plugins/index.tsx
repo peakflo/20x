@@ -8,6 +8,7 @@
 import { LinearConfigForm } from './LinearConfigForm'
 import { HubSpotConfigForm } from './HubSpotConfigForm'
 import { PeakfloConfigForm } from './PeakfloConfigForm'
+import { GitHubIssuesConfigForm } from './GitHubIssuesConfigForm'
 import type { PluginFormProps } from './PluginFormProps'
 
 export { PluginSetupDocumentation } from './PluginSetupDocumentation'
@@ -20,7 +21,8 @@ type PluginFormComponent = React.ComponentType<PluginFormProps>
 export const PLUGIN_FORMS: Record<string, PluginFormComponent> = {
   linear: LinearConfigForm,
   hubspot: HubSpotConfigForm,
-  peakflo: PeakfloConfigForm
+  peakflo: PeakfloConfigForm,
+  'github-issues': GitHubIssuesConfigForm
 }
 
 /**
