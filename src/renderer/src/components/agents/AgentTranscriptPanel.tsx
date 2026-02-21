@@ -79,12 +79,42 @@ interface AgentTranscriptPanelProps {
 
 function QuestionMessage({ message, onAnswer }: { message: AgentMessage; onAnswer?: (answer: string) => void }) {
   const questions = message.tool?.questions || []
-  const [answered, setAnswered] = useState<string | null>(null)
+  const isSingleQuestion = questions.length === 1
+  const [selections, setSelections] = useState<Record<number, string>>({})
+  const [submitted, setSubmitted] = useState(false)
 
-  const handleSelect = (_questionIdx: number, optionLabel: string) => {
-    if (answered) return
-    setAnswered(optionLabel)
-    onAnswer?.(optionLabel)
+  const allAnswered = questions.length > 0 && Object.keys(selections).length === questions.length
+
+  const handleSelect = (questionIdx: number, optionLabel: string) => {
+    if (submitted) return
+
+    if (isSingleQuestion) {
+      // Preserve current behavior: immediate submit on click
+      setSelections({ 0: optionLabel })
+      setSubmitted(true)
+      onAnswer?.(optionLabel)
+      return
+    }
+
+    // Multi-question: update selection for this specific question
+    setSelections(prev => {
+      const next = { ...prev }
+      if (next[questionIdx] === optionLabel) {
+        delete next[questionIdx]
+      } else {
+        next[questionIdx] = optionLabel
+      }
+      return next
+    })
+  }
+
+  const handleSubmit = () => {
+    if (!allAnswered || submitted) return
+    setSubmitted(true)
+    const combinedAnswer = questions
+      .map((_, idx) => selections[idx])
+      .join(' | ')
+    onAnswer?.(combinedAnswer)
   }
 
   return (
@@ -95,16 +125,16 @@ function QuestionMessage({ message, onAnswer }: { message: AgentMessage; onAnswe
           <p className="text-xs text-foreground">{q.question}</p>
           <div className="space-y-1.5">
             {q.options.map((opt, oi) => {
-              const isSelected = answered === opt.label
+              const isSelected = selections[qi] === opt.label
               return (
                 <button
                   key={oi}
                   onClick={() => handleSelect(qi, opt.label)}
-                  disabled={!!answered}
+                  disabled={submitted}
                   className={`w-full text-left rounded px-3 py-2 text-xs transition-colors border ${
                     isSelected
                       ? 'bg-primary/20 border-primary/50 text-foreground'
-                      : answered
+                      : submitted
                         ? 'border-border/30 text-muted-foreground opacity-50 cursor-default'
                         : 'border-border/50 hover:bg-white/5 hover:border-border text-gray-300 cursor-pointer'
                   }`}
@@ -119,6 +149,28 @@ function QuestionMessage({ message, onAnswer }: { message: AgentMessage; onAnswe
           </div>
         </div>
       ))}
+      {!isSingleQuestion && (
+        <div className="px-4 py-2">
+          <Button
+            size="sm"
+            disabled={!allAnswered || submitted}
+            onClick={handleSubmit}
+            className="w-full"
+          >
+            {submitted ? (
+              <>
+                <CheckCircle2 className="h-3.5 w-3.5 mr-1.5" />
+                Submitted
+              </>
+            ) : (
+              <>
+                <Send className="h-3.5 w-3.5 mr-1.5" />
+                Submit answers
+              </>
+            )}
+          </Button>
+        </div>
+      )}
       <div className="px-4 pb-2">
         <span className="text-[10px] text-muted-foreground">{message.timestamp.toLocaleTimeString()}</span>
       </div>
