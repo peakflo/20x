@@ -39,6 +39,7 @@ import { LinearPlugin } from './plugins/linear-plugin'
 import { HubSpotPlugin } from './plugins/hubspot-plugin'
 import { registerIpcHandlers } from './ipc-handlers'
 import { RecurrenceScheduler } from './recurrence-scheduler'
+import { initAutoUpdater } from './auto-updater'
 
 let mainWindow: BrowserWindow | null = null
 let tray: Tray | null = null
@@ -245,6 +246,11 @@ app.whenReady().then(async () => {
   }).catch(() => {})
 
   createWindow()
+
+  // Initialize auto-updater
+  if (mainWindow) {
+    initAutoUpdater(mainWindow)
+  }
 
   // Start OpenCode server
   try {

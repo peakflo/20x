@@ -8,6 +8,8 @@ on:
 jobs:
   build-mac:
     runs-on: macos-latest
+    permissions:
+      contents: write
 
     strategy:
       matrix:
@@ -32,19 +34,15 @@ jobs:
       - name: Build app
         run: pnpm build
 
-      - name: Package for macOS
-        run: pnpm exec electron-builder --mac --${{ matrix.arch }} --publish never
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: mac-${{ matrix.arch }}
-          path: |
-            dist/*.dmg
-            dist/*.zip
+      - name: Package and publish for macOS
+        run: pnpm exec electron-builder --mac --${{ matrix.arch }} --publish always
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   build-linux:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
       - uses: actions/checkout@v4
@@ -61,30 +59,7 @@ jobs:
       - name: Build app
         run: pnpm build
 
-      - name: Package for Linux
-        run: pnpm exec electron-builder --linux --x64 --publish never
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: linux-x64
-          path: dist/*.AppImage
-
-  release:
-    needs: [build-mac, build-linux]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-
-    steps:
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-          merge-multiple: true
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: artifacts/*
-          generate_release_notes: true
+      - name: Package and publish for Linux
+        run: pnpm exec electron-builder --linux --x64 --publish always
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

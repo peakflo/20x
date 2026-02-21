@@ -95,6 +95,22 @@ export interface DepsStatus {
   opencodeBinary: boolean
 }
 
+export type UpdateStatusType =
+  | 'checking'
+  | 'available'
+  | 'not-available'
+  | 'downloading'
+  | 'downloaded'
+  | 'error'
+
+export interface UpdateStatus {
+  status: UpdateStatusType
+  version?: string
+  releaseNotes?: string
+  progress?: { percent: number; bytesPerSecond: number; transferred: number; total: number }
+  error?: string
+}
+
 interface ElectronAPI {
   db: {
     getTasks: () => Promise<WorkfloTask[]>
@@ -213,7 +229,14 @@ interface ElectronAPI {
     requestNotificationPermission: () => Promise<'granted' | 'denied'>
     getMinimizeToTray: () => Promise<boolean>
     setMinimizeToTray: (enabled: boolean) => Promise<boolean>
+    getVersion: () => Promise<string>
   }
+  updater: {
+    check: () => Promise<void>
+    download: () => Promise<void>
+    install: () => Promise<void>
+  }
+  onUpdaterStatus: (callback: (event: UpdateStatus) => void) => () => void
   onOverdueCheck: (callback: () => void) => () => void
   onAgentOutput: (callback: (event: AgentOutputEvent) => void) => () => void
   onAgentStatus: (callback: (event: AgentStatusEvent) => void) => () => void

@@ -213,6 +213,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getMinimizeToTray: (): Promise<boolean> =>
       ipcRenderer.invoke('app:getMinimizeToTray'),
     setMinimizeToTray: (enabled: boolean): Promise<boolean> =>
-      ipcRenderer.invoke('app:setMinimizeToTray', enabled)
+      ipcRenderer.invoke('app:setMinimizeToTray', enabled),
+    getVersion: (): Promise<string> =>
+      ipcRenderer.invoke('app:getVersion')
+  },
+  updater: {
+    check: (): Promise<void> => ipcRenderer.invoke('updater:check'),
+    download: (): Promise<void> => ipcRenderer.invoke('updater:download'),
+    install: (): Promise<void> => ipcRenderer.invoke('updater:install')
+  },
+  onUpdaterStatus: (callback: (event: unknown) => void): (() => void) => {
+    const handler = (_: unknown, data: unknown): void => callback(data)
+    ipcRenderer.on('updater:status', handler)
+    return () => ipcRenderer.removeListener('updater:status', handler)
   }
 })

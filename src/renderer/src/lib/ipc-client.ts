@@ -1,5 +1,5 @@
 import type { WorkfloTask, CreateTaskDTO, UpdateTaskDTO, FileAttachment, Agent, CreateAgentDTO, UpdateAgentDTO, McpServer, CreateMcpServerDTO, UpdateMcpServerDTO, Skill, CreateSkillDTO, UpdateSkillDTO, TaskSource, CreateTaskSourceDTO, UpdateTaskSourceDTO, SyncResult, PluginMeta, ConfigFieldSchema, ConfigFieldOption, PluginAction, ActionResult, SourceUser, ReassignResult } from '@/types'
-import type { AgentOutputEvent, AgentStatusEvent, AgentApprovalRequest, GhCliStatus, GitHubRepo, WorktreeProgressEvent, McpTestResult, SkillSyncResult, DepsStatus } from '@/types/electron'
+import type { AgentOutputEvent, AgentStatusEvent, AgentApprovalRequest, GhCliStatus, GitHubRepo, WorktreeProgressEvent, McpTestResult, SkillSyncResult, DepsStatus, UpdateStatus } from '@/types/electron'
 
 export const taskApi = {
   getAll: (): Promise<WorkfloTask[]> => {
@@ -309,4 +309,18 @@ export const worktreeApi = {
 
 export const onWorktreeProgress = (callback: (event: WorktreeProgressEvent) => void): (() => void) => {
   return window.electronAPI.onWorktreeProgress(callback)
+}
+
+export const updaterApi = {
+  check: (): Promise<void> => window.electronAPI.updater.check(),
+  download: (): Promise<void> => window.electronAPI.updater.download(),
+  install: (): Promise<void> => window.electronAPI.updater.install()
+}
+
+export const appApi = {
+  getVersion: (): Promise<string> => window.electronAPI.app.getVersion()
+}
+
+export const onUpdaterStatus = (callback: (event: UpdateStatus) => void): (() => void) => {
+  return window.electronAPI.onUpdaterStatus(callback)
 }

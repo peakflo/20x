@@ -11,7 +11,8 @@ export const eventCallbacks = {
   onAgentApproval: null as ((event: any) => void) | null,
   onOverdueCheck: null as (() => void) | null,
   onTaskUpdated: null as ((event: any) => void) | null,
-  onWorktreeProgress: null as ((event: any) => void) | null
+  onWorktreeProgress: null as ((event: any) => void) | null,
+  onUpdaterStatus: null as ((event: any) => void) | null
 }
 
 const mockElectronAPI = {
@@ -137,7 +138,19 @@ const mockElectronAPI = {
   onWorktreeProgress: vi.fn((cb: (event: any) => void) => {
     eventCallbacks.onWorktreeProgress = cb
     return vi.fn()
-  })
+  }),
+  onUpdaterStatus: vi.fn((cb: (event: any) => void) => {
+    eventCallbacks.onUpdaterStatus = cb
+    return vi.fn()
+  }),
+  updater: {
+    check: vi.fn().mockResolvedValue(undefined),
+    download: vi.fn().mockResolvedValue(undefined),
+    install: vi.fn().mockResolvedValue(undefined)
+  },
+  app: {
+    getVersion: vi.fn().mockResolvedValue('1.0.0')
+  }
 }
 
 ;(globalThis as any).window = {

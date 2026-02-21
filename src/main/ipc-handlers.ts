@@ -25,6 +25,7 @@ import type { WorktreeManager } from './worktree-manager'
 import type { SyncManager } from './sync-manager'
 import type { PluginRegistry } from './plugins/registry'
 import type { OAuthManager } from './oauth/oauth-manager'
+import { checkForUpdates, downloadUpdate, installUpdate, getAppVersion } from './auto-updater'
 
 const MIME_MAP: Record<string, string> = {
   '.pdf': 'application/pdf',
@@ -580,5 +581,22 @@ export function registerIpcHandlers(
   ipcMain.handle('app:setMinimizeToTray', async (_, enabled: boolean) => {
     await db.setSetting('minimize_to_tray', enabled.toString())
     return enabled
+  })
+
+  // Auto-updater handlers
+  ipcMain.handle('updater:check', async () => {
+    await checkForUpdates()
+  })
+
+  ipcMain.handle('updater:download', async () => {
+    await downloadUpdate()
+  })
+
+  ipcMain.handle('updater:install', () => {
+    installUpdate()
+  })
+
+  ipcMain.handle('app:getVersion', () => {
+    return getAppVersion()
   })
 }
