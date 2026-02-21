@@ -1,4 +1,5 @@
 import { DepsWarningBanner } from './DepsWarningBanner'
+import { UpdateBanner } from './UpdateBanner'
 import { Sidebar } from './Sidebar'
 import { TaskWorkspace } from '@/components/tasks/TaskWorkspace'
 import { SkillWorkspace } from '@/components/skills/SkillWorkspace'
@@ -93,6 +94,7 @@ export function AppLayout() {
           </Button>
         </div>
         <DepsWarningBanner />
+        <UpdateBanner />
         <div className="flex-1 overflow-hidden relative">
           {/* Main workspace content */}
           {activeModal === 'settings' ? (

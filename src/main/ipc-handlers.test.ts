@@ -1,10 +1,26 @@
 import { describe, it, expect, vi } from 'vitest'
 
 vi.mock('electron', () => ({
+  app: { getVersion: vi.fn(() => '1.0.0') },
   ipcMain: { handle: vi.fn() },
   dialog: { showOpenDialog: vi.fn() },
   shell: { openPath: vi.fn(), showItemInFolder: vi.fn() },
   Notification: vi.fn().mockImplementation(() => ({ show: vi.fn() }))
+}))
+
+vi.mock('electron-updater', () => ({
+  autoUpdater: {
+    autoDownload: true,
+    autoInstallOnAppQuit: false,
+    on: vi.fn(),
+    checkForUpdates: vi.fn().mockResolvedValue({}),
+    downloadUpdate: vi.fn().mockResolvedValue({}),
+    quitAndInstall: vi.fn()
+  }
+}))
+
+vi.mock('@electron-toolkit/utils', () => ({
+  is: { dev: false }
 }))
 
 import { ipcMain } from 'electron'
@@ -36,5 +52,9 @@ describe('registerIpcHandlers', () => {
     expect(channels).toContain('skills:getAll')
     expect(channels).toContain('taskSource:sync')
     expect(channels).toContain('plugin:list')
+    expect(channels).toContain('updater:check')
+    expect(channels).toContain('updater:download')
+    expect(channels).toContain('updater:install')
+    expect(channels).toContain('app:getVersion')
   })
 })
