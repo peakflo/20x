@@ -42,7 +42,7 @@ function makeQuestionMessage(
 const noop = () => {}
 
 /** Render the panel and return scoped query helpers for the question card. */
-function renderQuestion(msg: AgentMessage, onSend: ReturnType<typeof vi.fn>) {
+function renderQuestion(msg: AgentMessage, onSend: (message: string) => void) {
   const result = render(
     <AgentTranscriptPanel
       messages={[msg]}
@@ -59,7 +59,7 @@ function renderQuestion(msg: AgentMessage, onSend: ReturnType<typeof vi.fn>) {
 // ── Tests ────────────────────────────────────────────────────
 
 describe('QuestionMessage', () => {
-  let onSend: ReturnType<typeof vi.fn>
+  let onSend: ReturnType<typeof vi.fn<(message: string) => void>>
 
   beforeEach(() => {
     onSend = vi.fn()
