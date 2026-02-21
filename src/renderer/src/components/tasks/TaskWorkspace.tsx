@@ -7,6 +7,7 @@ import { TaskDetailView } from './TaskDetailView'
 import { AgentTranscriptPanel } from '@/components/agents/AgentTranscriptPanel'
 import { AgentApprovalBanner } from '@/components/agents/AgentApprovalBanner'
 import { GhCliSetupDialog } from '@/components/github/GhCliSetupDialog'
+import { OrgPickerDialog } from '@/components/github/OrgPickerDialog'
 import { RepoSelectorDialog } from '@/components/github/RepoSelectorDialog'
 import { WorktreeProgressOverlay } from '@/components/github/WorktreeProgressOverlay'
 import { useAgentSession } from '@/hooks/use-agent-session'
@@ -44,9 +45,10 @@ export function TaskWorkspace({
 }: TaskWorkspaceProps) {
   const { session, start, resume, abort, stop, sendMessage, approve } = useAgentSession(task?.id)
   const { removeSession } = useAgentStore()
-  const { githubOrg, checkGhCli, fetchSettings } = useSettingsStore()
+  const { githubOrg, checkGhCli, setGithubOrg, fetchSettings } = useSettingsStore()
 
   const [showGhSetup, setShowGhSetup] = useState(false)
+  const [showOrgPicker, setShowOrgPicker] = useState(false)
   const [showRepoSelector, setShowRepoSelector] = useState(false)
   const [isSettingUpWorktree, setIsSettingUpWorktree] = useState(false)
   const [showFeedback, setShowFeedback] = useState(false)
@@ -156,12 +158,28 @@ export function TaskWorkspace({
 
   const handleGhSetupComplete = useCallback(() => {
     setShowGhSetup(false)
-  }, [])
+    // After gh auth, check if org is set — if not, show org picker
+    if (!githubOrg) {
+      setShowOrgPicker(true)
+    } else {
+      setShowRepoSelector(true)
+    }
+  }, [githubOrg])
+
+  const handleOrgSelected = useCallback(async (org: string) => {
+    await setGithubOrg(org)
+    setShowOrgPicker(false)
+    setShowRepoSelector(true)
+  }, [setGithubOrg])
 
   const handleAddRepos = useCallback(async () => {
     const cliStatus = await checkGhCli()
-    if (!cliStatus.installed || !cliStatus.authenticated || !githubOrg) {
+    if (!cliStatus.installed || !cliStatus.authenticated) {
       setShowGhSetup(true)
+      return
+    }
+    if (!githubOrg) {
+      setShowOrgPicker(true)
       return
     }
     setShowRepoSelector(true)
@@ -547,6 +565,12 @@ Update existing skills that were helpful or create new ones for patterns worth r
         open={showGhSetup}
         onOpenChange={setShowGhSetup}
         onComplete={handleGhSetupComplete}
+      />
+
+      <OrgPickerDialog
+        open={showOrgPicker}
+        onOpenChange={setShowOrgPicker}
+        onSelect={handleOrgSelected}
       />
 
       {githubOrg && (

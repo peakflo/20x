@@ -79,7 +79,7 @@ export function useAgentSession(taskId: string | undefined) {
       // Get latest session from store, not from closure
       const currentSession = useAgentStore.getState().sessions.get(taskId!)
       if (!currentSession?.sessionId) throw new Error('No active session')
-      const result = await agentSessionApi.send(currentSession.sessionId, message, taskId)
+      const result = await agentSessionApi.send(currentSession.sessionId, message, taskId, currentSession.agentId)
       // Session was recreated on the main process — update renderer store
       if (result.newSessionId && taskId) {
         initSession(taskId, result.newSessionId, currentSession.agentId)

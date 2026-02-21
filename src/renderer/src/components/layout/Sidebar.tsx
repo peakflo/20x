@@ -80,7 +80,9 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
 
   return (
     <aside className="flex flex-col h-full border-r bg-sidebar overflow-hidden">
-      <div className="drag-region h-13 shrink-0" />
+      <div className="drag-region h-13 shrink-0 flex items-center justify-center">
+        <span className="text-sm font-semibold text-foreground">20x</span>
+      </div>
 
       {/* Tab switcher */}
       <div className="no-drag px-3 pb-3 pt-1">

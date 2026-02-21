@@ -270,8 +270,8 @@ export function registerIpcHandlers(
     return { success: true }
   })
 
-  ipcMain.handle('agentSession:send', async (_, sessionId: string, message: string, taskId?: string) => {
-    const result = await agentManager.sendMessage(sessionId, message, taskId)
+  ipcMain.handle('agentSession:send', async (_, sessionId: string, message: string, taskId?: string, agentId?: string) => {
+    const result = await agentManager.sendMessage(sessionId, message, taskId, agentId)
     return { success: true, ...result }
   })
 
@@ -363,6 +363,14 @@ export function registerIpcHandlers(
 
   ipcMain.handle('github:fetchOrgRepos', async (_, org: string) => {
     return await githubManager.fetchOrgRepos(org)
+  })
+
+  ipcMain.handle('github:fetchUserRepos', async () => {
+    return await githubManager.fetchUserRepos()
+  })
+
+  ipcMain.handle('github:fetchCollaborators', async (_, owner: string, repo: string) => {
+    return await githubManager.fetchRepoCollaborators(owner, repo)
   })
 
   // Worktree handlers
