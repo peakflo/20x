@@ -1,10 +1,10 @@
 # AGENTS.md — Multi-Agent Architecture (Phase 3)
 
-This document describes the planned multi-agent system for Workflo Workspace. It is not yet implemented — this serves as the architectural specification for Phase 3 development.
+This document describes the planned multi-agent system for 20x. It is not yet implemented — this serves as the architectural specification for Phase 3 development.
 
 ## Overview
 
-Workflo Workspace will support running multiple AI coding agents in parallel, each working on assigned tasks within specific codebases. Agents are managed through the OpenCode SDK and interact with users via streaming terminal transcripts with human-in-the-loop (HITL) approval flows.
+20x will support running multiple AI coding agents in parallel, each working on assigned tasks within specific codebases. Agents are managed through the OpenCode SDK and interact with users via streaming terminal transcripts with human-in-the-loop (HITL) approval flows.
 
 ## Agent Model
 

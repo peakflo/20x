@@ -1,7 +1,7 @@
 # 20x
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
-[![Version](https://img.shields.io/badge/version-0.0.12-blue.svg)](./package.json)
+[![Version](https://img.shields.io/github/package-json/v/peakflo/20x)](./package.json)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey.svg)](.)
 
 **Your tasks. AI agents. One app.**
@@ -71,7 +71,7 @@ Your tools          20x              AI Agents
 
 ### Prerequisites
 
-- **Node.js** >= 18
+- **Node.js** >= 22
 - **pnpm** >= 9
 - **Git** (for worktree features)
 - **GitHub CLI** (optional, for repo features)
@@ -80,8 +80,8 @@ Your tools          20x              AI Agents
 
 ```bash
 # Clone the repository
-git clone https://github.com/peakflo/pf-desktop.git
-cd pf-desktop
+git clone https://github.com/peakflo/20x.git
+cd 20x
 
 # Install dependencies
 pnpm install
@@ -95,7 +95,7 @@ Configure in Agent Settings:
 - OpenAI API key for OpenCode (if needed)
 
 **Database:**
-- Stored at `~/.workflo/database.db`
+- Stored at `~/Library/Application Support/pf-desktop/pf-desktop.db` (macOS)
 - Automatic backups before migrations
 
 **Integrations:**
@@ -191,7 +191,7 @@ We welcome contributions! Here's how:
 
 ## Community
 
-- **Issues**: [GitHub Issues](https://github.com/peakflo/pf-desktop/issues)
+- **Issues**: [GitHub Issues](https://github.com/peakflo/20x/issues)
 - **Discord**: https://discord.gg/bPgkmycM
 
 ## Security

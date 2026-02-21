@@ -1,6 +1,6 @@
 # OpenCode SDK Integration - Development Summary
 
-This document summarizes the implementation of AI agent integration with OpenCode SDK in the Workflo Workspace application.
+This document summarizes the implementation of AI agent integration with OpenCode SDK in the 20x application.
 
 ## Overview
 

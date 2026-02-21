@@ -178,8 +178,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     delete: (id: string): Promise<boolean> => ipcRenderer.invoke('skills:delete', id)
   },
   deps: {
-    check: (): Promise<{ gh: boolean; opencode: boolean }> =>
-      ipcRenderer.invoke('deps:check')
+    check: (): Promise<{ gh: boolean; opencode: boolean; opencodeBinary: boolean }> =>
+      ipcRenderer.invoke('deps:check'),
+    setOpencodePath: (dirPath: string): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke('deps:setOpencodePath', dirPath)
   },
   plugins: {
     list: (): Promise<unknown[]> => ipcRenderer.invoke('plugin:list'),

@@ -1,6 +1,7 @@
 import { EventEmitter } from 'events'
 import { spawn } from 'child_process'
-import { join } from 'path'
+import { homedir } from 'os'
+import { join, delimiter } from 'path'
 import { existsSync, copyFileSync, mkdirSync, writeFileSync, readFileSync, readdirSync, statSync } from 'fs'
 import { Agent as UndiciAgent } from 'undici'
 import type { BrowserWindow } from 'electron'
@@ -519,6 +520,26 @@ export class AgentManager extends EventEmitter {
   }
 
   /**
+   * Ensures common binary install paths (e.g. ~/.opencode/bin) are in PATH
+   * so the OpenCode SDK can find the `opencode` binary via spawn().
+   */
+  private ensureBinaryPaths(): void {
+    const currentPath = process.env.PATH || ''
+    const customPath = this.db.getSetting('OPENCODE_BINARY_PATH')
+    const extraPaths = [
+      ...(customPath ? [customPath] : []),
+      join(homedir(), '.opencode', 'bin'),
+      '/usr/local/bin',
+      join(homedir(), '.local', 'bin')
+    ].filter(p => !currentPath.includes(p))
+
+    if (extraPaths.length > 0) {
+      process.env.PATH = [...extraPaths, currentPath].join(delimiter)
+      console.log('[AgentManager] Added binary paths to PATH:', extraPaths)
+    }
+  }
+
+  /**
    * Checks if a server is accessible at the given URL
    * Tries both the given URL and its localhost/127.0.0.1 variant
    * Returns the working URL if found, null otherwise
@@ -562,6 +583,9 @@ export class AgentManager extends EventEmitter {
   async startServer(targetUrl: string = DEFAULT_SERVER_URL): Promise<void> {
     // Always load API keys first (for both embedded and external servers)
     this.loadApiKeysToEnv()
+
+    // Ensure common binary install paths are in PATH so the SDK can find `opencode`
+    this.ensureBinaryPaths()
 
     // If we already have a server running, check if it matches the target
     if (this.serverUrl) {
@@ -2501,7 +2525,7 @@ export class AgentManager extends EventEmitter {
       }
 
       // Default to home directory so project-scoped OpenCode configs are picked up
-      const dir = directory || require('os').homedir()
+      const dir = directory || homedir()
 
       const ocClient = OpenCodeSDK.createOpencodeClient({ baseUrl, fetch: noTimeoutFetch as any })
       const result: any = await ocClient.config.providers({
