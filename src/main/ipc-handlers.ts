@@ -443,18 +443,50 @@ export function registerIpcHandlers(
       opencodeAvailable = false
     }
 
-    // GitHub CLI: Check using shell (still need the binary)
-    const shell = existsSync('/bin/zsh') ? '/bin/zsh' : '/bin/bash'
+    // OpenCode binary: Check if the `opencode` command is findable
+    // First ensure common paths are in PATH (same as agent-manager does)
+    const { homedir } = await import('os')
+    const { join: pathJoin, delimiter } = await import('path')
+    const customPath = db.getSetting('OPENCODE_BINARY_PATH')
+    const extraPaths = [
+      ...(customPath ? [customPath] : []),
+      pathJoin(homedir(), '.opencode', 'bin'),
+      '/usr/local/bin',
+      pathJoin(homedir(), '.local', 'bin')
+    ].filter(p => !(process.env.PATH || '').includes(p))
+    if (extraPaths.length > 0) {
+      process.env.PATH = [...extraPaths, process.env.PATH || ''].join(delimiter)
+    }
+
+    const loginShell = existsSync('/bin/zsh') ? '/bin/zsh' : '/bin/bash'
     const check = (cmd: string) =>
-      execFileAsync(shell, ['-l', '-c', cmd])
-    const [gh] = await Promise.allSettled([
-      check('gh --version')
+      execFileAsync(loginShell, ['-l', '-c', cmd])
+
+    const [gh, opencodeBin] = await Promise.allSettled([
+      check('gh --version'),
+      check('which opencode')
     ])
 
     return {
       gh: gh.status === 'fulfilled',
-      opencode: opencodeAvailable
+      opencode: opencodeAvailable,
+      opencodeBinary: opencodeBin.status === 'fulfilled'
     }
+  })
+
+  // Save custom OpenCode binary path
+  ipcMain.handle('deps:setOpencodePath', async (_, dirPath: string) => {
+    const { join: pathJoin, delimiter } = await import('path')
+    const binaryPath = pathJoin(dirPath, 'opencode')
+    if (!existsSync(binaryPath)) {
+      return { success: false, error: `opencode binary not found at ${binaryPath}` }
+    }
+    db.setSetting('OPENCODE_BINARY_PATH', dirPath)
+    // Also add to PATH immediately
+    if (!(process.env.PATH || '').includes(dirPath)) {
+      process.env.PATH = [dirPath, process.env.PATH || ''].join(delimiter)
+    }
+    return { success: true }
   })
 
   // Plugin handlers

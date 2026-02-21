@@ -267,7 +267,9 @@ export const skillApi = {
 }
 
 export const depsApi = {
-  check: (): Promise<DepsStatus> => window.electronAPI.deps.check()
+  check: (): Promise<DepsStatus> => window.electronAPI.deps.check(),
+  setOpencodePath: (dirPath: string): Promise<{ success: boolean; error?: string }> =>
+    window.electronAPI.deps.setOpencodePath(dirPath)
 }
 
 export const pluginApi = {

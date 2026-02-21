@@ -2,7 +2,7 @@
   "name": "20x",
   "version": "0.0.16",
   "packageManager": "pnpm@9.15.2",
-  "description": "Workflo Workspace - Task Management Desktop App",
+  "description": "20x — AI-powered desktop task manager",
   "main": "./out/main/index.js",
   "author": "Peakflo",
   "license": "MIT",
@@ -15,6 +15,7 @@
     "test:run": "ELECTRON_RUN_AS_NODE=1 electron ./node_modules/vitest/vitest.mjs run",
     "test:main": "ELECTRON_RUN_AS_NODE=1 electron ./node_modules/vitest/vitest.mjs --project main",
     "test:renderer": "ELECTRON_RUN_AS_NODE=1 electron ./node_modules/vitest/vitest.mjs --project renderer",
+    "lint": "eslint .",
     "typecheck": "tsc --build --noEmit",
     "build:mac": "electron-vite build && electron-builder --mac",
     "build:win": "electron-vite build && electron-builder --win",
@@ -70,16 +71,18 @@
     "electron": "^34.0.0",
     "electron-builder": "^25.1.8",
     "electron-vite": "^3.0.0",
+    "eslint": "^10.0.1",
     "happy-dom": "^20.5.0",
     "husky": "^9.1.7",
     "tailwindcss": "^4.0.0",
     "typescript": "^5.7.0",
+    "typescript-eslint": "^8.56.0",
     "vite": "^6.0.0",
     "vitest": "^4.0.18"
   },
   "build": {
-    "appId": "com.peakflo.workflo-workspace",
-    "productName": "peakflo-20x",
+    "appId": "com.20x.app",
+    "productName": "20x",
     "directories": {
       "buildResources": "resources"
     },

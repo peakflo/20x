@@ -133,7 +133,7 @@ function createTray(): void {
 
   const contextMenu = Menu.buildFromTemplate([
     {
-      label: 'Show Workflo',
+      label: 'Show 20x',
       click: () => {
         mainWindow?.show()
       }
@@ -150,7 +150,7 @@ function createTray(): void {
     }
   ])
 
-  tray.setToolTip('Workflo Workspace')
+  tray.setToolTip('20x')
   tray.setContextMenu(contextMenu)
 
   // Show window on tray icon click (platform specific)

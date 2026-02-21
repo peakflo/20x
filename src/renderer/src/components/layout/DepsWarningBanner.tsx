@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react'
-import { Check, Copy, RefreshCw, ArrowRight, ExternalLink, Loader2, Bot } from 'lucide-react'
+import { Check, Copy, RefreshCw, ArrowRight, ExternalLink, Loader2, Bot, FolderOpen } from 'lucide-react'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/Dialog'
 import { VisuallyHidden } from '@/components/ui/VisuallyHidden'
 import { Button } from '@/components/ui/Button'
@@ -35,7 +35,11 @@ interface ProviderStepDef {
   kind: 'provider'
 }
 
-type StepDef = DepStepDef | AgentStepDef | ProviderStepDef
+interface BinaryStepDef {
+  kind: 'binary'
+}
+
+type StepDef = DepStepDef | AgentStepDef | ProviderStepDef | BinaryStepDef
 
 /* ─── Constants ─── */
 
@@ -54,6 +58,7 @@ const DEP_STEPS: DepStepDef[] = [
   }
 ]
 
+const BINARY_STEP: BinaryStepDef = { kind: 'binary' }
 const PROVIDER_STEP: ProviderStepDef = { kind: 'provider' }
 const AGENT_STEP: AgentStepDef = { kind: 'agent' }
 
@@ -103,6 +108,126 @@ function InstallBlock({ methods }: { methods: InstallMethod[] }) {
         <CopyButton text={methods[safeActive].command} />
       </div>
     </div>
+  )
+}
+
+const OPENCODE_INSTALL_METHODS: InstallMethod[] = [
+  { label: 'curl', command: 'curl -fsSL https://opencode.ai/install | bash' },
+  { label: 'npm', command: 'npm install -g opencode-ai' }
+]
+
+function OpencodeBinaryStep({
+  onInstalled,
+  onSkip,
+  isLast,
+  error,
+  setError
+}: {
+  onInstalled: () => void
+  onSkip: () => void
+  isLast: boolean
+  error: string | null
+  setError: (e: string | null) => void
+}) {
+  const [customPath, setCustomPath] = useState('')
+  const [checking, setChecking] = useState(false)
+  const [saving, setSaving] = useState(false)
+
+  const recheck = async () => {
+    setChecking(true)
+    setError(null)
+    try {
+      const result = await depsApi.check()
+      if (result.opencodeBinary) {
+        onInstalled()
+      } else {
+        setError('OpenCode binary not detected yet. Install it or provide the path below.')
+      }
+    } catch {
+      setError('Failed to check dependencies.')
+    } finally {
+      setChecking(false)
+    }
+  }
+
+  const saveCustomPath = async () => {
+    if (!customPath.trim()) {
+      setError('Please enter the directory path containing the opencode binary.')
+      return
+    }
+    setSaving(true)
+    setError(null)
+    try {
+      const result = await depsApi.setOpencodePath(customPath.trim())
+      if (result.success) {
+        onInstalled()
+      } else {
+        setError(result.error || 'Binary not found at that path.')
+      }
+    } catch {
+      setError('Failed to save path.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <>
+      <h2 className="text-2xl font-bold text-foreground mb-2">
+        Install OpenCode
+      </h2>
+      <p className="text-sm text-muted-foreground mb-6 leading-relaxed">
+        OpenCode is the AI coding engine that powers your agents. Install it using one of the methods below.
+      </p>
+
+      <InstallBlock methods={OPENCODE_INSTALL_METHODS} />
+
+      <div className="mt-6 pt-5 border-t border-border">
+        <p className="text-xs font-medium text-muted-foreground mb-2 uppercase tracking-wide">
+          Or provide custom path
+        </p>
+        <div className="flex gap-2">
+          <Input
+            value={customPath}
+            onChange={(e) => setCustomPath(e.target.value)}
+            placeholder="e.g. /home/user/.opencode/bin"
+            className="flex-1"
+          />
+          <Button variant="outline" onClick={saveCustomPath} disabled={saving || !customPath.trim()}>
+            {saving ? <Loader2 className="size-4 animate-spin" /> : <FolderOpen className="size-4" />}
+            Set
+          </Button>
+        </div>
+        <p className="text-xs text-muted-foreground mt-1.5">
+          Enter the directory containing the <code className="text-foreground/80">opencode</code> binary.
+        </p>
+      </div>
+
+      {error && <p className="mt-3 text-xs text-destructive">{error}</p>}
+
+      <div className="flex items-center gap-3 mt-6">
+        <Button onClick={recheck} disabled={checking}>
+          {checking ? (
+            <RefreshCw className="size-4 animate-spin" />
+          ) : isLast ? (
+            <Check className="size-4" />
+          ) : (
+            <ArrowRight className="size-4" />
+          )}
+          {checking ? 'Checking...' : isLast ? 'Done' : 'Next'}
+        </Button>
+        <Button variant="ghost" onClick={onSkip}>
+          Skip
+        </Button>
+        <button
+          onClick={() => window.open('https://opencode.ai', '_blank')}
+          className="ml-auto flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+        >
+          Website
+          <ExternalLink className="size-3" />
+        </button>
+      </div>
+    </>
   )
 }
 
@@ -299,10 +424,13 @@ export function DepsWarningBanner() {
         console.log('[Onboarding] Found existing providers, skipping provider setup:', providers.providers.map(p => p.id))
       }
 
+      // OpenCode binary step — show if binary not found in PATH
+      const binarySteps = (force || !result.opencodeBinary) ? [BINARY_STEP] : []
+
       // Read fresh agent count from store (not stale closure)
       const hasAgents = useAgentStore.getState().agents.length > 0
       const agentSteps = force || !hasAgents ? [AGENT_STEP] : []
-      setSteps([...depSteps, ...providerSteps, ...agentSteps])
+      setSteps([...depSteps, ...binarySteps, ...providerSteps, ...agentSteps])
     })
   }, [])
 
@@ -417,6 +545,24 @@ export function DepsWarningBanner() {
                 </button>
               </div>
             </>
+          ) : current.kind === 'binary' ? (
+            /* OpenCode binary install step */
+            <OpencodeBinaryStep
+              error={error}
+              setError={setError}
+              isLast={isLast}
+              onInstalled={() => {
+                if (isLast) {
+                  setDismissed(true)
+                } else {
+                  // Remove binary step and advance
+                  const remaining = steps.filter((s) => s.kind !== 'binary')
+                  setSteps(remaining)
+                  setStep((prev) => Math.min(prev, remaining.length - 1))
+                }
+              }}
+              onSkip={skip}
+            />
           ) : current.kind === 'provider' ? (
             /* Provider setup step */
             <ProviderSetupStep

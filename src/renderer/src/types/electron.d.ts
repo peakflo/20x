@@ -92,6 +92,7 @@ export interface WorktreeProgressEvent {
 export interface DepsStatus {
   gh: boolean
   opencode: boolean
+  opencodeBinary: boolean
 }
 
 interface ElectronAPI {
@@ -195,6 +196,7 @@ interface ElectronAPI {
   }
   deps: {
     check: () => Promise<DepsStatus>
+    setOpencodePath: (dirPath: string) => Promise<{ success: boolean; error?: string }>
   }
   plugins: {
     list: () => Promise<PluginMeta[]>
