@@ -1,8 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { useUpdateStore } from './update-store'
-import { eventCallbacks } from '../../../../test/setup-renderer'
 
 const mockElectronAPI = window.electronAPI
+
+/** Helper to extract the callback registered via onUpdaterStatus */
+function getUpdaterCallback(): ((event: any) => void) | undefined {
+  const calls = (mockElectronAPI.onUpdaterStatus as ReturnType<typeof vi.fn>).mock.calls
+  return calls.length > 0 ? calls[calls.length - 1][0] : undefined
+}
 
 beforeEach(() => {
   useUpdateStore.setState({
@@ -109,18 +114,18 @@ describe('useUpdateStore', () => {
 
     it('updates status when updater event fires', () => {
       useUpdateStore.getState().initListener()
+      const cb = getUpdaterCallback()
 
-      eventCallbacks.onUpdaterStatus?.({
-        status: 'checking'
-      })
+      cb?.({ status: 'checking' })
 
       expect(useUpdateStore.getState().status).toBe('checking')
     })
 
     it('updates version and releaseNotes on available event', () => {
       useUpdateStore.getState().initListener()
+      const cb = getUpdaterCallback()
 
-      eventCallbacks.onUpdaterStatus?.({
+      cb?.({
         status: 'available',
         version: '3.0.0',
         releaseNotes: 'New features'
@@ -134,8 +139,9 @@ describe('useUpdateStore', () => {
 
     it('updates progress on downloading event', () => {
       useUpdateStore.getState().initListener()
+      const cb = getUpdaterCallback()
 
-      eventCallbacks.onUpdaterStatus?.({
+      cb?.({
         status: 'downloading',
         progress: {
           percent: 45.2,
@@ -157,8 +163,9 @@ describe('useUpdateStore', () => {
 
     it('updates error on error event', () => {
       useUpdateStore.getState().initListener()
+      const cb = getUpdaterCallback()
 
-      eventCallbacks.onUpdaterStatus?.({
+      cb?.({
         status: 'error',
         error: 'Something went wrong'
       })
@@ -170,8 +177,9 @@ describe('useUpdateStore', () => {
 
     it('sets downloaded status', () => {
       useUpdateStore.getState().initListener()
+      const cb = getUpdaterCallback()
 
-      eventCallbacks.onUpdaterStatus?.({
+      cb?.({
         status: 'downloaded',
         version: '3.0.0'
       })
@@ -186,9 +194,10 @@ describe('useUpdateStore', () => {
       useUpdateStore.setState({ version: '2.0.0', dismissed: true })
 
       useUpdateStore.getState().initListener()
+      const cb = getUpdaterCallback()
 
       // New version detected
-      eventCallbacks.onUpdaterStatus?.({
+      cb?.({
         status: 'available',
         version: '3.0.0'
       })
@@ -200,9 +209,10 @@ describe('useUpdateStore', () => {
       useUpdateStore.setState({ version: '2.0.0', dismissed: true })
 
       useUpdateStore.getState().initListener()
+      const cb = getUpdaterCallback()
 
       // Same version
-      eventCallbacks.onUpdaterStatus?.({
+      cb?.({
         status: 'available',
         version: '2.0.0'
       })
@@ -214,10 +224,9 @@ describe('useUpdateStore', () => {
       useUpdateStore.setState({ status: 'error', error: 'Previous error' })
 
       useUpdateStore.getState().initListener()
+      const cb = getUpdaterCallback()
 
-      eventCallbacks.onUpdaterStatus?.({
-        status: 'checking'
-      })
+      cb?.({ status: 'checking' })
 
       const state = useUpdateStore.getState()
       expect(state.status).toBe('checking')
@@ -231,8 +240,9 @@ describe('useUpdateStore', () => {
       })
 
       useUpdateStore.getState().initListener()
+      const cb = getUpdaterCallback()
 
-      eventCallbacks.onUpdaterStatus?.({
+      cb?.({
         status: 'downloaded',
         version: '3.0.0'
       })
