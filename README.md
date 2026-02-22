@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="resources/20xlogo.png" alt="20x Logo" width="120" />
+  <img src="resources/icon.png" alt="20x Logo" width="120" />
 </p>
 
 # 20x
