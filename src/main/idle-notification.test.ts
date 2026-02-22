@@ -142,6 +142,43 @@ describe('AgentManager idle notifications', () => {
       }
     })
 
+    it('does NOT show notification when notifications_enabled setting is false', () => {
+      mockDb.getSetting.mockImplementation((key: string) => {
+        if (key === 'notifications_enabled') return 'false'
+        return null
+      })
+
+      const mockWindow = createMockWindow({ isFocused: false })
+      agentManager.setMainWindow(mockWindow)
+
+      const session = { lastAssistantMessage: 'Done.' }
+      const task = { id: 'task-disabled', title: 'Disabled notifications task' }
+
+      callShowIdleNotification(agentManager, session, task)
+
+      const NotificationMock = Notification as unknown as ReturnType<typeof vi.fn>
+      expect(NotificationMock.mock.instances).toHaveLength(0)
+      if (isMacOS) {
+        expect(exec).not.toHaveBeenCalled()
+      }
+    })
+
+    it('shows notification when notifications_enabled setting is not set (defaults to enabled)', () => {
+      mockDb.getSetting.mockReturnValue(null)
+
+      const mockWindow = createMockWindow({ isFocused: false })
+      agentManager.setMainWindow(mockWindow)
+
+      const session = { lastAssistantMessage: 'Done.' }
+      const task = { id: 'task-default', title: 'Default setting task' }
+
+      callShowIdleNotification(agentManager, session, task)
+
+      expect(Notification).toHaveBeenCalled()
+      const instance = getLastNotificationInstance()
+      expect(instance.show).toHaveBeenCalled()
+    })
+
     it('does NOT show notification when Notification is not supported', () => {
       ;(Notification.isSupported as ReturnType<typeof vi.fn>).mockReturnValue(false)
 

@@ -3,8 +3,17 @@ import { describe, it, expect, vi } from 'vitest'
 vi.mock('electron', () => ({
   ipcMain: { handle: vi.fn(), on: vi.fn() },
   dialog: { showOpenDialog: vi.fn() },
-  shell: { openPath: vi.fn(), showItemInFolder: vi.fn() },
-  Notification: vi.fn().mockImplementation(function(this: any) { this.show = vi.fn() })
+  shell: { openPath: vi.fn(), showItemInFolder: vi.fn(), openExternal: vi.fn().mockResolvedValue(undefined) },
+  app: { dock: { bounce: vi.fn() } },
+  Notification: Object.assign(
+    vi.fn().mockImplementation(function(this: any) { this.show = vi.fn() }),
+    { isSupported: vi.fn().mockReturnValue(true) }
+  )
+}))
+
+vi.mock('child_process', () => ({
+  exec: vi.fn(),
+  execFile: vi.fn()
 }))
 
 import { ipcMain } from 'electron'
@@ -67,5 +76,23 @@ describe('registerIpcHandlers', () => {
     const handler = onCalls.find((call: any[]) => call[0] === 'task:selectedChanged')![1]
     handler({}, null)
     expect(agentManager.setSelectedTaskId).toHaveBeenCalledWith(null)
+  })
+
+  it('registers sendTestNotification handler', () => {
+    ;(ipcMain.handle as ReturnType<typeof vi.fn>).mockClear()
+    registerIpcHandlers({} as any, { setSelectedTaskId: vi.fn() } as any, {} as any, {} as any, {} as any, {} as any)
+
+    const handleCalls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls
+    const channels = handleCalls.map((call: any[]) => call[0])
+    expect(channels).toContain('app:sendTestNotification')
+  })
+
+  it('registers openNotificationSettings handler', () => {
+    ;(ipcMain.handle as ReturnType<typeof vi.fn>).mockClear()
+    registerIpcHandlers({} as any, { setSelectedTaskId: vi.fn() } as any, {} as any, {} as any, {} as any, {} as any)
+
+    const handleCalls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls
+    const channels = handleCalls.map((call: any[]) => call[0])
+    expect(channels).toContain('app:openNotificationSettings')
   })
 })

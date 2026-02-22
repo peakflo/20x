@@ -235,6 +235,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getMinimizeToTray: (): Promise<boolean> =>
       ipcRenderer.invoke('app:getMinimizeToTray'),
     setMinimizeToTray: (enabled: boolean): Promise<boolean> =>
-      ipcRenderer.invoke('app:setMinimizeToTray', enabled)
+      ipcRenderer.invoke('app:setMinimizeToTray', enabled),
+    sendTestNotification: (): Promise<void> =>
+      ipcRenderer.invoke('app:sendTestNotification'),
+    openNotificationSettings: (): Promise<void> =>
+      ipcRenderer.invoke('app:openNotificationSettings')
   }
 })

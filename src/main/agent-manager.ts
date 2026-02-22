@@ -1781,6 +1781,12 @@ export class AgentManager extends EventEmitter {
    */
   private showIdleNotification(session: AgentSession, task: { id: string; title: string }): void {
     try {
+      // Respect the user's notification preference from Settings
+      const notifSetting = this.db.getSetting('notifications_enabled')
+      if (notifSetting === 'false') {
+        return
+      }
+
       // Skip if window is focused AND this specific task is selected
       const isWindowVisible = this.mainWindow
         && !this.mainWindow.isDestroyed()

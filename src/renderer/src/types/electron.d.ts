@@ -222,6 +222,8 @@ interface ElectronAPI {
     requestNotificationPermission: () => Promise<'granted' | 'denied'>
     getMinimizeToTray: () => Promise<boolean>
     setMinimizeToTray: (enabled: boolean) => Promise<boolean>
+    sendTestNotification: () => Promise<void>
+    openNotificationSettings: () => Promise<void>
   }
   onOverdueCheck: (callback: () => void) => () => void
   onAgentOutput: (callback: (event: AgentOutputEvent) => void) => () => void
