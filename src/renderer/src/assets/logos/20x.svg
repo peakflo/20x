@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="96 76 208 173" width="208" height="173">
+  <!-- Rounded rectangle outline -->
+  <rect x="100" y="80" width="200" height="165" rx="32" ry="32"
+        fill="none" stroke="#FFFFFF" stroke-width="8"/>
+  <!-- Left X -->
+  <line x1="148" y1="138" x2="178" y2="168" stroke="#FFFFFF" stroke-width="7" stroke-linecap="round"/>
+  <line x1="178" y1="138" x2="148" y2="168" stroke="#FFFFFF" stroke-width="7" stroke-linecap="round"/>
+  <!-- Right X -->
+  <line x1="222" y1="138" x2="252" y2="168" stroke="#FFFFFF" stroke-width="7" stroke-linecap="round"/>
+  <line x1="252" y1="138" x2="222" y2="168" stroke="#FFFFFF" stroke-width="7" stroke-linecap="round"/>
+</svg>

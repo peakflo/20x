@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="resources/20xlogo.png" alt="20x Logo" width="120" />
+</p>
+
 # 20x
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
