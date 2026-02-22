@@ -1,5 +1,6 @@
 import { execFile, spawn, type ChildProcess } from 'child_process'
 import { promisify } from 'util'
+import { shell } from 'electron'
 
 const execFileAsync = promisify(execFile)
 
@@ -64,19 +65,47 @@ export class GitHubManager {
     }
   }
 
-  async startWebAuth(): Promise<void> {
+  async startWebAuth(onDeviceCode?: (code: string) => void): Promise<void> {
     return new Promise((resolve, reject) => {
-      this.authProcess = spawn('gh', ['auth', 'login', '--web', '--git-protocol', 'https'], {
-        stdio: ['pipe', 'pipe', 'pipe']
-      })
+      this.authProcess = spawn(
+        'gh',
+        ['auth', 'login', '--web', '--git-protocol', 'https', '--hostname', 'github.com'],
+        { stdio: ['pipe', 'pipe', 'pipe'] }
+      )
 
       let completed = false
+      let browserOpened = false
+      let codeEmitted = false
+      let output = ''
       const timeout = setTimeout(() => {
         if (!completed) {
           this.authProcess?.kill()
           reject(new Error('Auth timeout'))
         }
       }, 120000)
+
+      const handleOutput = (data: Buffer): void => {
+        output += data.toString()
+
+        if (!codeEmitted && onDeviceCode) {
+          const codeMatch = output.match(/code:\s*([A-Z0-9]{4}-[A-Z0-9]{4})/)
+          if (codeMatch) {
+            codeEmitted = true
+            onDeviceCode(codeMatch[1])
+          }
+        }
+
+        if (!browserOpened) {
+          const urlMatch = output.match(/(https:\/\/github\.com\/login\/device\S*)/)
+          if (urlMatch) {
+            browserOpened = true
+            shell.openExternal(urlMatch[1])
+          }
+        }
+      }
+
+      this.authProcess.stderr?.on('data', handleOutput)
+      this.authProcess.stdout?.on('data', handleOutput)
 
       this.authProcess.on('close', (code) => {
         completed = true
@@ -93,7 +122,7 @@ export class GitHubManager {
         reject(err)
       })
 
-      // Automatically press Enter for any prompts by writing newlines
+      // Write newline for any potential "Press Enter" prompts
       this.authProcess.stdin?.write('\n')
     })
   }
