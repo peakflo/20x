@@ -210,6 +210,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('worktree:progress', handler)
     return () => ipcRenderer.removeListener('worktree:progress', handler)
   },
+  onGithubDeviceCode: (callback: (code: string) => void): (() => void) => {
+    const handler = (_: unknown, code: string): void => callback(code)
+    ipcRenderer.on('github:deviceCode', handler)
+    return () => ipcRenderer.removeListener('github:deviceCode', handler)
+  },
   app: {
     getLoginItemSettings: (): Promise<{ openAtLogin: boolean; openAsHidden: boolean }> =>
       ipcRenderer.invoke('app:getLoginItemSettings'),

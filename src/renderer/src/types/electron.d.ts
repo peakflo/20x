@@ -62,6 +62,7 @@ export interface SkillSyncResult {
 export interface McpTestResult {
   status: 'connected' | 'failed'
   error?: string
+  errorDetail?: string
   toolCount?: number
   tools?: { name: string; description: string }[]
 }
@@ -230,6 +231,7 @@ interface ElectronAPI {
   onTaskUpdated: (callback: (event: { taskId: string; updates: Partial<WorkfloTask> }) => void) => () => void
   onTaskCreated: (callback: (event: { task: WorkfloTask }) => void) => () => void
   onWorktreeProgress: (callback: (event: WorktreeProgressEvent) => void) => () => void
+  onGithubDeviceCode: (callback: (code: string) => void) => () => void
   onOAuthCallback: (callback: (event: { code: string; state: string }) => void) => () => void
 }
 

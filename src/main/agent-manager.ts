@@ -2407,14 +2407,14 @@ export class AgentManager extends EventEmitter {
     return this.testLocalMcpServer(serverData)
   }
 
-  private testLocalMcpServer(serverData: { name: string; command?: string; args?: string[]; environment?: Record<string, string> }): Promise<{ status: 'connected' | 'failed'; error?: string; toolCount?: number; tools?: { name: string; description: string }[] }> {
+  private testLocalMcpServer(serverData: { name: string; command?: string; args?: string[]; environment?: Record<string, string> }): Promise<{ status: 'connected' | 'failed'; error?: string; errorDetail?: string; toolCount?: number; tools?: { name: string; description: string }[] }> {
     if (!serverData.command) {
       return Promise.resolve({ status: 'failed', error: 'No command specified' })
     }
 
     return new Promise((resolve) => {
       let resolved = false
-      const finish = (result: { status: 'connected' | 'failed'; error?: string; toolCount?: number; tools?: { name: string; description: string }[] }): void => {
+      const finish = (result: { status: 'connected' | 'failed'; error?: string; errorDetail?: string; toolCount?: number; tools?: { name: string; description: string }[] }): void => {
         if (resolved) return
         resolved = true
         clearTimeout(timer)
@@ -2431,10 +2431,17 @@ export class AgentManager extends EventEmitter {
       const shellCmd = [serverData.command!, ...(serverData.args || [])].map((arg) =>
         /[\s"'\\$`!#&|;()<>]/.test(arg) ? `'${arg.replace(/'/g, "'\\''")}'` : arg
       ).join(' ')
+      // Inject TASK_API_URL for the built-in task-management server
+      const extraEnv: Record<string, string> = {}
+      if (serverData.name === 'task-management') {
+        const apiPort = getTaskApiPort()
+        if (apiPort) extraEnv.TASK_API_URL = `http://127.0.0.1:${apiPort}`
+      }
+
       const proc = spawn(shellCmd, [], {
         stdio: ['pipe', 'pipe', 'pipe'],
         shell: true,
-        env: { ...process.env, npm_config_yes: 'true', ...(serverData.environment || {}) }
+        env: { ...process.env, npm_config_yes: 'true', ...(serverData.environment || {}), ...extraEnv }
       })
 
       let buffer = ''
@@ -2488,8 +2495,12 @@ export class AgentManager extends EventEmitter {
       })
 
       proc.on('exit', (code) => {
-        const errMsg = stderrBuf.trim().split('\n').pop() || `Process exited with code ${code}`
-        finish({ status: 'failed', error: errMsg })
+        const lines = stderrBuf.trim().split('\n')
+        // Find a line matching an error pattern (e.g. "TypeError: ...", "Error [ERR_...]: ...")
+        const errorLine = lines.find((l) => /\bError\b/.test(l) && !/^\s+at /.test(l) && !/^Node\.js v/.test(l))
+        const errMsg = errorLine?.trim() || `Process exited with code ${code}`
+        const detail = stderrBuf.trim().replace(/\nNode\.js v.+$/, '').trim()
+        finish({ status: 'failed', error: errMsg, errorDetail: detail || undefined })
       })
 
       // Send initialize

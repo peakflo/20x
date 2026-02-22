@@ -353,8 +353,10 @@ export function registerIpcHandlers(
     return await githubManager.checkGhCli()
   })
 
-  ipcMain.handle('github:startAuth', async () => {
-    await githubManager.startWebAuth()
+  ipcMain.handle('github:startAuth', async (event) => {
+    await githubManager.startWebAuth((code) => {
+      event.sender.send('github:deviceCode', code)
+    })
   })
 
   ipcMain.handle('github:fetchOrgs', async () => {

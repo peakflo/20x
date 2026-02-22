@@ -1158,9 +1158,9 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
         mcpServerId,
         'task-management',
         'local',
-        'node',
+        process.execPath,
         JSON.stringify([mcpServerPath]),
-        JSON.stringify({}),
+        JSON.stringify({ ELECTRON_RUN_AS_NODE: '1' }),
         JSON.stringify(tools),
         now,
         now
@@ -1168,12 +1168,13 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
     } else {
       mcpServerId = existingServer.id
 
-      // Always update path and refresh tools
+      // Always update path, command and refresh tools
       this.db.prepare(`
-        UPDATE mcp_servers SET args = ?, environment = ?, tools = ?, updated_at = ? WHERE id = ?
+        UPDATE mcp_servers SET command = ?, args = ?, environment = ?, tools = ?, updated_at = ? WHERE id = ?
       `).run(
+        process.execPath,
         JSON.stringify([mcpServerPath]),
-        JSON.stringify({}),
+        JSON.stringify({ ELECTRON_RUN_AS_NODE: '1' }),
         JSON.stringify(tools),
         now,
         mcpServerId
