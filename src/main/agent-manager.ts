@@ -1,10 +1,10 @@
 import { EventEmitter } from 'events'
-import { spawn } from 'child_process'
+import { spawn, exec } from 'child_process'
 import { homedir } from 'os'
 import { join, delimiter } from 'path'
 import { existsSync, copyFileSync, mkdirSync, writeFileSync, readFileSync, readdirSync, statSync } from 'fs'
 import { Agent as UndiciAgent } from 'undici'
-import { Notification } from 'electron'
+import { Notification, app } from 'electron'
 import type { BrowserWindow } from 'electron'
 import type { DatabaseManager, AgentMcpServerEntry, OutputFieldRecord, SkillRecord } from './database'
 import { TaskStatus } from '../shared/constants'
@@ -1793,10 +1793,6 @@ export class AgentManager extends EventEmitter {
         return
       }
 
-      if (!Notification.isSupported()) {
-        return
-      }
-
       // Build notification body from last assistant message, truncated
       const MAX_BODY = 200
       let body = session.lastAssistantMessage || 'Agent has finished working on this task.'
@@ -1811,22 +1807,45 @@ export class AgentManager extends EventEmitter {
         ? task.title.slice(0, MAX_TITLE - 3) + '...'
         : task.title
 
-      const notification = new Notification({
-        title: `Task Ready: ${taskTitle}`,
-        body,
-        silent: false
-      })
-
+      const fullTitle = `Task Ready: ${taskTitle}`
       const taskId = task.id
-      notification.on('click', () => {
-        if (this.mainWindow && !this.mainWindow.isDestroyed()) {
-          this.mainWindow.show()
-          this.mainWindow.focus()
-          this.mainWindow.webContents.send('task:navigate', taskId)
-        }
-      })
 
-      notification.show()
+      // On macOS, Electron's Notification API requires a code-signed, packaged
+      // app (Electron 25+). Use osascript as a reliable fallback and also
+      // bounce the dock icon so the user notices.
+      if (process.platform === 'darwin') {
+        const safeTitle = fullTitle.replace(/["\\]/g, '')
+        const safeBody = body.replace(/["\\]/g, '')
+        exec(
+          `osascript -e 'display notification "${safeBody}" with title "${safeTitle}"'`,
+          (err) => { if (err) console.error('[AgentManager] osascript notification failed:', err) }
+        )
+        // Bounce dock icon once to draw attention
+        app.dock?.bounce('informational')
+      }
+
+      // Also create an Electron Notification for the click-to-navigate handler.
+      // On macOS this may be silently dropped if the app is unsigned, but in
+      // production signed builds it will work and provide clickable navigation.
+      // On Windows/Linux this is the primary notification mechanism.
+      if (Notification.isSupported()) {
+        const notification = new Notification({
+          title: fullTitle,
+          body,
+          silent: process.platform === 'darwin' // avoid double sound on macOS
+        })
+
+        notification.on('click', () => {
+          if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+            this.mainWindow.show()
+            this.mainWindow.focus()
+            this.mainWindow.webContents.send('task:navigate', taskId)
+          }
+        })
+
+        notification.show()
+      }
+
       console.log(`[AgentManager] Showed idle notification for task "${task.title}" (${task.id})`)
     } catch (err) {
       console.error(`[AgentManager] Failed to show idle notification:`, err)

@@ -1,6 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { Notification } from 'electron'
+import { Notification, app } from 'electron'
+import { exec } from 'child_process'
 import { AgentManager } from './agent-manager'
+
+vi.mock('child_process', () => ({
+  spawn: vi.fn(),
+  exec: vi.fn()
+}))
+
+const isMacOS = process.platform === 'darwin'
 
 // Create a minimal mock DB
 function createMockDb(): any {
@@ -83,7 +91,7 @@ describe('AgentManager idle notifications', () => {
       expect(Notification).toHaveBeenCalledWith({
         title: 'Task Ready: Fix login bug',
         body: 'I have completed the implementation.',
-        silent: false
+        silent: isMacOS // silent on macOS to avoid double sound with osascript
       })
       const instance = getLastNotificationInstance()
       expect(instance.show).toHaveBeenCalled()
@@ -129,6 +137,9 @@ describe('AgentManager idle notifications', () => {
       callShowIdleNotification(agentManager, session, task)
 
       expect(Notification).not.toHaveBeenCalledWith(expect.anything())
+      if (isMacOS) {
+        expect(exec).not.toHaveBeenCalled()
+      }
     })
 
     it('does NOT show notification when Notification is not supported', () => {
@@ -233,6 +244,30 @@ describe('AgentManager idle notifications', () => {
       expect(mockWindow.webContents.send).toHaveBeenCalledWith('task:navigate', 'task-10')
     })
 
+    it('click handler does nothing when window has been destroyed', () => {
+      const mockWindow = createMockWindow({ isFocused: false })
+      agentManager.setMainWindow(mockWindow)
+
+      const session = { lastAssistantMessage: 'Done.' }
+      const task = { id: 'task-13', title: 'Destroyed window test' }
+
+      callShowIdleNotification(agentManager, session, task)
+
+      // Now simulate the window being destroyed before the user clicks
+      mockWindow.isDestroyed.mockReturnValue(true)
+
+      const instance = getLastNotificationInstance()
+      const clickHandler = instance.on.mock.calls.find(
+        (call: any[]) => call[0] === 'click'
+      )[1]
+
+      // Should not throw and should not call show/focus/send
+      expect(() => clickHandler()).not.toThrow()
+      expect(mockWindow.show).not.toHaveBeenCalled()
+      expect(mockWindow.focus).not.toHaveBeenCalled()
+      expect(mockWindow.webContents.send).not.toHaveBeenCalled()
+    })
+
     it('handles missing mainWindow gracefully', () => {
       // Don't set mainWindow — it stays null
       const session = { lastAssistantMessage: 'Done.' }
@@ -252,6 +287,85 @@ describe('AgentManager idle notifications', () => {
       const instance = getLastNotificationInstance()
       expect(instance.show).toHaveBeenCalled()
     })
+
+    if (isMacOS) {
+      describe('macOS osascript fallback', () => {
+        it('calls osascript to display notification on macOS', () => {
+          const mockWindow = createMockWindow({ isFocused: false })
+          agentManager.setMainWindow(mockWindow)
+
+          const session = { lastAssistantMessage: 'Deployment complete.' }
+          const task = { id: 'task-mac-1', title: 'Deploy service' }
+
+          callShowIdleNotification(agentManager, session, task)
+
+          expect(exec).toHaveBeenCalledWith(
+            expect.stringContaining('osascript'),
+            expect.any(Function)
+          )
+          const execCall = (exec as unknown as ReturnType<typeof vi.fn>).mock.calls[0][0]
+          expect(execCall).toContain('display notification')
+          expect(execCall).toContain('Deployment complete.')
+          expect(execCall).toContain('Task Ready: Deploy service')
+        })
+
+        it('bounces dock icon on macOS', () => {
+          const mockWindow = createMockWindow({ isFocused: false })
+          agentManager.setMainWindow(mockWindow)
+
+          const session = { lastAssistantMessage: 'Done.' }
+          const task = { id: 'task-mac-2', title: 'Dock bounce test' }
+
+          callShowIdleNotification(agentManager, session, task)
+
+          expect(app.dock?.bounce).toHaveBeenCalledWith('informational')
+        })
+
+        it('sets Electron Notification silent on macOS to avoid double sound', () => {
+          const mockWindow = createMockWindow({ isFocused: false })
+          agentManager.setMainWindow(mockWindow)
+
+          const session = { lastAssistantMessage: 'Done.' }
+          const task = { id: 'task-mac-3', title: 'Silent test' }
+
+          callShowIdleNotification(agentManager, session, task)
+
+          expect(Notification).toHaveBeenCalledWith(
+            expect.objectContaining({ silent: true })
+          )
+        })
+
+        it('sanitizes quotes in osascript command', () => {
+          const mockWindow = createMockWindow({ isFocused: false })
+          agentManager.setMainWindow(mockWindow)
+
+          const session = { lastAssistantMessage: 'Fixed the "auth" bug with backslash\\path' }
+          const task = { id: 'task-mac-4', title: 'Test with "quotes"' }
+
+          callShowIdleNotification(agentManager, session, task)
+
+          const execCall = (exec as unknown as ReturnType<typeof vi.fn>).mock.calls[0][0]
+          // Should not contain unescaped double quotes or backslashes in the osascript body
+          const bodyPart = execCall.split("display notification ")[1]
+          expect(bodyPart).not.toContain('\\"')
+          expect(bodyPart).not.toContain('\\\\')
+        })
+
+        it('does NOT call osascript when task is focused and selected', () => {
+          const mockWindow = createMockWindow({ isFocused: true, isVisible: true })
+          agentManager.setMainWindow(mockWindow)
+          agentManager.setSelectedTaskId('task-mac-5')
+
+          const session = { lastAssistantMessage: 'Done.' }
+          const task = { id: 'task-mac-5', title: 'Focused task' }
+
+          callShowIdleNotification(agentManager, session, task)
+
+          expect(exec).not.toHaveBeenCalled()
+          expect(app.dock?.bounce).not.toHaveBeenCalled()
+        })
+      })
+    }
   })
 
   describe('setSelectedTaskId', () => {

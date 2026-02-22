@@ -4,7 +4,11 @@ vi.mock('electron', () => ({
   app: {
     getPath: vi.fn(() => '/tmp/pf-desktop-test'),
     getName: vi.fn(() => 'pf-desktop'),
-    getVersion: vi.fn(() => '1.0.0')
+    getVersion: vi.fn(() => '1.0.0'),
+    isPackaged: false,
+    dock: {
+      bounce: vi.fn()
+    }
   },
   ipcMain: {
     handle: vi.fn(),
