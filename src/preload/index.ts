@@ -85,8 +85,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('agentSession:abort', sessionId),
     stop: (sessionId: string): Promise<{ success: boolean }> =>
       ipcRenderer.invoke('agentSession:stop', sessionId),
-    send: (sessionId: string, message: string, taskId?: string): Promise<{ success: boolean; newSessionId?: string }> =>
-      ipcRenderer.invoke('agentSession:send', sessionId, message, taskId),
+    send: (sessionId: string, message: string, taskId?: string, agentId?: string): Promise<{ success: boolean; newSessionId?: string }> =>
+      ipcRenderer.invoke('agentSession:send', sessionId, message, taskId, agentId),
     approve: (sessionId: string, approved: boolean, message?: string): Promise<{ success: boolean }> =>
       ipcRenderer.invoke('agentSession:approve', sessionId, approved, message),
     syncSkills: (sessionId: string): Promise<{ created: string[]; updated: string[]; unchanged: string[] }> =>
@@ -130,6 +130,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('task:updated', handler)
     return () => ipcRenderer.removeListener('task:updated', handler)
   },
+  onTaskCreated: (callback: (event: unknown) => void): (() => void) => {
+    const handler = (_: unknown, data: unknown): void => callback(data)
+    ipcRenderer.on('task:created', handler)
+    return () => ipcRenderer.removeListener('task:created', handler)
+  },
   settings: {
     get: (key: string): Promise<string | null> => ipcRenderer.invoke('settings:get', key),
     set: (key: string, value: string): Promise<void> => ipcRenderer.invoke('settings:set', key, value),
@@ -144,7 +149,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     startAuth: (): Promise<void> => ipcRenderer.invoke('github:startAuth'),
     fetchOrgs: (): Promise<string[]> => ipcRenderer.invoke('github:fetchOrgs'),
     fetchOrgRepos: (org: string): Promise<unknown[]> =>
-      ipcRenderer.invoke('github:fetchOrgRepos', org)
+      ipcRenderer.invoke('github:fetchOrgRepos', org),
+    fetchUserRepos: (): Promise<unknown[]> =>
+      ipcRenderer.invoke('github:fetchUserRepos'),
+    fetchCollaborators: (owner: string, repo: string): Promise<unknown[]> =>
+      ipcRenderer.invoke('github:fetchCollaborators', owner, repo)
   },
   worktree: {
     setup: (taskId: string, repos: { fullName: string; defaultBranch: string }[], org: string): Promise<string> =>
@@ -200,6 +209,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const handler = (_: unknown, data: unknown): void => callback(data)
     ipcRenderer.on('worktree:progress', handler)
     return () => ipcRenderer.removeListener('worktree:progress', handler)
+  },
+  onGithubDeviceCode: (callback: (code: string) => void): (() => void) => {
+    const handler = (_: unknown, code: string): void => callback(code)
+    ipcRenderer.on('github:deviceCode', handler)
+    return () => ipcRenderer.removeListener('github:deviceCode', handler)
   },
   app: {
     getLoginItemSettings: (): Promise<{ openAtLogin: boolean; openAsHidden: boolean }> =>

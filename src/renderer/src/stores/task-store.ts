@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import type { WorkfloTask, CreateTaskDTO, UpdateTaskDTO } from '@/types'
-import { taskApi, taskSourceApi, onTaskUpdated } from '@/lib/ipc-client'
+import { taskApi, taskSourceApi, onTaskUpdated, onTaskCreated } from '@/lib/ipc-client'
 
 interface TaskState {
   tasks: WorkfloTask[]
@@ -87,4 +87,13 @@ onTaskUpdated((event) => {
       t.id === event.taskId ? { ...t, ...event.updates } : t
     )
   }))
+})
+
+// Listen for tasks created externally (e.g., via task-management MCP server)
+onTaskCreated((event) => {
+  useTaskStore.setState((state) => {
+    // Avoid duplicates
+    if (state.tasks.some((t) => t.id === event.task.id)) return state
+    return { tasks: [event.task, ...state.tasks] }
+  })
 })

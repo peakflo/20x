@@ -270,8 +270,8 @@ export function registerIpcHandlers(
     return { success: true }
   })
 
-  ipcMain.handle('agentSession:send', async (_, sessionId: string, message: string, taskId?: string) => {
-    const result = await agentManager.sendMessage(sessionId, message, taskId)
+  ipcMain.handle('agentSession:send', async (_, sessionId: string, message: string, taskId?: string, agentId?: string) => {
+    const result = await agentManager.sendMessage(sessionId, message, taskId, agentId)
     return { success: true, ...result }
   })
 
@@ -353,8 +353,10 @@ export function registerIpcHandlers(
     return await githubManager.checkGhCli()
   })
 
-  ipcMain.handle('github:startAuth', async () => {
-    await githubManager.startWebAuth()
+  ipcMain.handle('github:startAuth', async (event) => {
+    await githubManager.startWebAuth((code) => {
+      event.sender.send('github:deviceCode', code)
+    })
   })
 
   ipcMain.handle('github:fetchOrgs', async () => {
@@ -363,6 +365,14 @@ export function registerIpcHandlers(
 
   ipcMain.handle('github:fetchOrgRepos', async (_, org: string) => {
     return await githubManager.fetchOrgRepos(org)
+  })
+
+  ipcMain.handle('github:fetchUserRepos', async () => {
+    return await githubManager.fetchUserRepos()
+  })
+
+  ipcMain.handle('github:fetchCollaborators', async (_, owner: string, repo: string) => {
+    return await githubManager.fetchRepoCollaborators(owner, repo)
   })
 
   // Worktree handlers

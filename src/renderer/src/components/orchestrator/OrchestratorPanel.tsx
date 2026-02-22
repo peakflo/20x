@@ -16,7 +16,7 @@ interface OrchestratorPanelProps {
 export function OrchestratorPanel({ onClose }: OrchestratorPanelProps) {
   const [agents, setAgents] = useState<Agent[]>([])
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null)
-  const { start, stop, sendMessage } = useAgentSession(MASTERMIND_SESSION_ID)
+  const { start, stop, sendMessage, approve } = useAgentSession(MASTERMIND_SESSION_ID)
   const getSession = useAgentStore((state) => state.getSession)
   const removeSession = useAgentStore((state) => state.removeSession)
   const currentSession = getSession(MASTERMIND_SESSION_ID)
@@ -68,11 +68,17 @@ export function OrchestratorPanel({ onClose }: OrchestratorPanelProps) {
           startingRef.current = false
         }
       } else if (currentSession?.sessionId) {
-        // Session already exists, just send the message
-        await sendMessage(message)
+        // Question answers should use approve() instead of sendMessage()
+        const messages = currentSession.messages || []
+        const lastMessage = messages[messages.length - 1]
+        if (lastMessage?.partType === 'question' && lastMessage?.tool?.questions) {
+          await approve(true, message)
+        } else {
+          await sendMessage(message)
+        }
       }
     },
-    [selectedAgentId, currentSession, start, sendMessage, removeSession]
+    [selectedAgentId, currentSession, start, sendMessage, approve, removeSession]
   )
 
   return (

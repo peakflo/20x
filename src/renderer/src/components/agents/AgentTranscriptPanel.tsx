@@ -79,96 +79,95 @@ interface AgentTranscriptPanelProps {
 
 function QuestionMessage({ message, onAnswer }: { message: AgentMessage; onAnswer?: (answer: string) => void }) {
   const questions = message.tool?.questions || []
-  const isSingleQuestion = questions.length === 1
-  const [selections, setSelections] = useState<Record<number, string>>({})
+  const [answers, setAnswers] = useState<Record<number, string>>({})
+  const [textInputs, setTextInputs] = useState<Record<number, string>>({})
   const [submitted, setSubmitted] = useState(false)
 
-  const allAnswered = questions.length > 0 && Object.keys(selections).length === questions.length
-
-  const handleSelect = (questionIdx: number, optionLabel: string) => {
+  const handleSelect = (qi: number, optionLabel: string) => {
     if (submitted) return
-
-    if (isSingleQuestion) {
-      // Preserve current behavior: immediate submit on click
-      setSelections({ 0: optionLabel })
-      setSubmitted(true)
-      onAnswer?.(optionLabel)
-      return
-    }
-
-    // Multi-question: update selection for this specific question
-    setSelections(prev => {
-      const next = { ...prev }
-      if (next[questionIdx] === optionLabel) {
-        delete next[questionIdx]
-      } else {
-        next[questionIdx] = optionLabel
-      }
-      return next
-    })
+    setAnswers(prev => ({ ...prev, [qi]: optionLabel }))
   }
+
+  const handleTextChange = (qi: number, value: string) => {
+    if (submitted) return
+    setTextInputs(prev => ({ ...prev, [qi]: value }))
+    setAnswers(prev => ({ ...prev, [qi]: value }))
+  }
+
+  const allAnswered = questions.every((_, qi) => answers[qi]?.trim())
 
   const handleSubmit = () => {
     if (!allAnswered || submitted) return
     setSubmitted(true)
-    const combinedAnswer = questions
-      .map((_, idx) => selections[idx])
-      .join(' | ')
-    onAnswer?.(combinedAnswer)
+    // Format: single answer for 1 question, JSON for multiple
+    if (questions.length === 1) {
+      onAnswer?.(answers[0])
+    } else {
+      const formatted = questions.map((q, qi) => `${q.header || q.question}: ${answers[qi]}`).join('\n')
+      onAnswer?.(formatted)
+    }
   }
 
   return (
     <div className="rounded-md bg-[#161b22] border border-primary/30 overflow-hidden">
-      {questions.map((q, qi) => (
-        <div key={qi} className="px-4 py-3 space-y-2.5">
-          {q.header && <span className="text-[10px] text-primary font-medium uppercase tracking-wide">{q.header}</span>}
-          <p className="text-xs text-foreground">{q.question}</p>
-          <div className="space-y-1.5">
-            {q.options.map((opt, oi) => {
-              const isSelected = selections[qi] === opt.label
-              return (
-                <button
-                  key={oi}
-                  onClick={() => handleSelect(qi, opt.label)}
-                  disabled={submitted}
-                  className={`w-full text-left rounded px-3 py-2 text-xs transition-colors border ${
-                    isSelected
-                      ? 'bg-primary/20 border-primary/50 text-foreground'
-                      : submitted
-                        ? 'border-border/30 text-muted-foreground opacity-50 cursor-default'
-                        : 'border-border/50 hover:bg-white/5 hover:border-border text-gray-300 cursor-pointer'
-                  }`}
-                >
-                  <span className="font-medium">{opt.label}</span>
-                  {opt.description && (
-                    <span className="block text-[11px] text-muted-foreground mt-0.5">{opt.description}</span>
-                  )}
-                </button>
-              )
-            })}
-          </div>
-        </div>
-      ))}
-      {!isSingleQuestion && (
-        <div className="px-4 py-2">
-          <Button
-            size="sm"
-            disabled={!allAnswered || submitted}
-            onClick={handleSubmit}
-            className="w-full"
-          >
-            {submitted ? (
-              <>
-                <CheckCircle2 className="h-3.5 w-3.5 mr-1.5" />
-                Submitted
-              </>
+      {questions.map((q, qi) => {
+        const hasOptions = q.options && q.options.length > 0
+        return (
+          <div key={qi} className="px-4 py-3 space-y-2.5">
+            {q.header && <span className="text-[10px] text-primary font-medium uppercase tracking-wide">{q.header}</span>}
+            <p className="text-xs text-foreground">{q.question}</p>
+            {hasOptions ? (
+              <div className="space-y-1.5">
+                {q.options.map((opt, oi) => {
+                  const isSelected = answers[qi] === opt.label
+                  return (
+                    <button
+                      key={oi}
+                      onClick={() => handleSelect(qi, opt.label)}
+                      disabled={submitted}
+                      className={`w-full text-left rounded px-3 py-2 text-xs transition-colors border ${
+                        isSelected
+                          ? 'bg-primary/20 border-primary/50 text-foreground'
+                          : submitted
+                            ? 'border-border/30 text-muted-foreground opacity-50 cursor-default'
+                            : 'border-border/50 hover:bg-white/5 hover:border-border text-gray-300 cursor-pointer'
+                      }`}
+                    >
+                      <span className="font-medium">{opt.label}</span>
+                      {opt.description && (
+                        <span className="block text-[11px] text-muted-foreground mt-0.5">{opt.description}</span>
+                      )}
+                    </button>
+                  )
+                })}
+              </div>
             ) : (
-              <>
-                <Send className="h-3.5 w-3.5 mr-1.5" />
-                Submit answers
-              </>
+              <input
+                type="text"
+                value={textInputs[qi] || ''}
+                onChange={(e) => handleTextChange(qi, e.target.value)}
+                disabled={submitted}
+                placeholder="Type your answer..."
+                className="w-full bg-background border border-border/50 rounded px-3 py-2 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary/50"
+                onKeyDown={(e) => { if (e.key === 'Enter' && allAnswered) handleSubmit() }}
+              />
             )}
-          </Button>
+          </div>
+        )
+      })}
+      {!submitted && (
+        <div className="px-4 py-3 border-t border-border/30">
+          <button
+            onClick={handleSubmit}
+            disabled={!allAnswered}
+            className={`px-4 py-1.5 rounded text-xs font-medium transition-colors ${
+              allAnswered
+                ? 'bg-primary text-primary-foreground hover:bg-primary/90 cursor-pointer'
+                : 'bg-muted text-muted-foreground cursor-not-allowed'
+            }`}
+          >
+            Submit
+          </button>
         </div>
       )}
       <div className="px-4 pb-2">

@@ -9,6 +9,7 @@ import type { McpServer, CreateMcpServerDTO } from '@/types'
 interface McpConnectionInfo {
   status: 'idle' | 'testing' | 'connected' | 'failed'
   error?: string
+  errorDetail?: string
   toolCount?: number
 }
 
@@ -44,6 +45,7 @@ export function ToolsMcpSettings() {
       setConnections((prev) => new Map(prev).set(server.id, {
         status: result.status,
         error: result.error,
+        errorDetail: result.errorDetail,
         toolCount: result.toolCount
       }))
     } catch (err: any) {
@@ -184,7 +186,7 @@ export function ToolsMcpSettings() {
                       ) : connection.status === 'failed' ? (
                         <>
                           <WifiOff className="h-3 w-3" />
-                          <span className="truncate">{connection.error || 'Connection failed'}</span>
+                          <span className="truncate" title={connection.errorDetail || connection.error}>{connection.error || 'Connection failed'}</span>
                         </>
                       ) : null}
                     </div>

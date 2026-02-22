@@ -651,6 +651,16 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
     return messages
   }
 
+  async respondToQuestion(
+    sessionId: string,
+    _answers: Record<string, string>,
+    _config: SessionConfig
+  ): Promise<void> {
+    // Claude Code runs with bypassPermissions, so AskUserQuestion shouldn't block.
+    // If it somehow does, log a warning — there's nothing to unblock.
+    console.warn(`[ClaudeCodeAdapter] respondToQuestion called for session ${sessionId}, but Claude Code uses bypassPermissions. Ignoring.`)
+  }
+
   async registerMcpServer(
     _serverName: string,
     _mcpConfig: {

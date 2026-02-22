@@ -14,16 +14,25 @@ export function GhCliSetupDialog({ open, onOpenChange, onComplete }: GhCliSetupD
   const { ghCliStatus, checkGhCli, startGhAuth } = useSettingsStore()
   const [isChecking, setIsChecking] = useState(false)
   const [isAuthenticating, setIsAuthenticating] = useState(false)
+  const [deviceCode, setDeviceCode] = useState<string | null>(null)
 
   useEffect(() => {
     if (open) {
       setIsChecking(true)
+      setDeviceCode(null)
       checkGhCli().finally(() => setIsChecking(false))
     }
   }, [open])
 
+  useEffect(() => {
+    return window.electronAPI.onGithubDeviceCode((code) => {
+      setDeviceCode(code)
+    })
+  }, [])
+
   const handleAuth = async () => {
     setIsAuthenticating(true)
+    setDeviceCode(null)
     try {
       await startGhAuth()
     } catch {
@@ -31,6 +40,7 @@ export function GhCliSetupDialog({ open, onOpenChange, onComplete }: GhCliSetupD
       await checkGhCli()
     } finally {
       setIsAuthenticating(false)
+      setDeviceCode(null)
     }
   }
 
@@ -84,11 +94,24 @@ export function GhCliSetupDialog({ open, onOpenChange, onComplete }: GhCliSetupD
                 <div className="flex-1">
                   <p className="text-sm font-medium">Authenticate with GitHub</p>
                   {isInstalled && !isAuthenticated && (
-                    <div className="mt-2">
-                      <Button size="sm" onClick={handleAuth} disabled={isAuthenticating}>
-                        {isAuthenticating ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> : null}
-                        Authenticate with GitHub
-                      </Button>
+                    <div className="mt-2 space-y-2">
+                      {isAuthenticating && deviceCode ? (
+                        <>
+                          <p className="text-xs text-muted-foreground">Enter this code in your browser:</p>
+                          <code className="block text-lg font-mono font-bold bg-muted px-3 py-2 rounded text-center">
+                            {deviceCode}
+                          </code>
+                          <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                            Waiting for authorization...
+                          </div>
+                        </>
+                      ) : (
+                        <Button size="sm" onClick={handleAuth} disabled={isAuthenticating}>
+                          {isAuthenticating ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> : null}
+                          Authenticate with GitHub
+                        </Button>
+                      )}
                     </div>
                   )}
                   {isAuthenticated && ghCliStatus?.username && (
