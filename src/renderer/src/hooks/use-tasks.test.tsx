@@ -91,6 +91,21 @@ describe('useTasks', () => {
       expect(result.current.tasks[0].id).toBe('t2')
     })
 
+    it('filters by Triaging status', () => {
+      useTaskStore.setState({
+        tasks: [
+          makeWorkfloTask({ id: 't1', status: TaskStatus.NotStarted }),
+          makeWorkfloTask({ id: 't2', status: TaskStatus.Triaging }),
+          makeWorkfloTask({ id: 't3', status: TaskStatus.AgentWorking })
+        ]
+      })
+      useUIStore.setState({ statusFilter: TaskStatus.Triaging })
+
+      const { result } = renderHook(() => useTasks())
+      expect(result.current.tasks).toHaveLength(1)
+      expect(result.current.tasks[0].id).toBe('t2')
+    })
+
     it('filters by priority', () => {
       useTaskStore.setState({
         tasks: [
@@ -228,6 +243,22 @@ describe('useTasks', () => {
 
       const { result } = renderHook(() => useTasks())
       expect(result.current.tasks[0].id).toBe('t2')
+    })
+
+    it('sorts Triaging status between AgentLearning and ReadyForReview', () => {
+      useTaskStore.setState({
+        tasks: [
+          makeWorkfloTask({ id: 't1', status: TaskStatus.NotStarted }),
+          makeWorkfloTask({ id: 't2', status: TaskStatus.Triaging }),
+          makeWorkfloTask({ id: 't3', status: TaskStatus.AgentWorking })
+        ]
+      })
+      useUIStore.setState({ sortField: 'status', sortDirection: 'asc' })
+
+      const { result } = renderHook(() => useTasks())
+      expect(result.current.tasks[0].id).toBe('t3') // AgentWorking (0)
+      expect(result.current.tasks[1].id).toBe('t2') // Triaging (2)
+      expect(result.current.tasks[2].id).toBe('t1') // NotStarted (4)
     })
 
     it('respects desc direction', () => {

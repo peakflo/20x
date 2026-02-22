@@ -249,6 +249,28 @@ export function TaskWorkspace({
     [task, session.sessionId, stop, onAssignAgent, removeSession]
   )
 
+  const handleTriage = useCallback(async () => {
+    if (!task || task.agent_id) return
+
+    // Find the default agent
+    const defaultAgent = agents.find((a) => a.is_default) || agents[0]
+    if (!defaultAgent) return
+
+    try {
+      // Set status to Triaging
+      await taskApi.update(task.id, { status: TaskStatus.Triaging })
+      updateTaskInStore(task.id, { status: TaskStatus.Triaging })
+
+      // Start the default agent for triage
+      await start(defaultAgent.id, task.id)
+    } catch (error) {
+      console.error('[TaskWorkspace] Triage failed:', error)
+      // Revert status
+      await taskApi.update(task.id, { status: TaskStatus.NotStarted })
+      updateTaskInStore(task.id, { status: TaskStatus.NotStarted })
+    }
+  }, [task, agents, start, updateTaskInStore])
+
   const handleAbort = useCallback(() => {
     if (session.sessionId) {
       abort().catch(console.error)
@@ -508,6 +530,8 @@ Update existing skills that were helpful or create new ones for patterns worth r
   const canRestart = task.agent_id && task.session_id && !session.sessionId && session.status === 'idle' && session.messages.length > 0
   const canStart = task.agent_id && !task.session_id && !session.sessionId && session.status === 'idle'
     && task.status !== TaskStatus.Completed
+  const canTriage = !task.agent_id && agents.length > 0 && session.status === 'idle'
+    && task.status !== TaskStatus.Completed && task.status !== TaskStatus.Triaging
 
   return (
     <>
@@ -542,6 +566,8 @@ Update existing skills that were helpful or create new ones for patterns worth r
             onSnooze={() => setShowSnooze(true)}
             onUnsnooze={handleUnsnooze}
             onReassign={handleReassign}
+            onTriage={handleTriage}
+            canTriage={!!canTriage}
           />
         </div>
 

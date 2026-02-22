@@ -1,7 +1,8 @@
 import { useEffect, useRef, useCallback } from 'react'
 import { useAgentSchedulerStore } from '@/stores/agent-scheduler-store'
+import { useAgentStore } from '@/stores/agent-store'
 import { useAgentSession } from './use-agent-session'
-import { onAgentStatus, onTaskUpdated } from '@/lib/ipc-client'
+import { onAgentStatus, onTaskUpdated, onTaskCreated, taskApi } from '@/lib/ipc-client'
 import { TaskStatus } from '@/types'
 import type { WorkfloTask, Agent, TaskPriority } from '@/types'
 import type { AgentStatusEvent } from '@/types/electron.d'
@@ -13,6 +14,8 @@ const PRIORITY_ORDER: Record<TaskPriority, number> = {
   medium: 2,
   low: 3
 }
+
+const MAX_TRIAGE_ATTEMPTS = 2
 
 interface UseAgentAutoStartProps {
   tasks: WorkfloTask[]
@@ -38,11 +41,79 @@ export function useAgentAutoStart({ tasks, agents, sessions, showToast }: UseAge
   // Track processed task updates to avoid duplicates
   const processedUpdatesRef = useRef<Set<string>>(new Set())
 
+  // Track tasks currently being triaged
+  const triagingRef = useRef<Set<string>>(new Set())
+
+  // Track triage attempts per task to prevent infinite retry
+  const triageAttemptsRef = useRef<Map<string, number>>(new Map())
+
   // Helper: Check if task is snoozed
   const isSnoozed = useCallback((snoozedUntil: string | null): boolean => {
     if (!snoozedUntil) return false
     return new Date(snoozedUntil) > new Date()
   }, [])
+
+  // Helper: Select triage candidates (tasks with no agent_id that need triage)
+  const selectTriageCandidates = useCallback(
+    (allTasks: WorkfloTask[], allSessions: Map<string, TaskSession>): string[] => {
+      return allTasks
+        .filter((task) => {
+          const isNotStarted = task.status === TaskStatus.NotStarted
+          const hasNoAgent = !task.agent_id
+          const notSnoozed = !isSnoozed(task.snoozed_until)
+          const noSession = !allSessions.has(task.id)
+          const notAlreadyTriaging = !triagingRef.current.has(task.id)
+          const attempts = triageAttemptsRef.current.get(task.id) || 0
+          const withinRetryLimit = attempts < MAX_TRIAGE_ATTEMPTS
+
+          return isNotStarted && hasNoAgent && notSnoozed && noSession && notAlreadyTriaging && withinRetryLimit
+        })
+        .map((task) => task.id)
+    },
+    [isSnoozed]
+  )
+
+  // Helper: Start triage for a task
+  const startTriage = useCallback(
+    async (taskId: string) => {
+      // Find default agent
+      const defaultAgent = agents.find((a) => a.is_default) || agents[0]
+      if (!defaultAgent) {
+        console.log('[AutoStart] No agents available for triage')
+        return
+      }
+
+      const task = tasks.find((t) => t.id === taskId)
+      if (!task) return
+
+      console.log(`[AutoStart] Starting triage for task "${task.title}" with default agent ${defaultAgent.name}`)
+
+      // Mark as triaging
+      triagingRef.current.add(taskId)
+
+      try {
+        // Update task status to Triaging
+        await taskApi.update(taskId, { status: TaskStatus.Triaging })
+
+        // Start the default agent session for this task
+        incrementRunningCount(defaultAgent.id)
+        await start(defaultAgent.id, taskId)
+      } catch (error) {
+        console.error(`[AutoStart] Failed to start triage for task ${taskId}:`, error)
+        triagingRef.current.delete(taskId)
+
+        // Revert status to NotStarted
+        try {
+          await taskApi.update(taskId, { status: TaskStatus.NotStarted })
+        } catch {
+          // ignore revert error
+        }
+
+        decrementRunningCount(defaultAgent.id)
+      }
+    },
+    [agents, tasks, incrementRunningCount, start, decrementRunningCount]
+  )
 
   // Helper: Select eligible tasks grouped by agent
   const selectEligibleTasks = useCallback(
@@ -206,6 +277,14 @@ export function useAgentAutoStart({ tasks, agents, sessions, showToast }: UseAge
 
     // Debounce to avoid rapid-fire starts when multiple tasks/agents change
     const timeoutId = setTimeout(() => {
+      // Check for triage candidates (tasks with no agent_id)
+      const triageCandidates = selectTriageCandidates(tasks, sessions)
+      if (triageCandidates.length > 0) {
+        console.log(`[AutoStart] Found ${triageCandidates.length} triage candidate(s)`)
+        triageCandidates.forEach((taskId) => startTriage(taskId))
+      }
+
+      // Check for regular auto-start eligible tasks (with agent_id)
       const tasksByAgent = selectEligibleTasks(tasks, sessions)
 
       console.log('[AutoStart] Eligible tasks by agent:',
@@ -230,7 +309,7 @@ export function useAgentAutoStart({ tasks, agents, sessions, showToast }: UseAge
     }, 300) // 300ms debounce
 
     return () => clearTimeout(timeoutId)
-  }, [isEnabled, tasks, agents, sessions, selectEligibleTasks, startTasksForAgent])
+  }, [isEnabled, tasks, agents, sessions, selectEligibleTasks, selectTriageCandidates, startTasksForAgent, startTriage])
 
   // Listen to agent status changes (task completions)
   useEffect(() => {
@@ -241,6 +320,40 @@ export function useAgentAutoStart({ tasks, agents, sessions, showToast }: UseAge
       if (event.status !== 'idle') return
 
       const agentId = event.agentId
+      const taskId = event.taskId
+
+      // Handle triage session completion
+      if (triagingRef.current.has(taskId)) {
+        console.log(`[AutoStart] Triage completed for task ${taskId}`)
+        triagingRef.current.delete(taskId)
+        decrementRunningCount(agentId)
+
+        // Remove the triage session from the agent store so the task
+        // becomes eligible for auto-start (sessions.has(taskId) must be false)
+        useAgentStore.getState().removeSession(taskId)
+
+        // Check if the task now has an agent_id assigned
+        // Use a slight delay to let the DB update propagate
+        setTimeout(async () => {
+          const updatedTask = await taskApi.getById(taskId)
+          if (updatedTask && !updatedTask.agent_id) {
+            const attempts = (triageAttemptsRef.current.get(taskId) || 0) + 1
+            triageAttemptsRef.current.set(taskId, attempts)
+            if (attempts >= MAX_TRIAGE_ATTEMPTS) {
+              showToast(`Triage failed for "${updatedTask.title}" — please assign an agent manually`, true)
+            } else {
+              console.log(`[AutoStart] Triage attempt ${attempts} did not assign agent for task ${taskId}, will retry`)
+            }
+          } else if (updatedTask?.agent_id) {
+            // Clean up attempts on success
+            triageAttemptsRef.current.delete(taskId)
+          }
+        }, 500)
+
+        // Try to start next task from queue for this agent
+        setTimeout(() => processNextTask(agentId), 100)
+        return
+      }
 
       // Decrement running count
       decrementRunningCount(agentId)
@@ -263,6 +376,26 @@ export function useAgentAutoStart({ tasks, agents, sessions, showToast }: UseAge
     return unsubscribe
   }, [isEnabled, tasks, agents, decrementRunningCount, showToast, processNextTask])
 
+  // Listen to new task creation — trigger triage for tasks with no agent_id
+  useEffect(() => {
+    if (!isEnabled) return
+
+    const unsubscribe = onTaskCreated((event) => {
+      const task = event.task
+      if (
+        task.status === TaskStatus.NotStarted &&
+        !task.agent_id &&
+        !isSnoozed(task.snoozed_until) &&
+        !triagingRef.current.has(task.id)
+      ) {
+        console.log(`[AutoStart] New task created without agent: "${task.title}", triggering triage`)
+        setTimeout(() => startTriage(task.id), 200)
+      }
+    })
+
+    return unsubscribe
+  }, [isEnabled, isSnoozed, startTriage])
+
   // Listen to task updates (new tasks or reassignments)
   useEffect(() => {
     if (!isEnabled) return
@@ -275,10 +408,13 @@ export function useAgentAutoStart({ tasks, agents, sessions, showToast }: UseAge
       processedUpdatesRef.current.add(updateKey)
       setTimeout(() => processedUpdatesRef.current.delete(updateKey), 1000)
 
-      const task = tasks.find((t) => t.id === event.taskId)
-      if (!task) return
+      const staleTask = tasks.find((t) => t.id === event.taskId)
+      if (!staleTask) return
 
-      // Check if task is eligible for auto-start
+      // Merge event updates with stale task to get current state
+      const task = { ...staleTask, ...event.updates } as WorkfloTask
+
+      // Check if task is eligible for auto-start (has agent_id)
       if (
         task.status === TaskStatus.NotStarted &&
         task.agent_id &&
@@ -302,6 +438,18 @@ export function useAgentAutoStart({ tasks, agents, sessions, showToast }: UseAge
           addToQueue(agentId, task.id)
         }
       }
+
+      // Check if task needs triage (no agent_id, not_started)
+      if (
+        task.status === TaskStatus.NotStarted &&
+        !task.agent_id &&
+        !isSnoozed(task.snoozed_until) &&
+        !sessions.has(task.id) &&
+        !triagingRef.current.has(task.id) &&
+        (triageAttemptsRef.current.get(task.id) || 0) < MAX_TRIAGE_ATTEMPTS
+      ) {
+        setTimeout(() => startTriage(task.id), 200)
+      }
     })
 
     return unsubscribe
@@ -313,7 +461,8 @@ export function useAgentAutoStart({ tasks, agents, sessions, showToast }: UseAge
     isSnoozed,
     getRunningCount,
     addToQueue,
-    startTasksForAgent
+    startTasksForAgent,
+    startTriage
   ])
 
   // Clear queues when disabled
@@ -331,6 +480,13 @@ export function useAgentAutoStart({ tasks, agents, sessions, showToast }: UseAge
 
     const intervalId = setInterval(() => {
       console.log('[AutoStart] Periodic check: scanning for eligible tasks...')
+
+      // Check triage candidates
+      const triageCandidates = selectTriageCandidates(tasks, sessions)
+      if (triageCandidates.length > 0) {
+        console.log(`[AutoStart] Periodic check: found ${triageCandidates.length} triage candidate(s)`)
+        triageCandidates.forEach((taskId) => startTriage(taskId))
+      }
 
       const tasksByAgent = selectEligibleTasks(tasks, sessions)
 
@@ -365,5 +521,5 @@ export function useAgentAutoStart({ tasks, agents, sessions, showToast }: UseAge
       console.log('[AutoStart] Stopping periodic check')
       clearInterval(intervalId)
     }
-  }, [isEnabled, tasks, agents, sessions, selectEligibleTasks, getRunningCount, startTasksForAgent])
+  }, [isEnabled, tasks, agents, sessions, selectEligibleTasks, selectTriageCandidates, getRunningCount, startTasksForAgent, startTriage])
 }

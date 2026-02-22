@@ -46,6 +46,7 @@ interface AgentSession {
   promptAbort?: AbortController
   lastOcStatus?: string
   learningMode?: boolean
+  isTriageSession?: boolean
   adapter?: CodingAgentAdapter
   pollingStarted?: boolean
 }
@@ -732,10 +733,14 @@ export class AgentManager extends EventEmitter {
     // Write SKILL.md files to workspace
     this.writeSkillFiles(taskId, agentId, workspaceDir)
 
+    // Check if this is a triage session
+    const task = this.db.getTask(taskId)
+    const isTriageSession = task?.status === TaskStatus.Triaging
+
     // Build MCP servers config for adapter
-    // Mastermind sessions always get task-management access
+    // Mastermind and triage sessions always get task-management access
     const isMastermind = taskId === 'mastermind-session'
-    const mcpServers = this.buildMcpServersForAdapter(agentId, { ensureTaskManagement: isMastermind })
+    const mcpServers = this.buildMcpServersForAdapter(agentId, { ensureTaskManagement: isMastermind || isTriageSession })
 
     // Build session config
     const sessionConfig: SessionConfig = {
@@ -765,20 +770,23 @@ export class AgentManager extends EventEmitter {
       seenMessageIds: new Set(),
       seenPartIds: new Set(),
       partContentLengths: new Map(),
-      adapter
+      adapter,
+      isTriageSession
     })
 
     // Store session ID in database
     this.db.updateTask(taskId, { session_id: adapterSessionId })
 
-    // Update task status
-    this.db.updateTask(taskId, { status: TaskStatus.AgentWorking })
+    // Update task status (preserve Triaging status for triage sessions)
+    if (!isTriageSession) {
+      this.db.updateTask(taskId, { status: TaskStatus.AgentWorking })
 
-    // Notify renderer about task status change
-    this.sendToRenderer('task:updated', {
-      taskId,
-      updates: { status: TaskStatus.AgentWorking }
-    })
+      // Notify renderer about task status change
+      this.sendToRenderer('task:updated', {
+        taskId,
+        updates: { status: TaskStatus.AgentWorking }
+      })
+    }
 
     // Notify renderer
     this.sendToRenderer('agent:status', {
@@ -793,37 +801,44 @@ export class AgentManager extends EventEmitter {
 
     // Send initial prompt if not skipped
     if (!skipInitialPrompt) {
-      const task = this.db.getTask(taskId)
-      let promptText = task
-        ? `Working on task: "${task.title}"\n\n${task.description || ''}`
-        : `Working on task ${taskId}`
+      let promptText: string
 
-      // Append output field instructions
-      if (task?.output_fields && task.output_fields.length > 0) {
-        promptText += this.buildOutputFieldInstructions(task.output_fields)
-      }
+      if (isTriageSession && task) {
+        // Use triage-specific prompt
+        promptText = this.buildTriagePrompt(task)
+      } else {
+        const currentTask = task || this.db.getTask(taskId)
+        promptText = currentTask
+          ? `Working on task: "${currentTask.title}"\n\n${currentTask.description || ''}`
+          : `Working on task ${taskId}`
 
-      // Copy attachments and build references
-      const attachmentRefs: string[] = []
-      if (task?.attachments?.length && workspaceDir) {
-        const attachDir = this.db.getAttachmentsDir(taskId)
-        const destDir = join(workspaceDir, 'attachments')
-        if (!existsSync(destDir)) mkdirSync(destDir, { recursive: true })
+        // Append output field instructions
+        if (currentTask?.output_fields && currentTask.output_fields.length > 0) {
+          promptText += this.buildOutputFieldInstructions(currentTask.output_fields)
+        }
 
-        for (const att of task.attachments) {
-          const srcPath = join(attachDir, `${att.id}-${att.filename}`)
-          if (!existsSync(srcPath)) continue
-          const destPath = join(destDir, att.filename)
-          try {
-            copyFileSync(srcPath, destPath)
-            attachmentRefs.push(`- attachments/${att.filename}`)
-          } catch {
-            continue
+        // Copy attachments and build references
+        const attachmentRefs: string[] = []
+        if (currentTask?.attachments?.length && workspaceDir) {
+          const attachDir = this.db.getAttachmentsDir(taskId)
+          const destDir = join(workspaceDir, 'attachments')
+          if (!existsSync(destDir)) mkdirSync(destDir, { recursive: true })
+
+          for (const att of currentTask.attachments) {
+            const srcPath = join(attachDir, `${att.id}-${att.filename}`)
+            if (!existsSync(srcPath)) continue
+            const destPath = join(destDir, att.filename)
+            try {
+              copyFileSync(srcPath, destPath)
+              attachmentRefs.push(`- attachments/${att.filename}`)
+            } catch {
+              continue
+            }
           }
         }
-      }
-      if (attachmentRefs.length > 0) {
-        promptText += `\n\nAttached files (relative to your working directory):\n${attachmentRefs.join('\n')}`
+        if (attachmentRefs.length > 0) {
+          promptText += `\n\nAttached files (relative to your working directory):\n${attachmentRefs.join('\n')}`
+        }
       }
 
       // Show user's prompt in UI first
@@ -1280,8 +1295,15 @@ export class AgentManager extends EventEmitter {
         }
       }
 
-      // Mastermind sessions always get task-management access
-      if (taskId === 'mastermind-session' && !registeredMcpNames.has('task-management')) {
+      // Check if this is a triage session (legacy path)
+      const legacyTask = this.db.getTask(taskId)
+      const isLegacyTriageSession = legacyTask?.status === TaskStatus.Triaging
+      if (isLegacyTriageSession) {
+        session.isTriageSession = true
+      }
+
+      // Mastermind and triage sessions always get task-management access
+      if ((taskId === 'mastermind-session' || isLegacyTriageSession) && !registeredMcpNames.has('task-management')) {
         const allServers = this.db.getMcpServers()
         const tmServer = allServers.find(s => s.name === 'task-management')
         if (tmServer && tmServer.type === 'local') {
@@ -1324,8 +1346,10 @@ export class AgentManager extends EventEmitter {
       this.db.updateTask(taskId, { session_id: result.data.id })
       console.log(`[AgentManager] OpenCode session created: ${result.data.id}`)
 
-      // Update task status to agent_working
-      this.db.updateTask(taskId, { status: TaskStatus.AgentWorking })
+      // Update task status to agent_working (preserve Triaging status for triage sessions)
+      if (!isLegacyTriageSession) {
+        this.db.updateTask(taskId, { status: TaskStatus.AgentWorking })
+      }
 
       // Notify renderer that session is live
       this.sendToRenderer('agent:status', {
@@ -1338,13 +1362,19 @@ export class AgentManager extends EventEmitter {
       if (!skipInitialPrompt) {
         // Build the initial prompt
         const task = this.db.getTask(taskId)
-        let promptText = task
-          ? `Working on task: "${task.title}"\n\n${task.description || ''}`
-          : `Working on task ${taskId}`
+        let promptText: string
 
-        // Append output field instructions if task has output fields
-        if (task?.output_fields && task.output_fields.length > 0) {
-          promptText += this.buildOutputFieldInstructions(task.output_fields)
+        if (isLegacyTriageSession && task) {
+          promptText = this.buildTriagePrompt(task)
+        } else {
+          promptText = task
+            ? `Working on task: "${task.title}"\n\n${task.description || ''}`
+            : `Working on task ${taskId}`
+
+          // Append output field instructions if task has output fields
+          if (task?.output_fields && task.output_fields.length > 0) {
+            promptText += this.buildOutputFieldInstructions(task.output_fields)
+          }
         }
 
         // Copy attachments to workspace — agent reads them via fs tools
@@ -1683,6 +1713,22 @@ export class AgentManager extends EventEmitter {
 
     // In learning mode, skip output extraction, task status, and renderer notification
     if (session.learningMode) return
+
+    // In triage mode, set status back to NotStarted (now with agent_id assigned) and return early
+    if (session.isTriageSession) {
+      console.log(`[AgentManager] Triage session completed for task ${session.taskId}, reverting to NotStarted`)
+      this.db.updateTask(session.taskId, { status: TaskStatus.NotStarted })
+
+      this.sendToRenderer('task:updated', {
+        taskId: session.taskId,
+        updates: this.db.getTask(session.taskId) || { status: TaskStatus.NotStarted }
+      })
+
+      this.sendToRenderer('agent:status', {
+        sessionId, agentId: session.agentId, taskId: session.taskId, status: 'idle'
+      })
+      return
+    }
 
     // Check if task exists (e.g., orchestrator-session doesn't have a real task)
     const task = this.db.getTask(session.taskId)
@@ -2658,6 +2704,38 @@ export class AgentManager extends EventEmitter {
     lines.push('```')
 
     return lines.join('\n')
+  }
+
+  private buildTriagePrompt(task: any): string {
+    return `You are triaging a new task. Your job is to analyze this task and assign the best agent, skills, repos, priority, and labels. Do NOT work on the task itself.
+
+Task ID: ${task.id}
+Title: ${task.title}
+Description: ${task.description || '(none)'}
+Type: ${task.type || 'general'}
+Current Priority: ${task.priority || 'medium'}
+Current Labels: ${JSON.stringify(task.labels || [])}
+
+Follow these steps:
+
+1. Call \`find_similar_tasks\` with keywords from the title/description to find historical patterns. Use \`completed_only: true\`.
+2. Call \`list_agents\` to see available agents and their capabilities.
+3. Call \`list_skills\` to see available skills.
+4. Call \`list_repos\` to see known repositories.
+5. Based on the similar tasks and available resources, determine:
+   - The best agent_id to assign (REQUIRED — you must set this)
+   - Relevant skill_ids (if any match the task)
+   - Appropriate repos (if the task relates to specific repositories)
+   - Priority (critical/high/medium/low) — adjust if the current priority seems wrong
+   - Labels — suggest relevant labels based on similar tasks
+6. Call \`update_task\` ONCE with task_id "${task.id}" and all the values you determined. You MUST include agent_id.
+
+Important:
+- You MUST assign an agent_id. If only one agent exists, assign that one.
+- Do NOT change the task status — it will be handled automatically.
+- Do NOT attempt to work on or solve the task. Only triage it.
+- If no similar tasks exist, use your best judgment based on the title, description, and type.
+- Be efficient — make your tool calls and finish quickly.`
   }
 
   /**

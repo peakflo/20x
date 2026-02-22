@@ -1,5 +1,6 @@
 export enum TaskStatus {
   NotStarted = 'not_started',
+  Triaging = 'triaging',
   AgentWorking = 'agent_working',
   ReadyForReview = 'ready_for_review',
   AgentLearning = 'agent_learning',
@@ -8,6 +9,7 @@ export enum TaskStatus {
 
 export const TASK_STATUSES: { value: TaskStatus; label: string }[] = [
   { value: TaskStatus.NotStarted, label: 'Not Started' },
+  { value: TaskStatus.Triaging, label: 'Triaging' },
   { value: TaskStatus.AgentWorking, label: 'Agent Working' },
   { value: TaskStatus.ReadyForReview, label: 'Ready for Review' },
   { value: TaskStatus.AgentLearning, label: 'Agent Learning' },

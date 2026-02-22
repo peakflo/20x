@@ -185,11 +185,21 @@ function handleRoute(db: DatabaseManager, route: string, params: any): any {
       const updates: string[] = []
       const qParams: any[] = []
 
+      // When task is in triaging status, skip status changes from the triage agent
+      if (params.status) {
+        const currentTask = rawDb.prepare('SELECT status FROM tasks WHERE id = ?').get(params.task_id) as any
+        if (currentTask?.status === 'triaging') {
+          // Don't allow triage agent to change status — it will be reset by transitionToIdle
+        } else {
+          updates.push('status = ?'); qParams.push(params.status)
+        }
+      }
+
       if (params.labels !== undefined) { updates.push('labels = ?'); qParams.push(JSON.stringify(params.labels)) }
       if (params.skill_ids !== undefined) { updates.push('skill_ids = ?'); qParams.push(JSON.stringify(params.skill_ids)) }
       if (params.agent_id !== undefined) { updates.push('agent_id = ?'); qParams.push(params.agent_id) }
+      if (params.repos !== undefined) { updates.push('repos = ?'); qParams.push(JSON.stringify(params.repos)) }
       if (params.priority) { updates.push('priority = ?'); qParams.push(params.priority) }
-      if (params.status) { updates.push('status = ?'); qParams.push(params.status) }
 
       if (updates.length === 0) return { error: 'No updates provided' }
 
@@ -281,6 +291,24 @@ function handleRoute(db: DatabaseManager, route: string, params: any): any {
         default:
           return { error: 'Unknown metric' }
       }
+    }
+
+    case '/list_repos': {
+      // Get distinct repos from historical tasks
+      const tasks = rawDb.prepare('SELECT repos FROM tasks WHERE repos IS NOT NULL AND repos != \'[]\'').all()
+      const repoSet = new Set<string>()
+      tasks.forEach((t: any) => {
+        try {
+          const repos = JSON.parse(t.repos || '[]')
+          repos.forEach((r: string) => repoSet.add(r))
+        } catch { /* ignore */ }
+      })
+
+      // Get github_org from settings
+      const orgRow = rawDb.prepare('SELECT value FROM settings WHERE key = ?').get('github_org') as any
+      const githubOrg = orgRow?.value || null
+
+      return { repos: Array.from(repoSet), github_org: githubOrg }
     }
 
     default:
