@@ -20,6 +20,7 @@ import { TaskStatus } from '@/types'
 import type { FileAttachment } from '@/types'
 import { MessageSquare } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
+import logo20x from '@/assets/logos/20x.svg'
 
 export function AppLayout() {
   const { tasks, allTasks, selectedTask, createTask, updateTask, deleteTask, selectTask } = useTasks()
@@ -81,7 +82,11 @@ export function AppLayout() {
       {/* Workspace — fills remaining space via CSS Grid 1fr */}
       <main className="flex flex-col min-w-0 overflow-hidden bg-background">
         {/* Drag region for macOS traffic lights with mastermind toggle */}
-        <div className="drag-region h-12 flex-shrink-0 flex items-center justify-end px-4">
+        <div className="drag-region h-12 flex-shrink-0 flex items-center justify-between px-4">
+          <div className="flex items-center gap-2 no-drag">
+            <img src={logo20x} className="h-5 w-5" alt="20x" />
+            <span className="text-sm font-semibold text-foreground">20x</span>
+          </div>
           <Button
             variant={showOrchestrator ? 'default' : 'ghost'}
             size="sm"
