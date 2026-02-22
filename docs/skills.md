@@ -93,7 +93,7 @@ User clicks "Complete Task"
 
 Runs entirely on the main process. The renderer fires and forgets — UI is never blocked.
 
-- Sets `session.learningMode = true` to suppress task status changes during polling
+- Sets `session.learningMode = true` to suppress task status changes during polling (similar to how `isTriageSession` suppresses changes during auto-triage — see `docs/task-lifecycle.md`)
 - Sends the feedback as a prompt to the existing OpenCode session
 - Awaits completion (the prompt call blocks until the agent finishes)
 - Calls `syncSkillsFromWorkspace()` to sync changes back to DB

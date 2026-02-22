@@ -155,9 +155,11 @@ Each session wraps an OpenCode SDK client instance and streams events (output, s
 
 ### Agent Assignment
 
-- Task detail view gains an "Assign Agent" dropdown
+- Task detail view has an "Assign Agent" dropdown
 - Shows available agents with their current status (idle, working, error)
 - Assigning starts a session automatically
+- **Auto-Triage**: When auto-run is enabled and a task has no agent assigned, the default agent automatically triages the task — analyzing similar historical tasks and assigning the best agent, skills, repos, priority, and labels. See `docs/task-lifecycle.md` for details.
+- A manual "Triage" button is available on tasks with no agent assigned
 
 ### Agent Transcript Panel
 
