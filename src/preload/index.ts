@@ -130,6 +130,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('task:updated', handler)
     return () => ipcRenderer.removeListener('task:updated', handler)
   },
+  onTaskNavigate: (callback: (taskId: string) => void): (() => void) => {
+    const handler = (_: unknown, taskId: string): void => callback(taskId)
+    ipcRenderer.on('task:navigate', handler)
+    return () => ipcRenderer.removeListener('task:navigate', handler)
+  },
+  reportSelectedTask: (taskId: string | null): void => {
+    ipcRenderer.send('task:selectedChanged', taskId)
+  },
   settings: {
     get: (key: string): Promise<string | null> => ipcRenderer.invoke('settings:get', key),
     set: (key: string, value: string): Promise<void> => ipcRenderer.invoke('settings:set', key, value),

@@ -1,7 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { useTaskStore } from './task-store'
+import { useUIStore } from './ui-store'
 
 const mockElectronAPI = window.electronAPI
+
+// Capture the onTaskNavigate callback that was registered during store module init
+// (must be captured before vi.clearAllMocks() wipes mock call history)
+const taskNavigateCallback: ((taskId: string) => void) | null = (() => {
+  const calls = (mockElectronAPI.onTaskNavigate as ReturnType<typeof vi.fn>).mock.calls
+  return calls.length > 0 ? calls[0][0] : null
+})()
 
 beforeEach(() => {
   useTaskStore.setState({
@@ -9,6 +17,12 @@ beforeEach(() => {
     selectedTaskId: null,
     isLoading: false,
     error: null
+  })
+  useUIStore.setState({
+    sidebarView: 'tasks',
+    activeModal: null,
+    editingTaskId: null,
+    deletingTaskId: null
   })
   vi.clearAllMocks()
 })
@@ -138,6 +152,68 @@ describe('useTaskStore', () => {
       useTaskStore.getState().selectTask('t1')
       useTaskStore.getState().selectTask(null)
       expect(useTaskStore.getState().selectedTaskId).toBeNull()
+    })
+
+    it('reports selected task to main process', () => {
+      useTaskStore.getState().selectTask('t1')
+      expect(mockElectronAPI.reportSelectedTask).toHaveBeenCalledWith('t1')
+    })
+
+    it('reports null when clearing selection', () => {
+      useTaskStore.getState().selectTask(null)
+      expect(mockElectronAPI.reportSelectedTask).toHaveBeenCalledWith(null)
+    })
+  })
+
+  describe('onTaskNavigate', () => {
+    it('registers a navigation callback', () => {
+      expect(taskNavigateCallback).toBeTypeOf('function')
+    })
+
+    it('selects the task when navigation event is received', () => {
+      taskNavigateCallback!('task-nav-1')
+
+      expect(useTaskStore.getState().selectedTaskId).toBe('task-nav-1')
+    })
+
+    it('reports selected task to main process on navigation', () => {
+      taskNavigateCallback!('task-nav-2')
+
+      expect(mockElectronAPI.reportSelectedTask).toHaveBeenCalledWith('task-nav-2')
+    })
+
+    it('switches to tasks sidebar view if on skills view', () => {
+      useUIStore.setState({ sidebarView: 'skills' })
+
+      taskNavigateCallback!('task-nav-3')
+
+      expect(useUIStore.getState().sidebarView).toBe('tasks')
+    })
+
+    it('closes active modal on navigation', () => {
+      useUIStore.setState({ activeModal: 'settings', editingTaskId: 'some-task', deletingTaskId: 'other' })
+
+      taskNavigateCallback!('task-nav-4')
+
+      expect(useUIStore.getState().activeModal).toBeNull()
+      expect(useUIStore.getState().editingTaskId).toBeNull()
+      expect(useUIStore.getState().deletingTaskId).toBeNull()
+    })
+
+    it('does not change sidebar view if already on tasks', () => {
+      useUIStore.setState({ sidebarView: 'tasks' })
+
+      taskNavigateCallback!('task-nav-5')
+
+      expect(useUIStore.getState().sidebarView).toBe('tasks')
+    })
+
+    it('does not touch modal state if no modal is open', () => {
+      useUIStore.setState({ activeModal: null })
+
+      taskNavigateCallback!('task-nav-6')
+
+      expect(useUIStore.getState().activeModal).toBeNull()
     })
   })
 })

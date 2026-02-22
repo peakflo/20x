@@ -220,6 +220,8 @@ interface ElectronAPI {
   onAgentApproval: (callback: (event: AgentApprovalRequest) => void) => () => void
   onAgentIncompatibleSession: (callback: (event: { taskId: string; agentId: string; error: string }) => void) => () => void
   onTaskUpdated: (callback: (event: { taskId: string; updates: Partial<WorkfloTask> }) => void) => () => void
+  onTaskNavigate: (callback: (taskId: string) => void) => () => void
+  reportSelectedTask: (taskId: string | null) => void
   onWorktreeProgress: (callback: (event: WorktreeProgressEvent) => void) => () => void
   onOAuthCallback: (callback: (event: { code: string; state: string }) => void) => () => void
 }

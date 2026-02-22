@@ -4,6 +4,7 @@ import { homedir } from 'os'
 import { join, delimiter } from 'path'
 import { existsSync, copyFileSync, mkdirSync, writeFileSync, readFileSync, readdirSync, statSync } from 'fs'
 import { Agent as UndiciAgent } from 'undici'
+import { Notification } from 'electron'
 import type { BrowserWindow } from 'electron'
 import type { DatabaseManager, AgentMcpServerEntry, OutputFieldRecord, SkillRecord } from './database'
 import { TaskStatus } from '../shared/constants'
@@ -48,6 +49,7 @@ interface AgentSession {
   learningMode?: boolean
   adapter?: CodingAgentAdapter
   pollingStarted?: boolean
+  lastAssistantMessage?: string
 }
 
 export class AgentManager extends EventEmitter {
@@ -59,6 +61,7 @@ export class AgentManager extends EventEmitter {
   private db: DatabaseManager
   private mainWindow: BrowserWindow | null = null
   private adapters: Map<string, CodingAgentAdapter> = new Map()  // Adapter instances
+  private selectedTaskId: string | null = null  // Currently selected task in renderer
 
   constructor(db: DatabaseManager) {
     super()
@@ -90,6 +93,10 @@ export class AgentManager extends EventEmitter {
 
   setMainWindow(window: BrowserWindow): void {
     this.mainWindow = window
+  }
+
+  setSelectedTaskId(taskId: string | null): void {
+    this.selectedTaskId = taskId
   }
 
   /**
@@ -903,7 +910,14 @@ export class AgentManager extends EventEmitter {
             continue
           }
 
-          console.log(`[AgentManager] Sending to UI: id=${part.id}, partType=${part.type}, update=${part.update}, contentLength=${(part.content || part.text || '').length}`)
+          // Track last assistant text message for idle notifications
+          const partContent = part.content || part.text || ''
+          if (part.type === 'text' && partContent && !part.update) {
+            const sess = this.sessions.get(sessionId)
+            if (sess) sess.lastAssistantMessage = partContent
+          }
+
+          console.log(`[AgentManager] Sending to UI: id=${part.id}, partType=${part.type}, update=${part.update}, contentLength=${partContent.length}`)
           this.sendToRenderer('agent:output', {
             sessionId,
             taskId: config.taskId,
@@ -911,7 +925,7 @@ export class AgentManager extends EventEmitter {
             data: {
               id: part.id,
               role: part.role || 'assistant', // Use part role if available
-              content: part.content || part.text || '',
+              content: partContent,
               partType: part.type,
               tool: part.tool,
               update: part.update // Pass through update flag
@@ -1714,9 +1728,70 @@ export class AgentManager extends EventEmitter {
       })
     }
 
+    // Show OS notification if the task is not currently visible to the user
+    this.showIdleNotification(session, task)
+
     this.sendToRenderer('agent:status', {
       sessionId, agentId: session.agentId, taskId: session.taskId, status: 'idle'
     })
+  }
+
+  /**
+   * Shows an OS notification when an agent goes idle, if the task
+   * is not currently visible in the focused app window.
+   */
+  private showIdleNotification(session: AgentSession, task: { id: string; title: string }): void {
+    try {
+      // Skip if window is focused AND this specific task is selected
+      const isWindowVisible = this.mainWindow
+        && !this.mainWindow.isDestroyed()
+        && this.mainWindow.isVisible()
+        && this.mainWindow.isFocused()
+      const isTaskSelected = this.selectedTaskId === task.id
+
+      if (isWindowVisible && isTaskSelected) {
+        console.log(`[AgentManager] Skipping idle notification for task ${task.id} - user is viewing it`)
+        return
+      }
+
+      if (!Notification.isSupported()) {
+        return
+      }
+
+      // Build notification body from last assistant message, truncated
+      const MAX_BODY = 200
+      let body = session.lastAssistantMessage || 'Agent has finished working on this task.'
+      // Strip markdown formatting for cleaner notification text
+      body = body.replace(/[#*_`~\[\]]/g, '').trim()
+      if (body.length > MAX_BODY) {
+        body = body.slice(0, MAX_BODY - 1) + '\u2026'
+      }
+
+      const MAX_TITLE = 60
+      const taskTitle = task.title.length > MAX_TITLE
+        ? task.title.slice(0, MAX_TITLE - 3) + '...'
+        : task.title
+
+      const notification = new Notification({
+        title: `Task Ready: ${taskTitle}`,
+        body,
+        silent: false
+      })
+
+      const taskId = task.id
+      notification.on('click', () => {
+        if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+          this.mainWindow.show()
+          this.mainWindow.focus()
+          this.mainWindow.webContents.send('task:navigate', taskId)
+        }
+      })
+
+      notification.show()
+      console.log(`[AgentManager] Showed idle notification for task "${task.title}" (${task.id})`)
+    } catch (err) {
+      console.error(`[AgentManager] Failed to show idle notification:`, err)
+    }
   }
 
   /**
@@ -1880,6 +1955,12 @@ export class AgentManager extends EventEmitter {
               const prevFingerprint = session.partContentLengths.get(partId)
               if (fingerprint !== prevFingerprint) {
                 session.partContentLengths.set(partId, fingerprint)
+
+                // Track last assistant text for idle notifications
+                if (role === 'assistant' && part.type === 'text' && payload.content) {
+                  session.lastAssistantMessage = payload.content
+                }
+
                 this.sendToRenderer('agent:output', {
                   sessionId,
                   taskId: session.taskId,
@@ -1903,6 +1984,11 @@ export class AgentManager extends EventEmitter {
             session.partContentLengths.set(partId, fingerprint)
           }
           newPartCount++
+
+          // Track last assistant text for idle notifications
+          if (role === 'assistant' && part.type === 'text' && payload.content) {
+            session.lastAssistantMessage = payload.content
+          }
 
           this.sendToRenderer('agent:output', {
             sessionId,

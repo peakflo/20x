@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import type { WorkfloTask, CreateTaskDTO, UpdateTaskDTO } from '@/types'
-import { taskApi, taskSourceApi, onTaskUpdated } from '@/lib/ipc-client'
+import { taskApi, taskSourceApi, onTaskUpdated, onTaskNavigate, reportSelectedTask } from '@/lib/ipc-client'
+import { useUIStore } from './ui-store'
 
 interface TaskState {
   tasks: WorkfloTask[]
@@ -77,7 +78,10 @@ export const useTaskStore = create<TaskState>((set) => ({
     }
   },
 
-  selectTask: (id) => set({ selectedTaskId: id })
+  selectTask: (id) => {
+    set({ selectedTaskId: id })
+    reportSelectedTask(id)
+  }
 }))
 
 // Listen for task updates from the backend (e.g., when agent changes task status)
@@ -87,4 +91,19 @@ onTaskUpdated((event) => {
       t.id === event.taskId ? { ...t, ...event.updates } : t
     )
   }))
+})
+
+// Listen for navigation commands from main process (e.g., notification click)
+onTaskNavigate((taskId: string) => {
+  useTaskStore.setState({ selectedTaskId: taskId })
+  reportSelectedTask(taskId)
+
+  // Ensure we're on the tasks view (not skills/settings)
+  const uiState = useUIStore.getState()
+  if (uiState.sidebarView !== 'tasks') {
+    useUIStore.setState({ sidebarView: 'tasks' })
+  }
+  if (uiState.activeModal) {
+    useUIStore.setState({ activeModal: null, editingTaskId: null, deletingTaskId: null })
+  }
 })

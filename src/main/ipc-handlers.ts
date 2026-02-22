@@ -292,6 +292,11 @@ export function registerIpcHandlers(
     return await agentManager.learnFromSession(sessionId, message)
   })
 
+  // Track selected task for idle notification visibility check
+  ipcMain.on('task:selectedChanged', (_, taskId: string | null) => {
+    agentManager.setSelectedTaskId(taskId)
+  })
+
   // Agent Config handlers
   ipcMain.handle('agentConfig:getProviders', async (_, serverUrl?: string) => {
     return await agentManager.getProviders(serverUrl)
