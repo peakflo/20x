@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import type { WorkfloTask, CreateTaskDTO, UpdateTaskDTO } from '@/types'
-import { taskApi, taskSourceApi, onTaskUpdated, onTaskNavigate, reportSelectedTask } from '@/lib/ipc-client'
+import { taskApi, taskSourceApi, onTaskUpdated, onTaskNavigate, reportSelectedTask, onTaskCreated } from '@/lib/ipc-client'
 import { useUIStore } from './ui-store'
 
 interface TaskState {
@@ -106,4 +106,13 @@ onTaskNavigate((taskId: string) => {
   if (uiState.activeModal) {
     useUIStore.setState({ activeModal: null, editingTaskId: null, deletingTaskId: null })
   }
+})
+
+// Listen for tasks created externally (e.g., via task-management MCP server)
+onTaskCreated((event) => {
+  useTaskStore.setState((state) => {
+    // Avoid duplicates
+    if (state.tasks.some((t) => t.id === event.task.id)) return state
+    return { tasks: [event.task, ...state.tasks] }
+  })
 })

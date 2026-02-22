@@ -182,6 +182,19 @@ export interface CodingAgentAdapter {
   ): Promise<void>
 
   /**
+   * Respond to a pending question (AskUserQuestion tool call).
+   * Agent-manager passes structured answers; each adapter delivers them
+   * in whatever format its backend expects.
+   *
+   * @param answers Map of question header/label → selected answer text
+   */
+  respondToQuestion?(
+    sessionId: string,
+    answers: Record<string, string>,
+    config: SessionConfig
+  ): Promise<void>
+
+  /**
    * Check if this adapter's backend is available and healthy
    */
   checkHealth(): Promise<{ available: boolean; reason?: string }>

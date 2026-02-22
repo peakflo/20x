@@ -62,6 +62,7 @@ export interface SkillSyncResult {
 export interface McpTestResult {
   status: 'connected' | 'failed'
   error?: string
+  errorDetail?: string
   toolCount?: number
   tools?: { name: string; description: string }[]
 }
@@ -79,6 +80,12 @@ export interface GitHubRepo {
   cloneUrl: string
   description: string
   isPrivate: boolean
+}
+
+export interface GitHubCollaborator {
+  login: string
+  avatar_url: string
+  type: string
 }
 
 export interface WorktreeProgressEvent {
@@ -126,7 +133,7 @@ interface ElectronAPI {
     resume: (agentId: string, taskId: string, ocSessionId: string) => Promise<AgentSessionStartResult>
     abort: (sessionId: string) => Promise<AgentSessionSuccessResult>
     stop: (sessionId: string) => Promise<AgentSessionSuccessResult>
-    send: (sessionId: string, message: string, taskId?: string) => Promise<AgentSessionSuccessResult & { newSessionId?: string }>
+    send: (sessionId: string, message: string, taskId?: string, agentId?: string) => Promise<AgentSessionSuccessResult & { newSessionId?: string }>
     approve: (sessionId: string, approved: boolean, message?: string) => Promise<AgentSessionSuccessResult>
     syncSkills: (sessionId: string) => Promise<SkillSyncResult>
     syncSkillsForTask: (taskId: string) => Promise<SkillSyncResult>
@@ -171,6 +178,8 @@ interface ElectronAPI {
     startAuth: () => Promise<void>
     fetchOrgs: () => Promise<string[]>
     fetchOrgRepos: (org: string) => Promise<GitHubRepo[]>
+    fetchUserRepos: () => Promise<GitHubRepo[]>
+    fetchCollaborators: (owner: string, repo: string) => Promise<GitHubCollaborator[]>
   }
   worktree: {
     setup: (taskId: string, repos: { fullName: string; defaultBranch: string }[], org: string) => Promise<string>
@@ -222,7 +231,9 @@ interface ElectronAPI {
   onTaskUpdated: (callback: (event: { taskId: string; updates: Partial<WorkfloTask> }) => void) => () => void
   onTaskNavigate: (callback: (taskId: string) => void) => () => void
   reportSelectedTask: (taskId: string | null) => void
+  onTaskCreated: (callback: (event: { task: WorkfloTask }) => void) => () => void
   onWorktreeProgress: (callback: (event: WorktreeProgressEvent) => void) => () => void
+  onGithubDeviceCode: (callback: (code: string) => void) => () => void
   onOAuthCallback: (callback: (event: { code: string; state: string }) => void) => () => void
 }
 

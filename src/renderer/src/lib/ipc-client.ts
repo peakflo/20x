@@ -1,5 +1,5 @@
 import type { WorkfloTask, CreateTaskDTO, UpdateTaskDTO, FileAttachment, Agent, CreateAgentDTO, UpdateAgentDTO, McpServer, CreateMcpServerDTO, UpdateMcpServerDTO, Skill, CreateSkillDTO, UpdateSkillDTO, TaskSource, CreateTaskSourceDTO, UpdateTaskSourceDTO, SyncResult, PluginMeta, ConfigFieldSchema, ConfigFieldOption, PluginAction, ActionResult, SourceUser, ReassignResult } from '@/types'
-import type { AgentOutputEvent, AgentStatusEvent, AgentApprovalRequest, GhCliStatus, GitHubRepo, WorktreeProgressEvent, McpTestResult, SkillSyncResult, DepsStatus } from '@/types/electron'
+import type { AgentOutputEvent, AgentStatusEvent, AgentApprovalRequest, GhCliStatus, GitHubRepo, GitHubCollaborator, WorktreeProgressEvent, McpTestResult, SkillSyncResult, DepsStatus } from '@/types/electron'
 
 export const taskApi = {
   getAll: (): Promise<WorkfloTask[]> => {
@@ -88,8 +88,8 @@ export const agentSessionApi = {
     return window.electronAPI.agentSession.stop(sessionId)
   },
 
-  send: (sessionId: string, message: string, taskId?: string): Promise<{ success: boolean; newSessionId?: string }> => {
-    return window.electronAPI.agentSession.send(sessionId, message, taskId)
+  send: (sessionId: string, message: string, taskId?: string, agentId?: string): Promise<{ success: boolean; newSessionId?: string }> => {
+    return window.electronAPI.agentSession.send(sessionId, message, taskId, agentId)
   },
 
   approve: (sessionId: string, approved: boolean, message?: string): Promise<{ success: boolean }> => {
@@ -187,6 +187,10 @@ export const reportSelectedTask = (taskId: string | null): void => {
   window.electronAPI.reportSelectedTask(taskId)
 }
 
+export const onTaskCreated = (callback: (event: { task: WorkfloTask }) => void): (() => void) => {
+  return window.electronAPI.onTaskCreated(callback)
+}
+
 export const settingsApi = {
   get: (key: string): Promise<string | null> => {
     return window.electronAPI.settings.get(key)
@@ -211,6 +215,12 @@ export const githubApi = {
   },
   fetchOrgRepos: (org: string): Promise<GitHubRepo[]> => {
     return window.electronAPI.github.fetchOrgRepos(org)
+  },
+  fetchUserRepos: (): Promise<GitHubRepo[]> => {
+    return window.electronAPI.github.fetchUserRepos()
+  },
+  fetchCollaborators: (owner: string, repo: string): Promise<GitHubCollaborator[]> => {
+    return window.electronAPI.github.fetchCollaborators(owner, repo)
   }
 }
 

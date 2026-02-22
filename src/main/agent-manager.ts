@@ -146,11 +146,9 @@ export class AgentManager extends EventEmitter {
    * Builds MCP servers config for adapters (Claude Code, etc.)
    * Converts from database format to adapter format
    */
-  private buildMcpServersForAdapter(agentId: string): Record<string, any> {
+  private buildMcpServersForAdapter(agentId: string, opts?: { ensureTaskManagement?: boolean }): Record<string, any> {
     const agent = this.db.getAgent(agentId)
-    if (!agent?.config?.mcp_servers) return {}
-
-    const mcpEntries = agent.config.mcp_servers
+    const mcpEntries = agent?.config?.mcp_servers || []
     const result: Record<string, any> = {}
 
     for (const entry of mcpEntries) {
@@ -183,6 +181,22 @@ export class AgentManager extends EventEmitter {
       }
     }
 
+    // Always include task-management for mastermind sessions
+    if (opts?.ensureTaskManagement && !result['task-management']) {
+      const allServers = this.db.getMcpServers()
+      const tmServer = allServers.find(s => s.name === 'task-management')
+      if (tmServer && tmServer.type === 'local') {
+        const apiPort = getTaskApiPort()
+        const env = { ...tmServer.environment, ...(apiPort ? { TASK_API_URL: `http://127.0.0.1:${apiPort}` } : {}) }
+        result['task-management'] = {
+          type: 'stdio',
+          command: tmServer.command,
+          args: tmServer.args,
+          env
+        }
+      }
+    }
+
     return result
   }
 
@@ -192,7 +206,8 @@ export class AgentManager extends EventEmitter {
       throw new Error(`Agent not found: ${agentId}`)
     }
 
-    const mcpServers = this.buildMcpServersForAdapter(agentId)
+    const isMastermind = taskId === 'mastermind-session'
+    const mcpServers = this.buildMcpServersForAdapter(agentId, { ensureTaskManagement: isMastermind })
 
     return {
       agentId,
@@ -725,7 +740,9 @@ export class AgentManager extends EventEmitter {
     this.writeSkillFiles(taskId, agentId, workspaceDir)
 
     // Build MCP servers config for adapter
-    const mcpServers = this.buildMcpServersForAdapter(agentId)
+    // Mastermind sessions always get task-management access
+    const isMastermind = taskId === 'mastermind-session'
+    const mcpServers = this.buildMcpServersForAdapter(agentId, { ensureTaskManagement: isMastermind })
 
     // Build session config
     const sessionConfig: SessionConfig = {
@@ -1049,7 +1066,8 @@ export class AgentManager extends EventEmitter {
     const workspaceDir = this.db.getWorkspaceDir(taskId)
 
     // Build MCP servers config
-    const mcpServers = this.buildMcpServersForAdapter(agentId)
+    const isMastermind = taskId === 'mastermind-session'
+    const mcpServers = this.buildMcpServersForAdapter(agentId, { ensureTaskManagement: isMastermind })
 
     // Build system prompt with task context (survives context compaction)
     const task = this.db.getTask(taskId)
@@ -1138,36 +1156,27 @@ export class AgentManager extends EventEmitter {
       }
     }
 
-    // Store session in sessions map
-    // Note: ClaudeCodeAdapter doesn't poll until user sends a message
-    const isClaudeCode = adapter.constructor.name === 'ClaudeCodeAdapter'
-
+    // Store session in sessions map — idle until user sends a message
     this.sessions.set(adapterSessionId, {
       id: adapterSessionId,
       agentId,
       taskId,
       workspaceDir,
-      status: 'working',
+      status: 'idle',
       createdAt: new Date(),
       seenMessageIds: new Set(),
       seenPartIds: new Set(),
       partContentLengths: new Map(),
       adapter,
-      pollingStarted: !isClaudeCode // Track if polling has started
+      pollingStarted: false
     })
 
-    // Start polling for non-Claude Code adapters
-    // Claude Code will start polling when user sends first message
-    if (!isClaudeCode) {
-      this.startAdapterPolling(adapterSessionId, adapter, sessionConfig)
-    }
-
-    // Notify renderer
+    // Notify renderer — session is resumed but idle (no work in progress)
     this.sendToRenderer('agent:status', {
       sessionId: adapterSessionId,
       agentId,
       taskId,
-      status: 'working'
+      status: 'idle'
     })
 
     return adapterSessionId
@@ -1241,6 +1250,8 @@ export class AgentManager extends EventEmitter {
       // Register MCP servers BEFORE creating session so the session picks them up
       const mcpEntries = agent.config?.mcp_servers || []
       const mcpServerIds = mcpEntries.map((e) => typeof e === 'string' ? e : (e as AgentMcpServerEntry).serverId)
+      const registeredMcpNames = new Set<string>()
+
       for (const serverId of mcpServerIds) {
         const mcpServer = this.db.getMcpServer(serverId)
         if (!mcpServer) continue
@@ -1277,8 +1288,36 @@ export class AgentManager extends EventEmitter {
             continue
           }
 
+          registeredMcpNames.add(mcpServer.name)
         } catch (mcpError) {
           console.error(`[AgentManager] Failed to register MCP server ${mcpServer.name}:`, mcpError)
+        }
+      }
+
+      // Mastermind sessions always get task-management access
+      if (taskId === 'mastermind-session' && !registeredMcpNames.has('task-management')) {
+        const allServers = this.db.getMcpServers()
+        const tmServer = allServers.find(s => s.name === 'task-management')
+        if (tmServer && tmServer.type === 'local') {
+          try {
+            const apiPort = getTaskApiPort()
+            const env = { ...tmServer.environment, ...(apiPort ? { TASK_API_URL: `http://127.0.0.1:${apiPort}` } : {}) }
+            const addResult: any = await ocClient.mcp.add({
+              body: {
+                name: 'task-management',
+                config: { type: 'local' as const, command: [tmServer.command, ...tmServer.args], environment: env }
+              },
+              ...(workspaceDir && { query: { directory: workspaceDir } })
+            })
+            if (!addResult.error) {
+              await ocClient.mcp.connect({
+                path: { name: 'task-management' },
+                ...(workspaceDir && { query: { directory: workspaceDir } })
+              })
+            }
+          } catch (mcpError) {
+            console.error('[AgentManager] Failed to register task-management for mastermind:', mcpError)
+          }
         }
       }
 
@@ -2171,21 +2210,25 @@ export class AgentManager extends EventEmitter {
     })
   }
 
-  async sendMessage(sessionId: string, message: string, taskId?: string): Promise<{ newSessionId?: string }> {
+  async sendMessage(sessionId: string, message: string, taskId?: string, agentId?: string): Promise<{ newSessionId?: string }> {
     let session = this.sessions.get(sessionId)
 
     // Session was destroyed — try to RESUME first (preserves conversation history),
     // then fallback to creating a new session
     if (!session && taskId) {
+      // For regular tasks, look up agent from DB; for mastermind, use the passed agentId
       const task = this.db.getTask(taskId)
-      if (task?.agent_id) {
+      const resolvedAgentId = task?.agent_id || agentId
+
+      if (resolvedAgentId) {
         // Try resuming existing session first
-        if (task.session_id) {
+        const persistedSessionId = task?.session_id
+        if (persistedSessionId) {
           try {
-            console.log(`[AgentManager] Session ${sessionId} not found, attempting resume from ${task.session_id} for task ${taskId}`)
-            const adapter = this.getAdapter(task.agent_id)
+            console.log(`[AgentManager] Session ${sessionId} not found, attempting resume from ${persistedSessionId} for task ${taskId}`)
+            const adapter = this.getAdapter(resolvedAgentId)
             if (adapter) {
-              const resumedId = await this.resumeAdapterSession(adapter, task.agent_id, taskId, task.session_id)
+              const resumedId = await this.resumeAdapterSession(adapter, resolvedAgentId, taskId, persistedSessionId)
               session = this.sessions.get(resumedId)
               if (session) {
                 sessionId = resumedId
@@ -2199,7 +2242,7 @@ export class AgentManager extends EventEmitter {
         // If resume failed or no session_id, create new session
         if (!session) {
           console.log(`[AgentManager] Creating new session for task ${taskId}`)
-          const newSessionId = await this.startSession(task.agent_id, taskId, undefined, true)
+          const newSessionId = await this.startSession(resolvedAgentId, taskId, undefined, true)
           session = this.sessions.get(newSessionId)
           if (!session) throw new Error('Failed to restart session')
           sessionId = newSessionId
@@ -2264,7 +2307,8 @@ export class AgentManager extends EventEmitter {
 
     // Build session config
     const agent = this.db.getAgent(session.agentId)!
-    const mcpServers = this.buildMcpServersForAdapter(session.agentId)
+    const isMastermind = session.taskId === 'mastermind-session'
+    const mcpServers = this.buildMcpServersForAdapter(session.agentId, { ensureTaskManagement: isMastermind })
     const sessionConfig: SessionConfig = {
       agentId: session.agentId,
       taskId: session.taskId,
@@ -2347,47 +2391,71 @@ export class AgentManager extends EventEmitter {
   }
 
   async respondToPermission(sessionId: string, approved: boolean, message?: string, optionId?: string): Promise<void> {
-    // Check if this is an adapter session
-    const agent = [...this.sessions.values()].find(s => s.id === sessionId)?.agentId
-    if (agent) {
-      const adapter = this.getAdapter(agent)
-      if (adapter && 'respondToApproval' in adapter && typeof adapter.respondToApproval === 'function') {
-        // For ACP adapters, map the user's answer to an optionId
-        // The UI passes the selected option label as 'message'
-        let selectedOption = optionId
-        if (!selectedOption && message) {
-          // Map common answers to option IDs
-          const answerMap: Record<string, string> = {
-            'Always': 'approved-for-session',
-            'Yes': 'approved',
-            'No, provide feedback': 'abort',
-            'No': 'abort'
-          }
-          selectedOption = answerMap[message] || (approved ? 'approved' : 'abort')
-        }
-
-        console.log(`[AgentManager] Responding to adapter approval with: ${selectedOption}`)
-        await (adapter as any).respondToApproval(sessionId, approved, selectedOption)
-        return
-      }
-    }
-
-    // OpenCode session handling
     const session = this.sessions.get(sessionId)
     if (!session) throw new Error(`Session not found: ${sessionId}`)
 
-    console.log(`[AgentManager] Permission ${approved ? 'approved' : 'rejected'} for session ${sessionId}`)
+    const adapter = this.getAdapter(session.agentId)
 
-    // TODO: Use postSessionIdPermissionsPermissionId when we have the permissionID
-    // For now, update status
-    session.status = approved ? 'working' : 'idle'
+    // --- ACP adapters: use respondToApproval (permission-style options) ---
+    if (adapter && 'respondToApproval' in adapter && typeof (adapter as any).respondToApproval === 'function') {
+      let selectedOption = optionId
+      if (!selectedOption && message) {
+        const answerMap: Record<string, string> = {
+          'Always': 'approved-for-session',
+          'Yes': 'approved',
+          'No, provide feedback': 'abort',
+          'No': 'abort'
+        }
+        selectedOption = answerMap[message] || (approved ? 'approved' : 'abort')
+      }
+      console.log(`[AgentManager] Responding to ACP adapter approval with: ${selectedOption}`)
+      await (adapter as any).respondToApproval(sessionId, approved, selectedOption)
+      return
+    }
 
-    this.sendToRenderer('agent:status', {
-      sessionId,
-      agentId: session.agentId,
-      taskId: session.taskId,
-      status: session.status
-    })
+    // --- Adapters with respondToQuestion: pass structured answers ---
+    if (adapter && typeof adapter.respondToQuestion === 'function') {
+      if (!approved) {
+        console.log(`[AgentManager] Question rejected for session ${sessionId}`)
+        session.status = 'idle'
+        this.sendToRenderer('agent:status', {
+          sessionId, agentId: session.agentId, taskId: session.taskId, status: 'idle'
+        })
+        return
+      }
+
+      // Parse structured answers from message text
+      // Format from renderer: "Header1: Answer1\nHeader2: Answer2" or single answer
+      const answers: Record<string, string> = {}
+      if (message) {
+        const lines = message.split('\n')
+        for (const line of lines) {
+          const colonIdx = line.indexOf(':')
+          if (colonIdx > 0) {
+            answers[line.slice(0, colonIdx).trim()] = line.slice(colonIdx + 1).trim()
+          } else {
+            answers['answer'] = line.trim()
+          }
+        }
+      }
+
+      console.log(`[AgentManager] Responding to question via adapter for session ${sessionId}:`, answers)
+
+      const adapterConfig = this.buildSessionConfig(session.agentId, session.taskId, session.workspaceDir)
+      await adapter.respondToQuestion(sessionId, answers, adapterConfig)
+      return
+    }
+
+    // --- Legacy OpenCode path (no adapter) ---
+    console.log(`[AgentManager] Permission ${approved ? 'approved' : 'rejected'} for session ${sessionId} (legacy path)`)
+    if (approved && message) {
+      await this.sendMessage(sessionId, message, session.taskId, session.agentId)
+    } else {
+      session.status = approved ? 'working' : 'idle'
+      this.sendToRenderer('agent:status', {
+        sessionId, agentId: session.agentId, taskId: session.taskId, status: session.status
+      })
+    }
   }
 
   stopAllSessions(): void {
@@ -2425,14 +2493,14 @@ export class AgentManager extends EventEmitter {
     return this.testLocalMcpServer(serverData)
   }
 
-  private testLocalMcpServer(serverData: { name: string; command?: string; args?: string[]; environment?: Record<string, string> }): Promise<{ status: 'connected' | 'failed'; error?: string; toolCount?: number; tools?: { name: string; description: string }[] }> {
+  private testLocalMcpServer(serverData: { name: string; command?: string; args?: string[]; environment?: Record<string, string> }): Promise<{ status: 'connected' | 'failed'; error?: string; errorDetail?: string; toolCount?: number; tools?: { name: string; description: string }[] }> {
     if (!serverData.command) {
       return Promise.resolve({ status: 'failed', error: 'No command specified' })
     }
 
     return new Promise((resolve) => {
       let resolved = false
-      const finish = (result: { status: 'connected' | 'failed'; error?: string; toolCount?: number; tools?: { name: string; description: string }[] }): void => {
+      const finish = (result: { status: 'connected' | 'failed'; error?: string; errorDetail?: string; toolCount?: number; tools?: { name: string; description: string }[] }): void => {
         if (resolved) return
         resolved = true
         clearTimeout(timer)
@@ -2449,10 +2517,17 @@ export class AgentManager extends EventEmitter {
       const shellCmd = [serverData.command!, ...(serverData.args || [])].map((arg) =>
         /[\s"'\\$`!#&|;()<>]/.test(arg) ? `'${arg.replace(/'/g, "'\\''")}'` : arg
       ).join(' ')
+      // Inject TASK_API_URL for the built-in task-management server
+      const extraEnv: Record<string, string> = {}
+      if (serverData.name === 'task-management') {
+        const apiPort = getTaskApiPort()
+        if (apiPort) extraEnv.TASK_API_URL = `http://127.0.0.1:${apiPort}`
+      }
+
       const proc = spawn(shellCmd, [], {
         stdio: ['pipe', 'pipe', 'pipe'],
         shell: true,
-        env: { ...process.env, npm_config_yes: 'true', ...(serverData.environment || {}) }
+        env: { ...process.env, npm_config_yes: 'true', ...(serverData.environment || {}), ...extraEnv }
       })
 
       let buffer = ''
@@ -2506,8 +2581,12 @@ export class AgentManager extends EventEmitter {
       })
 
       proc.on('exit', (code) => {
-        const errMsg = stderrBuf.trim().split('\n').pop() || `Process exited with code ${code}`
-        finish({ status: 'failed', error: errMsg })
+        const lines = stderrBuf.trim().split('\n')
+        // Find a line matching an error pattern (e.g. "TypeError: ...", "Error [ERR_...]: ...")
+        const errorLine = lines.find((l) => /\bError\b/.test(l) && !/^\s+at /.test(l) && !/^Node\.js v/.test(l))
+        const errMsg = errorLine?.trim() || `Process exited with code ${code}`
+        const detail = stderrBuf.trim().replace(/\nNode\.js v.+$/, '').trim()
+        finish({ status: 'failed', error: errMsg, errorDetail: detail || undefined })
       })
 
       // Send initialize

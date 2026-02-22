@@ -137,7 +137,7 @@ describe('useAgentSession', () => {
         await result.current.sendMessage('Hello agent')
       })
 
-      expect(mockElectronAPI.agentSession.send).toHaveBeenCalledWith('sess-1', 'Hello agent', 'task-1')
+      expect(mockElectronAPI.agentSession.send).toHaveBeenCalledWith('sess-1', 'Hello agent', 'task-1', 'agent-1')
     })
 
     it('throws when no active session', async () => {
@@ -171,7 +171,7 @@ describe('useAgentSession', () => {
       })
 
       // Should use the NEW sessionId from store, not the old one from closure
-      expect(mockElectronAPI.agentSession.send).toHaveBeenCalledWith('sess-2-new', 'After resume', 'task-1')
+      expect(mockElectronAPI.agentSession.send).toHaveBeenCalledWith('sess-2-new', 'After resume', 'task-1', 'agent-1')
     })
   })
 

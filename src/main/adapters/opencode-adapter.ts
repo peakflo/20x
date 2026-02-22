@@ -10,6 +10,11 @@ import { SessionStatusType } from './coding-agent-adapter'
 
 let OpenCodeSDK: typeof import('@opencode-ai/sdk') | null = null
 
+type OpenCodeV2Module = typeof import('@opencode-ai/sdk/v2/client')
+type V2OpencodeClient = import('@opencode-ai/sdk/v2/client').OpencodeClient
+type V2QuestionRequest = import('@opencode-ai/sdk/v2/client').QuestionRequest
+let OpenCodeV2: OpenCodeV2Module | null = null
+
 // Custom fetch with no timeout — agent prompts can run indefinitely
 const noTimeoutAgent = new UndiciAgent({ headersTimeout: 0, bodyTimeout: 0 })
 const noTimeoutFetch = (req: any) => (globalThis as any).fetch(req, { dispatcher: noTimeoutAgent })
@@ -25,6 +30,7 @@ export class OpencodeAdapter implements CodingAgentAdapter {
   private serverUrl: string | null = null
   private serverStarting: Promise<void> | null = null
   private clients: Map<string, any> = new Map() // sessionId -> ocClient
+  private v2Client: V2OpencodeClient | null = null
   private promptAborts: Map<string, AbortController> = new Map()
 
   constructor() {
@@ -34,6 +40,7 @@ export class OpencodeAdapter implements CodingAgentAdapter {
   private async loadSDK(): Promise<void> {
     try {
       OpenCodeSDK = await import('@opencode-ai/sdk')
+      OpenCodeV2 = await import('@opencode-ai/sdk/v2/client')
       console.log('[OpencodeAdapter] SDK loaded successfully')
     } catch (error) {
       console.error('[OpencodeAdapter] Failed to load SDK:', error)
@@ -535,6 +542,75 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     // We need access to the ocClient, which we don't have yet
     // For now, this will be handled in the AgentManager until we refactor further
     throw new Error('registerMcpServer must be called via AgentManager for now')
+  }
+
+  private getV2Client(config: SessionConfig): V2OpencodeClient {
+    if (this.v2Client) return this.v2Client
+    if (!OpenCodeV2) throw new Error('OpenCode V2 SDK not loaded')
+
+    const baseUrl = this.serverUrl || config.serverUrl || DEFAULT_SERVER_URL
+    this.v2Client = OpenCodeV2.createOpencodeClient({ baseUrl, fetch: noTimeoutFetch as any })
+    return this.v2Client
+  }
+
+  async respondToQuestion(
+    sessionId: string,
+    answers: Record<string, string>,
+    config: SessionConfig
+  ): Promise<void> {
+    const v2 = this.getV2Client(config)
+
+    try {
+      // List pending questions via V2 SDK
+      const listResult = await v2.question.list({
+        ...(config.workspaceDir && { directory: config.workspaceDir })
+      })
+
+      if (listResult.error) {
+        throw new Error(`question.list failed: ${JSON.stringify(listResult.error)}`)
+      }
+
+      const questions: V2QuestionRequest[] = listResult.data ?? []
+      console.log(`[OpencodeAdapter] Pending questions (${questions.length}):`, questions.map(q => ({ id: q.id, sessionID: q.sessionID, questionCount: q.questions?.length })))
+
+      // Find the question for this session
+      const question = questions.find(q => q.sessionID === sessionId)
+      if (!question?.id) {
+        console.warn(`[OpencodeAdapter] No pending question found for session ${sessionId}`)
+        return
+      }
+
+      console.log(`[OpencodeAdapter] Matched question:`, JSON.stringify(question, null, 2).slice(0, 1000))
+
+      // Build answers aligned with the question's questions array order
+      const questionItems = question.questions ?? []
+      const answerKeys = Object.keys(answers)
+      const formattedAnswers: string[][] = []
+
+      for (let i = 0; i < questionItems.length; i++) {
+        const qItem = questionItems[i]
+        const matchKey = answerKeys.find(k => k === qItem.header || k === qItem.question)
+        const answerValue = matchKey ? answers[matchKey] : Object.values(answers)[i]
+        formattedAnswers.push(answerValue ? [answerValue] : [])
+      }
+
+      console.log(`[OpencodeAdapter] Replying to question ${question.id} (${questionItems.length} items) with:`, formattedAnswers)
+
+      // Reply via V2 SDK
+      const replyResult = await v2.question.reply({
+        requestID: question.id,
+        answers: formattedAnswers,
+        ...(config.workspaceDir && { directory: config.workspaceDir })
+      })
+
+      if (replyResult.error) {
+        throw new Error(`question.reply failed: ${JSON.stringify(replyResult.error)}`)
+      }
+
+      console.log(`[OpencodeAdapter] Question ${question.id} replied successfully`)
+    } catch (err) {
+      console.error('[OpencodeAdapter] Question API failed:', err)
+    }
   }
 
   async stopServer(): Promise<void> {

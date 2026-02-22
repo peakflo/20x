@@ -143,6 +143,9 @@ const mockElectronAPI = {
   onWorktreeProgress: vi.fn((cb: (event: any) => void) => {
     eventCallbacks.onWorktreeProgress = cb
     return vi.fn()
+  }),
+  onTaskCreated: vi.fn((_cb: (event: any) => void) => {
+    return vi.fn()
   })
 }
 
