@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Pencil, Trash2, Calendar, User, Tag, Clock, Bot, Play, History, GitBranch, Plus, X, BookOpen, AlarmClockOff, BellRing, Folder, Repeat, Star } from 'lucide-react'
+import { Pencil, Trash2, Calendar, User, Tag, Clock, Bot, Play, History, GitBranch, Plus, X, BookOpen, AlarmClockOff, BellRing, Folder, Repeat, Star, Sparkles } from 'lucide-react'
 import { Markdown } from '@/components/ui/Markdown'
 import { Button } from '@/components/ui/Button'
 import { TaskStatusBadge } from './TaskStatusBadge'
@@ -106,9 +106,11 @@ interface TaskDetailViewProps {
   onSnooze?: () => void
   onUnsnooze?: () => void
   onReassign?: (userIds: string[], displayName: string) => Promise<void>
+  onTriage?: () => void
+  canTriage?: boolean
 }
 
-export function TaskDetailView({ task, agents, onEdit, onDelete, onUpdateAttachments, onUpdateOutputFields, onCompleteTask, onAssignAgent, onUpdateRepos, onAddRepos, onUpdateSkillIds, onStartAgent, canStartAgent, onResumeAgent, canResumeAgent, onRestartAgent, canRestartAgent, onSnooze, onUnsnooze, onReassign }: TaskDetailViewProps) {
+export function TaskDetailView({ task, agents, onEdit, onDelete, onUpdateAttachments, onUpdateOutputFields, onCompleteTask, onAssignAgent, onUpdateRepos, onAddRepos, onUpdateSkillIds, onStartAgent, canStartAgent, onResumeAgent, canResumeAgent, onRestartAgent, canRestartAgent, onSnooze, onUnsnooze, onReassign, onTriage, canTriage }: TaskDetailViewProps) {
   const [skillsExpanded, setSkillsExpanded] = useState(false)
   const isActive = task.status !== TaskStatus.Completed
   const overdue = isActive && isOverdue(task.due_date)
@@ -184,6 +186,12 @@ export function TaskDetailView({ task, agents, onEdit, onDelete, onUpdateAttachm
                     <option key={agent.id} value={agent.id}>{agent.name}</option>
                   ))}
                 </select>
+                {canTriage && onTriage && (
+                  <Button variant="default" size="sm" onClick={onTriage} className="h-7 gap-1.5 px-3">
+                    <Sparkles className="h-3 w-3" />
+                    Triage
+                  </Button>
+                )}
                 {task.agent_id && agents.find(a => a.id === task.agent_id)?.config.coding_agent && (() => {
                   const agent = agents.find(a => a.id === task.agent_id)
                   const codingAgent = agent?.config.coding_agent

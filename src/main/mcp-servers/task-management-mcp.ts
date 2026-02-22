@@ -84,8 +84,9 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           labels: { type: 'array', items: { type: 'string' }, description: 'Set task labels' },
           skill_ids: { type: 'array', items: { type: 'string' }, description: 'Set task skills' },
           agent_id: { type: 'string', description: 'Assign to agent' },
+          repos: { type: 'array', items: { type: 'string' }, description: 'Set repository paths/URLs for this task' },
           priority: { type: 'string', enum: ['critical', 'high', 'medium', 'low'] },
-          status: { type: 'string', enum: ['not_started', 'in_progress', 'completed', 'cancelled'] }
+          status: { type: 'string', enum: ['not_started', 'triaging', 'in_progress', 'completed', 'cancelled'] }
         },
         required: ['task_id']
       }
@@ -124,6 +125,14 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           metric: { type: 'string', enum: ['label_usage', 'agent_workload', 'priority_distribution', 'completion_rate'], description: 'Which statistic to compute' }
         },
         required: ['metric']
+      }
+    },
+    {
+      name: 'list_repos',
+      description: 'List all known repositories from historical tasks and the configured GitHub organization.',
+      inputSchema: {
+        type: 'object',
+        properties: {}
       }
     }
   ]

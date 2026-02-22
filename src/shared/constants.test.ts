@@ -2,13 +2,14 @@ import { describe, it, expect } from 'vitest'
 import { TaskStatus, TASK_STATUSES } from './constants'
 
 describe('TaskStatus enum', () => {
-  it('has exactly 5 statuses', () => {
+  it('has exactly 6 statuses', () => {
     const values = Object.values(TaskStatus)
-    expect(values).toHaveLength(5)
+    expect(values).toHaveLength(6)
   })
 
   it('has expected string values', () => {
     expect(TaskStatus.NotStarted).toBe('not_started')
+    expect(TaskStatus.Triaging).toBe('triaging')
     expect(TaskStatus.AgentWorking).toBe('agent_working')
     expect(TaskStatus.ReadyForReview).toBe('ready_for_review')
     expect(TaskStatus.AgentLearning).toBe('agent_learning')
@@ -20,6 +21,7 @@ describe('TASK_STATUSES array', () => {
   it('contains all enum values', () => {
     const values = TASK_STATUSES.map((s) => s.value)
     expect(values).toContain(TaskStatus.NotStarted)
+    expect(values).toContain(TaskStatus.Triaging)
     expect(values).toContain(TaskStatus.AgentWorking)
     expect(values).toContain(TaskStatus.ReadyForReview)
     expect(values).toContain(TaskStatus.AgentLearning)

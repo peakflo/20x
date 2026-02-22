@@ -97,11 +97,12 @@ After authorization, you can select which Linear teams to import tasks from:
    - Assignee is correctly mapped (if assigned)
    - Labels are imported
 
-**Status Mapping**:
+**Status Mapping** (see `docs/task-lifecycle.md` for all statuses):
 - Linear "Backlog", "Todo" → pf-desktop "not_started"
 - Linear "In Progress" → pf-desktop "agent_working"
 - Linear "Review" → pf-desktop "ready_for_review"
 - Linear "Done", "Canceled" → pf-desktop "completed"
+- Note: "triaging" and "agent_learning" are internal statuses not mapped from Linear
 
 **Priority Mapping**:
 - Linear Urgent (1) → pf-desktop "critical"

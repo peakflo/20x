@@ -3,6 +3,7 @@ import { TaskStatus } from '@/types'
 
 const statusConfig: Record<TaskStatus, { label: string; variant: BadgeVariant }> = {
   [TaskStatus.NotStarted]: { label: 'Not Started', variant: 'default' },
+  [TaskStatus.Triaging]: { label: 'Triaging', variant: 'default' },
   [TaskStatus.AgentWorking]: { label: 'Agent Working', variant: 'yellow' },
   [TaskStatus.ReadyForReview]: { label: 'Ready for Review', variant: 'purple' },
   [TaskStatus.AgentLearning]: { label: 'Agent Learning', variant: 'blue' },

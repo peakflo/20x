@@ -63,6 +63,7 @@ function formatRecurrenceShort(pattern: RecurrencePattern): string {
 
 const statusDotColor: Record<TaskStatus, string> = {
   [TaskStatus.NotStarted]: 'bg-muted-foreground',
+  [TaskStatus.Triaging]: 'bg-muted-foreground animate-pulse',
   [TaskStatus.AgentWorking]: 'bg-amber-400',
   [TaskStatus.ReadyForReview]: 'bg-purple-400',
   [TaskStatus.AgentLearning]: 'bg-blue-400',
@@ -92,9 +93,12 @@ export function TaskListItem({ task, isSelected, onSelect }: TaskListItemProps) 
     if (hasPendingQuestion) {
       return 'bg-blue-400 animate-pulse' // Waiting for user input
     }
-    // Check task status first - AgentLearning takes priority over session status
+    // Check task status first - AgentLearning/Triaging takes priority over session status
     if (task.status === TaskStatus.AgentLearning) {
       return 'bg-blue-400 animate-pulse' // Agent learning
+    }
+    if (task.status === TaskStatus.Triaging) {
+      return 'bg-muted-foreground animate-pulse' // Triaging
     }
     if (hasActiveAgent) {
       return 'bg-amber-400 animate-pulse' // Agent working
