@@ -24,14 +24,9 @@ Most AI tools make you copy-paste context between tabs. 20x flips it: **your tas
 
 ## How It Works
 
-```
-Your tools          20x              AI Agents
-┌──────────┐    ┌──────────┐    ┌──────────────┐
-│  Linear   │───>│          │───>│  Claude Code  │
-│  HubSpot  │───>│  20x     │───>│  OpenCode     │
-│  Peakflo  │───>│          │───>│  Codex        │
-└──────────┘    └──────────┘    └──────────────┘
-```
+<p align="center">
+  <img src="resources/integrations.png" alt="20x integrations: Hubspot, Linear, Github issues, Workflo → 20x ↔ Github, MCP → Claude Code, Opencode, OpenAI Codex; Skills automatically improved" />
+</p>
 
 1. **Tasks flow in** — from integrations or created manually
 2. **You assign an agent** — choose Claude Code, OpenCode, or Codex
