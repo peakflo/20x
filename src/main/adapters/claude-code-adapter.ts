@@ -431,7 +431,7 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
     // Determine session continuation mode
     if (isFirstPrompt && session.isResumed) {
       // First prompt after resume: use resume to load persisted session
-      ;(options as any).resume = sessionId
+      options.resume = sessionId
       // Don't use continue with resume - they're mutually exclusive
     } else if (!isFirstPrompt) {
       // Subsequent prompts: continue existing session in same process
@@ -445,7 +445,7 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
       model: options.model,
       permissionMode: options.permissionMode,
       continue: options.continue,
-      resume: (options as any).resume,
+      resume: options.resume,
       isFirstPrompt,
       isResumed: session.isResumed,
       promptLength: promptText.length,
@@ -598,7 +598,7 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
     for (const msg of session.messageBuffer) {
       // Derive role from message type
       const msgAny = msg as any
-      const roleStr = (msgAny.role || (msg.type === 'user' ? 'user' : 'assistant')) as string
+      const roleStr = (msgAny.role || (msg.type === 'user' ? 'user' : 'assistant'))
       const role = roleStr === 'user' ? MessageRole.USER :
                    roleStr === 'system' ? MessageRole.SYSTEM :
                    MessageRole.ASSISTANT
