@@ -130,6 +130,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('task:updated', handler)
     return () => ipcRenderer.removeListener('task:updated', handler)
   },
+  onTaskNavigate: (callback: (taskId: string) => void): (() => void) => {
+    const handler = (_: unknown, taskId: string): void => callback(taskId)
+    ipcRenderer.on('task:navigate', handler)
+    return () => ipcRenderer.removeListener('task:navigate', handler)
+  },
+  reportSelectedTask: (taskId: string | null): void => {
+    ipcRenderer.send('task:selectedChanged', taskId)
+  },
   onTaskCreated: (callback: (event: unknown) => void): (() => void) => {
     const handler = (_: unknown, data: unknown): void => callback(data)
     ipcRenderer.on('task:created', handler)
@@ -227,6 +235,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getMinimizeToTray: (): Promise<boolean> =>
       ipcRenderer.invoke('app:getMinimizeToTray'),
     setMinimizeToTray: (enabled: boolean): Promise<boolean> =>
-      ipcRenderer.invoke('app:setMinimizeToTray', enabled)
+      ipcRenderer.invoke('app:setMinimizeToTray', enabled),
+    sendTestNotification: (): Promise<void> =>
+      ipcRenderer.invoke('app:sendTestNotification'),
+    openNotificationSettings: (): Promise<void> =>
+      ipcRenderer.invoke('app:openNotificationSettings')
   }
 })

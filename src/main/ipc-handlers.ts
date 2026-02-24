@@ -1,6 +1,6 @@
 import { ipcMain, dialog, shell, Notification, app } from 'electron'
 import { copyFileSync, existsSync, unlinkSync, readdirSync, statSync, readFileSync } from 'fs'
-import { execFile } from 'child_process'
+import { exec, execFile } from 'child_process'
 import { promisify } from 'util'
 import { join, basename, extname } from 'path'
 
@@ -290,6 +290,11 @@ export function registerIpcHandlers(
 
   ipcMain.handle('agentSession:learnFromSession', async (_, sessionId: string, message: string) => {
     return await agentManager.learnFromSession(sessionId, message)
+  })
+
+  // Track selected task for idle notification visibility check
+  ipcMain.on('task:selectedChanged', (_, taskId: string | null) => {
+    agentManager.setSelectedTaskId(taskId)
   })
 
   // Agent Config handlers
@@ -590,5 +595,40 @@ export function registerIpcHandlers(
   ipcMain.handle('app:setMinimizeToTray', async (_, enabled: boolean) => {
     await db.setSetting('minimize_to_tray', enabled.toString())
     return enabled
+  })
+
+  ipcMain.handle('app:sendTestNotification', async () => {
+    const title = '20x Notifications'
+    const body = 'Notifications are working! You will see alerts when agents finish tasks.'
+
+    // On macOS, use osascript (Electron notifications require code-signed app)
+    if (process.platform === 'darwin') {
+      const safeTitle = title.replace(/["\\]/g, '')
+      const safeBody = body.replace(/["\\]/g, '')
+      exec(
+        `osascript -e 'display notification "${safeBody}" with title "${safeTitle}"'`,
+        (err) => { if (err) console.error('[IPC] osascript test notification failed:', err) }
+      )
+      app.dock?.bounce('informational')
+    }
+
+    // Also fire Electron notification (primary on Windows/Linux, fallback on macOS)
+    if (Notification.isSupported()) {
+      const notification = new Notification({
+        title,
+        body,
+        silent: process.platform === 'darwin'
+      })
+      notification.show()
+    }
+  })
+
+  ipcMain.handle('app:openNotificationSettings', async () => {
+    if (process.platform === 'darwin') {
+      await shell.openExternal('x-apple.systempreferences:com.apple.Notifications-Settings.extension')
+    } else if (process.platform === 'win32') {
+      await shell.openExternal('ms-settings:notifications')
+    }
+    // Linux: no standard notification settings URL across distros
   })
 }

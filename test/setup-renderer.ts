@@ -11,6 +11,7 @@ export const eventCallbacks = {
   onAgentApproval: null as ((event: any) => void) | null,
   onOverdueCheck: null as (() => void) | null,
   onTaskUpdated: null as ((event: any) => void) | null,
+  onTaskNavigate: null as ((taskId: string) => void) | null,
   onWorktreeProgress: null as ((event: any) => void) | null
 }
 
@@ -134,6 +135,11 @@ const mockElectronAPI = {
     eventCallbacks.onTaskUpdated = cb
     return vi.fn()
   }),
+  onTaskNavigate: vi.fn((cb: (taskId: string) => void) => {
+    eventCallbacks.onTaskNavigate = cb
+    return vi.fn()
+  }),
+  reportSelectedTask: vi.fn(),
   onWorktreeProgress: vi.fn((cb: (event: any) => void) => {
     eventCallbacks.onWorktreeProgress = cb
     return vi.fn()

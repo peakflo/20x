@@ -222,6 +222,8 @@ interface ElectronAPI {
     requestNotificationPermission: () => Promise<'granted' | 'denied'>
     getMinimizeToTray: () => Promise<boolean>
     setMinimizeToTray: (enabled: boolean) => Promise<boolean>
+    sendTestNotification: () => Promise<void>
+    openNotificationSettings: () => Promise<void>
   }
   onOverdueCheck: (callback: () => void) => () => void
   onAgentOutput: (callback: (event: AgentOutputEvent) => void) => () => void
@@ -229,6 +231,8 @@ interface ElectronAPI {
   onAgentApproval: (callback: (event: AgentApprovalRequest) => void) => () => void
   onAgentIncompatibleSession: (callback: (event: { taskId: string; agentId: string; error: string }) => void) => () => void
   onTaskUpdated: (callback: (event: { taskId: string; updates: Partial<WorkfloTask> }) => void) => () => void
+  onTaskNavigate: (callback: (taskId: string) => void) => () => void
+  reportSelectedTask: (taskId: string | null) => void
   onTaskCreated: (callback: (event: { task: WorkfloTask }) => void) => () => void
   onWorktreeProgress: (callback: (event: WorktreeProgressEvent) => void) => () => void
   onGithubDeviceCode: (callback: (code: string) => void) => () => void

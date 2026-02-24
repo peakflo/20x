@@ -179,6 +179,14 @@ export const onTaskUpdated = (callback: (event: { taskId: string; updates: Parti
   return window.electronAPI.onTaskUpdated(callback)
 }
 
+export const onTaskNavigate = (callback: (taskId: string) => void): (() => void) => {
+  return window.electronAPI.onTaskNavigate(callback)
+}
+
+export const reportSelectedTask = (taskId: string | null): void => {
+  window.electronAPI.reportSelectedTask(taskId)
+}
+
 export const onTaskCreated = (callback: (event: { task: WorkfloTask }) => void): (() => void) => {
   return window.electronAPI.onTaskCreated(callback)
 }

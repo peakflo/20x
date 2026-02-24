@@ -4,7 +4,11 @@ vi.mock('electron', () => ({
   app: {
     getPath: vi.fn(() => '/tmp/pf-desktop-test'),
     getName: vi.fn(() => 'pf-desktop'),
-    getVersion: vi.fn(() => '1.0.0')
+    getVersion: vi.fn(() => '1.0.0'),
+    isPackaged: false,
+    dock: {
+      bounce: vi.fn()
+    }
   },
   ipcMain: {
     handle: vi.fn(),
@@ -22,5 +26,11 @@ vi.mock('electron', () => ({
     openExternal: vi.fn()
   },
   BrowserWindow: vi.fn(),
-  Notification: vi.fn().mockImplementation(() => ({ show: vi.fn() }))
+  Notification: Object.assign(
+    vi.fn().mockImplementation(function(this: any) {
+      this.show = vi.fn()
+      this.on = vi.fn()
+    }),
+    { isSupported: vi.fn().mockReturnValue(true) }
+  )
 }))
