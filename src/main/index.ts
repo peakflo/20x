@@ -232,6 +232,7 @@ app.whenReady().then(async () => {
   agentManager = new AgentManager(db)
   githubManager = new GitHubManager()
   worktreeManager = new WorktreeManager()
+  agentManager.setManagers(githubManager, worktreeManager)
 
   mcpToolCaller = new McpToolCaller()
 

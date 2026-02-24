@@ -7,6 +7,8 @@ import { Agent as UndiciAgent } from 'undici'
 import type { BrowserWindow } from 'electron'
 import type { DatabaseManager, AgentMcpServerEntry, OutputFieldRecord, SkillRecord } from './database'
 import { TaskStatus } from '../shared/constants'
+import type { WorktreeManager } from './worktree-manager'
+import type { GitHubManager } from './github-manager'
 import { OpencodeAdapter } from './adapters/opencode-adapter'
 import { ClaudeCodeAdapter } from './adapters/claude-code-adapter'
 import { AcpAdapter } from './adapters/acp-adapter'
@@ -60,6 +62,8 @@ export class AgentManager extends EventEmitter {
   private db: DatabaseManager
   private mainWindow: BrowserWindow | null = null
   private adapters: Map<string, CodingAgentAdapter> = new Map()  // Adapter instances
+  private worktreeManager: WorktreeManager | null = null
+  private githubManager: GitHubManager | null = null
 
   constructor(db: DatabaseManager) {
     super()
@@ -91,6 +95,49 @@ export class AgentManager extends EventEmitter {
 
   setMainWindow(window: BrowserWindow): void {
     this.mainWindow = window
+  }
+
+  setManagers(githubManager: GitHubManager, worktreeManager: WorktreeManager): void {
+    this.githubManager = githubManager
+    this.worktreeManager = worktreeManager
+  }
+
+  /**
+   * Sets up git worktrees for a task's repos if needed.
+   * Skips for mastermind sessions, triage sessions, tasks without repos,
+   * or when github_org is not configured.
+   */
+  private async setupWorktreeIfNeeded(taskId: string): Promise<string | undefined> {
+    if (taskId === 'mastermind-session') return undefined
+
+    if (!this.githubManager || !this.worktreeManager) return undefined
+
+    const githubOrg = this.db.getSetting('github_org')
+    if (!githubOrg) return undefined
+
+    const task = this.db.getTask(taskId)
+    if (!task) return undefined
+    if (task.status === TaskStatus.Triaging) return undefined
+    if (!task.repos || task.repos.length === 0) return undefined
+
+    try {
+      const orgRepos = await this.githubManager.fetchOrgRepos(githubOrg)
+      const matched = task.repos
+        .map((name) => orgRepos.find((r) => r.fullName === name))
+        .filter(Boolean) as Array<{ fullName: string; defaultBranch: string }>
+
+      if (matched.length === 0) return undefined
+
+      const workspaceDir = await this.worktreeManager.setupWorkspaceForTask(
+        taskId,
+        matched.map((r) => ({ fullName: r.fullName, defaultBranch: r.defaultBranch })),
+        githubOrg
+      )
+      return workspaceDir
+    } catch (error) {
+      console.error('[AgentManager] Worktree setup failed:', error)
+      return undefined
+    }
   }
 
   /**
@@ -1193,6 +1240,11 @@ export class AgentManager extends EventEmitter {
       throw new Error(`Agent not found: ${agentId}`)
     }
 
+    // Auto-setup worktrees if caller didn't provide a workspaceDir
+    if (!workspaceDir) {
+      workspaceDir = await this.setupWorktreeIfNeeded(taskId)
+    }
+
     // Check if agent uses adapter (Claude Code, etc.)
     const adapter = this.getAdapter(agentId)
     if (adapter) {
@@ -1746,7 +1798,7 @@ export class AgentManager extends EventEmitter {
 
       // Sync skills from workspace
       try {
-        await this.syncSkillsFromWorkspace(session.taskId)
+        await this.syncSkillsFromWorkspace(sessionId)
       } catch (err) {
         console.error(`[AgentManager] Skill sync error:`, err)
       }
@@ -2961,6 +3013,7 @@ Important:
   syncSkillsFromWorkspace(sessionId: string): { created: string[]; updated: string[]; unchanged: string[] } {
     const session = this.sessions.get(sessionId)
     if (!session?.workspaceDir) {
+      console.log(`[AgentManager] syncSkillsFromWorkspace: no session or workspaceDir for ${sessionId} (sessions count: ${this.sessions.size})`)
       return { created: [], updated: [], unchanged: [] }
     }
 
@@ -2969,6 +3022,7 @@ Important:
       join(session.workspaceDir, '.agents', 'skills'),
       join(session.workspaceDir, '.opencode', 'skills')
     ].filter(existsSync)
+    console.log(`[AgentManager] syncSkillsFromWorkspace: workspaceDir=${session.workspaceDir}, skillsDirs found=${skillsDirs.length}`, skillsDirs)
     if (skillsDirs.length === 0) {
       return { created: [], updated: [], unchanged: [] }
     }

@@ -14,7 +14,7 @@ import { useAgentSession } from '@/hooks/use-agent-session'
 import { useAgentStore } from '@/stores/agent-store'
 import { useSettingsStore } from '@/stores/settings-store'
 import { useTaskStore } from '@/stores/task-store'
-import { taskApi, worktreeApi, githubApi, taskSourceApi, onAgentIncompatibleSession } from '@/lib/ipc-client'
+import { taskApi, worktreeApi, taskSourceApi, onAgentIncompatibleSession, onWorktreeProgress } from '@/lib/ipc-client'
 import { useEffect, useCallback, useRef, useState } from 'react'
 import { TaskStatus } from '@/types'
 import type { WorkfloTask, FileAttachment, OutputField, Agent } from '@/types'
@@ -80,6 +80,25 @@ export function TaskWorkspace({
     }
   }, [task?.id])
 
+  // Drive worktree progress overlay from IPC events
+  useEffect(() => {
+    if (!task?.id) return
+
+    const unsubscribe = onWorktreeProgress((event) => {
+      if (event.taskId !== task.id) return
+      if (event.done) {
+        // Check if all repos are done — hide overlay
+        setIsSettingUpWorktree(false)
+      } else {
+        setIsSettingUpWorktree(true)
+      }
+    })
+
+    return () => {
+      unsubscribe()
+    }
+  }, [task?.id])
+
   // Re-fetch tasks when agent status changes (status is updated in DB by agent-manager)
   const prevStatusRef = useRef(session.status)
   useEffect(() => {
@@ -112,35 +131,13 @@ export function TaskWorkspace({
     startingRef.current = true
 
     try {
-      // If task has repos and gh is configured, setup worktrees first
-      if (task.repos.length > 0 && githubOrg) {
-        setIsSettingUpWorktree(true)
-        const repoData = await githubApi.fetchOrgRepos(githubOrg)
-        const matched = task.repos
-          .map((name) => repoData.find((r) => r.fullName === name))
-          .filter(Boolean) as GitHubRepo[]
-
-        if (matched.length > 0) {
-          const workspaceDir = await worktreeApi.setup(
-            task.id,
-            matched.map((r) => ({ fullName: r.fullName, defaultBranch: r.defaultBranch })),
-            githubOrg
-          )
-          setIsSettingUpWorktree(false)
-          await start(task.agent_id, task.id, workspaceDir)
-          return
-        }
-        setIsSettingUpWorktree(false)
-      }
-
       await start(task.agent_id, task.id)
     } catch (err) {
       console.error('Failed to start session:', err)
-      setIsSettingUpWorktree(false)
     } finally {
       startingRef.current = false
     }
-  }, [task?.agent_id, task?.id, task?.repos, session.sessionId, githubOrg, start])
+  }, [task?.agent_id, task?.id, session.sessionId, start])
 
   const handleResumeSession = useCallback(async () => {
     if (!task?.agent_id || !task?.session_id || startingRef.current || session.sessionId) return
@@ -478,39 +475,13 @@ Update existing skills that were helpful or create new ones for patterns worth r
         await onUpdateTask(task.id, { session_id: null })
       }
 
-      console.log('[TaskWorkspace] Starting fresh session, repos:', task.repos, 'githubOrg:', githubOrg)
-
-      // If task has repos and gh is configured, setup worktrees first
-      if (task.repos.length > 0 && githubOrg) {
-        console.log('[TaskWorkspace] Setting up worktrees for', task.repos.length, 'repos')
-        setIsSettingUpWorktree(true)
-        const repoData = await githubApi.fetchOrgRepos(githubOrg)
-        const matched = task.repos
-          .map((name) => repoData.find((r) => r.fullName === name))
-          .filter(Boolean) as GitHubRepo[]
-
-        if (matched.length > 0) {
-          const workspaceDir = await worktreeApi.setup(
-            task.id,
-            matched.map((r) => ({ fullName: r.fullName, defaultBranch: r.defaultBranch })),
-            githubOrg
-          )
-          setIsSettingUpWorktree(false)
-          await start(task.agent_id, task.id, workspaceDir)
-          return
-        }
-        setIsSettingUpWorktree(false)
-      }
-
-      // Start fresh session
       await start(task.agent_id, task.id)
     } catch (err) {
       console.error('Failed to start fresh session:', err)
-      setIsSettingUpWorktree(false)
     } finally {
       startingRef.current = false
     }
-  }, [task?.agent_id, task?.id, task?.repos, session.sessionId, start, stop, removeSession, onUpdateTask, githubOrg])
+  }, [task?.agent_id, task?.id, session.sessionId, start, stop, removeSession, onUpdateTask])
 
   if (!task) {
     return (
