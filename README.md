@@ -7,6 +7,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 [![Version](https://img.shields.io/github/package-json/v/peakflo/20x)](./package.json)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey.svg)](.)
+[![Discord](https://img.shields.io/badge/Discord-Join%20us-5865F2?logo=discord&logoColor=white)](https://discord.gg/fUVsqTWDxX)
 
 **One app. All your tasks. Powered by AI agents.**
 
@@ -198,7 +199,7 @@ We welcome contributions! Here's how:
 ## Community
 
 - **Issues**: [GitHub Issues](https://github.com/peakflo/20x/issues)
-- **Discord**: https://discord.gg/bPgkmycM
+- **Discord**: https://discord.gg/fUVsqTWDxX
 
 ## Security
 
