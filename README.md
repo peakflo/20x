@@ -238,7 +238,7 @@ We welcome contributions! Here's how:
 
 ## License
 
-[MIT](./LICENSE) © 2025 Peakflo
+[MIT](./LICENSE) © 2026 Peakflo
 
 ---
 
