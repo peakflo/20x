@@ -333,7 +333,7 @@ function MessageBubble({ message, onAnswer, viewMode }: { message: AgentMessage;
 export function AgentTranscriptPanel({ title = 'Agent transcript', messages, status, onStop, onRestart, onSend, className }: AgentTranscriptPanelProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
-  const [viewMode, setViewMode] = useState<ViewMode>(ViewMode.RAW)
+  const [viewMode, setViewMode] = useState<ViewMode>(ViewMode.MARKDOWN)
 
   // Detect if the session ended due to an error (last message is error/retry and status is idle)
   const lastErrorMessage = useMemo(() => {
