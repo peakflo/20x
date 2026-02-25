@@ -6,7 +6,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 [![Version](https://img.shields.io/github/package-json/v/peakflo/20x)](./package.json)
-[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey.svg)](.)
+[![Platform](https://img.shields.io/badge/platform-macOS-lightgrey.svg)](.)
 [![Discord](https://img.shields.io/badge/Discord-Join%20us-5865F2?logo=discord&logoColor=white)](https://discord.gg/fUVsqTWDxX)
 
 **One app. All your tasks. Powered by AI agents.**
@@ -137,8 +137,6 @@ pnpm test
 
 # Build for distribution
 pnpm run build:mac    # macOS
-pnpm run build:win    # Windows
-pnpm run build:linux  # Linux
 ```
 
 ## Architecture
