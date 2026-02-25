@@ -100,6 +100,8 @@ export interface DepsStatus {
   gh: boolean
   opencode: boolean
   opencodeBinary: boolean
+  claudeCodeBinary: boolean
+  codexBinary: boolean
 }
 
 interface ElectronAPI {

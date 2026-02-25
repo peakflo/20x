@@ -124,7 +124,11 @@ export function TaskWorkspace({
         })
         .catch(console.error)
     }
-  }, [task?.status, session.sessionId, stop, task, githubOrg])
+    // Clean up triage session when triage completes (Triaging → NotStarted)
+    if (prevStatus === TaskStatus.Triaging && task?.status === TaskStatus.NotStarted) {
+      removeSession(task.id)
+    }
+  }, [task?.status, session.sessionId, stop, task, githubOrg, removeSession])
 
   const handleStartSession = useCallback(async () => {
     if (!task?.agent_id || startingRef.current || session.sessionId) return

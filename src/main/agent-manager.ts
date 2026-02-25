@@ -68,7 +68,6 @@ export class AgentManager extends EventEmitter {
   constructor(db: DatabaseManager) {
     super()
     this.db = db
-    this.sdkLoading = this.loadSDK()
   }
 
   private async loadSDK(): Promise<void> {
@@ -84,13 +83,14 @@ export class AgentManager extends EventEmitter {
 
   /**
    * Ensures the SDK is loaded before proceeding with any operations.
-   * Waits for the loading promise if SDK is currently loading.
+   * Lazily triggers loading on first call.
    */
   private async ensureSDKLoaded(): Promise<void> {
     if (OpenCodeSDK) return
-    if (this.sdkLoading) {
-      await this.sdkLoading
+    if (!this.sdkLoading) {
+      this.sdkLoading = this.loadSDK()
     }
+    await this.sdkLoading
   }
 
   setMainWindow(window: BrowserWindow): void {
@@ -1769,16 +1769,19 @@ export class AgentManager extends EventEmitter {
     // In triage mode, set status back to NotStarted (now with agent_id assigned) and return early
     if (session.isTriageSession) {
       console.log(`[AgentManager] Triage session completed for task ${session.taskId}, reverting to NotStarted`)
-      this.db.updateTask(session.taskId, { status: TaskStatus.NotStarted })
+      this.db.updateTask(session.taskId, { status: TaskStatus.NotStarted, session_id: null })
 
       this.sendToRenderer('task:updated', {
         taskId: session.taskId,
-        updates: this.db.getTask(session.taskId) || { status: TaskStatus.NotStarted }
+        updates: this.db.getTask(session.taskId) || { status: TaskStatus.NotStarted, session_id: null }
       })
 
       this.sendToRenderer('agent:status', {
         sessionId, agentId: session.agentId, taskId: session.taskId, status: 'idle'
       })
+
+      // Clean up backend session — triage is done, no need to keep it
+      this.sessions.delete(sessionId)
       return
     }
 

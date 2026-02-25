@@ -1,28 +1,4 @@
-// Fix PATH for macOS GUI apps - must be first
-import { execSync } from 'child_process'
-
-// Manual PATH fix for macOS (fix-path package is ES module and can't be required)
-if (process.platform === 'darwin') {
-  try {
-    const shell = process.env.SHELL || '/bin/zsh'
-    const shellPath = execSync(`${shell} -ilc 'echo $PATH'`, {
-      encoding: 'utf8',
-      timeout: 5000
-    }).trim()
-
-    if (shellPath && shellPath.length > 0) {
-      console.log('[Main] Setting PATH from shell:', shell)
-      process.env.PATH = shellPath
-    }
-  } catch (shellError) {
-    console.error('[Main] Failed to read shell PATH, using fallback')
-    // Add common paths as last resort
-    const commonPaths = ['/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin', process.env.HOME + '/.nvm/versions/node/v22.14.0/bin']
-    const existingPath = process.env.PATH || ''
-    process.env.PATH = [...new Set([...commonPaths, ...existingPath.split(':')])].filter(Boolean).join(':')
-  }
-}
-
+import { execFile } from 'child_process'
 import { app, BrowserWindow, shell, Tray, Menu, nativeImage } from 'electron'
 import { join } from 'path'
 import { is } from '@electron-toolkit/utils'
@@ -225,9 +201,35 @@ app.on('open-url', (event, url) => {
   }
 })
 
+// Fix PATH for macOS GUI apps (async to avoid blocking startup)
+function fixMacOSPath(): Promise<void> {
+  if (process.platform !== 'darwin') return Promise.resolve()
+  return new Promise((resolve) => {
+    const userShell = process.env.SHELL || '/bin/zsh'
+    execFile(userShell, ['-ilc', 'echo $PATH'], { timeout: 5000, encoding: 'utf8' }, (err, stdout) => {
+      if (!err && stdout && stdout.trim().length > 0) {
+        console.log('[Main] Setting PATH from shell:', userShell)
+        process.env.PATH = stdout.trim()
+      } else {
+        console.error('[Main] Failed to read shell PATH, using fallback')
+        const commonPaths = ['/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin', process.env.HOME + '/.nvm/versions/node/v22.14.0/bin']
+        const existingPath = process.env.PATH || ''
+        process.env.PATH = [...new Set([...commonPaths, ...existingPath.split(':')])].filter(Boolean).join(':')
+      }
+      resolve()
+    })
+  })
+}
+
 app.whenReady().then(async () => {
+  // Start PATH fix and DB init in parallel — both are independent
+  const pathFixPromise = fixMacOSPath()
+
   db = new DatabaseManager()
   db.initialize()
+
+  // Ensure PATH is ready before creating managers that may spawn child processes
+  await pathFixPromise
 
   agentManager = new AgentManager(db)
   githubManager = new GitHubManager()
@@ -257,12 +259,8 @@ app.whenReady().then(async () => {
 
   createWindow()
 
-  // Start OpenCode server
-  try {
-    await agentManager.startServer()
-  } catch (error) {
-    console.error('Failed to start OpenCode server:', error)
-  }
+  // OpenCode server starts lazily on first agent session (avoids macOS permission
+  // prompts for ~/Documents, ~/Downloads etc. on app launch).
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
