@@ -14,6 +14,10 @@
 
 **No cloud. No subscriptions. Everything runs on your machine.**
 
+<p align="center">
+  <img src="resources/product-demo.gif" alt="20x product demo" />
+</p>
+
 ## Why 20x?
 
 Most AI tools make you copy-paste context between tabs. 20x flips it: **your tasks come to the agents, not the other way around.**
@@ -25,15 +29,20 @@ Most AI tools make you copy-paste context between tabs. 20x flips it: **your tas
 ## How It Works
 
 <p align="center">
-  <img src="resources/integrations.png" alt="20x integrations: Hubspot, Linear, Github issues, Workflo → 20x ↔ Github, MCP → Claude Code, Opencode, OpenAI Codex; Skills automatically improved" />
+  <img src="resources/process.png" alt="20x process: Hubspot, Linear, Github issues, Workflo → 20x ↔ Github, MCP → Claude Code, Opencode, OpenAI Codex; Skills automatically improved" />
 </p>
 
-1. **Tasks flow in** — from integrations or created manually
-2. **You assign an agent** — choose Claude Code, OpenCode, or Codex
-3. **Agent works the task** — with live streaming output
+1. **Tasks flow in** — from Task sources (Linear, Hubspot, Github, Workflo) or created manually
+2. **Triage agent** — Assigns Coding agent (Claude Code, OpenCode, or Codex), relevant skills
+3. **Agent works the task** — with live streaming output, Questions and HITL support 
 4. **You stay in control** — approve, review, merge
+5. **Feedback loop** — Agent creates updates the skills after task is completed
 
 ## Features
+
+<p align="center">
+  <img src="resources/integrations.png" alt="20x integrations: Hubspot, Linear, Github issues, Workflo → 20x ↔ Github, MCP → Claude Code, Opencode, OpenAI Codex; Skills automatically improved" />
+</p>
 
 ### 🤖 Multi-Agent Support
 - **Claude Code** — Anthropic's official agent SDK
