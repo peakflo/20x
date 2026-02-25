@@ -1,3 +1,4 @@
+import { useState, useCallback } from 'react'
 import { Paperclip, X, FileText, Download } from 'lucide-react'
 import { attachmentApi } from '@/lib/ipc-client'
 import type { FileAttachment } from '@/types'
@@ -32,29 +33,72 @@ export function TaskAttachments({
   pendingFiles = [],
   onPendingChange
 }: TaskAttachmentsProps) {
+  const [isDragging, setIsDragging] = useState(false)
+
+  const processFilePaths = useCallback(
+    async (filePaths: string[]) => {
+      if (!filePaths.length) return
+
+      if (taskId) {
+        const newAttachments: FileAttachment[] = []
+        for (const fp of filePaths) {
+          const attachment = await attachmentApi.save(taskId, fp)
+          newAttachments.push(attachment)
+        }
+        onChange([...items, ...newAttachments])
+      } else {
+        const pending: PendingFile[] = filePaths.map((fp) => ({
+          id: crypto.randomUUID(),
+          filename: fp.split('/').pop() || fp.split('\\').pop() || fp,
+          size: 0,
+          sourcePath: fp
+        }))
+        onPendingChange?.([...pendingFiles, ...pending])
+      }
+    },
+    [taskId, items, onChange, pendingFiles, onPendingChange]
+  )
+
   const handleAdd = async () => {
     const filePaths = await attachmentApi.pick()
-    if (!filePaths.length) return
-
-    if (taskId) {
-      // Existing task — save files immediately
-      const newAttachments: FileAttachment[] = []
-      for (const fp of filePaths) {
-        const attachment = await attachmentApi.save(taskId, fp)
-        newAttachments.push(attachment)
-      }
-      onChange([...items, ...newAttachments])
-    } else {
-      // New task — store as pending
-      const pending: PendingFile[] = filePaths.map((fp) => ({
-        id: crypto.randomUUID(),
-        filename: fp.split('/').pop() || fp.split('\\').pop() || fp,
-        size: 0,
-        sourcePath: fp
-      }))
-      onPendingChange?.([...pendingFiles, ...pending])
-    }
+    await processFilePaths(filePaths)
   }
+
+  const handleDragOver = useCallback(
+    (e: React.DragEvent) => {
+      if (readOnly) return
+      e.preventDefault()
+      e.stopPropagation()
+      setIsDragging(true)
+    },
+    [readOnly]
+  )
+
+  const handleDragLeave = useCallback(
+    (e: React.DragEvent) => {
+      if (readOnly) return
+      e.preventDefault()
+      e.stopPropagation()
+      setIsDragging(false)
+    },
+    [readOnly]
+  )
+
+  const handleDrop = useCallback(
+    (e: React.DragEvent) => {
+      if (readOnly) return
+      e.preventDefault()
+      e.stopPropagation()
+      setIsDragging(false)
+
+      const files = Array.from(e.dataTransfer.files)
+      const filePaths = files
+        .map((f) => window.electronAPI.webUtils.getPathForFile(f))
+        .filter((p) => !!p)
+      processFilePaths(filePaths)
+    },
+    [readOnly, processFilePaths]
+  )
 
   const handleRemove = async (attachment: FileAttachment) => {
     if (taskId) {
@@ -78,7 +122,23 @@ export function TaskAttachments({
   const totalCount = items.length + pendingFiles.length
 
   return (
-    <div className="space-y-2" role="group" aria-label="Attachments">
+    <div
+      className={`relative space-y-2 rounded-md p-2 -m-2 transition-colors ${
+        isDragging ? 'border-2 border-dashed border-primary/50 bg-primary/5' : 'border-2 border-transparent'
+      }`}
+      role="group"
+      aria-label="Attachments"
+      onDragOver={handleDragOver}
+      onDragEnter={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
+      {isDragging && (
+        <div className="absolute inset-0 z-10 flex items-center justify-center rounded-md bg-primary/5 pointer-events-none">
+          <span className="text-sm font-medium text-primary">Drop files here</span>
+        </div>
+      )}
+
       <div className="flex items-center justify-between">
         <span className="text-sm font-medium">Attachments</span>
         {totalCount > 0 && (

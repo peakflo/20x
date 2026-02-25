@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
 
 contextBridge.exposeInMainWorld('electronAPI', {
   db: {
@@ -228,5 +228,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('app:getMinimizeToTray'),
     setMinimizeToTray: (enabled: boolean): Promise<boolean> =>
       ipcRenderer.invoke('app:setMinimizeToTray', enabled)
+  },
+  webUtils: {
+    getPathForFile: (file: File): string => webUtils.getPathForFile(file)
   }
 })
