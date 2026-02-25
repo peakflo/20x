@@ -8,7 +8,7 @@
 [![Version](https://img.shields.io/github/package-json/v/peakflo/20x)](./package.json)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey.svg)](.)
 
-**Your tasks. AI agents. One app.**
+**One app. All your tasks. Powered by AI agents.**
 
 20x is a desktop app that turns your task list into an AI-powered workforce. Connect your tools — Linear, HubSpot, Peakflo — assign tasks to AI agents, and watch them work in real time.
 
@@ -153,22 +153,6 @@ React UI → Zustand Store → IPC Client → Preload Bridge → Main Process �
 - **Security** — Full context isolation, no Node.js in renderer
 
 ### Agent Architecture
-
-```
-┌─────────────────────────────────────────────────┐
-│              Agent Manager                       │
-│  ┌──────────────────────────────────────────┐   │
-│  │   getAdapter(agent.config.coding_agent)  │   │
-│  └────────────────┬─────────────────────────┘   │
-│                   │                             │
-│       ┌───────────┼───────────┐                 │
-│       ▼           ▼           ▼                 │
-│  ┌─────────┐ ┌─────────┐ ┌─────────┐           │
-│  │OpenCode │ │  Claude │ │  Codex  │           │
-│  │ Adapter │ │  Adapter│ │ Adapter │           │
-│  └─────────┘ └─────────┘ └─────────┘           │
-└─────────────────────────────────────────────────┘
-```
 
 **Session Lifecycle:**
 1. **Start** — Agent assigned, skills applied, session created
