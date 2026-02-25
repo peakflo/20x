@@ -9,7 +9,8 @@ import { depsApi, agentConfigApi } from '@/lib/ipc-client'
 import { useAgentStore } from '@/stores/agent-store'
 import { ProviderSetupStep } from '@/components/providers/ProviderSetupDialog'
 import type { DepsStatus } from '@/types/electron'
-import { CodingAgentType } from '@/types'
+import { CodingAgentType, CODING_AGENTS, CLAUDE_MODELS, CODEX_MODELS } from '@/types'
+import { OpenCodeLogo, AnthropicLogo, OpenAILogo } from '@/components/icons/AgentLogos'
 
 /* ─── Types ─── */
 
@@ -35,21 +36,21 @@ interface ProviderStepDef {
   kind: 'provider'
 }
 
-interface BinaryStepDef {
-  kind: 'binary'
+interface CodingAgentStepDef {
+  kind: 'coding-agent'
 }
 
-type StepDef = DepStepDef | AgentStepDef | ProviderStepDef | BinaryStepDef
+type StepDef = DepStepDef | AgentStepDef | ProviderStepDef | CodingAgentStepDef
 
 /* ─── Constants ─── */
 
 const DEP_STEPS: DepStepDef[] = [
-  // OpenCode is now bundled as npm dependency - no installation needed!
   {
     kind: 'dep',
     key: 'gh',
-    title: 'GitHub CLI',
-    description: "GitHub's official command line tool for seamless repo and PR management.",
+    title: 'GitHub CLI (Optional)',
+    description:
+      "GitHub's official command line tool. Only needed if you want your agents to work with code repos and pull requests — not required to get started.",
     url: 'https://cli.github.com/',
     methods: [
       { label: 'brew', command: 'brew install gh' },
@@ -58,9 +59,68 @@ const DEP_STEPS: DepStepDef[] = [
   }
 ]
 
-const BINARY_STEP: BinaryStepDef = { kind: 'binary' }
+const CODING_AGENT_STEP: CodingAgentStepDef = { kind: 'coding-agent' }
 const PROVIDER_STEP: ProviderStepDef = { kind: 'provider' }
 const AGENT_STEP: AgentStepDef = { kind: 'agent' }
+
+const OPENCODE_INSTALL_METHODS: InstallMethod[] = [
+  { label: 'curl', command: 'curl -fsSL https://opencode.ai/install | bash' },
+  { label: 'npm', command: 'npm install -g opencode-ai' }
+]
+
+const CLAUDE_CODE_INSTALL_METHODS: InstallMethod[] = [
+  { label: 'npm', command: 'npm install -g @anthropic-ai/claude-code' }
+]
+
+const CODEX_INSTALL_METHODS: InstallMethod[] = [
+  { label: 'npm', command: 'npm install -g @openai/codex' }
+]
+
+/* ─── Helpers ─── */
+
+function getBinaryKeyForAgent(agent: CodingAgentType): keyof DepsStatus {
+  switch (agent) {
+    case CodingAgentType.OPENCODE:
+      return 'opencodeBinary'
+    case CodingAgentType.CLAUDE_CODE:
+      return 'claudeCodeBinary'
+    case CodingAgentType.CODEX:
+      return 'codexBinary'
+  }
+}
+
+function getInstallMethodsForAgent(agent: CodingAgentType): InstallMethod[] {
+  switch (agent) {
+    case CodingAgentType.OPENCODE:
+      return OPENCODE_INSTALL_METHODS
+    case CodingAgentType.CLAUDE_CODE:
+      return CLAUDE_CODE_INSTALL_METHODS
+    case CodingAgentType.CODEX:
+      return CODEX_INSTALL_METHODS
+  }
+}
+
+function getBinaryNameForAgent(agent: CodingAgentType): string {
+  switch (agent) {
+    case CodingAgentType.OPENCODE:
+      return 'opencode'
+    case CodingAgentType.CLAUDE_CODE:
+      return 'claude'
+    case CodingAgentType.CODEX:
+      return 'codex'
+  }
+}
+
+function getWebsiteForAgent(agent: CodingAgentType): string {
+  switch (agent) {
+    case CodingAgentType.OPENCODE:
+      return 'https://opencode.ai'
+    case CodingAgentType.CLAUDE_CODE:
+      return 'https://docs.anthropic.com/en/docs/claude-code'
+    case CodingAgentType.CODEX:
+      return 'https://github.com/openai/codex'
+  }
+}
 
 /* ─── Sub-components ─── */
 
@@ -111,37 +171,38 @@ function InstallBlock({ methods }: { methods: InstallMethod[] }) {
   )
 }
 
-const OPENCODE_INSTALL_METHODS: InstallMethod[] = [
-  { label: 'curl', command: 'curl -fsSL https://opencode.ai/install | bash' },
-  { label: 'npm', command: 'npm install -g opencode-ai' }
-]
+/* ─── Coding Agent Selection Step ─── */
 
-function OpencodeBinaryStep({
-  onInstalled,
+function CodingAgentSelectionStep({
+  onSelected,
   onSkip,
   isLast,
   error,
   setError
 }: {
-  onInstalled: () => void
+  onSelected: (agent: CodingAgentType) => void
   onSkip: () => void
   isLast: boolean
   error: string | null
   setError: (e: string | null) => void
 }) {
-  const [customPath, setCustomPath] = useState('')
+  const [selected, setSelected] = useState<CodingAgentType | null>(null)
   const [checking, setChecking] = useState(false)
+  const [customPath, setCustomPath] = useState('')
   const [saving, setSaving] = useState(false)
 
   const recheck = async () => {
+    if (!selected) return
     setChecking(true)
     setError(null)
     try {
       const result = await depsApi.check()
-      if (result.opencodeBinary) {
-        onInstalled()
+      const key = getBinaryKeyForAgent(selected)
+      if (result[key]) {
+        onSelected(selected)
       } else {
-        setError('OpenCode binary not detected yet. Install it or provide the path below.')
+        const name = getBinaryNameForAgent(selected)
+        setError(`${name} binary not detected yet. Install it or provide the path below.`)
       }
     } catch {
       setError('Failed to check dependencies.')
@@ -151,8 +212,13 @@ function OpencodeBinaryStep({
   }
 
   const saveCustomPath = async () => {
-    if (!customPath.trim()) {
-      setError('Please enter the directory path containing the opencode binary.')
+    if (!selected || !customPath.trim()) {
+      setError('Please enter the directory path containing the binary.')
+      return
+    }
+    if (selected !== CodingAgentType.OPENCODE) {
+      // Custom path only supported for OpenCode currently
+      setError('Custom path is only supported for OpenCode. Please install via the commands above.')
       return
     }
     setSaving(true)
@@ -160,7 +226,7 @@ function OpencodeBinaryStep({
     try {
       const result = await depsApi.setOpencodePath(customPath.trim())
       if (result.success) {
-        onInstalled()
+        onSelected(selected)
       } else {
         setError(result.error || 'Binary not found at that path.')
       }
@@ -171,37 +237,93 @@ function OpencodeBinaryStep({
     }
   }
 
+  // Phase 1: Show agent cards
+  if (!selected) {
+    return (
+      <>
+        <h2 className="text-2xl font-bold text-foreground mb-2">
+          Choose your coding agent
+        </h2>
+        <p className="text-sm text-muted-foreground mb-6 leading-relaxed">
+          Select which AI coding agent will power your tasks.
+        </p>
+
+        <div className="grid gap-3">
+          {CODING_AGENTS.map((agent) => (
+            <button
+              key={agent.value}
+              onClick={() => {
+                setSelected(agent.value)
+                setError(null)
+              }}
+              className="flex items-center gap-3 p-4 rounded-lg border border-border hover:border-primary/50 hover:bg-primary/5 transition-colors text-left"
+            >
+              <div className="rounded-full bg-muted/50 p-2 flex items-center justify-center">
+                {agent.value === CodingAgentType.OPENCODE && <OpenCodeLogo className="size-5" />}
+                {agent.value === CodingAgentType.CLAUDE_CODE && <AnthropicLogo className="size-5" />}
+                {agent.value === CodingAgentType.CODEX && <OpenAILogo className="size-5" />}
+              </div>
+              <div>
+                <p className="text-sm font-medium text-foreground">{agent.label}</p>
+                <p className="text-xs text-muted-foreground">
+                  {agent.value === CodingAgentType.OPENCODE && 'Open-source AI coding engine'}
+                  {agent.value === CodingAgentType.CLAUDE_CODE && "Anthropic's CLI coding agent"}
+                  {agent.value === CodingAgentType.CODEX && "OpenAI's CLI coding agent"}
+                </p>
+              </div>
+              <ArrowRight className="size-4 text-muted-foreground ml-auto" />
+            </button>
+          ))}
+        </div>
+
+        <div className="flex items-center gap-3 mt-6">
+          <Button variant="ghost" onClick={onSkip}>
+            Skip
+          </Button>
+        </div>
+      </>
+    )
+  }
+
+  // Phase 2: Binary check + install instructions
+  const agentLabel = CODING_AGENTS.find((a) => a.value === selected)?.label ?? selected
+  const installMethods = getInstallMethodsForAgent(selected)
+  const binaryName = getBinaryNameForAgent(selected)
+  const website = getWebsiteForAgent(selected)
+
   return (
     <>
       <h2 className="text-2xl font-bold text-foreground mb-2">
-        Install OpenCode
+        Install {agentLabel}
       </h2>
       <p className="text-sm text-muted-foreground mb-6 leading-relaxed">
-        OpenCode is the AI coding engine that powers your agents. Install it using one of the methods below.
+        Install the <code className="text-foreground/80">{binaryName}</code> CLI using one of the methods below.
       </p>
 
-      <InstallBlock methods={OPENCODE_INSTALL_METHODS} />
+      <InstallBlock methods={installMethods} />
 
-      <div className="mt-6 pt-5 border-t border-border">
-        <p className="text-xs font-medium text-muted-foreground mb-2 uppercase tracking-wide">
-          Or provide custom path
-        </p>
-        <div className="flex gap-2">
-          <Input
-            value={customPath}
-            onChange={(e) => setCustomPath(e.target.value)}
-            placeholder="e.g. /home/user/.opencode/bin"
-            className="flex-1"
-          />
-          <Button variant="outline" onClick={saveCustomPath} disabled={saving || !customPath.trim()}>
-            {saving ? <Loader2 className="size-4 animate-spin" /> : <FolderOpen className="size-4" />}
-            Set
-          </Button>
+      {selected === CodingAgentType.OPENCODE && (
+        <div className="mt-6 pt-5 border-t border-border">
+          <p className="text-xs font-medium text-muted-foreground mb-2 uppercase tracking-wide">
+            Or provide custom path
+          </p>
+          <div className="flex gap-2">
+            <Input
+              value={customPath}
+              onChange={(e) => setCustomPath(e.target.value)}
+              placeholder="e.g. /home/user/.opencode/bin"
+              className="flex-1"
+            />
+            <Button variant="outline" onClick={saveCustomPath} disabled={saving || !customPath.trim()}>
+              {saving ? <Loader2 className="size-4 animate-spin" /> : <FolderOpen className="size-4" />}
+              Set
+            </Button>
+          </div>
+          <p className="text-xs text-muted-foreground mt-1.5">
+            Enter the directory containing the <code className="text-foreground/80">opencode</code> binary.
+          </p>
         </div>
-        <p className="text-xs text-muted-foreground mt-1.5">
-          Enter the directory containing the <code className="text-foreground/80">opencode</code> binary.
-        </p>
-      </div>
+      )}
 
       {error && <p className="mt-3 text-xs text-destructive">{error}</p>}
 
@@ -216,11 +338,14 @@ function OpencodeBinaryStep({
           )}
           {checking ? 'Checking...' : isLast ? 'Done' : 'Next'}
         </Button>
+        <Button variant="ghost" onClick={() => setSelected(null)}>
+          Back
+        </Button>
         <Button variant="ghost" onClick={onSkip}>
           Skip
         </Button>
         <button
-          onClick={() => window.open('https://opencode.ai', '_blank')}
+          onClick={() => window.open(website, '_blank')}
           className="ml-auto flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
         >
           Website
@@ -231,6 +356,8 @@ function OpencodeBinaryStep({
   )
 }
 
+/* ─── Agent Setup Step ─── */
+
 interface ModelOption {
   id: string
   name: string
@@ -239,53 +366,82 @@ interface ModelOption {
 function AgentSetupStep({
   onCreated,
   error,
-  setError
+  setError,
+  selectedCodingAgent
 }: {
   onCreated: () => void
   error: string | null
   setError: (e: string | null) => void
+  selectedCodingAgent: CodingAgentType | null
 }) {
   const [name, setName] = useState('Robo')
+  const [codingAgent, setCodingAgent] = useState<CodingAgentType>(
+    selectedCodingAgent ?? CodingAgentType.OPENCODE
+  )
   const [model, setModel] = useState('')
   const [models, setModels] = useState<ModelOption[]>([])
   const [loadingModels, setLoadingModels] = useState(true)
   const [creating, setCreating] = useState(false)
-  const { createAgent } = useAgentStore()
+  const { agents, createAgent, updateAgent } = useAgentStore()
 
+  // Load models based on selected coding agent
   useEffect(() => {
     let cancelled = false
     setLoadingModels(true)
-    agentConfigApi.getProviders().then((result) => {
-      if (cancelled) return
-      if (result?.providers) {
-        const list: ModelOption[] = []
-        const providers = Array.isArray(result.providers) ? result.providers : []
-        for (const p of providers) {
-          const pModels = Array.isArray(p.models)
-            ? p.models
-            : p.models && typeof p.models === 'object'
-              ? Object.values(p.models)
-              : []
-          for (const m of pModels as any[]) {
-            if (m?.id) list.push({ id: `${p.id}/${m.id}`, name: `${p.name} – ${m.name || m.id}` })
+    setModel('')
+
+    if (codingAgent === CodingAgentType.CLAUDE_CODE) {
+      const list = CLAUDE_MODELS.map((m) => ({ id: m.id, name: m.name }))
+      setModels(list)
+      if (list.length > 0) setModel(list[0].id)
+      setLoadingModels(false)
+      return
+    }
+
+    if (codingAgent === CodingAgentType.CODEX) {
+      const list = CODEX_MODELS.map((m) => ({ id: m.id, name: m.name }))
+      setModels(list)
+      if (list.length > 0) setModel(list[0].id)
+      setLoadingModels(false)
+      return
+    }
+
+    // OpenCode — fetch from server
+    agentConfigApi
+      .getProviders()
+      .then((result) => {
+        if (cancelled) return
+        if (result?.providers) {
+          const list: ModelOption[] = []
+          const providers = Array.isArray(result.providers) ? result.providers : []
+          for (const p of providers) {
+            const pModels = Array.isArray(p.models)
+              ? p.models
+              : p.models && typeof p.models === 'object'
+                ? Object.values(p.models)
+                : []
+            for (const m of pModels as any[]) {
+              if (m?.id) list.push({ id: `${p.id}/${m.id}`, name: `${p.name} – ${m.name || m.id}` })
+            }
+          }
+          setModels(list)
+          // Pre-select a free model from the "zen" provider
+          if (list.length > 0) {
+            const zenFree = list.find((m) => m.name.toLowerCase().includes('free'))
+            setModel(zenFree?.id || list[0].id)
           }
         }
-        setModels(list)
-        // Pre-select a free model from the "zen" provider
-        if (list.length > 0) {
-          const zenFree = list.find(
-            (m) => m.name.toLowerCase().includes('free')
-          )
-          setModel(zenFree?.id || list[0].id)
-        }
-      }
-    }).catch(() => {
-      // Server not running — that's OK, user can pick later
-    }).finally(() => {
-      if (!cancelled) setLoadingModels(false)
-    })
-    return () => { cancelled = true }
-  }, [])
+      })
+      .catch(() => {
+        // Server not running — that's OK, user can pick later
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingModels(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [codingAgent])
 
   const handleCreate = async () => {
     if (!name.trim()) {
@@ -295,14 +451,30 @@ function AgentSetupStep({
     setCreating(true)
     setError(null)
     try {
-      await createAgent({
-        name: name.trim(),
-        config: {
-          coding_agent: CodingAgentType.OPENCODE,
-          model: model || undefined
-        },
-        is_default: true
-      })
+      // Check if a default agent with empty config already exists
+      const existingDefault = agents.find(
+        (a) => a.is_default && (!a.config.coding_agent || !a.config.model)
+      )
+      if (existingDefault) {
+        // Update the existing agent instead of creating a duplicate
+        await updateAgent(existingDefault.id, {
+          name: name.trim(),
+          config: {
+            ...existingDefault.config,
+            coding_agent: codingAgent,
+            model: model || undefined
+          }
+        })
+      } else {
+        await createAgent({
+          name: name.trim(),
+          config: {
+            coding_agent: codingAgent,
+            model: model || undefined
+          },
+          is_default: true
+        })
+      }
       onCreated()
     } catch {
       setError('Failed to create agent')
@@ -318,10 +490,10 @@ function AgentSetupStep({
       </div>
 
       <h2 className="text-2xl font-bold text-foreground mb-2">
-        Add your first agent
+        Set up your agent
       </h2>
       <p className="text-sm text-muted-foreground mb-6 leading-relaxed">
-        Set up an AI coding agent to work on your tasks.
+        Configure your AI coding agent to work on tasks.
       </p>
 
       <div className="space-y-4">
@@ -333,6 +505,22 @@ function AgentSetupStep({
             onChange={(e) => setName(e.target.value)}
             placeholder="Robo"
           />
+        </div>
+
+        <div className="space-y-1.5">
+          <Label htmlFor="setup-coding-agent">Coding agent</Label>
+          <select
+            id="setup-coding-agent"
+            value={codingAgent}
+            onChange={(e) => setCodingAgent(e.target.value as CodingAgentType)}
+            className="w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm cursor-pointer"
+          >
+            {CODING_AGENTS.map((a) => (
+              <option key={a.value} value={a.value}>
+                {a.label}
+              </option>
+            ))}
+          </select>
         </div>
 
         <div className="space-y-1.5">
@@ -351,7 +539,9 @@ function AgentSetupStep({
             >
               <option value="">Select a model...</option>
               {models.map((m) => (
-                <option key={m.id} value={m.id}>{m.name}</option>
+                <option key={m.id} value={m.id}>
+                  {m.name}
+                </option>
               ))}
             </select>
           ) : (
@@ -362,7 +552,7 @@ function AgentSetupStep({
               placeholder="provider/model-id"
             />
           )}
-          {!loadingModels && models.length === 0 && (
+          {!loadingModels && models.length === 0 && codingAgent === CodingAgentType.OPENCODE && (
             <p className="text-xs text-muted-foreground">
               Could not load models from OpenCode server. You can configure this later in settings.
             </p>
@@ -375,7 +565,9 @@ function AgentSetupStep({
       <div className="flex items-center gap-3 mt-6">
         <Button onClick={handleCreate} disabled={creating || !name.trim()}>
           {creating ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-4" />}
-          Create agent
+          {agents.find((a) => a.is_default && (!a.config.coding_agent || !a.config.model))
+            ? 'Update agent'
+            : 'Create agent'}
         </Button>
       </div>
     </>
@@ -386,6 +578,18 @@ function AgentSetupStep({
 
 const FORCE_ONBOARDING = () => localStorage.getItem('debug:onboarding') === 'true'
 
+/** Check if the default agent has a complete config (coding_agent AND model set) */
+function hasCompleteDefaultAgent(): boolean {
+  const agents = useAgentStore.getState().agents
+  return agents.some((a) => a.is_default && !!a.config.coding_agent && !!a.config.model)
+}
+
+/** Check if any agent already has a coding_agent selected */
+function hasAnyCodingAgent(): boolean {
+  const agents = useAgentStore.getState().agents
+  return agents.some((a) => !!a.config.coding_agent)
+}
+
 export function DepsWarningBanner() {
   const [status, setStatus] = useState<DepsStatus | null>(null)
   const [dismissed, setDismissed] = useState(false)
@@ -393,6 +597,7 @@ export function DepsWarningBanner() {
   const [step, setStep] = useState(0)
   const [steps, setSteps] = useState<StepDef[]>([])
   const [error, setError] = useState<string | null>(null)
+  const [selectedCodingAgent, setSelectedCodingAgent] = useState<CodingAgentType | null>(null)
   const { agents, fetchAgents } = useAgentStore()
 
   const check = useCallback(async () => {
@@ -410,61 +615,71 @@ export function DepsWarningBanner() {
 
   useEffect(() => {
     const force = FORCE_ONBOARDING()
-    Promise.all([check(), fetchAgents(), agentConfigApi.getProviders()]).then(([result, _, providers]) => {
-      if (!result) return
-      const depSteps = force
-        ? (DEP_STEPS as StepDef[])
-        : (DEP_STEPS.filter((s) => !result[s.key]) as StepDef[])
+    Promise.all([check(), fetchAgents(), agentConfigApi.getProviders()]).then(
+      ([result, _, providers]) => {
+        if (!result) return
+        const depSteps = force
+          ? (DEP_STEPS as StepDef[])
+          : (DEP_STEPS.filter((s) => !result[s.key]) as StepDef[])
 
-      // Only show provider setup if no existing providers are configured
-      const hasProviders = providers && providers.providers && providers.providers.length > 0
-      const providerSteps = (force || !hasProviders) ? [PROVIDER_STEP] : []
+        // Only show provider setup if no existing providers are configured
+        const hasProviders = providers && providers.providers && providers.providers.length > 0
+        const providerSteps = force || !hasProviders ? [PROVIDER_STEP] : []
 
-      if (hasProviders) {
-        console.log('[Onboarding] Found existing providers, skipping provider setup:', providers.providers.map(p => p.id))
+        if (hasProviders) {
+          console.log(
+            '[Onboarding] Found existing providers, skipping provider setup:',
+            providers.providers.map((p: any) => p.id)
+          )
+        }
+
+        // Coding agent selection step — skip if any agent already has a coding_agent set
+        const codingAgentSteps: StepDef[] =
+          force || !hasAnyCodingAgent() ? [CODING_AGENT_STEP] : []
+
+        // Agent step — show if default agent has incomplete config (no coding_agent or no model)
+        const hasCompleteAgent = hasCompleteDefaultAgent()
+        const agentSteps = force || !hasCompleteAgent ? [AGENT_STEP] : []
+
+        setSteps([...depSteps, ...codingAgentSteps, ...providerSteps, ...agentSteps])
       }
-
-      // OpenCode binary step — show if binary not found in PATH
-      const binarySteps = (force || !result.opencodeBinary) ? [BINARY_STEP] : []
-
-      // Read fresh agent count from store (not stale closure)
-      const hasAgents = useAgentStore.getState().agents.length > 0
-      const agentSteps = force || !hasAgents ? [AGENT_STEP] : []
-      setSteps([...depSteps, ...binarySteps, ...providerSteps, ...agentSteps])
-    })
+    )
   }, [])
 
   // Re-evaluate agent step when agents change (skip in force mode)
   useEffect(() => {
-    if (agents.length > 0 && !FORCE_ONBOARDING()) {
+    if (!FORCE_ONBOARDING() && hasCompleteDefaultAgent()) {
       setSteps((prev) => prev.filter((s) => s.kind !== 'agent'))
     }
-  }, [agents.length])
+  }, [agents])
 
-  const advance = useCallback(async () => {
-    setError(null)
-    const current = steps[step]
-    if (!current || current.kind !== 'dep') return
+  const advance = useCallback(
+    async () => {
+      setError(null)
+      const current = steps[step]
+      if (!current || current.kind !== 'dep') return
 
-    const force = FORCE_ONBOARDING()
-    const result = await check()
-    if (!result) return
+      const force = FORCE_ONBOARDING()
+      const result = await check()
+      if (!result) return
 
-    if (!force && !result[current.key]) {
-      setError(`${current.title} is not detected yet. Please install it first.`)
-      return
-    }
-    if (force) {
-      // In force mode just advance without removing steps
-      if (step < steps.length - 1) setStep(step + 1)
-      else setDismissed(true)
-      return
-    }
-    // Installed — remove from steps and advance
-    const remaining = steps.filter((s) => s.kind !== 'dep' || s.key !== current.key)
-    setSteps(remaining)
-    setStep((prev) => Math.min(prev, remaining.length - 1))
-  }, [check, steps, step])
+      if (!force && !result[current.key]) {
+        setError(`${current.title} is not detected yet. Please install it first.`)
+        return
+      }
+      if (force) {
+        // In force mode just advance without removing steps
+        if (step < steps.length - 1) setStep(step + 1)
+        else setDismissed(true)
+        return
+      }
+      // Installed — remove from steps and advance
+      const remaining = steps.filter((s) => s.kind !== 'dep' || s.key !== current.key)
+      setSteps(remaining)
+      setStep((prev) => Math.min(prev, remaining.length - 1))
+    },
+    [check, steps, step]
+  )
 
   const skip = useCallback(() => {
     setError(null)
@@ -545,18 +760,19 @@ export function DepsWarningBanner() {
                 </button>
               </div>
             </>
-          ) : current.kind === 'binary' ? (
-            /* OpenCode binary install step */
-            <OpencodeBinaryStep
+          ) : current.kind === 'coding-agent' ? (
+            /* Coding agent selection step */
+            <CodingAgentSelectionStep
               error={error}
               setError={setError}
               isLast={isLast}
-              onInstalled={() => {
+              onSelected={(agent) => {
+                setSelectedCodingAgent(agent)
                 if (isLast) {
                   setDismissed(true)
                 } else {
-                  // Remove binary step and advance
-                  const remaining = steps.filter((s) => s.kind !== 'binary')
+                  // Remove coding-agent step and advance
+                  const remaining = steps.filter((s) => s.kind !== 'coding-agent')
                   setSteps(remaining)
                   setStep((prev) => Math.min(prev, remaining.length - 1))
                 }
@@ -581,6 +797,7 @@ export function DepsWarningBanner() {
             <AgentSetupStep
               error={error}
               setError={setError}
+              selectedCodingAgent={selectedCodingAgent}
               onCreated={() => {
                 if (isLast) {
                   setDismissed(true)

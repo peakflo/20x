@@ -68,7 +68,6 @@ export class AgentManager extends EventEmitter {
   constructor(db: DatabaseManager) {
     super()
     this.db = db
-    this.sdkLoading = this.loadSDK()
   }
 
   private async loadSDK(): Promise<void> {
@@ -84,13 +83,14 @@ export class AgentManager extends EventEmitter {
 
   /**
    * Ensures the SDK is loaded before proceeding with any operations.
-   * Waits for the loading promise if SDK is currently loading.
+   * Lazily triggers loading on first call.
    */
   private async ensureSDKLoaded(): Promise<void> {
     if (OpenCodeSDK) return
-    if (this.sdkLoading) {
-      await this.sdkLoading
+    if (!this.sdkLoading) {
+      this.sdkLoading = this.loadSDK()
     }
+    await this.sdkLoading
   }
 
   setMainWindow(window: BrowserWindow): void {

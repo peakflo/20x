@@ -548,6 +548,10 @@ function deserializeOAuthToken(row: OAuthTokenRow): OAuthTokenRecord {
   }
 }
 
+// Bump this whenever new migrations are added so returning users skip
+// the full migration check on startup.
+const SCHEMA_VERSION = 1
+
 export class DatabaseManager {
   public db!: Database.Database
 
@@ -560,7 +564,25 @@ export class DatabaseManager {
     this.db.pragma('foreign_keys = ON')
 
     this.createTables()
-    this.runMigrations()
+
+    const currentVersion = this.getSchemaVersion()
+    if (currentVersion < SCHEMA_VERSION) {
+      this.runMigrations()
+      this.setSchemaVersion(SCHEMA_VERSION)
+    }
+  }
+
+  private getSchemaVersion(): number {
+    try {
+      const row = this.db.prepare("SELECT value FROM settings WHERE key = '__schema_version'").get() as { value: string } | undefined
+      return row ? parseInt(row.value, 10) || 0 : 0
+    } catch {
+      return 0
+    }
+  }
+
+  private setSchemaVersion(version: number): void {
+    this.db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('__schema_version', ?)").run(String(version))
   }
 
   private createTables(): void {
@@ -667,8 +689,6 @@ export class DatabaseManager {
       CREATE INDEX IF NOT EXISTS idx_oauth_tokens_source ON oauth_tokens(source_id);
       CREATE INDEX IF NOT EXISTS idx_oauth_tokens_provider ON oauth_tokens(provider);
     `)
-
-    this.runMigrations()
   }
 
   private runMigrations(): void {

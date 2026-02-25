@@ -443,7 +443,11 @@ export function registerIpcHandlers(
   })
 
   // Dependency check handler
+  let depsCheckCache: { gh: boolean; opencode: boolean; opencodeBinary: boolean; claudeCodeBinary: boolean; codexBinary: boolean } | null = null
+
   ipcMain.handle('deps:check', async () => {
+    if (depsCheckCache) return depsCheckCache
+
     // OpenCode: Check if SDK is installed (it's an npm package)
     let opencodeAvailable = false
     try {
@@ -454,7 +458,6 @@ export function registerIpcHandlers(
     }
 
     // OpenCode binary: Check if the `opencode` command is findable
-    // First ensure common paths are in PATH (same as agent-manager does)
     const { homedir } = await import('os')
     const { join: pathJoin, delimiter } = await import('path')
     const customPath = db.getSetting('OPENCODE_BINARY_PATH')
@@ -472,16 +475,22 @@ export function registerIpcHandlers(
     const check = (cmd: string) =>
       execFileAsync(loginShell, ['-l', '-c', cmd])
 
-    const [gh, opencodeBin] = await Promise.allSettled([
+    const [gh, opencodeBin, claudeCodeBin, codexBin] = await Promise.allSettled([
       check('gh --version'),
-      check('which opencode')
+      check('which opencode'),
+      check('which claude'),
+      check('which codex')
     ])
 
-    return {
+    const result = {
       gh: gh.status === 'fulfilled',
       opencode: opencodeAvailable,
-      opencodeBinary: opencodeBin.status === 'fulfilled'
+      opencodeBinary: opencodeBin.status === 'fulfilled',
+      claudeCodeBinary: claudeCodeBin.status === 'fulfilled',
+      codexBinary: codexBin.status === 'fulfilled'
     }
+    depsCheckCache = result
+    return result
   })
 
   // Save custom OpenCode binary path
@@ -496,6 +505,8 @@ export function registerIpcHandlers(
     if (!(process.env.PATH || '').includes(dirPath)) {
       process.env.PATH = [dirPath, process.env.PATH || ''].join(delimiter)
     }
+    // Invalidate deps cache so next check picks up the new path
+    depsCheckCache = null
     return { success: true }
   })
 
