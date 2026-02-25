@@ -48,7 +48,7 @@ export function SkillSelector({ selectedIds, onChange }: SkillSelectorProps) {
                 <div className="min-w-0 flex-1">
                   <span className="text-sm">{skill.name}</span>
                   {skill.description && (
-                    <p className="text-[10px] text-muted-foreground truncate">{skill.description}</p>
+                    <p className="text-[10px] text-muted-foreground break-words">{skill.description}</p>
                   )}
                 </div>
               </label>

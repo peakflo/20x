@@ -1769,16 +1769,19 @@ export class AgentManager extends EventEmitter {
     // In triage mode, set status back to NotStarted (now with agent_id assigned) and return early
     if (session.isTriageSession) {
       console.log(`[AgentManager] Triage session completed for task ${session.taskId}, reverting to NotStarted`)
-      this.db.updateTask(session.taskId, { status: TaskStatus.NotStarted })
+      this.db.updateTask(session.taskId, { status: TaskStatus.NotStarted, session_id: null })
 
       this.sendToRenderer('task:updated', {
         taskId: session.taskId,
-        updates: this.db.getTask(session.taskId) || { status: TaskStatus.NotStarted }
+        updates: this.db.getTask(session.taskId) || { status: TaskStatus.NotStarted, session_id: null }
       })
 
       this.sendToRenderer('agent:status', {
         sessionId, agentId: session.agentId, taskId: session.taskId, status: 'idle'
       })
+
+      // Clean up backend session — triage is done, no need to keep it
+      this.sessions.delete(sessionId)
       return
     }
 

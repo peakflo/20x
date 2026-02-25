@@ -257,12 +257,8 @@ app.whenReady().then(async () => {
 
   createWindow()
 
-  // Start OpenCode server
-  try {
-    await agentManager.startServer()
-  } catch (error) {
-    console.error('Failed to start OpenCode server:', error)
-  }
+  // OpenCode server starts lazily on first agent session (avoids macOS permission
+  // prompts for ~/Documents, ~/Downloads etc. on app launch).
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
