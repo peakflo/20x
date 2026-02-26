@@ -52,10 +52,10 @@ describe('useTaskStore', () => {
       expect(tasks).toHaveLength(2)
     })
 
-    it('returns null on failure', async () => {
+    it('throws and sets error on failure', async () => {
       ;(mockElectronAPI.db.createTask as any).mockRejectedValue(new Error('fail'))
-      const result = await useTaskStore.getState().createTask({ title: 'X' } as any)
-      expect(result).toBeNull()
+      await expect(useTaskStore.getState().createTask({ title: 'X' } as any)).rejects.toThrow('fail')
+      expect(useTaskStore.getState().error).toBe('fail')
     })
   })
 
