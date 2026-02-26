@@ -179,7 +179,14 @@ export function AppLayout() {
                 const pendingFiles = formData._pendingFiles
                 delete formData._pendingFiles
 
-                const newTask = await createTask(formData)
+                let newTask
+                try {
+                  newTask = await createTask(formData)
+                } catch (err) {
+                  const reason = err instanceof Error ? err.message : String(err)
+                  showToast(`Failed to create task: ${reason}`, true)
+                  return
+                }
                 if (newTask && pendingFiles?.length) {
                   const attachments: FileAttachment[] = []
                   for (const pf of pendingFiles) {
@@ -189,10 +196,7 @@ export function AppLayout() {
                   await updateTask(newTask.id, { attachments })
                 }
                 closeModal()
-                // Automatically select and open the newly created task
-                if (newTask) {
-                  selectTask(newTask.id)
-                }
+                if (newTask) selectTask(newTask.id)
               }}
               onCancel={closeModal}
             />
@@ -211,7 +215,13 @@ export function AppLayout() {
               <TaskForm
                 task={editingTask}
                 onSubmit={async (data) => {
-                  await updateTask(editingTask.id, data)
+                  try {
+                    await updateTask(editingTask.id, data)
+                  } catch (err) {
+                    const reason = err instanceof Error ? err.message : String(err)
+                    showToast(`Failed to update task: ${reason}`, true)
+                    return
+                  }
                   closeModal()
                 }}
                 onCancel={closeModal}
@@ -244,7 +254,13 @@ export function AppLayout() {
                 console.error('Failed to cleanup worktrees:', error)
               }
             }
-            await deleteTask(deletingTaskId)
+            try {
+              await deleteTask(deletingTaskId)
+            } catch (err) {
+              const reason = err instanceof Error ? err.message : String(err)
+              showToast(`Failed to delete task: ${reason}`, true)
+              return
+            }
             closeModal()
           }
         }}

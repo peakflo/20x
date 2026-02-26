@@ -446,7 +446,13 @@ export function registerIpcHandlers(
   let depsCheckCache: { gh: boolean; opencode: boolean; opencodeBinary: boolean; claudeCodeBinary: boolean; codexBinary: boolean } | null = null
 
   ipcMain.handle('deps:check', async () => {
-    if (depsCheckCache) return depsCheckCache
+    if (depsCheckCache) {
+      // Return cache only if all binaries were found; otherwise re-check
+      // so that installing a binary mid-session is picked up.
+      const allFound = depsCheckCache.opencodeBinary && depsCheckCache.claudeCodeBinary && depsCheckCache.codexBinary
+      if (allFound) return depsCheckCache
+      depsCheckCache = null
+    }
 
     // OpenCode: Check if SDK is installed (it's an npm package)
     let opencodeAvailable = false
