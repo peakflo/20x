@@ -555,6 +555,13 @@ const SCHEMA_VERSION = 1
 export class DatabaseManager {
   public db!: Database.Database
 
+  close(): void {
+    if (this.db?.open) {
+      this.db.pragma('wal_checkpoint(TRUNCATE)')
+      this.db.close()
+    }
+  }
+
   initialize(): void {
     const userDataPath = app.getPath('userData')
     const dbPath = join(userDataPath, 'pf-desktop.db')

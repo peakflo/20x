@@ -34,11 +34,12 @@ export const useTaskStore = create<TaskState>((set) => ({
   createTask: async (data) => {
     try {
       const task = await taskApi.create(data)
-      set((state) => ({ tasks: [task, ...state.tasks] }))
+      set((state) => ({ tasks: [task, ...state.tasks], error: null }))
       return task
     } catch (err) {
-      set({ error: String(err) })
-      return null
+      const message = err instanceof Error ? err.message : String(err)
+      set({ error: message })
+      throw err
     }
   },
 
@@ -47,7 +48,8 @@ export const useTaskStore = create<TaskState>((set) => ({
       const updated = await taskApi.update(id, data)
       if (updated) {
         set((state) => ({
-          tasks: state.tasks.map((t) => (t.id === id ? updated : t))
+          tasks: state.tasks.map((t) => (t.id === id ? updated : t)),
+          error: null
         }))
         // Fire background export if task has a source
         if (updated.source_id && updated.external_id) {
@@ -56,8 +58,9 @@ export const useTaskStore = create<TaskState>((set) => ({
       }
       return updated || null
     } catch (err) {
-      set({ error: String(err) })
-      return null
+      const message = err instanceof Error ? err.message : String(err)
+      set({ error: message })
+      throw err
     }
   },
 
@@ -67,13 +70,15 @@ export const useTaskStore = create<TaskState>((set) => ({
       if (success) {
         set((state) => ({
           tasks: state.tasks.filter((t) => t.id !== id),
-          selectedTaskId: state.selectedTaskId === id ? null : state.selectedTaskId
+          selectedTaskId: state.selectedTaskId === id ? null : state.selectedTaskId,
+          error: null
         }))
       }
       return success
     } catch (err) {
-      set({ error: String(err) })
-      return false
+      const message = err instanceof Error ? err.message : String(err)
+      set({ error: message })
+      throw err
     }
   },
 

@@ -288,6 +288,9 @@ app.on('before-quit', () => {
   mcpToolCaller?.destroy()
   oauthManager?.destroy()
 
+  // Checkpoint WAL and close database
+  db?.close()
+
   // Destroy tray
   if (tray) {
     tray.destroy()
