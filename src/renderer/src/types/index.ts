@@ -435,6 +435,7 @@ export interface ConfigFieldSchema {
   description?: string
   options?: ConfigFieldOption[]
   optionsResolver?: string
+  multiSelect?: boolean
   dependsOn?: { field: string; value: unknown }
 }
 
