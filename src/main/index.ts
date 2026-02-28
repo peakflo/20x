@@ -18,6 +18,7 @@ import { NotionPlugin } from './plugins/notion-plugin'
 import { registerIpcHandlers } from './ipc-handlers'
 import { RecurrenceScheduler } from './recurrence-scheduler'
 import { setTaskApiNotifier } from './task-api-server'
+import { startSecretBroker, stopSecretBroker, writeSecretShellWrapper } from './secret-broker'
 
 let mainWindow: BrowserWindow | null = null
 let tray: Tray | null = null
@@ -254,6 +255,14 @@ app.whenReady().then(async () => {
 
   registerIpcHandlers(db, agentManager, githubManager, worktreeManager, syncManager, pluginRegistry, mcpToolCaller, oauthManager, recurrenceScheduler)
 
+  // Start secret broker and write shell wrapper
+  startSecretBroker(db).then((brokerPort) => {
+    console.log(`[Main] Secret broker started on port ${brokerPort}`)
+    writeSecretShellWrapper()
+  }).catch((err) => {
+    console.error('[Main] Failed to start secret broker:', err)
+  })
+
   // Check gh CLI status on startup (log only)
   githubManager.checkGhCli().then((status) => {
     console.log('[GitHub] CLI status:', status)
@@ -276,6 +285,7 @@ app.on('window-all-closed', () => {
   agentManager?.stopAllSessions()
   agentManager?.stopServer()
   oauthManager?.destroy()
+  stopSecretBroker()
 
   if (process.platform !== 'darwin') {
     app.quit()

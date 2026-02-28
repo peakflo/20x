@@ -186,6 +186,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('skills:update', id, data),
     delete: (id: string): Promise<boolean> => ipcRenderer.invoke('skills:delete', id)
   },
+  secrets: {
+    getAll: (): Promise<unknown[]> => ipcRenderer.invoke('secrets:getAll'),
+    get: (id: string): Promise<unknown> => ipcRenderer.invoke('secrets:get', id),
+    create: (data: Record<string, unknown>): Promise<unknown> =>
+      ipcRenderer.invoke('secrets:create', data),
+    update: (id: string, data: Record<string, unknown>): Promise<unknown> =>
+      ipcRenderer.invoke('secrets:update', id, data),
+    delete: (id: string): Promise<boolean> => ipcRenderer.invoke('secrets:delete', id)
+  },
   deps: {
     check: (): Promise<{ gh: boolean; opencode: boolean; opencodeBinary: boolean }> =>
       ipcRenderer.invoke('deps:check'),

@@ -89,13 +89,23 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
 
   /**
    * Build environment variables for Claude process
-   * Removes CLAUDECODE to prevent nested session errors
+   * Removes CLAUDECODE to prevent nested session errors.
+   * When secrets are configured, sets SHELL to the secret-shell.sh wrapper
+   * so every bash command fetches secrets from the broker transparently.
    */
-  private buildClaudeEnvironment(): Record<string, string> {
+  private buildClaudeEnvironment(config?: SessionConfig): Record<string, string> {
     const env = { ...process.env } as Record<string, string>
 
     // Remove CLAUDECODE to prevent nested session error
     delete env.CLAUDECODE
+
+    // Inject secret broker shell wrapper if secrets are configured
+    if (config?.secretBrokerPort && config?.secretSessionToken && config?.secretShellPath) {
+      env._20X_REAL_SHELL = env.SHELL || '/bin/bash'
+      env.SHELL = config.secretShellPath
+      env._20X_SB_PORT = String(config.secretBrokerPort)
+      env._20X_SB_TOKEN = config.secretSessionToken
+    }
 
     return env
   }
@@ -451,7 +461,7 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
     const options: Options = {
       cwd: config.workspaceDir,
       pathToClaudeCodeExecutable: claudePath,
-      env: this.buildClaudeEnvironment(),
+      env: this.buildClaudeEnvironment(config),
       mcpServers: config.mcpServers as Record<string, McpServerConfig> | undefined,
       model: config.model,
       systemPrompt: config.systemPrompt,

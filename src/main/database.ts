@@ -37,6 +37,7 @@ export interface AgentConfigRecord {
   system_prompt?: string
   mcp_servers?: Array<string | AgentMcpServerEntry>
   skill_ids?: string[]
+  secret_ids?: string[]
   api_keys?: {
     openai?: string
     anthropic?: string
@@ -465,6 +466,46 @@ export interface UpdateSkillData {
   tags?: string[]
 }
 
+// ── Secret types ─────────────────────────────────────────────
+
+export interface SecretRow {
+  id: string
+  name: string
+  description: string
+  env_var_name: string
+  value: Buffer
+  created_at: string
+  updated_at: string
+}
+
+export interface SecretRecord {
+  id: string
+  name: string
+  description: string
+  env_var_name: string
+  // value intentionally omitted — never crosses IPC boundary
+  created_at: string
+  updated_at: string
+}
+
+export interface SecretRecordWithValue extends SecretRecord {
+  value: string  // Decrypted plaintext — only used internally in main process
+}
+
+export interface CreateSecretData {
+  name: string
+  description: string
+  env_var_name: string
+  value: string
+}
+
+export interface UpdateSecretData {
+  name?: string
+  description?: string
+  env_var_name?: string
+  value?: string
+}
+
 // ── OAuth Token types ────────────────────────────────────────
 
 export interface OAuthTokenRow {
@@ -519,6 +560,33 @@ function deserializeSkill(row: SkillRow): SkillRecord {
     uses: row.uses,
     last_used: row.last_used,
     tags,
+    created_at: row.created_at,
+    updated_at: row.updated_at
+  }
+}
+
+function deserializeSecret(row: SecretRow): SecretRecord {
+  return {
+    id: row.id,
+    name: row.name,
+    description: row.description,
+    env_var_name: row.env_var_name,
+    // value intentionally omitted — never sent to renderer
+    created_at: row.created_at,
+    updated_at: row.updated_at
+  }
+}
+
+function deserializeSecretWithValue(row: SecretRow): SecretRecordWithValue {
+  const decryptedValue = safeStorage.isEncryptionAvailable()
+    ? safeStorage.decryptString(row.value)
+    : row.value.toString('utf8')
+  return {
+    id: row.id,
+    name: row.name,
+    description: row.description,
+    env_var_name: row.env_var_name,
+    value: decryptedValue,
     created_at: row.created_at,
     updated_at: row.updated_at
   }
@@ -701,6 +769,18 @@ export class DatabaseManager {
 
       CREATE INDEX IF NOT EXISTS idx_oauth_tokens_source ON oauth_tokens(source_id);
       CREATE INDEX IF NOT EXISTS idx_oauth_tokens_provider ON oauth_tokens(provider);
+
+      CREATE TABLE IF NOT EXISTS secrets (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        description TEXT NOT NULL DEFAULT '',
+        env_var_name TEXT NOT NULL UNIQUE,
+        value BLOB NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_secrets_env_var ON secrets(env_var_name);
     `)
   }
 
@@ -1011,6 +1091,25 @@ export class DatabaseManager {
       this.db.exec(`ALTER TABLE tasks ADD COLUMN next_occurrence_at TEXT DEFAULT NULL`)
       // Create index for efficient querying of recurring tasks
       this.db.exec(`CREATE INDEX IF NOT EXISTS idx_tasks_next_occurrence ON tasks(next_occurrence_at) WHERE is_recurring = 1`)
+    }
+
+    // Migration v2: secrets table
+    const secretsTable = this.db.prepare(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name='secrets'"
+    ).get()
+    if (!secretsTable) {
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS secrets (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          description TEXT NOT NULL DEFAULT '',
+          env_var_name TEXT NOT NULL UNIQUE,
+          value BLOB NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_secrets_env_var ON secrets(env_var_name);
+      `)
     }
 
     // Seed default agent if none exist
@@ -1704,6 +1803,94 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
     const result = this.db.prepare(
       'UPDATE skills SET is_deleted = 1, updated_at = ? WHERE id = ? AND is_deleted = 0'
     ).run(new Date().toISOString(), id)
+    return result.changes > 0
+  }
+
+  // ── Secret CRUD ──────────────────────────────────────────
+
+  getSecrets(): SecretRecord[] {
+    const rows = this.db.prepare(
+      'SELECT * FROM secrets ORDER BY name ASC'
+    ).all() as SecretRow[]
+    return rows.map(deserializeSecret)
+  }
+
+  getSecret(id: string): SecretRecord | undefined {
+    const row = this.db.prepare(
+      'SELECT * FROM secrets WHERE id = ?'
+    ).get(id) as SecretRow | undefined
+    return row ? deserializeSecret(row) : undefined
+  }
+
+  getSecretsByIds(ids: string[]): SecretRecord[] {
+    if (ids.length === 0) return []
+    const placeholders = ids.map(() => '?').join(', ')
+    const rows = this.db.prepare(
+      `SELECT * FROM secrets WHERE id IN (${placeholders}) ORDER BY name ASC`
+    ).all(...ids) as SecretRow[]
+    return rows.map(deserializeSecret)
+  }
+
+  /**
+   * Decrypts and returns secrets with their plaintext values.
+   * ONLY for use within the main process (secret broker).
+   * NEVER expose this through IPC.
+   */
+  getSecretsWithValues(ids: string[]): SecretRecordWithValue[] {
+    if (ids.length === 0) return []
+    const placeholders = ids.map(() => '?').join(', ')
+    const rows = this.db.prepare(
+      `SELECT * FROM secrets WHERE id IN (${placeholders}) ORDER BY name ASC`
+    ).all(...ids) as SecretRow[]
+    return rows.map(deserializeSecretWithValue)
+  }
+
+  createSecret(data: CreateSecretData): SecretRecord | undefined {
+    const id = createId()
+    const now = new Date().toISOString()
+    const encryptedValue = safeStorage.isEncryptionAvailable()
+      ? safeStorage.encryptString(data.value)
+      : Buffer.from(data.value, 'utf8')
+    this.db.prepare(`
+      INSERT INTO secrets (id, name, description, env_var_name, value, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(id, data.name, data.description, data.env_var_name, encryptedValue, now, now)
+    return this.getSecret(id)
+  }
+
+  updateSecret(id: string, data: UpdateSecretData): SecretRecord | undefined {
+    const existing = this.getSecret(id)
+    if (!existing) return undefined
+
+    const setClauses: string[] = []
+    const values: (string | Buffer)[] = []
+
+    if (data.name !== undefined) { setClauses.push('name = ?'); values.push(data.name) }
+    if (data.description !== undefined) { setClauses.push('description = ?'); values.push(data.description) }
+    if (data.env_var_name !== undefined) { setClauses.push('env_var_name = ?'); values.push(data.env_var_name) }
+    if (data.value !== undefined) {
+      setClauses.push('value = ?')
+      const encryptedValue = safeStorage.isEncryptionAvailable()
+        ? safeStorage.encryptString(data.value)
+        : Buffer.from(data.value, 'utf8')
+      values.push(encryptedValue)
+    }
+
+    if (setClauses.length === 0) return existing
+
+    setClauses.push('updated_at = ?')
+    values.push(new Date().toISOString())
+    values.push(id)
+
+    this.db.prepare(
+      `UPDATE secrets SET ${setClauses.join(', ')} WHERE id = ?`
+    ).run(...values)
+
+    return this.getSecret(id)
+  }
+
+  deleteSecret(id: string): boolean {
+    const result = this.db.prepare('DELETE FROM secrets WHERE id = ?').run(id)
     return result.changes > 0
   }
 

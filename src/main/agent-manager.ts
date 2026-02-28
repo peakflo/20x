@@ -15,6 +15,8 @@ import { AcpAdapter } from './adapters/acp-adapter'
 import type { CodingAgentAdapter, SessionConfig, MessagePart, SessionMessage, McpServerConfig } from './adapters/coding-agent-adapter'
 import { SessionStatusType, MessagePartType } from './adapters/coding-agent-adapter'
 import { getTaskApiPort, waitForTaskApiServer } from './task-api-server'
+import { randomUUID } from 'crypto'
+import { registerSecretSession, unregisterSecretSession, getSecretBrokerPort, writeSecretShellWrapper } from './secret-broker'
 
 let OpenCodeSDK: typeof import('@opencode-ai/sdk') | null = null
 
@@ -47,6 +49,7 @@ interface AgentSession {
   learningMode?: boolean
   isTriageSession?: boolean
   adapter?: CodingAgentAdapter
+  secretSessionToken?: string
   pollingStarted?: boolean
 }
 
@@ -264,7 +267,7 @@ export class AgentManager extends EventEmitter {
     const isTriageSession = task?.status === TaskStatus.Triaging
     const mcpServers = await this.buildMcpServersForAdapter(agentId, { ensureTaskManagement: isMastermind || isTriageSession })
 
-    return {
+    const config: SessionConfig = {
       agentId,
       taskId,
       workspaceDir: workspaceDir || this.db.getWorkspaceDir(taskId),
@@ -273,6 +276,50 @@ export class AgentManager extends EventEmitter {
       mcpServers,
       apiKeys: agent.config?.api_keys
     }
+
+    // Attach secret broker info if agent session has an active secret token
+    const session = this.findSessionByTask(agentId, taskId)
+    if (session?.secretSessionToken) {
+      const brokerPort = getSecretBrokerPort()
+      if (brokerPort) {
+        config.secretBrokerPort = brokerPort
+        config.secretSessionToken = session.secretSessionToken
+        config.secretShellPath = writeSecretShellWrapper()
+      }
+    }
+
+    return config
+  }
+
+  /**
+   * Sets up a secret broker session for an agent, registering its secrets.
+   * Returns the token, or undefined if no secrets are configured.
+   */
+  private setupSecretSession(agentId: string): string | undefined {
+    const agent = this.db.getAgent(agentId)
+    const secretIds = (agent?.config as any)?.secret_ids as string[] | undefined
+    if (!secretIds || secretIds.length === 0) return undefined
+
+    const brokerPort = getSecretBrokerPort()
+    if (!brokerPort) {
+      console.warn('[AgentManager] Secret broker not running — secrets will not be injected')
+      return undefined
+    }
+
+    const token = randomUUID()
+    registerSecretSession(token, agentId, secretIds)
+    console.log(`[AgentManager] Secret session registered for agent ${agentId} with ${secretIds.length} secret(s)`)
+    return token
+  }
+
+  /** Find an active session by agentId and taskId */
+  private findSessionByTask(agentId: string, taskId: string): AgentSession | undefined {
+    for (const session of this.sessions.values()) {
+      if (session.agentId === agentId && session.taskId === taskId) {
+        return session
+      }
+    }
+    return undefined
   }
 
   /**
@@ -400,6 +447,26 @@ export class AgentManager extends EventEmitter {
       }
     }
 
+    // Add secrets section — name and description only, never the value
+    if (agentId) {
+      const agent2 = this.db.getAgent(agentId)
+      const secretIds = (agent2?.config as any)?.secret_ids as string[] | undefined
+      if (secretIds && secretIds.length > 0) {
+        const secrets = this.db.getSecretsByIds(secretIds)
+        if (secrets.length > 0) {
+          md += `## Available Secrets\n\n`
+          md += `The following secrets are available as environment variables in shell commands.\n`
+          md += `They are automatically injected — you do NOT need to set them manually.\n\n`
+          for (const secret of secrets) {
+            md += `- **\`${secret.env_var_name}\`** — ${secret.name}`
+            if (secret.description) md += `: ${secret.description}`
+            md += `\n`
+          }
+          md += `\n---\n\n`
+        }
+      }
+    }
+
     // Add repository information
     if (repos.length > 0) {
       md += `## Repositories\n\n`
@@ -476,6 +543,26 @@ export class AgentManager extends EventEmitter {
         }
 
         md += `---\n\n`
+      }
+    }
+
+    // Add secrets section — name and description only, never the value
+    if (agentId) {
+      const agentForSecrets = this.db.getAgent(agentId)
+      const secretIds = (agentForSecrets?.config as any)?.secret_ids as string[] | undefined
+      if (secretIds && secretIds.length > 0) {
+        const secrets = this.db.getSecretsByIds(secretIds)
+        if (secrets.length > 0) {
+          md += `## Available Secrets\n\n`
+          md += `The following secrets are automatically injected into your shell environment.\n`
+          md += `You can use them directly in bash commands — do NOT hardcode or ask for these values.\n\n`
+          for (const secret of secrets) {
+            md += `- **\`$${secret.env_var_name}\`** — ${secret.name}`
+            if (secret.description) md += `: ${secret.description}`
+            md += `\n`
+          }
+          md += `\n---\n\n`
+        }
       }
     }
 
@@ -770,6 +857,17 @@ export class AgentManager extends EventEmitter {
       apiKeys: agent.config?.api_keys
     }
 
+    // Setup secret broker session if agent has secrets
+    const secretToken = this.setupSecretSession(agentId)
+    if (secretToken) {
+      const brokerPort = getSecretBrokerPort()
+      if (brokerPort) {
+        sessionConfig.secretBrokerPort = brokerPort
+        sessionConfig.secretSessionToken = secretToken
+        sessionConfig.secretShellPath = writeSecretShellWrapper()
+      }
+    }
+
     // Initialize adapter
     await adapter.initialize()
 
@@ -788,7 +886,8 @@ export class AgentManager extends EventEmitter {
       seenPartIds: new Set(),
       partContentLengths: new Map(),
       adapter,
-      isTriageSession
+      isTriageSession,
+      secretSessionToken: secretToken
     })
 
     // Store session ID in database
@@ -1122,6 +1221,17 @@ export class AgentManager extends EventEmitter {
       apiKeys: agent.config?.api_keys
     }
 
+    // Setup secret broker session if agent has secrets
+    const secretToken = this.setupSecretSession(agentId)
+    if (secretToken) {
+      const brokerPort = getSecretBrokerPort()
+      if (brokerPort) {
+        sessionConfig.secretBrokerPort = brokerPort
+        sessionConfig.secretSessionToken = secretToken
+        sessionConfig.secretShellPath = writeSecretShellWrapper()
+      }
+    }
+
     // Initialize adapter
     await adapter.initialize()
 
@@ -1203,7 +1313,8 @@ export class AgentManager extends EventEmitter {
       seenPartIds: new Set(),
       partContentLengths: new Map(),
       adapter,
-      pollingStarted: false
+      pollingStarted: false,
+      secretSessionToken: secretToken
     })
 
     // Notify renderer — session is resumed but idle (no work in progress)
@@ -1430,6 +1541,12 @@ export class AgentManager extends EventEmitter {
       } catch (error) {
         console.error(`[AgentManager] Error destroying adapter session:`, error)
       }
+    }
+
+    // Clean up secret broker session
+    if (session.secretSessionToken) {
+      unregisterSecretSession(session.secretSessionToken)
+      console.log(`[AgentManager] Unregistered secret session for ${sessionId}`)
     }
 
     this.sessions.delete(sessionId)

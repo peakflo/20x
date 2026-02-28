@@ -48,6 +48,12 @@ export interface SessionConfig {
     openai?: string
     anthropic?: string
   }
+  /** Port of the local secret broker HTTP server */
+  secretBrokerPort?: number
+  /** Per-session token for authenticating with the secret broker */
+  secretSessionToken?: string
+  /** Absolute path to the secret-shell.sh wrapper script */
+  secretShellPath?: string
 }
 
 export interface SessionStatus {

@@ -1,4 +1,4 @@
-import type { WorkfloTask, CreateTaskDTO, UpdateTaskDTO, FileAttachment, Agent, CreateAgentDTO, UpdateAgentDTO, McpServer, CreateMcpServerDTO, UpdateMcpServerDTO, Skill, CreateSkillDTO, UpdateSkillDTO, TaskSource, CreateTaskSourceDTO, UpdateTaskSourceDTO, SyncResult, PluginMeta, ConfigFieldSchema, ConfigFieldOption, PluginAction, ActionResult, SourceUser, ReassignResult } from '@/types'
+import type { WorkfloTask, CreateTaskDTO, UpdateTaskDTO, FileAttachment, Agent, CreateAgentDTO, UpdateAgentDTO, McpServer, CreateMcpServerDTO, UpdateMcpServerDTO, Skill, CreateSkillDTO, UpdateSkillDTO, Secret, CreateSecretDTO, UpdateSecretDTO, TaskSource, CreateTaskSourceDTO, UpdateTaskSourceDTO, SyncResult, PluginMeta, ConfigFieldSchema, ConfigFieldOption, PluginAction, ActionResult, SourceUser, ReassignResult } from '@/types'
 import type { AgentOutputEvent, AgentStatusEvent, AgentApprovalRequest, GhCliStatus, GitHubRepo, GitHubCollaborator, WorktreeProgressEvent, McpTestResult, SkillSyncResult, DepsStatus } from '@/types/electron'
 
 export const taskApi = {
@@ -273,6 +273,28 @@ export const skillApi = {
 
   delete: (id: string): Promise<boolean> => {
     return window.electronAPI.skills.delete(id)
+  }
+}
+
+export const secretApi = {
+  getAll: (): Promise<Secret[]> => {
+    return window.electronAPI.secrets.getAll()
+  },
+
+  getById: (id: string): Promise<Secret | undefined> => {
+    return window.electronAPI.secrets.get(id)
+  },
+
+  create: (data: CreateSecretDTO): Promise<Secret> => {
+    return window.electronAPI.secrets.create(data)
+  },
+
+  update: (id: string, data: UpdateSecretDTO): Promise<Secret | undefined> => {
+    return window.electronAPI.secrets.update(id, data)
+  },
+
+  delete: (id: string): Promise<boolean> => {
+    return window.electronAPI.secrets.delete(id)
   }
 }
 

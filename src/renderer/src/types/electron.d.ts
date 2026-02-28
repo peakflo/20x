@@ -12,6 +12,9 @@ import type {
   Skill,
   CreateSkillDTO,
   UpdateSkillDTO,
+  Secret,
+  CreateSecretDTO,
+  UpdateSecretDTO,
   TaskSource,
   CreateTaskSourceDTO,
   UpdateTaskSourceDTO,
@@ -203,6 +206,13 @@ interface ElectronAPI {
     get: (id: string) => Promise<Skill | undefined>
     create: (data: CreateSkillDTO) => Promise<Skill>
     update: (id: string, data: UpdateSkillDTO) => Promise<Skill | undefined>
+    delete: (id: string) => Promise<boolean>
+  }
+  secrets: {
+    getAll: () => Promise<Secret[]>
+    get: (id: string) => Promise<Secret | undefined>
+    create: (data: CreateSecretDTO) => Promise<Secret>
+    update: (id: string, data: UpdateSecretDTO) => Promise<Secret | undefined>
     delete: (id: string) => Promise<boolean>
   }
   deps: {

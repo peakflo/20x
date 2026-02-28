@@ -219,6 +219,14 @@ export class AcpAdapter implements CodingAgentAdapter {
       env.ANTHROPIC_API_KEY = config.apiKeys.anthropic
     }
 
+    // Inject secret broker shell wrapper if secrets are configured
+    if (config.secretBrokerPort && config.secretSessionToken && config.secretShellPath) {
+      env._20X_REAL_SHELL = env.SHELL || '/bin/bash'
+      env.SHELL = config.secretShellPath
+      env._20X_SB_PORT = String(config.secretBrokerPort)
+      env._20X_SB_TOKEN = config.secretSessionToken
+    }
+
     // Validate required API keys are present
     if (this.agentType === 'codex') {
       if (!env.OPENAI_API_KEY && !env.CODEX_API_KEY) {
@@ -358,6 +366,14 @@ export class AcpAdapter implements CodingAgentAdapter {
       anthropicKeyLength: env.ANTHROPIC_API_KEY?.length,
       anthropicKeyPrefix: env.ANTHROPIC_API_KEY?.substring(0, 5)
     })
+
+    // Inject secret broker shell wrapper if secrets are configured
+    if (config.secretBrokerPort && config.secretSessionToken && config.secretShellPath) {
+      env._20X_REAL_SHELL = env.SHELL || '/bin/bash'
+      env.SHELL = config.secretShellPath
+      env._20X_SB_PORT = String(config.secretBrokerPort)
+      env._20X_SB_TOKEN = config.secretSessionToken
+    }
 
     // Validate required API keys are present
     if (this.agentType === 'codex') {

@@ -8,6 +8,7 @@ import { Checkbox } from '@/components/ui/Checkbox'
 import { agentConfigApi } from '@/lib/ipc-client'
 import { useMcpStore } from '@/stores/mcp-store'
 import { SkillSelector } from '@/components/skills/SkillSelector'
+import { SecretSelector } from '@/components/secrets/SecretSelector'
 import type { Agent, CreateAgentDTO, UpdateAgentDTO, AgentMcpServerEntry } from '@/types'
 import { CodingAgentType, CODING_AGENTS, CLAUDE_MODELS, CODEX_MODELS } from '@/types'
 
@@ -44,6 +45,7 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
   const [systemPrompt, setSystemPrompt] = useState(agent?.config.system_prompt ?? '')
   const [maxParallelSessions, setMaxParallelSessions] = useState(agent?.config.max_parallel_sessions ?? 1)
   const [skillIds, setSkillIds] = useState<string[] | undefined>(agent?.config.skill_ids)
+  const [secretIds, setSecretIds] = useState<string[]>(agent?.config.secret_ids ?? [])
   const [mcpSelection, setMcpSelection] = useState<Map<string, string[] | undefined>>(
     () => parseMcpSelection(agent?.config.mcp_servers)
   )
@@ -184,6 +186,7 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
         max_parallel_sessions: maxParallelSessions,
         mcp_servers: mcpServersConfig.length > 0 ? mcpServersConfig : undefined,
         skill_ids: skillIds,
+        secret_ids: secretIds.length > 0 ? secretIds : undefined,
         api_keys: {
           openai: openaiApiKey.trim() || undefined,
           anthropic: anthropicApiKey.trim() || undefined
@@ -514,6 +517,14 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
       <div className="space-y-2">
         <Label>Skills</Label>
         <SkillSelector selectedIds={skillIds} onChange={setSkillIds} />
+      </div>
+
+      <div className="space-y-2">
+        <Label>Secrets</Label>
+        <p className="text-xs text-muted-foreground">
+          Select secrets to inject into the agent's shell environment
+        </p>
+        <SecretSelector selectedIds={secretIds} onChange={setSecretIds} />
       </div>
 
       <div className="flex justify-end gap-2 pt-2">
