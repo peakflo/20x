@@ -5,7 +5,7 @@ import { join, delimiter } from 'path'
 import { existsSync, copyFileSync, mkdirSync, writeFileSync, readFileSync, readdirSync, statSync } from 'fs'
 import { Agent as UndiciAgent } from 'undici'
 import type { BrowserWindow } from 'electron'
-import type { DatabaseManager, AgentMcpServerEntry, OutputFieldRecord, SkillRecord, TaskRecord } from './database'
+import type { DatabaseManager, AgentConfigRecord, AgentMcpServerEntry, OutputFieldRecord, SkillRecord, TaskRecord } from './database'
 import { TaskStatus } from '../shared/constants'
 import type { WorktreeManager } from './worktree-manager'
 import type { GitHubManager } from './github-manager'
@@ -285,6 +285,19 @@ export class AgentManager extends EventEmitter {
         config.secretBrokerPort = brokerPort
         config.secretSessionToken = session.secretSessionToken
         config.secretShellPath = writeSecretShellWrapper()
+      }
+    }
+
+    // Also populate direct env vars (for runtimes that don't respect $SHELL)
+    const secretIds = (agent.config as AgentConfigRecord)?.secret_ids
+    if (secretIds && secretIds.length > 0) {
+      const secrets = this.db.getSecretsWithValues(secretIds)
+      if (secrets.length > 0) {
+        config.secretEnvVars = {}
+        for (const s of secrets) {
+          config.secretEnvVars[s.env_var_name] = s.value
+        }
+        console.log(`[AgentManager] buildSessionConfig: attached ${secrets.length} secret env var(s): [${secrets.map(s => s.env_var_name).join(', ')}]`)
       }
     }
 
@@ -890,6 +903,18 @@ export class AgentManager extends EventEmitter {
       }
     }
 
+    // Populate direct env vars (for runtimes that don't respect $SHELL)
+    const secretIds = (agent.config as AgentConfigRecord)?.secret_ids
+    if (secretIds && secretIds.length > 0) {
+      const secrets = this.db.getSecretsWithValues(secretIds)
+      if (secrets.length > 0) {
+        sessionConfig.secretEnvVars = {}
+        for (const s of secrets) {
+          sessionConfig.secretEnvVars[s.env_var_name] = s.value
+        }
+      }
+    }
+
     // Initialize adapter
     await adapter.initialize()
 
@@ -1251,6 +1276,18 @@ export class AgentManager extends EventEmitter {
         sessionConfig.secretBrokerPort = brokerPort
         sessionConfig.secretSessionToken = secretToken
         sessionConfig.secretShellPath = writeSecretShellWrapper()
+      }
+    }
+
+    // Populate direct env vars (for runtimes that don't respect $SHELL)
+    const secretIds = (agent.config as AgentConfigRecord)?.secret_ids
+    if (secretIds && secretIds.length > 0) {
+      const secrets = this.db.getSecretsWithValues(secretIds)
+      if (secrets.length > 0) {
+        sessionConfig.secretEnvVars = {}
+        for (const s of secrets) {
+          sessionConfig.secretEnvVars[s.env_var_name] = s.value
+        }
       }
     }
 

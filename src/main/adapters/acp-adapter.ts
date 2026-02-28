@@ -219,12 +219,11 @@ export class AcpAdapter implements CodingAgentAdapter {
       env.ANTHROPIC_API_KEY = config.apiKeys.anthropic
     }
 
-    // Inject secret broker shell wrapper if secrets are configured
-    if (config.secretBrokerPort && config.secretSessionToken && config.secretShellPath) {
-      env._20X_REAL_SHELL = env.SHELL || '/bin/bash'
-      env.SHELL = config.secretShellPath
-      env._20X_SB_PORT = String(config.secretBrokerPort)
-      env._20X_SB_TOKEN = config.secretSessionToken
+    // Inject secret env vars directly into process environment
+    if (config.secretEnvVars && Object.keys(config.secretEnvVars).length > 0) {
+      for (const [key, value] of Object.entries(config.secretEnvVars)) {
+        env[key] = value
+      }
     }
 
     // Validate required API keys are present
@@ -367,12 +366,11 @@ export class AcpAdapter implements CodingAgentAdapter {
       anthropicKeyPrefix: env.ANTHROPIC_API_KEY?.substring(0, 5)
     })
 
-    // Inject secret broker shell wrapper if secrets are configured
-    if (config.secretBrokerPort && config.secretSessionToken && config.secretShellPath) {
-      env._20X_REAL_SHELL = env.SHELL || '/bin/bash'
-      env.SHELL = config.secretShellPath
-      env._20X_SB_PORT = String(config.secretBrokerPort)
-      env._20X_SB_TOKEN = config.secretSessionToken
+    // Inject secret env vars directly into process environment
+    if (config.secretEnvVars && Object.keys(config.secretEnvVars).length > 0) {
+      for (const [key, value] of Object.entries(config.secretEnvVars)) {
+        env[key] = value
+      }
     }
 
     // Validate required API keys are present

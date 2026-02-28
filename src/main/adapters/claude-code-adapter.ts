@@ -99,15 +99,15 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
     // Remove CLAUDECODE to prevent nested session error
     delete env.CLAUDECODE
 
-    // Inject secret broker shell wrapper if secrets are configured
-    if (config?.secretBrokerPort && config?.secretSessionToken && config?.secretShellPath) {
-      env._20X_REAL_SHELL = env.SHELL || '/bin/bash'
-      env.SHELL = config.secretShellPath
-      env._20X_SB_PORT = String(config.secretBrokerPort)
-      env._20X_SB_TOKEN = config.secretSessionToken
-      console.log(`[ClaudeCodeAdapter] Secret env injected: SHELL=${config.secretShellPath} PORT=${config.secretBrokerPort} TOKEN=${config.secretSessionToken.substring(0, 8)}...`)
-    } else if (config) {
-      console.log(`[ClaudeCodeAdapter] No secret config: brokerPort=${config.secretBrokerPort} token=${config.secretSessionToken ? 'set' : 'unset'} shellPath=${config.secretShellPath || 'unset'}`)
+    // Inject secret env vars directly into process environment.
+    // Claude Code doesn't use $SHELL to run bash commands, so the shell wrapper
+    // approach doesn't work. Instead, inject decrypted secret values directly —
+    // they're inherited by child processes (bash commands) the agent spawns.
+    if (config?.secretEnvVars && Object.keys(config.secretEnvVars).length > 0) {
+      for (const [key, value] of Object.entries(config.secretEnvVars)) {
+        env[key] = value
+      }
+      console.log(`[ClaudeCodeAdapter] Secret env vars injected: [${Object.keys(config.secretEnvVars).join(', ')}]`)
     }
 
     return env

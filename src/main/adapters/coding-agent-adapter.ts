@@ -54,6 +54,9 @@ export interface SessionConfig {
   secretSessionToken?: string
   /** Absolute path to the secret-shell.sh wrapper script */
   secretShellPath?: string
+  /** Decrypted secret env vars to inject directly into the agent process env.
+   *  Used when the agent runtime doesn't respect $SHELL (e.g. Claude Code). */
+  secretEnvVars?: Record<string, string>
 }
 
 export interface SessionStatus {
