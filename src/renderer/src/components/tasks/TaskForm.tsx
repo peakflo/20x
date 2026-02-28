@@ -43,6 +43,7 @@ export function TaskForm({ task, onSubmit, onCancel }: TaskFormProps) {
   const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([])
   const [recurrencePattern, setRecurrencePattern] = useState<RecurrencePattern | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [submitError, setSubmitError] = useState<string | null>(null)
 
   useEffect(() => {
     if (task) {
@@ -65,6 +66,7 @@ export function TaskForm({ task, onSubmit, onCancel }: TaskFormProps) {
     if (!title.trim()) return
 
     setIsSubmitting(true)
+    setSubmitError(null)
     try {
       const parsedLabels = labels
         .split(',')
@@ -91,6 +93,9 @@ export function TaskForm({ task, onSubmit, onCancel }: TaskFormProps) {
       }
 
       await onSubmit(formData)
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err)
+      setSubmitError(reason)
     } finally {
       setIsSubmitting(false)
     }
@@ -170,6 +175,10 @@ export function TaskForm({ task, onSubmit, onCancel }: TaskFormProps) {
       <div className="rounded-md border p-4">
         <RecurrenceEditor value={recurrencePattern} onChange={setRecurrencePattern} />
       </div>
+
+      {submitError && (
+        <p className="text-sm text-destructive">{submitError}</p>
+      )}
 
       <div className="flex justify-end gap-3 pt-4 border-t">
         <Button type="button" variant="ghost" onClick={onCancel}>Cancel</Button>

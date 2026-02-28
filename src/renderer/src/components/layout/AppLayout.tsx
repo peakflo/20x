@@ -179,14 +179,7 @@ export function AppLayout() {
                 const pendingFiles = formData._pendingFiles
                 delete formData._pendingFiles
 
-                let newTask
-                try {
-                  newTask = await createTask(formData)
-                } catch (err) {
-                  const reason = err instanceof Error ? err.message : String(err)
-                  showToast(`Failed to create task: ${reason}`, true)
-                  return
-                }
+                const newTask = await createTask(formData)
                 if (newTask && pendingFiles?.length) {
                   const attachments: FileAttachment[] = []
                   for (const pf of pendingFiles) {
@@ -215,13 +208,7 @@ export function AppLayout() {
               <TaskForm
                 task={editingTask}
                 onSubmit={async (data) => {
-                  try {
-                    await updateTask(editingTask.id, data)
-                  } catch (err) {
-                    const reason = err instanceof Error ? err.message : String(err)
-                    showToast(`Failed to update task: ${reason}`, true)
-                    return
-                  }
+                  await updateTask(editingTask.id, data)
                   closeModal()
                 }}
                 onCancel={closeModal}

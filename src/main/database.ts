@@ -550,7 +550,7 @@ function deserializeOAuthToken(row: OAuthTokenRow): OAuthTokenRecord {
 
 // Bump this whenever new migrations are added so returning users skip
 // the full migration check on startup.
-const SCHEMA_VERSION = 1
+const SCHEMA_VERSION = 2
 
 export class DatabaseManager {
   public db!: Database.Database
@@ -696,6 +696,80 @@ export class DatabaseManager {
       CREATE INDEX IF NOT EXISTS idx_oauth_tokens_source ON oauth_tokens(source_id);
       CREATE INDEX IF NOT EXISTS idx_oauth_tokens_provider ON oauth_tokens(provider);
     `)
+  }
+
+  /**
+   * Rebuild the tasks table using the canonical schema from createTables().
+   * Dynamically copies all columns that exist in both old and new tables,
+   * so future column additions don't need to update this method.
+   * Refreshes columnNames in-place after the rebuild.
+   */
+  private rebuildTasksTable(columnNames: Set<string>): void {
+    this.db.exec('PRAGMA foreign_keys = OFF')
+
+    // Drop tasks_new if it exists from a previous failed attempt
+    this.db.exec('DROP TABLE IF EXISTS tasks_new')
+
+    // Create tasks_new with the canonical schema
+    this.db.exec(`
+      CREATE TABLE tasks_new (
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        description TEXT NOT NULL DEFAULT '',
+        type TEXT NOT NULL DEFAULT 'general',
+        priority TEXT NOT NULL DEFAULT 'medium',
+        status TEXT NOT NULL DEFAULT '${TaskStatus.NotStarted}',
+        assignee TEXT NOT NULL DEFAULT '',
+        due_date TEXT,
+        labels TEXT NOT NULL DEFAULT '[]',
+        checklist TEXT NOT NULL DEFAULT '[]',
+        source TEXT NOT NULL DEFAULT 'local',
+        resolution TEXT,
+        attachments TEXT NOT NULL DEFAULT '[]',
+        repos TEXT NOT NULL DEFAULT '[]',
+        output_fields TEXT NOT NULL DEFAULT '[]',
+        agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL,
+        external_id TEXT,
+        source_id TEXT REFERENCES task_sources(id) ON DELETE CASCADE,
+        skill_ids TEXT DEFAULT NULL,
+        session_id TEXT DEFAULT NULL,
+        snoozed_until TEXT DEFAULT NULL,
+        feedback_rating INTEGER DEFAULT NULL,
+        feedback_comment TEXT DEFAULT NULL,
+        is_recurring INTEGER NOT NULL DEFAULT 0,
+        recurrence_pattern TEXT DEFAULT NULL,
+        recurrence_parent_id TEXT REFERENCES tasks(id) ON DELETE CASCADE,
+        last_occurrence_at TEXT DEFAULT NULL,
+        next_occurrence_at TEXT DEFAULT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )
+    `)
+
+    // Dynamically find columns shared between old and new tables
+    const newCols = (this.db.pragma('table_info(tasks_new)') as { name: string }[]).map(c => c.name)
+    const sharedCols = newCols.filter(c => columnNames.has(c))
+
+    const colList = sharedCols.join(', ')
+    this.db.exec(`INSERT INTO tasks_new (${colList}) SELECT ${colList} FROM tasks`)
+
+    this.db.exec('DROP TABLE tasks')
+    this.db.exec('ALTER TABLE tasks_new RENAME TO tasks')
+
+    // Recreate indexes
+    this.db.exec(`
+      CREATE INDEX idx_tasks_status ON tasks(status);
+      CREATE INDEX idx_tasks_priority ON tasks(priority);
+      CREATE INDEX idx_tasks_source ON tasks(source);
+      CREATE UNIQUE INDEX idx_tasks_source_external ON tasks(source_id, external_id) WHERE external_id IS NOT NULL;
+      CREATE INDEX idx_tasks_next_occurrence ON tasks(next_occurrence_at) WHERE is_recurring = 1;
+    `)
+
+    this.db.exec('PRAGMA foreign_keys = ON')
+
+    // Refresh columnNames so subsequent migrations see accurate state
+    columnNames.clear()
+    for (const col of newCols) columnNames.add(col)
   }
 
   private runMigrations(): void {
@@ -910,72 +984,7 @@ export class DatabaseManager {
     const sourceIdFk = taskTableInfo.find(fk => fk.from === 'source_id' && fk.table === 'task_sources')
     if (sourceIdFk && sourceIdFk.on_delete === 'SET NULL') {
       console.log('[Database Migration] Updating source_id foreign key to CASCADE delete')
-
-      // Recreate tasks table with CASCADE delete for source_id
-      this.db.exec(`
-        PRAGMA foreign_keys = OFF;
-
-        -- Create new tasks table with CASCADE delete
-        CREATE TABLE tasks_new (
-          id TEXT PRIMARY KEY,
-          title TEXT NOT NULL,
-          description TEXT NOT NULL DEFAULT '',
-          type TEXT NOT NULL DEFAULT 'general',
-          priority TEXT NOT NULL DEFAULT 'medium',
-          status TEXT NOT NULL DEFAULT '${TaskStatus.NotStarted}',
-          assignee TEXT NOT NULL DEFAULT '',
-          due_date TEXT,
-          labels TEXT NOT NULL DEFAULT '[]',
-          checklist TEXT NOT NULL DEFAULT '[]',
-          attachments TEXT NOT NULL DEFAULT '[]',
-          repos TEXT NOT NULL DEFAULT '[]',
-          output_fields TEXT NOT NULL DEFAULT '[]',
-          agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL,
-          external_id TEXT,
-          source_id TEXT REFERENCES task_sources(id) ON DELETE CASCADE,
-          source TEXT NOT NULL DEFAULT 'local',
-          skill_ids TEXT DEFAULT NULL,
-          session_id TEXT DEFAULT NULL,
-          snoozed_until TEXT DEFAULT NULL,
-          resolution TEXT,
-          created_at TEXT NOT NULL,
-          updated_at TEXT NOT NULL
-        );
-
-        -- Copy all data (handle both old and new schema columns)
-        INSERT INTO tasks_new
-        SELECT
-          id, title, description, type, priority, status, assignee, due_date,
-          labels, checklist,
-          COALESCE(attachments, '[]'),
-          COALESCE(repos, '[]'),
-          COALESCE(output_fields, '[]'),
-          agent_id,
-          external_id,
-          source_id,
-          source,
-          skill_ids,
-          session_id,
-          snoozed_until,
-          resolution,
-          created_at, updated_at
-        FROM tasks;
-
-        -- Drop old table
-        DROP TABLE tasks;
-
-        -- Rename new table
-        ALTER TABLE tasks_new RENAME TO tasks;
-
-        -- Recreate indexes
-        CREATE INDEX idx_tasks_status ON tasks(status);
-        CREATE INDEX idx_tasks_priority ON tasks(priority);
-        CREATE INDEX idx_tasks_source ON tasks(source);
-        CREATE UNIQUE INDEX idx_tasks_source_external ON tasks(source_id, external_id) WHERE external_id IS NOT NULL;
-
-        PRAGMA foreign_keys = ON;
-      `)
-
+      this.rebuildTasksTable(columnNames)
       console.log('[Database Migration] Successfully updated source_id foreign key to CASCADE')
     }
 
