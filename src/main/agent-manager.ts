@@ -455,10 +455,22 @@ export class AgentManager extends EventEmitter {
         const secrets = this.db.getSecretsByIds(secretIds)
         if (secrets.length > 0) {
           md += `## Available Secrets\n\n`
-          md += `The following secrets are available as environment variables in shell commands.\n`
-          md += `They are automatically injected — you do NOT need to set them manually.\n\n`
+          md += `The following secrets are automatically injected as environment variables into every shell/bash command you run.\n`
+          md += `They are managed by the user and securely provided at runtime — you MUST NOT hardcode, echo, log, or ask the user for these values.\n\n`
+          md += `### How to use\n\n`
+          md += `Reference them with \`$VAR_NAME\` in any bash command. Examples:\n\n`
+          md += `\`\`\`bash\n`
+          md += `# Connect to a database\n`
+          md += `psql "$DATABASE_URL"\n\n`
+          md += `# Use an API key in a curl request\n`
+          md += `curl -H "Authorization: Bearer $API_KEY" https://api.example.com\n\n`
+          md += `# Pass to a script\n`
+          md += `python deploy.py --token "$DEPLOY_TOKEN"\n`
+          md += `\`\`\`\n\n`
+          md += `**Important:** Secrets are ONLY available inside bash/shell commands. They are not in your process environment or accessible via tool arguments.\n\n`
+          md += `### Available secrets\n\n`
           for (const secret of secrets) {
-            md += `- **\`${secret.env_var_name}\`** — ${secret.name}`
+            md += `- **\`$${secret.env_var_name}\`** — ${secret.name}`
             if (secret.description) md += `: ${secret.description}`
             md += `\n`
           }
@@ -554,8 +566,18 @@ export class AgentManager extends EventEmitter {
         const secrets = this.db.getSecretsByIds(secretIds)
         if (secrets.length > 0) {
           md += `## Available Secrets\n\n`
-          md += `The following secrets are automatically injected into your shell environment.\n`
-          md += `You can use them directly in bash commands — do NOT hardcode or ask for these values.\n\n`
+          md += `The following secrets are automatically injected as environment variables into every bash command you execute.\n`
+          md += `They are securely managed — you MUST NOT hardcode, echo, print, log, or ask the user for these values.\n\n`
+          md += `### Usage\n\n`
+          md += `Use \`$VAR_NAME\` directly in any bash command:\n\n`
+          md += `\`\`\`bash\n`
+          md += `# They are already set — just reference them\n`
+          md += `psql "$DATABASE_URL"\n`
+          md += `curl -H "Authorization: Bearer $API_KEY" https://api.example.com\n`
+          md += `python deploy.py --token "$DEPLOY_TOKEN"\n`
+          md += `\`\`\`\n\n`
+          md += `**Important:** Secrets are ONLY available inside bash/shell commands (the Bash tool). They are not accessible in your own process environment, tool arguments, or file contents.\n\n`
+          md += `### Available secrets\n\n`
           for (const secret of secrets) {
             md += `- **\`$${secret.env_var_name}\`** — ${secret.name}`
             if (secret.description) md += `: ${secret.description}`
