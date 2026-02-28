@@ -255,6 +255,8 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
       const content = readFileSync(sessionFile, 'utf-8')
       const lines = content.trim().split('\n')
       const messages: SessionMessage[] = []
+      // Map tool_use_id → part reference so tool_result can merge into it
+      const toolUseParts = new Map<string, MessagePart['tool']>()
 
       for (const line of lines) {
         const entry = JSON.parse(line)
@@ -281,21 +283,50 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
                 content: contentPart.text
               })
             } else if (contentPart.type === 'tool_use') {
-              message.parts.push({
-                type: MessagePartType.TOOL,
-                tool: {
-                  name: contentPart.name,
-                  input: contentPart.input
-                }
-              })
-            } else if (contentPart.type === 'tool_result') {
-              message.parts.push({
-                type: MessagePartType.TOOL,
-                tool: {
-                  name: 'tool_result',
-                  output: contentPart.content
-                }
-              })
+              const rawInput = contentPart.input as Record<string, unknown> | undefined
+              const toolName = contentPart.name || 'unknown'
+              const title = this.buildToolTitle(toolName, rawInput)
+              const input = rawInput ? JSON.stringify(rawInput, null, 2) : undefined
+              const toolObj: MessagePart['tool'] = {
+                name: toolName,
+                status: 'pending',
+                title,
+                input,
+              }
+
+              // Detect TodoWrite → set todowrite type and extract todos
+              let partType: string = MessagePartType.TOOL
+              let todos = rawInput?.todos
+              if (typeof todos === 'string') { try { todos = JSON.parse(todos) } catch {} }
+              if (Array.isArray(todos) && todos.length > 0) {
+                partType = 'todowrite'
+                toolObj.todos = todos.map((t: any, i: number) => ({
+                  id: t.id || `todo-${i}`,
+                  content: t.content || '',
+                  status: t.status || 'pending',
+                  priority: t.priority,
+                }))
+              }
+
+              // Detect AskUserQuestion → set question type and extract questions
+              let questions = rawInput?.questions
+              if (typeof questions === 'string') { try { questions = JSON.parse(questions) } catch {} }
+              if (Array.isArray(questions) && questions.length > 0) {
+                partType = 'question'
+                toolObj.questions = questions
+              }
+
+              message.parts.push({ type: partType as any, tool: toolObj })
+              if (contentPart.id) toolUseParts.set(contentPart.id, toolObj)
+            } else if (contentPart.type === 'tool_result' && contentPart.tool_use_id) {
+              // Merge result into the matching tool_use part instead of creating separate entry
+              const matchingTool = toolUseParts.get(contentPart.tool_use_id)
+              if (matchingTool) {
+                matchingTool.status = 'success'
+                matchingTool.output = contentPart.content
+                  ? String(contentPart.content).slice(0, 2000) : undefined
+              }
+              // Don't push a separate part — result is merged into tool_use
             }
           }
         }
@@ -899,7 +930,8 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
           })
         } else if (blockWithProps.type === 'tool_use') {
           const toolName = blockWithProps.name || 'unknown'
-          const input = blockWithProps.input ? JSON.stringify(blockWithProps.input, null, 2) : undefined
+          const rawInput = blockWithProps.input as Record<string, unknown> | undefined
+          const input = rawInput ? JSON.stringify(rawInput, null, 2) : undefined
           const toolUseId = blockWithProps.id || ''
 
           // Use tool_use_id as partId so we can update it when result arrives
@@ -907,16 +939,55 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
           if (seenPartIds.has(toolPartId)) continue
           seenPartIds.add(toolPartId)
 
+          // Build a human-readable title from tool input (mirrors buildPartPayload for OpenCode)
+          const title = this.buildToolTitle(toolName, rawInput)
+
+          // Detect AskUserQuestion → render as interactive question
+          let questions = rawInput?.questions
+          if (typeof questions === 'string') {
+            try { questions = JSON.parse(questions) } catch {}
+          }
+          if (Array.isArray(questions) && questions.length > 0) {
+            partContentLengths.set(toolPartId, `pending:${toolName}`)
+            parts.push({
+              id: toolPartId,
+              type: 'question' as any,
+              content: title || 'Question',
+              tool: { name: toolName, status: 'pending', title, input, questions },
+            })
+            continue
+          }
+
+          // Detect TodoWrite → render as todo list
+          let todos = rawInput?.todos
+          if (typeof todos === 'string') {
+            try { todos = JSON.parse(todos) } catch {}
+          }
+          if (Array.isArray(todos) && todos.length > 0) {
+            // Normalize: ensure each todo has an id (Claude Code SDK omits it)
+            const normalizedTodos = todos.map((t: any, i: number) => ({
+              id: t.id || `todo-${i}`,
+              content: t.content || '',
+              status: t.status || 'pending',
+              priority: t.priority,
+            }))
+            partContentLengths.set(toolPartId, `pending:${toolName}`)
+            parts.push({
+              id: toolPartId,
+              type: 'todowrite' as any,
+              content: title || 'Todo List',
+              tool: { name: toolName, status: 'pending', title, input, todos: normalizedTodos },
+            })
+            continue
+          }
+
+          // Regular tool call
           partContentLengths.set(toolPartId, `pending:${toolName}`)
           parts.push({
             id: toolPartId,
             type: MessagePartType.TOOL,
-            content: `Tool: ${toolName}`,
-            tool: {
-              name: toolName,
-              status: 'pending',
-              input,
-            },
+            content: title ? `${toolName} — ${title}` : toolName,
+            tool: { name: toolName, status: 'pending', title, input },
           })
         }
       }
@@ -987,23 +1058,29 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
       }
     } else if (msgWithProps.type === 'tool_use_summary') {
       const partId = `tool-${msgWithProps.tool_use_id || Date.now()}`
-      if (!seenPartIds.has(partId)) {
-        seenPartIds.add(partId)
+      const toolName = msgWithProps.tool_name || 'unknown'
+      const status = msgWithProps.status || 'unknown'
+      const output = msgWithProps.output ? String(msgWithProps.output).slice(0, 2000) : undefined
 
-        const toolName = msgWithProps.tool_name || 'unknown'
-        const status = msgWithProps.status || 'unknown'
-        const output = msgWithProps.output ? String(msgWithProps.output).slice(0, 2000) : undefined
-
+      if (seenPartIds.has(partId)) {
+        // Tool_use was already emitted — send an UPDATE to merge the result into it
         partContentLengths.set(partId, `${status}:${output?.length || 0}`)
         parts.push({
           id: partId,
           type: MessagePartType.TOOL,
           content: `${toolName} — ${status}`,
-          tool: {
-            name: toolName,
-            status,
-            output,
-          },
+          tool: { name: toolName, status, output },
+          update: true,
+        })
+      } else {
+        // First time seeing this tool — add as new entry
+        seenPartIds.add(partId)
+        partContentLengths.set(partId, `${status}:${output?.length || 0}`)
+        parts.push({
+          id: partId,
+          type: MessagePartType.TOOL,
+          content: `${toolName} — ${status}`,
+          tool: { name: toolName, status, output },
         })
       }
     } else if (msgWithProps.type === 'system') {
@@ -1027,5 +1104,41 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
     }
 
     return parts
+  }
+
+  /**
+   * Builds a human-readable title for a tool call from its input.
+   * Mirrors the titles that OpenCode/buildPartPayload produces.
+   */
+  private buildToolTitle(toolName: string, input?: Record<string, unknown>): string {
+    if (!input) return ''
+
+    switch (toolName) {
+      case 'Bash':
+        return input.command ? String(input.command) : (input.description ? String(input.description) : '')
+      case 'Read':
+        return input.file_path ? String(input.file_path) : ''
+      case 'Edit':
+      case 'Write':
+        return input.file_path ? String(input.file_path) : ''
+      case 'Grep':
+        return input.pattern
+          ? `${input.pattern}${input.path ? ` in ${input.path}` : ''}`
+          : ''
+      case 'Glob':
+        return input.pattern ? String(input.pattern) : ''
+      case 'Task':
+        return input.description ? String(input.description) : ''
+      case 'WebFetch':
+        return input.url ? String(input.url) : ''
+      case 'WebSearch':
+        return input.query ? String(input.query) : ''
+      case 'TodoWrite':
+        return 'Todo List'
+      case 'AskUserQuestion':
+        return 'Question'
+      default:
+        return ''
+    }
   }
 }

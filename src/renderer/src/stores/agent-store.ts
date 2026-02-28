@@ -187,11 +187,15 @@ export const useAgentStore = create<AgentState>((set, get) => {
       set({
         sessions: new Map(state.sessions).set(taskId, {
           ...resolvedSession,
-          messages: resolvedSession.messages.map((m) =>
-            m.id === msgId
-              ? { ...m, content, ...(data.partType && { partType: data.partType }), ...(data.tool && { tool: data.tool }) }
-              : m
-          )
+          messages: resolvedSession.messages.map((m) => {
+            if (m.id !== msgId) return m
+            // Preserve todowrite/question partType — don't let a generic 'tool' update overwrite them
+            const keepPartType = m.partType === 'todowrite' || m.partType === 'question'
+            const newPartType = keepPartType ? m.partType : (data.partType || m.partType)
+            // Merge tool objects so todos/questions are preserved across updates
+            const newTool = data.tool ? { ...m.tool, ...data.tool } : m.tool
+            return { ...m, content, partType: newPartType, tool: newTool }
+          })
         })
       })
       return

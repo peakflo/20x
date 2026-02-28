@@ -1,5 +1,5 @@
 import { useRef, useEffect, useState, useMemo } from 'react'
-import { StopCircle, Loader2, Terminal, Send, ChevronRight, Wrench, AlertTriangle, CheckCircle2, Circle, Clock, RotateCcw, Code2, Eye } from 'lucide-react'
+import { StopCircle, Loader2, Terminal, Send, ChevronRight, ChevronDown, Wrench, AlertTriangle, CheckCircle2, Circle, Clock, RotateCcw, Code2, Eye, ListTodo } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { Markdown } from '@/components/ui/Markdown'
 import type { AgentMessage } from '@/hooks/use-agent-session'
@@ -330,10 +330,73 @@ function MessageBubble({ message, onAnswer, viewMode }: { message: AgentMessage;
   )
 }
 
+function TodoSummary({ todos }: { todos: NonNullable<AgentMessage['tool']>['todos'] }) {
+  const [expanded, setExpanded] = useState(true)
+  if (!todos || todos.length === 0) return null
+
+  const completed = todos.filter((t) => t.status === 'completed').length
+  const inProgress = todos.filter((t) => t.status === 'in_progress').length
+
+  const statusIcon = (status: string) => {
+    switch (status) {
+      case 'completed': return <CheckCircle2 className="h-3 w-3 text-green-400 shrink-0" />
+      case 'in_progress': return <Clock className="h-3 w-3 text-yellow-400 shrink-0 animate-pulse" />
+      default: return <Circle className="h-3 w-3 text-muted-foreground shrink-0" />
+    }
+  }
+
+  return (
+    <div className="border-b border-border/50 shrink-0">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="w-full flex items-center gap-2 px-4 py-2 text-xs hover:bg-white/5 transition-colors"
+      >
+        {expanded
+          ? <ChevronDown className="h-3 w-3 text-muted-foreground shrink-0" />
+          : <ChevronRight className="h-3 w-3 text-muted-foreground shrink-0" />
+        }
+        <ListTodo className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+        <span className="text-muted-foreground font-medium">Tasks</span>
+        <span className="text-muted-foreground ml-auto tabular-nums">
+          {completed}/{todos.length}
+          {inProgress > 0 && <span className="text-yellow-400 ml-1.5">({inProgress} active)</span>}
+        </span>
+      </button>
+      {expanded && (
+        <div className="px-4 pb-2.5 space-y-0.5">
+          {todos.map((todo) => (
+            <div
+              key={todo.id}
+              className={`flex items-start gap-2 rounded px-2 py-1 text-xs ${
+                todo.status === 'completed' ? 'opacity-50' : ''
+              }`}
+            >
+              {statusIcon(todo.status)}
+              <span className={todo.status === 'completed' ? 'line-through text-muted-foreground' : 'text-foreground'}>
+                {todo.content}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function AgentTranscriptPanel({ title = 'Agent transcript', messages, status, onStop, onRestart, onSend, className }: AgentTranscriptPanelProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const [viewMode, setViewMode] = useState<ViewMode>(ViewMode.MARKDOWN)
+
+  // Find the latest todowrite message to show as a pinned summary
+  const latestTodos = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].partType === 'todowrite' && messages[i].tool?.todos?.length) {
+        return messages[i].tool!.todos!
+      }
+    }
+    return null
+  }, [messages])
 
   // Detect if the session ended due to an error (last message is error/retry and status is idle)
   const lastErrorMessage = useMemo(() => {
@@ -429,6 +492,9 @@ export function AgentTranscriptPanel({ title = 'Agent transcript', messages, sta
           <span className="text-xs text-red-300 truncate">{lastErrorMessage.content}</span>
         </div>
       )}
+
+      {/* Pinned todo summary */}
+      {latestTodos && <TodoSummary todos={latestTodos} />}
 
       {/* Messages */}
       <div
