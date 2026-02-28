@@ -105,6 +105,9 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
       env.SHELL = config.secretShellPath
       env._20X_SB_PORT = String(config.secretBrokerPort)
       env._20X_SB_TOKEN = config.secretSessionToken
+      console.log(`[ClaudeCodeAdapter] Secret env injected: SHELL=${config.secretShellPath} PORT=${config.secretBrokerPort} TOKEN=${config.secretSessionToken.substring(0, 8)}...`)
+    } else if (config) {
+      console.log(`[ClaudeCodeAdapter] No secret config: brokerPort=${config.secretBrokerPort} token=${config.secretSessionToken ? 'set' : 'unset'} shellPath=${config.secretShellPath || 'unset'}`)
     }
 
     return env

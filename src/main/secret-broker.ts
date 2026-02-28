@@ -52,6 +52,7 @@ export function startSecretBroker(db: DatabaseManager): Promise<number> {
       if (url.pathname === '/secrets/export') {
         const token = url.searchParams.get('token')
         if (!token || !activeSessions.has(token)) {
+          console.log(`[SecretBroker] 403 — invalid/missing token: ${token ? token.substring(0, 8) + '...' : 'null'}`)
           res.writeHead(403, { 'Content-Type': 'text/plain' })
           res.end('')
           return
@@ -59,12 +60,15 @@ export function startSecretBroker(db: DatabaseManager): Promise<number> {
 
         const session = activeSessions.get(token)!
         if (!dbRef) {
+          console.log('[SecretBroker] 500 — dbRef is null')
           res.writeHead(500, { 'Content-Type': 'text/plain' })
           res.end('')
           return
         }
 
+        console.log(`[SecretBroker] Fetching secrets for agent ${session.agentId}, secretIds: [${session.secretIds.join(', ')}]`)
         const secrets = dbRef.getSecretsWithValues(session.secretIds)
+        console.log(`[SecretBroker] Found ${secrets.length} secret(s): [${secrets.map(s => `${s.env_var_name}(${s.value.length} chars)`).join(', ')}]`)
 
         // Return shell export statements
         // Single-quote values and escape embedded single quotes
@@ -72,6 +76,7 @@ export function startSecretBroker(db: DatabaseManager): Promise<number> {
           .map(s => `export ${s.env_var_name}='${s.value.replace(/'/g, "'\\''")}'`)
           .join('\n')
 
+        console.log(`[SecretBroker] Response body length: ${exports.length} bytes`)
         res.writeHead(200, { 'Content-Type': 'text/plain' })
         res.end(exports)
         return
@@ -116,6 +121,8 @@ export function stopSecretBroker(): void {
 export function writeSecretShellWrapper(): string {
   const shellPath = join(app.getPath('userData'), 'secret-shell.sh')
 
+  const debugLog = join(app.getPath('userData'), 'secret-shell-debug.log')
+
   const script = `#!/bin/bash
 # 20x Secret Shell Wrapper
 # Fetches secrets from the local broker and injects them into the command environment.
@@ -125,12 +132,18 @@ _real_shell="\${_20X_REAL_SHELL:-/bin/bash}"
 
 # Fetch secrets from broker and export them
 if [ -n "\$_20X_SB_PORT" ] && [ -n "\$_20X_SB_TOKEN" ]; then
-  _20x_secrets="$(curl -sf "http://127.0.0.1:\${_20X_SB_PORT}/secrets/export?token=\${_20X_SB_TOKEN}" 2>/dev/null)"
+  _20x_http_code=\$(curl -sf -o /tmp/_20x_secrets_body -w "%{http_code}" "http://127.0.0.1:\${_20X_SB_PORT}/secrets/export?token=\${_20X_SB_TOKEN}" 2>/dev/null)
+  _20x_secrets=\$(cat /tmp/_20x_secrets_body 2>/dev/null)
+  rm -f /tmp/_20x_secrets_body
+
+  # Debug logging
+  echo "[secret-shell \$(date '+%H:%M:%S')] port=\$_20X_SB_PORT http_code=\$_20x_http_code body_len=\${#_20x_secrets} args=\$*" >> "${debugLog}"
+
   if [ -n "\$_20x_secrets" ]; then
     eval "\$_20x_secrets"
   fi
   # Clean up broker vars so they don't leak into command output
-  unset _20X_SB_PORT _20X_SB_TOKEN _20X_REAL_SHELL _20x_secrets
+  unset _20X_SB_PORT _20X_SB_TOKEN _20X_REAL_SHELL _20x_secrets _20x_http_code
 fi
 
 # Execute the real shell with original arguments
