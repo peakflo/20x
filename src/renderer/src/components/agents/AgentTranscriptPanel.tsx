@@ -1,4 +1,4 @@
-import { useRef, useEffect, useState, useMemo } from 'react'
+import { useRef, useEffect, useState, useMemo, useCallback } from 'react'
 import { StopCircle, Loader2, Terminal, Send, ChevronRight, ChevronDown, Wrench, AlertTriangle, CheckCircle2, Circle, Clock, RotateCcw, Code2, Eye, ListTodo } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { Markdown } from '@/components/ui/Markdown'
@@ -385,7 +385,7 @@ function TodoSummary({ todos }: { todos: NonNullable<AgentMessage['tool']>['todo
 
 export function AgentTranscriptPanel({ title = 'Agent transcript', messages, status, onStop, onRestart, onSend, className }: AgentTranscriptPanelProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
-  const inputRef = useRef<HTMLInputElement>(null)
+  const inputRef = useRef<HTMLTextAreaElement>(null)
   const [viewMode, setViewMode] = useState<ViewMode>(ViewMode.MARKDOWN)
 
   // Find the latest todowrite message to show as a pinned summary
@@ -397,6 +397,14 @@ export function AgentTranscriptPanel({ title = 'Agent transcript', messages, sta
     }
     return null
   }, [messages])
+
+  /** Auto-resize the textarea to fit its content, up to a max height */
+  const autoResize = useCallback(() => {
+    const el = inputRef.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = `${Math.min(el.scrollHeight, 128)}px` // max ~6 lines
+  }, [])
 
   // Detect if the session ended due to an error (last message is error/retry and status is idle)
   const lastErrorMessage = useMemo(() => {
@@ -439,6 +447,8 @@ export function AgentTranscriptPanel({ title = 'Agent transcript', messages, sta
     if (value && onSend) {
       onSend(value)
       inputRef.current!.value = ''
+      // Reset textarea height back to single row
+      inputRef.current!.style.height = 'auto'
     }
   }
 
@@ -533,15 +543,21 @@ export function AgentTranscriptPanel({ title = 'Agent transcript', messages, sta
       {/* Input + Footer */}
       <div className="border-t border-border/50 shrink-0">
         {onSend && (
-          <div className="flex items-center gap-2 px-4 py-2">
-            <input
+          <div className="flex items-end gap-2 px-4 py-2">
+            <textarea
               ref={inputRef}
-              type="text"
-              placeholder="Send a message..."
-              className="flex-1 bg-transparent border border-border/50 rounded px-3 py-1.5 text-xs font-mono text-foreground placeholder:text-muted-foreground focus:border-ring focus:ring-1 focus:ring-ring/30"
-              onKeyDown={(e) => e.key === 'Enter' && handleSend()}
+              rows={1}
+              placeholder="Send a message... (Shift+Enter for new line)"
+              className="flex-1 bg-transparent border border-border/50 rounded px-3 py-1.5 text-xs font-mono text-foreground placeholder:text-muted-foreground focus:border-ring focus:ring-1 focus:ring-ring/30 resize-none overflow-hidden max-h-32"
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault()
+                  handleSend()
+                }
+              }}
+              onInput={autoResize}
             />
-            <Button variant="ghost" size="icon" onClick={handleSend} className="h-7 w-7">
+            <Button variant="ghost" size="icon" onClick={handleSend} className="h-7 w-7 shrink-0 mb-0.5">
               <Send className="h-3 w-3" />
             </Button>
           </div>
