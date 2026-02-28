@@ -134,7 +134,7 @@ export function createTestDb(): { db: DatabaseManager; rawDb: InstanceType<typeo
   const manager = new DatabaseManager()
 
   // Inject the in-memory db into the private field
-  ;(manager as any).db = db
+  manager.db = db
 
   // Stub filesystem methods that call app.getPath
   manager.getWorkspaceDir = vi.fn(() => '/tmp/test-workspace')

@@ -15,7 +15,7 @@ function makeContext(overrides: Partial<PluginContext> = {}): PluginContext {
     } as unknown as DatabaseManager,
     toolCaller: {
       callTool: vi.fn().mockResolvedValue({ success: true, result: { tasks: [] } })
-    } as any,
+    } as unknown as PluginContext['toolCaller'],
     mcpServer: {
       id: 'srv-1',
       name: 'Test',
@@ -76,7 +76,7 @@ describe('PeakfloPlugin', () => {
 
     it('imports new tasks', async () => {
       const ctx = makeContext()
-      ;(ctx.toolCaller.callTool as any).mockResolvedValue({
+      ;(ctx.toolCaller.callTool as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
         success: true,
         result: {
           tasks: [
@@ -94,8 +94,8 @@ describe('PeakfloPlugin', () => {
 
     it('updates existing tasks', async () => {
       const ctx = makeContext()
-      ;(ctx.db.getTaskByExternalId as any).mockReturnValue({ id: 'local-1' })
-      ;(ctx.toolCaller.callTool as any).mockResolvedValue({
+      ;(ctx.db.getTaskByExternalId as unknown as ReturnType<typeof vi.fn>).mockReturnValue({ id: 'local-1' })
+      ;(ctx.toolCaller.callTool as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
         success: true,
         result: { tasks: [{ taskId: 'ext-1', title: 'Updated' }] }
       })
@@ -108,7 +108,7 @@ describe('PeakfloPlugin', () => {
 
     it('maps priority correctly', async () => {
       const ctx = makeContext()
-      ;(ctx.toolCaller.callTool as any).mockResolvedValue({
+      ;(ctx.toolCaller.callTool as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
         success: true,
         result: { tasks: [{ taskId: 'ext-1', title: 'T', priority: 'urgent' }] }
       })
@@ -121,7 +121,7 @@ describe('PeakfloPlugin', () => {
 
     it('maps status correctly', async () => {
       const ctx = makeContext()
-      ;(ctx.toolCaller.callTool as any).mockResolvedValue({
+      ;(ctx.toolCaller.callTool as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
         success: true,
         result: { tasks: [{ taskId: 'ext-1', title: 'T', status: 'in_progress' }] }
       })
@@ -134,7 +134,7 @@ describe('PeakfloPlugin', () => {
 
     it('handles tool call failure', async () => {
       const ctx = makeContext()
-      ;(ctx.toolCaller.callTool as any).mockResolvedValue({
+      ;(ctx.toolCaller.callTool as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
         success: false,
         error: 'Connection timeout'
       })
@@ -147,7 +147,7 @@ describe('PeakfloPlugin', () => {
   describe('executeAction', () => {
     it('calls task_complete for approve', async () => {
       const ctx = makeContext()
-      ;(ctx.toolCaller.callTool as any).mockResolvedValue({ success: true })
+      ;(ctx.toolCaller.callTool as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({ success: true })
 
       const task = { id: 'local-1', external_id: 'ext-1', output_fields: [] } as unknown as TaskRecord
       const result = await plugin.executeAction('approve', task, undefined, {}, ctx)
@@ -166,7 +166,7 @@ describe('PeakfloPlugin', () => {
 
     it('calls task_complete for reject with reason', async () => {
       const ctx = makeContext()
-      ;(ctx.toolCaller.callTool as any).mockResolvedValue({ success: true })
+      ;(ctx.toolCaller.callTool as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({ success: true })
 
       const task = { id: 'local-1', external_id: 'ext-1', output_fields: [] } as unknown as TaskRecord
       const result = await plugin.executeAction('reject', task, 'Bad quality', {}, ctx)

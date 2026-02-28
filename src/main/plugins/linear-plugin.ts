@@ -555,7 +555,7 @@ export class LinearPlugin implements TaskSourcePlugin {
     }
 
     const existingAttachments = task.attachments || []
-    const existingUrls = new Set(existingAttachments.map((a: any) => a.linear_url))
+    const existingUrls = new Set(existingAttachments.map((a) => (a as unknown as { linear_url?: string }).linear_url))
 
     for (const file of files) {
       // Skip if already downloaded
@@ -644,7 +644,7 @@ export class LinearPlugin implements TaskSourcePlugin {
 
     const existingAttachments = task.attachments || []
     console.log(`[linear-plugin] Existing attachments: ${existingAttachments.length}`)
-    const existingUrls = new Set(existingAttachments.map((a: any) => a.linear_url))
+    const existingUrls = new Set(existingAttachments.map((a) => (a as unknown as { linear_url?: string }).linear_url))
 
     for (const attachment of attachments) {
       console.log(`[linear-plugin] Processing attachment:`, {

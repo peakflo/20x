@@ -48,10 +48,10 @@ export function ToolsMcpSettings() {
         errorDetail: result.errorDetail,
         toolCount: result.toolCount
       }))
-    } catch (err: any) {
+    } catch (err: unknown) {
       setConnections((prev) => new Map(prev).set(server.id, {
         status: 'failed',
-        error: err?.message || 'Test failed'
+        error: err instanceof Error ? err.message : 'Test failed'
       }))
     }
   }

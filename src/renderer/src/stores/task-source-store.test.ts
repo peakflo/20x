@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import type { Mock } from 'vitest'
 import { useTaskSourceStore } from './task-source-store'
+import type { TaskSource, CreateTaskSourceDTO, UpdateTaskSourceDTO } from '@/types'
 
 const mockElectronAPI = window.electronAPI
 
@@ -18,7 +20,7 @@ describe('useTaskSourceStore', () => {
   describe('fetchSources', () => {
     it('fetches and sets sources', async () => {
       const sources = [{ id: 'ts1', name: 'Source 1' }]
-      ;(mockElectronAPI.taskSources.getAll as any).mockResolvedValue(sources)
+      ;(mockElectronAPI.taskSources.getAll as unknown as Mock).mockResolvedValue(sources)
 
       await useTaskSourceStore.getState().fetchSources()
 
@@ -30,13 +32,13 @@ describe('useTaskSourceStore', () => {
   describe('createSource', () => {
     it('appends source to list', async () => {
       const newSource = { id: 'ts1', name: 'New Source' }
-      ;(mockElectronAPI.taskSources.create as any).mockResolvedValue(newSource)
+      ;(mockElectronAPI.taskSources.create as unknown as Mock).mockResolvedValue(newSource)
 
       const result = await useTaskSourceStore.getState().createSource({
         mcp_server_id: 'm1',
         name: 'New Source',
         plugin_id: 'peakflo'
-      } as any)
+      } as unknown as CreateTaskSourceDTO)
 
       expect(result).toEqual(newSource)
       expect(useTaskSourceStore.getState().sources).toHaveLength(1)
@@ -45,11 +47,11 @@ describe('useTaskSourceStore', () => {
 
   describe('updateSource', () => {
     it('updates source in list', async () => {
-      useTaskSourceStore.setState({ sources: [{ id: 'ts1', name: 'Old' }] as any })
+      useTaskSourceStore.setState({ sources: [{ id: 'ts1', name: 'Old' }] as unknown as TaskSource[] })
       const updated = { id: 'ts1', name: 'Updated' }
-      ;(mockElectronAPI.taskSources.update as any).mockResolvedValue(updated)
+      ;(mockElectronAPI.taskSources.update as unknown as Mock).mockResolvedValue(updated)
 
-      await useTaskSourceStore.getState().updateSource('ts1', { name: 'Updated' } as any)
+      await useTaskSourceStore.getState().updateSource('ts1', { name: 'Updated' } as unknown as UpdateTaskSourceDTO)
 
       expect(useTaskSourceStore.getState().sources[0].name).toBe('Updated')
     })
@@ -57,8 +59,8 @@ describe('useTaskSourceStore', () => {
 
   describe('deleteSource', () => {
     it('removes source from list', async () => {
-      useTaskSourceStore.setState({ sources: [{ id: 'ts1' }, { id: 'ts2' }] as any })
-      ;(mockElectronAPI.taskSources.delete as any).mockResolvedValue(true)
+      useTaskSourceStore.setState({ sources: [{ id: 'ts1' }, { id: 'ts2' }] as unknown as TaskSource[] })
+      ;(mockElectronAPI.taskSources.delete as unknown as Mock).mockResolvedValue(true)
 
       const result = await useTaskSourceStore.getState().deleteSource('ts1')
 
@@ -70,10 +72,10 @@ describe('useTaskSourceStore', () => {
   describe('syncSource', () => {
     it('adds to syncingIds during sync and removes after', async () => {
       const syncResult = { source_id: 'ts1', imported: 3, updated: 1, errors: [] }
-      ;(mockElectronAPI.taskSources.sync as any).mockResolvedValue(syncResult)
+      ;(mockElectronAPI.taskSources.sync as unknown as Mock).mockResolvedValue(syncResult)
 
       useTaskSourceStore.setState({
-        sources: [{ id: 'ts1', last_synced_at: null }] as any
+        sources: [{ id: 'ts1', last_synced_at: null }] as unknown as TaskSource[]
       })
 
       const result = await useTaskSourceStore.getState().syncSource('ts1')
@@ -85,7 +87,7 @@ describe('useTaskSourceStore', () => {
     })
 
     it('clears syncingIds on error', async () => {
-      ;(mockElectronAPI.taskSources.sync as any).mockRejectedValue(new Error('fail'))
+      ;(mockElectronAPI.taskSources.sync as unknown as Mock).mockRejectedValue(new Error('fail'))
 
       const result = await useTaskSourceStore.getState().syncSource('ts1')
 
@@ -101,9 +103,9 @@ describe('useTaskSourceStore', () => {
           { id: 'ts1', enabled: true },
           { id: 'ts2', enabled: false },
           { id: 'ts3', enabled: true }
-        ] as any
+        ] as unknown as TaskSource[]
       })
-      ;(mockElectronAPI.taskSources.sync as any).mockResolvedValue({
+      ;(mockElectronAPI.taskSources.sync as unknown as Mock).mockResolvedValue({
         source_id: '', imported: 0, updated: 0, errors: []
       })
 
@@ -115,7 +117,7 @@ describe('useTaskSourceStore', () => {
 
   describe('executeAction', () => {
     it('calls plugin executeAction', async () => {
-      ;(mockElectronAPI.plugins.executeAction as any).mockResolvedValue({
+      ;(mockElectronAPI.plugins.executeAction as unknown as Mock).mockResolvedValue({
         success: true,
         taskUpdate: { status: 'completed' }
       })
@@ -131,7 +133,7 @@ describe('useTaskSourceStore', () => {
     })
 
     it('returns error result on failure', async () => {
-      ;(mockElectronAPI.plugins.executeAction as any).mockRejectedValue(new Error('fail'))
+      ;(mockElectronAPI.plugins.executeAction as unknown as Mock).mockRejectedValue(new Error('fail'))
 
       const result = await useTaskSourceStore.getState().executeAction(
         'approve', 'task-1', 'src-1'

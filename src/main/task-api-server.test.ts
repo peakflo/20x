@@ -10,7 +10,7 @@ import type { DatabaseManager } from './database'
  * the same SQL operations.
  */
 let db: DatabaseManager
-let rawDb: any
+let rawDb: import('better-sqlite3').Database
 
 beforeEach(() => {
   ;({ db, rawDb } = createTestDb())
@@ -22,18 +22,18 @@ describe('/update_task - triage status guard', () => {
     const task = db.createTask(makeTask({ title: 'Triage me' }))!
 
     // Set task to triaging status
-    db.updateTask(task.id, { status: 'triaging' as any })
+    db.updateTask(task.id, { status: 'triaging' as unknown as Parameters<typeof db.updateTask>[1]['status'] })
     const triagingTask = db.getTask(task.id)!
     expect(triagingTask.status).toBe('triaging')
 
     // Simulate what handleRoute does: check current status before updating
-    const currentTask = rawDb.prepare('SELECT status FROM tasks WHERE id = ?').get(task.id) as any
+    const currentTask = rawDb.prepare('SELECT status FROM tasks WHERE id = ?').get(task.id) as { status: string }
     expect(currentTask.status).toBe('triaging')
 
     // When status is triaging, the API should skip status changes
     // but still allow other field updates (agent_id, labels, etc.)
     const updates: string[] = []
-    const qParams: any[] = []
+    const qParams: unknown[] = []
 
     // Simulate status guard from handleRoute
     const requestedStatus = 'not_started'
@@ -63,11 +63,11 @@ describe('/update_task - triage status guard', () => {
     expect(task.status).toBe('not_started')
 
     // Simulate handleRoute status guard
-    const currentTask = rawDb.prepare('SELECT status FROM tasks WHERE id = ?').get(task.id) as any
+    const currentTask = rawDb.prepare('SELECT status FROM tasks WHERE id = ?').get(task.id) as { status: string }
     expect(currentTask.status).not.toBe('triaging')
 
     // Status update should proceed normally
-    db.updateTask(task.id, { status: 'completed' as any })
+    db.updateTask(task.id, { status: 'completed' as unknown as Parameters<typeof db.updateTask>[1]['status'] })
     const updatedTask = db.getTask(task.id)!
     expect(updatedTask.status).toBe('completed')
   })
@@ -96,11 +96,11 @@ describe('/list_repos', () => {
     db.createTask(makeTask({ title: 'Task 3', repos: [] }))
 
     // Simulate /list_repos route logic
-    const tasks = rawDb.prepare("SELECT repos FROM tasks WHERE repos IS NOT NULL AND repos != '[]'").all()
+    const tasks = rawDb.prepare("SELECT repos FROM tasks WHERE repos IS NOT NULL AND repos != '[]'").all() as Record<string, unknown>[]
     const repoSet = new Set<string>()
-    tasks.forEach((t: any) => {
+    tasks.forEach((t) => {
       try {
-        const repos = JSON.parse(t.repos || '[]')
+        const repos = JSON.parse((t.repos as string) || '[]')
         repos.forEach((r: string) => repoSet.add(r))
       } catch { /* ignore */ }
     })
@@ -122,12 +122,12 @@ describe('/list_repos', () => {
   it('returns github_org from settings', () => {
     db.setSetting('github_org', 'my-org')
 
-    const orgRow = rawDb.prepare('SELECT value FROM settings WHERE key = ?').get('github_org') as any
-    expect(orgRow.value).toBe('my-org')
+    const orgRow = rawDb.prepare('SELECT value FROM settings WHERE key = ?').get('github_org') as { value: string } | undefined
+    expect(orgRow!.value).toBe('my-org')
   })
 
   it('returns null github_org when not set', () => {
-    const orgRow = rawDb.prepare('SELECT value FROM settings WHERE key = ?').get('github_org') as any
+    const orgRow = rawDb.prepare('SELECT value FROM settings WHERE key = ?').get('github_org') as { value: string } | undefined
     expect(orgRow).toBeUndefined()
   })
 })
@@ -142,7 +142,7 @@ describe('Triage task status lifecycle', () => {
     expect(task.agent_id).toBeNull()
 
     // Step 2: Auto-start hook sets status to triaging
-    db.updateTask(task.id, { status: 'triaging' as any })
+    db.updateTask(task.id, { status: 'triaging' as unknown as Parameters<typeof db.updateTask>[1]['status'] })
     const triagingTask = db.getTask(task.id)!
     expect(triagingTask.status).toBe('triaging')
 
@@ -161,7 +161,7 @@ describe('Triage task status lifecycle', () => {
     expect(assignedTask.status).toBe('triaging') // Still triaging
 
     // Step 4: transitionToIdle resets status to not_started
-    db.updateTask(task.id, { status: 'not_started' as any })
+    db.updateTask(task.id, { status: 'not_started' as unknown as Parameters<typeof db.updateTask>[1]['status'] })
     const readyTask = db.getTask(task.id)!
     expect(readyTask.status).toBe('not_started')
     expect(readyTask.agent_id).toBe(agent.id) // Agent still assigned

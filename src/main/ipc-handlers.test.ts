@@ -12,19 +12,19 @@ import { registerIpcHandlers } from './ipc-handlers'
 
 describe('registerIpcHandlers', () => {
   it('registers the expected number of IPC handlers', () => {
-    const db = {} as any
-    const agentManager = {} as any
-    const githubManager = {} as any
-    const worktreeManager = {} as any
-    const syncManager = {} as any
-    const pluginRegistry = {} as any
+    const db = {} as unknown as Parameters<typeof registerIpcHandlers>[0]
+    const agentManager = {} as unknown as Parameters<typeof registerIpcHandlers>[1]
+    const githubManager = {} as unknown as Parameters<typeof registerIpcHandlers>[2]
+    const worktreeManager = {} as unknown as Parameters<typeof registerIpcHandlers>[3]
+    const syncManager = {} as unknown as Parameters<typeof registerIpcHandlers>[4]
+    const pluginRegistry = {} as unknown as Parameters<typeof registerIpcHandlers>[5]
 
     registerIpcHandlers(db, agentManager, githubManager, worktreeManager, syncManager, pluginRegistry)
 
     const handleCalls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls
     expect(handleCalls.length).toBeGreaterThanOrEqual(30)
 
-    const channels = handleCalls.map((call: any[]) => call[0])
+    const channels = handleCalls.map((call: unknown[]) => call[0])
     expect(channels).toContain('db:getTasks')
     expect(channels).toContain('db:createTask')
     expect(channels).toContain('db:updateTask')

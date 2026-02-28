@@ -45,7 +45,7 @@ const mockElectronAPI = window.electronAPI
 
 beforeEach(() => {
   vi.clearAllMocks()
-  ;(mockElectronAPI.db.getTasks as any).mockResolvedValue([])
+  ;(mockElectronAPI.db.getTasks as unknown as ReturnType<typeof vi.fn>).mockResolvedValue([])
 
   useTaskStore.setState({
     tasks: [],

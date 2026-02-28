@@ -11,7 +11,7 @@ if (!apiUrl) {
   throw new Error('TASK_API_URL environment variable is required')
 }
 
-async function callApi(route: string, params: any = {}): Promise<any> {
+async function callApi(route: string, params: Record<string, unknown> = {}): Promise<unknown> {
   const res = await fetch(`${apiUrl}${route}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -140,10 +140,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
 
 // Implement tool call handler
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
-  const { name, arguments: args } = request.params as { name: string; arguments?: any }
+  const { name, arguments: args } = request.params as { name: string; arguments?: Record<string, unknown> }
 
   try {
-    const result = await callApi(`/${name}`, args || {})
+    const result = await callApi(`/${name}`, args || {}) as Record<string, unknown> | null
 
     if (result?.error) {
       return {
@@ -155,9 +155,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     return {
       content: [{ type: 'text', text: JSON.stringify(result, null, 2) }]
     }
-  } catch (error: any) {
+  } catch (error: unknown) {
     return {
-      content: [{ type: 'text', text: JSON.stringify({ error: error.message }) }],
+      content: [{ type: 'text', text: JSON.stringify({ error: (error as Error).message }) }],
       isError: true
     }
   }

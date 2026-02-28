@@ -126,6 +126,7 @@ export function Markdown({ children, size = 'sm', className }: MarkdownProps) {
           ),
 
           // Code - CRITICAL: inline code must always be inline, block code must be block
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           code: ({ inline, children, className: codeClassName, ...props }: any) => {
             // Check if this is a code block (starts with language- class) or inline code
             const isCodeBlock = codeClassName?.startsWith('language-')
@@ -148,7 +149,7 @@ export function Markdown({ children, size = 'sm', className }: MarkdownProps) {
             return (
               <code
                 className={cn('bg-muted rounded font-mono text-foreground', classes.code)}
-                style={{ display: 'inline !important' } as any}
+                style={{ display: 'inline !important' } as React.CSSProperties}
                 {...props}
               >
                 {children}

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { useUIStore } from './ui-store'
-import { TaskStatus } from '@/types'
+import { TaskStatus, SettingsTab } from '@/types'
 
 describe('useUIStore', () => {
   beforeEach(() => {
@@ -16,7 +16,7 @@ describe('useUIStore', () => {
       activeModal: null,
       editingTaskId: null,
       deletingTaskId: null,
-      settingsTab: 'general' as any
+      settingsTab: SettingsTab.GENERAL
     })
   })
 

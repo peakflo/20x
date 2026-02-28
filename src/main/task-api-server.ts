@@ -10,10 +10,29 @@ import type { DatabaseManager } from './database'
 
 let server: HttpServer | null = null
 let port: number | null = null
+let startupPromise: Promise<number> | null = null
 let notifyRenderer: ((channel: string, data: unknown) => void) | null = null
 
 export function getTaskApiPort(): number | null {
   return port
+}
+
+/**
+ * Waits for the task API server to finish starting.
+ * Returns the port number once available.
+ */
+export async function waitForTaskApiServer(): Promise<number | null> {
+  if (port) return port
+  if (startupPromise) {
+    try {
+      return await startupPromise
+    } catch (err) {
+      console.error('[TaskApiServer] waitForTaskApiServer - startup promise rejected:', err)
+      return null
+    }
+  }
+  console.warn('[TaskApiServer] waitForTaskApiServer - no startup promise exists (server not started?)')
+  return null
 }
 
 export function setTaskApiNotifier(fn: (channel: string, data: unknown) => void): void {
@@ -22,8 +41,9 @@ export function setTaskApiNotifier(fn: (channel: string, data: unknown) => void)
 
 export function startTaskApiServer(db: DatabaseManager): Promise<number> {
   if (server && port) return Promise.resolve(port)
+  if (startupPromise) return startupPromise
 
-  return new Promise((resolve, reject) => {
+  startupPromise = new Promise((resolve, reject) => {
     server = createServer((req, res) => {
       // CORS not needed — local only
       res.setHeader('Content-Type', 'application/json')
@@ -36,17 +56,17 @@ export function startTaskApiServer(db: DatabaseManager): Promise<number> {
           const route = url.pathname
 
           // Parse body if present
-          let params: any = {}
+          let params: Record<string, unknown> = {}
           if (body) {
-            try { params = JSON.parse(body) } catch { /* ignore */ }
+            try { params = JSON.parse(body) as Record<string, unknown> } catch { /* ignore */ }
           }
 
           const result = handleRoute(db, route, params)
           res.writeHead(200)
           res.end(JSON.stringify(result))
-        } catch (err: any) {
+        } catch (err: unknown) {
           res.writeHead(500)
-          res.end(JSON.stringify({ error: err.message }))
+          res.end(JSON.stringify({ error: (err as Error).message }))
         }
       })
     })
@@ -65,6 +85,8 @@ export function startTaskApiServer(db: DatabaseManager): Promise<number> {
 
     server.on('error', reject)
   })
+
+  return startupPromise
 }
 
 export function stopTaskApiServer(): void {
@@ -77,13 +99,13 @@ export function stopTaskApiServer(): void {
 
 // ── Route handler ──────────────────────────────────────────────
 
-function handleRoute(db: DatabaseManager, route: string, params: any): any {
-  const rawDb = (db as any).db // Access the underlying better-sqlite3 instance
+function handleRoute(db: DatabaseManager, route: string, params: Record<string, unknown>): unknown {
+  const rawDb = (db as unknown as { db: import('better-sqlite3').Database }).db // Access the underlying better-sqlite3 instance
 
   switch (route) {
     case '/list_tasks': {
       let query = 'SELECT * FROM tasks WHERE 1=1'
-      const qParams: any[] = []
+      const qParams: unknown[] = []
 
       if (params.status) { query += ' AND status = ?'; qParams.push(params.status) }
       if (params.priority) { query += ' AND priority = ?'; qParams.push(params.priority) }
@@ -91,16 +113,19 @@ function handleRoute(db: DatabaseManager, route: string, params: any): any {
         query += params.has_agent ? ' AND agent_id IS NOT NULL' : ' AND agent_id IS NULL'
       }
       if (params.agent_id) { query += ' AND agent_id = ?'; qParams.push(params.agent_id) }
-      if (params.labels?.length) {
-        const conds = params.labels.map(() => 'labels LIKE ?').join(' OR ')
-        query += ` AND (${conds})`
-        params.labels.forEach((l: string) => qParams.push(`%"${l}"%`))
+      if (params.labels) {
+        const labels = params.labels as string[]
+        if (labels.length) {
+          const conds = labels.map(() => 'labels LIKE ?').join(' OR ')
+          query += ` AND (${conds})`
+          labels.forEach((l: string) => qParams.push(`%"${l}"%`))
+        }
       }
 
       query += ' ORDER BY created_at DESC'
       if (params.limit) { query += ' LIMIT ?'; qParams.push(params.limit) }
 
-      const tasks = rawDb.prepare(query).all(...qParams)
+      const tasks = rawDb.prepare(query).all(...qParams) as Record<string, unknown>[]
       tasks.forEach(parseTask)
       return tasks
     }
@@ -161,7 +186,7 @@ function handleRoute(db: DatabaseManager, route: string, params: any): any {
         now
       )
 
-      const task = rawDb.prepare('SELECT * FROM tasks WHERE id = ?').get(id)
+      const task = rawDb.prepare('SELECT * FROM tasks WHERE id = ?').get(id) as Record<string, unknown>
       const parsed = parseTask(task)
 
       // Notify renderer using properly deserialized task (matches WorkfloTask shape)
@@ -176,18 +201,18 @@ function handleRoute(db: DatabaseManager, route: string, params: any): any {
     }
 
     case '/get_task': {
-      const task = rawDb.prepare('SELECT * FROM tasks WHERE id = ?').get(params.task_id)
+      const task = rawDb.prepare('SELECT * FROM tasks WHERE id = ?').get(params.task_id) as Record<string, unknown> | undefined
       if (!task) return { error: 'Task not found' }
       return parseTask(task)
     }
 
     case '/update_task': {
       const updates: string[] = []
-      const qParams: any[] = []
+      const qParams: unknown[] = []
 
       // When task is in triaging status, skip status changes from the triage agent
       if (params.status) {
-        const currentTask = rawDb.prepare('SELECT status FROM tasks WHERE id = ?').get(params.task_id) as any
+        const currentTask = rawDb.prepare('SELECT status FROM tasks WHERE id = ?').get(params.task_id) as { status: string } | undefined
         if (currentTask?.status === 'triaging') {
           // Don't allow triage agent to change status — it will be reset by transitionToIdle
         } else {
@@ -210,12 +235,12 @@ function handleRoute(db: DatabaseManager, route: string, params: any): any {
       const result = rawDb.prepare(`UPDATE tasks SET ${updates.join(', ')} WHERE id = ?`).run(...qParams)
       if (result.changes === 0) return { error: 'Task not found' }
 
-      const updated = rawDb.prepare('SELECT * FROM tasks WHERE id = ?').get(params.task_id)
+      const updated = rawDb.prepare('SELECT * FROM tasks WHERE id = ?').get(params.task_id) as Record<string, unknown>
       const parsedUpdated = parseTask(updated)
 
       // Notify renderer using properly deserialized task (matches WorkfloTask shape)
       if (notifyRenderer) {
-        const properTask = db.getTask(params.task_id)
+        const properTask = db.getTask(params.task_id as string)
         if (properTask) {
           notifyRenderer('task:updated', { taskId: params.task_id, updates: properTask })
         }
@@ -225,35 +250,38 @@ function handleRoute(db: DatabaseManager, route: string, params: any): any {
     }
 
     case '/list_agents': {
-      const agents = rawDb.prepare('SELECT * FROM agents ORDER BY created_at ASC').all()
-      agents.forEach((a: any) => { a.config = JSON.parse(a.config || '{}'); a.is_default = !!a.is_default })
+      const agents = rawDb.prepare('SELECT * FROM agents ORDER BY created_at ASC').all() as Record<string, unknown>[]
+      agents.forEach((a) => { a.config = JSON.parse((a.config as string) || '{}'); a.is_default = !!a.is_default })
       return agents
     }
 
     case '/list_skills': {
-      const skills = rawDb.prepare('SELECT * FROM skills ORDER BY confidence DESC, uses DESC').all()
-      skills.forEach((s: any) => { s.tags = JSON.parse(s.tags || '[]') })
+      const skills = rawDb.prepare('SELECT * FROM skills ORDER BY confidence DESC, uses DESC').all() as Record<string, unknown>[]
+      skills.forEach((s) => { s.tags = JSON.parse((s.tags as string) || '[]') })
       return skills
     }
 
     case '/find_similar_tasks': {
       let query = 'SELECT * FROM tasks WHERE 1=1'
-      const qParams: any[] = []
+      const qParams: unknown[] = []
 
       if (params.completed_only) { query += ' AND status = ?'; qParams.push('completed') }
       if (params.title_keywords) { query += ' AND title LIKE ?'; qParams.push(`%${params.title_keywords}%`) }
       if (params.description_keywords) { query += ' AND description LIKE ?'; qParams.push(`%${params.description_keywords}%`) }
       if (params.type) { query += ' AND type = ?'; qParams.push(params.type) }
-      if (params.labels?.length) {
-        const conds = params.labels.map(() => 'labels LIKE ?').join(' OR ')
-        query += ` AND (${conds})`
-        params.labels.forEach((l: string) => qParams.push(`%"${l}"%`))
+      if (params.labels) {
+        const labels = params.labels as string[]
+        if (labels.length) {
+          const conds = labels.map(() => 'labels LIKE ?').join(' OR ')
+          query += ` AND (${conds})`
+          labels.forEach((l: string) => qParams.push(`%"${l}"%`))
+        }
       }
 
       query += ' ORDER BY created_at DESC'
       if (params.limit) { query += ' LIMIT ?'; qParams.push(params.limit) }
 
-      const tasks = rawDb.prepare(query).all(...qParams)
+      const tasks = rawDb.prepare(query).all(...qParams) as Record<string, unknown>[]
       tasks.forEach(parseTask)
       return tasks
     }
@@ -261,10 +289,10 @@ function handleRoute(db: DatabaseManager, route: string, params: any): any {
     case '/get_task_statistics': {
       switch (params.metric) {
         case 'label_usage': {
-          const tasks = rawDb.prepare('SELECT labels FROM tasks').all()
+          const tasks = rawDb.prepare('SELECT labels FROM tasks').all() as Record<string, unknown>[]
           const counts = new Map<string, number>()
-          tasks.forEach((t: any) => {
-            JSON.parse(t.labels || '[]').forEach((l: string) => counts.set(l, (counts.get(l) || 0) + 1))
+          tasks.forEach((t) => {
+            JSON.parse((t.labels as string) || '[]').forEach((l: string) => counts.set(l, (counts.get(l) || 0) + 1))
           })
           return Object.fromEntries(Array.from(counts.entries()).sort((a, b) => b[1] - a[1]))
         }
@@ -275,8 +303,8 @@ function handleRoute(db: DatabaseManager, route: string, params: any): any {
             FROM tasks WHERE agent_id IS NOT NULL GROUP BY agent_id
           `).all()
         case 'priority_distribution': {
-          const dist = rawDb.prepare('SELECT priority, COUNT(*) as count FROM tasks GROUP BY priority').all()
-          return Object.fromEntries(dist.map((d: any) => [d.priority, d.count]))
+          const dist = rawDb.prepare('SELECT priority, COUNT(*) as count FROM tasks GROUP BY priority').all() as Record<string, unknown>[]
+          return Object.fromEntries(dist.map((d) => [d.priority, d.count]))
         }
         case 'completion_rate': {
           const stats = rawDb.prepare(`
@@ -285,7 +313,7 @@ function handleRoute(db: DatabaseManager, route: string, params: any): any {
                    SUM(CASE WHEN status = 'in_progress' THEN 1 ELSE 0 END) as in_progress,
                    SUM(CASE WHEN status = 'not_started' THEN 1 ELSE 0 END) as not_started
             FROM tasks
-          `).get() as any
+          `).get() as { total: number; completed: number; in_progress: number; not_started: number }
           return { ...stats, completion_rate: stats.total > 0 ? (stats.completed / stats.total * 100).toFixed(1) + '%' : '0%' }
         }
         default:
@@ -295,17 +323,17 @@ function handleRoute(db: DatabaseManager, route: string, params: any): any {
 
     case '/list_repos': {
       // Get distinct repos from historical tasks
-      const tasks = rawDb.prepare('SELECT repos FROM tasks WHERE repos IS NOT NULL AND repos != \'[]\'').all()
+      const tasks = rawDb.prepare('SELECT repos FROM tasks WHERE repos IS NOT NULL AND repos != \'[]\'').all() as Record<string, unknown>[]
       const repoSet = new Set<string>()
-      tasks.forEach((t: any) => {
+      tasks.forEach((t) => {
         try {
-          const repos = JSON.parse(t.repos || '[]')
+          const repos = JSON.parse((t.repos as string) || '[]')
           repos.forEach((r: string) => repoSet.add(r))
         } catch { /* ignore */ }
       })
 
       // Get github_org from settings
-      const orgRow = rawDb.prepare('SELECT value FROM settings WHERE key = ?').get('github_org') as any
+      const orgRow = rawDb.prepare('SELECT value FROM settings WHERE key = ?').get('github_org') as { value: string } | undefined
       const githubOrg = orgRow?.value || null
 
       return { repos: Array.from(repoSet), github_org: githubOrg }
@@ -316,13 +344,13 @@ function handleRoute(db: DatabaseManager, route: string, params: any): any {
   }
 }
 
-function parseTask(task: any) {
+function parseTask(task: Record<string, unknown>) {
   if (!task) return task
-  task.labels = JSON.parse(task.labels || '[]')
-  task.skill_ids = JSON.parse(task.skill_ids || '[]')
-  task.attachments = JSON.parse(task.attachments || '[]')
-  task.output_fields = JSON.parse(task.output_fields || '[]')
-  task.repos = JSON.parse(task.repos || '[]')
+  task.labels = JSON.parse((task.labels as string) || '[]')
+  task.skill_ids = JSON.parse((task.skill_ids as string) || '[]')
+  task.attachments = JSON.parse((task.attachments as string) || '[]')
+  task.output_fields = JSON.parse((task.output_fields as string) || '[]')
+  task.repos = JSON.parse((task.repos as string) || '[]')
   task.feedback_rating = task.feedback_rating ?? null
   task.feedback_comment = task.feedback_comment ?? null
   return task

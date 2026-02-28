@@ -80,8 +80,8 @@ export function AgentsSettings() {
       } else {
         setConnections((prev) => new Map(prev).set(agent.id, { status: 'error', error: 'No response from server' }))
       }
-    } catch (err: any) {
-      setConnections((prev) => new Map(prev).set(agent.id, { status: 'error', error: err?.message || 'Connection failed' }))
+    } catch (err: unknown) {
+      setConnections((prev) => new Map(prev).set(agent.id, { status: 'error', error: err instanceof Error ? err.message : 'Connection failed' }))
     }
   }
 

@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { RecurrenceScheduler } from './recurrence-scheduler'
 
 // Minimal mock — we only need calculateNextOccurrence (no DB access)
-const scheduler = new RecurrenceScheduler({} as any)
+const scheduler = new RecurrenceScheduler({} as unknown as import('./database').DatabaseManager)
 
 describe('RecurrenceScheduler.calculateNextOccurrence', () => {
   describe('cron strings', () => {
@@ -168,7 +168,7 @@ describe('RecurrenceScheduler.calculateNextOccurrence', () => {
 
     it('unknown type returns null', () => {
       const result = scheduler.calculateNextOccurrence(
-        { type: 'unknown' as any, interval: 1, time: '09:00' },
+        { type: 'unknown' as unknown as 'daily', interval: 1, time: '09:00' },
         '2024-01-15T09:00:00.000Z'
       )
       expect(result).toBeNull()

@@ -6,10 +6,11 @@ import type {
   SessionMessage,
   MessagePart
 } from './coding-agent-adapter'
-import { SessionStatusType } from './coding-agent-adapter'
+import { SessionStatusType, MessagePartType, MessageRole } from './coding-agent-adapter'
 
 let OpenCodeSDK: typeof import('@opencode-ai/sdk') | null = null
 
+type OpencodeClient = import('@opencode-ai/sdk').OpencodeClient
 type OpenCodeV2Module = typeof import('@opencode-ai/sdk/v2/client')
 type V2OpencodeClient = import('@opencode-ai/sdk/v2/client').OpencodeClient
 type V2QuestionRequest = import('@opencode-ai/sdk/v2/client').QuestionRequest
@@ -17,7 +18,7 @@ let OpenCodeV2: OpenCodeV2Module | null = null
 
 // Custom fetch with no timeout — agent prompts can run indefinitely
 const noTimeoutAgent = new UndiciAgent({ headersTimeout: 0, bodyTimeout: 0 })
-const noTimeoutFetch = (req: any) => (globalThis as any).fetch(req, { dispatcher: noTimeoutAgent })
+const noTimeoutFetch = (req: unknown) => (globalThis as unknown as Record<string, (...args: unknown[]) => unknown>).fetch(req, { dispatcher: noTimeoutAgent })
 
 const DEFAULT_SERVER_URL = 'http://localhost:4096'
 
@@ -26,10 +27,10 @@ const DEFAULT_SERVER_URL = 'http://localhost:4096'
  */
 export class OpencodeAdapter implements CodingAgentAdapter {
   private sdkLoading: Promise<void> | null = null
-  private serverInstance: any = null
+  private serverInstance: unknown = null
   private serverUrl: string | null = null
   private serverStarting: Promise<void> | null = null
-  private clients: Map<string, any> = new Map() // sessionId -> ocClient
+  private clients: Map<string, OpencodeClient> = new Map() // sessionId -> ocClient
   private v2Client: V2OpencodeClient | null = null
   private promptAborts: Map<string, AbortController> = new Map()
 
@@ -77,7 +78,7 @@ export class OpencodeAdapter implements CodingAgentAdapter {
       }
 
       return { available: true }
-    } catch (error) {
+    } catch {
       return { available: false, reason: 'SDK not available or server not accessible' }
     }
   }
@@ -157,22 +158,20 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     await this.ensureServerRunning(config.serverUrl || DEFAULT_SERVER_URL)
 
     const baseUrl = this.serverUrl || config.serverUrl || DEFAULT_SERVER_URL
-    const ocClient = OpenCodeSDK!.createOpencodeClient({ baseUrl, fetch: noTimeoutFetch as any })
+    const ocClient = OpenCodeSDK!.createOpencodeClient({ baseUrl, fetch: noTimeoutFetch as unknown as (request: Request) => ReturnType<typeof fetch> })
 
     // Register MCP servers BEFORE creating session so the session picks them up
     if (config.mcpServers) {
       for (const [name, mcpConfig] of Object.entries(config.mcpServers)) {
         try {
-          console.log(`[OpencodeAdapter] Registering MCP server: ${name}`)
+          const mcpAddConfig = mcpConfig.type === 'http'
+            ? { type: 'remote' as const, url: mcpConfig.url ?? '', headers: mcpConfig.headers }
+            : { type: 'local' as const, command: [mcpConfig.command ?? '', ...(mcpConfig.args ?? [])], environment: mcpConfig.env }
+          console.log(`[OpencodeAdapter] Registering MCP server: ${name}`, JSON.stringify(mcpAddConfig))
 
           // Add MCP server
-          const addResult: any = await ocClient.mcp.add({
-            body: {
-              name,
-              config: mcpConfig.type === 'http'
-                ? { type: 'remote' as const, url: mcpConfig.url ?? '', headers: mcpConfig.headers }
-                : { type: 'local' as const, command: [mcpConfig.command ?? '', ...(mcpConfig.args ?? [])], environment: mcpConfig.env }
-            },
+          const addResult = await ocClient.mcp.add({
+            body: { name, config: mcpAddConfig },
             ...(config.workspaceDir && { query: { directory: config.workspaceDir } })
           })
 
@@ -181,8 +180,18 @@ export class OpencodeAdapter implements CodingAgentAdapter {
             continue
           }
 
+          // Check the add response for immediate server status
+          const addStatus = addResult.data?.[name] as { status: string; error?: string } | undefined
+          if (addStatus) {
+            console.log(`[OpencodeAdapter] mcp.add status for '${name}': ${addStatus.status}${addStatus.error ? ` - ${addStatus.error}` : ''}`)
+            if (addStatus.status === 'failed') {
+              console.error(`[OpencodeAdapter] MCP server '${name}' failed immediately after add: ${addStatus.error}`)
+              continue
+            }
+          }
+
           // Connect to MCP server
-          const connectResult: any = await ocClient.mcp.connect({
+          const connectResult = await ocClient.mcp.connect({
             path: { name },
             ...(config.workspaceDir && { query: { directory: config.workspaceDir } })
           })
@@ -192,7 +201,46 @@ export class OpencodeAdapter implements CodingAgentAdapter {
             continue
           }
 
-          console.log(`[OpencodeAdapter] Successfully registered MCP server: ${name}`)
+          // Check connect result (returns boolean)
+          if (connectResult.data === false) {
+            console.error(`[OpencodeAdapter] mcp.connect returned false for ${name} — server failed to connect`)
+            continue
+          }
+
+          // Wait for MCP server to fully connect with retries
+          let connected = false
+          for (let attempt = 0; attempt < 5; attempt++) {
+            try {
+              const statusResult = await ocClient.mcp.status({
+                ...(config.workspaceDir && { query: { directory: config.workspaceDir } })
+              })
+              const serverStatus = statusResult.data?.[name] as { status: string; error?: string } | undefined
+              if (serverStatus) {
+                if (serverStatus.status === 'connected') {
+                  console.log(`[OpencodeAdapter] MCP server '${name}' status: connected (attempt ${attempt + 1})`)
+                  connected = true
+                  break
+                } else if (serverStatus.status === 'failed') {
+                  console.error(`[OpencodeAdapter] MCP server '${name}' status: failed${serverStatus.error ? ` - ${serverStatus.error}` : ''}`)
+                  break
+                } else {
+                  console.log(`[OpencodeAdapter] MCP server '${name}' status: ${serverStatus.status}, waiting... (attempt ${attempt + 1})`)
+                }
+              } else {
+                console.log(`[OpencodeAdapter] MCP server '${name}' not yet in status response (attempt ${attempt + 1})`)
+              }
+            } catch (statusErr) {
+              console.warn(`[OpencodeAdapter] Failed to check MCP server status for ${name}:`, statusErr)
+            }
+            // Wait before retrying (500ms, 1s, 1.5s, 2s, 2.5s)
+            await new Promise(resolve => setTimeout(resolve, 500 * (attempt + 1)))
+          }
+
+          if (connected) {
+            console.log(`[OpencodeAdapter] Successfully registered MCP server: ${name}`)
+          } else {
+            console.error(`[OpencodeAdapter] MCP server '${name}' did not reach connected status — tools may not work`)
+          }
         } catch (mcpError) {
           console.error(`[OpencodeAdapter] Failed to register MCP server ${name}:`, mcpError)
         }
@@ -200,13 +248,14 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     }
 
     // Create OpenCode session
-    const result: any = await ocClient.session.create({
+    const result = await ocClient.session.create({
       body: { title: `Task ${config.taskId}` },
       ...(config.workspaceDir && { query: { directory: config.workspaceDir } })
     })
 
     if (result.error) {
-      throw new Error(result.error.data?.message || result.error.name || 'Failed to create session')
+      const errData = result.error as { data?: { message?: string }; name?: string }
+      throw new Error(errData.data?.message || errData.name || 'Failed to create session')
     }
     if (!result.data?.id) {
       throw new Error('No session ID returned from OpenCode')
@@ -222,10 +271,10 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     await this.ensureServerRunning(config.serverUrl || DEFAULT_SERVER_URL)
 
     const baseUrl = this.serverUrl || config.serverUrl || DEFAULT_SERVER_URL
-    const ocClient = OpenCodeSDK!.createOpencodeClient({ baseUrl, fetch: noTimeoutFetch as any })
+    const ocClient = OpenCodeSDK!.createOpencodeClient({ baseUrl, fetch: noTimeoutFetch as unknown as (request: Request) => ReturnType<typeof fetch> })
 
     // Validate session exists
-    const getResult: any = await ocClient.session.get({
+    const getResult = await ocClient.session.get({
       path: { id: sessionId },
       ...(config.workspaceDir && { query: { directory: config.workspaceDir } })
     })
@@ -237,7 +286,7 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     this.clients.set(sessionId, ocClient)
 
     // Fetch existing messages
-    const messagesResult: any = await ocClient.session.messages({
+    const messagesResult = await ocClient.session.messages({
       path: { id: sessionId },
       ...(config.workspaceDir && { query: { directory: config.workspaceDir } })
     })
@@ -247,20 +296,20 @@ export class OpencodeAdapter implements CodingAgentAdapter {
       for (const msg of messagesResult.data) {
         if (!msg.info) continue
         const rawParts = msg.parts || []
-        const transformedParts: MessagePart[] = rawParts.map((part: any) => {
+        const transformedParts: MessagePart[] = rawParts.map((part: Record<string, unknown>) => {
           if (part.type === 'tool') {
             return this.transformToolPart(part)
           }
           return {
-            id: part.id,
-            type: part.type,
-            text: part.text,
-            content: part.text
+            id: part.id as string,
+            type: part.type as MessagePartType,
+            text: part.text as string,
+            content: part.text as string
           }
         })
         messages.push({
           id: msg.info.id,
-          role: msg.info.role || 'assistant',
+          role: (msg.info.role || 'assistant') as unknown as MessageRole,
           parts: transformedParts
         })
       }
@@ -294,14 +343,14 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     ocClient.session.prompt({
       path: { id: sessionId },
       body: {
-        parts,
+        parts: parts as unknown as Array<import('@opencode-ai/sdk').TextPartInput>,
         ...(modelParam && { model: modelParam }),
         ...(config.tools && { tools: config.tools })
       },
       ...(config.workspaceDir && { query: { directory: config.workspaceDir } }),
       signal: promptAbort.signal
-    }).catch((err: any) => {
-      if (err.name !== 'AbortError') {
+    }).catch((err: unknown) => {
+      if (!(err instanceof Error) || err.name !== 'AbortError') {
         console.error('[OpencodeAdapter] prompt error:', err)
       }
     }).finally(() => {
@@ -315,7 +364,7 @@ export class OpencodeAdapter implements CodingAgentAdapter {
       return { type: SessionStatusType.ERROR, message: 'Client not found' }
     }
 
-    const statusResult: any = await ocClient.session.status({
+    const statusResult = await ocClient.session.status({
       ...(config.workspaceDir && { query: { directory: config.workspaceDir } })
     })
 
@@ -328,9 +377,11 @@ export class OpencodeAdapter implements CodingAgentAdapter {
       return { type: SessionStatusType.IDLE }
     }
 
+    const sdkType = ocStatus.type || 'idle'
+    const statusType = sdkType.toUpperCase() as keyof typeof SessionStatusType
     return {
-      type: ocStatus.type || SessionStatusType.IDLE,
-      message: ocStatus.message
+      type: SessionStatusType[statusType] ?? SessionStatusType.IDLE,
+      message: 'message' in ocStatus ? (ocStatus as { message: string }).message : undefined
     }
   }
 
@@ -338,23 +389,24 @@ export class OpencodeAdapter implements CodingAgentAdapter {
    * Transforms a raw OpenCode tool part into the structured format the renderer expects.
    * OpenCode returns tool name as `part.tool` (string) and details in `part.state`.
    */
-  private transformToolPart(part: any): MessagePart {
-    const state = part.state || {}
-    const toolName = part.tool || 'unknown'
-    const status = state.status || 'unknown'
-    const inputStr = state.input && typeof state.input === 'object' && Object.keys(state.input).length > 0
-      ? JSON.stringify(state.input, null, 2) : undefined
+  private transformToolPart(part: Record<string, unknown>): MessagePart {
+    const state = (part.state || {}) as Record<string, unknown>
+    const stateInput = (state.input && typeof state.input === 'object' ? state.input : {}) as Record<string, unknown>
+    const toolName = (part.tool as string) || 'unknown'
+    const status = (state.status as string) || 'unknown'
+    const inputStr = stateInput && Object.keys(stateInput).length > 0
+      ? JSON.stringify(stateInput, null, 2) : undefined
     const outputStr = state.output
       ? String(state.output).slice(0, 2000) : undefined
     const errorStr = status === 'error' && state.error ? String(state.error) : undefined
 
     // Detect interactive question tools
-    let questions = state.input?.questions
+    let questions: unknown = stateInput.questions
     if (typeof questions === 'string') {
       try { questions = JSON.parse(questions) } catch {}
     }
     // Detect TodoWrite tools
-    let todos = state.input?.todos
+    let todos: unknown = stateInput.todos
     if (typeof todos === 'string') {
       try { todos = JSON.parse(todos) } catch {}
     }
@@ -364,21 +416,21 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     else if (Array.isArray(todos) && todos.length > 0) partType = 'todowrite'
 
     return {
-      id: part.id,
-      type: partType as any,
-      text: part.text,
-      content: part.text,
+      id: part.id as string,
+      type: partType as MessagePartType,
+      text: part.text as string,
+      content: part.text as string,
       tool: {
         name: toolName,
         status,
-        title: state.title || undefined,
+        title: (state.title as string) || undefined,
         input: inputStr,
         output: outputStr,
         error: errorStr,
         ...(Array.isArray(questions) && questions.length > 0 && { questions }),
         ...(Array.isArray(todos) && todos.length > 0 && { todos })
-      } as any,
-      state: part.state
+      },
+      state: part.state as MessagePart['state']
     }
   }
 
@@ -394,7 +446,7 @@ export class OpencodeAdapter implements CodingAgentAdapter {
       return []
     }
 
-    const messagesResult: any = await ocClient.session.messages({
+    const messagesResult = await ocClient.session.messages({
       path: { id: sessionId },
       ...(config.workspaceDir && { query: { directory: config.workspaceDir } })
     })
@@ -420,14 +472,16 @@ export class OpencodeAdapter implements CodingAgentAdapter {
       for (const part of parts) {
         const partId = part.id
         if (!partId) continue
+        // Cast part to a loose record for uniform property access across SDK Part union members
+        const p = part as unknown as Record<string, unknown>
 
         const isNewPart = !seenPartIds.has(partId)
         const isUpdatable = part.type === 'text' || part.type === 'reasoning' || part.type === 'tool'
 
         if (isUpdatable) {
           const fingerprint = part.type === 'tool'
-            ? `${part.state?.status}:${part.type}:${part.text?.length ?? 0}:${part.tool?.output?.length ?? 0}`
-            : String(part.text?.length ?? 0)
+            ? `${(p.state as Record<string, unknown> | undefined)?.status}:${part.type}:${(p.text as string | undefined)?.length ?? 0}:${((p.state as Record<string, unknown> | undefined)?.output as string | undefined)?.length ?? 0}`
+            : String((p.text as string | undefined)?.length ?? 0)
 
           const oldFingerprint = partContentLengths.get(partId)
           const hasChanged = oldFingerprint !== fingerprint
@@ -437,14 +491,14 @@ export class OpencodeAdapter implements CodingAgentAdapter {
             partContentLengths.set(partId, fingerprint)
 
             if (part.type === 'tool') {
-              const transformed = this.transformToolPart(part)
+              const transformed = this.transformToolPart(p)
               newParts.push({ ...transformed, role: msgRole, update: !isNewPart })
             } else {
               newParts.push({
                 id: partId,
-                type: part.type,
-                text: part.text,
-                content: part.text,
+                type: part.type as unknown as MessagePartType,
+                text: p.text as string,
+                content: p.text as string,
                 role: msgRole,
                 update: !isNewPart
               })
@@ -454,9 +508,9 @@ export class OpencodeAdapter implements CodingAgentAdapter {
           seenPartIds.add(partId)
           newParts.push({
             id: partId,
-            type: part.type,
-            text: part.text,
-            content: part.text,
+            type: part.type as unknown as MessagePartType,
+            text: p.text as string,
+            content: p.text as string,
             role: msgRole // Include role from message
           })
         }
@@ -487,7 +541,7 @@ export class OpencodeAdapter implements CodingAgentAdapter {
 
     try {
       // Fetch all messages from OpenCode API
-      const messagesResult: any = await ocClient.session.messages({
+      const messagesResult = await ocClient.session.messages({
         path: { id: sessionId },
         ...(config.workspaceDir && { query: { directory: config.workspaceDir } })
       })
@@ -499,24 +553,32 @@ export class OpencodeAdapter implements CodingAgentAdapter {
       console.log(`[OpencodeAdapter] getAllMessages: Retrieved ${messagesResult.data.length} messages`)
 
       // Convert OpenCode messages to SessionMessage format
-      const messages = messagesResult.data.map((msg: any, idx: number) => {
-        const role = msg.info?.role || 'assistant'
-        const parts = msg.parts || []
+      const messages = messagesResult.data.map((msg: Record<string, unknown>, idx: number) => {
+        const msgInfo = msg.info as Record<string, unknown> | undefined
+        const role = (msgInfo?.role as string) || 'assistant'
+        const parts = (msg.parts || []) as Record<string, unknown>[]
 
         // Log raw parts for debugging
         console.log(`[OpencodeAdapter] Message ${idx} role=${role}, parts count=${parts.length}`)
-        parts.forEach((p: any, pIdx: number) => {
+        parts.forEach((p: Record<string, unknown>, pIdx: number) => {
+          const pText = p.text as string | undefined
           console.log(`[OpencodeAdapter]   Part ${pIdx}:`, {
             type: p.type,
-            hasText: !!p.text,
-            textLength: p.text?.length,
-            textPreview: p.text?.slice(0, 100)
+            hasText: !!pText,
+            textLength: pText?.length,
+            textPreview: pText?.slice(0, 100)
           })
         })
 
         return {
-          role,
-          parts
+          id: (msgInfo?.id as string) || `msg-${idx}`,
+          role: (role === 'user' ? MessageRole.USER : MessageRole.ASSISTANT) as MessageRole,
+          parts: parts.map((p: Record<string, unknown>) => ({
+            id: p.id as string,
+            type: (p.type as string) as unknown as MessagePartType,
+            text: p.text as string,
+            content: p.text as string
+          }))
         }
       })
 
@@ -549,7 +611,7 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     if (!OpenCodeV2) throw new Error('OpenCode V2 SDK not loaded')
 
     const baseUrl = this.serverUrl || config.serverUrl || DEFAULT_SERVER_URL
-    this.v2Client = OpenCodeV2.createOpencodeClient({ baseUrl, fetch: noTimeoutFetch as any })
+    this.v2Client = OpenCodeV2.createOpencodeClient({ baseUrl, fetch: noTimeoutFetch as unknown as typeof fetch })
     return this.v2Client
   }
 
@@ -616,7 +678,7 @@ export class OpencodeAdapter implements CodingAgentAdapter {
   async stopServer(): Promise<void> {
     if (this.serverInstance) {
       try {
-        await this.serverInstance.close()
+        await (this.serverInstance as { close: () => Promise<void> }).close()
       } catch (error) {
         console.error('[OpencodeAdapter] Error stopping server:', error)
       }

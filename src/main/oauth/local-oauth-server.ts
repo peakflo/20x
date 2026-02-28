@@ -30,7 +30,7 @@ export class LocalOAuthServer {
         await this.startOnPort(port)
         this.port = port
         return `http://localhost:${port}/callback`
-      } catch (err) {
+      } catch {
         // Port in use, try next one
         continue
       }

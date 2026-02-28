@@ -102,7 +102,7 @@ export class CodexAdapter implements CodingAgentAdapter {
       this.codexExecutablePath = stdout.trim()
       console.log(`[CodexAdapter] Found codex executable at: ${this.codexExecutablePath}`)
       return this.codexExecutablePath
-    } catch (error) {
+    } catch {
       // Common installation locations
       const commonPaths = [
         '/usr/local/bin/codex',
@@ -213,10 +213,10 @@ export class CodexAdapter implements CodingAgentAdapter {
       this.sessions.set(session.threadId, session)
 
       return session.threadId
-    } catch (error: any) {
+    } catch (error: unknown) {
       // Cleanup on error
       codexProcess.kill()
-      throw new Error(`Failed to create Codex session: ${error.message}`)
+      throw new Error(`Failed to create Codex session: ${error instanceof Error ? error.message : String(error)}`)
     }
   }
 
@@ -319,9 +319,10 @@ export class CodexAdapter implements CodingAgentAdapter {
 
       console.log(`[CodexAdapter] Resumed session ${sessionId} with ${messages.length} messages`)
       return messages
-    } catch (error: any) {
+    } catch (error: unknown) {
       // Check if thread not found
-      if (error.message?.includes('thread not found') || error.message?.includes('Thread not found')) {
+      const errMsg = error instanceof Error ? error.message : String(error)
+      if (errMsg.includes('thread not found') || errMsg.includes('Thread not found')) {
         codexProcess.kill()
         throw new Error(
           'INCOMPATIBLE_SESSION_ID: This session does not exist on Codex servers. It may have been created with a different coding agent or has expired.'
@@ -374,9 +375,9 @@ export class CodexAdapter implements CodingAgentAdapter {
       })
 
       console.log(`[CodexAdapter] Sent prompt to thread ${session.threadId}`)
-    } catch (error: any) {
+    } catch (error: unknown) {
       session.status = 'error'
-      session.lastError = error.message
+      session.lastError = error instanceof Error ? error.message : String(error)
       throw error
     }
   }
@@ -437,8 +438,8 @@ export class CodexAdapter implements CodingAgentAdapter {
       await this.sendRpcRequest(session, 'message.abort', {
         thread_id: session.threadId,
       })
-    } catch (error: any) {
-      console.warn(`[CodexAdapter] Failed to abort: ${error.message}`)
+    } catch (error: unknown) {
+      console.warn(`[CodexAdapter] Failed to abort: ${error instanceof Error ? error.message : String(error)}`)
     }
 
     session.status = 'idle'
@@ -501,11 +502,11 @@ export class CodexAdapter implements CodingAgentAdapter {
 
         await execFileAsync(execPath, ['--version'], { timeout: 5000 })
         return { available: true }
-      } catch (error: any) {
-        return { available: false, reason: `Codex CLI found but not executable: ${error.message}` }
+      } catch (error: unknown) {
+        return { available: false, reason: `Codex CLI found but not executable: ${error instanceof Error ? error.message : String(error)}` }
       }
-    } catch (error: any) {
-      return { available: false, reason: error.message }
+    } catch (error: unknown) {
+      return { available: false, reason: error instanceof Error ? error.message : String(error) }
     }
   }
 
@@ -532,7 +533,7 @@ export class CodexAdapter implements CodingAgentAdapter {
         try {
           const message = JSON.parse(line) as JsonRpcMessage
           this.handleRpcMessage(session, message)
-        } catch (error) {
+        } catch {
           console.error('[CodexAdapter] Failed to parse JSON-RPC message:', line)
         }
       }
@@ -572,17 +573,19 @@ export class CodexAdapter implements CodingAgentAdapter {
    * Handle JSON-RPC notification (streaming events)
    */
   private handleNotification(session: CodexSession, notification: JsonRpcNotification): void {
-    const params = notification.params as any
+    const params = notification.params as Record<string, unknown>
+
+    const delta = params.delta as Record<string, unknown> | undefined
 
     switch (notification.method) {
       case 'message.delta':
         // Text content streaming
         session.messageBuffer.push({
           type: 'text',
-          id: params.message_id || `msg-${Date.now()}`,
-          role: params.role || 'assistant',
-          delta: params.delta?.content || '',
-          content: params.delta?.content || '',
+          id: (params.message_id as string) || `msg-${Date.now()}`,
+          role: (params.role as CodexMessage['role']) || 'assistant',
+          delta: (delta?.content as string) || '',
+          content: (delta?.content as string) || '',
         })
         break
 
@@ -591,7 +594,7 @@ export class CodexAdapter implements CodingAgentAdapter {
         session.status = 'idle'
         session.messageBuffer.push({
           type: 'text',
-          id: params.message_id || `msg-${Date.now()}`,
+          id: (params.message_id as string) || `msg-${Date.now()}`,
           role: 'assistant',
           finished: true,
         } as CodexMessage)
@@ -601,10 +604,10 @@ export class CodexAdapter implements CodingAgentAdapter {
         // Tool call started
         session.messageBuffer.push({
           type: 'tool_call',
-          id: params.tool_call_id || `tool-${Date.now()}`,
-          tool_name: params.tool_name,
-          tool_call_id: params.tool_call_id,
-          arguments: params.arguments,
+          id: (params.tool_call_id as string) || `tool-${Date.now()}`,
+          tool_name: params.tool_name as string,
+          tool_call_id: params.tool_call_id as string,
+          arguments: params.arguments as Record<string, unknown>,
         })
         break
 
@@ -612,20 +615,20 @@ export class CodexAdapter implements CodingAgentAdapter {
         // Tool call completed
         session.messageBuffer.push({
           type: 'tool_result',
-          id: params.tool_call_id || `tool-${Date.now()}`,
-          tool_call_id: params.tool_call_id,
-          result: params.result,
+          id: (params.tool_call_id as string) || `tool-${Date.now()}`,
+          tool_call_id: params.tool_call_id as string,
+          result: params.result as string,
         })
         break
 
       case 'error':
         // Error occurred
         session.status = 'error'
-        session.lastError = params.message || 'Unknown error'
+        session.lastError = (params.message as string) || 'Unknown error'
         session.messageBuffer.push({
           type: 'error',
           id: `error-${Date.now()}`,
-          error: params.message,
+          error: params.message as string,
         })
         break
 

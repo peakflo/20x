@@ -85,7 +85,7 @@ export function TaskListItem({ task, isSelected, onSelect }: TaskListItemProps) 
   const hasPendingQuestion = Boolean(
     session?.pendingApproval &&
     session.status !== 'idle' &&
-    (session.pendingApproval as any).action
+    session.pendingApproval.action
   )
 
   // Determine status indicator color

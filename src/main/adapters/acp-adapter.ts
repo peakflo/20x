@@ -179,12 +179,13 @@ export class AcpAdapter implements CodingAgentAdapter {
    * Authenticate the session if required
    * Note: claude-code-acp doesn't implement authenticate - it uses env vars
    */
-  private async authenticateSession(session: AcpSession, initResult: any): Promise<void> {
-    const authMethods = (initResult as any)?.authMethods || []
+  private async authenticateSession(session: AcpSession, initResult: unknown): Promise<void> {
+    const initObj = initResult as Record<string, unknown> | undefined
+    const authMethods = (Array.isArray(initObj?.authMethods) ? initObj.authMethods : []) as Array<{ id: string; [key: string]: unknown }>
 
     if (authMethods.length > 0 && this.agentType !== 'claude-code') {
       // Prefer API key auth methods (they read from environment)
-      const authMethod = authMethods.find((m: any) =>
+      const authMethod = authMethods.find((m) =>
         m.id === 'openai-api-key' || m.id === 'codex-api-key'
       ) || authMethods[0]
 
@@ -315,8 +316,9 @@ export class AcpAdapter implements CodingAgentAdapter {
           value: config.model
         })
         console.log(`[AcpAdapter/${this.agentType}] Model set to: ${config.model}`)
-      } catch (error: any) {
-        console.warn(`[AcpAdapter/${this.agentType}] Failed to set model: ${error.message}`)
+      } catch (error: unknown) {
+        const errMsg = error instanceof Error ? error.message : String(error)
+        console.warn(`[AcpAdapter/${this.agentType}] Failed to set model: ${errMsg}`)
         // Continue even if model setting fails (agent will use default)
       }
     }
@@ -443,9 +445,10 @@ export class AcpAdapter implements CodingAgentAdapter {
       // TODO: Extract and return session messages from session/update notifications
       // For now, return empty array - messages will be replayed via notifications
       return []
-    } catch (error: any) {
+    } catch (error: unknown) {
       // Check if session not found
-      if (error.message?.includes('not found') || error.message?.includes('does not exist')) {
+      const errMsg = error instanceof Error ? error.message : String(error)
+      if (errMsg.includes('not found') || errMsg.includes('does not exist')) {
         // Clean up process
         acpProcess.kill('SIGTERM')
         this.sessions.delete(sessionId)
@@ -677,7 +680,7 @@ export class AcpAdapter implements CodingAgentAdapter {
           ? `${packageName}/bin/codex-acp.js`
           : `${packageName}/dist/index.js`
         require.resolve(entryPoint)
-      } catch (error) {
+      } catch {
         return {
           available: false,
           reason: `${packageName} not found. Install with: pnpm add ${packageName}`
@@ -688,8 +691,9 @@ export class AcpAdapter implements CodingAgentAdapter {
       // via UI configuration (agent.config.api_keys) at session creation time
 
       return { available: true }
-    } catch (error: any) {
-      return { available: false, reason: error.message }
+    } catch (error: unknown) {
+      const errMsg = error instanceof Error ? error.message : String(error)
+      return { available: false, reason: errMsg }
     }
   }
 
@@ -803,7 +807,7 @@ export class AcpAdapter implements CodingAgentAdapter {
 
       // Check if this is a response to session/prompt
       if (session.promptRequestId === message.id && 'result' in response) {
-        const result = response.result as any
+        const result = response.result as Record<string, unknown> | undefined
         if (result?.stopReason) {
           console.log(`[AcpAdapter/${this.agentType}] Prompt completed with stopReason: ${result.stopReason}`)
           session.status = SessionStatusType.IDLE
@@ -837,7 +841,7 @@ export class AcpAdapter implements CodingAgentAdapter {
 
       console.log(`[AcpAdapter/${this.agentType}] << Notification: ${notification.method}`)
       if (notification.method === 'session/update') {
-        const params = notification.params as any
+        const params = notification.params as { update?: SessionUpdate } | undefined
         console.log(`[AcpAdapter/${this.agentType}]    sessionUpdate: ${params?.update?.sessionUpdate}`)
       }
 
@@ -983,11 +987,20 @@ export class AcpAdapter implements CodingAgentAdapter {
   }
 
   private handlePermissionRequest(session: AcpSession, request: JsonRpcRequest): void {
-    const params = request.params as any
+    const params = request.params as {
+      toolCall?: {
+        rawInput?: { reason?: string }
+        content?: Array<{ content?: { text?: string } }>
+        title?: string
+        kind?: string
+        toolCallId?: string
+      }
+      options?: Array<{ optionId: string; name: string; kind: string }>
+    } | undefined
 
     // Extract permission details
-    const toolCall = params.toolCall
-    const options = params.options || []
+    const toolCall = params?.toolCall
+    const options = params?.options || []
 
     // Get the question/reason from the tool call
     const question = toolCall?.rawInput?.reason ||
@@ -997,14 +1010,14 @@ export class AcpAdapter implements CodingAgentAdapter {
     console.log(`[AcpAdapter/${this.agentType}] Permission request:`)
     console.log(`  Question: ${question}`)
     console.log(`  Tool: ${toolCall?.kind} - ${toolCall?.toolCallId}`)
-    console.log(`  Options: ${options.map((o: any) => `${o.name} (${o.optionId})`).join(', ')}`)
+    console.log(`  Options: ${options.map((o) => `${o.name} (${o.optionId})`).join(', ')}`)
 
     // Store the permission request for UI to handle
     session.pendingApproval = {
       requestId: request.id,
-      toolCallId: toolCall?.toolCallId,
+      toolCallId: toolCall?.toolCallId || '',
       question,
-      options: options.map((o: any) => ({
+      options: options.map((o) => ({
         optionId: o.optionId,
         name: o.name,
         kind: o.kind
@@ -1049,27 +1062,25 @@ export class AcpAdapter implements CodingAgentAdapter {
     const parts: MessagePart[] = []
 
     // Unwrap event (events may be wrapped with metadata)
-    const wrappedEvent = event as any
-    const actualEvent = wrappedEvent._notification || event
+    const wrappedEvent = event as Record<string, unknown>
+    const actualEvent = (wrappedEvent._notification || event) as Record<string, unknown>
 
     // Handle error events from adapter
-    const errorEvent = actualEvent as any
-    if (errorEvent._isError) {
+    if (actualEvent._isError) {
       const errorId = `error-${Date.now()}`
       if (!seenPartIds.has(errorId)) {
         seenPartIds.add(errorId)
         parts.push({
           id: errorId,
           type: MessagePartType.TEXT,
-          text: `Error: ${errorEvent.message}${errorEvent.data ? ` - ${errorEvent.data}` : ''}`,
-          role: 'assistant',
-          partType: 'error'
-        } as any)
+          text: `Error: ${actualEvent.message}${actualEvent.data ? ` - ${actualEvent.data}` : ''}`,
+          role: 'assistant'
+        })
       }
       return parts
     }
 
-    const notification = actualEvent as JsonRpcNotification
+    const notification = actualEvent as unknown as JsonRpcNotification
 
     // Handle session/update notifications (primary ACP notification type)
     if (notification.method === 'session/update') {
@@ -1093,7 +1104,7 @@ export class AcpAdapter implements CodingAgentAdapter {
           seenPartIds.add(partId)
 
           // Extract command and output from rawInput/rawOutput
-          const rawInput = update.rawInput as { command?: string | string[]; parsed_cmd?: any[] } | undefined
+          const rawInput = update.rawInput as { command?: string | string[]; parsed_cmd?: Array<{ cmd?: string }> } | undefined
           const rawOutput = update.rawOutput as {
             command?: string | string[];
             stdout?: string;
@@ -1108,7 +1119,7 @@ export class AcpAdapter implements CodingAgentAdapter {
           const commandFromOutput = Array.isArray(rawOutput?.command)
             ? rawOutput.command.join(' ')
             : rawOutput?.command
-          const commandFromParsed = rawInput?.parsed_cmd?.map((c: any) => c.cmd).join('; ')
+          const commandFromParsed = rawInput?.parsed_cmd?.map((c) => c.cmd).join('; ')
 
           const command = commandFromInput || commandFromOutput || commandFromParsed || update.title || 'Unknown'
           const output = rawOutput?.formatted_output || rawOutput?.stdout || rawOutput?.stderr || ''
@@ -1152,7 +1163,7 @@ export class AcpAdapter implements CodingAgentAdapter {
         const messageId = turnId > 0 ? `agent-response-${turnId}` : 'agent-response'
         console.log(`[AcpAdapter] agent_message_chunk: turnId=${turnId}, messageId=${messageId}`)
 
-        const content = (update as any).content
+        const content = update.content as { type?: string; text?: string } | undefined
         const chunk = content?.text || ''
 
         if (chunk) {
@@ -1178,7 +1189,7 @@ export class AcpAdapter implements CodingAgentAdapter {
         // Use auto-detected turn ID
         const turnId = session?.currentTurnId || 0
         const thinkingId = turnId > 0 ? `agent-thinking-${turnId}` : 'agent-thinking'
-        const content = (update as any).content
+        const content = update.content as { type?: string; text?: string } | undefined
         const chunk = content?.text || ''
 
         if (chunk) {
@@ -1201,7 +1212,7 @@ export class AcpAdapter implements CodingAgentAdapter {
       } else if (update.sessionUpdate === 'user_message_chunk') {
         // Handle streaming user message chunks (usually when user types)
         const userId = 'user-message'
-        const content = (update as any).content
+        const content = update.content as { type?: string; text?: string } | undefined
         const chunk = content?.text || ''
 
         if (chunk) {

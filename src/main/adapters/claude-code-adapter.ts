@@ -65,7 +65,7 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
       this.claudeExecutablePath = stdout.trim()
       console.log(`[ClaudeCodeAdapter] Found claude executable at: ${this.claudeExecutablePath}`)
       return this.claudeExecutablePath
-    } catch (error) {
+    } catch {
       // Common installation locations
       const commonPaths = [
         '/usr/local/bin/claude',
@@ -300,7 +300,7 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
               if (typeof todos === 'string') { try { todos = JSON.parse(todos) } catch {} }
               if (Array.isArray(todos) && todos.length > 0) {
                 partType = 'todowrite'
-                toolObj.todos = todos.map((t: any, i: number) => ({
+                toolObj.todos = todos.map((t: Record<string, unknown>, i: number) => ({
                   id: t.id || `todo-${i}`,
                   content: t.content || '',
                   status: t.status || 'pending',
@@ -316,7 +316,7 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
                 toolObj.questions = questions
               }
 
-              message.parts.push({ type: partType as any, tool: toolObj })
+              message.parts.push({ type: partType as MessagePartType, tool: toolObj })
               if (contentPart.id) toolUseParts.set(contentPart.id, toolObj)
             } else if (contentPart.type === 'tool_result' && contentPart.tool_use_id) {
               // Merge result into the matching tool_use part instead of creating separate entry
@@ -338,13 +338,14 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
 
       console.log(`[ClaudeCodeAdapter] Loaded ${messages.length} messages from session history`)
       return messages
-    } catch (error: any) {
+    } catch (error: unknown) {
       // Re-throw session file not found errors
-      if (error.message?.includes('SESSION_FILE_NOT_FOUND')) {
+      const errMsg = error instanceof Error ? error.message : String(error)
+      if (errMsg.includes('SESSION_FILE_NOT_FOUND')) {
         throw error
       }
       // For other errors, warn and return empty array
-      console.warn(`[ClaudeCodeAdapter] Failed to load session history:`, error.message)
+      console.warn(`[ClaudeCodeAdapter] Failed to load session history:`, errMsg)
       return []
     }
   }
@@ -483,6 +484,7 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
       promptPreview: promptText.substring(0, 100),
       hasEnv: !!options.env,
       hasMcpServers: !!options.mcpServers,
+      mcpServerNames: options.mcpServers ? Object.keys(options.mcpServers) : [],
     })
 
     // Start new query
@@ -495,6 +497,7 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
 
     session.queryIterator = query
     session.status = 'busy'
+    session.lastError = null // Clear any previous error (e.g., rate limit) for recovery
     if (!isFirstPrompt) {
       session.messageBuffer = [] // Clear buffer for new messages (but keep history for first prompt)
     }
@@ -628,8 +631,8 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
 
     for (const msg of session.messageBuffer) {
       // Derive role from message type
-      const msgAny = msg as any
-      const roleStr = (msgAny.role || (msg.type === 'user' ? 'user' : 'assistant'))
+      const msgRecord = msg as unknown as Record<string, unknown>
+      const roleStr = (msgRecord.role || (msg.type === 'user' ? 'user' : 'assistant')) as string
       const role = roleStr === 'user' ? MessageRole.USER :
                    roleStr === 'system' ? MessageRole.SYSTEM :
                    MessageRole.ASSISTANT
@@ -648,28 +651,28 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
 
       // Convert SDKMessage to MessagePart
       // Handle result messages (final output from Claude Code)
-      if (msgAny.type === 'result' && msgAny.result) {
+      if (msgRecord.type === 'result' && msgRecord.result) {
         currentMessage!.parts.push({
           type: MessagePartType.TEXT,
-          text: msgAny.result,
-          role: roleStr as any
+          text: msgRecord.result as string,
+          role: roleStr as MessagePart['role']
         })
-      } else if (msgAny.text) {
+      } else if (msgRecord.text) {
         currentMessage!.parts.push({
           type: MessagePartType.TEXT,
-          text: msgAny.text,
-          role: roleStr as any
+          text: msgRecord.text as string,
+          role: roleStr as MessagePart['role']
         })
-      } else if (msgAny.name || msgAny.tool_use_id) {
+      } else if (msgRecord.name || msgRecord.tool_use_id) {
         currentMessage!.parts.push({
           type: MessagePartType.TOOL,
           tool: {
-            name: msgAny.name || 'unknown',
-            status: msgAny.type === 'tool_result' ? 'completed' : 'in_progress',
-            input: msgAny.input ? JSON.stringify(msgAny.input) : '',
-            output: msgAny.content || ''
+            name: (msgRecord.name as string) || 'unknown',
+            status: msgRecord.type === 'tool_result' ? 'completed' : 'in_progress',
+            input: msgRecord.input ? JSON.stringify(msgRecord.input) : '',
+            output: (msgRecord.content as string) || ''
           },
-          role: roleStr as any
+          role: roleStr as MessagePart['role']
         })
       }
     }
@@ -684,12 +687,24 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
 
   async respondToQuestion(
     sessionId: string,
-    _answers: Record<string, string>,
-    _config: SessionConfig
+    answers: Record<string, string>,
+    config: SessionConfig
   ): Promise<void> {
-    // Claude Code runs with bypassPermissions, so AskUserQuestion shouldn't block.
-    // If it somehow does, log a warning — there's nothing to unblock.
-    console.warn(`[ClaudeCodeAdapter] respondToQuestion called for session ${sessionId}, but Claude Code uses bypassPermissions. Ignoring.`)
+    // Claude Code runs with bypassPermissions, so AskUserQuestion ends the
+    // session turn (it appears in permission_denials in the result message).
+    // Send the user's answer as a follow-up prompt to continue the conversation.
+    const answerText = Object.values(answers).filter(Boolean).join('\n')
+    if (!answerText) {
+      console.warn(`[ClaudeCodeAdapter] respondToQuestion called with empty answers for session ${sessionId}`)
+      return
+    }
+
+    console.log(`[ClaudeCodeAdapter] Sending question answer as follow-up prompt for session ${sessionId}`)
+    await this.sendPrompt(
+      sessionId,
+      [{ type: MessagePartType.TEXT, text: answerText }],
+      config
+    )
   }
 
   async registerMcpServer(
@@ -716,8 +731,8 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
         return { available: false, reason: 'Claude Agent SDK not loaded' }
       }
       return { available: true }
-    } catch (error: any) {
-      return { available: false, reason: error.message }
+    } catch (error: unknown) {
+      return { available: false, reason: error instanceof Error ? error.message : String(error) }
     }
   }
 
@@ -728,7 +743,7 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
   /**
    * Safely logs a message by truncating large base64 content
    */
-  private safeLogMessage(msg: any): void {
+  private safeLogMessage(msg: SDKMessage): void {
     const MAX_LOG_LENGTH = 1000 // Max chars for any single field
 
     try {
@@ -748,9 +763,10 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
       }))
 
       console.log('[ClaudeCodeAdapter] Received message:', JSON.stringify(truncated, null, 2))
-    } catch (error) {
+    } catch {
       // Fallback to basic logging if parsing fails
-      console.log('[ClaudeCodeAdapter] Received message (logging failed):', msg.type, msg.subtype)
+      const msgRecord = msg as unknown as Record<string, unknown>
+      console.log('[ClaudeCodeAdapter] Received message (logging failed):', msgRecord.type, msgRecord.subtype)
     }
   }
 
@@ -764,14 +780,14 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
 
     try {
       for await (const message of session.queryIterator) {
-        const msg = message as any
+        const msg = message as unknown as Record<string, unknown>
 
         // Log message with truncation for large content
-        this.safeLogMessage(msg)
+        this.safeLogMessage(message)
 
         // Extract real Claude Code session ID from first message
         if (!session.sessionId && 'session_id' in msg) {
-          const realSessionId = msg.session_id
+          const realSessionId = msg.session_id as string
           session.sessionId = realSessionId
           console.log(`[ClaudeCodeAdapter] Claude Code session ID: ${realSessionId}`)
 
@@ -779,7 +795,7 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
           // This allows pollMessages to work with both IDs during transition
           if (realSessionId !== sessionId) {
             console.log(`[ClaudeCodeAdapter] Adding session under real ID: ${realSessionId} (keeping temp ID ${sessionId} until agent-manager updates)`)
-            this.sessions.set(realSessionId, session)
+            this.sessions.set(realSessionId as string, session)
             // Don't delete the old sessionId yet - agent-manager needs to poll with it
             // to receive the realSessionId. The old key will be deleted by destroySession
             // or when agent-manager explicitly removes it.
@@ -802,6 +818,14 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
           }
         }
 
+        // Handle error result messages (e.g., rate limits) before treating as normal
+        if (msg.type === 'result' && msg.is_error) {
+          const errorText = ((msg as Record<string, unknown>).result as string) || 'Unknown error'
+          console.warn('[ClaudeCodeAdapter] Received error result:', errorText)
+          session.status = 'error'
+          session.lastError = errorText
+        }
+
         // Buffer message (only if we didn't throw above)
         session.messageBuffer.push(message)
 
@@ -813,7 +837,7 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
           } else if (msg.subtype === 'idle') {
             session.status = 'idle'
           }
-        } else if (msg.type === 'result') {
+        } else if (msg.type === 'result' && !msg.is_error) {
           console.log('[ClaudeCodeAdapter] Received result message')
           session.status = 'idle'
         }
@@ -827,37 +851,42 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
         }
       }
       console.log('[ClaudeCodeAdapter] Stream consumption completed normally')
-    } catch (error: any) {
-      if (error.name === 'AbortError' || error.message?.includes('aborted by user')) {
+    } catch (error: unknown) {
+      const errName = error instanceof Error ? error.name : ''
+      const errMsg = error instanceof Error ? error.message : String(error)
+      const errStack = error instanceof Error ? error.stack : undefined
+      if (errName === 'AbortError' || errMsg.includes('aborted by user')) {
         console.log('[ClaudeCodeAdapter] Stream aborted by user')
         // Don't set error status - this is normal when sending a new message
-      } else if (error.message?.includes('INCOMPATIBLE_SESSION_ID')) {
+      } else if (errMsg.includes('INCOMPATIBLE_SESSION_ID')) {
         // Store temporarily so resumeSession can detect and re-throw it
         console.warn('[ClaudeCodeAdapter] Incompatible session error detected')
         session.status = 'error'
-        session.lastError = error.message
-      } else if (error.message?.includes('exited with code 1')) {
-        // Claude Code process failed - likely a resume failure or other fatal error
-        console.error('[ClaudeCodeAdapter] Claude Code process failed:', error.message)
-        // Check if this was a resume attempt
-        if (session.isResumed || session.config) {
+        session.lastError = errMsg
+      } else if (errMsg.includes('exited with code 1')) {
+        // Claude Code process failed - could be rate limit, resume failure, or other error
+        console.error('[ClaudeCodeAdapter] Claude Code process failed:', errMsg)
+        // Only treat as incompatible session if we don't already have a specific error
+        // from the result message (e.g., rate limit errors set lastError before process exits)
+        if (!session.lastError && (session.isResumed || session.config)) {
           console.warn('[ClaudeCodeAdapter] Resume failed - session may not exist on Claude servers')
           session.status = 'error'
           session.lastError = 'INCOMPATIBLE_SESSION_ID: Failed to resume session. The session may have expired or does not exist on Claude Code servers.'
-        } else {
+        } else if (!session.lastError) {
           session.status = 'error'
-          session.lastError = error.message
+          session.lastError = errMsg
         }
       } else {
         console.error('[ClaudeCodeAdapter] Stream error:', error)
-        console.error('[ClaudeCodeAdapter] Error stack:', error.stack)
-        console.error('[ClaudeCodeAdapter] Error details:', JSON.stringify(error, Object.getOwnPropertyNames(error), 2))
+        console.error('[ClaudeCodeAdapter] Error stack:', errStack)
+        console.error('[ClaudeCodeAdapter] Error details:', JSON.stringify(error, error instanceof Error ? Object.getOwnPropertyNames(error) : undefined, 2))
         session.status = 'error'
-        session.lastError = error.message
+        session.lastError = errMsg
       }
     } finally {
       console.log('[ClaudeCodeAdapter] Stream consumption ended')
-      if (!session.lastError?.includes('INCOMPATIBLE_SESSION_ID')) {
+      // Only reset to idle if no error occurred during stream consumption
+      if (session.status !== 'error') {
         session.status = 'idle'
       }
     }
@@ -951,7 +980,7 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
             partContentLengths.set(toolPartId, `pending:${toolName}`)
             parts.push({
               id: toolPartId,
-              type: 'question' as any,
+              type: 'question' as MessagePartType,
               content: title || 'Question',
               tool: { name: toolName, status: 'pending', title, input, questions },
             })
@@ -965,7 +994,7 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
           }
           if (Array.isArray(todos) && todos.length > 0) {
             // Normalize: ensure each todo has an id (Claude Code SDK omits it)
-            const normalizedTodos = todos.map((t: any, i: number) => ({
+            const normalizedTodos = todos.map((t: Record<string, unknown>, i: number) => ({
               id: t.id || `todo-${i}`,
               content: t.content || '',
               status: t.status || 'pending',
@@ -974,7 +1003,7 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
             partContentLengths.set(toolPartId, `pending:${toolName}`)
             parts.push({
               id: toolPartId,
-              type: 'todowrite' as any,
+              type: 'todowrite' as MessagePartType,
               content: title || 'Todo List',
               tool: { name: toolName, status: 'pending', title, input, todos: normalizedTodos },
             })
@@ -1082,6 +1111,23 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
           content: `${toolName} — ${status}`,
           tool: { name: toolName, status, output },
         })
+      }
+    } else if (msgWithProps.type === 'result') {
+      // Surface error result messages (e.g., rate limit errors) to the UI
+      const resultMsg = msg as Record<string, unknown>
+      if (resultMsg.is_error && resultMsg.result) {
+        const partId = `result-error-${msgWithProps.uuid || Date.now()}`
+        if (!seenPartIds.has(partId)) {
+          seenPartIds.add(partId)
+          const errorText = String(resultMsg.result)
+          partContentLengths.set(partId, String(errorText.length))
+          parts.push({
+            id: partId,
+            type: MessagePartType.TEXT,
+            text: errorText,
+            role: 'system',
+          })
+        }
       }
     } else if (msgWithProps.type === 'system') {
       // Skip system init messages - they're internal session setup

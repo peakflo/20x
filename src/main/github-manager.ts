@@ -54,9 +54,10 @@ export class GitHubManager {
                     stdout.match(/account (\S+)/) ||
                     stdout.match(/as (\S+)/)
       return { installed: true, authenticated: true, username: match?.[1] }
-    } catch (error: any) {
+    } catch (error: unknown) {
       // gh auth status exits with 1 when not authenticated, but may still output to stderr
-      const output = error?.stderr || error?.stdout || ''
+      const execErr = error as { stderr?: string; stdout?: string }
+      const output = execErr?.stderr || execErr?.stdout || ''
       if (output.includes('Logged in')) {
         const match = output.match(/account (\S+)/) || output.match(/as (\S+)/)
         return { installed: true, authenticated: true, username: match?.[1] }
@@ -140,14 +141,14 @@ export class GitHubManager {
       `/orgs/${org}/repos?per_page=100&sort=updated`
     ], { maxBuffer: 10 * 1024 * 1024 })
 
-    const raw = JSON.parse(stdout) as any[]
+    const raw = JSON.parse(stdout) as Record<string, unknown>[]
     return raw.map((r) => ({
-      name: r.name,
-      fullName: r.full_name,
-      defaultBranch: r.default_branch || 'main',
-      cloneUrl: r.clone_url,
-      description: r.description || '',
-      isPrivate: r.private
+      name: r.name as string,
+      fullName: r.full_name as string,
+      defaultBranch: (r.default_branch as string) || 'main',
+      cloneUrl: r.clone_url as string,
+      description: (r.description as string) || '',
+      isPrivate: r.private as boolean
     }))
   }
 
@@ -157,14 +158,14 @@ export class GitHubManager {
       '/user/repos?per_page=100&sort=updated&affiliation=owner'
     ], { maxBuffer: 10 * 1024 * 1024 })
 
-    const raw = JSON.parse(stdout) as any[]
+    const raw = JSON.parse(stdout) as Record<string, unknown>[]
     return raw.map((r) => ({
-      name: r.name,
-      fullName: r.full_name,
-      defaultBranch: r.default_branch || 'main',
-      cloneUrl: r.clone_url,
-      description: r.description || '',
-      isPrivate: r.private
+      name: r.name as string,
+      fullName: r.full_name as string,
+      defaultBranch: (r.default_branch as string) || 'main',
+      cloneUrl: r.clone_url as string,
+      description: (r.description as string) || '',
+      isPrivate: r.private as boolean
     }))
   }
 

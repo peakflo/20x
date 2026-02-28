@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import type { Mock } from 'vitest'
 import { useTaskStore } from './task-store'
+import type { WorkfloTask, CreateTaskDTO, UpdateTaskDTO } from '@/types'
 
 const mockElectronAPI = window.electronAPI
 
@@ -20,7 +22,7 @@ describe('useTaskStore', () => {
         { id: 't1', title: 'Task 1' },
         { id: 't2', title: 'Task 2' }
       ]
-      ;(mockElectronAPI.db.getTasks as any).mockResolvedValue(mockTasks)
+      ;(mockElectronAPI.db.getTasks as unknown as Mock).mockResolvedValue(mockTasks)
 
       await useTaskStore.getState().fetchTasks()
 
@@ -29,7 +31,7 @@ describe('useTaskStore', () => {
     })
 
     it('sets error on failure', async () => {
-      ;(mockElectronAPI.db.getTasks as any).mockRejectedValue(new Error('DB error'))
+      ;(mockElectronAPI.db.getTasks as unknown as Mock).mockRejectedValue(new Error('DB error'))
 
       await useTaskStore.getState().fetchTasks()
 
@@ -40,11 +42,11 @@ describe('useTaskStore', () => {
 
   describe('createTask', () => {
     it('prepends new task to list', async () => {
-      useTaskStore.setState({ tasks: [{ id: 't1', title: 'Existing' }] as any })
+      useTaskStore.setState({ tasks: [{ id: 't1', title: 'Existing' }] as unknown as WorkfloTask[] })
       const newTask = { id: 't2', title: 'New Task' }
-      ;(mockElectronAPI.db.createTask as any).mockResolvedValue(newTask)
+      ;(mockElectronAPI.db.createTask as unknown as Mock).mockResolvedValue(newTask)
 
-      const result = await useTaskStore.getState().createTask({ title: 'New Task' } as any)
+      const result = await useTaskStore.getState().createTask({ title: 'New Task' } as unknown as CreateTaskDTO)
 
       expect(result).toEqual(newTask)
       const tasks = useTaskStore.getState().tasks
@@ -53,8 +55,8 @@ describe('useTaskStore', () => {
     })
 
     it('throws and sets error on failure', async () => {
-      ;(mockElectronAPI.db.createTask as any).mockRejectedValue(new Error('fail'))
-      await expect(useTaskStore.getState().createTask({ title: 'X' } as any)).rejects.toThrow('fail')
+      ;(mockElectronAPI.db.createTask as unknown as Mock).mockRejectedValue(new Error('fail'))
+      await expect(useTaskStore.getState().createTask({ title: 'X' } as unknown as CreateTaskDTO)).rejects.toThrow('fail')
       expect(useTaskStore.getState().error).toBe('fail')
     })
   })
@@ -64,12 +66,12 @@ describe('useTaskStore', () => {
       useTaskStore.setState({
         tasks: [
           { id: 't1', title: 'Old', source_id: null, external_id: null }
-        ] as any
+        ] as unknown as WorkfloTask[]
       })
       const updated = { id: 't1', title: 'Updated', source_id: null, external_id: null }
-      ;(mockElectronAPI.db.updateTask as any).mockResolvedValue(updated)
+      ;(mockElectronAPI.db.updateTask as unknown as Mock).mockResolvedValue(updated)
 
-      const result = await useTaskStore.getState().updateTask('t1', { title: 'Updated' } as any)
+      const result = await useTaskStore.getState().updateTask('t1', { title: 'Updated' } as unknown as UpdateTaskDTO)
 
       expect(result!.title).toBe('Updated')
       expect(useTaskStore.getState().tasks[0].title).toBe('Updated')
@@ -77,12 +79,12 @@ describe('useTaskStore', () => {
 
     it('fires background export for sourced tasks', async () => {
       useTaskStore.setState({
-        tasks: [{ id: 't1', source_id: 'src-1', external_id: 'ext-1' }] as any
+        tasks: [{ id: 't1', source_id: 'src-1', external_id: 'ext-1' }] as unknown as WorkfloTask[]
       })
       const updated = { id: 't1', title: 'X', source_id: 'src-1', external_id: 'ext-1' }
-      ;(mockElectronAPI.db.updateTask as any).mockResolvedValue(updated)
+      ;(mockElectronAPI.db.updateTask as unknown as Mock).mockResolvedValue(updated)
 
-      await useTaskStore.getState().updateTask('t1', { title: 'X' } as any)
+      await useTaskStore.getState().updateTask('t1', { title: 'X' } as unknown as UpdateTaskDTO)
 
       expect(mockElectronAPI.taskSources.exportUpdate).toHaveBeenCalledWith('t1', { title: 'X' })
     })
@@ -91,10 +93,10 @@ describe('useTaskStore', () => {
   describe('deleteTask', () => {
     it('removes task from list', async () => {
       useTaskStore.setState({
-        tasks: [{ id: 't1' }, { id: 't2' }] as any,
+        tasks: [{ id: 't1' }, { id: 't2' }] as unknown as WorkfloTask[],
         selectedTaskId: null
       })
-      ;(mockElectronAPI.db.deleteTask as any).mockResolvedValue(true)
+      ;(mockElectronAPI.db.deleteTask as unknown as Mock).mockResolvedValue(true)
 
       const result = await useTaskStore.getState().deleteTask('t1')
 
@@ -105,10 +107,10 @@ describe('useTaskStore', () => {
 
     it('clears selection if deleted task was selected', async () => {
       useTaskStore.setState({
-        tasks: [{ id: 't1' }] as any,
+        tasks: [{ id: 't1' }] as unknown as WorkfloTask[],
         selectedTaskId: 't1'
       })
-      ;(mockElectronAPI.db.deleteTask as any).mockResolvedValue(true)
+      ;(mockElectronAPI.db.deleteTask as unknown as Mock).mockResolvedValue(true)
 
       await useTaskStore.getState().deleteTask('t1')
 
@@ -117,10 +119,10 @@ describe('useTaskStore', () => {
 
     it('preserves selection if different task deleted', async () => {
       useTaskStore.setState({
-        tasks: [{ id: 't1' }, { id: 't2' }] as any,
+        tasks: [{ id: 't1' }, { id: 't2' }] as unknown as WorkfloTask[],
         selectedTaskId: 't2'
       })
-      ;(mockElectronAPI.db.deleteTask as any).mockResolvedValue(true)
+      ;(mockElectronAPI.db.deleteTask as unknown as Mock).mockResolvedValue(true)
 
       await useTaskStore.getState().deleteTask('t1')
 
