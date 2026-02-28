@@ -74,6 +74,8 @@ export interface MessagePart {
     input?: unknown
     output?: unknown
     error?: string
+    questions?: unknown
+    todos?: unknown
   }
   state?: {
     status?: string

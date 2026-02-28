@@ -9,6 +9,7 @@ import { LinearConfigForm } from './LinearConfigForm'
 import { HubSpotConfigForm } from './HubSpotConfigForm'
 import { PeakfloConfigForm } from './PeakfloConfigForm'
 import { GitHubIssuesConfigForm } from './GitHubIssuesConfigForm'
+import { NotionConfigForm } from './NotionConfigForm'
 import type { PluginFormProps } from './PluginFormProps'
 
 export { PluginSetupDocumentation } from './PluginSetupDocumentation'
@@ -22,7 +23,8 @@ export const PLUGIN_FORMS: Record<string, PluginFormComponent> = {
   linear: LinearConfigForm,
   hubspot: HubSpotConfigForm,
   peakflo: PeakfloConfigForm,
-  'github-issues': GitHubIssuesConfigForm
+  'github-issues': GitHubIssuesConfigForm,
+  notion: NotionConfigForm
 }
 
 /**

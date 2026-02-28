@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react'
-import { RefreshCw } from 'lucide-react'
+import { RefreshCw, Loader2 } from 'lucide-react'
 import { Input } from '@/components/ui/Input'
 import { Label } from '@/components/ui/Label'
 import { Button } from '@/components/ui/Button'
@@ -20,6 +20,7 @@ interface PluginConfigFormProps {
 export function PluginConfigForm({ pluginId, mcpServerId, sourceId, value, onChange, onRequestSave }: PluginConfigFormProps) {
   const [schema, setSchema] = useState<ConfigFieldSchema[]>([])
   const [dynamicOptions, setDynamicOptions] = useState<Record<string, ConfigFieldOption[]>>({})
+  const [loadingFields, setLoadingFields] = useState<Set<string>>(new Set())
   const [showOAuthDialog, setShowOAuthDialog] = useState(false)
   const [oauthConnected, setOauthConnected] = useState(false)
 
@@ -62,10 +63,18 @@ export function PluginConfigForm({ pluginId, mcpServerId, sourceId, value, onCha
   const resolveDynamicOptions = useCallback(() => {
     const dynamicFields = schema.filter((f) => f.type === 'dynamic-select' && f.optionsResolver)
     for (const field of dynamicFields) {
+      setLoadingFields((prev) => new Set(prev).add(field.key))
       pluginApi
         .resolveOptions(pluginId, field.optionsResolver!, value, mcpServerId, sourceId)
         .then((options) => {
           setDynamicOptions((prev) => ({ ...prev, [field.key]: options }))
+        })
+        .finally(() => {
+          setLoadingFields((prev) => {
+            const next = new Set(prev)
+            next.delete(field.key)
+            return next
+          })
         })
     }
   }, [schema, pluginId, mcpServerId, sourceId, value])
@@ -136,7 +145,7 @@ export function PluginConfigForm({ pluginId, mcpServerId, sourceId, value, onCha
             {setupLinkField.description && (
               <p className="text-xs text-muted-foreground">{setupLinkField.description}</p>
             )}
-            {renderField(setupLinkField, value[setupLinkField.key] ?? setupLinkField.default, updateField, dynamicOptions[setupLinkField.key], resolveDynamicOptions)}
+            {renderField(setupLinkField, value[setupLinkField.key] ?? setupLinkField.default, updateField, dynamicOptions[setupLinkField.key], resolveDynamicOptions, loadingFields.has(setupLinkField.key))}
           </div>
         )}
 
@@ -151,7 +160,7 @@ export function PluginConfigForm({ pluginId, mcpServerId, sourceId, value, onCha
               {field.description && (
                 <p className="text-xs text-muted-foreground">{field.description}</p>
               )}
-              {renderField(field, value[field.key] ?? field.default, updateField, dynamicOptions[field.key], resolveDynamicOptions)}
+              {renderField(field, value[field.key] ?? field.default, updateField, dynamicOptions[field.key], resolveDynamicOptions, loadingFields.has(field.key))}
             </div>
           ))}
 
@@ -221,7 +230,8 @@ function renderField(
   currentValue: unknown,
   onChange: (key: string, val: unknown) => void,
   resolvedOptions?: ConfigFieldOption[],
-  onRefresh?: () => void
+  onRefresh?: () => void,
+  isLoading?: boolean
 ) {
   // Special handling for setup link fields (fields starting with _)
   if (field.key.startsWith('_') && field.placeholder?.startsWith('http')) {
@@ -304,14 +314,80 @@ function renderField(
 
     case 'dynamic-select': {
       const options = resolvedOptions ?? []
+
+      if (field.multiSelect) {
+        const selected = Array.isArray(currentValue) ? (currentValue as string[]) : []
+        const toggleValue = (val: string) => {
+          const next = selected.includes(val)
+            ? selected.filter((v) => v !== val)
+            : [...selected, val]
+          onChange(field.key, next)
+        }
+        return (
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-muted-foreground">
+                {isLoading ? (
+                  <span className="flex items-center gap-1.5">
+                    <Loader2 className="h-3 w-3 animate-spin" /> Loading options...
+                  </span>
+                ) : (
+                  selected.length > 0 ? `${selected.length} selected` : 'None selected'
+                )}
+              </span>
+              {onRefresh && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  onClick={onRefresh}
+                  title="Refresh options"
+                  className="h-7 w-7"
+                  disabled={isLoading}
+                >
+                  <RefreshCw className={`h-3.5 w-3.5 ${isLoading ? 'animate-spin' : ''}`} />
+                </Button>
+              )}
+            </div>
+            <div className="max-h-48 overflow-y-auto rounded-md border border-input p-1.5 space-y-0.5">
+              {isLoading && options.length === 0 && (
+                <div className="flex items-center justify-center py-3">
+                  <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                </div>
+              )}
+              {!isLoading && options.length === 0 && (
+                <p className="text-xs text-muted-foreground px-2 py-1">No options available</p>
+              )}
+              {options.map((opt) => (
+                <label
+                  key={opt.value}
+                  className="flex items-center gap-2 text-sm cursor-pointer rounded px-2 py-1 hover:bg-accent"
+                >
+                  <input
+                    type="checkbox"
+                    checked={selected.includes(opt.value)}
+                    onChange={() => toggleValue(opt.value)}
+                    className="rounded border-input"
+                  />
+                  {opt.label}
+                </label>
+              ))}
+            </div>
+          </div>
+        )
+      }
+
       return (
         <div className="flex gap-2">
           <select
             value={(currentValue as string) ?? ''}
             onChange={(e) => onChange(field.key, e.target.value)}
             className="flex-1 rounded-md border border-input bg-transparent px-3 py-2 text-sm cursor-pointer"
+            disabled={isLoading}
           >
-            <option value="">{field.placeholder || 'Select...'}</option>
+            <option value="">
+              {isLoading ? 'Loading...' : (field.placeholder || 'Select...')}
+            </option>
             {options.map((opt) => (
               <option key={opt.value} value={opt.value}>
                 {opt.label}
@@ -325,8 +401,12 @@ function renderField(
               size="icon"
               onClick={onRefresh}
               title="Refresh options"
+              disabled={isLoading}
             >
-              <RefreshCw className="h-4 w-4" />
+              {isLoading
+                ? <Loader2 className="h-4 w-4 animate-spin" />
+                : <RefreshCw className="h-4 w-4" />
+              }
             </Button>
           )}
         </div>

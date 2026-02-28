@@ -14,6 +14,7 @@ import { PeakfloPlugin } from './plugins/peakflo-plugin'
 import { LinearPlugin } from './plugins/linear-plugin'
 import { HubSpotPlugin } from './plugins/hubspot-plugin'
 import { GitHubIssuesPlugin } from './plugins/github-issues-plugin'
+import { NotionPlugin } from './plugins/notion-plugin'
 import { registerIpcHandlers } from './ipc-handlers'
 import { RecurrenceScheduler } from './recurrence-scheduler'
 import { setTaskApiNotifier } from './task-api-server'
@@ -245,6 +246,7 @@ app.whenReady().then(async () => {
   pluginRegistry.register(new LinearPlugin())
   pluginRegistry.register(new HubSpotPlugin())
   pluginRegistry.register(new GitHubIssuesPlugin(githubManager))
+  pluginRegistry.register(new NotionPlugin())
 
   syncManager = new SyncManager(db, mcpToolCaller, pluginRegistry, oauthManager)
 

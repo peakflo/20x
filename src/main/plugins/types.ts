@@ -30,6 +30,8 @@ export interface ConfigFieldSchema {
   options?: ConfigFieldOption[]
   /** For 'dynamic-select': calls plugin.resolveOptions(resolverKey, ...) */
   optionsResolver?: string
+  /** For 'dynamic-select': store value as string[] instead of string */
+  multiSelect?: boolean
   /** Conditional visibility */
   dependsOn?: { field: string; value: unknown }
 }
