@@ -1689,20 +1689,12 @@ export class AgentManager extends EventEmitter {
       }
     })
 
-    // Build session config
-    const agent = this.db.getAgent(session.agentId)!
-    const isMastermind = session.taskId === 'mastermind-session'
-    const isTriageSession = session.isTriageSession || false
-    const mcpServers = await this.buildMcpServersForAdapter(session.agentId, { ensureTaskManagement: isMastermind || isTriageSession })
-    const sessionConfig: SessionConfig = {
-      agentId: session.agentId,
-      taskId: session.taskId,
-      workspaceDir: session.workspaceDir || process.cwd(),
-      model: agent.config?.model,
-      systemPrompt: agent.config?.system_prompt,
-      mcpServers,
-      apiKeys: agent.config?.api_keys
-    }
+    // Build session config (includes secret broker fields if agent has secrets)
+    const sessionConfig = await this.buildSessionConfig(
+      session.agentId,
+      session.taskId,
+      session.workspaceDir || process.cwd()
+    )
 
     // Send prompt via adapter
     const parts: MessagePart[] = [

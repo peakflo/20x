@@ -255,13 +255,14 @@ app.whenReady().then(async () => {
 
   registerIpcHandlers(db, agentManager, githubManager, worktreeManager, syncManager, pluginRegistry, mcpToolCaller, oauthManager, recurrenceScheduler)
 
-  // Start secret broker and write shell wrapper
-  startSecretBroker(db).then((brokerPort) => {
+  // Start secret broker and write shell wrapper (awaited so broker is ready before any sessions)
+  try {
+    const brokerPort = await startSecretBroker(db)
     console.log(`[Main] Secret broker started on port ${brokerPort}`)
     writeSecretShellWrapper()
-  }).catch((err) => {
+  } catch (err) {
     console.error('[Main] Failed to start secret broker:', err)
-  })
+  }
 
   // Check gh CLI status on startup (log only)
   githubManager.checkGhCli().then((status) => {
