@@ -420,7 +420,7 @@ function AgentSetupStep({
               : p.models && typeof p.models === 'object'
                 ? Object.values(p.models)
                 : []
-            for (const m of pModels as any[]) {
+            for (const m of pModels as { id?: string; name?: string }[]) {
               if (m?.id) list.push({ id: `${p.id}/${m.id}`, name: `${p.name} – ${m.name || m.id}` })
             }
           }
@@ -629,7 +629,7 @@ export function DepsWarningBanner() {
         if (hasProviders) {
           console.log(
             '[Onboarding] Found existing providers, skipping provider setup:',
-            providers.providers.map((p: any) => p.id)
+            providers.providers.map((p: { id: string }) => p.id)
           )
         }
 

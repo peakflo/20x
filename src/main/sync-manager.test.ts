@@ -53,19 +53,19 @@ describe('SyncManager', () => {
 
   describe('importTasks', () => {
     it('returns error when source not found', async () => {
-      ;(db.getTaskSource as any).mockReturnValue(undefined)
+      ;(db.getTaskSource as unknown as ReturnType<typeof vi.fn>).mockReturnValue(undefined)
       const result = await syncManager.importTasks('src-1')
       expect(result.errors).toContain('Task source not found')
     })
 
     it('returns error when plugin not found', async () => {
-      ;(db.getTaskSource as any).mockReturnValue({
+      ;(db.getTaskSource as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
         id: 'src-1',
         plugin_id: 'missing',
         mcp_server_id: 'srv-1',
         config: {}
       })
-      ;(registry.get as any).mockReturnValue(undefined)
+      ;(registry.get as unknown as ReturnType<typeof vi.fn>).mockReturnValue(undefined)
 
       const result = await syncManager.importTasks('src-1')
       expect(result.errors).toContain('Plugin "missing" not found')
@@ -73,14 +73,14 @@ describe('SyncManager', () => {
 
     it('delegates to plugin.importTasks', async () => {
       const plugin = makeMockPlugin()
-      ;(db.getTaskSource as any).mockReturnValue({
+      ;(db.getTaskSource as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
         id: 'src-1',
         plugin_id: 'test',
         mcp_server_id: 'srv-1',
         config: { status_filter: 'pending' }
       })
-      ;(registry.get as any).mockReturnValue(plugin)
-      ;(db.getMcpServer as any).mockReturnValue({ id: 'srv-1' })
+      ;(registry.get as unknown as ReturnType<typeof vi.fn>).mockReturnValue(plugin)
+      ;(db.getMcpServer as unknown as ReturnType<typeof vi.fn>).mockReturnValue({ id: 'srv-1' })
 
       const result = await syncManager.importTasks('src-1')
       expect(result.imported).toBe(5)
@@ -96,10 +96,10 @@ describe('SyncManager', () => {
       const plugin = makeMockPlugin({
         importTasks: vi.fn().mockRejectedValue(new Error('Network error'))
       })
-      ;(db.getTaskSource as any).mockReturnValue({
+      ;(db.getTaskSource as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
         id: 'src-1', plugin_id: 'test', mcp_server_id: 'srv-1', config: {}
       })
-      ;(registry.get as any).mockReturnValue(plugin)
+      ;(registry.get as unknown as ReturnType<typeof vi.fn>).mockReturnValue(plugin)
 
       const result = await syncManager.importTasks('src-1')
       expect(result.errors).toContain('Network error')
@@ -108,25 +108,25 @@ describe('SyncManager', () => {
 
   describe('exportTaskUpdate', () => {
     it('does nothing when task has no source_id', async () => {
-      ;(db.getTask as any).mockReturnValue({ id: 't1', source_id: null })
+      ;(db.getTask as unknown as ReturnType<typeof vi.fn>).mockReturnValue({ id: 't1', source_id: null })
       await syncManager.exportTaskUpdate('t1', { title: 'New' })
       expect(registry.get).not.toHaveBeenCalled()
     })
 
     it('does nothing when task has no external_id', async () => {
-      ;(db.getTask as any).mockReturnValue({ id: 't1', source_id: 'src-1', external_id: null })
+      ;(db.getTask as unknown as ReturnType<typeof vi.fn>).mockReturnValue({ id: 't1', source_id: 'src-1', external_id: null })
       await syncManager.exportTaskUpdate('t1', { title: 'New' })
       expect(registry.get).not.toHaveBeenCalled()
     })
 
     it('calls plugin.exportUpdate when task has source', async () => {
       const plugin = makeMockPlugin()
-      ;(db.getTask as any).mockReturnValue({ id: 't1', source_id: 'src-1', external_id: 'ext-1' })
-      ;(db.getTaskSource as any).mockReturnValue({
+      ;(db.getTask as unknown as ReturnType<typeof vi.fn>).mockReturnValue({ id: 't1', source_id: 'src-1', external_id: 'ext-1' })
+      ;(db.getTaskSource as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
         id: 'src-1', plugin_id: 'test', mcp_server_id: 'srv-1', config: {}
       })
-      ;(registry.get as any).mockReturnValue(plugin)
-      ;(db.getMcpServer as any).mockReturnValue({ id: 'srv-1' })
+      ;(registry.get as unknown as ReturnType<typeof vi.fn>).mockReturnValue(plugin)
+      ;(db.getMcpServer as unknown as ReturnType<typeof vi.fn>).mockReturnValue({ id: 'srv-1' })
 
       await syncManager.exportTaskUpdate('t1', { title: 'New' })
       expect(plugin.exportUpdate).toHaveBeenCalled()
@@ -135,7 +135,7 @@ describe('SyncManager', () => {
 
   describe('executeAction', () => {
     it('returns error when source not found', async () => {
-      ;(db.getTaskSource as any).mockReturnValue(undefined)
+      ;(db.getTaskSource as unknown as ReturnType<typeof vi.fn>).mockReturnValue(undefined)
       const task = { id: 't1' } as TaskRecord
       const result = await syncManager.executeAction('approve', task, undefined, 'src-1')
       expect(result.success).toBe(false)
@@ -144,11 +144,11 @@ describe('SyncManager', () => {
 
     it('applies taskUpdate to local task on success', async () => {
       const plugin = makeMockPlugin()
-      ;(db.getTaskSource as any).mockReturnValue({
+      ;(db.getTaskSource as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
         id: 'src-1', plugin_id: 'test', mcp_server_id: 'srv-1', config: {}
       })
-      ;(registry.get as any).mockReturnValue(plugin)
-      ;(db.getMcpServer as any).mockReturnValue({ id: 'srv-1' })
+      ;(registry.get as unknown as ReturnType<typeof vi.fn>).mockReturnValue(plugin)
+      ;(db.getMcpServer as unknown as ReturnType<typeof vi.fn>).mockReturnValue({ id: 'srv-1' })
 
       const task = { id: 't1' } as TaskRecord
       const result = await syncManager.executeAction('approve', task, undefined, 'src-1')

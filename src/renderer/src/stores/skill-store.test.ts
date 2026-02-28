@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import type { Mock } from 'vitest'
 import { useSkillStore } from './skill-store'
+import type { Skill } from '@/types'
 
 const mockElectronAPI = window.electronAPI
 
@@ -21,7 +23,7 @@ describe('useSkillStore', () => {
         { id: 's2', name: 'High', confidence: 0.9 },
         { id: 's3', name: 'Medium', confidence: 0.6 }
       ]
-      ;(mockElectronAPI.skills.getAll as any).mockResolvedValue(skills)
+      ;(mockElectronAPI.skills.getAll as unknown as Mock).mockResolvedValue(skills)
 
       await useSkillStore.getState().fetchSkills()
 
@@ -33,7 +35,7 @@ describe('useSkillStore', () => {
     })
 
     it('sets error on failure', async () => {
-      ;(mockElectronAPI.skills.getAll as any).mockRejectedValue(new Error('fail'))
+      ;(mockElectronAPI.skills.getAll as unknown as Mock).mockRejectedValue(new Error('fail'))
 
       await useSkillStore.getState().fetchSkills()
 
@@ -44,10 +46,10 @@ describe('useSkillStore', () => {
   describe('createSkill', () => {
     it('creates skill and sorts by confidence (high to low)', async () => {
       useSkillStore.setState({
-        skills: [{ id: 's1', name: 'Zeta', confidence: 0.5 }] as any
+        skills: [{ id: 's1', name: 'Zeta', confidence: 0.5 }] as unknown as Skill[]
       })
       const newSkill = { id: 's2', name: 'Alpha', confidence: 0.8 }
-      ;(mockElectronAPI.skills.create as any).mockResolvedValue(newSkill)
+      ;(mockElectronAPI.skills.create as unknown as Mock).mockResolvedValue(newSkill)
 
       const result = await useSkillStore.getState().createSkill({ name: 'Alpha', description: '', content: '' })
 
@@ -65,7 +67,7 @@ describe('useSkillStore', () => {
         uses: 0,
         tags: ['api', 'testing']
       }
-      ;(mockElectronAPI.skills.create as any).mockResolvedValue(newSkill)
+      ;(mockElectronAPI.skills.create as unknown as Mock).mockResolvedValue(newSkill)
 
       const result = await useSkillStore.getState().createSkill({
         name: 'test-skill',
@@ -86,7 +88,7 @@ describe('useSkillStore', () => {
       ]
 
       for (const skill of skills) {
-        ;(mockElectronAPI.skills.create as any).mockResolvedValue(skill)
+        ;(mockElectronAPI.skills.create as unknown as Mock).mockResolvedValue(skill)
         await useSkillStore.getState().createSkill({ name: skill.name, description: '', content: '' })
       }
 
@@ -103,10 +105,10 @@ describe('useSkillStore', () => {
         skills: [
           { id: 's1', name: 'First', confidence: 0.8 },
           { id: 's2', name: 'Second', confidence: 0.5 }
-        ] as any
+        ] as unknown as Skill[]
       })
       const updated = { id: 's2', name: 'Second', confidence: 0.9 }
-      ;(mockElectronAPI.skills.update as any).mockResolvedValue(updated)
+      ;(mockElectronAPI.skills.update as unknown as Mock).mockResolvedValue(updated)
 
       await useSkillStore.getState().updateSkill('s2', { confidence: 0.9 })
 
@@ -117,10 +119,10 @@ describe('useSkillStore', () => {
 
     it('updates skill tags', async () => {
       useSkillStore.setState({
-        skills: [{ id: 's1', name: 'Test', tags: ['old'], confidence: 0.5 }] as any
+        skills: [{ id: 's1', name: 'Test', tags: ['old'], confidence: 0.5 }] as unknown as Skill[]
       })
       const updated = { id: 's1', name: 'Test', tags: ['new', 'updated'], confidence: 0.5 }
-      ;(mockElectronAPI.skills.update as any).mockResolvedValue(updated)
+      ;(mockElectronAPI.skills.update as unknown as Mock).mockResolvedValue(updated)
 
       await useSkillStore.getState().updateSkill('s1', { tags: ['new', 'updated'] })
 
@@ -129,7 +131,7 @@ describe('useSkillStore', () => {
 
     it('updates multiple fields at once', async () => {
       useSkillStore.setState({
-        skills: [{ id: 's1', name: 'Old', description: 'Old desc', confidence: 0.5, tags: [] }] as any
+        skills: [{ id: 's1', name: 'Old', description: 'Old desc', confidence: 0.5, tags: [] }] as unknown as Skill[]
       })
       const updated = {
         id: 's1',
@@ -138,7 +140,7 @@ describe('useSkillStore', () => {
         confidence: 0.8,
         tags: ['updated']
       }
-      ;(mockElectronAPI.skills.update as any).mockResolvedValue(updated)
+      ;(mockElectronAPI.skills.update as unknown as Mock).mockResolvedValue(updated)
 
       await useSkillStore.getState().updateSkill('s1', {
         name: 'New',
@@ -156,9 +158,9 @@ describe('useSkillStore', () => {
 
     it('handles update errors', async () => {
       useSkillStore.setState({
-        skills: [{ id: 's1', name: 'Test', confidence: 0.5 }] as any
+        skills: [{ id: 's1', name: 'Test', confidence: 0.5 }] as unknown as Skill[]
       })
-      ;(mockElectronAPI.skills.update as any).mockRejectedValue(new Error('Update failed'))
+      ;(mockElectronAPI.skills.update as unknown as Mock).mockRejectedValue(new Error('Update failed'))
 
       const result = await useSkillStore.getState().updateSkill('s1', { name: 'New' })
 
@@ -170,10 +172,10 @@ describe('useSkillStore', () => {
   describe('deleteSkill', () => {
     it('removes skill from list', async () => {
       useSkillStore.setState({
-        skills: [{ id: 's1' }, { id: 's2' }] as any,
+        skills: [{ id: 's1' }, { id: 's2' }] as unknown as Skill[],
         selectedSkillId: null
       })
-      ;(mockElectronAPI.skills.delete as any).mockResolvedValue(true)
+      ;(mockElectronAPI.skills.delete as unknown as Mock).mockResolvedValue(true)
 
       const result = await useSkillStore.getState().deleteSkill('s1')
 
@@ -184,10 +186,10 @@ describe('useSkillStore', () => {
 
     it('clears selection if deleted skill was selected', async () => {
       useSkillStore.setState({
-        skills: [{ id: 's1' }] as any,
+        skills: [{ id: 's1' }] as unknown as Skill[],
         selectedSkillId: 's1'
       })
-      ;(mockElectronAPI.skills.delete as any).mockResolvedValue(true)
+      ;(mockElectronAPI.skills.delete as unknown as Mock).mockResolvedValue(true)
 
       await useSkillStore.getState().deleteSkill('s1')
 
@@ -196,10 +198,10 @@ describe('useSkillStore', () => {
 
     it('preserves selection if different skill was deleted', async () => {
       useSkillStore.setState({
-        skills: [{ id: 's1' }, { id: 's2' }] as any,
+        skills: [{ id: 's1' }, { id: 's2' }] as unknown as Skill[],
         selectedSkillId: 's2'
       })
-      ;(mockElectronAPI.skills.delete as any).mockResolvedValue(true)
+      ;(mockElectronAPI.skills.delete as unknown as Mock).mockResolvedValue(true)
 
       await useSkillStore.getState().deleteSkill('s1')
 
@@ -208,9 +210,9 @@ describe('useSkillStore', () => {
 
     it('handles delete errors', async () => {
       useSkillStore.setState({
-        skills: [{ id: 's1' }] as any
+        skills: [{ id: 's1' }] as unknown as Skill[]
       })
-      ;(mockElectronAPI.skills.delete as any).mockRejectedValue(new Error('Delete failed'))
+      ;(mockElectronAPI.skills.delete as unknown as Mock).mockRejectedValue(new Error('Delete failed'))
 
       const result = await useSkillStore.getState().deleteSkill('s1')
 

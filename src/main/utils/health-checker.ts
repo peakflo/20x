@@ -33,7 +33,7 @@ export async function checkOpencodeHealth(): Promise<HealthStatus> {
     }
 
     return { available: false, reason: 'Server not responding' }
-  } catch (error) {
+  } catch {
     return { available: false, reason: 'SDK not installed' }
   }
 }
@@ -59,7 +59,7 @@ export async function checkClaudeCodeHealth(): Promise<HealthStatus> {
 
     // Claude Code uses CLI authentication, no API key needed
     return { available: true }
-  } catch (error) {
+  } catch {
     return { available: false, reason: 'SDK not installed' }
   }
 }

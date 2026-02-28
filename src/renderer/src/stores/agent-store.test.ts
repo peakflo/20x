@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import type { Mock } from 'vitest'
 import { useAgentStore } from './agent-store'
+import type { Agent, CreateAgentDTO, UpdateAgentDTO } from '@/types'
 
 const mockElectronAPI = window.electronAPI
 
@@ -17,7 +19,7 @@ describe('useAgentStore', () => {
   describe('Agent CRUD', () => {
     it('fetchAgents sets agents', async () => {
       const agents = [{ id: 'a1', name: 'Agent 1' }]
-      ;(mockElectronAPI.agents.getAll as any).mockResolvedValue(agents)
+      ;(mockElectronAPI.agents.getAll as unknown as Mock).mockResolvedValue(agents)
 
       await useAgentStore.getState().fetchAgents()
 
@@ -26,29 +28,29 @@ describe('useAgentStore', () => {
     })
 
     it('createAgent appends to list', async () => {
-      useAgentStore.setState({ agents: [{ id: 'a1', name: 'Existing' }] as any })
+      useAgentStore.setState({ agents: [{ id: 'a1', name: 'Existing' }] as unknown as Agent[] })
       const newAgent = { id: 'a2', name: 'New' }
-      ;(mockElectronAPI.agents.create as any).mockResolvedValue(newAgent)
+      ;(mockElectronAPI.agents.create as unknown as Mock).mockResolvedValue(newAgent)
 
-      const result = await useAgentStore.getState().createAgent({ name: 'New' } as any)
+      const result = await useAgentStore.getState().createAgent({ name: 'New' } as unknown as CreateAgentDTO)
 
       expect(result).toEqual(newAgent)
       expect(useAgentStore.getState().agents).toHaveLength(2)
     })
 
     it('updateAgent replaces agent in list', async () => {
-      useAgentStore.setState({ agents: [{ id: 'a1', name: 'Old' }] as any })
+      useAgentStore.setState({ agents: [{ id: 'a1', name: 'Old' }] as unknown as Agent[] })
       const updated = { id: 'a1', name: 'Updated' }
-      ;(mockElectronAPI.agents.update as any).mockResolvedValue(updated)
+      ;(mockElectronAPI.agents.update as unknown as Mock).mockResolvedValue(updated)
 
-      await useAgentStore.getState().updateAgent('a1', { name: 'Updated' } as any)
+      await useAgentStore.getState().updateAgent('a1', { name: 'Updated' } as unknown as UpdateAgentDTO)
 
       expect(useAgentStore.getState().agents[0].name).toBe('Updated')
     })
 
     it('deleteAgent removes from list', async () => {
-      useAgentStore.setState({ agents: [{ id: 'a1' }, { id: 'a2' }] as any })
-      ;(mockElectronAPI.agents.delete as any).mockResolvedValue(true)
+      useAgentStore.setState({ agents: [{ id: 'a1' }, { id: 'a2' }] as unknown as Agent[] })
+      ;(mockElectronAPI.agents.delete as unknown as Mock).mockResolvedValue(true)
 
       const result = await useAgentStore.getState().deleteAgent('a1')
 

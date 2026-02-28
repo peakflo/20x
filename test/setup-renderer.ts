@@ -1,17 +1,19 @@
 import '@testing-library/jest-dom/vitest'
 import { vi } from 'vitest'
+import type { AgentOutputEvent, AgentStatusEvent, AgentApprovalRequest, WorktreeProgressEvent } from '../src/renderer/src/types/electron'
+import type { WorkfloTask } from '../src/renderer/src/types/index'
 
 // Suppress React act() warnings in happy-dom
-;(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true
+;(globalThis as unknown as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
 
 // Capture event listener callbacks for store tests
 export const eventCallbacks = {
-  onAgentOutput: null as ((event: any) => void) | null,
-  onAgentStatus: null as ((event: any) => void) | null,
-  onAgentApproval: null as ((event: any) => void) | null,
+  onAgentOutput: null as ((event: AgentOutputEvent) => void) | null,
+  onAgentStatus: null as ((event: AgentStatusEvent) => void) | null,
+  onAgentApproval: null as ((event: AgentApprovalRequest) => void) | null,
   onOverdueCheck: null as (() => void) | null,
-  onTaskUpdated: null as ((event: any) => void) | null,
-  onWorktreeProgress: null as ((event: any) => void) | null
+  onTaskUpdated: null as ((event: { taskId: string; updates: Partial<WorkfloTask> }) => void) | null,
+  onWorktreeProgress: null as ((event: WorktreeProgressEvent) => void) | null
 }
 
 const mockElectronAPI = {
@@ -115,35 +117,35 @@ const mockElectronAPI = {
     eventCallbacks.onOverdueCheck = cb
     return vi.fn()
   }),
-  onAgentOutput: vi.fn((cb: (event: any) => void) => {
+  onAgentOutput: vi.fn((cb: (event: AgentOutputEvent) => void) => {
     eventCallbacks.onAgentOutput = cb
     return vi.fn()
   }),
-  onAgentStatus: vi.fn((cb: (event: any) => void) => {
+  onAgentStatus: vi.fn((cb: (event: AgentStatusEvent) => void) => {
     eventCallbacks.onAgentStatus = cb
     return vi.fn()
   }),
-  onAgentApproval: vi.fn((cb: (event: any) => void) => {
+  onAgentApproval: vi.fn((cb: (event: AgentApprovalRequest) => void) => {
     eventCallbacks.onAgentApproval = cb
     return vi.fn()
   }),
-  onAgentIncompatibleSession: vi.fn((_cb: (event: any) => void) => {
+  onAgentIncompatibleSession: vi.fn((_cb: (event: { taskId: string; agentId: string; error: string }) => void) => {
     return vi.fn()
   }),
-  onTaskUpdated: vi.fn((cb: (event: any) => void) => {
+  onTaskUpdated: vi.fn((cb: (event: { taskId: string; updates: Partial<WorkfloTask> }) => void) => {
     eventCallbacks.onTaskUpdated = cb
     return vi.fn()
   }),
-  onWorktreeProgress: vi.fn((cb: (event: any) => void) => {
+  onWorktreeProgress: vi.fn((cb: (event: WorktreeProgressEvent) => void) => {
     eventCallbacks.onWorktreeProgress = cb
     return vi.fn()
   }),
-  onTaskCreated: vi.fn((_cb: (event: any) => void) => {
+  onTaskCreated: vi.fn((_cb: (event: { task: WorkfloTask }) => void) => {
     return vi.fn()
   })
 }
 
-;(globalThis as any).window = {
-  ...(globalThis as any).window,
+;(globalThis as unknown as Record<string, unknown>).window = {
+  ...(globalThis as unknown as { window?: Record<string, unknown> }).window,
   electronAPI: mockElectronAPI
 }

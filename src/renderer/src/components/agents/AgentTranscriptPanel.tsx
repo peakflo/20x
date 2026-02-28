@@ -27,7 +27,7 @@ function formatStepMeta(meta: NonNullable<AgentMessage['stepMeta']>): string {
 /**
  * Truncates large content (like base64 data) for display
  */
-function sanitizeToolContent(content: any): string {
+function sanitizeToolContent(content: unknown): string {
   // Handle null/undefined
   if (content == null) {
     return ''
@@ -36,8 +36,10 @@ function sanitizeToolContent(content: any): string {
   // Handle objects (like image data from Read tool)
   if (typeof content === 'object') {
     // Check if it's an image object
-    if (content.type === 'image' && content.source) {
-      const dataLength = content.source.data?.length || 0
+    const obj = content as Record<string, unknown>
+    if (obj.type === 'image' && obj.source) {
+      const source = obj.source as Record<string, unknown>
+      const dataLength = (typeof source.data === 'string' ? source.data.length : 0)
       return `[Image content: ${dataLength} characters of base64 data]`
     }
     // For other objects, stringify but truncate

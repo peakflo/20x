@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import type { Mock } from 'vitest'
 import { useSettingsStore } from './settings-store'
 
 const mockElectronAPI = window.electronAPI
@@ -15,7 +16,7 @@ beforeEach(() => {
 describe('useSettingsStore', () => {
   describe('fetchSettings', () => {
     it('loads github_org from settings', async () => {
-      ;(mockElectronAPI.settings.getAll as any).mockResolvedValue({
+      ;(mockElectronAPI.settings.getAll as unknown as Mock).mockResolvedValue({
         github_org: 'peakflo'
       })
 
@@ -26,7 +27,7 @@ describe('useSettingsStore', () => {
     })
 
     it('sets githubOrg to null when not present', async () => {
-      ;(mockElectronAPI.settings.getAll as any).mockResolvedValue({})
+      ;(mockElectronAPI.settings.getAll as unknown as Mock).mockResolvedValue({})
 
       await useSettingsStore.getState().fetchSettings()
 
@@ -34,7 +35,7 @@ describe('useSettingsStore', () => {
     })
 
     it('handles errors gracefully', async () => {
-      ;(mockElectronAPI.settings.getAll as any).mockRejectedValue(new Error('fail'))
+      ;(mockElectronAPI.settings.getAll as unknown as Mock).mockRejectedValue(new Error('fail'))
 
       await useSettingsStore.getState().fetchSettings()
 
@@ -54,7 +55,7 @@ describe('useSettingsStore', () => {
   describe('checkGhCli', () => {
     it('fetches and stores CLI status', async () => {
       const status = { installed: true, authenticated: true, username: 'user' }
-      ;(mockElectronAPI.github.checkCli as any).mockResolvedValue(status)
+      ;(mockElectronAPI.github.checkCli as unknown as Mock).mockResolvedValue(status)
 
       const result = await useSettingsStore.getState().checkGhCli()
 
@@ -66,7 +67,7 @@ describe('useSettingsStore', () => {
   describe('startGhAuth', () => {
     it('starts auth and re-checks status', async () => {
       const status = { installed: true, authenticated: true, username: 'user' }
-      ;(mockElectronAPI.github.checkCli as any).mockResolvedValue(status)
+      ;(mockElectronAPI.github.checkCli as unknown as Mock).mockResolvedValue(status)
 
       await useSettingsStore.getState().startGhAuth()
 

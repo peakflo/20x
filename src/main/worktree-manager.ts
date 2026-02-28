@@ -57,9 +57,10 @@ export class WorktreeManager {
         await this.fetchBareClone(org, repoName)
         await this.createWorktree(taskId, org, repoName, repo.defaultBranch)
         this.sendProgress(taskId, repoName, 'done', true)
-      } catch (error: any) {
-        console.error(`[WorktreeManager] Error setting up ${repo.fullName}:`, error.message)
-        this.sendProgress(taskId, repoName, 'error', true, error.message)
+      } catch (error: unknown) {
+        const errMsg = (error as Error).message
+        console.error(`[WorktreeManager] Error setting up ${repo.fullName}:`, errMsg)
+        this.sendProgress(taskId, repoName, 'error', true, errMsg)
         throw error
       }
     }
@@ -101,8 +102,8 @@ export class WorktreeManager {
         timeout: 120000
       })
       console.log(`[WorktreeManager]   Fetch completed successfully`)
-    } catch (err: any) {
-      console.error(`[WorktreeManager]   Fetch failed:`, err.message)
+    } catch (err: unknown) {
+      console.error(`[WorktreeManager]   Fetch failed:`, (err as Error).message)
       throw err
     }
   }
@@ -162,8 +163,8 @@ export class WorktreeManager {
         console.log(`[WorktreeManager]   Worktree created successfully`)
         return
       }
-    } catch (err: any) {
-      console.log(`[WorktreeManager]   Error checking for existing branch:`, err.message)
+    } catch (err: unknown) {
+      console.log(`[WorktreeManager]   Error checking for existing branch:`, (err as Error).message)
       // ignore — fall through to create new branch
     }
 
@@ -183,10 +184,11 @@ export class WorktreeManager {
         timeout: 60000
       })
       console.log(`[WorktreeManager]   Worktree created successfully`)
-    } catch (err: any) {
-      console.error(`[WorktreeManager]   Failed to create worktree:`, err.message)
-      if (err.stdout) console.error(`[WorktreeManager]   stdout:`, err.stdout)
-      if (err.stderr) console.error(`[WorktreeManager]   stderr:`, err.stderr)
+    } catch (err: unknown) {
+      const execErr = err as { message: string; stdout?: string; stderr?: string }
+      console.error(`[WorktreeManager]   Failed to create worktree:`, execErr.message)
+      if (execErr.stdout) console.error(`[WorktreeManager]   stdout:`, execErr.stdout)
+      if (execErr.stderr) console.error(`[WorktreeManager]   stderr:`, execErr.stderr)
       throw err
     }
   }

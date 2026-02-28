@@ -25,7 +25,7 @@ export enum MessagePartType {
 }
 
 export interface McpServerConfig {
-  name: string
+  name?: string
   type: 'stdio' | 'http' | 'sse'
   command?: string
   args?: string[]

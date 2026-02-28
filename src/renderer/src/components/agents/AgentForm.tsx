@@ -111,12 +111,12 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
         const models: Model[] = []
 
         if (Array.isArray(result.providers) && result.providers.length > 0) {
-          result.providers.forEach((provider: any) => {
+          result.providers.forEach((provider: { id: string; name: string; models: unknown }) => {
             // Models can be either an array or an object with model IDs as keys
             if (provider.models) {
               if (Array.isArray(provider.models)) {
                 // Handle array format
-                provider.models.forEach((m: any) => {
+                provider.models.forEach((m: { id: string; name?: string }) => {
                   models.push({
                     id: `${provider.id}/${m.id}`,
                     name: `${provider.name} - ${m.name || m.id}`
@@ -124,11 +124,12 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
                 })
               } else if (typeof provider.models === 'object') {
                 // Handle object format (model IDs as keys)
-                Object.values(provider.models).forEach((m: any) => {
-                  if (m && m.id) {
+                Object.values(provider.models as Record<string, unknown>).forEach((m: unknown) => {
+                  const model = m as { id?: string; name?: string }
+                  if (model && model.id) {
                     models.push({
-                      id: `${provider.id}/${m.id}`,
-                      name: `${provider.name} - ${m.name || m.id}`
+                      id: `${provider.id}/${model.id}`,
+                      name: `${provider.name} - ${model.name || model.id}`
                     })
                   }
                 })

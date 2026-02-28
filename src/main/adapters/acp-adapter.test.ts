@@ -2,9 +2,10 @@
  * Tests for ACP Adapter turn-based message ID detection
  */
 
+import { ChildProcess } from 'child_process'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { AcpAdapter } from './acp-adapter'
-import { SessionStatusType, MessagePartType } from './coding-agent-adapter'
+import { SessionStatusType, MessagePartType, MessagePart } from './coding-agent-adapter'
 
 // Mock child_process
 vi.mock('child_process', () => ({
@@ -22,6 +23,66 @@ vi.mock('child_process', () => ({
     kill: vi.fn()
   }))
 }))
+
+// Type for accessing private members of AcpAdapter in tests
+interface AcpAdapterPrivate {
+  sessions: Map<string, AcpSessionForTest>
+  convertAcpEventToMessageParts(
+    event: unknown,
+    seenMessageIds: Set<string>,
+    seenPartIds: Set<string>,
+    partContentLengths: Map<string, string>,
+    session?: AcpSessionForTest
+  ): MessagePart[]
+}
+
+// Minimal session type for tests (mirrors private AcpSession)
+interface AcpSessionForTest {
+  sessionId: string
+  acpSessionId: string | null
+  process: ChildProcess
+  stdoutBuffer: string
+  status: SessionStatusType
+  messageBuffer: unknown[]
+  permanentMessages: unknown[]
+  pendingRequests: Map<string | number, {
+    resolve: (value: unknown) => void
+    reject: (error: Error) => void
+  }>
+  nextRequestId: number
+  pendingApproval: unknown | null
+  promptRequestId: number | null
+  responseCounter: number
+  lastChunkTime: number | null
+  currentTurnId: number
+  sawToolCallSinceLastChunk: boolean
+}
+
+/** Cast adapter to access private members for testing */
+function adapterPrivate(adapter: AcpAdapter): AcpAdapterPrivate {
+  return adapter as unknown as AcpAdapterPrivate
+}
+
+/** Create a mock session for testing */
+function createMockSession(sessionId: string): AcpSessionForTest {
+  return {
+    sessionId,
+    acpSessionId: null,
+    process: {} as unknown as ChildProcess,
+    stdoutBuffer: '',
+    status: SessionStatusType.IDLE,
+    messageBuffer: [],
+    permanentMessages: [],
+    pendingRequests: new Map(),
+    nextRequestId: 1,
+    pendingApproval: null,
+    promptRequestId: null,
+    responseCounter: 0,
+    lastChunkTime: null,
+    currentTurnId: 0,
+    sawToolCallSinceLastChunk: false
+  }
+}
 
 describe('AcpAdapter - Turn Detection', () => {
   let adapter: AcpAdapter
@@ -41,27 +102,12 @@ describe('AcpAdapter - Turn Detection', () => {
   describe('Time-based turn detection', () => {
     it('should use same turn ID for messages arriving within 2 seconds', async () => {
       const sessionId = 'test-session'
+      const priv = adapterPrivate(adapter)
 
       // Get access to the private session
-      const session = (adapter as any).sessions.get(sessionId) || {
-        sessionId,
-        acpSessionId: null,
-        process: {} as any,
-        stdoutBuffer: '',
-        status: SessionStatusType.IDLE,
-        messageBuffer: [],
-        permanentMessages: [],
-        pendingRequests: new Map(),
-        nextRequestId: 1,
-        pendingApproval: null,
-        promptRequestId: null,
-        responseCounter: 0,
-        lastChunkTime: null,
-        currentTurnId: 0,
-        sawToolCallSinceLastChunk: false
-      }
+      const session = priv.sessions.get(sessionId) || createMockSession(sessionId)
 
-      ;(adapter as any).sessions.set(sessionId, session)
+      priv.sessions.set(sessionId, session)
 
       // Simulate first chunk
       const chunk1 = {
@@ -76,7 +122,7 @@ describe('AcpAdapter - Turn Detection', () => {
       }
 
       // Process first chunk
-      const parts1 = (adapter as any).convertAcpEventToMessageParts(
+      const parts1 = priv.convertAcpEventToMessageParts(
         chunk1,
         new Set(),
         new Set(),
@@ -102,7 +148,7 @@ describe('AcpAdapter - Turn Detection', () => {
         }
       }
 
-      const parts2 = (adapter as any).convertAcpEventToMessageParts(
+      const parts2 = priv.convertAcpEventToMessageParts(
         chunk2,
         new Set(),
         new Set(),
@@ -116,26 +162,11 @@ describe('AcpAdapter - Turn Detection', () => {
 
     it('should increment turn ID for messages arriving after 2+ seconds', async () => {
       const sessionId = 'test-session'
+      const priv = adapterPrivate(adapter)
 
-      const session = (adapter as any).sessions.get(sessionId) || {
-        sessionId,
-        acpSessionId: null,
-        process: {} as any,
-        stdoutBuffer: '',
-        status: SessionStatusType.IDLE,
-        messageBuffer: [],
-        permanentMessages: [],
-        pendingRequests: new Map(),
-        nextRequestId: 1,
-        pendingApproval: null,
-        promptRequestId: null,
-        responseCounter: 0,
-        lastChunkTime: null,
-        currentTurnId: 0,
-        sawToolCallSinceLastChunk: false
-      }
+      const session = priv.sessions.get(sessionId) || createMockSession(sessionId)
 
-      ;(adapter as any).sessions.set(sessionId, session)
+      priv.sessions.set(sessionId, session)
 
       // First chunk
       const chunk1 = {
@@ -149,7 +180,7 @@ describe('AcpAdapter - Turn Detection', () => {
         }
       }
 
-      const parts1 = (adapter as any).convertAcpEventToMessageParts(
+      const parts1 = priv.convertAcpEventToMessageParts(
         chunk1,
         new Set(),
         new Set(),
@@ -175,7 +206,7 @@ describe('AcpAdapter - Turn Detection', () => {
         }
       }
 
-      const parts2 = (adapter as any).convertAcpEventToMessageParts(
+      const parts2 = priv.convertAcpEventToMessageParts(
         chunk2,
         new Set(),
         new Set(),
@@ -191,26 +222,11 @@ describe('AcpAdapter - Turn Detection', () => {
   describe('Tool call-based turn detection', () => {
     it('should increment turn ID after tool call', async () => {
       const sessionId = 'test-session'
+      const priv = adapterPrivate(adapter)
 
-      const session = (adapter as any).sessions.get(sessionId) || {
-        sessionId,
-        acpSessionId: null,
-        process: {} as any,
-        stdoutBuffer: '',
-        status: SessionStatusType.IDLE,
-        messageBuffer: [],
-        permanentMessages: [],
-        pendingRequests: new Map(),
-        nextRequestId: 1,
-        pendingApproval: null,
-        promptRequestId: null,
-        responseCounter: 0,
-        lastChunkTime: null,
-        currentTurnId: 0,
-        sawToolCallSinceLastChunk: false
-      }
+      const session = priv.sessions.get(sessionId) || createMockSession(sessionId)
 
-      ;(adapter as any).sessions.set(sessionId, session)
+      priv.sessions.set(sessionId, session)
 
       // First message chunk
       const chunk1 = {
@@ -224,7 +240,7 @@ describe('AcpAdapter - Turn Detection', () => {
         }
       }
 
-      ;(adapter as any).convertAcpEventToMessageParts(
+      priv.convertAcpEventToMessageParts(
         chunk1,
         new Set(),
         new Set(),
@@ -253,7 +269,7 @@ describe('AcpAdapter - Turn Detection', () => {
         }
       }
 
-      ;(adapter as any).convertAcpEventToMessageParts(
+      priv.convertAcpEventToMessageParts(
         toolCall,
         new Set(),
         new Set(),
@@ -277,7 +293,7 @@ describe('AcpAdapter - Turn Detection', () => {
         }
       }
 
-      const parts2 = (adapter as any).convertAcpEventToMessageParts(
+      const parts2 = priv.convertAcpEventToMessageParts(
         chunk2,
         new Set(),
         new Set(),
@@ -292,26 +308,11 @@ describe('AcpAdapter - Turn Detection', () => {
 
     it('should set flag for all tool call types', async () => {
       const sessionId = 'test-session'
+      const priv = adapterPrivate(adapter)
 
-      const session = (adapter as any).sessions.get(sessionId) || {
-        sessionId,
-        acpSessionId: null,
-        process: {} as any,
-        stdoutBuffer: '',
-        status: SessionStatusType.IDLE,
-        messageBuffer: [],
-        permanentMessages: [],
-        pendingRequests: new Map(),
-        nextRequestId: 1,
-        pendingApproval: null,
-        promptRequestId: null,
-        responseCounter: 0,
-        lastChunkTime: null,
-        currentTurnId: 0,
-        sawToolCallSinceLastChunk: false
-      }
+      const session = priv.sessions.get(sessionId) || createMockSession(sessionId)
 
-      ;(adapter as any).sessions.set(sessionId, session)
+      priv.sessions.set(sessionId, session)
 
       const toolCallUpdate = {
         method: 'session/update',
@@ -325,7 +326,7 @@ describe('AcpAdapter - Turn Detection', () => {
         }
       }
 
-      ;(adapter as any).convertAcpEventToMessageParts(
+      priv.convertAcpEventToMessageParts(
         toolCallUpdate,
         new Set(),
         new Set(),
@@ -340,26 +341,11 @@ describe('AcpAdapter - Turn Detection', () => {
   describe('Message accumulation', () => {
     it('should accumulate chunks with same turn ID', async () => {
       const sessionId = 'test-session'
+      const priv = adapterPrivate(adapter)
 
-      const session = (adapter as any).sessions.get(sessionId) || {
-        sessionId,
-        acpSessionId: null,
-        process: {} as any,
-        stdoutBuffer: '',
-        status: SessionStatusType.IDLE,
-        messageBuffer: [],
-        permanentMessages: [],
-        pendingRequests: new Map(),
-        nextRequestId: 1,
-        pendingApproval: null,
-        promptRequestId: null,
-        responseCounter: 0,
-        lastChunkTime: null,
-        currentTurnId: 0,
-        sawToolCallSinceLastChunk: false
-      }
+      const session = priv.sessions.get(sessionId) || createMockSession(sessionId)
 
-      ;(adapter as any).sessions.set(sessionId, session)
+      priv.sessions.set(sessionId, session)
 
       const seenPartIds = new Set<string>()
       const partContentLengths = new Map<string, string>()
@@ -376,7 +362,7 @@ describe('AcpAdapter - Turn Detection', () => {
         }
       }
 
-      const parts1 = (adapter as any).convertAcpEventToMessageParts(
+      const parts1 = priv.convertAcpEventToMessageParts(
         chunk1,
         new Set(),
         seenPartIds,
@@ -401,7 +387,7 @@ describe('AcpAdapter - Turn Detection', () => {
         }
       }
 
-      const parts2 = (adapter as any).convertAcpEventToMessageParts(
+      const parts2 = priv.convertAcpEventToMessageParts(
         chunk2,
         new Set(),
         seenPartIds,
@@ -416,26 +402,11 @@ describe('AcpAdapter - Turn Detection', () => {
 
     it('should create separate messages for different turn IDs', async () => {
       const sessionId = 'test-session'
+      const priv = adapterPrivate(adapter)
 
-      const session = (adapter as any).sessions.get(sessionId) || {
-        sessionId,
-        acpSessionId: null,
-        process: {} as any,
-        stdoutBuffer: '',
-        status: SessionStatusType.IDLE,
-        messageBuffer: [],
-        permanentMessages: [],
-        pendingRequests: new Map(),
-        nextRequestId: 1,
-        pendingApproval: null,
-        promptRequestId: null,
-        responseCounter: 0,
-        lastChunkTime: null,
-        currentTurnId: 0,
-        sawToolCallSinceLastChunk: false
-      }
+      const session = priv.sessions.get(sessionId) || createMockSession(sessionId)
 
-      ;(adapter as any).sessions.set(sessionId, session)
+      priv.sessions.set(sessionId, session)
 
       const seenPartIds = new Set<string>()
       const partContentLengths = new Map<string, string>()
@@ -452,7 +423,7 @@ describe('AcpAdapter - Turn Detection', () => {
         }
       }
 
-      const parts1 = (adapter as any).convertAcpEventToMessageParts(
+      const parts1 = priv.convertAcpEventToMessageParts(
         chunk1,
         new Set(),
         seenPartIds,
@@ -478,7 +449,7 @@ describe('AcpAdapter - Turn Detection', () => {
         }
       }
 
-      const parts2 = (adapter as any).convertAcpEventToMessageParts(
+      const parts2 = priv.convertAcpEventToMessageParts(
         chunk2,
         new Set(),
         seenPartIds,
@@ -495,26 +466,11 @@ describe('AcpAdapter - Turn Detection', () => {
   describe('Thinking chunks', () => {
     it('should use same turn ID for thinking chunks', async () => {
       const sessionId = 'test-session'
+      const priv = adapterPrivate(adapter)
 
-      const session = (adapter as any).sessions.get(sessionId) || {
-        sessionId,
-        acpSessionId: null,
-        process: {} as any,
-        stdoutBuffer: '',
-        status: SessionStatusType.IDLE,
-        messageBuffer: [],
-        permanentMessages: [],
-        pendingRequests: new Map(),
-        nextRequestId: 1,
-        pendingApproval: null,
-        promptRequestId: null,
-        responseCounter: 0,
-        lastChunkTime: null,
-        currentTurnId: 0,
-        sawToolCallSinceLastChunk: false
-      }
+      const session = priv.sessions.get(sessionId) || createMockSession(sessionId)
 
-      ;(adapter as any).sessions.set(sessionId, session)
+      priv.sessions.set(sessionId, session)
 
       // Message chunk (establishes turn 1)
       const messageChunk = {
@@ -528,7 +484,7 @@ describe('AcpAdapter - Turn Detection', () => {
         }
       }
 
-      ;(adapter as any).convertAcpEventToMessageParts(
+      priv.convertAcpEventToMessageParts(
         messageChunk,
         new Set(),
         new Set(),
@@ -552,7 +508,7 @@ describe('AcpAdapter - Turn Detection', () => {
         }
       }
 
-      const parts = (adapter as any).convertAcpEventToMessageParts(
+      const parts = priv.convertAcpEventToMessageParts(
         thinkingChunk,
         new Set(),
         new Set(),
@@ -568,26 +524,11 @@ describe('AcpAdapter - Turn Detection', () => {
   describe('Resume session scenario', () => {
     it('should handle replayed messages with proper turn detection', async () => {
       const sessionId = 'test-session'
+      const priv = adapterPrivate(adapter)
 
-      const session = (adapter as any).sessions.get(sessionId) || {
-        sessionId,
-        acpSessionId: null,
-        process: {} as any,
-        stdoutBuffer: '',
-        status: SessionStatusType.IDLE,
-        messageBuffer: [],
-        permanentMessages: [],
-        pendingRequests: new Map(),
-        nextRequestId: 1,
-        pendingApproval: null,
-        promptRequestId: null,
-        responseCounter: 0,
-        lastChunkTime: null,
-        currentTurnId: 0,
-        sawToolCallSinceLastChunk: false
-      }
+      const session = priv.sessions.get(sessionId) || createMockSession(sessionId)
 
-      ;(adapter as any).sessions.set(sessionId, session)
+      priv.sessions.set(sessionId, session)
 
       const seenPartIds = new Set<string>()
       const partContentLengths = new Map<string, string>()
@@ -619,9 +560,9 @@ describe('AcpAdapter - Turn Detection', () => {
       }
 
       // Process first message chunks (immediate succession)
-      ;(adapter as any).convertAcpEventToMessageParts(replay1a, new Set(), seenPartIds, partContentLengths, session)
+      priv.convertAcpEventToMessageParts(replay1a, new Set(), seenPartIds, partContentLengths, session)
       vi.advanceTimersByTime(100) // Small delay
-      const parts1 = (adapter as any).convertAcpEventToMessageParts(replay1b, new Set(), seenPartIds, partContentLengths, session)
+      const parts1 = priv.convertAcpEventToMessageParts(replay1b, new Set(), seenPartIds, partContentLengths, session)
 
       expect(session.currentTurnId).toBe(1)
       expect(parts1[0].id).toBe('agent-response-1')
@@ -642,7 +583,7 @@ describe('AcpAdapter - Turn Detection', () => {
         }
       }
 
-      const parts2 = (adapter as any).convertAcpEventToMessageParts(replay2, new Set(), seenPartIds, partContentLengths, session)
+      const parts2 = priv.convertAcpEventToMessageParts(replay2, new Set(), seenPartIds, partContentLengths, session)
 
       expect(session.currentTurnId).toBe(2) // New turn detected
       expect(parts2[0].id).toBe('agent-response-2') // Different ID
@@ -653,26 +594,11 @@ describe('AcpAdapter - Turn Detection', () => {
   describe('Edge cases', () => {
     it('should handle first chunk when lastChunkTime is null', async () => {
       const sessionId = 'test-session'
+      const priv = adapterPrivate(adapter)
 
-      const session = (adapter as any).sessions.get(sessionId) || {
-        sessionId,
-        acpSessionId: null,
-        process: {} as any,
-        stdoutBuffer: '',
-        status: SessionStatusType.IDLE,
-        messageBuffer: [],
-        permanentMessages: [],
-        pendingRequests: new Map(),
-        nextRequestId: 1,
-        pendingApproval: null,
-        promptRequestId: null,
-        responseCounter: 0,
-        lastChunkTime: null, // Initially null
-        currentTurnId: 0,
-        sawToolCallSinceLastChunk: false
-      }
+      const session = priv.sessions.get(sessionId) || createMockSession(sessionId)
 
-      ;(adapter as any).sessions.set(sessionId, session)
+      priv.sessions.set(sessionId, session)
 
       const chunk = {
         method: 'session/update',
@@ -685,7 +611,7 @@ describe('AcpAdapter - Turn Detection', () => {
         }
       }
 
-      const parts = (adapter as any).convertAcpEventToMessageParts(
+      const parts = priv.convertAcpEventToMessageParts(
         chunk,
         new Set(),
         new Set(),
@@ -699,6 +625,8 @@ describe('AcpAdapter - Turn Detection', () => {
     })
 
     it('should not increment turn ID when session is undefined', async () => {
+      const priv = adapterPrivate(adapter)
+
       // Process message without session context
       const chunk = {
         method: 'session/update',
@@ -711,7 +639,7 @@ describe('AcpAdapter - Turn Detection', () => {
         }
       }
 
-      const parts = (adapter as any).convertAcpEventToMessageParts(
+      const parts = priv.convertAcpEventToMessageParts(
         chunk,
         new Set(),
         new Set(),

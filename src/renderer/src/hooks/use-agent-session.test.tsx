@@ -33,7 +33,7 @@ describe('useAgentSession', () => {
 
   describe('start', () => {
     it('pre-registers then updates with real sessionId', async () => {
-      ;(mockElectronAPI.agentSession.start as any).mockResolvedValue({
+      ;(mockElectronAPI.agentSession.start as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
         sessionId: 'real-session-id'
       })
 
@@ -162,7 +162,7 @@ describe('useAgentSession', () => {
       })
 
       // Mock the send to return a new sessionId
-      ;(mockElectronAPI.agentSession.send as any).mockResolvedValue({
+      ;(mockElectronAPI.agentSession.send as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
         newSessionId: 'sess-2-new'
       })
 

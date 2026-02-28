@@ -200,7 +200,8 @@ export class GitHubIssuesPlugin implements TaskSourcePlugin {
           const existing = ctx.db.getTaskByExternalId(sourceId, externalId)
 
           if (existing) {
-            const { status, ...withoutStatus } = mapped
+            // eslint-disable-next-line @typescript-eslint/no-unused-vars
+            const { status: _status, ...withoutStatus } = mapped
             ctx.db.updateTask(existing.id, withoutStatus)
             result.updated++
           } else {

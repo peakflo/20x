@@ -11,6 +11,10 @@
     "composite": true,
     "types": ["electron-vite/node"],
     "moduleResolution": "bundler",
-    "allowSyntheticDefaultImports": true
+    "allowSyntheticDefaultImports": true,
+    "baseUrl": ".",
+    "paths": {
+      "@shared/*": ["src/shared/*"]
+    }
   }
 }

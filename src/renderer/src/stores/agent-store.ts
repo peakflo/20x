@@ -115,7 +115,7 @@ export const useAgentStore = create<AgentState>((set, get) => {
       eventSessionId: event.sessionId,
       eventTaskId: event.taskId,
       foundSession: !!session,
-      messageId: (event.data as any)?.id
+      messageId: (event.data as Record<string, unknown>)?.id
     })
 
     if (!session) return
@@ -125,22 +125,22 @@ export const useAgentStore = create<AgentState>((set, get) => {
       ? { ...session, sessionId: event.sessionId }
       : session
 
-    const data = event.data as any
+    const data = event.data as Record<string, unknown>
     let role: 'user' | 'assistant' | 'system' = 'system'
     let content = ''
     let msgId = ''
 
     if (typeof data === 'object' && data !== null) {
       role = data.role === 'user' ? 'user' : data.role === 'assistant' ? 'assistant' : 'system'
-      content = data.content ?? data.text ?? data.message ?? ''
-      msgId = data.id || ''
+      content = (data.content ?? data.text ?? data.message ?? '') as string
+      msgId = (data.id || '') as string
     } else {
       content = String(data)
     }
 
     // Allow empty content for tool/question messages (they have tool/questions field instead)
     if (!content && !data.tool && !data.questions && !data.todos) return
-    if (!msgId) msgId = data.id || `${role}-${content.slice(0, 50)}-${Date.now()}`
+    if (!msgId) msgId = (data.id as string) || `${role}-${content.slice(0, 50)}-${Date.now()}`
 
     const taskId = resolvedSession.taskId
     const seen = getSeen(taskId)
@@ -187,13 +187,13 @@ export const useAgentStore = create<AgentState>((set, get) => {
       set({
         sessions: new Map(state.sessions).set(taskId, {
           ...resolvedSession,
-          messages: resolvedSession.messages.map((m) => {
+          messages: resolvedSession.messages.map((m): AgentMessage => {
             if (m.id !== msgId) return m
             // Preserve todowrite/question partType — don't let a generic 'tool' update overwrite them
             const keepPartType = m.partType === 'todowrite' || m.partType === 'question'
-            const newPartType = keepPartType ? m.partType : (data.partType || m.partType)
+            const newPartType = keepPartType ? m.partType : ((data.partType as string) || m.partType)
             // Merge tool objects so todos/questions are preserved across updates
-            const newTool = data.tool ? { ...m.tool, ...data.tool } : m.tool
+            const newTool = data.tool ? { ...m.tool, ...(data.tool as AgentMessage['tool']) } as AgentMessage['tool'] : m.tool
             return { ...m, content, partType: newPartType, tool: newTool }
           })
         })
@@ -214,7 +214,7 @@ export const useAgentStore = create<AgentState>((set, get) => {
         ...resolvedSession,
         messages: [
           ...resolvedSession.messages,
-          { id: msgId, role, content, timestamp: new Date(), partType: data.partType, tool: data.tool }
+          { id: msgId, role, content, timestamp: new Date(), partType: data.partType as string, tool: data.tool as AgentMessage['tool'] }
         ]
       })
     })

@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import type { Mock } from 'vitest'
 import { useMcpStore } from './mcp-store'
+import type { McpServer, CreateMcpServerDTO, UpdateMcpServerDTO } from '@/types'
 
 const mockElectronAPI = window.electronAPI
 
@@ -16,7 +18,7 @@ describe('useMcpStore', () => {
   describe('fetchServers', () => {
     it('fetches and sets servers', async () => {
       const servers = [{ id: 'm1', name: 'Server 1' }]
-      ;(mockElectronAPI.mcpServers.getAll as any).mockResolvedValue(servers)
+      ;(mockElectronAPI.mcpServers.getAll as unknown as Mock).mockResolvedValue(servers)
 
       await useMcpStore.getState().fetchServers()
 
@@ -25,7 +27,7 @@ describe('useMcpStore', () => {
     })
 
     it('sets error on failure', async () => {
-      ;(mockElectronAPI.mcpServers.getAll as any).mockRejectedValue(new Error('fail'))
+      ;(mockElectronAPI.mcpServers.getAll as unknown as Mock).mockRejectedValue(new Error('fail'))
 
       await useMcpStore.getState().fetchServers()
 
@@ -36,9 +38,9 @@ describe('useMcpStore', () => {
   describe('createServer', () => {
     it('appends server to list', async () => {
       const newServer = { id: 'm1', name: 'New MCP' }
-      ;(mockElectronAPI.mcpServers.create as any).mockResolvedValue(newServer)
+      ;(mockElectronAPI.mcpServers.create as unknown as Mock).mockResolvedValue(newServer)
 
-      const result = await useMcpStore.getState().createServer({ name: 'New MCP' } as any)
+      const result = await useMcpStore.getState().createServer({ name: 'New MCP' } as unknown as CreateMcpServerDTO)
 
       expect(result).toEqual(newServer)
       expect(useMcpStore.getState().servers).toHaveLength(1)
@@ -47,11 +49,11 @@ describe('useMcpStore', () => {
 
   describe('updateServer', () => {
     it('updates server in list', async () => {
-      useMcpStore.setState({ servers: [{ id: 'm1', name: 'Old' }] as any })
+      useMcpStore.setState({ servers: [{ id: 'm1', name: 'Old' }] as unknown as McpServer[] })
       const updated = { id: 'm1', name: 'Updated' }
-      ;(mockElectronAPI.mcpServers.update as any).mockResolvedValue(updated)
+      ;(mockElectronAPI.mcpServers.update as unknown as Mock).mockResolvedValue(updated)
 
-      await useMcpStore.getState().updateServer('m1', { name: 'Updated' } as any)
+      await useMcpStore.getState().updateServer('m1', { name: 'Updated' } as unknown as UpdateMcpServerDTO)
 
       expect(useMcpStore.getState().servers[0].name).toBe('Updated')
     })
@@ -59,8 +61,8 @@ describe('useMcpStore', () => {
 
   describe('deleteServer', () => {
     it('removes server from list', async () => {
-      useMcpStore.setState({ servers: [{ id: 'm1' }, { id: 'm2' }] as any })
-      ;(mockElectronAPI.mcpServers.delete as any).mockResolvedValue(true)
+      useMcpStore.setState({ servers: [{ id: 'm1' }, { id: 'm2' }] as unknown as McpServer[] })
+      ;(mockElectronAPI.mcpServers.delete as unknown as Mock).mockResolvedValue(true)
 
       const result = await useMcpStore.getState().deleteServer('m1')
 
@@ -72,7 +74,7 @@ describe('useMcpStore', () => {
   describe('testConnection', () => {
     it('returns test result', async () => {
       const testResult = { status: 'connected' as const, tools: [{ name: 'tool1', description: 'A tool' }] }
-      ;(mockElectronAPI.mcpServers.testConnection as any).mockResolvedValue(testResult)
+      ;(mockElectronAPI.mcpServers.testConnection as unknown as Mock).mockResolvedValue(testResult)
 
       const result = await useMcpStore.getState().testConnection({ name: 'Test' })
 
@@ -81,10 +83,10 @@ describe('useMcpStore', () => {
 
     it('updates tools in store when server ID provided', async () => {
       useMcpStore.setState({
-        servers: [{ id: 'm1', name: 'Server', tools: [] }] as any
+        servers: [{ id: 'm1', name: 'Server', tools: [] }] as unknown as McpServer[]
       })
       const tools = [{ name: 'tool1', description: 'A tool' }]
-      ;(mockElectronAPI.mcpServers.testConnection as any).mockResolvedValue({
+      ;(mockElectronAPI.mcpServers.testConnection as unknown as Mock).mockResolvedValue({
         status: 'connected',
         tools
       })

@@ -36,7 +36,7 @@ describe('Task CRUD', () => {
 
   it('does not update non-updatable fields', () => {
     const task = db.createTask(makeTask())!
-    const updated = db.updateTask(task.id, { title: 'New' } as any)
+    const updated = db.updateTask(task.id, { title: 'New' } as unknown as Parameters<typeof db.updateTask>[1])
     expect(updated!.title).toBe('New')
     // source is not in UPDATABLE_COLUMNS
     expect(updated!.source).toBe('local')

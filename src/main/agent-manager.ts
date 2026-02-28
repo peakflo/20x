@@ -5,16 +5,16 @@ import { join, delimiter } from 'path'
 import { existsSync, copyFileSync, mkdirSync, writeFileSync, readFileSync, readdirSync, statSync } from 'fs'
 import { Agent as UndiciAgent } from 'undici'
 import type { BrowserWindow } from 'electron'
-import type { DatabaseManager, AgentMcpServerEntry, OutputFieldRecord, SkillRecord } from './database'
+import type { DatabaseManager, AgentMcpServerEntry, OutputFieldRecord, SkillRecord, TaskRecord } from './database'
 import { TaskStatus } from '../shared/constants'
 import type { WorktreeManager } from './worktree-manager'
 import type { GitHubManager } from './github-manager'
 import { OpencodeAdapter } from './adapters/opencode-adapter'
 import { ClaudeCodeAdapter } from './adapters/claude-code-adapter'
 import { AcpAdapter } from './adapters/acp-adapter'
-import type { CodingAgentAdapter, SessionConfig, MessagePart, SessionMessage } from './adapters/coding-agent-adapter'
+import type { CodingAgentAdapter, SessionConfig, MessagePart, SessionMessage, McpServerConfig } from './adapters/coding-agent-adapter'
 import { SessionStatusType, MessagePartType } from './adapters/coding-agent-adapter'
-import { getTaskApiPort } from './task-api-server'
+import { getTaskApiPort, waitForTaskApiServer } from './task-api-server'
 
 let OpenCodeSDK: typeof import('@opencode-ai/sdk') | null = null
 
@@ -27,7 +27,8 @@ enum CodingAgentType {
 
 // Custom fetch with no timeout — agent prompts can run indefinitely
 const noTimeoutAgent = new UndiciAgent({ headersTimeout: 0, bodyTimeout: 0 })
-const noTimeoutFetch = (req: any) => (globalThis as any).fetch(req, { dispatcher: noTimeoutAgent })
+const noTimeoutFetch = (req: Request): ReturnType<typeof fetch> =>
+  (globalThis.fetch as (input: Request, init: Record<string, unknown>) => ReturnType<typeof fetch>)(req, { dispatcher: noTimeoutAgent })
 
 // Default OpenCode server URL (matches database default)
 const DEFAULT_SERVER_URL = 'http://localhost:4096'
@@ -39,14 +40,10 @@ interface AgentSession {
   workspaceDir?: string
   status: 'idle' | 'working' | 'error' | 'waiting_approval'
   createdAt: Date
-  ocClient?: any
-  ocSessionId?: string
   seenMessageIds: Set<string>
   seenPartIds: Set<string>
   partContentLengths: Map<string, string>
   pollTimer?: ReturnType<typeof setTimeout>
-  promptAbort?: AbortController
-  lastOcStatus?: string
   learningMode?: boolean
   isTriageSession?: boolean
   adapter?: CodingAgentAdapter
@@ -55,7 +52,7 @@ interface AgentSession {
 
 export class AgentManager extends EventEmitter {
   private sessions: Map<string, AgentSession> = new Map()
-  private serverInstance: any = null  // OpenCode SDK server instance
+  private serverInstance: { url: string; close(): void } | null = null  // OpenCode SDK server instance
   private serverUrl: string | null = null
   private serverStarting: Promise<void> | null = null  // Track server startup
   private sdkLoading: Promise<void> | null = null  // Track SDK loading
@@ -187,10 +184,16 @@ export class AgentManager extends EventEmitter {
    * Builds MCP servers config for adapters (Claude Code, etc.)
    * Converts from database format to adapter format
    */
-  private buildMcpServersForAdapter(agentId: string, opts?: { ensureTaskManagement?: boolean }): Record<string, any> {
+  private async buildMcpServersForAdapter(agentId: string, opts?: { ensureTaskManagement?: boolean }): Promise<Record<string, McpServerConfig>> {
     const agent = this.db.getAgent(agentId)
     const mcpEntries = agent?.config?.mcp_servers || []
-    const result: Record<string, any> = {}
+    const result: Record<string, McpServerConfig> = {}
+    console.log(`[AgentManager] buildMcpServersForAdapter - agentId: ${agentId}, entries: ${mcpEntries.length}, ensureTaskManagement: ${opts?.ensureTaskManagement}`)
+
+    // Ensure the task API server is ready before building MCP configs
+    // (startTaskApiServer is fire-and-forget during DB init, may not be done yet)
+    const taskApiPort = await waitForTaskApiServer()
+    console.log(`[AgentManager] buildMcpServersForAdapter - waitForTaskApiServer returned port: ${taskApiPort}`)
 
     for (const entry of mcpEntries) {
       const serverId = typeof entry === 'string' ? entry : (entry as AgentMcpServerEntry).serverId
@@ -204,6 +207,8 @@ export class AgentManager extends EventEmitter {
           const apiPort = getTaskApiPort()
           if (apiPort) {
             env = { ...env, TASK_API_URL: `http://127.0.0.1:${apiPort}` }
+          } else {
+            console.warn(`[AgentManager] buildMcpServersForAdapter - task API port is null for task-management MCP server (regular path)! Tools will fail.`)
           }
         }
 
@@ -222,12 +227,15 @@ export class AgentManager extends EventEmitter {
       }
     }
 
-    // Always include task-management for mastermind sessions
+    // Always include task-management for mastermind/triage sessions
     if (opts?.ensureTaskManagement && !result['task-management']) {
       const allServers = this.db.getMcpServers()
       const tmServer = allServers.find(s => s.name === 'task-management')
       if (tmServer && tmServer.type === 'local') {
         const apiPort = getTaskApiPort()
+        if (!apiPort) {
+          console.warn('[AgentManager] buildMcpServersForAdapter - task API port is null! MCP server may fail to start')
+        }
         const env = { ...tmServer.environment, ...(apiPort ? { TASK_API_URL: `http://127.0.0.1:${apiPort}` } : {}) }
         result['task-management'] = {
           type: 'stdio',
@@ -235,20 +243,26 @@ export class AgentManager extends EventEmitter {
           args: tmServer.args,
           env
         }
+        console.log(`[AgentManager] buildMcpServersForAdapter - force-included task-management MCP (command: ${tmServer.command}, args: ${JSON.stringify(tmServer.args)}, apiPort: ${apiPort})`)
+      } else {
+        console.warn(`[AgentManager] buildMcpServersForAdapter - task-management server not found in DB (found ${allServers.length} servers: ${allServers.map(s => s.name).join(', ')})`)
       }
     }
 
+    console.log(`[AgentManager] buildMcpServersForAdapter - result keys: [${Object.keys(result).join(', ')}]`)
     return result
   }
 
-  private buildSessionConfig(agentId: string, taskId: string, workspaceDir?: string): SessionConfig {
+  private async buildSessionConfig(agentId: string, taskId: string, workspaceDir?: string): Promise<SessionConfig> {
     const agent = this.db.getAgent(agentId)
     if (!agent) {
       throw new Error(`Agent not found: ${agentId}`)
     }
 
     const isMastermind = taskId === 'mastermind-session'
-    const mcpServers = this.buildMcpServersForAdapter(agentId, { ensureTaskManagement: isMastermind })
+    const task = this.db.getTask(taskId)
+    const isTriageSession = task?.status === TaskStatus.Triaging
+    const mcpServers = await this.buildMcpServersForAdapter(agentId, { ensureTaskManagement: isMastermind || isTriageSession })
 
     return {
       agentId,
@@ -262,40 +276,6 @@ export class AgentManager extends EventEmitter {
   }
 
   /**
-   * Builds a `tools: { [name: string]: boolean }` filter from agent config.
-   * If any MCP server has a subset of tools selected, we build an explicit
-   * allow/deny map so OpenCode only enables those tools.
-   * Returns undefined if all tools are enabled (no filtering needed).
-   */
-  private buildToolsFilter(agentId: string): Record<string, boolean> | undefined {
-    const agent = this.db.getAgent(agentId)
-    if (!agent?.config?.mcp_servers || agent.config.mcp_servers.length === 0) return undefined
-
-    const entries = agent.config.mcp_servers
-    let hasFiltering = false
-    const toolsMap: Record<string, boolean> = {}
-
-    for (const entry of entries) {
-      const serverId = typeof entry === 'string' ? entry : (entry as AgentMcpServerEntry).serverId
-      const enabledTools = typeof entry === 'string' ? undefined : (entry as AgentMcpServerEntry).enabledTools
-      const mcpServer = this.db.getMcpServer(serverId)
-      if (!mcpServer) continue
-
-      if (enabledTools !== undefined && mcpServer.tools.length > 0) {
-        // Selective — mark enabled tools true, others false
-        hasFiltering = true
-        const enabledSet = new Set(enabledTools)
-        for (const tool of mcpServer.tools) {
-          toolsMap[tool.name] = enabledSet.has(tool.name)
-        }
-      }
-      // If enabledTools is undefined, all tools are allowed — no entries needed
-    }
-
-    return hasFiltering ? toolsMap : undefined
-  }
-
-  /**
    * Resolves and writes SKILL.md files to the workspace directory.
    * Priority: task.skill_ids > agent.config.skill_ids > all skills.
    * Also generates AGENTS.md and CLAUDE.md with skill directory.
@@ -304,7 +284,7 @@ export class AgentManager extends EventEmitter {
     try {
       const task = this.db.getTask(taskId)
       const agent = this.db.getAgent(agentId)
-      const agentConfig = agent?.config as any
+      const agentConfig = agent?.config
 
       // Resolve which skill IDs to use
       let skillIds: string[] | undefined
@@ -630,8 +610,8 @@ export class AgentManager extends EventEmitter {
           console.log('[AgentManager] Server accessible at', testUrl, 'version:', health.version)
           return testUrl
         }
-      } catch (error: any) {
-        console.log('[AgentManager] Server not accessible at', testUrl, ':', error.message)
+      } catch (error: unknown) {
+        console.log('[AgentManager] Server not accessible at', testUrl, ':', error instanceof Error ? error.message : error)
       }
     }
 
@@ -751,16 +731,6 @@ export class AgentManager extends EventEmitter {
   }
 
   /**
-   * Resolves the actual server URL to use for an agent.
-   * Uses the dynamically detected server URL from our spawned process,
-   * falling back to the agent's configured URL.
-   */
-  private getServerUrl(agentServerUrl: string): string {
-    if (this.serverUrl) return this.serverUrl
-    return agentServerUrl
-  }
-
-  /**
    * Starts a session using a coding agent adapter (Claude Code, etc.)
    */
   private async startAdapterSession(
@@ -787,7 +757,7 @@ export class AgentManager extends EventEmitter {
     // Build MCP servers config for adapter
     // Mastermind and triage sessions always get task-management access
     const isMastermind = taskId === 'mastermind-session'
-    const mcpServers = this.buildMcpServersForAdapter(agentId, { ensureTaskManagement: isMastermind || isTriageSession })
+    const mcpServers = await this.buildMcpServersForAdapter(agentId, { ensureTaskManagement: isMastermind || isTriageSession })
 
     // Build session config
     const sessionConfig: SessionConfig = {
@@ -1000,7 +970,7 @@ export class AgentManager extends EventEmitter {
 
         // Check for pending approval (ACP adapters only)
         if ('getPendingApproval' in adapter && typeof adapter.getPendingApproval === 'function') {
-          const approval = (adapter as any).getPendingApproval(sessionId)
+          const approval = (adapter as unknown as AcpAdapter).getPendingApproval(sessionId)
           if (approval && !seenPartIds.has(`approval-${approval.toolCallId}`)) {
             seenPartIds.add(`approval-${approval.toolCallId}`)
 
@@ -1061,7 +1031,7 @@ export class AgentManager extends EventEmitter {
             return
           }
 
-          // Regular error - send to UI
+          // Regular error (e.g., rate limit) - send to UI and stop polling to allow recovery
           this.sendToRenderer('agent:output', {
             sessionId,
             taskId: config.taskId,
@@ -1073,6 +1043,22 @@ export class AgentManager extends EventEmitter {
               partType: 'error'
             }
           })
+
+          if (session) {
+            session.status = 'error'
+            // Reset polling flag so it can be restarted on next message
+            session.pollingStarted = false
+
+            // Update task status to indicate error (but allow recovery)
+            this.sendToRenderer('agent:status', {
+              sessionId,
+              agentId: config.agentId,
+              taskId: config.taskId,
+              status: 'error'
+            })
+          }
+          // Stop polling - will be restarted when user sends a new message
+          return
         } else if (status.type === SessionStatusType.IDLE && session) {
           // Use transitionToIdle to extract output values and update status
           console.log(`[AgentManager] Detected IDLE status for ${sessionId}, calling transitionToIdle`)
@@ -1083,7 +1069,7 @@ export class AgentManager extends EventEmitter {
           session.pollingStarted = false
           return
         }
-      } catch (error: any) {
+      } catch (error: unknown) {
         console.error('[AgentManager] Adapter polling error:', error)
       }
 
@@ -1115,10 +1101,11 @@ export class AgentManager extends EventEmitter {
 
     // Build MCP servers config
     const isMastermind = taskId === 'mastermind-session'
-    const mcpServers = this.buildMcpServersForAdapter(agentId, { ensureTaskManagement: isMastermind })
+    const task = this.db.getTask(taskId)
+    const isTriageSession = task?.status === TaskStatus.Triaging
+    const mcpServers = await this.buildMcpServersForAdapter(agentId, { ensureTaskManagement: isMastermind || isTriageSession })
 
     // Build system prompt with task context (survives context compaction)
-    const task = this.db.getTask(taskId)
     const baseSystemPrompt = agent.config?.system_prompt || ''
     const taskContext = task
       ? `\n\n[Task Context]\nTask: "${task.title}"\n${task.description || ''}`
@@ -1245,509 +1232,30 @@ export class AgentManager extends EventEmitter {
       workspaceDir = await this.setupWorktreeIfNeeded(taskId)
     }
 
-    // Check if agent uses adapter (Claude Code, etc.)
     const adapter = this.getAdapter(agentId)
-    if (adapter) {
-      return this.startAdapterSession(adapter, agentId, taskId, workspaceDir, skipInitialPrompt)
+    if (!adapter) {
+      throw new Error(`No adapter available for agent ${agentId}`)
     }
-
-    // Legacy OpenCode path below
-    await this.ensureSDKLoaded()
-    if (!OpenCodeSDK) {
-      throw new Error('OpenCode SDK not loaded')
-    }
-
-    // Reuse existing session for this task
-    for (const [sessionId, session] of this.sessions.entries()) {
-      if (session.taskId === taskId && session.status !== 'error') {
-        return sessionId
-      }
-    }
-
-    // Ensure server is running before starting session
-    if (!this.serverUrl) {
-      console.log('[AgentManager] Server not running, starting...')
-      await this.startServer(agent.server_url)
-    }
-
-    // Always use a dedicated workspace directory
-    if (!workspaceDir) {
-      workspaceDir = this.db.getWorkspaceDir(taskId)
-    }
-
-    const sessionId = `session-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
-    const baseUrl = this.getServerUrl(agent.server_url)
-    console.log(`[AgentManager] Starting session ${sessionId} for agent ${agentId}, server: ${baseUrl}`)
-
-    const ocClient = OpenCodeSDK.createOpencodeClient({ baseUrl, fetch: noTimeoutFetch as any })
-
-    const session: AgentSession = {
-      id: sessionId,
-      agentId,
-      taskId,
-      workspaceDir,
-      status: 'working',
-      createdAt: new Date(),
-      ocClient,
-      seenMessageIds: new Set(),
-      seenPartIds: new Set(),
-      partContentLengths: new Map()
-    }
-
-    this.sessions.set(sessionId, session)
-
-    try {
-      // Write SKILL.md files to workspace before session creation
-      this.writeSkillFiles(taskId, agentId, workspaceDir!)
-
-      // Register MCP servers BEFORE creating session so the session picks them up
-      const mcpEntries = agent.config?.mcp_servers || []
-      const mcpServerIds = mcpEntries.map((e) => typeof e === 'string' ? e : (e as AgentMcpServerEntry).serverId)
-      const registeredMcpNames = new Set<string>()
-
-      for (const serverId of mcpServerIds) {
-        const mcpServer = this.db.getMcpServer(serverId)
-        if (!mcpServer) continue
-
-        try {
-          // Inject TASK_API_URL for task-management server
-          let env = mcpServer.environment || {}
-          if (mcpServer.name === 'task-management') {
-            const apiPort = getTaskApiPort()
-            if (apiPort) env = { ...env, TASK_API_URL: `http://127.0.0.1:${apiPort}` }
-          }
-
-          const mcpConfig = mcpServer.type === 'remote'
-            ? { type: 'remote' as const, url: mcpServer.url, headers: mcpServer.headers }
-            : { type: 'local' as const, command: [mcpServer.command, ...mcpServer.args], environment: env }
-          const addResult: any = await ocClient.mcp.add({
-            body: {
-              name: mcpServer.name,
-              config: mcpConfig
-            },
-            ...(workspaceDir && { query: { directory: workspaceDir } })
-          })
-          if (addResult.error) {
-            console.error(`[AgentManager] mcp.add error for ${mcpServer.name}:`, addResult.error)
-            continue
-          }
-
-          const connectResult = await ocClient.mcp.connect({
-            path: { name: mcpServer.name },
-            ...(workspaceDir && { query: { directory: workspaceDir } })
-          })
-          if (connectResult.error) {
-            console.error(`[AgentManager] mcp.connect error for ${mcpServer.name}:`, connectResult.error)
-            continue
-          }
-
-          registeredMcpNames.add(mcpServer.name)
-        } catch (mcpError) {
-          console.error(`[AgentManager] Failed to register MCP server ${mcpServer.name}:`, mcpError)
-        }
-      }
-
-      // Check if this is a triage session (legacy path)
-      const legacyTask = this.db.getTask(taskId)
-      const isLegacyTriageSession = legacyTask?.status === TaskStatus.Triaging
-      if (isLegacyTriageSession) {
-        session.isTriageSession = true
-      }
-
-      // Mastermind and triage sessions always get task-management access
-      if ((taskId === 'mastermind-session' || isLegacyTriageSession) && !registeredMcpNames.has('task-management')) {
-        const allServers = this.db.getMcpServers()
-        const tmServer = allServers.find(s => s.name === 'task-management')
-        if (tmServer && tmServer.type === 'local') {
-          try {
-            const apiPort = getTaskApiPort()
-            const env = { ...tmServer.environment, ...(apiPort ? { TASK_API_URL: `http://127.0.0.1:${apiPort}` } : {}) }
-            const addResult: any = await ocClient.mcp.add({
-              body: {
-                name: 'task-management',
-                config: { type: 'local' as const, command: [tmServer.command, ...tmServer.args], environment: env }
-              },
-              ...(workspaceDir && { query: { directory: workspaceDir } })
-            })
-            if (!addResult.error) {
-              await ocClient.mcp.connect({
-                path: { name: 'task-management' },
-                ...(workspaceDir && { query: { directory: workspaceDir } })
-              })
-            }
-          } catch (mcpError) {
-            console.error('[AgentManager] Failed to register task-management for mastermind:', mcpError)
-          }
-        }
-      }
-
-      // Create OpenCode session
-      const result: any = await ocClient.session.create({
-        body: { title: `Task ${taskId}` },
-        ...(workspaceDir && { query: { directory: workspaceDir } })
-      })
-
-      if (result.error) {
-        throw new Error(result.error.data?.message || result.error.name || 'Failed to create session')
-      }
-      if (!result.data?.id) {
-        throw new Error('No session ID returned from OpenCode')
-      }
-
-      session.ocSessionId = result.data.id
-      this.db.updateTask(taskId, { session_id: result.data.id })
-      console.log(`[AgentManager] OpenCode session created: ${result.data.id}`)
-
-      // Update task status to agent_working (preserve Triaging status for triage sessions)
-      if (!isLegacyTriageSession) {
-        this.db.updateTask(taskId, { status: TaskStatus.AgentWorking })
-      }
-
-      // Notify renderer that session is live
-      this.sendToRenderer('agent:status', {
-        sessionId, agentId, taskId, status: 'working'
-      })
-
-      // Start polling for messages (SSE uses TextDecoderStream which isn't in Node)
-      this.startPolling(sessionId)
-
-      if (!skipInitialPrompt) {
-        // Build the initial prompt
-        const task = this.db.getTask(taskId)
-        let promptText: string
-
-        if (isLegacyTriageSession && task) {
-          promptText = this.buildTriagePrompt(task)
-        } else {
-          promptText = task
-            ? `Working on task: "${task.title}"\n\n${task.description || ''}`
-            : `Working on task ${taskId}`
-
-          // Append output field instructions if task has output fields
-          if (task?.output_fields && task.output_fields.length > 0) {
-            promptText += this.buildOutputFieldInstructions(task.output_fields)
-          }
-        }
-
-        // Copy attachments to workspace — agent reads them via fs tools
-        const attachmentRefs: string[] = []
-        const parts: any[] = []
-        if (task?.attachments?.length && workspaceDir) {
-          const attachDir = this.db.getAttachmentsDir(taskId)
-          const destDir = join(workspaceDir, 'attachments')
-          if (!existsSync(destDir)) mkdirSync(destDir, { recursive: true })
-
-          for (const att of task.attachments) {
-            const srcPath = join(attachDir, `${att.id}-${att.filename}`)
-            if (!existsSync(srcPath)) continue
-            const destPath = join(destDir, att.filename)
-            try { copyFileSync(srcPath, destPath) } catch { continue }
-            attachmentRefs.push(`- attachments/${att.filename}`)
-          }
-        }
-        if (attachmentRefs.length > 0) {
-          promptText += `\n\nAttached files (relative to your working directory):\n${attachmentRefs.join('\n')}`
-        }
-        parts.unshift({ type: 'text', text: promptText })
-
-        // Parse model from agent config (stored as "providerID/modelID")
-        const agentConfig = agent.config as any
-        let modelParam: { providerID: string; modelID: string } | undefined
-        if (agentConfig?.model) {
-          const slashIdx = agentConfig.model.indexOf('/')
-          if (slashIdx > 0) {
-            modelParam = {
-              providerID: agentConfig.model.slice(0, slashIdx),
-              modelID: agentConfig.model.slice(slashIdx + 1)
-            }
-          }
-          console.log(`[AgentManager] Using model: ${agentConfig.model} →`, modelParam)
-        }
-
-        // Build tool filter from agent config
-        const toolsFilter = this.buildToolsFilter(agentId)
-
-        // Fire-and-forget prompt via SDK (SDK disables Node.js timeout internally)
-        console.log(`[AgentManager] Sending prompt for session ${sessionId}${workspaceDir ? `, dir: ${workspaceDir}` : ''}`)
-        const promptAbort = new AbortController()
-        session.promptAbort = promptAbort
-        ocClient.session.prompt({
-          path: { id: session.ocSessionId! },
-          body: {
-            parts,
-            ...(modelParam && { model: modelParam }),
-            ...(toolsFilter && { tools: toolsFilter })
-          },
-          ...(workspaceDir && { query: { directory: workspaceDir } }),
-          signal: promptAbort.signal
-        }).catch((err: any) => {
-          if (err.name !== 'AbortError') {
-            console.error('[AgentManager] prompt error:', err)
-          }
-        }).finally(() => {
-          session.promptAbort = undefined
-        })
-      }
-
-      return sessionId
-    } catch (error) {
-      console.error(`[AgentManager] Failed to start session ${sessionId}:`, error)
-      session.status = 'error'
-      this.sessions.delete(sessionId)
-      // Revert task status on error
-      this.db.updateTask(taskId, { status: TaskStatus.NotStarted })
-      throw error
-    }
+    return this.startAdapterSession(adapter, agentId, taskId, workspaceDir, skipInitialPrompt)
   }
 
   /**
-   * Reconnects to an existing OpenCode session by its persisted ocSessionId.
+   * Reconnects to an existing session by its persisted session ID.
    * Replays all messages to the renderer and resumes polling.
    */
-  async resumeSession(agentId: string, taskId: string, ocSessionId: string): Promise<string> {
-    console.log('[AgentManager] resumeSession called:', { agentId, taskId, ocSessionId })
+  async resumeSession(agentId: string, taskId: string, sessionId: string): Promise<string> {
+    console.log('[AgentManager] resumeSession called:', { agentId, taskId, sessionId })
     const agent = this.db.getAgent(agentId)
     if (!agent) {
       throw new Error(`Agent not found: ${agentId}`)
     }
 
-    // Check if agent uses adapter (Claude Code, etc.)
     const adapter = this.getAdapter(agentId)
-    console.log('[AgentManager] getAdapter returned:', adapter ? 'adapter found' : 'no adapter')
-    if (adapter) {
-      // For adapters, ocSessionId is actually the adapter session ID
-      console.log('[AgentManager] Using adapter path, calling resumeAdapterSession')
-      return this.resumeAdapterSession(adapter, agentId, taskId, ocSessionId)
-    }
-    console.log('[AgentManager] Using legacy OpenCode path')
-
-    // Legacy OpenCode path below
-    await this.ensureSDKLoaded()
-    if (!OpenCodeSDK) {
-      throw new Error('OpenCode SDK not loaded')
+    if (!adapter) {
+      throw new Error(`No adapter available for agent ${agentId}`)
     }
 
-    // Check no active in-memory session for this task
-    for (const [sid, s] of this.sessions.entries()) {
-      if (s.taskId === taskId && s.status !== 'error') {
-        return sid
-      }
-    }
-
-    // Ensure server is running before resuming
-    if (!this.serverUrl) {
-      console.log('[AgentManager] Server not running, starting before resume...')
-      await this.startServer(agent.server_url)
-    }
-
-    const workspaceDir = this.db.getWorkspaceDir(taskId)
-    const sessionId = `session-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
-    const baseUrl = this.getServerUrl(agent.server_url)
-    console.log(`[AgentManager] Resuming session ${sessionId} for OC session ${ocSessionId}`)
-
-    const ocClient = OpenCodeSDK.createOpencodeClient({ baseUrl, fetch: noTimeoutFetch as any })
-
-    // Validate session still exists server-side
-    try {
-      const getResult: any = await ocClient.session.get({
-        path: { id: ocSessionId },
-        ...(workspaceDir && { query: { directory: workspaceDir } })
-      })
-      if (getResult.error || !getResult.data) {
-        console.warn('[AgentManager] OpenCode session no longer exists on server:', ocSessionId)
-        this.db.updateTask(taskId, { session_id: null })
-
-        // Emit event to show dialog
-        this.sendToRenderer('agent:incompatible-session', {
-          taskId,
-          agentId,
-          error: 'This session no longer exists on the server. It may have expired or been deleted.'
-        })
-
-        throw new Error('SESSION_INCOMPATIBLE')
-      }
-    } catch (error: any) {
-      if (error.message === 'SESSION_INCOMPATIBLE') throw error
-      console.warn('[AgentManager] Failed to validate OpenCode session:', error.message)
-      this.db.updateTask(taskId, { session_id: null })
-
-      // Emit event to show dialog
-      this.sendToRenderer('agent:incompatible-session', {
-        taskId,
-        agentId,
-        error: 'Failed to connect to the session on the server. It may have expired or been deleted.'
-      })
-
-      throw new Error('SESSION_INCOMPATIBLE')
-    }
-
-    const session: AgentSession = {
-      id: sessionId,
-      agentId,
-      taskId,
-      workspaceDir,
-      status: 'idle',
-      createdAt: new Date(),
-      ocClient,
-      ocSessionId,
-      seenMessageIds: new Set(),
-      seenPartIds: new Set(),
-      partContentLengths: new Map()
-    }
-
-    this.sessions.set(sessionId, session)
-
-    try {
-      // Replay existing messages to renderer
-      const messagesResult: any = await ocClient.session.messages({
-        path: { id: ocSessionId },
-        ...(workspaceDir && { query: { directory: workspaceDir } })
-      })
-
-      if (messagesResult.data && Array.isArray(messagesResult.data)) {
-        for (const msg of messagesResult.data) {
-          if (!msg.info) continue
-          const msgId = msg.info.id
-          const role = msg.info.role || 'assistant'
-          const parts = msg.parts && Array.isArray(msg.parts) ? msg.parts : []
-
-          session.seenMessageIds.add(msgId)
-
-          for (const part of parts) {
-            const partId = part.id
-            if (!partId) continue
-
-            const payload = this.buildPartPayload(part)
-            if (payload === null) {
-              session.seenPartIds.add(partId)
-              continue
-            }
-
-            session.seenPartIds.add(partId)
-            const isUpdatable = part.type === 'text' || part.type === 'reasoning' || part.type === 'tool'
-            if (isUpdatable) {
-              const fingerprint = part.type === 'tool'
-                ? `${part.state?.status}:${payload.partType}:${payload.content.length}:${payload.tool?.output?.length ?? 0}`
-                : String(payload.content.length)
-              session.partContentLengths.set(partId, fingerprint)
-            }
-
-            this.sendToRenderer('agent:output', {
-              sessionId,
-              taskId,
-              type: 'message',
-              data: {
-                id: partId,
-                role,
-                content: payload.content,
-                partType: payload.partType,
-                tool: payload.tool
-              }
-            })
-          }
-        }
-      }
-
-      // Check current status — set working if busy
-      try {
-        const statusResult: any = await ocClient.session.status({
-          ...(workspaceDir && { query: { directory: workspaceDir } })
-        })
-        if (statusResult.data) {
-          const ocStatus = statusResult.data[ocSessionId]
-          if (ocStatus?.type === 'busy') {
-            session.status = 'working'
-            this.db.updateTask(taskId, { status: TaskStatus.AgentWorking })
-          }
-        }
-      } catch {
-        // Non-fatal — just stay idle
-      }
-
-      this.sendToRenderer('agent:status', {
-        sessionId, agentId, taskId, status: session.status
-      })
-
-      this.startPolling(sessionId)
-      return sessionId
-    } catch (error) {
-      console.error(`[AgentManager] Failed to resume session ${sessionId}:`, error)
-      this.sessions.delete(sessionId)
-      throw error
-    }
-  }
-
-  /**
-   * Polls session status + messages every 2s to forward new content to the renderer.
-   */
-  private startPolling(sessionId: string): void {
-    const poll = async (): Promise<void> => {
-      const session = this.sessions.get(sessionId)
-      if (!session || session.status === 'error') return
-
-      await this.pollSessionStatus(sessionId)
-      await this.fetchNewMessages(sessionId)
-
-      // Schedule next poll
-      if (this.sessions.has(sessionId)) {
-        session.pollTimer = setTimeout(poll, 2000)
-      }
-    }
-
-    // First poll after 1s (give promptAsync time to register)
-    const session = this.sessions.get(sessionId)
-    if (session) {
-      session.pollTimer = setTimeout(poll, 1000)
-    }
-  }
-
-  /**
-   * Checks the OpenCode session status and forwards changes to the renderer.
-   */
-  private async pollSessionStatus(sessionId: string): Promise<void> {
-    const session = this.sessions.get(sessionId)
-    if (!session?.ocClient || !session.ocSessionId) return
-
-    try {
-      const statusResult: any = await session.ocClient.session.status({
-        ...(session.workspaceDir && { query: { directory: session.workspaceDir } })
-      })
-
-      if (!statusResult.data) return
-
-      const ocStatus = statusResult.data[session.ocSessionId]
-      const statusKey = ocStatus ? JSON.stringify(ocStatus) : undefined
-
-      // Only log + notify on change
-      if (statusKey === session.lastOcStatus) return
-      session.lastOcStatus = statusKey
-
-      if (!ocStatus || ocStatus.type === 'idle') {
-        await this.transitionToIdle(sessionId, session)
-      } else if (ocStatus.type === 'busy') {
-        session.status = 'working'
-        if (!session.learningMode) {
-          this.sendToRenderer('agent:status', {
-            sessionId, agentId: session.agentId, taskId: session.taskId, status: 'working'
-          })
-        }
-      } else if (ocStatus.type === 'retry') {
-        this.sendToRenderer('agent:output', {
-          sessionId,
-          taskId: session.taskId,
-          type: 'message',
-          data: {
-            id: `retry-${Date.now()}`,
-            role: 'system',
-            content: ocStatus.message || 'Rate limit exceeded',
-            partType: 'error'
-          }
-        })
-        await this.abortSession(sessionId)
-      }
-    } catch (error) {
-      console.error(`[AgentManager] Error checking session status:`, error)
-    }
+    return this.resumeAdapterSession(adapter, agentId, taskId, sessionId)
   }
 
   /**
@@ -1860,252 +1368,6 @@ export class AgentManager extends EventEmitter {
   }
 
   /**
-   * Builds the renderer payload for a single Part.
-   * Returns null for internal parts that should be skipped.
-   */
-  private buildPartPayload(part: any): { content: string; partType: string; tool?: any; stepTokens?: { input: number; output: number; cache: number } } | null {
-    switch (part.type) {
-      case 'text':
-        return part.text ? { content: part.text, partType: 'text' } : null
-
-      case 'reasoning':
-        return part.text ? { content: part.text, partType: 'reasoning' } : null
-
-      case 'tool': {
-        const toolName = part.tool || 'unknown'
-        const state = part.state || {}
-        const status = state.status || 'unknown'
-        const title = state.title || ''
-        const inputStr = state.input && Object.keys(state.input).length > 0
-          ? JSON.stringify(state.input, null, 2) : undefined
-        const outputStr = state.output
-          ? state.output.slice(0, 2000) : undefined
-        const errorStr = status === 'error' && state.error ? state.error : undefined
-
-        // Interactive question tool — detect by questions array in input
-        let questions = state.input?.questions
-        if (typeof questions === 'string') {
-          try { questions = JSON.parse(questions) } catch {}
-        }
-        if (Array.isArray(questions) && questions.length > 0) {
-          return {
-            content: title || 'Question',
-            partType: 'question',
-            tool: {
-              name: toolName,
-              status,
-              title,
-              input: inputStr,
-              output: outputStr,
-              error: errorStr,
-              questions
-            }
-          }
-        }
-
-        // TodoWrite tool — detect by todos array in input
-        let todos = state.input?.todos
-        if (typeof todos === 'string') {
-          try { todos = JSON.parse(todos) } catch {}
-        }
-        if (Array.isArray(todos) && todos.length > 0) {
-          return {
-            content: title || 'Todo List',
-            partType: 'todowrite',
-            tool: {
-              name: toolName,
-              status,
-              title,
-              input: inputStr,
-              output: outputStr,
-              error: errorStr,
-              todos
-            }
-          }
-        }
-
-        return {
-          content: title ? `${toolName} — ${title}` : toolName,
-          partType: 'tool',
-          tool: { name: toolName, status, title, input: inputStr, output: outputStr, error: errorStr }
-        }
-      }
-
-      case 'file':
-        return { content: `📎 ${part.filename || part.url || 'file'} (${part.mime || ''})`, partType: 'file' }
-
-      case 'step-start':
-        return { content: 'Step started', partType: 'step-start' }
-
-      case 'step-finish': {
-        const t = part.tokens
-        return {
-          content: part.reason || 'step-finish',
-          partType: 'step-finish',
-          stepTokens: t ? { input: t.input || 0, output: t.output || 0, cache: t.cache?.read || 0 } : undefined
-        }
-      }
-
-      case 'agent':
-        return { content: `Agent: ${part.name || 'unknown'}`, partType: 'agent' }
-
-      case 'subtask':
-        return { content: `Subtask: ${part.description || part.prompt || ''}`, partType: 'subtask' }
-
-      case 'retry':
-        return { content: `Retry #${part.attempt}: ${part.error?.message || JSON.stringify(part.error)}`, partType: 'retry' }
-
-      case 'compaction':
-        return { content: `Context compaction${part.auto ? ' (auto)' : ''}`, partType: 'compaction' }
-
-      case 'snapshot':
-      case 'patch':
-        return null
-
-      default:
-        return { content: part.text || JSON.stringify(part).slice(0, 200), partType: part.type || 'unknown' }
-    }
-  }
-
-  /**
-   * Fetches messages from OpenCode and forwards new parts to the renderer.
-   * Sends each part individually so the UI gets incremental updates.
-   */
-  private async fetchNewMessages(sessionId: string): Promise<void> {
-    const session = this.sessions.get(sessionId)
-    if (!session?.ocClient || !session.ocSessionId) return
-
-    try {
-      const messagesResult: any = await session.ocClient.session.messages({
-        path: { id: session.ocSessionId },
-        ...(session.workspaceDir && { query: { directory: session.workspaceDir } })
-      })
-
-      if (!messagesResult.data || !Array.isArray(messagesResult.data)) return
-
-      let newPartCount = 0
-
-      for (const msg of messagesResult.data) {
-        if (!msg.info) continue
-
-        const msgId = msg.info.id
-        const role = msg.info.role || 'assistant'
-        const parts = msg.parts && Array.isArray(msg.parts) ? msg.parts : []
-        const isCompleted = msg.info.time?.completed != null
-
-        if (!session.seenMessageIds.has(msgId)) {
-          session.seenMessageIds.add(msgId)
-        }
-
-        // Process each part — send new ones, update streaming text/reasoning parts
-        for (const part of parts) {
-          const partId = part.id
-          if (!partId) continue
-
-          const payload = this.buildPartPayload(part)
-          if (payload === null) {
-            session.seenPartIds.add(partId)
-            continue
-          }
-
-          const isUpdatable = part.type === 'text' || part.type === 'reasoning' || part.type === 'tool'
-          // For text/reasoning track content length; for tools track status+output+partType
-          const fingerprint = part.type === 'tool'
-            ? `${part.state?.status}:${payload.partType}:${payload.content.length}:${payload.tool?.output?.length ?? 0}`
-            : String(payload.content.length)
-
-          if (session.seenPartIds.has(partId)) {
-            // Already sent — check if content has changed
-            if (isUpdatable) {
-              const prevFingerprint = session.partContentLengths.get(partId)
-              if (fingerprint !== prevFingerprint) {
-                session.partContentLengths.set(partId, fingerprint)
-                this.sendToRenderer('agent:output', {
-                  sessionId,
-                  taskId: session.taskId,
-                  type: 'message',
-                  data: {
-                    id: partId,
-                    role,
-                    content: payload.content,
-                    partType: payload.partType,
-                    tool: payload.tool,
-                    update: true
-                  }
-                })
-              }
-            }
-            continue
-          }
-
-          session.seenPartIds.add(partId)
-          if (isUpdatable) {
-            session.partContentLengths.set(partId, fingerprint)
-          }
-          newPartCount++
-
-          this.sendToRenderer('agent:output', {
-            sessionId,
-            taskId: session.taskId,
-            type: 'message',
-            data: {
-              id: partId,
-              role,
-              content: payload.content,
-              partType: payload.partType,
-              tool: payload.tool,
-              stepTokens: payload.stepTokens
-            }
-          })
-        }
-
-        // If assistant message has an error, forward it with readable message
-        if (role === 'assistant' && msg.info.error) {
-          const errId = `error-${msgId}`
-          if (!session.seenPartIds.has(errId)) {
-            session.seenPartIds.add(errId)
-            const err = msg.info.error
-            const errMsg = err.data?.message || err.message || err.name || JSON.stringify(err)
-            this.sendToRenderer('agent:output', {
-              sessionId,
-              taskId: session.taskId,
-              type: 'message',
-              data: { id: errId, role: 'system', content: errMsg, partType: 'error' }
-            })
-          }
-        }
-
-        // Empty incomplete assistant message — model hasn't started producing parts yet, just wait
-        if (
-          role === 'assistant' &&
-          !isCompleted &&
-          parts.length === 0 &&
-          !msg.info.error
-        ) {
-          const pendingId = `pending-${msgId}`
-          if (!session.seenPartIds.has(pendingId)) {
-            session.seenPartIds.add(pendingId)
-          }
-        }
-      }
-
-      // Detect completion from messages: if the last assistant message is completed
-      // and session is still 'working', transition to idle
-      if (session.status === 'working') {
-        const lastAssistantMsg = [...messagesResult.data]
-          .reverse()
-          .find((m: any) => m.info?.role === 'assistant')
-
-        if (lastAssistantMsg?.info?.time?.completed) {
-          await this.transitionToIdle(sessionId, session)
-        }
-      }
-    } catch (error) {
-      console.error(`[AgentManager] Error fetching messages for ${sessionId}:`, error)
-    }
-  }
-
-  /**
    * Interrupts the current generation, stops polling, keeps transcript.
    */
   async abortSession(sessionId: string): Promise<void> {
@@ -2114,45 +1376,25 @@ export class AgentManager extends EventEmitter {
 
     console.log(`[AgentManager] Aborting session ${sessionId}`)
 
-    // Stop polling and cancel pending HTTP prompt
+    // Stop polling timer
     if (session.pollTimer) {
       clearTimeout(session.pollTimer)
       session.pollTimer = undefined
     }
-    if (session.promptAbort) {
-      session.promptAbort.abort()
-      session.promptAbort = undefined
-    }
 
-    // Check if using adapter (Codex, Claude Code, etc.)
+    // Abort via adapter
     const adapter = this.getAdapter(session.agentId)
     if (adapter) {
       try {
-        const agent = this.db.getAgent(session.agentId)
-        if (agent) {
-          const sessionConfig = this.buildSessionConfig(session.agentId, session.taskId, session.workspaceDir)
-          await adapter.abortPrompt(sessionId, sessionConfig)
-        }
+        const sessionConfig = await this.buildSessionConfig(session.agentId, session.taskId, session.workspaceDir)
+        await adapter.abortPrompt(sessionId, sessionConfig)
       } catch (error) {
         console.error(`[AgentManager] Error aborting adapter session:`, error)
       }
-    } else if (session.ocClient && session.ocSessionId) {
-      // Legacy OpenCode path
-      try {
-        await session.ocClient.session.abort({
-          path: { id: session.ocSessionId }
-        })
-      } catch (error) {
-        console.error(`[AgentManager] Error aborting session:`, error)
-      }
     }
-
-    // One final message fetch to capture any remaining output
-    await this.fetchNewMessages(sessionId)
 
     session.status = 'idle'
     // Don't change task status on abort - preserve current state
-    // (Previously this incorrectly set status to AgentWorking)
     this.sendToRenderer('agent:status', {
       sessionId,
       agentId: session.agentId,
@@ -2178,31 +1420,15 @@ export class AgentManager extends EventEmitter {
       clearTimeout(session.pollTimer)
       session.pollTimer = undefined
     }
-    if (session.promptAbort) {
-      session.promptAbort.abort()
-      session.promptAbort = undefined
-    }
 
-    // Check if using adapter (Codex, Claude Code, etc.)
+    // Destroy via adapter
     const adapter = this.getAdapter(session.agentId)
     if (adapter) {
       try {
-        const agent = this.db.getAgent(session.agentId)
-        if (agent) {
-          const sessionConfig = this.buildSessionConfig(session.agentId, session.taskId, session.workspaceDir)
-          await adapter.destroySession(sessionId, sessionConfig)
-        }
+        const sessionConfig = await this.buildSessionConfig(session.agentId, session.taskId, session.workspaceDir)
+        await adapter.destroySession(sessionId, sessionConfig)
       } catch (error) {
         console.error(`[AgentManager] Error destroying adapter session:`, error)
-      }
-    } else if (session.ocClient && session.ocSessionId) {
-      // Legacy OpenCode path
-      try {
-        await session.ocClient.session.abort({
-          path: { id: session.ocSessionId }
-        })
-      } catch (error) {
-        console.error(`[AgentManager] Error aborting session:`, error)
       }
     }
 
@@ -2264,28 +1490,32 @@ export class AgentManager extends EventEmitter {
         }
 
         // Send the user's message
-        if (session.adapter) {
-          await this.doSendAdapterMessage(session, sessionId, message)
-        } else {
-          await this.doSendMessage(session, sessionId, message)
-        }
+        await this.doSendAdapterMessage(session, sessionId, message)
         return { newSessionId: sessionId }
       }
     }
 
     if (!session) throw new Error(`Session not found: ${sessionId}`)
 
-    // Check if this is an adapter session or legacy OpenCode
-    if (session.adapter) {
-      await this.doSendAdapterMessage(session, sessionId, message)
-    } else {
-      await this.doSendMessage(session, sessionId, message)
-    }
+    await this.doSendAdapterMessage(session, sessionId, message)
     return {}
   }
 
   private async doSendAdapterMessage(session: AgentSession, sessionId: string, message: string): Promise<void> {
-    if (session.status === 'error') throw new Error('Session is in error state')
+    if (session.status === 'error') {
+      // Check if this is an incompatible session error (non-recoverable)
+      if (session.adapter) {
+        const adapterStatus = await session.adapter.getStatus(sessionId, {} as SessionConfig)
+        if (adapterStatus.message?.includes('INCOMPATIBLE_SESSION_ID')) {
+          throw new Error('Session is in error state: incompatible session')
+        }
+      }
+      // Allow recovery from non-fatal errors (e.g., rate limits)
+      console.log(`[AgentManager] Clearing error state for session ${sessionId} to allow recovery`)
+      session.status = 'working'
+      // Reset polling flag so polling restarts with the new message
+      session.pollingStarted = false
+    }
     if (!session.adapter) throw new Error('Adapter not initialized')
 
     console.log(`[AgentManager] Sending message to adapter session ${sessionId}`)
@@ -2323,7 +1553,8 @@ export class AgentManager extends EventEmitter {
     // Build session config
     const agent = this.db.getAgent(session.agentId)!
     const isMastermind = session.taskId === 'mastermind-session'
-    const mcpServers = this.buildMcpServersForAdapter(session.agentId, { ensureTaskManagement: isMastermind })
+    const isTriageSession = session.isTriageSession || false
+    const mcpServers = await this.buildMcpServersForAdapter(session.agentId, { ensureTaskManagement: isMastermind || isTriageSession })
     const sessionConfig: SessionConfig = {
       agentId: session.agentId,
       taskId: session.taskId,
@@ -2348,63 +1579,6 @@ export class AgentManager extends EventEmitter {
     }
   }
 
-  private async doSendMessage(session: AgentSession, sessionId: string, message: string): Promise<void> {
-    if (session.status === 'error') throw new Error('Session is in error state')
-    if (!session.ocClient || !session.ocSessionId) throw new Error('OpenCode session not initialized')
-
-    console.log(`[AgentManager] Sending message to session ${sessionId}`)
-
-    // Resume working state and restart polling if needed (but preserve AgentLearning if set)
-    session.status = 'working'
-    const currentTask = this.db.getTask(session.taskId)
-    if (currentTask?.status !== TaskStatus.AgentLearning) {
-      this.db.updateTask(session.taskId, { status: TaskStatus.AgentWorking })
-    }
-    this.sendToRenderer('agent:status', {
-      sessionId, agentId: session.agentId, taskId: session.taskId, status: 'working'
-    })
-    if (!session.pollTimer) {
-      this.startPolling(sessionId)
-    }
-
-    // Resolve model from agent config
-    const agent = this.db.getAgent(session.agentId)
-    const agentConfig = agent?.config as any
-    let modelParam: { providerID: string; modelID: string } | undefined
-    if (agentConfig?.model) {
-      const slashIdx = agentConfig.model.indexOf('/')
-      if (slashIdx > 0) {
-        modelParam = {
-          providerID: agentConfig.model.slice(0, slashIdx),
-          modelID: agentConfig.model.slice(slashIdx + 1)
-        }
-      }
-    }
-
-    // Build tool filter
-    const toolsFilter = this.buildToolsFilter(session.agentId)
-
-    // Fire-and-forget prompt via SDK
-    const promptAbort = new AbortController()
-    session.promptAbort = promptAbort
-    session.ocClient.session.prompt({
-      path: { id: session.ocSessionId },
-      body: {
-        parts: [{ type: 'text', text: message }],
-        ...(modelParam && { model: modelParam }),
-        ...(toolsFilter && { tools: toolsFilter })
-      },
-      ...(session.workspaceDir && { query: { directory: session.workspaceDir } }),
-      signal: promptAbort.signal
-    }).catch((err: any) => {
-      if (err.name !== 'AbortError') {
-        console.error('[AgentManager] sendMessage error:', err)
-      }
-    }).finally(() => {
-      session.promptAbort = undefined
-    })
-  }
-
   async respondToPermission(sessionId: string, approved: boolean, message?: string, optionId?: string): Promise<void> {
     const session = this.sessions.get(sessionId)
     if (!session) throw new Error(`Session not found: ${sessionId}`)
@@ -2412,7 +1586,7 @@ export class AgentManager extends EventEmitter {
     const adapter = this.getAdapter(session.agentId)
 
     // --- ACP adapters: use respondToApproval (permission-style options) ---
-    if (adapter && 'respondToApproval' in adapter && typeof (adapter as any).respondToApproval === 'function') {
+    if (adapter && 'respondToApproval' in adapter && typeof (adapter as unknown as AcpAdapter).respondToApproval === 'function') {
       let selectedOption = optionId
       if (!selectedOption && message) {
         const answerMap: Record<string, string> = {
@@ -2424,7 +1598,7 @@ export class AgentManager extends EventEmitter {
         selectedOption = answerMap[message] || (approved ? 'approved' : 'abort')
       }
       console.log(`[AgentManager] Responding to ACP adapter approval with: ${selectedOption}`)
-      await (adapter as any).respondToApproval(sessionId, approved, selectedOption)
+      await (adapter as unknown as AcpAdapter).respondToApproval(sessionId, approved, selectedOption)
       return
     }
 
@@ -2456,21 +1630,44 @@ export class AgentManager extends EventEmitter {
 
       console.log(`[AgentManager] Responding to question via adapter for session ${sessionId}:`, answers)
 
-      const adapterConfig = this.buildSessionConfig(session.agentId, session.taskId, session.workspaceDir)
+      // Update session and task state before sending
+      session.status = 'working'
+      const currentTask = this.db.getTask(session.taskId)
+      if (currentTask?.status !== TaskStatus.AgentLearning) {
+        this.db.updateTask(session.taskId, { status: TaskStatus.AgentWorking })
+      }
+      this.sendToRenderer('agent:status', {
+        sessionId, agentId: session.agentId, taskId: session.taskId, status: 'working'
+      })
+
+      // Show user's answer in UI
+      if (message) {
+        this.sendToRenderer('agent:output', {
+          sessionId,
+          taskId: session.taskId,
+          type: 'message',
+          data: {
+            id: `user-answer-${Date.now()}`,
+            role: 'user',
+            content: message,
+            partType: 'text'
+          }
+        })
+      }
+
+      const adapterConfig = await this.buildSessionConfig(session.agentId, session.taskId, session.workspaceDir)
       await adapter.respondToQuestion(sessionId, answers, adapterConfig)
+
+      // Restart polling if it was stopped (session may have gone idle before answer)
+      if (!session.pollingStarted && session.adapter) {
+        console.log(`[AgentManager] Restarting polling after question answer for session ${sessionId}`)
+        session.pollingStarted = true
+        this.startAdapterPolling(sessionId, session.adapter, adapterConfig)
+      }
       return
     }
 
-    // --- Legacy OpenCode path (no adapter) ---
-    console.log(`[AgentManager] Permission ${approved ? 'approved' : 'rejected'} for session ${sessionId} (legacy path)`)
-    if (approved && message) {
-      await this.sendMessage(sessionId, message, session.taskId, session.agentId)
-    } else {
-      session.status = approved ? 'working' : 'idle'
-      this.sendToRenderer('agent:status', {
-        sessionId, agentId: session.agentId, taskId: session.taskId, status: session.status
-      })
-    }
+    console.warn(`[AgentManager] No adapter handler for permission response in session ${sessionId}`)
   }
 
   stopAllSessions(): void {
@@ -2553,7 +1750,7 @@ export class AgentManager extends EventEmitter {
         stderrBuf += chunk.toString()
       })
 
-      const handleMessage = (msg: any): void => {
+      const handleMessage = (msg: { id?: number; error?: { message?: string }; result?: { tools?: { name?: string; description?: string }[] } }): void => {
         if (msg.error) {
           finish({ status: 'failed', error: msg.error.message || JSON.stringify(msg.error) })
           return
@@ -2566,7 +1763,7 @@ export class AgentManager extends EventEmitter {
           proc.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list' }) + '\n')
         } else if (phase === 'tools' && msg.id === 2 && msg.result) {
           const rawTools = Array.isArray(msg.result.tools) ? msg.result.tools : []
-          const tools = rawTools.map((t: any) => ({ name: t.name || '', description: t.description || '' }))
+          const tools = rawTools.map((t) => ({ name: t.name || '', description: t.description || '' }))
           finish({ status: 'connected', toolCount: tools.length, tools })
         }
       }
@@ -2663,19 +1860,19 @@ export class AgentManager extends EventEmitter {
         })
         const toolsData = await toolsRes.json()
         const rawTools = Array.isArray(toolsData.result?.tools) ? toolsData.result.tools : []
-        const tools = rawTools.map((t: any) => ({ name: t.name || '', description: t.description || '' }))
+        const tools = rawTools.map((t: { name?: string; description?: string }) => ({ name: t.name || '', description: t.description || '' }))
         return { status: 'connected', toolCount: tools.length, tools }
       }
 
       // Non-JSON response (SSE or other) — server is reachable but uses SSE transport
       return { status: 'connected' }
-    } catch (error: any) {
-      return { status: 'failed', error: error?.message || 'Connection failed' }
+    } catch (error: unknown) {
+      return { status: 'failed', error: error instanceof Error ? error.message : 'Connection failed' }
     }
   }
 
 
-  async getProviders(serverUrl?: string, directory?: string): Promise<{ providers: any[]; default: Record<string, string> } | null> {
+  async getProviders(serverUrl?: string, directory?: string): Promise<{ providers: { id: string; name: string; [key: string]: unknown }[]; default: Record<string, string> } | null> {
     await this.ensureSDKLoaded()
     if (!OpenCodeSDK) return null
 
@@ -2699,16 +1896,16 @@ export class AgentManager extends EventEmitter {
           console.log('[AgentManager] Checking for OpenCode server to fetch providers...')
           await this.startServer(baseUrl)
         }
-      } catch (serverError: any) {
-        console.log('[AgentManager] No OpenCode server available:', serverError.message)
+      } catch (serverError: unknown) {
+        console.log('[AgentManager] No OpenCode server available:', serverError instanceof Error ? serverError.message : serverError)
         return null // No server, no providers - this is OK during onboarding
       }
 
       // Default to home directory so project-scoped OpenCode configs are picked up
       const dir = directory || homedir()
 
-      const ocClient = OpenCodeSDK.createOpencodeClient({ baseUrl, fetch: noTimeoutFetch as any })
-      const result: any = await ocClient.config.providers({
+      const ocClient = OpenCodeSDK.createOpencodeClient({ baseUrl, fetch: noTimeoutFetch })
+      const result = await ocClient.config.providers({
         query: { directory: dir }
       })
 
@@ -2717,10 +1914,11 @@ export class AgentManager extends EventEmitter {
         return null
       }
 
-      console.log('[AgentManager] Found providers:', result.data?.providers?.map((p: any) => p.id))
-      return result.data || null
-    } catch (error: any) {
-      console.log('[AgentManager] Could not get providers:', error.message)
+      const data = result.data as { providers?: { id: string; name: string; [key: string]: unknown }[]; default?: Record<string, string> } | undefined
+      console.log('[AgentManager] Found providers:', data?.providers?.map((p) => p.id))
+      return data ? { providers: data.providers || [], default: data.default || {} } : null
+    } catch (error: unknown) {
+      console.log('[AgentManager] Could not get providers:', error instanceof Error ? error.message : error)
       return null // Gracefully return null - no providers available
     }
   }
@@ -2761,7 +1959,7 @@ export class AgentManager extends EventEmitter {
     return lines.join('\n')
   }
 
-  private buildTriagePrompt(task: any): string {
+  private buildTriagePrompt(task: TaskRecord): string {
     return `You are triaging a new task. Your job is to analyze this task and assign the best agent, skills, repos, priority, and labels. Do NOT work on the task itself.
 
 Task ID: ${task.id}
@@ -2808,7 +2006,7 @@ Important:
 
     try {
       // Use standardized getAllMessages from adapter
-      let messages: any[] = []
+      let messages: SessionMessage[] = []
 
       if (session.adapter.getAllMessages) {
         messages = await session.adapter.getAllMessages(sessionId, {
@@ -2828,7 +2026,7 @@ Important:
       }
 
       // Filter for assistant messages
-      const assistantMessages = messages.filter((m: any) => m.role === 'assistant')
+      const assistantMessages = messages.filter((m) => m.role === 'assistant')
       console.log(`[AgentManager] Found ${assistantMessages.length} assistant messages`)
 
       let parsedValues: Record<string, unknown> = {}
@@ -2839,9 +2037,9 @@ Important:
         if (!msg.parts) continue
         for (const part of msg.parts) {
           if (part.type !== 'tool' || part.state?.status !== 'completed') continue
-          const toolName = (part.tool || '').toLowerCase()
+          const toolName = (typeof part.tool === 'string' ? part.tool : part.tool?.name || '').toLowerCase()
           if (toolName === 'write' || toolName === 'edit' || toolName === 'create_file') {
-            const input = part.state?.input || {}
+            const input = (part.state?.input || {}) as Record<string, string | undefined>
             const filePath = input.file_path || input.path || input.filename
             if (filePath) writtenFiles.push(filePath)
           }
@@ -2858,7 +2056,7 @@ Important:
         if (!msg.parts) continue
 
         // Debug: log part types and small text samples
-        msg.parts.forEach((p: any, idx: number) => {
+        msg.parts.forEach((p, idx) => {
           console.log(`[AgentManager]   Part ${idx}: type=${p.type}, hasText=${!!p.text}, textLength=${p.text?.length || 0}`)
           // Log small text parts in full, large ones as preview
           if (p.text) {
@@ -2871,8 +2069,8 @@ Important:
         })
 
         const fullText = msg.parts
-          .filter((p: any) => p.type === 'text' && p.text)
-          .map((p: any) => p.text)
+          .filter((p) => p.type === 'text' && p.text)
+          .map((p) => p.text)
           .join('\n')
 
         console.log(`[AgentManager] Full text length: ${fullText.length}`)
@@ -3135,57 +2333,16 @@ Important:
   }
 
   /**
-   * Sends feedback to the agent, waits for completion, syncs skills, and cleans up.
-   * Runs entirely on main process — renderer can fire-and-forget.
+   * Syncs skills from workspace and cleans up session.
    * Does NOT change task status at any point.
    */
-  async learnFromSession(sessionId: string, feedbackMessage: string): Promise<{ created: string[]; updated: string[]; unchanged: string[] }> {
+  async learnFromSession(sessionId: string, _feedbackMessage: string): Promise<{ created: string[]; updated: string[]; unchanged: string[] }> {
     const session = this.sessions.get(sessionId)
-    if (!session?.ocClient || !session.ocSessionId) {
+    if (!session) {
       return { created: [], updated: [], unchanged: [] }
     }
 
     console.log(`[AgentManager] Learning from session ${sessionId}`)
-    session.learningMode = true
-
-    // Resolve model from agent config
-    const agent = this.db.getAgent(session.agentId)
-    const agentConfig = agent?.config as any
-    let modelParam: { providerID: string; modelID: string } | undefined
-    if (agentConfig?.model) {
-      const slashIdx = agentConfig.model.indexOf('/')
-      if (slashIdx > 0) {
-        modelParam = {
-          providerID: agentConfig.model.slice(0, slashIdx),
-          modelID: agentConfig.model.slice(slashIdx + 1)
-        }
-      }
-    }
-
-    const toolsFilter = this.buildToolsFilter(session.agentId)
-
-    // Send feedback prompt — await blocks until agent finishes
-    try {
-      await session.ocClient.session.prompt({
-        path: { id: session.ocSessionId },
-        body: {
-          parts: [{ type: 'text', text: feedbackMessage }],
-          ...(modelParam && { model: modelParam }),
-          ...(toolsFilter && { tools: toolsFilter })
-        },
-        ...(session.workspaceDir && { query: { directory: session.workspaceDir } })
-      })
-    } catch (err: any) {
-      if (err.name !== 'AbortError') {
-        console.error('[AgentManager] learnFromSession prompt error:', err)
-      }
-    }
-
-    // Stop polling
-    if (session.pollTimer) {
-      clearTimeout(session.pollTimer)
-      session.pollTimer = undefined
-    }
 
     // Sync skills from workspace
     const result = this.syncSkillsFromWorkspace(sessionId)

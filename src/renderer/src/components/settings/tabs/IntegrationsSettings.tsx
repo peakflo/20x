@@ -7,14 +7,14 @@ import { useMcpStore } from '@/stores/mcp-store'
 import { useTaskSourceStore } from '@/stores/task-source-store'
 import { useTaskStore } from '@/stores/task-store'
 import { pluginApi } from '@/lib/ipc-client'
-import type { CreateTaskSourceDTO, PluginMeta } from '@/types'
+import type { CreateTaskSourceDTO, PluginMeta, TaskSource } from '@/types'
 
 export function IntegrationsSettings() {
   const { servers: mcpServers } = useMcpStore()
   const { sources, syncingIds, createSource, updateSource, deleteSource, syncSource } = useTaskSourceStore()
   const { fetchTasks } = useTaskStore()
   const [plugins, setPlugins] = useState<PluginMeta[]>([])
-  const [tsDialog, setTsDialog] = useState<{ open: boolean; source?: any }>({ open: false })
+  const [tsDialog, setTsDialog] = useState<{ open: boolean; source?: TaskSource }>({ open: false })
   const [oauthStatus, setOauthStatus] = useState<Map<string, boolean>>(new Map())
 
   // Check if there are any plugins that don't require MCP servers (like Linear, HubSpot)

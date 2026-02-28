@@ -577,6 +577,12 @@ export class DatabaseManager {
       this.runMigrations()
       this.setSchemaVersion(SCHEMA_VERSION)
     }
+
+    // These must run on EVERY startup (not just during migrations)
+    // because they start runtime services (task API server) and
+    // ensure default records exist (MCP server, orchestrator skill).
+    this.initializeTaskManagementMcpServer()
+    this.initializeOrchestratorSkill()
   }
 
   private getSchemaVersion(): number {
@@ -1016,12 +1022,6 @@ export class DatabaseManager {
         VALUES (?, ?, ?, ?, 1, ?, ?)
       `).run(createId(), 'Default Agent', 'http://localhost:4096', '{}', now, now)
     }
-
-    // Initialize task management MCP server for default agent
-    this.initializeTaskManagementMcpServer()
-
-    // Initialize orchestrator skill
-    this.initializeOrchestratorSkill()
   }
 
   private initializeOrchestratorSkill(): void {
@@ -1128,14 +1128,14 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
       .get() as { id: string; config: string } | undefined
 
     if (defaultAgent) {
-      let config: any
+      let config: Record<string, unknown>
       try {
-        config = JSON.parse(defaultAgent.config)
+        config = JSON.parse(defaultAgent.config) as Record<string, unknown>
       } catch {
         config = {}
       }
 
-      const skillIds = config.skill_ids || []
+      const skillIds = (config.skill_ids as string[]) || []
       if (!skillIds.includes(skillId)) {
         skillIds.push(skillId)
         config.skill_ids = skillIds
@@ -1223,16 +1223,16 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
     ).get() as { id: string; config: string } | undefined
 
     if (defaultAgent) {
-      let config: any
+      let config: Record<string, unknown>
       try {
-        config = JSON.parse(defaultAgent.config)
+        config = JSON.parse(defaultAgent.config) as Record<string, unknown>
       } catch {
         config = {}
       }
 
-      const mcpServers = config.mcp_servers || []
+      const mcpServers = (config.mcp_servers as Array<string | { serverId: string }>) || []
       // Check if already present (either as string ID or AgentMcpServerEntry)
-      const alreadyPresent = mcpServers.some((s: any) =>
+      const alreadyPresent = mcpServers.some((s: string | { serverId: string }) =>
         typeof s === 'string' ? s === mcpServerId : s.serverId === mcpServerId
       )
 
@@ -1254,8 +1254,8 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
     const now = new Date().toISOString()
 
     for (const agent of agents) {
-      let config: any
-      try { config = JSON.parse(agent.config) } catch { continue }
+      let config: Record<string, unknown>
+      try { config = JSON.parse(agent.config) as Record<string, unknown> } catch { continue }
 
       if (!Array.isArray(config.mcp_servers) || config.mcp_servers.length === 0) continue
       // Already migrated if first element is a string (ID) or an AgentMcpServerEntry object

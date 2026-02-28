@@ -215,7 +215,7 @@ export class HubSpotClient {
       let after: number = 0
 
       // Build filter groups
-      const filters: any[] = []
+      const filters: Array<{ propertyName: string; operator: string; value: string }> = []
 
       // Add modified date filter if specified
       if (modifiedAfter) {
@@ -244,7 +244,7 @@ export class HubSpotClient {
         })
       }
 
-      const filterGroups: any[] = filters.length > 0 ? [{ filters }] : []
+      const filterGroups = filters.length > 0 ? [{ filters }] : []
 
       // Fetch all pipelines to filter by OPEN stages
       let openStageIds: string[] = []
@@ -259,7 +259,7 @@ export class HubSpotClient {
       // Paginate through search results
       while (true) {
         const searchResponse = await this.client.crm.tickets.searchApi.doSearch({
-          filterGroups: filterGroups.length > 0 ? filterGroups : undefined,
+          filterGroups: filterGroups.length > 0 ? filterGroups as Parameters<typeof this.client.crm.tickets.searchApi.doSearch>[0]['filterGroups'] : undefined,
           properties: TICKET_PROPERTIES,
           limit: 100,
           after: after > 0 ? String(after) : undefined

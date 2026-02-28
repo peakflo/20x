@@ -4,6 +4,39 @@ import type { DatabaseManager, RecurrencePatternRecord, RecurrencePatternObject,
 import { createId } from '@paralleldrive/cuid2'
 import { TaskStatus } from '../shared/constants'
 
+/** Raw row shape returned by SQLite for the tasks table (before JSON deserialization). */
+interface RawTaskRow {
+  id: string
+  title: string
+  description: string
+  type: string
+  priority: string
+  status: string
+  assignee: string
+  due_date: string | null
+  labels: string
+  attachments: string
+  repos: string
+  output_fields: string
+  agent_id: string | null
+  external_id: string | null
+  source_id: string | null
+  source: string
+  skill_ids: string | null
+  session_id: string | null
+  snoozed_until: string | null
+  resolution: string | null
+  feedback_rating: number | null
+  feedback_comment: string | null
+  is_recurring: number
+  recurrence_pattern: string | null
+  recurrence_parent_id: string | null
+  last_occurrence_at: string | null
+  next_occurrence_at: string | null
+  created_at: string
+  updated_at: string
+}
+
 /**
  * RecurrenceScheduler - Manages automatic creation of recurring task instances
  *
@@ -102,7 +135,7 @@ export class RecurrenceScheduler {
           AND next_occurrence_at IS NOT NULL
           AND next_occurrence_at <= ?
         ORDER BY next_occurrence_at ASC
-      `).all(now) as any[]
+      `).all(now) as RawTaskRow[]
 
       if (dueTemplates.length === 0) {
         return
@@ -330,7 +363,7 @@ export class RecurrenceScheduler {
     return new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate()
   }
 
-  private deserializeTaskRow(row: any): TaskRecord {
+  private deserializeTaskRow(row: RawTaskRow): TaskRecord {
     return {
       ...row,
       labels: JSON.parse(row.labels || '[]'),

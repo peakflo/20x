@@ -110,7 +110,7 @@ export const agentSessionApi = {
 }
 
 export const agentConfigApi = {
-  getProviders: (serverUrl?: string): Promise<{ providers: any[]; default: Record<string, string> } | null> => {
+  getProviders: (serverUrl?: string): Promise<{ providers: { id: string; name: string; models: unknown }[]; default: Record<string, string> } | null> => {
     return window.electronAPI.agentConfig.getProviders(serverUrl)
   }
 }
