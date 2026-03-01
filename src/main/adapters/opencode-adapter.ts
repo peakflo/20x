@@ -33,6 +33,8 @@ export class OpencodeAdapter implements CodingAgentAdapter {
   private clients: Map<string, OpencodeClient> = new Map() // sessionId -> ocClient
   private v2Client: V2OpencodeClient | null = null
   private promptAborts: Map<string, AbortController> = new Map()
+  /** Tracks which env var keys were injected per session, for cleanup on destroy */
+  private sessionSecretKeys: Map<string, string[]> = new Map()
 
   constructor() {
     this.sdkLoading = this.loadSDK()
@@ -247,6 +249,10 @@ export class OpencodeAdapter implements CodingAgentAdapter {
       }
     }
 
+    // Inject secret env vars into process.env so OpenCode bash commands inherit them.
+    // The server runs in-process, so child processes (bash) see process.env changes immediately.
+    this.injectSecretEnvVars(config)
+
     // Create OpenCode session
     const result = await ocClient.session.create({
       body: { title: `Task ${config.taskId}` },
@@ -263,6 +269,10 @@ export class OpencodeAdapter implements CodingAgentAdapter {
 
     const ocSessionId = result.data.id
     this.clients.set(ocSessionId, ocClient)
+    // Track injected keys for cleanup
+    if (config.secretEnvVars) {
+      this.sessionSecretKeys.set(ocSessionId, Object.keys(config.secretEnvVars))
+    }
 
     return ocSessionId
   }
@@ -281,6 +291,12 @@ export class OpencodeAdapter implements CodingAgentAdapter {
 
     if (getResult.error || !getResult.data) {
       throw new Error('Session no longer exists on server')
+    }
+
+    // Inject secret env vars for this session
+    this.injectSecretEnvVars(config)
+    if (config.secretEnvVars) {
+      this.sessionSecretKeys.set(sessionId, Object.keys(config.secretEnvVars))
     }
 
     this.clients.set(sessionId, ocClient)
@@ -531,6 +547,30 @@ export class OpencodeAdapter implements CodingAgentAdapter {
   async destroySession(sessionId: string, _config: SessionConfig): Promise<void> {
     await this.abortPrompt(sessionId, _config)
     this.clients.delete(sessionId)
+
+    // Clean up injected secret env vars
+    const keys = this.sessionSecretKeys.get(sessionId)
+    if (keys) {
+      for (const key of keys) {
+        delete process.env[key]
+      }
+      this.sessionSecretKeys.delete(sessionId)
+      console.log(`[OpencodeAdapter] Cleaned up ${keys.length} secret env var(s) for session ${sessionId}`)
+    }
+  }
+
+  /**
+   * Injects secret env vars into process.env.
+   * The OpenCode server runs in-process, so bash child processes
+   * inherit process.env changes immediately.
+   */
+  private injectSecretEnvVars(config: SessionConfig): void {
+    if (config.secretEnvVars && Object.keys(config.secretEnvVars).length > 0) {
+      for (const [key, value] of Object.entries(config.secretEnvVars)) {
+        process.env[key] = value
+      }
+      console.log(`[OpencodeAdapter] Secret env vars injected: [${Object.keys(config.secretEnvVars).join(', ')}]`)
+    }
   }
 
   async getAllMessages(sessionId: string, config: SessionConfig): Promise<SessionMessage[]> {
