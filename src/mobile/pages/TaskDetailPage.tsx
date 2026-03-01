@@ -192,8 +192,8 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
           )}
         </div>
 
-        {/* Transcript preview — matches desktop transcript panel style */}
-        {hasMessages && (
+        {/* Transcript — always show link when agent is assigned */}
+        {task.agent_id && (
           <div className="px-4 py-3">
             <button
               onClick={() => onNavigate({ page: 'conversation', taskId })}
@@ -204,21 +204,25 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
                   <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" x2="20" y1="19" y2="19"/></svg>
                   Agent Transcript
                 </span>
-                <span className="text-xs text-primary">View all →</span>
+                <span className="text-xs text-primary">Open →</span>
               </div>
             </button>
-            <div className="space-y-2 bg-[#0d1117] rounded-md border border-border/50 p-3">
-              {previewMessages.map((msg) => (
-                <MessageBubble key={msg.id} message={msg} />
-              ))}
-            </div>
-            {session!.messages.length > 3 && (
-              <button
-                onClick={() => onNavigate({ page: 'conversation', taskId })}
-                className="w-full text-center text-xs text-primary mt-2 py-2 active:opacity-60 font-mono"
-              >
-                View all {session!.messages.length} messages
-              </button>
+            {hasMessages && (
+              <>
+                <div className="space-y-2 bg-[#0d1117] rounded-md border border-border/50 p-3">
+                  {previewMessages.map((msg) => (
+                    <MessageBubble key={msg.id} message={msg} />
+                  ))}
+                </div>
+                {session!.messages.length > 3 && (
+                  <button
+                    onClick={() => onNavigate({ page: 'conversation', taskId })}
+                    className="w-full text-center text-xs text-primary mt-2 py-2 active:opacity-60 font-mono"
+                  >
+                    View all {session!.messages.length} messages
+                  </button>
+                )}
+              </>
             )}
           </div>
         )}
