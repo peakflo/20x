@@ -631,4 +631,10 @@ export function registerIpcHandlers(
     await db.setSetting('minimize_to_tray', enabled.toString())
     return enabled
   })
+
+  // Mobile web UI info
+  ipcMain.handle('mobile:getInfo', () => {
+    const port = 20620
+    return { url: `http://localhost:${port}`, port }
+  })
 }

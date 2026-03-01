@@ -19,6 +19,7 @@ import { registerIpcHandlers } from './ipc-handlers'
 import { RecurrenceScheduler } from './recurrence-scheduler'
 import { setTaskApiNotifier } from './task-api-server'
 import { startSecretBroker, stopSecretBroker, writeSecretShellWrapper } from './secret-broker'
+import { startMobileApiServer, stopMobileApiServer, broadcastToMobileClients } from './mobile-api-server'
 
 let mainWindow: BrowserWindow | null = null
 let tray: Tray | null = null
@@ -264,6 +265,15 @@ app.whenReady().then(async () => {
     console.error('[Main] Failed to start secret broker:', err)
   }
 
+  // Start mobile API server
+  try {
+    agentManager.addExternalListener(broadcastToMobileClients)
+    const mobilePort = await startMobileApiServer(db, agentManager, githubManager!)
+    console.log(`[Main] Mobile API server started on port ${mobilePort}`)
+  } catch (err) {
+    console.error('[Main] Failed to start mobile API server:', err)
+  }
+
   // Check gh CLI status on startup (log only)
   githubManager.checkGhCli().then((status) => {
     console.log('[GitHub] CLI status:', status)
@@ -287,6 +297,7 @@ app.on('window-all-closed', () => {
   agentManager?.stopServer()
   oauthManager?.destroy()
   stopSecretBroker()
+  stopMobileApiServer()
 
   if (process.platform !== 'darwin') {
     app.quit()
