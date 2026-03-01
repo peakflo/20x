@@ -13,18 +13,7 @@ export default defineConfig({
     }
   },
   server: {
-    port: 5174,
-    // Proxy API and WebSocket requests to the Electron mobile-api-server
-    proxy: {
-      '/api': {
-        target: 'http://localhost:20620',
-        changeOrigin: true
-      },
-      '/ws': {
-        target: 'ws://localhost:20620',
-        ws: true
-      }
-    }
+    port: 5174
   },
   build: {
     outDir: resolve(__dirname, 'out/mobile'),
