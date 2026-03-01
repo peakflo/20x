@@ -39,8 +39,6 @@ export class OpencodeAdapter implements CodingAgentAdapter {
   private pluginFilePath: string | null = null
   /** Absolute path to the secrets exports file (read dynamically by the plugin) */
   private secretsExportsPath: string | null = null
-  /** Whether the current running server has our secret-injector plugin loaded */
-  private pluginLoadedInServer = false
 
   constructor() {
     this.sdkLoading = this.loadSDK()
@@ -119,14 +117,7 @@ export class OpencodeAdapter implements CodingAgentAdapter {
   private async ensureServerRunning(targetUrl: string = DEFAULT_SERVER_URL): Promise<void> {
     if (this.serverUrl) {
       if (this.serverUrl === targetUrl) {
-        // Restart embedded server if we have a plugin that wasn't loaded yet
-        if (this.pluginFilePath && !this.pluginLoadedInServer && this.serverInstance) {
-          console.log('[OpencodeAdapter] Restarting embedded server to load secret-injector plugin')
-          await this.stopServer()
-          // Fall through to start a new server
-        } else {
-          return
-        }
+        return
       }
     }
 
@@ -140,15 +131,11 @@ export class OpencodeAdapter implements CodingAgentAdapter {
 
     this.serverStarting = (async () => {
       try {
-        // Skip external server check if we need to start our own embedded server with plugins
-        const needsEmbeddedWithPlugin = this.pluginFilePath && !this.pluginLoadedInServer
-        if (!needsEmbeddedWithPlugin) {
-          const accessibleUrl = await this.findAccessibleServer(targetUrl)
-          if (accessibleUrl) {
-            this.serverUrl = accessibleUrl
-            this.serverInstance = null
-            return
-          }
+        const accessibleUrl = await this.findAccessibleServer(targetUrl)
+        if (accessibleUrl) {
+          this.serverUrl = accessibleUrl
+          this.serverInstance = null
+          return
         }
 
         if (!isDefaultUrl) {
@@ -170,9 +157,6 @@ export class OpencodeAdapter implements CodingAgentAdapter {
         const result = await OpenCodeSDK!.createOpencode({ hostname, port, config: serverConfig })
         this.serverInstance = result.server
         this.serverUrl = targetUrl
-        if (this.pluginFilePath) {
-          this.pluginLoadedInServer = true
-        }
 
         await new Promise(resolve => setTimeout(resolve, 1000))
       } finally {
@@ -193,6 +177,20 @@ export class OpencodeAdapter implements CodingAgentAdapter {
 
     const baseUrl = this.serverUrl || config.serverUrl || DEFAULT_SERVER_URL
     const ocClient = OpenCodeSDK!.createOpencodeClient({ baseUrl, fetch: noTimeoutFetch as unknown as (request: Request) => ReturnType<typeof fetch> })
+
+    // Register secret-injector plugin via config.update() so the running server loads it
+    // for this workspace directory — no server restart needed.
+    if (this.pluginFilePath && config.workspaceDir) {
+      try {
+        await ocClient.config.update({
+          body: { plugin: [this.pluginFilePath] } as Record<string, unknown>,
+          ...(config.workspaceDir && { query: { directory: config.workspaceDir } })
+        })
+        console.log(`[OpencodeAdapter] Registered plugin via config.update: ${this.pluginFilePath}`)
+      } catch (err) {
+        console.warn(`[OpencodeAdapter] config.update for plugin failed (will rely on startup loading):`, err)
+      }
+    }
 
     // Register MCP servers BEFORE creating session so the session picks them up
     if (config.mcpServers) {
@@ -309,6 +307,19 @@ export class OpencodeAdapter implements CodingAgentAdapter {
 
     const baseUrl = this.serverUrl || config.serverUrl || DEFAULT_SERVER_URL
     const ocClient = OpenCodeSDK!.createOpencodeClient({ baseUrl, fetch: noTimeoutFetch as unknown as (request: Request) => ReturnType<typeof fetch> })
+
+    // Register secret-injector plugin for this workspace
+    if (this.pluginFilePath && config.workspaceDir) {
+      try {
+        await ocClient.config.update({
+          body: { plugin: [this.pluginFilePath] } as Record<string, unknown>,
+          ...(config.workspaceDir && { query: { directory: config.workspaceDir } })
+        })
+        console.log(`[OpencodeAdapter] Registered plugin via config.update: ${this.pluginFilePath}`)
+      } catch (err) {
+        console.warn(`[OpencodeAdapter] config.update for plugin failed:`, err)
+      }
+    }
 
     // Validate session exists
     const getResult = await ocClient.session.get({
@@ -797,7 +808,6 @@ export class OpencodeAdapter implements CodingAgentAdapter {
       }
       this.serverInstance = null
       this.serverUrl = null
-      this.pluginLoadedInServer = false
     }
   }
 }
