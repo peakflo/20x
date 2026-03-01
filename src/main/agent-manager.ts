@@ -5,7 +5,7 @@ import { join, delimiter } from 'path'
 import { existsSync, copyFileSync, mkdirSync, writeFileSync, readFileSync, readdirSync, statSync } from 'fs'
 import { Agent as UndiciAgent } from 'undici'
 import type { BrowserWindow } from 'electron'
-import type { DatabaseManager, AgentConfigRecord, AgentMcpServerEntry, OutputFieldRecord, SkillRecord, TaskRecord } from './database'
+import type { DatabaseManager, AgentConfigRecord, AgentMcpServerEntry, OutputFieldRecord, SecretRecord, SkillRecord, TaskRecord } from './database'
 import { TaskStatus } from '../shared/constants'
 import type { WorktreeManager } from './worktree-manager'
 import type { GitHubManager } from './github-manager'
@@ -288,20 +288,43 @@ export class AgentManager extends EventEmitter {
       }
     }
 
-    // Also populate direct env vars (for runtimes that don't respect $SHELL)
+    // Populate secret env vars and system prompt awareness
     const secretIds = (agent.config as AgentConfigRecord)?.secret_ids
     if (secretIds && secretIds.length > 0) {
-      const secrets = this.db.getSecretsWithValues(secretIds)
-      if (secrets.length > 0) {
+      const secretRecords = this.db.getSecretsByIds(secretIds)
+      const secretsWithValues = this.db.getSecretsWithValues(secretIds)
+
+      // Attach decrypted values for injection (hooks or direct env)
+      if (secretsWithValues.length > 0) {
         config.secretEnvVars = {}
-        for (const s of secrets) {
+        for (const s of secretsWithValues) {
           config.secretEnvVars[s.env_var_name] = s.value
         }
-        console.log(`[AgentManager] buildSessionConfig: attached ${secrets.length} secret env var(s): [${secrets.map(s => s.env_var_name).join(', ')}]`)
+      }
+
+      // Append secret awareness to system prompt so the agent knows what's available
+      if (secretRecords.length > 0) {
+        config.systemPrompt = (config.systemPrompt || '') + this.buildSecretsSystemPrompt(secretRecords)
       }
     }
 
     return config
+  }
+
+  /**
+   * Builds a system prompt snippet describing available secrets.
+   * Tells the agent which env vars exist and how to use them in bash commands.
+   */
+  private buildSecretsSystemPrompt(secrets: SecretRecord[]): string {
+    let prompt = '\n\n## Available Secrets\n\n'
+    prompt += 'The following environment variables are automatically injected into every bash command you run. '
+    prompt += 'Use them with `$VAR_NAME` in bash — do NOT hardcode, echo, or log their values.\n\n'
+    for (const s of secrets) {
+      prompt += `- \`$${s.env_var_name}\` — ${s.name}`
+      if (s.description) prompt += `: ${s.description}`
+      prompt += '\n'
+    }
+    return prompt
   }
 
   /**
@@ -903,15 +926,19 @@ export class AgentManager extends EventEmitter {
       }
     }
 
-    // Populate direct env vars (for runtimes that don't respect $SHELL)
+    // Populate secret env vars + system prompt awareness
     const secretIds = (agent.config as AgentConfigRecord)?.secret_ids
     if (secretIds && secretIds.length > 0) {
-      const secrets = this.db.getSecretsWithValues(secretIds)
-      if (secrets.length > 0) {
+      const secretRecords = this.db.getSecretsByIds(secretIds)
+      const secretsWithValues = this.db.getSecretsWithValues(secretIds)
+      if (secretsWithValues.length > 0) {
         sessionConfig.secretEnvVars = {}
-        for (const s of secrets) {
+        for (const s of secretsWithValues) {
           sessionConfig.secretEnvVars[s.env_var_name] = s.value
         }
+      }
+      if (secretRecords.length > 0) {
+        sessionConfig.systemPrompt = (sessionConfig.systemPrompt || '') + this.buildSecretsSystemPrompt(secretRecords)
       }
     }
 
@@ -1279,15 +1306,19 @@ export class AgentManager extends EventEmitter {
       }
     }
 
-    // Populate direct env vars (for runtimes that don't respect $SHELL)
+    // Populate secret env vars + system prompt awareness
     const secretIds = (agent.config as AgentConfigRecord)?.secret_ids
     if (secretIds && secretIds.length > 0) {
-      const secrets = this.db.getSecretsWithValues(secretIds)
-      if (secrets.length > 0) {
+      const secretRecords = this.db.getSecretsByIds(secretIds)
+      const secretsWithValues = this.db.getSecretsWithValues(secretIds)
+      if (secretsWithValues.length > 0) {
         sessionConfig.secretEnvVars = {}
-        for (const s of secrets) {
+        for (const s of secretsWithValues) {
           sessionConfig.secretEnvVars[s.env_var_name] = s.value
         }
+      }
+      if (secretRecords.length > 0) {
+        sessionConfig.systemPrompt = (sessionConfig.systemPrompt || '') + this.buildSecretsSystemPrompt(secretRecords)
       }
     }
 
