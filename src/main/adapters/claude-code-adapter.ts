@@ -124,7 +124,7 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
     console.log(`[ClaudeCodeAdapter] Registering PreToolUse hook for secrets: [${Object.keys(secretEnvVars).join(', ')}]`)
 
     const hook: HookCallback = async (input) => {
-      const toolInput = input.tool_input as Record<string, unknown> | undefined
+      const toolInput = ('tool_input' in input ? input.tool_input : undefined) as Record<string, unknown> | undefined
       if (!toolInput?.command) {
         return {}
       }
@@ -997,9 +997,17 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
       // Content is nested inside message.content for Claude Code SDK format
       const content = msgWithProps.message?.content || (Array.isArray(msgWithProps.content) ? msgWithProps.content : [])
 
-      for (const block of content) {
+      // Use the stable API message ID (e.g. msg_01FG7...) for dedup, not the streaming UUID.
+      // Claude Code sends multiple streaming chunks with different UUIDs but the same API message ID
+      // and the same text block, which would otherwise create duplicate text bubbles in the UI.
+      const stableId = msgWithProps.message?.id || msgWithProps.uuid || msgWithProps.type
+
+      for (let blockIdx = 0; blockIdx < content.length; blockIdx++) {
+        const block = content[blockIdx]
         const blockWithProps = block as { type?: string; text?: string; name?: string; input?: unknown; id?: string }
-        const partId = `${msgWithProps.uuid || msgWithProps.type}-${blockWithProps.type}-${blockWithProps.id || Date.now()}`
+        // For text blocks (no id), use stable message ID + block index for consistent dedup.
+        // For tool_use blocks, blockWithProps.id is the tool_use_id which is already stable.
+        const partId = `${stableId}-${blockWithProps.type}-${blockWithProps.id || blockIdx}`
         if (seenPartIds.has(partId)) continue
         seenPartIds.add(partId)
 

@@ -226,18 +226,14 @@ export class AcpAdapter implements CodingAgentAdapter {
       }
     }
 
-    // Validate required API keys are present
+    // Log warnings if API keys are missing (agents may have their own auth)
     if (this.agentType === 'codex') {
       if (!env.OPENAI_API_KEY && !env.CODEX_API_KEY) {
-        throw new Error(
-          'OPENAI_API_KEY is required for Codex. Please set it in the agent configuration or as an environment variable.'
-        )
+        console.warn('[AcpAdapter/codex] No OPENAI_API_KEY or CODEX_API_KEY in environment — relying on agent\'s own auth')
       }
     } else if (this.agentType === 'claude-code') {
       if (!env.ANTHROPIC_API_KEY) {
-        throw new Error(
-          'ANTHROPIC_API_KEY is required for Claude Code. Please set it in the agent configuration or as an environment variable.'
-        )
+        console.warn('[AcpAdapter/claude-code] No ANTHROPIC_API_KEY in environment — relying on agent\'s own auth')
       }
     }
 
@@ -300,9 +296,11 @@ export class AcpAdapter implements CodingAgentAdapter {
     await this.authenticateSession(session, initResult)
 
     // Create ACP session (only accepts cwd and mcpServers per ACP spec)
+    const convertedMcpServers = this.convertMcpServers(config.mcpServers) || []
+    console.log(`[AcpAdapter/${this.agentType}] session/new mcpServers:`, JSON.stringify(convertedMcpServers))
     const result = await this.sendRpcRequest(session, 'session/new', {
       cwd: config.workspaceDir,
-      mcpServers: this.convertMcpServers(config.mcpServers) || []
+      mcpServers: convertedMcpServers
     })
 
     // Extract session ID from result
@@ -373,18 +371,14 @@ export class AcpAdapter implements CodingAgentAdapter {
       }
     }
 
-    // Validate required API keys are present
+    // Log warnings if API keys are missing (agents may have their own auth)
     if (this.agentType === 'codex') {
       if (!env.OPENAI_API_KEY && !env.CODEX_API_KEY) {
-        throw new Error(
-          'OPENAI_API_KEY is required for Codex. Please set it in the agent configuration or as an environment variable.'
-        )
+        console.warn('[AcpAdapter/codex] No OPENAI_API_KEY or CODEX_API_KEY in environment — relying on agent\'s own auth')
       }
     } else if (this.agentType === 'claude-code') {
       if (!env.ANTHROPIC_API_KEY) {
-        throw new Error(
-          'ANTHROPIC_API_KEY is required for Claude Code. Please set it in the agent configuration or as an environment variable.'
-        )
+        console.warn('[AcpAdapter/claude-code] No ANTHROPIC_API_KEY in environment — relying on agent\'s own auth')
       }
     }
 
@@ -1055,15 +1049,27 @@ export class AcpAdapter implements CodingAgentAdapter {
   private convertMcpServers(servers?: Record<string, McpServerConfig>): unknown[] {
     if (!servers) return []
 
-    return Object.entries(servers).map(([name, config]) => ({
-      name,
-      type: config.type,
-      command: config.command,
-      args: config.args,
-      env: config.env,
-      url: config.url,
-      headers: config.headers
-    }))
+    return Object.entries(servers).map(([name, config]) => {
+      // Only include fields relevant to the server type to avoid
+      // deserialization failures with untagged enums (e.g. Codex/Rust)
+      if (config.type === 'stdio') {
+        return {
+          name,
+          type: 'stdio',
+          command: config.command,
+          args: config.args,
+          ...(config.env ? { env: config.env } : {})
+        }
+      } else {
+        // http or sse
+        return {
+          name,
+          type: config.type,
+          url: config.url,
+          ...(config.headers ? { headers: config.headers } : {})
+        }
+      }
+    })
   }
 
   private convertAcpEventToMessageParts(
