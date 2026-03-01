@@ -581,7 +581,10 @@ export class OpencodeAdapter implements CodingAgentAdapter {
    * MUST be called BEFORE ensureServerRunning() so the plugin is discovered at startup.
    */
   private writeSecretFiles(config: SessionConfig): void {
-    if (!config.secretEnvVars || Object.keys(config.secretEnvVars).length === 0 || !config.workspaceDir) {
+    const secretCount = config.secretEnvVars ? Object.keys(config.secretEnvVars).length : 0
+    console.log(`[OpencodeAdapter] writeSecretFiles: workspaceDir=${config.workspaceDir}, secretCount=${secretCount}`)
+    if (!config.secretEnvVars || secretCount === 0 || !config.workspaceDir) {
+      console.log(`[OpencodeAdapter] writeSecretFiles: skipping — no secrets or no workspaceDir`)
       return
     }
 

@@ -290,6 +290,7 @@ export class AgentManager extends EventEmitter {
 
     // Populate secret env vars and system prompt awareness
     const secretIds = (agent.config as AgentConfigRecord)?.secret_ids
+    console.log(`[AgentManager] buildSessionConfig: agentId=${agentId}, secretIds=${JSON.stringify(secretIds)}`)
     if (secretIds && secretIds.length > 0) {
       const secretRecords = this.db.getSecretsByIds(secretIds)
       const secretsWithValues = this.db.getSecretsWithValues(secretIds)
