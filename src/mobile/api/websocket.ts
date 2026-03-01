@@ -21,7 +21,11 @@ export function connectWebSocket(): void {
   }
 
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-  const url = `${protocol}//${window.location.host}/ws`
+  const MOBILE_API_PORT = '20620'
+  const host = window.location.port !== MOBILE_API_PORT
+    ? `${window.location.hostname}:${MOBILE_API_PORT}`
+    : window.location.host
+  const url = `${protocol}//${host}/ws`
 
   ws = new WebSocket(url)
 

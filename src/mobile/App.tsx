@@ -17,12 +17,16 @@ export function App() {
   const connected = useConnectionStore((s) => s.connected)
   const fetchTasks = useTaskStore((s) => s.fetchTasks)
   const fetchAgents = useAgentStore((s) => s.fetchAgents)
+  const syncActiveSessions = useAgentStore((s) => s.syncActiveSessions)
 
   useEffect(() => {
     connect()
     fetchTasks()
     fetchAgents()
-  }, [connect, fetchTasks, fetchAgents])
+    // After WebSocket connects and agents load, sync with any running sessions
+    const timer = setTimeout(() => syncActiveSessions(), 500)
+    return () => clearTimeout(timer)
+  }, [connect, fetchTasks, fetchAgents, syncActiveSessions])
 
   // Poll tasks every 10s as a fallback
   useEffect(() => {

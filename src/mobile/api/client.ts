@@ -1,9 +1,14 @@
 /**
  * HTTP API client for the mobile API server.
- * Uses same-origin fetch (mobile SPA is served by the same server).
+ * In production the SPA is served by the mobile-api-server (same origin).
+ * In dev mode (Vite on a different port), we point directly at the Electron server.
  */
 
-const BASE = ''
+const MOBILE_API_PORT = '20620'
+const BASE =
+  typeof window !== 'undefined' && window.location.port !== MOBILE_API_PORT
+    ? `http://${window.location.hostname}:${MOBILE_API_PORT}`
+    : ''
 
 async function get<T>(path: string): Promise<T> {
   const res = await fetch(`${BASE}${path}`)
@@ -50,6 +55,8 @@ export const api = {
       post<{ success: boolean; newSessionId?: string }>(`/api/sessions/${sessionId}/send`, { message, taskId, agentId }),
     approve: (sessionId: string, approved: boolean, message?: string) =>
       post<{ success: boolean }>(`/api/sessions/${sessionId}/approve`, { approved, message }),
+    sync: (sessionId: string) =>
+      post<{ success: boolean; status: string }>(`/api/sessions/${sessionId}/sync`),
     abort: (sessionId: string) =>
       post<{ success: boolean }>(`/api/sessions/${sessionId}/abort`),
     stop: (sessionId: string) =>

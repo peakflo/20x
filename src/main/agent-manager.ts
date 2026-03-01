@@ -1885,6 +1885,56 @@ export class AgentManager extends EventEmitter {
     return { status: session.status, agentId: session.agentId, taskId: session.taskId }
   }
 
+  /**
+   * Replay all messages from a running session via the adapter.
+   * Used by the mobile API to sync with an already-running session.
+   */
+  async replaySessionMessages(sessionId: string): Promise<void> {
+    const session = this.sessions.get(sessionId)
+    if (!session?.adapter?.getAllMessages) return
+
+    const messages = await session.adapter.getAllMessages(sessionId, {
+      agentId: session.agentId,
+      taskId: session.taskId,
+      workspaceDir: session.workspaceDir || process.cwd()
+    })
+
+    for (const msg of messages) {
+      for (const part of msg.parts) {
+        this.sendToRenderer('agent:output', {
+          sessionId,
+          taskId: session.taskId,
+          type: 'message',
+          data: {
+            id: part.id || `${msg.id}-${msg.parts.indexOf(part)}`,
+            role: msg.role === 'USER' ? 'user' : msg.role === 'ASSISTANT' ? 'assistant' : 'system',
+            content: part.text || part.content || '',
+            timestamp: new Date(),
+            partType: part.type?.toLowerCase(),
+            tool: part.tool ? {
+              name: part.tool.name,
+              status: part.tool.status || part.state?.status || '',
+              title: part.tool.title || part.state?.title || '',
+              input: typeof part.tool.input === 'string' ? part.tool.input : part.tool.input ? JSON.stringify(part.tool.input) : undefined,
+              output: typeof part.tool.output === 'string' ? part.tool.output : part.tool.output ? JSON.stringify(part.tool.output) : undefined,
+              error: part.tool.error || part.state?.error,
+              questions: part.tool.questions,
+              todos: part.tool.todos
+            } : undefined
+          }
+        })
+      }
+    }
+
+    // Also send current status
+    this.sendToRenderer('agent:status', {
+      sessionId,
+      agentId: session.agentId,
+      taskId: session.taskId,
+      status: session.status
+    })
+  }
+
   getActiveSessionsForTask(taskId: string): string[] {
     const sessionIds: string[] = []
     for (const [sessionId, session] of this.sessions.entries()) {

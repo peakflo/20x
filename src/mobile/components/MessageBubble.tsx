@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { cn } from '../lib/utils'
 import type { AgentMessage } from '../stores/agent-store'
 
 function QuestionMessage({ message, onAnswer }: { message: AgentMessage; onAnswer?: (answer: string) => void }) {
@@ -20,13 +21,19 @@ function QuestionMessage({ message, onAnswer }: { message: AgentMessage; onAnswe
   }
 
   return (
-    <div className="rounded-lg bg-muted border border-primary/30 overflow-hidden">
+    <div className="rounded-md bg-[#161b22] border border-primary/30 overflow-hidden">
       {questions.map((q, qi) => (
-        <div key={qi} className="px-3 py-2 space-y-2">
-          {q.header && <span className="text-[10px] text-primary font-medium uppercase tracking-wide">{q.header}</span>}
-          <p className="text-xs text-foreground">{q.question}</p>
+        <div key={qi} className="space-y-2">
+          {q.header && (
+            <div className="px-4 py-2 border-b border-border/30">
+              <span className="text-[10px] text-primary font-medium uppercase tracking-wide">{q.header}</span>
+            </div>
+          )}
+          <div className="px-4 py-3">
+            <p className="text-xs text-foreground">{q.question}</p>
+          </div>
           {q.options?.length > 0 && (
-            <div className="space-y-1">
+            <div className="px-4 pb-3 space-y-1.5">
               {q.options.map((opt, oi) => {
                 const isSelected = answers[qi] === opt.label
                 return (
@@ -34,11 +41,13 @@ function QuestionMessage({ message, onAnswer }: { message: AgentMessage; onAnswe
                     key={oi}
                     onClick={() => !submitted && setAnswers(prev => ({ ...prev, [qi]: opt.label }))}
                     disabled={submitted}
-                    className={`w-full text-left px-3 py-2 rounded text-xs transition-colors ${
+                    className={cn(
+                      'w-full text-left rounded px-3 py-2 text-xs transition-colors border',
                       isSelected
-                        ? 'bg-primary/20 border border-primary/50 text-primary'
-                        : 'bg-background/50 border border-border/50 text-foreground hover:bg-accent'
-                    } ${submitted ? 'opacity-60' : ''}`}
+                        ? 'bg-primary/20 border-primary/50 text-foreground'
+                        : 'border-border/50 hover:bg-white/5 hover:border-border text-gray-300',
+                      submitted && 'opacity-50 cursor-default'
+                    )}
                   >
                     <div className="font-medium">{opt.label}</div>
                     {opt.description && <div className="text-muted-foreground mt-0.5">{opt.description}</div>}
@@ -50,10 +59,10 @@ function QuestionMessage({ message, onAnswer }: { message: AgentMessage; onAnswe
         </div>
       ))}
       {!submitted && allAnswered && (
-        <div className="px-3 py-2 border-t border-border/30">
+        <div className="px-4 py-2.5 border-t border-border/30">
           <button
             onClick={handleSubmit}
-            className="w-full bg-primary text-primary-foreground text-xs font-medium py-2 rounded-lg active:opacity-80"
+            className="w-full bg-primary text-primary-foreground text-xs font-medium py-2 rounded-md active:opacity-80"
           >
             Submit
           </button>
@@ -66,23 +75,31 @@ function QuestionMessage({ message, onAnswer }: { message: AgentMessage; onAnswe
 function TodoList({ message }: { message: AgentMessage }) {
   const todos = message.tool?.todos || []
   return (
-    <div className="rounded-lg bg-muted border border-border/50 px-3 py-2 space-y-1">
-      <div className="text-[10px] text-muted-foreground uppercase tracking-wide font-medium">Tasks</div>
-      {todos.map((t) => (
-        <div key={t.id} className="flex items-center gap-2 text-xs">
-          <span className={`w-3 h-3 rounded-full border shrink-0 flex items-center justify-center text-[8px] ${
-            t.status === 'completed' ? 'bg-emerald-400/20 border-emerald-400 text-emerald-400' :
-            t.status === 'in_progress' ? 'bg-amber-400/20 border-amber-400 text-amber-400' :
-            'border-muted-foreground'
-          }`}>
-            {t.status === 'completed' && '\u2713'}
-            {t.status === 'in_progress' && '\u25CF'}
-          </span>
-          <span className={t.status === 'completed' ? 'text-muted-foreground line-through' : 'text-foreground'}>
-            {t.content}
-          </span>
-        </div>
-      ))}
+    <div className="rounded-md bg-[#161b22] border border-border/50 overflow-hidden">
+      <div className="px-4 py-2.5 border-b border-border/30">
+        <span className="text-[10px] text-muted-foreground font-medium uppercase tracking-wide">Tasks</span>
+      </div>
+      <div className="px-2 py-2 space-y-1">
+        {todos.map((t) => (
+          <div key={t.id} className="flex items-center gap-2 px-2 py-1.5 text-xs">
+            {t.status === 'completed' && (
+              <svg className="h-3.5 w-3.5 text-green-400 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><path d="m9 12 2 2 4-4" /></svg>
+            )}
+            {t.status === 'in_progress' && (
+              <svg className="h-3.5 w-3.5 text-yellow-400 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" /></svg>
+            )}
+            {t.status === 'pending' && (
+              <svg className="h-3.5 w-3.5 text-muted-foreground shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /></svg>
+            )}
+            <span className={cn(
+              t.status === 'completed' && 'opacity-60 line-through text-muted-foreground',
+              t.status !== 'completed' && 'text-foreground'
+            )}>
+              {t.content}
+            </span>
+          </div>
+        ))}
+      </div>
     </div>
   )
 }
@@ -90,38 +107,50 @@ function TodoList({ message }: { message: AgentMessage }) {
 function ToolCallMessage({ message }: { message: AgentMessage }) {
   const [expanded, setExpanded] = useState(false)
   const tool = message.tool!
-  const statusIcon = tool.status === 'succeeded' ? '\u2713' : tool.status === 'failed' ? '\u2717' : '\u25CF'
-  const statusColor = tool.status === 'succeeded' ? 'text-emerald-400' : tool.status === 'failed' ? 'text-red-400' : 'text-amber-400'
+
+  const statusColor = tool.status === 'succeeded' || tool.status === 'completed'
+    ? 'text-green-400'
+    : tool.status === 'failed' || tool.status === 'error'
+      ? 'text-red-400'
+      : 'text-yellow-400'
 
   return (
-    <div className="rounded-lg border border-border/30 overflow-hidden">
+    <div className="rounded-md bg-[#161b22] border border-border/50 overflow-hidden">
       <button
         onClick={() => setExpanded(!expanded)}
-        className="w-full flex items-center gap-2 px-3 py-2 text-xs text-muted-foreground active:bg-accent/30"
+        className="w-full flex items-center gap-2 px-3 py-2 font-mono text-xs hover:bg-white/5 transition-colors"
       >
-        <span className={statusColor}>{statusIcon}</span>
-        <span className="font-mono font-medium text-foreground/80">{tool.name}</span>
-        {tool.title && <span className="truncate">{tool.title}</span>}
-        <span className="ml-auto text-muted-foreground">{expanded ? '\u25B2' : '\u25BC'}</span>
+        <svg className="h-3 w-3 text-muted-foreground shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
+        </svg>
+        <span className="text-foreground font-medium">{tool.name}</span>
+        {tool.title && <span className="text-muted-foreground truncate">{tool.title}</span>}
+        <span className={cn('text-[10px] ml-auto shrink-0', statusColor)}>
+          {tool.status}
+        </span>
+        <span className={cn(
+          'text-muted-foreground transition-transform text-[10px]',
+          expanded && 'rotate-90'
+        )}>▶</span>
       </button>
       {expanded && (
-        <div className="px-3 py-2 border-t border-border/30 space-y-2 text-xs font-mono">
+        <div className="px-3 py-2 border-t border-border/30 space-y-2 text-[11px] font-mono">
           {tool.input && (
             <div>
               <div className="text-muted-foreground mb-0.5">Input</div>
-              <pre className="bg-background/50 rounded p-2 overflow-x-auto text-[10px] max-h-40 overflow-y-auto whitespace-pre-wrap">{tool.input}</pre>
+              <pre className="bg-background/50 rounded p-2 overflow-x-auto max-h-40 overflow-y-auto whitespace-pre-wrap text-gray-400">{tool.input}</pre>
             </div>
           )}
           {tool.output && (
             <div>
               <div className="text-muted-foreground mb-0.5">Output</div>
-              <pre className="bg-background/50 rounded p-2 overflow-x-auto text-[10px] max-h-40 overflow-y-auto whitespace-pre-wrap">{tool.output}</pre>
+              <pre className="bg-background/50 rounded p-2 overflow-x-auto max-h-40 overflow-y-auto whitespace-pre-wrap text-gray-400">{tool.output}</pre>
             </div>
           )}
           {tool.error && (
             <div>
               <div className="text-red-400 mb-0.5">Error</div>
-              <pre className="bg-red-500/10 rounded p-2 text-red-300 text-[10px] whitespace-pre-wrap">{tool.error}</pre>
+              <pre className="bg-red-500/10 rounded p-2 text-red-300 whitespace-pre-wrap">{tool.error}</pre>
             </div>
           )}
         </div>
@@ -154,23 +183,26 @@ export function MessageBubble({ message, onAnswer }: MessageBubbleProps) {
   // Step markers — skip
   if (message.partType === 'step-start' || message.partType === 'step-finish') return null
 
-  // Regular text message
+  // Regular text message — matches desktop AgentTranscriptPanel exactly
   const isUser = message.role === 'user'
+  const isSystem = message.role === 'system'
   const isError = message.partType === 'error'
+  const isReasoning = message.partType === 'reasoning'
 
   return (
-    <div className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
-      <div className={`max-w-[85%] rounded-lg px-3 py-2 text-sm ${
-        isUser
-          ? 'bg-primary/20 text-foreground'
-          : isError
-            ? 'bg-red-500/10 text-red-300'
-            : 'bg-muted text-foreground'
-      }`}>
-        <div className="whitespace-pre-wrap break-words">{message.content}</div>
+    <div className={cn('flex gap-2', isUser ? 'justify-end' : 'justify-start')}>
+      <div className={cn(
+        'max-w-[90%] rounded-md px-3 py-2',
+        isUser && 'bg-primary/20 text-foreground',
+        isSystem && !isError && 'bg-yellow-500/10 text-yellow-200',
+        isError && 'bg-red-500/10 text-red-200 border border-red-500/20',
+        isReasoning && 'bg-purple-500/10 text-purple-200 border border-purple-500/20',
+        !isUser && !isSystem && !isError && !isReasoning && 'bg-[#161b22] text-gray-300 border border-border/50'
+      )}>
+        <div className="whitespace-pre-wrap break-words font-mono text-xs">{message.content}</div>
         {message.stepMeta && (
           <div className="flex items-center gap-2 mt-1 text-[10px] text-muted-foreground">
-            {message.stepMeta.durationMs && <span>{(message.stepMeta.durationMs / 1000).toFixed(1)}s</span>}
+            {message.stepMeta.durationMs != null && <span>{(message.stepMeta.durationMs / 1000).toFixed(1)}s</span>}
             {message.stepMeta.tokens && (
               <span>{message.stepMeta.tokens.input + message.stepMeta.tokens.output} tokens</span>
             )}

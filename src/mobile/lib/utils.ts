@@ -1,5 +1,10 @@
 import { TaskStatus } from '@shared/constants'
 
+/** Merge class names, filtering out falsy values */
+export function cn(...classes: (string | false | null | undefined)[]): string {
+  return classes.filter(Boolean).join(' ')
+}
+
 export function isSnoozed(snoozedUntil: string | null): boolean {
   if (!snoozedUntil) return false
   if (snoozedUntil === '9999-12-31T00:00:00.000Z') return true
@@ -9,6 +14,14 @@ export function isSnoozed(snoozedUntil: string | null): boolean {
 export function isOverdue(dueDate: string | null): boolean {
   if (!dueDate) return false
   return new Date(dueDate) < new Date()
+}
+
+export function isDueSoon(dueDate: string | null): boolean {
+  if (!dueDate) return false
+  const due = new Date(dueDate)
+  const now = new Date()
+  const hoursUntil = (due.getTime() - now.getTime()) / (1000 * 60 * 60)
+  return hoursUntil > 0 && hoursUntil <= 24
 }
 
 export function formatRelativeDate(dateStr: string): string {
@@ -34,10 +47,11 @@ export function formatDate(dateStr: string): string {
   })
 }
 
-export const STATUS_COLORS: Record<string, string> = {
-  [TaskStatus.NotStarted]: 'bg-slate-500',
-  [TaskStatus.Triaging]: 'bg-slate-400 animate-pulse',
-  [TaskStatus.AgentWorking]: 'bg-amber-400 animate-pulse',
+// Matches desktop TaskListItem statusDotColor exactly
+export const STATUS_DOT_COLORS: Record<string, string> = {
+  [TaskStatus.NotStarted]: 'bg-muted-foreground',
+  [TaskStatus.Triaging]: 'bg-muted-foreground animate-pulse',
+  [TaskStatus.AgentWorking]: 'bg-amber-400',
   [TaskStatus.ReadyForReview]: 'bg-purple-400',
   [TaskStatus.AgentLearning]: 'bg-blue-400',
   [TaskStatus.Completed]: 'bg-emerald-400'
@@ -52,16 +66,31 @@ export const STATUS_LABELS: Record<string, string> = {
   [TaskStatus.Completed]: 'Completed'
 }
 
-export const PRIORITY_COLORS: Record<string, string> = {
-  critical: 'bg-red-500/20 text-red-300 border-red-500/30',
-  high: 'bg-orange-500/20 text-orange-300 border-orange-500/30',
-  medium: 'bg-yellow-500/20 text-yellow-300 border-yellow-500/30',
-  low: 'bg-slate-500/20 text-slate-400 border-slate-500/30'
+// Badge variant mappings — matches desktop Badge.tsx variants
+export type BadgeVariant = 'default' | 'blue' | 'green' | 'yellow' | 'red' | 'purple' | 'orange'
+
+export const BADGE_VARIANTS: Record<BadgeVariant, string> = {
+  default: 'border-border/50 bg-muted text-muted-foreground',
+  blue: 'border-blue-500/20 bg-blue-500/10 text-blue-400',
+  green: 'border-emerald-500/20 bg-emerald-500/10 text-emerald-400',
+  yellow: 'border-amber-500/20 bg-amber-500/10 text-amber-400',
+  red: 'border-red-500/20 bg-red-500/10 text-red-400',
+  purple: 'border-purple-500/20 bg-purple-500/10 text-purple-400',
+  orange: 'border-orange-500/20 bg-orange-500/10 text-orange-400'
 }
 
-export const SESSION_STATUS_COLORS: Record<string, string> = {
-  idle: 'text-muted-foreground',
-  working: 'text-green-400',
-  error: 'text-red-400',
-  waiting_approval: 'text-yellow-400'
+export const PRIORITY_VARIANT: Record<string, { label: string; variant: BadgeVariant }> = {
+  critical: { label: 'Critical', variant: 'red' },
+  high: { label: 'High', variant: 'orange' },
+  medium: { label: 'Medium', variant: 'yellow' },
+  low: { label: 'Low', variant: 'default' }
+}
+
+export const STATUS_VARIANT: Record<string, { label: string; variant: BadgeVariant }> = {
+  [TaskStatus.NotStarted]: { label: 'Not Started', variant: 'default' },
+  [TaskStatus.Triaging]: { label: 'Triaging', variant: 'default' },
+  [TaskStatus.AgentWorking]: { label: 'Agent Working', variant: 'yellow' },
+  [TaskStatus.ReadyForReview]: { label: 'Ready for Review', variant: 'purple' },
+  [TaskStatus.AgentLearning]: { label: 'Agent Learning', variant: 'blue' },
+  [TaskStatus.Completed]: { label: 'Completed', variant: 'green' }
 }

@@ -1,6 +1,6 @@
 import { useRef, useEffect, useCallback, useMemo } from 'react'
 import { useTaskStore } from '../stores/task-store'
-import { useAgentStore, type AgentMessage } from '../stores/agent-store'
+import { useAgentStore } from '../stores/agent-store'
 import { api } from '../api/client'
 import { MessageBubble } from '../components/MessageBubble'
 import { ChatInput } from '../components/ChatInput'
@@ -19,7 +19,6 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
   const messages = session?.messages || []
   const lastMessage = messages[messages.length - 1]
 
-  // Determine if the agent is actively working
   const isWorking = session?.status === 'working'
   const isWaitingApproval = session?.status === 'waiting_approval'
   const hasSession = !!session?.sessionId
@@ -27,10 +26,8 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
   // Smart routing: detect if last message is a question
   const isQuestion = lastMessage?.partType === 'question' && !!lastMessage?.tool?.questions
 
-  // Can the user send input?
   const canSendInput = hasSession && (isWorking || isWaitingApproval || session?.status === 'idle')
 
-  // Input placeholder
   const placeholder = useMemo(() => {
     if (!hasSession) return 'No active session'
     if (isQuestion) return 'Type your answer...'
@@ -45,12 +42,9 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
       if (!session?.sessionId) return
       try {
         if (isQuestion) {
-          // Answer to a question — use approve
           await api.sessions.approve(session.sessionId, true, message)
         } else {
-          // Regular message
           const result = await api.sessions.send(session.sessionId, message, taskId, session.agentId)
-          // Session was recreated — update store
           if (result.newSessionId && taskId) {
             initSession(taskId, result.newSessionId, session.agentId)
           }
@@ -62,7 +56,6 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
     [session, taskId, isQuestion, initSession]
   )
 
-  // Handle question answer from QuestionMessage options
   const handleAnswer = useCallback(
     async (answer: string) => {
       if (!session?.sessionId) return
@@ -75,7 +68,6 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
     [session]
   )
 
-  // Session controls
   const handleStart = useCallback(async () => {
     if (!task?.agent_id) return
     initSession(task.id, '', task.agent_id)
@@ -118,91 +110,116 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
     }
   }, [session])
 
-  // Auto-scroll to bottom when new messages arrive (only if user is at bottom)
+  // Auto-scroll to bottom when new messages arrive
   useEffect(() => {
     if (isAtBottomRef.current && scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight
     }
   }, [messages.length, lastMessage?.content])
 
-  // Track scroll position
   const handleScroll = useCallback(() => {
     if (!scrollRef.current) return
     const { scrollTop, scrollHeight, clientHeight } = scrollRef.current
     isAtBottomRef.current = scrollHeight - scrollTop - clientHeight < 80
   }, [])
 
-  // Session state flags
-  const canStart = task?.agent_id && !task.session_id && (!session || session.status === 'idle') && task.status !== 'completed'
-  const canResume = task?.agent_id && task.session_id && !session?.sessionId && (!session || session.status === 'idle')
-  const canStop = session?.sessionId && (session.status === 'working' || session.status === 'waiting_approval')
+  // Session state flags — session already synced from App.tsx syncActiveSessions
+  const isSessionRunning = hasSession && (isWorking || isWaitingApproval)
+  const canStart = task?.agent_id && !task.session_id && !isSessionRunning && (!session || session.status === 'idle') && task.status !== 'completed'
+  const canResume = task?.agent_id && task.session_id && !hasSession && (!session || session.status === 'idle')
+  const canStop = isSessionRunning
+
+  const statusText = session?.status === 'working' ? 'Working'
+    : session?.status === 'error' ? 'Error'
+    : session?.status === 'waiting_approval' ? 'Waiting for approval'
+    : session?.status === 'idle' ? 'Idle'
+    : null
+
+  const statusColor = session?.status === 'working' ? 'text-green-400'
+    : session?.status === 'error' ? 'text-red-400'
+    : session?.status === 'waiting_approval' ? 'text-yellow-400'
+    : 'text-muted-foreground'
 
   return (
-    <div className="flex flex-col h-full">
-      {/* Header */}
-      <div className="shrink-0 flex items-center gap-2 px-2 py-3 border-b border-border/30">
-        <button onClick={() => onNavigate({ page: 'detail', taskId })} className="p-2 active:opacity-60">
-          <svg className="w-5 h-5 text-foreground" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <div className="flex flex-col h-full bg-[#0d1117]">
+      {/* Header — matches AgentTranscriptPanel header */}
+      <div className="shrink-0 flex items-center gap-2 px-4 py-3 border-b border-border/50">
+        <button onClick={() => onNavigate({ page: 'detail', taskId })} className="p-1.5 rounded-md hover:bg-accent transition-colors">
+          <svg className="w-4 h-4 text-muted-foreground" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="m15 18-6-6 6-6" />
           </svg>
         </button>
-        <div className="flex-1 min-w-0">
-          <h1 className="text-sm font-semibold truncate">{task?.title || 'Conversation'}</h1>
-          {session && (
-            <span className={`text-[10px] ${
-              session.status === 'working' ? 'text-green-400' :
-              session.status === 'error' ? 'text-red-400' :
-              session.status === 'waiting_approval' ? 'text-yellow-400' :
-              'text-muted-foreground'
-            }`}>
-              {session.status === 'working' && '\u25CF Working'}
-              {session.status === 'idle' && '\u25CB Idle'}
-              {session.status === 'error' && '\u25CF Error'}
-              {session.status === 'waiting_approval' && '\u25CF Waiting for approval'}
-            </span>
-          )}
-        </div>
-        {/* Session action button in header */}
+        <svg className="h-4 w-4 text-muted-foreground shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <polyline points="4 17 10 11 4 5" /><line x1="12" y1="19" x2="20" y2="19" />
+        </svg>
+        <h1 className="text-sm font-medium truncate flex-1">{task?.title || 'Agent Transcript'}</h1>
+
+        {statusText && (
+          <span className={`text-xs flex items-center gap-1.5 ${statusColor}`}>
+            {isWorking && (
+              <svg className="h-3 w-3 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+              </svg>
+            )}
+            {statusText}
+          </span>
+        )}
+
         {canStop && (
-          <button onClick={handleStop} className="text-xs text-red-400 px-3 py-1.5 border border-red-400/30 rounded-lg active:opacity-60">
+          <button onClick={handleStop} className="text-xs text-red-400 px-3 py-1.5 border border-red-400/30 rounded-md active:opacity-60 hover:bg-red-500/10 transition-colors">
             Stop
           </button>
         )}
         {canStart && (
-          <button onClick={handleStart} className="text-xs text-primary px-3 py-1.5 border border-primary/30 rounded-lg active:opacity-60">
+          <button onClick={handleStart} className="text-xs bg-primary text-primary-foreground px-3 py-1.5 rounded-md active:opacity-80 shadow-sm">
             Start
           </button>
         )}
         {canResume && (
-          <button onClick={handleResume} className="text-xs text-primary px-3 py-1.5 border border-primary/30 rounded-lg active:opacity-60">
+          <button onClick={handleResume} className="text-xs bg-primary text-primary-foreground px-3 py-1.5 rounded-md active:opacity-80 shadow-sm">
             Resume
           </button>
         )}
       </div>
 
-      {/* Messages area */}
+      {/* Messages area — matches AgentTranscriptPanel body */}
       <div
         ref={scrollRef}
         onScroll={handleScroll}
-        className="flex-1 overflow-y-auto px-4 py-3 space-y-3"
+        className="flex-1 min-h-0 overflow-y-auto p-4 space-y-2 font-mono text-sm"
       >
         {messages.length === 0 && (
-          <div className="flex flex-col items-center justify-center h-full text-muted-foreground text-sm gap-2">
+          <div className="flex flex-col items-center justify-center h-full text-muted-foreground gap-2">
             {!hasSession && !canStart && !canResume && (
-              <p>No agent session available</p>
+              <>
+                <svg className="h-8 w-8 opacity-20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="4 17 10 11 4 5" /><line x1="12" y1="19" x2="20" y2="19" />
+                </svg>
+                <p className="text-xs">No agent session available</p>
+              </>
             )}
             {(canStart || canResume) && (
               <>
-                <p>No messages yet</p>
+                <svg className="h-8 w-8 opacity-20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="4 17 10 11 4 5" /><line x1="12" y1="19" x2="20" y2="19" />
+                </svg>
+                <p className="text-xs">No messages yet</p>
                 <button
                   onClick={canResume ? handleResume : handleStart}
-                  className="bg-primary text-primary-foreground text-xs font-medium px-5 py-2.5 rounded-lg active:opacity-80 mt-2"
+                  className="bg-primary text-primary-foreground text-xs font-medium px-4 py-2 rounded-md active:opacity-80 mt-2 shadow-sm"
                 >
                   {canResume ? 'Resume Session' : 'Start Agent'}
                 </button>
               </>
             )}
-            {hasSession && <p>Waiting for agent response...</p>}
+            {hasSession && messages.length === 0 && (
+              <>
+                <svg className="h-8 w-8 animate-spin opacity-30" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+                </svg>
+                <p className="text-xs">Waiting for agent response...</p>
+              </>
+            )}
           </div>
         )}
 
@@ -210,7 +227,6 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
           <MessageBubble key={msg.id} message={msg} onAnswer={handleAnswer} />
         ))}
 
-        {/* Working indicator */}
         {isWorking && messages.length > 0 && (
           <div className="flex items-center gap-2 px-3 py-2">
             <div className="flex gap-1">
@@ -223,14 +239,20 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
         )}
       </div>
 
+      {/* Message count */}
+      {messages.length > 0 && (
+        <div className="px-4 py-2 text-[10px] text-muted-foreground font-mono border-t border-border/50">
+          {messages.length} message{messages.length !== 1 ? 's' : ''}
+        </div>
+      )}
+
       {/* Input area */}
-      <div className="shrink-0 border-t border-border/30 bg-background">
-        {/* Abort button when agent is working */}
+      <div className="shrink-0 border-t border-border/50">
         {isWorking && hasSession && (
           <div className="px-4 pt-2">
             <button
               onClick={handleAbort}
-              className="w-full text-xs text-yellow-400 py-2 border border-yellow-400/30 rounded-lg active:opacity-60"
+              className="w-full text-xs text-yellow-400 py-2 border border-yellow-400/30 rounded-md active:opacity-60 hover:bg-yellow-500/10 transition-colors"
             >
               Interrupt Agent
             </button>

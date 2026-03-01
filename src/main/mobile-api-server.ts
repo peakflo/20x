@@ -335,6 +335,16 @@ async function routePost(pathname: string, params: Record<string, unknown>): Pro
     return { success: true }
   }
 
+  // POST /api/sessions/:sessionId/sync — replay messages from a running session
+  const syncMatch = pathname.match(/^\/api\/sessions\/([^/]+)\/sync$/)
+  if (syncMatch) {
+    const sessionId = syncMatch[1]
+    const status = agent.getSessionStatus(sessionId)
+    if (!status) throw Object.assign(new Error('Session not found or not running'), { status: 404 })
+    await agent.replaySessionMessages(sessionId)
+    return { success: true, status: status.status }
+  }
+
   // POST /api/sessions/:sessionId/abort
   const abortMatch = pathname.match(/^\/api\/sessions\/([^/]+)\/abort$/)
   if (abortMatch) {

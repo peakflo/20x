@@ -79,6 +79,7 @@ interface AgentState {
   agents: Agent[]
   sessions: Map<string, TaskSession>
   fetchAgents: () => Promise<void>
+  syncActiveSessions: () => Promise<void>
   initSession: (taskId: string, sessionId: string, agentId: string) => void
   endSession: (taskId: string) => void
   removeSession: (taskId: string) => void
@@ -212,6 +213,52 @@ export const useAgentStore = create<AgentState>((set, get) => {
         set({ agents })
       } catch (e) {
         console.error('Failed to fetch agents:', e)
+      }
+    },
+
+    /**
+     * Fetch active sessions from the server and sync with any running ones.
+     * This allows the mobile UI to connect to sessions already running in Electron.
+     */
+    syncActiveSessions: async () => {
+      try {
+        const activeSessions = (await api.sessions.list()) as Array<{
+          sessionId: string; agentId: string; taskId: string; status: string
+        }>
+
+        if (activeSessions.length === 0) return
+
+        const state = get()
+        const nextSessions = new Map(state.sessions)
+
+        for (const active of activeSessions) {
+          const existing = state.sessions.get(active.taskId)
+          // Skip if we already have this session connected with messages
+          if (existing?.sessionId === active.sessionId && existing.messages.length > 0) continue
+
+          // Initialize session in the store so WebSocket events are captured
+          seenIds.delete(active.taskId)
+          nextSessions.set(active.taskId, {
+            sessionId: active.sessionId,
+            agentId: active.agentId,
+            taskId: active.taskId,
+            status: active.status as SessionStatus,
+            messages: []
+          })
+        }
+
+        set({ sessions: nextSessions })
+
+        // Replay messages from each active session (will arrive via WebSocket)
+        for (const active of activeSessions) {
+          try {
+            await api.sessions.sync(active.sessionId)
+          } catch (e) {
+            console.error(`Failed to sync session ${active.sessionId}:`, e)
+          }
+        }
+      } catch (e) {
+        console.error('Failed to sync active sessions:', e)
       }
     },
 
