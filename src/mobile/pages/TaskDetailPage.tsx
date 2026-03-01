@@ -99,7 +99,7 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
   const canStart = task.agent_id && !task.session_id && (!session || session.status === 'idle') && task.status !== TaskStatus.Completed
   const canResume = task.agent_id && task.session_id && !isSessionRunning && (!session?.sessionId) && (!session || session.status === 'idle')
   const canStop = isSessionRunning
-  const canTriage = !task.agent_id && agents.length > 0 && task.status !== TaskStatus.Completed
+  const canTriage = !task.agent_id && agents.length > 0 && task.status !== TaskStatus.Completed && task.status !== TaskStatus.Triaging && !isSessionRunning
   const hasMessages = session && session.messages.length > 0
 
   // Preview: last 3 messages
