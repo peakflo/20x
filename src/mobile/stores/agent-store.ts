@@ -75,10 +75,19 @@ function findBySessionId(sessions: Map<string, TaskSession>, sid: string): TaskS
 
 // ── Store ─────────────────────────────────────────────────────
 
+export interface Skill {
+  id: string
+  name: string
+  description: string
+  agent_id: string | null
+}
+
 interface AgentState {
   agents: Agent[]
+  skills: Skill[]
   sessions: Map<string, TaskSession>
   fetchAgents: () => Promise<void>
+  fetchSkills: () => Promise<void>
   syncActiveSessions: () => Promise<void>
   initSession: (taskId: string, sessionId: string, agentId: string) => void
   endSession: (taskId: string) => void
@@ -205,6 +214,7 @@ export const useAgentStore = create<AgentState>((set, get) => {
 
   return {
     agents: [],
+    skills: [],
     sessions: new Map(),
 
     fetchAgents: async () => {
@@ -213,6 +223,15 @@ export const useAgentStore = create<AgentState>((set, get) => {
         set({ agents })
       } catch (e) {
         console.error('Failed to fetch agents:', e)
+      }
+    },
+
+    fetchSkills: async () => {
+      try {
+        const skills = (await api.skills.list()) as Skill[]
+        set({ skills })
+      } catch (e) {
+        console.error('Failed to fetch skills:', e)
       }
     },
 

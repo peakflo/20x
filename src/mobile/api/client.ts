@@ -45,6 +45,9 @@ export const api = {
     list: () => get<unknown[]>('/api/agents'),
     get: (id: string) => get<unknown>(`/api/agents/${id}`)
   },
+  skills: {
+    list: () => get<unknown[]>('/api/skills')
+  },
   sessions: {
     list: () => get<unknown[]>('/api/sessions'),
     start: (agentId: string, taskId: string, skipInitialPrompt?: boolean) =>

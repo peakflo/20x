@@ -273,6 +273,11 @@ function routeGet(pathname: string, url: URL): unknown {
     return agent
   }
 
+  // GET /api/skills
+  if (pathname === '/api/skills') {
+    return db.getSkills()
+  }
+
   // GET /api/sessions
   if (pathname === '/api/sessions') {
     return getActiveSessions()

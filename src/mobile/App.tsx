@@ -17,12 +17,14 @@ export function App() {
   const connected = useConnectionStore((s) => s.connected)
   const fetchTasks = useTaskStore((s) => s.fetchTasks)
   const fetchAgents = useAgentStore((s) => s.fetchAgents)
+  const fetchSkills = useAgentStore((s) => s.fetchSkills)
   const syncActiveSessions = useAgentStore((s) => s.syncActiveSessions)
 
   useEffect(() => {
     connect()
     fetchTasks()
     fetchAgents()
+    fetchSkills()
     // After WebSocket connects and agents load, sync with any running sessions
     const timer = setTimeout(() => syncActiveSessions(), 500)
     return () => clearTimeout(timer)
