@@ -1,4 +1,4 @@
-import { Settings, Users, Server, Workflow, Wrench, X } from 'lucide-react'
+import { Settings, Users, Server, Workflow, Wrench, KeyRound, X } from 'lucide-react'
 import * as Tabs from '@radix-ui/react-tabs'
 import { useUIStore } from '@/stores/ui-store'
 import { SettingsTab } from '@/types'
@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/Button'
 import { GeneralSettings } from './tabs/GeneralSettings'
 import { AgentsSettings } from './tabs/AgentsSettings'
 import { ToolsMcpSettings } from './tabs/ToolsMcpSettings'
+import { SecretsSettings } from './tabs/SecretsSettings'
 import { IntegrationsSettings } from './tabs/IntegrationsSettings'
 import { AdvancedSettings } from './tabs/AdvancedSettings'
 
@@ -14,6 +15,7 @@ const ICON_MAP = {
   Settings,
   Users,
   Server,
+  KeyRound,
   Workflow,
   Wrench
 } as const
@@ -25,6 +27,7 @@ export function SettingsWorkspace() {
     { value: SettingsTab.GENERAL, label: 'General', iconName: 'Settings' },
     { value: SettingsTab.AGENTS, label: 'Agents', iconName: 'Users' },
     { value: SettingsTab.TOOLS_MCP, label: 'Tools & MCP', iconName: 'Server' },
+    { value: SettingsTab.SECRETS, label: 'Secrets', iconName: 'KeyRound' },
     { value: SettingsTab.INTEGRATIONS, label: 'Task sources', iconName: 'Workflow' },
     { value: SettingsTab.ADVANCED, label: 'Advanced', iconName: 'Wrench' }
   ] as const
@@ -87,6 +90,10 @@ export function SettingsWorkspace() {
 
             <Tabs.Content value={SettingsTab.TOOLS_MCP} className="focus-visible:outline-none space-y-6">
               <ToolsMcpSettings />
+            </Tabs.Content>
+
+            <Tabs.Content value={SettingsTab.SECRETS} className="focus-visible:outline-none space-y-6">
+              <SecretsSettings />
             </Tabs.Content>
 
             <Tabs.Content value={SettingsTab.INTEGRATIONS} className="focus-visible:outline-none space-y-6">

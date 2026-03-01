@@ -5,7 +5,7 @@ import { join, delimiter } from 'path'
 import { existsSync, copyFileSync, mkdirSync, writeFileSync, readFileSync, readdirSync, statSync } from 'fs'
 import { Agent as UndiciAgent } from 'undici'
 import type { BrowserWindow } from 'electron'
-import type { DatabaseManager, AgentMcpServerEntry, OutputFieldRecord, SkillRecord, TaskRecord } from './database'
+import type { DatabaseManager, AgentMcpServerEntry, OutputFieldRecord, SecretRecord, SkillRecord, TaskRecord } from './database'
 import { TaskStatus } from '../shared/constants'
 import type { WorktreeManager } from './worktree-manager'
 import type { GitHubManager } from './github-manager'
@@ -15,6 +15,8 @@ import { AcpAdapter } from './adapters/acp-adapter'
 import type { CodingAgentAdapter, SessionConfig, MessagePart, SessionMessage, McpServerConfig } from './adapters/coding-agent-adapter'
 import { SessionStatusType, MessagePartType } from './adapters/coding-agent-adapter'
 import { getTaskApiPort, waitForTaskApiServer } from './task-api-server'
+import { randomUUID } from 'crypto'
+import { registerSecretSession, unregisterSecretSession, getSecretBrokerPort, writeSecretShellWrapper } from './secret-broker'
 
 let OpenCodeSDK: typeof import('@opencode-ai/sdk') | null = null
 
@@ -47,6 +49,7 @@ interface AgentSession {
   learningMode?: boolean
   isTriageSession?: boolean
   adapter?: CodingAgentAdapter
+  secretSessionToken?: string
   pollingStarted?: boolean
 }
 
@@ -264,7 +267,7 @@ export class AgentManager extends EventEmitter {
     const isTriageSession = task?.status === TaskStatus.Triaging
     const mcpServers = await this.buildMcpServersForAdapter(agentId, { ensureTaskManagement: isMastermind || isTriageSession })
 
-    return {
+    const config: SessionConfig = {
       agentId,
       taskId,
       workspaceDir: workspaceDir || this.db.getWorkspaceDir(taskId),
@@ -273,6 +276,87 @@ export class AgentManager extends EventEmitter {
       mcpServers,
       apiKeys: agent.config?.api_keys
     }
+
+    // Attach secret broker info if agent session has an active secret token
+    const session = this.findSessionByTask(agentId, taskId)
+    if (session?.secretSessionToken) {
+      const brokerPort = getSecretBrokerPort()
+      if (brokerPort) {
+        config.secretBrokerPort = brokerPort
+        config.secretSessionToken = session.secretSessionToken
+        config.secretShellPath = writeSecretShellWrapper()
+      }
+    }
+
+    // Populate secret env vars and system prompt awareness
+    const secretIds = agent.config?.secret_ids
+    console.log(`[AgentManager] buildSessionConfig: agentId=${agentId}, secretIds=${JSON.stringify(secretIds)}`)
+    if (secretIds && secretIds.length > 0) {
+      const secretRecords = this.db.getSecretsByIds(secretIds)
+      const secretsWithValues = this.db.getSecretsWithValues(secretIds)
+
+      // Attach decrypted values for injection (hooks or direct env)
+      if (secretsWithValues.length > 0) {
+        config.secretEnvVars = {}
+        for (const s of secretsWithValues) {
+          config.secretEnvVars[s.env_var_name] = s.value
+        }
+      }
+
+      // Append secret awareness to system prompt so the agent knows what's available
+      if (secretRecords.length > 0) {
+        config.systemPrompt = (config.systemPrompt || '') + this.buildSecretsSystemPrompt(secretRecords)
+      }
+    }
+
+    return config
+  }
+
+  /**
+   * Builds a system prompt snippet describing available secrets.
+   * Tells the agent which env vars exist and how to use them in bash commands.
+   */
+  private buildSecretsSystemPrompt(secrets: SecretRecord[]): string {
+    let prompt = '\n\n## Available Secrets\n\n'
+    prompt += 'The following environment variables are automatically injected into every bash command you run. '
+    prompt += 'Use them with `$VAR_NAME` in bash — do NOT hardcode, echo, or log their values.\n\n'
+    for (const s of secrets) {
+      prompt += `- \`$${s.env_var_name}\` — ${s.name}`
+      if (s.description) prompt += `: ${s.description}`
+      prompt += '\n'
+    }
+    return prompt
+  }
+
+  /**
+   * Sets up a secret broker session for an agent, registering its secrets.
+   * Returns the token, or undefined if no secrets are configured.
+   */
+  private setupSecretSession(agentId: string): string | undefined {
+    const agent = this.db.getAgent(agentId)
+    const secretIds = agent?.config?.secret_ids
+    if (!secretIds || secretIds.length === 0) return undefined
+
+    const brokerPort = getSecretBrokerPort()
+    if (!brokerPort) {
+      console.warn('[AgentManager] Secret broker not running — secrets will not be injected')
+      return undefined
+    }
+
+    const token = randomUUID()
+    registerSecretSession(token, agentId, secretIds)
+    console.log(`[AgentManager] Secret session registered for agent ${agentId} with ${secretIds.length} secret(s)`)
+    return token
+  }
+
+  /** Find an active session by agentId and taskId */
+  private findSessionByTask(agentId: string, taskId: string): AgentSession | undefined {
+    for (const session of this.sessions.values()) {
+      if (session.agentId === agentId && session.taskId === taskId) {
+        return session
+      }
+    }
+    return undefined
   }
 
   /**
@@ -400,6 +484,38 @@ export class AgentManager extends EventEmitter {
       }
     }
 
+    // Add secrets section — name and description only, never the value
+    if (agentId) {
+      const agent2 = this.db.getAgent(agentId)
+      const secretIds = agent2?.config?.secret_ids
+      if (secretIds && secretIds.length > 0) {
+        const secrets = this.db.getSecretsByIds(secretIds)
+        if (secrets.length > 0) {
+          md += `## Available Secrets\n\n`
+          md += `The following secrets are automatically injected as environment variables into every shell/bash command you run.\n`
+          md += `They are managed by the user and securely provided at runtime — you MUST NOT hardcode, echo, log, or ask the user for these values.\n\n`
+          md += `### How to use\n\n`
+          md += `Reference them with \`$VAR_NAME\` in any bash command. Examples:\n\n`
+          md += `\`\`\`bash\n`
+          md += `# Connect to a database\n`
+          md += `psql "$DATABASE_URL"\n\n`
+          md += `# Use an API key in a curl request\n`
+          md += `curl -H "Authorization: Bearer $API_KEY" https://api.example.com\n\n`
+          md += `# Pass to a script\n`
+          md += `python deploy.py --token "$DEPLOY_TOKEN"\n`
+          md += `\`\`\`\n\n`
+          md += `**Important:** Secrets are ONLY available inside bash/shell commands. They are not in your process environment or accessible via tool arguments.\n\n`
+          md += `### Available secrets\n\n`
+          for (const secret of secrets) {
+            md += `- **\`$${secret.env_var_name}\`** — ${secret.name}`
+            if (secret.description) md += `: ${secret.description}`
+            md += `\n`
+          }
+          md += `\n---\n\n`
+        }
+      }
+    }
+
     // Add repository information
     if (repos.length > 0) {
       md += `## Repositories\n\n`
@@ -476,6 +592,36 @@ export class AgentManager extends EventEmitter {
         }
 
         md += `---\n\n`
+      }
+    }
+
+    // Add secrets section — name and description only, never the value
+    if (agentId) {
+      const agentForSecrets = this.db.getAgent(agentId)
+      const secretIds = agentForSecrets?.config?.secret_ids
+      if (secretIds && secretIds.length > 0) {
+        const secrets = this.db.getSecretsByIds(secretIds)
+        if (secrets.length > 0) {
+          md += `## Available Secrets\n\n`
+          md += `The following secrets are automatically injected as environment variables into every bash command you execute.\n`
+          md += `They are securely managed — you MUST NOT hardcode, echo, print, log, or ask the user for these values.\n\n`
+          md += `### Usage\n\n`
+          md += `Use \`$VAR_NAME\` directly in any bash command:\n\n`
+          md += `\`\`\`bash\n`
+          md += `# They are already set — just reference them\n`
+          md += `psql "$DATABASE_URL"\n`
+          md += `curl -H "Authorization: Bearer $API_KEY" https://api.example.com\n`
+          md += `python deploy.py --token "$DEPLOY_TOKEN"\n`
+          md += `\`\`\`\n\n`
+          md += `**Important:** Secrets are ONLY available inside bash/shell commands (the Bash tool). They are not accessible in your own process environment, tool arguments, or file contents.\n\n`
+          md += `### Available secrets\n\n`
+          for (const secret of secrets) {
+            md += `- **\`$${secret.env_var_name}\`** — ${secret.name}`
+            if (secret.description) md += `: ${secret.description}`
+            md += `\n`
+          }
+          md += `\n---\n\n`
+        }
       }
     }
 
@@ -770,6 +916,33 @@ export class AgentManager extends EventEmitter {
       apiKeys: agent.config?.api_keys
     }
 
+    // Setup secret broker session if agent has secrets
+    const secretToken = this.setupSecretSession(agentId)
+    if (secretToken) {
+      const brokerPort = getSecretBrokerPort()
+      if (brokerPort) {
+        sessionConfig.secretBrokerPort = brokerPort
+        sessionConfig.secretSessionToken = secretToken
+        sessionConfig.secretShellPath = writeSecretShellWrapper()
+      }
+    }
+
+    // Populate secret env vars + system prompt awareness
+    const secretIds = agent.config?.secret_ids
+    if (secretIds && secretIds.length > 0) {
+      const secretRecords = this.db.getSecretsByIds(secretIds)
+      const secretsWithValues = this.db.getSecretsWithValues(secretIds)
+      if (secretsWithValues.length > 0) {
+        sessionConfig.secretEnvVars = {}
+        for (const s of secretsWithValues) {
+          sessionConfig.secretEnvVars[s.env_var_name] = s.value
+        }
+      }
+      if (secretRecords.length > 0) {
+        sessionConfig.systemPrompt = (sessionConfig.systemPrompt || '') + this.buildSecretsSystemPrompt(secretRecords)
+      }
+    }
+
     // Initialize adapter
     await adapter.initialize()
 
@@ -788,7 +961,8 @@ export class AgentManager extends EventEmitter {
       seenPartIds: new Set(),
       partContentLengths: new Map(),
       adapter,
-      isTriageSession
+      isTriageSession,
+      secretSessionToken: secretToken
     })
 
     // Store session ID in database
@@ -1122,6 +1296,33 @@ export class AgentManager extends EventEmitter {
       apiKeys: agent.config?.api_keys
     }
 
+    // Setup secret broker session if agent has secrets
+    const secretToken = this.setupSecretSession(agentId)
+    if (secretToken) {
+      const brokerPort = getSecretBrokerPort()
+      if (brokerPort) {
+        sessionConfig.secretBrokerPort = brokerPort
+        sessionConfig.secretSessionToken = secretToken
+        sessionConfig.secretShellPath = writeSecretShellWrapper()
+      }
+    }
+
+    // Populate secret env vars + system prompt awareness
+    const secretIds = agent.config?.secret_ids
+    if (secretIds && secretIds.length > 0) {
+      const secretRecords = this.db.getSecretsByIds(secretIds)
+      const secretsWithValues = this.db.getSecretsWithValues(secretIds)
+      if (secretsWithValues.length > 0) {
+        sessionConfig.secretEnvVars = {}
+        for (const s of secretsWithValues) {
+          sessionConfig.secretEnvVars[s.env_var_name] = s.value
+        }
+      }
+      if (secretRecords.length > 0) {
+        sessionConfig.systemPrompt = (sessionConfig.systemPrompt || '') + this.buildSecretsSystemPrompt(secretRecords)
+      }
+    }
+
     // Initialize adapter
     await adapter.initialize()
 
@@ -1203,7 +1404,8 @@ export class AgentManager extends EventEmitter {
       seenPartIds: new Set(),
       partContentLengths: new Map(),
       adapter,
-      pollingStarted: false
+      pollingStarted: false,
+      secretSessionToken: secretToken
     })
 
     // Notify renderer — session is resumed but idle (no work in progress)
@@ -1432,6 +1634,12 @@ export class AgentManager extends EventEmitter {
       }
     }
 
+    // Clean up secret broker session
+    if (session.secretSessionToken) {
+      unregisterSecretSession(session.secretSessionToken)
+      console.log(`[AgentManager] Unregistered secret session for ${sessionId}`)
+    }
+
     this.sessions.delete(sessionId)
 
     // Only reset task status if explicitly requested (e.g., user manually stopped, not app shutdown)
@@ -1550,20 +1758,12 @@ export class AgentManager extends EventEmitter {
       }
     })
 
-    // Build session config
-    const agent = this.db.getAgent(session.agentId)!
-    const isMastermind = session.taskId === 'mastermind-session'
-    const isTriageSession = session.isTriageSession || false
-    const mcpServers = await this.buildMcpServersForAdapter(session.agentId, { ensureTaskManagement: isMastermind || isTriageSession })
-    const sessionConfig: SessionConfig = {
-      agentId: session.agentId,
-      taskId: session.taskId,
-      workspaceDir: session.workspaceDir || process.cwd(),
-      model: agent.config?.model,
-      systemPrompt: agent.config?.system_prompt,
-      mcpServers,
-      apiKeys: agent.config?.api_keys
-    }
+    // Build session config (includes secret broker fields if agent has secrets)
+    const sessionConfig = await this.buildSessionConfig(
+      session.agentId,
+      session.taskId,
+      session.workspaceDir || process.cwd()
+    )
 
     // Send prompt via adapter
     const parts: MessagePart[] = [

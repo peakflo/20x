@@ -1,4 +1,6 @@
 import { Agent as UndiciAgent } from 'undici'
+import { mkdirSync, writeFileSync, rmSync, existsSync } from 'fs'
+import { join } from 'path'
 import type {
   CodingAgentAdapter,
   SessionConfig,
@@ -33,6 +35,10 @@ export class OpencodeAdapter implements CodingAgentAdapter {
   private clients: Map<string, OpencodeClient> = new Map() // sessionId -> ocClient
   private v2Client: V2OpencodeClient | null = null
   private promptAborts: Map<string, AbortController> = new Map()
+  /** Absolute path to the secret-injector plugin file (written before server start) */
+  private pluginFilePath: string | null = null
+  /** Absolute path to the secrets exports file (read dynamically by the plugin) */
+  private secretsExportsPath: string | null = null
 
   constructor() {
     this.sdkLoading = this.loadSDK()
@@ -141,7 +147,14 @@ export class OpencodeAdapter implements CodingAgentAdapter {
         const hostname = url.hostname
         const port = parseInt(url.port || '4096', 10)
 
-        const result = await OpenCodeSDK!.createOpencode({ hostname, port })
+        // Pass secret-injector plugin path via config so OpenCode loads it at startup
+        const serverConfig: Record<string, unknown> = {}
+        if (this.pluginFilePath) {
+          serverConfig.plugin = [this.pluginFilePath]
+          console.log(`[OpencodeAdapter] Passing plugin to server config: ${this.pluginFilePath}`)
+        }
+
+        const result = await OpenCodeSDK!.createOpencode({ hostname, port, config: serverConfig })
         this.serverInstance = result.server
         this.serverUrl = targetUrl
 
@@ -155,10 +168,29 @@ export class OpencodeAdapter implements CodingAgentAdapter {
   }
 
   async createSession(config: SessionConfig): Promise<string> {
+    // Write secret files BEFORE server starts so the plugin is discovered at startup.
+    // The plugin reads secrets dynamically from a file, so subsequent updates work
+    // even when the server is already running.
+    this.writeSecretFiles(config)
+
     await this.ensureServerRunning(config.serverUrl || DEFAULT_SERVER_URL)
 
     const baseUrl = this.serverUrl || config.serverUrl || DEFAULT_SERVER_URL
     const ocClient = OpenCodeSDK!.createOpencodeClient({ baseUrl, fetch: noTimeoutFetch as unknown as (request: Request) => ReturnType<typeof fetch> })
+
+    // Register secret-injector plugin via config.update() so the running server loads it
+    // for this workspace directory — no server restart needed.
+    if (this.pluginFilePath && config.workspaceDir) {
+      try {
+        await ocClient.config.update({
+          body: { plugin: [this.pluginFilePath] } as Record<string, unknown>,
+          ...(config.workspaceDir && { query: { directory: config.workspaceDir } })
+        })
+        console.log(`[OpencodeAdapter] Registered plugin via config.update: ${this.pluginFilePath}`)
+      } catch (err) {
+        console.warn(`[OpencodeAdapter] config.update for plugin failed (will rely on startup loading):`, err)
+      }
+    }
 
     // Register MCP servers BEFORE creating session so the session picks them up
     if (config.mcpServers) {
@@ -268,10 +300,26 @@ export class OpencodeAdapter implements CodingAgentAdapter {
   }
 
   async resumeSession(sessionId: string, config: SessionConfig): Promise<SessionMessage[]> {
+    // Update secrets file before resuming (plugin reads dynamically)
+    this.writeSecretFiles(config)
+
     await this.ensureServerRunning(config.serverUrl || DEFAULT_SERVER_URL)
 
     const baseUrl = this.serverUrl || config.serverUrl || DEFAULT_SERVER_URL
     const ocClient = OpenCodeSDK!.createOpencodeClient({ baseUrl, fetch: noTimeoutFetch as unknown as (request: Request) => ReturnType<typeof fetch> })
+
+    // Register secret-injector plugin for this workspace
+    if (this.pluginFilePath && config.workspaceDir) {
+      try {
+        await ocClient.config.update({
+          body: { plugin: [this.pluginFilePath] } as Record<string, unknown>,
+          ...(config.workspaceDir && { query: { directory: config.workspaceDir } })
+        })
+        console.log(`[OpencodeAdapter] Registered plugin via config.update: ${this.pluginFilePath}`)
+      } catch (err) {
+        console.warn(`[OpencodeAdapter] config.update for plugin failed:`, err)
+      }
+    }
 
     // Validate session exists
     const getResult = await ocClient.session.get({
@@ -531,6 +579,82 @@ export class OpencodeAdapter implements CodingAgentAdapter {
   async destroySession(sessionId: string, _config: SessionConfig): Promise<void> {
     await this.abortPrompt(sessionId, _config)
     this.clients.delete(sessionId)
+
+    // Clean up secret files (plugin + exports)
+    for (const filePath of [this.pluginFilePath, this.secretsExportsPath]) {
+      if (filePath) {
+        try {
+          if (existsSync(filePath)) {
+            rmSync(filePath)
+            console.log(`[OpencodeAdapter] Removed secret file: ${filePath}`)
+          }
+        } catch (err) {
+          console.warn(`[OpencodeAdapter] Failed to remove secret file: ${err}`)
+        }
+      }
+    }
+    this.pluginFilePath = null
+    this.secretsExportsPath = null
+  }
+
+  /**
+   * Writes two files for secret injection:
+   * 1. `.opencode/.20x-secrets` — pre-formatted export commands (read dynamically by the plugin)
+   * 2. `.opencode/plugins/20x-secret-injector.js` — plugin using `tool.execute.before`
+   *
+   * The plugin reads the exports file on every bash command, so secrets can be
+   * updated without restarting the server. Both files are cleaned up on session destroy.
+   *
+   * MUST be called BEFORE ensureServerRunning() so the plugin is discovered at startup.
+   */
+  private writeSecretFiles(config: SessionConfig): void {
+    const secretCount = config.secretEnvVars ? Object.keys(config.secretEnvVars).length : 0
+    console.log(`[OpencodeAdapter] writeSecretFiles: workspaceDir=${config.workspaceDir}, secretCount=${secretCount}`)
+    if (!config.secretEnvVars || secretCount === 0 || !config.workspaceDir) {
+      console.log(`[OpencodeAdapter] writeSecretFiles: skipping — no secrets or no workspaceDir`)
+      return
+    }
+
+    const openCodeDir = join(config.workspaceDir, '.opencode')
+    const pluginsDir = join(openCodeDir, 'plugins')
+    mkdirSync(pluginsDir, { recursive: true })
+
+    // 1. Write pre-formatted export commands to a secrets file.
+    //    The plugin reads this file on every bash invocation so updates take effect immediately.
+    const exportLines = Object.entries(config.secretEnvVars)
+      .map(([k, v]) => 'export ' + k + "='" + v.replace(/'/g, "'\\''" ) + "'")
+      .join('\n')
+
+    const secretsPath = join(openCodeDir, '.20x-secrets')
+    writeFileSync(secretsPath, exportLines, 'utf-8')
+    this.secretsExportsPath = secretsPath
+
+    // 2. Write the plugin JS that reads the secrets file and prepends exports to bash commands.
+    //    Uses tool.execute.before hook (same pattern as Claude Code PreToolUse).
+    const pluginPath = join(pluginsDir, '20x-secret-injector.js')
+    const pluginCode =
+      '// Auto-generated by 20x — do not edit. Removed on session destroy.\n' +
+      'import { readFileSync } from "fs";\n' +
+      '\n' +
+      'var SECRETS_PATH = ' + JSON.stringify(secretsPath) + ';\n' +
+      '\n' +
+      'export var SecretInjector = async function() {\n' +
+      '  return {\n' +
+      '    "tool.execute.before": async function(input, output) {\n' +
+      '      if (input.tool === "bash") {\n' +
+      '        try {\n' +
+      '          var exports = readFileSync(SECRETS_PATH, "utf-8").trim();\n' +
+      '          if (exports) output.args.command = exports + "\\n" + output.args.command;\n' +
+      '        } catch(e) {}\n' +
+      '      }\n' +
+      '    }\n' +
+      '  };\n' +
+      '};\n'
+
+    writeFileSync(pluginPath, pluginCode, 'utf-8')
+    this.pluginFilePath = pluginPath
+
+    console.log(`[OpencodeAdapter] Wrote secret files: plugin=${pluginPath}, secrets=${secretsPath} (${Object.keys(config.secretEnvVars).length} secret(s))`)
   }
 
   async getAllMessages(sessionId: string, config: SessionConfig): Promise<SessionMessage[]> {

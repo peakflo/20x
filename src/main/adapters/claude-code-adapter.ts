@@ -23,6 +23,8 @@ type Query = import('@anthropic-ai/claude-agent-sdk').Query
 type SDKMessage = import('@anthropic-ai/claude-agent-sdk').SDKMessage
 type Options = import('@anthropic-ai/claude-agent-sdk').Options
 type McpServerConfig = import('@anthropic-ai/claude-agent-sdk').McpServerConfig
+type HookCallback = import('@anthropic-ai/claude-agent-sdk').HookCallback
+type HookCallbackMatcher = import('@anthropic-ai/claude-agent-sdk').HookCallbackMatcher
 
 let ClaudeAgentSDK: ClaudeSDK | null = null
 
@@ -89,7 +91,9 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
 
   /**
    * Build environment variables for Claude process
-   * Removes CLAUDECODE to prevent nested session errors
+   * Removes CLAUDECODE to prevent nested session errors.
+   * When secrets are configured, sets SHELL to the secret-shell.sh wrapper
+   * so every bash command fetches secrets from the broker transparently.
    */
   private buildClaudeEnvironment(): Record<string, string> {
     const env = { ...process.env } as Record<string, string>
@@ -98,6 +102,54 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
     delete env.CLAUDECODE
 
     return env
+  }
+
+  /**
+   * Build PreToolUse hooks for secret injection.
+   * Registers a hook that prepends `export KEY='value'` lines to each Bash command.
+   * The LLM never sees the modified command — only the original tool call and
+   * the output appear in conversation context.
+   */
+  private buildSecretHooks(config: SessionConfig): Partial<Record<string, HookCallbackMatcher[]>> | undefined {
+    const secretEnvVars = config.secretEnvVars
+    if (!secretEnvVars || Object.keys(secretEnvVars).length === 0) {
+      return undefined
+    }
+
+    // Build shell export lines — single-quote values, escape embedded quotes
+    const exportLines = Object.entries(secretEnvVars)
+      .map(([k, v]) => `export ${k}='${v.replace(/'/g, "'\\''")}'`)
+      .join('\n')
+
+    console.log(`[ClaudeCodeAdapter] Registering PreToolUse hook for secrets: [${Object.keys(secretEnvVars).join(', ')}]`)
+
+    const hook: HookCallback = async (input) => {
+      const toolInput = ('tool_input' in input ? input.tool_input : undefined) as Record<string, unknown> | undefined
+      if (!toolInput?.command) {
+        return {}
+      }
+
+      // Prepend secret exports to the bash command
+      const originalCommand = toolInput.command as string
+      const modifiedCommand = exportLines + '\n' + originalCommand
+
+      return {
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse' as const,
+          updatedInput: {
+            ...toolInput,
+            command: modifiedCommand
+          }
+        }
+      }
+    }
+
+    return {
+      PreToolUse: [{
+        matcher: 'Bash',
+        hooks: [hook]
+      }]
+    }
   }
 
   private async loadSDK(): Promise<void> {
@@ -448,6 +500,7 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
     session.abortController = abortController
 
     // Build options
+    const secretHooks = this.buildSecretHooks(config)
     const options: Options = {
       cwd: config.workspaceDir,
       pathToClaudeCodeExecutable: claudePath,
@@ -458,6 +511,7 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
       abortController,
       permissionMode: 'bypassPermissions', // Auto-approve all actions (user has already chosen to run agent)
       allowDangerouslySkipPermissions: true, // Required for bypassPermissions mode
+      ...(secretHooks ? { hooks: secretHooks } : {}),
     }
 
     // Determine session continuation mode
@@ -943,9 +997,17 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
       // Content is nested inside message.content for Claude Code SDK format
       const content = msgWithProps.message?.content || (Array.isArray(msgWithProps.content) ? msgWithProps.content : [])
 
-      for (const block of content) {
+      // Use the stable API message ID (e.g. msg_01FG7...) for dedup, not the streaming UUID.
+      // Claude Code sends multiple streaming chunks with different UUIDs but the same API message ID
+      // and the same text block, which would otherwise create duplicate text bubbles in the UI.
+      const stableId = msgWithProps.message?.id || msgWithProps.uuid || msgWithProps.type
+
+      for (let blockIdx = 0; blockIdx < content.length; blockIdx++) {
+        const block = content[blockIdx]
         const blockWithProps = block as { type?: string; text?: string; name?: string; input?: unknown; id?: string }
-        const partId = `${msgWithProps.uuid || msgWithProps.type}-${blockWithProps.type}-${blockWithProps.id || Date.now()}`
+        // For text blocks (no id), use stable message ID + block index for consistent dedup.
+        // For tool_use blocks, blockWithProps.id is the tool_use_id which is already stable.
+        const partId = `${stableId}-${blockWithProps.type}-${blockWithProps.id || blockIdx}`
         if (seenPartIds.has(partId)) continue
         seenPartIds.add(partId)
 

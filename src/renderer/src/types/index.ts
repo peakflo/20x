@@ -4,6 +4,7 @@ export enum SettingsTab {
   GENERAL = 'general',
   AGENTS = 'agents',
   TOOLS_MCP = 'tools-mcp',
+  SECRETS = 'secrets',
   INTEGRATIONS = 'integrations',
   ADVANCED = 'advanced'
 }
@@ -12,6 +13,7 @@ export const SETTINGS_TABS: { value: SettingsTab; label: string; icon: string }[
   { value: SettingsTab.GENERAL, label: 'General', icon: 'Settings' },
   { value: SettingsTab.AGENTS, label: 'Agents', icon: 'Users' },
   { value: SettingsTab.TOOLS_MCP, label: 'Tools & MCP', icon: 'Server' },
+  { value: SettingsTab.SECRETS, label: 'Secrets', icon: 'KeyRound' },
   { value: SettingsTab.INTEGRATIONS, label: 'Integrations', icon: 'Workflow' },
   { value: SettingsTab.ADVANCED, label: 'Advanced', icon: 'Wrench' }
 ]
@@ -124,6 +126,7 @@ export interface AgentConfig {
   system_prompt?: string
   mcp_servers?: Array<string | AgentMcpServerEntry>
   skill_ids?: string[]
+  secret_ids?: string[]
   max_parallel_sessions?: number  // Default: 1, range: 1-10
   api_keys?: {
     openai?: string  // For Codex
@@ -397,6 +400,32 @@ export interface UpdateSkillDTO {
   uses?: number
   last_used?: string | null
   tags?: string[]
+}
+
+// ── Secret types ──────────────────────────────────────────────
+
+export interface Secret {
+  id: string
+  name: string
+  description: string
+  env_var_name: string
+  // value intentionally omitted — never sent to renderer
+  created_at: string
+  updated_at: string
+}
+
+export interface CreateSecretDTO {
+  name: string
+  description: string
+  env_var_name: string
+  value: string
+}
+
+export interface UpdateSecretDTO {
+  name?: string
+  description?: string
+  env_var_name?: string
+  value?: string  // Only set if user wants to change the value
 }
 
 // ── Plugin types ─────────────────────────────────────────────

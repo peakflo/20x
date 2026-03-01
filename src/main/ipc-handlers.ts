@@ -17,7 +17,9 @@ import type {
   CreateTaskSourceData,
   UpdateTaskSourceData,
   CreateSkillData,
-  UpdateSkillData
+  UpdateSkillData,
+  CreateSecretData,
+  UpdateSecretData
 } from './database'
 import type { AgentManager } from './agent-manager'
 import type { GitHubManager } from './github-manager'
@@ -440,6 +442,27 @@ export function registerIpcHandlers(
 
   ipcMain.handle('skills:delete', (_, id: string) => {
     return db.deleteSkill(id)
+  })
+
+  // Secret handlers
+  ipcMain.handle('secrets:getAll', () => {
+    return db.getSecrets()
+  })
+
+  ipcMain.handle('secrets:get', (_, id: string) => {
+    return db.getSecret(id)
+  })
+
+  ipcMain.handle('secrets:create', (_, data: CreateSecretData) => {
+    return db.createSecret(data)
+  })
+
+  ipcMain.handle('secrets:update', (_, id: string, data: UpdateSecretData) => {
+    return db.updateSecret(id, data)
+  })
+
+  ipcMain.handle('secrets:delete', (_, id: string) => {
+    return db.deleteSecret(id)
   })
 
   // Dependency check handler

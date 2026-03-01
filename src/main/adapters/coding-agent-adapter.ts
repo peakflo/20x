@@ -48,6 +48,15 @@ export interface SessionConfig {
     openai?: string
     anthropic?: string
   }
+  /** Port of the local secret broker HTTP server */
+  secretBrokerPort?: number
+  /** Per-session token for authenticating with the secret broker */
+  secretSessionToken?: string
+  /** Absolute path to the secret-shell.sh wrapper script */
+  secretShellPath?: string
+  /** Decrypted secret env vars to inject directly into the agent process env.
+   *  Used when the agent runtime doesn't respect $SHELL (e.g. Claude Code). */
+  secretEnvVars?: Record<string, string>
 }
 
 export interface SessionStatus {
