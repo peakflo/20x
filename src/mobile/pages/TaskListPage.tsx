@@ -71,7 +71,7 @@ export function TaskListPage({ onNavigate }: { onNavigate: (route: Route) => voi
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder="Search tasks..."
-          className="w-full bg-muted border border-border/50 rounded-lg px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-ring mb-2 min-h-[36px]"
+          className="w-full bg-transparent border border-input rounded-md px-3 py-1 h-9 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-ring focus:ring-1 focus:ring-ring/30 mb-2"
         />
 
         {/* Filter pills */}
@@ -108,7 +108,7 @@ export function TaskListPage({ onNavigate }: { onNavigate: (route: Route) => voi
                 key={task.id}
                 task={task}
                 onSelect={() => onNavigate({ page: 'detail', taskId: task.id })}
-                hasActiveSession={sessions.has(task.id)}
+                session={sessions.get(task.id)}
               />
             ))}
 
@@ -126,7 +126,7 @@ export function TaskListPage({ onNavigate }: { onNavigate: (route: Route) => voi
                     key={task.id}
                     task={task}
                     onSelect={() => onNavigate({ page: 'detail', taskId: task.id })}
-                    hasActiveSession={sessions.has(task.id)}
+                    session={sessions.get(task.id)}
                   />
                 ))}
               </>
