@@ -23,6 +23,8 @@ type Query = import('@anthropic-ai/claude-agent-sdk').Query
 type SDKMessage = import('@anthropic-ai/claude-agent-sdk').SDKMessage
 type Options = import('@anthropic-ai/claude-agent-sdk').Options
 type McpServerConfig = import('@anthropic-ai/claude-agent-sdk').McpServerConfig
+type HookCallback = import('@anthropic-ai/claude-agent-sdk').HookCallback
+type HookCallbackMatcher = import('@anthropic-ai/claude-agent-sdk').HookCallbackMatcher
 
 let ClaudeAgentSDK: ClaudeSDK | null = null
 
@@ -93,24 +95,61 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
    * When secrets are configured, sets SHELL to the secret-shell.sh wrapper
    * so every bash command fetches secrets from the broker transparently.
    */
-  private buildClaudeEnvironment(config?: SessionConfig): Record<string, string> {
+  private buildClaudeEnvironment(): Record<string, string> {
     const env = { ...process.env } as Record<string, string>
 
     // Remove CLAUDECODE to prevent nested session error
     delete env.CLAUDECODE
 
-    // Inject secret env vars directly into process environment.
-    // Claude Code doesn't use $SHELL to run bash commands, so the shell wrapper
-    // approach doesn't work. Instead, inject decrypted secret values directly —
-    // they're inherited by child processes (bash commands) the agent spawns.
-    if (config?.secretEnvVars && Object.keys(config.secretEnvVars).length > 0) {
-      for (const [key, value] of Object.entries(config.secretEnvVars)) {
-        env[key] = value
-      }
-      console.log(`[ClaudeCodeAdapter] Secret env vars injected: [${Object.keys(config.secretEnvVars).join(', ')}]`)
+    return env
+  }
+
+  /**
+   * Build PreToolUse hooks for secret injection.
+   * Registers a hook that prepends `export KEY='value'` lines to each Bash command.
+   * The LLM never sees the modified command — only the original tool call and
+   * the output appear in conversation context.
+   */
+  private buildSecretHooks(config: SessionConfig): Partial<Record<string, HookCallbackMatcher[]>> | undefined {
+    const secretEnvVars = config.secretEnvVars
+    if (!secretEnvVars || Object.keys(secretEnvVars).length === 0) {
+      return undefined
     }
 
-    return env
+    // Build shell export lines — single-quote values, escape embedded quotes
+    const exportLines = Object.entries(secretEnvVars)
+      .map(([k, v]) => `export ${k}='${v.replace(/'/g, "'\\''")}'`)
+      .join('\n')
+
+    console.log(`[ClaudeCodeAdapter] Registering PreToolUse hook for secrets: [${Object.keys(secretEnvVars).join(', ')}]`)
+
+    const hook: HookCallback = async (input) => {
+      const toolInput = input.tool_input as Record<string, unknown> | undefined
+      if (!toolInput?.command) {
+        return {}
+      }
+
+      // Prepend secret exports to the bash command
+      const originalCommand = toolInput.command as string
+      const modifiedCommand = exportLines + '\n' + originalCommand
+
+      return {
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse' as const,
+          updatedInput: {
+            ...toolInput,
+            command: modifiedCommand
+          }
+        }
+      }
+    }
+
+    return {
+      PreToolUse: [{
+        matcher: 'Bash',
+        hooks: [hook]
+      }]
+    }
   }
 
   private async loadSDK(): Promise<void> {
@@ -461,16 +500,18 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
     session.abortController = abortController
 
     // Build options
+    const secretHooks = this.buildSecretHooks(config)
     const options: Options = {
       cwd: config.workspaceDir,
       pathToClaudeCodeExecutable: claudePath,
-      env: this.buildClaudeEnvironment(config),
+      env: this.buildClaudeEnvironment(),
       mcpServers: config.mcpServers as Record<string, McpServerConfig> | undefined,
       model: config.model,
       systemPrompt: config.systemPrompt,
       abortController,
       permissionMode: 'bypassPermissions', // Auto-approve all actions (user has already chosen to run agent)
       allowDangerouslySkipPermissions: true, // Required for bypassPermissions mode
+      ...(secretHooks ? { hooks: secretHooks } : {}),
     }
 
     // Determine session continuation mode
