@@ -39,6 +39,8 @@ export class OpencodeAdapter implements CodingAgentAdapter {
   private pluginFilePath: string | null = null
   /** Absolute path to the secrets exports file (read dynamically by the plugin) */
   private secretsExportsPath: string | null = null
+  /** Whether the current running server has our secret-injector plugin loaded */
+  private pluginLoadedInServer = false
 
   constructor() {
     this.sdkLoading = this.loadSDK()
@@ -117,7 +119,14 @@ export class OpencodeAdapter implements CodingAgentAdapter {
   private async ensureServerRunning(targetUrl: string = DEFAULT_SERVER_URL): Promise<void> {
     if (this.serverUrl) {
       if (this.serverUrl === targetUrl) {
-        return
+        // Restart embedded server if we have a plugin that wasn't loaded yet
+        if (this.pluginFilePath && !this.pluginLoadedInServer && this.serverInstance) {
+          console.log('[OpencodeAdapter] Restarting embedded server to load secret-injector plugin')
+          await this.stopServer()
+          // Fall through to start a new server
+        } else {
+          return
+        }
       }
     }
 
@@ -131,11 +140,15 @@ export class OpencodeAdapter implements CodingAgentAdapter {
 
     this.serverStarting = (async () => {
       try {
-        const accessibleUrl = await this.findAccessibleServer(targetUrl)
-        if (accessibleUrl) {
-          this.serverUrl = accessibleUrl
-          this.serverInstance = null
-          return
+        // Skip external server check if we need to start our own embedded server with plugins
+        const needsEmbeddedWithPlugin = this.pluginFilePath && !this.pluginLoadedInServer
+        if (!needsEmbeddedWithPlugin) {
+          const accessibleUrl = await this.findAccessibleServer(targetUrl)
+          if (accessibleUrl) {
+            this.serverUrl = accessibleUrl
+            this.serverInstance = null
+            return
+          }
         }
 
         if (!isDefaultUrl) {
@@ -157,6 +170,9 @@ export class OpencodeAdapter implements CodingAgentAdapter {
         const result = await OpenCodeSDK!.createOpencode({ hostname, port, config: serverConfig })
         this.serverInstance = result.server
         this.serverUrl = targetUrl
+        if (this.pluginFilePath) {
+          this.pluginLoadedInServer = true
+        }
 
         await new Promise(resolve => setTimeout(resolve, 1000))
       } finally {
@@ -781,6 +797,7 @@ export class OpencodeAdapter implements CodingAgentAdapter {
       }
       this.serverInstance = null
       this.serverUrl = null
+      this.pluginLoadedInServer = false
     }
   }
 }
