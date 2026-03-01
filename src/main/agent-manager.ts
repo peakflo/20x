@@ -5,7 +5,7 @@ import { join, delimiter } from 'path'
 import { existsSync, copyFileSync, mkdirSync, writeFileSync, readFileSync, readdirSync, statSync } from 'fs'
 import { Agent as UndiciAgent } from 'undici'
 import type { BrowserWindow } from 'electron'
-import type { DatabaseManager, AgentConfigRecord, AgentMcpServerEntry, OutputFieldRecord, SecretRecord, SkillRecord, TaskRecord } from './database'
+import type { DatabaseManager, AgentMcpServerEntry, OutputFieldRecord, SecretRecord, SkillRecord, TaskRecord } from './database'
 import { TaskStatus } from '../shared/constants'
 import type { WorktreeManager } from './worktree-manager'
 import type { GitHubManager } from './github-manager'
@@ -289,7 +289,7 @@ export class AgentManager extends EventEmitter {
     }
 
     // Populate secret env vars and system prompt awareness
-    const secretIds = (agent.config as AgentConfigRecord)?.secret_ids
+    const secretIds = agent.config?.secret_ids
     console.log(`[AgentManager] buildSessionConfig: agentId=${agentId}, secretIds=${JSON.stringify(secretIds)}`)
     if (secretIds && secretIds.length > 0) {
       const secretRecords = this.db.getSecretsByIds(secretIds)
@@ -334,7 +334,7 @@ export class AgentManager extends EventEmitter {
    */
   private setupSecretSession(agentId: string): string | undefined {
     const agent = this.db.getAgent(agentId)
-    const secretIds = (agent?.config as any)?.secret_ids as string[] | undefined
+    const secretIds = agent?.config?.secret_ids
     if (!secretIds || secretIds.length === 0) return undefined
 
     const brokerPort = getSecretBrokerPort()
@@ -487,7 +487,7 @@ export class AgentManager extends EventEmitter {
     // Add secrets section — name and description only, never the value
     if (agentId) {
       const agent2 = this.db.getAgent(agentId)
-      const secretIds = (agent2?.config as any)?.secret_ids as string[] | undefined
+      const secretIds = agent2?.config?.secret_ids
       if (secretIds && secretIds.length > 0) {
         const secrets = this.db.getSecretsByIds(secretIds)
         if (secrets.length > 0) {
@@ -598,7 +598,7 @@ export class AgentManager extends EventEmitter {
     // Add secrets section — name and description only, never the value
     if (agentId) {
       const agentForSecrets = this.db.getAgent(agentId)
-      const secretIds = (agentForSecrets?.config as any)?.secret_ids as string[] | undefined
+      const secretIds = agentForSecrets?.config?.secret_ids
       if (secretIds && secretIds.length > 0) {
         const secrets = this.db.getSecretsByIds(secretIds)
         if (secrets.length > 0) {
@@ -928,7 +928,7 @@ export class AgentManager extends EventEmitter {
     }
 
     // Populate secret env vars + system prompt awareness
-    const secretIds = (agent.config as AgentConfigRecord)?.secret_ids
+    const secretIds = agent.config?.secret_ids
     if (secretIds && secretIds.length > 0) {
       const secretRecords = this.db.getSecretsByIds(secretIds)
       const secretsWithValues = this.db.getSecretsWithValues(secretIds)
@@ -1308,7 +1308,7 @@ export class AgentManager extends EventEmitter {
     }
 
     // Populate secret env vars + system prompt awareness
-    const secretIds = (agent.config as AgentConfigRecord)?.secret_ids
+    const secretIds = agent.config?.secret_ids
     if (secretIds && secretIds.length > 0) {
       const secretRecords = this.db.getSecretsByIds(secretIds)
       const secretsWithValues = this.db.getSecretsWithValues(secretIds)
