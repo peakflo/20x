@@ -64,6 +64,7 @@ export class AgentManager extends EventEmitter {
   private adapters: Map<string, CodingAgentAdapter> = new Map()  // Adapter instances
   private worktreeManager: WorktreeManager | null = null
   private githubManager: GitHubManager | null = null
+  private externalListeners: Array<(channel: string, data: unknown) => void> = []
 
   constructor(db: DatabaseManager) {
     super()
@@ -2553,9 +2554,21 @@ Important:
     return result
   }
 
+  /**
+   * Register an external listener that receives all events sent to the renderer.
+   * Used by the mobile API server to broadcast via WebSocket.
+   */
+  addExternalListener(fn: (channel: string, data: unknown) => void): void {
+    this.externalListeners.push(fn)
+  }
+
   private sendToRenderer(channel: string, data: unknown): void {
     if (this.mainWindow && !this.mainWindow.isDestroyed()) {
       this.mainWindow.webContents.send(channel, data)
+    }
+    // Also notify external listeners (mobile API WebSocket)
+    for (const fn of this.externalListeners) {
+      try { fn(channel, data) } catch { /* ignore */ }
     }
   }
 }

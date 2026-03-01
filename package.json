@@ -8,7 +8,7 @@
   "license": "MIT",
   "scripts": {
     "dev": "electron-vite dev",
-    "build": "electron-vite build",
+    "build": "electron-vite build && vite build --config vite.mobile.config.ts",
     "preview": "electron-vite preview",
     "postinstall": "node scripts/rebuild-native.mjs",
     "test": "ELECTRON_RUN_AS_NODE=1 electron ./node_modules/vitest/vitest.mjs",
@@ -17,10 +17,12 @@
     "test:renderer": "ELECTRON_RUN_AS_NODE=1 electron ./node_modules/vitest/vitest.mjs --project renderer",
     "lint": "eslint .",
     "typecheck": "tsc --build --noEmit",
-    "build:mac": "electron-vite build && electron-builder --mac",
-    "build:win": "electron-vite build && electron-builder --win",
-    "build:linux": "electron-vite build && electron-builder --linux",
+    "build:mac": "electron-vite build && vite build --config vite.mobile.config.ts && electron-builder --mac",
+    "build:win": "electron-vite build && vite build --config vite.mobile.config.ts && electron-builder --win",
+    "build:linux": "electron-vite build && vite build --config vite.mobile.config.ts && electron-builder --linux",
     "prepare": "husky",
+    "dev:mobile": "vite --config vite.mobile.config.ts",
+    "build:mobile": "vite build --config vite.mobile.config.ts",
     "release": "bash scripts/release.sh"
   },
   "dependencies": {
@@ -56,6 +58,7 @@
     "remark-gfm": "^4.0.1",
     "tailwind-merge": "^2.6.0",
     "undici": "^7.21.0",
+    "ws": "^8.19.0",
     "zustand": "^5.0.3"
   },
   "devDependencies": {
@@ -67,6 +70,7 @@
     "@types/better-sqlite3": "^7.6.13",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
+    "@types/ws": "^8.18.1",
     "@vitejs/plugin-react": "^4.3.4",
     "electron": "^34.0.0",
     "electron-builder": "^25.1.8",
