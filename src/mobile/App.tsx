@@ -5,11 +5,13 @@ import { useAgentStore } from './stores/agent-store'
 import { TaskListPage } from './pages/TaskListPage'
 import { TaskDetailPage } from './pages/TaskDetailPage'
 import { ConversationPage } from './pages/ConversationPage'
+import { RepoSelectorPage } from './pages/RepoSelectorPage'
 
 export type Route =
   | { page: 'list' }
   | { page: 'detail'; taskId: string }
   | { page: 'conversation'; taskId: string }
+  | { page: 'repos'; taskId: string }
 
 export function App() {
   const [route, setRoute] = useState<Route>({ page: 'list' })
@@ -53,6 +55,9 @@ export function App() {
       )}
       {route.page === 'conversation' && (
         <ConversationPage taskId={route.taskId} onNavigate={setRoute} />
+      )}
+      {route.page === 'repos' && (
+        <RepoSelectorPage taskId={route.taskId} onNavigate={setRoute} />
       )}
     </div>
   )

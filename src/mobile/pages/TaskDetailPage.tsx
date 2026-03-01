@@ -22,10 +22,6 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
   const clearMessageDedup = useAgentStore((s) => s.clearMessageDedup)
 
   const [skillsExpanded, setSkillsExpanded] = useState(false)
-  const [repoInput, setRepoInput] = useState('')
-  const [showRepoInput, setShowRepoInput] = useState(false)
-
-  const agent = useMemo(() => agents.find((a) => a.id === task?.agent_id), [agents, task?.agent_id])
 
   // Session is already synced and running (from desktop or elsewhere)
   const isSessionRunning = session?.sessionId && (session.status === 'working' || session.status === 'waiting_approval')
@@ -54,15 +50,6 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
     if (!task) return
     await updateTask(task.id, { skill_ids: ids })
   }, [task, updateTask])
-
-  const handleAddRepo = useCallback(async () => {
-    if (!task || !repoInput.trim()) return
-    const repo = repoInput.trim()
-    if (task.repos.includes(repo)) { setRepoInput(''); return }
-    await updateTask(task.id, { repos: [...task.repos, repo] })
-    setRepoInput('')
-    setShowRepoInput(false)
-  }, [task, repoInput, updateTask])
 
   const handleRemoveRepo = useCallback(async (repo: string) => {
     if (!task) return
@@ -234,39 +221,16 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
                     </button>
                   </span>
                 ))}
-                {!showRepoInput && (
-                  <button
-                    onClick={() => setShowRepoInput(true)}
-                    className="inline-flex items-center gap-1 h-6 px-2 text-xs text-muted-foreground hover:text-foreground hover:bg-accent rounded-md transition-colors"
-                  >
-                    <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M5 12h14"/><path d="M12 5v14"/>
-                    </svg>
-                    Add
-                  </button>
-                )}
+                <button
+                  onClick={() => onNavigate({ page: 'repos', taskId })}
+                  className="inline-flex items-center gap-1 h-6 px-2 text-xs text-muted-foreground hover:text-foreground hover:bg-accent rounded-md transition-colors"
+                >
+                  <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M5 12h14"/><path d="M12 5v14"/>
+                  </svg>
+                  Add
+                </button>
               </div>
-              {showRepoInput && (
-                <div className="flex items-center gap-1.5">
-                  <input
-                    type="text"
-                    value={repoInput}
-                    onChange={(e) => setRepoInput(e.target.value)}
-                    onKeyDown={(e) => { if (e.key === 'Enter') handleAddRepo(); if (e.key === 'Escape') { setShowRepoInput(false); setRepoInput('') } }}
-                    placeholder="owner/repo"
-                    autoFocus
-                    className="flex-1 bg-transparent border border-border rounded px-2 py-1 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-ring focus:ring-1 focus:ring-ring/30"
-                  />
-                  <button onClick={handleAddRepo} className="inline-flex items-center justify-center h-6 px-2 bg-primary text-primary-foreground rounded text-xs font-medium hover:bg-primary/90">
-                    Add
-                  </button>
-                  <button onClick={() => { setShowRepoInput(false); setRepoInput('') }} className="inline-flex items-center justify-center h-6 w-6 rounded text-muted-foreground hover:text-foreground hover:bg-accent">
-                    <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M18 6 6 18"/><path d="m6 6 12 12"/>
-                    </svg>
-                  </button>
-                </div>
-              )}
             </div>
 
             {/* Skills — visible when agent is assigned */}

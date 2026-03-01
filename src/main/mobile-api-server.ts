@@ -11,12 +11,14 @@ import { existsSync, readFileSync, statSync } from 'fs'
 import { WebSocketServer, WebSocket } from 'ws'
 import type { DatabaseManager } from './database'
 import type { AgentManager } from './agent-manager'
+import type { GitHubManager } from './github-manager'
 
 // ── State ────────────────────────────────────────────────────
 let server: HttpServer | null = null
 let wss: WebSocketServer | null = null
 let dbRef: DatabaseManager | null = null
 let agentRef: AgentManager | null = null
+let githubRef: GitHubManager | null = null
 let authToken: string | null = null
 
 const wsClients = new Set<WebSocket>()
@@ -26,12 +28,14 @@ const wsClients = new Set<WebSocket>()
 export function startMobileApiServer(
   db: DatabaseManager,
   agentManager: AgentManager,
+  githubManager: GitHubManager,
   port = 20620
 ): Promise<number> {
   if (server) return Promise.resolve(port)
 
   dbRef = db
   agentRef = agentManager
+  githubRef = githubManager
 
   // Read auth token from settings (optional)
   authToken = db.getSetting('mobile_auth_token') ?? null
@@ -239,8 +243,8 @@ function routeGet(pathname: string, url: URL): unknown {
     const dir = order === 'asc' ? 1 : -1
 
     tasks.sort((a, b) => {
-      const va = (a as Record<string, unknown>)[sort]
-      const vb = (b as Record<string, unknown>)[sort]
+      const va = (a as unknown as Record<string, unknown>)[sort]
+      const vb = (b as unknown as Record<string, unknown>)[sort]
       if (va == null && vb == null) return 0
       if (va == null) return dir
       if (vb == null) return -dir
@@ -281,6 +285,12 @@ function routeGet(pathname: string, url: URL): unknown {
   // GET /api/sessions
   if (pathname === '/api/sessions') {
     return getActiveSessions()
+  }
+
+  // GET /api/github/org — returns the configured github org
+  if (pathname === '/api/github/org') {
+    const org = db.getSetting('github_org') || ''
+    return { org }
   }
 
   throw Object.assign(new Error('Not found'), { status: 404 })
@@ -362,6 +372,15 @@ async function routePost(pathname: string, params: Record<string, unknown>): Pro
   if (stopMatch) {
     await agent.stopSession(stopMatch[1])
     return { success: true }
+  }
+
+  // POST /api/github/repos — fetch org repos
+  if (pathname === '/api/github/repos') {
+    if (!githubRef) throw Object.assign(new Error('GitHub not configured'), { status: 500 })
+    const { org } = params as { org?: string }
+    if (!org) throw Object.assign(new Error('org is required'), { status: 400 })
+    const repos = await githubRef.fetchOrgRepos(org)
+    return repos
   }
 
   throw Object.assign(new Error('Not found'), { status: 404 })

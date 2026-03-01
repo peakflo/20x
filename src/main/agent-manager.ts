@@ -13,7 +13,7 @@ import { OpencodeAdapter } from './adapters/opencode-adapter'
 import { ClaudeCodeAdapter } from './adapters/claude-code-adapter'
 import { AcpAdapter } from './adapters/acp-adapter'
 import type { CodingAgentAdapter, SessionConfig, MessagePart, SessionMessage, McpServerConfig } from './adapters/coding-agent-adapter'
-import { SessionStatusType, MessagePartType } from './adapters/coding-agent-adapter'
+import { SessionStatusType, MessagePartType, MessageRole } from './adapters/coding-agent-adapter'
 import { getTaskApiPort, waitForTaskApiServer } from './task-api-server'
 import { randomUUID } from 'crypto'
 import { registerSecretSession, unregisterSecretSession, getSecretBrokerPort, writeSecretShellWrapper } from './secret-broker'
@@ -1907,7 +1907,7 @@ export class AgentManager extends EventEmitter {
           type: 'message',
           data: {
             id: part.id || `${msg.id}-${msg.parts.indexOf(part)}`,
-            role: msg.role === 'USER' ? 'user' : msg.role === 'ASSISTANT' ? 'assistant' : 'system',
+            role: msg.role === MessageRole.USER ? 'user' : msg.role === MessageRole.ASSISTANT ? 'assistant' : 'system',
             content: part.text || part.content || '',
             timestamp: new Date(),
             partType: part.type?.toLowerCase(),

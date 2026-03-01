@@ -48,6 +48,11 @@ export const api = {
   skills: {
     list: () => get<unknown[]>('/api/skills')
   },
+  github: {
+    getOrg: () => get<{ org: string }>('/api/github/org'),
+    fetchRepos: (org: string) =>
+      post<Array<{ name: string; fullName: string; defaultBranch: string; cloneUrl: string; description: string; isPrivate: boolean }>>('/api/github/repos', { org })
+  },
   sessions: {
     list: () => get<unknown[]>('/api/sessions'),
     start: (agentId: string, taskId: string, skipInitialPrompt?: boolean) =>

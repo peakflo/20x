@@ -268,7 +268,7 @@ app.whenReady().then(async () => {
   // Start mobile API server
   try {
     agentManager.addExternalListener(broadcastToMobileClients)
-    const mobilePort = await startMobileApiServer(db, agentManager)
+    const mobilePort = await startMobileApiServer(db, agentManager, githubManager!)
     console.log(`[Main] Mobile API server started on port ${mobilePort}`)
   } catch (err) {
     console.error('[Main] Failed to start mobile API server:', err)

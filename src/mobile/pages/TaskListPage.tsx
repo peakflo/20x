@@ -3,7 +3,7 @@ import { TaskStatus } from '@shared/constants'
 import { useTaskStore, type Task } from '../stores/task-store'
 import { useAgentStore } from '../stores/agent-store'
 import { TaskListItem } from '../components/TaskListItem'
-import { isSnoozed, STATUS_LABELS } from '../lib/utils'
+import { isSnoozed } from '../lib/utils'
 import type { Route } from '../App'
 
 const FILTER_OPTIONS = [
