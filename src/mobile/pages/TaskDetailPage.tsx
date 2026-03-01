@@ -1,5 +1,6 @@
 import { useMemo, useCallback } from 'react'
 import { TaskStatus } from '@shared/constants'
+import { Markdown } from '@/components/ui/Markdown'
 import { useTaskStore } from '../stores/task-store'
 import { useAgentStore } from '../stores/agent-store'
 import { api } from '../api/client'
@@ -96,7 +97,7 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
         {/* Description — matches desktop max-w-2xl content area */}
         {task.description && (
           <div className="px-4 py-4 border-b border-border">
-            <div className="text-sm text-muted-foreground whitespace-pre-wrap">{task.description}</div>
+            <Markdown size="sm">{task.description}</Markdown>
           </div>
         )}
 

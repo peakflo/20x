@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Markdown } from '@/components/ui/Markdown'
 import { cn } from '../lib/utils'
 import type { AgentMessage } from '../stores/agent-store'
 
@@ -199,7 +200,9 @@ export function MessageBubble({ message, onAnswer }: MessageBubbleProps) {
         isReasoning && 'bg-purple-500/10 text-purple-200 border border-purple-500/20',
         !isUser && !isSystem && !isError && !isReasoning && 'bg-[#161b22] text-gray-300 border border-border/50'
       )}>
-        <div className="whitespace-pre-wrap break-words font-mono text-xs">{message.content}</div>
+        <div className="break-words font-mono">
+          <Markdown size="xs">{message.content}</Markdown>
+        </div>
         {message.stepMeta && (
           <div className="flex items-center gap-2 mt-1 text-[10px] text-muted-foreground">
             {message.stepMeta.durationMs != null && <span>{(message.stepMeta.durationMs / 1000).toFixed(1)}s</span>}
