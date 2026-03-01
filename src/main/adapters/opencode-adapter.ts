@@ -35,8 +35,10 @@ export class OpencodeAdapter implements CodingAgentAdapter {
   private clients: Map<string, OpencodeClient> = new Map() // sessionId -> ocClient
   private v2Client: V2OpencodeClient | null = null
   private promptAborts: Map<string, AbortController> = new Map()
-  /** Tracks plugin file paths per session for cleanup on destroy */
-  private sessionPluginPaths: Map<string, string> = new Map()
+  /** Absolute path to the secret-injector plugin file (written before server start) */
+  private pluginFilePath: string | null = null
+  /** Absolute path to the secrets exports file (read dynamically by the plugin) */
+  private secretsExportsPath: string | null = null
 
   constructor() {
     this.sdkLoading = this.loadSDK()
@@ -145,7 +147,14 @@ export class OpencodeAdapter implements CodingAgentAdapter {
         const hostname = url.hostname
         const port = parseInt(url.port || '4096', 10)
 
-        const result = await OpenCodeSDK!.createOpencode({ hostname, port })
+        // Pass secret-injector plugin path via config so OpenCode loads it at startup
+        const serverConfig: Record<string, unknown> = {}
+        if (this.pluginFilePath) {
+          serverConfig.plugin = [this.pluginFilePath]
+          console.log(`[OpencodeAdapter] Passing plugin to server config: ${this.pluginFilePath}`)
+        }
+
+        const result = await OpenCodeSDK!.createOpencode({ hostname, port, config: serverConfig })
         this.serverInstance = result.server
         this.serverUrl = targetUrl
 
@@ -159,6 +168,11 @@ export class OpencodeAdapter implements CodingAgentAdapter {
   }
 
   async createSession(config: SessionConfig): Promise<string> {
+    // Write secret files BEFORE server starts so the plugin is discovered at startup.
+    // The plugin reads secrets dynamically from a file, so subsequent updates work
+    // even when the server is already running.
+    this.writeSecretFiles(config)
+
     await this.ensureServerRunning(config.serverUrl || DEFAULT_SERVER_URL)
 
     const baseUrl = this.serverUrl || config.serverUrl || DEFAULT_SERVER_URL
@@ -251,10 +265,6 @@ export class OpencodeAdapter implements CodingAgentAdapter {
       }
     }
 
-    // Write secret injector plugin to .opencode/plugins/ before session creation.
-    // Uses the shell.env hook to inject env vars into all shell execution.
-    this.writeSecretPlugin(config)
-
     // Create OpenCode session
     const result = await ocClient.session.create({
       body: { title: `Task ${config.taskId}` },
@@ -271,15 +281,14 @@ export class OpencodeAdapter implements CodingAgentAdapter {
 
     const ocSessionId = result.data.id
     this.clients.set(ocSessionId, ocClient)
-    // Track plugin path for cleanup
-    if (config.workspaceDir && config.secretEnvVars) {
-      this.sessionPluginPaths.set(ocSessionId, join(config.workspaceDir, '.opencode', 'plugins', '20x-secret-injector.js'))
-    }
 
     return ocSessionId
   }
 
   async resumeSession(sessionId: string, config: SessionConfig): Promise<SessionMessage[]> {
+    // Update secrets file before resuming (plugin reads dynamically)
+    this.writeSecretFiles(config)
+
     await this.ensureServerRunning(config.serverUrl || DEFAULT_SERVER_URL)
 
     const baseUrl = this.serverUrl || config.serverUrl || DEFAULT_SERVER_URL
@@ -293,12 +302,6 @@ export class OpencodeAdapter implements CodingAgentAdapter {
 
     if (getResult.error || !getResult.data) {
       throw new Error('Session no longer exists on server')
-    }
-
-    // Write secret injector plugin for this session
-    this.writeSecretPlugin(config)
-    if (config.workspaceDir && config.secretEnvVars) {
-      this.sessionPluginPaths.set(sessionId, join(config.workspaceDir, '.opencode', 'plugins', '20x-secret-injector.js'))
     }
 
     this.clients.set(sessionId, ocClient)
@@ -550,53 +553,78 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     await this.abortPrompt(sessionId, _config)
     this.clients.delete(sessionId)
 
-    // Clean up secret plugin file
-    const pluginPath = this.sessionPluginPaths.get(sessionId)
-    if (pluginPath) {
-      try {
-        if (existsSync(pluginPath)) {
-          rmSync(pluginPath)
-          console.log(`[OpencodeAdapter] Removed secret plugin: ${pluginPath}`)
+    // Clean up secret files (plugin + exports)
+    for (const filePath of [this.pluginFilePath, this.secretsExportsPath]) {
+      if (filePath) {
+        try {
+          if (existsSync(filePath)) {
+            rmSync(filePath)
+            console.log(`[OpencodeAdapter] Removed secret file: ${filePath}`)
+          }
+        } catch (err) {
+          console.warn(`[OpencodeAdapter] Failed to remove secret file: ${err}`)
         }
-      } catch (err) {
-        console.warn(`[OpencodeAdapter] Failed to remove secret plugin: ${err}`)
       }
-      this.sessionPluginPaths.delete(sessionId)
     }
+    this.pluginFilePath = null
+    this.secretsExportsPath = null
   }
 
   /**
-   * Writes a shell.env plugin to .opencode/plugins/ that injects
-   * secret env vars into all OpenCode shell execution.
-   * The plugin is cleaned up on session destroy.
+   * Writes two files for secret injection:
+   * 1. `.opencode/.20x-secrets` — pre-formatted export commands (read dynamically by the plugin)
+   * 2. `.opencode/plugins/20x-secret-injector.js` — plugin using `tool.execute.before`
+   *
+   * The plugin reads the exports file on every bash command, so secrets can be
+   * updated without restarting the server. Both files are cleaned up on session destroy.
+   *
+   * MUST be called BEFORE ensureServerRunning() so the plugin is discovered at startup.
    */
-  private writeSecretPlugin(config: SessionConfig): void {
+  private writeSecretFiles(config: SessionConfig): void {
     if (!config.secretEnvVars || Object.keys(config.secretEnvVars).length === 0 || !config.workspaceDir) {
       return
     }
 
-    const pluginsDir = join(config.workspaceDir, '.opencode', 'plugins')
+    const openCodeDir = join(config.workspaceDir, '.opencode')
+    const pluginsDir = join(openCodeDir, 'plugins')
     mkdirSync(pluginsDir, { recursive: true })
 
-    // Build the plugin JS with env vars embedded as a JSON object.
-    // Values are JSON-stringified so special chars are safely escaped.
-    const envJson = JSON.stringify(config.secretEnvVars)
-    const pluginCode = `// Auto-generated by 20x — do not edit. Removed on session destroy.
-const _secrets = ${envJson};
-export const SecretInjector = async () => {
-  return {
-    "shell.env": async (_input, output) => {
-      for (const [key, value] of Object.entries(_secrets)) {
-        output.env[key] = value;
-      }
-    },
-  };
-};
-`
+    // 1. Write pre-formatted export commands to a secrets file.
+    //    The plugin reads this file on every bash invocation so updates take effect immediately.
+    const exportLines = Object.entries(config.secretEnvVars)
+      .map(([k, v]) => 'export ' + k + "='" + v.replace(/'/g, "'\\''" ) + "'")
+      .join('\n')
 
+    const secretsPath = join(openCodeDir, '.20x-secrets')
+    writeFileSync(secretsPath, exportLines, 'utf-8')
+    this.secretsExportsPath = secretsPath
+
+    // 2. Write the plugin JS that reads the secrets file and prepends exports to bash commands.
+    //    Uses tool.execute.before hook (same pattern as Claude Code PreToolUse).
     const pluginPath = join(pluginsDir, '20x-secret-injector.js')
+    const pluginCode =
+      '// Auto-generated by 20x — do not edit. Removed on session destroy.\n' +
+      'import { readFileSync } from "fs";\n' +
+      '\n' +
+      'var SECRETS_PATH = ' + JSON.stringify(secretsPath) + ';\n' +
+      '\n' +
+      'export var SecretInjector = async function() {\n' +
+      '  return {\n' +
+      '    "tool.execute.before": async function(input, output) {\n' +
+      '      if (input.tool === "bash") {\n' +
+      '        try {\n' +
+      '          var exports = readFileSync(SECRETS_PATH, "utf-8").trim();\n' +
+      '          if (exports) output.args.command = exports + "\\n" + output.args.command;\n' +
+      '        } catch(e) {}\n' +
+      '      }\n' +
+      '    }\n' +
+      '  };\n' +
+      '};\n'
+
     writeFileSync(pluginPath, pluginCode, 'utf-8')
-    console.log(`[OpencodeAdapter] Wrote secret plugin to ${pluginPath} with ${Object.keys(config.secretEnvVars).length} secret(s)`)
+    this.pluginFilePath = pluginPath
+
+    console.log(`[OpencodeAdapter] Wrote secret files: plugin=${pluginPath}, secrets=${secretsPath} (${Object.keys(config.secretEnvVars).length} secret(s))`)
   }
 
   async getAllMessages(sessionId: string, config: SessionConfig): Promise<SessionMessage[]> {
