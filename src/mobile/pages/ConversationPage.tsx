@@ -106,15 +106,6 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
     }
   }, [session, taskId, endSession])
 
-  const handleAbort = useCallback(async () => {
-    if (!session?.sessionId) return
-    try {
-      await api.sessions.abort(session.sessionId)
-    } catch (e) {
-      console.error('Failed to abort:', e)
-    }
-  }, [session])
-
   // Auto-scroll to bottom when new messages arrive (only if user is at bottom)
   useEffect(() => {
     if (isAtBottomRef.current && scrollRef.current) {
@@ -253,17 +244,6 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
 
       {/* Input area — matches desktop transcript panel input */}
       <div className="shrink-0 border-t border-border/50">
-        {/* Abort button when agent is working */}
-        {isWorking && hasSession && (
-          <div className="px-3 pt-2">
-            <button
-              onClick={handleAbort}
-              className="w-full text-xs text-yellow-400 py-1.5 border border-yellow-400/30 rounded-md active:opacity-60 hover:bg-yellow-500/10 transition-colors"
-            >
-              Interrupt Agent
-            </button>
-          </div>
-        )}
         <ChatInput
           onSend={handleSend}
           disabled={!canSendInput}
