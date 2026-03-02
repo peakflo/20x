@@ -20,6 +20,18 @@ export function UpdateDialog({ open, onClose }: UpdateDialogProps) {
     installUpdate
   } = useUpdateStore()
 
+  const handleInstall = async () => {
+    console.log('[UpdateDialog] Install button clicked')
+    console.log('[UpdateDialog] isReadyToInstall:', isReadyToInstall)
+    try {
+      console.log('[UpdateDialog] Calling installUpdate...')
+      await installUpdate()
+      console.log('[UpdateDialog] installUpdate resolved')
+    } catch (err) {
+      console.error('[UpdateDialog] installUpdate error:', err)
+    }
+  }
+
   if (!updateAvailable) return null
 
   return (
@@ -91,7 +103,7 @@ export function UpdateDialog({ open, onClose }: UpdateDialogProps) {
             {/* Actions */}
             <div className="flex items-center gap-2 pt-2">
               {isReadyToInstall ? (
-                <Button onClick={installUpdate} className="flex-1">
+                <Button type="button" onClick={handleInstall} className="flex-1">
                   <RotateCw className="h-4 w-4 mr-2" />
                   Install &amp; Restart
                 </Button>

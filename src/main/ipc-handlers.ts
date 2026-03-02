@@ -688,7 +688,13 @@ export function registerIpcHandlers(
   })
 
   ipcMain.handle('update:install', () => {
-    quitAndInstall()
+    console.log('[IPC] update:install called')
+    try {
+      quitAndInstall()
+      console.log('[IPC] quitAndInstall returned without error')
+    } catch (err) {
+      console.error('[IPC] quitAndInstall threw:', err)
+    }
   })
 
   ipcMain.handle('update:getVersion', () => {
