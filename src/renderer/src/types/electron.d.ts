@@ -235,6 +235,9 @@ interface ElectronAPI {
     getMinimizeToTray: () => Promise<boolean>
     setMinimizeToTray: (enabled: boolean) => Promise<boolean>
   }
+  mobile: {
+    getInfo: () => Promise<{ url: string; port: number }>
+  }
   webUtils: {
     getPathForFile: (file: File) => string
   }

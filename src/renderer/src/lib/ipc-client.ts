@@ -195,6 +195,12 @@ export const settingsApi = {
   }
 }
 
+export const mobileApi = {
+  getInfo: (): Promise<{ url: string; port: number }> => {
+    return window.electronAPI?.mobile?.getInfo() ?? Promise.resolve({ url: '', port: 0 })
+  }
+}
+
 export const githubApi = {
   checkCli: (): Promise<GhCliStatus> => {
     return window.electronAPI.github.checkCli()

@@ -13,7 +13,7 @@ import { OpencodeAdapter } from './adapters/opencode-adapter'
 import { ClaudeCodeAdapter } from './adapters/claude-code-adapter'
 import { AcpAdapter } from './adapters/acp-adapter'
 import type { CodingAgentAdapter, SessionConfig, MessagePart, SessionMessage, McpServerConfig } from './adapters/coding-agent-adapter'
-import { SessionStatusType, MessagePartType } from './adapters/coding-agent-adapter'
+import { SessionStatusType, MessagePartType, MessageRole } from './adapters/coding-agent-adapter'
 import { getTaskApiPort, waitForTaskApiServer } from './task-api-server'
 import { randomUUID } from 'crypto'
 import { registerSecretSession, unregisterSecretSession, getSecretBrokerPort, writeSecretShellWrapper } from './secret-broker'
@@ -64,6 +64,7 @@ export class AgentManager extends EventEmitter {
   private adapters: Map<string, CodingAgentAdapter> = new Map()  // Adapter instances
   private worktreeManager: WorktreeManager | null = null
   private githubManager: GitHubManager | null = null
+  private externalListeners: Array<(channel: string, data: unknown) => void> = []
 
   constructor(db: DatabaseManager) {
     super()
@@ -1884,6 +1885,56 @@ export class AgentManager extends EventEmitter {
     return { status: session.status, agentId: session.agentId, taskId: session.taskId }
   }
 
+  /**
+   * Replay all messages from a running session via the adapter.
+   * Used by the mobile API to sync with an already-running session.
+   */
+  async replaySessionMessages(sessionId: string): Promise<void> {
+    const session = this.sessions.get(sessionId)
+    if (!session?.adapter?.getAllMessages) return
+
+    const messages = await session.adapter.getAllMessages(sessionId, {
+      agentId: session.agentId,
+      taskId: session.taskId,
+      workspaceDir: session.workspaceDir || process.cwd()
+    })
+
+    for (const msg of messages) {
+      for (const part of msg.parts) {
+        this.sendToRenderer('agent:output', {
+          sessionId,
+          taskId: session.taskId,
+          type: 'message',
+          data: {
+            id: part.id || `${msg.id}-${msg.parts.indexOf(part)}`,
+            role: msg.role === MessageRole.USER ? 'user' : msg.role === MessageRole.ASSISTANT ? 'assistant' : 'system',
+            content: part.text || part.content || '',
+            timestamp: new Date(),
+            partType: part.type?.toLowerCase(),
+            tool: part.tool ? {
+              name: part.tool.name,
+              status: part.tool.status || part.state?.status || '',
+              title: part.tool.title || part.state?.title || '',
+              input: typeof part.tool.input === 'string' ? part.tool.input : part.tool.input ? JSON.stringify(part.tool.input) : undefined,
+              output: typeof part.tool.output === 'string' ? part.tool.output : part.tool.output ? JSON.stringify(part.tool.output) : undefined,
+              error: part.tool.error || part.state?.error,
+              questions: part.tool.questions,
+              todos: part.tool.todos
+            } : undefined
+          }
+        })
+      }
+    }
+
+    // Also send current status
+    this.sendToRenderer('agent:status', {
+      sessionId,
+      agentId: session.agentId,
+      taskId: session.taskId,
+      status: session.status
+    })
+  }
+
   getActiveSessionsForTask(taskId: string): string[] {
     const sessionIds: string[] = []
     for (const [sessionId, session] of this.sessions.entries()) {
@@ -2553,9 +2604,21 @@ Important:
     return result
   }
 
+  /**
+   * Register an external listener that receives all events sent to the renderer.
+   * Used by the mobile API server to broadcast via WebSocket.
+   */
+  addExternalListener(fn: (channel: string, data: unknown) => void): void {
+    this.externalListeners.push(fn)
+  }
+
   private sendToRenderer(channel: string, data: unknown): void {
     if (this.mainWindow && !this.mainWindow.isDestroyed()) {
       this.mainWindow.webContents.send(channel, data)
+    }
+    // Also notify external listeners (mobile API WebSocket)
+    for (const fn of this.externalListeners) {
+      try { fn(channel, data) } catch { /* ignore */ }
     }
   }
 }

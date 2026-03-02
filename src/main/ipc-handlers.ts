@@ -631,4 +631,12 @@ export function registerIpcHandlers(
     await db.setSetting('minimize_to_tray', enabled.toString())
     return enabled
   })
+
+  // Mobile web UI info — include auth token in URL hash so mobile SPA can authenticate
+  ipcMain.handle('mobile:getInfo', () => {
+    const port = 20620
+    const token = db.getSetting('mobile_auth_token') || ''
+    const hash = token ? `#token=${token}` : ''
+    return { url: `http://localhost:${port}/${hash}`, port }
+  })
 }

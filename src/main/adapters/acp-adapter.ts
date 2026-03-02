@@ -296,7 +296,7 @@ export class AcpAdapter implements CodingAgentAdapter {
     await this.authenticateSession(session, initResult)
 
     // Create ACP session (only accepts cwd and mcpServers per ACP spec)
-    const convertedMcpServers = this.convertMcpServers(config.mcpServers) || []
+    const convertedMcpServers = this.convertMcpServers(config.mcpServers) || {}
     console.log(`[AcpAdapter/${this.agentType}] session/new mcpServers:`, JSON.stringify(convertedMcpServers))
     const result = await this.sendRpcRequest(session, 'session/new', {
       cwd: config.workspaceDir,
@@ -445,7 +445,7 @@ export class AcpAdapter implements CodingAgentAdapter {
       await this.sendRpcRequest(session, 'session/load', {
         sessionId: sessionId,
         cwd: config.workspaceDir,
-        mcpServers: this.convertMcpServers(config.mcpServers) || []
+        mcpServers: this.convertMcpServers(config.mcpServers) || {}
       })
 
       console.log(`[AcpAdapter/${this.agentType}] Session loaded successfully: ${sessionId}`)
@@ -1046,30 +1046,29 @@ export class AcpAdapter implements CodingAgentAdapter {
     return (obj.sessionId || obj.session_id || obj.id) as string | null
   }
 
-  private convertMcpServers(servers?: Record<string, McpServerConfig>): unknown[] {
-    if (!servers) return []
+  private convertMcpServers(servers?: Record<string, McpServerConfig>): Record<string, unknown> {
+    if (!servers) return {}
 
-    return Object.entries(servers).map(([name, config]) => {
-      // Only include fields relevant to the server type to avoid
-      // deserialization failures with untagged enums (e.g. Codex/Rust)
+    const result: Record<string, unknown> = {}
+    for (const [name, config] of Object.entries(servers)) {
+      // Codex uses an untagged serde enum with deny_unknown_fields,
+      // so only include fields defined in the matching variant.
+      // No "name" or "type" fields — variant is inferred from "command" vs "url".
       if (config.type === 'stdio') {
-        return {
-          name,
-          type: 'stdio',
+        result[name] = {
           command: config.command,
-          args: config.args,
+          args: config.args || [],
           ...(config.env ? { env: config.env } : {})
         }
       } else {
-        // http or sse
-        return {
-          name,
-          type: config.type,
+        // http or sse → Codex StreamableHttp variant
+        result[name] = {
           url: config.url,
-          ...(config.headers ? { headers: config.headers } : {})
+          ...(config.headers ? { http_headers: config.headers } : {})
         }
       }
-    })
+    }
+    return result
   }
 
   private convertAcpEventToMessageParts(

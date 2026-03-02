@@ -238,6 +238,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     setMinimizeToTray: (enabled: boolean): Promise<boolean> =>
       ipcRenderer.invoke('app:setMinimizeToTray', enabled)
   },
+  mobile: {
+    getInfo: (): Promise<{ url: string; port: number }> =>
+      ipcRenderer.invoke('mobile:getInfo')
+  },
   webUtils: {
     getPathForFile: (file: File): string => webUtils.getPathForFile(file)
   }
