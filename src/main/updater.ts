@@ -92,9 +92,20 @@ export async function downloadUpdate(): Promise<void> {
 
 /**
  * Quit the app and install the downloaded update.
+ * On macOS, autoUpdater.quitAndInstall() can silently fail (especially in dev),
+ * so we force-quit after a short delay as a fallback.
  */
 export function quitAndInstall(): void {
-  autoUpdater.quitAndInstall()
+  setImmediate(() => {
+    // Prevent the "are you sure you want to quit" prompts
+    app.removeAllListeners('window-all-closed')
+    autoUpdater.quitAndInstall(false, true)
+
+    // Fallback: if quitAndInstall didn't exit (e.g. dev mode), force quit
+    setTimeout(() => {
+      app.exit(0)
+    }, 1000)
+  })
 }
 
 /**
