@@ -2,7 +2,11 @@ import { useState, useEffect } from 'react'
 import { SettingsSection } from '../SettingsSection'
 import { Label } from '@/components/ui/Label'
 import { Switch } from '@/components/ui/Switch'
+import { Button } from '@/components/ui/Button'
 import { settingsApi, mobileApi } from '@/lib/ipc-client'
+import { useUpdateStore } from '@/stores/update-store'
+import { useUIStore } from '@/stores/ui-store'
+import { Loader2 } from 'lucide-react'
 
 export function GeneralSettings() {
   const [launchAtStartup, setLaunchAtStartup] = useState(false)
@@ -167,6 +171,52 @@ export function GeneralSettings() {
         </div>
       </div>
     </SettingsSection>
+
+    <UpdateSection />
     </>
+  )
+}
+
+function UpdateSection() {
+  const { updateAvailable, isChecking, currentVersion, checkForUpdates } = useUpdateStore()
+  const { openUpdateDialog } = useUIStore()
+
+  return (
+    <SettingsSection
+      title="Updates"
+      description="Check for new versions of 20x"
+    >
+      <div className="space-y-4">
+        <div className="flex items-center justify-between py-2">
+          <div className="space-y-0.5">
+            <Label>App version</Label>
+            <p className="text-xs text-muted-foreground">
+              {currentVersion ? `v${currentVersion}` : 'Loading...'}
+              {updateAvailable && (
+                <span className="ml-2 text-amber-400 font-medium">
+                  v{updateAvailable.version} available
+                </span>
+              )}
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            {updateAvailable && (
+              <Button size="sm" variant="outline" onClick={openUpdateDialog}>
+                View Update
+              </Button>
+            )}
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={checkForUpdates}
+              disabled={isChecking}
+            >
+              {isChecking && <Loader2 className="h-3 w-3 animate-spin mr-1.5" />}
+              Check for Updates
+            </Button>
+          </div>
+        </div>
+      </div>
+    </SettingsSection>
   )
 }

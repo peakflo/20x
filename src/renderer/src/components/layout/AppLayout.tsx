@@ -5,6 +5,7 @@ import { SkillWorkspace } from '@/components/skills/SkillWorkspace'
 import { SettingsWorkspace } from '@/components/settings/SettingsWorkspace'
 import { TaskForm, type TaskFormSubmitData } from '@/components/tasks/TaskForm'
 import { DeleteConfirmDialog } from '@/components/tasks/DeleteConfirmDialog'
+import { UpdateDialog } from '@/components/update/UpdateDialog'
 import { Dialog, DialogContent, DialogHeader, DialogBody, DialogTitle } from '@/components/ui/Dialog'
 import { OrchestratorPanel } from '@/components/orchestrator/OrchestratorPanel'
 import { useTasks } from '@/hooks/use-tasks'
@@ -12,6 +13,7 @@ import { useUIStore } from '@/stores/ui-store'
 import { useAgentStore } from '@/stores/agent-store'
 import { useAgentAutoStart } from '@/hooks/use-agent-auto-start'
 import { useOverdueNotifications } from '@/hooks/use-overdue-notifications'
+import { useUpdateStore } from '@/stores/update-store'
 import { attachmentApi, worktreeApi, settingsApi } from '@/lib/ipc-client'
 import { useTaskSourceStore } from '@/stores/task-source-store'
 import { isOverdue, isSnoozed } from '@/lib/utils'
@@ -37,8 +39,13 @@ export function AppLayout() {
     closeModal
   } = useUIStore()
 
+  const { initListeners: initUpdateListeners, loadVersion } = useUpdateStore()
+
   useEffect(() => {
     fetchAgents()
+    loadVersion()
+    const cleanupUpdate = initUpdateListeners()
+    return cleanupUpdate
   }, [])
 
   const editingTask = editingTaskId ? tasks.find((t) => t.id === editingTaskId) || selectedTask : undefined
@@ -253,6 +260,9 @@ export function AppLayout() {
         }}
         onCancel={closeModal}
       />
+
+      {/* Update Dialog */}
+      <UpdateDialog open={activeModal === 'update'} onClose={closeModal} />
 
       {/* Toast */}
       {toast && (

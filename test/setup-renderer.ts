@@ -114,6 +114,15 @@ const mockElectronAPI = {
     getActions: vi.fn().mockResolvedValue([]),
     executeAction: vi.fn().mockResolvedValue({ success: true })
   },
+  update: {
+    check: vi.fn().mockResolvedValue(undefined),
+    download: vi.fn().mockResolvedValue(undefined),
+    install: vi.fn().mockResolvedValue(undefined),
+    getVersion: vi.fn().mockResolvedValue('0.0.28')
+  },
+  mobile: {
+    getInfo: vi.fn().mockResolvedValue({ url: 'http://localhost:20620/', port: 20620 })
+  },
   onOverdueCheck: vi.fn((cb: () => void) => {
     eventCallbacks.onOverdueCheck = cb
     return vi.fn()
@@ -146,6 +155,21 @@ const mockElectronAPI = {
     return vi.fn()
   }),
   onTaskCreated: vi.fn((_cb: (event: { task: WorkfloTask }) => void) => {
+    return vi.fn()
+  }),
+  onUpdateAvailable: vi.fn((_cb: (info: unknown) => void) => {
+    return vi.fn()
+  }),
+  onUpdateNotAvailable: vi.fn((_cb: () => void) => {
+    return vi.fn()
+  }),
+  onUpdateDownloadProgress: vi.fn((_cb: (progress: unknown) => void) => {
+    return vi.fn()
+  }),
+  onUpdateDownloaded: vi.fn((_cb: () => void) => {
+    return vi.fn()
+  }),
+  onUpdateError: vi.fn((_cb: (message: string) => void) => {
     return vi.fn()
   })
 }

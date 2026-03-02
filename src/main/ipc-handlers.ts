@@ -27,6 +27,7 @@ import type { WorktreeManager } from './worktree-manager'
 import type { SyncManager } from './sync-manager'
 import type { PluginRegistry } from './plugins/registry'
 import type { OAuthManager } from './oauth/oauth-manager'
+import { checkForUpdates, downloadUpdate, quitAndInstall, recordUpdateCheck } from './updater'
 
 const MIME_MAP: Record<string, string> = {
   '.pdf': 'application/pdf',
@@ -664,5 +665,27 @@ export function registerIpcHandlers(
     const token = db.getSetting('mobile_auth_token') || ''
     const hash = token ? `#token=${token}` : ''
     return { url: `http://localhost:${port}/${hash}`, port }
+  })
+
+  // ── Update handlers ─────────────────────────────────────────
+  ipcMain.handle('update:check', async () => {
+    try {
+      await checkForUpdates()
+      recordUpdateCheck(db)
+    } catch (err) {
+      console.error('[IPC] Update check failed:', err)
+    }
+  })
+
+  ipcMain.handle('update:download', async () => {
+    await downloadUpdate()
+  })
+
+  ipcMain.handle('update:install', () => {
+    quitAndInstall()
+  })
+
+  ipcMain.handle('update:getVersion', () => {
+    return app.getVersion()
   })
 }

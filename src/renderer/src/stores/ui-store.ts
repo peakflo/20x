@@ -4,7 +4,7 @@ import type { TaskPriority } from '@/types'
 
 export type SortField = 'created_at' | 'updated_at' | 'priority' | 'due_date' | 'title' | 'status'
 export type SortDirection = 'asc' | 'desc'
-export type ActiveModal = 'create' | 'edit' | 'delete' | 'settings' | 'repo-selector' | 'gh-setup' | null
+export type ActiveModal = 'create' | 'edit' | 'delete' | 'settings' | 'repo-selector' | 'gh-setup' | 'update' | null
 export type SidebarView = 'tasks' | 'skills'
 
 interface UIState {
@@ -32,6 +32,7 @@ interface UIState {
   openEditModal: (taskId: string) => void
   openDeleteModal: (taskId: string) => void
   openSettings: () => void
+  openUpdateDialog: () => void
   closeModal: () => void
 }
 
@@ -61,5 +62,6 @@ export const useUIStore = create<UIState>((set) => ({
   openEditModal: (taskId) => set({ activeModal: 'edit', editingTaskId: taskId }),
   openDeleteModal: (taskId) => set({ activeModal: 'delete', deletingTaskId: taskId }),
   openSettings: () => set({ activeModal: 'settings' }),
+  openUpdateDialog: () => set({ activeModal: 'update' }),
   closeModal: () => set({ activeModal: null, editingTaskId: null, deletingTaskId: null })
 }))

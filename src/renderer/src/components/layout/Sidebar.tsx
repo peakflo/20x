@@ -9,6 +9,7 @@ import { useTaskStore } from '@/stores/task-store'
 import { useUserStore } from '@/stores/user-store'
 import { useSkillStore } from '@/stores/skill-store'
 import { useAgentSchedulerStore } from '@/stores/agent-scheduler-store'
+import { useUpdateStore } from '@/stores/update-store'
 import { isSnoozed } from '@/lib/utils'
 import { TaskStatus, TASK_STATUSES, TASK_PRIORITIES } from '@/types'
 import type { WorkfloTask, TaskPriority } from '@/types'
@@ -45,6 +46,8 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
   const { fetchTasks } = useTaskStore()
   const { skills, selectedSkillId, fetchSkills, selectSkill, createSkill } = useSkillStore()
   const { isEnabled: isAutoStartEnabled, toggle: toggleAutoStart } = useAgentSchedulerStore()
+  const { updateAvailable } = useUpdateStore()
+  const { openUpdateDialog } = useUIStore()
   const [isSyncingAll, setIsSyncingAll] = useState(false)
 
   useEffect(() => {
@@ -82,7 +85,16 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
   return (
     <aside className="flex flex-col h-full border-r bg-sidebar overflow-hidden">
       <div className="drag-region h-13 shrink-0 flex items-center justify-center gap-2">
-        <img src={logo20x} className="h-5 w-5" alt="20x" />
+        <div className="relative">
+          <img src={logo20x} className="h-5 w-5" alt="20x" />
+          {updateAvailable && (
+            <button
+              onClick={openUpdateDialog}
+              className="no-drag absolute -top-1 -right-1 h-2.5 w-2.5 rounded-full bg-amber-400 ring-2 ring-sidebar cursor-pointer animate-pulse"
+              title={`Update available: v${updateAvailable.version}`}
+            />
+          )}
+        </div>
         <span className="text-sm font-semibold text-foreground">20x</span>
       </div>
 

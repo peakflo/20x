@@ -51,6 +51,7 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cron-parser": "^5.5.0",
+    "electron-updater": "^6.8.3",
     "js-yaml": "^4.1.1",
     "lucide-react": "^0.468.0",
     "react": "^19.0.0",
@@ -88,6 +89,11 @@
   "build": {
     "appId": "com.20x.app",
     "productName": "20x",
+    "publish": {
+      "provider": "github",
+      "owner": "peakflo",
+      "repo": "20x"
+    },
     "directories": {
       "buildResources": "resources"
     },
