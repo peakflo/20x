@@ -73,11 +73,14 @@ export function initUpdater(mainWindow: BrowserWindow): void {
  */
 export async function checkForUpdates(): Promise<boolean> {
   if (!app.isPackaged) {
-    console.log('[Updater] Skipping update check in dev mode (app not packaged)')
-    return false
+    // In dev mode, electron-updater will use dev-app-update.yml if it exists.
+    // Without that file it silently skips, so we let it try and rely on the
+    // error event to surface any issues.
+    console.log('[Updater] Dev mode — using dev-app-update.yml for update check')
   }
-  await autoUpdater.checkForUpdates()
-  return true
+  const result = await autoUpdater.checkForUpdates()
+  // electron-updater returns null when it cannot perform the check
+  return result !== null
 }
 
 /**
