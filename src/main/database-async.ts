@@ -59,7 +59,7 @@ export class DatabaseAsync {
       console.error('[DatabaseAsync] Worker error:', err)
       // Reject all pending requests
       for (const [id, pending] of this.pending) {
-        pending.reject(new Error(`Worker error: ${err.message}`))
+        pending.reject(new Error(`Worker error: ${err instanceof Error ? err.message : String(err)}`))
         this.pending.delete(id)
       }
     })

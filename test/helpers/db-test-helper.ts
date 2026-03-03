@@ -41,6 +41,7 @@ export function createTestDb(): { db: DatabaseManager; rawDb: InstanceType<typeo
       headers TEXT NOT NULL DEFAULT '{}',
       environment TEXT NOT NULL DEFAULT '{}',
       tools TEXT NOT NULL DEFAULT '[]',
+      oauth_metadata TEXT NOT NULL DEFAULT '{}',
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -117,7 +118,8 @@ export function createTestDb(): { db: DatabaseManager; rawDb: InstanceType<typeo
     CREATE TABLE IF NOT EXISTS oauth_tokens (
       id TEXT PRIMARY KEY,
       provider TEXT NOT NULL,
-      source_id TEXT NOT NULL REFERENCES task_sources(id) ON DELETE CASCADE,
+      source_id TEXT REFERENCES task_sources(id) ON DELETE CASCADE,
+      mcp_server_id TEXT REFERENCES mcp_servers(id) ON DELETE CASCADE,
       access_token BLOB NOT NULL,
       refresh_token BLOB,
       expires_at TEXT NOT NULL,
@@ -128,6 +130,7 @@ export function createTestDb(): { db: DatabaseManager; rawDb: InstanceType<typeo
     );
 
     CREATE INDEX IF NOT EXISTS idx_oauth_tokens_source ON oauth_tokens(source_id);
+    CREATE INDEX IF NOT EXISTS idx_oauth_tokens_mcp_server ON oauth_tokens(mcp_server_id);
     CREATE INDEX IF NOT EXISTS idx_oauth_tokens_provider ON oauth_tokens(provider);
   `)
 
