@@ -1,6 +1,6 @@
 import '@testing-library/jest-dom/vitest'
 import { vi } from 'vitest'
-import type { AgentOutputEvent, AgentStatusEvent, AgentApprovalRequest, WorktreeProgressEvent } from '../src/renderer/src/types/electron'
+import type { AgentOutputEvent, AgentOutputBatchEvent, AgentStatusEvent, AgentApprovalRequest, WorktreeProgressEvent } from '../src/renderer/src/types/electron'
 import type { WorkfloTask } from '../src/renderer/src/types/index'
 
 // Suppress React act() warnings in happy-dom
@@ -9,6 +9,7 @@ import type { WorkfloTask } from '../src/renderer/src/types/index'
 // Capture event listener callbacks for store tests
 export const eventCallbacks = {
   onAgentOutput: null as ((event: AgentOutputEvent) => void) | null,
+  onAgentOutputBatch: null as ((event: AgentOutputBatchEvent) => void) | null,
   onAgentStatus: null as ((event: AgentStatusEvent) => void) | null,
   onAgentApproval: null as ((event: AgentApprovalRequest) => void) | null,
   onOverdueCheck: null as (() => void) | null,
@@ -119,6 +120,10 @@ const mockElectronAPI = {
   }),
   onAgentOutput: vi.fn((cb: (event: AgentOutputEvent) => void) => {
     eventCallbacks.onAgentOutput = cb
+    return vi.fn()
+  }),
+  onAgentOutputBatch: vi.fn((cb: (event: AgentOutputBatchEvent) => void) => {
+    eventCallbacks.onAgentOutputBatch = cb
     return vi.fn()
   }),
   onAgentStatus: vi.fn((cb: (event: AgentStatusEvent) => void) => {

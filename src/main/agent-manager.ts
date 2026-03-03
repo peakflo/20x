@@ -1460,22 +1460,25 @@ export class AgentManager extends EventEmitter {
       throw error
     }
 
-    // Replay messages to renderer
+    // Replay messages to renderer in a single batch to avoid UI freeze
+    const batchMessages: Array<{ id: string; role: string; content: string; partType?: string; tool?: unknown }> = []
     for (const message of messages) {
       for (const part of message.parts) {
-        this.sendToRenderer('agent:output', {
-          sessionId: adapterSessionId,
-          taskId,
-          type: 'message',
-          data: {
-            id: part.id,
-            role: message.role,
-            content: part.content || part.text || '',
-            partType: part.type,
-            tool: part.tool
-          }
+        batchMessages.push({
+          id: part.id || `${message.role}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          role: message.role,
+          content: part.content || part.text || '',
+          partType: part.type,
+          tool: part.tool
         })
       }
+    }
+    if (batchMessages.length > 0) {
+      this.sendToRenderer('agent:output-batch', {
+        sessionId: adapterSessionId,
+        taskId,
+        messages: batchMessages
+      })
     }
 
     // Store session in sessions map — idle until user sends a message
