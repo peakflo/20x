@@ -1,5 +1,5 @@
 import type { WorkfloTask, CreateTaskDTO, UpdateTaskDTO, FileAttachment, Agent, CreateAgentDTO, UpdateAgentDTO, McpServer, CreateMcpServerDTO, UpdateMcpServerDTO, Skill, CreateSkillDTO, UpdateSkillDTO, Secret, CreateSecretDTO, UpdateSecretDTO, TaskSource, CreateTaskSourceDTO, UpdateTaskSourceDTO, SyncResult, PluginMeta, ConfigFieldSchema, ConfigFieldOption, PluginAction, ActionResult, SourceUser, ReassignResult } from '@/types'
-import type { AgentOutputEvent, AgentStatusEvent, AgentApprovalRequest, GhCliStatus, GitHubRepo, GitHubCollaborator, WorktreeProgressEvent, McpTestResult, SkillSyncResult, DepsStatus } from '@/types/electron'
+import type { AgentOutputEvent, AgentOutputBatchEvent, AgentStatusEvent, AgentApprovalRequest, GhCliStatus, GitHubRepo, GitHubCollaborator, WorktreeProgressEvent, McpTestResult, SkillSyncResult, DepsStatus } from '@/types/electron'
 
 export const taskApi = {
   getAll: (): Promise<WorkfloTask[]> => {
@@ -161,6 +161,10 @@ export const attachmentApi = {
 
 export const onAgentOutput = (callback: (event: AgentOutputEvent) => void): (() => void) => {
   return window.electronAPI.onAgentOutput(callback)
+}
+
+export const onAgentOutputBatch = (callback: (event: AgentOutputBatchEvent) => void): (() => void) => {
+  return window.electronAPI.onAgentOutputBatch(callback)
 }
 
 export const onAgentStatus = (callback: (event: AgentStatusEvent) => void): (() => void) => {

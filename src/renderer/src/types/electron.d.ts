@@ -43,6 +43,12 @@ export interface AgentOutputEvent {
   data: unknown
 }
 
+export interface AgentOutputBatchEvent {
+  sessionId: string
+  taskId: string
+  messages: Array<{ id: string; role: string; content: string; partType?: string; tool?: unknown }>
+}
+
 export interface AgentStatusEvent {
   sessionId: string
   agentId: string
@@ -243,6 +249,7 @@ interface ElectronAPI {
   }
   onOverdueCheck: (callback: () => void) => () => void
   onAgentOutput: (callback: (event: AgentOutputEvent) => void) => () => void
+  onAgentOutputBatch: (callback: (event: AgentOutputBatchEvent) => void) => () => void
   onAgentStatus: (callback: (event: AgentStatusEvent) => void) => () => void
   onAgentApproval: (callback: (event: AgentApprovalRequest) => void) => () => void
   onAgentIncompatibleSession: (callback: (event: { taskId: string; agentId: string; error: string }) => void) => () => void

@@ -1,4 +1,5 @@
-import { useRef, useEffect, useState, useMemo, useCallback } from 'react'
+import React, { useRef, useEffect, useState, useMemo, useCallback } from 'react'
+import { useVirtualizer } from '@tanstack/react-virtual'
 import { StopCircle, Loader2, Terminal, Send, ChevronRight, ChevronDown, Wrench, AlertTriangle, CheckCircle2, Circle, Clock, RotateCcw, Code2, Eye, ListTodo } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { Markdown } from '@/components/ui/Markdown'
@@ -332,6 +333,8 @@ function MessageBubble({ message, onAnswer, viewMode }: { message: AgentMessage;
   )
 }
 
+const MemoizedMessageBubble = React.memo(MessageBubble)
+
 function TodoSummary({ todos }: { todos: NonNullable<AgentMessage['tool']>['todos'] }) {
   const [expanded, setExpanded] = useState(true)
   if (!todos || todos.length === 0) return null
@@ -416,15 +419,27 @@ export function AgentTranscriptPanel({ title = 'Agent transcript', messages, sta
     return null
   }, [messages, status])
 
-  useEffect(() => {
+  const atBottomRef = useRef(true)
+
+  const virtualizer = useVirtualizer({
+    count: messages.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => 60,
+    overscan: 5,
+  })
+
+  const handleScroll = useCallback(() => {
     const el = scrollRef.current
     if (!el) return
-    // Use setTimeout to ensure DOM has rendered the new messages
-    const timer = setTimeout(() => {
-      el.scrollTop = el.scrollHeight
-    }, 50)
-    return () => clearTimeout(timer)
-  }, [messages.length])
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
+    atBottomRef.current = distanceFromBottom < 100
+  }, [])
+
+  useEffect(() => {
+    if (messages.length > 0 && atBottomRef.current) {
+      virtualizer.scrollToIndex(messages.length - 1, { align: 'end' })
+    }
+  }, [messages.length, virtualizer])
 
   const getStatusColor = () => {
     switch (status) {
@@ -511,7 +526,8 @@ export function AgentTranscriptPanel({ title = 'Agent transcript', messages, sta
       {/* Messages */}
       <div
         ref={scrollRef}
-        className="flex-1 min-h-0 overflow-y-auto p-4 font-mono text-sm space-y-2"
+        onScroll={handleScroll}
+        className="flex-1 min-h-0 overflow-y-auto p-4 font-mono text-sm"
       >
         {messages.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-muted-foreground text-xs">
@@ -529,9 +545,26 @@ export function AgentTranscriptPanel({ title = 'Agent transcript', messages, sta
           </div>
         ) : (
           <>
-            {messages.map((message) => (
-              <MessageBubble key={message.id} message={message} onAnswer={onSend} viewMode={viewMode} />
-            ))}
+            <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
+              {virtualizer.getVirtualItems().map((virtualRow) => (
+                <div
+                  key={messages[virtualRow.index].id}
+                  ref={virtualizer.measureElement}
+                  data-index={virtualRow.index}
+                  style={{
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    transform: `translateY(${virtualRow.start}px)`,
+                  }}
+                >
+                  <div className="pb-2">
+                    <MemoizedMessageBubble message={messages[virtualRow.index]} onAnswer={onSend} viewMode={viewMode} />
+                  </div>
+                </div>
+              ))}
+            </div>
             {status === 'working' && (
               <div className="flex items-center gap-2 text-xs text-muted-foreground">
                 <Loader2 className="h-3 w-3 animate-spin" />

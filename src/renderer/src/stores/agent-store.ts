@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import type { Agent, CreateAgentDTO, UpdateAgentDTO } from '@/types'
-import { agentApi, agentSessionApi, onAgentOutput, onAgentStatus, onAgentApproval } from '@/lib/ipc-client'
-import type { AgentOutputEvent, AgentStatusEvent, AgentApprovalRequest } from '@/types/electron'
+import { agentApi, agentSessionApi, onAgentOutput, onAgentOutputBatch, onAgentStatus, onAgentApproval } from '@/lib/ipc-client'
+import type { AgentOutputEvent, AgentOutputBatchEvent, AgentStatusEvent, AgentApprovalRequest } from '@/types/electron'
 
 // ── Message type ──────────────────────────────────────────────
 
@@ -216,6 +216,45 @@ export const useAgentStore = create<AgentState>((set, get) => {
           ...resolvedSession.messages,
           { id: msgId, role, content, timestamp: new Date(), partType: data.partType as string, tool: data.tool as AgentMessage['tool'] }
         ]
+      })
+    })
+  })
+
+  onAgentOutputBatch((event: AgentOutputBatchEvent) => {
+    const state = get()
+    const session = findBySessionId(state.sessions, event.sessionId)
+      || state.sessions.get(event.taskId)
+    if (!session) return
+
+    const taskId = session.taskId
+    const seen = getSeen(taskId)
+
+    const messages: AgentMessage[] = []
+    for (const msg of event.messages) {
+      const role: AgentMessage['role'] = msg.role === 'user' ? 'user' : msg.role === 'assistant' ? 'assistant' : 'system'
+      const msgId = msg.id || `${role}-${(msg.content || '').slice(0, 50)}-${Date.now()}`
+      if (seen.has(msgId)) continue
+      seen.add(msgId)
+      messages.push({
+        id: msgId,
+        role,
+        content: msg.content || '',
+        timestamp: new Date(),
+        partType: msg.partType,
+        tool: msg.tool as AgentMessage['tool']
+      })
+    }
+
+    if (messages.length === 0) return
+
+    const resolvedSession = (!session.sessionId && event.sessionId)
+      ? { ...session, sessionId: event.sessionId }
+      : session
+
+    set({
+      sessions: new Map(state.sessions).set(taskId, {
+        ...resolvedSession,
+        messages: [...resolvedSession.messages, ...messages]
       })
     })
   })
