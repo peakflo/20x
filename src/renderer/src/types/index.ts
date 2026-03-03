@@ -26,6 +26,8 @@ export enum CodingAgentType {
   CODEX = 'codex'
 }
 
+export type ClaudeAuthMethod = 'subscription' | 'api_key'
+
 export const CODING_AGENTS: { value: CodingAgentType; label: string }[] = [
   { value: CodingAgentType.OPENCODE, label: 'OpenCode' },
   { value: CodingAgentType.CLAUDE_CODE, label: 'Claude Code' },
@@ -125,6 +127,7 @@ export interface UpdateMcpServerDTO {
 export interface AgentConfig {
   coding_agent?: CodingAgentType
   model?: string
+  auth_method?: ClaudeAuthMethod
   system_prompt?: string
   mcp_servers?: Array<string | AgentMcpServerEntry>
   skill_ids?: string[]

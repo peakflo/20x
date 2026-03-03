@@ -34,6 +34,7 @@ export interface AgentMcpServerEntry {
 export interface AgentConfigRecord {
   coding_agent?: 'opencode' | 'claude-code' | 'codex'
   model?: string
+  auth_method?: 'subscription' | 'api_key'
   system_prompt?: string
   mcp_servers?: Array<string | AgentMcpServerEntry>
   skill_ids?: string[]

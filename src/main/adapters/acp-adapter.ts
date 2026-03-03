@@ -153,13 +153,12 @@ export class AcpAdapter implements CodingAgentAdapter {
         }
       case 'claude-code':
         // claude-code-acp is also a Node.js script
+        // Note: ANTHROPIC_API_KEY is NOT included here — it is handled per-session
+        // in createSession/resumeSession based on config.authMethod
         return {
           command: 'node',
           args: [require.resolve('@zed-industries/claude-code-acp/dist/index.js')],
-          env: {
-            // Claude Code requires ANTHROPIC_API_KEY
-            ...(process.env.ANTHROPIC_API_KEY && { ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY })
-          }
+          env: {}
         }
       default:
         throw new Error(`Unsupported ACP agent type: ${agentType}`)
@@ -215,8 +214,25 @@ export class AcpAdapter implements CodingAgentAdapter {
       env.OPENAI_API_KEY = config.apiKeys.openai
       env.CODEX_API_KEY = config.apiKeys.openai
     }
-    if (config.apiKeys?.anthropic) {
-      env.ANTHROPIC_API_KEY = config.apiKeys.anthropic
+
+    // Claude Code auth method handling
+    if (this.agentType === 'claude-code') {
+      const authMethod = config.authMethod || 'subscription' // default to subscription
+      if (authMethod === 'api_key') {
+        // API Key mode: use configured key, or fall back to env var
+        if (config.apiKeys?.anthropic) {
+          env.ANTHROPIC_API_KEY = config.apiKeys.anthropic
+        }
+        // If neither configured key nor env var exists, warn below
+      } else {
+        // Subscription mode: MUST NOT pass ANTHROPIC_API_KEY so Claude Code uses OAuth
+        delete env.ANTHROPIC_API_KEY
+        console.log(`[AcpAdapter/claude-code] Subscription auth: removed ANTHROPIC_API_KEY from env`)
+      }
+    } else {
+      if (config.apiKeys?.anthropic) {
+        env.ANTHROPIC_API_KEY = config.apiKeys.anthropic
+      }
     }
 
     // Inject secret env vars directly into process environment
@@ -232,8 +248,11 @@ export class AcpAdapter implements CodingAgentAdapter {
         console.warn('[AcpAdapter/codex] No OPENAI_API_KEY or CODEX_API_KEY in environment — relying on agent\'s own auth')
       }
     } else if (this.agentType === 'claude-code') {
-      if (!env.ANTHROPIC_API_KEY) {
-        console.warn('[AcpAdapter/claude-code] No ANTHROPIC_API_KEY in environment — relying on agent\'s own auth')
+      const authMethod = config.authMethod || 'subscription'
+      if (authMethod === 'api_key' && !env.ANTHROPIC_API_KEY) {
+        console.warn('[AcpAdapter/claude-code] API key auth selected but no ANTHROPIC_API_KEY available')
+      } else if (authMethod === 'subscription') {
+        console.log('[AcpAdapter/claude-code] Using subscription auth (OAuth)')
       }
     }
 
@@ -354,8 +373,24 @@ export class AcpAdapter implements CodingAgentAdapter {
       env.OPENAI_API_KEY = config.apiKeys.openai
       env.CODEX_API_KEY = config.apiKeys.openai
     }
-    if (config.apiKeys?.anthropic) {
-      env.ANTHROPIC_API_KEY = config.apiKeys.anthropic
+
+    // Claude Code auth method handling
+    if (this.agentType === 'claude-code') {
+      const authMethod = config.authMethod || 'subscription' // default to subscription
+      if (authMethod === 'api_key') {
+        // API Key mode: use configured key, or fall back to env var
+        if (config.apiKeys?.anthropic) {
+          env.ANTHROPIC_API_KEY = config.apiKeys.anthropic
+        }
+      } else {
+        // Subscription mode: MUST NOT pass ANTHROPIC_API_KEY so Claude Code uses OAuth
+        delete env.ANTHROPIC_API_KEY
+        console.log(`[AcpAdapter/claude-code] Subscription auth: removed ANTHROPIC_API_KEY from env`)
+      }
+    } else {
+      if (config.apiKeys?.anthropic) {
+        env.ANTHROPIC_API_KEY = config.apiKeys.anthropic
+      }
     }
 
     console.log(`[AcpAdapter/${this.agentType}] Environment after config:`, {
@@ -377,8 +412,11 @@ export class AcpAdapter implements CodingAgentAdapter {
         console.warn('[AcpAdapter/codex] No OPENAI_API_KEY or CODEX_API_KEY in environment — relying on agent\'s own auth')
       }
     } else if (this.agentType === 'claude-code') {
-      if (!env.ANTHROPIC_API_KEY) {
-        console.warn('[AcpAdapter/claude-code] No ANTHROPIC_API_KEY in environment — relying on agent\'s own auth')
+      const authMethod = config.authMethod || 'subscription'
+      if (authMethod === 'api_key' && !env.ANTHROPIC_API_KEY) {
+        console.warn('[AcpAdapter/claude-code] API key auth selected but no ANTHROPIC_API_KEY available')
+      } else if (authMethod === 'subscription') {
+        console.log('[AcpAdapter/claude-code] Using subscription auth (OAuth)')
       }
     }
 
