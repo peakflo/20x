@@ -6,7 +6,6 @@ import { existsSync, copyFileSync, mkdirSync, writeFileSync, readFileSync, readd
 import { Agent as UndiciAgent } from 'undici'
 import type { BrowserWindow } from 'electron'
 import type { DatabaseManager, AgentMcpServerEntry, OutputFieldRecord, SecretRecord, SkillRecord, TaskRecord } from './database'
-import type { DatabaseAsync } from './database-async'
 import { TaskStatus } from '../shared/constants'
 import type { WorktreeManager } from './worktree-manager'
 import type { GitHubManager } from './github-manager'
@@ -70,7 +69,6 @@ export class AgentManager extends EventEmitter {
   private serverStarting: Promise<void> | null = null  // Track server startup
   private sdkLoading: Promise<void> | null = null  // Track SDK loading
   private db: DatabaseManager
-  private dbAsync: DatabaseAsync | null = null  // Worker-thread DB for non-blocking hot-path operations
   private mainWindow: BrowserWindow | null = null
   private adapters: Map<string, CodingAgentAdapter> = new Map()  // Adapter instances
   private worktreeManager: WorktreeManager | null = null
@@ -83,17 +81,11 @@ export class AgentManager extends EventEmitter {
   // simultaneous sync DB calls from stacking up and starving the event loop.
   private pollingEntries: Map<string, PollingEntry> = new Map()
   private pollingTimer: ReturnType<typeof setTimeout> | null = null
-  private pollingInProgress = false
   private static readonly POLL_INTERVAL_MS = 2000
 
   constructor(db: DatabaseManager) {
     super()
     this.db = db
-  }
-
-  /** Sets the async (worker-thread) database for non-blocking hot-path operations */
-  setAsyncDatabase(dbAsync: DatabaseAsync): void {
-    this.dbAsync = dbAsync
   }
 
   private async loadSDK(): Promise<void> {
@@ -1134,8 +1126,9 @@ export class AgentManager extends EventEmitter {
     if (this.pollingTimer) return // Already running
 
     const tick = async (): Promise<void> => {
-      if (this.pollingInProgress) return // Guard against re-entrant ticks
-      this.pollingInProgress = true
+      // Clear the timer reference — this tick is now executing, not pending.
+      // ensurePollingCoordinator checks this to know whether to start a new loop.
+      this.pollingTimer = null
 
       try {
         // Snapshot current entries (entries may be removed during iteration)
@@ -1148,18 +1141,18 @@ export class AgentManager extends EventEmitter {
           if (!this.pollingEntries.has(entry.sessionId)) continue
 
           await this.pollSingleSession(entry)
+
+          // Yield the event loop between sessions so IPC, timers, and
+          // rendering callbacks can run between polls.
+          await new Promise<void>((r) => setImmediate(r))
         }
       } catch (error) {
         console.error('[AgentManager] Polling coordinator error:', error)
-      } finally {
-        this.pollingInProgress = false
       }
 
-      // Schedule next tick if there are still active sessions
+      // ALWAYS reschedule if there are active sessions (even after errors).
       if (this.pollingEntries.size > 0) {
         this.pollingTimer = setTimeout(tick, AgentManager.POLL_INTERVAL_MS)
-      } else {
-        this.pollingTimer = null
       }
     }
 
@@ -1215,12 +1208,8 @@ export class AgentManager extends EventEmitter {
       if (realSessionId && realSessionId !== sessionId) {
         console.log(`[AgentManager] Session ID updated: ${sessionId} -> ${realSessionId}`)
 
-        // Update database with real session ID (use async worker to avoid blocking event loop)
-        if (this.dbAsync) {
-          this.dbAsync.updateTask(config.taskId, { session_id: realSessionId })
-        } else {
-          this.db.updateTask(config.taskId, { session_id: realSessionId })
-        }
+        // Update database with real session ID
+        this.db.updateTask(config.taskId, { session_id: realSessionId })
 
         // Re-key the sessions map
         const session = this.sessions.get(sessionId)
@@ -1300,11 +1289,7 @@ export class AgentManager extends EventEmitter {
       if (status.type === SessionStatusType.ERROR) {
         if (status.message?.includes('INCOMPATIBLE_SESSION_ID')) {
           console.warn('[AgentManager] Incompatible session detected during polling:', sessionId)
-          if (this.dbAsync) {
-            this.dbAsync.updateTask(config.taskId, { session_id: null })
-          } else {
-            this.db.updateTask(config.taskId, { session_id: null })
-          }
+          this.db.updateTask(config.taskId, { session_id: null })
           this.sendToRenderer('agent:incompatible-session', {
             taskId: config.taskId,
             agentId: config.agentId,
@@ -1347,10 +1332,14 @@ export class AgentManager extends EventEmitter {
         return
       } else if (status.type === SessionStatusType.IDLE && session) {
         console.log(`[AgentManager] Detected IDLE status for ${sessionId}, calling transitionToIdle`)
-        await this.transitionToIdle(sessionId, session)
-        console.log(`[AgentManager] Stopping polling for idle session ${sessionId}`)
         session.pollingStarted = false
+        // Remove from polling FIRST so other sessions aren't starved while
+        // transitionToIdle runs (it can be slow due to extractOutputValues).
         this.stopAdapterPolling(sessionId)
+        // Fire-and-forget: transitionToIdle runs without blocking the coordinator.
+        this.transitionToIdle(sessionId, session).catch((err) => {
+          console.error(`[AgentManager] transitionToIdle error for ${sessionId}:`, err)
+        })
         return
       }
     } catch (error: unknown) {
@@ -1570,24 +1559,17 @@ export class AgentManager extends EventEmitter {
     session.status = 'idle'
     console.log(`[AgentManager] Session ${sessionId} → idle`)
 
-    // Helper: use async worker DB when available, fall back to sync
-    const dbGetTask = (id: string) =>
-      this.dbAsync ? this.dbAsync.getTask(id) : Promise.resolve(this.db.getTask(id))
-    const dbUpdateTask = (id: string, data: Record<string, unknown>) =>
-      this.dbAsync ? this.dbAsync.updateTask(id, data) : Promise.resolve(this.db.updateTask(id, data))
-
     // In learning mode, skip output extraction, task status, and renderer notification
     if (session.learningMode) return
 
     // In triage mode, set status back to NotStarted (now with agent_id assigned) and return early
     if (session.isTriageSession) {
       console.log(`[AgentManager] Triage session completed for task ${session.taskId}, reverting to NotStarted`)
-      await dbUpdateTask(session.taskId, { status: TaskStatus.NotStarted, session_id: null })
+      this.db.updateTask(session.taskId, { status: TaskStatus.NotStarted, session_id: null })
 
-      const triageTask = await dbGetTask(session.taskId)
       this.sendToRenderer('task:updated', {
         taskId: session.taskId,
-        updates: triageTask || { status: TaskStatus.NotStarted, session_id: null }
+        updates: this.db.getTask(session.taskId) || { status: TaskStatus.NotStarted, session_id: null }
       })
 
       this.sendToRenderer('agent:status', {
@@ -1600,7 +1582,7 @@ export class AgentManager extends EventEmitter {
     }
 
     // Check if task exists (e.g., orchestrator-session doesn't have a real task)
-    const task = await dbGetTask(session.taskId)
+    const task = this.db.getTask(session.taskId)
     if (!task) {
       console.log(`[AgentManager] No task found for ${session.taskId}, sending idle status only`)
       this.sendToRenderer('agent:status', {
@@ -1621,7 +1603,7 @@ export class AgentManager extends EventEmitter {
       }
 
       // Mark task as completed
-      await dbUpdateTask(session.taskId, { status: TaskStatus.Completed })
+      this.db.updateTask(session.taskId, { status: TaskStatus.Completed })
 
       this.sendToRenderer('task:updated', {
         taskId: session.taskId,
@@ -1643,7 +1625,7 @@ export class AgentManager extends EventEmitter {
 
     // Check again if task is still in a state where we should update it
     // (frontend might have already completed it during feedback flow)
-    const taskAfterExtract = await dbGetTask(session.taskId)
+    const taskAfterExtract = this.db.getTask(session.taskId)
     if (taskAfterExtract?.status === TaskStatus.AgentLearning || taskAfterExtract?.status === TaskStatus.Completed) {
       console.log(`[AgentManager] Task already in final state (${taskAfterExtract.status}), skipping status update`)
       this.sendToRenderer('agent:status', {
@@ -1655,10 +1637,10 @@ export class AgentManager extends EventEmitter {
     // Update task status to ready_for_review (only if task exists)
     if (task) {
       console.log(`[AgentManager] Updating task ${session.taskId} status to ReadyForReview`)
-      await dbUpdateTask(session.taskId, { status: TaskStatus.ReadyForReview })
+      this.db.updateTask(session.taskId, { status: TaskStatus.ReadyForReview })
 
       // Get updated task with output fields and notify renderer
-      const updatedTask = await dbGetTask(session.taskId)
+      const updatedTask = this.db.getTask(session.taskId)
       this.sendToRenderer('task:updated', {
         taskId: session.taskId,
         updates: {
