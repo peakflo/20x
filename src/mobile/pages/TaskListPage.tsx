@@ -18,7 +18,8 @@ const FILTER_OPTIONS = [
 export function TaskListPage({ onNavigate }: { onNavigate: (route: Route) => void }) {
   const tasks = useTaskStore((s) => s.tasks)
   const isLoading = useTaskStore((s) => s.isLoading)
-  const fetchTasks = useTaskStore((s) => s.fetchTasks)
+  const isSyncing = useTaskStore((s) => s.isSyncing)
+  const syncAndFetch = useTaskStore((s) => s.syncAndFetch)
   // Only extract session statuses — avoids re-rendering on every streaming message
   const sessionStatuses = useAgentStore(useShallow((s) => {
     const result: Record<string, SessionStatus> = {}
@@ -68,8 +69,16 @@ export function TaskListPage({ onNavigate }: { onNavigate: (route: Route) => voi
       <div className="shrink-0 px-4 pt-3 pb-2 border-b border-border/30">
         <div className="flex items-center justify-between mb-2">
           <h1 className="text-lg font-semibold">Tasks</h1>
-          <button onClick={() => fetchTasks()} disabled={isLoading} className="text-xs text-primary active:opacity-60">
-            {isLoading ? 'Loading...' : 'Refresh'}
+          <button
+            onClick={() => syncAndFetch()}
+            disabled={isLoading || isSyncing}
+            className="p-2 active:opacity-60 hover:bg-accent rounded-md transition-colors disabled:opacity-40"
+            aria-label="Sync and refresh tasks"
+            title="Sync all sources"
+          >
+            <svg className={`w-4 h-4 text-foreground ${isSyncing ? 'animate-spin' : ''}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" /><path d="M21 3v5h-5" />
+            </svg>
           </button>
         </div>
 
@@ -100,8 +109,8 @@ export function TaskListPage({ onNavigate }: { onNavigate: (route: Route) => voi
         </div>
       </div>
 
-      {/* Task list */}
-      <div className="flex-1 overflow-y-auto">
+      {/* Task list (relative for FAB positioning) */}
+      <div className="flex-1 overflow-y-auto relative">
         {active.length === 0 && completed.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
             <svg className="w-12 h-12 mb-3 opacity-20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
@@ -141,6 +150,17 @@ export function TaskListPage({ onNavigate }: { onNavigate: (route: Route) => voi
             )}
           </>
         )}
+
+        {/* FAB — Create Task */}
+        <button
+          onClick={() => onNavigate({ page: 'create' })}
+          className="sticky bottom-4 left-full -translate-x-4 ml-auto w-12 h-12 rounded-full bg-primary text-primary-foreground shadow-lg flex items-center justify-center active:scale-95 transition-transform"
+          aria-label="Create task"
+        >
+          <svg className="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M5 12h14"/><path d="M12 5v14"/>
+          </svg>
+        </button>
       </div>
     </div>
   )

@@ -13,6 +13,7 @@ import { randomUUID, timingSafeEqual } from 'crypto'
 import type { DatabaseManager } from './database'
 import type { AgentManager } from './agent-manager'
 import type { GitHubManager } from './github-manager'
+import type { SyncManager } from './sync-manager'
 
 // ── State ────────────────────────────────────────────────────
 let server: HttpServer | null = null
@@ -20,6 +21,7 @@ let wss: WebSocketServer | null = null
 let dbRef: DatabaseManager | null = null
 let agentRef: AgentManager | null = null
 let githubRef: GitHubManager | null = null
+let syncManagerRef: SyncManager | null = null
 let authToken: string | null = null
 
 const wsClients = new Set<WebSocket>()
@@ -39,13 +41,15 @@ export function startMobileApiServer(
   db: DatabaseManager,
   agentManager: AgentManager,
   githubManager: GitHubManager,
-  port = 20620
+  port = 20620,
+  syncManager?: SyncManager | null
 ): Promise<number> {
   if (server) return Promise.resolve(port)
 
   dbRef = db
   agentRef = agentManager
   githubRef = githubManager
+  syncManagerRef = syncManager ?? null
 
   // Read or generate auth token — auth is always required
   authToken = db.getSetting('mobile_auth_token') ?? null
@@ -337,6 +341,18 @@ function routeGet(pathname: string, url: URL): unknown {
 async function routePost(pathname: string, params: Record<string, unknown>): Promise<unknown> {
   const agent = agentRef!
   const db = dbRef!
+
+  // POST /api/task-sources/sync-all — sync all enabled task sources
+  if (pathname === '/api/task-sources/sync-all') {
+    if (!syncManagerRef) throw Object.assign(new Error('Sync manager not available'), { status: 503 })
+    const sources = db.getTaskSources().filter((s: { enabled: boolean }) => s.enabled)
+    const results = await Promise.allSettled(
+      sources.map((s: { id: string }) => syncManagerRef!.importTasks(s.id))
+    )
+    return results.map((r) =>
+      r.status === 'fulfilled' ? r.value : { error: String((r as PromiseRejectedResult).reason) }
+    )
+  }
 
   // POST /api/tasks — create task (must be checked before the :id update route)
   if (pathname === '/api/tasks') {

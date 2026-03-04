@@ -41,7 +41,9 @@ export interface Task {
 interface TaskState {
   tasks: Task[]
   isLoading: boolean
+  isSyncing: boolean
   fetchTasks: () => Promise<void>
+  syncAndFetch: () => Promise<void>
   createTask: (data: Record<string, unknown>) => Promise<Task | null>
   updateTask: (id: string, data: Record<string, unknown>) => Promise<boolean>
 }
@@ -75,6 +77,7 @@ export const useTaskStore = create<TaskState>((set, get) => {
   return {
     tasks: [],
     isLoading: false,
+    isSyncing: false,
 
     fetchTasks: async () => {
       set({ isLoading: true })
@@ -83,6 +86,22 @@ export const useTaskStore = create<TaskState>((set, get) => {
         set({ tasks, isLoading: false })
       } catch {
         set({ isLoading: false })
+      }
+    },
+
+    syncAndFetch: async () => {
+      set({ isSyncing: true })
+      try {
+        await api.taskSources.syncAll()
+      } catch (e) {
+        console.error('Failed to sync task sources:', e)
+      }
+      // Always re-fetch tasks after sync (even if sync failed, tasks may have changed)
+      try {
+        const tasks = (await api.tasks.list()) as Task[]
+        set({ tasks, isSyncing: false })
+      } catch {
+        set({ isSyncing: false })
       }
     },
 

@@ -22,6 +22,7 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
   const endSession = useAgentStore((s) => s.endSession)
 
   const [skillsExpanded, setSkillsExpanded] = useState(false)
+  const [showFeedback, setShowFeedback] = useState(false)
   const { handleStart: _startSession, handleResume: _resumeSession, handleStop: _stopSession, busyRef } = useSessionControls(taskId)
 
   // Session is already synced and running (from desktop or elsewhere)
@@ -74,6 +75,63 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
     if (session?.sessionId) _stopSession(session.sessionId)
   }, [session?.sessionId, _stopSession])
 
+  const handleCompleteTask = useCallback(async () => {
+    if (!task) return
+    // Always show feedback when an agent is assigned (there may be a session to learn from)
+    if (task.agent_id) {
+      setShowFeedback(true)
+    } else {
+      // No agent — complete directly
+      await updateTask(task.id, { status: TaskStatus.Completed })
+    }
+  }, [task, updateTask])
+
+  const handleFeedbackSubmit = useCallback(async (rating: number, comment: string) => {
+    if (!task || !task.agent_id) return
+    setShowFeedback(false)
+
+    // 1. Set task to AgentLearning status with feedback (matches desktop flow)
+    await updateTask(task.id, {
+      status: TaskStatus.AgentLearning,
+      feedback_rating: rating,
+      feedback_comment: comment || null
+    })
+
+    // 2. Build the same feedback prompt as desktop
+    const commentPart = comment ? ` Comment: "${comment}".` : ''
+    const today = new Date().toISOString().split('T')[0]
+    const prompt = `User rated this session ${rating}/5.${commentPart}\n\nReview the session and update skills in .agents/skills/:\n\n**For skills you used:**\nUpdate the YAML frontmatter:\n- confidence: ${rating >= 4 ? '+0.05 (was helpful)' : rating <= 2 ? '-0.10 (was wrong/outdated)' : 'no change'}\n- uses: increment by 1\n- lastUsed: ${today}\n- tags: add relevant keywords if missing\n\n**If you discovered a new reusable pattern:**\nCreate a new skill file.\n\nUpdate existing skills that were helpful or create new ones for patterns worth reusing.`
+
+    // 3. Resume the session (or start fresh if none) and send feedback prompt
+    try {
+      let activeSessionId = session?.sessionId
+      if (!activeSessionId && task.session_id) {
+        // Resume existing session from task record
+        const { sessionId } = await api.sessions.resume(task.session_id, task.agent_id, task.id)
+        activeSessionId = sessionId
+        initSession(task.id, sessionId, task.agent_id)
+      }
+      if (activeSessionId) {
+        await api.sessions.send(activeSessionId, prompt, task.id, task.agent_id)
+        // Backend agent-manager will sync skills and auto-transition to Completed
+        // when the session becomes idle (via transitionToIdle AgentLearning check)
+      } else {
+        // No session at all — just mark as completed with feedback
+        await updateTask(task.id, { status: TaskStatus.Completed })
+      }
+    } catch (e) {
+      console.error('Failed to send feedback to agent:', e)
+      // Fallback: complete the task even if learning session fails
+      await updateTask(task.id, { status: TaskStatus.Completed })
+    }
+  }, [task, session, updateTask, initSession])
+
+  const handleFeedbackSkip = useCallback(async () => {
+    if (!task) return
+    setShowFeedback(false)
+    await updateTask(task.id, { status: TaskStatus.Completed })
+  }, [task, updateTask])
+
   if (!task) {
     return (
       <div className="flex flex-col h-full">
@@ -88,6 +146,7 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
   const canResume = task.agent_id && task.session_id && !isSessionRunning && (!session?.sessionId) && (!session || session.status === 'idle')
   const canStop = isSessionRunning
   const canTriage = !task.agent_id && agents.length > 0 && task.status !== TaskStatus.Completed && task.status !== TaskStatus.Triaging && !isSessionRunning
+  const canComplete = task.status !== TaskStatus.Completed && !isSessionRunning
   const hasMessages = session && session.messages.length > 0
 
   // Preview: last 3 messages
@@ -101,7 +160,21 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
 
   return (
     <div className="flex flex-col h-full">
-      <Header onBack={() => onNavigate({ page: 'list' })} title={task.title} />
+      <Header
+        onBack={() => onNavigate({ page: 'list' })}
+        title={task.title}
+        rightAction={
+          <button
+            onClick={() => onNavigate({ page: 'edit', taskId })}
+            className="p-2 active:opacity-60 hover:bg-accent rounded-md transition-colors"
+            aria-label="Edit task"
+          >
+            <svg className="w-4 h-4 text-foreground" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/>
+            </svg>
+          </button>
+        }
+      />
 
       <div className="flex-1 overflow-y-auto">
         {/* Badges bar — matches desktop TaskDetailView header */}
@@ -165,6 +238,14 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
               {canStop && (
                 <button onClick={handleStop} className="inline-flex items-center gap-1.5 bg-destructive text-destructive-foreground hover:bg-destructive/90 h-7 rounded-md px-3 text-xs font-medium shrink-0">
                   Stop
+                </button>
+              )}
+              {canComplete && (
+                <button onClick={handleCompleteTask} className="inline-flex items-center gap-1.5 bg-green-600 text-white hover:bg-green-700 h-7 rounded-md px-3 text-xs font-medium shrink-0">
+                  <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="20 6 9 17 4 12"/>
+                  </svg>
+                  Complete
                 </button>
               )}
               {session && (
@@ -346,11 +427,94 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
           </div>
         )}
       </div>
+
+      {/* Feedback modal */}
+      {showFeedback && (
+        <FeedbackModal
+          onSubmit={handleFeedbackSubmit}
+          onSkip={handleFeedbackSkip}
+        />
+      )}
     </div>
   )
 }
 
-function Header({ onBack, title }: { onBack: () => void; title: string }) {
+function FeedbackModal({ onSubmit, onSkip }: { onSubmit: (rating: number, comment: string) => void; onSkip: () => void }) {
+  const [rating, setRating] = useState(0)
+  const [comment, setComment] = useState('')
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center">
+      {/* Backdrop */}
+      <div className="fixed inset-0 bg-black/60" onClick={onSkip} />
+
+      {/* Modal */}
+      <div className="relative z-50 w-full max-w-md mx-4 mb-4 bg-card border border-border rounded-xl shadow-xl animate-in slide-in-from-bottom-4 duration-200">
+        <div className="px-5 pt-5 pb-2">
+          <h2 className="text-base font-semibold text-foreground">Session Feedback</h2>
+          <p className="text-xs text-muted-foreground mt-1">Rate this session to help the agent improve</p>
+        </div>
+
+        {/* Star rating */}
+        <div className="flex gap-2 justify-center py-4">
+          {[1, 2, 3, 4, 5].map((star) => (
+            <button
+              key={star}
+              type="button"
+              onClick={() => setRating(star)}
+              className="p-1 active:scale-110 transition-transform"
+            >
+              <svg
+                className={`h-8 w-8 transition-colors ${
+                  star <= rating
+                    ? 'fill-amber-400 text-amber-400'
+                    : 'text-muted-foreground/30 fill-none'
+                }`}
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+              </svg>
+            </button>
+          ))}
+        </div>
+
+        {/* Comment */}
+        <div className="px-5">
+          <textarea
+            placeholder="Optional feedback..."
+            value={comment}
+            onChange={(e) => setComment(e.target.value)}
+            rows={3}
+            className="w-full bg-transparent border border-input rounded-md px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-ring focus:ring-1 focus:ring-ring/30 resize-none"
+          />
+        </div>
+
+        {/* Actions */}
+        <div className="flex gap-2 justify-end px-5 py-4">
+          <button
+            onClick={onSkip}
+            className="h-9 px-4 text-sm text-muted-foreground hover:text-foreground hover:bg-accent rounded-md transition-colors"
+          >
+            Skip
+          </button>
+          <button
+            onClick={() => { if (rating > 0) onSubmit(rating, comment) }}
+            disabled={rating === 0}
+            className="h-9 px-4 text-sm font-medium bg-primary text-primary-foreground rounded-md hover:bg-primary/90 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+          >
+            Submit
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function Header({ onBack, title, rightAction }: { onBack: () => void; title: string; rightAction?: React.ReactNode }) {
   return (
     <div className="shrink-0 flex items-center gap-2 px-2 py-3 border-b border-border">
       <button onClick={onBack} className="p-2 active:opacity-60 hover:bg-accent rounded-md transition-colors">
@@ -359,6 +523,7 @@ function Header({ onBack, title }: { onBack: () => void; title: string }) {
         </svg>
       </button>
       <h1 className="text-sm font-semibold truncate flex-1">{title}</h1>
+      {rightAction}
     </div>
   )
 }
