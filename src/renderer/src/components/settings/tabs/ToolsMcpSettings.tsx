@@ -126,11 +126,14 @@ export function ToolsMcpSettings() {
     return !!(hasRegistration || authRequired[server.id])
   }
 
-  // Should the connection error row be hidden? (OAuth-related 401 errors)
+  // Should the connection error row be hidden?
+  // Only hide when OAuth is required but not yet connected — the "Auth needed" badge explains it.
+  // If OAuth IS connected, show the error (it's a real connection problem, not an auth issue).
   const shouldHideConnectionRow = (server: McpServer, connection: McpConnectionInfo): boolean => {
     if (connection.status !== 'failed') return false
-    // If OAuth is needed for this server, hide the 401 error — the OAuth state explains it
-    return isOAuthServer(server)
+    if (!isOAuthServer(server)) return false
+    const oauthStatus = oauthStatuses[server.id]
+    return !oauthStatus?.connected
   }
 
   return (
