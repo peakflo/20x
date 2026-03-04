@@ -1996,6 +1996,9 @@ export class AgentManager extends EventEmitter {
   /**
    * Replay all messages from a running session via the adapter.
    * Used by the mobile API to sync with an already-running session.
+   * Sends a single agent:output-batch event (matching resumeAdapterSession pattern)
+   * to avoid content filtering, step-start/step-finish absorption, and dedup issues
+   * that affect individual agent:output events.
    */
   async replaySessionMessages(sessionId: string): Promise<void> {
     const session = this.sessions.get(sessionId)
@@ -2007,31 +2010,35 @@ export class AgentManager extends EventEmitter {
       workspaceDir: session.workspaceDir || process.cwd()
     })
 
+    // Collect all message parts into a single batch (matching resumeAdapterSession pattern)
+    const batchMessages: Array<{ id: string; role: string; content: string; partType?: string; tool?: unknown }> = []
     for (const msg of messages) {
       for (const part of msg.parts) {
-        this.sendToRenderer('agent:output', {
-          sessionId,
-          taskId: session.taskId,
-          type: 'message',
-          data: {
-            id: part.id || `${msg.id}-${msg.parts.indexOf(part)}`,
-            role: msg.role === MessageRole.USER ? 'user' : msg.role === MessageRole.ASSISTANT ? 'assistant' : 'system',
-            content: part.text || part.content || '',
-            timestamp: new Date(),
-            partType: part.type?.toLowerCase(),
-            tool: part.tool ? {
-              name: part.tool.name,
-              status: part.tool.status || part.state?.status || '',
-              title: part.tool.title || part.state?.title || '',
-              input: typeof part.tool.input === 'string' ? part.tool.input : part.tool.input ? JSON.stringify(part.tool.input) : undefined,
-              output: typeof part.tool.output === 'string' ? part.tool.output : part.tool.output ? JSON.stringify(part.tool.output) : undefined,
-              error: part.tool.error || part.state?.error,
-              questions: part.tool.questions,
-              todos: part.tool.todos
-            } : undefined
-          }
+        batchMessages.push({
+          id: part.id || `${msg.id}-${msg.parts.indexOf(part)}`,
+          role: msg.role === MessageRole.USER ? 'user' : msg.role === MessageRole.ASSISTANT ? 'assistant' : 'system',
+          content: part.text || part.content || '',
+          partType: part.type?.toLowerCase(),
+          tool: part.tool ? {
+            name: part.tool.name,
+            status: part.tool.status || part.state?.status || '',
+            title: part.tool.title || part.state?.title || '',
+            input: typeof part.tool.input === 'string' ? part.tool.input : part.tool.input ? JSON.stringify(part.tool.input) : undefined,
+            output: typeof part.tool.output === 'string' ? part.tool.output : part.tool.output ? JSON.stringify(part.tool.output) : undefined,
+            error: part.tool.error || part.state?.error,
+            questions: part.tool.questions,
+            todos: part.tool.todos
+          } : undefined
         })
       }
+    }
+
+    if (batchMessages.length > 0) {
+      this.sendToRenderer('agent:output-batch', {
+        sessionId,
+        taskId: session.taskId,
+        messages: batchMessages
+      })
     }
 
     // Also send current status
