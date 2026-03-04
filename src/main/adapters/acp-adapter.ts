@@ -122,7 +122,7 @@ interface AcpSession {
   responseCounter: number  // Counter for unique message IDs per response turn
   lastChunkTime: number | null  // Timestamp of last agent_message_chunk
   currentTurnId: number  // Auto-incremented ID for each detected response turn
-  sawToolCallSinceLastChunk: boolean  // Whether we saw a tool_call since last chunk
+  toolCallMetadata: Map<string, { name: string; input: string }>  // Cached metadata from initial tool_call events
 }
 
 /**
@@ -282,7 +282,7 @@ export class AcpAdapter implements CodingAgentAdapter {
       responseCounter: 0,
       lastChunkTime: null,
       currentTurnId: 0,
-      sawToolCallSinceLastChunk: false
+      toolCallMetadata: new Map()
     }
 
     // Temporarily store with workspace ID, will re-key after getting ACP session ID
@@ -446,7 +446,7 @@ export class AcpAdapter implements CodingAgentAdapter {
       responseCounter: 0,
       lastChunkTime: null,
       currentTurnId: 0,
-      sawToolCallSinceLastChunk: false
+      toolCallMetadata: new Map()
     }
 
     // Store with the Codex UUID (same as sessionId since we now return UUID from createSession)
@@ -488,9 +488,9 @@ export class AcpAdapter implements CodingAgentAdapter {
 
       console.log(`[AcpAdapter/${this.agentType}] Session loaded successfully: ${sessionId}`)
 
-      // TODO: Extract and return session messages from session/update notifications
-      // For now, return empty array - messages will be replayed via notifications
-      return []
+      // Convert replayed notifications (buffered during session/load) to SessionMessages.
+      // Without this, the renderer sees status:'idle' + messages:[] and hides the panel.
+      return this.getAllMessages(sessionId, config)
     } catch (error: unknown) {
       // Check if session not found
       const errMsg = error instanceof Error ? error.message : String(error)
@@ -1084,28 +1084,44 @@ export class AcpAdapter implements CodingAgentAdapter {
     return (obj.sessionId || obj.session_id || obj.id) as string | null
   }
 
+  /**
+   * Convert internal McpServerConfig map to ACP-spec McpServer array.
+   * ACP spec: https://agentclientprotocol.com/protocol/schema
+   *
+   * - mcpServers is Vec<McpServer> (array, not map)
+   * - stdio variant: { name, command, args: string[], env: EnvVariable[] }
+   * - http variant:  { type: "http", name, url, headers: HttpHeader[] }
+   * - EnvVariable / HttpHeader = { name: string, value: string }
+   */
   private convertMcpServers(servers?: Record<string, McpServerConfig>): unknown[] {
     if (!servers) return []
 
     const result: unknown[] = []
     for (const [name, config] of Object.entries(servers)) {
-      // Codex uses an untagged serde enum with deny_unknown_fields,
-      // so only include fields defined in the matching variant.
-      // Codex expects mcpServers as an array of objects with a "name" field.
-      // Variant is inferred from "command" vs "url".
       if (config.type === 'stdio') {
+        // Convert env from Record<string,string> to ACP EnvVariable[]
+        const envArray = config.env
+          ? Object.entries(config.env).map(([k, v]) => ({ name: k, value: v }))
+          : []
+
         result.push({
           name,
           command: config.command,
           args: config.args || [],
-          ...(config.env ? { env: config.env } : {})
+          env: envArray
         })
       } else {
-        // http or sse → Codex StreamableHttp variant
+        // http or sse — ACP requires a "type" discriminator for non-stdio variants
+        // Convert headers from Record<string,string> to ACP HttpHeader[]
+        const headersArray = config.headers
+          ? Object.entries(config.headers).map(([k, v]) => ({ name: k, value: v }))
+          : []
+
         result.push({
+          type: config.type,
           name,
           url: config.url,
-          ...(config.headers ? { http_headers: config.headers } : {})
+          headers: headersArray
         })
       }
     }
@@ -1154,14 +1170,32 @@ export class AcpAdapter implements CodingAgentAdapter {
 
       // Handle different update types
       if (update.sessionUpdate === 'tool_call' || update.sessionUpdate === 'tool_call_update') {
-        // Mark that we saw a tool call - this helps detect new turns
-        if (session) {
-          session.sawToolCallSinceLastChunk = true
+        // Cache metadata from initial tool_call events (in_progress) so we can use it
+        // when the completed tool_call_update arrives (which may lack name/input fields)
+        if (update.status !== 'completed' && session && partId) {
+          const rawInput = update.rawInput as { command?: string | string[]; parsed_cmd?: Array<{ cmd?: string }>; tool?: string; server?: string } | undefined
+          const commandFromInput = Array.isArray(rawInput?.command)
+            ? rawInput.command.join(' ')
+            : rawInput?.command
+          const commandFromParsed = rawInput?.parsed_cmd?.map((c) => c.cmd).join('; ')
+          const cachedInput = commandFromInput || commandFromParsed || update.title || ''
+          // Derive tool name: kind > rawInput.tool (with server prefix) > title (strip "Tool: " prefix)
+          const toolFromRawInput = rawInput?.tool
+            ? (rawInput.server ? `${rawInput.server}/${rawInput.tool}` : rawInput.tool)
+            : undefined
+          const toolFromTitle = update.title?.startsWith('Tool: ') ? update.title.slice(6) : undefined
+          const cachedName = update.kind || toolFromRawInput || toolFromTitle || ''
+          if (cachedName || cachedInput) {
+            session.toolCallMetadata.set(partId, { name: cachedName, input: cachedInput })
+          }
         }
 
         // Only create part if it's completed (has output)
         if (update.status === 'completed' && !seenPartIds.has(partId)) {
           seenPartIds.add(partId)
+
+          // Look up cached metadata from initial tool_call event
+          const cachedMeta = session?.toolCallMetadata.get(partId)
 
           // Extract command and output from rawInput/rawOutput
           const rawInput = update.rawInput as { command?: string | string[]; parsed_cmd?: Array<{ cmd?: string }> } | undefined
@@ -1169,7 +1203,9 @@ export class AcpAdapter implements CodingAgentAdapter {
             command?: string | string[];
             stdout?: string;
             stderr?: string;
-            formatted_output?: string
+            formatted_output?: string;
+            content?: Array<{ text?: string; type?: string }>;
+            isError?: boolean
           } | undefined
 
           // Try to get command from multiple sources (tool_call has rawInput, tool_call_update has it in rawOutput)
@@ -1181,14 +1217,34 @@ export class AcpAdapter implements CodingAgentAdapter {
             : rawOutput?.command
           const commandFromParsed = rawInput?.parsed_cmd?.map((c) => c.cmd).join('; ')
 
-          const command = commandFromInput || commandFromOutput || commandFromParsed || update.title || 'Unknown'
-          const output = rawOutput?.formatted_output || rawOutput?.stdout || rawOutput?.stderr || ''
+          // Extract from content array: [{type:"content", content:{type:"text", text:"..."}}]
+          const contentArray = update.content as Array<{ type?: string; content?: { type?: string; text?: string }; text?: string }> | undefined
+          const inputFromContent = Array.isArray(contentArray)
+            ? contentArray.map((c) => c.content?.text || c.text || '').filter(Boolean).join('\n')
+            : undefined
+
+          const command = commandFromInput || commandFromOutput || commandFromParsed || update.title || cachedMeta?.input || inputFromContent || 'Unknown'
+
+          // Extract output - handle Codex format: {content: [{text: "...", type: "text"}], isError: false}
+          const outputFromContent = Array.isArray(rawOutput?.content)
+            ? rawOutput.content.map((c) => c.text || '').filter(Boolean).join('\n')
+            : undefined
+          const output = rawOutput?.formatted_output || rawOutput?.stdout || rawOutput?.stderr || outputFromContent || ''
+
+          // Clean up cached metadata
+          if (session) {
+            session.toolCallMetadata.delete(partId)
+          }
+
+          // Derive tool name from multiple sources
+          const completedToolFromTitle = update.title?.startsWith('Tool: ') ? update.title.slice(6) : undefined
+          const toolName = update.kind || cachedMeta?.name || completedToolFromTitle || update.title || 'tool'
 
           parts.push({
             id: partId,
             type: MessagePartType.TOOL,
             tool: {
-              name: update.kind || 'tool',
+              name: toolName,
               status: update.status,
               input: command,
               output: output
@@ -1199,20 +1255,18 @@ export class AcpAdapter implements CodingAgentAdapter {
         // Handle streaming text response from agent
         // Format: { content: { type: 'text', text: '...' } }
 
-        // Auto-detect new response turns based on time gaps or tool calls
+        // Auto-detect new response turns based on time gaps
         const now = Date.now()
         const TIME_GAP_THRESHOLD = 2000 // 2 seconds
 
         if (session) {
           const timeSinceLastChunk = session.lastChunkTime ? now - session.lastChunkTime : Infinity
           const isNewTurn = session.lastChunkTime === null ||
-                           timeSinceLastChunk > TIME_GAP_THRESHOLD ||
-                           session.sawToolCallSinceLastChunk
+                           timeSinceLastChunk > TIME_GAP_THRESHOLD
 
           if (isNewTurn) {
             session.currentTurnId++
-            session.sawToolCallSinceLastChunk = false
-            console.log(`[AcpAdapter] Detected NEW turn #${session.currentTurnId} (gap: ${timeSinceLastChunk}ms, sawTool: ${session.sawToolCallSinceLastChunk})`)
+            console.log(`[AcpAdapter] Detected NEW turn #${session.currentTurnId} (gap: ${timeSinceLastChunk}ms)`)
           }
 
           session.lastChunkTime = now
