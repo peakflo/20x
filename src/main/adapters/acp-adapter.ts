@@ -488,9 +488,9 @@ export class AcpAdapter implements CodingAgentAdapter {
 
       console.log(`[AcpAdapter/${this.agentType}] Session loaded successfully: ${sessionId}`)
 
-      // TODO: Extract and return session messages from session/update notifications
-      // For now, return empty array - messages will be replayed via notifications
-      return []
+      // Convert replayed notifications (buffered during session/load) to SessionMessages.
+      // Without this, the renderer sees status:'idle' + messages:[] and hides the panel.
+      return this.getAllMessages(sessionId, config)
     } catch (error: unknown) {
       // Check if session not found
       const errMsg = error instanceof Error ? error.message : String(error)
