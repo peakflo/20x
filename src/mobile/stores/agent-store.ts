@@ -193,7 +193,7 @@ export const useAgentStore = create<AgentState>((set, get) => {
             ...resolvedSession,
             messages: resolvedSession.messages.map((m): AgentMessage => {
               if (m.id !== msgId) return m
-              const keepPartType = m.partType === 'todowrite' || m.partType === 'question'
+              const keepPartType = m.partType === 'todowrite' || m.partType === 'question' || m.partType === 'planreview'
               const newPartType = keepPartType ? m.partType : ((data.partType as string) || m.partType)
               const newTool = data.tool ? { ...m.tool, ...(data.tool as AgentMessage['tool']) } as AgentMessage['tool'] : m.tool
               return { ...m, content, partType: newPartType, tool: newTool }

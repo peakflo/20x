@@ -1,6 +1,6 @@
 import React, { useRef, useEffect, useState, useMemo, useCallback } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { StopCircle, Loader2, Terminal, Send, ChevronRight, ChevronDown, Wrench, AlertTriangle, CheckCircle2, Circle, Clock, RotateCcw, Code2, Eye, ListTodo } from 'lucide-react'
+import { StopCircle, Loader2, Terminal, Send, ChevronRight, ChevronDown, Wrench, AlertTriangle, CheckCircle2, Circle, Clock, RotateCcw, Code2, Eye, ListTodo, FileText } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { Markdown } from '@/components/ui/Markdown'
 import type { AgentMessage } from '@/hooks/use-agent-session'
@@ -220,6 +220,28 @@ function TodoWriteMessage({ message }: { message: AgentMessage }) {
   )
 }
 
+function PlanReviewMessage({ message }: { message: AgentMessage }) {
+  const tool = message.tool
+  const label = tool?.title || message.content || 'Plan mode'
+  const rawOutput = tool?.output || ''
+  // Filter out confirmation prompts — not useful content
+  const details = /^(exit|enter) plan mode\??$/i.test(rawOutput.trim()) ? '' : rawOutput
+
+  return (
+    <div className="rounded-md bg-[#161b22] border border-border/50 overflow-hidden">
+      <div className="flex items-center gap-2 px-3 py-2 text-xs font-mono">
+        <FileText className="h-3 w-3 text-muted-foreground shrink-0" />
+        <span className="text-foreground">{label}</span>
+      </div>
+      {details && (
+        <div className="px-3 py-2 border-t border-border/30 max-h-[60vh] overflow-y-auto">
+          <Markdown size="xs">{details}</Markdown>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function ToolCallMessage({ message }: { message: AgentMessage }) {
   const [expanded, setExpanded] = useState(false)
   const tool = message.tool!
@@ -278,6 +300,10 @@ function MessageBubble({ message, onAnswer, viewMode }: { message: AgentMessage;
 
   if (message.partType === 'todowrite' && message.tool?.todos) {
     return <TodoWriteMessage message={message} />
+  }
+
+  if (message.partType === 'planreview') {
+    return <PlanReviewMessage message={message} />
   }
 
   if (message.partType === 'tool' && message.tool) {

@@ -105,6 +105,33 @@ function TodoList({ message }: { message: AgentMessage }) {
   )
 }
 
+function PlanReviewMessage({ message }: { message: AgentMessage }) {
+  const tool = message.tool
+  const label = tool?.title || message.content || 'Plan mode'
+  const rawOutput = tool?.output || ''
+  // Filter out confirmation prompts — not useful content
+  const details = /^(exit|enter) plan mode\??$/i.test(rawOutput.trim()) ? '' : rawOutput
+
+  return (
+    <div className="rounded-md bg-[#161b22] border border-border/50 overflow-hidden">
+      <div className="flex items-center gap-2 px-3 py-2 font-mono text-xs">
+        {/* FileText icon */}
+        <svg className="h-3 w-3 text-muted-foreground shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/>
+        </svg>
+        <span className="text-foreground">{label}</span>
+      </div>
+      {details && (
+        <div className="px-3 py-2 border-t border-border/30 max-h-[50vh] overflow-y-auto">
+          <div className="break-words">
+            <Markdown size="xs">{details}</Markdown>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function ToolCallMessage({ message }: { message: AgentMessage }) {
   const [expanded, setExpanded] = useState(false)
   const tool = message.tool!
@@ -178,6 +205,11 @@ export function MessageBubble({ message, onAnswer }: MessageBubbleProps) {
   // Todo list — check by data content so it renders correctly regardless of partType
   if (message.tool?.todos && message.tool.todos.length > 0) {
     return <TodoList message={message} />
+  }
+
+  // Plan review
+  if (message.partType === 'planreview') {
+    return <PlanReviewMessage message={message} />
   }
 
   // Tool call — require a name to avoid rendering ghost entries with no tool name

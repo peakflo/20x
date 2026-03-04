@@ -374,6 +374,16 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
                 toolObj.questions = questions
               }
 
+              // Detect EnterPlanMode / ExitPlanMode → set planreview type
+              // For ExitPlanMode, the plan content is in input.plan (not in tool_result)
+              if (toolName === 'EnterPlanMode' || toolName === 'ExitPlanMode') {
+                partType = 'planreview'
+                toolObj.title = toolName === 'EnterPlanMode' ? 'Enter plan mode' : 'Exit plan mode'
+                if (toolName === 'ExitPlanMode' && rawInput?.plan) {
+                  toolObj.output = String(rawInput.plan).slice(0, 50000)
+                }
+              }
+
               message.parts.push({ type: partType as MessagePartType, tool: toolObj })
               if (contentPart.id) toolUseParts.set(contentPart.id, toolObj)
             } else if (contentPart.type === 'tool_result' && contentPart.tool_use_id) {
@@ -381,8 +391,15 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
               const matchingTool = toolUseParts.get(contentPart.tool_use_id)
               if (matchingTool) {
                 matchingTool.status = 'success'
-                matchingTool.output = contentPart.content
-                  ? String(contentPart.content).slice(0, 2000) : undefined
+                // Plan content should not be truncated (cap at 50K for safety)
+                const isPlan = matchingTool.name === 'ExitPlanMode' || matchingTool.name === 'EnterPlanMode'
+                const rawContent = contentPart.content ? String(contentPart.content) : undefined
+                // Filter out confirmation prompts like "Exit/Enter plan mode?"
+                const sanitized = isPlan && rawContent && /^(exit|enter) plan mode\??$/i.test(rawContent.trim())
+                  ? undefined : rawContent
+                matchingTool.output = sanitized
+                  ? (isPlan ? sanitized.slice(0, 50000) : sanitized.slice(0, 2000))
+                  : undefined
               }
               // Don't push a separate part — result is merged into tool_use
             }
@@ -1090,6 +1107,22 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
             continue
           }
 
+          // Detect EnterPlanMode / ExitPlanMode → render as plan mode indicator
+          // For ExitPlanMode, the plan content is in input.plan (not in tool_result)
+          if (toolName === 'EnterPlanMode' || toolName === 'ExitPlanMode') {
+            const planTitle = toolName === 'EnterPlanMode' ? 'Enter plan mode' : 'Exit plan mode'
+            const planContent = toolName === 'ExitPlanMode' && rawInput?.plan
+              ? String(rawInput.plan).slice(0, 50000) : undefined
+            partContentLengths.set(toolPartId, `pending:${toolName}`)
+            parts.push({
+              id: toolPartId,
+              type: 'planreview' as MessagePartType,
+              content: planTitle,
+              tool: { name: toolName, status: 'pending', title: planTitle, input, output: planContent },
+            })
+            continue
+          }
+
           // Regular tool call
           partContentLengths.set(toolPartId, `pending:${toolName}`)
           parts.push({
@@ -1132,17 +1165,28 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
 
           // Check if we already sent the pending tool call
           const previousContent = partContentLengths.get(toolPartId)
+          // Plan mode tools should not be truncated (cap at 50K for safety)
+          const isPlanReview = previousContent?.endsWith(':ExitPlanMode') || previousContent?.endsWith(':EnterPlanMode')
+          // Filter out confirmation prompts like "Exit plan mode?" / "Enter plan mode?" — not useful content
+          const sanitizedResult = isPlanReview && /^(exit|enter) plan mode\??$/i.test(resultContent.trim())
+            ? '' : resultContent
+          const outputContent = isPlanReview
+            ? sanitizedResult.slice(0, 50000)
+            : resultContent.slice(0, 2000)
+
           if (previousContent) {
+            const toolName = previousContent.split(':')[1] || 'tool'
             // Update the existing tool part - mark as completed
             partContentLengths.set(toolPartId, `success:${resultContent.length}`)
+            // For plan review: don't send empty output (would overwrite plan from input.plan)
             parts.push({
               id: toolPartId,
-              type: MessagePartType.TOOL,
-              content: `Tool completed`,
+              type: isPlanReview ? ('planreview' as MessagePartType) : MessagePartType.TOOL,
+              content: isPlanReview ? (toolName === 'EnterPlanMode' ? 'Enter plan mode' : 'Exit plan mode') : `Tool completed`,
               tool: {
-                name: previousContent.split(':')[1] || 'tool',
+                name: toolName,
                 status: 'success',
-                output: resultContent.slice(0, 2000),
+                ...(outputContent ? { output: outputContent } : {}),
               },
               update: true, // Mark as update to existing message
             })
@@ -1153,12 +1197,12 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
               partContentLengths.set(toolPartId, `success:${resultContent.length}`)
               parts.push({
                 id: toolPartId,
-                type: MessagePartType.TOOL,
-                content: `Tool result`,
+                type: isPlanReview ? ('planreview' as MessagePartType) : MessagePartType.TOOL,
+                content: isPlanReview ? 'Plan mode' : `Tool result`,
                 tool: {
-                  name: 'tool',
+                  name: isPlanReview ? 'ExitPlanMode' : 'tool',
                   status: 'success',
-                  output: resultContent.slice(0, 2000),
+                  output: outputContent,
                 },
               })
             }
@@ -1169,15 +1213,24 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
       const partId = `tool-${msgWithProps.tool_use_id || Date.now()}`
       const toolName = msgWithProps.tool_name || 'unknown'
       const status = msgWithProps.status || 'unknown'
-      const output = msgWithProps.output ? String(msgWithProps.output).slice(0, 2000) : undefined
+      const isPlanReview = toolName === 'ExitPlanMode' || toolName === 'EnterPlanMode'
+      const rawOutput = msgWithProps.output ? String(msgWithProps.output) : undefined
+      // Filter out confirmation prompts like "Exit/Enter plan mode?"
+      const sanitizedOutput = isPlanReview && rawOutput && /^(exit|enter) plan mode\??$/i.test(rawOutput.trim())
+        ? undefined : rawOutput
+      const output = sanitizedOutput
+        ? (isPlanReview ? sanitizedOutput.slice(0, 50000) : sanitizedOutput.slice(0, 2000))
+        : undefined
+      const partType = isPlanReview ? ('planreview' as MessagePartType) : MessagePartType.TOOL
+      const planLabel = toolName === 'EnterPlanMode' ? 'Enter plan mode' : 'Exit plan mode'
 
       if (seenPartIds.has(partId)) {
         // Tool_use was already emitted — send an UPDATE to merge the result into it
         partContentLengths.set(partId, `${status}:${output?.length || 0}`)
         parts.push({
           id: partId,
-          type: MessagePartType.TOOL,
-          content: `${toolName} — ${status}`,
+          type: partType,
+          content: isPlanReview ? planLabel : `${toolName} — ${status}`,
           tool: { name: toolName, status, output },
           update: true,
         })
@@ -1187,8 +1240,8 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
         partContentLengths.set(partId, `${status}:${output?.length || 0}`)
         parts.push({
           id: partId,
-          type: MessagePartType.TOOL,
-          content: `${toolName} — ${status}`,
+          type: partType,
+          content: isPlanReview ? planLabel : `${toolName} — ${status}`,
           tool: { name: toolName, status, output },
         })
       }
@@ -1263,6 +1316,10 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
         return 'Todo List'
       case 'AskUserQuestion':
         return 'Question'
+      case 'EnterPlanMode':
+        return 'Enter plan mode'
+      case 'ExitPlanMode':
+        return 'Exit plan mode'
       default:
         return ''
     }
