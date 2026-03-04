@@ -82,6 +82,19 @@ export function startMobileApiServer(
           wsClients.add(ws)
           console.log(`[MobileAPI] WebSocket client connected (total: ${wsClients.size})`)
 
+          ws.on('message', (data) => {
+            try {
+              const msg = JSON.parse(String(data))
+              if (msg.type === 'ping') {
+                if (ws.readyState === WebSocket.OPEN) {
+                  ws.send(JSON.stringify({ type: 'pong' }))
+                }
+              }
+            } catch {
+              // ignore malformed messages
+            }
+          })
+
           ws.on('close', () => {
             wsClients.delete(ws)
             console.log(`[MobileAPI] WebSocket client disconnected (total: ${wsClients.size})`)

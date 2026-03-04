@@ -306,12 +306,10 @@ export const useAgentStore = create<AgentState>((set, get) => {
           const nextSessions = new Map(state.sessions)
 
           for (const active of activeSessions) {
-            const existing = state.sessions.get(active.taskId)
-            // Skip if we already have this session connected with messages
-            if (existing?.sessionId === active.sessionId && existing.messages.length > 0) continue
-
-            // Initialize session in the store so WebSocket events are captured
+            // Clear dedup and messages so the full replay from server
+            // is accepted without stale data mixing in
             seenIds.delete(active.taskId)
+            stepStartTimes.delete(active.taskId)
             nextSessions.set(active.taskId, {
               sessionId: active.sessionId,
               agentId: active.agentId,
