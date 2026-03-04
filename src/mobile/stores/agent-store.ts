@@ -193,7 +193,7 @@ export const useAgentStore = create<AgentState>((set, get) => {
             ...resolvedSession,
             messages: resolvedSession.messages.map((m): AgentMessage => {
               if (m.id !== msgId) return m
-              const keepPartType = m.partType === 'todowrite' || m.partType === 'question'
+              const keepPartType = m.partType === 'todowrite' || m.partType === 'question' || m.partType === 'planreview'
               const newPartType = keepPartType ? m.partType : ((data.partType as string) || m.partType)
               const newTool = data.tool ? { ...m.tool, ...(data.tool as AgentMessage['tool']) } as AgentMessage['tool'] : m.tool
               return { ...m, content, partType: newPartType, tool: newTool }
@@ -219,6 +219,49 @@ export const useAgentStore = create<AgentState>((set, get) => {
               tool: data.tool as AgentMessage['tool']
             }
           ]
+        })
+      }
+    })
+  })
+
+  // Handle batch message events (sent during session resume with full history)
+  onEvent('agent:output-batch', (payload) => {
+    const event = payload as { sessionId: string; taskId: string; messages: Array<{ id: string; role: string; content: string; partType?: string; tool?: unknown }> }
+
+    set((state) => {
+      const session = findBySessionId(state.sessions, event.sessionId)
+        || state.sessions.get(event.taskId)
+      if (!session) return state
+
+      const taskId = session.taskId
+      const seen = getSeen(taskId)
+
+      const messages: AgentMessage[] = []
+      for (const msg of event.messages) {
+        const role: AgentMessage['role'] = msg.role === 'user' ? 'user' : msg.role === 'assistant' ? 'assistant' : 'system'
+        const msgId = msg.id || `${role}-${(msg.content || '').slice(0, 50)}-${Date.now()}`
+        if (seen.has(msgId)) continue
+        seen.add(msgId)
+        messages.push({
+          id: msgId,
+          role,
+          content: msg.content || '',
+          timestamp: new Date(),
+          partType: msg.partType,
+          tool: msg.tool as AgentMessage['tool']
+        })
+      }
+
+      if (messages.length === 0) return state
+
+      const resolvedSession = (!session.sessionId && event.sessionId)
+        ? { ...session, sessionId: event.sessionId }
+        : session
+
+      return {
+        sessions: new Map(state.sessions).set(taskId, {
+          ...resolvedSession,
+          messages: [...resolvedSession.messages, ...messages]
         })
       }
     })

@@ -1,5 +1,6 @@
-import { useRef, useEffect, useState, useMemo, useCallback } from 'react'
-import { StopCircle, Loader2, Terminal, Send, ChevronRight, ChevronDown, Wrench, AlertTriangle, CheckCircle2, Circle, Clock, RotateCcw, Code2, Eye, ListTodo } from 'lucide-react'
+import React, { useRef, useEffect, useState, useMemo, useCallback } from 'react'
+import { useVirtualizer } from '@tanstack/react-virtual'
+import { StopCircle, Loader2, Terminal, Send, ChevronRight, ChevronDown, Wrench, AlertTriangle, CheckCircle2, Circle, Clock, RotateCcw, Code2, Eye, ListTodo, FileText } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { Markdown } from '@/components/ui/Markdown'
 import type { AgentMessage } from '@/hooks/use-agent-session'
@@ -219,12 +220,33 @@ function TodoWriteMessage({ message }: { message: AgentMessage }) {
   )
 }
 
+function PlanReviewMessage({ message }: { message: AgentMessage }) {
+  const tool = message.tool
+  const label = tool?.title || message.content || 'Plan mode'
+  const rawOutput = tool?.output || ''
+  // Filter out confirmation prompts — not useful content
+  const details = /^(exit|enter) plan mode\??$/i.test(rawOutput.trim()) ? '' : rawOutput
+
+  return (
+    <div className="rounded-md bg-[#161b22] border border-border/50 overflow-hidden">
+      <div className="flex items-center gap-2 px-3 py-2 text-xs font-mono">
+        <FileText className="h-3 w-3 text-muted-foreground shrink-0" />
+        <span className="text-foreground">{label}</span>
+      </div>
+      {details && (
+        <div className="px-3 py-2 border-t border-border/30 max-h-[60vh] overflow-y-auto">
+          <Markdown size="xs">{details}</Markdown>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function ToolCallMessage({ message }: { message: AgentMessage }) {
   const [expanded, setExpanded] = useState(false)
   const tool = message.tool!
-  const statusColor = tool.status === 'completed' ? 'text-green-400'
-    : tool.status === 'error' ? 'text-red-400'
-    : 'text-yellow-400'
+  const isRunning = !tool.status || tool.status === 'in_progress' || tool.status === 'running' || tool.status === 'pending'
+  const isError = tool.status === 'error' || tool.status === 'failed'
 
   return (
     <div className="rounded-md bg-[#161b22] border border-border/50 overflow-hidden">
@@ -236,7 +258,8 @@ function ToolCallMessage({ message }: { message: AgentMessage }) {
         <Wrench className="h-3 w-3 text-muted-foreground shrink-0" />
         <span className="text-foreground">{tool.name}</span>
         {tool.title && <span className="text-muted-foreground truncate">— {tool.title}</span>}
-        <span className={`ml-auto text-[10px] shrink-0 ${statusColor}`}>{tool.status}</span>
+        {isRunning && <Loader2 className="h-3 w-3 ml-auto shrink-0 text-muted-foreground animate-spin" />}
+        {isError && <AlertTriangle className="h-3 w-3 ml-auto shrink-0 text-red-400" />}
       </button>
       {expanded && (
         <div className="border-t border-border/30 px-3 py-2 text-[11px] font-mono space-y-2">
@@ -279,6 +302,10 @@ function MessageBubble({ message, onAnswer, viewMode }: { message: AgentMessage;
     return <TodoWriteMessage message={message} />
   }
 
+  if (message.partType === 'planreview') {
+    return <PlanReviewMessage message={message} />
+  }
+
   if (message.partType === 'tool' && message.tool) {
     return <ToolCallMessage message={message} />
   }
@@ -296,7 +323,7 @@ function MessageBubble({ message, onAnswer, viewMode }: { message: AgentMessage;
   return (
     <div className={`flex gap-2 ${isUser ? 'justify-end' : 'justify-start'}`}>
       <div
-        className={`max-w-[90%] rounded-md px-3 py-2 ${
+        className={`max-w-[90%] rounded-md px-3 py-2 overflow-hidden min-w-0 ${
           isError
             ? 'bg-red-500/10 text-red-200 border border-red-500/20'
             : isUser
@@ -315,7 +342,7 @@ function MessageBubble({ message, onAnswer, viewMode }: { message: AgentMessage;
         )}
         {isReasoning && <span className="text-[10px] text-purple-400 block mb-1">Thinking</span>}
         {viewMode === ViewMode.MARKDOWN ? (
-          <Markdown size="xs">{message.content}</Markdown>
+          <Markdown size="sm">{message.content}</Markdown>
         ) : (
           <pre className="whitespace-pre-wrap break-words font-mono text-xs">
             {message.content}
@@ -331,6 +358,8 @@ function MessageBubble({ message, onAnswer, viewMode }: { message: AgentMessage;
     </div>
   )
 }
+
+const MemoizedMessageBubble = React.memo(MessageBubble)
 
 function TodoSummary({ todos }: { todos: NonNullable<AgentMessage['tool']>['todos'] }) {
   const [expanded, setExpanded] = useState(true)
@@ -416,15 +445,27 @@ export function AgentTranscriptPanel({ title = 'Agent transcript', messages, sta
     return null
   }, [messages, status])
 
-  useEffect(() => {
+  const atBottomRef = useRef(true)
+
+  const virtualizer = useVirtualizer({
+    count: messages.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => 60,
+    overscan: 5,
+  })
+
+  const handleScroll = useCallback(() => {
     const el = scrollRef.current
     if (!el) return
-    // Use setTimeout to ensure DOM has rendered the new messages
-    const timer = setTimeout(() => {
-      el.scrollTop = el.scrollHeight
-    }, 50)
-    return () => clearTimeout(timer)
-  }, [messages.length])
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
+    atBottomRef.current = distanceFromBottom < 100
+  }, [])
+
+  useEffect(() => {
+    if (messages.length > 0 && atBottomRef.current) {
+      virtualizer.scrollToIndex(messages.length - 1, { align: 'end' })
+    }
+  }, [messages.length, virtualizer])
 
   const getStatusColor = () => {
     switch (status) {
@@ -511,7 +552,8 @@ export function AgentTranscriptPanel({ title = 'Agent transcript', messages, sta
       {/* Messages */}
       <div
         ref={scrollRef}
-        className="flex-1 min-h-0 overflow-y-auto p-4 font-mono text-sm space-y-2"
+        onScroll={handleScroll}
+        className="flex-1 min-h-0 overflow-y-auto p-4 text-sm"
       >
         {messages.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-muted-foreground text-xs">
@@ -529,9 +571,26 @@ export function AgentTranscriptPanel({ title = 'Agent transcript', messages, sta
           </div>
         ) : (
           <>
-            {messages.map((message) => (
-              <MessageBubble key={message.id} message={message} onAnswer={onSend} viewMode={viewMode} />
-            ))}
+            <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
+              {virtualizer.getVirtualItems().map((virtualRow) => (
+                <div
+                  key={messages[virtualRow.index].id}
+                  ref={virtualizer.measureElement}
+                  data-index={virtualRow.index}
+                  style={{
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    transform: `translateY(${virtualRow.start}px)`,
+                  }}
+                >
+                  <div className="pb-2">
+                    <MemoizedMessageBubble message={messages[virtualRow.index]} onAnswer={onSend} viewMode={viewMode} />
+                  </div>
+                </div>
+              ))}
+            </div>
             {status === 'working' && (
               <div className="flex items-center gap-2 text-xs text-muted-foreground">
                 <Loader2 className="h-3 w-3 animate-spin" />
@@ -543,14 +602,14 @@ export function AgentTranscriptPanel({ title = 'Agent transcript', messages, sta
       </div>
 
       {/* Input + Footer */}
-      <div className="border-t border-border/50 shrink-0">
+      <div className="border-t border-border shrink-0">
         {onSend && (
-          <div className="flex items-end gap-2 px-4 py-2">
+          <div className="flex items-end gap-2 px-4 py-3">
             <textarea
               ref={inputRef}
               rows={1}
               placeholder="Send a message... (Shift+Enter for new line)"
-              className="flex-1 bg-transparent border border-border/50 rounded px-3 py-1.5 text-xs font-mono text-foreground placeholder:text-muted-foreground focus:border-ring focus:ring-1 focus:ring-ring/30 resize-none overflow-hidden max-h-32"
+              className="flex-1 bg-muted/50 border border-border rounded-lg px-3 py-1.5 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/30 resize-none overflow-hidden max-h-32 min-h-[32px]"
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && !e.shiftKey) {
                   e.preventDefault()
@@ -559,12 +618,12 @@ export function AgentTranscriptPanel({ title = 'Agent transcript', messages, sta
               }}
               onInput={autoResize}
             />
-            <Button variant="ghost" size="icon" onClick={handleSend} className="h-7 w-7 shrink-0 mb-0.5">
-              <Send className="h-3 w-3" />
+            <Button variant="default" size="icon" onClick={handleSend} className="h-[32px] w-[32px] shrink-0 rounded-lg">
+              <Send className="h-4 w-4" />
             </Button>
           </div>
         )}
-        <div className="px-4 py-2 text-[10px] text-muted-foreground font-mono">
+        <div className="px-4 py-1.5 text-[10px] text-muted-foreground font-mono">
           {messages.length} message{messages.length !== 1 ? 's' : ''}
         </div>
       </div>

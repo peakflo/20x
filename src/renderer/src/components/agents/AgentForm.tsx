@@ -9,7 +9,7 @@ import { agentConfigApi } from '@/lib/ipc-client'
 import { useMcpStore } from '@/stores/mcp-store'
 import { SkillSelector } from '@/components/skills/SkillSelector'
 import { SecretSelector } from '@/components/secrets/SecretSelector'
-import type { Agent, CreateAgentDTO, UpdateAgentDTO, AgentMcpServerEntry } from '@/types'
+import type { Agent, CreateAgentDTO, UpdateAgentDTO, AgentMcpServerEntry, ClaudeAuthMethod } from '@/types'
 import { CodingAgentType, CODING_AGENTS, CLAUDE_MODELS, CODEX_MODELS } from '@/types'
 
 interface AgentFormProps {
@@ -50,6 +50,11 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
     () => parseMcpSelection(agent?.config.mcp_servers)
   )
   const [expandedServers, setExpandedServers] = useState<Set<string>>(new Set())
+
+  // Auth method state (Claude Code only)
+  const [authMethod, setAuthMethod] = useState<ClaudeAuthMethod>(
+    agent?.config.auth_method ?? 'subscription'
+  )
 
   // API keys state
   const [openaiApiKey, setOpenaiApiKey] = useState(agent?.config.api_keys?.openai ?? '')
@@ -93,6 +98,13 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
       setModel('')
     }
   }, [codingAgent, serverUrl])
+
+  // Reset auth method when switching away from Claude Code
+  useEffect(() => {
+    if (codingAgent !== CodingAgentType.CLAUDE_CODE) {
+      setAuthMethod('subscription')
+    }
+  }, [codingAgent])
 
   const fetchModels = async () => {
     setIsLoadingModels(true)
@@ -182,6 +194,7 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
       config: {
         coding_agent: codingAgent || undefined,
         model: model.trim() || undefined,
+        auth_method: codingAgent === CodingAgentType.CLAUDE_CODE ? authMethod : undefined,
         system_prompt: systemPrompt.trim() || undefined,
         max_parallel_sessions: maxParallelSessions,
         mcp_servers: mcpServersConfig.length > 0 ? mcpServersConfig : undefined,
@@ -189,7 +202,10 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
         secret_ids: secretIds.length > 0 ? secretIds : undefined,
         api_keys: {
           openai: openaiApiKey.trim() || undefined,
-          anthropic: anthropicApiKey.trim() || undefined
+          // Only save anthropic key when in api_key mode
+          anthropic: (codingAgent === CodingAgentType.CLAUDE_CODE && authMethod === 'api_key')
+            ? (anthropicApiKey.trim() || undefined)
+            : undefined
         }
       }
     })
@@ -387,33 +403,60 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
         </div>
       )}
 
-      {/* API Key Configuration for Claude Code */}
+      {/* Auth Method & API Key Configuration for Claude Code */}
       {codingAgent === CodingAgentType.CLAUDE_CODE && (
-        <div className="space-y-1.5">
-          <Label htmlFor="anthropic-api-key">Anthropic API Key (Optional)</Label>
-          <Input
-            id="anthropic-api-key"
-            type="password"
-            value={anthropicApiKey}
-            onChange={(e) => setAnthropicApiKey(e.target.value)}
-            placeholder={hasAnthropicEnv ? '••••••••' : 'sk-ant-...'}
-          />
-          {anthropicApiKey && (
-            <p className="text-xs text-muted-foreground">
-              Using provided API key
-            </p>
+        <>
+          <div className="space-y-1.5">
+            <Label htmlFor="claude-auth-method">Authentication Method</Label>
+            <select
+              id="claude-auth-method"
+              value={authMethod}
+              onChange={(e) => setAuthMethod(e.target.value as ClaudeAuthMethod)}
+              className="w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm cursor-pointer"
+            >
+              <option value="subscription">Pro/Max Subscription (default)</option>
+              <option value="api_key">API Key (pay-per-use)</option>
+            </select>
+            {authMethod === 'subscription' && (
+              <p className="text-xs text-muted-foreground">
+                Uses Claude Code's built-in OAuth login. Your Pro or Max subscription will be used for billing.
+                {hasAnthropicEnv && (
+                  <span className="block mt-1 text-yellow-500">
+                    Note: ANTHROPIC_API_KEY found in environment but will be ignored in subscription mode.
+                  </span>
+                )}
+              </p>
+            )}
+          </div>
+
+          {authMethod === 'api_key' && (
+            <div className="space-y-1.5">
+              <Label htmlFor="anthropic-api-key">Anthropic API Key</Label>
+              <Input
+                id="anthropic-api-key"
+                type="password"
+                value={anthropicApiKey}
+                onChange={(e) => setAnthropicApiKey(e.target.value)}
+                placeholder={hasAnthropicEnv ? '••••••••' : 'sk-ant-...'}
+              />
+              {anthropicApiKey && (
+                <p className="text-xs text-muted-foreground">
+                  Using provided API key
+                </p>
+              )}
+              {!anthropicApiKey && hasAnthropicEnv && (
+                <p className="text-xs text-muted-foreground">
+                  ✓ Using ANTHROPIC_API_KEY from environment
+                </p>
+              )}
+              {!anthropicApiKey && !hasAnthropicEnv && (
+                <p className="text-xs text-destructive">
+                  Required: Enter your API key or set ANTHROPIC_API_KEY environment variable
+                </p>
+              )}
+            </div>
           )}
-          {!anthropicApiKey && hasAnthropicEnv && (
-            <p className="text-xs text-muted-foreground">
-              ✓ Using ANTHROPIC_API_KEY from environment
-            </p>
-          )}
-          {!anthropicApiKey && !hasAnthropicEnv && (
-            <p className="text-xs text-muted-foreground">
-              Claude Code uses CLI authentication - no API key required
-            </p>
-          )}
-        </div>
+        </>
       )}
 
       <div className="space-y-1.5">

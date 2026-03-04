@@ -3,7 +3,6 @@ import { app, BrowserWindow, shell, Tray, Menu, nativeImage } from 'electron'
 import { join } from 'path'
 import { is } from '@electron-toolkit/utils'
 import { DatabaseManager } from './database'
-import { DatabaseAsync } from './database-async'
 import { AgentManager } from './agent-manager'
 import { GitHubManager } from './github-manager'
 import { WorktreeManager } from './worktree-manager'
@@ -26,7 +25,6 @@ let mainWindow: BrowserWindow | null = null
 let tray: Tray | null = null
 let isQuitting = false
 let db: DatabaseManager | null = null
-let dbAsync: DatabaseAsync | null = null
 let agentManager: AgentManager | null = null
 let githubManager: GitHubManager | null = null
 let worktreeManager: WorktreeManager | null = null
@@ -233,25 +231,10 @@ app.whenReady().then(async () => {
   db = new DatabaseManager()
   db.initialize()
 
-  // Create async (worker-thread) database for non-blocking hot-path operations.
-  // Uses a second WAL-mode connection in a worker thread so polling loops
-  // don't block the main process event loop with synchronous SQL calls.
-  try {
-    dbAsync = new DatabaseAsync(db.getDbPath())
-    await dbAsync.waitForReady()
-    console.log('[Main] Database worker thread ready')
-  } catch (err) {
-    console.error('[Main] Failed to start database worker thread:', err)
-    dbAsync = null
-  }
-
   // Ensure PATH is ready before creating managers that may spawn child processes
   await pathFixPromise
 
   agentManager = new AgentManager(db)
-  if (dbAsync) {
-    agentManager.setAsyncDatabase(dbAsync)
-  }
   githubManager = new GitHubManager()
   worktreeManager = new WorktreeManager()
   agentManager.setManagers(githubManager, worktreeManager)
@@ -333,8 +316,7 @@ app.on('before-quit', () => {
   mcpToolCaller?.destroy()
   oauthManager?.destroy()
 
-  // Close worker-thread database first, then main-thread database
-  dbAsync?.close().catch(() => {})
+  // Checkpoint WAL and close database
   db?.close()
 
   // Destroy tray
