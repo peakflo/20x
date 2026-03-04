@@ -22,6 +22,7 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
   const endSession = useAgentStore((s) => s.endSession)
 
   const [skillsExpanded, setSkillsExpanded] = useState(false)
+  const [showFeedback, setShowFeedback] = useState(false)
   const { handleStart: _startSession, handleResume: _resumeSession, handleStop: _stopSession, busyRef } = useSessionControls(taskId)
 
   // Session is already synced and running (from desktop or elsewhere)
@@ -74,6 +75,35 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
     if (session?.sessionId) _stopSession(session.sessionId)
   }, [session?.sessionId, _stopSession])
 
+  const handleCompleteTask = useCallback(async () => {
+    if (!task) return
+    // If there's a session (active or resumable), show feedback dialog
+    const hasActiveSession = session?.sessionId && session.messages.length > 0
+    const hasResumableSession = !session?.sessionId && task.session_id
+    if (hasActiveSession || hasResumableSession) {
+      setShowFeedback(true)
+    } else {
+      // No session — complete directly
+      await updateTask(task.id, { status: TaskStatus.Completed })
+    }
+  }, [task, session, updateTask])
+
+  const handleFeedbackSubmit = useCallback(async (rating: number, comment: string) => {
+    if (!task) return
+    setShowFeedback(false)
+    await updateTask(task.id, {
+      status: TaskStatus.Completed,
+      feedback_rating: rating,
+      feedback_comment: comment || null
+    })
+  }, [task, updateTask])
+
+  const handleFeedbackSkip = useCallback(async () => {
+    if (!task) return
+    setShowFeedback(false)
+    await updateTask(task.id, { status: TaskStatus.Completed })
+  }, [task, updateTask])
+
   if (!task) {
     return (
       <div className="flex flex-col h-full">
@@ -88,6 +118,7 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
   const canResume = task.agent_id && task.session_id && !isSessionRunning && (!session?.sessionId) && (!session || session.status === 'idle')
   const canStop = isSessionRunning
   const canTriage = !task.agent_id && agents.length > 0 && task.status !== TaskStatus.Completed && task.status !== TaskStatus.Triaging && !isSessionRunning
+  const canComplete = task.status !== TaskStatus.Completed && !isSessionRunning
   const hasMessages = session && session.messages.length > 0
 
   // Preview: last 3 messages
@@ -179,6 +210,14 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
               {canStop && (
                 <button onClick={handleStop} className="inline-flex items-center gap-1.5 bg-destructive text-destructive-foreground hover:bg-destructive/90 h-7 rounded-md px-3 text-xs font-medium shrink-0">
                   Stop
+                </button>
+              )}
+              {canComplete && (
+                <button onClick={handleCompleteTask} className="inline-flex items-center gap-1.5 bg-green-600 text-white hover:bg-green-700 h-7 rounded-md px-3 text-xs font-medium shrink-0">
+                  <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="20 6 9 17 4 12"/>
+                  </svg>
+                  Complete
                 </button>
               )}
               {session && (
@@ -359,6 +398,89 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
             )}
           </div>
         )}
+      </div>
+
+      {/* Feedback modal */}
+      {showFeedback && (
+        <FeedbackModal
+          onSubmit={handleFeedbackSubmit}
+          onSkip={handleFeedbackSkip}
+        />
+      )}
+    </div>
+  )
+}
+
+function FeedbackModal({ onSubmit, onSkip }: { onSubmit: (rating: number, comment: string) => void; onSkip: () => void }) {
+  const [rating, setRating] = useState(0)
+  const [comment, setComment] = useState('')
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center">
+      {/* Backdrop */}
+      <div className="fixed inset-0 bg-black/60" onClick={onSkip} />
+
+      {/* Modal */}
+      <div className="relative z-50 w-full max-w-md mx-4 mb-4 bg-card border border-border rounded-xl shadow-xl animate-in slide-in-from-bottom-4 duration-200">
+        <div className="px-5 pt-5 pb-2">
+          <h2 className="text-base font-semibold text-foreground">Session Feedback</h2>
+          <p className="text-xs text-muted-foreground mt-1">Rate this session to help the agent improve</p>
+        </div>
+
+        {/* Star rating */}
+        <div className="flex gap-2 justify-center py-4">
+          {[1, 2, 3, 4, 5].map((star) => (
+            <button
+              key={star}
+              type="button"
+              onClick={() => setRating(star)}
+              className="p-1 active:scale-110 transition-transform"
+            >
+              <svg
+                className={`h-8 w-8 transition-colors ${
+                  star <= rating
+                    ? 'fill-amber-400 text-amber-400'
+                    : 'text-muted-foreground/30 fill-none'
+                }`}
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+              </svg>
+            </button>
+          ))}
+        </div>
+
+        {/* Comment */}
+        <div className="px-5">
+          <textarea
+            placeholder="Optional feedback..."
+            value={comment}
+            onChange={(e) => setComment(e.target.value)}
+            rows={3}
+            className="w-full bg-transparent border border-input rounded-md px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-ring focus:ring-1 focus:ring-ring/30 resize-none"
+          />
+        </div>
+
+        {/* Actions */}
+        <div className="flex gap-2 justify-end px-5 py-4">
+          <button
+            onClick={onSkip}
+            className="h-9 px-4 text-sm text-muted-foreground hover:text-foreground hover:bg-accent rounded-md transition-colors"
+          >
+            Skip
+          </button>
+          <button
+            onClick={() => { if (rating > 0) onSubmit(rating, comment) }}
+            disabled={rating === 0}
+            className="h-9 px-4 text-sm font-medium bg-primary text-primary-foreground rounded-md hover:bg-primary/90 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+          >
+            Submit
+          </button>
+        </div>
       </div>
     </div>
   )
