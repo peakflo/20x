@@ -1179,16 +1179,15 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
             // Update the existing tool part - mark as completed
             partContentLengths.set(toolPartId, `success:${resultContent.length}`)
             // For plan review: don't send empty output (would overwrite plan from input.plan)
-            const toolUpdate: Record<string, unknown> = {
-              name: toolName,
-              status: 'success',
-            }
-            if (outputContent) toolUpdate.output = outputContent
             parts.push({
               id: toolPartId,
               type: isPlanReview ? ('planreview' as MessagePartType) : MessagePartType.TOOL,
               content: isPlanReview ? (toolName === 'EnterPlanMode' ? 'Enter plan mode' : 'Exit plan mode') : `Tool completed`,
-              tool: toolUpdate,
+              tool: {
+                name: toolName,
+                status: 'success',
+                ...(outputContent ? { output: outputContent } : {}),
+              },
               update: true, // Mark as update to existing message
             })
           } else {
