@@ -39,6 +39,23 @@ export default defineConfig({
             '@': resolve(__dir, 'src/renderer/src')
           }
         }
+      },
+      {
+        esbuild: {
+          jsx: 'automatic'
+        },
+        test: {
+          name: 'mobile',
+          environment: 'happy-dom',
+          include: ['src/mobile/**/*.test.ts', 'src/mobile/**/*.test.tsx'],
+          setupFiles: ['./test/setup-mobile.ts']
+        },
+        resolve: {
+          alias: {
+            '@shared': resolve(__dir, 'src/shared'),
+            '@': resolve(__dir, 'src/renderer/src')
+          }
+        }
       }
     ]
   }

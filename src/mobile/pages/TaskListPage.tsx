@@ -100,8 +100,8 @@ export function TaskListPage({ onNavigate }: { onNavigate: (route: Route) => voi
         </div>
       </div>
 
-      {/* Task list */}
-      <div className="flex-1 overflow-y-auto">
+      {/* Task list (relative for FAB positioning) */}
+      <div className="flex-1 overflow-y-auto relative">
         {active.length === 0 && completed.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
             <svg className="w-12 h-12 mb-3 opacity-20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
@@ -141,6 +141,17 @@ export function TaskListPage({ onNavigate }: { onNavigate: (route: Route) => voi
             )}
           </>
         )}
+
+        {/* FAB — Create Task */}
+        <button
+          onClick={() => onNavigate({ page: 'create' })}
+          className="sticky bottom-4 left-full -translate-x-4 ml-auto w-12 h-12 rounded-full bg-primary text-primary-foreground shadow-lg flex items-center justify-center active:scale-95 transition-transform"
+          aria-label="Create task"
+        >
+          <svg className="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M5 12h14"/><path d="M12 5v14"/>
+          </svg>
+        </button>
       </div>
     </div>
   )

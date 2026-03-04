@@ -101,7 +101,21 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
 
   return (
     <div className="flex flex-col h-full">
-      <Header onBack={() => onNavigate({ page: 'list' })} title={task.title} />
+      <Header
+        onBack={() => onNavigate({ page: 'list' })}
+        title={task.title}
+        rightAction={
+          <button
+            onClick={() => onNavigate({ page: 'edit', taskId })}
+            className="p-2 active:opacity-60 hover:bg-accent rounded-md transition-colors"
+            aria-label="Edit task"
+          >
+            <svg className="w-4 h-4 text-foreground" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/>
+            </svg>
+          </button>
+        }
+      />
 
       <div className="flex-1 overflow-y-auto">
         {/* Badges bar — matches desktop TaskDetailView header */}
@@ -350,7 +364,7 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
   )
 }
 
-function Header({ onBack, title }: { onBack: () => void; title: string }) {
+function Header({ onBack, title, rightAction }: { onBack: () => void; title: string; rightAction?: React.ReactNode }) {
   return (
     <div className="shrink-0 flex items-center gap-2 px-2 py-3 border-b border-border">
       <button onClick={onBack} className="p-2 active:opacity-60 hover:bg-accent rounded-md transition-colors">
@@ -359,6 +373,7 @@ function Header({ onBack, title }: { onBack: () => void; title: string }) {
         </svg>
       </button>
       <h1 className="text-sm font-semibold truncate flex-1">{title}</h1>
+      {rightAction}
     </div>
   )
 }
