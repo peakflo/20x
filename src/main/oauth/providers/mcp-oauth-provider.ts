@@ -1,12 +1,14 @@
 /**
  * MCP Server OAuth Provider
  *
- * Generic OAuth 2.0 provider for MCP servers.
- * Unlike Linear/HubSpot providers, this provider reads OAuth endpoints
- * dynamically from the MCP server's stored oauth_metadata configuration.
+ * Generic OAuth 2.1 provider for MCP servers implementing the
+ * MCP Authorization spec (2025-11-25).
  *
- * Uses localhost redirect (like HubSpot) since MCP servers are generic
- * and don't have a custom URL scheme.
+ * Reads OAuth endpoints dynamically from the MCP server's stored
+ * McpOAuthRegistration (populated via the discovery flow).
+ *
+ * Includes the mandatory `resource` parameter (RFC 8707) in both
+ * authorization requests and token requests.
  */
 
 import type { OAuthProvider, TokenResponse } from '../oauth-provider'
@@ -30,6 +32,11 @@ export class McpOAuthProvider implements OAuthProvider {
       code_challenge_method: 'S256'
     })
 
+    // RFC 8707: resource parameter is REQUIRED per MCP spec
+    if (config.resource_url) {
+      params.set('resource', config.resource_url as string)
+    }
+
     if (config.scopes) {
       params.set('scope', config.scopes as string)
     }
@@ -51,7 +58,12 @@ export class McpOAuthProvider implements OAuthProvider {
       code_verifier: verifier
     }
 
-    // Include client_secret if provided (some MCP servers require it)
+    // RFC 8707: resource parameter is REQUIRED per MCP spec
+    if (config.resource_url) {
+      body.resource = config.resource_url as string
+    }
+
+    // Include client_secret if provided (confidential clients from DCR)
     if (config.client_secret) {
       body.client_secret = config.client_secret as string
     }

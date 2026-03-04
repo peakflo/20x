@@ -1,10 +1,11 @@
 import { useState, useEffect } from 'react'
 import { Plus, Loader2, Wifi, WifiOff, RefreshCw, Edit3, Trash2, KeyRound, LogOut } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
+import { Input } from '@/components/ui/Input'
 import { SettingsSection } from '../SettingsSection'
 import { McpServerFormDialog } from '../forms/McpServerFormDialog'
 import { useMcpStore } from '@/stores/mcp-store'
-import type { McpServer, CreateMcpServerDTO, McpOAuthMetadata } from '@/types'
+import type { McpServer, CreateMcpServerDTO } from '@/types'
 
 interface McpConnectionInfo {
   status: 'idle' | 'testing' | 'connected' | 'failed'
@@ -18,15 +19,18 @@ interface McpDialogState {
   server?: McpServer
 }
 
-function hasOAuth(server: McpServer): server is McpServer & { oauth_metadata: McpOAuthMetadata } {
-  return server.type === 'remote' && !!server.oauth_metadata && 'client_id' in server.oauth_metadata && !!(server.oauth_metadata as McpOAuthMetadata).client_id
-}
-
 export function ToolsMcpSettings() {
-  const { servers, fetchServers, createServer, updateServer, deleteServer, testConnection: testMcpConnection, oauthStatuses, startOAuthFlow, revokeOAuthToken, fetchAllOAuthStatuses } = useMcpStore()
+  const {
+    servers, fetchServers, createServer, updateServer, deleteServer,
+    testConnection: testMcpConnection,
+    oauthStatuses, startOAuthFlow, submitManualClientId, revokeOAuthToken,
+    fetchAllOAuthStatuses, authRequired, probeAllForAuth
+  } = useMcpStore()
   const [connections, setConnections] = useState<Map<string, McpConnectionInfo>>(new Map())
   const [mcpDialog, setMcpDialog] = useState<McpDialogState>({ open: false })
   const [connectingOAuth, setConnectingOAuth] = useState<string | null>(null)
+  const [manualClientIdFor, setManualClientIdFor] = useState<string | null>(null)
+  const [manualClientId, setManualClientId] = useState('')
 
   useEffect(() => {
     fetchServers()
@@ -36,6 +40,7 @@ export function ToolsMcpSettings() {
     if (servers.length > 0) {
       servers.forEach((s) => testServerConnection(s))
       fetchAllOAuthStatuses()
+      probeAllForAuth()
     }
   }, [servers.length])
 
@@ -83,7 +88,25 @@ export function ToolsMcpSettings() {
   const handleConnectOAuth = async (serverId: string) => {
     setConnectingOAuth(serverId)
     try {
-      await startOAuthFlow(serverId)
+      const result = await startOAuthFlow(serverId)
+      if (result.needsManualClientId) {
+        setManualClientIdFor(serverId)
+        setManualClientId('')
+      }
+    } finally {
+      setConnectingOAuth(null)
+    }
+  }
+
+  const handleSubmitManualClientId = async () => {
+    if (!manualClientIdFor || !manualClientId.trim()) return
+    setConnectingOAuth(manualClientIdFor)
+    try {
+      const result = await submitManualClientId(manualClientIdFor, manualClientId.trim())
+      if (!result.needsManualClientId) {
+        setManualClientIdFor(null)
+        setManualClientId('')
+      }
     } finally {
       setConnectingOAuth(null)
     }
@@ -91,6 +114,13 @@ export function ToolsMcpSettings() {
 
   const handleDisconnectOAuth = async (serverId: string) => {
     await revokeOAuthToken(serverId)
+  }
+
+  const needsOAuth = (server: McpServer): boolean => {
+    if (server.type !== 'remote') return false
+    // Show OAuth row if we have an existing OAuth registration or if probe detected auth is required
+    const hasRegistration = server.oauth_metadata && 'resource_url' in server.oauth_metadata
+    return !!(hasRegistration || authRequired[server.id])
   }
 
   return (
@@ -210,47 +240,76 @@ export function ToolsMcpSettings() {
                       ) : null}
                     </div>
                   )}
-                  {hasOAuth(server) && (() => {
+                  {needsOAuth(server) && (() => {
                     const oauthStatus = oauthStatuses[server.id]
                     const isConnecting = connectingOAuth === server.id
+                    const showManualInput = manualClientIdFor === server.id
                     return (
-                      <div className={`flex items-center justify-between gap-2 px-4 py-2 text-xs border-t border-border ${
+                      <div className={`flex flex-col gap-2 px-4 py-2 text-xs border-t border-border ${
                         oauthStatus?.connected ? 'bg-emerald-500/5' : 'bg-amber-500/5'
                       }`}>
-                        <div className="flex items-center gap-2">
-                          <span className={`h-1.5 w-1.5 rounded-full shrink-0 ${
-                            oauthStatus?.connected ? 'bg-emerald-500' : 'bg-amber-500'
-                          }`} />
-                          <KeyRound className="h-3 w-3 text-muted-foreground" />
-                          <span className={oauthStatus?.connected ? 'text-emerald-400' : 'text-amber-400'}>
-                            {oauthStatus?.connected ? 'OAuth Connected' : 'OAuth Not Connected'}
-                          </span>
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-2">
+                            <span className={`h-1.5 w-1.5 rounded-full shrink-0 ${
+                              oauthStatus?.connected ? 'bg-emerald-500' : 'bg-amber-500'
+                            }`} />
+                            <KeyRound className="h-3 w-3 text-muted-foreground" />
+                            <span className={oauthStatus?.connected ? 'text-emerald-400' : 'text-amber-400'}>
+                              {oauthStatus?.connected ? 'OAuth Connected' : 'OAuth Required'}
+                            </span>
+                          </div>
+                          {oauthStatus?.connected ? (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-6 px-2 text-xs text-muted-foreground hover:text-destructive"
+                              onClick={() => handleDisconnectOAuth(server.id)}
+                            >
+                              <LogOut className="h-3 w-3 mr-1" />
+                              Disconnect
+                            </Button>
+                          ) : (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-6 px-2 text-xs text-muted-foreground hover:text-foreground"
+                              onClick={() => handleConnectOAuth(server.id)}
+                              disabled={isConnecting}
+                            >
+                              {isConnecting ? (
+                                <Loader2 className="h-3 w-3 animate-spin mr-1" />
+                              ) : (
+                                <KeyRound className="h-3 w-3 mr-1" />
+                              )}
+                              Connect
+                            </Button>
+                          )}
                         </div>
-                        {oauthStatus?.connected ? (
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="h-6 px-2 text-xs text-muted-foreground hover:text-destructive"
-                            onClick={() => handleDisconnectOAuth(server.id)}
-                          >
-                            <LogOut className="h-3 w-3 mr-1" />
-                            Disconnect
-                          </Button>
-                        ) : (
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="h-6 px-2 text-xs text-muted-foreground hover:text-foreground"
-                            onClick={() => handleConnectOAuth(server.id)}
-                            disabled={isConnecting}
-                          >
-                            {isConnecting ? (
-                              <Loader2 className="h-3 w-3 animate-spin mr-1" />
-                            ) : (
-                              <KeyRound className="h-3 w-3 mr-1" />
-                            )}
-                            Connect
-                          </Button>
+                        {showManualInput && (
+                          <div className="flex items-center gap-2">
+                            <Input
+                              value={manualClientId}
+                              onChange={(e) => setManualClientId(e.target.value)}
+                              placeholder="Enter Client ID (from server provider)"
+                              className="h-7 text-xs flex-1"
+                            />
+                            <Button
+                              size="sm"
+                              className="h-7 px-3 text-xs"
+                              disabled={!manualClientId.trim() || isConnecting}
+                              onClick={handleSubmitManualClientId}
+                            >
+                              {isConnecting ? <Loader2 className="h-3 w-3 animate-spin" /> : 'Submit'}
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-7 px-2 text-xs"
+                              onClick={() => { setManualClientIdFor(null); setManualClientId('') }}
+                            >
+                              Cancel
+                            </Button>
+                          </div>
                         )}
                       </div>
                     )

@@ -247,7 +247,7 @@ export class AgentManager extends EventEmitter {
       } else if (mcpServer.type === 'remote') {
         // Inject OAuth Bearer token if the server has one
         let finalHeaders = { ...mcpServer.headers }
-        if (this.oauthManager && mcpServer.oauth_metadata && 'client_id' in mcpServer.oauth_metadata) {
+        if (this.oauthManager && mcpServer.oauth_metadata && 'resource_url' in mcpServer.oauth_metadata) {
           const token = await this.oauthManager.getValidMcpServerToken(mcpServer.id)
           if (token) {
             finalHeaders = { ...finalHeaders, Authorization: `Bearer ${token}` }

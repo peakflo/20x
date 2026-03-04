@@ -56,16 +56,28 @@ export interface McpServerToolRecord {
   description: string
 }
 
-export interface McpOAuthMetadata {
-  client_id: string
-  client_secret: string
+export interface McpOAuthRegistration {
+  // Discovered metadata (RFC 9728 + RFC 8414)
+  resource_url: string
+  authorization_server_url: string
   authorization_endpoint: string
   token_endpoint: string
-  scopes?: string
-  issuer?: string
   registration_endpoint?: string
   revocation_endpoint?: string
+  scopes?: string
+  code_challenge_methods_supported?: string[]
+
+  // Client registration result (DCR or manual)
+  client_id: string
+  client_secret?: string
+  registration_method: 'dcr' | 'manual'
+
+  // Timestamp
+  discovered_at: string
 }
+
+/** @deprecated Use McpOAuthRegistration instead */
+export type McpOAuthMetadata = McpOAuthRegistration
 
 export interface McpServerRow {
   id: string
@@ -92,7 +104,7 @@ export interface McpServerRecord {
   headers: Record<string, string>
   environment: Record<string, string>
   tools: McpServerToolRecord[]
-  oauth_metadata: McpOAuthMetadata | Record<string, never>
+  oauth_metadata: McpOAuthRegistration | Record<string, never>
   created_at: string
   updated_at: string
 }
@@ -105,7 +117,7 @@ export interface CreateMcpServerData {
   url?: string
   headers?: Record<string, string>
   environment?: Record<string, string>
-  oauth_metadata?: McpOAuthMetadata
+  oauth_metadata?: McpOAuthRegistration
 }
 
 export interface UpdateMcpServerData {
@@ -116,7 +128,7 @@ export interface UpdateMcpServerData {
   url?: string
   headers?: Record<string, string>
   environment?: Record<string, string>
-  oauth_metadata?: McpOAuthMetadata
+  oauth_metadata?: McpOAuthRegistration
 }
 
 export interface CreateAgentData {
@@ -420,7 +432,7 @@ function deserializeMcpServer(row: McpServerRow): McpServerRecord {
     headers: JSON.parse(row.headers || '{}') as Record<string, string>,
     environment: JSON.parse(row.environment || '{}') as Record<string, string>,
     tools: JSON.parse(row.tools || '[]') as McpServerToolRecord[],
-    oauth_metadata: JSON.parse(row.oauth_metadata || '{}') as McpOAuthMetadata | Record<string, never>
+    oauth_metadata: JSON.parse(row.oauth_metadata || '{}') as McpOAuthRegistration | Record<string, never>
   }
 }
 

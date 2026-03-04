@@ -598,10 +598,10 @@ export function registerIpcHandlers(
     await oauthManager.revokeToken(sourceId)
   })
 
-  // MCP Server OAuth handlers
+  // MCP Server OAuth handlers (spec-compliant discovery flow)
   ipcMain.handle('mcp:startOAuthFlow', async (_, mcpServerId: string) => {
     if (!oauthManager) throw new Error('OAuth manager not initialized')
-    await oauthManager.startMcpServerOAuthFlow(mcpServerId)
+    return await oauthManager.startMcpServerOAuthFlow(mcpServerId)
   })
 
   ipcMain.handle('mcp:getOAuthStatus', (_, mcpServerId: string) => {
@@ -614,9 +614,14 @@ export function registerIpcHandlers(
     await oauthManager.revokeMcpServerToken(mcpServerId)
   })
 
-  ipcMain.handle('mcp:discoverOAuthMetadata', async (_, serverUrl: string) => {
+  ipcMain.handle('mcp:probeForAuth', async (_, serverUrl: string) => {
     const { OAuthManager: OAuthMgr } = await import('./oauth/oauth-manager')
-    return await OAuthMgr.discoverOAuthMetadata(serverUrl)
+    return await OAuthMgr.probeForAuth(serverUrl)
+  })
+
+  ipcMain.handle('mcp:submitManualClientId', async (_, mcpServerId: string, clientId: string) => {
+    if (!oauthManager) throw new Error('OAuth manager not initialized')
+    return await oauthManager.completeManualRegistration(mcpServerId, clientId)
   })
 
   // App preferences handlers

@@ -48,7 +48,7 @@ export const mcpServerApi = {
     return window.electronAPI.mcpServers.testConnection(data)
   },
 
-  startOAuthFlow: (mcpServerId: string): Promise<void> => {
+  startOAuthFlow: (mcpServerId: string): Promise<{ needsManualClientId?: boolean }> => {
     return window.electronAPI.mcpServers.startOAuthFlow(mcpServerId)
   },
 
@@ -60,8 +60,12 @@ export const mcpServerApi = {
     return window.electronAPI.mcpServers.revokeOAuthToken(mcpServerId)
   },
 
-  discoverOAuthMetadata: (serverUrl: string): Promise<Record<string, string> | null> => {
-    return window.electronAPI.mcpServers.discoverOAuthMetadata(serverUrl)
+  probeForAuth: (serverUrl: string): Promise<{ requiresAuth: boolean }> => {
+    return window.electronAPI.mcpServers.probeForAuth(serverUrl)
+  },
+
+  submitManualClientId: (mcpServerId: string, clientId: string): Promise<{ needsManualClientId?: boolean }> => {
+    return window.electronAPI.mcpServers.submitManualClientId(mcpServerId, clientId)
   }
 }
 

@@ -1,14 +1,12 @@
 import { useState, useEffect } from 'react'
-import { Server, Globe, Loader2, Search } from 'lucide-react'
+import { Server, Globe } from 'lucide-react'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogBody } from '@/components/ui/Dialog'
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
 import { Label } from '@/components/ui/Label'
-import { Checkbox } from '@/components/ui/Checkbox'
 import { KeyValueEditor } from '../KeyValueEditor'
 import { shellQuoteArg, parseShellArgs } from '../utils'
-import { mcpServerApi } from '@/lib/ipc-client'
-import type { McpServer, CreateMcpServerDTO, McpOAuthMetadata } from '@/types'
+import type { McpServer, CreateMcpServerDTO } from '@/types'
 
 interface McpServerFormDialogProps {
   server?: McpServer
@@ -26,19 +24,8 @@ export function McpServerFormDialog({ server, open, onClose, onSubmit }: McpServ
   const [url, setUrl] = useState(server?.url ?? '')
   const [headers, setHeaders] = useState<Record<string, string>>(server?.headers ?? {})
 
-  // OAuth state
-  const serverOAuth = server?.oauth_metadata as McpOAuthMetadata | undefined
-  const [oauthEnabled, setOauthEnabled] = useState(!!(serverOAuth?.client_id))
-  const [oauthClientId, setOauthClientId] = useState(serverOAuth?.client_id ?? '')
-  const [oauthClientSecret, setOauthClientSecret] = useState(serverOAuth?.client_secret ?? '')
-  const [oauthAuthEndpoint, setOauthAuthEndpoint] = useState(serverOAuth?.authorization_endpoint ?? '')
-  const [oauthTokenEndpoint, setOauthTokenEndpoint] = useState(serverOAuth?.token_endpoint ?? '')
-  const [oauthScopes, setOauthScopes] = useState(serverOAuth?.scopes ?? '')
-  const [isDiscovering, setIsDiscovering] = useState(false)
-
   useEffect(() => {
     if (open) {
-      const oAuth = server?.oauth_metadata as McpOAuthMetadata | undefined
       setName(server?.name ?? '')
       setType(server?.type ?? 'local')
       setCommand(server?.command ?? '')
@@ -46,32 +33,10 @@ export function McpServerFormDialog({ server, open, onClose, onSubmit }: McpServ
       setEnvironment(server?.environment ?? {})
       setUrl(server?.url ?? '')
       setHeaders(server?.headers ?? {})
-      setOauthEnabled(!!(oAuth?.client_id))
-      setOauthClientId(oAuth?.client_id ?? '')
-      setOauthClientSecret(oAuth?.client_secret ?? '')
-      setOauthAuthEndpoint(oAuth?.authorization_endpoint ?? '')
-      setOauthTokenEndpoint(oAuth?.token_endpoint ?? '')
-      setOauthScopes(oAuth?.scopes ?? '')
     }
   }, [open, server?.id])
 
   const isValid = name.trim() && (type === 'local' ? command.trim() : url.trim())
-
-  const handleDiscoverMetadata = async () => {
-    if (!url.trim()) return
-    setIsDiscovering(true)
-    try {
-      const metadata = await mcpServerApi.discoverOAuthMetadata(url.trim())
-      if (metadata) {
-        if (metadata.authorization_endpoint) setOauthAuthEndpoint(metadata.authorization_endpoint)
-        if (metadata.token_endpoint) setOauthTokenEndpoint(metadata.token_endpoint)
-      }
-    } catch {
-      // Silently ignore discovery failures
-    } finally {
-      setIsDiscovering(false)
-    }
-  }
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
@@ -85,20 +50,6 @@ export function McpServerFormDialog({ server, open, onClose, onSubmit }: McpServ
     } else {
       data.url = url.trim()
       if (Object.keys(headers).length > 0) data.headers = headers
-
-      // Include OAuth metadata if enabled
-      if (oauthEnabled && oauthClientId.trim() && oauthAuthEndpoint.trim() && oauthTokenEndpoint.trim()) {
-        data.oauth_metadata = {
-          client_id: oauthClientId.trim(),
-          client_secret: oauthClientSecret.trim(),
-          authorization_endpoint: oauthAuthEndpoint.trim(),
-          token_endpoint: oauthTokenEndpoint.trim(),
-          scopes: oauthScopes.trim() || undefined
-        }
-      } else if (!oauthEnabled) {
-        // Clear OAuth metadata when disabled
-        data.oauth_metadata = undefined
-      }
     }
 
     onSubmit(data)
@@ -196,87 +147,6 @@ export function McpServerFormDialog({ server, open, onClose, onSubmit }: McpServ
                   keyPlaceholder="Header-Name"
                   valuePlaceholder="value"
                 />
-
-                {/* OAuth Configuration */}
-                <div className="space-y-2 pt-1 border-t border-border">
-                  <div className="flex items-center gap-2 pt-1">
-                    <Checkbox
-                      id="mcp-oauth"
-                      checked={oauthEnabled}
-                      onCheckedChange={(checked) => setOauthEnabled(!!checked)}
-                    />
-                    <Label htmlFor="mcp-oauth" className="text-sm font-medium cursor-pointer">
-                      Requires OAuth
-                    </Label>
-                  </div>
-
-                  {oauthEnabled && (
-                    <div className="space-y-2 pl-0.5">
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="outline"
-                        disabled={!url.trim() || isDiscovering}
-                        onClick={handleDiscoverMetadata}
-                        className="text-xs"
-                      >
-                        {isDiscovering ? (
-                          <Loader2 className="h-3 w-3 animate-spin mr-1.5" />
-                        ) : (
-                          <Search className="h-3 w-3 mr-1.5" />
-                        )}
-                        Auto-Discover Endpoints
-                      </Button>
-
-                      <div className="space-y-1.5">
-                        <Label htmlFor="mcp-oauth-client-id" className="text-xs">Client ID</Label>
-                        <Input
-                          id="mcp-oauth-client-id"
-                          value={oauthClientId}
-                          onChange={(e) => setOauthClientId(e.target.value)}
-                          placeholder="your-client-id"
-                        />
-                      </div>
-                      <div className="space-y-1.5">
-                        <Label htmlFor="mcp-oauth-client-secret" className="text-xs">Client Secret</Label>
-                        <Input
-                          id="mcp-oauth-client-secret"
-                          value={oauthClientSecret}
-                          onChange={(e) => setOauthClientSecret(e.target.value)}
-                          placeholder="your-client-secret"
-                          type="password"
-                        />
-                      </div>
-                      <div className="space-y-1.5">
-                        <Label htmlFor="mcp-oauth-auth-endpoint" className="text-xs">Authorization Endpoint</Label>
-                        <Input
-                          id="mcp-oauth-auth-endpoint"
-                          value={oauthAuthEndpoint}
-                          onChange={(e) => setOauthAuthEndpoint(e.target.value)}
-                          placeholder="https://provider.com/oauth/authorize"
-                        />
-                      </div>
-                      <div className="space-y-1.5">
-                        <Label htmlFor="mcp-oauth-token-endpoint" className="text-xs">Token Endpoint</Label>
-                        <Input
-                          id="mcp-oauth-token-endpoint"
-                          value={oauthTokenEndpoint}
-                          onChange={(e) => setOauthTokenEndpoint(e.target.value)}
-                          placeholder="https://provider.com/oauth/token"
-                        />
-                      </div>
-                      <div className="space-y-1.5">
-                        <Label htmlFor="mcp-oauth-scopes" className="text-xs">Scopes</Label>
-                        <Input
-                          id="mcp-oauth-scopes"
-                          value={oauthScopes}
-                          onChange={(e) => setOauthScopes(e.target.value)}
-                          placeholder="read write (space-separated)"
-                        />
-                      </div>
-                    </div>
-                  )}
-                </div>
               </>
             )}
 

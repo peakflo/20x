@@ -12,7 +12,8 @@ import type { DatabaseManager } from '../database'
 import { LocalOAuthServer } from './local-oauth-server'
 import type { OAuthProvider } from './oauth-provider'
 import { LinearProvider, HubSpotProvider, McpOAuthProvider } from './providers'
-import type { McpOAuthMetadata } from '../database'
+import type { McpOAuthRegistration } from '../database'
+import { McpDiscovery } from './mcp-discovery'
 
 interface PendingFlow {
   verifier: string
@@ -306,23 +307,89 @@ export class OAuthManager {
     }
   }
 
-  // ── MCP Server OAuth ──────────────────────────────────────
+  // ── MCP Server OAuth (spec-compliant discovery flow) ──────
 
   /**
-   * Start OAuth flow for an MCP server using its stored oauth_metadata.
-   * Opens a localhost server, launches browser for authorization, and stores the token.
+   * Start OAuth flow for an MCP server.
+   *
+   * Implements the MCP Authorization spec (2025-11-25):
+   * 1. Check for existing valid registration in oauth_metadata
+   * 2. If missing, run full discovery: probe → PRM → AS metadata → DCR
+   * 3. Run OAuth 2.1 + PKCE flow with `resource` parameter
+   *
+   * @throws Error with message 'NEEDS_MANUAL_CLIENT_ID' if DCR unavailable
+   * @returns { needsManualClientId: true } if manual client_id input required
    */
-  async startMcpServerOAuthFlow(mcpServerId: string): Promise<void> {
+  async startMcpServerOAuthFlow(mcpServerId: string): Promise<{ needsManualClientId?: boolean }> {
     const mcpServer = this.db.getMcpServer(mcpServerId)
     if (!mcpServer) throw new Error(`MCP server not found: ${mcpServerId}`)
+    if (!mcpServer.url) throw new Error('MCP server has no URL configured')
 
-    const metadata = mcpServer.oauth_metadata as McpOAuthMetadata | undefined
-    if (!metadata?.client_id || !metadata?.authorization_endpoint || !metadata?.token_endpoint) {
-      throw new Error('MCP server has incomplete OAuth metadata. Configure client_id, authorization_endpoint, and token_endpoint.')
+    let registration = mcpServer.oauth_metadata as McpOAuthRegistration | Record<string, never>
+    const hasValidRegistration = registration
+      && 'client_id' in registration
+      && 'resource_url' in registration
+      && registration.client_id
+
+    if (!hasValidRegistration) {
+      // Run spec-compliant discovery flow
+      console.log(`[OAuthManager] MCP OAuth: starting discovery for ${mcpServer.url}`)
+
+      // Start a temporary local server to get the redirect URI for DCR
+      const tempServer = new LocalOAuthServer()
+      let redirectUri: string
+      try {
+        redirectUri = await tempServer.start()
+      } finally {
+        tempServer.stop()
+      }
+
+      const discovery = await McpDiscovery.discover(mcpServer.url, redirectUri)
+
+      if (discovery.needsManualClientId) {
+        // Store partial discovery (without client_id) so user only needs to provide client_id
+        this.db.updateMcpServer(mcpServerId, {
+          oauth_metadata: {
+            resource_url: discovery.resourceUrl,
+            authorization_server_url: discovery.authorizationServerUrl,
+            authorization_endpoint: discovery.authorizationEndpoint,
+            token_endpoint: discovery.tokenEndpoint,
+            registration_endpoint: discovery.registrationEndpoint,
+            revocation_endpoint: discovery.revocationEndpoint,
+            scopes: discovery.scopes,
+            code_challenge_methods_supported: discovery.codeChallengeMethodsSupported,
+            client_id: '', // Placeholder — will be filled by completeManualRegistration
+            registration_method: 'manual',
+            discovered_at: new Date().toISOString()
+          } as McpOAuthRegistration
+        })
+        return { needsManualClientId: true }
+      }
+
+      // Full registration obtained (via DCR)
+      registration = {
+        resource_url: discovery.resourceUrl,
+        authorization_server_url: discovery.authorizationServerUrl,
+        authorization_endpoint: discovery.authorizationEndpoint,
+        token_endpoint: discovery.tokenEndpoint,
+        registration_endpoint: discovery.registrationEndpoint,
+        revocation_endpoint: discovery.revocationEndpoint,
+        scopes: discovery.scopes,
+        code_challenge_methods_supported: discovery.codeChallengeMethodsSupported,
+        client_id: discovery.clientId!,
+        client_secret: discovery.clientSecret,
+        registration_method: discovery.registrationMethod || 'dcr',
+        discovered_at: new Date().toISOString()
+      } as McpOAuthRegistration
+
+      // Persist registration to DB
+      this.db.updateMcpServer(mcpServerId, { oauth_metadata: registration as McpOAuthRegistration })
     }
 
+    // Now run the actual OAuth 2.1 + PKCE flow
+    const reg = registration as McpOAuthRegistration
     const provider = this.getProvider('mcp-server')
-    const config: Record<string, unknown> = { ...metadata }
+    const config: Record<string, unknown> = { ...reg }
     const server = new LocalOAuthServer()
 
     try {
@@ -361,9 +428,35 @@ export class OAuthManager {
       })
 
       console.log(`[OAuthManager] MCP OAuth flow completed successfully for server: ${mcpServer.name}`)
+      return {}
     } finally {
       server.stop()
     }
+  }
+
+  /**
+   * Complete a partial MCP OAuth registration with a manually-provided client_id.
+   * Called when DCR is unavailable and user provides client_id through UI.
+   */
+  async completeManualRegistration(mcpServerId: string, clientId: string): Promise<{ needsManualClientId?: boolean }> {
+    const mcpServer = this.db.getMcpServer(mcpServerId)
+    if (!mcpServer) throw new Error(`MCP server not found: ${mcpServerId}`)
+
+    const partial = mcpServer.oauth_metadata as McpOAuthRegistration | Record<string, never>
+    if (!partial || !('authorization_endpoint' in partial)) {
+      throw new Error('No partial registration found. Run startMcpServerOAuthFlow first.')
+    }
+
+    // Update registration with user-provided client_id
+    const reg: McpOAuthRegistration = {
+      ...(partial as McpOAuthRegistration),
+      client_id: clientId,
+      registration_method: 'manual'
+    }
+    this.db.updateMcpServer(mcpServerId, { oauth_metadata: reg })
+
+    // Now run the OAuth flow
+    return this.startMcpServerOAuthFlow(mcpServerId)
   }
 
   /**
@@ -391,7 +484,7 @@ export class OAuthManager {
   }
 
   /**
-   * Refresh an MCP server's OAuth token using credentials from oauth_metadata.
+   * Refresh an MCP server's OAuth token using credentials from oauth_metadata registration.
    */
   private async refreshMcpServerToken(tokenRecord: import('../database').OAuthTokenRecord): Promise<void> {
     if (!tokenRecord.refresh_token) throw new Error('No refresh token available')
@@ -400,18 +493,18 @@ export class OAuthManager {
     const mcpServer = this.db.getMcpServer(tokenRecord.mcp_server_id)
     if (!mcpServer) throw new Error('MCP server not found')
 
-    const metadata = mcpServer.oauth_metadata as McpOAuthMetadata | undefined
-    if (!metadata?.client_id || !metadata?.token_endpoint) {
+    const registration = mcpServer.oauth_metadata as McpOAuthRegistration | undefined
+    if (!registration?.client_id || !registration?.token_endpoint) {
       this.db.deleteOAuthToken(tokenRecord.id)
-      throw new Error('MCP server OAuth metadata incomplete. Please re-authenticate.')
+      throw new Error('MCP server OAuth registration incomplete. Please re-authenticate.')
     }
 
     const provider = this.getProvider('mcp-server')
     const data = await provider.refreshToken(
       tokenRecord.refresh_token,
-      metadata.client_id,
-      metadata.client_secret || '',
-      metadata.token_endpoint
+      registration.client_id,
+      registration.client_secret || '',
+      registration.token_endpoint
     )
 
     this.db.updateOAuthToken(
@@ -439,28 +532,12 @@ export class OAuthManager {
   }
 
   /**
-   * Discover OAuth metadata from an MCP server URL using the MCP spec.
-   * Fetches {origin}/.well-known/oauth-authorization-server
+   * Probe an MCP server URL to determine if it requires OAuth authentication.
+   * Sends an unauthenticated request and checks for a 401 response.
    */
-  static async discoverOAuthMetadata(serverUrl: string): Promise<Partial<McpOAuthMetadata> | null> {
-    try {
-      const origin = new URL(serverUrl).origin
-      const wellKnownUrl = `${origin}/.well-known/oauth-authorization-server`
-      const response = await fetch(wellKnownUrl, {
-        signal: AbortSignal.timeout(10000)
-      })
-      if (!response.ok) return null
-      const data = await response.json() as Record<string, string>
-      return {
-        authorization_endpoint: data.authorization_endpoint,
-        token_endpoint: data.token_endpoint,
-        issuer: data.issuer,
-        registration_endpoint: data.registration_endpoint,
-        revocation_endpoint: data.revocation_endpoint
-      }
-    } catch {
-      return null
-    }
+  static async probeForAuth(serverUrl: string): Promise<{ requiresAuth: boolean }> {
+    const result = await McpDiscovery.probeForAuth(serverUrl)
+    return { requiresAuth: result.requiresAuth }
   }
 
   /**

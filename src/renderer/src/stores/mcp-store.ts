@@ -13,16 +13,20 @@ interface McpState {
   isLoading: boolean
   error: string | null
   oauthStatuses: Record<string, OAuthStatus>
+  authRequired: Record<string, boolean>
 
   fetchServers: () => Promise<void>
   createServer: (data: CreateMcpServerDTO) => Promise<McpServer | null>
   updateServer: (id: string, data: UpdateMcpServerDTO) => Promise<McpServer | null>
   deleteServer: (id: string) => Promise<boolean>
   testConnection: (data: { id?: string; name: string; type?: 'local' | 'remote'; command?: string; args?: string[]; url?: string; headers?: Record<string, string>; environment?: Record<string, string> }) => Promise<McpTestResult>
-  startOAuthFlow: (mcpServerId: string) => Promise<void>
+  startOAuthFlow: (mcpServerId: string) => Promise<{ needsManualClientId?: boolean }>
+  submitManualClientId: (mcpServerId: string, clientId: string) => Promise<{ needsManualClientId?: boolean }>
   revokeOAuthToken: (mcpServerId: string) => Promise<void>
   fetchOAuthStatus: (mcpServerId: string) => Promise<void>
   fetchAllOAuthStatuses: () => Promise<void>
+  probeForAuth: (serverId: string, serverUrl: string) => Promise<boolean>
+  probeAllForAuth: () => Promise<void>
 }
 
 export const useMcpStore = create<McpState>((set, get) => ({
@@ -30,6 +34,7 @@ export const useMcpStore = create<McpState>((set, get) => ({
   isLoading: false,
   error: null,
   oauthStatuses: {},
+  authRequired: {},
 
   fetchServers: async () => {
     set({ isLoading: true, error: null })
@@ -84,7 +89,6 @@ export const useMcpStore = create<McpState>((set, get) => ({
 
   testConnection: async (data) => {
     const result = await mcpServerApi.testConnection(data)
-    // If test returned tools and we have a server ID, update tools in the store
     if (data.id && result.tools && result.status === 'connected') {
       set((state) => ({
         servers: state.servers.map((s) =>
@@ -97,14 +101,34 @@ export const useMcpStore = create<McpState>((set, get) => ({
 
   startOAuthFlow: async (mcpServerId: string) => {
     try {
-      await mcpServerApi.startOAuthFlow(mcpServerId)
-      // Refresh status after flow completes
-      const status = await mcpServerApi.getOAuthStatus(mcpServerId)
-      set((state) => ({
-        oauthStatuses: { ...state.oauthStatuses, [mcpServerId]: status }
-      }))
+      const result = await mcpServerApi.startOAuthFlow(mcpServerId)
+      if (!result.needsManualClientId) {
+        // Flow completed — refresh status
+        const status = await mcpServerApi.getOAuthStatus(mcpServerId)
+        set((state) => ({
+          oauthStatuses: { ...state.oauthStatuses, [mcpServerId]: status }
+        }))
+      }
+      return result
     } catch (err) {
       set({ error: String(err) })
+      return {}
+    }
+  },
+
+  submitManualClientId: async (mcpServerId: string, clientId: string) => {
+    try {
+      const result = await mcpServerApi.submitManualClientId(mcpServerId, clientId)
+      if (!result.needsManualClientId) {
+        const status = await mcpServerApi.getOAuthStatus(mcpServerId)
+        set((state) => ({
+          oauthStatuses: { ...state.oauthStatuses, [mcpServerId]: status }
+        }))
+      }
+      return result
+    } catch (err) {
+      set({ error: String(err) })
+      return {}
     }
   },
 
@@ -126,14 +150,15 @@ export const useMcpStore = create<McpState>((set, get) => ({
         oauthStatuses: { ...state.oauthStatuses, [mcpServerId]: status }
       }))
     } catch {
-      // Silently ignore - status will remain unknown
+      // Silently ignore
     }
   },
 
   fetchAllOAuthStatuses: async () => {
     const { servers } = get()
+    // Check all remote servers that have an existing registration
     const oauthServers = servers.filter(
-      (s) => s.type === 'remote' && s.oauth_metadata && 'client_id' in s.oauth_metadata
+      (s) => s.type === 'remote' && s.oauth_metadata && 'resource_url' in s.oauth_metadata
     )
     const statuses: Record<string, OAuthStatus> = {}
     await Promise.all(
@@ -147,6 +172,37 @@ export const useMcpStore = create<McpState>((set, get) => ({
     )
     set((state) => ({
       oauthStatuses: { ...state.oauthStatuses, ...statuses }
+    }))
+  },
+
+  probeForAuth: async (serverId: string, serverUrl: string) => {
+    try {
+      const { requiresAuth } = await mcpServerApi.probeForAuth(serverUrl)
+      set((state) => ({
+        authRequired: { ...state.authRequired, [serverId]: requiresAuth }
+      }))
+      return requiresAuth
+    } catch {
+      return false
+    }
+  },
+
+  probeAllForAuth: async () => {
+    const { servers } = get()
+    const remoteServers = servers.filter((s) => s.type === 'remote' && s.url)
+    const results: Record<string, boolean> = {}
+    await Promise.all(
+      remoteServers.map(async (s) => {
+        try {
+          const { requiresAuth } = await mcpServerApi.probeForAuth(s.url)
+          results[s.id] = requiresAuth
+        } catch {
+          results[s.id] = false
+        }
+      })
+    )
+    set((state) => ({
+      authRequired: { ...state.authRequired, ...results }
     }))
   }
 }))
