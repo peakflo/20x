@@ -375,9 +375,13 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
               }
 
               // Detect EnterPlanMode / ExitPlanMode → set planreview type
+              // For ExitPlanMode, the plan content is in input.plan (not in tool_result)
               if (toolName === 'EnterPlanMode' || toolName === 'ExitPlanMode') {
                 partType = 'planreview'
                 toolObj.title = toolName === 'EnterPlanMode' ? 'Enter plan mode' : 'Exit plan mode'
+                if (toolName === 'ExitPlanMode' && rawInput?.plan) {
+                  toolObj.output = String(rawInput.plan).slice(0, 50000)
+                }
               }
 
               message.parts.push({ type: partType as MessagePartType, tool: toolObj })
@@ -1104,14 +1108,17 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
           }
 
           // Detect EnterPlanMode / ExitPlanMode → render as plan mode indicator
+          // For ExitPlanMode, the plan content is in input.plan (not in tool_result)
           if (toolName === 'EnterPlanMode' || toolName === 'ExitPlanMode') {
             const planTitle = toolName === 'EnterPlanMode' ? 'Enter plan mode' : 'Exit plan mode'
+            const planContent = toolName === 'ExitPlanMode' && rawInput?.plan
+              ? String(rawInput.plan).slice(0, 50000) : undefined
             partContentLengths.set(toolPartId, `pending:${toolName}`)
             parts.push({
               id: toolPartId,
               type: 'planreview' as MessagePartType,
               content: planTitle,
-              tool: { name: toolName, status: 'pending', title: planTitle, input },
+              tool: { name: toolName, status: 'pending', title: planTitle, input, output: planContent },
             })
             continue
           }
@@ -1171,15 +1178,17 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
             const toolName = previousContent.split(':')[1] || 'tool'
             // Update the existing tool part - mark as completed
             partContentLengths.set(toolPartId, `success:${resultContent.length}`)
+            // For plan review: don't send empty output (would overwrite plan from input.plan)
+            const toolUpdate: Record<string, unknown> = {
+              name: toolName,
+              status: 'success',
+            }
+            if (outputContent) toolUpdate.output = outputContent
             parts.push({
               id: toolPartId,
               type: isPlanReview ? ('planreview' as MessagePartType) : MessagePartType.TOOL,
               content: isPlanReview ? (toolName === 'EnterPlanMode' ? 'Enter plan mode' : 'Exit plan mode') : `Tool completed`,
-              tool: {
-                name: toolName,
-                status: 'success',
-                output: outputContent,
-              },
+              tool: toolUpdate,
               update: true, // Mark as update to existing message
             })
           } else {
