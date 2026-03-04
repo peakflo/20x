@@ -221,43 +221,10 @@ function TodoWriteMessage({ message }: { message: AgentMessage }) {
 }
 
 function PlanReviewMessage({ message }: { message: AgentMessage }) {
-  const [expanded, setExpanded] = useState(true)
-  const tool = message.tool
-  const rawOutput = tool?.output || ''
-  // Filter out confirmation prompts like "Exit plan mode?" — not real plan content
-  const planContent = /^exit plan mode\??$/i.test(rawOutput.trim()) ? '' : rawOutput
-  const isPending = tool?.status === 'pending'
-  const isComplete = !isPending
-
   return (
-    <div className="rounded-md bg-[#161b22] border border-blue-500/30 overflow-hidden">
-      <button
-        onClick={() => setExpanded(!expanded)}
-        className="w-full flex items-center gap-2 px-4 py-2.5 border-b border-border/30 hover:bg-white/5 transition-colors"
-      >
-        {expanded
-          ? <ChevronDown className="h-3.5 w-3.5 text-blue-400 shrink-0" />
-          : <ChevronRight className="h-3.5 w-3.5 text-blue-400 shrink-0" />
-        }
-        <FileText className="h-3.5 w-3.5 text-blue-400 shrink-0" />
-        <span className="text-[10px] text-blue-400 font-medium uppercase tracking-wide">
-          {isPending ? 'Preparing plan...' : 'Exited plan mode'}
-        </span>
-        {isPending && (
-          <Loader2 className="h-3 w-3 text-blue-400 animate-spin ml-auto" />
-        )}
-        {isComplete && !planContent && (
-          <CheckCircle2 className="h-3 w-3 text-blue-400 ml-auto" />
-        )}
-      </button>
-      {expanded && planContent && (
-        <div className="px-4 py-3 max-h-[60vh] overflow-y-auto">
-          <Markdown size="xs">{planContent}</Markdown>
-        </div>
-      )}
-      <div className="px-4 pb-2">
-        <span className="text-[10px] text-muted-foreground">{message.timestamp.toLocaleTimeString()}</span>
-      </div>
+    <div className="flex items-center gap-2 px-3 py-1.5 text-xs text-blue-400">
+      <FileText className="h-3 w-3 shrink-0" />
+      <span>Exited plan mode</span>
     </div>
   )
 }
