@@ -55,7 +55,7 @@ interface AcpSessionForTest {
   responseCounter: number
   lastChunkTime: number | null
   currentTurnId: number
-  sawToolCallSinceLastChunk: boolean
+  toolCallMetadata: Map<string, { name: string; input: string }>
 }
 
 /** Cast adapter to access private members for testing */
@@ -80,7 +80,7 @@ function createMockSession(sessionId: string): AcpSessionForTest {
     responseCounter: 0,
     lastChunkTime: null,
     currentTurnId: 0,
-    sawToolCallSinceLastChunk: false
+    toolCallMetadata: new Map()
   }
 }
 
@@ -219,8 +219,8 @@ describe('AcpAdapter - Turn Detection', () => {
     })
   })
 
-  describe('Tool call-based turn detection', () => {
-    it('should increment turn ID after tool call', async () => {
+  describe('Tool call turn detection', () => {
+    it('should NOT increment turn ID for tool calls within time threshold', async () => {
       const sessionId = 'test-session'
       const priv = adapterPrivate(adapter)
 
@@ -249,7 +249,6 @@ describe('AcpAdapter - Turn Detection', () => {
       )
 
       expect(session.currentTurnId).toBe(1)
-      expect(session.sawToolCallSinceLastChunk).toBe(false)
 
       // Tool call (within 2s)
       vi.advanceTimersByTime(500)
@@ -277,9 +276,7 @@ describe('AcpAdapter - Turn Detection', () => {
         session
       )
 
-      expect(session.sawToolCallSinceLastChunk).toBe(true)
-
-      // Next message chunk (within 2s but after tool call)
+      // Next message chunk (within 2s — should stay on same turn)
       vi.advanceTimersByTime(500)
 
       const chunk2 = {
@@ -301,12 +298,12 @@ describe('AcpAdapter - Turn Detection', () => {
         session
       )
 
-      expect(session.currentTurnId).toBe(2) // New turn due to tool call
-      expect(parts2[0].id).toBe('agent-response-2')
-      expect(session.sawToolCallSinceLastChunk).toBe(false) // Reset after new turn
+      // Tool calls no longer force a new turn — only time gaps do
+      expect(session.currentTurnId).toBe(1)
+      expect(parts2[0].id).toBe('agent-response-1')
     })
 
-    it('should set flag for all tool call types', async () => {
+    it('should cache tool metadata from initial tool_call and use it on completion', async () => {
       const sessionId = 'test-session'
       const priv = adapterPrivate(adapter)
 
@@ -314,27 +311,101 @@ describe('AcpAdapter - Turn Detection', () => {
 
       priv.sessions.set(sessionId, session)
 
-      const toolCallUpdate = {
+      // Initial tool_call with kind and rawInput (in_progress)
+      const toolCallStart = {
         method: 'session/update',
         params: {
           sessionId,
           update: {
-            sessionUpdate: 'tool_call_update',
+            sessionUpdate: 'tool_call',
             toolCallId: 'tool-1',
-            status: 'in_progress'
+            status: 'in_progress',
+            kind: 'shell',
+            title: 'ls -la',
+            rawInput: { command: 'ls -la' }
           }
         }
       }
 
       priv.convertAcpEventToMessageParts(
-        toolCallUpdate,
+        toolCallStart,
         new Set(),
         new Set(),
         new Map(),
         session
       )
 
-      expect(session.sawToolCallSinceLastChunk).toBe(true)
+      // Metadata should be cached
+      expect(session.toolCallMetadata.has('tool-1')).toBe(true)
+      expect(session.toolCallMetadata.get('tool-1')?.name).toBe('shell')
+      expect(session.toolCallMetadata.get('tool-1')?.input).toBe('ls -la')
+
+      // Completed tool_call_update without kind/rawInput (Codex format)
+      const toolCallComplete = {
+        method: 'session/update',
+        params: {
+          sessionId,
+          update: {
+            sessionUpdate: 'tool_call_update',
+            toolCallId: 'tool-1',
+            status: 'completed',
+            content: [{ type: 'content', content: { type: 'text', text: '{"files":[]}' } }],
+            rawOutput: { content: [{ text: 'file.txt\ndir/', type: 'text' }], isError: false }
+          }
+        }
+      }
+
+      const parts = priv.convertAcpEventToMessageParts(
+        toolCallComplete,
+        new Set(),
+        new Set(),
+        new Map(),
+        session
+      )
+
+      // Should use cached metadata for name and input
+      expect(parts.length).toBe(1)
+      expect(parts[0].type).toBe(MessagePartType.TOOL)
+      expect(parts[0].tool?.name).toBe('shell')
+      expect(parts[0].tool?.input).toBe('ls -la')
+      expect(parts[0].tool?.output).toBe('file.txt\ndir/')
+
+      // Cached metadata should be cleaned up
+      expect(session.toolCallMetadata.has('tool-1')).toBe(false)
+    })
+
+    it('should extract output from Codex rawOutput content array', async () => {
+      const sessionId = 'test-session'
+      const priv = adapterPrivate(adapter)
+
+      const session = priv.sessions.get(sessionId) || createMockSession(sessionId)
+
+      priv.sessions.set(sessionId, session)
+
+      const toolCallComplete = {
+        method: 'session/update',
+        params: {
+          sessionId,
+          update: {
+            sessionUpdate: 'tool_call_update',
+            toolCallId: 'tool-2',
+            status: 'completed',
+            content: [{ type: 'content', content: { type: 'text', text: '{"resourceTemplates":[]}' } }],
+            rawOutput: { content: [{ text: '{"resourceTemplates":[]}', type: 'text' }], isError: false }
+          }
+        }
+      }
+
+      const parts = priv.convertAcpEventToMessageParts(
+        toolCallComplete,
+        new Set(),
+        new Set(),
+        new Map(),
+        session
+      )
+
+      expect(parts.length).toBe(1)
+      expect(parts[0].tool?.output).toBe('{"resourceTemplates":[]}')
     })
   })
 

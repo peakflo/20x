@@ -47,6 +47,7 @@ export const api = {
       return get<unknown[]>(`/api/tasks${qs}`)
     },
     get: (id: string) => get<unknown>(`/api/tasks/${encodeURIComponent(id)}`),
+    create: (data: unknown) => post<unknown>('/api/tasks', data),
     update: (id: string, data: unknown) => post<unknown>(`/api/tasks/${encodeURIComponent(id)}`, data)
   },
   agents: {

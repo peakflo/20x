@@ -42,6 +42,7 @@ interface TaskState {
   tasks: Task[]
   isLoading: boolean
   fetchTasks: () => Promise<void>
+  createTask: (data: Record<string, unknown>) => Promise<Task | null>
   updateTask: (id: string, data: Record<string, unknown>) => Promise<boolean>
 }
 
@@ -82,6 +83,20 @@ export const useTaskStore = create<TaskState>((set, get) => {
         set({ tasks, isLoading: false })
       } catch {
         set({ isLoading: false })
+      }
+    },
+
+    createTask: async (data) => {
+      try {
+        const task = (await api.tasks.create(data)) as Task
+        set((state) => {
+          if (state.tasks.some((t) => t.id === task.id)) return state
+          return { tasks: [task, ...state.tasks] }
+        })
+        return task
+      } catch (e) {
+        console.error('Failed to create task:', e)
+        return null
       }
     },
 

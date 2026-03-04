@@ -338,6 +338,16 @@ async function routePost(pathname: string, params: Record<string, unknown>): Pro
   const agent = agentRef!
   const db = dbRef!
 
+  // POST /api/tasks — create task (must be checked before the :id update route)
+  if (pathname === '/api/tasks') {
+    const { title } = params as { title?: string }
+    if (!title) throw Object.assign(new Error('title is required'), { status: 400 })
+    const task = db.createTask(params as unknown as Parameters<DatabaseManager['createTask']>[0])
+    if (!task) throw Object.assign(new Error('Failed to create task'), { status: 500 })
+    broadcastToMobileClients('task:created', { task })
+    return task
+  }
+
   // POST /api/tasks/:id — update task
   const taskUpdateMatch = pathname.match(/^\/api\/tasks\/([^/]+)$/)
   if (taskUpdateMatch) {
