@@ -148,7 +148,7 @@ export function Markdown({ children, size = 'sm', className }: MarkdownProps) {
             // Default to inline for single backticks - ALWAYS inline
             return (
               <code
-                className={cn('bg-muted rounded font-mono text-foreground', classes.code)}
+                className={cn('bg-muted rounded font-mono text-foreground break-all', classes.code)}
                 style={{ display: 'inline !important' } as React.CSSProperties}
                 {...props}
               >
@@ -159,7 +159,7 @@ export function Markdown({ children, size = 'sm', className }: MarkdownProps) {
 
           // Pre (wraps code blocks)
           pre: ({ children, ...props }) => (
-            <pre className={cn('bg-muted rounded overflow-x-auto', classes.codeBlock)} {...props}>
+            <pre className={cn('bg-muted rounded overflow-x-auto max-w-full', classes.codeBlock)} {...props}>
               {children}
             </pre>
           ),

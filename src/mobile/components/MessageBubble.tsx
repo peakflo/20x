@@ -200,7 +200,7 @@ export function MessageBubble({ message, onAnswer }: MessageBubbleProps) {
   return (
     <div className={cn('flex gap-2', isUser ? 'justify-end' : 'justify-start')}>
       <div className={cn(
-        'max-w-[90%] rounded-md px-3 py-2',
+        'max-w-[90%] rounded-md px-3 py-2 overflow-hidden min-w-0',
         isUser && 'bg-primary/20 text-foreground',
         isSystem && !isError && 'bg-yellow-500/10 text-yellow-200',
         isError && 'bg-red-500/10 text-red-200 border border-red-500/20',
