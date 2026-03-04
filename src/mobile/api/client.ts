@@ -50,6 +50,9 @@ export const api = {
     create: (data: unknown) => post<unknown>('/api/tasks', data),
     update: (id: string, data: unknown) => post<unknown>(`/api/tasks/${encodeURIComponent(id)}`, data)
   },
+  taskSources: {
+    syncAll: () => post<unknown[]>('/api/task-sources/sync-all')
+  },
   agents: {
     list: () => get<unknown[]>('/api/agents'),
     get: (id: string) => get<unknown>(`/api/agents/${encodeURIComponent(id)}`)
