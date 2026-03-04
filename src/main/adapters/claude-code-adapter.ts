@@ -1155,8 +1155,11 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
           const previousContent = partContentLengths.get(toolPartId)
           // Plan content should not be truncated (cap at 50K for safety)
           const isPlanReview = previousContent?.endsWith(':ExitPlanMode')
+          // Filter out confirmation prompts like "Exit plan mode?" — they're not plan content
+          const sanitizedPlanResult = isPlanReview && /^exit plan mode\??$/i.test(resultContent.trim())
+            ? '' : resultContent
           const outputContent = isPlanReview
-            ? resultContent.slice(0, 50000)
+            ? sanitizedPlanResult.slice(0, 50000)
             : resultContent.slice(0, 2000)
 
           if (previousContent) {

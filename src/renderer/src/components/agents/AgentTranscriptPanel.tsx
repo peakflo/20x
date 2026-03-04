@@ -225,6 +225,7 @@ function PlanReviewMessage({ message }: { message: AgentMessage }) {
   const tool = message.tool
   const planContent = tool?.output || ''
   const isPending = tool?.status === 'pending'
+  const isComplete = !isPending
 
   return (
     <div className="rounded-md bg-[#161b22] border border-blue-500/30 overflow-hidden">
@@ -237,20 +238,19 @@ function PlanReviewMessage({ message }: { message: AgentMessage }) {
           : <ChevronRight className="h-3.5 w-3.5 text-blue-400 shrink-0" />
         }
         <FileText className="h-3.5 w-3.5 text-blue-400 shrink-0" />
-        <span className="text-[10px] text-blue-400 font-medium uppercase tracking-wide">Plan</span>
+        <span className="text-[10px] text-blue-400 font-medium uppercase tracking-wide">
+          {isPending ? 'Preparing plan...' : 'Exited plan mode'}
+        </span>
         {isPending && (
           <Loader2 className="h-3 w-3 text-blue-400 animate-spin ml-auto" />
         )}
+        {isComplete && !planContent && (
+          <CheckCircle2 className="h-3 w-3 text-blue-400 ml-auto" />
+        )}
       </button>
-      {expanded && (
+      {expanded && planContent && (
         <div className="px-4 py-3 max-h-[60vh] overflow-y-auto">
-          {planContent ? (
-            <Markdown size="xs">{planContent}</Markdown>
-          ) : (
-            <span className="text-xs text-muted-foreground italic">
-              {isPending ? 'Loading plan...' : 'No plan content'}
-            </span>
-          )}
+          <Markdown size="xs">{planContent}</Markdown>
         </div>
       )}
       <div className="px-4 pb-2">
