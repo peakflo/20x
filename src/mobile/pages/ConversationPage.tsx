@@ -275,7 +275,7 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
       <div
         ref={scrollRef}
         onScroll={handleScroll}
-        className="flex-1 overflow-y-auto p-4 space-y-2 font-mono text-sm"
+        className="flex-1 overflow-y-auto p-4 space-y-2 text-sm"
       >
         {messages.length === 0 && (
           <div className="flex flex-col items-center justify-center h-full text-muted-foreground gap-2">
