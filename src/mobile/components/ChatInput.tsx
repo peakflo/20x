@@ -45,12 +45,12 @@ export function ChatInput({ onSend, disabled, placeholder = 'Send a message...' 
         placeholder={placeholder}
         disabled={disabled}
         rows={1}
-        className="flex-1 bg-muted/50 border border-border rounded-lg px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground resize-none overflow-hidden max-h-32 focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/30 min-h-[38px] disabled:opacity-40"
+        className="flex-1 bg-muted/50 border border-border rounded-lg px-3 py-1.5 text-sm text-foreground placeholder:text-muted-foreground resize-none overflow-hidden max-h-32 focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/30 min-h-[32px] disabled:opacity-40"
       />
       <button
         onClick={handleSend}
         disabled={disabled || !value.trim()}
-        className="h-[38px] w-[38px] shrink-0 rounded-lg flex items-center justify-center bg-primary text-primary-foreground active:opacity-80 disabled:opacity-30 transition-colors"
+        className="h-[32px] w-[32px] shrink-0 rounded-lg flex items-center justify-center bg-primary text-primary-foreground active:opacity-80 disabled:opacity-30 transition-colors"
       >
         <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <path d="m22 2-7 20-4-9-9-4z" /><path d="M22 2 11 13" />

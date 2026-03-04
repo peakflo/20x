@@ -583,7 +583,7 @@ export function AgentTranscriptPanel({ title = 'Agent transcript', messages, sta
               ref={inputRef}
               rows={1}
               placeholder="Send a message... (Shift+Enter for new line)"
-              className="flex-1 bg-muted/50 border border-border rounded-lg px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/30 resize-none overflow-hidden max-h-32 min-h-[38px]"
+              className="flex-1 bg-muted/50 border border-border rounded-lg px-3 py-1.5 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/30 resize-none overflow-hidden max-h-32 min-h-[32px]"
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && !e.shiftKey) {
                   e.preventDefault()
@@ -592,7 +592,7 @@ export function AgentTranscriptPanel({ title = 'Agent transcript', messages, sta
               }}
               onInput={autoResize}
             />
-            <Button variant="default" size="icon" onClick={handleSend} className="h-[38px] w-[38px] shrink-0 rounded-lg">
+            <Button variant="default" size="icon" onClick={handleSend} className="h-[32px] w-[32px] shrink-0 rounded-lg">
               <Send className="h-4 w-4" />
             </Button>
           </div>
