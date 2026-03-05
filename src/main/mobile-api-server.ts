@@ -23,6 +23,7 @@ let agentRef: AgentManager | null = null
 let githubRef: GitHubManager | null = null
 let syncManagerRef: SyncManager | null = null
 let authToken: string | null = null
+let notifyDesktop: ((channel: string, data: unknown) => void) | null = null
 
 const wsClients = new Set<WebSocket>()
 
@@ -116,6 +117,14 @@ export function startMobileApiServer(
 
     server.on('error', reject)
   })
+}
+
+/**
+ * Set a callback to notify the desktop (Electron renderer) of events
+ * originating from the mobile API (e.g. task created/updated).
+ */
+export function setMobileApiNotifier(fn: (channel: string, data: unknown) => void): void {
+  notifyDesktop = fn
 }
 
 export function stopMobileApiServer(): void {
@@ -374,6 +383,7 @@ async function routePost(pathname: string, params: Record<string, unknown>): Pro
     const task = db.createTask(params as unknown as Parameters<DatabaseManager['createTask']>[0])
     if (!task) throw Object.assign(new Error('Failed to create task'), { status: 500 })
     broadcastToMobileClients('task:created', { task })
+    if (notifyDesktop) notifyDesktop('task:created', { task })
     return task
   }
 
@@ -384,6 +394,10 @@ async function routePost(pathname: string, params: Record<string, unknown>): Pro
     const existing = db.getTask(taskId)
     if (!existing) throw Object.assign(new Error('Task not found'), { status: 404 })
     const updated = db.updateTask(taskId, params as Parameters<DatabaseManager['updateTask']>[1])
+    if (updated) {
+      broadcastToMobileClients('task:updated', { taskId, updates: updated })
+      if (notifyDesktop) notifyDesktop('task:updated', { taskId, updates: updated })
+    }
     return updated
   }
 

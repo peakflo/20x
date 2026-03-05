@@ -19,7 +19,7 @@ import { registerIpcHandlers } from './ipc-handlers'
 import { RecurrenceScheduler } from './recurrence-scheduler'
 import { setTaskApiNotifier } from './task-api-server'
 import { startSecretBroker, stopSecretBroker, writeSecretShellWrapper } from './secret-broker'
-import { startMobileApiServer, stopMobileApiServer, broadcastToMobileClients } from './mobile-api-server'
+import { startMobileApiServer, stopMobileApiServer, broadcastToMobileClients, setMobileApiNotifier } from './mobile-api-server'
 
 let mainWindow: BrowserWindow | null = null
 let tray: Tray | null = null
@@ -103,6 +103,13 @@ function createWindow(): void {
 
   // Wire up task-api-server notifications to the renderer
   setTaskApiNotifier((channel, data) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send(channel, data)
+    }
+  })
+
+  // Wire up mobile-api-server notifications to the renderer
+  setMobileApiNotifier((channel, data) => {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send(channel, data)
     }
