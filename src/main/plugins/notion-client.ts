@@ -31,6 +31,13 @@ export interface NotionPage {
   created_time: string
 }
 
+export interface NotionFileObject {
+  name: string
+  type: 'file' | 'external'
+  file?: { url: string; expiry_time?: string }
+  external?: { url: string }
+}
+
 export interface NotionPropertyValue {
   id: string
   type: string
@@ -45,6 +52,7 @@ export interface NotionPropertyValue {
   checkbox?: boolean
   url?: string | null
   unique_id?: { prefix: string | null; number: number } | null
+  files?: NotionFileObject[]
 }
 
 export interface NotionUser {
@@ -241,14 +249,28 @@ export class NotionClient {
    * Recursively fetches children for toggle, callout, and other container blocks.
    */
   async getPageContent(pageId: string, maxDepth = 3): Promise<string> {
-    const blocks = await this.fetchBlocks(pageId)
+    const blocks = await this.fetchBlocksRecursive(pageId, maxDepth)
+    return this.blocksToMarkdown(blocks)
+  }
 
-    // Recursively fetch children for blocks that have them
+  /**
+   * Get page blocks with recursive children fetching.
+   * Returns the raw block tree for both markdown rendering and file extraction.
+   */
+  async getPageBlocks(pageId: string, maxDepth = 3): Promise<NotionBlock[]> {
+    return this.fetchBlocksRecursive(pageId, maxDepth)
+  }
+
+  /**
+   * Fetch blocks and recursively fetch their children up to maxDepth.
+   */
+  private async fetchBlocksRecursive(blockId: string, maxDepth: number): Promise<NotionBlock[]> {
+    const blocks = await this.fetchBlocks(blockId)
+
     if (maxDepth > 0) {
       for (const block of blocks) {
         if (block.has_children) {
           block._children = await this.fetchBlocks(block.id)
-          // One more level for nested children
           if (maxDepth > 1) {
             for (const child of block._children) {
               if (child.has_children) {
@@ -260,7 +282,7 @@ export class NotionClient {
       }
     }
 
-    return this.blocksToMarkdown(blocks)
+    return blocks
   }
 
   /**
@@ -321,9 +343,142 @@ export class NotionClient {
     return users
   }
 
+  /**
+   * Download a file from a URL (Notion-hosted or external).
+   * Returns the buffer, detected filename, and content type.
+   */
+  async downloadFile(url: string): Promise<{ buffer: Buffer; filename: string; contentType: string }> {
+    const response = await fetch(url)
+    if (!response.ok) {
+      throw new Error(`Failed to download file: ${response.status}`)
+    }
+
+    const contentType = response.headers.get('content-type') || 'application/octet-stream'
+
+    // Try to extract filename from Content-Disposition header
+    let filename = ''
+    const disposition = response.headers.get('content-disposition')
+    if (disposition) {
+      const match = disposition.match(/filename[*]?=(?:UTF-8''|"?)([^";]+)/)
+      if (match) filename = decodeURIComponent(match[1].replace(/"/g, ''))
+    }
+
+    // Fallback: extract from URL path
+    if (!filename) {
+      try {
+        const urlObj = new URL(url)
+        const pathParts = urlObj.pathname.split('/').filter(Boolean)
+        const lastPart = pathParts[pathParts.length - 1]
+        if (lastPart && lastPart.includes('.')) {
+          filename = decodeURIComponent(lastPart)
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    if (!filename) {
+      filename = `notion-file-${Date.now()}`
+    }
+
+    const arrayBuffer = await response.arrayBuffer()
+    return { buffer: Buffer.from(arrayBuffer), filename, contentType }
+  }
+
+  /**
+   * Extract file URLs from page blocks (images, files, PDFs, videos, audio).
+   * Returns array of { url, filename } for downloadable files.
+   */
+  extractFilesFromBlocks(blocks: NotionBlock[]): Array<{ url: string; filename: string }> {
+    const files: Array<{ url: string; filename: string }> = []
+
+    for (const block of blocks) {
+      const fileInfo = this.extractFileFromBlock(block)
+      if (fileInfo) files.push(fileInfo)
+
+      // Recurse into children
+      if (block._children && block._children.length > 0) {
+        files.push(...this.extractFilesFromBlocks(block._children))
+      }
+    }
+
+    // Deduplicate by URL
+    const seen = new Set<string>()
+    return files.filter(f => {
+      if (seen.has(f.url)) return false
+      seen.add(f.url)
+      return true
+    })
+  }
+
+  /**
+   * Extract file URL from a single block (image, file, pdf, video, audio)
+   */
+  private extractFileFromBlock(block: NotionBlock): { url: string; filename: string } | null {
+    const fileBlockTypes = ['image', 'file', 'pdf', 'video', 'audio']
+    if (!fileBlockTypes.includes(block.type)) return null
+
+    const blockData = block[block.type] as {
+      type?: 'file' | 'external'
+      file?: { url: string }
+      external?: { url: string }
+      caption?: Array<{ plain_text: string }>
+      name?: string
+    } | undefined
+
+    if (!blockData) return null
+
+    let url: string | undefined
+    if (blockData.type === 'file' && blockData.file?.url) {
+      url = blockData.file.url
+    } else if (blockData.type === 'external' && blockData.external?.url) {
+      url = blockData.external.url
+    }
+
+    if (!url) return null
+
+    // Determine filename: prefer caption, then name, then derive from URL
+    let filename = ''
+    if (blockData.caption && blockData.caption.length > 0) {
+      const captionText = blockData.caption.map(t => t.plain_text).join('').trim()
+      if (captionText) filename = captionText
+    }
+    if (!filename && blockData.name) {
+      filename = blockData.name
+    }
+    if (!filename) {
+      try {
+        const urlObj = new URL(url)
+        const pathParts = urlObj.pathname.split('/').filter(Boolean)
+        const lastPart = pathParts[pathParts.length - 1]
+        if (lastPart && lastPart.includes('.')) {
+          filename = decodeURIComponent(lastPart)
+        }
+      } catch {
+        // ignore
+      }
+    }
+    if (!filename) {
+      filename = `notion-${block.type}-${block.id.slice(0, 8)}`
+    }
+
+    return { url, filename }
+  }
+
+  /**
+   * Extract file URLs from a Files property value.
+   */
+  extractFilesFromProperty(files: NotionFileObject[]): Array<{ url: string; filename: string }> {
+    return files.map(f => {
+      const url = f.type === 'file' ? f.file?.url : f.external?.url
+      if (!url) return null
+      return { url, filename: f.name || `notion-file-${Date.now()}` }
+    }).filter((f): f is { url: string; filename: string } => f !== null)
+  }
+
   // ── Block → Markdown conversion ──────────────────────────
 
-  private blocksToMarkdown(blocks: NotionBlock[], indent = ''): string {
+  blocksToMarkdown(blocks: NotionBlock[], indent = ''): string {
     const lines: string[] = []
 
     for (const block of blocks) {
@@ -373,6 +528,23 @@ export class NotionClient {
         case 'callout':
           lines.push(`${indent}> ${text}`)
           break
+        case 'image': {
+          const imgData = block.image as { type?: string; file?: { url: string }; external?: { url: string }; caption?: Array<{ plain_text: string }> } | undefined
+          const imgUrl = imgData?.type === 'file' ? imgData.file?.url : imgData?.external?.url
+          const imgCaption = imgData?.caption?.map(t => t.plain_text).join('') || 'image'
+          if (imgUrl) lines.push(`${indent}![${imgCaption}](${imgUrl})`)
+          break
+        }
+        case 'file':
+        case 'pdf':
+        case 'video':
+        case 'audio': {
+          const fileData = block[block.type] as { type?: string; file?: { url: string }; external?: { url: string }; caption?: Array<{ plain_text: string }>; name?: string } | undefined
+          const fileUrl = fileData?.type === 'file' ? fileData.file?.url : fileData?.external?.url
+          const fileCaption = fileData?.caption?.map(t => t.plain_text).join('') || fileData?.name || block.type
+          if (fileUrl) lines.push(`${indent}📎 [${fileCaption}](${fileUrl})`)
+          break
+        }
         default:
           if (text) lines.push(indent + text)
       }

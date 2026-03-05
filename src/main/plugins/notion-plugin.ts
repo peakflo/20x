@@ -1,3 +1,5 @@
+import { writeFileSync } from 'fs'
+import { join, extname } from 'path'
 import type {
   TaskSourcePlugin,
   PluginConfigSchema,
@@ -378,10 +380,12 @@ export class NotionPlugin implements TaskSourcePlugin {
           const mapped = this.mapPage(page, propMap)
           if (!mapped.title) continue
 
-          // Fetch page content for description
+          // Fetch page blocks for both content rendering and file extraction
+          let blocks: import('./notion-client').NotionBlock[] = []
           const parts: string[] = []
           try {
-            const content = await client.getPageContent(page.id)
+            blocks = await client.getPageBlocks(page.id)
+            const content = client.blocksToMarkdown(blocks)
             if (content) parts.push(content)
           } catch {
             // Non-fatal: page may have no content
@@ -401,6 +405,7 @@ export class NotionPlugin implements TaskSourcePlugin {
 
           const existing = ctx.db.getTaskByExternalId(sourceId, page.id)
 
+          let taskId: string
           if (existing) {
             ctx.db.updateTask(existing.id, {
               title: mapped.title,
@@ -411,9 +416,10 @@ export class NotionPlugin implements TaskSourcePlugin {
               due_date: mapped.dueDate,
               labels: mapped.labels
             })
+            taskId = existing.id
             result.updated++
           } else {
-            ctx.db.createTask({
+            const created = ctx.db.createTask({
               title: mapped.title,
               description,
               type: 'general',
@@ -426,7 +432,33 @@ export class NotionPlugin implements TaskSourcePlugin {
               source_id: sourceId,
               source: 'Notion'
             })
+            if (!created) {
+              console.error('[notion] Failed to create task for page:', page.id)
+              continue
+            }
+            taskId = created.id
             result.imported++
+          }
+
+          // Collect all file URLs from page properties (Files type) and content blocks
+          const fileUrls: Array<{ url: string; filename: string }> = []
+
+          // 1. Extract files from Files-type properties
+          for (const [, prop] of Object.entries(page.properties)) {
+            if (prop.type === 'files' && prop.files && prop.files.length > 0) {
+              fileUrls.push(...client.extractFilesFromProperty(prop.files))
+            }
+          }
+
+          // 2. Extract files from content blocks (images, files, PDFs, videos, audio)
+          if (blocks.length > 0) {
+            fileUrls.push(...client.extractFilesFromBlocks(blocks))
+          }
+
+          // Download and save attachments
+          if (fileUrls.length > 0) {
+            console.log(`[notion] Found ${fileUrls.length} files for page "${mapped.title}"`)
+            await this.downloadNotionFiles(taskId, fileUrls, client, ctx)
           }
         } catch (err) {
           const msg = err instanceof Error ? err.message : 'Unknown error'
@@ -894,6 +926,13 @@ The integration automatically maps Notion properties to task fields:
         return prop.checkbox ? 'Yes' : 'No'
       case 'url':
         return prop.url || null
+      case 'files': {
+        if (!prop.files || prop.files.length === 0) return null
+        return prop.files.map((f) => {
+          const url = f.type === 'file' ? f.file?.url : f.external?.url
+          return url ? `[${f.name}](${url})` : f.name
+        }).join(', ')
+      }
       case 'unique_id': {
         if (!prop.unique_id) return null
         const prefix = prop.unique_id.prefix
@@ -935,6 +974,103 @@ The integration automatically maps Notion properties to task fields:
     if (andClauses.length === 0) return undefined
     if (andClauses.length === 1) return andClauses[0]
     return { and: andClauses }
+  }
+
+  /**
+   * Download Notion files and save them as task attachments.
+   * Skips files that have already been downloaded (by URL).
+   */
+  private async downloadNotionFiles(
+    taskId: string,
+    files: Array<{ url: string; filename: string }>,
+    client: NotionClient,
+    ctx: PluginContext
+  ): Promise<void> {
+    const task = ctx.db.getTask(taskId)
+    if (!task) return
+
+    const existingAttachments = task.attachments || []
+    const existingUrls = new Set(
+      existingAttachments.map((a) => (a as unknown as { notion_url?: string }).notion_url)
+    )
+
+    for (const file of files) {
+      // Skip if already downloaded
+      if (existingUrls.has(file.url)) continue
+
+      try {
+        console.log(`[notion] Downloading: ${file.filename}`)
+
+        const { buffer, filename: headerFilename, contentType } = await client.downloadFile(file.url)
+
+        // Priority: original filename from Notion > Content-Disposition header filename
+        const actualFilename = file.filename || headerFilename || `notion-file-${Date.now()}`
+
+        // Detect MIME type
+        const mimeType = contentType || this.guessMimeType(actualFilename)
+
+        // Generate unique ID
+        const attachmentId = crypto.randomUUID()
+
+        // Save to attachments directory
+        const attachmentsDir = ctx.db.getAttachmentsDir(taskId)
+        const filePath = join(attachmentsDir, `${attachmentId}-${actualFilename}`)
+        writeFileSync(filePath, buffer)
+
+        // Add to task attachments
+        const newAttachment = {
+          id: attachmentId,
+          filename: actualFilename,
+          size: buffer.length,
+          mime_type: mimeType,
+          added_at: new Date().toISOString(),
+          notion_url: file.url
+        }
+
+        ctx.db.updateTask(taskId, {
+          attachments: [...existingAttachments, newAttachment]
+        })
+
+        console.log(`[notion] Saved attachment: ${actualFilename} (${buffer.length} bytes, ${mimeType})`)
+
+        // Update for next iteration
+        existingAttachments.push(newAttachment)
+        existingUrls.add(file.url)
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Unknown error'
+        console.error(`[notion] Failed to download ${file.filename}: ${msg}`)
+      }
+    }
+  }
+
+  /**
+   * Guess MIME type from filename extension
+   */
+  private guessMimeType(filename: string): string {
+    const ext = extname(filename).toLowerCase()
+    const mimeTypes: Record<string, string> = {
+      '.jpg': 'image/jpeg',
+      '.jpeg': 'image/jpeg',
+      '.png': 'image/png',
+      '.gif': 'image/gif',
+      '.webp': 'image/webp',
+      '.svg': 'image/svg+xml',
+      '.pdf': 'application/pdf',
+      '.doc': 'application/msword',
+      '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      '.xls': 'application/vnd.ms-excel',
+      '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      '.ppt': 'application/vnd.ms-powerpoint',
+      '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.document',
+      '.zip': 'application/zip',
+      '.txt': 'text/plain',
+      '.csv': 'text/csv',
+      '.json': 'application/json',
+      '.mp3': 'audio/mpeg',
+      '.mp4': 'video/mp4',
+      '.mov': 'video/quicktime'
+    }
+    return mimeTypes[ext] || 'application/octet-stream'
   }
 
   /**
