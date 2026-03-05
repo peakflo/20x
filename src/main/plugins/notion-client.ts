@@ -44,6 +44,7 @@ export interface NotionPropertyValue {
   number?: number | null
   checkbox?: boolean
   url?: string | null
+  unique_id?: { prefix: string | null; number: number } | null
 }
 
 export interface NotionUser {

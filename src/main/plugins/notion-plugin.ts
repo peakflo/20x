@@ -40,7 +40,8 @@ export enum NotionPropertyType {
   LastEditedTime = 'last_edited_time',
   Formula = 'formula',
   Relation = 'relation',
-  Rollup = 'rollup'
+  Rollup = 'rollup',
+  UniqueId = 'unique_id'
 }
 
 /** Property types that support server-side filtering */
@@ -893,6 +894,11 @@ The integration automatically maps Notion properties to task fields:
         return prop.checkbox ? 'Yes' : 'No'
       case 'url':
         return prop.url || null
+      case 'unique_id': {
+        if (!prop.unique_id) return null
+        const prefix = prop.unique_id.prefix
+        return prefix ? `${prefix}-${prop.unique_id.number}` : String(prop.unique_id.number)
+      }
       default:
         return null
     }
