@@ -214,12 +214,9 @@ export class AgentManager extends EventEmitter {
     const agent = this.db.getAgent(agentId)
     const mcpEntries = agent?.config?.mcp_servers || []
     const result: Record<string, McpServerConfig> = {}
-    console.log(`[AgentManager] buildMcpServersForAdapter - agentId: ${agentId}, entries: ${mcpEntries.length}, ensureTaskManagement: ${opts?.ensureTaskManagement}`)
-
     // Ensure the task API server is ready before building MCP configs
     // (startTaskApiServer is fire-and-forget during DB init, may not be done yet)
     const taskApiPort = await waitForTaskApiServer()
-    console.log(`[AgentManager] buildMcpServersForAdapter - waitForTaskApiServer returned port: ${taskApiPort}`)
 
     for (const entry of mcpEntries) {
       const serverId = typeof entry === 'string' ? entry : (entry as AgentMcpServerEntry).serverId
@@ -234,7 +231,7 @@ export class AgentManager extends EventEmitter {
           if (apiPort) {
             env = { ...env, TASK_API_URL: `http://127.0.0.1:${apiPort}` }
           } else {
-            console.warn(`[AgentManager] buildMcpServersForAdapter - task API port is null for task-management MCP server (regular path)! Tools will fail.`)
+            console.warn(`[AgentManager] buildMcpServersForAdapter - task API port is null for task-management server`)
           }
         }
 
@@ -278,13 +275,13 @@ export class AgentManager extends EventEmitter {
           args: tmServer.args,
           env
         }
-        console.log(`[AgentManager] buildMcpServersForAdapter - force-included task-management MCP (command: ${tmServer.command}, args: ${JSON.stringify(tmServer.args)}, apiPort: ${apiPort})`)
+        // force-included task-management MCP
       } else {
-        console.warn(`[AgentManager] buildMcpServersForAdapter - task-management server not found in DB (found ${allServers.length} servers: ${allServers.map(s => s.name).join(', ')})`)
+        console.warn(`[AgentManager] buildMcpServersForAdapter - task-management server not found in DB`)
       }
     }
 
-    console.log(`[AgentManager] buildMcpServersForAdapter - result keys: [${Object.keys(result).join(', ')}]`)
+    // result keys logged at debug level only
     return result
   }
 
@@ -323,7 +320,7 @@ export class AgentManager extends EventEmitter {
 
     // Populate secret env vars and system prompt awareness
     const secretIds = agent.config?.secret_ids
-    console.log(`[AgentManager] buildSessionConfig: agentId=${agentId}, secretIds=${JSON.stringify(secretIds)}`)
+    // secretIds checked for agent config
     if (secretIds && secretIds.length > 0) {
       const secretRecords = this.db.getSecretsByIds(secretIds)
       const secretsWithValues = this.db.getSecretsWithValues(secretIds)
@@ -1794,16 +1791,38 @@ export class AgentManager extends EventEmitter {
           sessionId = newSessionId
         }
 
-        // Send the user's message
-        await this.doSendAdapterMessage(session, sessionId, message)
+        // Send the user's message (fire-and-forget to avoid blocking IPC response)
+        this.doSendAdapterMessage(session, sessionId, message).catch((err) => {
+          console.error(`[AgentManager] doSendAdapterMessage failed for session ${sessionId}:`, err)
+          this.handleSessionError(sessionId, session!, err)
+        })
         return { newSessionId: sessionId }
       }
     }
 
     if (!session) throw new Error(`Session not found: ${sessionId}`)
 
-    await this.doSendAdapterMessage(session, sessionId, message)
+    // Fire-and-forget to avoid blocking IPC response and freezing the renderer
+    this.doSendAdapterMessage(session, sessionId, message).catch((err) => {
+      console.error(`[AgentManager] doSendAdapterMessage failed for session ${sessionId}:`, err)
+      this.handleSessionError(sessionId, session!, err)
+    })
     return {}
+  }
+
+  /**
+   * Handles errors from fire-and-forget doSendAdapterMessage calls.
+   * Sends error status to the renderer so the UI reflects the failure.
+   */
+  private handleSessionError(sessionId: string, session: AgentSession, err: unknown): void {
+    console.error(`[AgentManager] Session ${sessionId} error:`, err instanceof Error ? err.message : err)
+    session.status = 'error'
+    this.sendToRenderer('agent:status', {
+      sessionId,
+      agentId: session.agentId,
+      taskId: session.taskId,
+      status: 'error'
+    })
   }
 
   private async doSendAdapterMessage(session: AgentSession, sessionId: string, message: string): Promise<void> {
@@ -1823,17 +1842,11 @@ export class AgentManager extends EventEmitter {
     }
     if (!session.adapter) throw new Error('Adapter not initialized')
 
-    console.log(`[AgentManager] Sending message to adapter session ${sessionId}`)
-
     // Update status to working (but preserve AgentLearning if set)
     session.status = 'working'
     const currentTask = this.db.getTask(session.taskId)
-    console.log(`[AgentManager] doSendAdapterMessage - current task status: ${currentTask?.status}, taskId: ${session.taskId}`)
     if (currentTask?.status !== TaskStatus.AgentLearning) {
-      console.log(`[AgentManager] Setting task status to AgentWorking (was: ${currentTask?.status})`)
       this.db.updateTask(session.taskId, { status: TaskStatus.AgentWorking })
-    } else {
-      console.log(`[AgentManager] Preserving AgentLearning status`)
     }
     this.sendToRenderer('agent:status', {
       sessionId,
