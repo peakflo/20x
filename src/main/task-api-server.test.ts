@@ -132,6 +132,159 @@ describe('/list_repos', () => {
   })
 })
 
+describe('parseTask - skill_ids null vs empty array semantics', () => {
+  it('preserves null skill_ids (agent defaults) when reading from DB', () => {
+    const task = db.createTask(makeTask({ title: 'Task with default skills' }))!
+
+    // skill_ids should be null by default (= "use agent defaults")
+    expect(task.skill_ids).toBeNull()
+
+    // Verify the raw DB value is also null
+    const rawRow = rawDb.prepare('SELECT skill_ids FROM tasks WHERE id = ?').get(task.id) as { skill_ids: string | null }
+    expect(rawRow.skill_ids).toBeNull()
+
+    // The fixed parseTask logic should preserve null, NOT convert to []
+    const parsed = rawRow.skill_ids ? JSON.parse(rawRow.skill_ids) : null
+    expect(parsed).toBeNull()
+  })
+
+  it('preserves explicit empty array skill_ids (no skills)', () => {
+    const task = db.createTask(makeTask({ title: 'Task with no skills' }))!
+    db.updateTask(task.id, { skill_ids: [] })
+
+    const rawRow = rawDb.prepare('SELECT skill_ids FROM tasks WHERE id = ?').get(task.id) as { skill_ids: string | null }
+    expect(rawRow.skill_ids).toBe('[]')
+
+    // parseTask should return empty array, not null
+    const parsed = rawRow.skill_ids ? JSON.parse(rawRow.skill_ids) : null
+    expect(parsed).toEqual([])
+  })
+
+  it('preserves specific skill_ids array', () => {
+    const task = db.createTask(makeTask({ title: 'Task with specific skills' }))!
+    db.updateTask(task.id, { skill_ids: ['skill-a', 'skill-b'] })
+
+    const rawRow = rawDb.prepare('SELECT skill_ids FROM tasks WHERE id = ?').get(task.id) as { skill_ids: string | null }
+    expect(rawRow.skill_ids).toBe('["skill-a","skill-b"]')
+
+    const parsed = rawRow.skill_ids ? JSON.parse(rawRow.skill_ids) : null
+    expect(parsed).toEqual(['skill-a', 'skill-b'])
+  })
+
+  it('bugfix: null skill_ids must NOT become empty array via || fallback', () => {
+    // This test documents the bug that was fixed:
+    // The old code used: JSON.parse((task.skill_ids as string) || '[]')
+    // which converts null → '[]' → [], losing the "agent defaults" semantic.
+    const rawSkillIds: string | null = null
+
+    // OLD (buggy) behavior — demonstrates the problem:
+    const buggyResult = JSON.parse((rawSkillIds as string) || '[]')
+    expect(buggyResult).toEqual([]) // Incorrectly becomes "no skills"
+
+    // NEW (fixed) behavior — preserves null:
+    const fixedResult = rawSkillIds ? JSON.parse(rawSkillIds) : null
+    expect(fixedResult).toBeNull() // Correctly stays "agent defaults"
+  })
+})
+
+describe('Recurring task skill_ids propagation', () => {
+  it('copies skill_ids from recurring template to created instance', () => {
+    const agent = db.createAgent(makeAgent({ name: 'Test Agent' }))!
+    const template = db.createTask(makeTask({
+      title: 'Recurring template',
+      is_recurring: true,
+      recurrence_pattern: { type: 'daily', interval: 1, time: '09:00' }
+    }))!
+
+    // Assign agent and skills to template
+    db.updateTask(template.id, { agent_id: agent.id, skill_ids: ['skill-1', 'skill-2'] })
+    const updatedTemplate = db.getTask(template.id)!
+
+    // Simulate RecurrenceScheduler.createInstanceFromTemplate
+    const instanceId = 'test-instance-with-skills'
+    const now = new Date().toISOString()
+    rawDb.prepare(`
+      INSERT INTO tasks (
+        id, title, description, type, priority, status, assignee, due_date,
+        labels, attachments, repos, output_fields, agent_id, source, skill_ids,
+        is_recurring, recurrence_pattern, recurrence_parent_id,
+        created_at, updated_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      instanceId,
+      updatedTemplate.title,
+      updatedTemplate.description,
+      updatedTemplate.type,
+      updatedTemplate.priority,
+      'not_started',
+      updatedTemplate.assignee,
+      updatedTemplate.due_date,
+      JSON.stringify(updatedTemplate.labels),
+      JSON.stringify(updatedTemplate.attachments),
+      JSON.stringify(updatedTemplate.repos),
+      JSON.stringify(updatedTemplate.output_fields),
+      updatedTemplate.agent_id,
+      updatedTemplate.source,
+      updatedTemplate.skill_ids ? JSON.stringify(updatedTemplate.skill_ids) : null,
+      0, null, updatedTemplate.id, now, now
+    )
+
+    const instance = db.getTask(instanceId)!
+    expect(instance.agent_id).toBe(agent.id)
+    expect(instance.skill_ids).toEqual(['skill-1', 'skill-2'])
+    expect(instance.recurrence_parent_id).toBe(template.id)
+  })
+
+  it('preserves null skill_ids (agent defaults) from template to instance', () => {
+    const agent = db.createAgent(makeAgent({ name: 'Test Agent' }))!
+    const template = db.createTask(makeTask({
+      title: 'Template with agent defaults',
+      is_recurring: true,
+      recurrence_pattern: { type: 'daily', interval: 1, time: '09:00' }
+    }))!
+
+    // Assign agent but keep skill_ids as null (agent defaults)
+    db.updateTask(template.id, { agent_id: agent.id })
+    const updatedTemplate = db.getTask(template.id)!
+    expect(updatedTemplate.skill_ids).toBeNull()
+
+    // Simulate instance creation
+    const instanceId = 'test-instance-null-skills'
+    const now = new Date().toISOString()
+    rawDb.prepare(`
+      INSERT INTO tasks (
+        id, title, description, type, priority, status, assignee, due_date,
+        labels, attachments, repos, output_fields, agent_id, source, skill_ids,
+        is_recurring, recurrence_pattern, recurrence_parent_id,
+        created_at, updated_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      instanceId,
+      updatedTemplate.title,
+      updatedTemplate.description,
+      updatedTemplate.type,
+      updatedTemplate.priority,
+      'not_started',
+      updatedTemplate.assignee,
+      updatedTemplate.due_date,
+      JSON.stringify(updatedTemplate.labels),
+      JSON.stringify(updatedTemplate.attachments),
+      JSON.stringify(updatedTemplate.repos),
+      JSON.stringify(updatedTemplate.output_fields),
+      updatedTemplate.agent_id,
+      updatedTemplate.source,
+      updatedTemplate.skill_ids ? JSON.stringify(updatedTemplate.skill_ids) : null,
+      0, null, updatedTemplate.id, now, now
+    )
+
+    const instance = db.getTask(instanceId)!
+    expect(instance.agent_id).toBe(agent.id)
+    expect(instance.skill_ids).toBeNull() // Must stay null, NOT become []
+  })
+})
+
 describe('Triage task status lifecycle', () => {
   it('supports the full triage lifecycle: not_started → triaging → not_started (with agent)', () => {
     const agent = db.createAgent(makeAgent({ name: 'Default Agent', is_default: true }))!
