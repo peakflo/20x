@@ -5,9 +5,15 @@
  * Used in: task descriptions, agent transcripts, plugin documentation.
  */
 
-import ReactMarkdown from 'react-markdown'
+import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { cn } from '@/lib/utils'
+
+/** Allow the default safe protocols plus our local app-attachment:// scheme */
+function urlTransform(url: string): string {
+  if (url.startsWith('app-attachment://')) return url
+  return defaultUrlTransform(url)
+}
 
 type MarkdownSize = 'xs' | 'sm' | 'base'
 
@@ -83,6 +89,7 @@ export function Markdown({ children, size = 'sm', className }: MarkdownProps) {
     <div className={cn('markdown-content min-w-0', classes.base, className)}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
+        urlTransform={urlTransform}
         components={{
           // Headings
           h1: ({ children, ...props }) => (
