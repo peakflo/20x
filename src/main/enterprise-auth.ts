@@ -1,6 +1,45 @@
-import { safeStorage } from 'electron'
+import { app, safeStorage } from 'electron'
 import { createClient, SupabaseClient, Session } from '@supabase/supabase-js'
 import type { DatabaseManager } from './database'
+
+// ── Enterprise environment configs ────────────────────────────────
+// Supabase anon keys are public (designed for client-side use).
+// They only allow access scoped by Row Level Security policies.
+
+interface EnterpriseEnvConfig {
+  supabaseUrl: string
+  supabaseAnonKey: string
+  apiUrl: string
+}
+
+const ENV_CONFIGS: Record<string, EnterpriseEnvConfig> = {
+  local: {
+    supabaseUrl: 'https://zelvgltpjmxrafmwuhjx.supabase.co',
+    supabaseAnonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InplbHZnbHRwam14cmFmbXd1aGp4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDM3NzI1NDMsImV4cCI6MjA1OTM0ODU0M30.4HML8dzr3f_tDgA3Ej1AgS2Ne9BUsGm2gwGqfN7I_zM',
+    apiUrl: 'http://localhost:2000'
+  },
+  stage: {
+    supabaseUrl: 'https://bavjdtdcaujyynvbmhsk.supabase.co',
+    supabaseAnonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJhdmpkdGRjYXVqeXludmJtaHNrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3MzcyNTAxNTEsImV4cCI6MjA1MjgyNjE1MX0.2TKaaK66GoHkaiKrnBDT5GVlVBtgz6RLYUhN3o0fp4o',
+    apiUrl: 'https://stage-api.peakflo.ai'
+  },
+  production: {
+    supabaseUrl: 'https://ohoqjpdecvktoawiggiv.supabase.co',
+    supabaseAnonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9ob3FqcGRlY3ZrdG9hd2lnZ2l2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDUxMTg0NTYsImV4cCI6MjA2MDY5NDQ1Nn0.yIPkJnLnf6dQkV8yR5xberRPjoizMxVCH0M4S2ajenM',
+    apiUrl: 'https://api.peakflo.ai'
+  }
+}
+
+function getEnterpriseConfig(): EnterpriseEnvConfig {
+  // Allow explicit override via env var (useful for development)
+  const envOverride = process.env.ENTERPRISE_ENV
+  if (envOverride && ENV_CONFIGS[envOverride]) {
+    return ENV_CONFIGS[envOverride]
+  }
+
+  // Packaged app → production, dev mode → local
+  return app.isPackaged ? ENV_CONFIGS.production : ENV_CONFIGS.local
+}
 
 // ── Settings keys (stored in local SQLite) ────────────────────────
 const KEYS = {
@@ -71,15 +110,12 @@ export class EnterpriseAuth {
   constructor(db: DatabaseManager) {
     this.db = db
 
-    const supabaseUrl = process.env.ENTERPRISE_SUPABASE_URL || ''
-    const supabaseAnonKey = process.env.ENTERPRISE_SUPABASE_ANON_KEY || ''
-    this.apiUrl = process.env.ENTERPRISE_API_URL || ''
+    const config = getEnterpriseConfig()
+    this.apiUrl = config.apiUrl
 
-    if (!supabaseUrl || !supabaseAnonKey) {
-      console.warn('[Enterprise] ENTERPRISE_SUPABASE_URL or ENTERPRISE_SUPABASE_ANON_KEY not set — enterprise auth disabled')
-    }
+    console.log(`[Enterprise] Using ${app.isPackaged ? 'production' : process.env.ENTERPRISE_ENV || 'local'} config → ${config.apiUrl}`)
 
-    this.supabase = createClient(supabaseUrl, supabaseAnonKey, {
+    this.supabase = createClient(config.supabaseUrl, config.supabaseAnonKey, {
       auth: {
         autoRefreshToken: false,
         persistSession: false
