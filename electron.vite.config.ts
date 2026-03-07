@@ -5,7 +5,17 @@ import tailwindcss from '@tailwindcss/vite'
 
 export default defineConfig({
   main: {
-    plugins: [externalizeDepsPlugin({ exclude: ['@electron-toolkit/utils', '@paralleldrive/cuid2', '@modelcontextprotocol/sdk'] })],
+    plugins: [externalizeDepsPlugin({
+      exclude: [
+        '@electron-toolkit/utils',
+        '@paralleldrive/cuid2',
+        '@modelcontextprotocol/sdk',
+        // Bundle pure-JS deps to enable tree-shaking and avoid shipping them in node_modules
+        'js-yaml',
+        'cron-parser',
+        '@opencode-ai/sdk'
+      ]
+    })],
     build: {
       rollupOptions: {
         external: ['better-sqlite3'],

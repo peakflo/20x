@@ -3,9 +3,11 @@
  *
  * Wraps HubSpot's REST API for ticket management operations.
  * Handles pagination, ticket queries, owners, pipelines, and mutations.
+ *
+ * Uses direct fetch calls instead of the 44MB @hubspot/api-client SDK.
  */
 
-import { Client } from '@hubspot/api-client'
+const BASE_URL = 'https://api.hubapi.com'
 
 export interface HubSpotTicket {
   id: string
@@ -89,14 +91,58 @@ const TICKET_PROPERTIES = [
   'hs_lastmodifieddate'
 ]
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type ApiResponse = any
+
 export class HubSpotClient {
-  private client: Client
   private accessToken: string
   private accountInfo?: HubSpotAccountInfo
 
   constructor(accessToken: string) {
     this.accessToken = accessToken
-    this.client = new Client({ accessToken })
+  }
+
+  /**
+   * Make an authenticated request to the HubSpot API
+   */
+  private async request(
+    method: string,
+    path: string,
+    body?: unknown
+  ): Promise<ApiResponse> {
+    const url = `${BASE_URL}${path}`
+    const headers: Record<string, string> = {
+      'Authorization': `Bearer ${this.accessToken}`,
+      'Content-Type': 'application/json'
+    }
+
+    const response = await fetch(url, {
+      method,
+      headers,
+      body: body ? JSON.stringify(body) : undefined
+    })
+
+    if (!response.ok) {
+      const statusCode = response.status
+      if (statusCode === 401 || statusCode === 403) {
+        throw Object.assign(
+          new Error(`HubSpot API error: ${response.status} ${response.statusText}`),
+          { statusCode }
+        )
+      }
+      if (statusCode === 404) {
+        throw Object.assign(
+          new Error(`HubSpot API not found: ${path}`),
+          { statusCode }
+        )
+      }
+      throw Object.assign(
+        new Error(`HubSpot API error: ${response.status} ${response.statusText}`),
+        { statusCode }
+      )
+    }
+
+    return response.json()
   }
 
   /**
@@ -109,18 +155,7 @@ export class HubSpotClient {
     }
 
     try {
-      const response = await fetch('https://api.hubapi.com/account-info/v3/details', {
-        headers: {
-          'Authorization': `Bearer ${this.accessToken}`,
-          'Content-Type': 'application/json'
-        }
-      })
-
-      if (!response.ok) {
-        throw new Error(`Failed to fetch account info: ${response.status}`)
-      }
-
-      const data = await response.json()
+      const data = await this.request('GET', '/account-info/v3/details')
       this.accountInfo = {
         portalId: data.portalId,
         uiDomain: data.uiDomain || 'app.hubspot.com',
@@ -159,17 +194,16 @@ export class HubSpotClient {
       } else {
         // Otherwise use standard pagination
         let after: string | undefined
+        const propertiesParam = TICKET_PROPERTIES.map(p => `properties=${p}`).join('&')
 
         while (true) {
-          const response = await this.client.crm.tickets.basicApi.getPage(
-            100, // limit (HubSpot max)
-            after,
-            TICKET_PROPERTIES,
-            undefined, // propertiesWithHistory
-            ['contacts'] // associations
+          const afterParam = after ? `&after=${after}` : ''
+          const response = await this.request(
+            'GET',
+            `/crm/v3/objects/tickets?limit=100&${propertiesParam}&associations=contacts${afterParam}`
           )
 
-          allTickets = allTickets.concat(response.results as unknown as HubSpotTicket[])
+          allTickets = allTickets.concat(response.results as HubSpotTicket[])
 
           if (!response.paging?.next?.after) break
           after = response.paging.next.after
@@ -258,14 +292,14 @@ export class HubSpotClient {
 
       // Paginate through search results
       while (true) {
-        const searchResponse = await this.client.crm.tickets.searchApi.doSearch({
-          filterGroups: filterGroups.length > 0 ? filterGroups as Parameters<typeof this.client.crm.tickets.searchApi.doSearch>[0]['filterGroups'] : undefined,
+        const searchResponse = await this.request('POST', '/crm/v3/objects/tickets/search', {
+          filterGroups: filterGroups.length > 0 ? filterGroups : undefined,
           properties: TICKET_PROPERTIES,
           limit: 100,
           after: after > 0 ? String(after) : undefined
         })
 
-        let tickets = searchResponse.results as unknown as HubSpotTicket[]
+        let tickets = searchResponse.results as HubSpotTicket[]
 
         // Filter by OPEN state client-side (HubSpot doesn't support stage state filtering directly)
         if (onlyOpen && openStageIds.length > 0) {
@@ -289,14 +323,13 @@ export class HubSpotClient {
    */
   async getTicket(ticketId: string): Promise<HubSpotTicket | null> {
     try {
-      const response = await this.client.crm.tickets.basicApi.getById(
-        ticketId,
-        TICKET_PROPERTIES,
-        undefined, // propertiesWithHistory
-        ['contacts'] // associations
+      const propertiesParam = TICKET_PROPERTIES.map(p => `properties=${p}`).join('&')
+      const response = await this.request(
+        'GET',
+        `/crm/v3/objects/tickets/${ticketId}?${propertiesParam}&associations=contacts`
       )
 
-      return response as unknown as HubSpotTicket
+      return response as HubSpotTicket
     } catch (err: unknown) {
       if (err && typeof err === 'object' && 'statusCode' in err) {
         const statusCode = (err as { statusCode: number }).statusCode
@@ -313,8 +346,8 @@ export class HubSpotClient {
    */
   async updateTicket(ticketId: string, updates: Record<string, unknown>): Promise<void> {
     try {
-      await this.client.crm.tickets.basicApi.update(ticketId, {
-        properties: updates as Record<string, string>
+      await this.request('PATCH', `/crm/v3/objects/tickets/${ticketId}`, {
+        properties: updates
       })
     } catch (err: unknown) {
       throw new Error(`Failed to update HubSpot ticket: ${err instanceof Error ? err.message : String(err)}`)
@@ -326,8 +359,8 @@ export class HubSpotClient {
    */
   async addTicketNote(ticketId: string, noteBody: string): Promise<void> {
     try {
-      // Create an engagement (note)
-      const noteResponse = await this.client.crm.objects.notes.basicApi.create({
+      // Create a note object
+      const noteResponse = await this.request('POST', '/crm/v3/objects/notes', {
         properties: {
           hs_note_body: noteBody,
           hs_timestamp: new Date().toISOString()
@@ -335,11 +368,9 @@ export class HubSpotClient {
       })
 
       // Associate the note with the ticket using v4 associations API
-      await (this.client.crm.associations.v4.basicApi as { create: (fromType: string, fromId: string, toType: string, toId: string, associations: unknown[]) => Promise<unknown> }).create(
-        'tickets',
-        ticketId,
-        'notes',
-        noteResponse.id,
+      await this.request(
+        'PUT',
+        `/crm/v4/objects/tickets/${ticketId}/associations/notes/${noteResponse.id}`,
         [
           {
             associationCategory: 'HUBSPOT_DEFINED',
@@ -357,9 +388,9 @@ export class HubSpotClient {
    */
   async getOwners(): Promise<HubSpotOwner[]> {
     try {
-      const response = await this.client.crm.owners.ownersApi.getPage(undefined, undefined, 100)
+      const response = await this.request('GET', '/crm/v3/owners?limit=100')
 
-      const owners = response.results.map((owner) => ({
+      const owners = response.results.map((owner: ApiResponse) => ({
         id: owner.id,
         email: owner.email || '',
         firstName: owner.firstName || '',
@@ -378,7 +409,7 @@ export class HubSpotClient {
    */
   async getOwner(ownerId: string): Promise<HubSpotOwner | null> {
     try {
-      const response = await this.client.crm.owners.ownersApi.getById(Number(ownerId))
+      const response = await this.request('GET', `/crm/v3/owners/${ownerId}`)
 
       return {
         id: response.id,
@@ -403,13 +434,13 @@ export class HubSpotClient {
    */
   async getPipelines(): Promise<HubSpotPipeline[]> {
     try {
-      const response = await this.client.crm.pipelines.pipelinesApi.getAll('tickets')
+      const response = await this.request('GET', '/crm/v3/pipelines/tickets')
 
-      const pipelines = response.results.map((pipeline) => ({
+      const pipelines = response.results.map((pipeline: ApiResponse) => ({
         id: pipeline.id,
         label: pipeline.label,
         displayOrder: pipeline.displayOrder,
-        stages: (pipeline.stages || []).map((stage) => ({
+        stages: (pipeline.stages || []).map((stage: ApiResponse) => ({
           id: stage.id,
           label: stage.label,
           displayOrder: stage.displayOrder,
@@ -429,13 +460,12 @@ export class HubSpotClient {
    */
   async getContact(contactId: string): Promise<HubSpotContact | null> {
     try {
-      const response = await this.client.crm.contacts.basicApi.getById(contactId, [
-        'firstname',
-        'lastname',
-        'email'
-      ])
+      const response = await this.request(
+        'GET',
+        `/crm/v3/objects/contacts/${contactId}?properties=firstname&properties=lastname&properties=email`
+      )
 
-      return response as unknown as HubSpotContact
+      return response as HubSpotContact
     } catch (err: unknown) {
       if (err && typeof err === 'object' && 'statusCode' in err) {
         const statusCode = (err as { statusCode: number }).statusCode
@@ -457,10 +487,9 @@ export class HubSpotClient {
       const attachments: HubSpotAttachment[] = []
 
       // Step 1: Get notes associated with the ticket using v4 associations API
-      const notesResponse = await this.client.crm.associations.v4.basicApi.getPage(
-        'tickets',
-        ticketId,
-        'notes'
+      const notesResponse = await this.request(
+        'GET',
+        `/crm/v4/objects/tickets/${ticketId}/associations/notes`
       )
 
       if (!notesResponse.results || notesResponse.results.length === 0) {
@@ -470,9 +499,9 @@ export class HubSpotClient {
       // Step 2: For each note, fetch the note object to get hs_attachment_ids
       for (const noteAssoc of notesResponse.results) {
         try {
-          const note = await this.client.crm.objects.notes.basicApi.getById(
-            noteAssoc.toObjectId,
-            ['hs_attachment_ids']
+          const note = await this.request(
+            'GET',
+            `/crm/v3/objects/notes/${noteAssoc.toObjectId}?properties=hs_attachment_ids`
           )
 
           // Step 3: Parse attachment IDs from the note
@@ -480,18 +509,20 @@ export class HubSpotClient {
           if (!attachmentIds) continue
 
           // hs_attachment_ids is a semicolon-separated string
-          const ids = attachmentIds.split(';').filter((id) => id.trim())
+          const ids = attachmentIds.split(';').filter((id: string) => id.trim())
 
           // Step 4: Fetch file details for each attachment ID
           for (const attachmentId of ids) {
             try {
-              const fileResponse = await this.client.files.filesApi.getById(attachmentId.trim())
+              const fileResponse = await this.request(
+                'GET',
+                `/files/v3/files/${attachmentId.trim()}`
+              )
 
               // Get a signed URL for downloading (expires after a short time, but works reliably)
-              const signedUrlResponse = await this.client.files.filesApi.getSignedUrl(
-                attachmentId.trim(),
-                undefined, // size
-                300 // expirationSeconds - 5 minutes
+              const signedUrlResponse = await this.request(
+                'GET',
+                `/files/v3/files/${attachmentId.trim()}/signed-url?expirationSeconds=300`
               )
 
               attachments.push({
