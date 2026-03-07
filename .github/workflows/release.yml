@@ -42,6 +42,8 @@ jobs:
           path: |
             dist/*.dmg
             dist/*.zip
+            dist/*.blockmap
+            dist/*.yml
 
   release:
     needs: [build-mac]

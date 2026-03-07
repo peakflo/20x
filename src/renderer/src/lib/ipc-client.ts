@@ -1,5 +1,5 @@
 import type { WorkfloTask, CreateTaskDTO, UpdateTaskDTO, FileAttachment, Agent, CreateAgentDTO, UpdateAgentDTO, McpServer, CreateMcpServerDTO, UpdateMcpServerDTO, Skill, CreateSkillDTO, UpdateSkillDTO, Secret, CreateSecretDTO, UpdateSecretDTO, TaskSource, CreateTaskSourceDTO, UpdateTaskSourceDTO, SyncResult, PluginMeta, ConfigFieldSchema, ConfigFieldOption, PluginAction, ActionResult, SourceUser, ReassignResult } from '@/types'
-import type { AgentOutputEvent, AgentOutputBatchEvent, AgentStatusEvent, AgentApprovalRequest, GhCliStatus, GitHubRepo, GitHubCollaborator, WorktreeProgressEvent, McpTestResult, SkillSyncResult, DepsStatus } from '@/types/electron'
+import type { AgentOutputEvent, AgentOutputBatchEvent, AgentStatusEvent, AgentApprovalRequest, GhCliStatus, GitHubRepo, GitHubCollaborator, WorktreeProgressEvent, McpTestResult, SkillSyncResult, DepsStatus, UpdateInfo, UpdateDownloadProgress } from '@/types/electron'
 
 export const taskApi = {
   getAll: (): Promise<WorkfloTask[]> => {
@@ -371,4 +371,39 @@ export const worktreeApi = {
 
 export const onWorktreeProgress = (callback: (event: WorktreeProgressEvent) => void): (() => void) => {
   return window.electronAPI.onWorktreeProgress(callback)
+}
+
+export const updateApi = {
+  check: (): Promise<void> => {
+    return window.electronAPI.update.check()
+  },
+  download: (): Promise<void> => {
+    return window.electronAPI.update.download()
+  },
+  install: (): Promise<void> => {
+    return window.electronAPI.update.install()
+  },
+  getVersion: (): Promise<string> => {
+    return window.electronAPI.update.getVersion()
+  }
+}
+
+export const onUpdateAvailable = (callback: (info: UpdateInfo) => void): (() => void) => {
+  return window.electronAPI.onUpdateAvailable(callback)
+}
+
+export const onUpdateNotAvailable = (callback: () => void): (() => void) => {
+  return window.electronAPI.onUpdateNotAvailable(callback)
+}
+
+export const onUpdateDownloadProgress = (callback: (progress: UpdateDownloadProgress) => void): (() => void) => {
+  return window.electronAPI.onUpdateDownloadProgress(callback)
+}
+
+export const onUpdateDownloaded = (callback: () => void): (() => void) => {
+  return window.electronAPI.onUpdateDownloaded(callback)
+}
+
+export const onUpdateError = (callback: (message: string) => void): (() => void) => {
+  return window.electronAPI.onUpdateError(callback)
 }

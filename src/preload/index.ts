@@ -257,6 +257,37 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getInfo: (): Promise<{ url: string; port: number }> =>
       ipcRenderer.invoke('mobile:getInfo')
   },
+  update: {
+    check: (): Promise<void> => ipcRenderer.invoke('update:check'),
+    download: (): Promise<void> => ipcRenderer.invoke('update:download'),
+    install: (): Promise<void> => ipcRenderer.invoke('update:install'),
+    getVersion: (): Promise<string> => ipcRenderer.invoke('update:getVersion')
+  },
+  onUpdateAvailable: (callback: (info: unknown) => void): (() => void) => {
+    const handler = (_: unknown, data: unknown): void => callback(data)
+    ipcRenderer.on('update:available', handler)
+    return () => ipcRenderer.removeListener('update:available', handler)
+  },
+  onUpdateNotAvailable: (callback: () => void): (() => void) => {
+    const handler = (): void => callback()
+    ipcRenderer.on('update:not-available', handler)
+    return () => ipcRenderer.removeListener('update:not-available', handler)
+  },
+  onUpdateDownloadProgress: (callback: (progress: unknown) => void): (() => void) => {
+    const handler = (_: unknown, data: unknown): void => callback(data)
+    ipcRenderer.on('update:download-progress', handler)
+    return () => ipcRenderer.removeListener('update:download-progress', handler)
+  },
+  onUpdateDownloaded: (callback: () => void): (() => void) => {
+    const handler = (): void => callback()
+    ipcRenderer.on('update:downloaded', handler)
+    return () => ipcRenderer.removeListener('update:downloaded', handler)
+  },
+  onUpdateError: (callback: (message: string) => void): (() => void) => {
+    const handler = (_: unknown, message: string): void => callback(message)
+    ipcRenderer.on('update:error', handler)
+    return () => ipcRenderer.removeListener('update:error', handler)
+  },
   webUtils: {
     getPathForFile: (file: File): string => webUtils.getPathForFile(file)
   }

@@ -113,6 +113,19 @@ export interface DepsStatus {
   codexBinary: boolean
 }
 
+export interface UpdateInfo {
+  version: string
+  releaseNotes: string | null
+  releaseDate: string
+}
+
+export interface UpdateDownloadProgress {
+  percent: number
+  bytesPerSecond: number
+  transferred: number
+  total: number
+}
+
 interface ElectronAPI {
   db: {
     getTasks: () => Promise<WorkfloTask[]>
@@ -249,6 +262,12 @@ interface ElectronAPI {
   mobile: {
     getInfo: () => Promise<{ url: string; port: number }>
   }
+  update: {
+    check: () => Promise<void>
+    download: () => Promise<void>
+    install: () => Promise<void>
+    getVersion: () => Promise<string>
+  }
   webUtils: {
     getPathForFile: (file: File) => string
   }
@@ -263,6 +282,11 @@ interface ElectronAPI {
   onWorktreeProgress: (callback: (event: WorktreeProgressEvent) => void) => () => void
   onGithubDeviceCode: (callback: (code: string) => void) => () => void
   onOAuthCallback: (callback: (event: { code: string; state: string }) => void) => () => void
+  onUpdateAvailable: (callback: (info: UpdateInfo) => void) => () => void
+  onUpdateNotAvailable: (callback: () => void) => () => void
+  onUpdateDownloadProgress: (callback: (progress: UpdateDownloadProgress) => void) => () => void
+  onUpdateDownloaded: (callback: () => void) => () => void
+  onUpdateError: (callback: (message: string) => void) => () => void
 }
 
 declare global {

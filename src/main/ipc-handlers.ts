@@ -27,6 +27,7 @@ import type { WorktreeManager } from './worktree-manager'
 import type { SyncManager } from './sync-manager'
 import type { PluginRegistry } from './plugins/registry'
 import type { OAuthManager } from './oauth/oauth-manager'
+import { checkForUpdates, downloadUpdate, quitAndInstall, recordUpdateCheck, findCachedUpdate, setDownloadedFilePath } from './updater'
 
 const MIME_MAP: Record<string, string> = {
   '.pdf': 'application/pdf',
@@ -664,5 +665,58 @@ export function registerIpcHandlers(
     const token = db.getSetting('mobile_auth_token') || ''
     const hash = token ? `#token=${token}` : ''
     return { url: `http://localhost:${port}/${hash}`, port }
+  })
+
+  // ── Update handlers ─────────────────────────────────────────
+  ipcMain.handle('update:check', async (event) => {
+    try {
+      const didCheck = await checkForUpdates()
+      if (didCheck) {
+        recordUpdateCheck(db)
+      } else {
+        // Dev mode: electron-updater skips silently, so notify the renderer directly
+        event.sender.send('update:not-available')
+      }
+    } catch (err) {
+      console.error('[IPC] Update check failed:', err)
+      event.sender.send('update:error', err instanceof Error ? err.message : 'Update check failed')
+    }
+  })
+
+  ipcMain.handle('update:download', async (event) => {
+    try {
+      await downloadUpdate()
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      console.error('[IPC] update:download error:', msg)
+
+      // On macOS, Squirrel.Mac rejects unsigned apps with a code signature error.
+      // The ZIP is still downloaded to the cache — find it and treat as success.
+      if (process.platform === 'darwin' && msg.includes('Code signature')) {
+        const cached = findCachedUpdate()
+        if (cached) {
+          console.log('[IPC] Found cached update despite Squirrel error:', cached)
+          setDownloadedFilePath(cached)
+          event.sender.send('update:downloaded')
+          return // Don't propagate the error
+        }
+      }
+
+      throw err // Re-throw so the renderer sees the error
+    }
+  })
+
+  ipcMain.handle('update:install', () => {
+    console.log('[IPC] update:install called')
+    try {
+      quitAndInstall()
+      console.log('[IPC] quitAndInstall returned without error')
+    } catch (err) {
+      console.error('[IPC] quitAndInstall threw:', err)
+    }
+  })
+
+  ipcMain.handle('update:getVersion', () => {
+    return app.getVersion()
   })
 }

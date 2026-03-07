@@ -16,6 +16,7 @@ import { HubSpotPlugin } from './plugins/hubspot-plugin'
 import { GitHubIssuesPlugin } from './plugins/github-issues-plugin'
 import { NotionPlugin } from './plugins/notion-plugin'
 import { registerIpcHandlers } from './ipc-handlers'
+import { initUpdater, checkForUpdates, shouldCheckForUpdate, recordUpdateCheck } from './updater'
 import { RecurrenceScheduler } from './recurrence-scheduler'
 import { setTaskApiNotifier } from './task-api-server'
 import { startSecretBroker, stopSecretBroker, writeSecretShellWrapper } from './secret-broker'
@@ -64,6 +65,26 @@ function createWindow(): void {
     setInterval(() => {
       mainWindow?.webContents.send('overdue:check')
     }, 60_000)
+
+    // Auto-update: initialize updater and schedule periodic checks
+    if (mainWindow) {
+      initUpdater(mainWindow)
+
+      const runUpdateCheck = async (): Promise<void> => {
+        if (!db || !shouldCheckForUpdate(db)) return
+        try {
+          const didCheck = await checkForUpdates()
+          if (didCheck) recordUpdateCheck(db)
+        } catch (err) {
+          console.error('[Main] Update check failed:', err)
+        }
+      }
+
+      // Initial check 10s after startup
+      setTimeout(runUpdateCheck, 10_000)
+      // Re-check every 4 hours (the 24h guard in shouldCheckForUpdate prevents excessive API calls)
+      setInterval(runUpdateCheck, 4 * 60 * 60 * 1000)
+    }
   })
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
