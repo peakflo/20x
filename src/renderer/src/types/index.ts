@@ -6,6 +6,7 @@ export enum SettingsTab {
   TOOLS_MCP = 'tools-mcp',
   SECRETS = 'secrets',
   INTEGRATIONS = 'integrations',
+  ENTERPRISE = 'enterprise',
   PLUGINS = 'plugins',
   ADVANCED = 'advanced'
 }
@@ -16,6 +17,7 @@ export const SETTINGS_TABS: { value: SettingsTab; label: string; icon: string }[
   { value: SettingsTab.TOOLS_MCP, label: 'Tools & MCP', icon: 'Server' },
   { value: SettingsTab.SECRETS, label: 'Secrets', icon: 'KeyRound' },
   { value: SettingsTab.INTEGRATIONS, label: 'Integrations', icon: 'Workflow' },
+  { value: SettingsTab.ENTERPRISE, label: 'Enterprise', icon: 'Building2' },
   { value: SettingsTab.PLUGINS, label: 'Plugins', icon: 'Puzzle' },
   { value: SettingsTab.ADVANCED, label: 'Advanced', icon: 'Wrench' }
 ]

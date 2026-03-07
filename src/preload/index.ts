@@ -281,6 +281,29 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getInfo: (): Promise<{ url: string; port: number }> =>
       ipcRenderer.invoke('mobile:getInfo')
   },
+  enterprise: {
+    login: (email: string, password: string): Promise<{
+      userId: string
+      email: string
+      companies: { id: string; name: string; isPrimary: boolean }[]
+    }> => ipcRenderer.invoke('enterprise:login', email, password),
+    selectTenant: (tenantId: string): Promise<{
+      token: string
+      tenant: { id: string; name: string }
+    }> => ipcRenderer.invoke('enterprise:selectTenant', tenantId),
+    logout: (): Promise<void> =>
+      ipcRenderer.invoke('enterprise:logout'),
+    getSession: (): Promise<{
+      isAuthenticated: boolean
+      userEmail: string | null
+      userId: string | null
+      currentTenant: { id: string; name: string } | null
+    }> => ipcRenderer.invoke('enterprise:getSession'),
+    refreshToken: (): Promise<{ token: string }> =>
+      ipcRenderer.invoke('enterprise:refreshToken'),
+    apiRequest: (method: string, path: string, body?: unknown): Promise<unknown> =>
+      ipcRenderer.invoke('enterprise:apiRequest', method, path, body)
+  },
   webUtils: {
     getPathForFile: (file: File): string => webUtils.getPathForFile(file)
   }

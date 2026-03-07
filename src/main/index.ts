@@ -18,6 +18,7 @@ import { HubSpotPlugin } from './plugins/hubspot-plugin'
 import { GitHubIssuesPlugin } from './plugins/github-issues-plugin'
 import { NotionPlugin } from './plugins/notion-plugin'
 import { registerIpcHandlers } from './ipc-handlers'
+import { EnterpriseAuth } from './enterprise-auth'
 import { RecurrenceScheduler } from './recurrence-scheduler'
 import { ClaudePluginManager } from './claude-plugin-manager'
 import { setTaskApiNotifier } from './task-api-server'
@@ -35,6 +36,7 @@ let mcpToolCaller: McpToolCaller | null = null
 let syncManager: SyncManager | null = null
 let pluginRegistry: PluginRegistry | null = null
 let oauthManager: OAuthManager | null = null
+let enterpriseAuth: EnterpriseAuth | null = null
 let recurrenceScheduler: RecurrenceScheduler | null = null
 let claudePluginManager: ClaudePluginManager | null = null
 
@@ -309,9 +311,16 @@ app.whenReady().then(async () => {
 
   recurrenceScheduler = new RecurrenceScheduler(db)
 
+  // Initialize enterprise auth (gracefully — missing env vars just disable the feature)
+  try {
+    enterpriseAuth = new EnterpriseAuth(db)
+  } catch (err) {
+    console.warn('[Main] Enterprise auth initialization failed:', err)
+  }
+
   claudePluginManager = new ClaudePluginManager(db)
 
-  registerIpcHandlers(db, agentManager, githubManager, worktreeManager, syncManager, pluginRegistry, mcpToolCaller, oauthManager, recurrenceScheduler, claudePluginManager)
+  registerIpcHandlers(db, agentManager, githubManager, worktreeManager, syncManager, pluginRegistry, mcpToolCaller, oauthManager, recurrenceScheduler, enterpriseAuth ?? undefined, claudePluginManager)
 
   // Start secret broker and write shell wrapper (awaited so broker is ready before any sessions)
   try {
