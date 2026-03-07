@@ -28,6 +28,7 @@ import type { SyncManager } from './sync-manager'
 import type { PluginRegistry } from './plugins/registry'
 import type { OAuthManager } from './oauth/oauth-manager'
 import type { EnterpriseAuth } from './enterprise-auth'
+import type { ClaudePluginManager } from './claude-plugin-manager'
 
 const MIME_MAP: Record<string, string> = {
   '.pdf': 'application/pdf',
@@ -68,7 +69,8 @@ export function registerIpcHandlers(
   mcpToolCaller?: import('./mcp-tool-caller').McpToolCaller,
   oauthManager?: OAuthManager,
   recurrenceScheduler?: import('./recurrence-scheduler').RecurrenceScheduler,
-  enterpriseAuth?: EnterpriseAuth
+  enterpriseAuth?: EnterpriseAuth,
+  claudePluginManager?: ClaudePluginManager
 ): void {
   ipcMain.handle('db:getTasks', () => {
     return db.getTasks()
@@ -699,5 +701,64 @@ export function registerIpcHandlers(
   ipcMain.handle('enterprise:apiRequest', async (_, method: string, path: string, body?: unknown) => {
     if (!enterpriseAuth) throw new Error('Enterprise auth not available')
     return await enterpriseAuth.apiRequest(method, path, body)
+  })
+
+  // ── Claude Plugin Marketplace handlers ─────────────────────
+
+  // Marketplace sources
+  ipcMain.handle('claudePlugin:getMarketplaceSources', () => {
+    return claudePluginManager?.getMarketplaceSources() ?? []
+  })
+
+  ipcMain.handle('claudePlugin:addMarketplaceSource', (_, data: { name: string; source_type?: string; source_url: string; auto_update?: boolean }) => {
+    if (!claudePluginManager) throw new Error('ClaudePluginManager not initialized')
+    return claudePluginManager.addMarketplaceSource(data)
+  })
+
+  ipcMain.handle('claudePlugin:removeMarketplaceSource', (_, id: string) => {
+    if (!claudePluginManager) throw new Error('ClaudePluginManager not initialized')
+    return claudePluginManager.removeMarketplaceSource(id)
+  })
+
+  // Fetch catalog for a marketplace
+  ipcMain.handle('claudePlugin:fetchCatalog', async (_, sourceId: string) => {
+    if (!claudePluginManager) throw new Error('ClaudePluginManager not initialized')
+    return await claudePluginManager.fetchMarketplaceCatalog(sourceId)
+  })
+
+  // Discover plugins from all marketplaces
+  ipcMain.handle('claudePlugin:discoverPlugins', async (_, searchQuery?: string) => {
+    if (!claudePluginManager) throw new Error('ClaudePluginManager not initialized')
+    return await claudePluginManager.discoverPlugins(searchQuery)
+  })
+
+  // Installed plugins
+  ipcMain.handle('claudePlugin:getInstalledPlugins', () => {
+    return claudePluginManager?.getInstalledPlugins() ?? []
+  })
+
+  ipcMain.handle('claudePlugin:installPlugin', async (_, pluginName: string, marketplaceId: string, scope?: string) => {
+    if (!claudePluginManager) throw new Error('ClaudePluginManager not initialized')
+    return await claudePluginManager.installPlugin(pluginName, marketplaceId, scope)
+  })
+
+  ipcMain.handle('claudePlugin:uninstallPlugin', async (_, pluginId: string) => {
+    if (!claudePluginManager) throw new Error('ClaudePluginManager not initialized')
+    return await claudePluginManager.uninstallPlugin(pluginId)
+  })
+
+  ipcMain.handle('claudePlugin:enablePlugin', (_, pluginId: string) => {
+    if (!claudePluginManager) throw new Error('ClaudePluginManager not initialized')
+    return claudePluginManager.enablePlugin(pluginId)
+  })
+
+  ipcMain.handle('claudePlugin:disablePlugin', (_, pluginId: string) => {
+    if (!claudePluginManager) throw new Error('ClaudePluginManager not initialized')
+    return claudePluginManager.disablePlugin(pluginId)
+  })
+
+  ipcMain.handle('claudePlugin:getPluginResources', (_, pluginId: string) => {
+    if (!claudePluginManager) throw new Error('ClaudePluginManager not initialized')
+    return claudePluginManager.getPluginResources(pluginId)
   })
 }

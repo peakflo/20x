@@ -20,6 +20,7 @@ import { NotionPlugin } from './plugins/notion-plugin'
 import { registerIpcHandlers } from './ipc-handlers'
 import { EnterpriseAuth } from './enterprise-auth'
 import { RecurrenceScheduler } from './recurrence-scheduler'
+import { ClaudePluginManager } from './claude-plugin-manager'
 import { setTaskApiNotifier } from './task-api-server'
 import { startSecretBroker, stopSecretBroker, writeSecretShellWrapper } from './secret-broker'
 import { startMobileApiServer, stopMobileApiServer, broadcastToMobileClients, setMobileApiNotifier } from './mobile-api-server'
@@ -37,6 +38,7 @@ let pluginRegistry: PluginRegistry | null = null
 let oauthManager: OAuthManager | null = null
 let enterpriseAuth: EnterpriseAuth | null = null
 let recurrenceScheduler: RecurrenceScheduler | null = null
+let claudePluginManager: ClaudePluginManager | null = null
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
@@ -316,7 +318,9 @@ app.whenReady().then(async () => {
     console.warn('[Main] Enterprise auth initialization failed:', err)
   }
 
-  registerIpcHandlers(db, agentManager, githubManager, worktreeManager, syncManager, pluginRegistry, mcpToolCaller, oauthManager, recurrenceScheduler, enterpriseAuth ?? undefined)
+  claudePluginManager = new ClaudePluginManager(db)
+
+  registerIpcHandlers(db, agentManager, githubManager, worktreeManager, syncManager, pluginRegistry, mcpToolCaller, oauthManager, recurrenceScheduler, enterpriseAuth ?? undefined, claudePluginManager)
 
   // Start secret broker and write shell wrapper (awaited so broker is ready before any sessions)
   try {

@@ -38,6 +38,7 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
   const [filtersOpen, setFiltersOpen] = useState(false)
   const {
     sidebarView, setSidebarView,
+    activeModal, closeModal,
     statusFilter, priorityFilter, sourceFilter, sortField, searchQuery,
     setStatusFilter, setPriorityFilter, setSourceFilter, setSortField, setSearchQuery
   } = useUIStore()
@@ -92,7 +93,10 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
           {(['tasks', 'skills'] as SidebarView[]).map((view) => (
             <button
               key={view}
-              onClick={() => setSidebarView(view)}
+              onClick={() => {
+                if (activeModal === 'settings') closeModal()
+                setSidebarView(view)
+              }}
               className={`flex-1 rounded px-3 py-1.5 text-xs font-medium transition-colors cursor-pointer ${
                 sidebarView === view
                   ? 'bg-background text-foreground shadow-sm'
@@ -244,7 +248,10 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
           <div className="mx-3 border-t" />
 
           <div className="flex-1 overflow-y-auto pt-1">
-            <TaskList tasks={tasks} selectedTaskId={selectedTaskId} onSelectTask={onSelectTask} />
+            <TaskList tasks={tasks} selectedTaskId={selectedTaskId} onSelectTask={(id) => {
+              if (activeModal === 'settings') closeModal()
+              onSelectTask(id)
+            }} />
           </div>
 
           <div className="px-4 py-2.5 border-t text-xs text-muted-foreground tabular-nums">
@@ -268,7 +275,10 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
           <div className="mx-3 border-t" />
 
           <div className="flex-1 overflow-y-auto pt-1">
-            <SkillList skills={skills} selectedSkillId={selectedSkillId} onSelectSkill={selectSkill} />
+            <SkillList skills={skills} selectedSkillId={selectedSkillId} onSelectSkill={(id) => {
+              if (activeModal === 'settings') closeModal()
+              selectSkill(id)
+            }} />
           </div>
 
           <div className="px-4 py-2.5 border-t text-xs text-muted-foreground tabular-nums">

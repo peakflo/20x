@@ -1,4 +1,4 @@
-import { Settings, Users, Server, Workflow, Wrench, KeyRound, Building2, X } from 'lucide-react'
+import { Settings, Users, Server, Workflow, Wrench, KeyRound, Building2, Puzzle, X } from 'lucide-react'
 import * as Tabs from '@radix-ui/react-tabs'
 import { useUIStore } from '@/stores/ui-store'
 import { SettingsTab } from '@/types'
@@ -11,6 +11,7 @@ import { SecretsSettings } from './tabs/SecretsSettings'
 import { IntegrationsSettings } from './tabs/IntegrationsSettings'
 import { EnterpriseSettings } from './tabs/EnterpriseSettings'
 import { AdvancedSettings } from './tabs/AdvancedSettings'
+import { PluginsSettings } from './tabs/PluginsSettings'
 
 const ICON_MAP = {
   Settings,
@@ -19,6 +20,7 @@ const ICON_MAP = {
   KeyRound,
   Workflow,
   Building2,
+  Puzzle,
   Wrench
 } as const
 
@@ -32,6 +34,7 @@ export function SettingsWorkspace() {
     { value: SettingsTab.SECRETS, label: 'Secrets', iconName: 'KeyRound' },
     { value: SettingsTab.INTEGRATIONS, label: 'Task sources', iconName: 'Workflow' },
     { value: SettingsTab.ENTERPRISE, label: 'Enterprise', iconName: 'Building2' },
+    { value: SettingsTab.PLUGINS, label: 'Plugins', iconName: 'Puzzle' },
     { value: SettingsTab.ADVANCED, label: 'Advanced', iconName: 'Wrench' }
   ] as const
 
@@ -105,6 +108,10 @@ export function SettingsWorkspace() {
 
             <Tabs.Content value={SettingsTab.ENTERPRISE} className="focus-visible:outline-none space-y-6">
               <EnterpriseSettings />
+            </Tabs.Content>
+
+            <Tabs.Content value={SettingsTab.PLUGINS} className="focus-visible:outline-none space-y-6">
+              <PluginsSettings />
             </Tabs.Content>
 
             <Tabs.Content value={SettingsTab.ADVANCED} className="focus-visible:outline-none space-y-6">

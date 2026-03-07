@@ -25,7 +25,12 @@ import type {
   PluginAction,
   ActionResult,
   SourceUser,
-  ReassignResult
+  ReassignResult,
+  MarketplaceSource,
+  InstalledPlugin,
+  DiscoverablePlugin,
+  MarketplaceCatalog,
+  PluginResources
 } from './index'
 
 export interface AgentSessionStartResult {
@@ -237,6 +242,19 @@ interface ElectronAPI {
     resolveOptions: (pluginId: string, resolverKey: string, config: Record<string, unknown>, mcpServerId?: string, sourceId?: string) => Promise<ConfigFieldOption[]>
     getActions: (pluginId: string, config: Record<string, unknown>) => Promise<PluginAction[]>
     executeAction: (actionId: string, taskId: string, sourceId: string, input?: string) => Promise<ActionResult>
+  }
+  claudePlugins: {
+    getMarketplaceSources: () => Promise<MarketplaceSource[]>
+    addMarketplaceSource: (data: { name: string; source_type?: string; source_url: string; auto_update?: boolean }) => Promise<MarketplaceSource>
+    removeMarketplaceSource: (id: string) => Promise<boolean>
+    fetchCatalog: (sourceId: string) => Promise<MarketplaceCatalog | null>
+    discoverPlugins: (searchQuery?: string) => Promise<DiscoverablePlugin[]>
+    getInstalledPlugins: () => Promise<InstalledPlugin[]>
+    installPlugin: (pluginName: string, marketplaceId: string, scope?: string) => Promise<InstalledPlugin>
+    uninstallPlugin: (pluginId: string) => Promise<boolean>
+    enablePlugin: (pluginId: string) => Promise<InstalledPlugin | undefined>
+    disablePlugin: (pluginId: string) => Promise<InstalledPlugin | undefined>
+    getPluginResources: (pluginId: string) => Promise<PluginResources>
   }
   app: {
     getLoginItemSettings: () => Promise<{ openAtLogin: boolean; openAsHidden: boolean }>

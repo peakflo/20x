@@ -132,6 +132,33 @@ export function createTestDb(): { db: DatabaseManager; rawDb: InstanceType<typeo
     CREATE INDEX IF NOT EXISTS idx_oauth_tokens_source ON oauth_tokens(source_id);
     CREATE INDEX IF NOT EXISTS idx_oauth_tokens_mcp_server ON oauth_tokens(mcp_server_id);
     CREATE INDEX IF NOT EXISTS idx_oauth_tokens_provider ON oauth_tokens(provider);
+
+    CREATE TABLE IF NOT EXISTS marketplace_sources (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL UNIQUE,
+      source_type TEXT NOT NULL DEFAULT 'github',
+      source_url TEXT NOT NULL,
+      metadata TEXT NOT NULL DEFAULT '{}',
+      auto_update INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS installed_plugins (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      marketplace_id TEXT REFERENCES marketplace_sources(id) ON DELETE CASCADE,
+      manifest TEXT NOT NULL DEFAULT '{}',
+      source TEXT NOT NULL DEFAULT '{}',
+      scope TEXT NOT NULL DEFAULT 'user',
+      enabled INTEGER NOT NULL DEFAULT 1,
+      version TEXT NOT NULL DEFAULT '1.0.0',
+      installed_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_installed_plugins_name_marketplace
+      ON installed_plugins(name, marketplace_id);
   `)
 
   const manager = new DatabaseManager()
