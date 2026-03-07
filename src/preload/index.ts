@@ -249,7 +249,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     enablePlugin: (pluginId: string): Promise<unknown> =>
       ipcRenderer.invoke('claudePlugin:enablePlugin', pluginId),
     disablePlugin: (pluginId: string): Promise<unknown> =>
-      ipcRenderer.invoke('claudePlugin:disablePlugin', pluginId)
+      ipcRenderer.invoke('claudePlugin:disablePlugin', pluginId),
+    getPluginResources: (pluginId: string): Promise<unknown> =>
+      ipcRenderer.invoke('claudePlugin:getPluginResources', pluginId)
   },
   onWorktreeProgress: (callback: (event: unknown) => void): (() => void) => {
     const handler = (_: unknown, data: unknown): void => callback(data)

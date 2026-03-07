@@ -71,6 +71,15 @@ export interface DiscoverablePlugin {
   enabled?: boolean
 }
 
+// ── Plugin resources (what a plugin added) ──────────────────
+
+export interface PluginResources {
+  skills: { id: string; name: string; description: string }[]
+  mcpServers: { id: string; name: string; command: string; args: string[] }[]
+  agents: string[]
+  commands: string[]
+}
+
 // ── Manager class ──────────────────────────────────────────
 
 /** Default marketplaces seeded on first run */
@@ -343,6 +352,41 @@ export class ClaudePluginManager {
 
   getInstalledPlugins(): InstalledPluginRecord[] {
     return this.db.getInstalledPlugins()
+  }
+
+  /**
+   * Returns the concrete resources (skills, MCP servers) that were created
+   * when a plugin was installed, plus manifest-declared agents and commands.
+   */
+  getPluginResources(pluginId: string): PluginResources {
+    const plugin = this.db.getInstalledPlugin(pluginId)
+    if (!plugin) return { skills: [], mcpServers: [], agents: [], commands: [] }
+
+    const manifest = plugin.manifest
+
+    // Materialised skills (tagged with ['plugin', pluginName])
+    const allSkills = this.db.getSkills()
+    const skills = allSkills
+      .filter((s) => s.tags.includes('plugin') && s.tags.includes(plugin.name))
+      .map((s) => ({ id: s.id, name: s.name, description: s.description }))
+
+    // Materialised MCP servers (prefixed with pluginName:)
+    const allMcp = this.db.getMcpServers()
+    const mcpServers = allMcp
+      .filter((s) => s.name.startsWith(`${plugin.name}:`))
+      .map((s) => ({ id: s.id, name: s.name, command: s.command, args: s.args }))
+
+    // Manifest-declared agents
+    const agents: string[] = manifest.agents
+      ? (Array.isArray(manifest.agents) ? manifest.agents : [manifest.agents])
+      : []
+
+    // Manifest-declared commands
+    const commands: string[] = manifest.commands
+      ? (Array.isArray(manifest.commands) ? manifest.commands : [manifest.commands])
+      : []
+
+    return { skills, mcpServers, agents, commands }
   }
 
   // ── Apply / remove plugin resources ────────────────────────

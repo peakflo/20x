@@ -721,4 +721,9 @@ export function registerIpcHandlers(
     if (!claudePluginManager) throw new Error('ClaudePluginManager not initialized')
     return claudePluginManager.disablePlugin(pluginId)
   })
+
+  ipcMain.handle('claudePlugin:getPluginResources', (_, pluginId: string) => {
+    if (!claudePluginManager) throw new Error('ClaudePluginManager not initialized')
+    return claudePluginManager.getPluginResources(pluginId)
+  })
 }

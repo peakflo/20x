@@ -1,10 +1,11 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Search, Plus, Trash2, Download, Power, PowerOff, RefreshCw, Loader2, ExternalLink, Store, X } from 'lucide-react'
+import { Search, Plus, Trash2, Download, Power, PowerOff, RefreshCw, Loader2, ExternalLink, Store, X, ChevronDown, ChevronRight, Sparkles, Server, Bot, Terminal } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
 import { SettingsSection } from '../SettingsSection'
 import { usePluginMarketplaceStore } from '@/stores/plugin-marketplace-store'
-import type { DiscoverablePlugin, InstalledPlugin } from '@/types'
+import { claudePluginApi } from '@/lib/ipc-client'
+import type { DiscoverablePlugin, InstalledPlugin, PluginResources } from '@/types'
 
 export function PluginsSettings() {
   const {
@@ -290,6 +291,32 @@ function InstalledPluginCard({
   onDisable: () => void
 }) {
   const [confirmUninstall, setConfirmUninstall] = useState(false)
+  const [expanded, setExpanded] = useState(false)
+  const [resources, setResources] = useState<PluginResources | null>(null)
+  const [loadingResources, setLoadingResources] = useState(false)
+
+  const toggleResources = async () => {
+    if (expanded) {
+      setExpanded(false)
+      return
+    }
+    if (!resources) {
+      setLoadingResources(true)
+      try {
+        const res = await claudePluginApi.getPluginResources(plugin.id)
+        setResources(res)
+      } catch {
+        setResources({ skills: [], mcpServers: [], agents: [], commands: [] })
+      } finally {
+        setLoadingResources(false)
+      }
+    }
+    setExpanded(true)
+  }
+
+  const hasResources = resources
+    ? resources.skills.length > 0 || resources.mcpServers.length > 0 || resources.agents.length > 0 || resources.commands.length > 0
+    : true // assume there may be resources until loaded
 
   return (
     <div className="rounded-md border border-border bg-card px-4 py-3">
@@ -355,6 +382,95 @@ function InstalledPluginCard({
           )}
         </div>
       </div>
+
+      {/* Expandable resources section */}
+      <button
+        onClick={toggleResources}
+        className="flex items-center gap-1.5 mt-2 text-xs text-muted-foreground hover:text-foreground transition-colors"
+      >
+        {loadingResources ? (
+          <Loader2 className="h-3 w-3 animate-spin" />
+        ) : expanded ? (
+          <ChevronDown className="h-3 w-3" />
+        ) : (
+          <ChevronRight className="h-3 w-3" />
+        )}
+        Resources added by this plugin
+      </button>
+
+      {expanded && resources && (
+        <div className="mt-2 ml-1 space-y-2">
+          {!hasResources && (
+            <p className="text-[11px] text-muted-foreground italic">No resources created by this plugin.</p>
+          )}
+
+          {resources.skills.length > 0 && (
+            <div>
+              <div className="flex items-center gap-1.5 text-[11px] font-medium text-foreground mb-1">
+                <Sparkles className="h-3 w-3 text-amber-400" />
+                Skills ({resources.skills.length})
+              </div>
+              <div className="space-y-1 ml-4.5">
+                {resources.skills.map((skill) => (
+                  <div key={skill.id} className="flex items-start gap-2 text-[11px]">
+                    <span className="text-foreground font-mono bg-muted px-1.5 py-0.5 rounded">{skill.name}</span>
+                    {skill.description && <span className="text-muted-foreground truncate">{skill.description}</span>}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {resources.mcpServers.length > 0 && (
+            <div>
+              <div className="flex items-center gap-1.5 text-[11px] font-medium text-foreground mb-1">
+                <Server className="h-3 w-3 text-blue-400" />
+                MCP Servers ({resources.mcpServers.length})
+              </div>
+              <div className="space-y-1 ml-4.5">
+                {resources.mcpServers.map((server) => (
+                  <div key={server.id} className="flex items-start gap-2 text-[11px]">
+                    <span className="text-foreground font-mono bg-muted px-1.5 py-0.5 rounded">{server.name}</span>
+                    {server.command && <span className="text-muted-foreground font-mono">{server.command} {server.args.join(' ')}</span>}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {resources.agents.length > 0 && (
+            <div>
+              <div className="flex items-center gap-1.5 text-[11px] font-medium text-foreground mb-1">
+                <Bot className="h-3 w-3 text-purple-400" />
+                Agents ({resources.agents.length})
+              </div>
+              <div className="space-y-1 ml-4.5">
+                {resources.agents.map((agent) => (
+                  <div key={agent} className="text-[11px]">
+                    <span className="text-foreground font-mono bg-muted px-1.5 py-0.5 rounded">{agent}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {resources.commands.length > 0 && (
+            <div>
+              <div className="flex items-center gap-1.5 text-[11px] font-medium text-foreground mb-1">
+                <Terminal className="h-3 w-3 text-green-400" />
+                Commands ({resources.commands.length})
+              </div>
+              <div className="space-y-1 ml-4.5">
+                {resources.commands.map((cmd) => (
+                  <div key={cmd} className="text-[11px]">
+                    <span className="text-foreground font-mono bg-muted px-1.5 py-0.5 rounded">{cmd}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }

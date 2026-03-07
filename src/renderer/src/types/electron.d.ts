@@ -29,7 +29,8 @@ import type {
   MarketplaceSource,
   InstalledPlugin,
   DiscoverablePlugin,
-  MarketplaceCatalog
+  MarketplaceCatalog,
+  PluginResources
 } from './index'
 
 export interface AgentSessionStartResult {
@@ -253,6 +254,7 @@ interface ElectronAPI {
     uninstallPlugin: (pluginId: string) => Promise<boolean>
     enablePlugin: (pluginId: string) => Promise<InstalledPlugin | undefined>
     disablePlugin: (pluginId: string) => Promise<InstalledPlugin | undefined>
+    getPluginResources: (pluginId: string) => Promise<PluginResources>
   }
   app: {
     getLoginItemSettings: () => Promise<{ openAtLogin: boolean; openAsHidden: boolean }>

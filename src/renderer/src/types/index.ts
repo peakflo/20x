@@ -580,6 +580,13 @@ export interface DiscoverablePlugin {
   enabled?: boolean
 }
 
+export interface PluginResources {
+  skills: { id: string; name: string; description: string }[]
+  mcpServers: { id: string; name: string; command: string; args: string[] }[]
+  agents: string[]
+  commands: string[]
+}
+
 export interface MarketplaceCatalog {
   name: string
   owner: { name: string; email?: string }

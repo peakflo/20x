@@ -1,4 +1,4 @@
-import type { WorkfloTask, CreateTaskDTO, UpdateTaskDTO, FileAttachment, Agent, CreateAgentDTO, UpdateAgentDTO, McpServer, CreateMcpServerDTO, UpdateMcpServerDTO, Skill, CreateSkillDTO, UpdateSkillDTO, Secret, CreateSecretDTO, UpdateSecretDTO, TaskSource, CreateTaskSourceDTO, UpdateTaskSourceDTO, SyncResult, PluginMeta, ConfigFieldSchema, ConfigFieldOption, PluginAction, ActionResult, SourceUser, ReassignResult, MarketplaceSource, InstalledPlugin, DiscoverablePlugin, MarketplaceCatalog } from '@/types'
+import type { WorkfloTask, CreateTaskDTO, UpdateTaskDTO, FileAttachment, Agent, CreateAgentDTO, UpdateAgentDTO, McpServer, CreateMcpServerDTO, UpdateMcpServerDTO, Skill, CreateSkillDTO, UpdateSkillDTO, Secret, CreateSecretDTO, UpdateSecretDTO, TaskSource, CreateTaskSourceDTO, UpdateTaskSourceDTO, SyncResult, PluginMeta, ConfigFieldSchema, ConfigFieldOption, PluginAction, ActionResult, SourceUser, ReassignResult, MarketplaceSource, InstalledPlugin, DiscoverablePlugin, MarketplaceCatalog, PluginResources } from '@/types'
 import type { AgentOutputEvent, AgentOutputBatchEvent, AgentStatusEvent, AgentApprovalRequest, GhCliStatus, GitHubRepo, GitHubCollaborator, WorktreeProgressEvent, McpTestResult, SkillSyncResult, DepsStatus } from '@/types/electron'
 
 export const taskApi = {
@@ -399,6 +399,10 @@ export const claudePluginApi = {
 
   disablePlugin: (pluginId: string): Promise<InstalledPlugin | undefined> => {
     return window.electronAPI.claudePlugins.disablePlugin(pluginId)
+  },
+
+  getPluginResources: (pluginId: string): Promise<PluginResources> => {
+    return window.electronAPI.claudePlugins.getPluginResources(pluginId)
   }
 }
 
