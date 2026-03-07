@@ -6,36 +6,10 @@
  * images are always rendered from local files via the app-attachment:// protocol.
  */
 
-interface AttachmentWithSourceUrl {
-  id: string
-  filename: string
-  mime_type?: string
-  /** Original remote URL — plugin-specific key (linear_url, notion_url, hubspot_url) */
-  [key: string]: unknown
-}
+import type { PluginContext } from './types'
 
-/**
- * Build a map from remote URL -> local app-attachment:// URL
- * by checking plugin-specific URL fields on each attachment.
- */
-function buildUrlMap(
-  taskId: string,
-  attachments: AttachmentWithSourceUrl[]
-): Map<string, string> {
-  const urlMap = new Map<string, string>()
-  const sourceUrlKeys = ['linear_url', 'notion_url', 'hubspot_url']
-
-  for (const att of attachments) {
-    for (const key of sourceUrlKeys) {
-      const remoteUrl = att[key]
-      if (typeof remoteUrl === 'string' && remoteUrl) {
-        urlMap.set(remoteUrl, `app-attachment://${taskId}/${att.id}`)
-      }
-    }
-  }
-
-  return urlMap
-}
+/** Keys that plugins use to store the original remote URL on attachment records */
+const SOURCE_URL_KEYS = ['linear_url', 'notion_url', 'hubspot_url'] as const
 
 /**
  * Replace remote image/file URLs in markdown with local app-attachment:// URLs.
@@ -50,11 +24,25 @@ function buildUrlMap(
 export function replaceRemoteImageUrls(
   markdown: string,
   taskId: string,
-  attachments: AttachmentWithSourceUrl[]
+  attachments: Array<Record<string, unknown>>
 ): string {
   if (!markdown || !attachments || attachments.length === 0) return markdown
 
-  const urlMap = buildUrlMap(taskId, attachments)
+  // Build map from remote URL -> local app-attachment:// URL
+  const urlMap = new Map<string, string>()
+
+  for (const att of attachments) {
+    const attId = att.id
+    if (typeof attId !== 'string') continue
+
+    for (const key of SOURCE_URL_KEYS) {
+      const remoteUrl = att[key]
+      if (typeof remoteUrl === 'string' && remoteUrl) {
+        urlMap.set(remoteUrl, `app-attachment://${taskId}/${attId}`)
+      }
+    }
+  }
+
   if (urlMap.size === 0) return markdown
 
   let result = markdown
@@ -73,4 +61,30 @@ export function replaceRemoteImageUrls(
   }
 
   return result
+}
+
+/**
+ * Re-read a task's description from the DB and replace any remote image URLs
+ * with local attachment:// URLs. Writes back only if something changed.
+ *
+ * Call this once after all attachment downloads are complete for a task.
+ */
+export function replaceRemoteImageUrlsInTask(
+  taskId: string,
+  ctx: PluginContext,
+  logPrefix: string
+): void {
+  const task = ctx.db.getTask(taskId)
+  if (!task?.description || !task.attachments?.length) return
+
+  const newDescription = replaceRemoteImageUrls(
+    task.description,
+    taskId,
+    task.attachments as unknown as Array<Record<string, unknown>>
+  )
+
+  if (newDescription !== task.description) {
+    ctx.db.updateTask(taskId, { description: newDescription })
+    console.log(`${logPrefix} Replaced remote image URLs with local paths in task ${taskId}`)
+  }
 }

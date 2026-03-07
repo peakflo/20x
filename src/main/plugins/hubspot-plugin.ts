@@ -9,7 +9,7 @@
 import { writeFileSync } from 'fs'
 import { join, extname } from 'path'
 import type { TaskRecord } from '../database'
-import { replaceRemoteImageUrls } from './replace-image-urls'
+import { replaceRemoteImageUrlsInTask } from './replace-image-urls'
 import type {
   TaskSourcePlugin,
   PluginConfigSchema,
@@ -333,18 +333,7 @@ export class HubSpotPlugin implements TaskSourcePlugin {
           }
 
           // Replace remote image URLs in description with local attachment URLs
-          const updatedTask = ctx.db.getTask(taskId)
-          if (updatedTask?.description && updatedTask.attachments?.length) {
-            const newDescription = replaceRemoteImageUrls(
-              updatedTask.description,
-              taskId,
-              updatedTask.attachments as Array<{ id: string; filename: string; [key: string]: unknown }>
-            )
-            if (newDescription !== updatedTask.description) {
-              ctx.db.updateTask(taskId, { description: newDescription })
-              console.log(`[hubspot-plugin] Replaced remote image URLs with local paths in task ${taskId}`)
-            }
-          }
+          replaceRemoteImageUrlsInTask(taskId, ctx, '[hubspot-plugin]')
         } catch (err) {
           const errorMsg = err instanceof Error ? err.message : 'Unknown error'
           const ticketTitle = ticket.properties.subject || 'Unknown ticket'

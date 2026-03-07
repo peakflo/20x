@@ -1,5 +1,5 @@
 import { execFile } from 'child_process'
-import { existsSync, readdirSync, readFileSync } from 'fs'
+import { readdirSync } from 'fs'
 import { app, BrowserWindow, net, protocol, shell, Tray, Menu, nativeImage } from 'electron'
 import { join } from 'path'
 import { is } from '@electron-toolkit/utils'
@@ -261,18 +261,13 @@ app.whenReady().then(async () => {
       }
 
       const dir = join(app.getPath('userData'), 'attachments', taskId)
-      if (!existsSync(dir)) {
-        return new Response('Not found', { status: 404 })
-      }
-
-      const files = readdirSync(dir)
+      const files = readdirSync(dir) // throws if dir missing — caught below
       const match = files.find((f) => f.startsWith(`${attachmentId}-`))
       if (!match) {
         return new Response('Not found', { status: 404 })
       }
 
-      const filePath = join(dir, match)
-      return net.fetch(`file://${filePath}`)
+      return net.fetch(`file://${join(dir, match)}`)
     } catch {
       return new Response('Internal error', { status: 500 })
     }
