@@ -14,6 +14,7 @@ import type { TaskRecord } from '../database'
 import type { SourceUser, ReassignResult } from '../../shared/types'
 import { TaskStatus } from '../../shared/constants'
 import { replaceRemoteImageUrlsInTask } from './replace-image-urls'
+import { normalizeUrlForComparison, buildNormalizedUrlSet } from './url-utils'
 import {
   NotionClient,
   type NotionDatabase,
@@ -995,13 +996,14 @@ The integration automatically maps Notion properties to task fields:
     if (!task) return
 
     const existingAttachments = task.attachments || []
-    const existingUrls = new Set(
-      existingAttachments.map((a) => (a as unknown as { notion_url?: string }).notion_url)
+    const existingNormalizedUrls = buildNormalizedUrlSet(
+      existingAttachments as unknown as Array<Record<string, unknown>>,
+      'notion_url'
     )
 
     for (const file of files) {
-      // Skip if already downloaded
-      if (existingUrls.has(file.url)) continue
+      // Skip if already downloaded (compare without query params since signed tokens change on each API call)
+      if (existingNormalizedUrls.has(normalizeUrlForComparison(file.url))) continue
 
       try {
         console.log(`[notion] Downloading: ${file.filename}`)
@@ -1040,7 +1042,7 @@ The integration automatically maps Notion properties to task fields:
 
         // Update for next iteration
         existingAttachments.push(newAttachment)
-        existingUrls.add(file.url)
+        existingNormalizedUrls.add(normalizeUrlForComparison(file.url))
       } catch (err) {
         const msg = err instanceof Error ? err.message : 'Unknown error'
         console.error(`[notion] Failed to download ${file.filename}: ${msg}`)

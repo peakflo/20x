@@ -20,6 +20,7 @@ import type {
 } from './types'
 import { LinearClient, type LinearIssue } from './linear-client'
 import { replaceRemoteImageUrlsInTask } from './replace-image-urls'
+import { normalizeUrlForComparison, buildNormalizedUrlSet } from './url-utils'
 
 export class LinearPlugin implements TaskSourcePlugin {
   id = 'linear'
@@ -560,11 +561,14 @@ export class LinearPlugin implements TaskSourcePlugin {
     }
 
     const existingAttachments = task.attachments || []
-    const existingUrls = new Set(existingAttachments.map((a) => (a as unknown as { linear_url?: string }).linear_url))
+    const existingNormalizedUrls = buildNormalizedUrlSet(
+      existingAttachments as unknown as Array<Record<string, unknown>>,
+      'linear_url'
+    )
 
     for (const file of files) {
-      // Skip if already downloaded
-      if (existingUrls.has(file.url)) {
+      // Skip if already downloaded (compare without query params since signed tokens change on each API call)
+      if (existingNormalizedUrls.has(normalizeUrlForComparison(file.url))) {
         console.log(`[linear-plugin] Skipping already downloaded file: ${file.url}`)
         continue
       }
@@ -649,17 +653,22 @@ export class LinearPlugin implements TaskSourcePlugin {
 
     const existingAttachments = task.attachments || []
     console.log(`[linear-plugin] Existing attachments: ${existingAttachments.length}`)
-    const existingUrls = new Set(existingAttachments.map((a) => (a as unknown as { linear_url?: string }).linear_url))
+    const existingNormalizedUrls = buildNormalizedUrlSet(
+      existingAttachments as unknown as Array<Record<string, unknown>>,
+      'linear_url'
+    )
 
     for (const attachment of attachments) {
+      const normalizedUrl = normalizeUrlForComparison(attachment.url)
+      const alreadyExists = existingNormalizedUrls.has(normalizedUrl)
       console.log(`[linear-plugin] Processing attachment:`, {
         id: attachment.id,
         url: attachment.url,
         title: attachment.title,
-        alreadyExists: existingUrls.has(attachment.url)
+        alreadyExists
       })
-      // Skip if already downloaded
-      if (existingUrls.has(attachment.url)) continue
+      // Skip if already downloaded (compare without query params since signed tokens change on each API call)
+      if (alreadyExists) continue
 
       try {
         console.log(`[linear-plugin] Downloading attachment: ${attachment.title || attachment.url}`)

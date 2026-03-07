@@ -309,6 +309,34 @@ describe('NotionPlugin', () => {
       expect(mockClientInstance.downloadFile).not.toHaveBeenCalled()
     })
 
+    it('skips already downloaded files when URL has different query params (resync)', async () => {
+      mockClientInstance.queryAllPages.mockResolvedValue([makePage()])
+      // Resync returns the same file but with a new signed URL (different query params)
+      mockClientInstance.extractFilesFromBlocks.mockReturnValue([
+        { url: 'https://s3.example.com/bucket/image.png?X-Amz-Credential=NEW&X-Amz-Expires=3600', filename: 'image.png' }
+      ])
+
+      const ctx = makeContext()
+      ;(ctx.db.getTask as ReturnType<typeof vi.fn>).mockReturnValue({
+        id: 'task-1',
+        attachments: [
+          {
+            id: 'att-1',
+            filename: 'image.png',
+            size: 100,
+            mime_type: 'image/png',
+            added_at: '',
+            notion_url: 'https://s3.example.com/bucket/image.png?X-Amz-Credential=OLD&X-Amz-Expires=3600'
+          }
+        ]
+      })
+
+      await plugin.importTasks('src-1', defaultConfig, ctx)
+
+      // downloadFile should NOT be called — same base URL, only query params differ
+      expect(mockClientInstance.downloadFile).not.toHaveBeenCalled()
+    })
+
     it('handles import errors gracefully', async () => {
       mockClientInstance.queryAllPages.mockRejectedValue(new Error('API down'))
 
