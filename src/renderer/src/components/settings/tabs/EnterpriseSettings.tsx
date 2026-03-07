@@ -1,6 +1,7 @@
-import { useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { SettingsSection } from '../SettingsSection'
 import { Label } from '@/components/ui/Label'
+import { Input } from '@/components/ui/Input'
 import { Button } from '@/components/ui/Button'
 import { useEnterpriseStore } from '@/stores/enterprise-store'
 
@@ -19,13 +20,19 @@ export function EnterpriseSettings() {
     clearError
   } = useEnterpriseStore()
 
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+
   useEffect(() => {
     loadSession()
   }, [loadSession])
 
-  const handleLogin = useCallback(async () => {
-    await login()
-  }, [login])
+  const handleLogin = useCallback(async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!email.trim() || !password) return
+    await login(email.trim(), password)
+    setPassword('') // Never keep password in memory after submission
+  }, [email, password, login])
 
   const handleSelectTenant = useCallback(async (tenantId: string) => {
     await selectTenant(tenantId)
@@ -33,6 +40,8 @@ export function EnterpriseSettings() {
 
   const handleLogout = useCallback(async () => {
     await logout()
+    setEmail('')
+    setPassword('')
   }, [logout])
 
   const handleSwitchOrg = useCallback(() => {
@@ -168,13 +177,13 @@ export function EnterpriseSettings() {
     )
   }
 
-  // ── Login view (OAuth popup) ─────────────────────────────────
+  // ── Login view ─────────────────────────────────────────────────
   return (
     <SettingsSection
       title="20x Cloud"
       description="Connect to your organization's 20x Cloud to access enterprise features"
     >
-      <div className="space-y-4">
+      <form onSubmit={handleLogin} className="space-y-4">
         {error && (
           <div className="rounded-md bg-destructive/10 border border-destructive/20 px-3 py-2">
             <p className="text-sm text-destructive">{error}</p>
@@ -188,13 +197,37 @@ export function EnterpriseSettings() {
           </div>
         )}
 
-        <p className="text-sm text-muted-foreground">
-          Sign in with your 20x Cloud account. A browser window will open for authentication.
-        </p>
+        <div className="space-y-2">
+          <Label htmlFor="enterprise-email">Email</Label>
+          <Input
+            id="enterprise-email"
+            type="email"
+            placeholder="you@company.com"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            disabled={isLoading}
+            required
+            autoComplete="email"
+          />
+        </div>
+
+        <div className="space-y-2">
+          <Label htmlFor="enterprise-password">Password</Label>
+          <Input
+            id="enterprise-password"
+            type="password"
+            placeholder="Enter your password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            disabled={isLoading}
+            required
+            autoComplete="current-password"
+          />
+        </div>
 
         <Button
-          onClick={handleLogin}
-          disabled={isLoading}
+          type="submit"
+          disabled={isLoading || !email.trim() || !password}
           className="w-full"
         >
           {isLoading ? (
@@ -203,13 +236,13 @@ export function EnterpriseSettings() {
                 <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                 <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
               </svg>
-              Waiting for authentication...
+              Signing in...
             </span>
           ) : (
             'Sign in to 20x Cloud'
           )}
         </Button>
-      </div>
+      </form>
     </SettingsSection>
   )
 }

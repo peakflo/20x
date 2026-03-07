@@ -282,11 +282,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('mobile:getInfo')
   },
   enterprise: {
-    login: (): Promise<{
+    login: (email: string, password: string): Promise<{
       userId: string
       email: string
       companies: { id: string; name: string; isPrimary: boolean }[]
-    }> => ipcRenderer.invoke('enterprise:login'),
+    }> => ipcRenderer.invoke('enterprise:login', email, password),
     selectTenant: (tenantId: string): Promise<{
       token: string
       tenant: { id: string; name: string }

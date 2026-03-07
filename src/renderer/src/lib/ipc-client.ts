@@ -420,12 +420,12 @@ export const onWorktreeProgress = (callback: (event: WorktreeProgressEvent) => v
 }
 
 export const enterpriseApi = {
-  login: (): Promise<{
+  login: (email: string, password: string): Promise<{
     userId: string
     email: string
     companies: { id: string; name: string; isPrimary: boolean }[]
   }> => {
-    return window.electronAPI.enterprise.login()
+    return window.electronAPI.enterprise.login(email, password)
   },
 
   selectTenant: (tenantId: string): Promise<{

@@ -25,7 +25,7 @@ interface EnterpriseState {
   availableTenants: EnterpriseCompany[] | null
 
   // Actions
-  login: () => Promise<void>
+  login: (email: string, password: string) => Promise<void>
   selectTenant: (tenantId: string) => Promise<void>
   logout: () => Promise<void>
   loadSession: () => Promise<void>
@@ -41,10 +41,10 @@ export const useEnterpriseStore = create<EnterpriseState>((set) => ({
   currentTenant: null,
   availableTenants: null,
 
-  login: async () => {
+  login: async (email: string, password: string) => {
     set({ isLoading: true, error: null })
     try {
-      const result = await enterpriseApi.login()
+      const result = await enterpriseApi.login(email, password)
       set({
         isLoading: false,
         userEmail: result.email,

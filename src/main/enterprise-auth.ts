@@ -1,8 +1,6 @@
-import { app, safeStorage, shell } from 'electron'
-import { randomBytes, createHash } from 'crypto'
+import { app, safeStorage } from 'electron'
 import { createClient, SupabaseClient, Session } from '@supabase/supabase-js'
 import type { DatabaseManager } from './database'
-import { LocalOAuthServer } from './oauth/local-oauth-server'
 
 // ── Enterprise environment configs ────────────────────────────────
 // Supabase anon keys are public (designed for client-side use).
@@ -121,116 +119,46 @@ export class EnterpriseAuth {
     this.supabase = createClient(this.config.supabaseUrl, this.config.supabaseAnonKey, {
       auth: {
         autoRefreshToken: false,
-        persistSession: false,
-        flowType: 'pkce'
+        persistSession: false
       }
     })
   }
 
-  // ── PKCE helpers ─────────────────────────────────────────────────
+  // ── Login (email/password via Supabase) ───────────────────────────
 
-  private generatePKCE(): { verifier: string; challenge: string } {
-    const verifier = randomBytes(32).toString('base64url')
-    const challenge = createHash('sha256').update(verifier).digest('base64url')
-    return { verifier, challenge }
-  }
+  async login(email: string, password: string): Promise<EnterpriseLoginResult> {
+    if (!email || !password) {
+      throw new Error('Email and password are required')
+    }
 
-  // ── Login (Supabase OAuth Server flow) ─────────────────────────
-  //
-  // Follows: https://supabase.com/docs/guides/auth/oauth-server/oauth-flows
-  //
-  // 1. Redirect to Supabase's /auth/v1/authorize (hosted login UI)
-  //    — Supabase decides which providers to show (Google, OIDC, email, etc.)
-  // 2. User authenticates in the browser
-  // 3. Supabase redirects back with ?code=...
-  // 4. We exchange the code + PKCE verifier for tokens via /auth/v1/token
+    // Sign in with Supabase
+    const { data, error } = await this.supabase.auth.signInWithPassword({
+      email,
+      password
+    })
 
-  async login(): Promise<EnterpriseLoginResult> {
-    const server = new LocalOAuthServer()
+    if (error) {
+      throw new Error(error.message)
+    }
 
-    try {
-      // Start local server to receive OAuth callback
-      const redirectUri = await server.start()
-      console.log(`[Enterprise] OAuth: local server started at ${redirectUri}`)
+    if (!data.session || !data.user) {
+      throw new Error('Authentication failed — no session returned')
+    }
 
-      // Generate PKCE code verifier and challenge
-      const { verifier, challenge } = this.generatePKCE()
+    // Store Supabase tokens (encrypted)
+    this.storeSupabaseSession(data.session)
 
-      // Build Supabase authorize URL — Supabase shows its hosted login UI
-      // with all configured providers (no provider hardcoded on our side)
-      const authorizeUrl = new URL(`${this.config.supabaseUrl}/auth/v1/authorize`)
-      authorizeUrl.searchParams.set('response_type', 'code')
-      authorizeUrl.searchParams.set('client_id', this.config.supabaseAnonKey)
-      authorizeUrl.searchParams.set('redirect_uri', redirectUri)
-      authorizeUrl.searchParams.set('code_challenge', challenge)
-      authorizeUrl.searchParams.set('code_challenge_method', 'S256')
+    // Store basic user info
+    this.db.setSetting(KEYS.USER_EMAIL, data.user.email || email)
+    this.db.setSetting(KEYS.USER_ID, data.user.id)
 
-      // Open in system browser — Supabase handles provider selection
-      console.log('[Enterprise] OAuth: opening Supabase auth UI in browser')
-      await shell.openExternal(authorizeUrl.toString())
+    // Fetch user's companies from the workflow-api
+    const companies = await this.fetchCompanies(data.session.access_token)
 
-      // Wait for callback with auth code
-      console.log('[Enterprise] OAuth: waiting for callback...')
-      const callback = await server.waitForCallback()
-
-      // Exchange auth code + PKCE verifier for tokens
-      // POST /auth/v1/token?grant_type=authorization_code
-      console.log('[Enterprise] OAuth: exchanging code for tokens')
-      const tokenUrl = `${this.config.supabaseUrl}/auth/v1/token?grant_type=authorization_code`
-      const tokenResponse = await fetch(tokenUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'apikey': this.config.supabaseAnonKey
-        },
-        body: JSON.stringify({
-          code: callback.code,
-          redirect_uri: redirectUri,
-          code_verifier: verifier
-        })
-      })
-
-      if (!tokenResponse.ok) {
-        const errBody = await tokenResponse.json().catch(() => ({}))
-        throw new Error(errBody.error_description || errBody.msg || `Token exchange failed (${tokenResponse.status})`)
-      }
-
-      const tokenData = await tokenResponse.json()
-
-      if (!tokenData.access_token || !tokenData.user) {
-        throw new Error('Token exchange returned incomplete data')
-      }
-
-      // Build a session-like object for storage
-      const session: Session = {
-        access_token: tokenData.access_token,
-        refresh_token: tokenData.refresh_token || '',
-        expires_in: tokenData.expires_in,
-        expires_at: tokenData.expires_at,
-        token_type: tokenData.token_type || 'bearer',
-        user: tokenData.user
-      }
-
-      // Store Supabase tokens (encrypted)
-      this.storeSupabaseSession(session)
-
-      // Store basic user info
-      const userEmail = tokenData.user.email || ''
-      this.db.setSetting(KEYS.USER_EMAIL, userEmail)
-      this.db.setSetting(KEYS.USER_ID, tokenData.user.id)
-
-      // Fetch user's companies from the workflow-api
-      const companies = await this.fetchCompanies(tokenData.access_token)
-
-      console.log(`[Enterprise] OAuth: login successful for ${userEmail}`)
-
-      return {
-        userId: tokenData.user.id,
-        email: userEmail,
-        companies
-      }
-    } finally {
-      server.stop()
+    return {
+      userId: data.user.id,
+      email: data.user.email || email,
+      companies
     }
   }
 
