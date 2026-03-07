@@ -2,6 +2,7 @@ import { execFile } from 'child_process'
 import { readdirSync } from 'fs'
 import { app, BrowserWindow, net, protocol, shell, Tray, Menu, nativeImage } from 'electron'
 import { join } from 'path'
+import { pathToFileURL } from 'url'
 import { is } from '@electron-toolkit/utils'
 import { DatabaseManager } from './database'
 import { AgentManager } from './agent-manager'
@@ -267,7 +268,7 @@ app.whenReady().then(async () => {
         return new Response('Not found', { status: 404 })
       }
 
-      return net.fetch(`file://${join(dir, match)}`)
+      return net.fetch(pathToFileURL(join(dir, match)).href)
     } catch {
       return new Response('Internal error', { status: 500 })
     }
