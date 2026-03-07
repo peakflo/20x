@@ -481,6 +481,14 @@ You are a TypeScript Agent SDK application verifier.
       .map((s) => s.id)
     expect(pluginSkillIds.length).toBeGreaterThan(0)
     expect(pyAgent.config.skill_ids).toEqual(pluginSkillIds)
+
+    // Verify plugin MCP servers are auto-assigned to agent
+    const allMcp = db.getMcpServers()
+    const pluginMcpIds = allMcp
+      .filter((s) => s.name.startsWith('file-plugin:'))
+      .map((s) => s.id)
+    expect(pluginMcpIds.length).toBeGreaterThan(0)
+    expect(pyAgent.config.mcp_servers).toEqual(pluginMcpIds)
   })
 
   it('removes all resources on uninstall', async () => {

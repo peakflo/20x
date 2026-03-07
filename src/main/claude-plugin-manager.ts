@@ -850,10 +850,15 @@ export class ClaudePluginManager {
     }
 
     // ── 4. Agents from agents/ directory ────────────────────────
-    // Collect all plugin skill IDs so agents auto-inherit them
+    // Collect all plugin skill IDs and MCP server IDs so agents auto-inherit them
     const allSkills = this.db.getSkills()
     const pluginSkillIds = allSkills
       .filter((s) => s.tags.includes('plugin') && s.tags.includes(plugin.name))
+      .map((s) => s.id)
+
+    const allMcpServers = this.db.getMcpServers()
+    const pluginMcpServerIds = allMcpServers
+      .filter((s) => s.name.startsWith(`${plugin.name}:`))
       .map((s) => s.id)
 
     const agentsDir = join(pluginDir, 'agents')
@@ -867,7 +872,7 @@ export class ClaudePluginManager {
           const content = readFileSync(entryPath, 'utf-8')
           const agentName = basename(entry, '.md')
           const { title, description, model } = this.parseAgentFrontmatter(content, agentName)
-          this.createPluginAgent(plugin.name, agentName, title, description, content, model, pluginSkillIds)
+          this.createPluginAgent(plugin.name, agentName, title, description, content, model, pluginSkillIds, pluginMcpServerIds)
         }
       }
     }
@@ -942,7 +947,8 @@ export class ClaudePluginManager {
     description: string,
     content: string,
     model?: string,
-    skillIds?: string[]
+    skillIds?: string[],
+    mcpServerIds?: string[]
   ): void {
     try {
       // Strip frontmatter from content to use as system prompt
@@ -953,7 +959,8 @@ export class ClaudePluginManager {
         config: {
           system_prompt: systemPrompt,
           model: model || undefined,
-          skill_ids: skillIds?.length ? skillIds : undefined
+          skill_ids: skillIds?.length ? skillIds : undefined,
+          mcp_servers: mcpServerIds?.length ? mcpServerIds : undefined
         }
       })
     } catch (err) {
