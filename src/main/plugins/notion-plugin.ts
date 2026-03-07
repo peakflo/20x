@@ -13,6 +13,7 @@ import type {
 import type { TaskRecord } from '../database'
 import type { SourceUser, ReassignResult } from '../../shared/types'
 import { TaskStatus } from '../../shared/constants'
+import { replaceRemoteImageUrls } from './replace-image-urls'
 import {
   NotionClient,
   type NotionDatabase,
@@ -459,6 +460,21 @@ export class NotionPlugin implements TaskSourcePlugin {
           if (fileUrls.length > 0) {
             console.log(`[notion] Found ${fileUrls.length} files for page "${mapped.title}"`)
             await this.downloadNotionFiles(taskId, fileUrls, client, ctx)
+          }
+
+          // Replace remote image URLs in description with local attachment URLs
+          // so images still display after remote links expire
+          const updatedTask = ctx.db.getTask(taskId)
+          if (updatedTask?.description && updatedTask.attachments?.length) {
+            const newDescription = replaceRemoteImageUrls(
+              updatedTask.description,
+              taskId,
+              updatedTask.attachments as Array<{ id: string; filename: string; [key: string]: unknown }>
+            )
+            if (newDescription !== updatedTask.description) {
+              ctx.db.updateTask(taskId, { description: newDescription })
+              console.log(`[notion] Replaced remote image URLs with local paths in task ${taskId}`)
+            }
           }
         } catch (err) {
           const msg = err instanceof Error ? err.message : 'Unknown error'

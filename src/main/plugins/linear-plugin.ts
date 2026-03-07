@@ -19,6 +19,7 @@ import type {
   ActionResult
 } from './types'
 import { LinearClient, type LinearIssue } from './linear-client'
+import { replaceRemoteImageUrls } from './replace-image-urls'
 
 export class LinearPlugin implements TaskSourcePlugin {
   id = 'linear'
@@ -257,6 +258,21 @@ export class LinearPlugin implements TaskSourcePlugin {
           if (issue.attachments?.nodes && issue.attachments.nodes.length > 0) {
             console.log(`[linear-plugin] Found ${issue.attachments.nodes.length} link attachments`)
             await this.downloadAttachments(taskId, issue.attachments.nodes, client, ctx)
+          }
+
+          // Replace remote image URLs in description with local attachment URLs
+          // so images still display after remote links expire
+          const updatedTask = ctx.db.getTask(taskId)
+          if (updatedTask?.description && updatedTask.attachments?.length) {
+            const newDescription = replaceRemoteImageUrls(
+              updatedTask.description,
+              taskId,
+              updatedTask.attachments as Array<{ id: string; filename: string; [key: string]: unknown }>
+            )
+            if (newDescription !== updatedTask.description) {
+              ctx.db.updateTask(taskId, { description: newDescription })
+              console.log(`[linear-plugin] Replaced remote image URLs with local paths in task ${taskId}`)
+            }
           }
         } catch (err) {
           const errorMsg = err instanceof Error ? err.message : 'Unknown error'

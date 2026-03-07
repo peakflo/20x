@@ -177,6 +177,17 @@ export function Markdown({ children, size = 'sm', className }: MarkdownProps) {
             </a>
           ),
 
+          // Images
+          img: ({ alt, src, ...props }) => (
+            <img
+              alt={alt || ''}
+              src={src}
+              className="max-w-full h-auto rounded my-2"
+              loading="lazy"
+              {...props}
+            />
+          ),
+
           // Blockquotes
           blockquote: ({ children, ...props }) => (
             <blockquote
