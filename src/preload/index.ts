@@ -229,6 +229,30 @@ contextBridge.exposeInMainWorld('electronAPI', {
     executeAction: (actionId: string, taskId: string, sourceId: string, input?: string): Promise<unknown> =>
       ipcRenderer.invoke('plugin:executeAction', actionId, taskId, sourceId, input)
   },
+  claudePlugins: {
+    getMarketplaceSources: (): Promise<unknown[]> =>
+      ipcRenderer.invoke('claudePlugin:getMarketplaceSources'),
+    addMarketplaceSource: (data: { name: string; source_type?: string; source_url: string; auto_update?: boolean }): Promise<unknown> =>
+      ipcRenderer.invoke('claudePlugin:addMarketplaceSource', data),
+    removeMarketplaceSource: (id: string): Promise<boolean> =>
+      ipcRenderer.invoke('claudePlugin:removeMarketplaceSource', id),
+    fetchCatalog: (sourceId: string): Promise<unknown> =>
+      ipcRenderer.invoke('claudePlugin:fetchCatalog', sourceId),
+    discoverPlugins: (searchQuery?: string): Promise<unknown[]> =>
+      ipcRenderer.invoke('claudePlugin:discoverPlugins', searchQuery),
+    getInstalledPlugins: (): Promise<unknown[]> =>
+      ipcRenderer.invoke('claudePlugin:getInstalledPlugins'),
+    installPlugin: (pluginName: string, marketplaceId: string, scope?: string): Promise<unknown> =>
+      ipcRenderer.invoke('claudePlugin:installPlugin', pluginName, marketplaceId, scope),
+    uninstallPlugin: (pluginId: string): Promise<boolean> =>
+      ipcRenderer.invoke('claudePlugin:uninstallPlugin', pluginId),
+    enablePlugin: (pluginId: string): Promise<unknown> =>
+      ipcRenderer.invoke('claudePlugin:enablePlugin', pluginId),
+    disablePlugin: (pluginId: string): Promise<unknown> =>
+      ipcRenderer.invoke('claudePlugin:disablePlugin', pluginId),
+    getPluginResources: (pluginId: string): Promise<unknown> =>
+      ipcRenderer.invoke('claudePlugin:getPluginResources', pluginId)
+  },
   onWorktreeProgress: (callback: (event: unknown) => void): (() => void) => {
     const handler = (_: unknown, data: unknown): void => callback(data)
     ipcRenderer.on('worktree:progress', handler)

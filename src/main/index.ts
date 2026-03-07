@@ -19,6 +19,7 @@ import { GitHubIssuesPlugin } from './plugins/github-issues-plugin'
 import { NotionPlugin } from './plugins/notion-plugin'
 import { registerIpcHandlers } from './ipc-handlers'
 import { RecurrenceScheduler } from './recurrence-scheduler'
+import { ClaudePluginManager } from './claude-plugin-manager'
 import { setTaskApiNotifier } from './task-api-server'
 import { startSecretBroker, stopSecretBroker, writeSecretShellWrapper } from './secret-broker'
 import { startMobileApiServer, stopMobileApiServer, broadcastToMobileClients, setMobileApiNotifier } from './mobile-api-server'
@@ -35,6 +36,7 @@ let syncManager: SyncManager | null = null
 let pluginRegistry: PluginRegistry | null = null
 let oauthManager: OAuthManager | null = null
 let recurrenceScheduler: RecurrenceScheduler | null = null
+let claudePluginManager: ClaudePluginManager | null = null
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
@@ -307,7 +309,9 @@ app.whenReady().then(async () => {
 
   recurrenceScheduler = new RecurrenceScheduler(db)
 
-  registerIpcHandlers(db, agentManager, githubManager, worktreeManager, syncManager, pluginRegistry, mcpToolCaller, oauthManager, recurrenceScheduler)
+  claudePluginManager = new ClaudePluginManager(db)
+
+  registerIpcHandlers(db, agentManager, githubManager, worktreeManager, syncManager, pluginRegistry, mcpToolCaller, oauthManager, recurrenceScheduler, claudePluginManager)
 
   // Start secret broker and write shell wrapper (awaited so broker is ready before any sessions)
   try {

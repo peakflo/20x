@@ -1,4 +1,4 @@
-import type { WorkfloTask, CreateTaskDTO, UpdateTaskDTO, FileAttachment, Agent, CreateAgentDTO, UpdateAgentDTO, McpServer, CreateMcpServerDTO, UpdateMcpServerDTO, Skill, CreateSkillDTO, UpdateSkillDTO, Secret, CreateSecretDTO, UpdateSecretDTO, TaskSource, CreateTaskSourceDTO, UpdateTaskSourceDTO, SyncResult, PluginMeta, ConfigFieldSchema, ConfigFieldOption, PluginAction, ActionResult, SourceUser, ReassignResult } from '@/types'
+import type { WorkfloTask, CreateTaskDTO, UpdateTaskDTO, FileAttachment, Agent, CreateAgentDTO, UpdateAgentDTO, McpServer, CreateMcpServerDTO, UpdateMcpServerDTO, Skill, CreateSkillDTO, UpdateSkillDTO, Secret, CreateSecretDTO, UpdateSecretDTO, TaskSource, CreateTaskSourceDTO, UpdateTaskSourceDTO, SyncResult, PluginMeta, ConfigFieldSchema, ConfigFieldOption, PluginAction, ActionResult, SourceUser, ReassignResult, MarketplaceSource, InstalledPlugin, DiscoverablePlugin, MarketplaceCatalog, PluginResources } from '@/types'
 import type { AgentOutputEvent, AgentOutputBatchEvent, AgentStatusEvent, AgentApprovalRequest, GhCliStatus, GitHubRepo, GitHubCollaborator, WorktreeProgressEvent, McpTestResult, SkillSyncResult, DepsStatus } from '@/types/electron'
 
 export const taskApi = {
@@ -357,6 +357,52 @@ export const pluginApi = {
 
   executeAction: (actionId: string, taskId: string, sourceId: string, input?: string): Promise<ActionResult> => {
     return window.electronAPI.plugins.executeAction(actionId, taskId, sourceId, input)
+  }
+}
+
+export const claudePluginApi = {
+  getMarketplaceSources: (): Promise<MarketplaceSource[]> => {
+    return window.electronAPI.claudePlugins.getMarketplaceSources()
+  },
+
+  addMarketplaceSource: (data: { name: string; source_type?: string; source_url: string; auto_update?: boolean }): Promise<MarketplaceSource> => {
+    return window.electronAPI.claudePlugins.addMarketplaceSource(data)
+  },
+
+  removeMarketplaceSource: (id: string): Promise<boolean> => {
+    return window.electronAPI.claudePlugins.removeMarketplaceSource(id)
+  },
+
+  fetchCatalog: (sourceId: string): Promise<MarketplaceCatalog | null> => {
+    return window.electronAPI.claudePlugins.fetchCatalog(sourceId)
+  },
+
+  discoverPlugins: (searchQuery?: string): Promise<DiscoverablePlugin[]> => {
+    return window.electronAPI.claudePlugins.discoverPlugins(searchQuery)
+  },
+
+  getInstalledPlugins: (): Promise<InstalledPlugin[]> => {
+    return window.electronAPI.claudePlugins.getInstalledPlugins()
+  },
+
+  installPlugin: (pluginName: string, marketplaceId: string, scope?: string): Promise<InstalledPlugin> => {
+    return window.electronAPI.claudePlugins.installPlugin(pluginName, marketplaceId, scope)
+  },
+
+  uninstallPlugin: (pluginId: string): Promise<boolean> => {
+    return window.electronAPI.claudePlugins.uninstallPlugin(pluginId)
+  },
+
+  enablePlugin: (pluginId: string): Promise<InstalledPlugin | undefined> => {
+    return window.electronAPI.claudePlugins.enablePlugin(pluginId)
+  },
+
+  disablePlugin: (pluginId: string): Promise<InstalledPlugin | undefined> => {
+    return window.electronAPI.claudePlugins.disablePlugin(pluginId)
+  },
+
+  getPluginResources: (pluginId: string): Promise<PluginResources> => {
+    return window.electronAPI.claudePlugins.getPluginResources(pluginId)
   }
 }
 

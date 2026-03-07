@@ -6,6 +6,7 @@ export enum SettingsTab {
   TOOLS_MCP = 'tools-mcp',
   SECRETS = 'secrets',
   INTEGRATIONS = 'integrations',
+  PLUGINS = 'plugins',
   ADVANCED = 'advanced'
 }
 
@@ -15,6 +16,7 @@ export const SETTINGS_TABS: { value: SettingsTab; label: string; icon: string }[
   { value: SettingsTab.TOOLS_MCP, label: 'Tools & MCP', icon: 'Server' },
   { value: SettingsTab.SECRETS, label: 'Secrets', icon: 'KeyRound' },
   { value: SettingsTab.INTEGRATIONS, label: 'Integrations', icon: 'Workflow' },
+  { value: SettingsTab.PLUGINS, label: 'Plugins', icon: 'Puzzle' },
   { value: SettingsTab.ADVANCED, label: 'Advanced', icon: 'Wrench' }
 ]
 
@@ -503,6 +505,105 @@ export interface ActionResult {
   success: boolean
   error?: string
   taskUpdate?: Record<string, unknown>
+}
+
+// ── Claude Plugin Marketplace types ─────────────────────────
+
+export interface MarketplaceSource {
+  id: string
+  name: string
+  source_type: string
+  source_url: string
+  metadata: Record<string, unknown>
+  auto_update: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface ClaudePluginManifest {
+  name: string
+  version?: string
+  description?: string
+  author?: { name: string; email?: string; url?: string }
+  homepage?: string
+  repository?: string
+  license?: string
+  keywords?: string[]
+  commands?: string | string[]
+  agents?: string | string[]
+  skills?: string | string[]
+  hooks?: string | Record<string, unknown>
+  mcpServers?: string | Record<string, unknown>
+  lspServers?: string | Record<string, unknown>
+}
+
+export interface ClaudePluginSource {
+  source?: string
+  repo?: string
+  url?: string
+  ref?: string
+  sha?: string
+  path?: string
+  package?: string
+  version?: string
+  registry?: string
+}
+
+export interface InstalledPlugin {
+  id: string
+  name: string
+  marketplace_id: string
+  manifest: ClaudePluginManifest
+  source: ClaudePluginSource
+  scope: string
+  enabled: boolean
+  version: string
+  installed_at: string
+  updated_at: string
+}
+
+export interface DiscoverablePlugin {
+  name: string
+  description: string
+  version: string
+  author: string
+  category: string
+  tags: string[]
+  homepage: string
+  repository: string
+  license: string
+  marketplace_id: string
+  marketplace_name: string
+  source: ClaudePluginSource | string
+  installed: boolean
+  installed_plugin_id?: string
+  enabled?: boolean
+}
+
+export interface PluginResources {
+  skills: { id: string; name: string; description: string }[]
+  mcpServers: { id: string; name: string; command: string; args: string[] }[]
+  agents: { id: string; name: string; description: string }[]
+  commands: string[]
+}
+
+export interface MarketplaceCatalog {
+  name: string
+  owner: { name: string; email?: string }
+  metadata?: { description?: string; version?: string }
+  plugins: Array<{
+    name: string
+    source: string | ClaudePluginSource
+    description?: string
+    version?: string
+    author?: { name: string; email?: string }
+    category?: string
+    tags?: string[]
+    keywords?: string[]
+    homepage?: string
+    repository?: string
+    license?: string
+  }>
 }
 
 // ── OAuth types ──────────────────────────────────────────────
