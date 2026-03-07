@@ -27,6 +27,7 @@ import type { WorktreeManager } from './worktree-manager'
 import type { SyncManager } from './sync-manager'
 import type { PluginRegistry } from './plugins/registry'
 import type { OAuthManager } from './oauth/oauth-manager'
+import type { EnterpriseAuth } from './enterprise-auth'
 
 const MIME_MAP: Record<string, string> = {
   '.pdf': 'application/pdf',
@@ -66,7 +67,8 @@ export function registerIpcHandlers(
   pluginRegistry: PluginRegistry,
   mcpToolCaller?: import('./mcp-tool-caller').McpToolCaller,
   oauthManager?: OAuthManager,
-  recurrenceScheduler?: import('./recurrence-scheduler').RecurrenceScheduler
+  recurrenceScheduler?: import('./recurrence-scheduler').RecurrenceScheduler,
+  enterpriseAuth?: EnterpriseAuth
 ): void {
   ipcMain.handle('db:getTasks', () => {
     return db.getTasks()
@@ -664,5 +666,38 @@ export function registerIpcHandlers(
     const token = db.getSetting('mobile_auth_token') || ''
     const hash = token ? `#token=${token}` : ''
     return { url: `http://localhost:${port}/${hash}`, port }
+  })
+
+  // Enterprise auth handlers
+  ipcMain.handle('enterprise:login', async (_, email: string, password: string) => {
+    if (!enterpriseAuth) throw new Error('Enterprise auth not available')
+    return await enterpriseAuth.login(email, password)
+  })
+
+  ipcMain.handle('enterprise:selectTenant', async (_, tenantId: string) => {
+    if (!enterpriseAuth) throw new Error('Enterprise auth not available')
+    return await enterpriseAuth.selectTenant(tenantId)
+  })
+
+  ipcMain.handle('enterprise:logout', async () => {
+    if (!enterpriseAuth) throw new Error('Enterprise auth not available')
+    return await enterpriseAuth.logout()
+  })
+
+  ipcMain.handle('enterprise:getSession', async () => {
+    if (!enterpriseAuth) {
+      return { isAuthenticated: false, userEmail: null, userId: null, currentTenant: null }
+    }
+    return await enterpriseAuth.getSession()
+  })
+
+  ipcMain.handle('enterprise:refreshToken', async () => {
+    if (!enterpriseAuth) throw new Error('Enterprise auth not available')
+    return await enterpriseAuth.refreshToken()
+  })
+
+  ipcMain.handle('enterprise:apiRequest', async (_, method: string, path: string, body?: unknown) => {
+    if (!enterpriseAuth) throw new Error('Enterprise auth not available')
+    return await enterpriseAuth.apiRequest(method, path, body)
   })
 }

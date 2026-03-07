@@ -249,6 +249,26 @@ interface ElectronAPI {
   mobile: {
     getInfo: () => Promise<{ url: string; port: number }>
   }
+  enterprise: {
+    login: (email: string, password: string) => Promise<{
+      userId: string
+      email: string
+      companies: { id: string; name: string; isPrimary: boolean }[]
+    }>
+    selectTenant: (tenantId: string) => Promise<{
+      token: string
+      tenant: { id: string; name: string }
+    }>
+    logout: () => Promise<void>
+    getSession: () => Promise<{
+      isAuthenticated: boolean
+      userEmail: string | null
+      userId: string | null
+      currentTenant: { id: string; name: string } | null
+    }>
+    refreshToken: () => Promise<{ token: string }>
+    apiRequest: (method: string, path: string, body?: unknown) => Promise<unknown>
+  }
   webUtils: {
     getPathForFile: (file: File) => string
   }

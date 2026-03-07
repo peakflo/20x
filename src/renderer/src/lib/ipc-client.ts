@@ -372,3 +372,41 @@ export const worktreeApi = {
 export const onWorktreeProgress = (callback: (event: WorktreeProgressEvent) => void): (() => void) => {
   return window.electronAPI.onWorktreeProgress(callback)
 }
+
+export const enterpriseApi = {
+  login: (email: string, password: string): Promise<{
+    userId: string
+    email: string
+    companies: { id: string; name: string; isPrimary: boolean }[]
+  }> => {
+    return window.electronAPI.enterprise.login(email, password)
+  },
+
+  selectTenant: (tenantId: string): Promise<{
+    token: string
+    tenant: { id: string; name: string }
+  }> => {
+    return window.electronAPI.enterprise.selectTenant(tenantId)
+  },
+
+  logout: (): Promise<void> => {
+    return window.electronAPI.enterprise.logout()
+  },
+
+  getSession: (): Promise<{
+    isAuthenticated: boolean
+    userEmail: string | null
+    userId: string | null
+    currentTenant: { id: string; name: string } | null
+  }> => {
+    return window.electronAPI.enterprise.getSession()
+  },
+
+  refreshToken: (): Promise<{ token: string }> => {
+    return window.electronAPI.enterprise.refreshToken()
+  },
+
+  apiRequest: (method: string, path: string, body?: unknown): Promise<unknown> => {
+    return window.electronAPI.enterprise.apiRequest(method, path, body)
+  }
+}
