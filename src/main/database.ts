@@ -535,6 +535,119 @@ export interface UpdateSecretData {
   value?: string
 }
 
+// ── Marketplace Source types ─────────────────────────────────
+
+export interface MarketplaceSourceRow {
+  id: string
+  name: string
+  source_type: string
+  source_url: string
+  metadata: string
+  auto_update: number
+  created_at: string
+  updated_at: string
+}
+
+export interface MarketplaceSourceRecord {
+  id: string
+  name: string
+  source_type: string
+  source_url: string
+  metadata: Record<string, unknown>
+  auto_update: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface CreateMarketplaceSourceData {
+  name: string
+  source_type?: string
+  source_url: string
+  metadata?: Record<string, unknown>
+  auto_update?: boolean
+}
+
+export interface UpdateMarketplaceSourceData {
+  name?: string
+  source_type?: string
+  source_url?: string
+  metadata?: Record<string, unknown>
+  auto_update?: boolean
+}
+
+// ── Installed Plugin types ──────────────────────────────────
+
+export interface ClaudePluginManifest {
+  name: string
+  version?: string
+  description?: string
+  author?: { name: string; email?: string; url?: string }
+  homepage?: string
+  repository?: string
+  license?: string
+  keywords?: string[]
+  commands?: string | string[]
+  agents?: string | string[]
+  skills?: string | string[]
+  hooks?: string | Record<string, unknown>
+  mcpServers?: string | Record<string, unknown>
+  lspServers?: string | Record<string, unknown>
+}
+
+export interface ClaudePluginSource {
+  source?: string
+  repo?: string
+  url?: string
+  ref?: string
+  sha?: string
+  path?: string
+  package?: string
+  version?: string
+  registry?: string
+}
+
+export interface InstalledPluginRow {
+  id: string
+  name: string
+  marketplace_id: string
+  manifest: string
+  source: string
+  scope: string
+  enabled: number
+  version: string
+  installed_at: string
+  updated_at: string
+}
+
+export interface InstalledPluginRecord {
+  id: string
+  name: string
+  marketplace_id: string
+  manifest: ClaudePluginManifest
+  source: ClaudePluginSource
+  scope: string
+  enabled: boolean
+  version: string
+  installed_at: string
+  updated_at: string
+}
+
+export interface CreateInstalledPluginData {
+  name: string
+  marketplace_id: string
+  manifest?: ClaudePluginManifest
+  source?: ClaudePluginSource
+  scope?: string
+  version?: string
+}
+
+export interface UpdateInstalledPluginData {
+  enabled?: boolean
+  manifest?: ClaudePluginManifest
+  version?: string
+  scope?: string
+}
+
 // ── OAuth Token types ────────────────────────────────────────
 
 export interface OAuthTokenRow {
@@ -645,6 +758,34 @@ function deserializeOAuthToken(row: OAuthTokenRow): OAuthTokenRecord {
     scope: row.scope,
     token_type: row.token_type,
     created_at: row.created_at,
+    updated_at: row.updated_at
+  }
+}
+
+function deserializeMarketplaceSource(row: MarketplaceSourceRow): MarketplaceSourceRecord {
+  return {
+    id: row.id,
+    name: row.name,
+    source_type: row.source_type,
+    source_url: row.source_url,
+    metadata: JSON.parse(row.metadata || '{}'),
+    auto_update: row.auto_update === 1,
+    created_at: row.created_at,
+    updated_at: row.updated_at
+  }
+}
+
+function deserializeInstalledPlugin(row: InstalledPluginRow): InstalledPluginRecord {
+  return {
+    id: row.id,
+    name: row.name,
+    marketplace_id: row.marketplace_id,
+    manifest: JSON.parse(row.manifest || '{}'),
+    source: JSON.parse(row.source || '{}'),
+    scope: row.scope,
+    enabled: row.enabled === 1,
+    version: row.version,
+    installed_at: row.installed_at,
     updated_at: row.updated_at
   }
 }
@@ -815,6 +956,33 @@ export class DatabaseManager {
       );
 
       CREATE UNIQUE INDEX IF NOT EXISTS idx_secrets_env_var ON secrets(env_var_name);
+
+      CREATE TABLE IF NOT EXISTS marketplace_sources (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL UNIQUE,
+        source_type TEXT NOT NULL DEFAULT 'github',
+        source_url TEXT NOT NULL,
+        metadata TEXT NOT NULL DEFAULT '{}',
+        auto_update INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS installed_plugins (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        marketplace_id TEXT REFERENCES marketplace_sources(id) ON DELETE CASCADE,
+        manifest TEXT NOT NULL DEFAULT '{}',
+        source TEXT NOT NULL DEFAULT '{}',
+        scope TEXT NOT NULL DEFAULT 'user',
+        enabled INTEGER NOT NULL DEFAULT 1,
+        version TEXT NOT NULL DEFAULT '1.0.0',
+        installed_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_installed_plugins_name_marketplace
+        ON installed_plugins(name, marketplace_id);
     `)
   }
 
@@ -2082,6 +2250,102 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
 
   deleteOAuthTokenByMcpServer(mcpServerId: string): boolean {
     const result = this.db.prepare('DELETE FROM oauth_tokens WHERE mcp_server_id = ?').run(mcpServerId)
+    return result.changes > 0
+  }
+
+  // ── Marketplace Sources ──────────────────────────────────────
+
+  getMarketplaceSources(): MarketplaceSourceRecord[] {
+    const rows = this.db.prepare('SELECT * FROM marketplace_sources ORDER BY created_at DESC').all() as MarketplaceSourceRow[]
+    return rows.map(deserializeMarketplaceSource)
+  }
+
+  getMarketplaceSource(id: string): MarketplaceSourceRecord | undefined {
+    const row = this.db.prepare('SELECT * FROM marketplace_sources WHERE id = ?').get(id) as MarketplaceSourceRow | undefined
+    return row ? deserializeMarketplaceSource(row) : undefined
+  }
+
+  getMarketplaceSourceByName(name: string): MarketplaceSourceRecord | undefined {
+    const row = this.db.prepare('SELECT * FROM marketplace_sources WHERE name = ?').get(name) as MarketplaceSourceRow | undefined
+    return row ? deserializeMarketplaceSource(row) : undefined
+  }
+
+  createMarketplaceSource(data: CreateMarketplaceSourceData): MarketplaceSourceRecord {
+    const id = createId()
+    const now = new Date().toISOString()
+    this.db.prepare(
+      'INSERT INTO marketplace_sources (id, name, source_type, source_url, metadata, auto_update, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+    ).run(id, data.name, data.source_type || 'github', data.source_url, JSON.stringify(data.metadata || {}), data.auto_update ? 1 : 0, now, now)
+    return this.getMarketplaceSource(id)!
+  }
+
+  updateMarketplaceSource(id: string, data: UpdateMarketplaceSourceData): MarketplaceSourceRecord | undefined {
+    const existing = this.getMarketplaceSource(id)
+    if (!existing) return undefined
+    const now = new Date().toISOString()
+    const sets: string[] = ['updated_at = ?']
+    const values: unknown[] = [now]
+    if (data.name !== undefined) { sets.push('name = ?'); values.push(data.name) }
+    if (data.source_type !== undefined) { sets.push('source_type = ?'); values.push(data.source_type) }
+    if (data.source_url !== undefined) { sets.push('source_url = ?'); values.push(data.source_url) }
+    if (data.metadata !== undefined) { sets.push('metadata = ?'); values.push(JSON.stringify(data.metadata)) }
+    if (data.auto_update !== undefined) { sets.push('auto_update = ?'); values.push(data.auto_update ? 1 : 0) }
+    values.push(id)
+    this.db.prepare(`UPDATE marketplace_sources SET ${sets.join(', ')} WHERE id = ?`).run(...values)
+    return this.getMarketplaceSource(id)
+  }
+
+  deleteMarketplaceSource(id: string): boolean {
+    const result = this.db.prepare('DELETE FROM marketplace_sources WHERE id = ?').run(id)
+    return result.changes > 0
+  }
+
+  // ── Installed Plugins ────────────────────────────────────────
+
+  getInstalledPlugins(): InstalledPluginRecord[] {
+    const rows = this.db.prepare('SELECT * FROM installed_plugins ORDER BY installed_at DESC').all() as InstalledPluginRow[]
+    return rows.map(deserializeInstalledPlugin)
+  }
+
+  getInstalledPlugin(id: string): InstalledPluginRecord | undefined {
+    const row = this.db.prepare('SELECT * FROM installed_plugins WHERE id = ?').get(id) as InstalledPluginRow | undefined
+    return row ? deserializeInstalledPlugin(row) : undefined
+  }
+
+  getInstalledPluginByName(name: string, marketplaceId: string): InstalledPluginRecord | undefined {
+    const row = this.db.prepare('SELECT * FROM installed_plugins WHERE name = ? AND marketplace_id = ?').get(name, marketplaceId) as InstalledPluginRow | undefined
+    return row ? deserializeInstalledPlugin(row) : undefined
+  }
+
+  createInstalledPlugin(data: CreateInstalledPluginData): InstalledPluginRecord {
+    const id = createId()
+    const now = new Date().toISOString()
+    this.db.prepare(
+      'INSERT INTO installed_plugins (id, name, marketplace_id, manifest, source, scope, enabled, version, installed_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    ).run(
+      id, data.name, data.marketplace_id, JSON.stringify(data.manifest || {}),
+      JSON.stringify(data.source || {}), data.scope || 'user', 1, data.version || '1.0.0', now, now
+    )
+    return this.getInstalledPlugin(id)!
+  }
+
+  updateInstalledPlugin(id: string, data: UpdateInstalledPluginData): InstalledPluginRecord | undefined {
+    const existing = this.getInstalledPlugin(id)
+    if (!existing) return undefined
+    const now = new Date().toISOString()
+    const sets: string[] = ['updated_at = ?']
+    const values: unknown[] = [now]
+    if (data.enabled !== undefined) { sets.push('enabled = ?'); values.push(data.enabled ? 1 : 0) }
+    if (data.manifest !== undefined) { sets.push('manifest = ?'); values.push(JSON.stringify(data.manifest)) }
+    if (data.version !== undefined) { sets.push('version = ?'); values.push(data.version) }
+    if (data.scope !== undefined) { sets.push('scope = ?'); values.push(data.scope) }
+    values.push(id)
+    this.db.prepare(`UPDATE installed_plugins SET ${sets.join(', ')} WHERE id = ?`).run(...values)
+    return this.getInstalledPlugin(id)
+  }
+
+  deleteInstalledPlugin(id: string): boolean {
+    const result = this.db.prepare('DELETE FROM installed_plugins WHERE id = ?').run(id)
     return result.changes > 0
   }
 }
