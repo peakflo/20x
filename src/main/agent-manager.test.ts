@@ -246,47 +246,37 @@ describe('AgentManager skill file paths', () => {
     })
   })
 
-  describe('buildMemoryFileInstruction', () => {
-    it('returns CLAUDE.md instruction for Claude Code agents', () => {
+  describe('getMemoryFileName', () => {
+    it('returns CLAUDE.md for Claude Code agents', () => {
       const mockDb = createMockDb({ coding_agent: 'claude-code' })
       manager = new AgentManager(mockDb)
 
-      const result: string = (manager as any).buildMemoryFileInstruction('agent-1')
-
-      expect(result).toContain('CLAUDE.md')
-      expect(result).toContain('you MUST read')
-      expect(result).not.toContain('AGENTS.md')
+      const result: string = (manager as any).getMemoryFileName('agent-1')
+      expect(result).toBe('CLAUDE.md')
     })
 
-    it('returns AGENTS.md instruction for OpenCode agents', () => {
+    it('returns AGENTS.md for OpenCode agents', () => {
       const mockDb = createMockDb({ coding_agent: 'opencode' })
       manager = new AgentManager(mockDb)
 
-      const result: string = (manager as any).buildMemoryFileInstruction('agent-1')
-
-      expect(result).toContain('AGENTS.md')
-      expect(result).toContain('you MUST read')
-      expect(result).not.toContain('CLAUDE.md')
+      const result: string = (manager as any).getMemoryFileName('agent-1')
+      expect(result).toBe('AGENTS.md')
     })
 
-    it('returns AGENTS.md instruction for Codex agents', () => {
+    it('returns AGENTS.md for Codex agents', () => {
       const mockDb = createMockDb({ coding_agent: 'codex' })
       manager = new AgentManager(mockDb)
 
-      const result: string = (manager as any).buildMemoryFileInstruction('agent-1')
-
-      expect(result).toContain('AGENTS.md')
-      expect(result).not.toContain('CLAUDE.md')
+      const result: string = (manager as any).getMemoryFileName('agent-1')
+      expect(result).toBe('AGENTS.md')
     })
 
-    it('returns AGENTS.md instruction when no coding_agent is configured', () => {
+    it('returns AGENTS.md when no coding_agent is configured', () => {
       const mockDb = createMockDb({})
       manager = new AgentManager(mockDb)
 
-      const result: string = (manager as any).buildMemoryFileInstruction('agent-1')
-
-      expect(result).toContain('AGENTS.md')
-      expect(result).not.toContain('CLAUDE.md')
+      const result: string = (manager as any).getMemoryFileName('agent-1')
+      expect(result).toBe('AGENTS.md')
     })
   })
 })

@@ -339,32 +339,17 @@ export class AgentManager extends EventEmitter {
       }
     }
 
-    // Append memory file instruction (CLAUDE.md for Claude Code, AGENTS.md for others)
-    config.systemPrompt = (config.systemPrompt || '') + this.buildMemoryFileInstruction(agentId)
-
     return config
   }
 
   /**
-   * Builds a system prompt instruction telling the agent to read its memory file
-   * at the start of the session. Claude Code agents read CLAUDE.md; other agents read AGENTS.md.
+   * Returns the memory file name for an agent based on its type.
+   * Claude Code agents use CLAUDE.md; all other agents use AGENTS.md.
    */
-  private buildMemoryFileInstruction(agentId: string): string {
+  private getMemoryFileName(agentId: string): string {
     const agent = this.db.getAgent(agentId)
     const backendType = (agent?.config?.coding_agent as string) || CodingAgentType.OPENCODE
-    const isClaudeCode = backendType === CodingAgentType.CLAUDE_CODE
-
-    if (isClaudeCode) {
-      return '\n\n## Important: Read CLAUDE.md\n\n' +
-        'At the start of every session, you MUST read the `CLAUDE.md` file in the working directory. ' +
-        'It contains critical workspace configuration, skill references, and project context. ' +
-        'Run `cat CLAUDE.md` or use the Read tool before doing anything else.\n'
-    } else {
-      return '\n\n## Important: Read AGENTS.md\n\n' +
-        'At the start of every session, you MUST read the `AGENTS.md` file in the working directory. ' +
-        'It contains critical workspace configuration, skill references, and project context. ' +
-        'Read it before doing anything else.\n'
-    }
+    return backendType === CodingAgentType.CLAUDE_CODE ? 'CLAUDE.md' : 'AGENTS.md'
   }
 
   /**
@@ -1001,9 +986,6 @@ export class AgentManager extends EventEmitter {
       }
     }
 
-    // Append memory file instruction (CLAUDE.md for Claude Code, AGENTS.md for others)
-    sessionConfig.systemPrompt = (sessionConfig.systemPrompt || '') + this.buildMemoryFileInstruction(agentId)
-
     // Initialize adapter
     await adapter.initialize()
 
@@ -1092,6 +1074,11 @@ export class AgentManager extends EventEmitter {
           promptText += `\n\nAttached files (relative to your working directory):\n${attachmentRefs.join('\n')}`
         }
       }
+
+      // Prepend memory file read instruction to user message
+      // (user messages are more reliably followed than system prompt instructions)
+      const memoryFileName = this.getMemoryFileName(agentId)
+      promptText = `IMPORTANT: First, read the \`${memoryFileName}\` file in the working directory — it has workspace config, skills, and project context.\n\n` + promptText
 
       // Show user's prompt in UI first
       this.sendToRenderer('agent:output', {
@@ -1448,9 +1435,6 @@ export class AgentManager extends EventEmitter {
         sessionConfig.systemPrompt = (sessionConfig.systemPrompt || '') + this.buildSecretsSystemPrompt(secretRecords)
       }
     }
-
-    // Append memory file instruction (CLAUDE.md for Claude Code, AGENTS.md for others)
-    sessionConfig.systemPrompt = (sessionConfig.systemPrompt || '') + this.buildMemoryFileInstruction(agentId)
 
     // Initialize adapter
     await adapter.initialize()
