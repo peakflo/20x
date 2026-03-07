@@ -14,13 +14,20 @@ function ordinal(n: number): string {
   return `${n}th`
 }
 
+/** Convert UTC HH:MM to local HH:MM for display */
+function utcTimeToLocal(utcHour: number, utcMinute: number): string {
+  const d = new Date()
+  d.setUTCHours(utcHour, utcMinute, 0, 0)
+  return `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`
+}
+
 function formatRecurrenceShort(pattern: RecurrencePattern): string {
   if (typeof pattern === 'string') {
     const parts = pattern.trim().split(/\s+/)
     if (parts.length < 5) return pattern
 
     const [minute, hour, dayOfMonth, , dayOfWeek] = parts
-    const time = `${hour.padStart(2, '0')}:${minute.padStart(2, '0')}`
+    const time = utcTimeToLocal(parseInt(hour) || 0, parseInt(minute) || 0)
     const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
     if (dayOfWeek !== '*') {
