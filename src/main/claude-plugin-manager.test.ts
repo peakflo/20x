@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { createTestDb } from '../../test/helpers/db-test-helper'
 import type { DatabaseManager } from './database'
 import { ClaudePluginManager } from './claude-plugin-manager'
-import { mkdtempSync } from 'fs'
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
 
@@ -315,7 +315,7 @@ describe('Plugin Resource Materialization from Files', () => {
   })
 
   function setupPluginFiles(): void {
-    const { mkdirSync, writeFileSync } = require('fs')
+    // fs imports from top-level
     const pluginDir = join(tempPluginsDir, 'file-plugin')
     mkdirSync(pluginDir, { recursive: true })
 
@@ -523,7 +523,7 @@ You are a TypeScript Agent SDK application verifier.
     setupPluginFiles()
     const installed = await manager.installPlugin('file-plugin', marketplaceId)
 
-    const { existsSync } = require('fs')
+    // fs imports from top-level
     const pluginDir = join(tempPluginsDir, 'file-plugin')
     expect(existsSync(pluginDir)).toBe(true)
 

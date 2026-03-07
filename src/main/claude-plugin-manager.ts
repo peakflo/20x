@@ -10,6 +10,9 @@
  * - Apply plugin resources: skills (from skills/ & commands/), MCP servers (from .mcp.json)
  */
 
+import { join } from 'path'
+import { tmpdir } from 'os'
+
 import type {
   DatabaseManager,
   MarketplaceSourceRecord,
@@ -118,16 +121,17 @@ export class ClaudePluginManager {
     pluginsDir?: string
   ) {
     // Default to <userData>/plugins if not specified
-    const { join } = require('path')
     if (pluginsDir) {
       this.pluginsDir = pluginsDir
     } else {
+      this.pluginsDir = join(tmpdir(), '20x-plugins')
       try {
-        const { app } = require('electron')
-        this.pluginsDir = join(app.getPath('userData'), 'plugins')
+        // Dynamic import for electron (only available in main process)
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const electron = require('electron') as typeof import('electron')
+        this.pluginsDir = join(electron.app.getPath('userData'), 'plugins')
       } catch {
-        // Fallback for tests
-        this.pluginsDir = join(require('os').tmpdir(), '20x-plugins')
+        // Fallback for tests — already set above
       }
     }
 
