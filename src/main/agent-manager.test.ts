@@ -14,7 +14,7 @@ vi.mock('fs', async (importOriginal) => {
 
 // Mock heavy dependencies to avoid loading electron/native modules
 vi.mock('child_process', () => ({ spawn: vi.fn() }))
-const notificationInstances: Array<{ show: ReturnType<typeof vi.fn>; on: ReturnType<typeof vi.fn>; _listeners: Map<string, () => void> }> = []
+const notificationInstances: Array<{ show: ReturnType<typeof vi.fn>; on: ReturnType<typeof vi.fn>; _listeners: Map<string, () => void>; opts: { title: string; body: string } }> = []
 
 vi.mock('electron', () => {
   class MockNotification {
