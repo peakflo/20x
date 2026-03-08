@@ -48,8 +48,6 @@ interface AgentSession {
   partContentLengths: Map<string, string>
   learningMode?: boolean
   isTriageSession?: boolean
-  isHeartbeatSession?: boolean
-  heartbeatPrompt?: string
   lastAssistantText?: string
   adapter?: CodingAgentAdapter
   secretSessionToken?: string
@@ -1320,9 +1318,9 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
         }
       }
 
-      // Capture last assistant text for heartbeat sessions
+      // Capture last assistant text (used by HeartbeatScheduler to read results)
       const currentSession = this.sessions.get(sessionId)
-      if (currentSession?.isHeartbeatSession) {
+      if (currentSession) {
         for (const msg of batchMessages) {
           if (msg.role === 'assistant' && msg.partType === 'text' && msg.content) {
             currentSession.lastAssistantText = msg.content
@@ -1331,8 +1329,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       }
 
       // Send all parts in a single IPC call
-      if (batchMessages.length > 0 && !currentSession?.isHeartbeatSession) {
-        // Skip renderer output for heartbeat sessions — they're invisible to the user
+      if (batchMessages.length > 0) {
         this.sendToRenderer('agent:output-batch', {
           sessionId,
           taskId: config.taskId,
@@ -1591,102 +1588,26 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
   }
 
   /**
-   * Starts a heartbeat session by resuming the task's existing session.
-   * This preserves full conversation history so the agent has context about
-   * its prior work (PRs created, files changed, etc.).
-   *
-   * Unlike normal sessions, heartbeat sessions:
-   * - Do NOT change the task status to agent_working
-   * - Do NOT write SKILL.md files
-   * - Do NOT extract output fields on completion
-   * - Skip the ready_for_review transition on completion
-   *
-   * Falls back to creating a new session if the existing one can't be resumed.
+   * Sends a heartbeat check message to the task's existing session.
+   * Uses sendMessage which handles resume/create automatically.
+   * The heartbeat message appears in the normal conversation transcript
+   * so the user can see what was checked.
    */
   async startHeartbeatSession(agentId: string, taskId: string, heartbeatPrompt: string): Promise<string> {
-    const agent = this.db.getAgent(agentId)
-    if (!agent) {
-      throw new Error(`Agent not found: ${agentId}`)
-    }
-
-    const workspaceDir = this.db.getWorkspaceDir(taskId)
-
-    const adapter = this.getAdapter(agentId)
-    if (!adapter) {
-      throw new Error(`No adapter available for agent ${agentId}`)
-    }
-
-    // Build MCP servers config (heartbeat needs tools for checking)
-    const mcpServers = await this.buildMcpServersForAdapter(agentId, { ensureTaskManagement: false })
-
-    // Determine model — allow override via settings
-    const modelOverride = this.db.getSetting('heartbeat_model_override')
-    const model = modelOverride || agent.config?.model
-
-    const sessionConfig: SessionConfig = {
-      agentId,
-      taskId,
-      workspaceDir,
-      model,
-      systemPrompt: agent.config?.system_prompt,
-      mcpServers,
-      authMethod: agent.config?.auth_method,
-      apiKeys: agent.config?.api_keys
-    }
-
-    await adapter.initialize()
-
-    // Try to resume the task's existing session for full conversation context
     const task = this.db.getTask(taskId)
-    const existingSessionId = task?.session_id
-    let adapterSessionId: string
+    const sessionId = task?.session_id
 
-    if (existingSessionId) {
-      try {
-        console.log(`[AgentManager] Heartbeat: resuming existing session ${existingSessionId} for task ${taskId}`)
-        await adapter.resumeSession(existingSessionId, sessionConfig)
-        adapterSessionId = existingSessionId
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err)
-        console.warn(`[AgentManager] Heartbeat: could not resume session ${existingSessionId}: ${msg}. Creating new session.`)
-        adapterSessionId = await adapter.createSession(sessionConfig)
-      }
-    } else {
-      console.log(`[AgentManager] Heartbeat: no existing session for task ${taskId}, creating new session`)
-      adapterSessionId = await adapter.createSession(sessionConfig)
+    if (!sessionId) {
+      throw new Error(`No session found for task ${taskId} — heartbeat requires an existing session`)
     }
 
-    // Store session with heartbeat flag
-    this.sessions.set(adapterSessionId, {
-      id: adapterSessionId,
-      agentId,
-      taskId,
-      workspaceDir,
-      status: 'working',
-      createdAt: new Date(),
-      seenMessageIds: new Set(),
-      seenPartIds: new Set(),
-      partContentLengths: new Map(),
-      adapter,
-      isHeartbeatSession: true,
-      heartbeatPrompt
-    })
+    console.log(`[AgentManager] Heartbeat: sending check to session ${sessionId} for task ${taskId}`)
 
-    // Do NOT update task status or session_id for heartbeat sessions
-    // Do NOT notify renderer about "working" status
+    // sendMessage handles everything: resume if dead, send the prompt, start polling
+    const result = await this.sendMessage(sessionId, heartbeatPrompt, taskId, agentId)
+    const activeSessionId = result.newSessionId || sessionId
 
-    console.log(`[AgentManager] Started heartbeat session ${adapterSessionId} for task ${taskId}`)
-
-    // Start polling
-    this.startAdapterPolling(adapterSessionId, adapter, sessionConfig)
-
-    // Send the heartbeat prompt
-    const parts: MessagePart[] = [
-      { type: MessagePartType.TEXT, text: heartbeatPrompt }
-    ]
-    await adapter.sendPrompt(adapterSessionId, parts, sessionConfig)
-
-    return adapterSessionId
+    return activeSessionId
   }
 
   /**
@@ -1757,14 +1678,6 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
 
     // In learning mode, skip output extraction, task status, and renderer notification
     if (session.learningMode) return
-
-    // In heartbeat mode, skip everything — just clean up the session
-    if (session.isHeartbeatSession) {
-      console.log(`[AgentManager] Heartbeat session ${sessionId} completed for task ${session.taskId}`)
-      // Session stays in map briefly so HeartbeatScheduler can read lastAssistantText
-      // It will be cleaned up when HeartbeatScheduler finishes processing
-      return
-    }
 
     // In triage mode, set status back to NotStarted (now with agent_id assigned) and return early
     if (session.isTriageSession) {
