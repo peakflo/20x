@@ -1,6 +1,6 @@
 import React, { useRef, useEffect, useState, useMemo, useCallback } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { StopCircle, Loader2, Terminal, Send, ChevronRight, ChevronDown, Wrench, AlertTriangle, CheckCircle2, Circle, Clock, RotateCcw, Code2, Eye, ListTodo, FileText } from 'lucide-react'
+import { StopCircle, Loader2, Terminal, Send, ChevronRight, ChevronDown, Wrench, AlertTriangle, CheckCircle2, Circle, Clock, RotateCcw, Code2, Eye, ListTodo, FileText, ArrowDown } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { Markdown } from '@/components/ui/Markdown'
 import type { AgentMessage } from '@/hooks/use-agent-session'
@@ -446,6 +446,7 @@ export function AgentTranscriptPanel({ title = 'Agent transcript', messages, sta
   }, [messages, status])
 
   const atBottomRef = useRef(true)
+  const [showScrollToBottom, setShowScrollToBottom] = useState(false)
 
   const virtualizer = useVirtualizer({
     count: messages.length,
@@ -458,8 +459,18 @@ export function AgentTranscriptPanel({ title = 'Agent transcript', messages, sta
     const el = scrollRef.current
     if (!el) return
     const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
-    atBottomRef.current = distanceFromBottom < 100
+    const isAtBottom = distanceFromBottom < 100
+    atBottomRef.current = isAtBottom
+    setShowScrollToBottom(!isAtBottom)
   }, [])
+
+  const scrollToBottom = useCallback(() => {
+    if (messages.length > 0) {
+      virtualizer.scrollToIndex(messages.length - 1, { align: 'end' })
+      atBottomRef.current = true
+      setShowScrollToBottom(false)
+    }
+  }, [messages.length, virtualizer])
 
   useEffect(() => {
     if (messages.length > 0 && atBottomRef.current) {
@@ -550,54 +561,68 @@ export function AgentTranscriptPanel({ title = 'Agent transcript', messages, sta
       {latestTodos && <TodoSummary todos={latestTodos} />}
 
       {/* Messages */}
-      <div
-        ref={scrollRef}
-        onScroll={handleScroll}
-        className="flex-1 min-h-0 overflow-y-auto p-4 text-sm"
-      >
-        {messages.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-full text-muted-foreground text-xs">
-            {status === 'working' ? (
-              <>
-                <Loader2 className="h-8 w-8 mb-3 animate-spin opacity-30" />
-                <p>Agent is starting...</p>
-              </>
-            ) : (
-              <>
-                <Terminal className="h-8 w-8 mb-2 opacity-20" />
-                <p>No messages yet</p>
-              </>
-            )}
-          </div>
-        ) : (
-          <>
-            <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
-              {virtualizer.getVirtualItems().map((virtualRow) => (
-                <div
-                  key={messages[virtualRow.index].id}
-                  ref={virtualizer.measureElement}
-                  data-index={virtualRow.index}
-                  style={{
-                    position: 'absolute',
-                    top: 0,
-                    left: 0,
-                    right: 0,
-                    transform: `translateY(${virtualRow.start}px)`,
-                  }}
-                >
-                  <div className="pb-2">
-                    <MemoizedMessageBubble message={messages[virtualRow.index]} onAnswer={onSend} viewMode={viewMode} />
-                  </div>
-                </div>
-              ))}
+      <div className="relative flex-1 min-h-0">
+        <div
+          ref={scrollRef}
+          onScroll={handleScroll}
+          className="h-full overflow-y-auto p-4 text-sm"
+        >
+          {messages.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-full text-muted-foreground text-xs">
+              {status === 'working' ? (
+                <>
+                  <Loader2 className="h-8 w-8 mb-3 animate-spin opacity-30" />
+                  <p>Agent is starting...</p>
+                </>
+              ) : (
+                <>
+                  <Terminal className="h-8 w-8 mb-2 opacity-20" />
+                  <p>No messages yet</p>
+                </>
+              )}
             </div>
-            {status === 'working' && (
-              <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                <Loader2 className="h-3 w-3 animate-spin" />
-                Agent is working...
+          ) : (
+            <>
+              <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
+                {virtualizer.getVirtualItems().map((virtualRow) => (
+                  <div
+                    key={messages[virtualRow.index].id}
+                    ref={virtualizer.measureElement}
+                    data-index={virtualRow.index}
+                    style={{
+                      position: 'absolute',
+                      top: 0,
+                      left: 0,
+                      right: 0,
+                      transform: `translateY(${virtualRow.start}px)`,
+                    }}
+                  >
+                    <div className="pb-2">
+                      <MemoizedMessageBubble message={messages[virtualRow.index]} onAnswer={onSend} viewMode={viewMode} />
+                    </div>
+                  </div>
+                ))}
               </div>
-            )}
-          </>
+              {status === 'working' && (
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                  Agent is working...
+                </div>
+              )}
+            </>
+          )}
+        </div>
+
+        {/* Scroll to bottom button */}
+        {showScrollToBottom && messages.length > 0 && (
+          <button
+            onClick={scrollToBottom}
+            className="absolute bottom-3 right-3 flex items-center gap-1.5 rounded-full bg-[#161b22] border border-border/50 px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:border-border shadow-lg transition-all duration-200 opacity-80 hover:opacity-100"
+            title="Scroll to bottom"
+          >
+            <ArrowDown className="h-3 w-3" />
+            <span>Bottom</span>
+          </button>
         )}
       </div>
 

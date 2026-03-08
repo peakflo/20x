@@ -16,6 +16,7 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
   const scrollRef = useRef<HTMLDivElement>(null)
   const isAtBottomRef = useRef(true)
   const [todosExpanded, setTodosExpanded] = useState(false)
+  const [showScrollToBottom, setShowScrollToBottom] = useState(false)
 
   const messages = session?.messages || []
   const lastMessage = messages[messages.length - 1]
@@ -112,7 +113,17 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
   const handleScroll = useCallback(() => {
     if (!scrollRef.current) return
     const { scrollTop, scrollHeight, clientHeight } = scrollRef.current
-    isAtBottomRef.current = scrollHeight - scrollTop - clientHeight < 80
+    const isAtBottom = scrollHeight - scrollTop - clientHeight < 80
+    isAtBottomRef.current = isAtBottom
+    setShowScrollToBottom(!isAtBottom)
+  }, [])
+
+  const scrollToBottom = useCallback(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
+      isAtBottomRef.current = true
+      setShowScrollToBottom(false)
+    }
   }, [])
 
   // Session state flags — matches TaskDetailPage logic
@@ -272,60 +283,76 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
       )}
 
       {/* Messages area — matches desktop transcript panel */}
-      <div
-        ref={scrollRef}
-        onScroll={handleScroll}
-        className="flex-1 overflow-y-auto p-4 space-y-2 text-sm"
-      >
-        {messages.length === 0 && (
-          <div className="flex flex-col items-center justify-center h-full text-muted-foreground gap-2">
-            {!hasSession && !canStart && !canResume && (
-              <>
-                <svg className="h-8 w-8 opacity-20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <polyline points="4 17 10 11 4 5"/><line x1="12" x2="20" y1="19" y2="19"/>
-                </svg>
-                <p className="text-xs">No agent session available</p>
-              </>
-            )}
-            {(canStart || canResume) && (
-              <>
-                <svg className="h-8 w-8 opacity-20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <polyline points="4 17 10 11 4 5"/><line x1="12" x2="20" y1="19" y2="19"/>
-                </svg>
-                <p className="text-xs">No messages yet</p>
-                <button
-                  onClick={canResume ? handleResume : handleStart}
-                  className="bg-primary text-primary-foreground text-xs font-medium px-4 py-2 rounded-md active:opacity-80 mt-2 hover:bg-primary/90"
-                >
-                  {canResume ? 'Resume Session' : 'Start Agent'}
-                </button>
-              </>
-            )}
-            {hasSession && messages.length === 0 && (
-              <>
-                <svg className="h-8 w-8 opacity-30 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
-                </svg>
-                <p className="text-xs">Starting agent session...</p>
-              </>
-            )}
-          </div>
-        )}
-
-        {messages.map((msg) => (
-          <MessageBubble key={msg.id} message={msg} onAnswer={handleAnswer} />
-        ))}
-
-        {/* Working indicator */}
-        {isWorking && messages.length > 0 && (
-          <div className="flex items-center gap-2 px-3 py-2">
-            <div className="flex gap-1">
-              <span className="w-1.5 h-1.5 bg-green-400 rounded-full animate-pulse" />
-              <span className="w-1.5 h-1.5 bg-green-400 rounded-full animate-pulse [animation-delay:0.2s]" />
-              <span className="w-1.5 h-1.5 bg-green-400 rounded-full animate-pulse [animation-delay:0.4s]" />
+      <div className="relative flex-1 min-h-0">
+        <div
+          ref={scrollRef}
+          onScroll={handleScroll}
+          className="h-full overflow-y-auto p-4 space-y-2 text-sm"
+        >
+          {messages.length === 0 && (
+            <div className="flex flex-col items-center justify-center h-full text-muted-foreground gap-2">
+              {!hasSession && !canStart && !canResume && (
+                <>
+                  <svg className="h-8 w-8 opacity-20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="4 17 10 11 4 5"/><line x1="12" x2="20" y1="19" y2="19"/>
+                  </svg>
+                  <p className="text-xs">No agent session available</p>
+                </>
+              )}
+              {(canStart || canResume) && (
+                <>
+                  <svg className="h-8 w-8 opacity-20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="4 17 10 11 4 5"/><line x1="12" x2="20" y1="19" y2="19"/>
+                  </svg>
+                  <p className="text-xs">No messages yet</p>
+                  <button
+                    onClick={canResume ? handleResume : handleStart}
+                    className="bg-primary text-primary-foreground text-xs font-medium px-4 py-2 rounded-md active:opacity-80 mt-2 hover:bg-primary/90"
+                  >
+                    {canResume ? 'Resume Session' : 'Start Agent'}
+                  </button>
+                </>
+              )}
+              {hasSession && messages.length === 0 && (
+                <>
+                  <svg className="h-8 w-8 opacity-30 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
+                  </svg>
+                  <p className="text-xs">Starting agent session...</p>
+                </>
+              )}
             </div>
-            <span className="text-xs text-muted-foreground">Agent is working...</span>
-          </div>
+          )}
+
+          {messages.map((msg) => (
+            <MessageBubble key={msg.id} message={msg} onAnswer={handleAnswer} />
+          ))}
+
+          {/* Working indicator */}
+          {isWorking && messages.length > 0 && (
+            <div className="flex items-center gap-2 px-3 py-2">
+              <div className="flex gap-1">
+                <span className="w-1.5 h-1.5 bg-green-400 rounded-full animate-pulse" />
+                <span className="w-1.5 h-1.5 bg-green-400 rounded-full animate-pulse [animation-delay:0.2s]" />
+                <span className="w-1.5 h-1.5 bg-green-400 rounded-full animate-pulse [animation-delay:0.4s]" />
+              </div>
+              <span className="text-xs text-muted-foreground">Agent is working...</span>
+            </div>
+          )}
+        </div>
+
+        {/* Scroll to bottom button */}
+        {showScrollToBottom && messages.length > 0 && (
+          <button
+            onClick={scrollToBottom}
+            className="absolute bottom-3 right-3 flex items-center gap-1.5 rounded-full bg-[#161b22] border border-border/50 px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:border-border shadow-lg transition-all duration-200 opacity-80 hover:opacity-100 active:opacity-100"
+            title="Scroll to bottom"
+          >
+            <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 5v14"/><path d="m19 12-7 7-7-7"/>
+            </svg>
+            <span>Bottom</span>
+          </button>
         )}
       </div>
 
