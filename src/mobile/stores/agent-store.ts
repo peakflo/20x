@@ -339,6 +339,12 @@ export const useAgentStore = create<AgentState>((set, get) => {
     /**
      * Fetch active sessions from the server and sync with any running ones.
      * This allows the mobile UI to connect to sessions already running in Electron.
+     *
+     * On reconnect (same session still active), we preserve existing messages
+     * and only add new ones missed during disconnect. This prevents the flash
+     * of empty state and avoids losing messages if the sync request fails.
+     *
+     * On first connect or session change, we do a full reset + replay.
      */
     syncActiveSessions: async () => {
       try {
@@ -352,23 +358,39 @@ export const useAgentStore = create<AgentState>((set, get) => {
           const nextSessions = new Map(state.sessions)
 
           for (const active of activeSessions) {
-            // Clear dedup and messages so the full replay from server
-            // is accepted without stale data mixing in
-            seenIds.delete(active.taskId)
-            stepStartTimes.delete(active.taskId)
-            nextSessions.set(active.taskId, {
-              sessionId: active.sessionId,
-              agentId: active.agentId,
-              taskId: active.taskId,
-              status: active.status as SessionStatus,
-              messages: []
-            })
+            const existing = state.sessions.get(active.taskId)
+            const isSameSession = existing && existing.sessionId === active.sessionId
+
+            if (isSameSession) {
+              // Same session — preserve messages so missed ones are appended
+              // by the replay batch (dedup via seenIds filters out duplicates)
+              nextSessions.set(active.taskId, {
+                sessionId: active.sessionId,
+                agentId: active.agentId,
+                taskId: active.taskId,
+                status: active.status as SessionStatus,
+                messages: existing.messages
+              })
+            } else {
+              // New or different session — full reset so replay populates fresh
+              seenIds.delete(active.taskId)
+              stepStartTimes.delete(active.taskId)
+              nextSessions.set(active.taskId, {
+                sessionId: active.sessionId,
+                agentId: active.agentId,
+                taskId: active.taskId,
+                status: active.status as SessionStatus,
+                messages: []
+              })
+            }
           }
 
           return { sessions: nextSessions }
         })
 
-        // Replay messages from each active session (will arrive via WebSocket)
+        // Replay messages from each active session (will arrive via WebSocket).
+        // For same-session reconnects: only messages not in seenIds are added.
+        // For new sessions: all messages are added (seenIds was cleared above).
         for (const active of activeSessions) {
           try {
             await api.sessions.sync(active.sessionId)

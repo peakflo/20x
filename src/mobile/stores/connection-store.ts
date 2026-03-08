@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { connectWebSocket, setStatusChangeHandler, setReconnectHandler, setFirstConnectHandler } from '../api/websocket'
+import { connectWebSocket, setStatusChangeHandler, setReconnectHandler, setFirstConnectHandler, setVisibilityReconnectHandler } from '../api/websocket'
 
 type Callback = () => void
 
@@ -8,6 +8,7 @@ interface ConnectionState {
   connect: () => void
   setOnReconnect: (fn: Callback) => void
   setOnFirstConnect: (fn: Callback) => void
+  setOnVisibilityReconnect: (fn: Callback) => void
 }
 
 export const useConnectionStore = create<ConnectionState>((set) => {
@@ -23,6 +24,9 @@ export const useConnectionStore = create<ConnectionState>((set) => {
     },
     setOnFirstConnect: (fn: Callback) => {
       setFirstConnectHandler(fn)
+    },
+    setOnVisibilityReconnect: (fn: Callback) => {
+      setVisibilityReconnectHandler(fn)
     }
   }
 })

@@ -47,6 +47,7 @@ export function App() {
   const connected = useConnectionStore((s) => s.connected)
   const setOnReconnect = useConnectionStore((s) => s.setOnReconnect)
   const setOnFirstConnect = useConnectionStore((s) => s.setOnFirstConnect)
+  const setOnVisibilityReconnect = useConnectionStore((s) => s.setOnVisibilityReconnect)
   const fetchTasks = useTaskStore((s) => s.fetchTasks)
   const fetchAgents = useAgentStore((s) => s.fetchAgents)
   const fetchSkills = useAgentStore((s) => s.fetchSkills)
@@ -68,7 +69,13 @@ export function App() {
       fetchTasks()
       syncActiveSessions()
     })
-  }, [connect, fetchTasks, fetchAgents, fetchSkills, syncActiveSessions, setOnReconnect, setOnFirstConnect])
+
+    // Re-sync when page becomes visible (phone wakes) even if connection stayed alive,
+    // because messages may have been missed while JS was suspended on mobile
+    setOnVisibilityReconnect(() => {
+      syncActiveSessions()
+    })
+  }, [connect, fetchTasks, fetchAgents, fetchSkills, syncActiveSessions, setOnReconnect, setOnFirstConnect, setOnVisibilityReconnect])
 
   // Poll tasks every 10s as a fallback
   useEffect(() => {

@@ -14,6 +14,7 @@ let hasConnectedBefore = false
 let onStatusChange: ((connected: boolean) => void) | null = null
 let onReconnect: (() => void) | null = null
 let onFirstConnect: (() => void) | null = null
+let onVisibilityReconnect: (() => void) | null = null
 
 // Ping/pong heartbeat state
 const PING_INTERVAL_MS = 15_000
@@ -32,6 +33,10 @@ export function setReconnectHandler(fn: () => void): void {
 
 export function setFirstConnectHandler(fn: () => void): void {
   onFirstConnect = fn
+}
+
+export function setVisibilityReconnectHandler(fn: () => void): void {
+  onVisibilityReconnect = fn
 }
 
 export function connectWebSocket(): void {
@@ -177,5 +182,9 @@ function handleVisibilityChange(): void {
       console.warn('[WS] Pong timeout after visibility change — closing stale connection')
       ws?.close()
     }, PONG_TIMEOUT_MS)
+
+    // Even if the connection is alive, sync any messages missed during
+    // the time the page was hidden (JS was suspended on mobile).
+    onVisibilityReconnect?.()
   }
 }
