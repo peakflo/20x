@@ -1591,12 +1591,17 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
   }
 
   /**
-   * Starts a lightweight heartbeat session. Unlike normal sessions, heartbeat sessions:
+   * Starts a heartbeat session by resuming the task's existing session.
+   * This preserves full conversation history so the agent has context about
+   * its prior work (PRs created, files changed, etc.).
+   *
+   * Unlike normal sessions, heartbeat sessions:
    * - Do NOT change the task status to agent_working
    * - Do NOT write SKILL.md files
    * - Do NOT extract output fields on completion
-   * - Use a minimal heartbeat-specific prompt
    * - Skip the ready_for_review transition on completion
+   *
+   * Falls back to creating a new session if the existing one can't be resumed.
    */
   async startHeartbeatSession(agentId: string, taskId: string, heartbeatPrompt: string): Promise<string> {
     const agent = this.db.getAgent(agentId)
@@ -1604,7 +1609,6 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       throw new Error(`Agent not found: ${agentId}`)
     }
 
-    // Reuse existing workspace — heartbeat doesn't create worktrees
     const workspaceDir = this.db.getWorkspaceDir(taskId)
 
     const adapter = this.getAdapter(agentId)
@@ -1630,11 +1634,27 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       apiKeys: agent.config?.api_keys
     }
 
-    // Initialize adapter
     await adapter.initialize()
 
-    // Create session via adapter
-    const adapterSessionId = await adapter.createSession(sessionConfig)
+    // Try to resume the task's existing session for full conversation context
+    const task = this.db.getTask(taskId)
+    const existingSessionId = task?.session_id
+    let adapterSessionId: string
+
+    if (existingSessionId) {
+      try {
+        console.log(`[AgentManager] Heartbeat: resuming existing session ${existingSessionId} for task ${taskId}`)
+        await adapter.resumeSession(existingSessionId, sessionConfig)
+        adapterSessionId = existingSessionId
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        console.warn(`[AgentManager] Heartbeat: could not resume session ${existingSessionId}: ${msg}. Creating new session.`)
+        adapterSessionId = await adapter.createSession(sessionConfig)
+      }
+    } else {
+      console.log(`[AgentManager] Heartbeat: no existing session for task ${taskId}, creating new session`)
+      adapterSessionId = await adapter.createSession(sessionConfig)
+    }
 
     // Store session with heartbeat flag
     this.sessions.set(adapterSessionId, {
@@ -1674,6 +1694,19 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
    */
   getSession(sessionId: string): AgentSession | undefined {
     return this.sessions.get(sessionId)
+  }
+
+  /**
+   * Check if a task has a live (working) session in memory.
+   * Used by HeartbeatScheduler to avoid interrupting active user sessions.
+   */
+  hasActiveSessionForTask(taskId: string): boolean {
+    for (const session of this.sessions.values()) {
+      if (session.taskId === taskId && session.status === 'working') {
+        return true
+      }
+    }
+    return false
   }
 
   /**

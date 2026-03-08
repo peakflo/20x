@@ -180,6 +180,12 @@ export class HeartbeatScheduler {
           continue
         }
 
+        // Skip if task has a live agent session (user is actively working)
+        if (this.agentManager.hasActiveSessionForTask(task.id)) {
+          console.log(`[HeartbeatScheduler] Skipping task ${task.id} — active agent session in progress`)
+          continue
+        }
+
         // Verify heartbeat.md still exists
         if (!this.hasHeartbeatFile(task.id)) {
           console.log(`[HeartbeatScheduler] No heartbeat.md for task ${task.id}, disabling heartbeat`)

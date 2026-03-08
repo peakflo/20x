@@ -44,6 +44,7 @@ function mockAgentManager(overrides: Record<string, unknown> = {}): AgentManager
     startHeartbeatSession: vi.fn().mockResolvedValue('session-1'),
     getSession: vi.fn().mockReturnValue({ status: 'idle' }),
     getLastAssistantMessage: vi.fn().mockReturnValue(HEARTBEAT_OK_TOKEN),
+    hasActiveSessionForTask: vi.fn().mockReturnValue(false),
     ...overrides,
   } as unknown as AgentManager
 }
@@ -516,6 +517,18 @@ describe('HeartbeatScheduler', () => {
       ;(db.getHeartbeatDueTasks as ReturnType<typeof vi.fn>).mockReturnValue([])
       await check(scheduler).call(scheduler)
       expect(db.getHeartbeatDueTasks).toHaveBeenCalled()
+    })
+
+    it('skips tasks with active agent sessions', async () => {
+      const dueTask = makeTask()
+      ;(db.getHeartbeatDueTasks as ReturnType<typeof vi.fn>).mockReturnValue([dueTask])
+      ;(agent.hasActiveSessionForTask as ReturnType<typeof vi.fn>).mockReturnValue(true)
+
+      await check(scheduler).call(scheduler)
+
+      expect(agent.hasActiveSessionForTask).toHaveBeenCalledWith('task-1')
+      // Should not have tried to start a heartbeat session
+      expect(agent.startHeartbeatSession).not.toHaveBeenCalled()
     })
   })
 
