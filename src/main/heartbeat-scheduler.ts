@@ -267,7 +267,7 @@ Keep your response concise. This is a monitoring check, not a full work session.
    * Wait for a heartbeat session to complete and extract the result text.
    * Polls the agent session status until it transitions to idle.
    */
-  private waitForSessionResult(sessionId: string, taskId: string): Promise<string> {
+  private waitForSessionResult(sessionId: string, _taskId: string): Promise<string> {
     return new Promise<string>((resolve, reject) => {
       const TIMEOUT_MS = 5 * 60_000 // 5 minute timeout for heartbeat sessions
       const POLL_MS = 3_000 // check every 3s

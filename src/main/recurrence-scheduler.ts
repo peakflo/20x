@@ -33,6 +33,10 @@ interface RawTaskRow {
   recurrence_parent_id: string | null
   last_occurrence_at: string | null
   next_occurrence_at: string | null
+  heartbeat_enabled: number
+  heartbeat_interval_minutes: number
+  heartbeat_last_check_at: string | null
+  heartbeat_next_check_at: string | null
   created_at: string
   updated_at: string
 }
@@ -385,7 +389,11 @@ export class RecurrenceScheduler {
         : null,
       recurrence_parent_id: row.recurrence_parent_id ?? null,
       last_occurrence_at: row.last_occurrence_at ?? null,
-      next_occurrence_at: row.next_occurrence_at ?? null
+      next_occurrence_at: row.next_occurrence_at ?? null,
+      heartbeat_enabled: (row.heartbeat_enabled ?? 0) === 1,
+      heartbeat_interval_minutes: row.heartbeat_interval_minutes ?? 30,
+      heartbeat_last_check_at: row.heartbeat_last_check_at ?? null,
+      heartbeat_next_check_at: row.heartbeat_next_check_at ?? null,
     }
   }
 
