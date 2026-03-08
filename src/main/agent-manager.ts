@@ -2037,7 +2037,7 @@ export class AgentManager extends EventEmitter {
     })
 
     // Collect all message parts into a single batch (matching resumeAdapterSession pattern)
-    const batchMessages: Array<{ id: string; role: string; content: string; partType?: string; tool?: unknown }> = []
+    const batchMessages: Array<{ id: string; role: string; content: string; partType?: string; tool?: unknown; update?: boolean }> = []
     for (const msg of messages) {
       for (const part of msg.parts) {
         batchMessages.push({
@@ -2054,7 +2054,10 @@ export class AgentManager extends EventEmitter {
             error: part.tool.error || part.state?.error,
             questions: part.tool.questions,
             todos: part.tool.todos
-          } : undefined
+          } : undefined,
+          // Pass update flag so mobile store merges tool results into their
+          // pending tool_use entries (e.g. status pending → success)
+          ...(part.update ? { update: true } : {})
         })
       }
     }
