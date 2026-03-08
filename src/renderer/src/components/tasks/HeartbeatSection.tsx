@@ -100,6 +100,7 @@ export function HeartbeatSection({ task, onTaskUpdated }: HeartbeatSectionProps)
       setHeartbeatContent(editDraft.trim() || null)
       await fetchStatus()
       onTaskUpdated?.()
+      setModalOpen(false)
     } finally {
       setSaving(false)
     }
@@ -113,6 +114,7 @@ export function HeartbeatSection({ task, onTaskUpdated }: HeartbeatSectionProps)
     }
     await fetchStatus()
     onTaskUpdated?.()
+    setModalOpen(false)
   }
 
   const handleRunNow = async () => {
@@ -120,6 +122,7 @@ export function HeartbeatSection({ task, onTaskUpdated }: HeartbeatSectionProps)
     await fetchStatus()
     await fetchLogs()
     onTaskUpdated?.()
+    setModalOpen(false)
   }
 
   const handleIntervalChange = async (minutes: number) => {
