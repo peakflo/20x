@@ -830,7 +830,7 @@ function deserializeInstalledPlugin(row: InstalledPluginRow): InstalledPluginRec
 
 // Bump this whenever new migrations are added so returning users skip
 // the full migration check on startup.
-const SCHEMA_VERSION = 3
+const SCHEMA_VERSION = 4
 
 export class DatabaseManager {
   public db!: Database.Database
@@ -862,6 +862,7 @@ export class DatabaseManager {
     // These must run on EVERY startup (not just during migrations)
     // because they start runtime services (task API server) and
     // ensure default records exist (MCP server, orchestrator skill).
+    this.initializeTasksFts()
     this.initializeTaskManagementMcpServer()
     this.initializeOrchestratorSkill()
   }
@@ -1455,6 +1456,63 @@ export class DatabaseManager {
         VALUES (?, ?, ?, ?, 1, ?, ?)
       `).run(createId(), 'Default Agent', 'http://localhost:4096', '{}', now, now)
     }
+
+    // Migration v4: FTS5 full-text search index for similar task search
+    this.initializeTasksFts()
+  }
+
+  /**
+   * Creates (or rebuilds) the FTS5 full-text search index used by
+   * `find_similar_tasks`.  The virtual table is a *content-sync* table
+   * backed by `tasks`, plus triggers that keep it in sync on every
+   * INSERT / UPDATE / DELETE.
+   *
+   * We always DROP + re-CREATE the FTS table so the trigger definitions
+   * stay in sync with the current schema — this is cheap because the
+   * table is tiny and only holds text columns.
+   */
+  private initializeTasksFts(): void {
+    this.db.exec(`
+      -- Drop existing FTS artifacts so we can recreate cleanly
+      DROP TRIGGER IF EXISTS tasks_fts_insert;
+      DROP TRIGGER IF EXISTS tasks_fts_update;
+      DROP TRIGGER IF EXISTS tasks_fts_delete;
+      DROP TABLE   IF EXISTS tasks_fts;
+
+      -- Content-sync FTS5 table.  content= keeps it linked to tasks;
+      -- content_rowid= maps the FTS rowid to tasks.rowid.
+      CREATE VIRTUAL TABLE tasks_fts USING fts5(
+        title,
+        description,
+        labels,
+        type,
+        content='tasks',
+        content_rowid='rowid',
+        tokenize='unicode61 remove_diacritics 2'
+      );
+
+      -- Populate from existing rows
+      INSERT INTO tasks_fts(rowid, title, description, labels, type)
+        SELECT rowid, title, description, labels, type FROM tasks;
+
+      -- Keep FTS in sync via triggers
+      CREATE TRIGGER tasks_fts_insert AFTER INSERT ON tasks BEGIN
+        INSERT INTO tasks_fts(rowid, title, description, labels, type)
+          VALUES (new.rowid, new.title, new.description, new.labels, new.type);
+      END;
+
+      CREATE TRIGGER tasks_fts_update AFTER UPDATE OF title, description, labels, type ON tasks BEGIN
+        INSERT INTO tasks_fts(tasks_fts, rowid, title, description, labels, type)
+          VALUES ('delete', old.rowid, old.title, old.description, old.labels, old.type);
+        INSERT INTO tasks_fts(rowid, title, description, labels, type)
+          VALUES (new.rowid, new.title, new.description, new.labels, new.type);
+      END;
+
+      CREATE TRIGGER tasks_fts_delete AFTER DELETE ON tasks BEGIN
+        INSERT INTO tasks_fts(tasks_fts, rowid, title, description, labels, type)
+          VALUES ('delete', old.rowid, old.title, old.description, old.labels, old.type);
+      END;
+    `)
   }
 
   private initializeOrchestratorSkill(): void {

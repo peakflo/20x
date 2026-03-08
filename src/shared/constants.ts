@@ -1,3 +1,10 @@
+export enum SessionStatus {
+  IDLE = 'idle',
+  WORKING = 'working',
+  ERROR = 'error',
+  WAITING_APPROVAL = 'waiting_approval',
+}
+
 export enum TaskStatus {
   NotStarted = 'not_started',
   Triaging = 'triaging',

@@ -103,15 +103,15 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: 'find_similar_tasks',
-      description: 'Find historical tasks similar to the given criteria. Use this to understand patterns from past task assignments.',
+      description: 'Find historical tasks similar to the given criteria using full-text search with relevance ranking. Pass individual keywords (not full sentences) for best results. Results are ranked by relevance. When completed_only returns nothing, automatically falls back to searching all tasks.',
       inputSchema: {
         type: 'object',
         properties: {
-          title_keywords: { type: 'string', description: 'Keywords to match in task title' },
-          description_keywords: { type: 'string', description: 'Keywords to match in description' },
+          title_keywords: { type: 'string', description: 'Space-separated keywords to match in task titles (e.g. "login bug authentication"). Each word is matched independently.' },
+          description_keywords: { type: 'string', description: 'Space-separated keywords to match in task descriptions. Each word is matched independently.' },
           type: { type: 'string', enum: ['coding', 'manual', 'review', 'approval', 'general'] },
-          labels: { type: 'array', items: { type: 'string' } },
-          completed_only: { type: 'boolean', default: true, description: 'Only return completed tasks' },
+          labels: { type: 'array', items: { type: 'string' }, description: 'Labels to match (e.g. ["bug", "frontend"])' },
+          completed_only: { type: 'boolean', default: false, description: 'Only return completed tasks. Defaults to false to search all tasks.' },
           limit: { type: 'number', default: 10 }
         }
       }

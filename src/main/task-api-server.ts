@@ -262,26 +262,84 @@ function handleRoute(db: DatabaseManager, route: string, params: Record<string, 
     }
 
     case '/find_similar_tasks': {
-      let query = 'SELECT * FROM tasks WHERE 1=1'
-      const qParams: unknown[] = []
+      const limit = (params.limit as number) || 10
 
-      if (params.completed_only) { query += ' AND status = ?'; qParams.push('completed') }
-      if (params.title_keywords) { query += ' AND title LIKE ?'; qParams.push(`%${params.title_keywords}%`) }
-      if (params.description_keywords) { query += ' AND description LIKE ?'; qParams.push(`%${params.description_keywords}%`) }
-      if (params.type) { query += ' AND type = ?'; qParams.push(params.type) }
+      // ── Build FTS5 MATCH expression from provided keywords ──
+      const matchTerms: string[] = []
+
+      // Tokenise keywords into individual words for broad matching
+      const tokenize = (s: unknown): string[] =>
+        typeof s === 'string'
+          ? s.split(/\s+/).filter((w) => w.length > 2).map((w) => w.replace(/[^a-zA-Z0-9_]/g, ''))
+              .filter(Boolean)
+          : []
+
+      const titleWords = tokenize(params.title_keywords)
+      const descWords = tokenize(params.description_keywords)
+
+      // Weight title matches higher by boosting with column filter
+      if (titleWords.length) {
+        matchTerms.push(...titleWords.map((w) => `title:${w}*`))
+      }
+      if (descWords.length) {
+        matchTerms.push(...descWords.map((w) => `description:${w}*`))
+      }
+      if (params.type) {
+        matchTerms.push(`type:${params.type}`)
+      }
       if (params.labels) {
         const labels = params.labels as string[]
-        if (labels.length) {
-          const conds = labels.map(() => 'labels LIKE ?').join(' OR ')
-          query += ` AND (${conds})`
-          labels.forEach((l: string) => qParams.push(`%"${l}"%`))
-        }
+        labels.forEach((l: string) => {
+          const cleaned = l.replace(/[^a-zA-Z0-9_]/g, '')
+          if (cleaned) matchTerms.push(`labels:${cleaned}`)
+        })
       }
 
-      query += ' ORDER BY created_at DESC'
-      if (params.limit) { query += ' LIMIT ?'; qParams.push(params.limit) }
+      // If we have search terms, use FTS5 with bm25 ranking
+      if (matchTerms.length > 0) {
+        const matchExpr = matchTerms.join(' OR ')
+        let ftsQuery = `
+          SELECT t.*, bm25(tasks_fts, 10.0, 5.0, 2.0, 1.0) AS rank
+          FROM tasks_fts
+          JOIN tasks t ON tasks_fts.rowid = t.rowid
+          WHERE tasks_fts MATCH ?`
+        const qParams: unknown[] = [matchExpr]
 
-      const tasks = rawDb.prepare(query).all(...qParams) as Record<string, unknown>[]
+        if (params.completed_only) {
+          ftsQuery += ' AND t.status = ?'
+          qParams.push('completed')
+        }
+
+        ftsQuery += ' ORDER BY rank LIMIT ?'
+        qParams.push(limit)
+
+        let tasks = rawDb.prepare(ftsQuery).all(...qParams) as Record<string, unknown>[]
+
+        // ── Fallback: if completed_only returned nothing, retry with all statuses ──
+        if (tasks.length === 0 && params.completed_only) {
+          const fallbackQuery = `
+            SELECT t.*, bm25(tasks_fts, 10.0, 5.0, 2.0, 1.0) AS rank
+            FROM tasks_fts
+            JOIN tasks t ON tasks_fts.rowid = t.rowid
+            WHERE tasks_fts MATCH ?
+            ORDER BY rank LIMIT ?`
+          tasks = rawDb.prepare(fallbackQuery).all(matchExpr, limit) as Record<string, unknown>[]
+        }
+
+        tasks.forEach(parseTask)
+        return tasks
+      }
+
+      // ── No keywords at all — fall back to recent tasks ──
+      let fallbackQuery = 'SELECT * FROM tasks WHERE 1=1'
+      const fbParams: unknown[] = []
+      if (params.completed_only) {
+        fallbackQuery += ' AND status = ?'
+        fbParams.push('completed')
+      }
+      fallbackQuery += ' ORDER BY created_at DESC LIMIT ?'
+      fbParams.push(limit)
+      const tasks = rawDb.prepare(fallbackQuery).all(...fbParams) as Record<string, unknown>[]
       tasks.forEach(parseTask)
       return tasks
     }
