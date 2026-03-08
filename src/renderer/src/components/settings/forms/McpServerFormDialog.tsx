@@ -55,9 +55,20 @@ export function McpServerFormDialog({ server, open, onClose, onSubmit, oauthConn
       setConnecting(false)
       setManualClientIdNeeded(false)
       setManualClientId('')
-      // For edit mode: check if this server already has OAuth registration
+      // For edit mode: if already has OAuth registration, show it immediately
       if (server?.type === 'remote' && server.oauth_metadata && 'resource_url' in server.oauth_metadata) {
         setAuthNeeded(true)
+      }
+      // For edit mode: if remote server with URL but no stored OAuth metadata, probe live
+      else if (server?.type === 'remote' && server.url?.trim() && !oauthConnected) {
+        setProbing(true)
+        oauth.probeForAuth(server.url.trim()).then((needed) => {
+          setAuthNeeded(needed)
+        }).catch(() => {
+          setAuthNeeded(false)
+        }).finally(() => {
+          setProbing(false)
+        })
       }
     }
     return () => {
