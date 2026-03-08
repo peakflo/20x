@@ -3,7 +3,7 @@ import { TaskPriorityBadge } from '@/components/tasks/TaskPriorityBadge'
 import type { TaskPriority } from '@/types'
 import { cn, formatDate, isOverdue, isDueSoon, isSnoozed } from '../lib/utils'
 import type { Task } from '../stores/task-store'
-import type { SessionStatus } from '../stores/agent-store'
+import { SessionStatus } from '../stores/agent-store'
 
 interface TaskListItemProps {
   task: Task
@@ -15,7 +15,7 @@ export function TaskListItem({ task, onSelect, sessionStatus }: TaskListItemProp
   const isActive = task.status !== TaskStatus.Completed
   const overdue = isActive && isOverdue(task.due_date)
   const dueSoon = isActive && !overdue && isDueSoon(task.due_date)
-  const hasActiveAgent = sessionStatus && sessionStatus !== 'idle'
+  const hasActiveAgent = sessionStatus && sessionStatus !== SessionStatus.IDLE
 
   // Status indicator color — matches desktop TaskListItem exactly
   const statusDotColor = (() => {

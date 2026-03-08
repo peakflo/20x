@@ -1,20 +1,20 @@
 import { useCallback } from 'react'
 import { agentSessionApi } from '@/lib/ipc-client'
-import { useAgentStore } from '@/stores/agent-store'
+import { useAgentStore, SessionStatus } from '@/stores/agent-store'
 import type { AgentApprovalRequest } from '@/types/electron'
 
 export type { AgentMessage } from '@/stores/agent-store'
 
 export interface AgentSessionState {
   sessionId: string | null
-  status: 'idle' | 'working' | 'error' | 'waiting_approval'
+  status: SessionStatus
   messages: import('@/stores/agent-store').AgentMessage[]
   pendingApproval: AgentApprovalRequest | null
 }
 
 const EMPTY_SESSION: AgentSessionState = {
   sessionId: null,
-  status: 'idle',
+  status: SessionStatus.IDLE,
   messages: [],
   pendingApproval: null
 }

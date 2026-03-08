@@ -1,6 +1,6 @@
 import { useEffect, useRef, useCallback } from 'react'
 import { useAgentSchedulerStore } from '@/stores/agent-scheduler-store'
-import { useAgentStore } from '@/stores/agent-store'
+import { useAgentStore, SessionStatus } from '@/stores/agent-store'
 import { useAgentSession } from './use-agent-session'
 import { onAgentStatus, onTaskUpdated, onTaskCreated, taskApi } from '@/lib/ipc-client'
 import { TaskStatus } from '@/types'
@@ -317,7 +317,7 @@ export function useAgentAutoStart({ tasks, agents, sessions, showToast }: UseAge
 
     const unsubscribe = onAgentStatus((event: AgentStatusEvent) => {
       // Only process when agent goes idle (task completed)
-      if (event.status !== 'idle') return
+      if (event.status !== SessionStatus.IDLE) return
 
       const agentId = event.agentId
       const taskId = event.taskId

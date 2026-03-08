@@ -12,7 +12,7 @@ import { RepoSelectorDialog } from '@/components/github/RepoSelectorDialog'
 import { SkillSelectorDialog } from '@/components/skills/SkillSelectorDialog'
 import { WorktreeProgressOverlay } from '@/components/github/WorktreeProgressOverlay'
 import { useAgentSession } from '@/hooks/use-agent-session'
-import { useAgentStore } from '@/stores/agent-store'
+import { useAgentStore, SessionStatus } from '@/stores/agent-store'
 import { useSettingsStore } from '@/stores/settings-store'
 import { useTaskStore } from '@/stores/task-store'
 import { taskApi, worktreeApi, taskSourceApi, onAgentIncompatibleSession, onWorktreeProgress } from '@/lib/ipc-client'
@@ -141,7 +141,7 @@ export function TaskWorkspace({
       task.status !== TaskStatus.Triaging &&
       !task.session_id &&
       session.sessionId &&
-      session.status === 'idle'
+      session.status === SessionStatus.IDLE
     ) {
       removeSession(task.id)
     }
@@ -517,12 +517,12 @@ Update existing skills that were helpful or create new ones for patterns worth r
   }
 
   // Show panel if session exists (active or past transcript with messages)
-  const showPanel = session.status !== 'idle' || session.messages.length > 0
-  const canResume = task.agent_id && task.session_id && !session.sessionId && session.status === 'idle' && session.messages.length === 0
-  const canRestart = task.agent_id && task.session_id && !session.sessionId && session.status === 'idle' && session.messages.length > 0
-  const canStart = task.agent_id && !task.session_id && !session.sessionId && session.status === 'idle'
+  const showPanel = session.status !== SessionStatus.IDLE || session.messages.length > 0
+  const canResume = task.agent_id && task.session_id && !session.sessionId && session.status === SessionStatus.IDLE && session.messages.length === 0
+  const canRestart = task.agent_id && task.session_id && !session.sessionId && session.status === SessionStatus.IDLE && session.messages.length > 0
+  const canStart = task.agent_id && !task.session_id && !session.sessionId && session.status === SessionStatus.IDLE
     && task.status !== TaskStatus.Completed
-  const canTriage = !task.agent_id && agents.length > 0 && session.status === 'idle'
+  const canTriage = !task.agent_id && agents.length > 0 && session.status === SessionStatus.IDLE
     && task.status !== TaskStatus.Completed && task.status !== TaskStatus.Triaging
 
   return (

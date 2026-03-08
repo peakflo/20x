@@ -2,7 +2,7 @@ import { useMemo, useCallback, useState } from 'react'
 import { TaskStatus } from '@shared/constants'
 import { Markdown } from '@/components/ui/Markdown'
 import { useTaskStore } from '../stores/task-store'
-import { useAgentStore } from '../stores/agent-store'
+import { useAgentStore, SessionStatus } from '../stores/agent-store'
 import { api } from '../api/client'
 import { useSessionControls } from '../hooks/useSessionControls'
 import { Badge } from '../components/Badge'
@@ -25,7 +25,7 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
   const { handleStart: _startSession, handleResume: _resumeSession, handleStop: _stopSession, busyRef } = useSessionControls(taskId)
 
   // Session is already synced and running (from desktop or elsewhere)
-  const isSessionRunning = session?.sessionId && (session.status === 'working' || session.status === 'waiting_approval')
+  const isSessionRunning = session?.sessionId && (session.status === SessionStatus.WORKING || session.status === SessionStatus.WAITING_APPROVAL)
 
   const handleAssignAgent = useCallback(async (agentId: string | null) => {
     if (!task) return
@@ -141,8 +141,8 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
   }
 
   // Session state logic — don't show Resume if session is already running
-  const canStart = task.agent_id && !task.session_id && (!session || session.status === 'idle') && task.status !== TaskStatus.Completed
-  const canResume = task.agent_id && task.session_id && !isSessionRunning && (!session?.sessionId) && (!session || session.status === 'idle')
+  const canStart = task.agent_id && !task.session_id && (!session || session.status === SessionStatus.IDLE) && task.status !== TaskStatus.Completed
+  const canResume = task.agent_id && task.session_id && !isSessionRunning && (!session?.sessionId) && (!session || session.status === SessionStatus.IDLE)
   const canStop = isSessionRunning
   const canTriage = !task.agent_id && agents.length > 0 && task.status !== TaskStatus.Completed && task.status !== TaskStatus.Triaging && !isSessionRunning
   const canComplete = task.status !== TaskStatus.Completed && !isSessionRunning
@@ -250,18 +250,18 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
               {session && (
                 <span className={cn(
                   'text-xs flex items-center gap-1.5 ml-auto',
-                  session.status === 'working' && 'text-green-400',
-                  session.status === 'error' && 'text-red-400',
-                  session.status === 'waiting_approval' && 'text-yellow-400',
-                  session.status === 'idle' && 'text-muted-foreground'
+                  session.status === SessionStatus.WORKING && 'text-green-400',
+                  session.status === SessionStatus.ERROR && 'text-red-400',
+                  session.status === SessionStatus.WAITING_APPROVAL && 'text-yellow-400',
+                  session.status === SessionStatus.IDLE && 'text-muted-foreground'
                 )}>
-                  {session.status === 'working' && (
+                  {session.status === SessionStatus.WORKING && (
                     <svg className="h-3 w-3 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
                   )}
-                  {session.status === 'working' && 'Working'}
-                  {session.status === 'idle' && 'Idle'}
-                  {session.status === 'error' && '● Error'}
-                  {session.status === 'waiting_approval' && '● Waiting'}
+                  {session.status === SessionStatus.WORKING && 'Working'}
+                  {session.status === SessionStatus.IDLE && 'Idle'}
+                  {session.status === SessionStatus.ERROR && '● Error'}
+                  {session.status === SessionStatus.WAITING_APPROVAL && '● Waiting'}
                 </span>
               )}
             </div>

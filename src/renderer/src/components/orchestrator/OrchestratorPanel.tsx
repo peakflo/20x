@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { X } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { AgentTranscriptPanel } from '@/components/agents/AgentTranscriptPanel'
-import { useAgentStore } from '@/stores/agent-store'
+import { useAgentStore, SessionStatus } from '@/stores/agent-store'
 import { useAgentSession } from '@/hooks/use-agent-session'
 import { agentApi } from '@/lib/ipc-client'
 import type { Agent } from '@/types'
@@ -108,7 +108,7 @@ export function OrchestratorPanel({ onClose }: OrchestratorPanelProps) {
         <AgentTranscriptPanel
           title="Mastermind den"
           messages={currentSession?.messages || []}
-          status={currentSession?.status || 'idle'}
+          status={currentSession?.status || SessionStatus.IDLE}
           onStop={stop}
           onSend={handleSendMessage}
           className="flex-1 min-h-0"

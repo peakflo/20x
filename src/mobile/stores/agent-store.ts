@@ -37,7 +37,12 @@ export interface AgentMessage {
   }
 }
 
-export type SessionStatus = 'idle' | 'working' | 'error' | 'waiting_approval'
+export enum SessionStatus {
+  IDLE = 'idle',
+  WORKING = 'working',
+  ERROR = 'error',
+  WAITING_APPROVAL = 'waiting_approval',
+}
 
 export interface TaskSession {
   sessionId: string | null
@@ -411,7 +416,7 @@ export const useAgentStore = create<AgentState>((set, get) => {
           sessionId,
           agentId,
           taskId,
-          status: existing?.status || 'working',
+          status: existing?.status || SessionStatus.WORKING,
           messages: existing?.messages || []
         })
       }))
@@ -425,7 +430,7 @@ export const useAgentStore = create<AgentState>((set, get) => {
           sessions: new Map(state.sessions).set(taskId, {
             ...session,
             sessionId: null,
-            status: 'idle'
+            status: SessionStatus.IDLE
           })
         }
       })

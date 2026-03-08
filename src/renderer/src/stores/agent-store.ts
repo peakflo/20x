@@ -40,7 +40,12 @@ export interface AgentMessage {
 
 // ── Per-task session ──────────────────────────────────────────
 
-export type SessionStatus = 'idle' | 'working' | 'error' | 'waiting_approval'
+export enum SessionStatus {
+  IDLE = 'idle',
+  WORKING = 'working',
+  ERROR = 'error',
+  WAITING_APPROVAL = 'waiting_approval',
+}
 
 export interface TaskSession {
   sessionId: string | null
@@ -102,7 +107,7 @@ export const useAgentStore = create<AgentState>((set, get) => {
     // Patch in real sessionId if session was pre-registered with empty string
     if (!session.sessionId && event.sessionId) updated.sessionId = event.sessionId
     // Clear pending approval when session goes idle
-    if (event.status === 'idle') updated.pendingApproval = null
+    if (event.status === SessionStatus.IDLE) updated.pendingApproval = null
     set({ sessions: new Map(state.sessions).set(session.taskId, updated) })
   })
 
@@ -344,7 +349,7 @@ export const useAgentStore = create<AgentState>((set, get) => {
       sessions: new Map(state.sessions).set(session.taskId, {
         ...session,
         pendingApproval: event,
-        status: 'waiting_approval'
+        status: SessionStatus.WAITING_APPROVAL
       })
     })
   })
@@ -415,7 +420,7 @@ export const useAgentStore = create<AgentState>((set, get) => {
           sessionId,
           agentId,
           taskId,
-          status: existing?.status || 'working',
+          status: existing?.status || SessionStatus.WORKING,
           messages: existing?.messages || [],
           pendingApproval: null  // Always reset on init
         })
@@ -430,7 +435,7 @@ export const useAgentStore = create<AgentState>((set, get) => {
           sessions: new Map(state.sessions).set(taskId, {
             ...session,
             sessionId: null,
-            status: 'idle',
+            status: SessionStatus.IDLE,
             pendingApproval: null
           })
         }

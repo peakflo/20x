@@ -4,6 +4,7 @@ import { StopCircle, Loader2, Terminal, Send, ChevronRight, ChevronDown, Wrench,
 import { Button } from '@/components/ui/Button'
 import { Markdown } from '@/components/ui/Markdown'
 import type { AgentMessage } from '@/hooks/use-agent-session'
+import { SessionStatus } from '@/stores/agent-store'
 
 enum ViewMode {
   MARKDOWN = 'markdown',
@@ -73,7 +74,7 @@ function sanitizeToolContent(content: unknown): string {
 interface AgentTranscriptPanelProps {
   title?: string
   messages: AgentMessage[]
-  status: 'idle' | 'working' | 'error' | 'waiting_approval'
+  status: SessionStatus
   onStop: () => void
   onRestart?: () => void
   onSend?: (message: string) => void
@@ -439,7 +440,7 @@ export function AgentTranscriptPanel({ title = 'Agent transcript', messages, sta
 
   // Detect if the session ended due to an error (last message is error/retry and status is idle)
   const lastErrorMessage = useMemo(() => {
-    if (status !== 'idle' || messages.length === 0) return null
+    if (status !== SessionStatus.IDLE || messages.length === 0) return null
     const last = messages[messages.length - 1]
     if (last.partType === 'error' || last.partType === 'retry') return last
     return null
@@ -480,18 +481,18 @@ export function AgentTranscriptPanel({ title = 'Agent transcript', messages, sta
 
   const getStatusColor = () => {
     switch (status) {
-      case 'working': return 'text-green-400'
-      case 'error': return 'text-red-400'
-      case 'waiting_approval': return 'text-yellow-400'
+      case SessionStatus.WORKING: return 'text-green-400'
+      case SessionStatus.ERROR: return 'text-red-400'
+      case SessionStatus.WAITING_APPROVAL: return 'text-yellow-400'
       default: return 'text-muted-foreground'
     }
   }
 
   const getStatusLabel = () => {
     switch (status) {
-      case 'working': return 'Working'
-      case 'error': return 'Error'
-      case 'waiting_approval': return 'Waiting for approval'
+      case SessionStatus.WORKING: return 'Working'
+      case SessionStatus.ERROR: return 'Error'
+      case SessionStatus.WAITING_APPROVAL: return 'Waiting for approval'
       default: return 'Idle'
     }
   }
@@ -516,7 +517,7 @@ export function AgentTranscriptPanel({ title = 'Agent transcript', messages, sta
         </div>
         <div className="flex items-center gap-3">
           <span className={`text-xs flex items-center gap-1 ${getStatusColor()}`}>
-            {status === 'working' && <Loader2 className="h-3 w-3 animate-spin" />}
+            {status === SessionStatus.WORKING && <Loader2 className="h-3 w-3 animate-spin" />}
             {getStatusLabel()}
           </span>
           <div className="flex items-center gap-1">
@@ -540,7 +541,7 @@ export function AgentTranscriptPanel({ title = 'Agent transcript', messages, sta
                 <RotateCcw className="h-3.5 w-3.5" />
               </Button>
             )}
-            {(status === 'working' || status === 'waiting_approval') && (
+            {(status === SessionStatus.WORKING || status === SessionStatus.WAITING_APPROVAL) && (
               <Button variant="ghost" size="sm" onClick={onStop} className="h-7 px-2" title="Stop session">
                 <StopCircle className="h-3.5 w-3.5" />
               </Button>
@@ -569,7 +570,7 @@ export function AgentTranscriptPanel({ title = 'Agent transcript', messages, sta
         >
           {messages.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-full text-muted-foreground text-xs">
-              {status === 'working' ? (
+              {status === SessionStatus.WORKING ? (
                 <>
                   <Loader2 className="h-8 w-8 mb-3 animate-spin opacity-30" />
                   <p>Agent is starting...</p>
@@ -603,7 +604,7 @@ export function AgentTranscriptPanel({ title = 'Agent transcript', messages, sta
                   </div>
                 ))}
               </div>
-              {status === 'working' && (
+              {status === SessionStatus.WORKING && (
                 <div className="flex items-center gap-2 text-xs text-muted-foreground">
                   <Loader2 className="h-3 w-3 animate-spin" />
                   Agent is working...

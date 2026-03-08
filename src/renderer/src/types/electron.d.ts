@@ -58,7 +58,7 @@ export interface AgentStatusEvent {
   sessionId: string
   agentId: string
   taskId: string
-  status: 'idle' | 'working' | 'error' | 'waiting_approval'
+  status: import('@/stores/agent-store').SessionStatus
 }
 
 export interface AgentApprovalRequest {

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { Mock } from 'vitest'
-import { useAgentStore, type AgentMessage, type TaskSession } from './agent-store'
+import { useAgentStore, SessionStatus, type AgentMessage, type TaskSession } from './agent-store'
 import { api } from '../api/client'
 
 beforeEach(() => {
@@ -22,7 +22,7 @@ function setSession(taskId: string, session: Partial<TaskSession>): void {
       sessionId: session.sessionId ?? 'sess-1',
       agentId: session.agentId ?? 'agent-1',
       taskId,
-      status: session.status ?? 'working',
+      status: session.status ?? SessionStatus.WORKING,
       messages: session.messages ?? []
     })
   }))
@@ -51,7 +51,7 @@ describe('useAgentStore', () => {
       setSession('task-1', {
         sessionId: 'sess-1',
         agentId: 'agent-1',
-        status: 'working',
+        status: SessionStatus.WORKING,
         messages: [makeMessage('m1'), makeMessage('m2'), makeMessage('m3')]
       })
 
@@ -137,7 +137,7 @@ describe('useAgentStore', () => {
       // Session was "working" on client, server reports "waiting_approval"
       setSession('task-1', {
         sessionId: 'sess-1',
-        status: 'working',
+        status: SessionStatus.WORKING,
         messages: [makeMessage('m1')]
       })
 
@@ -162,7 +162,7 @@ describe('useAgentStore', () => {
       })
       setSession('task-2', {
         sessionId: 'sess-2',
-        status: 'idle',
+        status: SessionStatus.IDLE,
         messages: [makeMessage('m2-1'), makeMessage('m2-2')]
       })
 
@@ -256,7 +256,7 @@ describe('useAgentStore', () => {
     it('sets session to idle and clears sessionId', () => {
       setSession('task-1', {
         sessionId: 'sess-1',
-        status: 'working',
+        status: SessionStatus.WORKING,
         messages: [makeMessage('m1')]
       })
 

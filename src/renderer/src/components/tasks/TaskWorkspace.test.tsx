@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, act } from '@testing-library/react'
 import { TaskWorkspace } from './TaskWorkspace'
-import { useAgentStore } from '@/stores/agent-store'
+import { useAgentStore, SessionStatus } from '@/stores/agent-store'
 import { TaskStatus } from '@/types'
 import type { WorkfloTask, Agent } from '@/types'
 
@@ -99,7 +99,7 @@ describe('TaskWorkspace – stale triage session cleanup', () => {
       const session = state.sessions.get(taskId)!
       const updated = {
         ...session,
-        status: 'idle' as const,
+        status: SessionStatus.IDLE,
         messages: [
           {
             id: 'msg-1',
@@ -160,7 +160,7 @@ describe('TaskWorkspace – stale triage session cleanup', () => {
       const session = state.sessions.get(taskId)!
       const updated = {
         ...session,
-        status: 'idle' as const,
+        status: SessionStatus.IDLE,
         messages: [
           {
             id: 'msg-1',

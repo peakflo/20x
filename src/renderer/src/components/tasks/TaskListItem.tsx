@@ -1,7 +1,7 @@
 import { Calendar, AlarmClockOff, Repeat } from 'lucide-react'
 import { cn, formatDate, isOverdue, isDueSoon, isSnoozed } from '@/lib/utils'
 import { TaskPriorityBadge } from './TaskPriorityBadge'
-import { useAgentStore } from '@/stores/agent-store'
+import { useAgentStore, SessionStatus } from '@/stores/agent-store'
 import { TaskStatus } from '@/types'
 import type { WorkfloTask, RecurrencePattern, RecurrencePatternObject } from '@/types'
 
@@ -81,10 +81,10 @@ export function TaskListItem({ task, isSelected, onSelect }: TaskListItemProps) 
   const overdue = isActive && isOverdue(task.due_date)
   const dueSoon = isActive && !overdue && isDueSoon(task.due_date)
   const session = useAgentStore((s) => s.sessions.get(task.id))
-  const hasActiveAgent = session && session.status !== 'idle'
+  const hasActiveAgent = session && session.status !== SessionStatus.IDLE
   const hasPendingQuestion = Boolean(
     session?.pendingApproval &&
-    session.status !== 'idle' &&
+    session.status !== SessionStatus.IDLE &&
     session.pendingApproval.action
   )
 
