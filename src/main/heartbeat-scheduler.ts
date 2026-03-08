@@ -99,14 +99,37 @@ export class HeartbeatScheduler {
 
   /**
    * Manually trigger a heartbeat check for a specific task.
+   * Skips pre-flight checks — always sends to the agent since the user explicitly requested it.
+   * Returns a status string so the UI can show feedback.
    */
-  async runNow(taskId: string): Promise<void> {
+  async runNow(taskId: string): Promise<'sent' | 'no_file' | 'no_agent' | 'error'> {
     const task = this.dbManager.getTask(taskId)
     if (!task) {
       console.warn(`[HeartbeatScheduler] runNow: task ${taskId} not found`)
-      return
+      return 'error'
     }
-    await this.runHeartbeat(task)
+
+    const heartbeatContent = this.readHeartbeatFile(taskId)
+    if (!heartbeatContent) {
+      return 'no_file'
+    }
+
+    const agentId = this.resolveAgentId(task)
+    if (!agentId) {
+      return 'no_agent'
+    }
+
+    try {
+      const prompt = this.buildHeartbeatPrompt(task, heartbeatContent)
+      await this.agentManager.startHeartbeatSession(agentId, taskId, prompt)
+      console.log(`[HeartbeatScheduler] runNow: sent heartbeat check to agent for task "${task.title}"`)
+      return 'sent'
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      console.error(`[HeartbeatScheduler] runNow error for task ${taskId}:`, message)
+      this.logResult(taskId, HeartbeatStatus.Error, message)
+      return 'error'
+    }
   }
 
   /**

@@ -779,8 +779,7 @@ export function registerIpcHandlers(
 
   ipcMain.handle('heartbeat:runNow', async (_, taskId: string) => {
     if (!heartbeatScheduler) throw new Error('HeartbeatScheduler not initialized')
-    await heartbeatScheduler.runNow(taskId)
-    return db.getTask(taskId)
+    return await heartbeatScheduler.runNow(taskId)
   })
 
   ipcMain.handle('heartbeat:getLogs', (_, taskId: string, limit?: number) => {

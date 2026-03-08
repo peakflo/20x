@@ -118,11 +118,18 @@ export function HeartbeatSection({ task, onTaskUpdated }: HeartbeatSectionProps)
   }
 
   const handleRunNow = async () => {
-    await window.electronAPI.heartbeat.runNow(task.id)
-    await fetchStatus()
-    await fetchLogs()
-    onTaskUpdated?.()
     setModalOpen(false)
+    const result = await window.electronAPI.heartbeat.runNow(task.id)
+    if (result === 'sent') {
+      // Agent is now working — transcript will update visibly
+      onTaskUpdated?.()
+    } else if (result === 'no_file') {
+      alert('No heartbeat.md file found. Save instructions first.')
+    } else if (result === 'no_agent') {
+      alert('No agent assigned to this task.')
+    } else {
+      alert('Failed to run heartbeat check.')
+    }
   }
 
   const handleIntervalChange = async (minutes: number) => {

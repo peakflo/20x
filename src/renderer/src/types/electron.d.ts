@@ -274,7 +274,7 @@ interface ElectronAPI {
   heartbeat: {
     enable: (taskId: string, intervalMinutes?: number) => Promise<WorkfloTask | undefined>
     disable: (taskId: string) => Promise<WorkfloTask | undefined>
-    runNow: (taskId: string) => Promise<WorkfloTask | undefined>
+    runNow: (taskId: string) => Promise<'sent' | 'no_file' | 'no_agent' | 'error'>
     getLogs: (taskId: string, limit?: number) => Promise<HeartbeatLog[]>
     getStatus: (taskId: string) => Promise<HeartbeatStatusResult | null>
     updateInterval: (taskId: string, intervalMinutes: number) => Promise<WorkfloTask | undefined>
