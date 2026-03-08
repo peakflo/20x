@@ -44,7 +44,7 @@ describe('PeakfloPlugin', () => {
   it('has correct metadata', () => {
     expect(plugin.id).toBe('peakflo')
     expect(plugin.displayName).toBe('Peakflo Workflo')
-    expect(plugin.requiresMcpServer).toBe(true)
+    expect(plugin.requiresMcpServer).toBe(false)
   })
 
   it('returns config schema with status_filter and auto_sync_interval', () => {
@@ -72,7 +72,7 @@ describe('PeakfloPlugin', () => {
     it('returns error when no MCP server', async () => {
       const ctx = makeContext({ mcpServer: undefined })
       const result = await plugin.importTasks('src-1', {}, ctx)
-      expect(result.errors).toContain('MCP server not found')
+      expect(result.errors).toContain('MCP server not found and enterprise not connected')
     })
 
     it('imports new tasks', async () => {

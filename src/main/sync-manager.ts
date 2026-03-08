@@ -3,6 +3,8 @@ import type { McpToolCaller } from './mcp-tool-caller'
 import type { PluginRegistry } from './plugins/registry'
 import type { OAuthManager } from './oauth/oauth-manager'
 import type { PluginContext, PluginSyncResult, ActionResult } from './plugins/types'
+import type { WorkfloApiClient } from './workflo-api-client'
+import type { EnterpriseSyncManager } from './enterprise-sync'
 import type { SourceUser, ReassignResult } from '../shared/types'
 
 export interface SyncResult {
@@ -13,12 +15,36 @@ export interface SyncResult {
 }
 
 export class SyncManager {
+  private workfloApiClient?: WorkfloApiClient
+  private enterpriseSyncManager?: EnterpriseSyncManager
+  private enterpriseUserId?: string
+
   constructor(
     private db: DatabaseManager,
     private toolCaller: McpToolCaller,
     private pluginRegistry: PluginRegistry,
     private oauthManager?: OAuthManager
   ) {}
+
+  /**
+   * Set the enterprise connection for REST API-based task import.
+   * Called when enterprise auth succeeds (selectTenant).
+   */
+  setEnterpriseConnection(
+    apiClient: WorkfloApiClient,
+    syncManager: EnterpriseSyncManager,
+    userId: string
+  ): void {
+    this.workfloApiClient = apiClient
+    this.enterpriseSyncManager = syncManager
+    this.enterpriseUserId = userId
+  }
+
+  clearEnterpriseConnection(): void {
+    this.workfloApiClient = undefined
+    this.enterpriseSyncManager = undefined
+    this.enterpriseUserId = undefined
+  }
 
   private buildContext(mcpServerId?: string, sourceId?: string): PluginContext {
     const mcpServer = mcpServerId ? this.db.getMcpServer(mcpServerId) : undefined
@@ -27,7 +53,8 @@ export class SyncManager {
       toolCaller: this.toolCaller,
       mcpServer,
       oauthManager: this.oauthManager,
-      sourceId
+      sourceId,
+      workfloApiClient: this.workfloApiClient
     }
   }
 
@@ -53,6 +80,16 @@ export class SyncManager {
 
     // Merge legacy columns into config for backward compat
     const config = this.getConfig(source)
+
+    // Phase 2.4: re-sync agents/skills/MCP servers before each task import
+    if (this.enterpriseSyncManager && this.enterpriseUserId) {
+      try {
+        console.log('[sync] Running enterprise resource sync before task import...')
+        await this.enterpriseSyncManager.syncAll(this.enterpriseUserId)
+      } catch (err: unknown) {
+        console.error('[sync] Enterprise resource sync error (non-fatal):', err)
+      }
+    }
 
     try {
       const pluginResult: PluginSyncResult = await plugin.importTasks(sourceId, config, ctx)

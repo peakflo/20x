@@ -172,7 +172,15 @@ export class PeakfloPlugin implements TaskSourcePlugin {
   displayName = 'Peakflo Workflo'
   description = 'Import and manage tasks from Peakflo Workflo platform'
   icon = 'Zap'
-  requiresMcpServer = true
+  requiresMcpServer = false // No longer required — enterprise mode uses REST API
+
+  /** Check if running in enterprise mode (REST API instead of MCP) */
+  private isEnterpriseMode(
+    config: Record<string, unknown>,
+    ctx: PluginContext
+  ): boolean {
+    return !!(config.enterprise_mode || ctx.workfloApiClient)
+  }
 
   getConfigSchema(): PluginConfigSchema {
     return [
@@ -246,8 +254,14 @@ export class PeakfloPlugin implements TaskSourcePlugin {
   ): Promise<PluginSyncResult> {
     const result: PluginSyncResult = { imported: 0, updated: 0, errors: [] }
 
+    // ── Enterprise mode: fetch from Workflo REST API ──────────
+    if (this.isEnterpriseMode(config, ctx)) {
+      return this.importTasksEnterprise(sourceId, config, ctx, result)
+    }
+
+    // ── Legacy MCP mode ───────────────────────────────────────
     if (!ctx.mcpServer) {
-      result.errors.push('MCP server not found')
+      result.errors.push('MCP server not found and enterprise not connected')
       return result
     }
 
@@ -329,25 +343,168 @@ export class PeakfloPlugin implements TaskSourcePlugin {
     return result
   }
 
+  // ── Enterprise import: fetch tasks from Workflo REST API ──────────
+
+  private async importTasksEnterprise(
+    sourceId: string,
+    config: Record<string, unknown>,
+    ctx: PluginContext,
+    result: PluginSyncResult
+  ): Promise<PluginSyncResult> {
+    const apiClient = ctx.workfloApiClient
+    if (!apiClient) {
+      result.errors.push('Enterprise API client not available')
+      return result
+    }
+
+    const source = ctx.db.getTaskSource(sourceId)
+    const sourceName = source?.name ?? 'Peakflo'
+    const statusFilter = (config.status_filter as string) || 'all'
+
+    try {
+      // Paginated fetch from Workflo API
+      let page = 1
+      const pageSize = 100
+      let hasMore = true
+
+      while (hasMore) {
+        const response = await apiClient.listTasks({
+          status: statusFilter !== 'all' ? statusFilter : undefined,
+          page,
+          pageSize,
+          myTasks: true
+        })
+
+        for (const task of response.tasks) {
+          try {
+            const externalId = task.id // Workflo task ID is the external ID
+            const existing = ctx.db.getTaskByExternalId(sourceId, externalId)
+
+            // Map Workflo task status to local status
+            const status = this.mapWorkfloStatus(task.status)
+            const priority = task.priority || 'medium'
+            const assignee = task.assignees?.[0]?.assigneeValue
+
+            if (existing) {
+              ctx.db.updateTask(existing.id, {
+                title: task.title,
+                description: task.description ?? undefined,
+                status,
+                priority,
+                assignee,
+                due_date: task.dueDate
+              })
+              result.updated++
+            } else {
+              ctx.db.createTask({
+                title: task.title,
+                description: task.description || undefined,
+                type: 'general',
+                priority,
+                status,
+                assignee,
+                due_date: task.dueDate,
+                external_id: externalId,
+                source_id: sourceId,
+                source: sourceName
+              })
+              result.imported++
+            }
+          } catch (err: unknown) {
+            const msg = err instanceof Error ? err.message : 'Unknown error'
+            result.errors.push(`Task ${task.id}: ${msg}`)
+          }
+        }
+
+        if (
+          response.tasks.length < pageSize ||
+          page >= response.pagination.totalPages
+        ) {
+          hasMore = false
+        } else {
+          page++
+        }
+      }
+
+      ctx.db.updateTaskSourceLastSynced(sourceId)
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Unknown error'
+      result.errors.push(`Enterprise import failed: ${msg}`)
+    }
+
+    return result
+  }
+
+  private mapWorkfloStatus(status: string): TaskStatus {
+    switch (status?.toLowerCase()) {
+      case 'completed':
+        return TaskStatus.Completed
+      case 'in_progress':
+        return TaskStatus.NotStarted
+      case 'pending':
+        return TaskStatus.NotStarted
+      default:
+        return TaskStatus.NotStarted
+    }
+  }
+
   async exportUpdate(
-    _task: TaskRecord,
-    _changedFields: Record<string, unknown>,
-    _config: Record<string, unknown>,
-    _ctx: PluginContext
+    task: TaskRecord,
+    changedFields: Record<string, unknown>,
+    config: Record<string, unknown>,
+    ctx: PluginContext
   ): Promise<void> {
-    // Peakflo uses action-based completion, not field updates
-    // Export is a no-op; use executeAction instead
+    // Enterprise mode: push updates to Workflo via REST API
+    if (this.isEnterpriseMode(config, ctx) && ctx.workfloApiClient && task.external_id) {
+      const updateData: Record<string, unknown> = {}
+      if (changedFields.title !== undefined) updateData.title = changedFields.title
+      if (changedFields.description !== undefined) updateData.description = changedFields.description
+      if (changedFields.priority !== undefined) updateData.priority = changedFields.priority
+      if (changedFields.due_date !== undefined) updateData.dueDate = changedFields.due_date
+      if (changedFields.status !== undefined) updateData.status = changedFields.status
+
+      if (Object.keys(updateData).length > 0) {
+        await ctx.workfloApiClient.updateTask(task.external_id, updateData)
+      }
+      return
+    }
+
+    // Legacy MCP mode: no-op (uses action-based completion)
   }
 
   async executeAction(
     actionId: string,
     task: TaskRecord,
     input: string | undefined,
-    _config: Record<string, unknown>,
+    config: Record<string, unknown>,
     ctx: PluginContext
   ): Promise<ActionResult> {
-    if (!ctx.mcpServer || !task.external_id) {
-      return { success: false, error: 'Missing MCP server or external task ID' }
+    if (!task.external_id) {
+      return { success: false, error: 'Missing external task ID' }
+    }
+
+    // ── Enterprise mode: call Workflo REST API ──────────────────
+    if (this.isEnterpriseMode(config, ctx) && ctx.workfloApiClient) {
+      try {
+        const outputs: Record<string, unknown> = { action: actionId }
+        for (const field of task.output_fields) {
+          if (field.value !== undefined && field.value !== null && field.value !== '') {
+            outputs[field.id] = field.value
+          }
+        }
+        if (input) outputs.reason = input
+
+        await ctx.workfloApiClient.executeAction(task.external_id, outputs)
+        return { success: true, taskUpdate: { status: TaskStatus.Completed } }
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : 'Action failed'
+        return { success: false, error: msg }
+      }
+    }
+
+    // ── Legacy MCP mode ─────────────────────────────────────────
+    if (!ctx.mcpServer) {
+      return { success: false, error: 'Missing MCP server and enterprise not connected' }
     }
 
     // Build outputs from all output_fields with values

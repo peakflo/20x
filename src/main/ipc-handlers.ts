@@ -678,11 +678,60 @@ export function registerIpcHandlers(
 
   ipcMain.handle('enterprise:selectTenant', async (_, tenantId: string) => {
     if (!enterpriseAuth) throw new Error('Enterprise auth not available')
-    return await enterpriseAuth.selectTenant(tenantId)
+    const result = await enterpriseAuth.selectTenant(tenantId)
+
+    // Phase 2.6: On enterprise connect, set up API client, sync resources, auto-create task source
+    try {
+      const { WorkfloApiClient } = await import('./workflo-api-client')
+      const { EnterpriseSyncManager } = await import('./enterprise-sync')
+
+      const apiClient = new WorkfloApiClient(enterpriseAuth)
+      const enterpriseSyncMgr = new EnterpriseSyncManager(db, apiClient)
+
+      // Get user ID from stored session
+      const session = await enterpriseAuth.getSession()
+      const userId = session.userId || ''
+
+      // Wire enterprise connection into sync manager
+      syncManager.setEnterpriseConnection(apiClient, enterpriseSyncMgr, userId)
+
+      // Run initial sync (agents, skills, MCP servers)
+      console.log('[enterprise] Running initial resource sync...')
+      const syncResult = await enterpriseSyncMgr.syncAll(userId)
+      console.log('[enterprise] Initial sync result:', JSON.stringify(syncResult))
+
+      // Auto-create Peakflo task source if none exists
+      const existingSources = db.getTaskSources()
+      const hasPeakfloSource = existingSources.some(
+        (s) => s.plugin_id === 'peakflo' && (s.config as Record<string, unknown>).enterprise_mode
+      )
+      if (!hasPeakfloSource) {
+        console.log('[enterprise] Auto-creating Peakflo task source...')
+        db.createTaskSource({
+          mcp_server_id: null,
+          name: `Workflo (${result.tenant.name})`,
+          plugin_id: 'peakflo',
+          config: {
+            enterprise_mode: true,
+            status_filter: 'all',
+            auto_sync_interval: 5
+          },
+          list_tool: '',
+          list_tool_args: {},
+          update_tool: '',
+          update_tool_args: {}
+        })
+      }
+    } catch (err) {
+      console.error('[enterprise] Post-connect setup error (non-fatal):', err)
+    }
+
+    return result
   })
 
   ipcMain.handle('enterprise:logout', async () => {
     if (!enterpriseAuth) throw new Error('Enterprise auth not available')
+    syncManager.clearEnterpriseConnection()
     return await enterpriseAuth.logout()
   })
 
@@ -690,7 +739,23 @@ export function registerIpcHandlers(
     if (!enterpriseAuth) {
       return { isAuthenticated: false, userEmail: null, userId: null, currentTenant: null }
     }
-    return await enterpriseAuth.getSession()
+    const session = await enterpriseAuth.getSession()
+
+    // Restore enterprise connection if authenticated but sync manager not wired
+    if (session.isAuthenticated && session.currentTenant && session.userId) {
+      try {
+        const { WorkfloApiClient } = await import('./workflo-api-client')
+        const { EnterpriseSyncManager } = await import('./enterprise-sync')
+
+        const apiClient = new WorkfloApiClient(enterpriseAuth)
+        const enterpriseSyncMgr = new EnterpriseSyncManager(db, apiClient)
+        syncManager.setEnterpriseConnection(apiClient, enterpriseSyncMgr, session.userId)
+      } catch (err) {
+        console.error('[enterprise] Failed to restore connection:', err)
+      }
+    }
+
+    return session
   })
 
   ipcMain.handle('enterprise:refreshToken', async () => {
