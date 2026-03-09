@@ -28,6 +28,8 @@ const DEFAULT_SERVER_URL = 'http://localhost:4096'
  * Adapter for OpenCode backend
  */
 export class OpencodeAdapter implements CodingAgentAdapter {
+  /** Callback set by agent-manager to trigger an immediate poll cycle */
+  onDataAvailable?: (sessionId: string) => void
   private sdkLoading: Promise<void> | null = null
   private serverInstance: unknown = null
   private serverUrl: string | null = null

@@ -133,6 +133,9 @@ export class AcpAdapter implements CodingAgentAdapter {
   private agentConfig: AcpAgentConfig
   private sessions = new Map<string, AcpSession>()
 
+  /** Callback set by agent-manager to trigger an immediate poll cycle */
+  onDataAvailable?: (sessionId: string) => void
+
   constructor(agentType: AcpAgentType) {
     this.agentType = agentType
     this.agentConfig = this.getAgentConfig(agentType)
@@ -848,6 +851,7 @@ export class AcpAdapter implements CodingAgentAdapter {
         }
         session.messageBuffer.push(errorEvent)
         session.permanentMessages.push(errorEvent)
+        this.onDataAvailable?.(session.sessionId)
         return
       }
 
@@ -897,6 +901,7 @@ export class AcpAdapter implements CodingAgentAdapter {
       session.messageBuffer.push(notification)
       // Also store permanently for getAllMessages (never cleared)
       session.permanentMessages.push(notification)
+      this.onDataAvailable?.(session.sessionId)
 
       // Update session status based on notification
       this.updateSessionStatus(session, notification)

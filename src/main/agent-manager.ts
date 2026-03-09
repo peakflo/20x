@@ -2,7 +2,8 @@ import { EventEmitter } from 'events'
 import { spawn } from 'child_process'
 import { homedir } from 'os'
 import { join, delimiter } from 'path'
-import { existsSync, copyFileSync, mkdirSync, writeFileSync, readFileSync, readdirSync, statSync } from 'fs'
+import { existsSync, copyFileSync, mkdirSync, readFileSync, readdirSync, statSync } from 'fs'
+import { mkdir, writeFile } from 'fs/promises'
 import { Agent as UndiciAgent } from 'undici'
 import { Notification } from 'electron'
 import type { BrowserWindow } from 'electron'
@@ -85,6 +86,15 @@ export class AgentManager extends EventEmitter {
   private pollingEntries: Map<string, PollingEntry> = new Map()
   private pollingTimer: ReturnType<typeof setTimeout> | null = null
   private static readonly POLL_INTERVAL_MS = 2000
+
+  // ── Event-driven nudge ──
+  // When an adapter buffers new stream data it calls onDataAvailable().
+  // We debounce that into a short nudge timer so the coordinator delivers
+  // the data to the UI within ~50ms instead of waiting up to 2 seconds.
+  private nudgeTimer: ReturnType<typeof setTimeout> | null = null
+  private static readonly NUDGE_DELAY_MS = 50
+  private pollingInProgress = false  // Prevents overlapping tick() calls
+  private pollTickFn: (() => Promise<void>) | null = null  // Reference to the tick function
 
   // Track last sent status per session to detect transitions for OS notifications
   private lastSentStatus: Map<string, string> = new Map()
@@ -222,6 +232,10 @@ export class AgentManager extends EventEmitter {
     // Ensure the task API server is ready before building MCP configs
     // (startTaskApiServer is fire-and-forget during DB init, may not be done yet)
     await waitForTaskApiServer()
+
+    // Yield after waitForTaskApiServer + db.getAgent (sync) so the event
+    // loop can process rendering before we enter the MCP server loop.
+    await new Promise<void>((r) => setImmediate(r))
 
     for (const entry of mcpEntries) {
       const serverId = typeof entry === 'string' ? entry : (entry as AgentMcpServerEntry).serverId
@@ -409,7 +423,7 @@ export class AgentManager extends EventEmitter {
    * Priority: task.skill_ids > agent.config.skill_ids > all skills.
    * Also generates AGENTS.md and CLAUDE.md with skill directory.
    */
-  private writeSkillFiles(taskId: string, agentId: string, workspaceDir: string): void {
+  private async writeSkillFiles(taskId: string, agentId: string, workspaceDir: string): Promise<void> {
     try {
       const task = this.db.getTask(taskId)
       const agent = this.db.getAgent(agentId)
@@ -428,7 +442,8 @@ export class AgentManager extends EventEmitter {
         ? this.db.getSkills()
         : this.db.getSkillsByIds(skillIds)
 
-      // Write individual SKILL.md files
+      // Write individual SKILL.md files using async I/O so the event loop
+      // can process IPC/rendering between writes (avoids startup UI freeze).
       // Claude Code agent: .claude/skills/<name>/SKILL.md
       // Other agents: .agents/skills/<name>/SKILL.md
       if (skills.length > 0) {
@@ -439,16 +454,16 @@ export class AgentManager extends EventEmitter {
           : join(workspaceDir, '.agents', 'skills')
         for (const skill of skills) {
           const dir = join(skillsDir, skill.name)
-          mkdirSync(dir, { recursive: true })
+          await mkdir(dir, { recursive: true })
           const desc = skill.description || skill.name
           const content = `---\nname: ${skill.name}\ndescription: ${desc}\n---\n\n${skill.content}`
-          writeFileSync(join(dir, 'SKILL.md'), content, 'utf-8')
+          await writeFile(join(dir, 'SKILL.md'), content, 'utf-8')
         }
         console.log(`[AgentManager] Wrote ${skills.length} SKILL.md file(s) to ${skillsDir}`)
       }
 
       // Generate AGENTS.md and CLAUDE.md with skill directory
-      this.writeAgentsDocumentation(workspaceDir, skills, task?.repos || [], agentId)
+      await this.writeAgentsDocumentation(workspaceDir, skills, task?.repos || [], agentId)
     } catch (error) {
       console.error('[AgentManager] Error writing skill files:', error)
     }
@@ -458,23 +473,23 @@ export class AgentManager extends EventEmitter {
    * Generates AGENTS.md and CLAUDE.md with skill directory and metadata.
    * Both files are written to the workspace root directory.
    */
-  private writeAgentsDocumentation(
+  private async writeAgentsDocumentation(
     workspaceDir: string,
     skills: SkillRecord[],
     repos: string[],
     agentId?: string
-  ): void {
+  ): Promise<void> {
     try {
       // Sort skills by confidence (high to low)
       const sortedSkills = [...skills].sort((a, b) => b.confidence - a.confidence)
 
-      // Generate AGENTS.md — write to workspace root
+      // Generate AGENTS.md — write to workspace root (async to avoid blocking)
       const agentsMd = this.generateAgentsMd(sortedSkills, repos, workspaceDir, agentId)
-      writeFileSync(join(workspaceDir, 'AGENTS.md'), agentsMd, 'utf-8')
+      await writeFile(join(workspaceDir, 'AGENTS.md'), agentsMd, 'utf-8')
 
       // Generate CLAUDE.md — write to workspace root
       const claudeMd = this.generateClaudeMd(sortedSkills, repos, workspaceDir, agentId)
-      writeFileSync(join(workspaceDir, 'CLAUDE.md'), claudeMd, 'utf-8')
+      await writeFile(join(workspaceDir, 'CLAUDE.md'), claudeMd, 'utf-8')
 
       console.log('[AgentManager] Generated AGENTS.md and CLAUDE.md in workspace root')
     } catch (error) {
@@ -933,6 +948,10 @@ export class AgentManager extends EventEmitter {
     workspaceDir?: string,
     skipInitialPrompt?: boolean
   ): Promise<string> {
+    // Helper: yield event loop between bursts of synchronous DB / FS calls
+    // so the renderer can process IPC and paint frames during session setup.
+    const yieldEL = (): Promise<void> => new Promise((r) => setImmediate(r))
+
     const agent = this.db.getAgent(agentId)!
 
     // Always use a dedicated workspace directory
@@ -940,12 +959,13 @@ export class AgentManager extends EventEmitter {
       workspaceDir = this.db.getWorkspaceDir(taskId)
     }
 
-    // Write SKILL.md files to workspace
-    this.writeSkillFiles(taskId, agentId, workspaceDir)
+    // Write SKILL.md files to workspace (async to avoid blocking the event loop)
+    await this.writeSkillFiles(taskId, agentId, workspaceDir)
 
     // Check if this is a triage session
     const task = this.db.getTask(taskId)
     const isTriageSession = task?.status === TaskStatus.Triaging
+    await yieldEL()
 
     // Build MCP servers config for adapter
     // Mastermind and triage sessions always get task-management access
@@ -990,6 +1010,7 @@ export class AgentManager extends EventEmitter {
         sessionConfig.systemPrompt = (sessionConfig.systemPrompt || '') + this.buildSecretsSystemPrompt(secretRecords)
       }
     }
+    await yieldEL()
 
     // Initialize adapter
     await adapter.initialize()
@@ -1026,6 +1047,7 @@ export class AgentManager extends EventEmitter {
         updates: { status: TaskStatus.AgentWorking }
       })
     }
+    await yieldEL()
 
     // Notify renderer
     this.sendToRenderer('agent:status', {
@@ -1046,6 +1068,7 @@ export class AgentManager extends EventEmitter {
         // Use triage-specific prompt
         promptText = this.buildTriagePrompt(task)
       } else {
+        // Reuse the task we already fetched above instead of hitting the DB again
         const currentTask = task || this.db.getTask(taskId)
         promptText = currentTask
           ? `Work on task: "${currentTask.title}"\n\n${currentTask.description || ''}`
@@ -1150,6 +1173,15 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     this.pollingEntries.set(initialSessionId, entry)
     console.log(`[AgentManager] Registered session ${initialSessionId} for polling (${this.pollingEntries.size} active)`)
 
+    // Wire up event-driven nudge so the adapter can trigger an immediate
+    // poll cycle when new stream data is buffered (instead of waiting for
+    // the 2-second heartbeat).
+    if (!adapter.onDataAvailable) {
+      adapter.onDataAvailable = (_sessionId: string) => {
+        this.nudgePollingCoordinator()
+      }
+    }
+
     // Start the coordinator if not already running
     this.ensurePollingCoordinator()
   }
@@ -1162,9 +1194,15 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     console.log(`[AgentManager] Unregistered session ${sessionId} from polling (${this.pollingEntries.size} remaining)`)
 
     // Stop coordinator if no sessions left
-    if (this.pollingEntries.size === 0 && this.pollingTimer) {
-      clearTimeout(this.pollingTimer)
-      this.pollingTimer = null
+    if (this.pollingEntries.size === 0) {
+      if (this.pollingTimer) {
+        clearTimeout(this.pollingTimer)
+        this.pollingTimer = null
+      }
+      if (this.nudgeTimer) {
+        clearTimeout(this.nudgeTimer)
+        this.nudgeTimer = null
+      }
       console.log('[AgentManager] Polling coordinator stopped (no active sessions)')
     }
   }
@@ -1173,9 +1211,13 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
    * Ensures the single polling coordinator timer is running.
    */
   private ensurePollingCoordinator(): void {
-    if (this.pollingTimer) return // Already running
+    if (this.pollingTimer || this.pollingInProgress) return // Already running or executing
 
     const tick = async (): Promise<void> => {
+      // Prevent overlapping tick() calls from nudge + heartbeat firing together
+      if (this.pollingInProgress) return
+      this.pollingInProgress = true
+
       // Clear the timer reference — this tick is now executing, not pending.
       // ensurePollingCoordinator checks this to know whether to start a new loop.
       this.pollingTimer = null
@@ -1198,6 +1240,8 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
         }
       } catch (error) {
         console.error('[AgentManager] Polling coordinator error:', error)
+      } finally {
+        this.pollingInProgress = false
       }
 
       // ALWAYS reschedule if there are active sessions (even after errors).
@@ -1206,9 +1250,50 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       }
     }
 
+    // Store reference so nudgePollingCoordinator can invoke it
+    this.pollTickFn = tick
+
     // Start after a short initial delay
     this.pollingTimer = setTimeout(tick, 1000)
     console.log('[AgentManager] Polling coordinator started')
+  }
+
+  /**
+   * Nudges the polling coordinator to run a poll cycle within NUDGE_DELAY_MS
+   * instead of waiting for the next 2-second heartbeat.  Called by adapters
+   * (via onDataAvailable) when new stream data is buffered.
+   *
+   * The short debounce (50ms) batches rapid-fire stream events so we don't
+   * run a poll cycle for every single streaming chunk.
+   */
+  private nudgePollingCoordinator(): void {
+    // Already have a nudge scheduled, no need to double-schedule
+    if (this.nudgeTimer) return
+
+    // If a tick is already running, it will pick up the new data — no nudge needed
+    if (this.pollingInProgress) return
+
+    // No active sessions → nothing to nudge
+    if (this.pollingEntries.size === 0) return
+
+    this.nudgeTimer = setTimeout(() => {
+      this.nudgeTimer = null
+
+      // Guard: still have sessions and tick isn't already running
+      if (this.pollingEntries.size === 0 || this.pollingInProgress) return
+
+      // Cancel the pending heartbeat timer — the nudge replaces it.
+      // tick() will reschedule the heartbeat after it finishes.
+      if (this.pollingTimer) {
+        clearTimeout(this.pollingTimer)
+        this.pollingTimer = null
+      }
+
+      // Run a poll cycle immediately
+      if (this.pollTickFn) {
+        this.pollTickFn()
+      }
+    }, AgentManager.NUDGE_DELAY_MS)
   }
 
   /**
@@ -1418,6 +1503,9 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     taskId: string,
     adapterSessionId: string
   ): Promise<string> {
+    // Helper: yield event loop between bursts of sync DB/FS calls
+    const yieldEL = (): Promise<void> => new Promise((r) => setImmediate(r))
+
     const agent = this.db.getAgent(agentId)!
     const workspaceDir = this.db.getWorkspaceDir(taskId)
 
@@ -1425,6 +1513,8 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     const isMastermind = taskId === 'mastermind-session'
     const task = this.db.getTask(taskId)
     const isTriageSession = task?.status === TaskStatus.Triaging
+    await yieldEL()
+
     const mcpServers = await this.buildMcpServersForAdapter(agentId, { ensureTaskManagement: isMastermind || isTriageSession })
 
     // Build system prompt with task context (survives context compaction)
@@ -1471,6 +1561,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
         sessionConfig.systemPrompt = (sessionConfig.systemPrompt || '') + this.buildSecretsSystemPrompt(secretRecords)
       }
     }
+    await yieldEL()
 
     // Initialize adapter
     await adapter.initialize()
@@ -1726,6 +1817,12 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     session.status = 'idle'
     console.log(`[AgentManager] Session ${sessionId} → idle`)
 
+    // Helper: yield event loop between synchronous DB operations so IPC,
+    // timers and rendering callbacks can run.  transitionToIdle chains many
+    // sync better-sqlite3 calls; without yields this blocks the main thread
+    // for the entire duration and freezes the UI.
+    const yieldEventLoop = (): Promise<void> => new Promise((r) => setImmediate(r))
+
     // In learning mode, skip output extraction, task status, and renderer notification
     if (session.learningMode) return
 
@@ -1733,6 +1830,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     if (session.isTriageSession) {
       console.log(`[AgentManager] Triage session completed for task ${session.taskId}, reverting to NotStarted`)
       this.db.updateTask(session.taskId, { status: TaskStatus.NotStarted, session_id: null })
+      await yieldEventLoop()
 
       this.sendToRenderer('task:updated', {
         taskId: session.taskId,
@@ -1750,6 +1848,8 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
 
     // Check if task exists (e.g., orchestrator-session doesn't have a real task)
     const task = this.db.getTask(session.taskId)
+    await yieldEventLoop()
+
     if (!task) {
       console.log(`[AgentManager] No task found for ${session.taskId}, sending idle status only`)
       this.sendToRenderer('agent:status', {
@@ -1768,9 +1868,11 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       } catch (err) {
         console.error(`[AgentManager] Skill sync error:`, err)
       }
+      await yieldEventLoop()
 
       // Mark task as completed
       this.db.updateTask(session.taskId, { status: TaskStatus.Completed })
+      await yieldEventLoop()
 
       this.sendToRenderer('task:updated', {
         taskId: session.taskId,
@@ -1789,10 +1891,13 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     } catch (err) {
       console.error(`[AgentManager] extractOutputValues error:`, err)
     }
+    await yieldEventLoop()
 
     // Check again if task is still in a state where we should update it
     // (frontend might have already completed it during feedback flow)
     const taskAfterExtract = this.db.getTask(session.taskId)
+    await yieldEventLoop()
+
     if (taskAfterExtract?.status === TaskStatus.AgentLearning || taskAfterExtract?.status === TaskStatus.Completed) {
       console.log(`[AgentManager] Task already in final state (${taskAfterExtract.status}), skipping status update`)
       this.sendToRenderer('agent:status', {
@@ -1805,9 +1910,11 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     if (task) {
       console.log(`[AgentManager] Updating task ${session.taskId} status to ReadyForReview`)
       this.db.updateTask(session.taskId, { status: TaskStatus.ReadyForReview })
+      await yieldEventLoop()
 
       // Auto-enable heartbeat if agent wrote a heartbeat.md file
       this.autoEnableHeartbeat(session.taskId)
+      await yieldEventLoop()
 
       // Get updated task with output fields and notify renderer
       const updatedTask = this.db.getTask(session.taskId)
@@ -2948,15 +3055,22 @@ Important:
         const prevStatus = this.lastSentStatus.get(sessionId)
         this.lastSentStatus.set(sessionId, status)
 
+        // Check ALL conditions BEFORE doing any DB/notification work.
+        // Previously the sync db.getTask() call ran inside the notification
+        // block but BEFORE checking if the window was inactive, blocking the
+        // event loop on every status transition even when no notification was
+        // needed.
         const isWindowInactive = !this.mainWindow || this.mainWindow.isDestroyed() || !this.mainWindow.isFocused()
+        const isNotifiableTransition = prevStatus === SessionStatus.WORKING && (status === SessionStatus.IDLE || status === SessionStatus.WAITING_APPROVAL)
 
-        if (prevStatus === SessionStatus.WORKING && (status === SessionStatus.IDLE || status === SessionStatus.WAITING_APPROVAL) && isWindowInactive) {
+        if (isNotifiableTransition && isWindowInactive) {
           try {
             if (Notification.isSupported()) {
-              let title: string
-              let body: string
+              // Only hit the database when we actually need the title for a notification
               const taskTitle = taskId ? this.db.getTask(taskId)?.title : undefined
 
+              let title: string
+              let body: string
               if (status === SessionStatus.WAITING_APPROVAL) {
                 title = 'Agent needs approval'
                 body = taskTitle ? `"${taskTitle}" is waiting for your approval` : 'An agent is waiting for your approval'

@@ -13,6 +13,10 @@ vi.mock('fs', async (importOriginal) => {
     existsSync: vi.fn(() => false),
   }
 })
+vi.mock('fs/promises', () => ({
+  mkdir: vi.fn(async () => undefined),
+  writeFile: vi.fn(async () => undefined),
+}))
 
 // Mock heavy dependencies to avoid loading electron/native modules
 vi.mock('child_process', () => ({ spawn: vi.fn() }))
@@ -44,10 +48,10 @@ vi.mock('./secret-broker', () => ({
   writeSecretShellWrapper: vi.fn(),
 }))
 
-import { mkdirSync, writeFileSync } from 'fs'
+import { mkdir as mkdirAsync, writeFile as writeFileAsync } from 'fs/promises'
 
-const mockedMkdirSync = vi.mocked(mkdirSync)
-const mockedWriteFileSync = vi.mocked(writeFileSync)
+const mockedMkdirAsync = vi.mocked(mkdirAsync)
+const mockedWriteFileAsync = vi.mocked(writeFileAsync)
 
 function makeSkillRecord(overrides: Partial<{
   id: string; name: string; description: string; content: string;
@@ -101,18 +105,18 @@ describe('AgentManager skill file paths', () => {
   })
 
   describe('writeSkillFiles', () => {
-    it('writes SKILL.md files to .claude/skills/ for Claude Code agents', () => {
+    it('writes SKILL.md files to .claude/skills/ for Claude Code agents', async () => {
       const mockDb = createMockDb({ coding_agent: 'claude-code' })
       manager = new AgentManager(mockDb)
 
       const workspaceDir = '/tmp/test-workspace'
-      ;(manager as any).writeSkillFiles('task-1', 'agent-1', workspaceDir)
+      await (manager as any).writeSkillFiles('task-1', 'agent-1', workspaceDir)
 
-      // Verify SKILL.md was written under .claude/skills/
-      const mkdirCalls = mockedMkdirSync.mock.calls.map(c => c[0])
+      // Verify SKILL.md was written under .claude/skills/ (now uses async fs/promises)
+      const mkdirCalls = mockedMkdirAsync.mock.calls.map(c => c[0])
       expect(mkdirCalls).toContainEqual('/tmp/test-workspace/.claude/skills/test-skill')
 
-      const writeFilePaths = mockedWriteFileSync.mock.calls.map(c => c[0] as string)
+      const writeFilePaths = mockedWriteFileAsync.mock.calls.map(c => c[0] as string)
       expect(writeFilePaths).toContainEqual(
         '/tmp/test-workspace/.claude/skills/test-skill/SKILL.md'
       )
@@ -122,14 +126,14 @@ describe('AgentManager skill file paths', () => {
       expect(agentsWrites).toHaveLength(0)
     })
 
-    it('writes SKILL.md files to .agents/skills/ for OpenCode agents', () => {
+    it('writes SKILL.md files to .agents/skills/ for OpenCode agents', async () => {
       const mockDb = createMockDb({ coding_agent: 'opencode' })
       manager = new AgentManager(mockDb)
 
       const workspaceDir = '/tmp/test-workspace'
-      ;(manager as any).writeSkillFiles('task-1', 'agent-1', workspaceDir)
+      await (manager as any).writeSkillFiles('task-1', 'agent-1', workspaceDir)
 
-      const writeFilePaths = mockedWriteFileSync.mock.calls.map(c => c[0] as string)
+      const writeFilePaths = mockedWriteFileAsync.mock.calls.map(c => c[0] as string)
       expect(writeFilePaths).toContainEqual(
         '/tmp/test-workspace/.agents/skills/test-skill/SKILL.md'
       )
@@ -139,14 +143,14 @@ describe('AgentManager skill file paths', () => {
       expect(claudeWrites).toHaveLength(0)
     })
 
-    it('writes SKILL.md files to .agents/skills/ for Codex agents', () => {
+    it('writes SKILL.md files to .agents/skills/ for Codex agents', async () => {
       const mockDb = createMockDb({ coding_agent: 'codex' })
       manager = new AgentManager(mockDb)
 
       const workspaceDir = '/tmp/test-workspace'
-      ;(manager as any).writeSkillFiles('task-1', 'agent-1', workspaceDir)
+      await (manager as any).writeSkillFiles('task-1', 'agent-1', workspaceDir)
 
-      const writeFilePaths = mockedWriteFileSync.mock.calls.map(c => c[0] as string)
+      const writeFilePaths = mockedWriteFileAsync.mock.calls.map(c => c[0] as string)
       expect(writeFilePaths).toContainEqual(
         '/tmp/test-workspace/.agents/skills/test-skill/SKILL.md'
       )
@@ -156,14 +160,14 @@ describe('AgentManager skill file paths', () => {
       expect(claudeWrites).toHaveLength(0)
     })
 
-    it('defaults to .agents/skills/ when no coding_agent is configured', () => {
+    it('defaults to .agents/skills/ when no coding_agent is configured', async () => {
       const mockDb = createMockDb({})
       manager = new AgentManager(mockDb)
 
       const workspaceDir = '/tmp/test-workspace'
-      ;(manager as any).writeSkillFiles('task-1', 'agent-1', workspaceDir)
+      await (manager as any).writeSkillFiles('task-1', 'agent-1', workspaceDir)
 
-      const writeFilePaths = mockedWriteFileSync.mock.calls.map(c => c[0] as string)
+      const writeFilePaths = mockedWriteFileAsync.mock.calls.map(c => c[0] as string)
       expect(writeFilePaths).toContainEqual(
         '/tmp/test-workspace/.agents/skills/test-skill/SKILL.md'
       )
@@ -171,7 +175,7 @@ describe('AgentManager skill file paths', () => {
   })
 
   describe('writeAgentsDocumentation', () => {
-    it('writes AGENTS.md and CLAUDE.md to workspace root, not .agents/', () => {
+    it('writes AGENTS.md and CLAUDE.md to workspace root, not .agents/', async () => {
       const mockDb = createMockDb({ coding_agent: 'claude-code' })
       manager = new AgentManager(mockDb)
 
@@ -179,9 +183,9 @@ describe('AgentManager skill file paths', () => {
       const skills = [makeSkillRecord()]
       const repos = ['org/repo']
 
-      ;(manager as any).writeAgentsDocumentation(workspaceDir, skills, repos, 'agent-1')
+      await (manager as any).writeAgentsDocumentation(workspaceDir, skills, repos, 'agent-1')
 
-      const writeFilePaths = mockedWriteFileSync.mock.calls.map(c => c[0] as string)
+      const writeFilePaths = mockedWriteFileAsync.mock.calls.map(c => c[0] as string)
 
       // Both files should be written to workspace root
       expect(writeFilePaths).toContain('/tmp/test-workspace/AGENTS.md')
@@ -194,15 +198,15 @@ describe('AgentManager skill file paths', () => {
       expect(agentsDirWrites).toHaveLength(0)
     })
 
-    it('does not create .agents/ directory for documentation files', () => {
+    it('does not create .agents/ directory for documentation files', async () => {
       const mockDb = createMockDb({})
       manager = new AgentManager(mockDb)
 
       const workspaceDir = '/tmp/test-workspace'
-      ;(manager as any).writeAgentsDocumentation(workspaceDir, [], [], 'agent-1')
+      await (manager as any).writeAgentsDocumentation(workspaceDir, [], [], 'agent-1')
 
-      // mkdirSync should NOT be called for .agents/ directory
-      const mkdirCalls = mockedMkdirSync.mock.calls.map(c => c[0] as string)
+      // mkdir (async) should NOT be called for .agents/ directory
+      const mkdirCalls = mockedMkdirAsync.mock.calls.map(c => c[0] as string)
       const agentsDirCreates = mkdirCalls.filter(p => p.endsWith('.agents'))
       expect(agentsDirCreates).toHaveLength(0)
     })
