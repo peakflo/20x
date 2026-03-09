@@ -61,6 +61,7 @@ interface CodexMessage {
 }
 
 interface CodexSession {
+  sessionId: string // Our internal session ID (map key)
   threadId: string // Codex thread ID
   process: ChildProcess
   workspaceDir: string
@@ -77,6 +78,9 @@ interface CodexSession {
 export class CodexAdapter implements CodingAgentAdapter {
   private sessions = new Map<string, CodexSession>()
   private codexExecutablePath: string | null = null
+
+  /** Callback set by agent-manager to trigger an immediate poll cycle */
+  onDataAvailable?: (sessionId: string) => void
 
   async initialize(): Promise<void> {
     // Find codex CLI executable
@@ -163,6 +167,7 @@ export class CodexAdapter implements CodingAgentAdapter {
 
     // Create session state
     const session: CodexSession = {
+      sessionId: '', // Will be set to threadId after thread.create
       threadId: '', // Will be set after thread.create
       process: codexProcess,
       workspaceDir: config.workspaceDir,
@@ -207,6 +212,7 @@ export class CodexAdapter implements CodingAgentAdapter {
       }
 
       session.threadId = threadResponse.thread_id
+      session.sessionId = session.threadId
       console.log(`[CodexAdapter] Created Codex thread: ${session.threadId}`)
 
       // Store session
@@ -251,6 +257,7 @@ export class CodexAdapter implements CodingAgentAdapter {
 
     // Create session state
     const session: CodexSession = {
+      sessionId,
       threadId: sessionId,
       process: codexProcess,
       workspaceDir: config.workspaceDir,
@@ -635,6 +642,9 @@ export class CodexAdapter implements CodingAgentAdapter {
       default:
         console.log(`[CodexAdapter] Unknown notification: ${notification.method}`)
     }
+
+    // Notify the polling coordinator that new data is available
+    this.onDataAvailable?.(session.sessionId)
   }
 
   /**

@@ -50,6 +50,13 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
   private sdkLoading: Promise<void> | null = null
   private claudeExecutablePath: string | null = null
 
+  /**
+   * Callback set by agent-manager to trigger an immediate poll cycle
+   * when new stream data is buffered.  Eliminates the up-to-2-second
+   * latency of the fixed-interval polling heartbeat.
+   */
+  onDataAvailable?: (sessionId: string) => void
+
   constructor() {
     this.sdkLoading = this.loadSDK()
   }
@@ -885,6 +892,13 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
           const drop = session.messageBuffer.length - MAX_MESSAGE_BUFFER_SIZE
           session.messageBuffer.splice(0, drop)
           session.messageCursor = Math.max(0, session.messageCursor - drop)
+        }
+
+        // Notify the polling coordinator that new data is available so it can
+        // deliver this message to the UI immediately instead of waiting for
+        // the next 2-second heartbeat tick.
+        if (this.onDataAvailable) {
+          this.onDataAvailable(sessionId)
         }
 
         // Update status based on message type

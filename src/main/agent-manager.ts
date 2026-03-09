@@ -86,6 +86,15 @@ export class AgentManager extends EventEmitter {
   private pollingTimer: ReturnType<typeof setTimeout> | null = null
   private static readonly POLL_INTERVAL_MS = 2000
 
+  // ── Event-driven nudge ──
+  // When an adapter buffers new stream data it calls onDataAvailable().
+  // We debounce that into a short nudge timer so the coordinator delivers
+  // the data to the UI within ~50ms instead of waiting up to 2 seconds.
+  private nudgeTimer: ReturnType<typeof setTimeout> | null = null
+  private static readonly NUDGE_DELAY_MS = 50
+  private pollingInProgress = false  // Prevents overlapping tick() calls
+  private pollTickFn: (() => Promise<void>) | null = null  // Reference to the tick function
+
   // Track last sent status per session to detect transitions for OS notifications
   private lastSentStatus: Map<string, string> = new Map()
 
@@ -1150,6 +1159,15 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     this.pollingEntries.set(initialSessionId, entry)
     console.log(`[AgentManager] Registered session ${initialSessionId} for polling (${this.pollingEntries.size} active)`)
 
+    // Wire up event-driven nudge so the adapter can trigger an immediate
+    // poll cycle when new stream data is buffered (instead of waiting for
+    // the 2-second heartbeat).
+    if (!adapter.onDataAvailable) {
+      adapter.onDataAvailable = (_sessionId: string) => {
+        this.nudgePollingCoordinator()
+      }
+    }
+
     // Start the coordinator if not already running
     this.ensurePollingCoordinator()
   }
@@ -1162,9 +1180,15 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     console.log(`[AgentManager] Unregistered session ${sessionId} from polling (${this.pollingEntries.size} remaining)`)
 
     // Stop coordinator if no sessions left
-    if (this.pollingEntries.size === 0 && this.pollingTimer) {
-      clearTimeout(this.pollingTimer)
-      this.pollingTimer = null
+    if (this.pollingEntries.size === 0) {
+      if (this.pollingTimer) {
+        clearTimeout(this.pollingTimer)
+        this.pollingTimer = null
+      }
+      if (this.nudgeTimer) {
+        clearTimeout(this.nudgeTimer)
+        this.nudgeTimer = null
+      }
       console.log('[AgentManager] Polling coordinator stopped (no active sessions)')
     }
   }
@@ -1173,9 +1197,13 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
    * Ensures the single polling coordinator timer is running.
    */
   private ensurePollingCoordinator(): void {
-    if (this.pollingTimer) return // Already running
+    if (this.pollingTimer || this.pollingInProgress) return // Already running or executing
 
     const tick = async (): Promise<void> => {
+      // Prevent overlapping tick() calls from nudge + heartbeat firing together
+      if (this.pollingInProgress) return
+      this.pollingInProgress = true
+
       // Clear the timer reference — this tick is now executing, not pending.
       // ensurePollingCoordinator checks this to know whether to start a new loop.
       this.pollingTimer = null
@@ -1198,6 +1226,8 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
         }
       } catch (error) {
         console.error('[AgentManager] Polling coordinator error:', error)
+      } finally {
+        this.pollingInProgress = false
       }
 
       // ALWAYS reschedule if there are active sessions (even after errors).
@@ -1206,9 +1236,50 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       }
     }
 
+    // Store reference so nudgePollingCoordinator can invoke it
+    this.pollTickFn = tick
+
     // Start after a short initial delay
     this.pollingTimer = setTimeout(tick, 1000)
     console.log('[AgentManager] Polling coordinator started')
+  }
+
+  /**
+   * Nudges the polling coordinator to run a poll cycle within NUDGE_DELAY_MS
+   * instead of waiting for the next 2-second heartbeat.  Called by adapters
+   * (via onDataAvailable) when new stream data is buffered.
+   *
+   * The short debounce (50ms) batches rapid-fire stream events so we don't
+   * run a poll cycle for every single streaming chunk.
+   */
+  private nudgePollingCoordinator(): void {
+    // Already have a nudge scheduled, no need to double-schedule
+    if (this.nudgeTimer) return
+
+    // If a tick is already running, it will pick up the new data — no nudge needed
+    if (this.pollingInProgress) return
+
+    // No active sessions → nothing to nudge
+    if (this.pollingEntries.size === 0) return
+
+    this.nudgeTimer = setTimeout(() => {
+      this.nudgeTimer = null
+
+      // Guard: still have sessions and tick isn't already running
+      if (this.pollingEntries.size === 0 || this.pollingInProgress) return
+
+      // Cancel the pending heartbeat timer — the nudge replaces it.
+      // tick() will reschedule the heartbeat after it finishes.
+      if (this.pollingTimer) {
+        clearTimeout(this.pollingTimer)
+        this.pollingTimer = null
+      }
+
+      // Run a poll cycle immediately
+      if (this.pollTickFn) {
+        this.pollTickFn()
+      }
+    }, AgentManager.NUDGE_DELAY_MS)
   }
 
   /**
