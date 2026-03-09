@@ -2,7 +2,8 @@ import { EventEmitter } from 'events'
 import { spawn } from 'child_process'
 import { homedir } from 'os'
 import { join, delimiter } from 'path'
-import { existsSync, copyFileSync, mkdirSync, writeFileSync, readFileSync, readdirSync, statSync } from 'fs'
+import { existsSync, copyFileSync, mkdirSync, readFileSync, readdirSync, statSync } from 'fs'
+import { mkdir, writeFile } from 'fs/promises'
 import { Agent as UndiciAgent } from 'undici'
 import { Notification } from 'electron'
 import type { BrowserWindow } from 'electron'
@@ -418,7 +419,7 @@ export class AgentManager extends EventEmitter {
    * Priority: task.skill_ids > agent.config.skill_ids > all skills.
    * Also generates AGENTS.md and CLAUDE.md with skill directory.
    */
-  private writeSkillFiles(taskId: string, agentId: string, workspaceDir: string): void {
+  private async writeSkillFiles(taskId: string, agentId: string, workspaceDir: string): Promise<void> {
     try {
       const task = this.db.getTask(taskId)
       const agent = this.db.getAgent(agentId)
@@ -437,7 +438,8 @@ export class AgentManager extends EventEmitter {
         ? this.db.getSkills()
         : this.db.getSkillsByIds(skillIds)
 
-      // Write individual SKILL.md files
+      // Write individual SKILL.md files using async I/O so the event loop
+      // can process IPC/rendering between writes (avoids startup UI freeze).
       // Claude Code agent: .claude/skills/<name>/SKILL.md
       // Other agents: .agents/skills/<name>/SKILL.md
       if (skills.length > 0) {
@@ -448,16 +450,16 @@ export class AgentManager extends EventEmitter {
           : join(workspaceDir, '.agents', 'skills')
         for (const skill of skills) {
           const dir = join(skillsDir, skill.name)
-          mkdirSync(dir, { recursive: true })
+          await mkdir(dir, { recursive: true })
           const desc = skill.description || skill.name
           const content = `---\nname: ${skill.name}\ndescription: ${desc}\n---\n\n${skill.content}`
-          writeFileSync(join(dir, 'SKILL.md'), content, 'utf-8')
+          await writeFile(join(dir, 'SKILL.md'), content, 'utf-8')
         }
         console.log(`[AgentManager] Wrote ${skills.length} SKILL.md file(s) to ${skillsDir}`)
       }
 
       // Generate AGENTS.md and CLAUDE.md with skill directory
-      this.writeAgentsDocumentation(workspaceDir, skills, task?.repos || [], agentId)
+      await this.writeAgentsDocumentation(workspaceDir, skills, task?.repos || [], agentId)
     } catch (error) {
       console.error('[AgentManager] Error writing skill files:', error)
     }
@@ -467,23 +469,23 @@ export class AgentManager extends EventEmitter {
    * Generates AGENTS.md and CLAUDE.md with skill directory and metadata.
    * Both files are written to the workspace root directory.
    */
-  private writeAgentsDocumentation(
+  private async writeAgentsDocumentation(
     workspaceDir: string,
     skills: SkillRecord[],
     repos: string[],
     agentId?: string
-  ): void {
+  ): Promise<void> {
     try {
       // Sort skills by confidence (high to low)
       const sortedSkills = [...skills].sort((a, b) => b.confidence - a.confidence)
 
-      // Generate AGENTS.md — write to workspace root
+      // Generate AGENTS.md — write to workspace root (async to avoid blocking)
       const agentsMd = this.generateAgentsMd(sortedSkills, repos, workspaceDir, agentId)
-      writeFileSync(join(workspaceDir, 'AGENTS.md'), agentsMd, 'utf-8')
+      await writeFile(join(workspaceDir, 'AGENTS.md'), agentsMd, 'utf-8')
 
       // Generate CLAUDE.md — write to workspace root
       const claudeMd = this.generateClaudeMd(sortedSkills, repos, workspaceDir, agentId)
-      writeFileSync(join(workspaceDir, 'CLAUDE.md'), claudeMd, 'utf-8')
+      await writeFile(join(workspaceDir, 'CLAUDE.md'), claudeMd, 'utf-8')
 
       console.log('[AgentManager] Generated AGENTS.md and CLAUDE.md in workspace root')
     } catch (error) {
@@ -949,8 +951,8 @@ export class AgentManager extends EventEmitter {
       workspaceDir = this.db.getWorkspaceDir(taskId)
     }
 
-    // Write SKILL.md files to workspace
-    this.writeSkillFiles(taskId, agentId, workspaceDir)
+    // Write SKILL.md files to workspace (async to avoid blocking the event loop)
+    await this.writeSkillFiles(taskId, agentId, workspaceDir)
 
     // Check if this is a triage session
     const task = this.db.getTask(taskId)
@@ -1797,6 +1799,12 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     session.status = 'idle'
     console.log(`[AgentManager] Session ${sessionId} → idle`)
 
+    // Helper: yield event loop between synchronous DB operations so IPC,
+    // timers and rendering callbacks can run.  transitionToIdle chains many
+    // sync better-sqlite3 calls; without yields this blocks the main thread
+    // for the entire duration and freezes the UI.
+    const yieldEventLoop = (): Promise<void> => new Promise((r) => setImmediate(r))
+
     // In learning mode, skip output extraction, task status, and renderer notification
     if (session.learningMode) return
 
@@ -1804,6 +1812,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     if (session.isTriageSession) {
       console.log(`[AgentManager] Triage session completed for task ${session.taskId}, reverting to NotStarted`)
       this.db.updateTask(session.taskId, { status: TaskStatus.NotStarted, session_id: null })
+      await yieldEventLoop()
 
       this.sendToRenderer('task:updated', {
         taskId: session.taskId,
@@ -1821,6 +1830,8 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
 
     // Check if task exists (e.g., orchestrator-session doesn't have a real task)
     const task = this.db.getTask(session.taskId)
+    await yieldEventLoop()
+
     if (!task) {
       console.log(`[AgentManager] No task found for ${session.taskId}, sending idle status only`)
       this.sendToRenderer('agent:status', {
@@ -1839,9 +1850,11 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       } catch (err) {
         console.error(`[AgentManager] Skill sync error:`, err)
       }
+      await yieldEventLoop()
 
       // Mark task as completed
       this.db.updateTask(session.taskId, { status: TaskStatus.Completed })
+      await yieldEventLoop()
 
       this.sendToRenderer('task:updated', {
         taskId: session.taskId,
@@ -1860,10 +1873,13 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     } catch (err) {
       console.error(`[AgentManager] extractOutputValues error:`, err)
     }
+    await yieldEventLoop()
 
     // Check again if task is still in a state where we should update it
     // (frontend might have already completed it during feedback flow)
     const taskAfterExtract = this.db.getTask(session.taskId)
+    await yieldEventLoop()
+
     if (taskAfterExtract?.status === TaskStatus.AgentLearning || taskAfterExtract?.status === TaskStatus.Completed) {
       console.log(`[AgentManager] Task already in final state (${taskAfterExtract.status}), skipping status update`)
       this.sendToRenderer('agent:status', {
@@ -1876,9 +1892,11 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     if (task) {
       console.log(`[AgentManager] Updating task ${session.taskId} status to ReadyForReview`)
       this.db.updateTask(session.taskId, { status: TaskStatus.ReadyForReview })
+      await yieldEventLoop()
 
       // Auto-enable heartbeat if agent wrote a heartbeat.md file
       this.autoEnableHeartbeat(session.taskId)
+      await yieldEventLoop()
 
       // Get updated task with output fields and notify renderer
       const updatedTask = this.db.getTask(session.taskId)
@@ -3019,15 +3037,22 @@ Important:
         const prevStatus = this.lastSentStatus.get(sessionId)
         this.lastSentStatus.set(sessionId, status)
 
+        // Check ALL conditions BEFORE doing any DB/notification work.
+        // Previously the sync db.getTask() call ran inside the notification
+        // block but BEFORE checking if the window was inactive, blocking the
+        // event loop on every status transition even when no notification was
+        // needed.
         const isWindowInactive = !this.mainWindow || this.mainWindow.isDestroyed() || !this.mainWindow.isFocused()
+        const isNotifiableTransition = prevStatus === SessionStatus.WORKING && (status === SessionStatus.IDLE || status === SessionStatus.WAITING_APPROVAL)
 
-        if (prevStatus === SessionStatus.WORKING && (status === SessionStatus.IDLE || status === SessionStatus.WAITING_APPROVAL) && isWindowInactive) {
+        if (isNotifiableTransition && isWindowInactive) {
           try {
             if (Notification.isSupported()) {
-              let title: string
-              let body: string
+              // Only hit the database when we actually need the title for a notification
               const taskTitle = taskId ? this.db.getTask(taskId)?.title : undefined
 
+              let title: string
+              let body: string
               if (status === SessionStatus.WAITING_APPROVAL) {
                 title = 'Agent needs approval'
                 body = taskTitle ? `"${taskTitle}" is waiting for your approval` : 'An agent is waiting for your approval'
