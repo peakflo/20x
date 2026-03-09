@@ -136,7 +136,7 @@ export class AgentManager extends EventEmitter {
    * or when github_org is not configured.
    */
   private async setupWorktreeIfNeeded(taskId: string): Promise<string | undefined> {
-    if (taskId === 'mastermind-session') return undefined
+    if (taskId === 'mastermind-session' || taskId.startsWith('heartbeat-')) return undefined
 
     if (!this.githubManager || !this.worktreeManager) return undefined
 
@@ -1319,12 +1319,18 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       }
 
       // Capture last assistant text (used by HeartbeatScheduler to read results)
+      // Concatenate all text parts from this batch to avoid missing tokens
+      // that appear in earlier parts
       const currentSession = this.sessions.get(sessionId)
       if (currentSession) {
+        const assistantTexts: string[] = []
         for (const msg of batchMessages) {
           if (msg.role === 'assistant' && msg.partType === 'text' && msg.content) {
-            currentSession.lastAssistantText = msg.content
+            assistantTexts.push(msg.content)
           }
+        }
+        if (assistantTexts.length > 0) {
+          currentSession.lastAssistantText = assistantTexts.join('\n')
         }
       }
 
@@ -1588,15 +1594,10 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
   }
 
   /**
-   * Sends a heartbeat check message to the task's existing session.
-   * Uses sendMessage which handles resume/create automatically.
-   * The heartbeat message appears in the normal conversation transcript
-   * so the user can see what was checked.
-   */
-  /**
    * Send a heartbeat check via a dedicated heartbeat session for this task.
    * Uses a separate session (heartbeat-{taskId}) to keep checks out of the task's working session.
    * Each task gets its own heartbeat session so checks don't mix across tasks.
+   * Uses the real task's workspace dir so the agent has repo context for gh commands.
    */
   async sendHeartbeatViaMastermind(agentId: string, taskId: string, heartbeatPrompt: string): Promise<string> {
     const heartbeatTaskId = `heartbeat-${taskId}`
@@ -1611,8 +1612,10 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     }
 
     if (!sessionId) {
+      // Use the real task's workspace dir so the agent has repo context
+      const workspaceDir = this.db.getWorkspaceDir(taskId)
       console.log(`[AgentManager] Heartbeat: creating heartbeat session for task ${taskId}`)
-      sessionId = await this.startSession(agentId, heartbeatTaskId, undefined, true /* skipInitialPrompt */)
+      sessionId = await this.startSession(agentId, heartbeatTaskId, workspaceDir, true /* skipInitialPrompt */)
     }
 
     console.log(`[AgentManager] Heartbeat: sending check via heartbeat session ${sessionId} for task ${taskId}`)
@@ -1647,6 +1650,21 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
    */
   getSession(sessionId: string): AgentSession | undefined {
     return this.sessions.get(sessionId)
+  }
+
+  /**
+   * Remove a heartbeat session from memory after the check completes.
+   * Prevents heartbeat-{taskId} sessions from accumulating indefinitely.
+   */
+  cleanupHeartbeatSession(taskId: string): void {
+    const heartbeatTaskId = `heartbeat-${taskId}`
+    for (const [id, session] of this.sessions.entries()) {
+      if (session.taskId === heartbeatTaskId) {
+        this.sessions.delete(id)
+        console.log(`[AgentManager] Cleaned up heartbeat session ${id} for task ${taskId}`)
+        break
+      }
+    }
   }
 
   /**

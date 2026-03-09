@@ -124,17 +124,12 @@ export class HeartbeatScheduler {
       const checkPrompt = this.buildHeartbeatPrompt(task, heartbeatContent)
       const mastermindSessionId = await this.agentManager.sendHeartbeatViaMastermind(agentId, task.id, checkPrompt)
 
-      // Phase 2: Wait for mastermind result and forward to task agent if action needed
-      const mastermindResult = await this.waitForSessionResult(mastermindSessionId, taskId)
-      const classification = this.classifyMastermindResult(mastermindResult)
-
-      if (classification === 'action') {
-        console.log(`[HeartbeatScheduler] runNow: mastermind found action needed, forwarding to task agent`)
-        const actionPrompt = this.buildActionPrompt(task, mastermindResult)
-        await this.agentManager.startHeartbeatSession(agentId, taskId, actionPrompt)
-      } else {
-        console.log(`[HeartbeatScheduler] runNow: ${classification} for task "${task.title}"`)
-      }
+      // Phase 2: Wait for result and forward — run in background so IPC returns immediately
+      this.processRunNowResult(mastermindSessionId, task, agentId).catch((err) => {
+        const message = err instanceof Error ? err.message : String(err)
+        console.error(`[HeartbeatScheduler] runNow background error for task ${taskId}:`, message)
+        this.logResult(taskId, HeartbeatStatus.Error, message)
+      })
 
       return 'sent'
     } catch (err) {
@@ -310,6 +305,29 @@ export class HeartbeatScheduler {
       this.advanceNextCheck(task)
     } finally {
       this.inProgress.delete(task.id)
+      this.agentManager.cleanupHeartbeatSession(task.id)
+    }
+  }
+
+  /**
+   * Background processing for runNow — waits for mastermind result and forwards to task agent if needed.
+   */
+  private async processRunNowResult(mastermindSessionId: string, task: TaskRecord, agentId: string): Promise<void> {
+    try {
+      const mastermindResult = await this.waitForSessionResult(mastermindSessionId, task.id)
+      const classification = this.classifyMastermindResult(mastermindResult)
+
+      if (classification === 'action') {
+        console.log(`[HeartbeatScheduler] runNow: mastermind found action needed, forwarding to task agent`)
+        const actionPrompt = this.buildActionPrompt(task, mastermindResult)
+        await this.agentManager.startHeartbeatSession(agentId, task.id, actionPrompt)
+      } else {
+        console.log(`[HeartbeatScheduler] runNow: ${classification} for task "${task.title}"`)
+        this.logResult(task.id, classification === 'ok' ? HeartbeatStatus.Ok : HeartbeatStatus.Info,
+          classification === 'ok' ? 'All checks passed' : mastermindResult.substring(0, 500), mastermindSessionId)
+      }
+    } finally {
+      this.agentManager.cleanupHeartbeatSession(task.id)
     }
   }
 
@@ -379,8 +397,13 @@ export class HeartbeatScheduler {
 
         // Check if the session is still running
         const session = this.agentManager.getSession(sessionId)
-        if (!session || session.status === 'idle') {
+        if (!session || session.status === 'idle' || session.status === 'error') {
           clearInterval(timer)
+
+          if (session?.status === 'error') {
+            reject(new Error(`Heartbeat session ${sessionId} ended with error`))
+            return
+          }
 
           // Get the last assistant message from the session
           const lastMessage = this.agentManager.getLastAssistantMessage(sessionId)

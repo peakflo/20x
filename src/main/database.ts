@@ -247,15 +247,6 @@ export interface TaskRow {
   updated_at: string
 }
 
-export interface HeartbeatLogRow {
-  id: string
-  task_id: string
-  status: string
-  summary: string | null
-  session_id: string | null
-  created_at: string
-}
-
 export interface HeartbeatLogRecord {
   id: string
   task_id: string
@@ -911,6 +902,7 @@ export class DatabaseManager {
       CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
       CREATE INDEX IF NOT EXISTS idx_tasks_priority ON tasks(priority);
       CREATE INDEX IF NOT EXISTS idx_tasks_source ON tasks(source);
+      CREATE INDEX IF NOT EXISTS idx_tasks_next_occurrence ON tasks(next_occurrence_at) WHERE is_recurring = 1;
 
       CREATE TABLE IF NOT EXISTS agents (
         id TEXT PRIMARY KEY,
@@ -1872,6 +1864,14 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
       } else {
         values.push(value as string | number | null)
       }
+    }
+
+    // Auto-set heartbeat_next_check_at when enabling heartbeat without explicit next check time
+    if (data.heartbeat_enabled === true && data.heartbeat_next_check_at === undefined) {
+      const interval = data.heartbeat_interval_minutes ?? 30
+      const nextCheck = new Date(Date.now() + interval * 60_000).toISOString()
+      setClauses.push('heartbeat_next_check_at = ?')
+      values.push(nextCheck)
     }
 
     if (setClauses.length === 0) return this.getTask(id)
