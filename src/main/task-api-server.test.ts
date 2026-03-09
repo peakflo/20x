@@ -132,6 +132,104 @@ describe('/list_repos', () => {
   })
 })
 
+describe('/list_skills - excludes content', () => {
+  it('returns skills without content field', () => {
+    db.createSkill({ name: 'Test Skill', description: 'A test skill', content: 'SECRET CONTENT HERE' })
+
+    const skills = rawDb
+      .prepare('SELECT id, name, description, version, confidence, uses, last_used, tags, created_at, updated_at FROM skills WHERE is_deleted = 0 ORDER BY confidence DESC, uses DESC')
+      .all() as Record<string, unknown>[]
+    skills.forEach((s) => { s.tags = JSON.parse((s.tags as string) || '[]') })
+
+    expect(skills).toHaveLength(1)
+    expect(skills[0].name).toBe('Test Skill')
+    expect(skills[0].description).toBe('A test skill')
+    expect(skills[0]).not.toHaveProperty('content')
+  })
+})
+
+describe('/get_skill - returns full details', () => {
+  it('returns skill with content', () => {
+    const created = db.createSkill({ name: 'Full Skill', description: 'Desc', content: 'Full content body' })!
+
+    const skill = rawDb.prepare('SELECT * FROM skills WHERE id = ? AND is_deleted = 0').get(created.id) as Record<string, unknown>
+    skill.tags = JSON.parse((skill.tags as string) || '[]')
+
+    expect(skill.name).toBe('Full Skill')
+    expect(skill.content).toBe('Full content body')
+  })
+
+  it('returns error for non-existent skill', () => {
+    const skill = rawDb.prepare('SELECT * FROM skills WHERE id = ? AND is_deleted = 0').get('nonexistent') as Record<string, unknown> | undefined
+    expect(skill).toBeUndefined()
+  })
+})
+
+describe('/update_skill', () => {
+  it('updates skill fields and increments version', () => {
+    const created = db.createSkill({ name: 'Old Name', description: 'Old Desc', content: 'Old Content', tags: ['old'] })!
+    expect(created.version).toBe(1)
+
+    // Simulate handleRoute /update_skill
+    const skillUpdates: string[] = []
+    const skillParams: unknown[] = []
+    skillUpdates.push('name = ?'); skillParams.push('New Name')
+    skillUpdates.push('description = ?'); skillParams.push('New Desc')
+    skillUpdates.push('content = ?'); skillParams.push('New Content')
+    skillUpdates.push('tags = ?'); skillParams.push(JSON.stringify(['new', 'updated']))
+    skillUpdates.push('version = version + 1')
+    skillUpdates.push('updated_at = ?'); skillParams.push(new Date().toISOString())
+    skillParams.push(created.id)
+
+    const result = rawDb.prepare(
+      `UPDATE skills SET ${skillUpdates.join(', ')} WHERE id = ? AND is_deleted = 0`
+    ).run(...skillParams)
+
+    expect(result.changes).toBe(1)
+
+    const updated = db.getSkill(created.id)!
+    expect(updated.name).toBe('New Name')
+    expect(updated.description).toBe('New Desc')
+    expect(updated.content).toBe('New Content')
+    expect(updated.tags).toEqual(['new', 'updated'])
+    expect(updated.version).toBe(2)
+  })
+
+  it('returns 0 changes for non-existent skill', () => {
+    const result = rawDb.prepare(
+      'UPDATE skills SET name = ?, version = version + 1, updated_at = ? WHERE id = ? AND is_deleted = 0'
+    ).run('Name', new Date().toISOString(), 'nonexistent')
+    expect(result.changes).toBe(0)
+  })
+})
+
+describe('/delete_skill', () => {
+  it('soft-deletes a skill', () => {
+    const created = db.createSkill({ name: 'To Delete', description: 'Will be deleted', content: 'Content' })!
+
+    const result = rawDb.prepare(
+      'UPDATE skills SET is_deleted = 1, updated_at = ? WHERE id = ? AND is_deleted = 0'
+    ).run(new Date().toISOString(), created.id)
+
+    expect(result.changes).toBe(1)
+
+    // Should not appear in normal queries
+    const skill = db.getSkill(created.id)
+    expect(skill).toBeUndefined()
+  })
+
+  it('returns 0 changes for already deleted skill', () => {
+    const created = db.createSkill({ name: 'Already Deleted', description: 'Desc', content: 'Content' })!
+    db.deleteSkill(created.id)
+
+    const result = rawDb.prepare(
+      'UPDATE skills SET is_deleted = 1, updated_at = ? WHERE id = ? AND is_deleted = 0'
+    ).run(new Date().toISOString(), created.id)
+
+    expect(result.changes).toBe(0)
+  })
+})
+
 describe('Triage task status lifecycle', () => {
   it('supports the full triage lifecycle: not_started → triaging → not_started (with agent)', () => {
     const agent = db.createAgent(makeAgent({ name: 'Default Agent', is_default: true }))!
