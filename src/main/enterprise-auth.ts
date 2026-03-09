@@ -340,6 +340,50 @@ export class EnterpriseAuth {
     return response.json().catch(() => null)
   }
 
+  /**
+   * Download a binary file from the API (returns Buffer instead of JSON).
+   */
+  async downloadFile(path: string): Promise<{ buffer: Buffer; filename: string; contentType: string }> {
+    const jwt = await this.getValidJwt()
+
+    const url = `${this.apiUrl}${path.startsWith('/') ? path : `/${path}`}`
+
+    const headers: Record<string, string> = {
+      'Authorization': `Bearer ${jwt}`
+    }
+
+    let response = await fetch(url, { method: 'GET', headers })
+
+    if (response.status === 401) {
+      try {
+        await this.refreshToken()
+        const retryJwt = await this.getValidJwt()
+        headers['Authorization'] = `Bearer ${retryJwt}`
+        response = await fetch(url, { method: 'GET', headers })
+      } catch {
+        this.clearStoredData()
+        throw new Error('Session expired — please sign in again')
+      }
+    }
+
+    if (!response.ok) {
+      throw new Error(`File download failed (${response.status})`)
+    }
+
+    const arrayBuffer = await response.arrayBuffer()
+    const buffer = Buffer.from(arrayBuffer)
+
+    // Extract filename from Content-Disposition header
+    const disposition = response.headers.get('content-disposition') || ''
+    const filenameMatch = disposition.match(/filename\*?=(?:UTF-8'')?([^;\s]+)/i) ||
+                          disposition.match(/filename="?([^";\s]+)"?/i)
+    const filename = filenameMatch ? decodeURIComponent(filenameMatch[1]) : path.split('/').pop() || 'file'
+
+    const contentType = response.headers.get('content-type') || 'application/octet-stream'
+
+    return { buffer, filename, contentType }
+  }
+
   // ── Private helpers ──────────────────────────────────────────────
 
   private async fetchCompanies(accessToken: string): Promise<EnterpriseCompany[]> {

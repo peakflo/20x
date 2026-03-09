@@ -328,6 +328,33 @@ app.whenReady().then(async () => {
 
   claudePluginManager = new ClaudePluginManager(db)
 
+  // Eagerly restore enterprise connection on startup so sync works immediately
+  if (enterpriseAuth) {
+    try {
+      const session = await enterpriseAuth.getSession()
+      console.log('[Main] Enterprise session on startup:', {
+        isAuthenticated: session.isAuthenticated,
+        userId: session.userId,
+        hasTenant: !!session.currentTenant
+      })
+      if (session.isAuthenticated && session.currentTenant && session.userId) {
+        const { WorkfloApiClient } = await import('./workflo-api-client')
+        const { EnterpriseSyncManager } = await import('./enterprise-sync')
+
+        const apiClient = new WorkfloApiClient(enterpriseAuth)
+        const enterpriseSyncMgr = new EnterpriseSyncManager(db, apiClient)
+        syncManager.setEnterpriseConnection(apiClient, enterpriseSyncMgr, session.userId)
+        console.log('[Main] Enterprise connection restored on startup')
+      } else {
+        console.log('[Main] Enterprise session not complete — skipping restore')
+      }
+    } catch (err) {
+      console.warn('[Main] Could not restore enterprise connection on startup:', err)
+    }
+  } else {
+    console.log('[Main] No enterprise auth instance — skipping restore')
+  }
+
   registerIpcHandlers(db, agentManager, githubManager, worktreeManager, syncManager, pluginRegistry, mcpToolCaller, oauthManager, recurrenceScheduler, enterpriseAuth ?? undefined, claudePluginManager, heartbeatScheduler)
 
   // Start secret broker and write shell wrapper (awaited so broker is ready before any sessions)

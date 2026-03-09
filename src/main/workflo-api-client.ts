@@ -241,6 +241,19 @@ export class WorkfloApiClient {
     return result.skills
   }
 
+  // ── File download ───────────────────────────────────────────────────
+
+  /**
+   * Download a file from Workflo storage.
+   * The path is the storage path from FileDataTypeValue (e.g. "uploads/1234-file.pdf").
+   * Returns the raw buffer + metadata.
+   */
+  async downloadFile(
+    filePath: string
+  ): Promise<{ buffer: Buffer; filename: string; contentType: string }> {
+    return this.auth.downloadFile(`/api/files/${filePath}`)
+  }
+
   // ── Sync trigger ──────────────────────────────────────────────────────
 
   /**
