@@ -61,12 +61,28 @@ interface OutputField {
 
 type FrequencyType = 'daily' | 'weekly' | 'monthly'
 
+// ── Timezone helpers ────────────────────────────────────────
+/** Convert local HH:MM to UTC HH:MM using today's date for offset */
+function localTimeToUtc(localTime: string): { hour: number; minute: number } {
+  const [h, m] = localTime.split(':').map(s => parseInt(s) || 0)
+  const d = new Date()
+  d.setHours(h, m, 0, 0)
+  return { hour: d.getUTCHours(), minute: d.getUTCMinutes() }
+}
+
+/** Convert UTC HH:MM to local HH:MM using today's date for offset */
+function utcTimeToLocal(utcHour: number, utcMinute: number): string {
+  const d = new Date()
+  d.setUTCHours(utcHour, utcMinute, 0, 0)
+  return `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`
+}
+
 // ── Cron helpers ────────────────────────────────────────────
 function parseCronToState(cron: string) {
   const parts = cron.trim().split(/\s+/)
   if (parts.length < 5) return { type: 'daily' as FrequencyType, interval: 1, time: '09:00', weekdays: [1,2,3,4,5], monthDay: 1 }
   const [minute, hour, dayOfMonth, , dayOfWeek] = parts
-  const time = `${hour.padStart(2, '0')}:${minute.padStart(2, '0')}`
+  const time = utcTimeToLocal(parseInt(hour) || 0, parseInt(minute) || 0)
   if (dayOfMonth !== '*' && !dayOfMonth.startsWith('*/') && dayOfWeek === '*') {
     return { type: 'monthly' as FrequencyType, interval: 1, time, weekdays: [1,2,3,4,5], monthDay: parseInt(dayOfMonth) || 1 }
   }
@@ -83,7 +99,7 @@ function parseCronToState(cron: string) {
 }
 
 function buildCronExpression(type: FrequencyType, interval: number, time: string, weekdays: number[], monthDay: number): string {
-  const [hour, minute] = time.split(':').map(s => parseInt(s) || 0)
+  const { hour, minute } = localTimeToUtc(time)
   switch (type) {
     case 'daily': return interval === 1 ? `${minute} ${hour} * * *` : `${minute} ${hour} */${interval} * *`
     case 'weekly': return `${minute} ${hour} * * ${weekdays.sort((a, b) => a - b).join(',')}`
@@ -474,7 +490,7 @@ export function TaskFormPage({ taskId, onNavigate }: { taskId?: string; onNaviga
                         </select>
                       </div>
                       <div className="space-y-1">
-                        <label className="text-[11px] text-muted-foreground">Time (UTC)</label>
+                        <label className="text-[11px] text-muted-foreground">Time</label>
                         <input
                           type="time"
                           value={freqTime}

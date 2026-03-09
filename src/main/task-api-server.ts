@@ -405,7 +405,7 @@ function handleRoute(db: DatabaseManager, route: string, params: Record<string, 
 function parseTask(task: Record<string, unknown>) {
   if (!task) return task
   task.labels = JSON.parse((task.labels as string) || '[]')
-  task.skill_ids = JSON.parse((task.skill_ids as string) || '[]')
+  task.skill_ids = task.skill_ids ? JSON.parse(task.skill_ids as string) : null
   task.attachments = JSON.parse((task.attachments as string) || '[]')
   task.output_fields = JSON.parse((task.output_fields as string) || '[]')
   task.repos = JSON.parse((task.repos as string) || '[]')

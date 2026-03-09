@@ -28,7 +28,7 @@ const FREQUENCY_OPTIONS = [
 
 type FrequencyType = 'daily' | 'weekly' | 'monthly'
 
-/** Parse a cron string back into visual controls state */
+/** Parse a cron string back into visual controls state (converts UTC time to local) */
 function parseCronToState(cron: string): {
   type: FrequencyType
   interval: number
@@ -42,7 +42,7 @@ function parseCronToState(cron: string): {
   }
 
   const [minute, hour, dayOfMonth, , dayOfWeek] = parts
-  const time = `${hour.padStart(2, '0')}:${minute.padStart(2, '0')}`
+  const time = utcTimeToLocal(parseInt(hour) || 0, parseInt(minute) || 0)
 
   // Monthly: specific day-of-month, any day-of-week
   if (dayOfMonth !== '*' && !dayOfMonth.startsWith('*/') && dayOfWeek === '*') {
@@ -71,7 +71,22 @@ function parseCronToState(cron: string): {
   return { type: 'daily', interval, time, weekdays: [1, 2, 3, 4, 5], monthDay: 1 }
 }
 
-/** Build a cron expression from visual controls */
+/** Convert local HH:MM to UTC HH:MM using today's date for offset */
+function localTimeToUtc(localTime: string): { hour: number; minute: number } {
+  const [h, m] = localTime.split(':').map(s => parseInt(s) || 0)
+  const d = new Date()
+  d.setHours(h, m, 0, 0)
+  return { hour: d.getUTCHours(), minute: d.getUTCMinutes() }
+}
+
+/** Convert UTC HH:MM to local HH:MM using today's date for offset */
+function utcTimeToLocal(utcHour: number, utcMinute: number): string {
+  const d = new Date()
+  d.setUTCHours(utcHour, utcMinute, 0, 0)
+  return `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`
+}
+
+/** Build a cron expression from visual controls (converts local time to UTC) */
 function buildCronExpression(
   type: FrequencyType,
   interval: number,
@@ -79,7 +94,7 @@ function buildCronExpression(
   weekdays: number[],
   monthDay: number
 ): string {
-  const [hour, minute] = time.split(':').map(s => parseInt(s) || 0)
+  const { hour, minute } = localTimeToUtc(time)
 
   switch (type) {
     case 'daily':
@@ -194,7 +209,7 @@ export function RecurrenceEditor({ value, onChange }: RecurrenceEditorProps) {
             </div>
 
             <div>
-              <Label htmlFor="recurrence-time">Time (UTC)</Label>
+              <Label htmlFor="recurrence-time">Time</Label>
               <Input
                 id="recurrence-time"
                 type="time"
