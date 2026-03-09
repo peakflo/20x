@@ -184,3 +184,18 @@ The response can be a JSON array or an object with a `tasks` or `items` property
 The update tool receives merged arguments: `{ ...source.update_tool_args, external_id, ...changedFields }`. It should update the corresponding task in the external system.
 
 `changedFields` contains only the fields that were changed locally (e.g. `{ status: "completed" }`).
+
+---
+
+## Enterprise Mode (Peakflo Workflo)
+
+When connected to a pf-workflo organization via the Enterprise settings tab, task sources can use the **PeakfloPlugin** which operates via REST API instead of MCP. This enables:
+
+- Paginated task import from workflo
+- File attachment downloads from workflo storage
+- Two-way field sync (title, description, priority, due date)
+- Approve/reject action execution with output fields
+
+See [enterprise-sync-implementation.md](./enterprise-sync-implementation.md) for the full enterprise sync architecture, including `EnterpriseSyncManager` (agent/skill/MCP provisioning) and `PeakfloPlugin` (task sync, file downloads, actions).
+
+See also the pf-workflo side: `pf-workflo/docs/task-sync-implementation.md` for the server-side sync engine (Inngest processing, Notion adapter, cron scheduling).
