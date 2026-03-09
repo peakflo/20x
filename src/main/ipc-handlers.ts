@@ -3,6 +3,8 @@ import { copyFileSync, existsSync, unlinkSync, readdirSync, statSync, readFileSy
 import { execFile } from 'child_process'
 import { promisify } from 'util'
 import { join, basename, extname } from 'path'
+import Papa from 'papaparse'
+import * as XLSX from 'xlsx'
 
 const execFileAsync = promisify(execFile)
 import type {
@@ -141,6 +143,14 @@ export function registerIpcHandlers(
     return db.getWorkspaceDir(taskId)
   })
 
+  ipcMain.handle('attachments:resolvePath', (_, taskId: string, attachmentId: string): string | null => {
+    const dir = db.getAttachmentsDir(taskId)
+    if (!existsSync(dir)) return null
+    const files = readdirSync(dir)
+    const match = files.find((f) => f.startsWith(`${attachmentId}-`))
+    return match ? join(dir, match) : null
+  })
+
   ipcMain.handle('attachments:open', (_, taskId: string, attachmentId: string) => {
     console.log('[IPC] attachments:open called:', { taskId, attachmentId })
 
@@ -229,6 +239,89 @@ export function registerIpcHandlers(
   ipcMain.handle('shell:openExternal', async (_, url: string) => {
     await shell.openExternal(url)
   })
+
+  // ── File Viewer handlers ──────────────────────────────────────────────────
+  const TABULAR_EXTENSIONS = new Set(['.csv', '.tsv', '.json', '.jsonl', '.xlsx', '.xls', '.parquet'])
+
+  ipcMain.handle('fileViewer:getFileInfo', (_, filePath: string): { exists: boolean; size: number; extension: string; isTabular: boolean } => {
+    if (!existsSync(filePath)) return { exists: false, size: 0, extension: '', isTabular: false }
+    const stat = statSync(filePath)
+    const ext = extname(filePath).toLowerCase()
+    return { exists: true, size: stat.size, extension: ext, isTabular: TABULAR_EXTENSIONS.has(ext) }
+  })
+
+  ipcMain.handle(
+    'fileViewer:readTabularFile',
+    (_, filePath: string, limit?: number): { columns: string[]; rows: Record<string, unknown>[]; totalRows: number; truncated: boolean; filePath: string } | { error: string } => {
+      const maxRows = limit ?? 500
+      if (!existsSync(filePath)) return { error: 'File not found' }
+
+      const ext = extname(filePath).toLowerCase()
+      try {
+        if (ext === '.csv' || ext === '.tsv') {
+          const content = readFileSync(filePath, 'utf-8')
+          const result = Papa.parse(content, {
+            header: true,
+            delimiter: ext === '.tsv' ? '\t' : undefined,
+            skipEmptyLines: true,
+            preview: maxRows
+          })
+          const columns = result.meta.fields || []
+          const rows = result.data as Record<string, unknown>[]
+          // Count total lines for the footer
+          let totalRows = rows.length
+          if (rows.length === maxRows) {
+            // Estimate total by counting newlines
+            totalRows = content.split('\n').filter(l => l.trim()).length - 1 // minus header
+          }
+          return { columns, rows, totalRows, truncated: rows.length < totalRows, filePath }
+        }
+
+        if (ext === '.json') {
+          const content = readFileSync(filePath, 'utf-8')
+          let parsed = JSON.parse(content)
+          if (!Array.isArray(parsed)) {
+            // If it's a single object, wrap it
+            parsed = [parsed]
+          }
+          const totalRows = parsed.length
+          const rows = parsed.slice(0, maxRows) as Record<string, unknown>[]
+          const columns = rows.length > 0 ? Object.keys(rows[0]) : []
+          return { columns, rows, totalRows, truncated: totalRows > maxRows, filePath }
+        }
+
+        if (ext === '.jsonl') {
+          const content = readFileSync(filePath, 'utf-8')
+          const lines = content.split('\n').filter(l => l.trim())
+          const totalRows = lines.length
+          const rows = lines.slice(0, maxRows).map(l => JSON.parse(l)) as Record<string, unknown>[]
+          const columns = rows.length > 0 ? Object.keys(rows[0]) : []
+          return { columns, rows, totalRows, truncated: totalRows > maxRows, filePath }
+        }
+
+        if (ext === '.xlsx' || ext === '.xls') {
+          const workbook = XLSX.read(readFileSync(filePath), { type: 'buffer' })
+          const sheetName = workbook.SheetNames[0]
+          if (!sheetName) return { error: 'No sheets found in workbook' }
+          const sheet = workbook.Sheets[sheetName]
+          const allRows = XLSX.utils.sheet_to_json(sheet) as Record<string, unknown>[]
+          const totalRows = allRows.length
+          const rows = allRows.slice(0, maxRows)
+          const columns = rows.length > 0 ? Object.keys(rows[0]) : []
+          return { columns, rows, totalRows, truncated: totalRows > maxRows, filePath }
+        }
+
+        if (ext === '.parquet') {
+          // Parquet requires async — for now return a helpful error
+          return { error: 'Parquet support coming soon. Convert to CSV or JSON for preview.' }
+        }
+
+        return { error: `Unsupported file type: ${ext}` }
+      } catch (err) {
+        return { error: `Failed to parse file: ${err instanceof Error ? err.message : String(err)}` }
+      }
+    }
+  )
 
   // Notification handler
   ipcMain.handle('notifications:show', (_, title: string, body: string) => {

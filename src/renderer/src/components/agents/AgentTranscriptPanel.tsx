@@ -3,8 +3,26 @@ import { useVirtualizer } from '@tanstack/react-virtual'
 import { StopCircle, Loader2, Terminal, Send, ChevronRight, ChevronDown, Wrench, AlertTriangle, CheckCircle2, Circle, Clock, RotateCcw, Code2, Eye, ListTodo, FileText, ArrowDown } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { Markdown } from '@/components/ui/Markdown'
+import { DataFilePreview } from '@/components/ui/DataFilePreview'
+import { DataFileDialog } from '@/components/ui/DataFileDialog'
 import type { AgentMessage } from '@/hooks/use-agent-session'
 import { SessionStatus } from '@/stores/agent-store'
+
+const TABULAR_EXT_RE = /\.(csv|tsv|json|jsonl|xlsx|xls|parquet)$/i
+
+function extractTabularFilePath(toolInput: unknown): string | null {
+  if (!toolInput) return null
+  try {
+    const input = typeof toolInput === 'string' ? JSON.parse(toolInput) : toolInput
+    // Check common field names for file paths
+    const path = input.file_path || input.path || input.filePath || input.filename
+    if (typeof path === 'string' && TABULAR_EXT_RE.test(path)) return path
+  } catch {
+    // If input is a plain string path
+    if (typeof toolInput === 'string' && TABULAR_EXT_RE.test(toolInput)) return toolInput
+  }
+  return null
+}
 
 enum ViewMode {
   MARKDOWN = 'markdown',
@@ -245,52 +263,83 @@ function PlanReviewMessage({ message }: { message: AgentMessage }) {
 
 function ToolCallMessage({ message }: { message: AgentMessage }) {
   const [expanded, setExpanded] = useState(false)
+  const [showDataDialog, setShowDataDialog] = useState(false)
   const tool = message.tool!
   const isRunning = !tool.status || tool.status === 'in_progress' || tool.status === 'running' || tool.status === 'pending'
   const isError = tool.status === 'error' || tool.status === 'failed'
+  const isCompleted = tool.status === 'completed' || tool.status === 'done' || tool.status === 'success'
+
+  // Detect tabular file from tool input
+  const tabularFilePath = useMemo(() => {
+    if (!isCompleted) return null
+    return extractTabularFilePath(tool.input)
+  }, [isCompleted, tool.input])
 
   return (
-    <div className="rounded-md bg-[#161b22] border border-border/50 overflow-hidden">
-      <button
-        onClick={() => setExpanded(!expanded)}
-        className="w-full flex items-center gap-2 px-3 py-2 text-xs font-mono hover:bg-white/5 transition-colors"
-      >
-        <ChevronRight className={`h-3 w-3 text-muted-foreground shrink-0 transition-transform ${expanded ? 'rotate-90' : ''}`} />
-        <Wrench className="h-3 w-3 text-muted-foreground shrink-0" />
-        <span className="text-foreground">{tool.name}</span>
-        {tool.title && <span className="text-muted-foreground truncate">— {tool.title}</span>}
-        {isRunning && <Loader2 className="h-3 w-3 ml-auto shrink-0 text-muted-foreground animate-spin" />}
-        {isError && <AlertTriangle className="h-3 w-3 ml-auto shrink-0 text-red-400" />}
-      </button>
-      {expanded && (
-        <div className="border-t border-border/30 px-3 py-2 text-[11px] font-mono space-y-2">
-          {tool.input && (
-            <div>
-              <span className="text-muted-foreground">Input:</span>
-              <pre className="mt-0.5 text-gray-400 whitespace-pre-wrap break-words max-h-40 overflow-y-auto">{sanitizeToolContent(tool.input)}</pre>
-            </div>
-          )}
-          {tool.output && (
-            <div>
-              <span className="text-muted-foreground">Output:</span>
-              <pre className="mt-0.5 text-gray-400 whitespace-pre-wrap break-words max-h-40 overflow-y-auto">{sanitizeToolContent(tool.output)}</pre>
-            </div>
-          )}
-          {tool.error && (
-            <div>
-              <span className="text-red-400">Error:</span>
-              <pre className="mt-0.5 text-red-300 whitespace-pre-wrap break-words">{tool.error}</pre>
-            </div>
+    <>
+      <div className="rounded-md bg-[#161b22] border border-border/50 overflow-hidden">
+        <button
+          onClick={() => setExpanded(!expanded)}
+          className="w-full flex items-center gap-2 px-3 py-2 text-xs font-mono hover:bg-white/5 transition-colors"
+        >
+          <ChevronRight className={`h-3 w-3 text-muted-foreground shrink-0 transition-transform ${expanded ? 'rotate-90' : ''}`} />
+          <Wrench className="h-3 w-3 text-muted-foreground shrink-0" />
+          <span className="text-foreground">{tool.name}</span>
+          {tool.title && <span className="text-muted-foreground truncate">— {tool.title}</span>}
+          {isRunning && <Loader2 className="h-3 w-3 ml-auto shrink-0 text-muted-foreground animate-spin" />}
+          {isError && <AlertTriangle className="h-3 w-3 ml-auto shrink-0 text-red-400" />}
+        </button>
+        {expanded && (
+          <div className="border-t border-border/30 px-3 py-2 text-[11px] font-mono space-y-2">
+            {tool.input && (
+              <div>
+                <span className="text-muted-foreground">Input:</span>
+                <pre className="mt-0.5 text-gray-400 whitespace-pre-wrap break-words max-h-40 overflow-y-auto">{sanitizeToolContent(tool.input)}</pre>
+              </div>
+            )}
+            {tool.output && (
+              <div>
+                <span className="text-muted-foreground">Output:</span>
+                <pre className="mt-0.5 text-gray-400 whitespace-pre-wrap break-words max-h-40 overflow-y-auto">{sanitizeToolContent(tool.output)}</pre>
+              </div>
+            )}
+            {tool.error && (
+              <div>
+                <span className="text-red-400">Error:</span>
+                <pre className="mt-0.5 text-red-300 whitespace-pre-wrap break-words">{tool.error}</pre>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Inline data file preview */}
+        {tabularFilePath && (
+          <div className="border-t border-border/30 px-2 py-2">
+            <DataFilePreview
+              filePath={tabularFilePath}
+              compact={true}
+              onExpand={() => setShowDataDialog(true)}
+            />
+          </div>
+        )}
+
+        <div className="flex items-center gap-2 px-3 pb-1.5">
+          <span className="text-[10px] text-muted-foreground">{message.timestamp.toLocaleTimeString()}</span>
+          {message.stepMeta && (
+            <span className="text-[10px] text-muted-foreground">{formatStepMeta(message.stepMeta)}</span>
           )}
         </div>
-      )}
-      <div className="flex items-center gap-2 px-3 pb-1.5">
-        <span className="text-[10px] text-muted-foreground">{message.timestamp.toLocaleTimeString()}</span>
-        {message.stepMeta && (
-          <span className="text-[10px] text-muted-foreground">{formatStepMeta(message.stepMeta)}</span>
-        )}
       </div>
-    </div>
+
+      {/* Fullscreen data dialog */}
+      {tabularFilePath && (
+        <DataFileDialog
+          open={showDataDialog}
+          onOpenChange={setShowDataDialog}
+          filePath={tabularFilePath}
+        />
+      )}
+    </>
   )
 }
 

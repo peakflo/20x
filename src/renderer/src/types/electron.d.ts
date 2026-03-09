@@ -133,6 +133,27 @@ export interface DepsStatus {
   codexBinary: boolean
 }
 
+export interface TabularData {
+  columns: string[]
+  rows: Record<string, unknown>[]
+  totalRows: number
+  truncated: boolean
+  filePath: string
+}
+
+export interface TabularDataError {
+  error: string
+}
+
+export type TabularDataResult = TabularData | TabularDataError
+
+export interface FileInfo {
+  exists: boolean
+  size: number
+  extension: string
+  isTabular: boolean
+}
+
 interface ElectronAPI {
   db: {
     getTasks: () => Promise<WorkfloTask[]>
@@ -184,12 +205,17 @@ interface ElectronAPI {
     remove: (taskId: string, attachmentId: string) => Promise<void>
     open: (taskId: string, attachmentId: string) => Promise<void>
     download: (taskId: string, attachmentId: string) => Promise<void>
+    resolvePath: (taskId: string, attachmentId: string) => Promise<string | null>
   }
   shell: {
     openPath: (filePath: string) => Promise<void>
     showItemInFolder: (filePath: string) => Promise<void>
     readTextFile: (filePath: string) => Promise<{ content: string; size: number } | null>
     openExternal: (url: string) => Promise<void>
+  }
+  fileViewer: {
+    getFileInfo: (filePath: string) => Promise<FileInfo>
+    readTabularFile: (filePath: string, limit?: number) => Promise<TabularDataResult>
   }
   oauth: {
     startFlow: (provider: string, config: Record<string, unknown>) => Promise<string>

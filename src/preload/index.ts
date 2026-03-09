@@ -23,7 +23,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     open: (taskId: string, attachmentId: string): Promise<void> =>
       ipcRenderer.invoke('attachments:open', taskId, attachmentId),
     download: (taskId: string, attachmentId: string): Promise<void> =>
-      ipcRenderer.invoke('attachments:download', taskId, attachmentId)
+      ipcRenderer.invoke('attachments:download', taskId, attachmentId),
+    resolvePath: (taskId: string, attachmentId: string): Promise<string | null> =>
+      ipcRenderer.invoke('attachments:resolvePath', taskId, attachmentId)
   },
   shell: {
     openPath: (filePath: string): Promise<void> =>
@@ -34,6 +36,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('shell:readTextFile', filePath),
     openExternal: (url: string): Promise<void> =>
       ipcRenderer.invoke('shell:openExternal', url)
+  },
+  fileViewer: {
+    getFileInfo: (filePath: string): Promise<{ exists: boolean; size: number; extension: string; isTabular: boolean }> =>
+      ipcRenderer.invoke('fileViewer:getFileInfo', filePath),
+    readTabularFile: (filePath: string, limit?: number): Promise<{ columns: string[]; rows: Record<string, unknown>[]; totalRows: number; truncated: boolean; filePath: string } | { error: string }> =>
+      ipcRenderer.invoke('fileViewer:readTabularFile', filePath, limit)
   },
   oauth: {
     startFlow: (provider: string, config: Record<string, unknown>): Promise<string> =>
