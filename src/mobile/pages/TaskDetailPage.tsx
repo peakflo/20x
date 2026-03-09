@@ -9,7 +9,7 @@ import { Badge } from '../components/Badge'
 import { PriorityBadge } from '../components/PriorityBadge'
 import { TaskStatusDot } from '../components/TaskStatusDot'
 import { MessageBubble } from '../components/MessageBubble'
-import { cn, formatDate, isOverdue, formatRelativeDate, STATUS_VARIANT } from '../lib/utils'
+import { cn, formatDate, isOverdue, formatRelativeDate, formatRelativeFuture, STATUS_VARIANT } from '../lib/utils'
 import type { Route } from '../App'
 
 export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavigate: (route: Route) => void }) {
@@ -404,7 +404,7 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
                     </Badge>
                     {task.heartbeat_enabled && task.heartbeat_next_check_at && (
                       <span className="text-[10px] text-muted-foreground/60">
-                        next {formatRelativeDate(task.heartbeat_next_check_at)}
+                        next {formatRelativeFuture(task.heartbeat_next_check_at)}
                       </span>
                     )}
                     <button
