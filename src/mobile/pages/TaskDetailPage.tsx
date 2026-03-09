@@ -1,6 +1,6 @@
 import { useMemo, useCallback, useState } from 'react'
 import { TaskStatus } from '@shared/constants'
-import { Markdown } from '@/components/ui/Markdown'
+import { CollapsibleDescription } from '../components/CollapsibleDescription'
 import { useTaskStore } from '../stores/task-store'
 import { useAgentStore, SessionStatus } from '../stores/agent-store'
 import { api } from '../api/client'
@@ -193,7 +193,11 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
         {/* Description — matches desktop max-w-2xl content area */}
         {task.description && (
           <div className="px-4 py-4 border-b border-border">
-            <Markdown size="sm">{task.description}</Markdown>
+            <CollapsibleDescription
+              taskId={task.id}
+              description={task.description}
+              size="sm"
+            />
           </div>
         )}
 

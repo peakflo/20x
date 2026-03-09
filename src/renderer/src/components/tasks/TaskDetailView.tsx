@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 import { Pencil, Trash2, Calendar, User, Tag, Clock, Bot, Play, History, GitBranch, Plus, X, BookOpen, AlarmClockOff, BellRing, Folder, Repeat, Star, Sparkles } from 'lucide-react'
-import { Markdown } from '@/components/ui/Markdown'
+import { CollapsibleDescription } from '@/components/ui/CollapsibleDescription'
 import { Button } from '@/components/ui/Button'
 import { TaskStatusBadge } from './TaskStatusBadge'
 import { TaskPriorityBadge } from './TaskPriorityBadge'
@@ -166,9 +166,12 @@ export function TaskDetailView({ task, agents, onEdit, onDelete, onUpdateAttachm
           <div>
             <h1 className="text-xl font-semibold">{task.title}</h1>
             {task.description && (
-              <div className="mt-3 text-muted-foreground">
-                <Markdown size="sm">{task.description}</Markdown>
-              </div>
+              <CollapsibleDescription
+                taskId={task.id}
+                description={task.description}
+                size="sm"
+                className="mt-3 text-muted-foreground"
+              />
             )}
           </div>
 
