@@ -405,7 +405,7 @@ app.on('window-all-closed', () => {
   }
 })
 
-app.on('before-quit', () => {
+app.on('before-quit', async () => {
   isQuitting = true
   // Ensure cleanup before quitting
   heartbeatScheduler?.stop()
@@ -413,6 +413,12 @@ app.on('before-quit', () => {
   agentManager?.stopServer()
   mcpToolCaller?.destroy()
   oauthManager?.destroy()
+
+  // Stop all marimo server instances
+  try {
+    const { stopAllMarimo } = await import('./marimo-server')
+    stopAllMarimo()
+  } catch { /* marimo module may not be loaded */ }
 
   // Checkpoint WAL and close database
   db?.close()

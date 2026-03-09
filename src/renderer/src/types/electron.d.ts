@@ -154,6 +154,24 @@ export interface FileInfo {
   isTabular: boolean
 }
 
+export interface MarimoCheckResult {
+  installed: boolean
+  path: string | null
+  version: string | null
+}
+
+export interface MarimoLaunchResult {
+  url: string
+  port: number
+  pid: number
+}
+
+export interface MarimoStatusResult {
+  running: boolean
+  url: string | null
+  port: number | null
+}
+
 interface ElectronAPI {
   db: {
     getTasks: () => Promise<WorkfloTask[]>
@@ -216,6 +234,13 @@ interface ElectronAPI {
   fileViewer: {
     getFileInfo: (filePath: string) => Promise<FileInfo>
     readTabularFile: (filePath: string, limit?: number) => Promise<TabularDataResult>
+  }
+  marimo: {
+    check: () => Promise<MarimoCheckResult>
+    isNotebook: (filePath: string) => Promise<boolean>
+    launch: (filePath: string, mode?: 'run' | 'edit') => Promise<MarimoLaunchResult>
+    stop: (filePath: string) => Promise<boolean>
+    status: (filePath: string) => Promise<MarimoStatusResult>
   }
   oauth: {
     startFlow: (provider: string, config: Record<string, unknown>) => Promise<string>

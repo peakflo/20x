@@ -5,23 +5,63 @@ import { Button } from '@/components/ui/Button'
 import { Markdown } from '@/components/ui/Markdown'
 import { DataFilePreview } from '@/components/ui/DataFilePreview'
 import { DataFileDialog } from '@/components/ui/DataFileDialog'
+import { MarimoEmbed } from '@/components/ui/MarimoEmbed'
+import { marimoApi } from '@/lib/ipc-client'
 import type { AgentMessage } from '@/hooks/use-agent-session'
 import { SessionStatus } from '@/stores/agent-store'
 
 const TABULAR_EXT_RE = /\.(csv|tsv|json|jsonl|xlsx|xls|parquet)$/i
 
-function extractTabularFilePath(toolInput: unknown): string | null {
+function extractFilePath(toolInput: unknown): string | null {
   if (!toolInput) return null
   try {
     const input = typeof toolInput === 'string' ? JSON.parse(toolInput) : toolInput
-    // Check common field names for file paths
-    const path = input.file_path || input.path || input.filePath || input.filename
-    if (typeof path === 'string' && TABULAR_EXT_RE.test(path)) return path
+    return input.file_path || input.path || input.filePath || input.filename || null
   } catch {
-    // If input is a plain string path
-    if (typeof toolInput === 'string' && TABULAR_EXT_RE.test(toolInput)) return toolInput
+    if (typeof toolInput === 'string') return toolInput
   }
   return null
+}
+
+function extractTabularFilePath(toolInput: unknown): string | null {
+  const path = extractFilePath(toolInput)
+  if (path && TABULAR_EXT_RE.test(path)) return path
+  return null
+}
+
+function extractMarimoFilePath(toolInput: unknown, toolOutput: unknown): string | null {
+  const path = extractFilePath(toolInput)
+  if (!path || !path.endsWith('.py')) return null
+
+  // Check tool output for marimo markers (content written by agent)
+  const output = typeof toolOutput === 'string' ? toolOutput : ''
+  const input = typeof toolInput === 'string' ? toolInput : JSON.stringify(toolInput || '')
+  const combined = output + input
+
+  if (
+    combined.includes('import marimo') ||
+    combined.includes('marimo.App') ||
+    combined.includes('@app.cell')
+  ) {
+    return path
+  }
+  return null
+}
+
+/**
+ * Hook that async-checks if a .py file is a marimo notebook (reads from disk).
+ * Used as fallback when content isn't visible in tool input/output.
+ */
+function useMarimoDetection(filePath: string | null, isCompleted: boolean): boolean {
+  const [isMarimo, setIsMarimo] = useState(false)
+  useEffect(() => {
+    if (!filePath || !isCompleted || !filePath.endsWith('.py')) {
+      setIsMarimo(false)
+      return
+    }
+    marimoApi.isNotebook(filePath).then(setIsMarimo).catch(() => setIsMarimo(false))
+  }, [filePath, isCompleted])
+  return isMarimo
 }
 
 enum ViewMode {
@@ -275,6 +315,22 @@ function ToolCallMessage({ message }: { message: AgentMessage }) {
     return extractTabularFilePath(tool.input)
   }, [isCompleted, tool.input])
 
+  // Detect marimo notebook from tool input/output (sync check via content)
+  const marimoFilePathFromContent = useMemo(() => {
+    if (!isCompleted) return null
+    return extractMarimoFilePath(tool.input, tool.output)
+  }, [isCompleted, tool.input, tool.output])
+
+  // Async fallback: check disk for marimo markers if .py file was written
+  const pyFilePath = useMemo(() => {
+    if (!isCompleted || marimoFilePathFromContent) return null
+    const fp = extractFilePath(tool.input)
+    return fp?.endsWith('.py') ? fp : null
+  }, [isCompleted, tool.input, marimoFilePathFromContent])
+
+  const isMarimoFromDisk = useMarimoDetection(pyFilePath, isCompleted)
+  const marimoFilePath = marimoFilePathFromContent || (isMarimoFromDisk ? pyFilePath : null)
+
   return (
     <>
       <div className="rounded-md bg-[#161b22] border border-border/50 overflow-hidden">
@@ -312,8 +368,15 @@ function ToolCallMessage({ message }: { message: AgentMessage }) {
           </div>
         )}
 
-        {/* Inline data file preview */}
-        {tabularFilePath && (
+        {/* Inline marimo notebook embed */}
+        {marimoFilePath && (
+          <div className="border-t border-border/30 px-2 py-2">
+            <MarimoEmbed filePath={marimoFilePath} compact={true} />
+          </div>
+        )}
+
+        {/* Inline data file preview (non-marimo tabular files) */}
+        {!marimoFilePath && tabularFilePath && (
           <div className="border-t border-border/30 px-2 py-2">
             <DataFilePreview
               filePath={tabularFilePath}
@@ -332,7 +395,7 @@ function ToolCallMessage({ message }: { message: AgentMessage }) {
       </div>
 
       {/* Fullscreen data dialog */}
-      {tabularFilePath && (
+      {tabularFilePath && !marimoFilePath && (
         <DataFileDialog
           open={showDataDialog}
           onOpenChange={setShowDataDialog}

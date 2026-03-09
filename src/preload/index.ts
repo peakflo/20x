@@ -43,6 +43,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
     readTabularFile: (filePath: string, limit?: number): Promise<{ columns: string[]; rows: Record<string, unknown>[]; totalRows: number; truncated: boolean; filePath: string } | { error: string }> =>
       ipcRenderer.invoke('fileViewer:readTabularFile', filePath, limit)
   },
+  marimo: {
+    check: (): Promise<{ installed: boolean; path: string | null; version: string | null }> =>
+      ipcRenderer.invoke('marimo:check'),
+    isNotebook: (filePath: string): Promise<boolean> =>
+      ipcRenderer.invoke('marimo:isNotebook', filePath),
+    launch: (filePath: string, mode?: 'run' | 'edit'): Promise<{ url: string; port: number; pid: number }> =>
+      ipcRenderer.invoke('marimo:launch', filePath, mode),
+    stop: (filePath: string): Promise<boolean> =>
+      ipcRenderer.invoke('marimo:stop', filePath),
+    status: (filePath: string): Promise<{ running: boolean; url: string | null; port: number | null }> =>
+      ipcRenderer.invoke('marimo:status', filePath)
+  },
   oauth: {
     startFlow: (provider: string, config: Record<string, unknown>): Promise<string> =>
       ipcRenderer.invoke('oauth:startFlow', provider, config),

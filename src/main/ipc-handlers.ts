@@ -328,6 +328,32 @@ export function registerIpcHandlers(
     new Notification({ title, body }).show()
   })
 
+  // ── Marimo handlers ────────────────────────────────────────────────────
+  ipcMain.handle('marimo:check', async () => {
+    const { checkMarimo } = await import('./marimo-server')
+    return checkMarimo()
+  })
+
+  ipcMain.handle('marimo:isNotebook', async (_, filePath: string) => {
+    const { isMarimoNotebook } = await import('./marimo-server')
+    return isMarimoNotebook(filePath)
+  })
+
+  ipcMain.handle('marimo:launch', async (_, filePath: string, mode?: 'run' | 'edit') => {
+    const { launchMarimo } = await import('./marimo-server')
+    return launchMarimo(filePath, mode || 'run')
+  })
+
+  ipcMain.handle('marimo:stop', async (_, filePath: string) => {
+    const { stopMarimo } = await import('./marimo-server')
+    return stopMarimo(filePath)
+  })
+
+  ipcMain.handle('marimo:status', async (_, filePath: string) => {
+    const { getMarimoStatus } = await import('./marimo-server')
+    return getMarimoStatus(filePath)
+  })
+
   // Agent handlers
   ipcMain.handle('agent:getAll', () => {
     return db.getAgents()
