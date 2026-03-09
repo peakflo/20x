@@ -233,6 +233,10 @@ export class AgentManager extends EventEmitter {
     // (startTaskApiServer is fire-and-forget during DB init, may not be done yet)
     await waitForTaskApiServer()
 
+    // Yield after waitForTaskApiServer + db.getAgent (sync) so the event
+    // loop can process rendering before we enter the MCP server loop.
+    await new Promise<void>((r) => setImmediate(r))
+
     for (const entry of mcpEntries) {
       const serverId = typeof entry === 'string' ? entry : (entry as AgentMcpServerEntry).serverId
       const mcpServer = this.db.getMcpServer(serverId)
@@ -944,6 +948,10 @@ export class AgentManager extends EventEmitter {
     workspaceDir?: string,
     skipInitialPrompt?: boolean
   ): Promise<string> {
+    // Helper: yield event loop between bursts of synchronous DB / FS calls
+    // so the renderer can process IPC and paint frames during session setup.
+    const yieldEL = (): Promise<void> => new Promise((r) => setImmediate(r))
+
     const agent = this.db.getAgent(agentId)!
 
     // Always use a dedicated workspace directory
@@ -957,6 +965,7 @@ export class AgentManager extends EventEmitter {
     // Check if this is a triage session
     const task = this.db.getTask(taskId)
     const isTriageSession = task?.status === TaskStatus.Triaging
+    await yieldEL()
 
     // Build MCP servers config for adapter
     // Mastermind and triage sessions always get task-management access
@@ -1001,6 +1010,7 @@ export class AgentManager extends EventEmitter {
         sessionConfig.systemPrompt = (sessionConfig.systemPrompt || '') + this.buildSecretsSystemPrompt(secretRecords)
       }
     }
+    await yieldEL()
 
     // Initialize adapter
     await adapter.initialize()
@@ -1037,6 +1047,7 @@ export class AgentManager extends EventEmitter {
         updates: { status: TaskStatus.AgentWorking }
       })
     }
+    await yieldEL()
 
     // Notify renderer
     this.sendToRenderer('agent:status', {
@@ -1057,6 +1068,7 @@ export class AgentManager extends EventEmitter {
         // Use triage-specific prompt
         promptText = this.buildTriagePrompt(task)
       } else {
+        // Reuse the task we already fetched above instead of hitting the DB again
         const currentTask = task || this.db.getTask(taskId)
         promptText = currentTask
           ? `Work on task: "${currentTask.title}"\n\n${currentTask.description || ''}`
@@ -1491,6 +1503,9 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     taskId: string,
     adapterSessionId: string
   ): Promise<string> {
+    // Helper: yield event loop between bursts of sync DB/FS calls
+    const yieldEL = (): Promise<void> => new Promise((r) => setImmediate(r))
+
     const agent = this.db.getAgent(agentId)!
     const workspaceDir = this.db.getWorkspaceDir(taskId)
 
@@ -1498,6 +1513,8 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     const isMastermind = taskId === 'mastermind-session'
     const task = this.db.getTask(taskId)
     const isTriageSession = task?.status === TaskStatus.Triaging
+    await yieldEL()
+
     const mcpServers = await this.buildMcpServersForAdapter(agentId, { ensureTaskManagement: isMastermind || isTriageSession })
 
     // Build system prompt with task context (survives context compaction)
@@ -1544,6 +1561,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
         sessionConfig.systemPrompt = (sessionConfig.systemPrompt || '') + this.buildSecretsSystemPrompt(secretRecords)
       }
     }
+    await yieldEL()
 
     // Initialize adapter
     await adapter.initialize()

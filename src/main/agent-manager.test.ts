@@ -48,11 +48,8 @@ vi.mock('./secret-broker', () => ({
   writeSecretShellWrapper: vi.fn(),
 }))
 
-import { mkdirSync, writeFileSync } from 'fs'
 import { mkdir as mkdirAsync, writeFile as writeFileAsync } from 'fs/promises'
 
-const mockedMkdirSync = vi.mocked(mkdirSync)
-const mockedWriteFileSync = vi.mocked(writeFileSync)
 const mockedMkdirAsync = vi.mocked(mkdirAsync)
 const mockedWriteFileAsync = vi.mocked(writeFileAsync)
 
