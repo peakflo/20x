@@ -256,9 +256,52 @@ function handleRoute(db: DatabaseManager, route: string, params: Record<string, 
     }
 
     case '/list_skills': {
-      const skills = rawDb.prepare('SELECT * FROM skills ORDER BY confidence DESC, uses DESC').all() as Record<string, unknown>[]
+      const skills = rawDb.prepare('SELECT id, name, description, version, confidence, uses, last_used, tags, created_at, updated_at FROM skills WHERE is_deleted = 0 ORDER BY confidence DESC, uses DESC').all() as Record<string, unknown>[]
       skills.forEach((s) => { s.tags = JSON.parse((s.tags as string) || '[]') })
       return skills
+    }
+
+    case '/get_skill': {
+      const skill = rawDb.prepare('SELECT * FROM skills WHERE id = ? AND is_deleted = 0').get(params.skill_id) as Record<string, unknown> | undefined
+      if (!skill) return { error: 'Skill not found' }
+      skill.tags = JSON.parse((skill.tags as string) || '[]')
+      return skill
+    }
+
+    case '/update_skill': {
+      const skillUpdates: string[] = []
+      const skillParams: unknown[] = []
+
+      if (params.name !== undefined) { skillUpdates.push('name = ?'); skillParams.push(params.name) }
+      if (params.description !== undefined) { skillUpdates.push('description = ?'); skillParams.push(params.description) }
+      if (params.content !== undefined) { skillUpdates.push('content = ?'); skillParams.push(params.content) }
+      if (params.confidence !== undefined) { skillUpdates.push('confidence = ?'); skillParams.push(params.confidence) }
+      if (params.tags !== undefined) { skillUpdates.push('tags = ?'); skillParams.push(JSON.stringify(params.tags)) }
+
+      if (skillUpdates.length === 0) return { error: 'No updates provided' }
+
+      skillUpdates.push('version = version + 1')
+      skillUpdates.push('updated_at = ?'); skillParams.push(new Date().toISOString())
+      skillParams.push(params.skill_id)
+
+      const skillUpdateResult = rawDb.prepare(
+        `UPDATE skills SET ${skillUpdates.join(', ')} WHERE id = ? AND is_deleted = 0`
+      ).run(...skillParams)
+
+      if (skillUpdateResult.changes === 0) return { error: 'Skill not found' }
+
+      const updatedSkill = rawDb.prepare('SELECT * FROM skills WHERE id = ?').get(params.skill_id) as Record<string, unknown>
+      updatedSkill.tags = JSON.parse((updatedSkill.tags as string) || '[]')
+      return { success: true, skill: updatedSkill }
+    }
+
+    case '/delete_skill': {
+      const deleteResult = rawDb.prepare(
+        'UPDATE skills SET is_deleted = 1, updated_at = ? WHERE id = ? AND is_deleted = 0'
+      ).run(new Date().toISOString(), params.skill_id)
+
+      if (deleteResult.changes === 0) return { error: 'Skill not found' }
+      return { success: true }
     }
 
     case '/find_similar_tasks': {

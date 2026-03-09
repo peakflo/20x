@@ -98,8 +98,46 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: 'list_skills',
-      description: 'List all available skills with their descriptions',
+      description: 'List all available skills with their names, descriptions, and metadata (does not include full skill content — use get_skill for that)',
       inputSchema: { type: 'object', properties: {} }
+    },
+    {
+      name: 'get_skill',
+      description: 'Get full details of a specific skill by ID, including its content',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          skill_id: { type: 'string', description: 'Skill ID' }
+        },
+        required: ['skill_id']
+      }
+    },
+    {
+      name: 'update_skill',
+      description: 'Update an existing skill. Only provided fields will be updated.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          skill_id: { type: 'string', description: 'Skill ID' },
+          name: { type: 'string', description: 'Skill name' },
+          description: { type: 'string', description: 'Skill description' },
+          content: { type: 'string', description: 'Skill content (the full skill file body)' },
+          confidence: { type: 'number', description: 'Confidence score (0.0 to 1.0)' },
+          tags: { type: 'array', items: { type: 'string' }, description: 'Tags for categorization' }
+        },
+        required: ['skill_id']
+      }
+    },
+    {
+      name: 'delete_skill',
+      description: 'Delete a skill by ID (soft delete)',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          skill_id: { type: 'string', description: 'Skill ID' }
+        },
+        required: ['skill_id']
+      }
     },
     {
       name: 'find_similar_tasks',
