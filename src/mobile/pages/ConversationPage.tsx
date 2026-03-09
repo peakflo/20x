@@ -84,7 +84,7 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
   )
 
   // Session controls (shared hook provides double-click protection and rollback)
-  const { handleStart: _startSession, handleResume: _resumeSession, handleStop: _stopSession, handleRestart: _restartSession, busyRef } = useSessionControls(taskId)
+  const { handleStart: _startSession, handleResume: _resumeSession, handleStop: _stopSession, handleRestart: _restartSession } = useSessionControls(taskId)
 
   const handleStart = useCallback(() => {
     if (task?.agent_id) _startSession(task.agent_id)

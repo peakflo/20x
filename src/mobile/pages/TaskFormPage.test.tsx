@@ -1,14 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, fireEvent, waitFor } from '@testing-library/react'
 import { TaskFormPage } from './TaskFormPage'
 import { useTaskStore, type Task } from '../stores/task-store'
 
 const mockNavigate = vi.fn()
-
-// happy-dom + React 19 can duplicate elements — use getAllBy* helpers
-function queryFirst(getter: () => HTMLElement[]): HTMLElement {
-  return getter()[0]
-}
 
 beforeEach(() => {
   useTaskStore.setState({ tasks: [], isLoading: false })

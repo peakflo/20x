@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { TaskStatus, TASK_STATUSES } from '@shared/constants'
-import { useTaskStore, type Task } from '../stores/task-store'
+import { useTaskStore } from '../stores/task-store'
 import { cn } from '../lib/utils'
 import type { Route } from '../App'
 

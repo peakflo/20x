@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { AgentManager } from './agent-manager'
 import { SessionStatus } from '../shared/constants'

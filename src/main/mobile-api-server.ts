@@ -502,6 +502,7 @@ function getActiveSessions(): Array<{ sessionId: string; agentId: string; taskId
 /** Strip sensitive fields (api_keys, secret_ids) from agent config before sending over the network. */
 function stripSensitiveAgentFields(agent: ReturnType<DatabaseManager['getAgent']>) {
   if (!agent) return agent
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const { api_keys: _keys, secret_ids: _secrets, ...safeConfig } = (agent.config || {}) as Record<string, unknown>
   return { ...agent, config: safeConfig }
 }
