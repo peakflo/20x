@@ -314,6 +314,8 @@ export interface FileAttachmentRecord {
   size: number
   mime_type: string
   added_at: string
+  /** Storage path in workflo — used to skip re-downloads on sync */
+  workflo_path?: string
 }
 
 export interface CreateTaskData {

@@ -382,6 +382,9 @@ export class PeakfloPlugin implements TaskSourcePlugin {
     const sourceName = source?.name ?? 'Peakflo'
     const statusFilter = (config.status_filter as string) || 'all'
 
+    // Collect file download jobs to run after the sync loop
+    const fileDownloadJobs: Array<{ taskId: string; fields: PeakfloField[] }> = []
+
     try {
       // Paginated fetch from Workflo API
       let page = 1
@@ -402,10 +405,6 @@ export class PeakfloPlugin implements TaskSourcePlugin {
         )
 
         for (const task of response.tasks) {
-          console.log(
-            `[peakflo]   Task: id=${task.id}, title="${task.title}", status=${task.status}, ` +
-            `sourceId=${task.orgTaskSourceId ?? 'none'}, sourceType=${task.sourceType ?? 'none'}`
-          )
           try {
             const externalId = task.id // Workflo task ID is the external ID
             const existing = ctx.db.getTaskByExternalId(sourceId, externalId)
@@ -449,10 +448,10 @@ export class PeakfloPlugin implements TaskSourcePlugin {
               })
               result.updated++
 
-              // Download file attachments (fire-and-forget per task)
-              this.downloadWorkfloFiles(existing.id, fields, apiClient, ctx).catch((err) => {
-                console.error(`[peakflo] Failed to download files for task ${existing.id}:`, err)
-              })
+              // Queue file download for after sync completes
+              if (fields.some((f) => f.type === 'file')) {
+                fileDownloadJobs.push({ taskId: existing.id, fields })
+              }
             } else {
               const created = ctx.db.createTask({
                 title: task.title,
@@ -469,11 +468,9 @@ export class PeakfloPlugin implements TaskSourcePlugin {
               })
               result.imported++
 
-              // Download file attachments (fire-and-forget per task)
-              if (created) {
-                this.downloadWorkfloFiles(created.id, fields, apiClient, ctx).catch((err) => {
-                  console.error(`[peakflo] Failed to download files for task ${created.id}:`, err)
-                })
+              // Queue file download for after sync completes
+              if (created && fields.some((f) => f.type === 'file')) {
+                fileDownloadJobs.push({ taskId: created.id, fields })
               }
             }
           } catch (err: unknown) {
@@ -496,6 +493,18 @@ export class PeakfloPlugin implements TaskSourcePlugin {
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Unknown error'
       result.errors.push(`Enterprise import failed: ${msg}`)
+    }
+
+    // Download file attachments after sync loop completes (sequential per task, no races)
+    if (fileDownloadJobs.length > 0) {
+      console.log(`[peakflo] Downloading files for ${fileDownloadJobs.length} task(s)...`)
+      for (const job of fileDownloadJobs) {
+        try {
+          await this.downloadWorkfloFiles(job.taskId, job.fields, apiClient, ctx)
+        } catch (err) {
+          console.error(`[peakflo] Failed to download files for task ${job.taskId}:`, err)
+        }
+      }
     }
 
     return result
@@ -596,7 +605,7 @@ export class PeakfloPlugin implements TaskSourcePlugin {
     // Build a set of existing file paths to skip re-downloads
     const existingPaths = new Set(
       existingAttachments
-        .map((a) => (a as unknown as Record<string, unknown>).workflo_path)
+        .map((a) => a.workflo_path)
         .filter(Boolean) as string[]
     )
 
@@ -614,7 +623,7 @@ export class PeakfloPlugin implements TaskSourcePlugin {
         const filePath = join(attachmentsDir, `${attachmentId}-${entry.originalName}`)
         writeFileSync(filePath, buffer)
 
-        const newAttachment = {
+        const newAttachment: FileAttachmentRecord = {
           id: attachmentId,
           filename: entry.originalName,
           size: buffer.length,
@@ -624,10 +633,10 @@ export class PeakfloPlugin implements TaskSourcePlugin {
         }
 
         ctx.db.updateTask(taskId, {
-          attachments: [...existingAttachments, newAttachment] as FileAttachmentRecord[]
+          attachments: [...existingAttachments, newAttachment]
         })
 
-        existingAttachments.push(newAttachment as unknown as FileAttachmentRecord)
+        existingAttachments.push(newAttachment)
         existingPaths.add(entry.path)
 
         console.log(`[peakflo] Saved attachment: ${entry.originalName} (${buffer.length} bytes)`)
@@ -643,7 +652,7 @@ export class PeakfloPlugin implements TaskSourcePlugin {
       case 'completed':
         return TaskStatus.Completed
       case 'in_progress':
-        return TaskStatus.NotStarted
+        return TaskStatus.Triaging
       case 'pending':
         return TaskStatus.NotStarted
       default:
