@@ -1,3 +1,10 @@
+export enum SessionStatus {
+  IDLE = 'idle',
+  WORKING = 'working',
+  ERROR = 'error',
+  WAITING_APPROVAL = 'waiting_approval',
+}
+
 export enum TaskStatus {
   NotStarted = 'not_started',
   Triaging = 'triaging',
@@ -15,3 +22,21 @@ export const TASK_STATUSES: { value: TaskStatus; label: string }[] = [
   { value: TaskStatus.AgentLearning, label: 'Agent Learning' },
   { value: TaskStatus.Completed, label: 'Completed' }
 ]
+
+// ── Heartbeat types ─────────────────────────────────────────
+
+export enum HeartbeatStatus {
+  Ok = 'ok',
+  Info = 'info',
+  AttentionNeeded = 'attention_needed',
+  Error = 'error'
+}
+
+export const HEARTBEAT_OK_TOKEN = 'HEARTBEAT_OK'
+export const HEARTBEAT_INFO_TOKEN = 'HEARTBEAT_INFO'
+
+export const HEARTBEAT_DEFAULTS = {
+  intervalMinutes: 30,
+  maxConsecutiveErrors: 3,
+  checkIntervalMs: 60_000, // scheduler tick every 60s
+} as const

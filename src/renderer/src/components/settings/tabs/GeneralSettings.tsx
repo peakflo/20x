@@ -11,6 +11,13 @@ export function GeneralSettings() {
   const [mobileUrl, setMobileUrl] = useState('')
   const [loading, setLoading] = useState(true)
 
+  // Heartbeat settings
+  const [heartbeatEnabled, setHeartbeatEnabled] = useState(true)
+  const [heartbeatInterval, setHeartbeatInterval] = useState('30')
+  const [heartbeatActiveStart, setHeartbeatActiveStart] = useState('')
+  const [heartbeatActiveEnd, setHeartbeatActiveEnd] = useState('')
+  const [heartbeatGlobalInstructions, setHeartbeatGlobalInstructions] = useState('')
+
   useEffect(() => {
     const loadSettings = async () => {
       try {
@@ -31,6 +38,26 @@ export function GeneralSettings() {
         console.error('Failed to load app preferences:', error)
       } finally {
         setLoading(false)
+      }
+
+      // Load heartbeat settings
+      try {
+        const hbEnabled = await settingsApi.get('heartbeat_enabled_global')
+        if (hbEnabled !== null) setHeartbeatEnabled(hbEnabled !== 'false')
+
+        const hbInterval = await settingsApi.get('heartbeat_default_interval')
+        if (hbInterval) setHeartbeatInterval(hbInterval)
+
+        const hbStart = await settingsApi.get('heartbeat_active_hours_start')
+        if (hbStart) setHeartbeatActiveStart(hbStart)
+
+        const hbEnd = await settingsApi.get('heartbeat_active_hours_end')
+        if (hbEnd) setHeartbeatActiveEnd(hbEnd)
+
+        const hbGlobal = await settingsApi.get('heartbeat_global_instructions')
+        if (hbGlobal) setHeartbeatGlobalInstructions(hbGlobal)
+      } catch (error) {
+        console.error('Failed to load heartbeat settings:', error)
       }
 
       // Load mobile URL separately so its failure doesn't block other settings
@@ -164,6 +191,111 @@ export function GeneralSettings() {
           ) : (
             <span className="text-sm text-muted-foreground">Unavailable</span>
           )}
+        </div>
+      </div>
+    </SettingsSection>
+
+    <SettingsSection
+      title="Heartbeat Monitoring"
+      description="Periodic checks on tasks in review — monitors PRs, issues, and deployments"
+    >
+      <div className="space-y-4">
+        <div className="flex items-center justify-between py-2 border-b border-border">
+          <div className="space-y-0.5">
+            <Label htmlFor="heartbeat-enabled">Enable heartbeat</Label>
+            <p className="text-xs text-muted-foreground">
+              Periodically check tasks with heartbeat.md files for updates
+            </p>
+          </div>
+          <Switch
+            id="heartbeat-enabled"
+            checked={heartbeatEnabled}
+            onCheckedChange={async (checked) => {
+              setHeartbeatEnabled(checked)
+              await settingsApi.set('heartbeat_enabled_global', checked ? 'true' : 'false')
+            }}
+            disabled={loading}
+          />
+        </div>
+
+        <div className="flex items-center justify-between py-2 border-b border-border">
+          <div className="space-y-0.5">
+            <Label htmlFor="heartbeat-interval">Default interval</Label>
+            <p className="text-xs text-muted-foreground">
+              How often to check each task (can be overridden per-task)
+            </p>
+          </div>
+          <select
+            id="heartbeat-interval"
+            value={heartbeatInterval}
+            onChange={async (e) => {
+              setHeartbeatInterval(e.target.value)
+              await settingsApi.set('heartbeat_default_interval', e.target.value)
+            }}
+            disabled={loading || !heartbeatEnabled}
+            className="bg-transparent border rounded px-2 py-1 text-sm disabled:opacity-50"
+          >
+            <option value="15">15 minutes</option>
+            <option value="30">30 minutes</option>
+            <option value="60">1 hour</option>
+            <option value="120">2 hours</option>
+            <option value="240">4 hours</option>
+          </select>
+        </div>
+
+        <div className="flex items-center justify-between py-2 border-b border-border">
+          <div className="space-y-0.5">
+            <Label>Active hours</Label>
+            <p className="text-xs text-muted-foreground">
+              Only run heartbeat checks during these hours (leave empty for always)
+            </p>
+          </div>
+          <div className="flex items-center gap-2 text-sm">
+            <input
+              type="time"
+              value={heartbeatActiveStart}
+              onChange={async (e) => {
+                setHeartbeatActiveStart(e.target.value)
+                await settingsApi.set('heartbeat_active_hours_start', e.target.value)
+              }}
+              disabled={loading || !heartbeatEnabled}
+              className="bg-transparent border rounded px-2 py-1 text-sm disabled:opacity-50"
+              placeholder="09:00"
+            />
+            <span className="text-muted-foreground">to</span>
+            <input
+              type="time"
+              value={heartbeatActiveEnd}
+              onChange={async (e) => {
+                setHeartbeatActiveEnd(e.target.value)
+                await settingsApi.set('heartbeat_active_hours_end', e.target.value)
+              }}
+              disabled={loading || !heartbeatEnabled}
+              className="bg-transparent border rounded px-2 py-1 text-sm disabled:opacity-50"
+              placeholder="22:00"
+            />
+          </div>
+        </div>
+
+        <div className="py-2">
+          <div className="space-y-1.5 mb-2">
+            <Label htmlFor="heartbeat-global-instructions">Global instructions</Label>
+            <p className="text-xs text-muted-foreground">
+              Default instructions prepended to every heartbeat check. Per-task heartbeat.md takes priority.
+            </p>
+          </div>
+          <textarea
+            id="heartbeat-global-instructions"
+            value={heartbeatGlobalInstructions}
+            onChange={(e) => setHeartbeatGlobalInstructions(e.target.value)}
+            onBlur={async () => {
+              await settingsApi.set('heartbeat_global_instructions', heartbeatGlobalInstructions)
+            }}
+            disabled={loading || !heartbeatEnabled}
+            rows={6}
+            className="w-full bg-transparent border rounded px-3 py-2 text-sm font-mono disabled:opacity-50 resize-y placeholder:text-muted-foreground"
+            placeholder="e.g. Always run `gh api` calls to verify status. Never skip checks. Reply HEARTBEAT_OK only when everything is clean."
+          />
         </div>
       </div>
     </SettingsSection>

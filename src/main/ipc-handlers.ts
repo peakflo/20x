@@ -70,7 +70,8 @@ export function registerIpcHandlers(
   oauthManager?: OAuthManager,
   recurrenceScheduler?: import('./recurrence-scheduler').RecurrenceScheduler,
   enterpriseAuth?: EnterpriseAuth,
-  claudePluginManager?: ClaudePluginManager
+  claudePluginManager?: ClaudePluginManager,
+  heartbeatScheduler?: import('./heartbeat-scheduler').HeartbeatScheduler
 ): void {
   ipcMain.handle('db:getTasks', () => {
     return db.getTasks()
@@ -825,5 +826,58 @@ export function registerIpcHandlers(
   ipcMain.handle('claudePlugin:getPluginResources', (_, pluginId: string) => {
     if (!claudePluginManager) throw new Error('ClaudePluginManager not initialized')
     return claudePluginManager.getPluginResources(pluginId)
+  })
+
+  // ── Heartbeat handlers ────────────────────────────────────
+
+  ipcMain.handle('heartbeat:enable', (_, taskId: string, intervalMinutes?: number) => {
+    if (!heartbeatScheduler) throw new Error('HeartbeatScheduler not initialized')
+    heartbeatScheduler.enableHeartbeat(taskId, intervalMinutes)
+    return db.getTask(taskId)
+  })
+
+  ipcMain.handle('heartbeat:disable', (_, taskId: string) => {
+    if (!heartbeatScheduler) throw new Error('HeartbeatScheduler not initialized')
+    heartbeatScheduler.disableHeartbeat(taskId)
+    return db.getTask(taskId)
+  })
+
+  ipcMain.handle('heartbeat:runNow', async (_, taskId: string) => {
+    if (!heartbeatScheduler) throw new Error('HeartbeatScheduler not initialized')
+    return await heartbeatScheduler.runNow(taskId)
+  })
+
+  ipcMain.handle('heartbeat:getLogs', (_, taskId: string, limit?: number) => {
+    return db.getHeartbeatLogs(taskId, limit)
+  })
+
+  ipcMain.handle('heartbeat:getStatus', (_, taskId: string) => {
+    if (!heartbeatScheduler) throw new Error('HeartbeatScheduler not initialized')
+    const task = db.getTask(taskId)
+    if (!task) return null
+    return {
+      enabled: task.heartbeat_enabled,
+      intervalMinutes: task.heartbeat_interval_minutes,
+      lastCheckAt: task.heartbeat_last_check_at,
+      nextCheckAt: task.heartbeat_next_check_at,
+      hasHeartbeatFile: heartbeatScheduler.hasHeartbeatFile(taskId)
+    }
+  })
+
+  ipcMain.handle('heartbeat:updateInterval', (_, taskId: string, intervalMinutes: number) => {
+    if (!heartbeatScheduler) throw new Error('HeartbeatScheduler not initialized')
+    heartbeatScheduler.enableHeartbeat(taskId, intervalMinutes)
+    return db.getTask(taskId)
+  })
+
+  ipcMain.handle('heartbeat:readFile', (_, taskId: string) => {
+    if (!heartbeatScheduler) throw new Error('HeartbeatScheduler not initialized')
+    return heartbeatScheduler.readHeartbeatFile(taskId)
+  })
+
+  ipcMain.handle('heartbeat:writeFile', (_, taskId: string, content: string) => {
+    if (!heartbeatScheduler) throw new Error('HeartbeatScheduler not initialized')
+    heartbeatScheduler.writeHeartbeatFile(taskId, content)
+    return true
   })
 }

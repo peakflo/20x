@@ -223,8 +223,8 @@ export const OUTPUT_FIELD_TYPES: { value: OutputFieldType; label: string }[] = [
 ]
 
 // ── Re-export shared constants & types ──────────────────────
-import { TaskStatus, TASK_STATUSES } from '@shared/constants'
-export { TaskStatus, TASK_STATUSES }
+import { TaskStatus, TASK_STATUSES, HeartbeatStatus } from '@shared/constants'
+export { TaskStatus, TASK_STATUSES, HeartbeatStatus }
 export type { SourceUser, ReassignResult } from '@shared/types'
 
 // ── Task types ──────────────────────────────────────────────
@@ -282,6 +282,10 @@ export interface WorkfloTask {
   recurrence_parent_id: string | null
   last_occurrence_at: string | null
   next_occurrence_at: string | null
+  heartbeat_enabled?: boolean
+  heartbeat_interval_minutes?: number | null
+  heartbeat_last_check_at?: string | null
+  heartbeat_next_check_at?: string | null
   created_at: string
   updated_at: string
 }
@@ -325,6 +329,21 @@ export interface UpdateTaskDTO {
   recurrence_pattern?: RecurrencePattern | null
   last_occurrence_at?: string | null
   next_occurrence_at?: string | null
+  heartbeat_enabled?: boolean
+  heartbeat_interval_minutes?: number | null
+  heartbeat_last_check_at?: string | null
+  heartbeat_next_check_at?: string | null
+}
+
+// ── Heartbeat log types ─────────────────────────────────────
+
+export interface HeartbeatLog {
+  id: string
+  task_id: string
+  status: HeartbeatStatus
+  summary: string | null
+  session_id: string | null
+  created_at: string
 }
 
 export const TASK_TYPES: { value: TaskType; label: string }[] = [

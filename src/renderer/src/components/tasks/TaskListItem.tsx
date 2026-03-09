@@ -1,4 +1,4 @@
-import { Calendar, AlarmClockOff, Repeat } from 'lucide-react'
+import { Calendar, AlarmClockOff, Repeat, HeartPulse } from 'lucide-react'
 import { cn, formatDate, isOverdue, isDueSoon, isSnoozed } from '@/lib/utils'
 import { TaskPriorityBadge } from './TaskPriorityBadge'
 import { useAgentStore, SessionStatus } from '@/stores/agent-store'
@@ -145,6 +145,11 @@ export function TaskListItem({ task, isSelected, onSelect }: TaskListItemProps) 
             {task.recurrence_parent_id && (
               <span title="From recurring template">
                 <Repeat className="h-3 w-3 text-muted-foreground opacity-50" />
+              </span>
+            )}
+            {task.heartbeat_enabled && (
+              <span title="Heartbeat monitoring active">
+                <HeartPulse className="h-3 w-3 text-rose-400" />
               </span>
             )}
             {task.source !== 'local' && (

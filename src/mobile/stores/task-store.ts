@@ -34,6 +34,10 @@ export interface Task {
   recurrence_parent_id: string | null
   last_occurrence_at: string | null
   next_occurrence_at: string | null
+  heartbeat_enabled?: boolean
+  heartbeat_interval_minutes?: number | null
+  heartbeat_last_check_at?: string | null
+  heartbeat_next_check_at?: string | null
   created_at: string
   updated_at: string
 }

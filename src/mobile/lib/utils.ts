@@ -39,6 +39,22 @@ export function formatRelativeDate(dateStr: string): string {
   return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 }
 
+export function formatRelativeFuture(dateStr: string): string {
+  const date = new Date(dateStr)
+  const now = new Date()
+  const diffMs = date.getTime() - now.getTime()
+
+  if (diffMs <= 0) return 'soon'
+
+  const diffMin = Math.ceil(diffMs / 60000)
+  const diffHrs = Math.floor(diffMs / 3600000)
+
+  if (diffMin <= 1) return 'in <1m'
+  if (diffMin < 60) return `in ${diffMin}m`
+  if (diffHrs < 24) return `in ${diffHrs}h`
+  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+}
+
 export function formatDate(dateStr: string): string {
   return new Date(dateStr).toLocaleDateString('en-US', {
     month: 'short',

@@ -30,6 +30,22 @@ export function formatRelativeDate(dateString: string): string {
   return formatDate(dateString)
 }
 
+export function formatRelativeFuture(dateString: string): string {
+  const date = new Date(dateString)
+  const now = new Date()
+  const diffMs = date.getTime() - now.getTime()
+
+  if (diffMs <= 0) return 'soon'
+
+  const diffMins = Math.ceil(diffMs / 60000)
+  const diffHours = Math.floor(diffMs / 3600000)
+
+  if (diffMins <= 1) return 'in <1m'
+  if (diffMins < 60) return `in ${diffMins}m`
+  if (diffHours < 24) return `in ${diffHours}h`
+  return formatDate(dateString)
+}
+
 function startOfDay(date: Date): Date {
   const d = new Date(date)
   d.setHours(0, 0, 0, 0)

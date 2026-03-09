@@ -14,6 +14,7 @@ import { AssigneeSelect } from './AssigneeSelect'
 import { TaskStatus, CodingAgentType } from '@/types'
 import type { WorkfloTask, FileAttachment, OutputField, Agent, RecurrencePattern, RecurrencePatternObject } from '@/types'
 import { AnthropicLogo, OpenCodeLogo, OpenAILogo } from '@/components/icons/AgentLogos'
+import { HeartbeatSection } from './HeartbeatSection'
 
 function ordinal(n: number): string {
   if (n >= 11 && n <= 13) return `${n}th`
@@ -368,6 +369,9 @@ export function TaskDetailView({ task, agents, onEdit, onDelete, onUpdateAttachm
             <span className="text-muted-foreground">{formatRelativeDate(task.created_at)}</span>
             <span className="text-muted-foreground flex items-center gap-2"><Clock className="h-3.5 w-3.5" /> Updated</span>
             <span className="text-muted-foreground">{formatRelativeDate(task.updated_at)}</span>
+            {(task.status === TaskStatus.ReadyForReview || task.heartbeat_enabled) && (
+              <HeartbeatSection task={task} />
+            )}
           </div>
 
           {task.labels.length > 0 && (
@@ -392,6 +396,8 @@ export function TaskDetailView({ task, agents, onEdit, onDelete, onUpdateAttachm
               />
             </div>
           )}
+
+          {/* Heartbeat monitoring — handled inside the properties grid above */}
 
           {task.output_fields.length > 0 ? (
             <div className="rounded-md border p-4">

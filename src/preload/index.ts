@@ -253,6 +253,34 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getPluginResources: (pluginId: string): Promise<unknown> =>
       ipcRenderer.invoke('claudePlugin:getPluginResources', pluginId)
   },
+  heartbeat: {
+    enable: (taskId: string, intervalMinutes?: number): Promise<unknown> =>
+      ipcRenderer.invoke('heartbeat:enable', taskId, intervalMinutes),
+    disable: (taskId: string): Promise<unknown> =>
+      ipcRenderer.invoke('heartbeat:disable', taskId),
+    runNow: (taskId: string): Promise<unknown> =>
+      ipcRenderer.invoke('heartbeat:runNow', taskId),
+    getLogs: (taskId: string, limit?: number): Promise<unknown[]> =>
+      ipcRenderer.invoke('heartbeat:getLogs', taskId, limit),
+    getStatus: (taskId: string): Promise<unknown> =>
+      ipcRenderer.invoke('heartbeat:getStatus', taskId),
+    updateInterval: (taskId: string, intervalMinutes: number): Promise<unknown> =>
+      ipcRenderer.invoke('heartbeat:updateInterval', taskId, intervalMinutes),
+    readFile: (taskId: string): Promise<string | null> =>
+      ipcRenderer.invoke('heartbeat:readFile', taskId),
+    writeFile: (taskId: string, content: string): Promise<boolean> =>
+      ipcRenderer.invoke('heartbeat:writeFile', taskId, content)
+  },
+  onHeartbeatAlert: (callback: (event: unknown) => void): (() => void) => {
+    const handler = (_: unknown, data: unknown): void => callback(data)
+    ipcRenderer.on('heartbeat:alert', handler)
+    return () => ipcRenderer.removeListener('heartbeat:alert', handler)
+  },
+  onHeartbeatDisabled: (callback: (event: unknown) => void): (() => void) => {
+    const handler = (_: unknown, data: unknown): void => callback(data)
+    ipcRenderer.on('heartbeat:disabled', handler)
+    return () => ipcRenderer.removeListener('heartbeat:disabled', handler)
+  },
   onWorktreeProgress: (callback: (event: unknown) => void): (() => void) => {
     const handler = (_: unknown, data: unknown): void => callback(data)
     ipcRenderer.on('worktree:progress', handler)

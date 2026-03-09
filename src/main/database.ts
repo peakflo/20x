@@ -239,8 +239,21 @@ export interface TaskRow {
   recurrence_parent_id: string | null
   last_occurrence_at: string | null
   next_occurrence_at: string | null
+  heartbeat_enabled: number
+  heartbeat_interval_minutes: number | null
+  heartbeat_last_check_at: string | null
+  heartbeat_next_check_at: string | null
   created_at: string
   updated_at: string
+}
+
+export interface HeartbeatLogRecord {
+  id: string
+  task_id: string
+  status: string
+  summary: string | null
+  session_id: string | null
+  created_at: string
 }
 
 export interface RecurrencePatternObject {
@@ -284,6 +297,10 @@ export interface TaskRecord {
   recurrence_parent_id: string | null
   last_occurrence_at: string | null
   next_occurrence_at: string | null
+  heartbeat_enabled: boolean
+  heartbeat_interval_minutes: number | null
+  heartbeat_last_check_at: string | null
+  heartbeat_next_check_at: string | null
   created_at: string
   updated_at: string
 }
@@ -343,6 +360,10 @@ export interface UpdateTaskData {
   recurrence_pattern?: RecurrencePatternRecord | null
   last_occurrence_at?: string | null
   next_occurrence_at?: string | null
+  heartbeat_enabled?: boolean
+  heartbeat_interval_minutes?: number | null
+  heartbeat_last_check_at?: string | null
+  heartbeat_next_check_at?: string | null
 }
 
 /** Columns that can be dynamically updated via updateTask. */
@@ -367,7 +388,11 @@ const UPDATABLE_COLUMNS = new Set([
   'is_recurring',
   'recurrence_pattern',
   'last_occurrence_at',
-  'next_occurrence_at'
+  'next_occurrence_at',
+  'heartbeat_enabled',
+  'heartbeat_interval_minutes',
+  'heartbeat_last_check_at',
+  'heartbeat_next_check_at'
 ])
 
 const JSON_COLUMNS = new Set(['labels', 'attachments', 'repos', 'output_fields', 'skill_ids'])
@@ -396,7 +421,11 @@ function deserializeTask(row: TaskRow): TaskRecord {
       : null,
     recurrence_parent_id: row.recurrence_parent_id ?? null,
     last_occurrence_at: row.last_occurrence_at ?? null,
-    next_occurrence_at: row.next_occurrence_at ?? null
+    next_occurrence_at: row.next_occurrence_at ?? null,
+    heartbeat_enabled: row.heartbeat_enabled === 1,
+    heartbeat_interval_minutes: row.heartbeat_interval_minutes ?? null,
+    heartbeat_last_check_at: row.heartbeat_last_check_at ?? null,
+    heartbeat_next_check_at: row.heartbeat_next_check_at ?? null
   }
 }
 
@@ -792,7 +821,7 @@ function deserializeInstalledPlugin(row: InstalledPluginRow): InstalledPluginRec
 
 // Bump this whenever new migrations are added so returning users skip
 // the full migration check on startup.
-const SCHEMA_VERSION = 3
+const SCHEMA_VERSION = 4
 
 export class DatabaseManager {
   public db!: Database.Database
@@ -824,6 +853,7 @@ export class DatabaseManager {
     // These must run on EVERY startup (not just during migrations)
     // because they start runtime services (task API server) and
     // ensure default records exist (MCP server, orchestrator skill).
+    this.initializeTasksFts()
     this.initializeTaskManagementMcpServer()
     this.initializeOrchestratorSkill()
   }
@@ -861,6 +891,10 @@ export class DatabaseManager {
         recurrence_parent_id TEXT REFERENCES tasks(id) ON DELETE CASCADE,
         last_occurrence_at TEXT DEFAULT NULL,
         next_occurrence_at TEXT DEFAULT NULL,
+        heartbeat_enabled INTEGER NOT NULL DEFAULT 0,
+        heartbeat_interval_minutes INTEGER DEFAULT 30,
+        heartbeat_last_check_at TEXT DEFAULT NULL,
+        heartbeat_next_check_at TEXT DEFAULT NULL,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
@@ -928,6 +962,18 @@ export class DatabaseManager {
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
+
+      CREATE TABLE IF NOT EXISTS heartbeat_logs (
+        id TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+        status TEXT NOT NULL,
+        summary TEXT,
+        session_id TEXT,
+        created_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_heartbeat_logs_task ON heartbeat_logs(task_id);
+      CREATE INDEX IF NOT EXISTS idx_heartbeat_logs_created ON heartbeat_logs(created_at);
 
       CREATE TABLE IF NOT EXISTS oauth_tokens (
         id TEXT PRIMARY KEY,
@@ -1029,6 +1075,10 @@ export class DatabaseManager {
         recurrence_parent_id TEXT REFERENCES tasks(id) ON DELETE CASCADE,
         last_occurrence_at TEXT DEFAULT NULL,
         next_occurrence_at TEXT DEFAULT NULL,
+        heartbeat_enabled INTEGER NOT NULL DEFAULT 0,
+        heartbeat_interval_minutes INTEGER DEFAULT 30,
+        heartbeat_last_check_at TEXT DEFAULT NULL,
+        heartbeat_next_check_at TEXT DEFAULT NULL,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       )
@@ -1051,6 +1101,7 @@ export class DatabaseManager {
       CREATE INDEX idx_tasks_source ON tasks(source);
       CREATE UNIQUE INDEX idx_tasks_source_external ON tasks(source_id, external_id) WHERE external_id IS NOT NULL;
       CREATE INDEX idx_tasks_next_occurrence ON tasks(next_occurrence_at) WHERE is_recurring = 1;
+      CREATE INDEX idx_tasks_heartbeat_next ON tasks(heartbeat_next_check_at) WHERE heartbeat_enabled = 1;
     `)
 
     this.db.exec('PRAGMA foreign_keys = ON')
@@ -1334,6 +1385,40 @@ export class DatabaseManager {
       this.db.exec(`CREATE INDEX IF NOT EXISTS idx_tasks_next_occurrence ON tasks(next_occurrence_at) WHERE is_recurring = 1`)
     }
 
+    // Add heartbeat columns to tasks
+    if (!columnNames.has('heartbeat_enabled')) {
+      this.db.exec(`ALTER TABLE tasks ADD COLUMN heartbeat_enabled INTEGER NOT NULL DEFAULT 0`)
+    }
+    if (!columnNames.has('heartbeat_interval_minutes')) {
+      this.db.exec(`ALTER TABLE tasks ADD COLUMN heartbeat_interval_minutes INTEGER DEFAULT 30`)
+    }
+    if (!columnNames.has('heartbeat_last_check_at')) {
+      this.db.exec(`ALTER TABLE tasks ADD COLUMN heartbeat_last_check_at TEXT DEFAULT NULL`)
+    }
+    if (!columnNames.has('heartbeat_next_check_at')) {
+      this.db.exec(`ALTER TABLE tasks ADD COLUMN heartbeat_next_check_at TEXT DEFAULT NULL`)
+      this.db.exec(`CREATE INDEX IF NOT EXISTS idx_tasks_heartbeat_next ON tasks(heartbeat_next_check_at) WHERE heartbeat_enabled = 1`)
+    }
+
+    // Create heartbeat_logs table
+    const heartbeatLogsTable = this.db.prepare(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name='heartbeat_logs'"
+    ).get()
+    if (!heartbeatLogsTable) {
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS heartbeat_logs (
+          id TEXT PRIMARY KEY,
+          task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+          status TEXT NOT NULL,
+          summary TEXT,
+          session_id TEXT,
+          created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_heartbeat_logs_task ON heartbeat_logs(task_id);
+        CREATE INDEX IF NOT EXISTS idx_heartbeat_logs_created ON heartbeat_logs(created_at);
+      `)
+    }
+
     // Migration v2: secrets table
     const secretsTable = this.db.prepare(
       "SELECT name FROM sqlite_master WHERE type='table' AND name='secrets'"
@@ -1362,6 +1447,63 @@ export class DatabaseManager {
         VALUES (?, ?, ?, ?, 1, ?, ?)
       `).run(createId(), 'Default Agent', 'http://localhost:4096', '{}', now, now)
     }
+
+    // Migration v4: FTS5 full-text search index for similar task search
+    this.initializeTasksFts()
+  }
+
+  /**
+   * Creates (or rebuilds) the FTS5 full-text search index used by
+   * `find_similar_tasks`.  The virtual table is a *content-sync* table
+   * backed by `tasks`, plus triggers that keep it in sync on every
+   * INSERT / UPDATE / DELETE.
+   *
+   * We always DROP + re-CREATE the FTS table so the trigger definitions
+   * stay in sync with the current schema — this is cheap because the
+   * table is tiny and only holds text columns.
+   */
+  private initializeTasksFts(): void {
+    this.db.exec(`
+      -- Drop existing FTS artifacts so we can recreate cleanly
+      DROP TRIGGER IF EXISTS tasks_fts_insert;
+      DROP TRIGGER IF EXISTS tasks_fts_update;
+      DROP TRIGGER IF EXISTS tasks_fts_delete;
+      DROP TABLE   IF EXISTS tasks_fts;
+
+      -- Content-sync FTS5 table.  content= keeps it linked to tasks;
+      -- content_rowid= maps the FTS rowid to tasks.rowid.
+      CREATE VIRTUAL TABLE tasks_fts USING fts5(
+        title,
+        description,
+        labels,
+        type,
+        content='tasks',
+        content_rowid='rowid',
+        tokenize='unicode61 remove_diacritics 2'
+      );
+
+      -- Populate from existing rows
+      INSERT INTO tasks_fts(rowid, title, description, labels, type)
+        SELECT rowid, title, description, labels, type FROM tasks;
+
+      -- Keep FTS in sync via triggers
+      CREATE TRIGGER tasks_fts_insert AFTER INSERT ON tasks BEGIN
+        INSERT INTO tasks_fts(rowid, title, description, labels, type)
+          VALUES (new.rowid, new.title, new.description, new.labels, new.type);
+      END;
+
+      CREATE TRIGGER tasks_fts_update AFTER UPDATE OF title, description, labels, type ON tasks BEGIN
+        INSERT INTO tasks_fts(tasks_fts, rowid, title, description, labels, type)
+          VALUES ('delete', old.rowid, old.title, old.description, old.labels, old.type);
+        INSERT INTO tasks_fts(rowid, title, description, labels, type)
+          VALUES (new.rowid, new.title, new.description, new.labels, new.type);
+      END;
+
+      CREATE TRIGGER tasks_fts_delete AFTER DELETE ON tasks BEGIN
+        INSERT INTO tasks_fts(tasks_fts, rowid, title, description, labels, type)
+          VALUES ('delete', old.rowid, old.title, old.description, old.labels, old.type);
+      END;
+    `)
   }
 
   private initializeOrchestratorSkill(): void {
@@ -1724,6 +1866,14 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
       }
     }
 
+    // Auto-set heartbeat_next_check_at when enabling heartbeat without explicit next check time
+    if (data.heartbeat_enabled === true && data.heartbeat_next_check_at === undefined) {
+      const interval = data.heartbeat_interval_minutes ?? 30
+      const nextCheck = new Date(Date.now() + interval * 60_000).toISOString()
+      setClauses.push('heartbeat_next_check_at = ?')
+      values.push(nextCheck)
+    }
+
     if (setClauses.length === 0) return this.getTask(id)
 
     setClauses.push('updated_at = ?')
@@ -1741,6 +1891,75 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
     this.deleteTaskAttachments(id)
     const result = this.db.prepare('DELETE FROM tasks WHERE id = ?').run(id)
     return result.changes > 0
+  }
+
+  // ── Heartbeat CRUD ──────────────────────────────────────────
+
+  /** Get all tasks that have heartbeat due (enabled + next_check_at <= now). */
+  getHeartbeatDueTasks(): TaskRecord[] {
+    const now = new Date().toISOString()
+    const rows = this.db.prepare(`
+      SELECT * FROM tasks
+      WHERE heartbeat_enabled = 1
+        AND heartbeat_next_check_at IS NOT NULL
+        AND heartbeat_next_check_at <= ?
+      ORDER BY heartbeat_next_check_at ASC
+    `).all(now) as TaskRow[]
+    return rows.map(deserializeTask)
+  }
+
+  /** Get all tasks with heartbeat enabled. */
+  getHeartbeatEnabledTasks(): TaskRecord[] {
+    const rows = this.db.prepare(`
+      SELECT * FROM tasks WHERE heartbeat_enabled = 1
+      ORDER BY heartbeat_next_check_at ASC
+    `).all() as TaskRow[]
+    return rows.map(deserializeTask)
+  }
+
+  /** Create a heartbeat log entry. */
+  createHeartbeatLog(data: {
+    task_id: string
+    status: string
+    summary?: string | null
+    session_id?: string | null
+  }): HeartbeatLogRecord {
+    const id = createId()
+    const now = new Date().toISOString()
+
+    this.db.prepare(`
+      INSERT INTO heartbeat_logs (id, task_id, status, summary, session_id, created_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(id, data.task_id, data.status, data.summary ?? null, data.session_id ?? null, now)
+
+    return { id, task_id: data.task_id, status: data.status, summary: data.summary ?? null, session_id: data.session_id ?? null, created_at: now }
+  }
+
+  /** Get heartbeat logs for a task, most recent first. */
+  getHeartbeatLogs(taskId: string, limit = 20): HeartbeatLogRecord[] {
+    return this.db.prepare(`
+      SELECT * FROM heartbeat_logs
+      WHERE task_id = ?
+      ORDER BY created_at DESC
+      LIMIT ?
+    `).all(taskId, limit) as HeartbeatLogRecord[]
+  }
+
+  /** Count consecutive errors for a task (from most recent). */
+  getHeartbeatConsecutiveErrors(taskId: string): number {
+    const logs = this.db.prepare(`
+      SELECT status FROM heartbeat_logs
+      WHERE task_id = ?
+      ORDER BY created_at DESC
+      LIMIT 10
+    `).all(taskId) as { status: string }[]
+
+    let count = 0
+    for (const log of logs) {
+      if (log.status === 'error') count++
+      else break
+    }
+    return count
   }
 
   // ── Agent CRUD ────────────────────────────────────────────

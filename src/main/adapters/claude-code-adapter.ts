@@ -705,7 +705,15 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
       return []
     }
 
-    // Get all messages from the buffer
+    // Reuse the same convertSDKMessageToParts() that the live streaming path uses.
+    // This ensures replay produces the same message structure (IDs, content, tool
+    // fields) as the original live stream, which is critical for:
+    //   - Correct content extraction from nested message.content[] arrays
+    //   - Proper tool names (tool_name vs name), statuses, and titles
+    //   - Consistent part IDs so mobile dedup works on reconnect
+    const seenPartIds = new Set<string>()
+    const partContentLengths = new Map<string, string>()
+
     const messages: SessionMessage[] = []
     let currentMessage: SessionMessage | null = null
     let messageIdCounter = 0
@@ -717,6 +725,10 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
       const role = roleStr === 'user' ? MessageRole.USER :
                    roleStr === 'system' ? MessageRole.SYSTEM :
                    MessageRole.ASSISTANT
+
+      // Convert using the full SDK message parser
+      const parts = this.convertSDKMessageToParts(msg, seenPartIds, partContentLengths)
+      if (parts.length === 0) continue
 
       // Start new message if role changed
       if (!currentMessage || currentMessage.role !== role) {
@@ -730,32 +742,7 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
         }
       }
 
-      // Convert SDKMessage to MessagePart
-      // Handle result messages (final output from Claude Code)
-      if (msgRecord.type === 'result' && msgRecord.result) {
-        currentMessage!.parts.push({
-          type: MessagePartType.TEXT,
-          text: msgRecord.result as string,
-          role: roleStr as MessagePart['role']
-        })
-      } else if (msgRecord.text) {
-        currentMessage!.parts.push({
-          type: MessagePartType.TEXT,
-          text: msgRecord.text as string,
-          role: roleStr as MessagePart['role']
-        })
-      } else if (msgRecord.name || msgRecord.tool_use_id) {
-        currentMessage!.parts.push({
-          type: MessagePartType.TOOL,
-          tool: {
-            name: (msgRecord.name as string) || 'unknown',
-            status: msgRecord.type === 'tool_result' ? 'completed' : 'in_progress',
-            input: msgRecord.input ? JSON.stringify(msgRecord.input) : '',
-            output: (msgRecord.content as string) || ''
-          },
-          role: roleStr as MessagePart['role']
-        })
-      }
+      currentMessage!.parts.push(...parts)
     }
 
     // Push last message

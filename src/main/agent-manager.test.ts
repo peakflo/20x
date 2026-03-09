@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { AgentManager } from './agent-manager'
+import { SessionStatus } from '../shared/constants'
 
 // Mock filesystem operations
 vi.mock('fs', async (importOriginal) => {
@@ -14,7 +15,23 @@ vi.mock('fs', async (importOriginal) => {
 
 // Mock heavy dependencies to avoid loading electron/native modules
 vi.mock('child_process', () => ({ spawn: vi.fn() }))
-vi.mock('electron', () => ({ app: { getPath: vi.fn(() => '/tmp') } }))
+const notificationInstances: Array<{ show: ReturnType<typeof vi.fn>; on: ReturnType<typeof vi.fn>; _listeners: Map<string, () => void>; opts: { title: string; body: string } }> = []
+
+vi.mock('electron', () => {
+  class MockNotification {
+    show = vi.fn()
+    on = vi.fn((event: string, cb: () => void) => { this._listeners.set(event, cb) })
+    _listeners = new Map<string, () => void>()
+    constructor(public opts: { title: string; body: string }) {
+      notificationInstances.push(this)
+    }
+    static isSupported = vi.fn(() => true)
+  }
+  return {
+    app: { getPath: vi.fn(() => '/tmp') },
+    Notification: MockNotification,
+  }
+})
 vi.mock('./adapters/opencode-adapter', () => ({ OpencodeAdapter: vi.fn() }))
 vi.mock('./adapters/claude-code-adapter', () => ({ ClaudeCodeAdapter: vi.fn() }))
 vi.mock('./adapters/acp-adapter', () => ({ AcpAdapter: vi.fn() }))
@@ -278,5 +295,103 @@ describe('AgentManager skill file paths', () => {
       const result: string = (manager as any).getMemoryFileName('agent-1')
       expect(result).toBe('AGENTS.md')
     })
+  })
+})
+
+describe('AgentManager OS notifications', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    notificationInstances.length = 0
+  })
+
+  function createManagerWithWindow(opts: { isFocused: boolean; isDestroyed?: boolean }) {
+    const mockDb = createMockDb({})
+    const mgr = new AgentManager(mockDb)
+    const mockWindow = {
+      isDestroyed: vi.fn(() => opts.isDestroyed ?? false),
+      isFocused: vi.fn(() => opts.isFocused),
+      show: vi.fn(),
+      focus: vi.fn(),
+      webContents: { send: vi.fn() },
+    }
+    mgr.setMainWindow(mockWindow as any)
+    return { mgr, mockWindow }
+  }
+
+  it('shows notification when status transitions from working to idle and window is not focused', () => {
+    const { mgr } = createManagerWithWindow({ isFocused: false })
+
+    ;(mgr as any).sendToRenderer('agent:status', {
+      sessionId: 's1', agentId: 'a1', taskId: 'task-1', status: SessionStatus.WORKING
+    })
+    ;(mgr as any).sendToRenderer('agent:status', {
+      sessionId: 's1', agentId: 'a1', taskId: 'task-1', status: SessionStatus.IDLE
+    })
+
+    expect(notificationInstances).toHaveLength(1)
+    expect(notificationInstances[0].opts.title).toBe('Agent finished')
+    expect(notificationInstances[0].opts.body).toContain('Test Task')
+    expect(notificationInstances[0].show).toHaveBeenCalled()
+  })
+
+  it('shows notification when status transitions from working to waiting_approval and window is not focused', () => {
+    const { mgr } = createManagerWithWindow({ isFocused: false })
+
+    ;(mgr as any).sendToRenderer('agent:status', {
+      sessionId: 's1', agentId: 'a1', taskId: 'task-1', status: SessionStatus.WORKING
+    })
+    ;(mgr as any).sendToRenderer('agent:status', {
+      sessionId: 's1', agentId: 'a1', taskId: 'task-1', status: SessionStatus.WAITING_APPROVAL
+    })
+
+    expect(notificationInstances).toHaveLength(1)
+    expect(notificationInstances[0].opts.title).toBe('Agent needs approval')
+    expect(notificationInstances[0].opts.body).toContain('Test Task')
+    expect(notificationInstances[0].show).toHaveBeenCalled()
+  })
+
+  it('does NOT show notification when window is focused', () => {
+    const { mgr } = createManagerWithWindow({ isFocused: true })
+
+    ;(mgr as any).sendToRenderer('agent:status', {
+      sessionId: 's1', agentId: 'a1', taskId: 'task-1', status: SessionStatus.WORKING
+    })
+    ;(mgr as any).sendToRenderer('agent:status', {
+      sessionId: 's1', agentId: 'a1', taskId: 'task-1', status: SessionStatus.IDLE
+    })
+
+    expect(notificationInstances).toHaveLength(0)
+  })
+
+  it('does NOT show notification when status does not transition from working', () => {
+    const { mgr } = createManagerWithWindow({ isFocused: false })
+
+    ;(mgr as any).sendToRenderer('agent:status', {
+      sessionId: 's1', agentId: 'a1', taskId: 'task-1', status: SessionStatus.IDLE
+    })
+    ;(mgr as any).sendToRenderer('agent:status', {
+      sessionId: 's1', agentId: 'a1', taskId: 'task-1', status: SessionStatus.IDLE
+    })
+
+    expect(notificationInstances).toHaveLength(0)
+  })
+
+  it('clicking notification brings the window to focus', () => {
+    const { mgr, mockWindow } = createManagerWithWindow({ isFocused: false })
+
+    ;(mgr as any).sendToRenderer('agent:status', {
+      sessionId: 's1', agentId: 'a1', taskId: 'task-1', status: SessionStatus.WORKING
+    })
+    ;(mgr as any).sendToRenderer('agent:status', {
+      sessionId: 's1', agentId: 'a1', taskId: 'task-1', status: SessionStatus.IDLE
+    })
+
+    expect(notificationInstances).toHaveLength(1)
+    const clickHandler = notificationInstances[0]._listeners.get('click')
+    expect(clickHandler).toBeDefined()
+    clickHandler!()
+
+    expect(mockWindow.show).toHaveBeenCalled()
+    expect(mockWindow.focus).toHaveBeenCalled()
   })
 })

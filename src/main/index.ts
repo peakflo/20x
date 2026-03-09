@@ -20,6 +20,7 @@ import { NotionPlugin } from './plugins/notion-plugin'
 import { registerIpcHandlers } from './ipc-handlers'
 import { EnterpriseAuth } from './enterprise-auth'
 import { RecurrenceScheduler } from './recurrence-scheduler'
+import { HeartbeatScheduler } from './heartbeat-scheduler'
 import { ClaudePluginManager } from './claude-plugin-manager'
 import { setTaskApiNotifier } from './task-api-server'
 import { startSecretBroker, stopSecretBroker, writeSecretShellWrapper } from './secret-broker'
@@ -38,6 +39,7 @@ let pluginRegistry: PluginRegistry | null = null
 let oauthManager: OAuthManager | null = null
 let enterpriseAuth: EnterpriseAuth | null = null
 let recurrenceScheduler: RecurrenceScheduler | null = null
+let heartbeatScheduler: HeartbeatScheduler | null = null
 let claudePluginManager: ClaudePluginManager | null = null
 
 function createWindow(): void {
@@ -64,6 +66,11 @@ function createWindow(): void {
     // Start recurrence scheduler
     if (recurrenceScheduler && mainWindow) {
       recurrenceScheduler.start(mainWindow)
+    }
+
+    // Start heartbeat scheduler
+    if (heartbeatScheduler && mainWindow) {
+      heartbeatScheduler.start(mainWindow)
     }
 
     // Periodic overdue check — nudges renderer every 60s
@@ -310,6 +317,7 @@ app.whenReady().then(async () => {
   syncManager = new SyncManager(db, mcpToolCaller, pluginRegistry, oauthManager)
 
   recurrenceScheduler = new RecurrenceScheduler(db)
+  heartbeatScheduler = new HeartbeatScheduler(db, agentManager)
 
   // Initialize enterprise auth (gracefully — missing env vars just disable the feature)
   try {
@@ -320,7 +328,7 @@ app.whenReady().then(async () => {
 
   claudePluginManager = new ClaudePluginManager(db)
 
-  registerIpcHandlers(db, agentManager, githubManager, worktreeManager, syncManager, pluginRegistry, mcpToolCaller, oauthManager, recurrenceScheduler, enterpriseAuth ?? undefined, claudePluginManager)
+  registerIpcHandlers(db, agentManager, githubManager, worktreeManager, syncManager, pluginRegistry, mcpToolCaller, oauthManager, recurrenceScheduler, enterpriseAuth ?? undefined, claudePluginManager, heartbeatScheduler)
 
   // Start secret broker and write shell wrapper (awaited so broker is ready before any sessions)
   try {
@@ -373,6 +381,7 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
   isQuitting = true
   // Ensure cleanup before quitting
+  heartbeatScheduler?.stop()
   agentManager?.stopAllSessions()
   agentManager?.stopServer()
   mcpToolCaller?.destroy()

@@ -4,9 +4,10 @@ import { homedir } from 'os'
 import { join, delimiter } from 'path'
 import { existsSync, copyFileSync, mkdirSync, writeFileSync, readFileSync, readdirSync, statSync } from 'fs'
 import { Agent as UndiciAgent } from 'undici'
+import { Notification } from 'electron'
 import type { BrowserWindow } from 'electron'
 import type { DatabaseManager, AgentMcpServerEntry, OutputFieldRecord, SecretRecord, SkillRecord, TaskRecord } from './database'
-import { TaskStatus } from '../shared/constants'
+import { TaskStatus, SessionStatus } from '../shared/constants'
 import type { WorktreeManager } from './worktree-manager'
 import type { GitHubManager } from './github-manager'
 import { OpencodeAdapter } from './adapters/opencode-adapter'
@@ -47,6 +48,7 @@ interface AgentSession {
   partContentLengths: Map<string, string>
   learningMode?: boolean
   isTriageSession?: boolean
+  lastAssistantText?: string
   adapter?: CodingAgentAdapter
   secretSessionToken?: string
   pollingStarted?: boolean
@@ -83,6 +85,9 @@ export class AgentManager extends EventEmitter {
   private pollingEntries: Map<string, PollingEntry> = new Map()
   private pollingTimer: ReturnType<typeof setTimeout> | null = null
   private static readonly POLL_INTERVAL_MS = 2000
+
+  // Track last sent status per session to detect transitions for OS notifications
+  private lastSentStatus: Map<string, string> = new Map()
 
   constructor(db: DatabaseManager) {
     super()
@@ -131,7 +136,7 @@ export class AgentManager extends EventEmitter {
    * or when github_org is not configured.
    */
   private async setupWorktreeIfNeeded(taskId: string): Promise<string | undefined> {
-    if (taskId === 'mastermind-session') return undefined
+    if (taskId === 'mastermind-session' || taskId.startsWith('heartbeat-')) return undefined
 
     if (!this.githubManager || !this.worktreeManager) return undefined
 
@@ -1075,6 +1080,21 @@ export class AgentManager extends EventEmitter {
         }
       }
 
+      // Append heartbeat monitoring instructions
+      promptText += `\n\n## Heartbeat Monitoring (Optional)
+
+If this task involves something that should be monitored after your work is done (e.g., a PR awaiting review, a deployment to verify, an issue to track), create a \`heartbeat.md\` file in the working directory.
+
+Example heartbeat.md:
+\`\`\`markdown
+# Heartbeat Checks
+- [ ] Check if PR https://github.com/org/repo/pull/123 has new review comments or requested changes
+- [ ] Verify CI pipeline passed on the latest commit
+- [ ] Check if linked issue #456 has new updates
+\`\`\`
+
+Only create this file when there's genuinely useful monitoring to do. Do not create it for tasks that are fully self-contained.`
+
       // Append memory file read instruction to user message
       // (user messages are more reliably followed than system prompt instructions)
       const memoryFileName = this.getMemoryFileName(agentId)
@@ -1295,6 +1315,22 @@ export class AgentManager extends EventEmitter {
               }]
             }
           })
+        }
+      }
+
+      // Capture last assistant text (used by HeartbeatScheduler to read results)
+      // Concatenate all text parts from this batch to avoid missing tokens
+      // that appear in earlier parts
+      const currentSession = this.sessions.get(sessionId)
+      if (currentSession) {
+        const assistantTexts: string[] = []
+        for (const msg of batchMessages) {
+          if (msg.role === 'assistant' && msg.partType === 'text' && msg.content) {
+            assistantTexts.push(msg.content)
+          }
+        }
+        if (assistantTexts.length > 0) {
+          currentSession.lastAssistantText = assistantTexts.join('\n')
         }
       }
 
@@ -1558,6 +1594,107 @@ export class AgentManager extends EventEmitter {
   }
 
   /**
+   * Send a heartbeat check via a dedicated heartbeat session for this task.
+   * Uses a separate session (heartbeat-{taskId}) to keep checks out of the task's working session.
+   * Each task gets its own heartbeat session so checks don't mix across tasks.
+   * Uses the real task's workspace dir so the agent has repo context for gh commands.
+   */
+  async sendHeartbeatViaMastermind(agentId: string, taskId: string, heartbeatPrompt: string): Promise<string> {
+    const heartbeatTaskId = `heartbeat-${taskId}`
+
+    // Check if heartbeat session for this task exists in memory
+    let sessionId: string | undefined
+    for (const [id, session] of this.sessions.entries()) {
+      if (session.taskId === heartbeatTaskId) {
+        sessionId = id
+        break
+      }
+    }
+
+    if (!sessionId) {
+      // Use the real task's workspace dir so the agent has repo context
+      const workspaceDir = this.db.getWorkspaceDir(taskId)
+      console.log(`[AgentManager] Heartbeat: creating heartbeat session for task ${taskId}`)
+      sessionId = await this.startSession(agentId, heartbeatTaskId, workspaceDir, true /* skipInitialPrompt */)
+    }
+
+    console.log(`[AgentManager] Heartbeat: sending check via heartbeat session ${sessionId} for task ${taskId}`)
+    const result = await this.sendMessage(sessionId, heartbeatPrompt, heartbeatTaskId, agentId)
+    return result.newSessionId || sessionId
+  }
+
+  /**
+   * Send action findings to the task agent's own session.
+   * Only called when mastermind detected something that needs the task agent to act on.
+   */
+  async startHeartbeatSession(agentId: string, taskId: string, heartbeatPrompt: string): Promise<string> {
+    const task = this.db.getTask(taskId)
+    let sessionId = task?.session_id
+
+    if (!sessionId) {
+      console.log(`[AgentManager] Heartbeat: no session for task ${taskId}, creating new session`)
+      sessionId = await this.startSession(agentId, taskId, undefined, true /* skipInitialPrompt */)
+    }
+
+    console.log(`[AgentManager] Heartbeat: forwarding action to task session ${sessionId} for task ${taskId}`)
+
+    // sendMessage handles everything: resume if dead, send the prompt, start polling
+    const result = await this.sendMessage(sessionId, heartbeatPrompt, taskId, agentId)
+    const activeSessionId = result.newSessionId || sessionId
+
+    return activeSessionId
+  }
+
+  /**
+   * Get a session's current state (used by HeartbeatScheduler to poll status).
+   */
+  getSession(sessionId: string): AgentSession | undefined {
+    return this.sessions.get(sessionId)
+  }
+
+  /**
+   * Remove a heartbeat session from memory after the check completes.
+   * Prevents heartbeat-{taskId} sessions from accumulating indefinitely.
+   */
+  cleanupHeartbeatSession(taskId: string): void {
+    const heartbeatTaskId = `heartbeat-${taskId}`
+    for (const [id, session] of this.sessions.entries()) {
+      if (session.taskId === heartbeatTaskId) {
+        this.sessions.delete(id)
+        console.log(`[AgentManager] Cleaned up heartbeat session ${id} for task ${taskId}`)
+        break
+      }
+    }
+  }
+
+  /**
+   * Check if a task has a live (working) session in memory.
+   * Used by HeartbeatScheduler to avoid interrupting active user sessions.
+   */
+  hasActiveSessionForTask(taskId: string): boolean {
+    for (const session of this.sessions.values()) {
+      if (session.taskId === taskId && session.status === 'working') {
+        return true
+      }
+    }
+    return false
+  }
+
+  /**
+   * Get the last assistant message text from a session's conversation.
+   * Used by HeartbeatScheduler to extract the heartbeat result.
+   */
+  getLastAssistantMessage(sessionId: string): string | null {
+    const session = this.sessions.get(sessionId)
+    if (!session?.adapter) return null
+
+    // The adapter should have the session's messages accessible
+    // We use the polling entry's seenPartIds to reconstruct content
+    // For simplicity, we store the last assistant text during polling
+    return session.lastAssistantText ?? null
+  }
+
+  /**
    * Reconnects to an existing session by its persisted session ID.
    * Replays all messages to the renderer and resumes polling.
    */
@@ -1669,13 +1806,19 @@ export class AgentManager extends EventEmitter {
       console.log(`[AgentManager] Updating task ${session.taskId} status to ReadyForReview`)
       this.db.updateTask(session.taskId, { status: TaskStatus.ReadyForReview })
 
+      // Auto-enable heartbeat if agent wrote a heartbeat.md file
+      this.autoEnableHeartbeat(session.taskId)
+
       // Get updated task with output fields and notify renderer
       const updatedTask = this.db.getTask(session.taskId)
       this.sendToRenderer('task:updated', {
         taskId: session.taskId,
         updates: {
           status: TaskStatus.ReadyForReview,
-          output_fields: updatedTask?.output_fields
+          output_fields: updatedTask?.output_fields,
+          heartbeat_enabled: updatedTask?.heartbeat_enabled,
+          heartbeat_interval_minutes: updatedTask?.heartbeat_interval_minutes,
+          heartbeat_next_check_at: updatedTask?.heartbeat_next_check_at
         }
       })
     }
@@ -2037,7 +2180,7 @@ export class AgentManager extends EventEmitter {
     })
 
     // Collect all message parts into a single batch (matching resumeAdapterSession pattern)
-    const batchMessages: Array<{ id: string; role: string; content: string; partType?: string; tool?: unknown }> = []
+    const batchMessages: Array<{ id: string; role: string; content: string; partType?: string; tool?: unknown; update?: boolean }> = []
     for (const msg of messages) {
       for (const part of msg.parts) {
         batchMessages.push({
@@ -2054,7 +2197,10 @@ export class AgentManager extends EventEmitter {
             error: part.tool.error || part.state?.error,
             questions: part.tool.questions,
             todos: part.tool.todos
-          } : undefined
+          } : undefined,
+          // Pass update flag so mobile store merges tool results into their
+          // pending tool_use entries (e.g. status pending → success)
+          ...(part.update ? { update: true } : {})
         })
       }
     }
@@ -2363,7 +2509,7 @@ Current Labels: ${JSON.stringify(task.labels || [])}
 
 Follow these steps:
 
-1. Call \`find_similar_tasks\` with keywords from the title/description to find historical patterns. Use \`completed_only: true\`.
+1. Call \`find_similar_tasks\` with individual keywords extracted from the title/description. Pass them as space-separated words in \`title_keywords\` (e.g. "login bug fix" not the full title). Do NOT set \`completed_only\` — search all tasks so you find patterns even if tasks are still in progress.
 2. Call \`list_agents\` to see available agents and their capabilities.
 3. Call \`list_skills\` to see available skills.
 4. Call \`list_repos\` to see known repositories.
@@ -2754,6 +2900,37 @@ Important:
     this.externalListeners.push(fn)
   }
 
+  /**
+   * Auto-enable heartbeat for a task if a heartbeat.md file exists in the workspace.
+   * Called after a task transitions to ready_for_review.
+   */
+  private autoEnableHeartbeat(taskId: string): void {
+    try {
+      const workspaceDir = this.db.getWorkspaceDir(taskId)
+      const heartbeatPath = join(workspaceDir, 'heartbeat.md')
+
+      if (existsSync(heartbeatPath)) {
+        const content = readFileSync(heartbeatPath, 'utf-8').trim()
+        // Skip empty files or files with only headers
+        if (content && !/^(#[^\n]*\n?\s*)*$/.test(content)) {
+          const defaultInterval = parseInt(this.db.getSetting('heartbeat_default_interval') || '30', 10)
+          const now = new Date()
+          const nextCheck = new Date(now.getTime() + defaultInterval * 60_000)
+
+          this.db.updateTask(taskId, {
+            heartbeat_enabled: true,
+            heartbeat_interval_minutes: defaultInterval,
+            heartbeat_next_check_at: nextCheck.toISOString()
+          })
+
+          console.log(`[AgentManager] Auto-enabled heartbeat for task ${taskId} (found heartbeat.md)`)
+        }
+      }
+    } catch (err) {
+      console.error(`[AgentManager] Error auto-enabling heartbeat for task ${taskId}:`, err)
+    }
+  }
+
   private sendToRenderer(channel: string, data: unknown): void {
     if (this.mainWindow && !this.mainWindow.isDestroyed()) {
       this.mainWindow.webContents.send(channel, data)
@@ -2761,6 +2938,47 @@ Important:
     // Also notify external listeners (mobile API WebSocket)
     for (const fn of this.externalListeners) {
       try { fn(channel, data) } catch { /* ignore */ }
+    }
+
+    // Show OS notification when agent transitions from working to idle/waiting_approval
+    // and the app window is not focused
+    if (channel === 'agent:status' && data && typeof data === 'object') {
+      const { sessionId, status, taskId } = data as { sessionId?: string; status?: string; taskId?: string }
+      if (sessionId && status) {
+        const prevStatus = this.lastSentStatus.get(sessionId)
+        this.lastSentStatus.set(sessionId, status)
+
+        const isWindowInactive = !this.mainWindow || this.mainWindow.isDestroyed() || !this.mainWindow.isFocused()
+
+        if (prevStatus === SessionStatus.WORKING && (status === SessionStatus.IDLE || status === SessionStatus.WAITING_APPROVAL) && isWindowInactive) {
+          try {
+            if (Notification.isSupported()) {
+              let title: string
+              let body: string
+              const taskTitle = taskId ? this.db.getTask(taskId)?.title : undefined
+
+              if (status === SessionStatus.WAITING_APPROVAL) {
+                title = 'Agent needs approval'
+                body = taskTitle ? `"${taskTitle}" is waiting for your approval` : 'An agent is waiting for your approval'
+              } else {
+                title = 'Agent finished'
+                body = taskTitle ? `"${taskTitle}" is ready for review` : 'A task is ready for review'
+              }
+
+              const notification = new Notification({ title, body })
+              notification.on('click', () => {
+                if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+                  this.mainWindow.show()
+                  this.mainWindow.focus()
+                }
+              })
+              notification.show()
+            }
+          } catch (err) {
+            console.error('[AgentManager] Failed to show OS notification:', err)
+          }
+        }
+      }
     }
   }
 }

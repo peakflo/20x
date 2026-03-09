@@ -9,7 +9,7 @@ import { Badge } from '../components/Badge'
 import { PriorityBadge } from '../components/PriorityBadge'
 import { TaskStatusDot } from '../components/TaskStatusDot'
 import { MessageBubble } from '../components/MessageBubble'
-import { cn, formatDate, isOverdue, formatRelativeDate, STATUS_VARIANT } from '../lib/utils'
+import { cn, formatDate, isOverdue, formatRelativeDate, formatRelativeFuture, STATUS_VARIANT } from '../lib/utils'
 import type { Route } from '../App'
 
 export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavigate: (route: Route) => void }) {
@@ -386,6 +386,39 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
               Updated
             </span>
             <span className="text-foreground">{formatRelativeDate(task.updated_at)}</span>
+
+            {/* Heartbeat */}
+            {(task.status === TaskStatus.ReadyForReview || task.heartbeat_enabled) && (
+              <>
+                <span className="text-muted-foreground flex items-center gap-1.5">
+                  <svg className={`h-3.5 w-3.5 ${task.heartbeat_enabled ? 'text-rose-500' : ''}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z" />
+                    <path d="M3.22 12H9.5l.5-1 2 4.5 2-7 1.5 3.5h5.27" />
+                  </svg>
+                  Heartbeat
+                </span>
+                <div>
+                  <div className="flex items-center gap-2 mb-1">
+                    <Badge variant={task.heartbeat_enabled ? 'green' : 'default'}>
+                      {task.heartbeat_enabled ? 'On' : 'Off'}
+                    </Badge>
+                    {task.heartbeat_enabled && task.heartbeat_next_check_at && (
+                      <span className="text-[10px] text-muted-foreground/60">
+                        next {formatRelativeFuture(task.heartbeat_next_check_at)}
+                      </span>
+                    )}
+                    <button
+                      onClick={async () => {
+                        await updateTask(task.id, { heartbeat_enabled: !task.heartbeat_enabled })
+                      }}
+                      className="text-xs text-primary active:opacity-60 ml-auto"
+                    >
+                      {task.heartbeat_enabled ? 'Disable' : 'Enable'}
+                    </button>
+                  </div>
+                </div>
+              </>
+            )}
           </div>
         </div>
 

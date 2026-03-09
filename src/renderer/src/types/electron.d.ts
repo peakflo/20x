@@ -30,7 +30,8 @@ import type {
   InstalledPlugin,
   DiscoverablePlugin,
   MarketplaceCatalog,
-  PluginResources
+  PluginResources,
+  HeartbeatLog
 } from './index'
 
 export interface AgentSessionStartResult {
@@ -100,6 +101,20 @@ export interface GitHubCollaborator {
   login: string
   avatar_url: string
   type: string
+}
+
+export interface HeartbeatStatusResult {
+  enabled: boolean
+  intervalMinutes: number | null
+  lastCheckAt: string | null
+  nextCheckAt: string | null
+  hasHeartbeatFile: boolean
+}
+
+export interface HeartbeatAlertEvent {
+  taskId: string
+  title: string
+  summary: string
 }
 
 export interface WorktreeProgressEvent {
@@ -256,6 +271,16 @@ interface ElectronAPI {
     disablePlugin: (pluginId: string) => Promise<InstalledPlugin | undefined>
     getPluginResources: (pluginId: string) => Promise<PluginResources>
   }
+  heartbeat: {
+    enable: (taskId: string, intervalMinutes?: number) => Promise<WorkfloTask | undefined>
+    disable: (taskId: string) => Promise<WorkfloTask | undefined>
+    runNow: (taskId: string) => Promise<'sent' | 'no_file' | 'no_agent' | 'error'>
+    getLogs: (taskId: string, limit?: number) => Promise<HeartbeatLog[]>
+    getStatus: (taskId: string) => Promise<HeartbeatStatusResult | null>
+    updateInterval: (taskId: string, intervalMinutes: number) => Promise<WorkfloTask | undefined>
+    readFile: (taskId: string) => Promise<string | null>
+    writeFile: (taskId: string, content: string) => Promise<boolean>
+  }
   app: {
     getLoginItemSettings: () => Promise<{ openAtLogin: boolean; openAsHidden: boolean }>
     setLoginItemSettings: (openAtLogin: boolean) => Promise<{ openAtLogin: boolean; openAsHidden: boolean }>
@@ -298,6 +323,8 @@ interface ElectronAPI {
   onAgentIncompatibleSession: (callback: (event: { taskId: string; agentId: string; error: string }) => void) => () => void
   onTaskUpdated: (callback: (event: { taskId: string; updates: Partial<WorkfloTask> }) => void) => () => void
   onTaskCreated: (callback: (event: { task: WorkfloTask }) => void) => () => void
+  onHeartbeatAlert: (callback: (event: HeartbeatAlertEvent) => void) => () => void
+  onHeartbeatDisabled: (callback: (event: { taskId: string; reason: string }) => void) => () => void
   onWorktreeProgress: (callback: (event: WorktreeProgressEvent) => void) => () => void
   onGithubDeviceCode: (callback: (code: string) => void) => () => void
   onOAuthCallback: (callback: (event: { code: string; state: string }) => void) => () => void

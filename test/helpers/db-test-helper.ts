@@ -85,6 +85,8 @@ export function createTestDb(): { db: DatabaseManager; rawDb: InstanceType<typeo
       session_id TEXT DEFAULT NULL,
       snoozed_until TEXT DEFAULT NULL,
       resolution TEXT,
+      feedback_rating INTEGER DEFAULT NULL,
+      feedback_comment TEXT DEFAULT NULL,
       is_recurring INTEGER NOT NULL DEFAULT 0,
       recurrence_pattern TEXT DEFAULT NULL,
       recurrence_parent_id TEXT REFERENCES tasks(id) ON DELETE CASCADE,
@@ -99,6 +101,34 @@ export function createTestDb(): { db: DatabaseManager; rawDb: InstanceType<typeo
     CREATE INDEX IF NOT EXISTS idx_tasks_source ON tasks(source);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_source_external ON tasks(source_id, external_id) WHERE external_id IS NOT NULL;
     CREATE INDEX IF NOT EXISTS idx_tasks_next_occurrence ON tasks(next_occurrence_at) WHERE is_recurring = 1;
+
+    -- FTS5 full-text search index for similar task search
+    CREATE VIRTUAL TABLE IF NOT EXISTS tasks_fts USING fts5(
+      title,
+      description,
+      labels,
+      type,
+      content='tasks',
+      content_rowid='rowid',
+      tokenize='unicode61 remove_diacritics 2'
+    );
+
+    CREATE TRIGGER IF NOT EXISTS tasks_fts_insert AFTER INSERT ON tasks BEGIN
+      INSERT INTO tasks_fts(rowid, title, description, labels, type)
+        VALUES (new.rowid, new.title, new.description, new.labels, new.type);
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS tasks_fts_update AFTER UPDATE OF title, description, labels, type ON tasks BEGIN
+      INSERT INTO tasks_fts(tasks_fts, rowid, title, description, labels, type)
+        VALUES ('delete', old.rowid, old.title, old.description, old.labels, old.type);
+      INSERT INTO tasks_fts(rowid, title, description, labels, type)
+        VALUES (new.rowid, new.title, new.description, new.labels, new.type);
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS tasks_fts_delete AFTER DELETE ON tasks BEGIN
+      INSERT INTO tasks_fts(tasks_fts, rowid, title, description, labels, type)
+        VALUES ('delete', old.rowid, old.title, old.description, old.labels, old.type);
+    END;
 
     CREATE TABLE IF NOT EXISTS skills (
       id TEXT PRIMARY KEY,
