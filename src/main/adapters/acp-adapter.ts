@@ -112,8 +112,10 @@ interface AcpSession {
   pendingApproval: AcpPermissionRequest | null  // Permission request awaiting user response
   promptRequestId: number | null  // ID of the current session/prompt request
   responseCounter: number  // Counter for unique message IDs per response turn
+  currentUserTurnId: number  // Auto-incremented ID for each detected user turn
   lastChunkTime: number | null  // Timestamp of last agent_message_chunk
   currentTurnId: number  // Auto-incremented ID for each detected response turn
+  lastSessionUpdateType: string | null
   toolCallMetadata: Map<string, { name: string; input: string }>  // Cached metadata from initial tool_call events
 }
 
@@ -275,8 +277,10 @@ export class AcpAdapter implements CodingAgentAdapter {
       pendingApproval: null,
       promptRequestId: null,
       responseCounter: 0,
+      currentUserTurnId: 0,
       lastChunkTime: null,
       currentTurnId: 0,
+      lastSessionUpdateType: null,
       toolCallMetadata: new Map()
     }
 
@@ -439,8 +443,10 @@ export class AcpAdapter implements CodingAgentAdapter {
       pendingApproval: null,
       promptRequestId: null,
       responseCounter: 0,
+      currentUserTurnId: 0,
       lastChunkTime: null,
       currentTurnId: 0,
+      lastSessionUpdateType: null,
       toolCallMetadata: new Map()
     }
 
@@ -1166,6 +1172,47 @@ export class AcpAdapter implements CodingAgentAdapter {
     return ''
   }
 
+  private isUserUpdateType(sessionUpdate?: string): boolean {
+    return sessionUpdate === 'user_message_chunk'
+      || sessionUpdate === 'human_message_chunk'
+      || sessionUpdate === 'user_message'
+      || sessionUpdate === 'human_message'
+  }
+
+  private isAssistantChunkUpdateType(sessionUpdate?: string): boolean {
+    return sessionUpdate === 'agent_message_chunk'
+      || sessionUpdate === 'assistant_message_chunk'
+      || sessionUpdate === 'agent_thought_chunk'
+  }
+
+  private getAssistantTurnId(session: AcpSession): number {
+    const previousType = session.lastSessionUpdateType
+    const now = Date.now()
+    const timeSinceLastChunk = session.lastChunkTime ? now - session.lastChunkTime : Infinity
+    const TIME_GAP_THRESHOLD = 2000
+
+    const shouldStartNewTurn = session.currentTurnId === 0
+      || this.isUserUpdateType(previousType)
+      || (this.isAssistantChunkUpdateType(previousType) && timeSinceLastChunk > TIME_GAP_THRESHOLD)
+
+    if (shouldStartNewTurn) {
+      session.currentTurnId += 1
+      console.log(`[AcpAdapter] Detected NEW assistant turn #${session.currentTurnId} (prev=${previousType}, gap=${timeSinceLastChunk}ms)`)
+    }
+
+    session.lastChunkTime = now
+    return session.currentTurnId
+  }
+
+  private getUserTurnId(session: AcpSession): number {
+    if (!this.isUserUpdateType(session.lastSessionUpdateType)) {
+      session.currentUserTurnId += 1
+      console.log(`[AcpAdapter] Detected NEW user turn #${session.currentUserTurnId} (prev=${session.lastSessionUpdateType})`)
+    }
+
+    return session.currentUserTurnId
+  }
+
   private convertAcpEventToMessageParts(
     event: unknown,
     _seenMessageIds: Set<string>,
@@ -1293,25 +1340,8 @@ export class AcpAdapter implements CodingAgentAdapter {
         // Handle streaming text response from agent
         // Format: { content: { type: 'text', text: '...' } }
 
-        // Auto-detect new response turns based on time gaps
-        const now = Date.now()
-        const TIME_GAP_THRESHOLD = 2000 // 2 seconds
-
-        if (session) {
-          const timeSinceLastChunk = session.lastChunkTime ? now - session.lastChunkTime : Infinity
-          const isNewTurn = session.lastChunkTime === null ||
-                           timeSinceLastChunk > TIME_GAP_THRESHOLD
-
-          if (isNewTurn) {
-            session.currentTurnId++
-            console.log(`[AcpAdapter] Detected NEW turn #${session.currentTurnId} (gap: ${timeSinceLastChunk}ms)`)
-          }
-
-          session.lastChunkTime = now
-        }
-
         // Use auto-detected turn ID instead of promptRequestId
-        const turnId = session?.currentTurnId || 0
+        const turnId = session ? this.getAssistantTurnId(session) : 0
         const messageId = turnId > 0 ? `agent-response-${turnId}` : 'agent-response'
         console.log(`[AcpAdapter] agent_message_chunk: turnId=${turnId}, messageId=${messageId}`)
 
@@ -1338,7 +1368,7 @@ export class AcpAdapter implements CodingAgentAdapter {
         // Handle reasoning/thinking chunks
         // Format: { content: { type: 'text', text: '...' } }
         // Use auto-detected turn ID
-        const turnId = session?.currentTurnId || 0
+        const turnId = session ? this.getAssistantTurnId(session) : 0
         const thinkingId = turnId > 0 ? `agent-thinking-${turnId}` : 'agent-thinking'
         const chunk = this.extractTextFromUpdateContent(update.content)
 
@@ -1361,7 +1391,8 @@ export class AcpAdapter implements CodingAgentAdapter {
         }
       } else if (update.sessionUpdate === 'user_message_chunk' || update.sessionUpdate === 'human_message_chunk') {
         // Handle streaming user message chunks (usually when user types)
-        const userId = 'user-message'
+        const turnId = session ? this.getUserTurnId(session) : 0
+        const userId = turnId > 0 ? `user-message-${turnId}` : 'user-message'
         const chunk = this.extractTextFromUpdateContent(update.content)
 
         if (chunk) {
@@ -1409,6 +1440,10 @@ export class AcpAdapter implements CodingAgentAdapter {
         // Handle agent plan - we can ignore this for now or display it later
         // Format: { entries: [{ content: '...', priority: 'high', status: 'pending' }] }
         console.log(`[AcpAdapter/${this.agentType}] Received plan with ${(update.entries || []).length} entries`)
+      }
+
+      if (session && update.sessionUpdate) {
+        session.lastSessionUpdateType = update.sessionUpdate
       }
     }
 

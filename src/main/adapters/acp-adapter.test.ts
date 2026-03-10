@@ -53,8 +53,10 @@ interface AcpSessionForTest {
   pendingApproval: unknown | null
   promptRequestId: number | null
   responseCounter: number
+  currentUserTurnId: number
   lastChunkTime: number | null
   currentTurnId: number
+  lastSessionUpdateType: string | null
   toolCallMetadata: Map<string, { name: string; input: string }>
 }
 
@@ -78,8 +80,10 @@ function createMockSession(sessionId: string): AcpSessionForTest {
     pendingApproval: null,
     promptRequestId: null,
     responseCounter: 0,
+    currentUserTurnId: 0,
     lastChunkTime: null,
     currentTurnId: 0,
+    lastSessionUpdateType: null,
     toolCallMetadata: new Map()
   }
 }
@@ -659,6 +663,86 @@ describe('AcpAdapter - Turn Detection', () => {
       expect(session.currentTurnId).toBe(2) // New turn detected
       expect(parts2[0].id).toBe('agent-response-2') // Different ID
       expect(parts2[0].text).toBe('Second reply')
+    })
+
+    it('keeps separate replayed user and assistant turns even without time gaps', async () => {
+      const sessionId = 'test-session'
+      const priv = adapterPrivate(adapter)
+      const session = priv.sessions.get(sessionId) || createMockSession(sessionId)
+      const seenPartIds = new Set<string>()
+      const partContentLengths = new Map<string, string>()
+
+      priv.sessions.set(sessionId, session)
+
+      const firstUser = {
+        method: 'session/update',
+        params: {
+          sessionId,
+          update: {
+            sessionUpdate: 'user_message_chunk',
+            content: { type: 'text', text: 'First task prompt' }
+          }
+        }
+      }
+
+      const firstAssistant = {
+        method: 'session/update',
+        params: {
+          sessionId,
+          update: {
+            sessionUpdate: 'agent_message_chunk',
+            content: { type: 'text', text: 'First assistant reply' }
+          }
+        }
+      }
+
+      const toolCall = {
+        method: 'session/update',
+        params: {
+          sessionId,
+          update: {
+            sessionUpdate: 'tool_call',
+            toolCallId: 'tool-1',
+            title: 'exec_command',
+            status: 'completed',
+            rawInput: { command: 'pwd' }
+          }
+        }
+      }
+
+      const secondUser = {
+        method: 'session/update',
+        params: {
+          sessionId,
+          update: {
+            sessionUpdate: 'user_message_chunk',
+            content: { type: 'text', text: 'Second task prompt' }
+          }
+        }
+      }
+
+      const secondAssistant = {
+        method: 'session/update',
+        params: {
+          sessionId,
+          update: {
+            sessionUpdate: 'agent_message_chunk',
+            content: { type: 'text', text: 'Second assistant reply' }
+          }
+        }
+      }
+
+      const firstUserParts = priv.convertAcpEventToMessageParts(firstUser, new Set(), seenPartIds, partContentLengths, session)
+      const firstAssistantParts = priv.convertAcpEventToMessageParts(firstAssistant, new Set(), seenPartIds, partContentLengths, session)
+      priv.convertAcpEventToMessageParts(toolCall, new Set(), seenPartIds, partContentLengths, session)
+      const secondUserParts = priv.convertAcpEventToMessageParts(secondUser, new Set(), seenPartIds, partContentLengths, session)
+      const secondAssistantParts = priv.convertAcpEventToMessageParts(secondAssistant, new Set(), seenPartIds, partContentLengths, session)
+
+      expect(firstUserParts[0].id).toBe('user-message-1')
+      expect(secondUserParts[0].id).toBe('user-message-2')
+      expect(firstAssistantParts[0].id).toBe('agent-response-1')
+      expect(secondAssistantParts[0].id).toBe('agent-response-2')
+      expect(secondAssistantParts[0].text).toBe('Second assistant reply')
     })
   })
 
