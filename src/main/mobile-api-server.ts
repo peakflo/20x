@@ -355,6 +355,27 @@ function routeGet(pathname: string, url: URL): unknown {
     return { org }
   }
 
+  // GET /api/github/orgs — returns available orgs + personal account
+  if (pathname === '/api/github/orgs') {
+    if (!githubRef) throw Object.assign(new Error('GitHub not configured'), { status: 500 })
+
+    const [status, orgs] = await Promise.all([
+      githubRef.checkCli(),
+      githubRef.fetchOrgs()
+    ])
+
+    const owners: Array<{ value: string; label: string }> = []
+    if (status.username) {
+      owners.push({ value: status.username, label: `${status.username} (personal)` })
+    }
+
+    for (const orgName of orgs) {
+      owners.push({ value: orgName, label: orgName })
+    }
+
+    return owners
+  }
+
   throw Object.assign(new Error('Not found'), { status: 404 })
 }
 
@@ -470,6 +491,14 @@ async function routePost(pathname: string, params: Record<string, unknown>): Pro
     if (!org) throw Object.assign(new Error('org is required'), { status: 400 })
     const repos = await githubRef.fetchOrgRepos(org)
     return repos
+  }
+
+  // POST /api/github/org — set configured github org
+  if (pathname === '/api/github/org') {
+    const { org } = params as { org?: string }
+    if (!org) throw Object.assign(new Error('org is required'), { status: 400 })
+    db.setSetting('github_org', org)
+    return { org }
   }
 
   throw Object.assign(new Error('Not found'), { status: 404 })

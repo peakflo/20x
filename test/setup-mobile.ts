@@ -31,6 +31,8 @@ vi.mock('../src/mobile/api/client', () => ({
     },
     github: {
       getOrg: vi.fn().mockResolvedValue({ org: '' }),
+      getOrgs: vi.fn().mockResolvedValue([]),
+      setOrg: vi.fn().mockResolvedValue({ org: '' }),
       fetchRepos: vi.fn().mockResolvedValue([])
     }
   }

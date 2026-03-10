@@ -62,6 +62,8 @@ export const api = {
   },
   github: {
     getOrg: () => get<{ org: string }>('/api/github/org'),
+    getOrgs: () => get<Array<{ value: string; label: string }>>('/api/github/orgs'),
+    setOrg: (org: string) => post<{ org: string }>('/api/github/org', { org }),
     fetchRepos: (org: string) =>
       post<Array<{ name: string; fullName: string; defaultBranch: string; cloneUrl: string; description: string; isPrivate: boolean }>>('/api/github/repos', { org })
   },

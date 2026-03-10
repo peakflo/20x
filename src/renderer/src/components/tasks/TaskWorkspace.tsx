@@ -203,21 +203,26 @@ export function TaskWorkspace({
     setShowRepoSelector(true)
   }, [githubOrg, checkGhCli])
 
-  const handleReposConfirmed = useCallback(async (selectedRepos: GitHubRepo[]) => {
+  const handleReposConfirmed = useCallback(async (selectedRepos: GitHubRepo[], selectedOrg: string) => {
     if (!task) return
     setShowRepoSelector(false)
+
+    if (selectedOrg && selectedOrg !== githubOrg) {
+      await setGithubOrg(selectedOrg)
+    }
+
     const repoNames = selectedRepos.map((r) => r.fullName)
     const merged = [...new Set([...task.repos, ...repoNames])]
 
     // If session is running and there are new repos, setup worktrees immediately
     const newRepos = selectedRepos.filter((r) => !task.repos.includes(r.fullName))
-    if (session.sessionId && newRepos.length > 0 && githubOrg) {
+    if (session.sessionId && newRepos.length > 0 && selectedOrg) {
       try {
         setIsSettingUpWorktree(true)
         await worktreeApi.setup(
           task.id,
           newRepos.map((r) => ({ fullName: r.fullName, defaultBranch: r.defaultBranch })),
-          githubOrg
+          selectedOrg
         )
       } catch (err) {
         console.error('Failed to setup worktrees for new repos:', err)
@@ -232,7 +237,7 @@ export function TaskWorkspace({
       await taskApi.update(task.id, { repos: merged })
     }
     fetchTasks()
-  }, [task, onUpdateTask, fetchTasks, session.sessionId, githubOrg])
+  }, [task, onUpdateTask, fetchTasks, session.sessionId, githubOrg, setGithubOrg])
 
   const handleUpdateRepos = useCallback(async (repos: string[]) => {
     if (!task) return

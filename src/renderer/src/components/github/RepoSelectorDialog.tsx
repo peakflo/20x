@@ -3,6 +3,7 @@ import { Search, Lock, Globe, Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { Checkbox } from '@/components/ui/Checkbox'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogBody } from '@/components/ui/Dialog'
+import { Select } from '@/components/ui/Select'
 import { githubApi } from '@/lib/ipc-client'
 import type { GitHubRepo } from '@/types/electron'
 
@@ -11,32 +12,72 @@ interface RepoSelectorDialogProps {
   onOpenChange: (open: boolean) => void
   org: string
   initialRepos?: string[]
-  onConfirm: (repos: GitHubRepo[]) => void
+  onConfirm: (repos: GitHubRepo[], org: string) => void
 }
 
 export function RepoSelectorDialog({ open, onOpenChange, org, initialRepos, onConfirm }: RepoSelectorDialogProps) {
   const [repos, setRepos] = useState<GitHubRepo[]>([])
-  const [selected, setSelected] = useState<Set<string>>(new Set(initialRepos ?? []))
+  const [selectedOrg, setSelectedOrg] = useState(org)
+  const [owners, setOwners] = useState<{ value: string; label: string }[]>([])
+  const [selected, setSelected] = useState<Set<string>>(new Set())
   const [search, setSearch] = useState('')
   const [isLoading, setIsLoading] = useState(false)
+  const [isLoadingOwners, setIsLoadingOwners] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    if (open && org) {
-      setIsLoading(true)
-      setError(null)
-      githubApi.fetchOrgRepos(org)
-        .then(setRepos)
-        .catch((err) => setError(err.message))
-        .finally(() => setIsLoading(false))
+    if (open) {
+      setSelectedOrg(org)
     }
   }, [open, org])
 
   useEffect(() => {
-    if (open && initialRepos) {
-      setSelected(new Set(initialRepos))
+    if (open && selectedOrg) {
+      setIsLoading(true)
+      setError(null)
+      githubApi.fetchOrgRepos(selectedOrg)
+        .then(setRepos)
+        .catch((err) => setError(err.message))
+        .finally(() => setIsLoading(false))
     }
-  }, [open, initialRepos])
+  }, [open, selectedOrg])
+
+  useEffect(() => {
+    if (open) {
+      const initial = (initialRepos ?? []).filter((repo) => repo.startsWith(`${selectedOrg}/`))
+      setSelected(new Set(initial))
+    }
+  }, [open, initialRepos, selectedOrg])
+
+  useEffect(() => {
+    if (!open) return
+    setIsLoadingOwners(true)
+
+    Promise.all([githubApi.checkCli(), githubApi.fetchOrgs()])
+      .then(([status, orgs]) => {
+        const list: { value: string; label: string }[] = []
+        if (status.username) {
+          list.push({ value: status.username, label: `${status.username} (personal)` })
+        }
+        for (const orgName of orgs) {
+          list.push({ value: orgName, label: orgName })
+        }
+
+        if (selectedOrg && !list.some((o) => o.value === selectedOrg)) {
+          list.unshift({ value: selectedOrg, label: selectedOrg })
+        }
+
+        setOwners(list)
+      })
+      .catch(() => {
+        if (selectedOrg) {
+          setOwners([{ value: selectedOrg, label: selectedOrg }])
+        } else {
+          setOwners([])
+        }
+      })
+      .finally(() => setIsLoadingOwners(false))
+  }, [open, selectedOrg])
 
   const filtered = useMemo(() => {
     if (!search) return repos
@@ -55,8 +96,10 @@ export function RepoSelectorDialog({ open, onOpenChange, org, initialRepos, onCo
 
   const handleConfirm = () => {
     const selectedRepos = repos.filter((r) => selected.has(r.fullName))
-    onConfirm(selectedRepos)
+    onConfirm(selectedRepos, selectedOrg)
   }
+
+  const selectedInCurrentOrg = repos.filter((r) => selected.has(r.fullName)).length
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -65,6 +108,26 @@ export function RepoSelectorDialog({ open, onOpenChange, org, initialRepos, onCo
           <DialogTitle>Select Repositories</DialogTitle>
         </DialogHeader>
         <DialogBody className="space-y-4">
+          <div className="space-y-1">
+            <label htmlFor="repo-selector-org" className="text-xs font-medium text-muted-foreground">
+              Organization
+            </label>
+            {isLoadingOwners ? (
+              <div className="flex items-center gap-2 rounded-md border border-input px-3 py-2 text-sm text-muted-foreground">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                Loading organizations...
+              </div>
+            ) : (
+              <Select
+                id="repo-selector-org"
+                value={selectedOrg}
+                options={owners}
+                onChange={(e) => setSelectedOrg(e.target.value)}
+                disabled={owners.length === 0}
+              />
+            )}
+          </div>
+
           {/* Search */}
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
@@ -121,9 +184,9 @@ export function RepoSelectorDialog({ open, onOpenChange, org, initialRepos, onCo
           {/* Footer */}
           <div className="flex items-center justify-between pt-2 border-t">
             <span className="text-xs text-muted-foreground">
-              {selected.size} repo{selected.size !== 1 ? 's' : ''} selected
+              {selectedInCurrentOrg} repo{selectedInCurrentOrg !== 1 ? 's' : ''} selected
             </span>
-            <Button onClick={handleConfirm} disabled={selected.size === 0}>
+            <Button onClick={handleConfirm} disabled={selectedInCurrentOrg === 0}>
               Confirm
             </Button>
           </div>
