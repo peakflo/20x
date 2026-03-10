@@ -1185,6 +1185,13 @@ export class AcpAdapter implements CodingAgentAdapter {
       || sessionUpdate === 'agent_thought_chunk'
   }
 
+  private isToolingUpdateType(sessionUpdate?: string): boolean {
+    return sessionUpdate === 'tool_call'
+      || sessionUpdate === 'tool_call_update'
+      || sessionUpdate === 'plan'
+      || sessionUpdate === 'available_commands_update'
+  }
+
   private getAssistantTurnId(session: AcpSession): number {
     const previousType = session.lastSessionUpdateType
     const now = Date.now()
@@ -1193,6 +1200,7 @@ export class AcpAdapter implements CodingAgentAdapter {
 
     const shouldStartNewTurn = session.currentTurnId === 0
       || this.isUserUpdateType(previousType)
+      || this.isToolingUpdateType(previousType)
       || (this.isAssistantChunkUpdateType(previousType) && timeSinceLastChunk > TIME_GAP_THRESHOLD)
 
     if (shouldStartNewTurn) {

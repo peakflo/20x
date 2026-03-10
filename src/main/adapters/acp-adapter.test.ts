@@ -744,6 +744,60 @@ describe('AcpAdapter - Turn Detection', () => {
       expect(secondAssistantParts[0].id).toBe('agent-response-2')
       expect(secondAssistantParts[0].text).toBe('Second assistant reply')
     })
+
+    it('starts a new assistant replay turn after tool activity', async () => {
+      const sessionId = 'test-session'
+      const priv = adapterPrivate(adapter)
+      const session = priv.sessions.get(sessionId) || createMockSession(sessionId)
+      const seenPartIds = new Set<string>()
+      const partContentLengths = new Map<string, string>()
+
+      priv.sessions.set(sessionId, session)
+
+      const assistantBeforeTool = {
+        method: 'session/update',
+        params: {
+          sessionId,
+          update: {
+            sessionUpdate: 'agent_message_chunk',
+            content: { type: 'text', text: 'Let me inspect that.' }
+          }
+        }
+      }
+
+      const toolCall = {
+        method: 'session/update',
+        params: {
+          sessionId,
+          update: {
+            sessionUpdate: 'tool_call',
+            toolCallId: 'tool-2',
+            title: 'exec_command',
+            status: 'completed',
+            rawInput: { command: 'ls' }
+          }
+        }
+      }
+
+      const assistantAfterTool = {
+        method: 'session/update',
+        params: {
+          sessionId,
+          update: {
+            sessionUpdate: 'agent_message_chunk',
+            content: { type: 'text', text: 'I found the issue.' }
+          }
+        }
+      }
+
+      const beforeToolParts = priv.convertAcpEventToMessageParts(assistantBeforeTool, new Set(), seenPartIds, partContentLengths, session)
+      priv.convertAcpEventToMessageParts(toolCall, new Set(), seenPartIds, partContentLengths, session)
+      const afterToolParts = priv.convertAcpEventToMessageParts(assistantAfterTool, new Set(), seenPartIds, partContentLengths, session)
+
+      expect(beforeToolParts[0].id).toBe('agent-response-1')
+      expect(afterToolParts[0].id).toBe('agent-response-2')
+      expect(afterToolParts[0].text).toBe('I found the issue.')
+    })
   })
 
   describe('Edge cases', () => {
