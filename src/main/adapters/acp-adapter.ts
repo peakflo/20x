@@ -122,6 +122,7 @@ interface AcpSession {
   responseCounter: number  // Counter for unique message IDs per response turn
   lastChunkTime: number | null  // Timestamp of last agent_message_chunk
   currentTurnId: number  // Auto-incremented ID for each detected response turn
+  activeTurnId: number | null  // Current turn tied to an in-flight session/prompt
   toolCallMetadata: Map<string, { name: string; input: string }>  // Cached metadata from initial tool_call events
 }
 
@@ -285,6 +286,7 @@ export class AcpAdapter implements CodingAgentAdapter {
       responseCounter: 0,
       lastChunkTime: null,
       currentTurnId: 0,
+      activeTurnId: null,
       toolCallMetadata: new Map()
     }
 
@@ -449,6 +451,7 @@ export class AcpAdapter implements CodingAgentAdapter {
       responseCounter: 0,
       lastChunkTime: null,
       currentTurnId: 0,
+      activeTurnId: null,
       toolCallMetadata: new Map()
     }
 
@@ -536,6 +539,9 @@ export class AcpAdapter implements CodingAgentAdapter {
     console.log(promptText.slice(0, 200) + (promptText.length > 200 ? '...' : ''))
 
     session.status = SessionStatusType.BUSY
+    session.currentTurnId++
+    session.activeTurnId = session.currentTurnId
+    session.lastChunkTime = null
 
     // Send prompt via ACP (prompt must be an array of ContentBlock objects)
     // Note: session/prompt is a long-running operation that responds via session/update notifications
@@ -1260,11 +1266,13 @@ export class AcpAdapter implements CodingAgentAdapter {
         // Handle streaming text response from agent
         // Format: { content: { type: 'text', text: '...' } }
 
-        // Auto-detect new response turns based on time gaps
+        // Prefer prompt-scoped turn ID (stable for the full response).
+        // Fall back to time-gap detection for replay scenarios where no prompt was sent.
         const now = Date.now()
         const TIME_GAP_THRESHOLD = 2000 // 2 seconds
+        let turnId = session?.activeTurnId || 0
 
-        if (session) {
+        if (session && !turnId) {
           const timeSinceLastChunk = session.lastChunkTime ? now - session.lastChunkTime : Infinity
           const isNewTurn = session.lastChunkTime === null ||
                            timeSinceLastChunk > TIME_GAP_THRESHOLD
@@ -1275,10 +1283,11 @@ export class AcpAdapter implements CodingAgentAdapter {
           }
 
           session.lastChunkTime = now
+          turnId = session.currentTurnId
+        } else if (session) {
+          session.lastChunkTime = now
         }
 
-        // Use auto-detected turn ID instead of promptRequestId
-        const turnId = session?.currentTurnId || 0
         const messageId = turnId > 0 ? `agent-response-${turnId}` : 'agent-response'
         console.log(`[AcpAdapter] agent_message_chunk: turnId=${turnId}, messageId=${messageId}`)
 
@@ -1305,8 +1314,8 @@ export class AcpAdapter implements CodingAgentAdapter {
       } else if (update.sessionUpdate === 'agent_thought_chunk') {
         // Handle reasoning/thinking chunks
         // Format: { content: { type: 'text', text: '...' } }
-        // Use auto-detected turn ID
-        const turnId = session?.currentTurnId || 0
+        // Use prompt-scoped turn ID when available, otherwise fallback.
+        const turnId = session?.activeTurnId || session?.currentTurnId || 0
         const thinkingId = turnId > 0 ? `agent-thinking-${turnId}` : 'agent-thinking'
         const content = update.content as { type?: string; text?: string } | undefined
         const chunk = content?.text || ''
