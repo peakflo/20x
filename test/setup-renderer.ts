@@ -150,7 +150,8 @@ const mockElectronAPI = {
   })
 }
 
-;(globalThis as unknown as Record<string, unknown>).window = {
-  ...(globalThis as unknown as { window?: Record<string, unknown> }).window,
-  electronAPI: mockElectronAPI
-}
+Object.defineProperty(window, 'electronAPI', {
+  value: mockElectronAPI,
+  configurable: true,
+  writable: true
+})

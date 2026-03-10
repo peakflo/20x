@@ -207,7 +207,7 @@ function handleHttpRequest(req: IncomingMessage, res: ServerResponse): void {
         return
       }
     }
-    handleApiRoute(req, res, pathname, url)
+    void handleApiRoute(req, res, pathname, url)
     return
   }
 
@@ -218,7 +218,7 @@ function handleHttpRequest(req: IncomingMessage, res: ServerResponse): void {
 
 // ── API router ───────────────────────────────────────────────
 
-function handleApiRoute(req: IncomingMessage, res: ServerResponse, pathname: string, url: URL): void {
+async function handleApiRoute(req: IncomingMessage, res: ServerResponse, pathname: string, url: URL): Promise<void> {
   res.setHeader('Content-Type', 'application/json')
 
   // Collect body for POST requests
@@ -258,7 +258,7 @@ function handleApiRoute(req: IncomingMessage, res: ServerResponse, pathname: str
   // GET requests
   if (req.method === 'GET') {
     try {
-      const result = routeGet(pathname, url)
+      const result = await routeGet(pathname, url)
       res.writeHead(200)
       res.end(JSON.stringify(result))
     } catch (err: unknown) {
@@ -276,7 +276,7 @@ function handleApiRoute(req: IncomingMessage, res: ServerResponse, pathname: str
 
 // ── GET routes ───────────────────────────────────────────────
 
-function routeGet(pathname: string, url: URL): unknown {
+async function routeGet(pathname: string, url: URL): Promise<unknown> {
   const db = dbRef!
 
   // GET /api/tasks
@@ -353,6 +353,27 @@ function routeGet(pathname: string, url: URL): unknown {
   if (pathname === '/api/github/org') {
     const org = db.getSetting('github_org') || ''
     return { org }
+  }
+
+  // GET /api/github/orgs — returns available orgs + personal account
+  if (pathname === '/api/github/orgs') {
+    if (!githubRef) throw Object.assign(new Error('GitHub not configured'), { status: 500 })
+
+    const [status, orgs] = await Promise.all([
+      githubRef.checkGhCli(),
+      githubRef.fetchUserOrgs()
+    ])
+
+    const owners: Array<{ value: string; label: string }> = []
+    if (status.username) {
+      owners.push({ value: status.username, label: `${status.username} (personal)` })
+    }
+
+    for (const orgName of orgs) {
+      owners.push({ value: orgName, label: orgName })
+    }
+
+    return owners
   }
 
   throw Object.assign(new Error('Not found'), { status: 404 })
@@ -470,6 +491,14 @@ async function routePost(pathname: string, params: Record<string, unknown>): Pro
     if (!org) throw Object.assign(new Error('org is required'), { status: 400 })
     const repos = await githubRef.fetchOrgRepos(org)
     return repos
+  }
+
+  // POST /api/github/org — set configured github org
+  if (pathname === '/api/github/org') {
+    const { org } = params as { org?: string }
+    if (!org) throw Object.assign(new Error('org is required'), { status: 400 })
+    db.setSetting('github_org', org)
+    return { org }
   }
 
   throw Object.assign(new Error('Not found'), { status: 404 })

@@ -23,30 +23,65 @@ export function RepoSelectorPage({
   const updateTask = useTaskStore((s) => s.updateTask)
 
   const [repos, setRepos] = useState<GitHubRepo[]>([])
+  const [orgOptions, setOrgOptions] = useState<Array<{ value: string; label: string }>>([])
+  const [selectedOrg, setSelectedOrg] = useState('')
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [search, setSearch] = useState('')
   const [isLoading, setIsLoading] = useState(false)
+  const [isLoadingOrgs, setIsLoadingOrgs] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   // Initialise selected set from existing task repos
   useEffect(() => {
     if (task) {
-      setSelected(new Set(task.repos))
+      const initial = selectedOrg
+        ? task.repos.filter((repo) => repo.startsWith(`${selectedOrg}/`))
+        : task.repos
+      setSelected(new Set(initial))
     }
-  }, [task])
+  }, [task, selectedOrg])
 
-  // Fetch repos from GitHub on mount
+  // Fetch org choices on mount
   useEffect(() => {
     let cancelled = false
+    setIsLoadingOrgs(true)
+
+    Promise.all([api.github.getOrg(), api.github.getOrgs()])
+      .then(([{ org }, owners]) => {
+        if (cancelled) return
+
+        setOrgOptions(owners)
+
+        const fallbackOrg = owners[0]?.value || ''
+        const nextOrg = org || fallbackOrg
+        setSelectedOrg(nextOrg)
+
+        if (nextOrg && nextOrg !== org) {
+          void api.github.setOrg(nextOrg)
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err.message)
+      })
+      .finally(() => {
+        if (!cancelled) setIsLoadingOrgs(false)
+      })
+
+    return () => { cancelled = true }
+  }, [])
+
+  // Fetch repos for selected org
+  useEffect(() => {
+    let cancelled = false
+    if (!selectedOrg) {
+      setRepos([])
+      return () => { cancelled = true }
+    }
+
     setIsLoading(true)
     setError(null)
 
-    api.github
-      .getOrg()
-      .then(({ org }) => {
-        if (!org) throw new Error('No GitHub org configured in settings')
-        return api.github.fetchRepos(org)
-      })
+    api.github.fetchRepos(selectedOrg)
       .then((data) => {
         if (!cancelled) setRepos(data)
       })
@@ -58,7 +93,13 @@ export function RepoSelectorPage({
       })
 
     return () => { cancelled = true }
-  }, [])
+  }, [selectedOrg])
+
+  const handleOrgChange = useCallback((org: string) => {
+    setSelectedOrg(org)
+    setSelected(new Set((task?.repos ?? []).filter((repo) => repo.startsWith(`${org}/`))))
+    void api.github.setOrg(org)
+  }, [task?.repos])
 
   const filtered = useMemo(() => {
     if (!search) return repos
@@ -88,7 +129,8 @@ export function RepoSelectorPage({
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
-      <div className="shrink-0 flex items-center gap-2 px-2 py-3 border-b border-border">
+      <div className="shrink-0 px-2 py-3 border-b border-border space-y-2">
+        <div className="flex items-center gap-2">
         <button
           onClick={() => onNavigate({ page: 'detail', taskId })}
           className="p-2 active:opacity-60 hover:bg-accent rounded-md transition-colors"
@@ -108,6 +150,28 @@ export function RepoSelectorPage({
         <h1 className="text-sm font-semibold truncate flex-1">
           Select Repositories
         </h1>
+        </div>
+
+        <div className="px-2">
+          {isLoadingOrgs ? (
+            <div className="h-8 rounded-md border border-input bg-transparent px-3 text-xs text-muted-foreground flex items-center">
+              Loading organizations...
+            </div>
+          ) : (
+            <select
+              value={selectedOrg}
+              onChange={(e) => handleOrgChange(e.target.value)}
+              disabled={orgOptions.length === 0}
+              className="h-8 w-full rounded-md border border-input bg-transparent px-2 text-xs text-foreground focus:border-ring focus:ring-1 focus:ring-ring/30 disabled:opacity-50"
+            >
+              {orgOptions.map((owner) => (
+                <option key={owner.value} value={owner.value}>
+                  {owner.label}
+                </option>
+              ))}
+            </select>
+          )}
+        </div>
       </div>
 
       {/* Search */}
