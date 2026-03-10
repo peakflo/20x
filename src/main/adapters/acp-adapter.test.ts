@@ -663,6 +663,58 @@ describe('AcpAdapter - Turn Detection', () => {
   })
 
   describe('Edge cases', () => {
+    it('converts non-chunk replayed user and agent messages', async () => {
+      const sessionId = 'test-session'
+      const priv = adapterPrivate(adapter)
+      const session = priv.sessions.get(sessionId) || createMockSession(sessionId)
+      const seenPartIds = new Set<string>()
+      const partContentLengths = new Map<string, string>()
+
+      priv.sessions.set(sessionId, session)
+
+      const userMessage = {
+        method: 'session/update',
+        params: {
+          sessionId,
+          update: {
+            sessionUpdate: 'user_message',
+            messageId: 'user-1',
+            content: { type: 'text', text: 'Please run tests' }
+          }
+        }
+      }
+
+      const agentMessage = {
+        method: 'session/update',
+        params: {
+          sessionId,
+          update: {
+            sessionUpdate: 'agent_message',
+            messageId: 'assistant-1',
+            content: [
+              {
+                type: 'content',
+                content: { type: 'text', text: 'Running tests now.' }
+              }
+            ]
+          }
+        }
+      }
+
+      const userParts = priv.convertAcpEventToMessageParts(userMessage, new Set(), seenPartIds, partContentLengths, session)
+      const agentParts = priv.convertAcpEventToMessageParts(agentMessage, new Set(), seenPartIds, partContentLengths, session)
+
+      expect(userParts).toHaveLength(1)
+      expect(userParts[0].role).toBe('user')
+      expect(userParts[0].type).toBe(MessagePartType.TEXT)
+      expect(userParts[0].text).toBe('Please run tests')
+
+      expect(agentParts).toHaveLength(1)
+      expect(agentParts[0].role).toBe('assistant')
+      expect(agentParts[0].type).toBe(MessagePartType.TEXT)
+      expect(agentParts[0].text).toBe('Running tests now.')
+    })
+
     it('should handle first chunk when lastChunkTime is null', async () => {
       const sessionId = 'test-session'
       const priv = adapterPrivate(adapter)

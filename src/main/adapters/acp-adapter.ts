@@ -68,6 +68,7 @@ type JsonRpcMessage = JsonRpcRequest | JsonRpcNotification | JsonRpcResponse | J
 // ACP Session Update Notification
 interface SessionUpdate {
   sessionUpdate?: string
+  messageId?: string
   toolCallId?: string
   title?: string
   kind?: string
@@ -1133,6 +1134,22 @@ export class AcpAdapter implements CodingAgentAdapter {
     return result
   }
 
+  private extractTextFromUpdateContent(content: SessionUpdate['content']): string {
+    if (!content) return ''
+
+    if (!Array.isArray(content)) {
+      return content.text || ''
+    }
+
+    return content
+      .map((entry) => {
+        if (entry.content?.text) return entry.content.text
+        return ''
+      })
+      .filter(Boolean)
+      .join('\n')
+  }
+
   private convertAcpEventToMessageParts(
     event: unknown,
     _seenMessageIds: Set<string>,
@@ -1282,8 +1299,7 @@ export class AcpAdapter implements CodingAgentAdapter {
         const messageId = turnId > 0 ? `agent-response-${turnId}` : 'agent-response'
         console.log(`[AcpAdapter] agent_message_chunk: turnId=${turnId}, messageId=${messageId}`)
 
-        const content = update.content as { type?: string; text?: string } | undefined
-        const chunk = content?.text || ''
+        const chunk = this.extractTextFromUpdateContent(update.content)
 
         if (chunk) {
           // Accumulate text across multiple chunks
@@ -1308,8 +1324,7 @@ export class AcpAdapter implements CodingAgentAdapter {
         // Use auto-detected turn ID
         const turnId = session?.currentTurnId || 0
         const thinkingId = turnId > 0 ? `agent-thinking-${turnId}` : 'agent-thinking'
-        const content = update.content as { type?: string; text?: string } | undefined
-        const chunk = content?.text || ''
+        const chunk = this.extractTextFromUpdateContent(update.content)
 
         if (chunk) {
           // Accumulate text across multiple chunks
@@ -1331,8 +1346,7 @@ export class AcpAdapter implements CodingAgentAdapter {
       } else if (update.sessionUpdate === 'user_message_chunk') {
         // Handle streaming user message chunks (usually when user types)
         const userId = 'user-message'
-        const content = update.content as { type?: string; text?: string } | undefined
-        const chunk = content?.text || ''
+        const chunk = this.extractTextFromUpdateContent(update.content)
 
         if (chunk) {
           // Accumulate text across multiple chunks
@@ -1350,6 +1364,23 @@ export class AcpAdapter implements CodingAgentAdapter {
           })
 
           seenPartIds.add(userId)
+        }
+      } else if (update.sessionUpdate === 'agent_message' || update.sessionUpdate === 'user_message') {
+        const text = this.extractTextFromUpdateContent(update.content)
+        if (!text) return parts
+
+        const role = update.sessionUpdate === 'user_message' ? 'user' : 'assistant'
+        const partId = update.messageId || `${update.sessionUpdate}-${randomUUID()}`
+
+        if (!seenPartIds.has(partId)) {
+          seenPartIds.add(partId)
+          partContentLengths.set(partId, text)
+          parts.push({
+            id: partId,
+            type: MessagePartType.TEXT,
+            text,
+            role
+          })
         }
       } else if (update.sessionUpdate === 'plan') {
         // Handle agent plan - we can ignore this for now or display it later
