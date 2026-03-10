@@ -20,6 +20,8 @@ import type {
 } from './coding-agent-adapter'
 import { SessionStatusType, MessagePartType, MessageRole } from './coding-agent-adapter'
 
+export const DEFAULT_CODEX_MODEL = 'gpt-5.4-codex'
+
 interface JsonRpcRequest {
   jsonrpc: '2.0'
   id?: number | string
@@ -155,7 +157,7 @@ export class CodexAdapter implements CodingAgentAdapter {
       this.codexExecutablePath,
       [
         '--model',
-        config.model || 'gpt-5.3-codex',
+        config.model || DEFAULT_CODEX_MODEL,
         '--json-rpc', // Enable JSON-RPC mode
       ],
       {
@@ -203,7 +205,7 @@ export class CodexAdapter implements CodingAgentAdapter {
       const apiKey = process.env.OPENAI_API_KEY || process.env.CODEX_API_KEY
       await this.sendRpcRequest(session, 'initialize', {
         api_key: apiKey,
-        model: config.model || 'gpt-5.3-codex',
+        model: config.model || DEFAULT_CODEX_MODEL,
       })
 
       // Create thread (Codex's session concept)
@@ -245,7 +247,7 @@ export class CodexAdapter implements CodingAgentAdapter {
       this.codexExecutablePath,
       [
         '--model',
-        config.model || 'gpt-5.3-codex',
+        config.model || DEFAULT_CODEX_MODEL,
         '--json-rpc',
       ],
       {
@@ -293,7 +295,7 @@ export class CodexAdapter implements CodingAgentAdapter {
       const apiKey = process.env.OPENAI_API_KEY || process.env.CODEX_API_KEY
       await this.sendRpcRequest(session, 'initialize', {
         api_key: apiKey,
-        model: config.model || 'gpt-5.3-codex',
+        model: config.model || DEFAULT_CODEX_MODEL,
       })
 
       // Fetch thread history
