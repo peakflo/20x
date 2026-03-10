@@ -1501,7 +1501,8 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     adapter: CodingAgentAdapter,
     agentId: string,
     taskId: string,
-    adapterSessionId: string
+    adapterSessionId: string,
+    options?: { replayToRenderer?: boolean }
   ): Promise<string> {
     // Helper: yield event loop between bursts of sync DB/FS calls
     const yieldEL = (): Promise<void> => new Promise((r) => setImmediate(r))
@@ -1614,25 +1615,29 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       throw error
     }
 
+    const shouldReplayToRenderer = options?.replayToRenderer !== false
+
     // Replay messages to renderer in a single batch to avoid UI freeze
-    const batchMessages: Array<{ id: string; role: string; content: string; partType?: string; tool?: unknown }> = []
-    for (const message of messages) {
-      for (const part of message.parts) {
-        batchMessages.push({
-          id: part.id || `${message.role}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-          role: message.role,
-          content: part.content || part.text || '',
-          partType: part.type,
-          tool: part.tool
+    if (shouldReplayToRenderer) {
+      const batchMessages: Array<{ id: string; role: string; content: string; partType?: string; tool?: unknown }> = []
+      for (const message of messages) {
+        for (const part of message.parts) {
+          batchMessages.push({
+            id: part.id || `${message.role}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+            role: message.role,
+            content: part.content || part.text || '',
+            partType: part.type,
+            tool: part.tool
+          })
+        }
+      }
+      if (batchMessages.length > 0) {
+        this.sendToRenderer('agent:output-batch', {
+          sessionId: adapterSessionId,
+          taskId,
+          messages: batchMessages
         })
       }
-    }
-    if (batchMessages.length > 0) {
-      this.sendToRenderer('agent:output-batch', {
-        sessionId: adapterSessionId,
-        taskId,
-        messages: batchMessages
-      })
     }
 
     // Store session in sessions map — idle until user sends a message
@@ -2038,7 +2043,9 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
             console.log(`[AgentManager] Session ${sessionId} not found, attempting resume from ${persistedSessionId} for task ${taskId}`)
             const adapter = this.getAdapter(resolvedAgentId)
             if (adapter) {
-              const resumedId = await this.resumeAdapterSession(adapter, resolvedAgentId, taskId, persistedSessionId)
+              const resumedId = await this.resumeAdapterSession(adapter, resolvedAgentId, taskId, persistedSessionId, {
+                replayToRenderer: false
+              })
               session = this.sessions.get(resumedId)
               if (session) {
                 sessionId = resumedId
