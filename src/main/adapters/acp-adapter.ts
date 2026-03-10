@@ -75,16 +75,7 @@ interface SessionUpdate {
   status?: string
   rawInput?: unknown
   rawOutput?: unknown
-  content?: {
-    type?: string
-    text?: string
-  } | Array<{
-    type: string
-    content?: {
-      type?: string
-      text?: string
-    }
-  }>
+  content?: unknown
   entries?: Array<{
     content: string
     priority: string
@@ -1137,17 +1128,42 @@ export class AcpAdapter implements CodingAgentAdapter {
   private extractTextFromUpdateContent(content: SessionUpdate['content']): string {
     if (!content) return ''
 
-    if (!Array.isArray(content)) {
-      return content.text || ''
+    if (typeof content === 'string') {
+      return content
     }
 
-    return content
-      .map((entry) => {
-        if (entry.content?.text) return entry.content.text
-        return ''
-      })
-      .filter(Boolean)
-      .join('\n')
+    if (Array.isArray(content)) {
+      return content
+        .map((entry) => this.extractTextFromUpdateContent(entry))
+        .filter(Boolean)
+        .join('\n')
+    }
+
+    if (typeof content !== 'object') {
+      return ''
+    }
+
+    const value = content as Record<string, unknown>
+
+    if (typeof value.text === 'string') {
+      return value.text
+    }
+
+    if (typeof value.content === 'string') {
+      return value.content
+    }
+
+    if (value.content) {
+      const nestedContent = this.extractTextFromUpdateContent(value.content)
+      if (nestedContent) return nestedContent
+    }
+
+    if (value.message) {
+      const nestedMessage = this.extractTextFromUpdateContent(value.message)
+      if (nestedMessage) return nestedMessage
+    }
+
+    return ''
   }
 
   private convertAcpEventToMessageParts(
@@ -1273,7 +1289,7 @@ export class AcpAdapter implements CodingAgentAdapter {
             }
           })
         }
-      } else if (update.sessionUpdate === 'agent_message_chunk') {
+      } else if (update.sessionUpdate === 'agent_message_chunk' || update.sessionUpdate === 'assistant_message_chunk') {
         // Handle streaming text response from agent
         // Format: { content: { type: 'text', text: '...' } }
 
@@ -1343,7 +1359,7 @@ export class AcpAdapter implements CodingAgentAdapter {
 
           seenPartIds.add(thinkingId)
         }
-      } else if (update.sessionUpdate === 'user_message_chunk') {
+      } else if (update.sessionUpdate === 'user_message_chunk' || update.sessionUpdate === 'human_message_chunk') {
         // Handle streaming user message chunks (usually when user types)
         const userId = 'user-message'
         const chunk = this.extractTextFromUpdateContent(update.content)
@@ -1365,11 +1381,18 @@ export class AcpAdapter implements CodingAgentAdapter {
 
           seenPartIds.add(userId)
         }
-      } else if (update.sessionUpdate === 'agent_message' || update.sessionUpdate === 'user_message') {
+      } else if (
+        update.sessionUpdate === 'agent_message' ||
+        update.sessionUpdate === 'assistant_message' ||
+        update.sessionUpdate === 'user_message' ||
+        update.sessionUpdate === 'human_message'
+      ) {
         const text = this.extractTextFromUpdateContent(update.content)
         if (!text) return parts
 
-        const role = update.sessionUpdate === 'user_message' ? 'user' : 'assistant'
+        const role = update.sessionUpdate === 'user_message' || update.sessionUpdate === 'human_message'
+          ? 'user'
+          : 'assistant'
         const partId = update.messageId || `${update.sessionUpdate}-${randomUUID()}`
 
         if (!seenPartIds.has(partId)) {

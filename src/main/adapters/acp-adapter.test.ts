@@ -715,6 +715,57 @@ describe('AcpAdapter - Turn Detection', () => {
       expect(agentParts[0].text).toBe('Running tests now.')
     })
 
+    it('converts alternate completed message aliases and array text shapes', async () => {
+      const sessionId = 'test-session'
+      const priv = adapterPrivate(adapter)
+      const session = priv.sessions.get(sessionId) || createMockSession(sessionId)
+      const seenPartIds = new Set<string>()
+      const partContentLengths = new Map<string, string>()
+
+      priv.sessions.set(sessionId, session)
+
+      const assistantMessage = {
+        method: 'session/update',
+        params: {
+          sessionId,
+          update: {
+            sessionUpdate: 'assistant_message',
+            messageId: 'assistant-2',
+            content: [
+              { type: 'text', text: 'Done inspecting resume history.' },
+              { type: 'text', text: 'Found the gap.' }
+            ]
+          }
+        }
+      }
+
+      const humanMessage = {
+        method: 'session/update',
+        params: {
+          sessionId,
+          update: {
+            sessionUpdate: 'human_message',
+            messageId: 'user-2',
+            content: {
+              type: 'wrapper',
+              content: { type: 'text', text: 'Please keep digging.' }
+            }
+          }
+        }
+      }
+
+      const assistantParts = priv.convertAcpEventToMessageParts(assistantMessage, new Set(), seenPartIds, partContentLengths, session)
+      const humanParts = priv.convertAcpEventToMessageParts(humanMessage, new Set(), seenPartIds, partContentLengths, session)
+
+      expect(assistantParts).toHaveLength(1)
+      expect(assistantParts[0].role).toBe('assistant')
+      expect(assistantParts[0].text).toBe('Done inspecting resume history.\nFound the gap.')
+
+      expect(humanParts).toHaveLength(1)
+      expect(humanParts[0].role).toBe('user')
+      expect(humanParts[0].text).toBe('Please keep digging.')
+    })
+
     it('should handle first chunk when lastChunkTime is null', async () => {
       const sessionId = 'test-session'
       const priv = adapterPrivate(adapter)
