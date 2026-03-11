@@ -1,7 +1,13 @@
 import { useState, useCallback } from 'react'
-import { Paperclip, X, FileText, Download } from 'lucide-react'
+import { Paperclip, X, FileText, Download, Table2 } from 'lucide-react'
 import { attachmentApi } from '@/lib/ipc-client'
+import { DataFileDialog } from '@/components/ui/DataFileDialog'
 import type { FileAttachment } from '@/types'
+
+const TABULAR_EXT_RE = /\.(csv|tsv|json|jsonl|xlsx|xls|parquet)$/i
+function isTabularFile(filename: string): boolean {
+  return TABULAR_EXT_RE.test(filename)
+}
 
 export interface PendingFile {
   id: string
@@ -34,6 +40,7 @@ export function TaskAttachments({
   onPendingChange
 }: TaskAttachmentsProps) {
   const [isDragging, setIsDragging] = useState(false)
+  const [dataDialogPath, setDataDialogPath] = useState<string | null>(null)
 
   const processFilePaths = useCallback(
     async (filePaths: string[]) => {
@@ -111,8 +118,16 @@ export function TaskAttachments({
     onPendingChange?.(pendingFiles.filter((f) => f.id !== id))
   }
 
-  const handleOpen = (attachment: FileAttachment) => {
-    if (taskId) attachmentApi.open(taskId, attachment.id)
+  const handleOpen = async (attachment: FileAttachment) => {
+    if (!taskId) return
+    if (isTabularFile(attachment.filename)) {
+      const resolved = await attachmentApi.resolvePath(taskId, attachment.id)
+      if (resolved) {
+        setDataDialogPath(resolved)
+        return
+      }
+    }
+    attachmentApi.open(taskId, attachment.id)
   }
 
   const handleDownload = (attachment: FileAttachment) => {
@@ -150,7 +165,11 @@ export function TaskAttachments({
         <div className="space-y-1" role="list">
           {items.map((a) => (
             <div key={a.id} className="flex items-center gap-2 group" role="listitem">
-              <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
+              {isTabularFile(a.filename) ? (
+                <Table2 className="h-4 w-4 shrink-0 text-primary" />
+              ) : (
+                <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
+              )}
               <button
                 type="button"
                 onClick={() => handleOpen(a)}
@@ -208,6 +227,14 @@ export function TaskAttachments({
           <Paperclip className="h-3.5 w-3.5" />
           Add files
         </button>
+      )}
+
+      {dataDialogPath && (
+        <DataFileDialog
+          open={!!dataDialogPath}
+          onOpenChange={(open) => { if (!open) setDataDialogPath(null) }}
+          filePath={dataDialogPath}
+        />
       )}
     </div>
   )

@@ -1,5 +1,5 @@
 import type { WorkfloTask, CreateTaskDTO, UpdateTaskDTO, FileAttachment, Agent, CreateAgentDTO, UpdateAgentDTO, McpServer, CreateMcpServerDTO, UpdateMcpServerDTO, Skill, CreateSkillDTO, UpdateSkillDTO, Secret, CreateSecretDTO, UpdateSecretDTO, TaskSource, CreateTaskSourceDTO, UpdateTaskSourceDTO, SyncResult, PluginMeta, ConfigFieldSchema, ConfigFieldOption, PluginAction, ActionResult, SourceUser, ReassignResult, MarketplaceSource, InstalledPlugin, DiscoverablePlugin, MarketplaceCatalog, PluginResources } from '@/types'
-import type { AgentOutputEvent, AgentOutputBatchEvent, AgentStatusEvent, AgentApprovalRequest, GhCliStatus, GitHubRepo, GitHubCollaborator, WorktreeProgressEvent, McpTestResult, SkillSyncResult, DepsStatus } from '@/types/electron'
+import type { AgentOutputEvent, AgentOutputBatchEvent, AgentStatusEvent, AgentApprovalRequest, GhCliStatus, GitHubRepo, GitHubCollaborator, WorktreeProgressEvent, McpTestResult, SkillSyncResult, DepsStatus, TabularDataResult, FileInfo, MarimoCheckResult, MarimoLaunchResult, MarimoStatusResult } from '@/types/electron'
 
 export const taskApi = {
   getAll: (): Promise<WorkfloTask[]> => {
@@ -176,6 +176,42 @@ export const attachmentApi = {
 
   download: (taskId: string, attachmentId: string): Promise<void> => {
     return window.electronAPI.attachments.download(taskId, attachmentId)
+  },
+
+  resolvePath: (taskId: string, attachmentId: string): Promise<string | null> => {
+    return window.electronAPI.attachments.resolvePath(taskId, attachmentId)
+  }
+}
+
+export const fileViewerApi = {
+  getFileInfo: (filePath: string): Promise<FileInfo> => {
+    return window.electronAPI.fileViewer.getFileInfo(filePath)
+  },
+
+  readTabularFile: (filePath: string, limit?: number): Promise<TabularDataResult> => {
+    return window.electronAPI.fileViewer.readTabularFile(filePath, limit)
+  }
+}
+
+export const marimoApi = {
+  check: (): Promise<MarimoCheckResult> => {
+    return window.electronAPI.marimo.check()
+  },
+
+  isNotebook: (filePath: string): Promise<boolean> => {
+    return window.electronAPI.marimo.isNotebook(filePath)
+  },
+
+  launch: (filePath: string, mode?: 'run' | 'edit'): Promise<MarimoLaunchResult> => {
+    return window.electronAPI.marimo.launch(filePath, mode)
+  },
+
+  stop: (filePath: string): Promise<boolean> => {
+    return window.electronAPI.marimo.stop(filePath)
+  },
+
+  status: (filePath: string): Promise<MarimoStatusResult> => {
+    return window.electronAPI.marimo.status(filePath)
   }
 }
 

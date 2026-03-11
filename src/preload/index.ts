@@ -23,7 +23,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     open: (taskId: string, attachmentId: string): Promise<void> =>
       ipcRenderer.invoke('attachments:open', taskId, attachmentId),
     download: (taskId: string, attachmentId: string): Promise<void> =>
-      ipcRenderer.invoke('attachments:download', taskId, attachmentId)
+      ipcRenderer.invoke('attachments:download', taskId, attachmentId),
+    resolvePath: (taskId: string, attachmentId: string): Promise<string | null> =>
+      ipcRenderer.invoke('attachments:resolvePath', taskId, attachmentId)
   },
   shell: {
     openPath: (filePath: string): Promise<void> =>
@@ -34,6 +36,24 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('shell:readTextFile', filePath),
     openExternal: (url: string): Promise<void> =>
       ipcRenderer.invoke('shell:openExternal', url)
+  },
+  fileViewer: {
+    getFileInfo: (filePath: string): Promise<{ exists: boolean; size: number; extension: string; isTabular: boolean }> =>
+      ipcRenderer.invoke('fileViewer:getFileInfo', filePath),
+    readTabularFile: (filePath: string, limit?: number): Promise<{ columns: string[]; rows: Record<string, unknown>[]; totalRows: number; truncated: boolean; filePath: string } | { error: string }> =>
+      ipcRenderer.invoke('fileViewer:readTabularFile', filePath, limit)
+  },
+  marimo: {
+    check: (): Promise<{ installed: boolean; path: string | null; version: string | null }> =>
+      ipcRenderer.invoke('marimo:check'),
+    isNotebook: (filePath: string): Promise<boolean> =>
+      ipcRenderer.invoke('marimo:isNotebook', filePath),
+    launch: (filePath: string, mode?: 'run' | 'edit'): Promise<{ url: string; port: number; pid: number }> =>
+      ipcRenderer.invoke('marimo:launch', filePath, mode),
+    stop: (filePath: string): Promise<boolean> =>
+      ipcRenderer.invoke('marimo:stop', filePath),
+    status: (filePath: string): Promise<{ running: boolean; url: string | null; port: number | null }> =>
+      ipcRenderer.invoke('marimo:status', filePath)
   },
   oauth: {
     startFlow: (provider: string, config: Record<string, unknown>): Promise<string> =>
