@@ -70,6 +70,18 @@ function sanitizeToolContent(content: unknown): string {
 
   return str.substring(0, MAX_DISPLAY_LENGTH) + `\n\n... (${str.length - MAX_DISPLAY_LENGTH} more characters)`
 }
+function deriveToolSubtitle(tool?: AgentMessage['tool']): string {
+  if (!tool) return ''
+  if (tool.title) return tool.title
+
+  if (tool.name === 'command' && typeof tool.input === 'string') {
+    const firstLine = tool.input.split('\n').map((line) => line.trim()).find(Boolean)
+    return firstLine ? firstLine.slice(0, 120) : ''
+  }
+
+  return ''
+}
+
 
 interface AgentTranscriptPanelProps {
   title?: string
@@ -249,6 +261,7 @@ function ToolCallMessage({ message }: { message: AgentMessage }) {
   const tool = message.tool!
   const isRunning = !tool.status || tool.status === 'in_progress' || tool.status === 'running' || tool.status === 'pending'
   const isError = tool.status === 'error' || tool.status === 'failed'
+  const subtitle = deriveToolSubtitle(tool)
 
   return (
     <div className="rounded-md bg-[#161b22] border border-border/50 overflow-hidden">
@@ -259,7 +272,7 @@ function ToolCallMessage({ message }: { message: AgentMessage }) {
         <ChevronRight className={`h-3 w-3 text-muted-foreground shrink-0 transition-transform ${expanded ? 'rotate-90' : ''}`} />
         <Wrench className="h-3 w-3 text-muted-foreground shrink-0" />
         <span className="text-foreground">{tool.name}</span>
-        {tool.title && <span className="text-muted-foreground truncate">— {tool.title}</span>}
+        {subtitle && <span className="text-muted-foreground truncate"> {subtitle}</span>}
         {isRunning && <Loader2 className="h-3 w-3 ml-auto shrink-0 text-muted-foreground animate-spin" />}
         {isError && <AlertTriangle className="h-3 w-3 ml-auto shrink-0 text-red-400" />}
       </button>

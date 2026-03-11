@@ -2,6 +2,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { AgentManager } from './agent-manager'
 import { SessionStatus } from '../shared/constants'
+import { MessagePartType, MessageRole } from './adapters/coding-agent-adapter'
 
 // Mock filesystem operations
 vi.mock('fs', async (importOriginal) => {
@@ -398,6 +399,100 @@ describe('AgentManager OS notifications', () => {
 
     expect(mockWindow.show).toHaveBeenCalled()
     expect(mockWindow.focus).toHaveBeenCalled()
+  })
+})
+
+describe('AgentManager implicit resume behavior', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('does not replay transcript when sendMessage implicitly resumes a session', async () => {
+    const mockDb = {
+      getTask: vi.fn(() => ({
+        id: 'task-1',
+        title: 'Test Task',
+        agent_id: 'agent-1',
+        session_id: 'persisted-session-id',
+      })),
+      getAgent: vi.fn(() => ({
+        id: 'agent-1',
+        name: 'Test Agent',
+        config: { coding_agent: 'codex' },
+      })),
+      getWorkspaceDir: vi.fn(() => '/tmp/test-workspace'),
+      updateTask: vi.fn(),
+      getMcpServer: vi.fn(() => null),
+      getSecretsByIds: vi.fn(() => []),
+      getSecretsWithValues: vi.fn(() => []),
+      getSetting: vi.fn(() => null),
+    } as unknown as ConstructorParameters<typeof AgentManager>[0]
+
+    const manager = new AgentManager(mockDb)
+    const adapter = { initialize: vi.fn(async () => undefined), resumeSession: vi.fn(async () => ([])) }
+
+    vi.spyOn(manager as any, 'getAdapter').mockReturnValue(adapter)
+    vi.spyOn(manager as any, 'buildMcpServersForAdapter').mockResolvedValue({})
+    vi.spyOn(manager as any, 'setupSecretSession').mockReturnValue(null)
+    vi.spyOn(manager as any, 'buildSecretsSystemPrompt').mockReturnValue('')
+
+    const sendToRendererSpy = vi.spyOn(manager as any, 'sendToRenderer').mockImplementation(() => undefined)
+    const doSendAdapterMessageSpy = vi.spyOn(manager as any, 'doSendAdapterMessage').mockResolvedValue(undefined)
+
+    await manager.sendMessage('missing-live-session', 'root cause ?', 'task-1', 'agent-1')
+
+    expect(adapter.resumeSession).toHaveBeenCalledOnce()
+    expect(doSendAdapterMessageSpy).toHaveBeenCalledOnce()
+
+    const outputBatchEvents = sendToRendererSpy.mock.calls.filter(([channel]) => channel === 'agent:output-batch')
+    expect(outputBatchEvents).toHaveLength(0)
+
+    const userMessageEvents = sendToRendererSpy.mock.calls.filter(([channel, payload]) => (
+      channel === 'agent:output' && (payload as { data?: { role?: string; content?: string } }).data?.role === 'user'
+    ))
+    expect(userMessageEvents).toHaveLength(0)
+  })
+
+  it('still replays transcript during explicit resume', async () => {
+    const mockDb = {
+      getTask: vi.fn(() => ({
+        id: 'task-1',
+        title: 'Test Task',
+      })),
+      getAgent: vi.fn(() => ({
+        id: 'agent-1',
+        name: 'Test Agent',
+        config: { coding_agent: 'codex' },
+      })),
+      getWorkspaceDir: vi.fn(() => '/tmp/test-workspace'),
+      updateTask: vi.fn(),
+      getMcpServer: vi.fn(() => null),
+      getSecretsByIds: vi.fn(() => []),
+      getSecretsWithValues: vi.fn(() => []),
+      getSetting: vi.fn(() => null),
+    } as unknown as ConstructorParameters<typeof AgentManager>[0]
+
+    const manager = new AgentManager(mockDb)
+    const adapter = {
+      initialize: vi.fn(async () => undefined),
+      resumeSession: vi.fn(async () => ([{
+        id: 'msg-1',
+        role: MessageRole.ASSISTANT,
+        parts: [{ id: 'part-1', type: MessagePartType.TEXT, text: 'Earlier reply' }]
+      }]))
+    }
+
+    vi.spyOn(manager as any, 'getAdapter').mockReturnValue(adapter)
+    vi.spyOn(manager as any, 'buildMcpServersForAdapter').mockResolvedValue({})
+    vi.spyOn(manager as any, 'setupSecretSession').mockReturnValue(null)
+    vi.spyOn(manager as any, 'buildSecretsSystemPrompt').mockReturnValue('')
+
+    const sendToRendererSpy = vi.spyOn(manager as any, 'sendToRenderer').mockImplementation(() => undefined)
+
+    await manager.resumeSession('agent-1', 'task-1', 'persisted-session-id')
+
+    const outputBatchEvents = sendToRendererSpy.mock.calls.filter(([channel]) => channel === 'agent:output-batch')
+    expect(outputBatchEvents).toHaveLength(1)
   })
 })
 

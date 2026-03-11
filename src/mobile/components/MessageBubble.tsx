@@ -133,11 +133,24 @@ function PlanReviewMessage({ message }: { message: AgentMessage }) {
   )
 }
 
+function deriveToolSubtitle(tool?: AgentMessage['tool']): string {
+  if (!tool) return ''
+  if (tool.title) return tool.title
+
+  if (tool.name === 'command' && typeof tool.input === 'string') {
+    const firstLine = tool.input.split('\n').map((line) => line.trim()).find(Boolean)
+    return firstLine ? firstLine.slice(0, 120) : ''
+  }
+
+  return ''
+}
+
 function ToolCallMessage({ message }: { message: AgentMessage }) {
   const [expanded, setExpanded] = useState(false)
   const tool = message.tool!
   const isRunning = !tool.status || tool.status === 'in_progress' || tool.status === 'running' || tool.status === 'pending'
   const isError = tool.status === 'error' || tool.status === 'failed'
+  const subtitle = deriveToolSubtitle(tool)
 
   return (
     <div className="rounded-md bg-[#161b22] border border-border/50 overflow-hidden">
@@ -150,7 +163,7 @@ function ToolCallMessage({ message }: { message: AgentMessage }) {
           <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
         </svg>
         <span className="text-foreground font-medium">{tool.name}</span>
-        {tool.title && <span className="text-muted-foreground truncate">{tool.title}</span>}
+        {subtitle && <span className="text-muted-foreground truncate"> {subtitle}</span>}
         {isRunning && (
           <svg className="h-3 w-3 ml-auto shrink-0 text-muted-foreground animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
             <path d="M21 12a9 9 0 1 1-6.219-8.56"/>

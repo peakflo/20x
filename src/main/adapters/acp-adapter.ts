@@ -68,22 +68,14 @@ type JsonRpcMessage = JsonRpcRequest | JsonRpcNotification | JsonRpcResponse | J
 // ACP Session Update Notification
 interface SessionUpdate {
   sessionUpdate?: string
+  messageId?: string
   toolCallId?: string
   title?: string
   kind?: string
   status?: string
   rawInput?: unknown
   rawOutput?: unknown
-  content?: {
-    type?: string
-    text?: string
-  } | Array<{
-    type: string
-    content?: {
-      type?: string
-      text?: string
-    }
-  }>
+  content?: unknown
   entries?: Array<{
     content: string
     priority: string
@@ -121,10 +113,13 @@ interface AcpSession {
   config: SessionConfig
   promptRequestId: number | null  // ID of the current session/prompt request
   responseCounter: number  // Counter for unique message IDs per response turn
+  currentUserTurnId: number  // Auto-incremented ID for each detected user turn
   lastChunkTime: number | null  // Timestamp of last agent_message_chunk
   currentTurnId: number  // Auto-incremented ID for each detected response turn
+  lastSessionUpdateType: string | null
   activeTurnId: number | null  // Current turn tied to an in-flight session/prompt
-  toolCallMetadata: Map<string, { name: string; input: string }>  // Cached metadata from initial tool_call events
+  pendingAssistantTurnSplit: boolean  // True after tool activity; next assistant chunk must start a new turn
+  toolCallMetadata: Map<string, { name: string; input: string; title?: string }>  // Cached metadata from initial tool_call events
 }
 
 /**
@@ -286,9 +281,12 @@ export class AcpAdapter implements CodingAgentAdapter {
       config,
       promptRequestId: null,
       responseCounter: 0,
+      currentUserTurnId: 0,
       lastChunkTime: null,
       currentTurnId: 0,
+      lastSessionUpdateType: null,
       activeTurnId: null,
+      pendingAssistantTurnSplit: false,
       toolCallMetadata: new Map()
     }
 
@@ -452,9 +450,12 @@ export class AcpAdapter implements CodingAgentAdapter {
       config,
       promptRequestId: null,
       responseCounter: 0,
+      currentUserTurnId: 0,
       lastChunkTime: null,
       currentTurnId: 0,
+      lastSessionUpdateType: null,
       activeTurnId: null,
+      pendingAssistantTurnSplit: false,
       toolCallMetadata: new Map()
     }
 
@@ -499,7 +500,13 @@ export class AcpAdapter implements CodingAgentAdapter {
 
       // Convert replayed notifications (buffered during session/load) to SessionMessages.
       // Without this, the renderer sees status:'idle' + messages:[] and hides the panel.
-      return this.getAllMessages(sessionId, config)
+      const messages = await this.getAllMessages(sessionId, config)
+
+      // Drain replayed notifications from the live poll buffer. Otherwise the
+      // first poll after resume/send will emit the whole old transcript again.
+      session.messageBuffer = []
+
+      return messages
     } catch (error: unknown) {
       // Check if session not found
       const errMsg = error instanceof Error ? error.message : String(error)
@@ -676,8 +683,12 @@ export class AcpAdapter implements CodingAgentAdapter {
     // Convert MessageParts to SessionMessages
     const messages: SessionMessage[] = []
 
-    // Group parts by role to create messages
+    // Start a new message whenever the role changes OR the part itself is a
+    // new top-level transcript item. This keeps assistant text that arrives
+    // after tool calls in a separate message instead of appending it to the
+    // earlier assistant text during resume reconstruction.
     let currentMessage: SessionMessage | null = null
+    let previousPart: MessagePart | null = null
     let messageIdCounter = 0
 
     for (const part of allParts) {
@@ -686,8 +697,12 @@ export class AcpAdapter implements CodingAgentAdapter {
                    roleStr === 'system' ? MessageRole.SYSTEM :
                    MessageRole.ASSISTANT
 
-      // Start new message if role changed or no current message
-      if (!currentMessage || currentMessage.role !== role) {
+      const startsNewMessage = !currentMessage
+        || currentMessage.role !== role
+        || !previousPart
+        || part.id !== previousPart.id
+
+      if (startsNewMessage) {
         if (currentMessage) {
           messages.push(currentMessage)
         }
@@ -699,9 +714,9 @@ export class AcpAdapter implements CodingAgentAdapter {
       }
 
       currentMessage!.parts.push(part)
+      previousPart = part
     }
 
-    // Push last message
     if (currentMessage) {
       messages.push(currentMessage)
     }
@@ -870,6 +885,7 @@ export class AcpAdapter implements CodingAgentAdapter {
         if (result?.stopReason) {
           console.log(`[AcpAdapter/${this.agentType}] Prompt completed with stopReason: ${result.stopReason}`)
           session.status = SessionStatusType.IDLE
+          session.activeTurnId = null
           // Don't clear promptRequestId - keep it for late-arriving events
           // It will be updated when the next prompt is sent
         }
@@ -928,6 +944,11 @@ export class AcpAdapter implements CodingAgentAdapter {
       // Update status based on update type
       if (update.sessionUpdate === 'tool_call' || update.sessionUpdate === 'tool_call_update') {
         session.status = SessionStatusType.BUSY
+        // Tool activity ends the current assistant turn. The next assistant
+        // text chunk should render as a new message after the tool row instead
+        // of appending to the pre-tool assistant text.
+        session.activeTurnId = null
+        session.pendingAssistantTurnSplit = true
       } else if (update.sessionUpdate === 'error' || update.sessionUpdate === 'failed') {
         session.status = SessionStatusType.ERROR
       } else if (update.sessionUpdate === 'completed' || update.sessionUpdate === 'finished') {
@@ -1161,6 +1182,164 @@ export class AcpAdapter implements CodingAgentAdapter {
     return result
   }
 
+  private extractTextFromUpdateContent(content: SessionUpdate['content']): string {
+    if (!content) return ''
+
+    if (typeof content === 'string') {
+      return content
+    }
+
+    if (Array.isArray(content)) {
+      return content
+        .map((entry) => this.extractTextFromUpdateContent(entry))
+        .filter(Boolean)
+        .join('\n')
+    }
+
+    if (typeof content !== 'object') {
+      return ''
+    }
+
+    const value = content as Record<string, unknown>
+
+    if (typeof value.text === 'string') {
+      return value.text
+    }
+
+    if (typeof value.content === 'string') {
+      return value.content
+    }
+
+    if (value.content) {
+      const nestedContent = this.extractTextFromUpdateContent(value.content)
+      if (nestedContent) return nestedContent
+    }
+
+    if (value.message) {
+      const nestedMessage = this.extractTextFromUpdateContent(value.message)
+      if (nestedMessage) return nestedMessage
+    }
+
+    return ''
+  }
+
+  private isUserUpdateType(sessionUpdate?: string | null): boolean {
+    return sessionUpdate === 'user_message_chunk'
+      || sessionUpdate === 'human_message_chunk'
+      || sessionUpdate === 'user_message'
+      || sessionUpdate === 'human_message'
+  }
+
+  private isAssistantChunkUpdateType(sessionUpdate?: string | null): boolean {
+    return sessionUpdate === 'agent_message_chunk'
+      || sessionUpdate === 'assistant_message_chunk'
+      || sessionUpdate === 'agent_thought_chunk'
+  }
+
+  private isToolingUpdateType(sessionUpdate?: string | null): boolean {
+    return sessionUpdate === 'tool_call'
+      || sessionUpdate === 'tool_call_update'
+      || sessionUpdate === 'plan'
+      || sessionUpdate === 'available_commands_update'
+  }
+
+  private getAssistantTurnId(session: AcpSession): number {
+    const now = Date.now()
+    const previousType = session.lastSessionUpdateType
+    const mustSplitAfterTool = session.pendingAssistantTurnSplit
+
+    if (
+      session.activeTurnId &&
+      !mustSplitAfterTool &&
+      !this.isToolingUpdateType(previousType) &&
+      !this.isUserUpdateType(previousType)
+    ) {
+      session.lastChunkTime = now
+      return session.activeTurnId
+    }
+
+    const timeSinceLastChunk = session.lastChunkTime ? now - session.lastChunkTime : Infinity
+    const TIME_GAP_THRESHOLD = 2000
+
+    const shouldStartNewTurn = session.currentTurnId === 0
+      || mustSplitAfterTool
+      || this.isUserUpdateType(previousType)
+      || this.isToolingUpdateType(previousType)
+      || (this.isAssistantChunkUpdateType(previousType) && timeSinceLastChunk > TIME_GAP_THRESHOLD)
+
+    if (shouldStartNewTurn) {
+      session.currentTurnId += 1
+      console.log(`[AcpAdapter] Detected NEW assistant turn #${session.currentTurnId} (prev=${previousType}, gap=${timeSinceLastChunk}ms, split=${mustSplitAfterTool})`)
+    }
+
+    session.pendingAssistantTurnSplit = false
+
+    if (session.activeTurnId) {
+      session.activeTurnId = session.currentTurnId
+    }
+
+    session.lastChunkTime = now
+    return session.currentTurnId
+  }
+
+  private getUserTurnId(session: AcpSession): number {
+    if (!this.isUserUpdateType(session.lastSessionUpdateType)) {
+      session.currentUserTurnId += 1
+      console.log(`[AcpAdapter] Detected NEW user turn #${session.currentUserTurnId} (prev=${session.lastSessionUpdateType})`)
+    }
+
+    return session.currentUserTurnId
+  }
+
+  private normalizeToolName(rawToolName?: string): string {
+    switch (rawToolName) {
+      case 'exec_command':
+        return 'command'
+      case 'write_stdin':
+        return 'stdin'
+      case 'update_plan':
+        return 'plan'
+      default:
+        return rawToolName || 'tool'
+    }
+  }
+
+  private buildToolTitle(
+    rawToolName?: string,
+    rawInput?: Record<string, unknown>,
+    fallback?: string
+  ): string | undefined {
+    const trimmedFallback = fallback?.trim()
+
+    switch (rawToolName) {
+      case 'exec_command': {
+        const command = rawInput?.command
+        if (Array.isArray(command)) return command.join(' ') || trimmedFallback
+        if (typeof command === 'string' && command.trim()) return command.trim()
+        const cmd = typeof rawInput?.cmd === 'string' ? rawInput.cmd.trim() : ''
+        if (cmd) return cmd
+        return trimmedFallback
+      }
+      case 'write_stdin': {
+        const chars = typeof rawInput?.chars === 'string' ? rawInput.chars.trim() : ''
+        if (chars) return chars.replace(/\s+/g, ' ').slice(0, 80)
+        return 'poll'
+      }
+      case 'update_plan': {
+        const plan = Array.isArray(rawInput?.plan) ? rawInput.plan : []
+        const firstStep = plan.find((item): item is { step: string } =>
+          typeof item === 'object' && item !== null && typeof (item as { step?: unknown }).step === 'string'
+        )
+        if (firstStep) return `${plan.length} steps: ${firstStep.step}`
+        const explanation = typeof rawInput?.explanation === 'string' ? rawInput.explanation.trim() : ''
+        if (explanation) return explanation.slice(0, 80)
+        return trimmedFallback
+      }
+      default:
+        return trimmedFallback
+    }
+  }
+
   private convertAcpEventToMessageParts(
     event: unknown,
     _seenMessageIds: Set<string>,
@@ -1203,23 +1382,28 @@ export class AcpAdapter implements CodingAgentAdapter {
 
       // Handle different update types
       if (update.sessionUpdate === 'tool_call' || update.sessionUpdate === 'tool_call_update') {
+        if (session) {
+          session.pendingAssistantTurnSplit = true
+        }
         // Cache metadata from initial tool_call events (in_progress) so we can use it
         // when the completed tool_call_update arrives (which may lack name/input fields)
         if (update.status !== 'completed' && session && partId) {
-          const rawInput = update.rawInput as { command?: string | string[]; parsed_cmd?: Array<{ cmd?: string }>; tool?: string; server?: string } | undefined
+          const rawInput = update.rawInput as { cmd?: string; command?: string | string[]; parsed_cmd?: Array<{ cmd?: string }>; tool?: string; server?: string } | undefined
           const commandFromInput = Array.isArray(rawInput?.command)
             ? rawInput.command.join(' ')
             : rawInput?.command
+          const commandFromCmd = rawInput?.cmd
           const commandFromParsed = rawInput?.parsed_cmd?.map((c) => c.cmd).join('; ')
-          const cachedInput = commandFromInput || commandFromParsed || update.title || ''
+          const cachedInput = commandFromInput || commandFromCmd || commandFromParsed || update.title || ''
           // Derive tool name: kind > rawInput.tool (with server prefix) > title (strip "Tool: " prefix)
           const toolFromRawInput = rawInput?.tool
             ? (rawInput.server ? `${rawInput.server}/${rawInput.tool}` : rawInput.tool)
             : undefined
           const toolFromTitle = update.title?.startsWith('Tool: ') ? update.title.slice(6) : undefined
           const cachedName = update.kind || toolFromRawInput || toolFromTitle || ''
-          if (cachedName || cachedInput) {
-            session.toolCallMetadata.set(partId, { name: cachedName, input: cachedInput })
+          const cachedTitle = this.buildToolTitle(cachedName || update.title, rawInput as Record<string, unknown>, cachedInput)
+          if (cachedName || cachedInput || cachedTitle) {
+            session.toolCallMetadata.set(partId, { name: cachedName, input: cachedInput, title: cachedTitle })
           }
         }
 
@@ -1231,7 +1415,7 @@ export class AcpAdapter implements CodingAgentAdapter {
           const cachedMeta = session?.toolCallMetadata.get(partId)
 
           // Extract command and output from rawInput/rawOutput
-          const rawInput = update.rawInput as { command?: string | string[]; parsed_cmd?: Array<{ cmd?: string }> } | undefined
+          const rawInput = update.rawInput as { cmd?: string; command?: string | string[]; parsed_cmd?: Array<{ cmd?: string }> } | undefined
           const rawOutput = update.rawOutput as {
             command?: string | string[];
             stdout?: string;
@@ -1245,6 +1429,7 @@ export class AcpAdapter implements CodingAgentAdapter {
           const commandFromInput = Array.isArray(rawInput?.command)
             ? rawInput.command.join(' ')
             : rawInput?.command
+          const commandFromCmd = rawInput?.cmd
           const commandFromOutput = Array.isArray(rawOutput?.command)
             ? rawOutput.command.join(' ')
             : rawOutput?.command
@@ -1256,7 +1441,7 @@ export class AcpAdapter implements CodingAgentAdapter {
             ? contentArray.map((c) => c.content?.text || c.text || '').filter(Boolean).join('\n')
             : undefined
 
-          const command = commandFromInput || commandFromOutput || commandFromParsed || update.title || cachedMeta?.input || inputFromContent || 'Unknown'
+          const command = commandFromInput || commandFromCmd || commandFromOutput || commandFromParsed || update.title || cachedMeta?.input || inputFromContent || 'Unknown'
 
           // Extract output - handle Codex format: {content: [{text: "...", type: "text"}], isError: false}
           const outputFromContent = Array.isArray(rawOutput?.content)
@@ -1271,50 +1456,34 @@ export class AcpAdapter implements CodingAgentAdapter {
 
           // Derive tool name from multiple sources
           const completedToolFromTitle = update.title?.startsWith('Tool: ') ? update.title.slice(6) : undefined
-          const toolName = update.kind || cachedMeta?.name || completedToolFromTitle || update.title || 'tool'
+          const rawToolName = update.kind || cachedMeta?.name || completedToolFromTitle || update.title || 'tool'
+          const toolName = this.normalizeToolName(rawToolName)
+          const toolTitle = this.buildToolTitle(
+            rawToolName,
+            rawInput as Record<string, unknown> | undefined,
+            cachedMeta?.title || (command && command !== rawToolName ? command : undefined)
+          )
 
           parts.push({
             id: partId,
             type: MessagePartType.TOOL,
             tool: {
               name: toolName,
+              title: toolTitle,
               status: update.status,
               input: command,
               output: output
             }
           })
         }
-      } else if (update.sessionUpdate === 'agent_message_chunk') {
+      } else if (update.sessionUpdate === 'agent_message_chunk' || update.sessionUpdate === 'assistant_message_chunk') {
         // Handle streaming text response from agent
         // Format: { content: { type: 'text', text: '...' } }
-
-        // Prefer prompt-scoped turn ID (stable for the full response).
-        // Fall back to time-gap detection for replay scenarios where no prompt was sent.
-        const now = Date.now()
-        const TIME_GAP_THRESHOLD = 2000 // 2 seconds
-        let turnId = session?.activeTurnId || 0
-
-        if (session && !turnId) {
-          const timeSinceLastChunk = session.lastChunkTime ? now - session.lastChunkTime : Infinity
-          const isNewTurn = session.lastChunkTime === null ||
-                           timeSinceLastChunk > TIME_GAP_THRESHOLD
-
-          if (isNewTurn) {
-            session.currentTurnId++
-            console.log(`[AcpAdapter] Detected NEW turn #${session.currentTurnId} (gap: ${timeSinceLastChunk}ms)`)
-          }
-
-          session.lastChunkTime = now
-          turnId = session.currentTurnId
-        } else if (session) {
-          session.lastChunkTime = now
-        }
-
+        const turnId = session ? this.getAssistantTurnId(session) : 0
         const messageId = turnId > 0 ? `agent-response-${turnId}` : 'agent-response'
         console.log(`[AcpAdapter] agent_message_chunk: turnId=${turnId}, messageId=${messageId}`)
 
-        const content = update.content as { type?: string; text?: string } | undefined
-        const chunk = content?.text || ''
+        const chunk = this.extractTextFromUpdateContent(update.content)
 
         if (chunk) {
           // Accumulate text across multiple chunks
@@ -1336,11 +1505,9 @@ export class AcpAdapter implements CodingAgentAdapter {
       } else if (update.sessionUpdate === 'agent_thought_chunk') {
         // Handle reasoning/thinking chunks
         // Format: { content: { type: 'text', text: '...' } }
-        // Use prompt-scoped turn ID when available, otherwise fallback.
-        const turnId = session?.activeTurnId || session?.currentTurnId || 0
+        const turnId = session ? this.getAssistantTurnId(session) : 0
         const thinkingId = turnId > 0 ? `agent-thinking-${turnId}` : 'agent-thinking'
-        const content = update.content as { type?: string; text?: string } | undefined
-        const chunk = content?.text || ''
+        const chunk = this.extractTextFromUpdateContent(update.content)
 
         if (chunk) {
           // Accumulate text across multiple chunks
@@ -1359,11 +1526,11 @@ export class AcpAdapter implements CodingAgentAdapter {
 
           seenPartIds.add(thinkingId)
         }
-      } else if (update.sessionUpdate === 'user_message_chunk') {
+      } else if (update.sessionUpdate === 'user_message_chunk' || update.sessionUpdate === 'human_message_chunk') {
         // Handle streaming user message chunks (usually when user types)
-        const userId = 'user-message'
-        const content = update.content as { type?: string; text?: string } | undefined
-        const chunk = content?.text || ''
+        const turnId = session ? this.getUserTurnId(session) : 0
+        const userId = turnId > 0 ? `user-message-${turnId}` : 'user-message'
+        const chunk = this.extractTextFromUpdateContent(update.content)
 
         if (chunk) {
           // Accumulate text across multiple chunks
@@ -1382,10 +1549,38 @@ export class AcpAdapter implements CodingAgentAdapter {
 
           seenPartIds.add(userId)
         }
+      } else if (
+        update.sessionUpdate === 'agent_message' ||
+        update.sessionUpdate === 'assistant_message' ||
+        update.sessionUpdate === 'user_message' ||
+        update.sessionUpdate === 'human_message'
+      ) {
+        const text = this.extractTextFromUpdateContent(update.content)
+        if (!text) return parts
+
+        const role = update.sessionUpdate === 'user_message' || update.sessionUpdate === 'human_message'
+          ? 'user'
+          : 'assistant'
+        const partId = update.messageId || `${update.sessionUpdate}-${randomUUID()}`
+
+        if (!seenPartIds.has(partId)) {
+          seenPartIds.add(partId)
+          partContentLengths.set(partId, text)
+          parts.push({
+            id: partId,
+            type: MessagePartType.TEXT,
+            text,
+            role
+          })
+        }
       } else if (update.sessionUpdate === 'plan') {
         // Handle agent plan - we can ignore this for now or display it later
         // Format: { entries: [{ content: '...', priority: 'high', status: 'pending' }] }
         console.log(`[AcpAdapter/${this.agentType}] Received plan with ${(update.entries || []).length} entries`)
+      }
+
+      if (session && update.sessionUpdate) {
+        session.lastSessionUpdateType = update.sessionUpdate
       }
     }
 
