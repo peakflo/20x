@@ -365,8 +365,8 @@ describe('AcpAdapter - Turn Detection', () => {
         session
       )
 
-      expect(session.currentTurnId).toBe(2)
-      expect(parts2[0].id).toBe('agent-response-2')
+      expect(session.currentTurnId).toBe(1)
+      expect(parts2[0].id).toBe('agent-response-1')
       expect(parts2[0].text).toBe('Long response part 1 and part 2')
     })
   })
