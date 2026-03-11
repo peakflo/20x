@@ -365,8 +365,8 @@ describe('AcpAdapter - Turn Detection', () => {
         session
       )
 
-      expect(session.currentTurnId).toBe(1)
-      expect(parts2[0].id).toBe('agent-response-1')
+      expect(session.currentTurnId).toBe(2)
+      expect(parts2[0].id).toBe('agent-response-2')
       expect(parts2[0].text).toBe('Long response part 1 and part 2')
     })
   })
@@ -421,7 +421,7 @@ describe('AcpAdapter - Turn Detection', () => {
   })
 
   describe('Tool call turn detection', () => {
-    it('should NOT increment turn ID for tool calls within an active prompt turn', async () => {
+    it('should start a new turn after a completed tool call within an active prompt turn', async () => {
       const sessionId = 'test-session'
       const priv = adapterPrivate(adapter)
 
@@ -479,7 +479,7 @@ describe('AcpAdapter - Turn Detection', () => {
         session
       )
 
-      // Next message chunk in the same prompt turn should keep the same turn ID
+      // Next assistant chunk after a completed tool call should become a new turn
       vi.advanceTimersByTime(500)
 
       const chunk2 = {
@@ -501,8 +501,8 @@ describe('AcpAdapter - Turn Detection', () => {
         session
       )
 
-      expect(session.currentTurnId).toBe(1)
-      expect(parts2[0].id).toBe('agent-response-1')
+      expect(session.currentTurnId).toBe(2)
+      expect(parts2[0].id).toBe('agent-response-2')
     })
 
     it('should cache tool metadata from initial tool_call and use it on completion', async () => {
