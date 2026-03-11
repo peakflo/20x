@@ -33,7 +33,7 @@
     "@paralleldrive/cuid2": "^2.2.2",
     "@supabase/supabase-js": "^2.49.4",
     "@zed-industries/claude-code-acp": "^0.16.1",
-    "@zed-industries/codex-acp": "^0.9.2",
+    "@zed-industries/codex-acp": "^0.9.5",
     "better-sqlite3": "^12.6.2",
     "cron-parser": "^5.5.0",
     "js-yaml": "^4.1.1",
