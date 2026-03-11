@@ -283,11 +283,11 @@ export class HeartbeatScheduler {
 
       if (classification === 'ok') {
         console.log(`[HeartbeatScheduler] ${HEARTBEAT_OK_TOKEN} for task "${task.title}" (mastermind check)`)
-        this.logResult(task.id, HeartbeatStatus.Ok, 'All checks passed', mastermindSessionId)
+        this.logResult(task.id, HeartbeatStatus.Ok, this.extractSummary(mastermindResult, HeartbeatStatus.Ok), mastermindSessionId)
         this.advanceNextCheck(task, true)
       } else if (classification === 'info') {
         console.log(`[HeartbeatScheduler] Info for task "${task.title}": ${mastermindResult.substring(0, 100)}`)
-        this.logResult(task.id, HeartbeatStatus.Info, mastermindResult.substring(0, 500), mastermindSessionId)
+        this.logResult(task.id, HeartbeatStatus.Info, this.extractSummary(mastermindResult, HeartbeatStatus.Info), mastermindSessionId)
         this.advanceNextCheck(task, true) // no action needed, treat like OK for interval
       } else {
         console.log(`[HeartbeatScheduler] Action needed for task "${task.title}", forwarding to task agent`)
@@ -322,9 +322,9 @@ export class HeartbeatScheduler {
         const actionPrompt = this.buildActionPrompt(task, mastermindResult)
         await this.agentManager.startHeartbeatSession(agentId, task.id, actionPrompt)
       } else {
+        const logStatus = classification === 'ok' ? HeartbeatStatus.Ok : HeartbeatStatus.Info
         console.log(`[HeartbeatScheduler] runNow: ${classification} for task "${task.title}"`)
-        this.logResult(task.id, classification === 'ok' ? HeartbeatStatus.Ok : HeartbeatStatus.Info,
-          classification === 'ok' ? 'All checks passed' : mastermindResult.substring(0, 500), mastermindSessionId)
+        this.logResult(task.id, logStatus, this.extractSummary(mastermindResult, logStatus), mastermindSessionId)
       }
     } finally {
       this.agentManager.cleanupHeartbeatSession(task.id)
@@ -421,14 +421,41 @@ export class HeartbeatScheduler {
 
     if (isOk) {
       console.log(`[HeartbeatScheduler] ${HEARTBEAT_OK_TOKEN} for task "${task.title}"`)
-      this.logResult(task.id, HeartbeatStatus.Ok, 'All checks passed', sessionId)
+      this.logResult(task.id, HeartbeatStatus.Ok, this.extractSummary(result, HeartbeatStatus.Ok), sessionId)
       this.advanceNextCheck(task, true) // adaptive: may increase interval
     } else {
       console.log(`[HeartbeatScheduler] Attention needed for task "${task.title}": ${result.substring(0, 100)}`)
-      this.logResult(task.id, HeartbeatStatus.AttentionNeeded, result.substring(0, 500), sessionId)
+      this.logResult(task.id, HeartbeatStatus.AttentionNeeded, this.extractSummary(result, HeartbeatStatus.AttentionNeeded), sessionId)
       this.notifyAttentionNeeded(task, result)
       this.advanceNextCheck(task, false) // reset to base interval
     }
+  }
+
+  /**
+   * Build a compact check summary for heartbeat logs.
+   * Strips control tokens so UI can show meaningful check context.
+   */
+  private extractSummary(result: string, status: HeartbeatStatus): string {
+    const infoTokenPattern = new RegExp(`^${HEARTBEAT_INFO_TOKEN}\\s*:\\s*`, 'i')
+    const normalized = result
+      .replace(HEARTBEAT_OK_TOKEN, '')
+      .replace(infoTokenPattern, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+
+    if (normalized.length > 0) {
+      return normalized.substring(0, 500)
+    }
+
+    if (status === HeartbeatStatus.Ok) {
+      return 'All checks passed (no new updates)'
+    }
+
+    if (status === HeartbeatStatus.Info) {
+      return 'Checked: update found, but no action needed'
+    }
+
+    return 'Checked: action needed'
   }
 
   /**

@@ -10,6 +10,8 @@ import type { HeartbeatStatusResult } from '@/types/electron'
 import { HeartbeatStatus } from '@/types'
 import { formatRelativeDate, formatRelativeFuture } from '@/lib/utils'
 
+const LOG_SUMMARY_PREVIEW_LENGTH = 160
+
 interface HeartbeatLog {
   id: string
   task_id: string
@@ -25,13 +27,14 @@ interface HeartbeatSectionProps {
 }
 
 /**
- * Heartbeat property row — renders inside the task properties grid.
+ * Heartbeat property row - renders inside the task properties grid.
  * Shows heartbeat status + content preview. Clicking opens an edit modal.
  */
 export function HeartbeatSection({ task, onTaskUpdated }: HeartbeatSectionProps) {
   const [status, setStatus] = useState<HeartbeatStatusResult | null>(null)
   const [heartbeatContent, setHeartbeatContent] = useState<string | null>(null)
   const [logs, setLogs] = useState<HeartbeatLog[]>([])
+  const [expandedLogIds, setExpandedLogIds] = useState<string[]>([])
   const [modalOpen, setModalOpen] = useState(false)
   const [editDraft, setEditDraft] = useState('')
   const [saving, setSaving] = useState(false)
@@ -89,6 +92,7 @@ export function HeartbeatSection({ task, onTaskUpdated }: HeartbeatSectionProps)
 
   const handleOpenModal = () => {
     setEditDraft(heartbeatContent || '# Heartbeat Checks\n- [ ] ')
+    setExpandedLogIds([])
     fetchLogs()
     setModalOpen(true)
   }
@@ -121,7 +125,7 @@ export function HeartbeatSection({ task, onTaskUpdated }: HeartbeatSectionProps)
     setModalOpen(false)
     const result = await window.electronAPI.heartbeat.runNow(task.id)
     if (result === 'sent') {
-      // Agent is now working — transcript will update visibly
+      // Agent is now working - transcript will update visibly
       onTaskUpdated?.()
     } else if (result === 'no_file') {
       alert('No heartbeat.md file found. Save instructions first.')
@@ -138,9 +142,19 @@ export function HeartbeatSection({ task, onTaskUpdated }: HeartbeatSectionProps)
     onTaskUpdated?.()
   }
 
+  const toggleLogExpansion = (logId: string) => {
+    setExpandedLogIds((current) =>
+      current.includes(logId)
+        ? current.filter((id) => id !== logId)
+        : [...current, logId]
+    )
+  }
+
   const lastLog = logs[0]
   const statusBadge = !status?.enabled
     ? <Badge variant="default">Off</Badge>
+    : lastLog?.status === HeartbeatStatus.Info
+    ? <Badge variant="blue">Info</Badge>
     : lastLog?.status === HeartbeatStatus.AttentionNeeded
     ? <Badge variant="yellow">Attention</Badge>
     : lastLog?.status === HeartbeatStatus.Error
@@ -149,12 +163,12 @@ export function HeartbeatSection({ task, onTaskUpdated }: HeartbeatSectionProps)
 
   return (
     <>
-      {/* Property row — label */}
+      {/* Property row - label */}
       <span className="text-muted-foreground flex items-center gap-2">
         <HeartPulse className={`h-3.5 w-3.5 ${status?.enabled ? 'text-rose-500' : ''}`} /> Heartbeat
       </span>
 
-      {/* Property row — value: show full markdown instructions, click to edit */}
+      {/* Property row - value: show full markdown instructions, click to edit */}
       <div
         className="cursor-pointer hover:bg-muted/50 rounded -mx-1 px-1 transition-colors"
         onClick={handleOpenModal}
@@ -169,7 +183,7 @@ export function HeartbeatSection({ task, onTaskUpdated }: HeartbeatSectionProps)
           )}
           {status?.enabled && status?.nextCheckAt && (
             <span className="text-[10px] text-muted-foreground/60 shrink-0">
-              · next {formatRelativeFuture(status.nextCheckAt)}
+              . next {formatRelativeFuture(status.nextCheckAt)}
             </span>
           )}
         </div>
@@ -262,27 +276,52 @@ export function HeartbeatSection({ task, onTaskUpdated }: HeartbeatSectionProps)
               <div>
                 <label className="text-xs text-muted-foreground mb-1.5 block">Recent Checks</label>
                 <div className="space-y-1">
-                  {logs.map((log) => (
-                    <div key={log.id} className="flex items-center justify-between text-xs bg-muted/30 rounded px-2 py-1">
-                      <div className="flex items-center gap-2 min-w-0">
-                        <Badge variant={
-                          log.status === HeartbeatStatus.Ok ? 'green'
-                          : log.status === HeartbeatStatus.AttentionNeeded ? 'yellow'
-                          : 'red'
-                        }>
-                          {log.status === HeartbeatStatus.Ok ? 'OK'
-                          : log.status === HeartbeatStatus.AttentionNeeded ? 'Attention'
-                          : 'Error'}
-                        </Badge>
-                        {log.summary && log.status !== HeartbeatStatus.Ok && (
-                          <span className="text-muted-foreground truncate">{log.summary}</span>
-                        )}
+                  {logs.map((log) => {
+                    const hasLongSummary = (log.summary?.length ?? 0) > LOG_SUMMARY_PREVIEW_LENGTH
+                    const isExpanded = expandedLogIds.includes(log.id)
+                    const visibleSummary = !log.summary || isExpanded || !hasLongSummary
+                      ? log.summary
+                      : `${log.summary.slice(0, LOG_SUMMARY_PREVIEW_LENGTH).trimEnd()}...`
+
+                    return (
+                      <div key={log.id} className="flex items-start justify-between gap-3 text-xs bg-muted/30 rounded px-2 py-1">
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-start gap-2 min-w-0">
+                            <Badge variant={
+                              log.status === HeartbeatStatus.Ok ? 'green'
+                              : log.status === HeartbeatStatus.Info ? 'blue'
+                              : log.status === HeartbeatStatus.AttentionNeeded ? 'yellow'
+                              : 'red'
+                            }>
+                              {log.status === HeartbeatStatus.Ok ? 'OK'
+                              : log.status === HeartbeatStatus.Info ? 'Info'
+                              : log.status === HeartbeatStatus.AttentionNeeded ? 'Attention'
+                              : 'Error'}
+                            </Badge>
+                            {visibleSummary && (
+                              <div className={`min-w-0 text-muted-foreground break-words ${isExpanded ? 'whitespace-pre-wrap' : ''}`}>
+                                {visibleSummary}
+                              </div>
+                            )}
+                          </div>
+                          {log.summary && hasLongSummary && (
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="ghost"
+                              className="h-auto px-0 py-0.5 mt-1 text-[11px] text-muted-foreground"
+                              onClick={() => toggleLogExpansion(log.id)}
+                            >
+                              {isExpanded ? 'Show less' : 'Show more'}
+                            </Button>
+                          )}
+                        </div>
+                        <span className="text-muted-foreground/60 shrink-0">
+                          {formatRelativeDate(log.created_at)}
+                        </span>
                       </div>
-                      <span className="text-muted-foreground/60 shrink-0 ml-2">
-                        {formatRelativeDate(log.created_at)}
-                      </span>
-                    </div>
-                  ))}
+                    )
+                  })}
                 </div>
               </div>
             )}

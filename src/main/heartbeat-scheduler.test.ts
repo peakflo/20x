@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { HeartbeatScheduler } from './heartbeat-scheduler'
-import { HeartbeatStatus, HEARTBEAT_OK_TOKEN, HEARTBEAT_DEFAULTS } from '../shared/constants'
+import { HeartbeatStatus, HEARTBEAT_OK_TOKEN, HEARTBEAT_INFO_TOKEN, HEARTBEAT_DEFAULTS } from '../shared/constants'
 import type { DatabaseManager, TaskRecord } from './database'
 import type { AgentManager } from './agent-manager'
 
@@ -365,8 +365,33 @@ describe('HeartbeatScheduler', () => {
       expect(db.createHeartbeatLog).toHaveBeenCalledWith(expect.objectContaining({
         task_id: 'task-1',
         status: HeartbeatStatus.Ok,
+        summary: 'Everything is fine.',
         session_id: 'session-1',
       }))
+    })
+
+    it('falls back to default OK summary when only token is returned', () => {
+      const task = makeTask()
+      handle(scheduler).call(scheduler, task, 'session-1', HEARTBEAT_OK_TOKEN)
+
+      expect(db.createHeartbeatLog).toHaveBeenCalledWith(expect.objectContaining({
+        status: HeartbeatStatus.Ok,
+        summary: 'All checks passed (no new updates)',
+      }))
+    })
+
+    it('strips HEARTBEAT_INFO token prefix from summaries', () => {
+      const extractSummary = (scheduler as unknown as {
+        extractSummary: (result: string, status: HeartbeatStatus) => string
+      }).extractSummary
+
+      const summary = extractSummary.call(
+        scheduler,
+        `${HEARTBEAT_INFO_TOKEN}: PR approved; no action needed`,
+        HeartbeatStatus.Info,
+      )
+
+      expect(summary).toBe('PR approved; no action needed')
     })
 
     it('logs attention needed and notifies on non-OK result', () => {
