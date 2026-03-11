@@ -68,7 +68,7 @@ interface AcpSessionForTest {
   currentTurnId: number
   lastSessionUpdateType: string | null
   activeTurnId: number | null
-  toolCallMetadata: Map<string, { name: string; input: string }>
+  toolCallMetadata: Map<string, { name: string; input: string; title?: string }>
 }
 
 /** Cast adapter to access private members for testing */
@@ -559,6 +559,81 @@ describe('AcpAdapter - Turn Detection', () => {
       expect(parts[0].tool?.name).toBe('command')
       expect(parts[0].tool?.title).toBe('pwd')
       expect(parts[0].tool?.input).toBe('pwd')
+    })
+
+    it('should normalize write_stdin and summarize chars as title', async () => {
+      const sessionId = 'test-session'
+      const priv = adapterPrivate(adapter)
+
+      const session = priv.sessions.get(sessionId) || createMockSession(sessionId)
+      priv.sessions.set(sessionId, session)
+
+      const toolCallComplete = {
+        method: 'session/update',
+        params: {
+          sessionId,
+          update: {
+            sessionUpdate: 'tool_call_update',
+            toolCallId: 'tool-stdin',
+            status: 'completed',
+            title: 'write_stdin',
+            rawInput: { chars: 'y\n' },
+            rawOutput: { stdout: '' }
+          }
+        }
+      }
+
+      const parts = priv.convertAcpEventToMessageParts(
+        toolCallComplete,
+        new Set(),
+        new Set(),
+        new Map(),
+        session
+      )
+
+      expect(parts).toHaveLength(1)
+      expect(parts[0].tool?.name).toBe('stdin')
+      expect(parts[0].tool?.title).toBe('y')
+    })
+
+    it('should normalize update_plan and summarize first step as title', async () => {
+      const sessionId = 'test-session'
+      const priv = adapterPrivate(adapter)
+
+      const session = priv.sessions.get(sessionId) || createMockSession(sessionId)
+      priv.sessions.set(sessionId, session)
+
+      const toolCallComplete = {
+        method: 'session/update',
+        params: {
+          sessionId,
+          update: {
+            sessionUpdate: 'tool_call_update',
+            toolCallId: 'tool-plan',
+            status: 'completed',
+            title: 'update_plan',
+            rawInput: {
+              plan: [
+                { step: 'Trace replay messages', status: 'completed' },
+                { step: 'Patch transcript labels', status: 'in_progress' }
+              ]
+            },
+            rawOutput: { stdout: '' }
+          }
+        }
+      }
+
+      const parts = priv.convertAcpEventToMessageParts(
+        toolCallComplete,
+        new Set(),
+        new Set(),
+        new Map(),
+        session
+      )
+
+      expect(parts).toHaveLength(1)
+      expect(parts[0].tool?.name).toBe('plan')
+      expect(parts[0].tool?.title).toBe('2 steps: Trace replay messages')
     })
 
     it('should extract output from Codex rawOutput content array', async () => {

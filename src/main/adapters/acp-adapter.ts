@@ -118,7 +118,7 @@ interface AcpSession {
   currentTurnId: number  // Auto-incremented ID for each detected response turn
   lastSessionUpdateType: string | null
   activeTurnId: number | null  // Current turn tied to an in-flight session/prompt
-  toolCallMetadata: Map<string, { name: string; input: string }>  // Cached metadata from initial tool_call events
+  toolCallMetadata: Map<string, { name: string; input: string; title?: string }>  // Cached metadata from initial tool_call events
 }
 
 /**
@@ -1256,6 +1256,53 @@ export class AcpAdapter implements CodingAgentAdapter {
     return session.currentUserTurnId
   }
 
+  private normalizeToolName(rawToolName?: string): string {
+    switch (rawToolName) {
+      case 'exec_command':
+        return 'command'
+      case 'write_stdin':
+        return 'stdin'
+      case 'update_plan':
+        return 'plan'
+      default:
+        return rawToolName || 'tool'
+    }
+  }
+
+  private buildToolTitle(
+    rawToolName?: string,
+    rawInput?: Record<string, unknown>,
+    fallback?: string
+  ): string | undefined {
+    const trimmedFallback = fallback?.trim()
+
+    switch (rawToolName) {
+      case 'exec_command': {
+        const command = rawInput?.command
+        if (Array.isArray(command)) return command.join(' ') || trimmedFallback
+        if (typeof command === 'string' && command.trim()) return command.trim()
+        return trimmedFallback
+      }
+      case 'write_stdin': {
+        const chars = typeof rawInput?.chars === 'string' ? rawInput.chars.trim() : ''
+        if (chars) return chars.replace(/\s+/g, ' ').slice(0, 80)
+        return 'poll'
+      }
+      case 'update_plan': {
+        const plan = Array.isArray(rawInput?.plan) ? rawInput.plan : []
+        const firstStep = plan.find((item): item is { step: string } =>
+          typeof item === 'object' && item !== null && typeof (item as { step?: unknown }).step === 'string'
+        )
+        if (firstStep) return `${plan.length} steps: ${firstStep.step}`
+        const explanation = typeof rawInput?.explanation === 'string' ? rawInput.explanation.trim() : ''
+        if (explanation) return explanation.slice(0, 80)
+        return trimmedFallback
+      }
+      default:
+        return trimmedFallback
+    }
+  }
+
   private convertAcpEventToMessageParts(
     event: unknown,
     _seenMessageIds: Set<string>,
@@ -1313,8 +1360,9 @@ export class AcpAdapter implements CodingAgentAdapter {
             : undefined
           const toolFromTitle = update.title?.startsWith('Tool: ') ? update.title.slice(6) : undefined
           const cachedName = update.kind || toolFromRawInput || toolFromTitle || ''
-          if (cachedName || cachedInput) {
-            session.toolCallMetadata.set(partId, { name: cachedName, input: cachedInput })
+          const cachedTitle = this.buildToolTitle(cachedName || update.title, rawInput as Record<string, unknown>, cachedInput)
+          if (cachedName || cachedInput || cachedTitle) {
+            session.toolCallMetadata.set(partId, { name: cachedName, input: cachedInput, title: cachedTitle })
           }
         }
 
@@ -1367,14 +1415,19 @@ export class AcpAdapter implements CodingAgentAdapter {
           // Derive tool name from multiple sources
           const completedToolFromTitle = update.title?.startsWith('Tool: ') ? update.title.slice(6) : undefined
           const rawToolName = update.kind || cachedMeta?.name || completedToolFromTitle || update.title || 'tool'
-          const toolName = rawToolName === 'exec_command' ? 'command' : rawToolName
+          const toolName = this.normalizeToolName(rawToolName)
+          const toolTitle = this.buildToolTitle(
+            rawToolName,
+            rawInput as Record<string, unknown> | undefined,
+            cachedMeta?.title || (command && command !== rawToolName ? command : undefined)
+          )
 
           parts.push({
             id: partId,
             type: MessagePartType.TOOL,
             tool: {
               name: toolName,
-              title: command && command !== rawToolName ? command : undefined,
+              title: toolTitle,
               status: update.status,
               input: command,
               output: output
