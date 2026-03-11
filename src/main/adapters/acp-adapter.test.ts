@@ -1185,6 +1185,65 @@ describe('AcpAdapter - Turn Detection', () => {
     })
   })
 
+  describe('Resume message grouping', () => {
+    it('keeps assistant text after tool calls as a separate resumed message', async () => {
+      const sessionId = 'test-session'
+      const priv = adapterPrivate(adapter)
+      const session = priv.sessions.get(sessionId) || createMockSession(sessionId)
+
+      const assistantBeforeTool = {
+        method: 'session/update',
+        params: {
+          sessionId,
+          update: {
+            sessionUpdate: 'agent_message_chunk',
+            content: { type: 'text', text: 'Let me inspect that.' }
+          }
+        }
+      }
+
+      const toolCall = {
+        method: 'session/update',
+        params: {
+          sessionId,
+          update: {
+            sessionUpdate: 'tool_call',
+            toolCallId: 'tool-2',
+            title: 'exec_command',
+            status: 'completed',
+            rawInput: { cmd: 'pwd' }
+          }
+        }
+      }
+
+      const assistantAfterTool = {
+        method: 'session/update',
+        params: {
+          sessionId,
+          update: {
+            sessionUpdate: 'agent_message_chunk',
+            content: { type: 'text', text: 'I found the issue.' }
+          }
+        }
+      }
+
+      session.permanentMessages.push(assistantBeforeTool, toolCall, assistantAfterTool)
+      priv.sessions.set(sessionId, session)
+
+      const messages = await adapter.getAllMessages(sessionId, {
+        agentId: 'codex',
+        taskId: 'task-1',
+        workspaceDir: '/tmp'
+      })
+
+      expect(messages).toHaveLength(3)
+      expect(messages[0].parts[0].id).toBe('agent-response-1')
+      expect(messages[1].parts[0].id).toBe('tool-2')
+      expect(messages[2].parts[0].id).toBe('agent-response-2')
+      expect(messages[2].parts[0].text).toBe('I found the issue.')
+    })
+  })
+
   describe('Edge cases', () => {
     it('converts non-chunk replayed user and agent messages', async () => {
       const sessionId = 'test-session'

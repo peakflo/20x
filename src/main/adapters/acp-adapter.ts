@@ -680,8 +680,12 @@ export class AcpAdapter implements CodingAgentAdapter {
     // Convert MessageParts to SessionMessages
     const messages: SessionMessage[] = []
 
-    // Group parts by role to create messages
+    // Start a new message whenever the role changes OR the part itself is a
+    // new top-level transcript item. This keeps assistant text that arrives
+    // after tool calls in a separate message instead of appending it to the
+    // earlier assistant text during resume reconstruction.
     let currentMessage: SessionMessage | null = null
+    let previousPart: MessagePart | null = null
     let messageIdCounter = 0
 
     for (const part of allParts) {
@@ -690,8 +694,12 @@ export class AcpAdapter implements CodingAgentAdapter {
                    roleStr === 'system' ? MessageRole.SYSTEM :
                    MessageRole.ASSISTANT
 
-      // Start new message if role changed or no current message
-      if (!currentMessage || currentMessage.role !== role) {
+      const startsNewMessage = !currentMessage
+        || currentMessage.role !== role
+        || !previousPart
+        || part.id !== previousPart.id
+
+      if (startsNewMessage) {
         if (currentMessage) {
           messages.push(currentMessage)
         }
@@ -702,10 +710,10 @@ export class AcpAdapter implements CodingAgentAdapter {
         }
       }
 
-      currentMessage!.parts.push(part)
+      currentMessage.parts.push(part)
+      previousPart = part
     }
 
-    // Push last message
     if (currentMessage) {
       messages.push(currentMessage)
     }
