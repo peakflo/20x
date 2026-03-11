@@ -229,7 +229,7 @@ describe('TaskWorkspace – stale triage session cleanup', () => {
       }
     })
 
-    const task = makeRendererTask({ id: taskId, status: TaskStatus.InProgress, session_id: 'session-1' })
+    const task = makeRendererTask({ id: taskId, status: TaskStatus.AgentWorking, session_id: 'session-1' })
     renderWorkspace(task)
 
     fireEvent.click(screen.getByTestId('mock-send'))
