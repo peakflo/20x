@@ -497,7 +497,13 @@ export class AcpAdapter implements CodingAgentAdapter {
 
       // Convert replayed notifications (buffered during session/load) to SessionMessages.
       // Without this, the renderer sees status:'idle' + messages:[] and hides the panel.
-      return this.getAllMessages(sessionId, config)
+      const messages = await this.getAllMessages(sessionId, config)
+
+      // Drain replayed notifications from the live poll buffer. Otherwise the
+      // first poll after resume/send will emit the whole old transcript again.
+      session.messageBuffer = []
+
+      return messages
     } catch (error: unknown) {
       // Check if session not found
       const errMsg = error instanceof Error ? error.message : String(error)

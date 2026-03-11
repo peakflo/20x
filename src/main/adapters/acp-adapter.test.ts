@@ -5,7 +5,7 @@
 import { ChildProcess } from 'child_process'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { AcpAdapter } from './acp-adapter'
-import { SessionStatusType, MessagePartType, MessagePart } from './coding-agent-adapter'
+import { SessionStatusType, MessagePartType, MessagePart, SessionConfig } from './coding-agent-adapter'
 
 // Mock child_process
 vi.mock('child_process', () => ({
@@ -365,6 +365,52 @@ describe('AcpAdapter - Turn Detection', () => {
       expect(session.currentTurnId).toBe(1)
       expect(parts2[0].id).toBe('agent-response-1')
       expect(parts2[0].text).toBe('Long response part 1 and part 2')
+    })
+  })
+
+  describe('Resume buffer handling', () => {
+    it('clears replayed messageBuffer after resumeSession loads history', async () => {
+      const adapterAny = adapter as any
+      const replayEvent = {
+        method: 'session/update',
+        params: {
+          sessionId: 'persisted-session-id',
+          update: {
+            sessionUpdate: 'agent_message_chunk',
+            content: { type: 'text', text: 'Replayed assistant message' }
+          }
+        }
+      }
+
+      vi.spyOn(adapterAny, 'sendRpcRequest').mockImplementation(async (session: AcpSessionForTest, method: string) => {
+        if (method === 'initialize' || method === 'authenticate') return {}
+        if (method === 'session/load') {
+          session.messageBuffer.push(replayEvent)
+          session.permanentMessages.push(replayEvent)
+          return {}
+        }
+        return {}
+      })
+
+      const messages = await adapter.resumeSession('persisted-session-id', {
+        workspaceDir: '/tmp',
+        permissionMode: 'default'
+      } as any)
+
+      expect(messages).toHaveLength(1)
+
+      const session = adapterPrivate(adapter).sessions.get('persisted-session-id')
+      expect(session).toBeTruthy()
+      expect(session?.messageBuffer).toHaveLength(0)
+
+      const polled = await adapter.pollMessages(
+        'persisted-session-id',
+        new Set(),
+        new Set(),
+        new Map(),
+        {} as any
+      )
+      expect(polled).toHaveLength(0)
     })
   })
 
