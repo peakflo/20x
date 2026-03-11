@@ -118,6 +118,7 @@ interface AcpSession {
   currentTurnId: number  // Auto-incremented ID for each detected response turn
   lastSessionUpdateType: string | null
   activeTurnId: number | null  // Current turn tied to an in-flight session/prompt
+  pendingAssistantTurnSplit: boolean  // True after tool activity; next assistant chunk must start a new turn
   toolCallMetadata: Map<string, { name: string; input: string; title?: string }>  // Cached metadata from initial tool_call events
 }
 
@@ -285,6 +286,7 @@ export class AcpAdapter implements CodingAgentAdapter {
       currentTurnId: 0,
       lastSessionUpdateType: null,
       activeTurnId: null,
+      pendingAssistantTurnSplit: false,
       toolCallMetadata: new Map()
     }
 
@@ -453,6 +455,7 @@ export class AcpAdapter implements CodingAgentAdapter {
       currentTurnId: 0,
       lastSessionUpdateType: null,
       activeTurnId: null,
+      pendingAssistantTurnSplit: false,
       toolCallMetadata: new Map()
     }
 
@@ -945,6 +948,7 @@ export class AcpAdapter implements CodingAgentAdapter {
         // text chunk should render as a new message after the tool row instead
         // of appending to the pre-tool assistant text.
         session.activeTurnId = null
+        session.pendingAssistantTurnSplit = true
       } else if (update.sessionUpdate === 'error' || update.sessionUpdate === 'failed') {
         session.status = SessionStatusType.ERROR
       } else if (update.sessionUpdate === 'completed' || update.sessionUpdate === 'finished') {
@@ -1242,9 +1246,11 @@ export class AcpAdapter implements CodingAgentAdapter {
   private getAssistantTurnId(session: AcpSession): number {
     const now = Date.now()
     const previousType = session.lastSessionUpdateType
+    const mustSplitAfterTool = session.pendingAssistantTurnSplit
 
     if (
       session.activeTurnId &&
+      !mustSplitAfterTool &&
       !this.isToolingUpdateType(previousType) &&
       !this.isUserUpdateType(previousType)
     ) {
@@ -1256,14 +1262,17 @@ export class AcpAdapter implements CodingAgentAdapter {
     const TIME_GAP_THRESHOLD = 2000
 
     const shouldStartNewTurn = session.currentTurnId === 0
+      || mustSplitAfterTool
       || this.isUserUpdateType(previousType)
       || this.isToolingUpdateType(previousType)
       || (this.isAssistantChunkUpdateType(previousType) && timeSinceLastChunk > TIME_GAP_THRESHOLD)
 
     if (shouldStartNewTurn) {
       session.currentTurnId += 1
-      console.log(`[AcpAdapter] Detected NEW assistant turn #${session.currentTurnId} (prev=${previousType}, gap=${timeSinceLastChunk}ms)`)
+      console.log(`[AcpAdapter] Detected NEW assistant turn #${session.currentTurnId} (prev=${previousType}, gap=${timeSinceLastChunk}ms, split=${mustSplitAfterTool})`)
     }
+
+    session.pendingAssistantTurnSplit = false
 
     if (session.activeTurnId) {
       session.activeTurnId = session.currentTurnId
@@ -1373,6 +1382,9 @@ export class AcpAdapter implements CodingAgentAdapter {
 
       // Handle different update types
       if (update.sessionUpdate === 'tool_call' || update.sessionUpdate === 'tool_call_update') {
+        if (session) {
+          session.pendingAssistantTurnSplit = true
+        }
         // Cache metadata from initial tool_call events (in_progress) so we can use it
         // when the completed tool_call_update arrives (which may lack name/input fields)
         if (update.status !== 'completed' && session && partId) {

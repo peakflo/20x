@@ -36,6 +36,7 @@ interface AcpAdapterPrivate {
   ): MessagePart[]
   handlePermissionRequest(session: AcpSessionForTest, request: JsonRpcRequestForTest): void
   sendRpcResponse(session: AcpSessionForTest, id: string | number, result: unknown): void
+  updateSessionStatus(session: AcpSessionForTest, notification: unknown): void
 }
 
 interface JsonRpcRequestForTest {
@@ -68,6 +69,7 @@ interface AcpSessionForTest {
   currentTurnId: number
   lastSessionUpdateType: string | null
   activeTurnId: number | null
+  pendingAssistantTurnSplit: boolean
   toolCallMetadata: Map<string, { name: string; input: string; title?: string }>
 }
 
@@ -97,6 +99,7 @@ function createMockSession(sessionId: string): AcpSessionForTest {
     currentTurnId: 0,
     lastSessionUpdateType: null,
     activeTurnId: null,
+    pendingAssistantTurnSplit: false,
     toolCallMetadata: new Map()
   }
 }
@@ -1174,6 +1177,64 @@ describe('AcpAdapter - Turn Detection', () => {
 
       expect(session.currentTurnId).toBe(2)
       expect(afterToolParts[0].id).toBe('agent-response-2')
+    })
+
+    it('starts a new live assistant turn after usage_update follows a tool call', async () => {
+      const sessionId = 'test-session'
+      const priv = adapterPrivate(adapter)
+      const session = priv.sessions.get(sessionId) || createMockSession(sessionId)
+      const seenPartIds = new Set<string>()
+      const partContentLengths = new Map<string, string>()
+
+      session.currentTurnId = 1
+      session.activeTurnId = 1
+      session.lastSessionUpdateType = 'agent_message_chunk'
+      priv.sessions.set(sessionId, session)
+
+      const toolCall = {
+        method: 'session/update',
+        params: {
+          sessionId,
+          update: {
+            sessionUpdate: 'tool_call',
+            toolCallId: 'tool-live-usage',
+            title: 'Run pwd',
+            status: 'completed',
+            rawInput: { command: ['pwd'] }
+          }
+        }
+      }
+
+      const usageUpdate = {
+        method: 'session/update',
+        params: {
+          sessionId,
+          update: {
+            sessionUpdate: 'usage_update'
+          }
+        }
+      }
+
+      const assistantAfterTool = {
+        method: 'session/update',
+        params: {
+          sessionId,
+          update: {
+            sessionUpdate: 'agent_message_chunk',
+            content: { type: 'text', text: 'am2' }
+          }
+        }
+      }
+
+      priv.updateSessionStatus(session, toolCall as never)
+      priv.convertAcpEventToMessageParts(toolCall, new Set(), seenPartIds, partContentLengths, session)
+      priv.convertAcpEventToMessageParts(usageUpdate, new Set(), seenPartIds, partContentLengths, session)
+      const afterToolParts = priv.convertAcpEventToMessageParts(assistantAfterTool, new Set(), seenPartIds, partContentLengths, session)
+
+      expect(session.pendingAssistantTurnSplit).toBe(false)
+      expect(session.currentTurnId).toBe(2)
+      expect(afterToolParts[0].id).toBe('agent-response-2')
+      expect(afterToolParts[0].text).toBe('am2')
     })
 
     it('starts a new assistant replay turn after tool activity', async () => {
