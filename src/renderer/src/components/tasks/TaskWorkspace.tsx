@@ -315,7 +315,10 @@ export function TaskWorkspace({
       // Check if this is a question answer (for permission requests)
       // Question answers should use approve() instead of sendMessage()
       const lastMessage = session.messages[session.messages.length - 1]
-      if (lastMessage?.partType === 'question' && lastMessage?.tool?.questions) {
+      const hasActiveQuestion = session.status === SessionStatus.WAITING_APPROVAL
+        && lastMessage?.partType === 'question'
+        && !!lastMessage?.tool?.questions
+      if (hasActiveQuestion) {
         // This is an answer to a question - use approve
         approve(true, message).catch(console.error)
       } else {
@@ -323,7 +326,7 @@ export function TaskWorkspace({
         sendMessage(message).catch(console.error)
       }
     },
-    [sendMessage, approve, session.messages]
+    [sendMessage, approve, session.messages, session.status]
   )
 
   // ── Feedback orchestration ──────────────────────────────────

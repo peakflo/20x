@@ -3,15 +3,16 @@ import { Markdown } from '@/components/ui/Markdown'
 import { cn } from '../lib/utils'
 import type { AgentMessage } from '../stores/agent-store'
 
-function QuestionMessage({ message, onAnswer }: { message: AgentMessage; onAnswer?: (answer: string) => void }) {
+function QuestionMessage({ message, onAnswer, canAnswer }: { message: AgentMessage; onAnswer?: (answer: string) => void; canAnswer: boolean }) {
   const questions = message.tool?.questions || []
   const [answers, setAnswers] = useState<Record<number, string>>({})
   const [submitted, setSubmitted] = useState(false)
+  const isLocked = submitted || !canAnswer
 
   const allAnswered = questions.every((_, qi) => answers[qi]?.trim())
 
   const handleSubmit = () => {
-    if (!allAnswered || submitted) return
+    if (!allAnswered || isLocked) return
     setSubmitted(true)
     if (questions.length === 1) {
       onAnswer?.(answers[0])
@@ -40,14 +41,14 @@ function QuestionMessage({ message, onAnswer }: { message: AgentMessage; onAnswe
                 return (
                   <button
                     key={oi}
-                    onClick={() => !submitted && setAnswers(prev => ({ ...prev, [qi]: opt.label }))}
-                    disabled={submitted}
+                    onClick={() => !isLocked && setAnswers(prev => ({ ...prev, [qi]: opt.label }))}
+                    disabled={isLocked}
                     className={cn(
                       'w-full text-left rounded px-3 py-2 text-xs transition-colors border',
                       isSelected
                         ? 'bg-primary/20 border-primary/50 text-foreground'
                         : 'border-border/50 hover:bg-white/5 hover:border-border text-gray-300',
-                      submitted && 'opacity-50 cursor-default'
+                      isLocked && 'opacity-50 cursor-default'
                     )}
                   >
                     <div className="font-medium">{opt.label}</div>
@@ -59,7 +60,7 @@ function QuestionMessage({ message, onAnswer }: { message: AgentMessage; onAnswe
           )}
         </div>
       ))}
-      {!submitted && allAnswered && (
+      {!isLocked && allAnswered && (
         <div className="px-4 py-2.5 border-t border-border/30">
           <button
             onClick={handleSubmit}
@@ -194,12 +195,13 @@ function ToolCallMessage({ message }: { message: AgentMessage }) {
 interface MessageBubbleProps {
   message: AgentMessage
   onAnswer?: (answer: string) => void
+  canAnswerQuestion?: boolean
 }
 
-export function MessageBubble({ message, onAnswer }: MessageBubbleProps) {
+export function MessageBubble({ message, onAnswer, canAnswerQuestion = false }: MessageBubbleProps) {
   // Question — check by data content so it renders correctly regardless of partType
   if (message.tool?.questions && message.tool.questions.length > 0) {
-    return <QuestionMessage message={message} onAnswer={onAnswer} />
+    return <QuestionMessage message={message} onAnswer={onAnswer} canAnswer={canAnswerQuestion} />
   }
 
   // Todo list — check by data content so it renders correctly regardless of partType
