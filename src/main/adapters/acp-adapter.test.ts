@@ -34,6 +34,15 @@ interface AcpAdapterPrivate {
     partContentLengths: Map<string, string>,
     session?: AcpSessionForTest
   ): MessagePart[]
+  handlePermissionRequest(session: AcpSessionForTest, request: JsonRpcRequestForTest): void
+  sendRpcResponse(session: AcpSessionForTest, id: string | number, result: unknown): void
+}
+
+interface JsonRpcRequestForTest {
+  jsonrpc: '2.0'
+  id: string | number
+  method: string
+  params?: unknown
 }
 
 // Minimal session type for tests (mirrors private AcpSession)
@@ -51,12 +60,14 @@ interface AcpSessionForTest {
   }>
   nextRequestId: number
   pendingApproval: unknown | null
+  config: { permissionMode?: 'ask' | 'allow' }
   promptRequestId: number | null
   responseCounter: number
   currentUserTurnId: number
   lastChunkTime: number | null
   currentTurnId: number
   lastSessionUpdateType: string | null
+  activeTurnId: number | null
   toolCallMetadata: Map<string, { name: string; input: string }>
 }
 
@@ -78,12 +89,14 @@ function createMockSession(sessionId: string): AcpSessionForTest {
     pendingRequests: new Map(),
     nextRequestId: 1,
     pendingApproval: null,
+    config: { permissionMode: 'ask' },
     promptRequestId: null,
     responseCounter: 0,
     currentUserTurnId: 0,
     lastChunkTime: null,
     currentTurnId: 0,
     lastSessionUpdateType: null,
+    activeTurnId: null,
     toolCallMetadata: new Map()
   }
 }
@@ -103,6 +116,77 @@ describe('AcpAdapter - Turn Detection', () => {
     vi.clearAllMocks()
   })
 
+  describe('Permission handling', () => {
+    it('stores pending approval when permission mode is ask', () => {
+      const sessionId = 'test-session'
+      const priv = adapterPrivate(adapter)
+      const session = createMockSession(sessionId)
+      session.config.permissionMode = 'ask'
+
+      priv.handlePermissionRequest(session, {
+        jsonrpc: '2.0',
+        id: 'req-1',
+        method: 'session/request_permission',
+        params: {
+          toolCall: {
+            rawInput: { reason: 'Run ls' },
+            toolCallId: 'tool-1',
+            kind: 'shell'
+          },
+          options: [
+            { optionId: 'approved', name: 'Yes', kind: 'allow_once' },
+            { optionId: 'abort', name: 'No', kind: 'deny' }
+          ]
+        }
+      })
+
+      expect(session.pendingApproval).toEqual({
+        requestId: 'req-1',
+        toolCallId: 'tool-1',
+        question: 'Run ls',
+        options: [
+          { optionId: 'approved', name: 'Yes', kind: 'allow_once' },
+          { optionId: 'abort', name: 'No', kind: 'deny' }
+        ]
+      })
+    })
+
+    it('auto-approves when permission mode is allow', () => {
+      const sessionId = 'test-session'
+      const priv = adapterPrivate(adapter)
+      const session = createMockSession(sessionId)
+      session.config.permissionMode = 'allow'
+      const sendRpcResponseSpy = vi.spyOn(priv, 'sendRpcResponse')
+
+      priv.handlePermissionRequest(session, {
+        jsonrpc: '2.0',
+        id: 'req-2',
+        method: 'session/request_permission',
+        params: {
+          toolCall: {
+            rawInput: { reason: 'Run npm test' },
+            toolCallId: 'tool-2',
+            kind: 'shell'
+          },
+          options: [
+            { optionId: 'approved-for-session', name: 'Always', kind: 'allow_session' },
+            { optionId: 'approved', name: 'Yes', kind: 'allow_once' },
+            { optionId: 'abort', name: 'No', kind: 'deny' }
+          ]
+        }
+      })
+
+      expect(session.pendingApproval).toBeNull()
+      expect(sendRpcResponseSpy).toHaveBeenCalledWith(session, 'req-2', {
+        result: {
+          outcome: {
+            outcome: 'selected',
+            optionId: 'approved-for-session'
+          }
+        }
+      })
+    })
+  })
   describe('Time-based turn detection', () => {
     it('should use same turn ID for messages arriving within 2 seconds', async () => {
       const sessionId = 'test-session'
@@ -221,14 +305,77 @@ describe('AcpAdapter - Turn Detection', () => {
       expect(session.currentTurnId).toBe(2) // New turn
       expect(parts2[0].id).toBe('agent-response-2') // Different ID
     })
-  })
 
-  describe('Tool call turn detection', () => {
-    it('should NOT increment turn ID for tool calls within time threshold', async () => {
+    it('should keep same turn during long gaps when prompt-scoped turn is active', async () => {
       const sessionId = 'test-session'
       const priv = adapterPrivate(adapter)
 
       const session = priv.sessions.get(sessionId) || createMockSession(sessionId)
+      session.currentTurnId = 1
+      session.activeTurnId = 1
+
+      priv.sessions.set(sessionId, session)
+
+      const seenPartIds = new Set<string>()
+      const partContentLengths = new Map<string, string>()
+
+      const chunk1 = {
+        method: 'session/update',
+        params: {
+          sessionId,
+          update: {
+            sessionUpdate: 'agent_message_chunk',
+            content: { type: 'text', text: 'Long response part 1' }
+          }
+        }
+      }
+
+      const parts1 = priv.convertAcpEventToMessageParts(
+        chunk1,
+        new Set(),
+        seenPartIds,
+        partContentLengths,
+        session
+      )
+
+      expect(parts1[0].id).toBe('agent-response-1')
+
+      // Simulate a long pause between chunks (stream stall/network jitter)
+      vi.advanceTimersByTime(3000)
+
+      const chunk2 = {
+        method: 'session/update',
+        params: {
+          sessionId,
+          update: {
+            sessionUpdate: 'agent_message_chunk',
+            content: { type: 'text', text: ' and part 2' }
+          }
+        }
+      }
+
+      const parts2 = priv.convertAcpEventToMessageParts(
+        chunk2,
+        new Set(),
+        seenPartIds,
+        partContentLengths,
+        session
+      )
+
+      expect(session.currentTurnId).toBe(1)
+      expect(parts2[0].id).toBe('agent-response-1')
+      expect(parts2[0].text).toBe('Long response part 1 and part 2')
+    })
+  })
+
+  describe('Tool call turn detection', () => {
+    it('should NOT increment turn ID for tool calls within an active prompt turn', async () => {
+      const sessionId = 'test-session'
+      const priv = adapterPrivate(adapter)
+
+      const session = priv.sessions.get(sessionId) || createMockSession(sessionId)
+      session.currentTurnId = 1
+      session.activeTurnId = 1
 
       priv.sessions.set(sessionId, session)
 
@@ -254,7 +401,7 @@ describe('AcpAdapter - Turn Detection', () => {
 
       expect(session.currentTurnId).toBe(1)
 
-      // Tool call (within 2s)
+      // Tool call inside the same prompt turn
       vi.advanceTimersByTime(500)
 
       const toolCall = {
@@ -280,7 +427,7 @@ describe('AcpAdapter - Turn Detection', () => {
         session
       )
 
-      // Next message chunk (within 2s — should stay on same turn)
+      // Next message chunk in the same prompt turn should keep the same turn ID
       vi.advanceTimersByTime(500)
 
       const chunk2 = {
@@ -302,7 +449,6 @@ describe('AcpAdapter - Turn Detection', () => {
         session
       )
 
-      // Tool calls no longer force a new turn — only time gaps do
       expect(session.currentTurnId).toBe(1)
       expect(parts2[0].id).toBe('agent-response-1')
     })

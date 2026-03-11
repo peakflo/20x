@@ -9,7 +9,7 @@ import { agentConfigApi } from '@/lib/ipc-client'
 import { useMcpStore } from '@/stores/mcp-store'
 import { SkillSelector } from '@/components/skills/SkillSelector'
 import { SecretSelector } from '@/components/secrets/SecretSelector'
-import type { Agent, CreateAgentDTO, UpdateAgentDTO, AgentMcpServerEntry, ClaudeAuthMethod } from '@/types'
+import type { Agent, CreateAgentDTO, UpdateAgentDTO, AgentMcpServerEntry, ClaudeAuthMethod, AgentPermissionMode } from '@/types'
 import { CodingAgentType, CODING_AGENTS, CLAUDE_MODELS, CODEX_MODELS } from '@/types'
 
 interface AgentFormProps {
@@ -54,6 +54,9 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
   // Auth method state (Claude Code only)
   const [authMethod, setAuthMethod] = useState<ClaudeAuthMethod>(
     agent?.config.auth_method ?? 'subscription'
+  )
+  const [permissionMode, setPermissionMode] = useState<AgentPermissionMode>(
+    agent?.config.permission_mode ?? 'ask'
   )
 
   // API keys state
@@ -195,6 +198,7 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
         coding_agent: codingAgent || undefined,
         model: model.trim() || undefined,
         auth_method: codingAgent === CodingAgentType.CLAUDE_CODE ? authMethod : undefined,
+        permission_mode: permissionMode,
         system_prompt: systemPrompt.trim() || undefined,
         max_parallel_sessions: maxParallelSessions,
         mcp_servers: mcpServersConfig.length > 0 ? mcpServersConfig : undefined,
@@ -318,8 +322,26 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
       </div>
 
       {(codingAgent === CodingAgentType.OPENCODE || codingAgent === CodingAgentType.CLAUDE_CODE || codingAgent === CodingAgentType.CODEX) && (
-        <div className="space-y-1.5">
-          <Label htmlFor="agent-model">Model</Label>
+        <>
+          <div className="space-y-1.5">
+            <Label htmlFor="agent-permission-mode">Permissions</Label>
+            <select
+              id="agent-permission-mode"
+              value={permissionMode}
+              onChange={(e) => setPermissionMode(e.target.value as AgentPermissionMode)}
+              className="w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm cursor-pointer"
+            >
+              <option value="ask">Ask before tools/commands</option>
+              <option value="allow">Allow automatically</option>
+            </select>
+            <p className="text-xs text-muted-foreground">
+              {codingAgent === CodingAgentType.CODEX
+                ? 'Allow automatically auto-approves Codex ACP permission requests for this agent.'
+                : 'Controls how this agent handles tool and command approval prompts.'}
+            </p>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="agent-model">Model</Label>
           <div className="relative">
             {isLoadingModels ? (
               <div className="flex items-center gap-2 px-3 py-2 text-sm text-muted-foreground border border-input rounded-md">
@@ -376,7 +398,8 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
               </div>
             )}
           </div>
-        </div>
+          </div>
+        </>
       )}
 
       {/* API Key Configuration for Codex */}

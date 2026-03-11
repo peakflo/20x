@@ -110,12 +110,14 @@ interface AcpSession {
   }>
   nextRequestId: number
   pendingApproval: AcpPermissionRequest | null  // Permission request awaiting user response
+  config: SessionConfig
   promptRequestId: number | null  // ID of the current session/prompt request
   responseCounter: number  // Counter for unique message IDs per response turn
   currentUserTurnId: number  // Auto-incremented ID for each detected user turn
   lastChunkTime: number | null  // Timestamp of last agent_message_chunk
   currentTurnId: number  // Auto-incremented ID for each detected response turn
   lastSessionUpdateType: string | null
+  activeTurnId: number | null  // Current turn tied to an in-flight session/prompt
   toolCallMetadata: Map<string, { name: string; input: string }>  // Cached metadata from initial tool_call events
 }
 
@@ -275,12 +277,14 @@ export class AcpAdapter implements CodingAgentAdapter {
       pendingRequests: new Map(),
       nextRequestId: 1,
       pendingApproval: null,
+      config,
       promptRequestId: null,
       responseCounter: 0,
       currentUserTurnId: 0,
       lastChunkTime: null,
       currentTurnId: 0,
       lastSessionUpdateType: null,
+      activeTurnId: null,
       toolCallMetadata: new Map()
     }
 
@@ -441,12 +445,14 @@ export class AcpAdapter implements CodingAgentAdapter {
       pendingRequests: new Map(),
       nextRequestId: 1,
       pendingApproval: null,
+      config,
       promptRequestId: null,
       responseCounter: 0,
       currentUserTurnId: 0,
       lastChunkTime: null,
       currentTurnId: 0,
       lastSessionUpdateType: null,
+      activeTurnId: null,
       toolCallMetadata: new Map()
     }
 
@@ -534,6 +540,9 @@ export class AcpAdapter implements CodingAgentAdapter {
     console.log(promptText.slice(0, 200) + (promptText.length > 200 ? '...' : ''))
 
     session.status = SessionStatusType.BUSY
+    session.currentTurnId++
+    session.activeTurnId = session.currentTurnId
+    session.lastChunkTime = null
 
     // Send prompt via ACP (prompt must be an array of ContentBlock objects)
     // Note: session/prompt is a long-running operation that responds via session/update notifications
@@ -1061,16 +1070,35 @@ export class AcpAdapter implements CodingAgentAdapter {
     console.log(`  Tool: ${toolCall?.kind} - ${toolCall?.toolCallId}`)
     console.log(`  Options: ${options.map((o) => `${o.name} (${o.optionId})`).join(', ')}`)
 
+    const approvalOptions = options.map((o) => ({
+      optionId: o.optionId,
+      name: o.name,
+      kind: o.kind
+    }))
+
+    if (session.config.permissionMode === 'allow') {
+      const autoApprovedOptionId = approvalOptions.find((option) => option.optionId === 'approved-for-session')?.optionId
+        || approvalOptions.find((option) => option.optionId === 'approved')?.optionId
+        || 'approved'
+
+      console.log(`[AcpAdapter/${this.agentType}] Auto-approving permission with: ${autoApprovedOptionId}`)
+      this.sendRpcResponse(session, request.id, {
+        result: {
+          outcome: {
+            outcome: 'selected',
+            optionId: autoApprovedOptionId
+          }
+        }
+      })
+      return
+    }
+
     // Store the permission request for UI to handle
     session.pendingApproval = {
       requestId: request.id,
       toolCallId: toolCall?.toolCallId || '',
       question,
-      options: options.map((o) => ({
-        optionId: o.optionId,
-        name: o.name,
-        kind: o.kind
-      }))
+      options: approvalOptions
     }
 
     // Update session status to waiting for approval
@@ -1172,20 +1200,20 @@ export class AcpAdapter implements CodingAgentAdapter {
     return ''
   }
 
-  private isUserUpdateType(sessionUpdate?: string): boolean {
+  private isUserUpdateType(sessionUpdate?: string | null): boolean {
     return sessionUpdate === 'user_message_chunk'
       || sessionUpdate === 'human_message_chunk'
       || sessionUpdate === 'user_message'
       || sessionUpdate === 'human_message'
   }
 
-  private isAssistantChunkUpdateType(sessionUpdate?: string): boolean {
+  private isAssistantChunkUpdateType(sessionUpdate?: string | null): boolean {
     return sessionUpdate === 'agent_message_chunk'
       || sessionUpdate === 'assistant_message_chunk'
       || sessionUpdate === 'agent_thought_chunk'
   }
 
-  private isToolingUpdateType(sessionUpdate?: string): boolean {
+  private isToolingUpdateType(sessionUpdate?: string | null): boolean {
     return sessionUpdate === 'tool_call'
       || sessionUpdate === 'tool_call_update'
       || sessionUpdate === 'plan'
@@ -1193,6 +1221,11 @@ export class AcpAdapter implements CodingAgentAdapter {
   }
 
   private getAssistantTurnId(session: AcpSession): number {
+    if (session.activeTurnId) {
+      session.lastChunkTime = Date.now()
+      return session.activeTurnId
+    }
+
     const previousType = session.lastSessionUpdateType
     const now = Date.now()
     const timeSinceLastChunk = session.lastChunkTime ? now - session.lastChunkTime : Infinity
@@ -1347,8 +1380,6 @@ export class AcpAdapter implements CodingAgentAdapter {
       } else if (update.sessionUpdate === 'agent_message_chunk' || update.sessionUpdate === 'assistant_message_chunk') {
         // Handle streaming text response from agent
         // Format: { content: { type: 'text', text: '...' } }
-
-        // Use auto-detected turn ID instead of promptRequestId
         const turnId = session ? this.getAssistantTurnId(session) : 0
         const messageId = turnId > 0 ? `agent-response-${turnId}` : 'agent-response'
         console.log(`[AcpAdapter] agent_message_chunk: turnId=${turnId}, messageId=${messageId}`)
@@ -1375,7 +1406,6 @@ export class AcpAdapter implements CodingAgentAdapter {
       } else if (update.sessionUpdate === 'agent_thought_chunk') {
         // Handle reasoning/thinking chunks
         // Format: { content: { type: 'text', text: '...' } }
-        // Use auto-detected turn ID
         const turnId = session ? this.getAssistantTurnId(session) : 0
         const thinkingId = turnId > 0 ? `agent-thinking-${turnId}` : 'agent-thinking'
         const chunk = this.extractTextFromUpdateContent(update.content)

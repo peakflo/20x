@@ -495,3 +495,27 @@ describe('AgentManager implicit resume behavior', () => {
     expect(outputBatchEvents).toHaveLength(1)
   })
 })
+
+describe('AgentManager shutdown', () => {
+  it('stopAllSessions waits for all stopSession promises', async () => {
+    const mockDb = createMockDb({})
+    const mgr = new AgentManager(mockDb)
+
+    ;(mgr as any).sessions.set('s1', { taskId: 'task-1' })
+    ;(mgr as any).sessions.set('s2', { taskId: 'task-2' })
+
+    let pendingStops = 0
+    vi.spyOn(mgr, 'stopSession').mockImplementation(async () => {
+      pendingStops += 1
+      await new Promise(resolve => setTimeout(resolve, 0))
+      pendingStops -= 1
+    })
+
+    await mgr.stopAllSessions()
+
+    expect(mgr.stopSession).toHaveBeenCalledTimes(2)
+    expect(mgr.stopSession).toHaveBeenCalledWith('s1', false)
+    expect(mgr.stopSession).toHaveBeenCalledWith('s2', false)
+    expect(pendingStops).toBe(0)
+  })
+})

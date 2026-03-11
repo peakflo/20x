@@ -398,3 +398,13 @@ describe('Settings CRUD', () => {
     expect(db.getSetting('key')).toBeUndefined()
   })
 })
+
+describe('Closed database behavior', () => {
+  it('returns safe defaults after close', () => {
+    db.close()
+
+    expect(db.getTasks()).toEqual([])
+    expect(db.getTask('any-id')).toBeUndefined()
+    expect(db.getMcpServer('any-id')).toBeUndefined()
+  })
+})

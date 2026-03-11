@@ -30,6 +30,8 @@ export enum CodingAgentType {
   CODEX = 'codex'
 }
 
+export type AgentPermissionMode = 'ask' | 'allow'
+
 export type ClaudeAuthMethod = 'subscription' | 'api_key'
 
 export const CODING_AGENTS: { value: CodingAgentType; label: string }[] = [
@@ -57,6 +59,7 @@ export const CLAUDE_MODELS: { id: ClaudeModel; name: string }[] = [
 ]
 
 export enum CodexModel {
+  GPT_5_4_CODEX = 'gpt-5.4-codex',
   GPT_5_3_CODEX = 'gpt-5.3-codex',
   GPT_5_2_CODEX = 'gpt-5.2-codex',
   GPT_5_1_CODEX_MAX = 'gpt-5.1-codex-max',
@@ -68,7 +71,8 @@ export enum CodexModel {
 }
 
 export const CODEX_MODELS: { id: CodexModel; name: string }[] = [
-  { id: CodexModel.GPT_5_3_CODEX, name: 'GPT-5.3 Codex (Recommended)' },
+  { id: CodexModel.GPT_5_4_CODEX, name: 'GPT-5.4 Codex (Recommended)' },
+  { id: CodexModel.GPT_5_3_CODEX, name: 'GPT-5.3 Codex' },
   { id: CodexModel.GPT_5_2_CODEX, name: 'GPT-5.2 Codex' },
   { id: CodexModel.GPT_5_1_CODEX_MAX, name: 'GPT-5.1 Codex Max' },
   { id: CodexModel.GPT_5_1_CODEX, name: 'GPT-5.1 Codex' },
@@ -148,6 +152,7 @@ export interface AgentConfig {
   coding_agent?: CodingAgentType
   model?: string
   auth_method?: ClaudeAuthMethod
+  permission_mode?: AgentPermissionMode
   system_prompt?: string
   mcp_servers?: Array<string | AgentMcpServerEntry>
   skill_ids?: string[]

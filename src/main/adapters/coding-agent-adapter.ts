@@ -46,6 +46,7 @@ export interface SessionConfig {
   mcpServers?: Record<string, McpServerConfig>
   /** Claude Code auth method: 'subscription' (OAuth/Pro/Max) or 'api_key' (pay-per-use). Defaults to 'subscription'. */
   authMethod?: 'subscription' | 'api_key'
+  permissionMode?: 'ask' | 'allow'
   apiKeys?: {
     openai?: string
     anthropic?: string
