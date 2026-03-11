@@ -57,6 +57,7 @@ interface AcpSessionForTest {
   lastChunkTime: number | null
   currentTurnId: number
   lastSessionUpdateType: string | null
+  activeTurnId: number | null
   toolCallMetadata: Map<string, { name: string; input: string }>
 }
 
@@ -84,6 +85,7 @@ function createMockSession(sessionId: string): AcpSessionForTest {
     lastChunkTime: null,
     currentTurnId: 0,
     lastSessionUpdateType: null,
+    activeTurnId: null,
     toolCallMetadata: new Map()
   }
 }
@@ -220,6 +222,67 @@ describe('AcpAdapter - Turn Detection', () => {
 
       expect(session.currentTurnId).toBe(2) // New turn
       expect(parts2[0].id).toBe('agent-response-2') // Different ID
+    })
+
+    it('should keep same turn during long gaps when prompt-scoped turn is active', async () => {
+      const sessionId = 'test-session'
+      const priv = adapterPrivate(adapter)
+
+      const session = priv.sessions.get(sessionId) || createMockSession(sessionId)
+      session.currentTurnId = 1
+      session.activeTurnId = 1
+
+      priv.sessions.set(sessionId, session)
+
+      const seenPartIds = new Set<string>()
+      const partContentLengths = new Map<string, string>()
+
+      const chunk1 = {
+        method: 'session/update',
+        params: {
+          sessionId,
+          update: {
+            sessionUpdate: 'agent_message_chunk',
+            content: { type: 'text', text: 'Long response part 1' }
+          }
+        }
+      }
+
+      const parts1 = priv.convertAcpEventToMessageParts(
+        chunk1,
+        new Set(),
+        seenPartIds,
+        partContentLengths,
+        session
+      )
+
+      expect(parts1[0].id).toBe('agent-response-1')
+
+      // Simulate a long pause between chunks (stream stall/network jitter)
+      vi.advanceTimersByTime(3000)
+
+      const chunk2 = {
+        method: 'session/update',
+        params: {
+          sessionId,
+          update: {
+            sessionUpdate: 'agent_message_chunk',
+            content: { type: 'text', text: ' and part 2' }
+          }
+        }
+      }
+
+      const parts2 = priv.convertAcpEventToMessageParts(
+        chunk2,
+        new Set(),
+        seenPartIds,
+        partContentLengths,
+        session
+      )
+
+      expect(session.currentTurnId).toBe(1)
+      expect(parts2[0].id).toBe('agent-response-1')
+      expect(parts2[0].text).toBe('Long response part 1 and part 2')
     })
   })
 
