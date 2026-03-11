@@ -561,6 +561,42 @@ describe('AcpAdapter - Turn Detection', () => {
       expect(parts[0].tool?.input).toBe('pwd')
     })
 
+    it('should use rawInput.cmd for exec_command title', async () => {
+      const sessionId = 'test-session'
+      const priv = adapterPrivate(adapter)
+
+      const session = priv.sessions.get(sessionId) || createMockSession(sessionId)
+      priv.sessions.set(sessionId, session)
+
+      const toolCallComplete = {
+        method: 'session/update',
+        params: {
+          sessionId,
+          update: {
+            sessionUpdate: 'tool_call_update',
+            toolCallId: 'tool-cmd',
+            status: 'completed',
+            title: 'exec_command',
+            rawInput: { cmd: 'pwd' },
+            rawOutput: { stdout: '/tmp' }
+          }
+        }
+      }
+
+      const parts = priv.convertAcpEventToMessageParts(
+        toolCallComplete,
+        new Set(),
+        new Set(),
+        new Map(),
+        session
+      )
+
+      expect(parts).toHaveLength(1)
+      expect(parts[0].tool?.name).toBe('command')
+      expect(parts[0].tool?.title).toBe('pwd')
+      expect(parts[0].tool?.input).toBe('pwd')
+    })
+
     it('should normalize write_stdin and summarize chars as title', async () => {
       const sessionId = 'test-session'
       const priv = adapterPrivate(adapter)

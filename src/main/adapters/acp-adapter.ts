@@ -1281,6 +1281,8 @@ export class AcpAdapter implements CodingAgentAdapter {
         const command = rawInput?.command
         if (Array.isArray(command)) return command.join(' ') || trimmedFallback
         if (typeof command === 'string' && command.trim()) return command.trim()
+        const cmd = typeof rawInput?.cmd === 'string' ? rawInput.cmd.trim() : ''
+        if (cmd) return cmd
         return trimmedFallback
       }
       case 'write_stdin': {
@@ -1348,12 +1350,13 @@ export class AcpAdapter implements CodingAgentAdapter {
         // Cache metadata from initial tool_call events (in_progress) so we can use it
         // when the completed tool_call_update arrives (which may lack name/input fields)
         if (update.status !== 'completed' && session && partId) {
-          const rawInput = update.rawInput as { command?: string | string[]; parsed_cmd?: Array<{ cmd?: string }>; tool?: string; server?: string } | undefined
+          const rawInput = update.rawInput as { cmd?: string; command?: string | string[]; parsed_cmd?: Array<{ cmd?: string }>; tool?: string; server?: string } | undefined
           const commandFromInput = Array.isArray(rawInput?.command)
             ? rawInput.command.join(' ')
             : rawInput?.command
+          const commandFromCmd = rawInput?.cmd
           const commandFromParsed = rawInput?.parsed_cmd?.map((c) => c.cmd).join('; ')
-          const cachedInput = commandFromInput || commandFromParsed || update.title || ''
+          const cachedInput = commandFromInput || commandFromCmd || commandFromParsed || update.title || ''
           // Derive tool name: kind > rawInput.tool (with server prefix) > title (strip "Tool: " prefix)
           const toolFromRawInput = rawInput?.tool
             ? (rawInput.server ? `${rawInput.server}/${rawInput.tool}` : rawInput.tool)
@@ -1374,7 +1377,7 @@ export class AcpAdapter implements CodingAgentAdapter {
           const cachedMeta = session?.toolCallMetadata.get(partId)
 
           // Extract command and output from rawInput/rawOutput
-          const rawInput = update.rawInput as { command?: string | string[]; parsed_cmd?: Array<{ cmd?: string }> } | undefined
+          const rawInput = update.rawInput as { cmd?: string; command?: string | string[]; parsed_cmd?: Array<{ cmd?: string }> } | undefined
           const rawOutput = update.rawOutput as {
             command?: string | string[];
             stdout?: string;
@@ -1388,6 +1391,7 @@ export class AcpAdapter implements CodingAgentAdapter {
           const commandFromInput = Array.isArray(rawInput?.command)
             ? rawInput.command.join(' ')
             : rawInput?.command
+          const commandFromCmd = rawInput?.cmd
           const commandFromOutput = Array.isArray(rawOutput?.command)
             ? rawOutput.command.join(' ')
             : rawOutput?.command
@@ -1399,7 +1403,7 @@ export class AcpAdapter implements CodingAgentAdapter {
             ? contentArray.map((c) => c.content?.text || c.text || '').filter(Boolean).join('\n')
             : undefined
 
-          const command = commandFromInput || commandFromOutput || commandFromParsed || update.title || cachedMeta?.input || inputFromContent || 'Unknown'
+          const command = commandFromInput || commandFromCmd || commandFromOutput || commandFromParsed || update.title || cachedMeta?.input || inputFromContent || 'Unknown'
 
           // Extract output - handle Codex format: {content: [{text: "...", type: "text"}], isError: false}
           const outputFromContent = Array.isArray(rawOutput?.content)
