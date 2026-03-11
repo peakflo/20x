@@ -941,6 +941,10 @@ export class AcpAdapter implements CodingAgentAdapter {
       // Update status based on update type
       if (update.sessionUpdate === 'tool_call' || update.sessionUpdate === 'tool_call_update') {
         session.status = SessionStatusType.BUSY
+        // Tool activity ends the current assistant turn. The next assistant
+        // text chunk should render as a new message after the tool row instead
+        // of appending to the pre-tool assistant text.
+        session.activeTurnId = null
       } else if (update.sessionUpdate === 'error' || update.sessionUpdate === 'failed') {
         session.status = SessionStatusType.ERROR
       } else if (update.sessionUpdate === 'completed' || update.sessionUpdate === 'finished') {
