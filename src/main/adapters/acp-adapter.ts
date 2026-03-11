@@ -1331,13 +1331,15 @@ export class AcpAdapter implements CodingAgentAdapter {
 
           // Derive tool name from multiple sources
           const completedToolFromTitle = update.title?.startsWith('Tool: ') ? update.title.slice(6) : undefined
-          const toolName = update.kind || cachedMeta?.name || completedToolFromTitle || update.title || 'tool'
+          const rawToolName = update.kind || cachedMeta?.name || completedToolFromTitle || update.title || 'tool'
+          const toolName = rawToolName === 'exec_command' ? 'command' : rawToolName
 
           parts.push({
             id: partId,
             type: MessagePartType.TOOL,
             tool: {
               name: toolName,
+              title: command && command !== rawToolName ? command : undefined,
               status: update.status,
               input: command,
               output: output
