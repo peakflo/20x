@@ -27,7 +27,9 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
   const hasSession = !!session?.sessionId
 
   // Smart routing: detect if last message is a question
-  const isQuestion = lastMessage?.partType === 'question' && !!lastMessage?.tool?.questions
+  const isQuestion = isWaitingApproval
+    && lastMessage?.partType === 'question'
+    && !!lastMessage?.tool?.questions
 
   // Can the user send input?
   const canSendInput = hasSession && (isWorking || isWaitingApproval || session?.status === SessionStatus.IDLE)
@@ -73,14 +75,14 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
   // Handle question answer from QuestionMessage options
   const handleAnswer = useCallback(
     async (answer: string) => {
-      if (!session?.sessionId) return
+      if (!session?.sessionId || !isWaitingApproval) return
       try {
         await api.sessions.approve(session.sessionId, true, answer)
       } catch (e) {
         console.error('Failed to send answer:', e)
       }
     },
-    [session]
+    [session, isWaitingApproval]
   )
 
   // Session controls (shared hook provides double-click protection and rollback)
@@ -325,7 +327,12 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
           )}
 
           {messages.map((msg) => (
-            <MessageBubble key={msg.id} message={msg} onAnswer={handleAnswer} />
+            <MessageBubble
+              key={msg.id}
+              message={msg}
+              onAnswer={handleAnswer}
+              canAnswerQuestion={isWaitingApproval && msg.id === lastMessage?.id}
+            />
           ))}
 
           {/* Working indicator */}
