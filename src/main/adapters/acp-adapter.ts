@@ -713,7 +713,7 @@ export class AcpAdapter implements CodingAgentAdapter {
         }
       }
 
-      currentMessage.parts.push(part)
+      currentMessage!.parts.push(part)
       previousPart = part
     }
 

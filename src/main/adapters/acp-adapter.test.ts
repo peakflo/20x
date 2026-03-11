@@ -5,7 +5,7 @@
 import { ChildProcess } from 'child_process'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { AcpAdapter } from './acp-adapter'
-import { SessionStatusType, MessagePartType, MessagePart, SessionConfig } from './coding-agent-adapter'
+import { SessionStatusType, MessagePartType, MessagePart } from './coding-agent-adapter'
 
 // Mock child_process
 vi.mock('child_process', () => ({
@@ -385,7 +385,10 @@ describe('AcpAdapter - Turn Detection', () => {
         }
       }
 
-      vi.spyOn(adapterAny, 'sendRpcRequest').mockImplementation(async (session: AcpSessionForTest, method: string) => {
+      vi.spyOn(adapterAny, 'sendRpcRequest').mockImplementation(async (...args: unknown[]) => {
+        const session = args[0] as AcpSessionForTest
+        const method = args[1] as string
+
         if (method === 'initialize' || method === 'authenticate') return {}
         if (method === 'session/load') {
           session.messageBuffer.push(replayEvent)
