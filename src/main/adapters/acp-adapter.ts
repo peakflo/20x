@@ -1223,13 +1223,17 @@ export class AcpAdapter implements CodingAgentAdapter {
 
   private getAssistantTurnId(session: AcpSession): number {
     const now = Date.now()
+    const previousType = session.lastSessionUpdateType
 
-    if (session.activeTurnId) {
+    if (
+      session.activeTurnId &&
+      !this.isToolingUpdateType(previousType) &&
+      !this.isUserUpdateType(previousType)
+    ) {
       session.lastChunkTime = now
       return session.activeTurnId
     }
 
-    const previousType = session.lastSessionUpdateType
     const timeSinceLastChunk = session.lastChunkTime ? now - session.lastChunkTime : Infinity
     const TIME_GAP_THRESHOLD = 2000
 
@@ -1241,6 +1245,10 @@ export class AcpAdapter implements CodingAgentAdapter {
     if (shouldStartNewTurn) {
       session.currentTurnId += 1
       console.log(`[AcpAdapter] Detected NEW assistant turn #${session.currentTurnId} (prev=${previousType}, gap=${timeSinceLastChunk}ms)`)
+    }
+
+    if (session.activeTurnId) {
+      session.activeTurnId = session.currentTurnId
     }
 
     session.lastChunkTime = now

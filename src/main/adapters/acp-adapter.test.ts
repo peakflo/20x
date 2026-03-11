@@ -1039,6 +1039,51 @@ describe('AcpAdapter - Turn Detection', () => {
       expect(secondAssistantParts[0].text).toBe('Second assistant reply')
     })
 
+    it('starts a new assistant turn after tool activity even with active prompt turn', async () => {
+      const sessionId = 'test-session'
+      const priv = adapterPrivate(adapter)
+      const session = priv.sessions.get(sessionId) || createMockSession(sessionId)
+      const seenPartIds = new Set<string>()
+      const partContentLengths = new Map<string, string>()
+
+      session.currentTurnId = 1
+      session.activeTurnId = 1
+      session.lastSessionUpdateType = 'agent_message_chunk'
+      priv.sessions.set(sessionId, session)
+
+      const toolCall = {
+        method: 'session/update',
+        params: {
+          sessionId,
+          update: {
+            sessionUpdate: 'tool_call',
+            toolCallId: 'tool-active',
+            title: 'exec_command',
+            status: 'completed',
+            rawInput: { cmd: 'pwd' }
+          }
+        }
+      }
+
+      const assistantAfterTool = {
+        method: 'session/update',
+        params: {
+          sessionId,
+          update: {
+            sessionUpdate: 'agent_message_chunk',
+            content: { type: 'text', text: 'Here is the result.' }
+          }
+        }
+      }
+
+      priv.convertAcpEventToMessageParts(toolCall, new Set(), seenPartIds, partContentLengths, session)
+      const afterToolParts = priv.convertAcpEventToMessageParts(assistantAfterTool, new Set(), seenPartIds, partContentLengths, session)
+
+      expect(session.currentTurnId).toBe(2)
+      expect(session.activeTurnId).toBe(2)
+      expect(afterToolParts[0].id).toBe('agent-response-2')
+    })
+
     it('starts a new assistant replay turn after tool activity', async () => {
       const sessionId = 'test-session'
       const priv = adapterPrivate(adapter)
