@@ -178,11 +178,27 @@ export class HeartbeatScheduler {
   writeHeartbeatFile(taskId: string, content: string): void {
     const filePath = this.getHeartbeatFilePath(taskId)
     const dir = dirname(filePath)
+    const previousContent = this.readHeartbeatFile(taskId)
+    const normalizedContent = content.trim()
     if (!existsSync(dir)) {
       mkdirSync(dir, { recursive: true })
     }
     writeFileSync(filePath, content, 'utf-8')
     console.log(`[HeartbeatScheduler] Wrote heartbeat.md for task ${taskId} (${content.length} chars)`)
+
+    if ((previousContent ?? '') !== normalizedContent) {
+      const task = this.dbManager.getTask(taskId)
+      const updates: Partial<TaskRecord> = {
+        heartbeat_last_check_at: null
+      }
+
+      if (task?.heartbeat_enabled) {
+        updates.heartbeat_next_check_at = new Date().toISOString()
+      }
+
+      this.dbManager.updateTask(taskId, updates)
+      console.log(`[HeartbeatScheduler] Reset heartbeat baseline for task ${taskId} after instructions changed`)
+    }
   }
 
   // ── Core Logic ──────────────────────────────────────────────
@@ -343,6 +359,10 @@ export class HeartbeatScheduler {
 
     if (lastCheck) {
       prompt += `IMPORTANT: Only consider events after ${lastCheck}. Ignore anything older — it has already been handled.\n\n`
+    }
+
+    if (this.requiresCurrentStateChecks(heartbeatContent)) {
+      prompt += 'For checks about current state (for example merge conflicts, unresolved requested changes, or the latest CI status), inspect the current state even if the problem started before the last check.\n\n'
     }
 
     if (globalInstructions.trim()) {
@@ -590,6 +610,10 @@ export class HeartbeatScheduler {
     // Extract GitHub PR and issue URLs
     const githubUrls = this.extractGitHubUrls(heartbeatContent)
 
+    if (this.requiresCurrentStateChecks(heartbeatContent)) {
+      return 'inconclusive' // Needs full heartbeat to inspect current PR/CI state
+    }
+
     if (githubUrls.length === 0) {
       return 'inconclusive' // No URLs to check — need LLM
     }
@@ -614,6 +638,14 @@ export class HeartbeatScheduler {
     }
 
     return hasChanges ? 'changes_detected' : 'no_changes'
+  }
+
+  /**
+   * Detect whether the heartbeat instructions require checking the current state,
+   * not just new activity since the last run.
+   */
+  private requiresCurrentStateChecks(heartbeatContent: string): boolean {
+    return /(merge conflict|conflicts|conflicted|requested changes|request changes|ci\b|pipeline|status check|check run)/i.test(heartbeatContent)
   }
 
   /**

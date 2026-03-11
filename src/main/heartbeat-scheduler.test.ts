@@ -178,6 +178,26 @@ describe('HeartbeatScheduler', () => {
     })
   })
 
+  // ── requiresCurrentStateChecks ───────────────────────────
+
+  describe('requiresCurrentStateChecks', () => {
+    const requiresCurrentStateChecks = (content: string) => {
+      const scheduler = new HeartbeatScheduler({} as DatabaseManager, {} as AgentManager)
+      return (scheduler as unknown as {
+        requiresCurrentStateChecks: (heartbeatContent: string) => boolean
+      }).requiresCurrentStateChecks(content)
+    }
+
+    it('returns true for conflict and CI checks', () => {
+      expect(requiresCurrentStateChecks('Check PR conflicts and verify CI pipeline passed')).toBe(true)
+      expect(requiresCurrentStateChecks('Watch for requested changes on the PR')).toBe(true)
+    })
+
+    it('returns false for comment-only checks', () => {
+      expect(requiresCurrentStateChecks('Check for new PR comments and issue comments')).toBe(false)
+    })
+  })
+
   // ── buildHeartbeatPrompt ──────────────────────────────────
 
   describe('buildHeartbeatPrompt', () => {
@@ -193,6 +213,18 @@ describe('HeartbeatScheduler', () => {
       expect(prompt).toContain('Fix auth bug')
       expect(prompt).toContain(content)
       expect(prompt).toContain(HEARTBEAT_OK_TOKEN)
+    })
+
+    it('adds current-state guidance for conflicts and CI checks', () => {
+      const buildPrompt = (scheduler as unknown as {
+        buildHeartbeatPrompt: (task: TaskRecord, content: string) => string
+      }).buildHeartbeatPrompt
+
+      const task = makeTask({ title: 'Fix auth bug' })
+      const content = '- Check PR conflicts\n- Verify CI pipeline passed'
+      const prompt = buildPrompt.call(scheduler, task, content)
+
+      expect(prompt).toContain('inspect the current state even if the problem started before the last check')
     })
   })
 
@@ -554,6 +586,23 @@ describe('HeartbeatScheduler', () => {
       expect(agent.hasActiveSessionForTask).toHaveBeenCalledWith('task-1')
       // Should not have tried to start a heartbeat session
       expect(agent.startHeartbeatSession).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('writeHeartbeatFile', () => {
+    it('resets the heartbeat baseline when instructions change', () => {
+      const db = mockDbManager({
+        getWorkspaceDir: vi.fn().mockReturnValue(`/tmp/heartbeat-${Date.now()}`),
+        getTask: vi.fn().mockReturnValue(makeTask()),
+      })
+      const scheduler = new HeartbeatScheduler(db as unknown as DatabaseManager, agent as unknown as AgentManager)
+
+      scheduler.writeHeartbeatFile('task-1', `# Heartbeat Checks\n- [ ] Check PR conflicts`)
+
+      expect(db.updateTask).toHaveBeenCalledWith('task-1', expect.objectContaining({
+        heartbeat_last_check_at: null,
+        heartbeat_next_check_at: expect.any(String),
+      }))
     })
   })
 
