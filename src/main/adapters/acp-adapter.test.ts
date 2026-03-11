@@ -517,11 +517,48 @@ describe('AcpAdapter - Turn Detection', () => {
       expect(parts.length).toBe(1)
       expect(parts[0].type).toBe(MessagePartType.TOOL)
       expect(parts[0].tool?.name).toBe('shell')
+      expect(parts[0].tool?.title).toBe('ls -la')
       expect(parts[0].tool?.input).toBe('ls -la')
       expect(parts[0].tool?.output).toBe('file.txt\ndir/')
 
       // Cached metadata should be cleaned up
       expect(session.toolCallMetadata.has('tool-1')).toBe(false)
+    })
+
+    it('should normalize exec_command to command and use command as title', async () => {
+      const sessionId = 'test-session'
+      const priv = adapterPrivate(adapter)
+
+      const session = priv.sessions.get(sessionId) || createMockSession(sessionId)
+      priv.sessions.set(sessionId, session)
+
+      const toolCallComplete = {
+        method: 'session/update',
+        params: {
+          sessionId,
+          update: {
+            sessionUpdate: 'tool_call_update',
+            toolCallId: 'tool-1',
+            status: 'completed',
+            title: 'exec_command',
+            rawInput: { command: 'pwd' },
+            rawOutput: { stdout: '/tmp' }
+          }
+        }
+      }
+
+      const parts = priv.convertAcpEventToMessageParts(
+        toolCallComplete,
+        new Set(),
+        new Set(),
+        new Map(),
+        session
+      )
+
+      expect(parts).toHaveLength(1)
+      expect(parts[0].tool?.name).toBe('command')
+      expect(parts[0].tool?.title).toBe('pwd')
+      expect(parts[0].tool?.input).toBe('pwd')
     })
 
     it('should extract output from Codex rawOutput content array', async () => {

@@ -258,7 +258,7 @@ function ToolCallMessage({ message }: { message: AgentMessage }) {
         <ChevronRight className={`h-3 w-3 text-muted-foreground shrink-0 transition-transform ${expanded ? 'rotate-90' : ''}`} />
         <Wrench className="h-3 w-3 text-muted-foreground shrink-0" />
         <span className="text-foreground">{tool.name}</span>
-        {tool.title && <span className="text-muted-foreground truncate">— {tool.title}</span>}
+        {tool.title && <span className="text-muted-foreground truncate"> {tool.title}</span>}
         {isRunning && <Loader2 className="h-3 w-3 ml-auto shrink-0 text-muted-foreground animate-spin" />}
         {isError && <AlertTriangle className="h-3 w-3 ml-auto shrink-0 text-red-400" />}
       </button>

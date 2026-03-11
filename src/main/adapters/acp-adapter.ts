@@ -868,6 +868,7 @@ export class AcpAdapter implements CodingAgentAdapter {
         if (result?.stopReason) {
           console.log(`[AcpAdapter/${this.agentType}] Prompt completed with stopReason: ${result.stopReason}`)
           session.status = SessionStatusType.IDLE
+          session.activeTurnId = null
           // Don't clear promptRequestId - keep it for late-arriving events
           // It will be updated when the next prompt is sent
         }
@@ -1221,13 +1222,14 @@ export class AcpAdapter implements CodingAgentAdapter {
   }
 
   private getAssistantTurnId(session: AcpSession): number {
+    const now = Date.now()
+
     if (session.activeTurnId) {
-      session.lastChunkTime = Date.now()
+      session.lastChunkTime = now
       return session.activeTurnId
     }
 
     const previousType = session.lastSessionUpdateType
-    const now = Date.now()
     const timeSinceLastChunk = session.lastChunkTime ? now - session.lastChunkTime : Infinity
     const TIME_GAP_THRESHOLD = 2000
 
@@ -1364,13 +1366,15 @@ export class AcpAdapter implements CodingAgentAdapter {
 
           // Derive tool name from multiple sources
           const completedToolFromTitle = update.title?.startsWith('Tool: ') ? update.title.slice(6) : undefined
-          const toolName = update.kind || cachedMeta?.name || completedToolFromTitle || update.title || 'tool'
+          const rawToolName = update.kind || cachedMeta?.name || completedToolFromTitle || update.title || 'tool'
+          const toolName = rawToolName === 'exec_command' ? 'command' : rawToolName
 
           parts.push({
             id: partId,
             type: MessagePartType.TOOL,
             tool: {
               name: toolName,
+              title: command && command !== rawToolName ? command : undefined,
               status: update.status,
               input: command,
               output: output
