@@ -829,8 +829,12 @@ const SCHEMA_VERSION = 4
 export class DatabaseManager {
   public db!: Database.Database
 
+  private ensureDbOpen(): boolean {
+    return !!this.db?.open
+  }
+
   close(): void {
-    if (this.db?.open) {
+    if (this.ensureDbOpen()) {
       this.db.pragma('wal_checkpoint(TRUNCATE)')
       this.db.close()
     }
@@ -1788,6 +1792,8 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
   }
 
   getTasks(): TaskRecord[] {
+    if (!this.ensureDbOpen()) return []
+
     const rows = this.db.prepare(
       'SELECT * FROM tasks ORDER BY created_at DESC'
     ).all() as TaskRow[]
@@ -1796,6 +1802,8 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
   }
 
   getTask(id: string): TaskRecord | undefined {
+    if (!this.ensureDbOpen()) return undefined
+
     const row = this.db.prepare(
       'SELECT * FROM tasks WHERE id = ?'
     ).get(id) as TaskRow | undefined
@@ -2044,6 +2052,8 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
   }
 
   getMcpServer(id: string): McpServerRecord | undefined {
+    if (!this.ensureDbOpen()) return undefined
+
     const row = this.db.prepare('SELECT * FROM mcp_servers WHERE id = ?').get(id) as McpServerRow | undefined
     return row ? deserializeMcpServer(row) : undefined
   }

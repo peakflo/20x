@@ -2250,7 +2250,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     console.warn(`[AgentManager] No adapter handler for permission response in session ${sessionId}`)
   }
 
-  stopAllSessions(): void {
+  async stopAllSessions(): Promise<void> {
     console.log(`[AgentManager] Stopping all ${this.sessions.size} sessions`)
 
     // Stop the centralized polling coordinator first
@@ -2260,10 +2260,12 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     }
     this.pollingEntries.clear()
 
-    for (const sessionId of [...this.sessions.keys()]) {
-      // Don't reset task status during app shutdown - preserve current status
-      this.stopSession(sessionId, false)
-    }
+    await Promise.allSettled(
+      [...this.sessions.keys()].map((sessionId) => {
+        // Don't reset task status during app shutdown - preserve current status
+        return this.stopSession(sessionId, false)
+      })
+    )
   }
 
   getSessionStatus(sessionId: string): { status: string; agentId: string; taskId: string } | null {
