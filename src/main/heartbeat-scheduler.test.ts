@@ -188,13 +188,32 @@ describe('HeartbeatScheduler', () => {
       }).requiresCurrentStateChecks(content)
     }
 
-    it('returns true for conflict and CI checks', () => {
-      expect(requiresCurrentStateChecks('Check PR conflicts and verify CI pipeline passed')).toBe(true)
+    it('returns true for requested changes and CI checks', () => {
+      expect(requiresCurrentStateChecks('Verify CI pipeline passed')).toBe(true)
       expect(requiresCurrentStateChecks('Watch for requested changes on the PR')).toBe(true)
     })
 
-    it('returns false for comment-only checks', () => {
+    it('returns false for comments and conflict-only checks', () => {
       expect(requiresCurrentStateChecks('Check for new PR comments and issue comments')).toBe(false)
+      expect(requiresCurrentStateChecks('Check whether the PR has conflicts')).toBe(false)
+    })
+  })
+
+  describe('hasMergeConflicts', () => {
+    const hasMergeConflicts = (prState: { mergeable: boolean | null; mergeable_state?: string | null }) => {
+      const scheduler = new HeartbeatScheduler({} as DatabaseManager, {} as AgentManager)
+      return (scheduler as unknown as {
+        hasMergeConflicts: (prState: { mergeable: boolean | null; mergeable_state?: string | null }) => boolean
+      }).hasMergeConflicts(prState)
+    }
+
+    it('returns true for dirty merge state', () => {
+      expect(hasMergeConflicts({ mergeable: false, mergeable_state: 'dirty' })).toBe(true)
+    })
+
+    it('returns false for non-conflicting states', () => {
+      expect(hasMergeConflicts({ mergeable: true, mergeable_state: 'clean' })).toBe(false)
+      expect(hasMergeConflicts({ mergeable: null, mergeable_state: 'unknown' })).toBe(false)
     })
   })
 
