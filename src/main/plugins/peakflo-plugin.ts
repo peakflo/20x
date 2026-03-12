@@ -437,14 +437,22 @@ export class PeakfloPlugin implements TaskSourcePlugin {
             })
 
             if (existing) {
-              // Don't overwrite a locally-completed task with a non-completed
-              // server status.  This guards against race conditions where the
-              // completion API call succeeded but the server response hasn't
-              // propagated yet when the next sync runs.
-              const effectiveStatus =
-                existing.status === TaskStatus.Completed && status !== TaskStatus.Completed
-                  ? TaskStatus.Completed
-                  : status
+              // Guard against a narrow race condition: the user completes a task
+              // in 20x (executeAction succeeds on the server) but the next sync
+              // fetch returns stale data before the server has processed it.
+              //
+              // We only preserve the local Completed status for a brief window
+              // (2 minutes).  After that we trust the server — if the action was
+              // processed, the server will already report "completed".  If it
+              // didn't, we should let the server status flow through so the user
+              // can see the task is still open and retry.
+              const RACE_WINDOW_MS = 2 * 60 * 1000
+              const completedRecently =
+                existing.status === TaskStatus.Completed &&
+                status !== TaskStatus.Completed &&
+                (Date.now() - new Date(existing.updated_at).getTime()) < RACE_WINDOW_MS
+
+              const effectiveStatus = completedRecently ? TaskStatus.Completed : status
 
               ctx.db.updateTask(existing.id, {
                 title: task.title,
@@ -722,9 +730,10 @@ export class PeakfloPlugin implements TaskSourcePlugin {
       // Call Workflo API to complete the task (like github plugin
       // calls GitHub API to close an issue). Workflo handles
       // propagation to the original task source (Notion, etc.).
-      if (ctx.workfloApiClient) {
-        await ctx.workfloApiClient.executeAction(task.external_id, outputs)
+      if (!ctx.workfloApiClient) {
+        return { success: false, error: 'Enterprise API client not available — please reconnect to enterprise' }
       }
+      await ctx.workfloApiClient.executeAction(task.external_id, outputs)
 
       return { success: true, taskUpdate: { status: TaskStatus.Completed } }
     }
