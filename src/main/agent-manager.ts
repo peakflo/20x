@@ -1105,7 +1105,8 @@ export class AgentManager extends EventEmitter {
               promptText += '\nUse `get_task` with a sibling ID to read its full output fields and resolution.'
             }
           }
-          promptText += '\n\nYou can call `list_subtasks` or `get_task` via MCP tools at any time for live data on parent and sibling tasks.'
+          promptText += '\n\nYou can call `list_subtasks` or `get_task` via the `task-management` MCP server at any time for live data on parent and sibling tasks.'
+          promptText += '\nIMPORTANT: For all task operations (update_task, get_task, list_subtasks), use ONLY the `task-management` MCP server tools. Do NOT use integration tools like `pf-workflo-integrations` — those are for external system sync only.'
         }
 
         // If this task has subtasks, mention them
@@ -2673,6 +2674,8 @@ Current Priority: ${task.priority || 'medium'}
 Current Labels: ${JSON.stringify(task.labels || [])}
 Parent Task: ${task.parent_task_id ? `This is a subtask of task ${task.parent_task_id}` : 'None (top-level task)'}
 
+IMPORTANT: For ALL task operations below, use ONLY the \`task-management\` MCP server tools (e.g. \`mcp__task-management__update_task\`, \`mcp__task-management__create_subtask\`). Do NOT use integration/sync tools like \`pf-workflo-integrations\` for updating tasks — those are for external system sync only.
+
 Follow these steps:
 
 1. Call \`find_similar_tasks\` with individual keywords extracted from the title/description. Pass them as space-separated words in \`title_keywords\` (e.g. "login bug fix" not the full title). Do NOT set \`completed_only\` — search all tasks so you find patterns even if tasks are still in progress.
@@ -2685,7 +2688,7 @@ Follow these steps:
    - Appropriate repos (if the task relates to specific repositories)
    - Priority (critical/high/medium/low) — adjust if the current priority seems wrong
    - Labels — suggest relevant labels based on similar tasks
-6. If the task is complex and clearly involves multiple distinct steps that would benefit from separate agents or sequential human review, create subtasks using \`create_subtask\`. Each subtask should:
+6. If the task is complex and clearly involves multiple distinct steps that would benefit from separate agents or sequential human review, create subtasks using \`create_subtask\` from the \`task-management\` MCP server. Each subtask should:
    - Have a clear, specific title describing one step
    - Be assigned to the most appropriate agent_id
    - Have relevant skill_ids and repos
@@ -2699,7 +2702,8 @@ Important:
 - Do NOT attempt to work on or solve the task. Only triage it.
 - If no similar tasks exist, use your best judgment based on the title, description, and type.
 - Be efficient — make your tool calls and finish quickly.
-- When creating subtasks, the parent task's agent will coordinate — subtask agents handle individual pieces.`
+- When creating subtasks, the parent task's agent will coordinate — subtask agents handle individual pieces.
+- NEVER use external integration MCP tools (like pf-workflo-integrations) for local task updates — always use task-management tools.`
   }
 
   /**
