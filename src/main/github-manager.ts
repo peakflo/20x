@@ -4,6 +4,8 @@ import { shell } from 'electron'
 
 const execFileAsync = promisify(execFile)
 
+const GH_API_MAX_BUFFER = 10 * 1024 * 1024
+
 export interface GhCliStatus {
   installed: boolean
   authenticated: boolean
@@ -40,6 +42,34 @@ export interface GitHubCollaborator {
 
 export class GitHubManager {
   private authProcess: ChildProcess | null = null
+
+  private mapRepo(raw: Record<string, unknown>): GitHubRepo {
+    return {
+      name: raw.name as string,
+      fullName: raw.full_name as string,
+      defaultBranch: (raw.default_branch as string) || 'main',
+      cloneUrl: raw.clone_url as string,
+      description: (raw.description as string) || '',
+      isPrivate: raw.private as boolean
+    }
+  }
+
+  private async fetchAccessibleRepos(): Promise<GitHubRepo[]> {
+    const { stdout } = await execFileAsync('gh', [
+      'api', '--paginate',
+      '/user/repos?per_page=100&sort=updated&affiliation=owner,collaborator,organization_member'
+    ], { maxBuffer: GH_API_MAX_BUFFER })
+
+    const raw = JSON.parse(stdout) as Record<string, unknown>[]
+    const deduped = new Map<string, GitHubRepo>()
+
+    for (const repo of raw) {
+      const mapped = this.mapRepo(repo)
+      deduped.set(mapped.fullName, mapped)
+    }
+
+    return Array.from(deduped.values())
+  }
 
   async checkGhCli(): Promise<GhCliStatus> {
     try {
@@ -129,44 +159,33 @@ export class GitHubManager {
   }
 
   async fetchUserOrgs(): Promise<string[]> {
-    const { stdout } = await execFileAsync('gh', [
-      'api', '/user/orgs', '--jq', '.[].login'
+    const [status, repos] = await Promise.all([
+      this.checkGhCli(),
+      this.fetchAccessibleRepos()
     ])
-    return stdout.trim().split('\n').filter(Boolean)
+
+    const owners = new Set<string>()
+    for (const repo of repos) {
+      const [owner] = repo.fullName.split('/')
+      if (owner && owner !== status.username) {
+        owners.add(owner)
+      }
+    }
+
+    return Array.from(owners).sort((left, right) => left.localeCompare(right))
   }
 
   async fetchOrgRepos(org: string): Promise<GitHubRepo[]> {
-    const { stdout } = await execFileAsync('gh', [
-      'api', '--paginate',
-      `/orgs/${org}/repos?per_page=100&sort=updated`
-    ], { maxBuffer: 10 * 1024 * 1024 })
-
-    const raw = JSON.parse(stdout) as Record<string, unknown>[]
-    return raw.map((r) => ({
-      name: r.name as string,
-      fullName: r.full_name as string,
-      defaultBranch: (r.default_branch as string) || 'main',
-      cloneUrl: r.clone_url as string,
-      description: (r.description as string) || '',
-      isPrivate: r.private as boolean
-    }))
+    const repos = await this.fetchAccessibleRepos()
+    return repos.filter((repo) => repo.fullName.startsWith(`${org}/`))
   }
 
   async fetchUserRepos(): Promise<GitHubRepo[]> {
-    const { stdout } = await execFileAsync('gh', [
-      'api', '--paginate',
-      '/user/repos?per_page=100&sort=updated&affiliation=owner'
-    ], { maxBuffer: 10 * 1024 * 1024 })
+    const status = await this.checkGhCli()
+    if (!status.username) return []
 
-    const raw = JSON.parse(stdout) as Record<string, unknown>[]
-    return raw.map((r) => ({
-      name: r.name as string,
-      fullName: r.full_name as string,
-      defaultBranch: (r.default_branch as string) || 'main',
-      cloneUrl: r.clone_url as string,
-      description: (r.description as string) || '',
-      isPrivate: r.private as boolean
-    }))
+    const repos = await this.fetchAccessibleRepos()
+    return repos.filter((repo) => repo.fullName.startsWith(`${status.username}/`))
   }
 
   async fetchIssues(
