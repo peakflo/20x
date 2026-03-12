@@ -698,10 +698,9 @@ export class PeakfloPlugin implements TaskSourcePlugin {
     }
 
     // ── Enterprise mode ────────────────────────────────────────
-    // Don't call Workflo API directly. Instead return taskUpdate
-    // so the status change triggers a task_completed sync event
-    // (with outputs). Workflo POST /events handles completion +
-    // propagation to the task source in a single path.
+    // Follow the same pattern as other plugins (github-issues,
+    // hubspot, notion): call the external API directly, then
+    // return taskUpdate so sync-manager updates local state.
     if (this.isEnterpriseMode(config, ctx)) {
       const outputs: Record<string, unknown> = { action: actionId }
       for (const field of task.output_fields) {
@@ -711,12 +710,11 @@ export class PeakfloPlugin implements TaskSourcePlugin {
       }
       if (input) outputs.reason = input
 
-      // Record completion event with outputs via enterprise sync
-      if (ctx.enterpriseStateSync) {
-        ctx.enterpriseStateSync.recordTaskCompleted(task, {
-          action: actionId,
-          outputs
-        })
+      // Call Workflo API to complete the task (like github plugin
+      // calls GitHub API to close an issue). Workflo handles
+      // propagation to the original task source (Notion, etc.).
+      if (ctx.workfloApiClient) {
+        await ctx.workfloApiClient.executeAction(task.external_id, outputs)
       }
 
       return { success: true, taskUpdate: { status: TaskStatus.Completed } }
