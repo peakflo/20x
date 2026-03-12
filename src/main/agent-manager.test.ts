@@ -604,7 +604,7 @@ describe('AgentManager transitionToIdle — enterprise task completion after fee
 
     // Renderer should be notified with ReadyForReview
     const taskUpdatedCall = sendSpy.mock.calls.find(
-      ([channel, data]: [string, any]) => channel === 'task:updated' && data.updates.status === TaskStatus.ReadyForReview
+      (call) => call[0] === 'task:updated' && (call[1] as any)?.updates?.status === TaskStatus.ReadyForReview
     )
     expect(taskUpdatedCall).toBeDefined()
 
