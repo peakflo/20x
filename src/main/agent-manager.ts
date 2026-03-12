@@ -78,6 +78,7 @@ export class AgentManager extends EventEmitter {
   private githubManager: GitHubManager | null = null
   private oauthManager: import('./oauth/oauth-manager').OAuthManager | null = null
   private externalListeners: Array<(channel: string, data: unknown) => void> = []
+  private enterpriseStateSync: import('./enterprise-state-sync').EnterpriseStateSync | null = null
 
   // ── Centralized Polling Coordinator ──
   // Instead of N independent setTimeout loops (one per session),
@@ -102,6 +103,14 @@ export class AgentManager extends EventEmitter {
   constructor(db: DatabaseManager) {
     super()
     this.db = db
+  }
+
+  /**
+   * Set the enterprise state sync manager for recording agent events.
+   * Called when enterprise auth succeeds.
+   */
+  setEnterpriseStateSync(stateSync: import('./enterprise-state-sync').EnterpriseStateSync | null): void {
+    this.enterpriseStateSync = stateSync
   }
 
   private async loadSDK(): Promise<void> {
@@ -1059,6 +1068,11 @@ export class AgentManager extends EventEmitter {
       status: 'working'
     })
 
+    // Record enterprise sync event: agent run started
+    if (this.enterpriseStateSync && task && !isTriageSession && taskId !== 'mastermind-session' && !taskId.startsWith('heartbeat-')) {
+      this.enterpriseStateSync.recordAgentRunStarted(task, agent.name)
+    }
+
     // Start polling adapter for messages
     this.startAdapterPolling(adapterSessionId, adapter, sessionConfig)
 
@@ -1941,6 +1955,17 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     this.sendToRenderer('agent:status', {
       sessionId, agentId: session.agentId, taskId: session.taskId, status: 'idle'
     })
+
+    // Record enterprise sync event: agent run completed
+    if (this.enterpriseStateSync && task && !session.isTriageSession && session.taskId !== 'mastermind-session' && !session.taskId.startsWith('heartbeat-')) {
+      const durationMinutes = (Date.now() - session.createdAt.getTime()) / (1000 * 60)
+      const agent = this.db.getAgent(session.agentId)
+      this.enterpriseStateSync.recordAgentRunCompleted(task, {
+        agentName: agent?.name,
+        durationMinutes: Math.round(durationMinutes * 10) / 10,
+        success: true
+      })
+    }
   }
 
   /**

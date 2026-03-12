@@ -131,6 +131,20 @@ export interface WorkfloOrgNodeDetail {
   taskSources: WorkfloTaskSource[]
 }
 
+// ── Sync types ──────────────────────────────────────────────────────────
+
+export interface WorkfloSyncEvent {
+  eventType: string
+  entityType: string
+  entityId: string
+  entityTitle?: string
+  previousValue?: string
+  newValue?: string
+  eventData?: Record<string, unknown>
+  userName?: string
+  occurredAt?: string
+}
+
 // ── Client ──────────────────────────────────────────────────────────────
 
 export class WorkfloApiClient {
@@ -275,4 +289,41 @@ export class WorkfloApiClient {
     )) as { result: { imported: number; updated: number; unchanged: number; errors: string[]; totalFromSource: number } }
     return result.result
   }
+
+  // ── Sync (heartbeat + events + stats) ──────────────────────────────────
+
+  /**
+   * Send a heartbeat ping to Workflo.
+   * Should be called every ~1 minute when enterprise mode is active.
+   */
+  async sendHeartbeat(data?: {
+    appVersion?: string
+    userEmail?: string
+    userName?: string
+  }): Promise<{ ok: boolean; timestamp: string }> {
+    const result = (await this.auth.apiRequest(
+      'POST',
+      '/api/20x/sync/heartbeat',
+      data || {}
+    )) as { ok: boolean; timestamp: string }
+    return result
+  }
+
+  /**
+   * Send a batch of changelog events to Workflo.
+   * Events include task status changes, agent completions, etc.
+   */
+  async sendSyncEvents(
+    events: WorkfloSyncEvent[]
+  ): Promise<{ ok: boolean; inserted: number }> {
+    if (events.length === 0) return { ok: true, inserted: 0 }
+
+    const result = (await this.auth.apiRequest(
+      'POST',
+      '/api/20x/sync/events',
+      { events }
+    )) as { ok: boolean; inserted: number }
+    return result
+  }
+
 }

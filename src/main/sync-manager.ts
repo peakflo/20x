@@ -1,4 +1,5 @@
 import type { DatabaseManager, TaskRecord } from './database'
+import type { EnterpriseStateSync } from './enterprise-state-sync'
 import type { McpToolCaller } from './mcp-tool-caller'
 import type { PluginRegistry } from './plugins/registry'
 import type { OAuthManager } from './oauth/oauth-manager'
@@ -17,6 +18,7 @@ export interface SyncResult {
 export class SyncManager {
   private workfloApiClient?: WorkfloApiClient
   private enterpriseSyncManager?: EnterpriseSyncManager
+  private enterpriseStateSync?: EnterpriseStateSync
   private enterpriseUserId?: string
 
   constructor(
@@ -33,16 +35,19 @@ export class SyncManager {
   setEnterpriseConnection(
     apiClient: WorkfloApiClient,
     syncManager: EnterpriseSyncManager,
-    userId: string
+    userId: string,
+    stateSync?: EnterpriseStateSync
   ): void {
     this.workfloApiClient = apiClient
     this.enterpriseSyncManager = syncManager
     this.enterpriseUserId = userId
+    this.enterpriseStateSync = stateSync
   }
 
   clearEnterpriseConnection(): void {
     this.workfloApiClient = undefined
     this.enterpriseSyncManager = undefined
+    this.enterpriseStateSync = undefined
     this.enterpriseUserId = undefined
   }
 
@@ -54,7 +59,8 @@ export class SyncManager {
       mcpServer,
       oauthManager: this.oauthManager,
       sourceId,
-      workfloApiClient: this.workfloApiClient
+      workfloApiClient: this.workfloApiClient,
+      enterpriseStateSync: this.enterpriseStateSync
     }
   }
 

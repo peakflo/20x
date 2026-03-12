@@ -697,23 +697,27 @@ export class PeakfloPlugin implements TaskSourcePlugin {
       return { success: false, error: 'Missing external task ID' }
     }
 
-    // ── Enterprise mode: call Workflo REST API ──────────────────
-    if (this.isEnterpriseMode(config, ctx) && ctx.workfloApiClient) {
-      try {
-        const outputs: Record<string, unknown> = { action: actionId }
-        for (const field of task.output_fields) {
-          if (field.value !== undefined && field.value !== null && field.value !== '') {
-            outputs[field.id] = field.value
-          }
+    // ── Enterprise mode ────────────────────────────────────────
+    // Follow the same pattern as other plugins (github-issues,
+    // hubspot, notion): call the external API directly, then
+    // return taskUpdate so sync-manager updates local state.
+    if (this.isEnterpriseMode(config, ctx)) {
+      const outputs: Record<string, unknown> = { action: actionId }
+      for (const field of task.output_fields) {
+        if (field.value !== undefined && field.value !== null && field.value !== '') {
+          outputs[field.id] = field.value
         }
-        if (input) outputs.reason = input
-
-        await ctx.workfloApiClient.executeAction(task.external_id, outputs)
-        return { success: true, taskUpdate: { status: TaskStatus.Completed } }
-      } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : 'Action failed'
-        return { success: false, error: msg }
       }
+      if (input) outputs.reason = input
+
+      // Call Workflo API to complete the task (like github plugin
+      // calls GitHub API to close an issue). Workflo handles
+      // propagation to the original task source (Notion, etc.).
+      if (ctx.workfloApiClient) {
+        await ctx.workfloApiClient.executeAction(task.external_id, outputs)
+      }
+
+      return { success: true, taskUpdate: { status: TaskStatus.Completed } }
     }
 
     // ── Legacy MCP mode ─────────────────────────────────────────
