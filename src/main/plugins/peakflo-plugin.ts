@@ -315,12 +315,18 @@ export class PeakfloPlugin implements TaskSourcePlugin {
         try {
           const existing = ctx.db.getTaskByExternalId(sourceId, mapped.external_id)
           if (existing) {
+            // Never reopen a locally-completed task during resync
+            const effectiveStatus =
+              existing.status === TaskStatus.Completed
+                ? TaskStatus.Completed
+                : mapped.status
+
             const update: Record<string, unknown> = {
               title: mapped.title,
               description: mapped.description,
               type: mapped.type,
               priority: mapped.priority,
-              status: mapped.status,
+              status: effectiveStatus,
               due_date: mapped.due_date,
               labels: mapped.labels,
               output_fields: mapped.output_fields
@@ -437,10 +443,16 @@ export class PeakfloPlugin implements TaskSourcePlugin {
             })
 
             if (existing) {
+              // Never reopen a locally-completed task during resync.
+              // The remote may lag behind the local state (e.g. executeAction
+              // just completed it but Workflo hasn't processed yet).
+              const effectiveStatus =
+                existing.status === TaskStatus.Completed ? TaskStatus.Completed : status
+
               ctx.db.updateTask(existing.id, {
                 title: task.title,
                 description,
-                status,
+                status: effectiveStatus,
                 priority,
                 assignee,
                 due_date: task.dueDate,
