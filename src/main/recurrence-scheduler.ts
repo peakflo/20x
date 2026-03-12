@@ -37,6 +37,7 @@ interface RawTaskRow {
   heartbeat_interval_minutes: number
   heartbeat_last_check_at: string | null
   heartbeat_next_check_at: string | null
+  parent_task_id: string | null
   created_at: string
   updated_at: string
 }
@@ -394,6 +395,7 @@ export class RecurrenceScheduler {
       heartbeat_interval_minutes: row.heartbeat_interval_minutes ?? 30,
       heartbeat_last_check_at: row.heartbeat_last_check_at ?? null,
       heartbeat_next_check_at: row.heartbeat_next_check_at ?? null,
+      parent_task_id: row.parent_task_id ?? null,
     }
   }
 

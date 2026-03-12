@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect } from 'react'
 import { Pencil, Trash2, Calendar, User, Tag, Clock, Bot, Play, History, GitBranch, Plus, X, BookOpen, AlarmClockOff, BellRing, Folder, Repeat, Star, Sparkles, ListTree, ArrowLeft, ChevronRight } from 'lucide-react'
 import { CollapsibleDescription } from '@/components/ui/CollapsibleDescription'
 import { Button } from '@/components/ui/Button'
@@ -15,8 +15,6 @@ import { TaskStatus, CodingAgentType } from '@/types'
 import type { WorkfloTask, FileAttachment, OutputField, Agent, RecurrencePattern, RecurrencePatternObject } from '@/types'
 import { AnthropicLogo, OpenCodeLogo, OpenAILogo } from '@/components/icons/AgentLogos'
 import { HeartbeatSection } from './HeartbeatSection'
-import { useAgentStore, SessionStatus } from '@/stores/agent-store'
-import { taskApi } from '@/lib/ipc-client'
 
 function ordinal(n: number): string {
   if (n >= 11 && n <= 13) return `${n}th`
