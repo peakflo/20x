@@ -379,6 +379,7 @@ app.whenReady().then(async () => {
         enterpriseStateSyncInstance.setUserName(session.userEmail || 'Unknown')
 
         syncManager.setEnterpriseConnection(apiClient, enterpriseSyncMgr, session.userId, enterpriseStateSyncInstance)
+        agentManager.setEnterpriseStateSync(enterpriseStateSyncInstance)
 
         console.log('[Main] Enterprise connection restored on startup (with heartbeat)')
       } else {
