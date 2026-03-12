@@ -1,8 +1,24 @@
+import { promisify } from 'util'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const { execFileMock } = vi.hoisted(() => ({
   execFileMock: vi.fn()
 }))
+
+execFileMock[promisify.custom] = (...args: unknown[]) => {
+  return new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
+    const callback = (error: Error | null, stdout = '', stderr = '') => {
+      if (error) {
+        reject(error)
+        return
+      }
+
+      resolve({ stdout, stderr })
+    }
+
+    execFileMock(...args, callback)
+  })
+}
 
 vi.mock('child_process', () => ({
   execFile: execFileMock,
