@@ -1080,7 +1080,14 @@ export class AgentManager extends EventEmitter {
         if (currentTask?.parent_task_id) {
           const parentTask = this.db.getTask(currentTask.parent_task_id)
           if (parentTask) {
-            promptText += `\n\n## Parent Task Context\nThis is a subtask of: "${parentTask.title}"\nParent description: ${parentTask.description || '(none)'}\nParent status: ${parentTask.status}`
+            promptText += `\n\n## Parent Task Context\nThis is a subtask of: "${parentTask.title}" (id: ${parentTask.id})\nParent description: ${parentTask.description || '(none)'}\nParent status: ${parentTask.status}`
+            if (parentTask.output_fields && parentTask.output_fields.length > 0) {
+              promptText += '\nParent output fields:'
+              for (const field of parentTask.output_fields) {
+                const val = (field as unknown as { value?: string }).value ?? '(not set)'
+                promptText += `\n  - ${field.name}: ${val}`
+              }
+            }
 
             // Include sibling subtasks for coordination
             const siblings = this.db.getSubtasks(currentTask.parent_task_id)
@@ -1089,11 +1096,16 @@ export class AgentManager extends EventEmitter {
               promptText += '\n\n## Sibling Subtasks'
               for (const sibling of otherSubtasks) {
                 const resolution = sibling.resolution ? ` | Resolution: ${sibling.resolution}` : ''
-                promptText += `\n- "${sibling.title}" (status: ${sibling.status}${resolution})`
+                const outputSummary = sibling.output_fields && sibling.output_fields.length > 0
+                  ? ` | Outputs: ${sibling.output_fields.length} field(s)`
+                  : ''
+                promptText += `\n- "${sibling.title}" (id: ${sibling.id}, status: ${sibling.status}${resolution}${outputSummary})`
               }
               promptText += '\n\nCoordinate with sibling subtasks — avoid duplicating work and ensure compatibility.'
+              promptText += '\nUse `get_task` with a sibling ID to read its full output fields and resolution.'
             }
           }
+          promptText += '\n\nYou can call `list_subtasks` or `get_task` via MCP tools at any time for live data on parent and sibling tasks.'
         }
 
         // If this task has subtasks, mention them
@@ -1102,9 +1114,11 @@ export class AgentManager extends EventEmitter {
           if (subtasks.length > 0) {
             promptText += '\n\n## Subtasks'
             for (const sub of subtasks) {
-              promptText += `\n- "${sub.title}" (status: ${sub.status}, agent: ${sub.agent_id || 'unassigned'})`
+              const subResolution = sub.resolution ? ` | Resolution: ${sub.resolution}` : ''
+              promptText += `\n- "${sub.title}" (id: ${sub.id}, status: ${sub.status}, agent: ${sub.agent_id || 'unassigned'}${subResolution})`
             }
             promptText += '\n\nThis task has subtasks. Each subtask has its own agent. Focus on coordination and any work not covered by subtasks.'
+            promptText += '\nUse `list_subtasks` or `get_task` via MCP tools to check live subtask status and outputs.'
           }
         }
 

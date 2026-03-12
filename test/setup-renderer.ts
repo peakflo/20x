@@ -23,7 +23,8 @@ const mockElectronAPI = {
     getTask: vi.fn().mockResolvedValue(undefined),
     createTask: vi.fn().mockResolvedValue({}),
     updateTask: vi.fn().mockResolvedValue({}),
-    deleteTask: vi.fn().mockResolvedValue(true)
+    deleteTask: vi.fn().mockResolvedValue(true),
+    getSubtasks: vi.fn().mockResolvedValue([])
   },
   mcpServers: {
     getAll: vi.fn().mockResolvedValue([]),
