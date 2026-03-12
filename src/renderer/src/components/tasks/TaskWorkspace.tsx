@@ -450,13 +450,11 @@ Update existing skills that were helpful or create new ones for patterns worth r
   const handleFeedbackSkip = useCallback(async () => {
     if (!task?.id) return
     setShowFeedback(false)
-    // Mark task as completed when skipping feedback (updates local state without refetch)
-    if (onUpdateTask) {
-      await onUpdateTask(task.id, { status: TaskStatus.Completed })
-    } else {
-      await updateTaskInStore(task.id, { status: TaskStatus.Completed })
-    }
-  }, [task?.id, onUpdateTask, updateTaskInStore])
+    // Use the main completion path which calls executeAction for
+    // enterprise tasks (notifying the Workflo backend) before setting
+    // the local status to Completed.
+    await onCompleteTask()
+  }, [task?.id, onCompleteTask])
 
   const handleSnooze = useCallback(async (isoString: string) => {
     if (!task) return
