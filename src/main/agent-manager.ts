@@ -1076,6 +1076,38 @@ export class AgentManager extends EventEmitter {
           ? `Work on task: "${currentTask.title}"\n\n${currentTask.description || ''}`
           : `Work on task: ${taskId}`
 
+        // Add subtask context: if this is a subtask, include parent and sibling info
+        if (currentTask?.parent_task_id) {
+          const parentTask = this.db.getTask(currentTask.parent_task_id)
+          if (parentTask) {
+            promptText += `\n\n## Parent Task Context\nThis is a subtask of: "${parentTask.title}"\nParent description: ${parentTask.description || '(none)'}\nParent status: ${parentTask.status}`
+
+            // Include sibling subtasks for coordination
+            const siblings = this.db.getSubtasks(currentTask.parent_task_id)
+            const otherSubtasks = siblings.filter(s => s.id !== currentTask.id)
+            if (otherSubtasks.length > 0) {
+              promptText += '\n\n## Sibling Subtasks'
+              for (const sibling of otherSubtasks) {
+                const resolution = sibling.resolution ? ` | Resolution: ${sibling.resolution}` : ''
+                promptText += `\n- "${sibling.title}" (status: ${sibling.status}${resolution})`
+              }
+              promptText += '\n\nCoordinate with sibling subtasks — avoid duplicating work and ensure compatibility.'
+            }
+          }
+        }
+
+        // If this task has subtasks, mention them
+        if (currentTask) {
+          const subtasks = this.db.getSubtasks(currentTask.id)
+          if (subtasks.length > 0) {
+            promptText += '\n\n## Subtasks'
+            for (const sub of subtasks) {
+              promptText += `\n- "${sub.title}" (status: ${sub.status}, agent: ${sub.agent_id || 'unassigned'})`
+            }
+            promptText += '\n\nThis task has subtasks. Each subtask has its own agent. Focus on coordination and any work not covered by subtasks.'
+          }
+        }
+
         // Append output field instructions
         if (currentTask?.output_fields && currentTask.output_fields.length > 0) {
           promptText += this.buildOutputFieldInstructions(currentTask.output_fields)
@@ -2625,6 +2657,7 @@ Description: ${task.description || '(none)'}
 Type: ${task.type || 'general'}
 Current Priority: ${task.priority || 'medium'}
 Current Labels: ${JSON.stringify(task.labels || [])}
+Parent Task: ${task.parent_task_id ? `This is a subtask of task ${task.parent_task_id}` : 'None (top-level task)'}
 
 Follow these steps:
 
@@ -2638,14 +2671,21 @@ Follow these steps:
    - Appropriate repos (if the task relates to specific repositories)
    - Priority (critical/high/medium/low) — adjust if the current priority seems wrong
    - Labels — suggest relevant labels based on similar tasks
-6. Call \`update_task\` ONCE with task_id "${task.id}" and all the values you determined. You MUST include agent_id.
+6. If the task is complex and clearly involves multiple distinct steps that would benefit from separate agents or sequential human review, create subtasks using \`create_subtask\`. Each subtask should:
+   - Have a clear, specific title describing one step
+   - Be assigned to the most appropriate agent_id
+   - Have relevant skill_ids and repos
+   - NOT overlap with other subtasks
+   Only create subtasks when clearly needed — simple tasks should remain as single tasks.
+7. Call \`update_task\` ONCE with task_id "${task.id}" and all the values you determined. You MUST include agent_id.
 
 Important:
 - You MUST assign an agent_id. If only one agent exists, assign that one.
 - Do NOT change the task status — it will be handled automatically.
 - Do NOT attempt to work on or solve the task. Only triage it.
 - If no similar tasks exist, use your best judgment based on the title, description, and type.
-- Be efficient — make your tool calls and finish quickly.`
+- Be efficient — make your tool calls and finish quickly.
+- When creating subtasks, the parent task's agent will coordinate — subtask agents handle individual pieces.`
   }
 
   /**

@@ -151,6 +151,7 @@ export function AppLayout() {
               onUpdateTask={async (taskId, data) => {
                 await updateTask(taskId, data)
               }}
+              onNavigateToTask={(taskId) => selectTask(taskId)}
             />
           )}
 

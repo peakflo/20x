@@ -20,6 +20,10 @@ export const taskApi = {
 
   delete: (id: string): Promise<boolean> => {
     return window.electronAPI.db.deleteTask(id)
+  },
+
+  getSubtasks: (parentId: string): Promise<WorkfloTask[]> => {
+    return window.electronAPI.db.getSubtasks(parentId)
   }
 }
 

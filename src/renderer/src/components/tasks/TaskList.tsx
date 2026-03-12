@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react'
-import { Inbox, ChevronRight } from 'lucide-react'
+import { Inbox, ChevronRight, ChevronDown } from 'lucide-react'
 import { TaskListItem } from './TaskListItem'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { isSnoozed } from '@/lib/utils'
@@ -16,6 +16,29 @@ export function TaskList({ tasks, selectedTaskId, onSelectTask }: TaskListProps)
   const [completedOpen, setCompletedOpen] = useState(false)
   const [hiddenOpen, setHiddenOpen] = useState(false)
   const [recurringOpen, setRecurringOpen] = useState(false)
+  const [expandedParents, setExpandedParents] = useState<Set<string>>(new Set())
+
+  const toggleParentExpanded = (parentId: string) => {
+    setExpandedParents(prev => {
+      const next = new Set(prev)
+      if (next.has(parentId)) next.delete(parentId)
+      else next.add(parentId)
+      return next
+    })
+  }
+
+  // Build subtask lookup map
+  const subtasksByParent = useMemo(() => {
+    const map = new Map<string, WorkfloTask[]>()
+    for (const task of tasks) {
+      if (task.parent_task_id) {
+        const existing = map.get(task.parent_task_id) || []
+        existing.push(task)
+        map.set(task.parent_task_id, existing)
+      }
+    }
+    return map
+  }, [tasks])
 
   const { activeTasks, snoozedTasks, recurringTasks, completedTasks } = useMemo(() => {
     const active: WorkfloTask[] = []
@@ -23,6 +46,9 @@ export function TaskList({ tasks, selectedTaskId, onSelectTask }: TaskListProps)
     const recurring: WorkfloTask[] = []
     const completed: WorkfloTask[] = []
     for (const task of tasks) {
+      // Skip subtasks from top-level grouping — they render under their parent
+      if (task.parent_task_id) continue
+
       // Template tasks only (not instances)
       if (task.is_recurring && !task.recurrence_parent_id) {
         recurring.push(task)
@@ -41,16 +67,53 @@ export function TaskList({ tasks, selectedTaskId, onSelectTask }: TaskListProps)
     return <EmptyState icon={Inbox} title="No tasks" description="Create a task to get started" className="py-10" />
   }
 
+  const renderTaskWithSubtasks = (task: WorkfloTask) => {
+    const subtasks = subtasksByParent.get(task.id)
+    const hasSubtasks = subtasks && subtasks.length > 0
+    const isExpanded = expandedParents.has(task.id)
+
+    return (
+      <div key={task.id}>
+        <div className="flex items-center">
+          {hasSubtasks && (
+            <button
+              onClick={(e) => { e.stopPropagation(); toggleParentExpanded(task.id) }}
+              className="flex items-center justify-center w-5 h-5 ml-1 mr-0 shrink-0 text-muted-foreground hover:text-foreground cursor-pointer"
+            >
+              {isExpanded
+                ? <ChevronDown className="h-3 w-3" />
+                : <ChevronRight className="h-3 w-3" />}
+            </button>
+          )}
+          <div className="flex-1 min-w-0">
+            <TaskListItem
+              task={task}
+              isSelected={task.id === selectedTaskId}
+              onSelect={() => onSelectTask(task.id)}
+              subtaskCount={subtasks?.length}
+            />
+          </div>
+        </div>
+        {hasSubtasks && isExpanded && (
+          <div className="ml-5 pl-2 border-l border-border/30">
+            {subtasks.map((subtask) => (
+              <TaskListItem
+                key={subtask.id}
+                task={subtask}
+                isSelected={subtask.id === selectedTaskId}
+                onSelect={() => onSelectTask(subtask.id)}
+                isSubtask
+              />
+            ))}
+          </div>
+        )}
+      </div>
+    )
+  }
+
   return (
     <div className="flex flex-col gap-0.5 px-2 pb-2">
-      {activeTasks.map((task) => (
-        <TaskListItem
-          key={task.id}
-          task={task}
-          isSelected={task.id === selectedTaskId}
-          onSelect={() => onSelectTask(task.id)}
-        />
-      ))}
+      {activeTasks.map(renderTaskWithSubtasks)}
 
       {snoozedTasks.length > 0 && (
         <>
@@ -62,14 +125,7 @@ export function TaskList({ tasks, selectedTaskId, onSelectTask }: TaskListProps)
             Hidden
             <span className="ml-auto tabular-nums">{snoozedTasks.length}</span>
           </button>
-          {hiddenOpen && snoozedTasks.map((task) => (
-            <TaskListItem
-              key={task.id}
-              task={task}
-              isSelected={task.id === selectedTaskId}
-              onSelect={() => onSelectTask(task.id)}
-            />
-          ))}
+          {hiddenOpen && snoozedTasks.map(renderTaskWithSubtasks)}
         </>
       )}
 
@@ -83,14 +139,7 @@ export function TaskList({ tasks, selectedTaskId, onSelectTask }: TaskListProps)
             Recurring
             <span className="ml-auto tabular-nums">{recurringTasks.length}</span>
           </button>
-          {recurringOpen && recurringTasks.map((task) => (
-            <TaskListItem
-              key={task.id}
-              task={task}
-              isSelected={task.id === selectedTaskId}
-              onSelect={() => onSelectTask(task.id)}
-            />
-          ))}
+          {recurringOpen && recurringTasks.map(renderTaskWithSubtasks)}
         </>
       )}
 
@@ -104,14 +153,7 @@ export function TaskList({ tasks, selectedTaskId, onSelectTask }: TaskListProps)
             Completed
             <span className="ml-auto tabular-nums">{completedTasks.length}</span>
           </button>
-          {completedOpen && completedTasks.map((task) => (
-            <TaskListItem
-              key={task.id}
-              task={task}
-              isSelected={task.id === selectedTaskId}
-              onSelect={() => onSelectTask(task.id)}
-            />
-          ))}
+          {completedOpen && completedTasks.map(renderTaskWithSubtasks)}
         </>
       )}
     </div>

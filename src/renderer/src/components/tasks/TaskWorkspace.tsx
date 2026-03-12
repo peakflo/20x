@@ -31,6 +31,7 @@ interface TaskWorkspaceProps {
   onCompleteTask: () => void
   onAssignAgent: (taskId: string, agentId: string | null) => void
   onUpdateTask?: (taskId: string, data: Partial<WorkfloTask>) => Promise<void>
+  onNavigateToTask?: (taskId: string) => void
 }
 
 export function TaskWorkspace({
@@ -42,7 +43,8 @@ export function TaskWorkspace({
   onUpdateOutputFields,
   onCompleteTask,
   onAssignAgent,
-  onUpdateTask
+  onUpdateTask,
+  onNavigateToTask
 }: TaskWorkspaceProps) {
   const { session, start, resume, abort, stop, sendMessage, approve } = useAgentSession(task?.id)
   const { removeSession } = useAgentStore()
@@ -57,12 +59,31 @@ export function TaskWorkspace({
   const [showSnooze, setShowSnooze] = useState(false)
   const [showIncompatibleSession, setShowIncompatibleSession] = useState(false)
   const [incompatibleSessionError, setIncompatibleSessionError] = useState<string>()
+  const [subtasks, setSubtasks] = useState<WorkfloTask[]>([])
+  const [parentTask, setParentTask] = useState<WorkfloTask | null>(null)
   const startingRef = useRef(false)
 
   const { fetchTasks, updateTask: updateTaskInStore } = useTaskStore()
 
   // Fetch settings on mount
   useEffect(() => { fetchSettings() }, [])
+
+  // Fetch subtasks and parent task when task changes
+  useEffect(() => {
+    if (!task) {
+      setSubtasks([])
+      setParentTask(null)
+      return
+    }
+    // Fetch subtasks
+    taskApi.getSubtasks(task.id).then(setSubtasks).catch(() => setSubtasks([]))
+    // Fetch parent task
+    if (task.parent_task_id) {
+      taskApi.getById(task.parent_task_id).then(p => setParentTask(p ?? null)).catch(() => setParentTask(null))
+    } else {
+      setParentTask(null)
+    }
+  }, [task?.id, task?.parent_task_id, task?.updated_at])
 
   // Listen for incompatible session events
   useEffect(() => {
@@ -569,6 +590,9 @@ Update existing skills that were helpful or create new ones for patterns worth r
             onReassign={handleReassign}
             onTriage={handleTriage}
             canTriage={!!canTriage}
+            subtasks={subtasks}
+            parentTask={parentTask}
+            onNavigateToTask={onNavigateToTask}
           />
         </div>
 

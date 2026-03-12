@@ -172,6 +172,36 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         type: 'object',
         properties: {}
       }
+    },
+    {
+      name: 'create_subtask',
+      description: 'Create a subtask under a parent task. Subtasks inherit repos and priority from the parent unless specified. Each subtask can have its own agent, skills, and output fields.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          parent_task_id: { type: 'string', description: 'The ID of the parent task' },
+          title: { type: 'string', description: 'Subtask title (required)' },
+          description: { type: 'string', description: 'Subtask description' },
+          type: { type: 'string', enum: ['coding', 'manual', 'review', 'approval', 'general'], description: 'Subtask type' },
+          priority: { type: 'string', enum: ['critical', 'high', 'medium', 'low'], description: 'Priority level (inherits from parent if not set)' },
+          labels: { type: 'array', items: { type: 'string' }, description: 'Subtask labels' },
+          agent_id: { type: 'string', description: 'Assign to an agent by ID' },
+          skill_ids: { type: 'array', items: { type: 'string' }, description: 'Skill IDs to assign' },
+          repos: { type: 'array', items: { type: 'string' }, description: 'Repository paths (inherits from parent if not set)' }
+        },
+        required: ['parent_task_id', 'title']
+      }
+    },
+    {
+      name: 'list_subtasks',
+      description: 'List all subtasks for a given parent task. Returns subtask details including status, agent assignment, and outputs.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          parent_task_id: { type: 'string', description: 'The ID of the parent task' }
+        },
+        required: ['parent_task_id']
+      }
     }
   ]
 }))

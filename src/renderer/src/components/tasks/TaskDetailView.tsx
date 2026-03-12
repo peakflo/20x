@@ -1,5 +1,5 @@
-import { useEffect } from 'react'
-import { Pencil, Trash2, Calendar, User, Tag, Clock, Bot, Play, History, GitBranch, Plus, X, BookOpen, AlarmClockOff, BellRing, Folder, Repeat, Star, Sparkles } from 'lucide-react'
+import { useEffect, useState, useCallback } from 'react'
+import { Pencil, Trash2, Calendar, User, Tag, Clock, Bot, Play, History, GitBranch, Plus, X, BookOpen, AlarmClockOff, BellRing, Folder, Repeat, Star, Sparkles, ListTree, ArrowLeft, ChevronRight } from 'lucide-react'
 import { CollapsibleDescription } from '@/components/ui/CollapsibleDescription'
 import { Button } from '@/components/ui/Button'
 import { TaskStatusBadge } from './TaskStatusBadge'
@@ -15,6 +15,8 @@ import { TaskStatus, CodingAgentType } from '@/types'
 import type { WorkfloTask, FileAttachment, OutputField, Agent, RecurrencePattern, RecurrencePatternObject } from '@/types'
 import { AnthropicLogo, OpenCodeLogo, OpenAILogo } from '@/components/icons/AgentLogos'
 import { HeartbeatSection } from './HeartbeatSection'
+import { useAgentStore, SessionStatus } from '@/stores/agent-store'
+import { taskApi } from '@/lib/ipc-client'
 
 function ordinal(n: number): string {
   if (n >= 11 && n <= 13) return `${n}th`
@@ -86,6 +88,45 @@ function formatRecurrencePattern(pattern: RecurrencePattern): string {
   return formatLegacyPattern(pattern)
 }
 
+const subtaskStatusDotColor: Record<TaskStatus, string> = {
+  [TaskStatus.NotStarted]: 'bg-muted-foreground',
+  [TaskStatus.Triaging]: 'bg-muted-foreground animate-pulse',
+  [TaskStatus.AgentWorking]: 'bg-amber-400 animate-pulse',
+  [TaskStatus.ReadyForReview]: 'bg-purple-400',
+  [TaskStatus.AgentLearning]: 'bg-blue-400 animate-pulse',
+  [TaskStatus.Completed]: 'bg-emerald-400'
+}
+
+function SubtasksSection({ subtasks, onNavigateToTask }: { subtasks: WorkfloTask[]; onNavigateToTask?: (taskId: string) => void }) {
+  const completedCount = subtasks.filter(s => s.status === TaskStatus.Completed).length
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <ListTree className="h-3.5 w-3.5" /> Subtasks
+          <span className="text-xs tabular-nums">({completedCount}/{subtasks.length})</span>
+        </div>
+      </div>
+      <div className="rounded-md border divide-y">
+        {subtasks.map((subtask) => (
+          <button
+            key={subtask.id}
+            onClick={() => onNavigateToTask?.(subtask.id)}
+            className="w-full flex items-center gap-3 px-3 py-2.5 text-left hover:bg-accent/50 transition-colors cursor-pointer"
+          >
+            <div className={`h-2 w-2 rounded-full shrink-0 ${subtaskStatusDotColor[subtask.status]}`} />
+            <div className="min-w-0 flex-1">
+              <div className="text-sm truncate">{subtask.title}</div>
+            </div>
+            <ChevronRight className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 interface TaskDetailViewProps {
   task: WorkfloTask
   agents: Agent[]
@@ -110,9 +151,12 @@ interface TaskDetailViewProps {
   onReassign?: (userIds: string[], displayName: string) => Promise<void>
   onTriage?: () => void
   canTriage?: boolean
+  subtasks?: WorkfloTask[]
+  parentTask?: WorkfloTask | null
+  onNavigateToTask?: (taskId: string) => void
 }
 
-export function TaskDetailView({ task, agents, onEdit, onDelete, onUpdateAttachments, onUpdateOutputFields, onCompleteTask, onAssignAgent, onUpdateRepos, onAddRepos, onUpdateSkillIds, onAddSkills, onStartAgent, canStartAgent, onResumeAgent, canResumeAgent, onRestartAgent, canRestartAgent, onSnooze, onUnsnooze, onReassign, onTriage, canTriage }: TaskDetailViewProps) {
+export function TaskDetailView({ task, agents, onEdit, onDelete, onUpdateAttachments, onUpdateOutputFields, onCompleteTask, onAssignAgent, onUpdateRepos, onAddRepos, onUpdateSkillIds, onAddSkills, onStartAgent, canStartAgent, onResumeAgent, canResumeAgent, onRestartAgent, canRestartAgent, onSnooze, onUnsnooze, onReassign, onTriage, canTriage, subtasks, parentTask, onNavigateToTask }: TaskDetailViewProps) {
   const { skills, fetchSkills } = useSkillStore()
   const isActive = task.status !== TaskStatus.Completed
 
@@ -164,6 +208,15 @@ export function TaskDetailView({ task, agents, onEdit, onDelete, onUpdateAttachm
       <div className="flex-1 overflow-y-auto">
         <div className="max-w-2xl mx-auto px-8 py-8 space-y-6">
           <div>
+            {parentTask && onNavigateToTask && (
+              <button
+                onClick={() => onNavigateToTask(parentTask.id)}
+                className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground mb-2 cursor-pointer"
+              >
+                <ArrowLeft className="h-3 w-3" />
+                {parentTask.title}
+              </button>
+            )}
             <h1 className="text-xl font-semibold">{task.title}</h1>
             {task.description && (
               <CollapsibleDescription
@@ -388,6 +441,13 @@ export function TaskDetailView({ task, agents, onEdit, onDelete, onUpdateAttachm
                 ))}
               </div>
             </div>
+          )}
+
+          {subtasks && subtasks.length > 0 && (
+            <SubtasksSection
+              subtasks={subtasks}
+              onNavigateToTask={onNavigateToTask}
+            />
           )}
 
           {task.attachments.length > 0 && (

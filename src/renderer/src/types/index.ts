@@ -291,6 +291,7 @@ export interface WorkfloTask {
   heartbeat_interval_minutes?: number | null
   heartbeat_last_check_at?: string | null
   heartbeat_next_check_at?: string | null
+  parent_task_id: string | null
   created_at: string
   updated_at: string
 }
@@ -310,6 +311,7 @@ export interface CreateTaskDTO {
   is_recurring?: boolean
   recurrence_pattern?: RecurrencePattern | null
   recurrence_parent_id?: string | null
+  parent_task_id?: string | null
 }
 
 export interface UpdateTaskDTO {
@@ -338,6 +340,7 @@ export interface UpdateTaskDTO {
   heartbeat_interval_minutes?: number | null
   heartbeat_last_check_at?: string | null
   heartbeat_next_check_at?: string | null
+  parent_task_id?: string | null
 }
 
 // ── Heartbeat log types ─────────────────────────────────────

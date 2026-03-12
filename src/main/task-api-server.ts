@@ -165,8 +165,8 @@ function handleRoute(db: DatabaseManager, route: string, params: Record<string, 
       }
 
       rawDb.prepare(`
-        INSERT INTO tasks (id, title, description, type, priority, status, assignee, due_date, labels, attachments, repos, output_fields, source, agent_id, skill_ids, is_recurring, recurrence_pattern, next_occurrence_at, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', '[]', '[]', 'local', ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO tasks (id, title, description, type, priority, status, assignee, due_date, labels, attachments, repos, output_fields, source, agent_id, skill_ids, is_recurring, recurrence_pattern, next_occurrence_at, parent_task_id, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', '[]', '[]', 'local', ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         id,
         params.title,
@@ -182,6 +182,7 @@ function handleRoute(db: DatabaseManager, route: string, params: Record<string, 
         isRecurring,
         recurrencePattern,
         nextOccurrenceAt,
+        params.parent_task_id || null,
         now,
         now
       )
@@ -438,6 +439,61 @@ function handleRoute(db: DatabaseManager, route: string, params: Record<string, 
       const githubOrg = orgRow?.value || null
 
       return { repos: Array.from(repoSet), github_org: githubOrg }
+    }
+
+    case '/list_subtasks': {
+      if (!params.parent_task_id) return { error: 'parent_task_id is required' }
+      const subtasks = rawDb.prepare(
+        'SELECT * FROM tasks WHERE parent_task_id = ? ORDER BY created_at ASC'
+      ).all(params.parent_task_id) as Record<string, unknown>[]
+      subtasks.forEach(parseTask)
+      return subtasks
+    }
+
+    case '/create_subtask': {
+      if (!params.parent_task_id) return { error: 'parent_task_id is required' }
+      if (!params.title) return { error: 'title is required' }
+
+      // Verify parent task exists
+      const parentTask = rawDb.prepare('SELECT id, repos, priority FROM tasks WHERE id = ?').get(params.parent_task_id) as Record<string, unknown> | undefined
+      if (!parentTask) return { error: 'Parent task not found' }
+
+      const subtaskId = `task_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`
+      const now = new Date().toISOString()
+
+      // Inherit repos from parent if not specified
+      const repos = params.repos ? JSON.stringify(params.repos) : (parentTask.repos as string) || '[]'
+
+      rawDb.prepare(`
+        INSERT INTO tasks (id, title, description, type, priority, status, assignee, due_date, labels, attachments, repos, output_fields, source, agent_id, skill_ids, parent_task_id, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, 'not_started', '', NULL, ?, '[]', ?, '[]', 'local', ?, ?, ?, ?, ?)
+      `).run(
+        subtaskId,
+        params.title,
+        params.description || '',
+        params.type || 'general',
+        params.priority || parentTask.priority || 'medium',
+        JSON.stringify(params.labels || []),
+        repos,
+        params.agent_id || null,
+        params.skill_ids ? JSON.stringify(params.skill_ids) : null,
+        params.parent_task_id,
+        now,
+        now
+      )
+
+      const subtask = rawDb.prepare('SELECT * FROM tasks WHERE id = ?').get(subtaskId) as Record<string, unknown>
+      const parsedSubtask = parseTask(subtask)
+
+      // Notify renderer
+      if (notifyRenderer) {
+        const properTask = db.getTask(subtaskId)
+        if (properTask) {
+          notifyRenderer('task:created', { task: properTask })
+        }
+      }
+
+      return { success: true, task: parsedSubtask }
     }
 
     default:

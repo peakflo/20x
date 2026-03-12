@@ -255,11 +255,11 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
           </div>
 
           <div className="px-4 py-2.5 border-t text-xs text-muted-foreground tabular-nums">
-            {tasks.filter((t) => t.status !== TaskStatus.Completed && !isSnoozed(t.snoozed_until)).length} active
-            {tasks.filter((t) => t.status !== TaskStatus.Completed && isSnoozed(t.snoozed_until)).length > 0 && (
-              <> · {tasks.filter((t) => t.status !== TaskStatus.Completed && isSnoozed(t.snoozed_until)).length} hidden</>
+            {tasks.filter((t) => t.status !== TaskStatus.Completed && !isSnoozed(t.snoozed_until) && !t.parent_task_id).length} active
+            {tasks.filter((t) => t.status !== TaskStatus.Completed && isSnoozed(t.snoozed_until) && !t.parent_task_id).length > 0 && (
+              <> · {tasks.filter((t) => t.status !== TaskStatus.Completed && isSnoozed(t.snoozed_until) && !t.parent_task_id).length} hidden</>
             )}
-            {' '}· {tasks.length} total
+            {' '}· {tasks.filter(t => !t.parent_task_id).length} total
           </div>
         </>
       ) : (
