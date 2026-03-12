@@ -340,6 +340,7 @@ app.whenReady().then(async () => {
   pluginRegistry.register(new NotionPlugin())
 
   syncManager = new SyncManager(db, mcpToolCaller, pluginRegistry, oauthManager)
+  agentManager.setSyncManager(syncManager)
 
   recurrenceScheduler = new RecurrenceScheduler(db)
   heartbeatScheduler = new HeartbeatScheduler(db, agentManager)

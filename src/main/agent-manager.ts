@@ -79,6 +79,7 @@ export class AgentManager extends EventEmitter {
   private oauthManager: import('./oauth/oauth-manager').OAuthManager | null = null
   private externalListeners: Array<(channel: string, data: unknown) => void> = []
   private enterpriseStateSync: import('./enterprise-state-sync').EnterpriseStateSync | null = null
+  private syncManager: import('./sync-manager').SyncManager | null = null
 
   // ── Centralized Polling Coordinator ──
   // Instead of N independent setTimeout loops (one per session),
@@ -111,6 +112,14 @@ export class AgentManager extends EventEmitter {
    */
   setEnterpriseStateSync(stateSync: import('./enterprise-state-sync').EnterpriseStateSync | null): void {
     this.enterpriseStateSync = stateSync
+  }
+
+  /**
+   * Set the sync manager for executing enterprise actions (e.g. completing tasks on Workflo).
+   * Called after both AgentManager and SyncManager are created.
+   */
+  setSyncManager(syncManager: import('./sync-manager').SyncManager): void {
+    this.syncManager = syncManager
   }
 
   private async loadSDK(): Promise<void> {
@@ -1891,6 +1900,45 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
         console.error(`[AgentManager] Skill sync error:`, err)
       }
       await yieldEventLoop()
+
+      // For enterprise tasks, call executeAction to notify the backend (e.g. Workflo)
+      // before marking the task as completed locally. This mirrors the completion
+      // path used by the renderer's onCompleteTask / handleFeedbackSkip.
+      if (task.source_id && this.syncManager) {
+        const actionField = task.output_fields?.find((f: OutputFieldRecord) => f.id === 'action')
+        const actionValue = actionField?.value ? String(actionField.value) : 'complete'
+        console.log(`[AgentManager] Enterprise task — calling executeAction("${actionValue}") for source ${task.source_id}`)
+        try {
+          const result = await this.syncManager.executeAction(actionValue, task, undefined, task.source_id)
+          if (!result.success) {
+            console.error(`[AgentManager] executeAction failed:`, result.error)
+            // Revert to ReadyForReview so user can retry completion manually
+            this.db.updateTask(session.taskId, { status: TaskStatus.ReadyForReview })
+            await yieldEventLoop()
+            this.sendToRenderer('task:updated', {
+              taskId: session.taskId,
+              updates: { status: TaskStatus.ReadyForReview }
+            })
+            this.sendToRenderer('agent:status', {
+              sessionId, agentId: session.agentId, taskId: session.taskId, status: 'idle'
+            })
+            return
+          }
+        } catch (err) {
+          console.error(`[AgentManager] executeAction threw:`, err)
+          this.db.updateTask(session.taskId, { status: TaskStatus.ReadyForReview })
+          await yieldEventLoop()
+          this.sendToRenderer('task:updated', {
+            taskId: session.taskId,
+            updates: { status: TaskStatus.ReadyForReview }
+          })
+          this.sendToRenderer('agent:status', {
+            sessionId, agentId: session.agentId, taskId: session.taskId, status: 'idle'
+          })
+          return
+        }
+        await yieldEventLoop()
+      }
 
       // Mark task as completed
       this.db.updateTask(session.taskId, { status: TaskStatus.Completed })
