@@ -437,10 +437,19 @@ export class PeakfloPlugin implements TaskSourcePlugin {
             })
 
             if (existing) {
+              // Don't overwrite a locally-completed task with a non-completed
+              // server status.  This guards against race conditions where the
+              // completion API call succeeded but the server response hasn't
+              // propagated yet when the next sync runs.
+              const effectiveStatus =
+                existing.status === TaskStatus.Completed && status !== TaskStatus.Completed
+                  ? TaskStatus.Completed
+                  : status
+
               ctx.db.updateTask(existing.id, {
                 title: task.title,
                 description,
-                status,
+                status: effectiveStatus,
                 priority,
                 assignee,
                 due_date: task.dueDate,

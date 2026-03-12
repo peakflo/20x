@@ -182,5 +182,55 @@ describe('PeakfloPlugin', () => {
       const result = await plugin.executeAction('approve', task, undefined, {}, ctx)
       expect(result.success).toBe(false)
     })
+
+    it('enterprise mode: calls workfloApiClient.executeAction with action and output field values', async () => {
+      const mockExecuteAction = vi.fn().mockResolvedValue(undefined)
+      const ctx = makeContext({
+        workfloApiClient: {
+          executeAction: mockExecuteAction
+        } as unknown as PluginContext['workfloApiClient']
+      })
+
+      const task = {
+        id: 'local-1',
+        external_id: 'wf-task-123',
+        output_fields: [
+          { id: 'action', name: 'Action', type: 'list', value: 'approve' },
+          { id: 'reason', name: 'Reason', type: 'text', value: 'Looks good' }
+        ]
+      } as unknown as TaskRecord
+
+      const result = await plugin.executeAction('approve', task, undefined, { enterprise_mode: true }, ctx)
+
+      expect(result.success).toBe(true)
+      expect(result.taskUpdate).toEqual({ status: TaskStatus.Completed })
+      expect(mockExecuteAction).toHaveBeenCalledWith('wf-task-123', {
+        action: 'approve',
+        reason: 'Looks good'
+      })
+    })
+
+    it('enterprise mode: sends default "complete" action for tasks without action field', async () => {
+      const mockExecuteAction = vi.fn().mockResolvedValue(undefined)
+      const ctx = makeContext({
+        workfloApiClient: {
+          executeAction: mockExecuteAction
+        } as unknown as PluginContext['workfloApiClient']
+      })
+
+      const task = {
+        id: 'local-1',
+        external_id: 'wf-task-456',
+        output_fields: []
+      } as unknown as TaskRecord
+
+      const result = await plugin.executeAction('complete', task, undefined, { enterprise_mode: true }, ctx)
+
+      expect(result.success).toBe(true)
+      expect(result.taskUpdate).toEqual({ status: TaskStatus.Completed })
+      expect(mockExecuteAction).toHaveBeenCalledWith('wf-task-456', {
+        action: 'complete'
+      })
+    })
   })
 })

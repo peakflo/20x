@@ -125,13 +125,11 @@ export function AppLayout() {
                 try {
                   if (selectedTask.source_id) {
                     const actionField = selectedTask.output_fields.find((f) => f.id === 'action')
-                    const actionValue = actionField?.value ? String(actionField.value) : undefined
-                    if (actionValue) {
-                      const result = await executeAction(actionValue, selectedTask.id, selectedTask.source_id)
-                      if (!result.success) {
-                        showToast(result.error || 'Failed to complete task', true)
-                        return
-                      }
+                    const actionValue = actionField?.value ? String(actionField.value) : 'complete'
+                    const result = await executeAction(actionValue, selectedTask.id, selectedTask.source_id)
+                    if (!result.success) {
+                      showToast(result.error || 'Failed to complete task', true)
+                      return
                     }
                   }
                   await updateTask(selectedTask.id, { status: TaskStatus.Completed })
