@@ -166,6 +166,102 @@ describe('ClaudeCodeAdapter error result handling', () => {
     })
   })
 
+  describe('error recovery — queryIterator reset', () => {
+    it('resets queryIterator to null after error so next sendPrompt starts fresh process', async () => {
+      const adapter = new ClaudeCodeAdapter()
+
+      // Simulate a session that had a previous query (queryIterator is set)
+      // and then hit an error (status = 'error')
+      const fakeIterator = {
+        [Symbol.asyncIterator]() { return this },
+        async next() { return { done: true, value: undefined } },
+      }
+
+      const session: any = {
+        sessionId: 's1',
+        queryIterator: fakeIterator,
+        abortController: null,
+        status: 'idle',
+        messageBuffer: [],
+        messageCursor: 0,
+        streamTask: null,
+        lastError: null,
+        config: {} as any,
+      }
+      ;(adapter as any).sessions.set('s1', session)
+
+      // Simulate consumeStream completing with error status
+      // (error result sets status to 'error' before stream ends normally)
+      session.status = 'error'
+      session.lastError = 'Rate limit exceeded'
+
+      // Call consumeStream directly (it reads from queryIterator which is exhausted)
+      await (adapter as any).consumeStream('s1', session)
+
+      // After error, queryIterator should be null so next sendPrompt
+      // starts a fresh process instead of setting continue: true
+      expect(session.queryIterator).toBeNull()
+      expect(session.status).toBe('error')
+    })
+
+    it('does NOT reset queryIterator when stream completes normally (idle)', async () => {
+      const adapter = new ClaudeCodeAdapter()
+
+      const fakeIterator = {
+        [Symbol.asyncIterator]() { return this },
+        async next() { return { done: true, value: undefined } },
+      }
+
+      const session = {
+        sessionId: 's1',
+        queryIterator: fakeIterator,
+        abortController: null,
+        status: 'idle' as const,
+        messageBuffer: [],
+        messageCursor: 0,
+        streamTask: null,
+        lastError: null,
+        config: {} as any,
+      }
+      ;(adapter as any).sessions.set('s1', session)
+
+      await (adapter as any).consumeStream('s1', session)
+
+      // queryIterator should remain set — process is alive for continue
+      expect(session.queryIterator).toBe(fakeIterator)
+      expect(session.status).toBe('idle')
+    })
+
+    it('resets queryIterator when stream throws an error', async () => {
+      const adapter = new ClaudeCodeAdapter()
+
+      const fakeIterator = {
+        [Symbol.asyncIterator]() { return this },
+        async next() { throw new Error('Claude Code process exited with code 1') },
+      }
+
+      const session = {
+        sessionId: 's1',
+        queryIterator: fakeIterator,
+        abortController: null,
+        status: 'busy' as const,
+        messageBuffer: [],
+        messageCursor: 0,
+        streamTask: null,
+        lastError: null,
+        config: {} as any,
+        isResumed: false,
+      }
+      ;(adapter as any).sessions.set('s1', session)
+
+      await (adapter as any).consumeStream('s1', session)
+
+      // After thrown error, queryIterator should be null for recovery
+      expect(session.queryIterator).toBeNull()
+      expect(session.status).toBe('error')
+    })
+  })
+
   describe('getStatus with lastError', () => {
     it('returns error status with lastError message', async () => {
       const { adapter } = createAdapterWithSession('s1', [], {

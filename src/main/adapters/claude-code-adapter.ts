@@ -995,8 +995,12 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
       }
     } finally {
       console.log('[ClaudeCodeAdapter] Stream consumption ended')
-      // Only reset to idle if no error occurred during stream consumption
-      if (session.status !== 'error') {
+      if (session.status === 'error') {
+        // Reset queryIterator so the next sendPrompt starts a fresh process
+        // instead of setting `continue: true` on a dead process (which would
+        // immediately fail again, trapping the user in an error loop).
+        session.queryIterator = null
+      } else {
         session.status = 'idle'
       }
     }
