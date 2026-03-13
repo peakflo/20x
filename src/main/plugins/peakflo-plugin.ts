@@ -437,10 +437,27 @@ export class PeakfloPlugin implements TaskSourcePlugin {
             })
 
             if (existing) {
+              // Guard against a narrow race condition: the user completes a task
+              // in 20x (executeAction succeeds on the server) but the next sync
+              // fetch returns stale data before the server has processed it.
+              //
+              // We only preserve the local Completed status for a brief window
+              // (2 minutes).  After that we trust the server — if the action was
+              // processed, the server will already report "completed".  If it
+              // didn't, we should let the server status flow through so the user
+              // can see the task is still open and retry.
+              const RACE_WINDOW_MS = 2 * 60 * 1000
+              const completedRecently =
+                existing.status === TaskStatus.Completed &&
+                status !== TaskStatus.Completed &&
+                (Date.now() - new Date(existing.updated_at).getTime()) < RACE_WINDOW_MS
+
+              const effectiveStatus = completedRecently ? TaskStatus.Completed : status
+
               ctx.db.updateTask(existing.id, {
                 title: task.title,
                 description,
-                status,
+                status: effectiveStatus,
                 priority,
                 assignee,
                 due_date: task.dueDate,
@@ -697,23 +714,28 @@ export class PeakfloPlugin implements TaskSourcePlugin {
       return { success: false, error: 'Missing external task ID' }
     }
 
-    // ── Enterprise mode: call Workflo REST API ──────────────────
-    if (this.isEnterpriseMode(config, ctx) && ctx.workfloApiClient) {
-      try {
-        const outputs: Record<string, unknown> = { action: actionId }
-        for (const field of task.output_fields) {
-          if (field.value !== undefined && field.value !== null && field.value !== '') {
-            outputs[field.id] = field.value
-          }
+    // ── Enterprise mode ────────────────────────────────────────
+    // Follow the same pattern as other plugins (github-issues,
+    // hubspot, notion): call the external API directly, then
+    // return taskUpdate so sync-manager updates local state.
+    if (this.isEnterpriseMode(config, ctx)) {
+      const outputs: Record<string, unknown> = { action: actionId }
+      for (const field of task.output_fields) {
+        if (field.value !== undefined && field.value !== null && field.value !== '') {
+          outputs[field.id] = field.value
         }
-        if (input) outputs.reason = input
-
-        await ctx.workfloApiClient.executeAction(task.external_id, outputs)
-        return { success: true, taskUpdate: { status: TaskStatus.Completed } }
-      } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : 'Action failed'
-        return { success: false, error: msg }
       }
+      if (input) outputs.reason = input
+
+      // Call Workflo API to complete the task (like github plugin
+      // calls GitHub API to close an issue). Workflo handles
+      // propagation to the original task source (Notion, etc.).
+      if (!ctx.workfloApiClient) {
+        return { success: false, error: 'Enterprise API client not available — please reconnect to enterprise' }
+      }
+      await ctx.workfloApiClient.executeAction(task.external_id, outputs)
+
+      return { success: true, taskUpdate: { status: TaskStatus.Completed } }
     }
 
     // ── Legacy MCP mode ─────────────────────────────────────────

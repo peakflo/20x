@@ -823,6 +823,7 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
    * the event loop with expensive JSON serialization on every streaming chunk.
    */
   private safeLogMessage(msg: SDKMessage): void {
+    if (!msg || typeof msg !== 'object') return
     const m = msg as unknown as Record<string, unknown>
     console.log(`[ClaudeCodeAdapter] msg: type=${m.type} subtype=${m.subtype || '-'}`)
   }
@@ -838,6 +839,13 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
     try {
       let messagesSinceYield = 0
       for await (const message of session.queryIterator) {
+        // Guard against undefined/null messages from the SDK (can happen during
+        // process crashes, lock acquisition failures, or SDK bugs)
+        if (!message || typeof message !== 'object') {
+          console.warn('[ClaudeCodeAdapter] Received invalid message from SDK, skipping:', typeof message)
+          continue
+        }
+
         const msg = message as unknown as Record<string, unknown>
 
         // ── Prevent microtask starvation ──
@@ -890,8 +898,33 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
 
         // Handle error result messages (e.g., rate limits) before treating as normal
         if (msg.type === 'result' && msg.is_error) {
-          const errorText = ((msg as Record<string, unknown>).result as string) || 'Unknown error'
+          const raw = msg as Record<string, unknown>
+          // Extract meaningful error text from all available fields:
+          // - `result` may be a string or object
+          // - `errors` may be an array of error strings
+          // - `error` may be a string
+          const resultField = raw.result
+          const errorsField = Array.isArray(raw.errors) ? raw.errors : []
+          const errorField = typeof raw.error === 'string' ? raw.error : ''
+          const subtypeField = typeof raw.subtype === 'string' ? raw.subtype : ''
+
+          let errorText: string
+          if (typeof resultField === 'string' && resultField.length > 0) {
+            errorText = resultField
+          } else if (errorsField.length > 0) {
+            errorText = errorsField.map(String).join('; ')
+          } else if (errorField) {
+            errorText = errorField
+          } else if (resultField && typeof resultField === 'object') {
+            errorText = JSON.stringify(resultField)
+          } else if (subtypeField) {
+            errorText = `Error during ${subtypeField}`
+          } else {
+            errorText = 'Unknown error (no details in result message)'
+          }
+
           console.warn('[ClaudeCodeAdapter] Received error result:', errorText)
+          console.warn('[ClaudeCodeAdapter] Full error result message:', JSON.stringify(raw, null, 2))
           session.status = 'error'
           session.lastError = errorText
         }
@@ -951,9 +984,10 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
       } else if (errMsg.includes('exited with code 1')) {
         // Claude Code process failed - could be rate limit, resume failure, or other error
         console.error('[ClaudeCodeAdapter] Claude Code process failed:', errMsg)
-        // Only treat as incompatible session if we don't already have a specific error
-        // from the result message (e.g., rate limit errors set lastError before process exits)
-        if (!session.lastError && (session.isResumed || session.config)) {
+        // Only treat as incompatible session if this was a resumed session AND we
+        // don't already have a specific error from the result message (e.g., rate limits).
+        // Note: session.config is always set, so only check session.isResumed here.
+        if (!session.lastError && session.isResumed) {
           console.warn('[ClaudeCodeAdapter] Resume failed - session may not exist on Claude servers')
           session.status = 'error'
           session.lastError = 'INCOMPATIBLE_SESSION_ID: Failed to resume session. The session may have expired or does not exist on Claude Code servers.'
@@ -970,8 +1004,12 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
       }
     } finally {
       console.log('[ClaudeCodeAdapter] Stream consumption ended')
-      // Only reset to idle if no error occurred during stream consumption
-      if (session.status !== 'error') {
+      if (session.status === 'error') {
+        // Reset queryIterator so the next sendPrompt starts a fresh process
+        // instead of setting `continue: true` on a dead process (which would
+        // immediately fail again, trapping the user in an error loop).
+        session.queryIterator = null
+      } else {
         session.status = 'idle'
       }
     }
@@ -1244,11 +1282,28 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
     } else if (msgWithProps.type === 'result') {
       // Surface error result messages (e.g., rate limit errors) to the UI
       const resultMsg = msg as Record<string, unknown>
-      if (resultMsg.is_error && resultMsg.result) {
+      if (resultMsg.is_error) {
+        // Extract error text from all available fields (result, errors, error)
+        const resultField = resultMsg.result
+        const errorsField = Array.isArray(resultMsg.errors) ? resultMsg.errors : []
+        const errorField = typeof resultMsg.error === 'string' ? resultMsg.error : ''
+
+        let errorText: string
+        if (typeof resultField === 'string' && resultField.length > 0) {
+          errorText = resultField
+        } else if (errorsField.length > 0) {
+          errorText = errorsField.map(String).join('; ')
+        } else if (errorField) {
+          errorText = errorField
+        } else if (resultField && typeof resultField === 'object') {
+          errorText = JSON.stringify(resultField)
+        } else {
+          errorText = 'An error occurred (no details available)'
+        }
+
         const partId = `result-error-${msgWithProps.uuid || Date.now()}`
         if (!seenPartIds.has(partId)) {
           seenPartIds.add(partId)
-          const errorText = String(resultMsg.result)
           partContentLengths.set(partId, String(errorText.length))
           parts.push({
             id: partId,

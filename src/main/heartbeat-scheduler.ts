@@ -645,7 +645,11 @@ export class HeartbeatScheduler {
    * not just new activity since the last run.
    */
   private requiresCurrentStateChecks(heartbeatContent: string): boolean {
-    return /(merge conflict|conflicts|conflicted|requested changes|request changes|ci\b|pipeline|status check|check run)/i.test(heartbeatContent)
+    return /(requested changes|request changes|ci\b|pipeline|status check|check run)/i.test(heartbeatContent)
+  }
+
+  private hasMergeConflicts(prState: { mergeable: boolean | null; mergeable_state?: string | null }): boolean {
+    return prState.mergeable_state === 'dirty'
   }
 
   /**
@@ -709,7 +713,17 @@ export class HeartbeatScheduler {
         ], { timeout: 15_000 })
 
         const newIssueComments = parseInt(issueCommentsJson.trim(), 10)
-        return newIssueComments > 0
+        if (newIssueComments > 0) return true
+
+        // Check current merge conflict state
+        const { stdout: prStateJson } = await execFileAsync('gh', [
+          'api',
+          `repos/${url.owner}/${url.repo}/pulls/${url.number}`,
+          '--jq', '{ mergeable: .mergeable, mergeable_state: .mergeable_state }'
+        ], { timeout: 15_000 })
+
+        const prState = JSON.parse(prStateJson.trim()) as { mergeable: boolean | null; mergeable_state?: string | null }
+        return this.hasMergeConflicts(prState)
       } else {
         // Check issue comments
         const { stdout: commentsJson } = await execFileAsync('gh', [

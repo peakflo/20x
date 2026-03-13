@@ -22,6 +22,8 @@ import { EnterpriseAuth } from './enterprise-auth'
 import { RecurrenceScheduler } from './recurrence-scheduler'
 import { HeartbeatScheduler } from './heartbeat-scheduler'
 import { ClaudePluginManager } from './claude-plugin-manager'
+import { EnterpriseHeartbeat } from './enterprise-heartbeat'
+import { EnterpriseStateSync } from './enterprise-state-sync'
 import { setTaskApiNotifier, setTranscriptProvider, stopTaskApiServer } from './task-api-server'
 import { startSecretBroker, stopSecretBroker, writeSecretShellWrapper } from './secret-broker'
 import { startMobileApiServer, stopMobileApiServer, broadcastToMobileClients, setMobileApiNotifier } from './mobile-api-server'
@@ -41,9 +43,12 @@ let enterpriseAuth: EnterpriseAuth | null = null
 let recurrenceScheduler: RecurrenceScheduler | null = null
 let heartbeatScheduler: HeartbeatScheduler | null = null
 let claudePluginManager: ClaudePluginManager | null = null
+let enterpriseHeartbeatInstance: EnterpriseHeartbeat | null = null
+let enterpriseStateSyncInstance: EnterpriseStateSync | null = null
 let isShuttingDown = false
 
 async function shutdownAppServices(): Promise<void> {
+  enterpriseHeartbeatInstance?.stop()
   heartbeatScheduler?.stop()
 
   await agentManager?.stopAllSessions()
@@ -349,6 +354,7 @@ app.whenReady().then(async () => {
   pluginRegistry.register(new NotionPlugin())
 
   syncManager = new SyncManager(db, mcpToolCaller, pluginRegistry, oauthManager)
+  agentManager.setSyncManager(syncManager)
 
   recurrenceScheduler = new RecurrenceScheduler(db)
   heartbeatScheduler = new HeartbeatScheduler(db, agentManager)
@@ -377,8 +383,19 @@ app.whenReady().then(async () => {
 
         const apiClient = new WorkfloApiClient(enterpriseAuth)
         const enterpriseSyncMgr = new EnterpriseSyncManager(db, apiClient)
-        syncManager.setEnterpriseConnection(apiClient, enterpriseSyncMgr, session.userId)
-        console.log('[Main] Enterprise connection restored on startup')
+        // Initialize and start enterprise heartbeat + state sync
+        enterpriseHeartbeatInstance = new EnterpriseHeartbeat(apiClient)
+        enterpriseHeartbeatInstance.start({
+          userEmail: session.userEmail || undefined,
+          userName: session.userEmail || undefined
+        })
+
+        enterpriseStateSyncInstance = new EnterpriseStateSync(apiClient)
+        enterpriseStateSyncInstance.setUserName(session.userEmail || 'Unknown')
+
+        syncManager.setEnterpriseConnection(apiClient, enterpriseSyncMgr, session.userId, enterpriseStateSyncInstance)
+
+        console.log('[Main] Enterprise connection restored on startup (with heartbeat)')
       } else {
         console.log('[Main] Enterprise session not complete — skipping restore')
       }
@@ -389,7 +406,7 @@ app.whenReady().then(async () => {
     console.log('[Main] No enterprise auth instance — skipping restore')
   }
 
-  registerIpcHandlers(db, agentManager, githubManager, worktreeManager, syncManager, pluginRegistry, mcpToolCaller, oauthManager, recurrenceScheduler, enterpriseAuth ?? undefined, claudePluginManager, heartbeatScheduler)
+  registerIpcHandlers(db, agentManager, githubManager, worktreeManager, syncManager, pluginRegistry, mcpToolCaller, oauthManager, recurrenceScheduler, enterpriseAuth ?? undefined, claudePluginManager, heartbeatScheduler, enterpriseHeartbeatInstance ?? undefined, enterpriseStateSyncInstance ?? undefined)
 
   // Start secret broker and write shell wrapper (awaited so broker is ready before any sessions)
   try {

@@ -29,6 +29,8 @@ import type { PluginRegistry } from './plugins/registry'
 import type { OAuthManager } from './oauth/oauth-manager'
 import type { EnterpriseAuth } from './enterprise-auth'
 import type { ClaudePluginManager } from './claude-plugin-manager'
+import type { EnterpriseHeartbeat } from './enterprise-heartbeat'
+import type { EnterpriseStateSync } from './enterprise-state-sync'
 
 const MIME_MAP: Record<string, string> = {
   '.pdf': 'application/pdf',
@@ -71,8 +73,13 @@ export function registerIpcHandlers(
   recurrenceScheduler?: import('./recurrence-scheduler').RecurrenceScheduler,
   enterpriseAuth?: EnterpriseAuth,
   claudePluginManager?: ClaudePluginManager,
-  heartbeatScheduler?: import('./heartbeat-scheduler').HeartbeatScheduler
+  heartbeatScheduler?: import('./heartbeat-scheduler').HeartbeatScheduler,
+  initialEnterpriseHeartbeat?: EnterpriseHeartbeat,
+  initialEnterpriseStateSync?: EnterpriseStateSync
 ): void {
+  // Mutable references — created on selectTenant, cleared on logout
+  let enterpriseHeartbeat = initialEnterpriseHeartbeat
+  let enterpriseStateSync = initialEnterpriseStateSync
   ipcMain.handle('db:getTasks', () => {
     return db.getTasks()
   })
@@ -91,7 +98,33 @@ export function registerIpcHandlers(
   })
 
   ipcMain.handle('db:updateTask', (_, id: string, data: UpdateTaskData) => {
-    return db.updateTask(id, data)
+    // Capture previous status before updating (for enterprise sync)
+    let previousStatus: string | undefined
+    if (enterpriseStateSync && data.status) {
+      const existing = db.getTask(id)
+      if (existing && existing.status !== data.status) {
+        previousStatus = existing.status
+      }
+    }
+
+    const updated = db.updateTask(id, data)
+
+    // Record status change event for enterprise sync
+    if (enterpriseStateSync && previousStatus && updated && data.status) {
+      enterpriseStateSync.recordTaskStatusChange(updated, previousStatus, data.status)
+
+      // If task just completed, also record a completion event
+      if (data.status === 'completed') {
+        enterpriseStateSync.recordTaskCompleted(updated)
+      }
+    }
+
+    // Record feedback event for enterprise sync
+    if (enterpriseStateSync && data.feedback_rating && updated) {
+      enterpriseStateSync.recordFeedbackSubmitted(updated, data.feedback_rating)
+    }
+
+    return updated
   })
 
   ipcMain.handle('db:deleteTask', (_, id: string) => {
@@ -417,7 +450,16 @@ export function registerIpcHandlers(
   })
 
   ipcMain.handle('taskSource:sync', async (_, sourceId: string) => {
-    return await syncManager.importTasks(sourceId)
+    const result = await syncManager.importTasks(sourceId)
+
+    // After sync, flush pending events to Workflo (non-blocking)
+    if (enterpriseStateSync) {
+      enterpriseStateSync.flush().catch((err) => {
+        console.warn('[ipc] Enterprise state sync flush error (non-fatal):', err)
+      })
+    }
+
+    return result
   })
 
   ipcMain.handle('taskSource:exportUpdate', async (_, taskId: string, fields: Record<string, unknown>) => {
@@ -697,8 +739,34 @@ export function registerIpcHandlers(
       const session = await enterpriseAuth.getSession()
       const userId = session.userId || ''
 
-      // Wire enterprise connection into sync manager
-      syncManager.setEnterpriseConnection(apiClient, enterpriseSyncMgr, userId)
+      // Start enterprise heartbeat (1-min interval)
+      {
+        const { EnterpriseHeartbeat: EHB } = await import('./enterprise-heartbeat')
+        if (!enterpriseHeartbeat) {
+          enterpriseHeartbeat = new EHB(apiClient)
+        } else {
+          enterpriseHeartbeat.setApiClient(apiClient)
+        }
+        enterpriseHeartbeat.start({
+          userEmail: session.userEmail || undefined,
+          userName: session.userEmail || undefined
+        })
+      }
+
+      // Wire enterprise state sync
+      {
+        const { EnterpriseStateSync: ESS } = await import('./enterprise-state-sync')
+        if (!enterpriseStateSync) {
+          enterpriseStateSync = new ESS(apiClient)
+        } else {
+          enterpriseStateSync.setApiClient(apiClient)
+        }
+        enterpriseStateSync.setUserName(session.userEmail || 'Unknown')
+        agentManager.setEnterpriseStateSync(enterpriseStateSync)
+      }
+
+      // Wire enterprise connection into sync manager (after state sync is ready)
+      syncManager.setEnterpriseConnection(apiClient, enterpriseSyncMgr, userId, enterpriseStateSync)
 
       // Run initial sync (agents, skills, MCP servers)
       console.log('[enterprise] Running initial resource sync...')
@@ -737,6 +805,15 @@ export function registerIpcHandlers(
   ipcMain.handle('enterprise:logout', async () => {
     if (!enterpriseAuth) throw new Error('Enterprise auth not available')
     syncManager.clearEnterpriseConnection()
+
+    // Stop enterprise heartbeat
+    if (enterpriseHeartbeat) {
+      enterpriseHeartbeat.stop()
+    }
+
+    // Clear enterprise state sync from agent manager
+    agentManager.setEnterpriseStateSync(null)
+
     return await enterpriseAuth.logout()
   })
 
@@ -754,7 +831,40 @@ export function registerIpcHandlers(
 
         const apiClient = new WorkfloApiClient(enterpriseAuth)
         const enterpriseSyncMgr = new EnterpriseSyncManager(db, apiClient)
-        syncManager.setEnterpriseConnection(apiClient, enterpriseSyncMgr, session.userId)
+        // Restore enterprise heartbeat
+        try {
+          const { EnterpriseHeartbeat: EHB } = await import('./enterprise-heartbeat')
+          if (!enterpriseHeartbeat) {
+            enterpriseHeartbeat = new EHB(apiClient)
+          } else {
+            enterpriseHeartbeat.setApiClient(apiClient)
+          }
+          if (!enterpriseHeartbeat.isRunning) {
+            enterpriseHeartbeat.start({
+              userEmail: session.userEmail || undefined,
+              userName: session.userEmail || undefined
+            })
+          }
+        } catch (err) {
+          console.error('[enterprise] Failed to restore heartbeat:', err)
+        }
+
+        // Restore enterprise state sync
+        try {
+          const { EnterpriseStateSync: ESS } = await import('./enterprise-state-sync')
+          if (!enterpriseStateSync) {
+            enterpriseStateSync = new ESS(apiClient)
+          } else {
+            enterpriseStateSync.setApiClient(apiClient)
+          }
+          enterpriseStateSync.setUserName(session.userEmail || 'Unknown')
+          agentManager.setEnterpriseStateSync(enterpriseStateSync)
+        } catch (err) {
+          console.error('[enterprise] Failed to restore state sync:', err)
+        }
+
+        // Wire enterprise connection (after state sync is ready)
+        syncManager.setEnterpriseConnection(apiClient, enterpriseSyncMgr, session.userId, enterpriseStateSync)
       } catch (err) {
         console.error('[enterprise] Failed to restore connection:', err)
       }

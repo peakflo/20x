@@ -182,5 +182,142 @@ describe('PeakfloPlugin', () => {
       const result = await plugin.executeAction('approve', task, undefined, {}, ctx)
       expect(result.success).toBe(false)
     })
+
+    it('enterprise mode: calls workfloApiClient.executeAction with action and output field values', async () => {
+      const mockExecuteAction = vi.fn().mockResolvedValue(undefined)
+      const ctx = makeContext({
+        workfloApiClient: {
+          executeAction: mockExecuteAction
+        } as unknown as PluginContext['workfloApiClient']
+      })
+
+      const task = {
+        id: 'local-1',
+        external_id: 'wf-task-123',
+        output_fields: [
+          { id: 'action', name: 'Action', type: 'list', value: 'approve' },
+          { id: 'reason', name: 'Reason', type: 'text', value: 'Looks good' }
+        ]
+      } as unknown as TaskRecord
+
+      const result = await plugin.executeAction('approve', task, undefined, { enterprise_mode: true }, ctx)
+
+      expect(result.success).toBe(true)
+      expect(result.taskUpdate).toEqual({ status: TaskStatus.Completed })
+      expect(mockExecuteAction).toHaveBeenCalledWith('wf-task-123', {
+        action: 'approve',
+        reason: 'Looks good'
+      })
+    })
+
+    it('enterprise mode: sends default "complete" action for tasks without action field', async () => {
+      const mockExecuteAction = vi.fn().mockResolvedValue(undefined)
+      const ctx = makeContext({
+        workfloApiClient: {
+          executeAction: mockExecuteAction
+        } as unknown as PluginContext['workfloApiClient']
+      })
+
+      const task = {
+        id: 'local-1',
+        external_id: 'wf-task-456',
+        output_fields: []
+      } as unknown as TaskRecord
+
+      const result = await plugin.executeAction('complete', task, undefined, { enterprise_mode: true }, ctx)
+
+      expect(result.success).toBe(true)
+      expect(result.taskUpdate).toEqual({ status: TaskStatus.Completed })
+      expect(mockExecuteAction).toHaveBeenCalledWith('wf-task-456', {
+        action: 'complete'
+      })
+    })
+
+    it('enterprise mode: returns error when workfloApiClient is missing', async () => {
+      // enterprise_mode in config but no workfloApiClient → should fail, not silently succeed
+      const ctx = makeContext({ workfloApiClient: undefined })
+
+      const task = {
+        id: 'local-1',
+        external_id: 'wf-task-789',
+        output_fields: []
+      } as unknown as TaskRecord
+
+      const result = await plugin.executeAction('complete', task, undefined, { enterprise_mode: true }, ctx)
+
+      expect(result.success).toBe(false)
+      expect(result.error).toContain('Enterprise API client not available')
+    })
+  })
+
+  describe('importTasksEnterprise - race condition guard', () => {
+    function makeEnterpriseCtx(existingTask?: Partial<TaskRecord>) {
+      const mockListTasks = vi.fn().mockResolvedValue({
+        tasks: [{
+          id: 'wf-1',
+          title: 'Server Task',
+          status: 'pending',
+          priority: 'medium',
+          description: '',
+          taskData: { fields: [], outputs: [] },
+          assignees: []
+        }],
+        pagination: { total: 1, page: 1, pageSize: 100, totalPages: 1 }
+      })
+
+      const db = {
+        getTaskSource: vi.fn().mockReturnValue({ name: 'Workflo Test' }),
+        getTaskByExternalId: vi.fn().mockReturnValue(existingTask || undefined),
+        createTask: vi.fn(),
+        updateTask: vi.fn(),
+        updateTaskSourceLastSynced: vi.fn()
+      } as unknown as DatabaseManager
+
+      const ctx = makeContext({
+        db,
+        workfloApiClient: {
+          listTasks: mockListTasks,
+          downloadFile: vi.fn()
+        } as unknown as PluginContext['workfloApiClient']
+      })
+
+      return { ctx, db }
+    }
+
+    it('preserves local Completed status within the 2-minute race window', async () => {
+      // Task was completed very recently (30 seconds ago)
+      const recentUpdate = new Date(Date.now() - 30_000).toISOString()
+      const { ctx, db } = makeEnterpriseCtx({
+        id: 'local-1',
+        status: TaskStatus.Completed,
+        updated_at: recentUpdate
+      })
+
+      await plugin.importTasks('src-1', { enterprise_mode: true }, ctx)
+
+      // Should keep Completed (within race window)
+      expect(db.updateTask).toHaveBeenCalledWith(
+        'local-1',
+        expect.objectContaining({ status: TaskStatus.Completed })
+      )
+    })
+
+    it('trusts server status after the 2-minute race window expires', async () => {
+      // Task was completed 5 minutes ago — well past the race window
+      const oldUpdate = new Date(Date.now() - 5 * 60_000).toISOString()
+      const { ctx, db } = makeEnterpriseCtx({
+        id: 'local-1',
+        status: TaskStatus.Completed,
+        updated_at: oldUpdate
+      })
+
+      await plugin.importTasks('src-1', { enterprise_mode: true }, ctx)
+
+      // Should update to server status (NotStarted, mapped from "pending")
+      expect(db.updateTask).toHaveBeenCalledWith(
+        'local-1',
+        expect.objectContaining({ status: TaskStatus.NotStarted })
+      )
+    })
   })
 })
