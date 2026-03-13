@@ -1636,6 +1636,17 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       ) {
         console.warn(`[AgentManager] Session not found or incompatible: ${adapterSessionId}`)
 
+        // For completed/review tasks, the session may have ended normally.
+        // Don't show the alarming "incompatible" dialog — just clear the session_id
+        // so the UI shows "Start" instead. This commonly happens with subtask sessions.
+        const currentTask = this.db.getTask(taskId)
+        if (currentTask && (currentTask.status === TaskStatus.ReadyForReview || currentTask.status === TaskStatus.Completed)) {
+          console.log(`[AgentManager] Session ended normally for ${currentTask.status} task ${taskId} — clearing session_id`)
+          this.db.updateTask(taskId, { session_id: null })
+          this.sendToRenderer('task:updated', { taskId, updates: { session_id: null } })
+          throw new Error('SESSION_ENDED')
+        }
+
         // Clear the old session_id in the database
         this.db.updateTask(taskId, { session_id: null })
 

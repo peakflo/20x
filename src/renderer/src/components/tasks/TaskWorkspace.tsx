@@ -567,8 +567,12 @@ Update existing skills that were helpful or create new ones for patterns worth r
 
   // Show panel if session exists (active or past transcript with messages)
   const showPanel = session.status !== SessionStatus.IDLE || session.messages.length > 0
+  // Resume = reconnect to a live session (only for tasks still in progress, not completed/review)
   const canResume = task.agent_id && task.session_id && !session.sessionId && session.status === SessionStatus.IDLE && session.messages.length === 0
-  const canRestart = task.agent_id && task.session_id && !session.sessionId && session.status === SessionStatus.IDLE && session.messages.length > 0
+    && task.status !== TaskStatus.ReadyForReview && task.status !== TaskStatus.Completed
+  // Restart = replay transcript from a finished session (review/completed, or when messages are already loaded)
+  const canRestart = task.agent_id && task.session_id && !session.sessionId && session.status === SessionStatus.IDLE
+    && (session.messages.length > 0 || task.status === TaskStatus.ReadyForReview || task.status === TaskStatus.Completed)
   const canStart = task.agent_id && !task.session_id && !session.sessionId && session.status === SessionStatus.IDLE
     && task.status !== TaskStatus.Completed
   const canTriage = !task.agent_id && agents.length > 0 && session.status === SessionStatus.IDLE
