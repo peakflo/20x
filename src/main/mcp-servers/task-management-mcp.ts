@@ -18,12 +18,23 @@ const scopeTaskId = process.env.TASK_SCOPE_TASK_ID || null
 const isScoped = !!(scopeParentId && scopeTaskId)
 
 async function callApi(route: string, params: Record<string, unknown> = {}): Promise<unknown> {
-  const res = await fetch(`${apiUrl}${route}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(params)
-  })
-  return res.json()
+  const maxRetries = 3
+  const baseDelay = 500 // ms
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      const res = await fetch(`${apiUrl}${route}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(params)
+      })
+      return res.json()
+    } catch (err) {
+      if (attempt === maxRetries) throw err
+      // Exponential backoff: 500ms, 1000ms, 2000ms
+      await new Promise((r) => setTimeout(r, baseDelay * Math.pow(2, attempt)))
+    }
+  }
+  throw new Error(`callApi ${route} failed after ${maxRetries + 1} attempts`)
 }
 
 // ── Tool definitions ──────────────────────────────────────────
