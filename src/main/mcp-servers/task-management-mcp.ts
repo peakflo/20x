@@ -19,19 +19,17 @@ const isScoped = !!(scopeParentId && scopeTaskId)
 
 async function callApi(route: string, params: Record<string, unknown> = {}): Promise<unknown> {
   const url = `${apiUrl}${route}`
-  console.error(`[MCP:task-management] callApi → ${route} (${url})`, JSON.stringify(params).slice(0, 200))
   try {
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(params)
     })
-    const json = await res.json()
-    console.error(`[MCP:task-management] callApi ← ${route} status=${res.status}`, JSON.stringify(json).slice(0, 200))
-    return json
+    return res.json()
   } catch (err) {
-    console.error(`[MCP:task-management] callApi FAILED ${route}:`, (err as Error).message, (err as Error).cause || '')
-    throw err
+    const cause = (err as Error).cause
+    const causeMsg = cause instanceof Error ? cause.message : (cause ? String(cause) : '')
+    return { error: `fetch failed: ${(err as Error).message}${causeMsg ? ` (cause: ${causeMsg})` : ''} | url=${url} | scope=${isScoped ? `task=${scopeTaskId} parent=${scopeParentId}` : 'full'}` }
   }
 }
 
