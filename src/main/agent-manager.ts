@@ -1485,7 +1485,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
           data: {
             id: `error-${Date.now()}`,
             role: 'system',
-            content: status.message || 'Unknown error',
+            content: status.message || 'An unexpected error occurred. Check logs for details.',
             partType: 'error'
           }
         })
