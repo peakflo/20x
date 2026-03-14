@@ -92,9 +92,10 @@ export class EnterpriseSyncManager {
         }
 
         // Step C: Pull server skills back (picks up skills from other nodes)
-        const serverSkills = await this.apiClient.listSkills()
-        if (serverSkills && serverSkills.length > 0) {
-          await this.pullServerSkills(serverSkills, result)
+        // Re-fetch to include any skills we just created
+        const freshServerSkills = await this.apiClient.listSkills() ?? []
+        if (freshServerSkills.length > 0) {
+          await this.pullServerSkills(freshServerSkills, result)
         } else {
           console.log('[EnterpriseSyncManager] No server skills to pull (listSkills returned empty)')
         }
