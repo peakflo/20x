@@ -370,3 +370,147 @@ describe('Triage task status lifecycle', () => {
     // This task should go directly to auto-run, not triage
   })
 })
+
+describe('/update_task - output_fields', () => {
+  it('updates output_fields via JSON serialization', () => {
+    const task = db.createTask(makeTask({ title: 'Task with outputs' }))!
+    expect(task.output_fields).toEqual([])
+
+    // Simulate what handleRoute does for output_fields
+    const outputFields = [
+      { id: 'pr_url', name: 'Pull Request URL', type: 'url', required: true },
+      { id: 'summary', name: 'Summary', type: 'textarea', required: false }
+    ]
+    rawDb.prepare('UPDATE tasks SET output_fields = ?, updated_at = ? WHERE id = ?')
+      .run(JSON.stringify(outputFields), new Date().toISOString(), task.id)
+
+    const updatedTask = db.getTask(task.id)!
+    expect(updatedTask.output_fields).toEqual(outputFields)
+    expect(updatedTask.output_fields).toHaveLength(2)
+    expect(updatedTask.output_fields[0].id).toBe('pr_url')
+    expect(updatedTask.output_fields[0].type).toBe('url')
+    expect(updatedTask.output_fields[0].required).toBe(true)
+    expect(updatedTask.output_fields[1].id).toBe('summary')
+  })
+
+  it('preserves existing output_fields when not included in update', () => {
+    const outputFields = [
+      { id: 'result', name: 'Result', type: 'text', required: true }
+    ]
+    const task = db.createTask(makeTask({ title: 'Pre-defined outputs', output_fields: outputFields }))!
+    expect(task.output_fields).toEqual(outputFields)
+
+    // Update only labels, not output_fields
+    db.updateTask(task.id, { labels: ['test'] })
+    const updatedTask = db.getTask(task.id)!
+    expect(updatedTask.output_fields).toEqual(outputFields)
+    expect(updatedTask.labels).toEqual(['test'])
+  })
+})
+
+describe('/create_subtask - output_fields', () => {
+  it('creates subtask with output_fields', () => {
+    const parentTask = db.createTask(makeTask({ title: 'Parent' }))!
+
+    const subtaskId = `task_${Date.now()}_with_outputs`
+    const now = new Date().toISOString()
+    const outputFields = [
+      { id: 'findings', name: 'Findings', type: 'textarea', required: true },
+      { id: 'approved', name: 'Approved', type: 'boolean', required: true }
+    ]
+
+    rawDb.prepare(`
+      INSERT INTO tasks (id, title, description, type, priority, status, assignee, due_date, labels, attachments, repos, output_fields, source, agent_id, skill_ids, parent_task_id, created_at, updated_at)
+      VALUES (?, ?, '', 'general', 'medium', 'not_started', '', NULL, '[]', '[]', '[]', ?, 'local', NULL, NULL, ?, ?, ?)
+    `).run(subtaskId, 'Subtask with outputs', JSON.stringify(outputFields), parentTask.id, now, now)
+
+    const subtask = db.getTask(subtaskId)!
+    expect(subtask.output_fields).toEqual(outputFields)
+    expect(subtask.output_fields).toHaveLength(2)
+    expect(subtask.output_fields[0].id).toBe('findings')
+    expect(subtask.output_fields[1].type).toBe('boolean')
+  })
+
+  it('defaults to empty output_fields when not specified', () => {
+    const parentTask = db.createTask(makeTask({ title: 'Parent' }))!
+
+    const subtaskId = `task_${Date.now()}_no_outputs`
+    const now = new Date().toISOString()
+
+    rawDb.prepare(`
+      INSERT INTO tasks (id, title, description, type, priority, status, assignee, due_date, labels, attachments, repos, output_fields, source, agent_id, skill_ids, parent_task_id, created_at, updated_at)
+      VALUES (?, ?, '', 'general', 'medium', 'not_started', '', NULL, '[]', '[]', '[]', '[]', 'local', NULL, NULL, ?, ?, ?)
+    `).run(subtaskId, 'Subtask no outputs', parentTask.id, now, now)
+
+    const subtask = db.getTask(subtaskId)!
+    expect(subtask.output_fields).toEqual([])
+  })
+})
+
+describe('Triage lifecycle with output_fields', () => {
+  it('triage agent can define output_fields during triage', () => {
+    const agent = db.createAgent(makeAgent({ name: 'Default Agent', is_default: true }))!
+    const task = db.createTask(makeTask({ title: 'Task needing triage and outputs' }))!
+
+    // Task starts with no output_fields
+    expect(task.output_fields).toEqual([])
+
+    // Set to triaging
+    db.updateTask(task.id, { status: 'triaging' as unknown as Parameters<typeof db.updateTask>[1]['status'] })
+
+    // Triage agent assigns agent_id and output_fields
+    const outputFields = [
+      { id: 'pr_url', name: 'Pull Request URL', type: 'url', required: true },
+      { id: 'test_results', name: 'Test Results', type: 'textarea', required: true },
+      { id: 'files_changed', name: 'Files Changed', type: 'number', required: false }
+    ]
+
+    // Simulate handleRoute update_task with output_fields
+    const updates = ['agent_id = ?', 'output_fields = ?', 'updated_at = ?']
+    const params = [agent.id, JSON.stringify(outputFields), new Date().toISOString(), task.id]
+    rawDb.prepare(`UPDATE tasks SET ${updates.join(', ')} WHERE id = ?`).run(...params)
+
+    const triaged = db.getTask(task.id)!
+    expect(triaged.agent_id).toBe(agent.id)
+    expect(triaged.output_fields).toEqual(outputFields)
+    expect(triaged.output_fields).toHaveLength(3)
+
+    // After triage, status resets to not_started — output_fields preserved
+    db.updateTask(task.id, { status: 'not_started' as unknown as Parameters<typeof db.updateTask>[1]['status'] })
+    const readyTask = db.getTask(task.id)!
+    expect(readyTask.status).toBe('not_started')
+    expect(readyTask.output_fields).toEqual(outputFields) // Output fields persist
+  })
+
+  it('preserves externally-defined output_fields during triage', () => {
+    const agent = db.createAgent(makeAgent({ name: 'Agent' }))!
+    const existingOutputs = [
+      { id: 'invoice_number', name: 'Invoice Number', type: 'text', required: true },
+      { id: 'amount', name: 'Amount', type: 'number', required: true }
+    ]
+    const task = db.createTask(makeTask({
+      title: 'Enterprise task with predefined outputs',
+      output_fields: existingOutputs
+    }))!
+
+    expect(task.output_fields).toEqual(existingOutputs)
+
+    // Triage agent preserves existing and adds more
+    const mergedOutputs = [
+      ...existingOutputs,
+      { id: 'approval_status', name: 'Approval Status', type: 'list', required: true, options: ['approved', 'rejected'] }
+    ]
+
+    db.updateTask(task.id, {
+      agent_id: agent.id,
+      output_fields: mergedOutputs
+    })
+
+    const triaged = db.getTask(task.id)!
+    expect(triaged.output_fields).toHaveLength(3)
+    expect(triaged.output_fields[0].id).toBe('invoice_number')
+    expect(triaged.output_fields[1].id).toBe('amount')
+    expect(triaged.output_fields[2].id).toBe('approval_status')
+    expect(triaged.output_fields[2].options).toEqual(['approved', 'rejected'])
+  })
+})

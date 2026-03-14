@@ -149,7 +149,23 @@ const mastermindTools = [
         agent_id: { type: 'string', description: 'Assign to agent' },
         repos: { type: 'array', items: { type: 'string' }, description: 'Set repository paths/URLs for this task' },
         priority: { type: 'string', enum: ['critical', 'high', 'medium', 'low'] },
-        status: { type: 'string', enum: ['not_started', 'triaging', 'in_progress', 'completed', 'cancelled'] }
+        status: { type: 'string', enum: ['not_started', 'triaging', 'in_progress', 'completed', 'cancelled'] },
+        output_fields: {
+          type: 'array',
+          description: 'Define expected output fields for this task. Each field describes a piece of structured data the agent should produce.',
+          items: {
+            type: 'object',
+            properties: {
+              id: { type: 'string', description: 'Unique identifier for this output field (e.g. "pr_url", "summary")' },
+              name: { type: 'string', description: 'Human-readable name (e.g. "Pull Request URL", "Summary")' },
+              type: { type: 'string', enum: ['text', 'number', 'email', 'textarea', 'list', 'date', 'file', 'boolean', 'country', 'currency', 'url'], description: 'Field type' },
+              required: { type: 'boolean', description: 'Whether this output is required' },
+              multiple: { type: 'boolean', description: 'Whether multiple values are allowed' },
+              options: { type: 'array', items: { type: 'string' }, description: 'Options for list-type fields' }
+            },
+            required: ['id', 'name', 'type']
+          }
+        }
       },
       required: ['task_id']
     }
@@ -202,7 +218,23 @@ const mastermindTools = [
         labels: { type: 'array', items: { type: 'string' }, description: 'Subtask labels' },
         agent_id: { type: 'string', description: 'Assign to an agent by ID' },
         skill_ids: { type: 'array', items: { type: 'string' }, description: 'Skill IDs to assign' },
-        repos: { type: 'array', items: { type: 'string' }, description: 'Repository paths (inherits from parent if not set)' }
+        repos: { type: 'array', items: { type: 'string' }, description: 'Repository paths (inherits from parent if not set)' },
+        output_fields: {
+          type: 'array',
+          description: 'Define expected output fields for this subtask. Each field describes a piece of structured data the agent should produce.',
+          items: {
+            type: 'object',
+            properties: {
+              id: { type: 'string', description: 'Unique identifier for this output field' },
+              name: { type: 'string', description: 'Human-readable name' },
+              type: { type: 'string', enum: ['text', 'number', 'email', 'textarea', 'list', 'date', 'file', 'boolean', 'country', 'currency', 'url'], description: 'Field type' },
+              required: { type: 'boolean', description: 'Whether this output is required' },
+              multiple: { type: 'boolean', description: 'Whether multiple values are allowed' },
+              options: { type: 'array', items: { type: 'string' }, description: 'Options for list-type fields' }
+            },
+            required: ['id', 'name', 'type']
+          }
+        }
       },
       required: ['parent_task_id', 'title']
     }

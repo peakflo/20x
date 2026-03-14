@@ -2813,6 +2813,7 @@ Description: ${task.description || '(none)'}
 Type: ${task.type || 'general'}
 Current Priority: ${task.priority || 'medium'}
 Current Labels: ${JSON.stringify(task.labels || [])}
+Current Output Fields: ${JSON.stringify(task.output_fields || [])}
 Parent Task: ${task.parent_task_id ? `This is a subtask of task ${task.parent_task_id}` : 'None (top-level task)'}
 
 IMPORTANT: For ALL task operations below, use ONLY the \`task-management\` MCP server tools (e.g. \`mcp__task-management__update_task\`, \`mcp__task-management__create_subtask\`). Do NOT use integration/sync tools like \`pf-workflo-integrations\` for updating tasks — those are for external system sync only.
@@ -2829,17 +2830,22 @@ Follow these steps:
    - Appropriate repos (if the task relates to specific repositories)
    - Priority (critical/high/medium/low) — adjust if the current priority seems wrong
    - Labels — suggest relevant labels based on similar tasks
+   - output_fields — define the expected structured outputs for this task. Think about what concrete deliverables or data the agent should produce. Each output field needs an id (snake_case), name (human-readable), and type (text, number, url, file, boolean, textarea, list, date, email, country, currency). Mark fields as required if they are essential. Examples:
+     - A coding task might have: { id: "pr_url", name: "Pull Request URL", type: "url", required: true }
+     - A research task might have: { id: "summary", name: "Summary", type: "textarea", required: true }
+     - A review task might have: { id: "approved", name: "Approved", type: "boolean", required: true }
 6. If the task is complex and clearly involves multiple distinct steps that would benefit from separate agents or sequential human review, create subtasks using \`create_subtask\` from the \`task-management\` MCP server. Each subtask should:
    - Have a clear, specific title describing one step
    - Be assigned to the most appropriate agent_id (REQUIRED for each subtask)
    - Have relevant skill_ids assigned based on what skills match that subtask's work
    - Have repos set to the repositories relevant to that subtask (inherits from parent if not specified)
    - Include a description explaining the subtask's scope, expected output, and how it relates to other subtasks
+   - Have output_fields defined to specify what structured data the subtask agent should produce
    - NOT overlap with other subtasks — each subtask should be a distinct, self-contained piece of work
    Only create subtasks when clearly needed — simple tasks should remain as single tasks.
    When creating subtasks, consider the order of execution and dependencies between them.
    Each subtask will run as a separate agent session with access to the parent task and sibling subtask outputs for coordination.
-7. Call \`update_task\` ONCE with task_id "${task.id}" and all the values you determined. You MUST include agent_id.
+7. Call \`update_task\` ONCE with task_id "${task.id}" and all the values you determined. You MUST include agent_id and output_fields.
    If you created subtasks, the parent task's agent will coordinate the overall work.
 
 Important:
@@ -2849,6 +2855,7 @@ Important:
 - Do NOT attempt to work on or solve the task. Only triage it.
 - If no similar tasks exist, use your best judgment based on the title, description, and type.
 - Be efficient — make your tool calls and finish quickly.
+- If the task already has output_fields defined (from an external source), preserve them and only add additional fields if needed. Do not remove existing output fields.
 - When creating subtasks, the parent task's agent will coordinate — subtask agents handle individual pieces.
 - Subtask agents can see the parent task, all sibling subtasks' status/resolution/outputs, and sibling transcripts for coordination.
 - NEVER use external integration MCP tools (like pf-workflo-integrations) for local task updates — always use task-management tools.`
