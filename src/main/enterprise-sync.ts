@@ -93,7 +93,11 @@ export class EnterpriseSyncManager {
 
         // Step C: Pull server skills back (picks up skills from other nodes)
         const serverSkills = await this.apiClient.listSkills()
-        await this.pullServerSkills(serverSkills, result)
+        if (serverSkills && serverSkills.length > 0) {
+          await this.pullServerSkills(serverSkills, result)
+        } else {
+          console.log('[EnterpriseSyncManager] No server skills to pull (listSkills returned empty)')
+        }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
         result.errors.push(`Skills 2-way sync failed: ${msg}`)

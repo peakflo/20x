@@ -252,11 +252,13 @@ export class WorkfloApiClient {
    * List all skills
    */
   async listSkills(): Promise<WorkfloSkill[]> {
-    const result = (await this.auth.apiRequest(
+    const result = await this.auth.apiRequest(
       'GET',
       '/api/skills'
-    )) as { skills: WorkfloSkill[] }
-    return result.skills
+    )
+    // Handle both { skills: [...] } (new) and bare array (legacy) response formats
+    if (Array.isArray(result)) return result as WorkfloSkill[]
+    return (result as { skills: WorkfloSkill[] }).skills ?? []
   }
 
   /**
