@@ -200,6 +200,12 @@ describe('EnterpriseSyncManager — Skills 2-Way Sync', () => {
       const localSkill = makeLocalSkill({ enterprise_skill_id: null })
       mockDb.getSkills.mockReturnValue([localSkill])
       mockApiClient.createSkill.mockResolvedValue(makeServerSkill({ id: 'pushed-1' }))
+      // listSkills must return the existing IDs so they pass the valid-ID filter
+      mockApiClient.listSkills.mockResolvedValue([
+        makeServerSkill({ id: 'existing-1', name: 'Existing 1' }),
+        makeServerSkill({ id: 'existing-2', name: 'Existing 2' }),
+        makeServerSkill({ id: 'pushed-1', name: 'Pushed 1' })
+      ])
       mockApiClient.getOrgNode.mockResolvedValue({
         node: makeOrgNode({ skillIds: ['existing-1', 'existing-2'] }),
         mcpServers: [],
@@ -217,6 +223,11 @@ describe('EnterpriseSyncManager — Skills 2-Way Sync', () => {
       const localSkill = makeLocalSkill({ enterprise_skill_id: 'already-on-node' })
       mockDb.getSkills.mockReturnValue([localSkill])
       mockApiClient.updateSkill.mockResolvedValue(makeServerSkill({ id: 'already-on-node' }))
+      // listSkills must return the IDs so they pass the valid-ID filter
+      mockApiClient.listSkills.mockResolvedValue([
+        makeServerSkill({ id: 'already-on-node', name: 'Already' }),
+        makeServerSkill({ id: 'other-1', name: 'Other' })
+      ])
       mockApiClient.getOrgNode.mockResolvedValue({
         node: makeOrgNode({ skillIds: ['already-on-node', 'other-1'] }),
         mcpServers: [],

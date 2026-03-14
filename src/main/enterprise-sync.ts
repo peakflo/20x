@@ -343,22 +343,24 @@ export class EnterpriseSyncManager {
     result: EnterpriseSyncResult
   ): Promise<void> {
     try {
-      // Get current node to merge with existing skillIds
-      const detail = await this.apiClient.getOrgNode(nodeId)
-      const existingSkillIds = detail.node?.skillIds || []
+      // Get valid server skill IDs to filter out stale references
+      const serverSkills = await this.apiClient.listSkills() ?? []
+      const validSkillIds = new Set(serverSkills.map((s) => s.id))
 
-      console.log(
-        `[EnterpriseSyncManager] assignSkillsToNode: node=${nodeId}, existing=${JSON.stringify(existingSkillIds)}, pushed=${JSON.stringify(pushedSkillIds)}`
+      // Get current node and filter existing IDs to only valid ones
+      const detail = await this.apiClient.getOrgNode(nodeId)
+      const existingSkillIds = (detail.node?.skillIds || []).filter(
+        (id) => validSkillIds.has(id)
       )
 
-      // Merge: keep existing IDs that aren't from our push, add our pushed IDs
+      // Merge: existing valid IDs + newly pushed IDs, deduplicated
       const mergedIds = [...new Set([...existingSkillIds, ...pushedSkillIds])]
 
-      if (mergedIds.length === 0) {
-        console.log('[EnterpriseSyncManager] No skills to assign — skipping updateOrgNode')
-        return
-      }
+      console.log(
+        `[EnterpriseSyncManager] assignSkillsToNode: node=${nodeId}, validExisting=${existingSkillIds.length}, pushed=${pushedSkillIds.length}, merged=${mergedIds.length}`
+      )
 
+      // Always update to clean up stale references even if pushedSkillIds is empty
       await this.apiClient.updateOrgNode(nodeId, {
         skillIds: mergedIds
       })
