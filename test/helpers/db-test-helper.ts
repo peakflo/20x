@@ -93,6 +93,7 @@ export function createTestDb(): { db: DatabaseManager; rawDb: InstanceType<typeo
       last_occurrence_at TEXT DEFAULT NULL,
       next_occurrence_at TEXT DEFAULT NULL,
       parent_task_id TEXT REFERENCES tasks(id) ON DELETE CASCADE,
+      sort_order INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );

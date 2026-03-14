@@ -9,10 +9,10 @@ import type { AgentStatusEvent } from '@/types/electron.d'
 import type { TaskSession } from '@/stores/agent-store'
 
 const PRIORITY_ORDER: Record<TaskPriority, number> = {
-  critical: 0,
-  high: 1,
-  medium: 2,
-  low: 3
+  critical: 3,
+  high: 2,
+  medium: 1,
+  low: 0
 }
 
 const MAX_TRIAGE_ATTEMPTS = 2
@@ -156,7 +156,7 @@ export function useAgentAutoStart({ tasks, agents, sessions, showToast }: UseAge
           const taskA = allTasks.find((t) => t.id === aId)
           const taskB = allTasks.find((t) => t.id === bId)
           if (!taskA || !taskB) return 0
-          return PRIORITY_ORDER[taskA.priority] - PRIORITY_ORDER[taskB.priority]
+          return PRIORITY_ORDER[taskB.priority] - PRIORITY_ORDER[taskA.priority]
         })
         tasksByAgent.set(agentId, sortedIds)
       })

@@ -245,6 +245,7 @@ export interface TaskRow {
   heartbeat_last_check_at: string | null
   heartbeat_next_check_at: string | null
   parent_task_id: string | null
+  sort_order: number
   created_at: string
   updated_at: string
 }
@@ -304,6 +305,7 @@ export interface TaskRecord {
   heartbeat_last_check_at: string | null
   heartbeat_next_check_at: string | null
   parent_task_id: string | null
+  sort_order: number
   created_at: string
   updated_at: string
 }
@@ -371,6 +373,7 @@ export interface UpdateTaskData {
   heartbeat_last_check_at?: string | null
   heartbeat_next_check_at?: string | null
   parent_task_id?: string | null
+  sort_order?: number
 }
 
 /** Columns that can be dynamically updated via updateTask. */
@@ -400,7 +403,8 @@ const UPDATABLE_COLUMNS = new Set([
   'heartbeat_interval_minutes',
   'heartbeat_last_check_at',
   'heartbeat_next_check_at',
-  'parent_task_id'
+  'parent_task_id',
+  'sort_order'
 ])
 
 const JSON_COLUMNS = new Set(['labels', 'attachments', 'repos', 'output_fields', 'skill_ids'])
@@ -908,6 +912,7 @@ export class DatabaseManager {
         heartbeat_last_check_at TEXT DEFAULT NULL,
         heartbeat_next_check_at TEXT DEFAULT NULL,
         parent_task_id TEXT REFERENCES tasks(id) ON DELETE CASCADE,
+        sort_order INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
@@ -1420,6 +1425,11 @@ export class DatabaseManager {
     // Always ensure the index exists (covers both new DBs and migrated DBs)
     this.db.exec(`CREATE INDEX IF NOT EXISTS idx_tasks_parent ON tasks(parent_task_id) WHERE parent_task_id IS NOT NULL`)
 
+    // Add sort_order column for explicit subtask ordering (supports drag-and-drop)
+    if (!columnNames.has('sort_order')) {
+      this.db.exec(`ALTER TABLE tasks ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0`)
+    }
+
     // Create heartbeat_logs table
     const heartbeatLogsTable = this.db.prepare(
       "SELECT name FROM sqlite_master WHERE type='table' AND name='heartbeat_logs'"
@@ -1828,7 +1838,7 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
     if (!this.ensureDbOpen()) return []
 
     const rows = this.db.prepare(
-      'SELECT * FROM tasks WHERE parent_task_id = ? ORDER BY created_at ASC'
+      'SELECT * FROM tasks WHERE parent_task_id = ? ORDER BY sort_order ASC, created_at ASC'
     ).all(parentId) as TaskRow[]
 
     return rows.map(deserializeTask)

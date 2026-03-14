@@ -5,19 +5,19 @@ import { TaskStatus } from '@/types'
 import type { WorkfloTask, TaskPriority } from '@/types'
 
 const PRIORITY_ORDER: Record<TaskPriority, number> = {
-  critical: 0,
-  high: 1,
-  medium: 2,
-  low: 3
+  critical: 3,
+  high: 2,
+  medium: 1,
+  low: 0
 }
 
 const STATUS_ORDER: Record<TaskStatus, number> = {
-  [TaskStatus.AgentWorking]: 0,
-  [TaskStatus.AgentLearning]: 1,
-  [TaskStatus.Triaging]: 2,
-  [TaskStatus.ReadyForReview]: 3,
-  [TaskStatus.NotStarted]: 4,
-  [TaskStatus.Completed]: 5
+  [TaskStatus.AgentWorking]: 5,
+  [TaskStatus.AgentLearning]: 4,
+  [TaskStatus.Triaging]: 3,
+  [TaskStatus.ReadyForReview]: 2,
+  [TaskStatus.NotStarted]: 1,
+  [TaskStatus.Completed]: 0
 }
 
 export function useTasks() {

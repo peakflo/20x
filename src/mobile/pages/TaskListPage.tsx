@@ -42,7 +42,7 @@ export function TaskListPage({ onNavigate }: { onNavigate: (route: Route) => voi
     })
   }
 
-  // Build subtask lookup map
+  // Build subtask lookup map — sorted by sort_order to preserve explicit sequence
   const subtasksByParent = useMemo(() => {
     const map = new Map<string, Task[]>()
     for (const task of tasks) {
@@ -51,6 +51,14 @@ export function TaskListPage({ onNavigate }: { onNavigate: (route: Route) => voi
         existing.push(task)
         map.set(task.parent_task_id, existing)
       }
+    }
+    // Sort subtasks by sort_order ascending (with created_at as tiebreaker)
+    for (const [, subtasks] of map) {
+      subtasks.sort((a, b) => {
+        const orderDiff = (a.sort_order ?? 0) - (b.sort_order ?? 0)
+        if (orderDiff !== 0) return orderDiff
+        return new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+      })
     }
     return map
   }, [tasks])

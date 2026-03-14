@@ -304,12 +304,26 @@ async function routeGet(pathname: string, url: URL): Promise<unknown> {
     const order = url.searchParams.get('order') || 'desc'
     const dir = order === 'asc' ? 1 : -1
 
+    const PRIORITY_ORDER: Record<string, number> = { critical: 3, high: 2, medium: 1, low: 0 }
+    const STATUS_ORDER: Record<string, number> = { agent_working: 5, agent_learning: 4, triaging: 3, ready_for_review: 2, not_started: 1, completed: 0 }
+
     tasks.sort((a, b) => {
       const va = (a as unknown as Record<string, unknown>)[sort]
       const vb = (b as unknown as Record<string, unknown>)[sort]
       if (va == null && vb == null) return 0
       if (va == null) return dir
       if (vb == null) return -dir
+      // Use semantic ordering for priority and status instead of alphabetical
+      if (sort === 'priority') {
+        const pa = PRIORITY_ORDER[va as string] ?? 0
+        const pb = PRIORITY_ORDER[vb as string] ?? 0
+        return (pa - pb) * dir
+      }
+      if (sort === 'status') {
+        const sa = STATUS_ORDER[va as string] ?? 0
+        const sb = STATUS_ORDER[vb as string] ?? 0
+        return (sa - sb) * dir
+      }
       if (va < vb) return -dir
       if (va > vb) return dir
       return 0

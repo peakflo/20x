@@ -38,6 +38,7 @@ function makeWorkfloTask(overrides: Partial<WorkfloTask> = {}): WorkfloTask {
     created_at: '2024-06-15T12:00:00Z',
     updated_at: '2024-06-15T12:00:00Z',
     parent_task_id: null,
+    sort_order: 0,
     ...overrides
   }
 }
@@ -191,17 +192,36 @@ describe('useTasks', () => {
       expect(result.current.tasks[0].id).toBe('t2')
     })
 
-    it('sorts by priority', () => {
+    it('sorts by priority asc (low first)', () => {
       useTaskStore.setState({
         tasks: [
-          makeWorkfloTask({ id: 't1', priority: 'low' }),
-          makeWorkfloTask({ id: 't2', priority: 'critical' })
+          makeWorkfloTask({ id: 't1', priority: 'critical' }),
+          makeWorkfloTask({ id: 't2', priority: 'low' })
         ]
       })
       useUIStore.setState({ sortField: 'priority', sortDirection: 'asc' })
 
       const { result } = renderHook(() => useTasks())
-      expect(result.current.tasks[0].id).toBe('t2')
+      expect(result.current.tasks[0].id).toBe('t2') // low first
+      expect(result.current.tasks[1].id).toBe('t1') // critical last
+    })
+
+    it('sorts by priority desc (critical first)', () => {
+      useTaskStore.setState({
+        tasks: [
+          makeWorkfloTask({ id: 't1', priority: 'low' }),
+          makeWorkfloTask({ id: 't2', priority: 'high' }),
+          makeWorkfloTask({ id: 't3', priority: 'critical' }),
+          makeWorkfloTask({ id: 't4', priority: 'medium' })
+        ]
+      })
+      useUIStore.setState({ sortField: 'priority', sortDirection: 'desc' })
+
+      const { result } = renderHook(() => useTasks())
+      expect(result.current.tasks[0].id).toBe('t3') // critical
+      expect(result.current.tasks[1].id).toBe('t2') // high
+      expect(result.current.tasks[2].id).toBe('t4') // medium
+      expect(result.current.tasks[3].id).toBe('t1') // low
     })
 
     it('sorts by title', () => {
@@ -233,20 +253,35 @@ describe('useTasks', () => {
       expect(result.current.tasks[2].id).toBe('t1')
     })
 
-    it('sorts by status', () => {
+    it('sorts by status asc (completed first)', () => {
+      useTaskStore.setState({
+        tasks: [
+          makeWorkfloTask({ id: 't1', status: TaskStatus.AgentWorking }),
+          makeWorkfloTask({ id: 't2', status: TaskStatus.Completed })
+        ]
+      })
+      useUIStore.setState({ sortField: 'status', sortDirection: 'asc' })
+
+      const { result } = renderHook(() => useTasks())
+      expect(result.current.tasks[0].id).toBe('t2') // Completed first
+      expect(result.current.tasks[1].id).toBe('t1') // AgentWorking last
+    })
+
+    it('sorts by status desc (active first)', () => {
       useTaskStore.setState({
         tasks: [
           makeWorkfloTask({ id: 't1', status: TaskStatus.Completed }),
           makeWorkfloTask({ id: 't2', status: TaskStatus.AgentWorking })
         ]
       })
-      useUIStore.setState({ sortField: 'status', sortDirection: 'asc' })
+      useUIStore.setState({ sortField: 'status', sortDirection: 'desc' })
 
       const { result } = renderHook(() => useTasks())
-      expect(result.current.tasks[0].id).toBe('t2')
+      expect(result.current.tasks[0].id).toBe('t2') // AgentWorking first
+      expect(result.current.tasks[1].id).toBe('t1') // Completed last
     })
 
-    it('sorts Triaging status between AgentLearning and ReadyForReview', () => {
+    it('sorts Triaging status between AgentLearning and ReadyForReview (desc)', () => {
       useTaskStore.setState({
         tasks: [
           makeWorkfloTask({ id: 't1', status: TaskStatus.NotStarted }),
@@ -254,12 +289,12 @@ describe('useTasks', () => {
           makeWorkfloTask({ id: 't3', status: TaskStatus.AgentWorking })
         ]
       })
-      useUIStore.setState({ sortField: 'status', sortDirection: 'asc' })
+      useUIStore.setState({ sortField: 'status', sortDirection: 'desc' })
 
       const { result } = renderHook(() => useTasks())
-      expect(result.current.tasks[0].id).toBe('t3') // AgentWorking (0)
-      expect(result.current.tasks[1].id).toBe('t2') // Triaging (2)
-      expect(result.current.tasks[2].id).toBe('t1') // NotStarted (4)
+      expect(result.current.tasks[0].id).toBe('t3') // AgentWorking (5)
+      expect(result.current.tasks[1].id).toBe('t2') // Triaging (3)
+      expect(result.current.tasks[2].id).toBe('t1') // NotStarted (1)
     })
 
     it('respects desc direction', () => {

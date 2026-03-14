@@ -272,31 +272,69 @@ describe('/create_subtask', () => {
 })
 
 describe('/list_subtasks', () => {
-  it('returns subtasks for a parent task', () => {
+  it('returns subtasks for a parent task ordered by sort_order', () => {
     const parent = db.createTask(makeTask({ title: 'Parent' }))!
     const now = new Date().toISOString()
 
-    // Create two subtasks
+    // Create two subtasks with explicit sort_order
     rawDb.prepare(`
-      INSERT INTO tasks (id, title, description, type, priority, status, assignee, labels, attachments, repos, output_fields, source, parent_task_id, created_at, updated_at)
-      VALUES (?, ?, '', 'general', 'medium', 'not_started', '', '[]', '[]', '[]', '[]', 'local', ?, ?, ?)
-    `).run('sub1', 'Sub 1', parent.id, now, now)
+      INSERT INTO tasks (id, title, description, type, priority, status, assignee, labels, attachments, repos, output_fields, source, parent_task_id, sort_order, created_at, updated_at)
+      VALUES (?, ?, '', 'general', 'medium', 'not_started', '', '[]', '[]', '[]', '[]', 'local', ?, ?, ?, ?)
+    `).run('sub1', 'Sub 1', parent.id, 1, now, now)
 
     rawDb.prepare(`
-      INSERT INTO tasks (id, title, description, type, priority, status, assignee, labels, attachments, repos, output_fields, source, parent_task_id, created_at, updated_at)
-      VALUES (?, ?, '', 'general', 'medium', 'not_started', '', '[]', '[]', '[]', '[]', 'local', ?, ?, ?)
-    `).run('sub2', 'Sub 2', parent.id, now, now)
+      INSERT INTO tasks (id, title, description, type, priority, status, assignee, labels, attachments, repos, output_fields, source, parent_task_id, sort_order, created_at, updated_at)
+      VALUES (?, ?, '', 'general', 'medium', 'not_started', '', '[]', '[]', '[]', '[]', 'local', ?, ?, ?, ?)
+    `).run('sub2', 'Sub 2', parent.id, 0, now, now)
 
-    const subtasks = rawDb.prepare('SELECT * FROM tasks WHERE parent_task_id = ? ORDER BY created_at ASC').all(parent.id) as Record<string, unknown>[]
+    const subtasks = rawDb.prepare('SELECT * FROM tasks WHERE parent_task_id = ? ORDER BY sort_order ASC, created_at ASC').all(parent.id) as Record<string, unknown>[]
     expect(subtasks).toHaveLength(2)
-    expect(subtasks[0].title).toBe('Sub 1')
-    expect(subtasks[1].title).toBe('Sub 2')
+    // Sub 2 has sort_order=0, Sub 1 has sort_order=1
+    expect(subtasks[0].title).toBe('Sub 2')
+    expect(subtasks[1].title).toBe('Sub 1')
   })
 
   it('returns empty array when no subtasks exist', () => {
     const parent = db.createTask(makeTask({ title: 'No subtasks parent' }))!
     const subtasks = rawDb.prepare('SELECT * FROM tasks WHERE parent_task_id = ?').all(parent.id)
     expect(subtasks).toHaveLength(0)
+  })
+})
+
+describe('/reorder_subtasks', () => {
+  it('reorders subtasks by updating sort_order', () => {
+    const parent = db.createTask(makeTask({ title: 'Parent' }))!
+    const now = new Date().toISOString()
+
+    // Create three subtasks with initial sort_order
+    rawDb.prepare(`
+      INSERT INTO tasks (id, title, description, type, priority, status, assignee, labels, attachments, repos, output_fields, source, parent_task_id, sort_order, created_at, updated_at)
+      VALUES (?, ?, '', 'general', 'medium', 'not_started', '', '[]', '[]', '[]', '[]', 'local', ?, ?, ?, ?)
+    `).run('sub-a', 'Sub A', parent.id, 0, now, now)
+
+    rawDb.prepare(`
+      INSERT INTO tasks (id, title, description, type, priority, status, assignee, labels, attachments, repos, output_fields, source, parent_task_id, sort_order, created_at, updated_at)
+      VALUES (?, ?, '', 'general', 'medium', 'not_started', '', '[]', '[]', '[]', '[]', 'local', ?, ?, ?, ?)
+    `).run('sub-b', 'Sub B', parent.id, 1, now, now)
+
+    rawDb.prepare(`
+      INSERT INTO tasks (id, title, description, type, priority, status, assignee, labels, attachments, repos, output_fields, source, parent_task_id, sort_order, created_at, updated_at)
+      VALUES (?, ?, '', 'general', 'medium', 'not_started', '', '[]', '[]', '[]', '[]', 'local', ?, ?, ?, ?)
+    `).run('sub-c', 'Sub C', parent.id, 2, now, now)
+
+    // Reorder: C first, then A, then B
+    const reorderStmt = rawDb.prepare('UPDATE tasks SET sort_order = ?, updated_at = ? WHERE id = ? AND parent_task_id = ?')
+    const reorderNow = new Date().toISOString()
+    const newOrder = ['sub-c', 'sub-a', 'sub-b']
+    for (let i = 0; i < newOrder.length; i++) {
+      reorderStmt.run(i, reorderNow, newOrder[i], parent.id)
+    }
+
+    const subtasks = rawDb.prepare('SELECT * FROM tasks WHERE parent_task_id = ? ORDER BY sort_order ASC').all(parent.id) as Record<string, unknown>[]
+    expect(subtasks).toHaveLength(3)
+    expect(subtasks[0].title).toBe('Sub C')
+    expect(subtasks[1].title).toBe('Sub A')
+    expect(subtasks[2].title).toBe('Sub B')
   })
 })
 

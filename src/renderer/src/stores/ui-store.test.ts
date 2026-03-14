@@ -61,6 +61,40 @@ describe('useUIStore', () => {
     expect(useUIStore.getState().sortField).toBe('priority')
   })
 
+  it('setSortField auto-sets desc direction for priority', () => {
+    useUIStore.getState().setSortDirection('asc') // start with asc
+    useUIStore.getState().setSortField('priority')
+    expect(useUIStore.getState().sortDirection).toBe('desc')
+  })
+
+  it('setSortField auto-sets desc direction for status', () => {
+    useUIStore.getState().setSortField('title') // asc
+    useUIStore.getState().setSortField('status')
+    expect(useUIStore.getState().sortDirection).toBe('desc')
+  })
+
+  it('setSortField auto-sets asc direction for title', () => {
+    useUIStore.getState().setSortField('title')
+    expect(useUIStore.getState().sortDirection).toBe('asc')
+  })
+
+  it('setSortField auto-sets asc direction for due_date', () => {
+    useUIStore.getState().setSortField('due_date')
+    expect(useUIStore.getState().sortDirection).toBe('asc')
+  })
+
+  it('setSortField auto-sets desc direction for created_at', () => {
+    useUIStore.getState().setSortDirection('asc')
+    useUIStore.getState().setSortField('created_at')
+    expect(useUIStore.getState().sortDirection).toBe('desc')
+  })
+
+  it('setSortField auto-sets desc direction for updated_at', () => {
+    useUIStore.getState().setSortDirection('asc')
+    useUIStore.getState().setSortField('updated_at')
+    expect(useUIStore.getState().sortDirection).toBe('desc')
+  })
+
   it('setSortDirection updates direction', () => {
     useUIStore.getState().setSortDirection('asc')
     expect(useUIStore.getState().sortDirection).toBe('asc')

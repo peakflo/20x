@@ -460,7 +460,7 @@ async function handleRoute(db: DatabaseManager, route: string, params: Record<st
     case '/list_subtasks': {
       if (!params.parent_task_id) return { error: 'parent_task_id is required' }
       const subtasks = rawDb.prepare(
-        'SELECT * FROM tasks WHERE parent_task_id = ? ORDER BY created_at ASC'
+        'SELECT * FROM tasks WHERE parent_task_id = ? ORDER BY sort_order ASC, created_at ASC'
       ).all(params.parent_task_id) as Record<string, unknown>[]
       subtasks.forEach(parseTask)
       return subtasks
@@ -480,11 +480,17 @@ async function handleRoute(db: DatabaseManager, route: string, params: Record<st
       // Inherit repos from parent if not specified
       const repos = params.repos ? JSON.stringify(params.repos) : (parentTask.repos as string) || '[]'
 
+      // Calculate next sort_order for this parent's subtasks
+      const maxOrderRow = rawDb.prepare(
+        'SELECT COALESCE(MAX(sort_order), -1) as max_order FROM tasks WHERE parent_task_id = ?'
+      ).get(params.parent_task_id) as { max_order: number }
+      const nextSortOrder = maxOrderRow.max_order + 1
+
       const outputFields = params.output_fields ? JSON.stringify(params.output_fields) : '[]'
 
       rawDb.prepare(`
-        INSERT INTO tasks (id, title, description, type, priority, status, assignee, due_date, labels, attachments, repos, output_fields, source, agent_id, skill_ids, parent_task_id, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, 'not_started', '', NULL, ?, '[]', ?, ?, 'local', ?, ?, ?, ?, ?)
+        INSERT INTO tasks (id, title, description, type, priority, status, assignee, due_date, labels, attachments, repos, output_fields, source, agent_id, skill_ids, parent_task_id, sort_order, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, 'not_started', '', NULL, ?, '[]', ?, ?, 'local', ?, ?, ?, ?, ?, ?)
       `).run(
         subtaskId,
         params.title,
@@ -497,6 +503,7 @@ async function handleRoute(db: DatabaseManager, route: string, params: Record<st
         params.agent_id || null,
         params.skill_ids ? JSON.stringify(params.skill_ids) : null,
         params.parent_task_id,
+        nextSortOrder,
         now,
         now
       )
@@ -513,6 +520,23 @@ async function handleRoute(db: DatabaseManager, route: string, params: Record<st
       }
 
       return { success: true, task: parsedSubtask }
+    }
+
+    case '/reorder_subtasks': {
+      if (!params.parent_task_id) return { error: 'parent_task_id is required' }
+      if (!Array.isArray(params.subtask_ids)) return { error: 'subtask_ids array is required' }
+
+      const reorderStmt = rawDb.prepare('UPDATE tasks SET sort_order = ?, updated_at = ? WHERE id = ? AND parent_task_id = ?')
+      const now = new Date().toISOString()
+
+      const reorderTxn = rawDb.transaction(() => {
+        for (let i = 0; i < (params.subtask_ids as string[]).length; i++) {
+          reorderStmt.run(i, now, (params.subtask_ids as string[])[i], params.parent_task_id)
+        }
+      })
+      reorderTxn()
+
+      return { success: true }
     }
 
     case '/get_session_transcript': {

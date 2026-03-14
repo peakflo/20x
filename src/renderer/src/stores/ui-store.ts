@@ -55,7 +55,18 @@ export const useUIStore = create<UIState>((set) => ({
   setStatusFilter: (statusFilter) => set({ statusFilter }),
   setPriorityFilter: (priorityFilter) => set({ priorityFilter }),
   setSourceFilter: (sourceFilter) => set({ sourceFilter }),
-  setSortField: (sortField) => set({ sortField }),
+  setSortField: (sortField) => {
+    // Auto-set the most intuitive sort direction for each field
+    const FIELD_DEFAULT_DIRECTION: Record<SortField, SortDirection> = {
+      priority: 'desc',     // critical first
+      status: 'desc',       // active/working first
+      created_at: 'desc',   // newest first
+      updated_at: 'desc',   // recently updated first
+      due_date: 'asc',      // soonest deadline first
+      title: 'asc'          // A-Z
+    }
+    set({ sortField, sortDirection: FIELD_DEFAULT_DIRECTION[sortField] })
+  },
   setSortDirection: (sortDirection) => set({ sortDirection }),
   setSearchQuery: (searchQuery) => set({ searchQuery }),
   setSkillSearchQuery: (skillSearchQuery) => set({ skillSearchQuery }),

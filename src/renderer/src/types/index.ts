@@ -292,6 +292,7 @@ export interface WorkfloTask {
   heartbeat_last_check_at?: string | null
   heartbeat_next_check_at?: string | null
   parent_task_id: string | null
+  sort_order: number
   created_at: string
   updated_at: string
 }
@@ -341,6 +342,7 @@ export interface UpdateTaskDTO {
   heartbeat_last_check_at?: string | null
   heartbeat_next_check_at?: string | null
   parent_task_id?: string | null
+  sort_order?: number
 }
 
 // ── Heartbeat log types ─────────────────────────────────────

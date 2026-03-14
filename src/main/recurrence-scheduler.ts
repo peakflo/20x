@@ -38,6 +38,7 @@ interface RawTaskRow {
   heartbeat_last_check_at: string | null
   heartbeat_next_check_at: string | null
   parent_task_id: string | null
+  sort_order: number
   created_at: string
   updated_at: string
 }
@@ -396,6 +397,7 @@ export class RecurrenceScheduler {
       heartbeat_last_check_at: row.heartbeat_last_check_at ?? null,
       heartbeat_next_check_at: row.heartbeat_next_check_at ?? null,
       parent_task_id: row.parent_task_id ?? null,
+      sort_order: row.sort_order ?? 0,
     }
   }
 
