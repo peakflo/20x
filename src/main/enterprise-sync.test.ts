@@ -393,5 +393,97 @@ describe('EnterpriseSyncManager — Skills 2-Way Sync', () => {
 
       expect(result.errors).toContainEqual(expect.stringContaining('Sync failed'))
     })
+
+    it('assigns skills to multiple user nodes', async () => {
+      const nodeA = makeOrgNode({ id: 'node-a', userIds: ['user-1'] })
+      const nodeB = makeOrgNode({ id: 'node-b', userIds: ['user-1'] })
+      mockApiClient.listOrgNodes.mockResolvedValue([nodeA, nodeB])
+      mockApiClient.getOrgNode.mockResolvedValue({
+        node: makeOrgNode(),
+        mcpServers: [],
+        taskSources: []
+      })
+
+      const localSkill = makeLocalSkill({ enterprise_skill_id: null })
+      mockDb.getSkills.mockReturnValue([localSkill])
+      mockApiClient.createSkill.mockResolvedValue(makeServerSkill({ id: 'pushed-1' }))
+
+      await syncManager.syncAll('user-1')
+
+      // Should call updateOrgNode for each user node
+      expect(mockApiClient.updateOrgNode).toHaveBeenCalledTimes(2)
+      expect(mockApiClient.updateOrgNode).toHaveBeenCalledWith('node-a', expect.objectContaining({ skillIds: expect.any(Array) }))
+      expect(mockApiClient.updateOrgNode).toHaveBeenCalledWith('node-b', expect.objectContaining({ skillIds: expect.any(Array) }))
+    })
+
+    it('keeps Mastermind enterprise_skill_id in node assignment when already linked', async () => {
+      const mastermind = makeLocalSkill({
+        name: 'Mastermind',
+        enterprise_skill_id: 'mastermind-server-id'
+      })
+      mockDb.getSkills.mockReturnValue([mastermind])
+
+      await syncManager.syncAll('user-1')
+
+      // Should not push but should include in node assignment
+      expect(mockApiClient.createSkill).not.toHaveBeenCalled()
+      expect(mockApiClient.updateOrgNode).toHaveBeenCalledWith(
+        'node-1',
+        expect.objectContaining({
+          skillIds: expect.arrayContaining(['mastermind-server-id'])
+        })
+      )
+    })
+
+    it('handles assign skills failure gracefully', async () => {
+      const localSkill = makeLocalSkill({ enterprise_skill_id: null })
+      mockDb.getSkills.mockReturnValue([localSkill])
+      mockApiClient.createSkill.mockResolvedValue(makeServerSkill({ id: 'pushed-1' }))
+      mockApiClient.updateOrgNode.mockRejectedValue(new Error('Permission denied'))
+      // getOrgNode is called both in syncNode and assignSkillsToNode
+      mockApiClient.getOrgNode.mockResolvedValue({
+        node: makeOrgNode(),
+        mcpServers: [],
+        taskSources: []
+      })
+
+      const result = await syncManager.syncAll('user-1')
+
+      // Should report assignment error but still succeed on push and pull
+      expect(result.errors).toContainEqual(expect.stringContaining('Assign skills to node'))
+      expect(result.skills.pushed).toBe(1)
+    })
+
+    it('includes result.skills.pushed in sync output', async () => {
+      const result = await syncManager.syncAll('user-1')
+
+      // Verify the pushed counter exists in the result shape
+      expect(result.skills).toHaveProperty('pushed')
+      expect(result.skills).toHaveProperty('created')
+      expect(result.skills).toHaveProperty('updated')
+    })
+
+    it('handles multiple skills with mixed enterprise_skill_id states', async () => {
+      const skills = [
+        makeLocalSkill({ id: 'local-1', name: 'New Skill', enterprise_skill_id: null }),
+        makeLocalSkill({ id: 'local-2', name: '[Workflo] Existing Skill', enterprise_skill_id: 'server-existing' }),
+        makeLocalSkill({ id: 'local-3', name: 'Mastermind' })
+      ]
+      mockDb.getSkills.mockReturnValue(skills)
+      mockApiClient.createSkill.mockResolvedValue(makeServerSkill({ id: 'server-new' }))
+      mockApiClient.updateSkill.mockResolvedValue(makeServerSkill({ id: 'server-existing' }))
+
+      const result = await syncManager.syncAll('user-1')
+
+      // New Skill → created on server, Existing Skill → updated on server, Mastermind → skipped
+      expect(mockApiClient.createSkill).toHaveBeenCalledTimes(1)
+      expect(mockApiClient.updateSkill).toHaveBeenCalledTimes(1)
+      expect(result.skills.pushed).toBe(2)
+
+      // updateSkill should strip [Workflo] prefix
+      expect(mockApiClient.updateSkill).toHaveBeenCalledWith('server-existing', expect.objectContaining({
+        name: 'Existing Skill'
+      }))
+    })
   })
 })
