@@ -6,13 +6,14 @@ interface SkillListProps {
   skills: Skill[]
   selectedSkillId: string | null
   onSelectSkill: (id: string) => void
+  emptyMessage?: string
 }
 
-export function SkillList({ skills, selectedSkillId, onSelectSkill }: SkillListProps) {
+export function SkillList({ skills, selectedSkillId, onSelectSkill, emptyMessage }: SkillListProps) {
   if (skills.length === 0) {
     return (
       <div className="px-4 py-8 text-center text-sm text-muted-foreground">
-        No skills yet. Create one to get started.
+        {emptyMessage || 'No skills yet. Create one to get started.'}
       </div>
     )
   }

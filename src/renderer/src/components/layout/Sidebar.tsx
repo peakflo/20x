@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { Plus, Search, ChevronDown, X, Settings, FileText, RefreshCw, Loader2, Play, Pause } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { TaskList } from '@/components/tasks/TaskList'
@@ -40,7 +40,8 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
     sidebarView, setSidebarView,
     activeModal, closeModal,
     statusFilter, priorityFilter, sourceFilter, sortField, searchQuery,
-    setStatusFilter, setPriorityFilter, setSourceFilter, setSortField, setSearchQuery
+    setStatusFilter, setPriorityFilter, setSourceFilter, setSortField, setSearchQuery,
+    skillSearchQuery, setSkillSearchQuery
   } = useUIStore()
   const { sources, syncingIds, fetchSources, syncAllEnabled } = useTaskSourceStore()
   const { fetchTasks } = useTaskStore()
@@ -77,6 +78,17 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
     })
     if (skill) selectSkill(skill.id)
   }
+
+  const filteredSkills = useMemo(() => {
+    if (!skillSearchQuery.trim()) return skills
+    const q = skillSearchQuery.toLowerCase()
+    return skills.filter(
+      (s) =>
+        s.name.toLowerCase().includes(q) ||
+        s.description.toLowerCase().includes(q) ||
+        s.tags.some((tag) => tag.toLowerCase().includes(q))
+    )
+  }, [skills, skillSearchQuery])
 
   const hasActiveFilters = statusFilter !== 'all' || priorityFilter !== 'all' || sourceFilter !== 'all'
 
@@ -272,10 +284,31 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
             </Button>
           </div>
 
+          <div className="no-drag px-3 pb-3">
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+              <input
+                type="search"
+                value={skillSearchQuery}
+                onChange={(e) => setSkillSearchQuery(e.target.value)}
+                placeholder="Search skills..."
+                className="w-full rounded-md border border-input bg-transparent pl-9 pr-8 py-2 text-sm placeholder:text-muted-foreground focus:border-ring focus:ring-1 focus:ring-ring/30"
+              />
+              {skillSearchQuery && (
+                <button
+                  onClick={() => setSkillSearchQuery('')}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </div>
+          </div>
+
           <div className="mx-3 border-t" />
 
           <div className="flex-1 overflow-y-auto pt-1">
-            <SkillList skills={skills} selectedSkillId={selectedSkillId} onSelectSkill={(id) => {
+            <SkillList skills={filteredSkills} selectedSkillId={selectedSkillId} emptyMessage={skillSearchQuery ? 'No matching skills' : undefined} onSelectSkill={(id) => {
               if (activeModal === 'settings') closeModal()
               selectSkill(id)
             }} />

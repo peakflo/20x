@@ -15,6 +15,7 @@ interface UIState {
   sortField: SortField
   sortDirection: SortDirection
   searchQuery: string
+  skillSearchQuery: string
   activeModal: ActiveModal
   editingTaskId: string | null
   deletingTaskId: string | null
@@ -27,6 +28,7 @@ interface UIState {
   setSortField: (field: SortField) => void
   setSortDirection: (dir: SortDirection) => void
   setSearchQuery: (query: string) => void
+  setSkillSearchQuery: (query: string) => void
   setSettingsTab: (tab: SettingsTab) => void
   openCreateModal: () => void
   openEditModal: (taskId: string) => void
@@ -43,6 +45,7 @@ export const useUIStore = create<UIState>((set) => ({
   sortField: 'created_at',
   sortDirection: 'desc',
   searchQuery: '',
+  skillSearchQuery: '',
   activeModal: null,
   editingTaskId: null,
   deletingTaskId: null,
@@ -55,6 +58,7 @@ export const useUIStore = create<UIState>((set) => ({
   setSortField: (sortField) => set({ sortField }),
   setSortDirection: (sortDirection) => set({ sortDirection }),
   setSearchQuery: (searchQuery) => set({ searchQuery }),
+  setSkillSearchQuery: (skillSearchQuery) => set({ skillSearchQuery }),
   setSettingsTab: (settingsTab) => set({ settingsTab }),
 
   openCreateModal: () => set({ activeModal: 'create', editingTaskId: null }),

@@ -13,6 +13,7 @@ describe('useUIStore', () => {
       sortField: 'created_at',
       sortDirection: 'desc',
       searchQuery: '',
+      skillSearchQuery: '',
       activeModal: null,
       editingTaskId: null,
       deletingTaskId: null,
@@ -29,6 +30,7 @@ describe('useUIStore', () => {
     expect(state.sortField).toBe('created_at')
     expect(state.sortDirection).toBe('desc')
     expect(state.searchQuery).toBe('')
+    expect(state.skillSearchQuery).toBe('')
     expect(state.activeModal).toBeNull()
     expect(state.editingTaskId).toBeNull()
     expect(state.deletingTaskId).toBeNull()
@@ -67,6 +69,11 @@ describe('useUIStore', () => {
   it('setSearchQuery updates query', () => {
     useUIStore.getState().setSearchQuery('bug fix')
     expect(useUIStore.getState().searchQuery).toBe('bug fix')
+  })
+
+  it('setSkillSearchQuery updates skill search query', () => {
+    useUIStore.getState().setSkillSearchQuery('testing')
+    expect(useUIStore.getState().skillSearchQuery).toBe('testing')
   })
 
   describe('modals', () => {
