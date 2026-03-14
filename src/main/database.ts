@@ -971,6 +971,7 @@ export class DatabaseManager {
         last_used TEXT,
         tags TEXT NOT NULL DEFAULT '[]',
         is_deleted INTEGER NOT NULL DEFAULT 0,
+        enterprise_skill_id TEXT DEFAULT NULL,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
