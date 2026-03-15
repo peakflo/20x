@@ -292,7 +292,7 @@ export class WorkfloApiClient {
       content?: string
       confidence?: number
       tags?: string[]
-      uses?: number
+      usesDelta?: number
       lastUsed?: string | null
     }
   ): Promise<WorkfloSkill> {

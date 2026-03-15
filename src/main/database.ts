@@ -499,6 +499,7 @@ export interface SkillRow {
   tags: string
   is_deleted: number
   enterprise_skill_id: string | null
+  uses_at_last_sync: number
   created_at: string
   updated_at: string
 }
@@ -514,6 +515,7 @@ export interface SkillRecord {
   last_used: string | null
   tags: string[]
   enterprise_skill_id: string | null
+  uses_at_last_sync: number
   created_at: string
   updated_at: string
 }
@@ -538,6 +540,7 @@ export interface UpdateSkillData {
   last_used?: string | null
   tags?: string[]
   enterprise_skill_id?: string | null
+  uses_at_last_sync?: number
 }
 
 // ── Secret types ─────────────────────────────────────────────
@@ -751,6 +754,7 @@ function deserializeSkill(row: SkillRow): SkillRecord {
     last_used: row.last_used,
     tags,
     enterprise_skill_id: row.enterprise_skill_id ?? null,
+    uses_at_last_sync: row.uses_at_last_sync ?? 0,
     created_at: row.created_at,
     updated_at: row.updated_at
   }
@@ -983,6 +987,7 @@ export class DatabaseManager {
         tags TEXT NOT NULL DEFAULT '[]',
         is_deleted INTEGER NOT NULL DEFAULT 0,
         enterprise_skill_id TEXT DEFAULT NULL,
+        uses_at_last_sync INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
@@ -1480,6 +1485,10 @@ export class DatabaseManager {
 
     if (!skillColumnNames.has('enterprise_skill_id')) {
       this.db.exec(`ALTER TABLE skills ADD COLUMN enterprise_skill_id TEXT DEFAULT NULL`)
+    }
+
+    if (!skillColumnNames.has('uses_at_last_sync')) {
+      this.db.exec(`ALTER TABLE skills ADD COLUMN uses_at_last_sync INTEGER NOT NULL DEFAULT 0`)
     }
 
     // Seed default agent if none exist
@@ -2302,6 +2311,7 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
     if (data.last_used !== undefined) { setClauses.push('last_used = ?'); values.push(data.last_used) }
     if (data.tags !== undefined) { setClauses.push('tags = ?'); values.push(JSON.stringify(data.tags)) }
     if (data.enterprise_skill_id !== undefined) { setClauses.push('enterprise_skill_id = ?'); values.push(data.enterprise_skill_id) }
+    if (data.uses_at_last_sync !== undefined) { setClauses.push('uses_at_last_sync = ?'); values.push(data.uses_at_last_sync) }
 
     if (setClauses.length === 0) return existing
 
