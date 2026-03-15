@@ -41,6 +41,7 @@ export const CODING_AGENTS: { value: CodingAgentType; label: string }[] = [
 ]
 
 export enum ClaudeModel {
+  SONNET_4_6 = 'claude-sonnet-4-6',
   SONNET_4_5 = 'claude-sonnet-4-5',
   OPUS_4_6 = 'claude-opus-4-6',
   HAIKU_4_5 = 'claude-haiku-4-5',
@@ -50,6 +51,7 @@ export enum ClaudeModel {
 }
 
 export const CLAUDE_MODELS: { id: ClaudeModel; name: string }[] = [
+  { id: ClaudeModel.SONNET_4_6, name: 'Claude Sonnet 4.6' },
   { id: ClaudeModel.SONNET_4_5, name: 'Claude Sonnet 4.5' },
   { id: ClaudeModel.OPUS_4_6, name: 'Claude Opus 4.6' },
   { id: ClaudeModel.HAIKU_4_5, name: 'Claude Haiku 4.5' },
