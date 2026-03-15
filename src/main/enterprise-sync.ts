@@ -324,12 +324,13 @@ export class EnterpriseSyncManager {
         // Compute usage delta since last sync (for additive server-side merge)
         const usesDelta = skill.uses - (skill.uses_at_last_sync ?? 0)
 
+        const localName = this.stripWorkfloPrefix(skill.name)
+
         if (skill.enterprise_skill_id) {
-          const localName = this.stripWorkfloPrefix(skill.name)
           let serverVersion = serverSkillMap.get(skill.enterprise_skill_id)
 
           // If linked ID no longer exists on server (e.g. deleted by cleanup),
-          // re-link to surviving copy by name instead of re-creating
+          // re-link to surviving copy by name or clear the stale ID to create fresh
           if (!serverVersion) {
             const byName = serverSkillByName.get(localName)
             if (byName) {
@@ -339,11 +340,22 @@ export class EnterpriseSyncManager {
               this.db.updateSkill(skill.id, { enterprise_skill_id: byName.id })
               skill.enterprise_skill_id = byName.id
               serverVersion = byName
+            } else {
+              // Server skill is gone and no surviving copy by name — clear stale ID
+              // so it falls through to the create path below
+              console.log(
+                `[EnterpriseSyncManager] Skill "${skill.name}" gone from server (${skill.enterprise_skill_id}), will re-create`
+              )
+              this.db.updateSkill(skill.id, { enterprise_skill_id: null })
+              skill.enterprise_skill_id = null
             }
           }
+        }
 
-          // Compare content to decide if we need to push
-          const contentChanged = !serverVersion ||
+        if (skill.enterprise_skill_id) {
+          // Linked to a valid server skill — compare content to decide if we need to push
+          const serverVersion = serverSkillMap.get(skill.enterprise_skill_id)!
+          const contentChanged =
             serverVersion.name !== localName ||
             serverVersion.description !== skill.description ||
             serverVersion.content !== skill.content ||
@@ -356,56 +368,28 @@ export class EnterpriseSyncManager {
             continue
           }
 
-          try {
-            const updatePayload: Record<string, unknown> = {}
-            if (contentChanged) {
-              updatePayload.name = localName
-              updatePayload.description = skill.description
-              updatePayload.content = skill.content
-              updatePayload.confidence = skill.confidence
-              updatePayload.tags = skill.tags
-            }
-            if (usesDelta > 0) {
-              updatePayload.usesDelta = usesDelta
-              updatePayload.lastUsed = skill.last_used
-            }
-
-            const serverSkill = await this.apiClient.updateSkill(
-              skill.enterprise_skill_id,
-              updatePayload as Parameters<typeof this.apiClient.updateSkill>[1]
-            )
-            serverSkillIds.push(serverSkill.id)
-            result.skills.pushed++
-
-            // Reset uses_at_last_sync after successful push
-            this.db.updateSkill(skill.id, { uses_at_last_sync: skill.uses })
-          } catch (updateErr) {
-            // If 404 (skill deleted on server and no surviving copy by name), re-create
-            const msg = updateErr instanceof Error ? updateErr.message : String(updateErr)
-            if (msg.includes('404') || msg.includes('not found') || msg.includes('Not Found')) {
-              console.log(`[EnterpriseSyncManager] Skill ${skill.name} gone from server, re-creating...`)
-              const created = await this.apiClient.createSkill({
-                name: localName,
-                description: skill.description,
-                content: skill.content,
-                confidence: skill.confidence,
-                tags: skill.tags,
-                uses: skill.uses,
-                lastUsed: skill.last_used
-              })
-              this.db.updateSkill(skill.id, {
-                enterprise_skill_id: created.id,
-                uses_at_last_sync: skill.uses
-              })
-              serverSkillIds.push(created.id)
-              result.skills.pushed++
-
-              // Add to name map so other skills don't re-create
-              serverSkillByName.set(localName, { ...created, tags: skill.tags } as WorkfloSkill)
-            } else {
-              throw updateErr
-            }
+          const updatePayload: Record<string, unknown> = {}
+          if (contentChanged) {
+            updatePayload.name = localName
+            updatePayload.description = skill.description
+            updatePayload.content = skill.content
+            updatePayload.confidence = skill.confidence
+            updatePayload.tags = skill.tags
           }
+          if (usesDelta > 0) {
+            updatePayload.usesDelta = usesDelta
+            updatePayload.lastUsed = skill.last_used
+          }
+
+          const serverSkill = await this.apiClient.updateSkill(
+            skill.enterprise_skill_id,
+            updatePayload as Parameters<typeof this.apiClient.updateSkill>[1]
+          )
+          serverSkillIds.push(serverSkill.id)
+          result.skills.pushed++
+
+          // Reset uses_at_last_sync after successful push
+          this.db.updateSkill(skill.id, { uses_at_last_sync: skill.uses })
         } else {
           // New local skill — check if same-name skill already exists on server
           // (handles multi-device scenario: another 20x already pushed this skill)

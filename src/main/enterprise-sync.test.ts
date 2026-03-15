@@ -136,6 +136,10 @@ describe('EnterpriseSyncManager — Skills 2-Way Sync', () => {
     it('updates existing skill on server for local skill with enterprise_skill_id', async () => {
       const localSkill = makeLocalSkill({ enterprise_skill_id: 'server-existing', uses: 5, uses_at_last_sync: 0 })
       mockDb.getSkills.mockReturnValue([localSkill])
+      // Server must have the skill so it's found in serverSkillMap
+      mockApiClient.listSkills.mockResolvedValue([
+        makeServerSkill({ id: 'server-existing', name: 'Test Skill' })
+      ])
       mockApiClient.updateSkill.mockResolvedValue(makeServerSkill({ id: 'server-existing' }))
 
       const result = await syncManager.syncAll('user-1')
@@ -177,14 +181,20 @@ describe('EnterpriseSyncManager — Skills 2-Way Sync', () => {
       expect(result.skills.pushed).toBe(0)
     })
 
-    it('re-creates skill on server when update returns 404', async () => {
+    it('clears stale enterprise_skill_id and creates fresh when server skill is gone', async () => {
       const localSkill = makeLocalSkill({ enterprise_skill_id: 'deleted-server-id' })
       mockDb.getSkills.mockReturnValue([localSkill])
-      mockApiClient.updateSkill.mockRejectedValue(new Error('404 Not Found'))
+      // listSkills returns empty — the linked ID doesn't exist on server
+      mockApiClient.listSkills.mockResolvedValue([])
       mockApiClient.createSkill.mockResolvedValue(makeServerSkill({ id: 'new-server-id' }))
 
       const result = await syncManager.syncAll('user-1')
 
+      // Should clear stale ID first
+      expect(mockDb.updateSkill).toHaveBeenCalledWith('local-1', {
+        enterprise_skill_id: null
+      })
+      // Then create fresh
       expect(mockApiClient.createSkill).toHaveBeenCalled()
       expect(mockDb.updateSkill).toHaveBeenCalledWith('local-1', {
         enterprise_skill_id: 'new-server-id',
@@ -495,6 +505,10 @@ describe('EnterpriseSyncManager — Skills 2-Way Sync', () => {
         uses_at_last_sync: 7
       })
       mockDb.getSkills.mockReturnValue([localSkill])
+      // Server must have the skill so it's found in serverSkillMap
+      mockApiClient.listSkills.mockResolvedValue([
+        makeServerSkill({ id: 'server-1', name: 'Test Skill' })
+      ])
       mockApiClient.updateSkill.mockResolvedValue(makeServerSkill({ id: 'server-1' }))
 
       await syncManager.syncAll('user-1')
@@ -543,6 +557,10 @@ describe('EnterpriseSyncManager — Skills 2-Way Sync', () => {
         makeLocalSkill({ id: 'local-4', name: 'Existing Skill', enterprise_skill_id: 'server-existing' })
       ]
       mockDb.getSkills.mockReturnValue(skills)
+      // Server must have the existing skill so it's found in serverSkillMap
+      mockApiClient.listSkills.mockResolvedValue([
+        makeServerSkill({ id: 'server-existing', name: 'Existing Skill' })
+      ])
       mockApiClient.createSkill.mockResolvedValue(makeServerSkill({ id: 'server-new' }))
       mockApiClient.updateSkill.mockResolvedValue(makeServerSkill({ id: 'server-existing' }))
 
