@@ -498,6 +498,8 @@ export interface SkillRow {
   last_used: string | null
   tags: string
   is_deleted: number
+  enterprise_skill_id: string | null
+  uses_at_last_sync: number
   created_at: string
   updated_at: string
 }
@@ -512,6 +514,8 @@ export interface SkillRecord {
   uses: number
   last_used: string | null
   tags: string[]
+  enterprise_skill_id: string | null
+  uses_at_last_sync: number
   created_at: string
   updated_at: string
 }
@@ -524,6 +528,7 @@ export interface CreateSkillData {
   uses?: number
   last_used?: string | null
   tags?: string[]
+  enterprise_skill_id?: string | null
 }
 
 export interface UpdateSkillData {
@@ -534,6 +539,8 @@ export interface UpdateSkillData {
   uses?: number
   last_used?: string | null
   tags?: string[]
+  enterprise_skill_id?: string | null
+  uses_at_last_sync?: number
 }
 
 // ── Secret types ─────────────────────────────────────────────
@@ -746,6 +753,8 @@ function deserializeSkill(row: SkillRow): SkillRecord {
     uses: row.uses,
     last_used: row.last_used,
     tags,
+    enterprise_skill_id: row.enterprise_skill_id ?? null,
+    uses_at_last_sync: row.uses_at_last_sync ?? 0,
     created_at: row.created_at,
     updated_at: row.updated_at
   }
@@ -833,7 +842,7 @@ function deserializeInstalledPlugin(row: InstalledPluginRow): InstalledPluginRec
 
 // Bump this whenever new migrations are added so returning users skip
 // the full migration check on startup.
-const SCHEMA_VERSION = 5
+const SCHEMA_VERSION = 6
 
 export class DatabaseManager {
   public db!: Database.Database
@@ -977,6 +986,8 @@ export class DatabaseManager {
         last_used TEXT,
         tags TEXT NOT NULL DEFAULT '[]',
         is_deleted INTEGER NOT NULL DEFAULT 0,
+        enterprise_skill_id TEXT DEFAULT NULL,
+        uses_at_last_sync INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
@@ -1466,6 +1477,18 @@ export class DatabaseManager {
         );
         CREATE UNIQUE INDEX IF NOT EXISTS idx_secrets_env_var ON secrets(env_var_name);
       `)
+    }
+
+    // Migrate skills table: add enterprise_skill_id for 2-way sync
+    const skillColumns = this.db.pragma('table_info(skills)') as { name: string }[]
+    const skillColumnNames = new Set(skillColumns.map((c) => c.name))
+
+    if (!skillColumnNames.has('enterprise_skill_id')) {
+      this.db.exec(`ALTER TABLE skills ADD COLUMN enterprise_skill_id TEXT DEFAULT NULL`)
+    }
+
+    if (!skillColumnNames.has('uses_at_last_sync')) {
+      this.db.exec(`ALTER TABLE skills ADD COLUMN uses_at_last_sync INTEGER NOT NULL DEFAULT 0`)
     }
 
     // Seed default agent if none exist
@@ -2265,10 +2288,11 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
     const uses = data.uses ?? 0
     const lastUsed = data.last_used ?? null
     const tags = JSON.stringify(data.tags ?? [])
+    const enterpriseSkillId = data.enterprise_skill_id ?? null
     this.db.prepare(`
-      INSERT INTO skills (id, name, description, content, version, confidence, uses, last_used, tags, is_deleted, created_at, updated_at)
-      VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, 0, ?, ?)
-    `).run(id, data.name, data.description, data.content, confidence, uses, lastUsed, tags, now, now)
+      INSERT INTO skills (id, name, description, content, version, confidence, uses, last_used, tags, is_deleted, enterprise_skill_id, created_at, updated_at)
+      VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, 0, ?, ?, ?)
+    `).run(id, data.name, data.description, data.content, confidence, uses, lastUsed, tags, enterpriseSkillId, now, now)
     return this.getSkill(id)
   }
 
@@ -2286,11 +2310,17 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
     if (data.uses !== undefined) { setClauses.push('uses = ?'); values.push(data.uses) }
     if (data.last_used !== undefined) { setClauses.push('last_used = ?'); values.push(data.last_used) }
     if (data.tags !== undefined) { setClauses.push('tags = ?'); values.push(JSON.stringify(data.tags)) }
+    if (data.enterprise_skill_id !== undefined) { setClauses.push('enterprise_skill_id = ?'); values.push(data.enterprise_skill_id) }
+    if (data.uses_at_last_sync !== undefined) { setClauses.push('uses_at_last_sync = ?'); values.push(data.uses_at_last_sync) }
 
     if (setClauses.length === 0) return existing
 
-    // Increment version on any update
-    setClauses.push('version = version + 1')
+    // Only increment version for content changes, not metadata-only updates (like enterprise_skill_id linking)
+    const isContentChange = data.name !== undefined || data.description !== undefined ||
+      data.content !== undefined || data.confidence !== undefined || data.tags !== undefined
+    if (isContentChange) {
+      setClauses.push('version = version + 1')
+    }
     setClauses.push('updated_at = ?')
     values.push(new Date().toISOString())
     values.push(id)
@@ -2307,6 +2337,34 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
       'SELECT * FROM skills WHERE name = ? AND is_deleted = 0'
     ).get(name) as SkillRow | undefined
     return row ? deserializeSkill(row) : undefined
+  }
+
+  getSkillByEnterpriseId(enterpriseSkillId: string): SkillRecord | undefined {
+    const row = this.db.prepare(
+      'SELECT * FROM skills WHERE enterprise_skill_id = ? AND is_deleted = 0'
+    ).get(enterpriseSkillId) as SkillRow | undefined
+    return row ? deserializeSkill(row) : undefined
+  }
+
+  /**
+   * Get skills that were deleted locally but had an enterprise link.
+   * Used to propagate deletions to the server during sync.
+   */
+  getDeletedEnterpriseSkills(): SkillRecord[] {
+    const rows = this.db.prepare(
+      'SELECT * FROM skills WHERE is_deleted = 1 AND enterprise_skill_id IS NOT NULL'
+    ).all() as SkillRow[]
+    return rows.map(deserializeSkill)
+  }
+
+  /**
+   * Hard-delete a skill row (permanent removal after server sync).
+   */
+  hardDeleteSkill(id: string): boolean {
+    const result = this.db.prepare(
+      'DELETE FROM skills WHERE id = ?'
+    ).run(id)
+    return result.changes > 0
   }
 
   deleteSkill(id: string): boolean {
