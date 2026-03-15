@@ -42,9 +42,9 @@ export function EnterpriseLoginModal({ open, onClose }: EnterpriseLoginModalProp
   }, [email, password, login])
 
   const handleSelectTenant = useCallback(async (tenantId: string) => {
-    await selectTenant(tenantId)
-    // Close modal after successful tenant selection
+    // Close modal immediately — sync runs in the background via IPC
     onClose()
+    await selectTenant(tenantId)
   }, [selectTenant, onClose])
 
   const handleClose = useCallback(() => {

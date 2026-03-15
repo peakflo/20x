@@ -120,6 +120,10 @@ export interface WorkfloSkill {
   name: string
   description: string
   content: string
+  confidence?: number
+  version?: number
+  uses?: number
+  lastUsed?: string | null
   tags: string[]
   createdAt: string
   updatedAt: string
@@ -248,11 +252,94 @@ export class WorkfloApiClient {
    * List all skills
    */
   async listSkills(): Promise<WorkfloSkill[]> {
-    const result = (await this.auth.apiRequest(
+    const result = await this.auth.apiRequest(
       'GET',
       '/api/skills'
-    )) as { skills: WorkfloSkill[] }
-    return result.skills
+    )
+    // Handle both { skills: [...] } (new) and bare array (legacy) response formats
+    if (Array.isArray(result)) return result as WorkfloSkill[]
+    return (result as { skills: WorkfloSkill[] }).skills ?? []
+  }
+
+  /**
+   * Create a new skill on the server
+   */
+  async createSkill(data: {
+    name: string
+    description: string
+    content: string
+    confidence?: number
+    tags?: string[]
+    uses?: number
+    lastUsed?: string | null
+  }): Promise<WorkfloSkill> {
+    const result = (await this.auth.apiRequest(
+      'POST',
+      '/api/skills',
+      data
+    )) as WorkfloSkill
+    return result
+  }
+
+  /**
+   * Update an existing skill on the server
+   */
+  async updateSkill(
+    skillId: string,
+    data: {
+      name?: string
+      description?: string
+      content?: string
+      confidence?: number
+      tags?: string[]
+      usesDelta?: number
+      lastUsed?: string | null
+    }
+  ): Promise<WorkfloSkill> {
+    const result = (await this.auth.apiRequest(
+      'PATCH',
+      `/api/skills/${skillId}`,
+      data
+    )) as WorkfloSkill
+    return result
+  }
+
+  /**
+   * Delete a skill from the server
+   */
+  async deleteSkill(skillId: string): Promise<void> {
+    await this.auth.apiRequest('DELETE', `/api/skills/${skillId}`)
+  }
+
+  /**
+   * Clean up duplicate skills on the server (keeps oldest per name)
+   */
+  async cleanupDuplicateSkills(): Promise<{ deleted: number; kept: number }> {
+    const result = (await this.auth.apiRequest(
+      'POST',
+      '/api/skills/cleanup-duplicates'
+    )) as { deleted: number; kept: number }
+    return result
+  }
+
+  // ── Org Nodes (update) ──────────────────────────────────────────────
+
+  /**
+   * Update an org node (e.g. to assign skillIds)
+   */
+  async updateOrgNode(
+    nodeId: string,
+    data: {
+      skillIds?: string[]
+      agents?: WorkfloAgent[]
+    }
+  ): Promise<WorkfloOrgNode> {
+    const result = (await this.auth.apiRequest(
+      'PUT',
+      `/api/org-nodes/${nodeId}`,
+      data
+    )) as { node: WorkfloOrgNode }
+    return result.node
   }
 
   // ── File download ───────────────────────────────────────────────────

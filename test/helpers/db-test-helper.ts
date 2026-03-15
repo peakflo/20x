@@ -145,6 +145,8 @@ export function createTestDb(): { db: DatabaseManager; rawDb: InstanceType<typeo
       last_used TEXT,
       tags TEXT NOT NULL DEFAULT '[]',
       is_deleted INTEGER NOT NULL DEFAULT 0,
+      enterprise_skill_id TEXT DEFAULT NULL,
+      uses_at_last_sync INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
