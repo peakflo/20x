@@ -255,6 +255,13 @@ export class EnterpriseSyncManager {
     const localSkills = this.db.getSkills()
     const serverSkillIds: string[] = []
 
+    // Fetch server skills to compare content before pushing updates
+    const currentServerSkills = await this.apiClient.listSkills() ?? []
+    const serverSkillMap = new Map<string, WorkfloSkill>()
+    for (const s of currentServerSkills) {
+      serverSkillMap.set(s.id, s)
+    }
+
     console.log(
       `[EnterpriseSyncManager] pushLocalSkills: ${localSkills.length} local skills found`,
       localSkills.map((s) => ({ name: s.name, enterprise_skill_id: s.enterprise_skill_id }))
@@ -272,12 +279,27 @@ export class EnterpriseSyncManager {
         }
 
         if (skill.enterprise_skill_id) {
-          // Already linked to server — push update if locally newer
+          // Already linked to server — only push if content actually changed
+          const serverVersion = serverSkillMap.get(skill.enterprise_skill_id)
+          const localName = this.stripWorkfloPrefix(skill.name)
+          const contentChanged = !serverVersion ||
+            serverVersion.name !== localName ||
+            serverVersion.description !== skill.description ||
+            serverVersion.content !== skill.content ||
+            serverVersion.confidence !== skill.confidence ||
+            JSON.stringify(serverVersion.tags) !== JSON.stringify(skill.tags)
+
+          if (!contentChanged) {
+            // No changes — just include the ID for node assignment
+            serverSkillIds.push(skill.enterprise_skill_id)
+            continue
+          }
+
           try {
             const serverSkill = await this.apiClient.updateSkill(
               skill.enterprise_skill_id,
               {
-                name: this.stripWorkfloPrefix(skill.name),
+                name: localName,
                 description: skill.description,
                 content: skill.content,
                 confidence: skill.confidence,
@@ -389,18 +411,26 @@ export class EnterpriseSyncManager {
         const linkedSkill = this.db.getSkillByEnterpriseId(skill.id)
 
         if (linkedSkill) {
-          // Already linked — update if server is newer
-          const remoteUpdated = new Date(skill.updatedAt).getTime()
-          const localUpdated = new Date(linkedSkill.updated_at).getTime()
+          // Already linked — update only if server content actually differs
+          const contentChanged =
+            linkedSkill.description !== skill.description ||
+            linkedSkill.content !== skill.content ||
+            linkedSkill.confidence !== skill.confidence ||
+            JSON.stringify(linkedSkill.tags) !== JSON.stringify(skill.tags)
 
-          if (remoteUpdated > localUpdated) {
-            this.db.updateSkill(linkedSkill.id, {
-              description: skill.description,
-              content: skill.content,
-              confidence: skill.confidence,
-              tags: skill.tags
-            })
-            result.skills.updated++
+          if (contentChanged) {
+            const remoteUpdated = new Date(skill.updatedAt).getTime()
+            const localUpdated = new Date(linkedSkill.updated_at).getTime()
+
+            if (remoteUpdated > localUpdated) {
+              this.db.updateSkill(linkedSkill.id, {
+                description: skill.description,
+                content: skill.content,
+                confidence: skill.confidence,
+                tags: skill.tags
+              })
+              result.skills.updated++
+            }
           }
           continue
         }

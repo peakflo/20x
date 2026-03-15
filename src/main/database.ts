@@ -2270,8 +2270,12 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
 
     if (setClauses.length === 0) return existing
 
-    // Increment version on any update
-    setClauses.push('version = version + 1')
+    // Only increment version for content changes, not metadata-only updates (like enterprise_skill_id linking)
+    const isContentChange = data.name !== undefined || data.description !== undefined ||
+      data.content !== undefined || data.confidence !== undefined || data.tags !== undefined
+    if (isContentChange) {
+      setClauses.push('version = version + 1')
+    }
     setClauses.push('updated_at = ?')
     values.push(new Date().toISOString())
     values.push(id)
