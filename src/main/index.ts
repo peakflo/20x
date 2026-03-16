@@ -393,6 +393,9 @@ app.whenReady().then(async () => {
         enterpriseStateSyncInstance = new EnterpriseStateSync(apiClient)
         enterpriseStateSyncInstance.setUserName(session.userEmail || 'Unknown')
 
+        // Attach state sync to heartbeat so events flush every 60s
+        enterpriseHeartbeatInstance.setStateSync(enterpriseStateSyncInstance)
+
         syncManager.setEnterpriseConnection(apiClient, enterpriseSyncMgr, session.userId, enterpriseStateSyncInstance)
 
         console.log('[Main] Enterprise connection restored on startup (with heartbeat)')

@@ -15,12 +15,14 @@
  */
 import { app } from 'electron'
 import type { WorkfloApiClient } from './workflo-api-client'
+import type { EnterpriseStateSync } from './enterprise-state-sync'
 
 const HEARTBEAT_INTERVAL_MS = 60_000 // 1 minute
 
 export class EnterpriseHeartbeat {
   private intervalId: NodeJS.Timeout | null = null
   private apiClient: WorkfloApiClient
+  private stateSync: EnterpriseStateSync | null = null
   private userEmail: string | null = null
   private userName: string | null = null
   private consecutiveErrors = 0
@@ -28,6 +30,14 @@ export class EnterpriseHeartbeat {
 
   constructor(apiClient: WorkfloApiClient) {
     this.apiClient = apiClient
+  }
+
+  /**
+   * Attach an EnterpriseStateSync instance so pending events
+   * are flushed alongside every heartbeat (every 60s).
+   */
+  setStateSync(stateSync: EnterpriseStateSync | null): void {
+    this.stateSync = stateSync
   }
 
   /**
@@ -85,6 +95,15 @@ export class EnterpriseHeartbeat {
       })
 
       this.consecutiveErrors = 0
+
+      // Flush any pending enterprise state sync events (agent runs, feedback, etc.)
+      // This ensures events reach Workflo within ~60s instead of waiting for manual task sync.
+      if (this.stateSync) {
+        this.stateSync.flush().catch((err) => {
+          const msg = err instanceof Error ? err.message : String(err)
+          console.warn(`[EnterpriseHeartbeat] State sync flush error (non-fatal): ${msg}`)
+        })
+      }
     } catch (err) {
       this.consecutiveErrors++
       const msg = err instanceof Error ? err.message : String(err)

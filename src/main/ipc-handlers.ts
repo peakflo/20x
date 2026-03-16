@@ -764,6 +764,11 @@ export function registerIpcHandlers(
         }
         enterpriseStateSync.setUserName(session.userEmail || 'Unknown')
         agentManager.setEnterpriseStateSync(enterpriseStateSync)
+
+        // Attach state sync to heartbeat so events flush every 60s
+        if (enterpriseHeartbeat) {
+          enterpriseHeartbeat.setStateSync(enterpriseStateSync)
+        }
       }
 
       // Wire enterprise connection into sync manager (after state sync is ready)
@@ -860,6 +865,11 @@ export function registerIpcHandlers(
           }
           enterpriseStateSync.setUserName(session.userEmail || 'Unknown')
           agentManager.setEnterpriseStateSync(enterpriseStateSync)
+
+          // Attach state sync to heartbeat so events flush every 60s
+          if (enterpriseHeartbeat) {
+            enterpriseHeartbeat.setStateSync(enterpriseStateSync)
+          }
         } catch (err) {
           console.error('[enterprise] Failed to restore state sync:', err)
         }
