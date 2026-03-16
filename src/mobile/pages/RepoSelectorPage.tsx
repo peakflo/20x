@@ -42,7 +42,6 @@ export function RepoSelectorPage({
         : task.repos
       setSelected(new Set(initial))
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [taskReposKey, selectedOrg])
 
   // Fetch org choices on mount
