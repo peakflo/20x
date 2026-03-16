@@ -653,8 +653,19 @@ describe('HeartbeatScheduler', () => {
   // ── waitForSessionResult (dangerous default fix) ────
 
   describe('waitForSessionResult', () => {
-    it('rejects when session completes without producing a message after 30s', { timeout: 40_000 }, async () => {
+    it('rejects when session is idle with no message after inactivity timeout', { timeout: 25_000 }, async () => {
       vi.useRealTimers()
+
+      // Fast-forward Date.now() so the inactivity timeout triggers quickly
+      // without actually waiting 5 real minutes. The interval still runs
+      // every 3s in real time, but each Date.now() call jumps ahead,
+      // making the inactivity window appear to exceed 5 minutes.
+      let fakeNow = Date.now()
+      vi.spyOn(Date, 'now').mockImplementation(() => {
+        // Each call advances time by 90s so the gap exceeds 5 min quickly
+        fakeNow += 90_000
+        return fakeNow
+      })
 
       const agentWithNoMessage = mockAgentManager({
         getSession: vi.fn().mockReturnValue({ status: 'idle' }),
@@ -663,12 +674,14 @@ describe('HeartbeatScheduler', () => {
       const s = new HeartbeatScheduler(db as unknown as DatabaseManager, agentWithNoMessage as unknown as AgentManager)
 
       const waitForSessionResult = (s as unknown as {
-        waitForSessionResult: (sessionId: string, taskId: string) => Promise<string>
+        waitForSessionResult: (sessionId: string, taskId: string, fallbackTaskId?: string) => Promise<string>
       }).waitForSessionResult
 
       await expect(
         waitForSessionResult.call(s, 'session-1', 'task-1')
-      ).rejects.toThrow('completed without producing a result')
+      ).rejects.toThrow('timed out after')
+
+      vi.restoreAllMocks()
     })
 
     it('resolves with the assistant message when session completes normally', async () => {
@@ -681,7 +694,7 @@ describe('HeartbeatScheduler', () => {
       const s = new HeartbeatScheduler(db as unknown as DatabaseManager, agentWithMessage as unknown as AgentManager)
 
       const waitForSessionResult = (s as unknown as {
-        waitForSessionResult: (sessionId: string, taskId: string) => Promise<string>
+        waitForSessionResult: (sessionId: string, taskId: string, fallbackTaskId?: string) => Promise<string>
       }).waitForSessionResult
 
       const result = await waitForSessionResult.call(s, 'session-1', 'task-1')
@@ -723,7 +736,7 @@ describe('HeartbeatScheduler', () => {
       const s = new HeartbeatScheduler(db as unknown as DatabaseManager, agentWithRekey as unknown as AgentManager)
 
       const waitForSessionResult = (s as unknown as {
-        waitForSessionResult: (sessionId: string, taskId: string) => Promise<string>
+        waitForSessionResult: (sessionId: string, taskId: string, fallbackTaskId?: string) => Promise<string>
       }).waitForSessionResult
 
       const result = await waitForSessionResult.call(s, oldSessionId, 'task-1')
@@ -752,12 +765,78 @@ describe('HeartbeatScheduler', () => {
       const s = new HeartbeatScheduler(db as unknown as DatabaseManager, agentWithRace as unknown as AgentManager)
 
       const waitForSessionResult = (s as unknown as {
-        waitForSessionResult: (sessionId: string, taskId: string) => Promise<string>
+        waitForSessionResult: (sessionId: string, taskId: string, fallbackTaskId?: string) => Promise<string>
       }).waitForSessionResult
 
       const result = await waitForSessionResult.call(s, 'session-1', 'task-1')
       expect(result).toContain(HEARTBEAT_OK_TOKEN)
       expect(pollCount).toBeGreaterThan(2) // Confirmed it waited past the race condition
+    })
+
+    it('does not timeout while session is actively working', { timeout: 25_000 }, async () => {
+      vi.useRealTimers()
+
+      // Simulate a session that stays in 'working' status for many polls,
+      // then transitions to 'idle' with a result. The idle timeout should
+      // not accumulate while the session is working.
+      let pollCount = 0
+      const agentWithLongWork = mockAgentManager({
+        getSession: vi.fn().mockImplementation(() => {
+          pollCount++
+          // First 5 polls (~15s): session is working
+          if (pollCount <= 5) {
+            return { status: 'working' }
+          }
+          // Then transitions to idle
+          return { status: 'idle' }
+        }),
+        getLastAssistantMessage: vi.fn().mockImplementation(() => {
+          if (pollCount <= 5) return null
+          return 'Action completed successfully\nHEARTBEAT_OK'
+        }),
+      })
+      const s = new HeartbeatScheduler(db as unknown as DatabaseManager, agentWithLongWork as unknown as AgentManager)
+
+      const waitForSessionResult = (s as unknown as {
+        waitForSessionResult: (sessionId: string, taskId: string, fallbackTaskId?: string) => Promise<string>
+      }).waitForSessionResult
+
+      const result = await waitForSessionResult.call(s, 'session-1', 'task-1')
+      expect(result).toContain('HEARTBEAT_OK')
+      expect(pollCount).toBeGreaterThan(5) // Confirmed it waited through the working period
+    })
+
+    it('resets idle timeout when session transitions from idle back to working', { timeout: 45_000 }, async () => {
+      vi.useRealTimers()
+
+      // Session is idle (no message) for a while, then starts working,
+      // then goes idle again with a result. The idle timer should reset
+      // when it sees 'working', preventing premature timeout.
+      let pollCount = 0
+      const agentWithTransitions = mockAgentManager({
+        getSession: vi.fn().mockImplementation(() => {
+          pollCount++
+          // Polls 1-3 (~9s): idle, no message yet (prompt not processed)
+          if (pollCount <= 3) return { status: 'idle' }
+          // Polls 4-8 (~15s): working
+          if (pollCount <= 8) return { status: 'working' }
+          // Polls 9+: idle with result
+          return { status: 'idle' }
+        }),
+        getLastAssistantMessage: vi.fn().mockImplementation(() => {
+          if (pollCount <= 8) return null
+          return 'Completed the fix\nHEARTBEAT_OK'
+        }),
+      })
+      const s = new HeartbeatScheduler(db as unknown as DatabaseManager, agentWithTransitions as unknown as AgentManager)
+
+      const waitForSessionResult = (s as unknown as {
+        waitForSessionResult: (sessionId: string, taskId: string, fallbackTaskId?: string) => Promise<string>
+      }).waitForSessionResult
+
+      const result = await waitForSessionResult.call(s, 'session-1', 'task-1')
+      expect(result).toContain('HEARTBEAT_OK')
+      expect(pollCount).toBeGreaterThan(8)
     })
   })
 

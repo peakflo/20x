@@ -309,7 +309,7 @@ export class HeartbeatScheduler {
         console.log(`[HeartbeatScheduler] Action needed for task "${task.title}", forwarding to task agent`)
         const actionPrompt = this.buildActionPrompt(task, mastermindResult)
         const taskSessionId = await this.agentManager.startHeartbeatSession(agentId, task.id, actionPrompt)
-        const taskResult = await this.waitForSessionResult(taskSessionId, task.id)
+        const taskResult = await this.waitForSessionResult(taskSessionId, task.id, task.id)
         this.handleResult(task, taskSessionId, taskResult)
       }
     } catch (err) {
@@ -399,38 +399,44 @@ export class HeartbeatScheduler {
    * Wait for a heartbeat session to complete and extract the result text.
    * Polls the agent session status until it transitions to idle.
    */
-  private waitForSessionResult(sessionId: string, taskId: string): Promise<string> {
+  private waitForSessionResult(sessionId: string, taskId: string, fallbackTaskId?: string): Promise<string> {
     return new Promise<string>((resolve, reject) => {
-      const TIMEOUT_MS = 5 * 60_000 // 5 minute timeout for heartbeat sessions
+      const INACTIVITY_TIMEOUT_MS = 5 * 60_000 // 5 min since last sign of life
       const POLL_MS = 3_000 // check every 3s
 
-      let elapsed = 0
+      // Track the last time the session showed any activity (working status,
+      // new message, etc.). The timeout only fires if there has been NO
+      // activity for the full INACTIVITY_TIMEOUT_MS window. This handles
+      // long multi-step coding sessions where the agent flickers between
+      // 'working' and 'idle' across tool calls.
+      let lastActivityAt = Date.now()
       // Track the current session ID — may change if the adapter re-keys it
       let currentSessionId = sessionId
-      const heartbeatTaskId = `heartbeat-${taskId}`
+      // Use the provided fallbackTaskId for re-keying lookup, defaulting to
+      // the heartbeat session's taskId. This ensures Phase 3 (task agent)
+      // looks up the correct session instead of the mastermind session.
+      const lookupTaskId = fallbackTaskId || `heartbeat-${taskId}`
 
       const timer = setInterval(() => {
-        elapsed += POLL_MS
-
-        if (elapsed >= TIMEOUT_MS) {
-          clearInterval(timer)
-          reject(new Error(`Heartbeat session ${currentSessionId} timed out after 5 minutes`))
-          return
-        }
-
         // Try to find the session by ID first
         let session = this.agentManager.getSession(currentSessionId)
 
         // If not found, the session ID may have been re-keyed by pollSingleSession
         // (adapter provides real ID, old temp ID is deleted from sessions map).
-        // Fall back to finding the session by its stable heartbeatTaskId.
+        // Fall back to finding the session by its stable taskId.
         if (!session) {
-          const found = this.agentManager.findSessionByTaskId(heartbeatTaskId)
+          const found = this.agentManager.findSessionByTaskId(lookupTaskId)
           if (found) {
             console.log(`[HeartbeatScheduler] Session ID re-keyed: ${currentSessionId} → ${found.sessionId}`)
             currentSessionId = found.sessionId
             session = found.session
           }
+        }
+
+        // Session is actively working — mark activity and keep waiting
+        if (session?.status === 'working') {
+          lastActivityAt = Date.now()
+          return
         }
 
         if (session?.status === 'error') {
@@ -448,12 +454,13 @@ export class HeartbeatScheduler {
           if (lastMessage) {
             clearInterval(timer)
             resolve(lastMessage)
-          } else if (elapsed >= 30_000) {
-            // After 30s, if we still have no message, give up rather than
-            // waiting the full 5-minute timeout. The session likely hit
-            // the premature-idle race condition and never recovered.
+            return
+          }
+
+          const inactiveMs = Date.now() - lastActivityAt
+          if (inactiveMs >= INACTIVITY_TIMEOUT_MS) {
             clearInterval(timer)
-            reject(new Error(`Heartbeat session ${currentSessionId} completed without producing a result`))
+            reject(new Error(`Heartbeat session ${currentSessionId} timed out after ${Math.round(inactiveMs / 60_000)} minutes of inactivity`))
           }
           // Otherwise keep waiting — agent may not have processed the prompt yet
         }
