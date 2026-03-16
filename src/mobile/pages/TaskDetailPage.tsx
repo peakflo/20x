@@ -1,5 +1,4 @@
 import { useMemo, useCallback, useState } from 'react'
-import { useShallow } from 'zustand/react/shallow'
 import { TaskStatus } from '@shared/constants'
 import { CollapsibleDescription } from '../components/CollapsibleDescription'
 import { useTaskStore, type Task } from '../stores/task-store'
@@ -138,19 +137,25 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
     return skills.filter((s) => !s.agent_id || s.agent_id === task.agent_id)
   }, [skills, task?.agent_id])
 
-  // Subtasks and parent task — use useShallow to prevent .filter() from returning
-  // a new array reference on every selector call (which causes infinite re-renders
-  // via useSyncExternalStore torn-read detection). Also use stable taskId (string)
-  // instead of closing over the task object which changes reference on store updates.
-  const subtasks = useTaskStore(useShallow((s) =>
-    s.tasks.filter((t) => t.parent_task_id === taskId)
-  ))
+  // Subtasks and parent task — derive via useMemo from stable store ref.
+  // IMPORTANT: Do NOT use .filter() / .map() / [] inside a Zustand 5 selector.
+  // Zustand 5 passes `() => selector(state)` directly to useSyncExternalStore's
+  // getSnapshot, which must return referentially-stable values. .filter() creates
+  // a new array on every call, violating that contract. useShallow's useRef-based
+  // caching also fails under rapid WebSocket updates because the subscription
+  // handler mutates the ref between renders, causing Object.is to always fail.
+  // The safe pattern: select the raw store array (stable ref) + useMemo.
+  const allTasks = useTaskStore((s) => s.tasks)
 
-  const parentTask = useTaskStore((s) => {
-    const currentTask = s.tasks.find((t) => t.id === taskId)
-    if (!currentTask?.parent_task_id) return null
-    return s.tasks.find((t) => t.id === currentTask.parent_task_id) || null
-  })
+  const subtasks = useMemo(
+    () => allTasks.filter((t) => t.parent_task_id === taskId),
+    [allTasks, taskId]
+  )
+
+  const parentTask = useMemo(() => {
+    if (!task?.parent_task_id) return null
+    return allTasks.find((t) => t.id === task.parent_task_id) || null
+  }, [allTasks, task?.parent_task_id])
 
   if (!task) {
     return (
