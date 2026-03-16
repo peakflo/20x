@@ -1,4 +1,5 @@
 import { useMemo, useCallback, useState } from 'react'
+import { useShallow } from 'zustand/react/shallow'
 import { TaskStatus } from '@shared/constants'
 import { CollapsibleDescription } from '../components/CollapsibleDescription'
 import { useTaskStore, type Task } from '../stores/task-store'
@@ -131,6 +132,26 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
     await updateTask(task.id, { status: TaskStatus.Completed })
   }, [task, updateTask])
 
+  // Skills available for this agent — must be before conditional return (Rules of Hooks)
+  const agentSkills = useMemo(() => {
+    if (!task?.agent_id) return []
+    return skills.filter((s) => !s.agent_id || s.agent_id === task.agent_id)
+  }, [skills, task?.agent_id])
+
+  // Subtasks and parent task — use useShallow to prevent .filter() from returning
+  // a new array reference on every selector call (which causes infinite re-renders
+  // via useSyncExternalStore torn-read detection). Also use stable taskId (string)
+  // instead of closing over the task object which changes reference on store updates.
+  const subtasks = useTaskStore(useShallow((s) =>
+    s.tasks.filter((t) => t.parent_task_id === taskId)
+  ))
+
+  const parentTask = useTaskStore((s) => {
+    const currentTask = s.tasks.find((t) => t.id === taskId)
+    if (!currentTask?.parent_task_id) return null
+    return s.tasks.find((t) => t.id === currentTask.parent_task_id) || null
+  })
+
   if (!task) {
     return (
       <div className="flex flex-col h-full">
@@ -150,20 +171,6 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
 
   // Preview: last 3 messages
   const previewMessages = session?.messages.slice(-3) || []
-
-  // Skills available for this agent
-  const agentSkills = useMemo(() => {
-    if (!task.agent_id) return []
-    return skills.filter((s) => !s.agent_id || s.agent_id === task.agent_id)
-  }, [skills, task.agent_id])
-
-  // Subtasks and parent task — use targeted selectors to avoid re-renders on unrelated task changes
-  const subtasks = useTaskStore((s) => task ? s.tasks.filter((t) => t.parent_task_id === task.id) : [])
-
-  const parentTask = useTaskStore((s) => {
-    if (!task?.parent_task_id) return null
-    return s.tasks.find((t) => t.id === task.parent_task_id) || null
-  })
 
   return (
     <div className="flex flex-col h-full">
