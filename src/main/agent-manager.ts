@@ -2349,6 +2349,14 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       status: 'working'
     })
 
+    // Record enterprise sync event: agent run started (follow-up message)
+    // Each working→idle cycle is a separate agent run. Without this,
+    // follow-up messages produce agent_run_completed without a matching started.
+    if (this.enterpriseStateSync && currentTask && !session.isTriageSession && session.taskId !== 'mastermind-session' && !session.taskId.startsWith('heartbeat-')) {
+      const agent = this.db.getAgent(session.agentId)
+      this.enterpriseStateSync.recordAgentRunStarted(currentTask, agent?.name)
+    }
+
     // Show user's message in UI
     this.sendToRenderer('agent:output', {
       sessionId,
