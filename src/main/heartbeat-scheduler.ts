@@ -417,13 +417,21 @@ export class HeartbeatScheduler {
 
         // Check if the session is still running
         const session = this.agentManager.getSession(sessionId)
-        if (!session || session.status === 'idle' || session.status === 'error') {
-          clearInterval(timer)
 
-          if (session?.status === 'error') {
-            reject(new Error(`Heartbeat session ${sessionId} ended with error`))
-            return
-          }
+        // Guard against race condition: sendMessage fires doSendAdapterMessage
+        // as fire-and-forget, so the adapter may report IDLE before the prompt
+        // is even sent. Only treat idle/missing as "done" if the session has
+        // actually received at least one assistant message.
+        const hasReceivedMessages = session && session.seenPartIds.size > 0
+
+        if (session?.status === 'error') {
+          clearInterval(timer)
+          reject(new Error(`Heartbeat session ${sessionId} ended with error`))
+          return
+        }
+
+        if ((!session || session.status === 'idle') && hasReceivedMessages) {
+          clearInterval(timer)
 
           // Get the last assistant message from the session
           const lastMessage = this.agentManager.getLastAssistantMessage(sessionId)
@@ -435,6 +443,8 @@ export class HeartbeatScheduler {
             reject(new Error(`Heartbeat session ${sessionId} completed without producing a result`))
           }
         }
+        // If session exists but hasn't received messages yet, keep waiting
+        // (the agent hasn't started processing the prompt yet)
       }, POLL_MS)
     })
   }
