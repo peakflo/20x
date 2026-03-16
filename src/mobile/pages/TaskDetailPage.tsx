@@ -131,6 +131,32 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
     await updateTask(task.id, { status: TaskStatus.Completed })
   }, [task, updateTask])
 
+  // Skills available for this agent — must be before conditional return (Rules of Hooks)
+  const agentSkills = useMemo(() => {
+    if (!task?.agent_id) return []
+    return skills.filter((s) => !s.agent_id || s.agent_id === task.agent_id)
+  }, [skills, task?.agent_id])
+
+  // Subtasks and parent task — derive via useMemo from stable store ref.
+  // IMPORTANT: Do NOT use .filter() / .map() / [] inside a Zustand 5 selector.
+  // Zustand 5 passes `() => selector(state)` directly to useSyncExternalStore's
+  // getSnapshot, which must return referentially-stable values. .filter() creates
+  // a new array on every call, violating that contract. useShallow's useRef-based
+  // caching also fails under rapid WebSocket updates because the subscription
+  // handler mutates the ref between renders, causing Object.is to always fail.
+  // The safe pattern: select the raw store array (stable ref) + useMemo.
+  const allTasks = useTaskStore((s) => s.tasks)
+
+  const subtasks = useMemo(
+    () => allTasks.filter((t) => t.parent_task_id === taskId),
+    [allTasks, taskId]
+  )
+
+  const parentTask = useMemo(() => {
+    if (!task?.parent_task_id) return null
+    return allTasks.find((t) => t.id === task.parent_task_id) || null
+  }, [allTasks, task?.parent_task_id])
+
   if (!task) {
     return (
       <div className="flex flex-col h-full">
@@ -150,20 +176,6 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
 
   // Preview: last 3 messages
   const previewMessages = session?.messages.slice(-3) || []
-
-  // Skills available for this agent
-  const agentSkills = useMemo(() => {
-    if (!task.agent_id) return []
-    return skills.filter((s) => !s.agent_id || s.agent_id === task.agent_id)
-  }, [skills, task.agent_id])
-
-  // Subtasks and parent task — use targeted selectors to avoid re-renders on unrelated task changes
-  const subtasks = useTaskStore((s) => task ? s.tasks.filter((t) => t.parent_task_id === task.id) : [])
-
-  const parentTask = useTaskStore((s) => {
-    if (!task?.parent_task_id) return null
-    return s.tasks.find((t) => t.id === task.parent_task_id) || null
-  })
 
   return (
     <div className="flex flex-col h-full">

@@ -32,6 +32,9 @@ export function RepoSelectorPage({
   const [error, setError] = useState<string | null>(null)
 
   // Initialise selected set from existing task repos
+  // Depend on task.repos (serialised) instead of the task object to avoid re-running
+  // every time the task store replaces objects (e.g. from polling every 10s).
+  const taskReposKey = task?.repos?.join(',') ?? ''
   useEffect(() => {
     if (task) {
       const initial = selectedOrg
@@ -39,7 +42,7 @@ export function RepoSelectorPage({
         : task.repos
       setSelected(new Set(initial))
     }
-  }, [task, selectedOrg])
+  }, [taskReposKey, selectedOrg])
 
   // Fetch org choices on mount
   useEffect(() => {
