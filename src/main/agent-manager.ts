@@ -1874,6 +1874,22 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
   }
 
   /**
+   * Find a session by its taskId. Returns the current session ID and session object.
+   * Used by HeartbeatScheduler to recover from session ID re-keying: when the adapter
+   * provides a real session ID, pollSingleSession re-keys the sessions map, but
+   * waitForSessionResult still holds the old temp ID. This method looks up by taskId
+   * which is stable across re-keying.
+   */
+  findSessionByTaskId(taskId: string): { sessionId: string; session: AgentSession } | undefined {
+    for (const [id, session] of this.sessions.entries()) {
+      if (session.taskId === taskId) {
+        return { sessionId: id, session }
+      }
+    }
+    return undefined
+  }
+
+  /**
    * Check if a task has a live (working) session in memory.
    * Used by HeartbeatScheduler to avoid interrupting active user sessions.
    */

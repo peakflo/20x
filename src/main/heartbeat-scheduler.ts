@@ -309,7 +309,7 @@ export class HeartbeatScheduler {
         console.log(`[HeartbeatScheduler] Action needed for task "${task.title}", forwarding to task agent`)
         const actionPrompt = this.buildActionPrompt(task, mastermindResult)
         const taskSessionId = await this.agentManager.startHeartbeatSession(agentId, task.id, actionPrompt)
-        const taskResult = await this.waitForSessionResult(taskSessionId, task.id)
+        const taskResult = await this.waitForSessionResult(taskSessionId, task.id, task.id)
         this.handleResult(task, taskSessionId, taskResult)
       }
     } catch (err) {
@@ -399,35 +399,70 @@ export class HeartbeatScheduler {
    * Wait for a heartbeat session to complete and extract the result text.
    * Polls the agent session status until it transitions to idle.
    */
-  private waitForSessionResult(sessionId: string, _taskId: string): Promise<string> {
+  private waitForSessionResult(sessionId: string, taskId: string, fallbackTaskId?: string): Promise<string> {
     return new Promise<string>((resolve, reject) => {
-      const TIMEOUT_MS = 5 * 60_000 // 5 minute timeout for heartbeat sessions
+      const INACTIVITY_TIMEOUT_MS = 5 * 60_000 // 5 min since last sign of life
       const POLL_MS = 3_000 // check every 3s
 
-      let elapsed = 0
+      // Track the last time the session showed any activity (working status,
+      // new message, etc.). The timeout only fires if there has been NO
+      // activity for the full INACTIVITY_TIMEOUT_MS window. This handles
+      // long multi-step coding sessions where the agent flickers between
+      // 'working' and 'idle' across tool calls.
+      let lastActivityAt = Date.now()
+      // Track the current session ID — may change if the adapter re-keys it
+      let currentSessionId = sessionId
+      // Use the provided fallbackTaskId for re-keying lookup, defaulting to
+      // the heartbeat session's taskId. This ensures Phase 3 (task agent)
+      // looks up the correct session instead of the mastermind session.
+      const lookupTaskId = fallbackTaskId || `heartbeat-${taskId}`
 
       const timer = setInterval(() => {
-        elapsed += POLL_MS
+        // Try to find the session by ID first
+        let session = this.agentManager.getSession(currentSessionId)
 
-        if (elapsed >= TIMEOUT_MS) {
-          clearInterval(timer)
-          reject(new Error(`Heartbeat session ${sessionId} timed out after 5 minutes`))
+        // If not found, the session ID may have been re-keyed by pollSingleSession
+        // (adapter provides real ID, old temp ID is deleted from sessions map).
+        // Fall back to finding the session by its stable taskId.
+        if (!session) {
+          const found = this.agentManager.findSessionByTaskId(lookupTaskId)
+          if (found) {
+            console.log(`[HeartbeatScheduler] Session ID re-keyed: ${currentSessionId} → ${found.sessionId}`)
+            currentSessionId = found.sessionId
+            session = found.session
+          }
+        }
+
+        // Session is actively working — mark activity and keep waiting
+        if (session?.status === 'working') {
+          lastActivityAt = Date.now()
           return
         }
 
-        // Check if the session is still running
-        const session = this.agentManager.getSession(sessionId)
-        if (!session || session.status === 'idle' || session.status === 'error') {
+        if (session?.status === 'error') {
           clearInterval(timer)
+          reject(new Error(`Heartbeat session ${currentSessionId} ended with error`))
+          return
+        }
 
-          if (session?.status === 'error') {
-            reject(new Error(`Heartbeat session ${sessionId} ended with error`))
+        if (!session || session.status === 'idle') {
+          // Guard against race condition: sendMessage fires doSendAdapterMessage
+          // as fire-and-forget, so the adapter may report IDLE before the prompt
+          // is even sent. Only treat idle as "done" if the session has actually
+          // produced an assistant response (lastAssistantText is set during polling).
+          const lastMessage = this.agentManager.getLastAssistantMessage(currentSessionId)
+          if (lastMessage) {
+            clearInterval(timer)
+            resolve(lastMessage)
             return
           }
 
-          // Get the last assistant message from the session
-          const lastMessage = this.agentManager.getLastAssistantMessage(sessionId)
-          resolve(lastMessage || HEARTBEAT_OK_TOKEN) // Default to OK if no message
+          const inactiveMs = Date.now() - lastActivityAt
+          if (inactiveMs >= INACTIVITY_TIMEOUT_MS) {
+            clearInterval(timer)
+            reject(new Error(`Heartbeat session ${currentSessionId} timed out after ${Math.round(inactiveMs / 60_000)} minutes of inactivity`))
+          }
+          // Otherwise keep waiting — agent may not have processed the prompt yet
         }
       }, POLL_MS)
     })
@@ -610,10 +645,6 @@ export class HeartbeatScheduler {
     // Extract GitHub PR and issue URLs
     const githubUrls = this.extractGitHubUrls(heartbeatContent)
 
-    if (this.requiresCurrentStateChecks(heartbeatContent)) {
-      return 'inconclusive' // Needs full heartbeat to inspect current PR/CI state
-    }
-
     if (githubUrls.length === 0) {
       return 'inconclusive' // No URLs to check — need LLM
     }
@@ -623,6 +654,38 @@ export class HeartbeatScheduler {
       return 'inconclusive' // First check — need LLM to establish baseline
     }
 
+    // Phase 1: Always check CI status for PRs (cheap, catches deployment failures)
+    // This runs even when current-state checks are needed, so CI failures are never missed.
+    const pullUrls = githubUrls.filter(u => u.type === 'pull')
+    for (const url of pullUrls) {
+      try {
+        const { stdout: prJson } = await execFileAsync('gh', [
+          'api',
+          `repos/${url.owner}/${url.repo}/pulls/${url.number}`,
+          '--jq', '.head.sha'
+        ], { timeout: 15_000 })
+
+        const headSha = prJson.trim()
+        if (headSha) {
+          const hasFailed = await this.hasFailedCheckRuns(url.owner, url.repo, headSha)
+          if (hasFailed) {
+            console.log(`[HeartbeatScheduler] Pre-flight: CI failure detected for ${url.owner}/${url.repo}#${url.number}`)
+            return 'changes_detected'
+          }
+        }
+      } catch {
+        // CI check failed — fall through to LLM
+        return 'inconclusive'
+      }
+    }
+
+    // Phase 2: If heartbeat needs current-state checks beyond CI (e.g., unresolved
+    // requested changes), delegate to LLM since pre-flight can't evaluate those.
+    if (this.requiresCurrentStateChecks(heartbeatContent)) {
+      return 'inconclusive'
+    }
+
+    // Phase 3: Check for new activity since last check (comments, reviews, merge conflicts)
     let hasChanges = false
 
     for (const url of githubUrls) {
@@ -650,6 +713,37 @@ export class HeartbeatScheduler {
 
   private hasMergeConflicts(prState: { mergeable: boolean | null; mergeable_state?: string | null }): boolean {
     return prState.mergeable_state === 'dirty'
+  }
+
+  /**
+   * Check if a commit has any failed CI check-runs or commit statuses.
+   * Uses the combined status endpoint which aggregates both check-runs and commit statuses.
+   */
+  private async hasFailedCheckRuns(owner: string, repo: string, sha: string): Promise<boolean> {
+    try {
+      // Check check-runs (GitHub Actions, etc.)
+      const { stdout: checkRunsJson } = await execFileAsync('gh', [
+        'api',
+        `repos/${owner}/${repo}/commits/${sha}/check-runs`,
+        '--jq', '[.check_runs[] | select(.status == "completed" and (.conclusion == "failure" or .conclusion == "timed_out" or .conclusion == "cancelled"))] | length'
+      ], { timeout: 15_000 })
+
+      const failedCheckRuns = parseInt(checkRunsJson.trim(), 10)
+      if (failedCheckRuns > 0) return true
+
+      // Check commit statuses (Vercel, external CI, etc.)
+      const { stdout: statusJson } = await execFileAsync('gh', [
+        'api',
+        `repos/${owner}/${repo}/commits/${sha}/status`,
+        '--jq', '[.statuses[] | select(.state == "failure" or .state == "error")] | length'
+      ], { timeout: 15_000 })
+
+      const failedStatuses = parseInt(statusJson.trim(), 10)
+      return failedStatuses > 0
+    } catch {
+      // If we can't determine CI status, signal inconclusive (caller will throw → LLM fallback)
+      return false
+    }
   }
 
   /**
@@ -715,15 +809,25 @@ export class HeartbeatScheduler {
         const newIssueComments = parseInt(issueCommentsJson.trim(), 10)
         if (newIssueComments > 0) return true
 
-        // Check current merge conflict state
-        const { stdout: prStateJson } = await execFileAsync('gh', [
+        // Check CI/check-run status — detect failed checks
+        const { stdout: checkRunsJson } = await execFileAsync('gh', [
           'api',
           `repos/${url.owner}/${url.repo}/pulls/${url.number}`,
-          '--jq', '{ mergeable: .mergeable, mergeable_state: .mergeable_state }'
+          '--jq', '{ mergeable: .mergeable, mergeable_state: .mergeable_state, head_sha: .head.sha }'
         ], { timeout: 15_000 })
 
-        const prState = JSON.parse(prStateJson.trim()) as { mergeable: boolean | null; mergeable_state?: string | null }
-        return this.hasMergeConflicts(prState)
+        const prState = JSON.parse(checkRunsJson.trim()) as { mergeable: boolean | null; mergeable_state?: string | null; head_sha?: string }
+
+        // Check for merge conflicts
+        if (this.hasMergeConflicts(prState)) return true
+
+        // Check for failed CI check-runs on the HEAD commit
+        if (prState.head_sha) {
+          const hasFailedChecks = await this.hasFailedCheckRuns(url.owner, url.repo, prState.head_sha)
+          if (hasFailedChecks) return true
+        }
+
+        return false
       } else {
         // Check issue comments
         const { stdout: commentsJson } = await execFileAsync('gh', [
