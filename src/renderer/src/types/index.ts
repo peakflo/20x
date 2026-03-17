@@ -68,6 +68,7 @@ export enum CodexModel {
   GPT_5_1_CODEX = 'gpt-5.1-codex',
   GPT_5_1_CODEX_MINI = 'gpt-5.1-codex-mini',
   GPT_5_CODEX = 'gpt-5-codex',
+  GPT_5_4 = 'gpt-5.4',
   GPT_5 = 'gpt-5',
   GPT_5_MINI = 'gpt-5-mini'
 }
@@ -80,6 +81,7 @@ export const CODEX_MODELS: { id: CodexModel; name: string }[] = [
   { id: CodexModel.GPT_5_1_CODEX, name: 'GPT-5.1 Codex' },
   { id: CodexModel.GPT_5_1_CODEX_MINI, name: 'GPT-5.1 Codex Mini' },
   { id: CodexModel.GPT_5_CODEX, name: 'GPT-5 Codex' },
+  { id: CodexModel.GPT_5_4, name: 'GPT-5.4' },
   { id: CodexModel.GPT_5, name: 'GPT-5' },
   { id: CodexModel.GPT_5_MINI, name: 'GPT-5 Mini (Fastest)' }
 ]
