@@ -15,4 +15,11 @@ describe('CODEX_MODELS', () => {
       name: 'GPT-5.3 Codex'
     })
   })
+
+  it('includes the standalone GPT-5.4 model', () => {
+    expect(CODEX_MODELS).toContainEqual({
+      id: CodexModel.GPT_5_4,
+      name: 'GPT-5.4'
+    })
+  })
 })
