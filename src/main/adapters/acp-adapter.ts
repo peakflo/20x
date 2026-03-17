@@ -548,6 +548,31 @@ export class AcpAdapter implements CodingAgentAdapter {
     console.log(`[AcpAdapter/${this.agentType}] Sending prompt to session ${sessionId}:`)
     console.log(promptText.slice(0, 200) + (promptText.length > 200 ? '...' : ''))
 
+    // Clear stale buffered events from the previous turn. Between the last
+    // pollMessages() call (which empties the buffer) and the idle detection
+    // that stops polling, new ACP notifications can still arrive.  When the
+    // next prompt triggers a fresh PollingEntry (with empty seenPartIds),
+    // those stale events would be re-processed with a new turnId, creating
+    // duplicate messages in the transcript.
+    session.messageBuffer = []
+
+    // Store a synthetic user_message event in permanentMessages so that the
+    // user's prompt survives session resume / replay.  During session/load,
+    // the ACP agent may not echo user_message_chunk events, which means
+    // getAllMessages() would return no user parts and the transcript would
+    // show only agent responses.
+    session.permanentMessages.push({
+      jsonrpc: '2.0',
+      method: 'session/update',
+      params: {
+        update: {
+          sessionUpdate: 'user_message',
+          content: { type: 'text', text: promptText },
+          messageId: `user-prompt-${session.currentTurnId + 1}`
+        }
+      }
+    } as unknown as JsonRpcNotification)
+
     session.status = SessionStatusType.BUSY
     session.currentTurnId++
     session.activeTurnId = session.currentTurnId
@@ -1385,10 +1410,13 @@ export class AcpAdapter implements CodingAgentAdapter {
         if (session) {
           session.pendingAssistantTurnSplit = true
         }
-        // Cache metadata from initial tool_call events (in_progress) so we can use it
-        // when the completed tool_call_update arrives (which may lack name/input fields)
+
+        // Cache metadata from initial tool_call events (in_progress) so we can
+        // use it when the completed tool_call_update arrives (which may lack
+        // name/input fields).
+        const rawInput = update.rawInput as { cmd?: string; command?: string | string[]; parsed_cmd?: Array<{ cmd?: string }>; tool?: string; server?: string } | undefined
+
         if (update.status !== 'completed' && session && partId) {
-          const rawInput = update.rawInput as { cmd?: string; command?: string | string[]; parsed_cmd?: Array<{ cmd?: string }>; tool?: string; server?: string } | undefined
           const commandFromInput = Array.isArray(rawInput?.command)
             ? rawInput.command.join(' ')
             : rawInput?.command
@@ -1405,17 +1433,34 @@ export class AcpAdapter implements CodingAgentAdapter {
           if (cachedName || cachedInput || cachedTitle) {
             session.toolCallMetadata.set(partId, { name: cachedName, input: cachedInput, title: cachedTitle })
           }
+
+          // Emit an in-progress tool part so the user sees the tool call
+          // immediately (with a spinner) instead of waiting for completion.
+          if (!seenPartIds.has(partId)) {
+            seenPartIds.add(partId)
+            const inProgressToolName = this.normalizeToolName(cachedName || update.title || 'tool')
+            parts.push({
+              id: partId,
+              type: MessagePartType.TOOL,
+              tool: {
+                name: inProgressToolName,
+                title: cachedTitle,
+                status: 'running',
+                input: cachedInput || undefined
+              }
+            })
+          }
         }
 
-        // Only create part if it's completed (has output)
-        if (update.status === 'completed' && !seenPartIds.has(partId)) {
+        // Create / update the tool part when completed (with output)
+        if (update.status === 'completed') {
+          const alreadySeen = seenPartIds.has(partId)
           seenPartIds.add(partId)
 
           // Look up cached metadata from initial tool_call event
           const cachedMeta = session?.toolCallMetadata.get(partId)
 
           // Extract command and output from rawInput/rawOutput
-          const rawInput = update.rawInput as { cmd?: string; command?: string | string[]; parsed_cmd?: Array<{ cmd?: string }> } | undefined
           const rawOutput = update.rawOutput as {
             command?: string | string[];
             stdout?: string;
@@ -1473,7 +1518,10 @@ export class AcpAdapter implements CodingAgentAdapter {
               status: update.status,
               input: command,
               output: output
-            }
+            },
+            // If we already emitted an in-progress part for this tool,
+            // mark as update so the renderer replaces rather than adds.
+            update: alreadySeen
           })
         }
       } else if (update.sessionUpdate === 'agent_message_chunk' || update.sessionUpdate === 'assistant_message_chunk') {
