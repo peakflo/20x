@@ -1787,7 +1787,7 @@ describe('AcpAdapter - sendPrompt clears stale messageBuffer', () => {
     await adapter.sendPrompt('sess-user', [{ type: MessagePartType.TEXT, text: 'Hello agent' }], {} as never)
 
     // permanentMessages should contain a synthetic user_message
-    const userEvents = session.permanentMessages.filter((e: Record<string, unknown>) => {
+    const userEvents = session.permanentMessages.filter((e) => {
       const params = (e as { params?: { update?: { sessionUpdate?: string } } }).params
       return params?.update?.sessionUpdate === 'user_message'
     })
