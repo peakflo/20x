@@ -1136,7 +1136,7 @@ describe('AcpAdapter - Turn Detection', () => {
       expect(afterToolParts[0].id).toBe('agent-response-2')
     })
 
-    it('clears active turn immediately when live tool activity arrives', async () => {
+    it('does NOT clear activeTurnId in updateSessionStatus (turn state managed only during polling)', async () => {
       const sessionId = 'test-session'
       const priv = adapterPrivate(adapter)
       const session = priv.sessions.get(sessionId) || createMockSession(sessionId)
@@ -1162,8 +1162,15 @@ describe('AcpAdapter - Turn Detection', () => {
         }
       }
 
+      // updateSessionStatus should NOT modify turn-related state (activeTurnId,
+      // pendingAssistantTurnSplit) — that's handled by convertAcpEventToMessageParts
+      // during polling to avoid race conditions with real-time event arrival.
       priv.updateSessionStatus(session, toolCall as never)
-      expect(session.activeTurnId).toBeNull()
+      expect(session.activeTurnId).toBe(1) // Preserved — turn state managed only during polling
+
+      // Process the tool call through the polling path
+      priv.convertAcpEventToMessageParts(toolCall, new Set(), seenPartIds, partContentLengths, session)
+      // Now pendingAssistantTurnSplit is set by convertAcpEventToMessageParts
 
       const assistantAfterTool = {
         method: 'session/update',
@@ -1179,6 +1186,7 @@ describe('AcpAdapter - Turn Detection', () => {
       const afterToolParts = priv.convertAcpEventToMessageParts(assistantAfterTool, new Set(), seenPartIds, partContentLengths, session)
 
       expect(session.currentTurnId).toBe(2)
+      expect(session.activeTurnId).toBe(2) // Updated by getAssistantTurnId
       expect(afterToolParts[0].id).toBe('agent-response-2')
     })
 
@@ -2095,5 +2103,118 @@ describe('AcpAdapter - User message handling', () => {
     expect(userMessages[0].parts[0].text).toBe('User prompt text')
     expect(assistantMessages.length).toBe(1)
     expect(assistantMessages[0].parts[0].text).toBe('Agent response')
+  })
+})
+
+// ─── Regression tests: available_commands_update / plan must NOT cause turn splits ───
+
+describe('AcpAdapter - Non-content events must not fragment assistant messages', () => {
+  let adapter: AcpAdapter
+
+  beforeEach(() => {
+    adapter = new AcpAdapter('codex')
+    vi.useFakeTimers()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.clearAllMocks()
+  })
+
+  it('available_commands_update between chunks should NOT start a new turn', () => {
+    const priv = adapterPrivate(adapter)
+    const session = createMockSession('sess-cmd-update')
+    session.currentTurnId = 1
+    session.activeTurnId = 1
+    session.lastSessionUpdateType = 'agent_message_chunk'
+    priv.sessions.set('sess-cmd-update', session)
+
+    const seenPartIds = new Set<string>()
+    const partContentLengths = new Map<string, string>()
+
+    // First assistant chunk
+    const chunk1 = {
+      method: 'session/update',
+      params: { update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Hello ' } } }
+    }
+    priv.convertAcpEventToMessageParts(chunk1, new Set(), seenPartIds, partContentLengths, session)
+    expect(session.currentTurnId).toBe(1)
+
+    // available_commands_update arrives (non-content event)
+    const cmdUpdate = {
+      method: 'session/update',
+      params: { update: { sessionUpdate: 'available_commands_update' } }
+    }
+    priv.convertAcpEventToMessageParts(cmdUpdate, new Set(), seenPartIds, partContentLengths, session)
+
+    // Second assistant chunk — should continue same turn
+    const chunk2 = {
+      method: 'session/update',
+      params: { update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'world' } } }
+    }
+    const parts2 = priv.convertAcpEventToMessageParts(chunk2, new Set(), seenPartIds, partContentLengths, session)
+
+    expect(session.currentTurnId).toBe(1) // SAME turn — no split
+    expect(parts2[0].id).toBe('agent-response-1') // same message ID
+    expect(parts2[0].text).toBe('Hello world') // accumulated text
+  })
+
+  it('plan event between chunks should NOT start a new turn', () => {
+    const priv = adapterPrivate(adapter)
+    const session = createMockSession('sess-plan')
+    session.currentTurnId = 1
+    session.activeTurnId = 1
+    session.lastSessionUpdateType = 'agent_message_chunk'
+    priv.sessions.set('sess-plan', session)
+
+    const seenPartIds = new Set<string>()
+    const partContentLengths = new Map<string, string>()
+
+    // First chunk
+    const chunk1 = {
+      method: 'session/update',
+      params: { update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Step 1: ' } } }
+    }
+    priv.convertAcpEventToMessageParts(chunk1, new Set(), seenPartIds, partContentLengths, session)
+
+    // plan event
+    const planEvent = {
+      method: 'session/update',
+      params: { update: { sessionUpdate: 'plan', entries: [{ content: 'step 1', priority: 'high', status: 'pending' }] } }
+    }
+    priv.convertAcpEventToMessageParts(planEvent, new Set(), seenPartIds, partContentLengths, session)
+
+    // Second chunk — should continue same turn
+    const chunk2 = {
+      method: 'session/update',
+      params: { update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'read file' } } }
+    }
+    const parts2 = priv.convertAcpEventToMessageParts(chunk2, new Set(), seenPartIds, partContentLengths, session)
+
+    expect(session.currentTurnId).toBe(1) // SAME turn
+    expect(parts2[0].id).toBe('agent-response-1')
+    expect(parts2[0].text).toBe('Step 1: read file')
+  })
+
+  it('updateSessionStatus should NOT modify turn state (activeTurnId, pendingAssistantTurnSplit)', () => {
+    const priv = adapterPrivate(adapter)
+    const session = createMockSession('sess-status')
+    session.currentTurnId = 1
+    session.activeTurnId = 1
+    session.pendingAssistantTurnSplit = false
+    priv.sessions.set('sess-status', session)
+
+    const toolNotification = {
+      method: 'session/update',
+      params: { update: { sessionUpdate: 'tool_call', toolCallId: 'tc-1', status: 'in_progress' } }
+    }
+
+    priv.updateSessionStatus(session, toolNotification as never)
+
+    // Status should be updated
+    expect(session.status).toBe('busy')
+    // Turn state should NOT be modified by updateSessionStatus
+    expect(session.activeTurnId).toBe(1)
+    expect(session.pendingAssistantTurnSplit).toBe(false)
   })
 })

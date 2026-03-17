@@ -966,14 +966,14 @@ export class AcpAdapter implements CodingAgentAdapter {
 
       if (!update) return
 
-      // Update status based on update type
+      // Update status based on update type.
+      // IMPORTANT: Do NOT modify turn-related state (activeTurnId, pendingAssistantTurnSplit)
+      // here — this runs in real-time when notifications arrive, but pollMessages processes
+      // events in buffer order. Modifying turn state here would "leak" future event state
+      // into earlier events during polling, causing incorrect turn splits and duplication.
+      // Turn state is managed exclusively in convertAcpEventToMessageParts().
       if (update.sessionUpdate === 'tool_call' || update.sessionUpdate === 'tool_call_update') {
         session.status = SessionStatusType.BUSY
-        // Tool activity ends the current assistant turn. The next assistant
-        // text chunk should render as a new message after the tool row instead
-        // of appending to the pre-tool assistant text.
-        session.activeTurnId = null
-        session.pendingAssistantTurnSplit = true
       } else if (update.sessionUpdate === 'error' || update.sessionUpdate === 'failed') {
         session.status = SessionStatusType.ERROR
       } else if (update.sessionUpdate === 'completed' || update.sessionUpdate === 'finished') {
@@ -1262,10 +1262,12 @@ export class AcpAdapter implements CodingAgentAdapter {
   }
 
   private isToolingUpdateType(sessionUpdate?: string | null): boolean {
+    // Only actual tool calls should trigger turn splits.
+    // `plan` and `available_commands_update` do NOT produce visible message parts
+    // and must NOT cause turn splits — otherwise every such notification fragments
+    // the assistant response into a separate message bubble.
     return sessionUpdate === 'tool_call'
       || sessionUpdate === 'tool_call_update'
-      || sessionUpdate === 'plan'
-      || sessionUpdate === 'available_commands_update'
   }
 
   private getAssistantTurnId(session: AcpSession): number {
@@ -1627,8 +1629,20 @@ export class AcpAdapter implements CodingAgentAdapter {
         console.log(`[AcpAdapter/${this.agentType}] Received plan with ${(update.entries || []).length} entries`)
       }
 
+      // Only update lastSessionUpdateType for events that affect turn detection.
+      // Non-content events like `plan` and `available_commands_update` must NOT
+      // pollute turn state — otherwise they cause the next assistant chunk to
+      // start a spurious new turn, fragmenting the response into multiple bubbles.
       if (session && update.sessionUpdate) {
-        session.lastSessionUpdateType = update.sessionUpdate
+        const isTurnRelevant =
+          this.isAssistantChunkUpdateType(update.sessionUpdate)
+          || this.isToolingUpdateType(update.sessionUpdate)
+          || this.isUserUpdateType(update.sessionUpdate)
+          || update.sessionUpdate === 'agent_message'
+          || update.sessionUpdate === 'assistant_message'
+        if (isTurnRelevant) {
+          session.lastSessionUpdateType = update.sessionUpdate
+        }
       }
     }
 

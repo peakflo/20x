@@ -1450,8 +1450,10 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       // that each trigger a Zustand state update + React re-render.
       const batchMessages: Array<{ id: string; role: string; content: string; partType?: string; tool?: unknown; update?: boolean }> = []
       for (const part of newParts) {
-        if (part.role === 'user') continue
-
+        // Allow user messages through so they appear in the transcript during
+        // session resume and replay.  The renderer's seenIds dedup prevents
+        // duplicate bubbles when the same message was already sent via the
+        // direct agent:output event.
         batchMessages.push({
           id: part.id || `part-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
           role: part.role || 'assistant',
