@@ -119,6 +119,12 @@ export function stopSecretBroker(): void {
  * Returns the absolute path to the wrapper script.
  */
 export function writeSecretShellWrapper(): string {
+  const isWin = process.platform === 'win32'
+
+  if (isWin) {
+    return writeWindowsSecretShellWrapper()
+  }
+
   const shellPath = join(app.getPath('userData'), 'secret-shell.sh')
 
   const debugLog = join(app.getPath('userData'), 'secret-shell-debug.log')
@@ -152,6 +158,62 @@ exec "\$_real_shell" "\$@"
 
   writeFileSync(shellPath, script, 'utf-8')
   chmodSync(shellPath, 0o755)
+  console.log(`[SecretBroker] Wrote shell wrapper to ${shellPath}`)
+  return shellPath
+}
+
+/**
+ * Windows equivalent of the secret shell wrapper using PowerShell.
+ * Fetches secrets from the broker and injects them as environment variables
+ * before executing the real command.
+ */
+function writeWindowsSecretShellWrapper(): string {
+  const shellPath = join(app.getPath('userData'), 'secret-shell.ps1')
+  const debugLog = join(app.getPath('userData'), 'secret-shell-debug.log').replace(/\\/g, '\\\\')
+
+  const script = `# 20x Secret Shell Wrapper (Windows PowerShell)
+# Fetches secrets from the local broker and injects them into the command environment.
+
+$ErrorActionPreference = "SilentlyContinue"
+
+if ($env:_20X_SB_PORT -and $env:_20X_SB_TOKEN) {
+    try {
+        $response = Invoke-WebRequest -Uri "http://127.0.0.1:$($env:_20X_SB_PORT)/secrets/export?token=$($env:_20X_SB_TOKEN)" -UseBasicParsing -TimeoutSec 5
+        $secrets = $response.Content
+
+        # Debug logging
+        $timestamp = Get-Date -Format "HH:mm:ss"
+        Add-Content -Path "${debugLog}" -Value "[secret-shell $timestamp] port=$($env:_20X_SB_PORT) status=$($response.StatusCode) body_len=$($secrets.Length) args=$args"
+
+        if ($secrets) {
+            # Parse KEY=VALUE lines and set as environment variables
+            $secrets -split "\\n" | ForEach-Object {
+                if ($_ -match "^export\\s+([^=]+)=(.*)$") {
+                    $key = $Matches[1]
+                    $val = $Matches[2] -replace "^['\"]|['\"]$", ""
+                    [Environment]::SetEnvironmentVariable($key, $val, "Process")
+                }
+            }
+        }
+    } catch {
+        Add-Content -Path "${debugLog}" -Value "[secret-shell $(Get-Date -Format 'HH:mm:ss')] ERROR: $_"
+    }
+
+    # Clean up broker vars
+    Remove-Item Env:\\_20X_SB_PORT -ErrorAction SilentlyContinue
+    Remove-Item Env:\\_20X_SB_TOKEN -ErrorAction SilentlyContinue
+    Remove-Item Env:\\_20X_REAL_SHELL -ErrorAction SilentlyContinue
+}
+
+# Execute the real command with original arguments
+if ($args.Count -gt 0) {
+    & $args[0] $args[1..($args.Count-1)]
+} else {
+    cmd.exe /c
+}
+`
+
+  writeFileSync(shellPath, script, 'utf-8')
   console.log(`[SecretBroker] Wrote shell wrapper to ${shellPath}`)
   return shellPath
 }

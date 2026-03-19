@@ -1,5 +1,6 @@
 import { spawn } from 'child_process'
 import type { McpServerRecord } from './database'
+import { getTaskApiPort } from './task-api-server'
 
 export interface McpToolCallResult {
   success: boolean
@@ -95,7 +96,15 @@ export class McpToolCaller {
     const proc = spawn(server.command!, server.args || [], {
       stdio: ['pipe', 'pipe', 'pipe'],
       ...(needsShell ? { shell: true } : {}),
-      env: { ...process.env, npm_config_yes: 'true', ...server.environment }
+      env: {
+        ...process.env,
+        npm_config_yes: 'true',
+        ...server.environment,
+        // Inject TASK_API_URL for task-management MCP server
+        ...(server.name === 'task-management' && getTaskApiPort()
+          ? { TASK_API_URL: `http://127.0.0.1:${getTaskApiPort()}` }
+          : {})
+      }
     })
 
     const session: LocalMcpSession = {

@@ -1699,6 +1699,13 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
       mcpServerPath = mcpServerPath.replace('app.asar', 'app.asar.unpacked')
     }
 
+    // On Windows, ELECTRON_RUN_AS_NODE with packaged 20x.exe doesn't work properly —
+    // it still initializes Electron internals. Use system 'node' instead.
+    // On Mac/Linux, process.execPath with ELECTRON_RUN_AS_NODE works fine.
+    const isWin = process.platform === 'win32'
+    const mcpCommand = isWin ? 'node' : process.execPath
+    const mcpEnv = isWin ? {} : { ELECTRON_RUN_AS_NODE: '1' }
+
     // Start the HTTP API server so the MCP server can call back to it
     startTaskApiServer(this).catch(err =>
       console.error('[Database] Failed to start task API server:', err)
@@ -1734,9 +1741,9 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
         mcpServerId,
         'task-management',
         'local',
-        process.execPath,
+        mcpCommand,
         JSON.stringify([mcpServerPath]),
-        JSON.stringify({ ELECTRON_RUN_AS_NODE: '1' }),
+        JSON.stringify(mcpEnv),
         JSON.stringify(tools),
         now,
         now
@@ -1748,9 +1755,9 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
       this.db.prepare(`
         UPDATE mcp_servers SET command = ?, args = ?, environment = ?, tools = ?, updated_at = ? WHERE id = ?
       `).run(
-        process.execPath,
+        mcpCommand,
         JSON.stringify([mcpServerPath]),
-        JSON.stringify({ ELECTRON_RUN_AS_NODE: '1' }),
+        JSON.stringify(mcpEnv),
         JSON.stringify(tools),
         now,
         mcpServerId

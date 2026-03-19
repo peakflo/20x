@@ -162,6 +162,8 @@ export class CodexAdapter implements CodingAgentAdapter {
     const abortController = new AbortController()
 
     // Spawn codex process
+    // On Windows, .cmd wrappers need shell:true to resolve
+    const needsShell = process.platform === 'win32' && /\.(cmd|bat)$/i.test(this.codexExecutablePath!)
     const codexProcess = spawn(
       this.codexExecutablePath,
       [
@@ -173,6 +175,7 @@ export class CodexAdapter implements CodingAgentAdapter {
         cwd: config.workspaceDir,
         stdio: ['pipe', 'pipe', 'pipe'],
         env: this.buildCodexEnvironment(),
+        ...(needsShell ? { shell: true } : {}),
       }
     )
 
@@ -252,6 +255,8 @@ export class CodexAdapter implements CodingAgentAdapter {
     const abortController = new AbortController()
 
     // Spawn new codex process
+    // On Windows, .cmd wrappers need shell:true to resolve
+    const needsShellResume = process.platform === 'win32' && /\.(cmd|bat)$/i.test(this.codexExecutablePath!)
     const codexProcess = spawn(
       this.codexExecutablePath,
       [
@@ -263,6 +268,7 @@ export class CodexAdapter implements CodingAgentAdapter {
         cwd: config.workspaceDir,
         stdio: ['pipe', 'pipe', 'pipe'],
         env: this.buildCodexEnvironment(),
+        ...(needsShellResume ? { shell: true } : {}),
       }
     )
 

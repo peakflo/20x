@@ -2670,11 +2670,6 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
         finish({ status: 'failed', error: 'Connection timeout (30s)' })
       }, 30000)
 
-      // Build a single shell command with proper quoting — args containing spaces
-      // must be quoted so the shell doesn't split them (e.g. "Authorization: Bearer ...")
-      const shellCmd = [serverData.command!, ...(serverData.args || [])].map((arg) =>
-        /[\s"'\\$`!#&|;()<>]/.test(arg) ? `'${arg.replace(/'/g, "'\\''")}'` : arg
-      ).join(' ')
       // Inject TASK_API_URL for the built-in task-management server
       const extraEnv: Record<string, string> = {}
       if (serverData.name === 'task-management') {
@@ -2682,9 +2677,12 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
         if (apiPort) extraEnv.TASK_API_URL = `http://127.0.0.1:${apiPort}`
       }
 
-      const proc = spawn(shellCmd, [], {
+      // Spawn directly with args array (no shell quoting) to avoid Windows single-quote issues.
+      // Only use shell mode for commands that need it (npx, .cmd/.bat wrappers).
+      const needsShell = /^(npx|uvx|bunx)\b/.test(serverData.command!) || (process.platform === 'win32' && /\.(cmd|bat)$/i.test(serverData.command!))
+      const proc = spawn(serverData.command!, serverData.args || [], {
         stdio: ['pipe', 'pipe', 'pipe'],
-        shell: true,
+        ...(needsShell ? { shell: true } : {}),
         env: { ...process.env, npm_config_yes: 'true', ...(serverData.environment || {}), ...extraEnv }
       })
 

@@ -1,4 +1,5 @@
 import { spawn } from 'child_process'
+import { getTaskApiPort } from './task-api-server'
 
 /**
  * @typedef {{ success: boolean, result?: unknown, error?: string }} McpToolCallResult
@@ -86,17 +87,20 @@ export class McpToolCaller {
 
     // Spawn the MCP server directly (no shell) to avoid path-quoting issues on Windows.
     // Fall back to shell mode only for commands that look like they need a shell (e.g. npx, uvx).
-    const needsShell = /^(npx|uvx|bunx)\b/.test(server.command) || process.platform === 'win32' && /\.(cmd|bat)$/i.test(server.command)
-    const proc = needsShell
-      ? spawn(server.command, server.args || [], {
-          stdio: ['pipe', 'pipe', 'pipe'],
-          shell: true,
-          env: { ...process.env, npm_config_yes: 'true', ...server.environment }
-        })
-      : spawn(server.command, server.args || [], {
-          stdio: ['pipe', 'pipe', 'pipe'],
-          env: { ...process.env, npm_config_yes: 'true', ...server.environment }
-        })
+    const needsShell = /^(npx|uvx|bunx)\b/.test(server.command) || (process.platform === 'win32' && /\.(cmd|bat)$/i.test(server.command))
+    const proc = spawn(server.command, server.args || [], {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      ...(needsShell ? { shell: true } : {}),
+      env: {
+        ...process.env,
+        npm_config_yes: 'true',
+        ...server.environment,
+        // Inject TASK_API_URL for task-management MCP server
+        ...(server.name === 'task-management' && getTaskApiPort()
+          ? { TASK_API_URL: `http://127.0.0.1:${getTaskApiPort()}` }
+          : {})
+      }
+    })
 
     /** @type {LocalMcpSession} */
     const session = {
