@@ -684,3 +684,111 @@ describe('AgentManager shutdown', () => {
     expect(pendingStops).toBe(0)
   })
 })
+
+describe('AgentManager session ID re-keying redirect', () => {
+  function createManagerWithSession() {
+    const mockDb = {
+      getTask: vi.fn(() => ({ id: 'task-1', title: 'Test', agent_id: 'agent-1' })),
+      getAgent: vi.fn(() => ({ id: 'agent-1', name: 'Agent', config: {} })),
+      getWorkspaceDir: vi.fn(() => '/tmp/ws'),
+      updateTask: vi.fn(),
+      getMcpServer: vi.fn(() => null),
+      getSecretsByIds: vi.fn(() => []),
+      getSecretsWithValues: vi.fn(() => []),
+      getSetting: vi.fn(() => null),
+    } as unknown as ConstructorParameters<typeof AgentManager>[0]
+
+    const mgr = new AgentManager(mockDb)
+    vi.spyOn(mgr as any, 'sendToRenderer').mockImplementation(() => undefined)
+
+    // Create session with temp ID
+    const session = {
+      agentId: 'agent-1',
+      taskId: 'task-1',
+      status: 'working',
+      adapter: {
+        respondToQuestion: vi.fn(async () => undefined),
+        getStatus: vi.fn(async () => ({ type: 'working' })),
+        sendPrompt: vi.fn(async () => undefined),
+        abortPrompt: vi.fn(async () => undefined),
+      },
+      pollingStarted: true,
+      createdAt: new Date(),
+      seenMessageIds: new Set<string>(),
+      seenPartIds: new Set<string>(),
+      partContentLengths: new Map<string, string>(),
+    }
+    ;(mgr as any).sessions.set('temp-id', session)
+
+    return { mgr, session }
+  }
+
+  it('respondToPermission resolves re-keyed session via redirect map', async () => {
+    const { mgr, session } = createManagerWithSession()
+
+    // Simulate re-keying: move session from temp-id to real-id
+    ;(mgr as any).sessions.delete('temp-id')
+    ;(mgr as any).sessions.set('real-id', session)
+    ;(mgr as any).sessionIdRedirects.set('temp-id', 'real-id')
+
+    // This would throw "Session not found: temp-id" before the fix
+    await expect(mgr.respondToPermission('temp-id', true, 'Yes')).resolves.not.toThrow()
+  })
+
+  it('respondToPermission still throws for truly unknown session IDs', async () => {
+    const { mgr } = createManagerWithSession()
+
+    await expect(mgr.respondToPermission('unknown-id', true)).rejects.toThrow('Session not found: unknown-id')
+  })
+
+  it('abortSession resolves re-keyed session via redirect map', async () => {
+    const { mgr, session } = createManagerWithSession()
+
+    // Simulate re-keying
+    ;(mgr as any).sessions.delete('temp-id')
+    ;(mgr as any).sessions.set('real-id', session)
+    ;(mgr as any).sessionIdRedirects.set('temp-id', 'real-id')
+
+    vi.spyOn(mgr as any, 'stopAdapterPolling').mockImplementation(() => undefined)
+    vi.spyOn(mgr as any, 'getAdapter').mockReturnValue(session.adapter)
+    vi.spyOn(mgr as any, 'buildSessionConfig').mockResolvedValue({})
+
+    // Should not silently return — should actually abort the re-keyed session
+    await mgr.abortSession('temp-id')
+    expect(session.status).toBe('idle')
+  })
+
+  it('sendMessage resolves re-keyed session via redirect map', async () => {
+    const { mgr, session } = createManagerWithSession()
+
+    // Simulate re-keying
+    ;(mgr as any).sessions.delete('temp-id')
+    ;(mgr as any).sessions.set('real-id', session)
+    ;(mgr as any).sessionIdRedirects.set('temp-id', 'real-id')
+
+    const doSendSpy = vi.spyOn(mgr as any, 'doSendAdapterMessage').mockResolvedValue(undefined)
+
+    const result = await mgr.sendMessage('temp-id', 'hello')
+    expect(doSendSpy).toHaveBeenCalledOnce()
+    // Should not return a newSessionId since session was found via redirect
+    expect(result.newSessionId).toBeUndefined()
+  })
+
+  it('stopSession cleans up redirect entries pointing to destroyed session', async () => {
+    const { mgr, session } = createManagerWithSession()
+
+    // Set up redirect and session under real-id
+    ;(mgr as any).sessions.delete('temp-id')
+    ;(mgr as any).sessions.set('real-id', session)
+    ;(mgr as any).sessionIdRedirects.set('temp-id', 'real-id')
+
+    vi.spyOn(mgr as any, 'stopAdapterPolling').mockImplementation(() => undefined)
+    vi.spyOn(mgr as any, 'getAdapter').mockReturnValue(null)
+
+    await mgr.stopSession('real-id')
+
+    // Redirect should be cleaned up
+    expect((mgr as any).sessionIdRedirects.has('temp-id')).toBe(false)
+    expect((mgr as any).sessions.has('real-id')).toBe(false)
+  })
+})
