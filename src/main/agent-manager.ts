@@ -1612,7 +1612,16 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     const yieldEL = (): Promise<void> => new Promise((r) => setImmediate(r))
 
     const agent = this.db.getAgent(agentId)!
-    const workspaceDir = this.db.getWorkspaceDir(taskId)
+
+    // Use the same workspace resolution as startSession: try git worktree first,
+    // then fall back to the default workspace dir. This is critical because Claude
+    // Code stores session files under ~/.claude/projects/<encoded-workspaceDir>/,
+    // so resuming with a different workspaceDir produces a different path and the
+    // session file won't be found.
+    let workspaceDir = await this.setupWorktreeIfNeeded(taskId)
+    if (!workspaceDir) {
+      workspaceDir = this.db.getWorkspaceDir(taskId)
+    }
 
     // Build MCP servers config
     const isMastermind = taskId === 'mastermind-session'
