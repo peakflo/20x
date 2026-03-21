@@ -276,7 +276,7 @@ function TaskProgressMessage({ message }: { message: AgentMessage }) {
 
   return (
     <div className={`rounded-md bg-[#161b22] border overflow-hidden ${
-      isDone ? 'border-green-500/30' : isError ? 'border-red-500/30' : isStopped ? 'border-yellow-500/30' : 'border-blue-500/30'
+      isError ? 'border-red-500/30' : isStopped ? 'border-yellow-500/30' : isDone ? 'border-border/50' : 'border-blue-500/30'
     }`}>
       <button
         onClick={() => setExpanded(!expanded)}
@@ -295,7 +295,6 @@ function TaskProgressMessage({ message }: { message: AgentMessage }) {
             </span>
           )}
           {isRunning && <Loader2 className="h-3 w-3 text-blue-400 animate-spin" />}
-          {isDone && <CheckCircle2 className="h-3 w-3 text-green-400" />}
           {isError && <AlertTriangle className="h-3 w-3 text-red-400" />}
           {isStopped && <Circle className="h-3 w-3 text-yellow-400" />}
         </span>

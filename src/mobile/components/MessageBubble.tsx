@@ -164,11 +164,10 @@ function TaskProgressMessage({ message }: { message: AgentMessage }) {
   return (
     <div className={cn(
       'rounded-md bg-[#161b22] border overflow-hidden',
-      isDone && 'border-green-500/30',
       isError && 'border-red-500/30',
       isStopped && 'border-yellow-500/30',
       isRunning && 'border-blue-500/30',
-      !isDone && !isError && !isStopped && !isRunning && 'border-border/50'
+      !isError && !isStopped && !isRunning && 'border-border/50'
     )}>
       <button
         onClick={() => setExpanded(!expanded)}
@@ -191,11 +190,6 @@ function TaskProgressMessage({ message }: { message: AgentMessage }) {
           {isRunning && (
             <svg className="h-3 w-3 text-blue-400 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
-            </svg>
-          )}
-          {isDone && (
-            <svg className="h-3 w-3 text-green-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>
             </svg>
           )}
           {isError && (
