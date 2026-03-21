@@ -520,7 +520,7 @@ describe('ClaudeCodeAdapter task_progress handling', () => {
 
     const progressUpdate = toolParts.find((p: any) => p.update === true)
     expect(progressUpdate).toBeDefined()
-    expect(progressUpdate.tool.status).toBe('running')
-    expect(progressUpdate.tool.title).toContain('15s')
+    expect(progressUpdate!.tool!.status).toBe('running')
+    expect(progressUpdate!.tool!.title).toContain('15s')
   })
 })

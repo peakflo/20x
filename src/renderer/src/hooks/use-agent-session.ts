@@ -10,6 +10,8 @@ export interface AgentSessionState {
   status: SessionStatus
   messages: import('@/stores/agent-store').AgentMessage[]
   pendingApproval: AgentApprovalRequest | null
+  /** Transient system status indicator (e.g. 'compacting') — cleared on next non-status message */
+  systemStatus?: string | null
 }
 
 const EMPTY_SESSION: AgentSessionState = {
@@ -30,7 +32,8 @@ export function useAgentSession(taskId: string | undefined) {
         sessionId: session.sessionId,
         status: session.status,
         messages: session.messages,
-        pendingApproval: session.pendingApproval
+        pendingApproval: session.pendingApproval,
+        systemStatus: session.systemStatus
       }
     : EMPTY_SESSION
 
