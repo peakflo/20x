@@ -145,6 +145,98 @@ function deriveToolSubtitle(tool?: AgentMessage['tool']): string {
   return ''
 }
 
+function formatDuration(ms: number): string {
+  const seconds = Math.floor(ms / 1000)
+  if (seconds < 60) return `${seconds}s`
+  const minutes = Math.floor(seconds / 60)
+  const remainingSeconds = seconds % 60
+  return `${minutes}m ${remainingSeconds}s`
+}
+
+function TaskProgressMessage({ message }: { message: AgentMessage }) {
+  const [expanded, setExpanded] = useState(false)
+  const tp = message.taskProgress!
+  const isRunning = tp.status === 'started' || tp.status === 'running'
+  const isError = tp.status === 'failed'
+  const isDone = tp.status === 'completed'
+  const isStopped = tp.status === 'stopped'
+
+  return (
+    <div className={cn(
+      'rounded-md bg-[#161b22] border overflow-hidden',
+      isDone && 'border-green-500/30',
+      isError && 'border-red-500/30',
+      isStopped && 'border-yellow-500/30',
+      isRunning && 'border-blue-500/30',
+      !isDone && !isError && !isStopped && !isRunning && 'border-border/50'
+    )}>
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="w-full flex items-center gap-2 px-3 py-2 font-mono text-xs hover:bg-white/5 transition-colors"
+      >
+        {/* Terminal icon */}
+        <svg className="h-3 w-3 text-blue-400 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <polyline points="4 17 10 11 4 5" /><line x1="12" x2="20" y1="19" y2="19" />
+        </svg>
+        <span className="text-foreground font-medium truncate">{tp.description || 'Subagent task'}</span>
+        {tp.lastToolName && isRunning && (
+          <span className="text-muted-foreground text-[10px] truncate">· {tp.lastToolName}</span>
+        )}
+        <span className="ml-auto flex items-center gap-1.5 shrink-0">
+          {tp.usage && (
+            <span className="text-[10px] text-muted-foreground">
+              {tp.usage.tool_uses} tools · {formatDuration(tp.usage.duration_ms)}
+            </span>
+          )}
+          {isRunning && (
+            <svg className="h-3 w-3 text-blue-400 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
+            </svg>
+          )}
+          {isDone && (
+            <svg className="h-3 w-3 text-green-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>
+            </svg>
+          )}
+          {isError && (
+            <svg className="h-3 w-3 text-red-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/>
+            </svg>
+          )}
+          {isStopped && (
+            <svg className="h-3 w-3 text-yellow-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="10"/>
+            </svg>
+          )}
+        </span>
+        <span className={cn(
+          'text-muted-foreground transition-transform text-[10px]',
+          expanded && 'rotate-90'
+        )}>▶</span>
+      </button>
+      {expanded && (
+        <div className="border-t border-border/30 px-3 py-2 space-y-2">
+          {tp.summary && (
+            <div className="text-xs">
+              <Markdown size="sm">{tp.summary}</Markdown>
+            </div>
+          )}
+          {tp.usage && (
+            <div className="flex items-center gap-3 text-[10px] text-muted-foreground font-mono">
+              <span>{tp.usage.tool_uses} tool uses</span>
+              <span>{tp.usage.total_tokens.toLocaleString()} tokens</span>
+              <span>{formatDuration(tp.usage.duration_ms)}</span>
+            </div>
+          )}
+          {!tp.summary && !tp.usage && (
+            <div className="text-[11px] text-muted-foreground">No additional details available</div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function ToolCallMessage({ message }: { message: AgentMessage }) {
   const [expanded, setExpanded] = useState(false)
   const tool = message.tool!
@@ -205,6 +297,45 @@ function ToolCallMessage({ message }: { message: AgentMessage }) {
   )
 }
 
+function TaskNotificationMessage({ message }: { message: AgentMessage }) {
+  const tool = message.tool
+  const status = tool?.status || 'completed'
+  const summary = tool?.output || message.content || 'Task completed'
+  const isError = status === 'failed' || status === 'stopped'
+  const statusColor = status === 'completed' ? 'text-green-400' : status === 'failed' ? 'text-red-400' : 'text-yellow-400'
+  const borderColor = status === 'completed' ? 'border-green-500/30' : status === 'failed' ? 'border-red-500/30' : 'border-yellow-500/30'
+  const bgColor = status === 'completed' ? 'bg-green-500/5' : status === 'failed' ? 'bg-red-500/5' : 'bg-yellow-500/5'
+
+  return (
+    <div className={cn('rounded-md overflow-hidden border', bgColor, borderColor)}>
+      <div className="flex items-center gap-2 px-3 py-2">
+        {/* Status icon */}
+        {status === 'completed' ? (
+          <svg className={cn('h-4 w-4 shrink-0', statusColor)} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" /><polyline points="22 4 12 14.01 9 11.01" />
+          </svg>
+        ) : status === 'failed' ? (
+          <svg className={cn('h-4 w-4 shrink-0', statusColor)} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" /><path d="M12 9v4" /><path d="M12 17h.01" />
+          </svg>
+        ) : (
+          <svg className={cn('h-4 w-4 shrink-0', statusColor)} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="12" cy="12" r="10" /><rect width="4" height="6" x="10" y="9" rx="1" />
+          </svg>
+        )}
+        <span className={cn('text-xs font-medium', statusColor)}>
+          Subtask {status}
+        </span>
+      </div>
+      {summary && (
+        <div className={cn('px-3 pb-2', isError ? 'text-red-200' : 'text-gray-300')}>
+          <Markdown size="sm">{summary}</Markdown>
+        </div>
+      )}
+    </div>
+  )
+}
+
 interface MessageBubbleProps {
   message: AgentMessage
   onAnswer?: (answer: string) => void
@@ -232,8 +363,18 @@ export function MessageBubble({ message, onAnswer, canAnswerQuestion = false }: 
     return <ToolCallMessage message={message} />
   }
 
-  // Step markers — skip
-  if (message.partType === 'step-start' || message.partType === 'step-finish') return null
+  // Task progress — live subagent task tracking
+  if (message.partType === 'task_progress' && message.taskProgress) {
+    return <TaskProgressMessage message={message} />
+  }
+
+  // Task notification — subtask completion/failure/stopped
+  if (message.partType === 'task-notification') {
+    return <TaskNotificationMessage message={message} />
+  }
+
+  // Step markers and system status — skip (absorbed by store)
+  if (message.partType === 'step-start' || message.partType === 'step-finish' || message.partType === 'system-status') return null
 
   // Skip tool messages that have no content and no recognizable tool name
   if (message.partType === 'tool' && !message.content) return null

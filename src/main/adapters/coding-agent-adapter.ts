@@ -21,7 +21,8 @@ export enum MessagePartType {
   REASONING = 'reasoning',
   TOOL = 'tool',
   IMAGE = 'image',
-  ERROR = 'error'
+  ERROR = 'error',
+  TASK_PROGRESS = 'task_progress'
 }
 
 export interface McpServerConfig {
@@ -98,6 +99,14 @@ export interface MessagePart {
   }
   update?: boolean // Mark as update to existing message
   realSessionId?: string // Real session ID from backend (for updating database)
+  taskProgress?: {
+    taskId: string
+    status: 'started' | 'running' | 'completed' | 'failed' | 'stopped'
+    description: string
+    lastToolName?: string
+    summary?: string
+    usage?: { total_tokens: number; tool_uses: number; duration_ms: number }
+  }
 }
 
 export interface MessagePayload {

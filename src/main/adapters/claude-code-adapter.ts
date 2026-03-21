@@ -1049,7 +1049,7 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
       }
       tool_use_id?: string
       tool_name?: string
-      status?: string
+      status?: string | null
       output?: unknown
       subtype?: string
       text?: string
@@ -1059,6 +1059,18 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
         mode?: string
         durationMs?: number
       }
+      // SDKToolProgressMessage fields
+      elapsed_time_seconds?: number
+      parent_tool_use_id?: string | null
+      // SDKTaskNotificationMessage / SDKTaskProgressMessage / SDKTaskStartedMessage fields
+      task_id?: string
+      summary?: string
+      output_file?: string
+      description?: string
+      last_tool_name?: string
+      usage?: { total_tokens: number; tool_uses: number; duration_ms: number }
+      task_type?: string
+      prompt?: string
     }
 
     // Handle assistant_message type
@@ -1279,6 +1291,33 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
           tool: { name: toolName, status, output },
         })
       }
+    } else if (msgWithProps.type === 'tool_progress') {
+      // SDKToolProgressMessage — periodic progress updates for running tools.
+      // Update the existing tool part with elapsed time so the UI shows a timer.
+      const toolUseId = msgWithProps.tool_use_id
+      if (toolUseId) {
+        const partId = `tool-${toolUseId}`
+        const toolName = msgWithProps.tool_name || 'tool'
+        const elapsed = msgWithProps.elapsed_time_seconds ?? 0
+        const elapsedLabel = elapsed >= 60
+          ? `${Math.floor(elapsed / 60)}m ${Math.round(elapsed % 60)}s`
+          : `${Math.round(elapsed)}s`
+
+        if (seenPartIds.has(partId)) {
+          // Tool was already emitted — send an update with elapsed time
+          parts.push({
+            id: partId,
+            type: MessagePartType.TOOL,
+            tool: {
+              name: toolName,
+              status: 'running',
+              title: `Running… ${elapsedLabel}`,
+            },
+            update: true,
+          })
+        }
+        // If tool hasn't been seen yet, skip — progress before tool_use is meaningless
+      }
     } else if (msgWithProps.type === 'result') {
       // Surface error result messages (e.g., rate limit errors) to the UI
       const resultMsg = msg as Record<string, unknown>
@@ -1316,6 +1355,106 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
     } else if (msgWithProps.type === 'system') {
       // Skip system init messages - they're internal session setup
       if (msgWithProps.subtype === 'init') {
+        return parts
+      }
+
+      // SDKTaskStartedMessage — subagent task started
+      if (msgWithProps.subtype === 'task_started') {
+        const taskId = msgWithProps.task_id || msgWithProps.uuid || `task-${Date.now()}`
+        const partId = `task-${taskId}`
+        if (!seenPartIds.has(partId)) {
+          seenPartIds.add(partId)
+          partContentLengths.set(partId, `started:${taskId}`)
+          parts.push({
+            id: partId,
+            type: MessagePartType.TASK_PROGRESS,
+            content: msgWithProps.description || 'Subagent task started',
+            taskProgress: {
+              taskId,
+              status: 'started',
+              description: msgWithProps.description || '',
+            }
+          })
+        }
+        return parts
+      }
+
+      // SDKTaskProgressMessage — periodic progress updates for running subagent tasks
+      if (msgWithProps.subtype === 'task_progress') {
+        const taskId = msgWithProps.task_id || `task-${Date.now()}`
+        const partId = `task-${taskId}`
+        const usage = msgWithProps.usage
+        const alreadySeen = seenPartIds.has(partId)
+
+        if (!alreadySeen) {
+          // Missed task_started — create the entry
+          seenPartIds.add(partId)
+        }
+        partContentLengths.set(partId, `running:${taskId}`)
+        parts.push({
+          id: partId,
+          type: MessagePartType.TASK_PROGRESS,
+          content: msgWithProps.description || 'Subagent task in progress',
+          taskProgress: {
+            taskId,
+            status: 'running',
+            description: msgWithProps.description || '',
+            lastToolName: msgWithProps.last_tool_name,
+            summary: msgWithProps.summary,
+            usage,
+          },
+          update: alreadySeen,
+        })
+        return parts
+      }
+
+      // SDKTaskNotificationMessage — subtask completion notifications
+      if (msgWithProps.subtype === 'task_notification') {
+        const taskId = msgWithProps.task_id || `task-${Date.now()}`
+        const partId = `task-${taskId}`
+        const taskStatus = (msgWithProps.status || 'completed') as 'completed' | 'failed' | 'stopped'
+        const summary = msgWithProps.summary || `Task ${taskStatus}`
+        const usage = msgWithProps.usage
+        const alreadySeen = seenPartIds.has(partId)
+
+        if (!alreadySeen) {
+          seenPartIds.add(partId)
+        }
+        partContentLengths.set(partId, `${taskStatus}:${taskId}`)
+        parts.push({
+          id: partId,
+          type: MessagePartType.TASK_PROGRESS,
+          content: summary,
+          taskProgress: {
+            taskId,
+            status: taskStatus,
+            description: summary,
+            summary,
+            usage,
+          },
+          update: alreadySeen,
+        })
+        return parts
+      }
+
+      // SDKStatusMessage — transient status indicators (e.g. 'compacting')
+      if (msgWithProps.subtype === 'status') {
+        // null status means "cleared" — skip
+        if (!msgWithProps.status) return parts
+        const partId = `system-status-${msgWithProps.uuid || Date.now()}`
+        if (!seenPartIds.has(partId)) {
+          seenPartIds.add(partId)
+          const statusLabel = msgWithProps.status === 'compacting'
+            ? 'Compacting conversation history…'
+            : String(msgWithProps.status)
+          partContentLengths.set(partId, String(statusLabel.length))
+          parts.push({
+            id: partId,
+            type: 'system-status' as MessagePartType,
+            content: statusLabel,
+            role: 'system',
+          })
+        }
         return parts
       }
 

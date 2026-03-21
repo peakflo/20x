@@ -91,6 +91,8 @@ interface AgentTranscriptPanelProps {
   onRestart?: () => void
   onSend?: (message: string) => void
   className?: string
+  /** Transient system status (e.g. 'Compacting conversation history…') */
+  systemStatus?: string | null
 }
 
 function QuestionMessage({ message, onAnswer, canAnswer }: { message: AgentMessage; onAnswer?: (answer: string) => void; canAnswer: boolean }) {
@@ -256,6 +258,71 @@ function PlanReviewMessage({ message }: { message: AgentMessage }) {
   )
 }
 
+function formatDuration(ms: number): string {
+  const seconds = Math.floor(ms / 1000)
+  if (seconds < 60) return `${seconds}s`
+  const minutes = Math.floor(seconds / 60)
+  const remainingSeconds = seconds % 60
+  return `${minutes}m ${remainingSeconds}s`
+}
+
+function TaskProgressMessage({ message }: { message: AgentMessage }) {
+  const [expanded, setExpanded] = useState(false)
+  const tp = message.taskProgress!
+  const isRunning = tp.status === 'started' || tp.status === 'running'
+  const isError = tp.status === 'failed'
+  const isDone = tp.status === 'completed'
+  const isStopped = tp.status === 'stopped'
+
+  return (
+    <div className={`rounded-md bg-[#161b22] border overflow-hidden ${
+      isDone ? 'border-green-500/30' : isError ? 'border-red-500/30' : isStopped ? 'border-yellow-500/30' : 'border-blue-500/30'
+    }`}>
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="w-full flex items-center gap-2 px-3 py-2 text-xs font-mono hover:bg-white/5 transition-colors"
+      >
+        <ChevronRight className={`h-3 w-3 text-muted-foreground shrink-0 transition-transform ${expanded ? 'rotate-90' : ''}`} />
+        <Terminal className="h-3 w-3 text-blue-400 shrink-0" />
+        <span className="text-foreground truncate">{tp.description || 'Subagent task'}</span>
+        {tp.lastToolName && isRunning && (
+          <span className="text-muted-foreground text-[10px] truncate">· {tp.lastToolName}</span>
+        )}
+        <span className="ml-auto flex items-center gap-1.5 shrink-0">
+          {tp.usage && (
+            <span className="text-[10px] text-muted-foreground">
+              {tp.usage.tool_uses} tools · {formatDuration(tp.usage.duration_ms)}
+            </span>
+          )}
+          {isRunning && <Loader2 className="h-3 w-3 text-blue-400 animate-spin" />}
+          {isDone && <CheckCircle2 className="h-3 w-3 text-green-400" />}
+          {isError && <AlertTriangle className="h-3 w-3 text-red-400" />}
+          {isStopped && <Circle className="h-3 w-3 text-yellow-400" />}
+        </span>
+      </button>
+      {expanded && (
+        <div className="border-t border-border/30 px-3 py-2 space-y-2">
+          {tp.summary && (
+            <div className="text-xs">
+              <Markdown size="sm">{tp.summary}</Markdown>
+            </div>
+          )}
+          {tp.usage && (
+            <div className="flex items-center gap-3 text-[10px] text-muted-foreground font-mono">
+              <span>{tp.usage.tool_uses} tool uses</span>
+              <span>{tp.usage.total_tokens.toLocaleString()} tokens</span>
+              <span>{formatDuration(tp.usage.duration_ms)}</span>
+            </div>
+          )}
+          {!tp.summary && !tp.usage && (
+            <div className="text-[11px] text-muted-foreground">No additional details available</div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function ToolCallMessage({ message }: { message: AgentMessage }) {
   const [expanded, setExpanded] = useState(false)
   const tool = message.tool!
@@ -325,8 +392,13 @@ function MessageBubble({ message, onAnswer, viewMode, canAnswerQuestion = false 
     return <ToolCallMessage message={message} />
   }
 
+  if (message.partType === 'task_progress' && message.taskProgress) {
+    return <TaskProgressMessage message={message} />
+  }
+
   // Step markers are absorbed into message stepMeta — skip if any slip through
-  if (message.partType === 'step-start' || message.partType === 'step-finish') {
+  // System status messages are absorbed into session.systemStatus — skip if any slip through
+  if (message.partType === 'step-start' || message.partType === 'step-finish' || message.partType === 'system-status') {
     return null
   }
 
@@ -429,7 +501,7 @@ function TodoSummary({ todos }: { todos: NonNullable<AgentMessage['tool']>['todo
   )
 }
 
-export function AgentTranscriptPanel({ title = 'Agent transcript', messages, status, onStop, onRestart, onSend, className }: AgentTranscriptPanelProps) {
+export function AgentTranscriptPanel({ title = 'Agent transcript', messages, status, onStop, onRestart, onSend, className, systemStatus }: AgentTranscriptPanelProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const [viewMode, setViewMode] = useState<ViewMode>(ViewMode.MARKDOWN)
@@ -579,6 +651,14 @@ export function AgentTranscriptPanel({ title = 'Agent transcript', messages, sta
         <div className="flex items-center gap-2 px-4 py-2.5 bg-red-500/10 border-b border-red-500/20 shrink-0">
           <AlertTriangle className="h-3.5 w-3.5 text-red-400 shrink-0" />
           <span className="text-xs text-red-300 truncate">{lastErrorMessage.content}</span>
+        </div>
+      )}
+
+      {/* System status bar (e.g. 'Compacting conversation history…') */}
+      {systemStatus && (
+        <div className="flex items-center gap-2 px-4 py-1.5 bg-yellow-500/10 border-b border-yellow-500/20 shrink-0">
+          <Loader2 className="h-3 w-3 text-yellow-400 animate-spin shrink-0" />
+          <span className="text-xs text-yellow-300">{systemStatus}</span>
         </div>
       )}
 

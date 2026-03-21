@@ -620,6 +620,7 @@ Update existing skills that were helpful or create new ones for patterns worth r
             <AgentTranscriptPanel
               messages={session.messages}
               status={session.status}
+              systemStatus={session.systemStatus}
               onStop={handleAbort}
               onRestart={handleStartFreshSession}
               onSend={handleSend}
