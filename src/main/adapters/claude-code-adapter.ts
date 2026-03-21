@@ -314,7 +314,10 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
       // Check if session file exists
       if (!existsSync(sessionFile)) {
         console.warn(`[ClaudeCodeAdapter] Session file not found: ${sessionFile}`)
-        throw new Error('SESSION_FILE_NOT_FOUND: The Claude Code session file does not exist. This may happen if the session was deleted or never synced.')
+        // Don't throw - the session may still be valid on the server.
+        // The local .jsonl file is just a cache for UI history display.
+        // The actual resume happens via the SDK's `resume` option in sendPrompt.
+        return []
       }
 
       const content = readFileSync(sessionFile, 'utf-8')
@@ -421,12 +424,9 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
       console.log(`[ClaudeCodeAdapter] Loaded ${messages.length} messages from session history`)
       return messages
     } catch (error: unknown) {
-      // Re-throw session file not found errors
+      // For any errors loading history, warn and return empty array.
+      // The session can still be resumed via the SDK - history is just for UI display.
       const errMsg = error instanceof Error ? error.message : String(error)
-      if (errMsg.includes('SESSION_FILE_NOT_FOUND')) {
-        throw error
-      }
-      // For other errors, warn and return empty array
       console.warn(`[ClaudeCodeAdapter] Failed to load session history:`, errMsg)
       return []
     }
@@ -984,14 +984,11 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
       } else if (errMsg.includes('exited with code 1')) {
         // Claude Code process failed - could be rate limit, resume failure, or other error
         console.error('[ClaudeCodeAdapter] Claude Code process failed:', errMsg)
-        // Only treat as incompatible session if this was a resumed session AND we
-        // don't already have a specific error from the result message (e.g., rate limits).
-        // Note: session.config is always set, so only check session.isResumed here.
-        if (!session.lastError && session.isResumed) {
-          console.warn('[ClaudeCodeAdapter] Resume failed - session may not exist on Claude servers')
-          session.status = 'error'
-          session.lastError = 'INCOMPATIBLE_SESSION_ID: Failed to resume session. The session may have expired or does not exist on Claude Code servers.'
-        } else if (!session.lastError) {
+        // Don't assume incompatible session just because the process exited with code 1
+        // on a resumed session. The exit could be due to transient errors (rate limits,
+        // network issues, server errors). Only treat as incompatible if we got an explicit
+        // "No conversation found" or similar session-specific error from the result message.
+        if (!session.lastError) {
           session.status = 'error'
           session.lastError = errMsg
         }
