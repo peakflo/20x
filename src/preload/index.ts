@@ -293,6 +293,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeListener('github:deviceCode', handler)
   },
   app: {
+    getVersion: (): Promise<string> =>
+      ipcRenderer.invoke('app:getVersion'),
     getLoginItemSettings: (): Promise<{ openAtLogin: boolean; openAsHidden: boolean }> =>
       ipcRenderer.invoke('app:getLoginItemSettings'),
     setLoginItemSettings: (openAtLogin: boolean): Promise<{ openAtLogin: boolean; openAsHidden: boolean }> =>
@@ -332,6 +334,32 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('enterprise:refreshToken'),
     apiRequest: (method: string, path: string, body?: unknown): Promise<unknown> =>
       ipcRenderer.invoke('enterprise:apiRequest', method, path, body)
+  },
+  updater: {
+    check: (): Promise<{ success: boolean; version?: string; error?: string }> =>
+      ipcRenderer.invoke('updater:check'),
+    download: (): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke('updater:download'),
+    install: (): Promise<void> =>
+      ipcRenderer.invoke('updater:install'),
+    onStatus: (callback: (data: { status: string; version?: string; percent?: number; error?: string; releaseNotes?: string }) => void): (() => void) => {
+      const handler = (_: unknown, data: { status: string; version?: string; percent?: number; error?: string; releaseNotes?: string }): void => callback(data)
+      ipcRenderer.on('updater:status', handler)
+      return () => ipcRenderer.removeListener('updater:status', handler)
+    }
+  },
+  agentInstaller: {
+    detect: (): Promise<Record<string, { installed: boolean; version: string | null }>> =>
+      ipcRenderer.invoke('agent-installer:detect'),
+    install: (agentName: string): Promise<{ success: boolean; error: string | null; newStatus: Record<string, { installed: boolean; version: string | null }> }> =>
+      ipcRenderer.invoke('agent-installer:install', { agentName }),
+    getCommand: (agentName: string): Promise<string> =>
+      ipcRenderer.invoke('agent-installer:get-install-command', { agentName }),
+    onProgress: (callback: (data: { agentName: string; stage: string; output: string; percent: number }) => void): (() => void) => {
+      const handler = (_: unknown, data: { agentName: string; stage: string; output: string; percent: number }): void => callback(data)
+      ipcRenderer.on('agent-installer:progress', handler)
+      return () => ipcRenderer.removeListener('agent-installer:progress', handler)
+    }
   },
   webUtils: {
     getPathForFile: (file: File): string => webUtils.getPathForFile(file)

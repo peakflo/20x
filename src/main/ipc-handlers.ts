@@ -542,26 +542,43 @@ export function registerIpcHandlers(
     const { homedir } = await import('os')
     const { join: pathJoin, delimiter } = await import('path')
     const customPath = db.getSetting('OPENCODE_BINARY_PATH')
+    const isWin = process.platform === 'win32'
     const extraPaths = [
       ...(customPath ? [customPath] : []),
       pathJoin(homedir(), '.opencode', 'bin'),
-      '/usr/local/bin',
+      ...(isWin
+        ? [pathJoin(homedir(), 'AppData', 'Roaming', 'npm')]
+        : ['/usr/local/bin']),
       pathJoin(homedir(), '.local', 'bin')
     ].filter(p => !(process.env.PATH || '').includes(p))
     if (extraPaths.length > 0) {
       process.env.PATH = [...extraPaths, process.env.PATH || ''].join(delimiter)
     }
 
-    const loginShell = existsSync('/bin/zsh') ? '/bin/zsh' : '/bin/bash'
-    const check = (cmd: string) =>
-      execFileAsync(loginShell, ['-l', '-c', cmd])
+    let check: (cmd: string) => Promise<{ stdout: string; stderr: string }>
+    if (isWin) {
+      const whichCmd = (bin: string) => execFileAsync('where', [bin])
+      check = whichCmd
+    } else {
+      const loginShell = existsSync('/bin/zsh') ? '/bin/zsh' : '/bin/bash'
+      check = (cmd: string) => execFileAsync(loginShell, ['-l', '-c', cmd])
+    }
 
-    const [gh, opencodeBin, claudeCodeBin, codexBin] = await Promise.allSettled([
-      check('gh --version'),
-      check('which opencode'),
-      check('which claude'),
-      check('which codex')
-    ])
+    const [gh, opencodeBin, claudeCodeBin, codexBin] = await Promise.allSettled(
+      isWin
+        ? [
+            check('gh'),
+            check('opencode'),
+            check('claude.cmd'),
+            check('codex')
+          ]
+        : [
+            check('gh --version'),
+            check('which opencode'),
+            check('which claude'),
+            check('which codex')
+          ]
+    )
 
     const result = {
       gh: gh.status === 'fulfilled',
@@ -577,8 +594,11 @@ export function registerIpcHandlers(
   // Save custom OpenCode binary path
   ipcMain.handle('deps:setOpencodePath', async (_, dirPath: string) => {
     const { join: pathJoin, delimiter } = await import('path')
-    const binaryPath = pathJoin(dirPath, 'opencode')
-    if (!existsSync(binaryPath)) {
+    const binaryName = process.platform === 'win32' ? 'opencode.cmd' : 'opencode'
+    const binaryPath = pathJoin(dirPath, binaryName)
+    // Also check for .exe on Windows
+    const altPath = process.platform === 'win32' ? pathJoin(dirPath, 'opencode.exe') : null
+    if (!existsSync(binaryPath) && (!altPath || !existsSync(altPath))) {
       return { success: false, error: `opencode binary not found at ${binaryPath}` }
     }
     db.setSetting('OPENCODE_BINARY_PATH', dirPath)
@@ -674,6 +694,17 @@ export function registerIpcHandlers(
   ipcMain.handle('mcp:submitManualClientId', async (_, mcpServerId: string, clientId: string) => {
     if (!oauthManager) throw new Error('OAuth manager not initialized')
     return await oauthManager.completeManualRegistration(mcpServerId, clientId)
+  })
+
+  // App version
+  ipcMain.handle('app:getVersion', () => {
+    return app.getVersion()
+  })
+
+  // Crash log path
+  ipcMain.handle('app:getCrashLogPath', async () => {
+    const { getCrashLogPath } = await import('./crash-logger')
+    return getCrashLogPath()
   })
 
   // App preferences handlers
@@ -1004,5 +1035,24 @@ export function registerIpcHandlers(
     if (!heartbeatScheduler) throw new Error('HeartbeatScheduler not initialized')
     heartbeatScheduler.writeHeartbeatFile(taskId, content)
     return true
+  })
+
+  // ── Agent Installer IPC handlers ──────────────────────────
+
+  ipcMain.handle('agent-installer:detect', async () => {
+    const { detectInstalledAgents } = await import('./agent-installer/detect.js')
+    return detectInstalledAgents()
+  })
+
+  ipcMain.handle('agent-installer:install', async (event, { agentName }: { agentName: string }) => {
+    const { installAgent } = await import('./agent-installer/install.js')
+    return installAgent(agentName, (progress: { stage: string; output: string; percent: number }) => {
+      event.sender.send('agent-installer:progress', { agentName, ...progress })
+    })
+  })
+
+  ipcMain.handle('agent-installer:get-install-command', async (_, { agentName }: { agentName: string }) => {
+    const { getInstallCommand } = await import('./agent-installer/install.js')
+    return getInstallCommand(agentName)
   })
 }

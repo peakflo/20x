@@ -257,13 +257,16 @@ export class AcpAdapter implements CodingAgentAdapter {
     }
 
     // Spawn ACP agent process
+    // On Windows, .cmd/.bat wrappers need shell:true to resolve
+    const needsShell = process.platform === 'win32' && /\.(cmd|bat)$/i.test(this.agentConfig.command)
     const acpProcess = spawn(
       this.agentConfig.command,
       this.agentConfig.args,
       {
         cwd: config.workspaceDir,
         env,
-        stdio: ['pipe', 'pipe', 'pipe']
+        stdio: ['pipe', 'pipe', 'pipe'],
+        ...(needsShell ? { shell: true } : {})
       }
     )
 
@@ -426,13 +429,16 @@ export class AcpAdapter implements CodingAgentAdapter {
     }
 
     // Spawn ACP agent process
+    // On Windows, .cmd/.bat wrappers need shell:true to resolve
+    const needsShell = process.platform === 'win32' && /\.(cmd|bat)$/i.test(this.agentConfig.command)
     const acpProcess = spawn(
       this.agentConfig.command,
       this.agentConfig.args,
       {
         cwd: config.workspaceDir,
         env,
-        stdio: ['pipe', 'pipe', 'pipe']
+        stdio: ['pipe', 'pipe', 'pipe'],
+        ...(needsShell ? { shell: true } : {})
       }
     )
 

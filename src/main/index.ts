@@ -8,7 +8,7 @@ import { DatabaseManager } from './database'
 import { AgentManager } from './agent-manager'
 import { GitHubManager } from './github-manager'
 import { WorktreeManager } from './worktree-manager'
-import { McpToolCaller } from './mcp-tool-caller'
+import { McpToolCaller } from './mcp-tool-caller.js'
 import { SyncManager } from './sync-manager'
 import { OAuthManager } from './oauth/oauth-manager'
 import { PluginRegistry } from './plugins/registry'
@@ -27,6 +27,8 @@ import { EnterpriseStateSync } from './enterprise-state-sync'
 import { setTaskApiNotifier, setTranscriptProvider, stopTaskApiServer } from './task-api-server'
 import { startSecretBroker, stopSecretBroker, writeSecretShellWrapper } from './secret-broker'
 import { startMobileApiServer, stopMobileApiServer, broadcastToMobileClients, setMobileApiNotifier } from './mobile-api-server'
+import { initAutoUpdater } from './auto-updater'
+import { initCrashLogger, getCrashLogPath } from './crash-logger'
 
 let mainWindow: BrowserWindow | null = null
 let tray: Tray | null = null
@@ -62,10 +64,14 @@ async function shutdownAppServices(): Promise<void> {
 
   // Kill orphaned task-management-mcp processes (spawned by opencode, not cleaned up on exit)
   try {
-    execSync('pkill -f "task-management-mcp\\.js"', { stdio: 'ignore' })
+    if (process.platform === 'win32') {
+      execSync('taskkill /F /FI "IMAGENAME eq node.exe" /FI "WINDOWTITLE eq task-management-mcp*"', { stdio: 'ignore' })
+    } else {
+      execSync('pkill -f "task-management-mcp\\.js"', { stdio: 'ignore' })
+    }
     console.log('[Shutdown] Killed orphaned task-management-mcp processes')
   } catch {
-    // pkill exits 1 if no processes matched — that's fine
+    // pkill/taskkill exits non-zero if no processes matched — that's fine
   }
 
   db?.close()
@@ -77,14 +83,20 @@ async function shutdownAppServices(): Promise<void> {
 }
 
 function createWindow(): void {
+  const isMac = process.platform === 'darwin'
   mainWindow = new BrowserWindow({
     width: 1400,
     height: 900,
     minWidth: 900,
     minHeight: 600,
     backgroundColor: '#0f172a',
-    titleBarStyle: 'hiddenInset',
-    trafficLightPosition: { x: 16, y: 16 },
+    ...(isMac
+      ? { titleBarStyle: 'hiddenInset' as const, trafficLightPosition: { x: 16, y: 16 } }
+      : {
+          titleBarStyle: 'hidden' as const,
+          titleBarOverlay: { color: '#0f172a', symbolColor: '#94a3b8', height: 36 },
+          icon: is.dev ? join(__dirname, '../../resources/icon.ico') : join(process.resourcesPath, 'icon.ico')
+        }),
     show: false,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
@@ -96,6 +108,11 @@ function createWindow(): void {
 
   mainWindow.on('ready-to-show', () => {
     mainWindow?.show()
+
+    // Initialize auto-updater (only in production)
+    if (!is.dev && mainWindow) {
+      initAutoUpdater(mainWindow)
+    }
 
     // Start recurrence scheduler
     if (recurrenceScheduler && mainWindow) {
@@ -111,6 +128,26 @@ function createWindow(): void {
     setInterval(() => {
       mainWindow?.webContents.send('overdue:check')
     }, 60_000)
+  })
+
+  // Auto-reload on renderer crash (blank screen recovery)
+  mainWindow.webContents.on('render-process-gone', (_event, details) => {
+    console.error(`[Main] Renderer crashed: reason=${details.reason}, exitCode=${details.exitCode}`)
+    if (details.reason !== 'clean-exit') {
+      console.log('[Main] Attempting to reload renderer...')
+      setTimeout(() => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.reload()
+        }
+      }, 1000)
+    }
+  })
+
+  // Log renderer console errors
+  mainWindow.webContents.on('console-message', (_event, level, message) => {
+    if (level >= 2) { // 2 = warning, 3 = error
+      console.error(`[Renderer ${level === 3 ? 'ERROR' : 'WARN'}] ${message}`)
+    }
   })
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
@@ -263,8 +300,23 @@ app.on('open-url', (event, url) => {
   }
 })
 
-// Fix PATH for macOS GUI apps (async to avoid blocking startup)
-function fixMacOSPath(): Promise<void> {
+// Fix PATH for GUI apps (async to avoid blocking startup)
+function fixPlatformPath(): Promise<void> {
+  if (process.platform === 'win32') {
+    // On Windows, ensure common Node/npm/git paths are available
+    const home = process.env.USERPROFILE || process.env.HOME || ''
+    const winPaths = [
+      join(home, 'AppData', 'Roaming', 'npm'),
+      'C:\\Program Files\\nodejs',
+      'C:\\Program Files\\Git\\cmd'
+    ]
+    const existingPath = process.env.PATH || ''
+    const missing = winPaths.filter(p => !existingPath.includes(p))
+    if (missing.length > 0) {
+      process.env.PATH = [...missing, existingPath].join(';')
+    }
+    return Promise.resolve()
+  }
   if (process.platform !== 'darwin') return Promise.resolve()
   return new Promise((resolve) => {
     const userShell = process.env.SHELL || '/bin/zsh'
@@ -297,6 +349,13 @@ protocol.registerSchemesAsPrivileged([
   }
 ])
 
+// Initialize crash logger as early as possible
+initCrashLogger()
+
+// Ignore EPIPE errors from broken stdout/stderr pipes (e.g. when piped through head/tail)
+process.stdout?.on?.('error', (err: NodeJS.ErrnoException) => { if (err.code !== 'EPIPE') throw err })
+process.stderr?.on?.('error', (err: NodeJS.ErrnoException) => { if (err.code !== 'EPIPE') throw err })
+
 app.whenReady().then(async () => {
   // Register protocol handler: app-attachment://taskId/attachmentId
   // Serves local attachment files from the attachments directory.
@@ -325,7 +384,7 @@ app.whenReady().then(async () => {
   })
 
   // Start PATH fix and DB init in parallel — both are independent
-  const pathFixPromise = fixMacOSPath()
+  const pathFixPromise = fixPlatformPath()
 
   db = new DatabaseManager()
   db.initialize()

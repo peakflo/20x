@@ -283,6 +283,7 @@ interface ElectronAPI {
     writeFile: (taskId: string, content: string) => Promise<boolean>
   }
   app: {
+    getVersion: () => Promise<string>
     getLoginItemSettings: () => Promise<{ openAtLogin: boolean; openAsHidden: boolean }>
     setLoginItemSettings: (openAtLogin: boolean) => Promise<{ openAtLogin: boolean; openAsHidden: boolean }>
     getNotificationPermission: () => Promise<'granted' | 'denied'>
@@ -312,6 +313,18 @@ interface ElectronAPI {
     }>
     refreshToken: () => Promise<{ token: string }>
     apiRequest: (method: string, path: string, body?: unknown) => Promise<unknown>
+  }
+  updater: {
+    check: () => Promise<{ success: boolean; version?: string; error?: string }>
+    download: () => Promise<{ success: boolean; error?: string }>
+    install: () => Promise<void>
+    onStatus: (callback: (data: { status: string; version?: string; percent?: number; error?: string; releaseNotes?: string }) => void) => () => void
+  }
+  agentInstaller: {
+    detect: () => Promise<Record<string, { installed: boolean; version: string | null }>>
+    install: (agentName: string) => Promise<{ success: boolean; error: string | null; newStatus: Record<string, { installed: boolean; version: string | null }> }>
+    getCommand: (agentName: string) => Promise<string>
+    onProgress: (callback: (data: { agentName: string; stage: string; output: string; percent: number }) => void) => () => void
   }
   webUtils: {
     getPathForFile: (file: File) => string

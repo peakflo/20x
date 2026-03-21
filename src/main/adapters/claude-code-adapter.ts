@@ -75,18 +75,27 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
       const execFileAsync = promisify(execFile)
 
       // Try to find claude in PATH
-      const { stdout } = await execFileAsync('which', ['claude'])
-      this.claudeExecutablePath = stdout.trim()
+      const isWin = process.platform === 'win32'
+      const whichCmd = isWin ? 'where' : 'which'
+      const binaryName = isWin ? 'claude.cmd' : 'claude'
+      const { stdout } = await execFileAsync(whichCmd, [binaryName])
+      this.claudeExecutablePath = stdout.trim().split(/\r?\n/)[0]
       console.log(`[ClaudeCodeAdapter] Found claude executable at: ${this.claudeExecutablePath}`)
       return this.claudeExecutablePath
     } catch {
       // Common installation locations
-      const commonPaths = [
-        '/usr/local/bin/claude',
-        '/opt/homebrew/bin/claude',
-        `${process.env.HOME}/.local/bin/claude`,
-        `${process.env.HOME}/.npm-global/bin/claude`
-      ]
+      const home = process.env.HOME || process.env.USERPROFILE || ''
+      const commonPaths = process.platform === 'win32'
+        ? [
+            `${home}\\AppData\\Roaming\\npm\\claude.cmd`,
+            `${home}\\.local\\bin\\claude.cmd`
+          ]
+        : [
+            '/usr/local/bin/claude',
+            '/opt/homebrew/bin/claude',
+            `${home}/.local/bin/claude`,
+            `${home}/.npm-global/bin/claude`
+          ]
 
       const { existsSync } = await import('fs')
       for (const path of commonPaths) {

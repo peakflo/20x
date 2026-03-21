@@ -16,12 +16,15 @@ export default defineConfig({
         '@opencode-ai/sdk'
       ]
     })],
+    resolve: {
+      extensions: ['.js', '.ts', '.jsx', '.tsx', '.json']
+    },
     build: {
       rollupOptions: {
         external: ['better-sqlite3'],
         input: {
           index: resolve(__dirname, 'src/main/index.ts'),
-          'mcp-servers/task-management-mcp': resolve(__dirname, 'src/main/mcp-servers/task-management-mcp.ts')
+          'mcp-servers/task-management-mcp': resolve(__dirname, 'src/main/mcp-servers/task-management-mcp.js')
         },
         output: {
           entryFileNames: '[name].js'

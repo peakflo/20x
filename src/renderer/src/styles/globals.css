@@ -94,6 +94,13 @@ select {
   background-repeat: no-repeat;
   background-position: right 8px center;
   padding-right: 26px !important;
+  background-color: var(--color-card);
+  color: var(--color-foreground);
+}
+
+select option {
+  background-color: var(--color-card);
+  color: var(--color-foreground);
 }
 
 input[type="date"]::-webkit-calendar-picker-indicator {

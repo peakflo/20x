@@ -7,6 +7,7 @@ import { TaskForm, type TaskFormSubmitData } from '@/components/tasks/TaskForm'
 import { DeleteConfirmDialog } from '@/components/tasks/DeleteConfirmDialog'
 import { Dialog, DialogContent, DialogHeader, DialogBody, DialogTitle } from '@/components/ui/Dialog'
 import { OrchestratorPanel } from '@/components/orchestrator/OrchestratorPanel'
+import { AgentSetupDialog } from '@/components/AgentSetupWizard'
 import { useTasks } from '@/hooks/use-tasks'
 import { useUIStore } from '@/stores/ui-store'
 import { useAgentStore } from '@/stores/agent-store'
@@ -57,6 +58,28 @@ export function AppLayout() {
   }, [])
 
   const [showOrchestrator, setShowOrchestrator] = useState(false)
+  const [setupDialogOpen, setSetupDialogOpen] = useState(false)
+
+  // Auto-open agent setup on every new install/update
+  useEffect(() => {
+    Promise.all([
+      settingsApi.get('setup_completed_version'),
+      window.electronAPI?.app?.getVersion()
+    ]).then(([completedVersion, currentVersion]) => {
+      if (currentVersion && completedVersion !== currentVersion) {
+        setSetupDialogOpen(true)
+      }
+    })
+  }, [])
+
+  const handleSetupDialogChange = (open: boolean) => {
+    setSetupDialogOpen(open)
+    if (!open) {
+      window.electronAPI?.app?.getVersion().then((v) => {
+        if (v) settingsApi.set('setup_completed_version', v)
+      })
+    }
+  }
 
   // Initialize auto-start feature
   useAgentAutoStart({
@@ -252,6 +275,9 @@ export function AppLayout() {
         }}
         onCancel={closeModal}
       />
+
+      {/* Agent Setup Dialog — auto-opens on first launch */}
+      <AgentSetupDialog open={setupDialogOpen} onOpenChange={handleSetupDialogChange} />
 
       {/* Toast */}
       {toast && (

@@ -223,6 +223,21 @@ export const settingsApi = {
   }
 }
 
+export const updaterApi = {
+  check: (): Promise<{ success: boolean; version?: string; error?: string }> => {
+    return window.electronAPI?.updater?.check() ?? Promise.resolve({ success: false, error: 'Not available' })
+  },
+  download: (): Promise<{ success: boolean; error?: string }> => {
+    return window.electronAPI?.updater?.download() ?? Promise.resolve({ success: false, error: 'Not available' })
+  },
+  install: (): Promise<void> => {
+    return window.electronAPI?.updater?.install() ?? Promise.resolve()
+  },
+  onStatus: (callback: (data: { status: string; version?: string; percent?: number; error?: string }) => void): (() => void) => {
+    return window.electronAPI?.updater?.onStatus(callback) ?? (() => {})
+  }
+}
+
 export const mobileApi = {
   getInfo: (): Promise<{ url: string; port: number }> => {
     return window.electronAPI?.mobile?.getInfo() ?? Promise.resolve({ url: '', port: 0 })

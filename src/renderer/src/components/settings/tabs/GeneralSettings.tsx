@@ -1,15 +1,35 @@
 import { useState, useEffect } from 'react'
+import { Wrench, RefreshCw, Download, Check, Loader2 } from 'lucide-react'
 import { SettingsSection } from '../SettingsSection'
 import { Label } from '@/components/ui/Label'
 import { Switch } from '@/components/ui/Switch'
-import { settingsApi, mobileApi } from '@/lib/ipc-client'
+import { Button } from '@/components/ui/Button'
+import { AgentSetupDialog } from '@/components/AgentSetupWizard'
+import { settingsApi, mobileApi, updaterApi } from '@/lib/ipc-client'
 
 export function GeneralSettings() {
+  const [setupDialogOpen, setSetupDialogOpen] = useState(false)
   const [launchAtStartup, setLaunchAtStartup] = useState(false)
   const [notificationsEnabled, setNotificationsEnabled] = useState(false)
   const [minimizeToTray, setMinimizeToTray] = useState(false)
   const [mobileUrl, setMobileUrl] = useState('')
   const [loading, setLoading] = useState(true)
+
+  // Updater state
+  const [updateStatus, setUpdateStatus] = useState<string>('idle')
+  const [updateVersion, setUpdateVersion] = useState<string | null>(null)
+  const [updatePercent, setUpdatePercent] = useState(0)
+  const [updateError, setUpdateError] = useState<string | null>(null)
+
+  useEffect(() => {
+    const cleanup = updaterApi.onStatus((data) => {
+      setUpdateStatus(data.status)
+      if (data.version) setUpdateVersion(data.version)
+      if (data.percent !== undefined) setUpdatePercent(data.percent)
+      if (data.error) setUpdateError(data.error)
+    })
+    return cleanup
+  }, [])
 
   // Heartbeat settings
   const [heartbeatEnabled, setHeartbeatEnabled] = useState(true)
@@ -298,6 +318,81 @@ export function GeneralSettings() {
           />
         </div>
       </div>
+    </SettingsSection>
+
+    <SettingsSection
+      title="Updates"
+      description="Check for new versions and install updates"
+    >
+      <div className="flex items-center gap-3">
+        {updateStatus === 'idle' || updateStatus === 'up-to-date' || updateStatus === 'error' ? (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={async () => {
+              setUpdateError(null)
+              setUpdateStatus('checking')
+              await updaterApi.check()
+            }}
+          >
+            <RefreshCw className="size-3.5 mr-1.5" />
+            Check for Updates
+          </Button>
+        ) : updateStatus === 'checking' ? (
+          <Button variant="outline" size="sm" disabled>
+            <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+            Checking...
+          </Button>
+        ) : updateStatus === 'available' ? (
+          <Button
+            size="sm"
+            onClick={async () => {
+              await updaterApi.download()
+            }}
+          >
+            <Download className="size-3.5 mr-1.5" />
+            Download v{updateVersion}
+          </Button>
+        ) : updateStatus === 'downloading' ? (
+          <Button variant="outline" size="sm" disabled>
+            <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+            Downloading... {updatePercent}%
+          </Button>
+        ) : updateStatus === 'downloaded' ? (
+          <Button
+            size="sm"
+            onClick={() => updaterApi.install()}
+          >
+            <Check className="size-3.5 mr-1.5" />
+            Install & Restart (v{updateVersion})
+          </Button>
+        ) : null}
+
+        {updateStatus === 'up-to-date' && (
+          <span className="text-xs text-emerald-400 flex items-center gap-1.5">
+            <Check className="size-3.5" />
+            You&apos;re on the latest version
+          </span>
+        )}
+
+        {updateError && (
+          <span className="text-xs text-red-400">{updateError}</span>
+        )}
+      </div>
+    </SettingsSection>
+
+    <SettingsSection
+      title="Agent & Tool Setup"
+      description="Detect installed CLI tools and install missing ones"
+    >
+      <Button
+        variant="outline"
+        onClick={() => setSetupDialogOpen(true)}
+      >
+        <Wrench className="size-4 mr-1.5" />
+        Open Setup Wizard
+      </Button>
+      <AgentSetupDialog open={setupDialogOpen} onOpenChange={setSetupDialogOpen} />
     </SettingsSection>
     </>
   )

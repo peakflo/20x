@@ -1,4 +1,5 @@
 import { Agent as UndiciAgent } from 'undici'
+import { spawn } from 'child_process'
 import { mkdirSync, writeFileSync, rmSync, existsSync } from 'fs'
 import { join } from 'path'
 import type {
@@ -91,6 +92,61 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     }
   }
 
+  private spawnOpencodeServer(hostname: string, port: number, config: Record<string, unknown>): Promise<{ close: () => void }> {
+    const isWin = process.platform === 'win32'
+    const args = ['serve', `--hostname=${hostname}`, `--port=${port}`]
+    const cmd = isWin ? 'opencode.cmd' : 'opencode'
+    const timeout = 10000
+
+    console.log(`[OpencodeAdapter] Spawning: ${cmd} ${args.join(' ')} (shell=${isWin})`)
+
+    const proc = spawn(cmd, args, {
+      shell: isWin,
+      windowsHide: true,
+      env: {
+        ...process.env,
+        OPENCODE_CONFIG_CONTENT: JSON.stringify(config)
+      }
+    })
+
+    return new Promise((resolve, reject) => {
+      const id = setTimeout(() => {
+        reject(new Error(`Timeout waiting for opencode server after ${timeout}ms`))
+      }, timeout)
+
+      let output = ''
+
+      proc.stdout?.on('data', (chunk: Buffer) => {
+        output += chunk.toString()
+        const lines = output.split('\n')
+        for (const line of lines) {
+          if (line.startsWith('opencode server listening')) {
+            clearTimeout(id)
+            console.log(`[OpencodeAdapter] Server started: ${line.trim()}`)
+            resolve({ close: () => proc.kill() })
+            return
+          }
+        }
+      })
+
+      proc.stderr?.on('data', (chunk: Buffer) => {
+        output += chunk.toString()
+      })
+
+      proc.on('exit', (code) => {
+        clearTimeout(id)
+        let msg = `opencode server exited with code ${code}`
+        if (output.trim()) msg += `\nOutput: ${output.slice(0, 500)}`
+        reject(new Error(msg))
+      })
+
+      proc.on('error', (error) => {
+        clearTimeout(id)
+        reject(error)
+      })
+    })
+  }
+
   private async findAccessibleServer(url: string): Promise<string | null> {
     const urls = [url]
 
@@ -156,11 +212,12 @@ export class OpencodeAdapter implements CodingAgentAdapter {
           console.log(`[OpencodeAdapter] Passing plugin to server config: ${this.pluginFilePath}`)
         }
 
-        const result = await OpenCodeSDK!.createOpencode({ hostname, port, config: serverConfig })
-        this.serverInstance = result.server
+        // Spawn opencode server with platform-aware settings.
+        // The SDK's createOpencode uses spawn('opencode', ...) without shell: true,
+        // which fails on Windows because opencode is a .cmd wrapper.
+        const serverResult = await this.spawnOpencodeServer(hostname, port, serverConfig)
+        this.serverInstance = serverResult
         this.serverUrl = targetUrl
-
-        await new Promise(resolve => setTimeout(resolve, 1000))
       } finally {
         this.serverStarting = null
       }

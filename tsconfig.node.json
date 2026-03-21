@@ -12,9 +12,15 @@
     "types": ["electron-vite/node"],
     "moduleResolution": "bundler",
     "allowSyntheticDefaultImports": true,
+    "allowJs": true,
     "baseUrl": ".",
     "paths": {
       "@shared/*": ["src/shared/*"]
     }
-  }
+  },
+  "exclude": [
+    "node_modules",
+    "dist",
+    "out"
+  ]
 }
