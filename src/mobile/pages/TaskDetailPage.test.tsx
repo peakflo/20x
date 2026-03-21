@@ -116,6 +116,81 @@ describe('TaskDetailPage', () => {
     expect(container.textContent).toContain('Task not found')
   })
 
+  it('renders subtasks sorted by sort_order then created_at', () => {
+    const parentTask = makeTask({ id: 'parent-1', title: 'Parent task' })
+    const subtaskC = makeTask({
+      id: 'sub-c',
+      title: 'Subtask C',
+      parent_task_id: 'parent-1',
+      sort_order: 2,
+      created_at: '2026-01-01T00:00:00.000Z'
+    })
+    const subtaskA = makeTask({
+      id: 'sub-a',
+      title: 'Subtask A',
+      parent_task_id: 'parent-1',
+      sort_order: 0,
+      created_at: '2026-01-03T00:00:00.000Z'
+    })
+    const subtaskB = makeTask({
+      id: 'sub-b',
+      title: 'Subtask B',
+      parent_task_id: 'parent-1',
+      sort_order: 1,
+      created_at: '2026-01-02T00:00:00.000Z'
+    })
+
+    // Store order deliberately differs from sort_order
+    useTaskStore.setState({
+      tasks: [parentTask, subtaskC, subtaskA, subtaskB],
+      isLoading: false
+    })
+
+    const { container } = render(
+      <TaskDetailPage taskId="parent-1" onNavigate={mockNavigate} />
+    )
+
+    // Find all subtask buttons (inside the subtasks section's divide-y container)
+    const subtaskButtons = container.querySelectorAll('[class*="active:bg-accent"]')
+    const titles = Array.from(subtaskButtons).map(el => el.querySelector('[class*="truncate"]')?.textContent)
+
+    // Should be sorted by sort_order: A(0), B(1), C(2)
+    expect(titles).toEqual(['Subtask A', 'Subtask B', 'Subtask C'])
+  })
+
+  it('sorts subtasks by created_at when sort_order is equal', () => {
+    const parentTask = makeTask({ id: 'parent-1', title: 'Parent task' })
+    const subtaskLater = makeTask({
+      id: 'sub-later',
+      title: 'Later Subtask',
+      parent_task_id: 'parent-1',
+      sort_order: 0,
+      created_at: '2026-01-05T00:00:00.000Z'
+    })
+    const subtaskEarlier = makeTask({
+      id: 'sub-earlier',
+      title: 'Earlier Subtask',
+      parent_task_id: 'parent-1',
+      sort_order: 0,
+      created_at: '2026-01-01T00:00:00.000Z'
+    })
+
+    useTaskStore.setState({
+      tasks: [parentTask, subtaskLater, subtaskEarlier],
+      isLoading: false
+    })
+
+    const { container } = render(
+      <TaskDetailPage taskId="parent-1" onNavigate={mockNavigate} />
+    )
+
+    const subtaskButtons = container.querySelectorAll('[class*="active:bg-accent"]')
+    const titles = Array.from(subtaskButtons).map(el => el.querySelector('[class*="truncate"]')?.textContent)
+
+    // Same sort_order → older first
+    expect(titles).toEqual(['Earlier Subtask', 'Later Subtask'])
+  })
+
   it('does not crash when task store updates with new object references', () => {
     // Simulates what happens when fetchTasks polling replaces task objects
     const task = makeTask({ id: 'task-1', title: 'Test task' })
