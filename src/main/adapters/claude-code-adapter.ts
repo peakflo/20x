@@ -1073,6 +1073,17 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
       prompt?: string
     }
 
+    // ── Skip messages from inside a subtask ──
+    // Messages originating from a subagent task have a non-null parent_tool_use_id.
+    // These would otherwise leak as top-level user messages / tool calls in the
+    // transcript.  The task_started / task_progress / task_notification events
+    // already provide the high-level summary, so we suppress the inner messages.
+    // Exception: system messages (task_started, task_progress, task_notification,
+    // status) do NOT carry parent_tool_use_id and must always be processed.
+    if (msgWithProps.parent_tool_use_id) {
+      return parts
+    }
+
     // Handle assistant_message type
     if (msgWithProps.type === 'assistant' || msgWithProps.type === 'assistant_message') {
       // Content is nested inside message.content for Claude Code SDK format
