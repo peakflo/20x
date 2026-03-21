@@ -299,7 +299,7 @@ const subtaskTools = [
         resolution: { type: 'string', description: 'Set resolution/output summary (read by sibling subtasks for coordination)' },
         attachments: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, path: { type: 'string' }, type: { type: 'string' } } }, description: 'Set attachments (e.g. files, screenshots)' },
         labels: { type: 'array', items: { type: 'string' }, description: 'Set labels' },
-        status: { type: 'string', enum: ['not_started', 'in_progress', 'ready_for_review'], description: 'Subtasks cannot self-complete; set ready_for_review when done so the parent task owner can verify.' }
+        status: { type: 'string', enum: ['not_started', 'triaging', 'in_progress', 'completed', 'cancelled'], description: 'Subtask status. Note: subtasks cannot self-complete or self-cancel; set ready_for_review when done so the parent task owner can verify.' }
       }
     }
   },
