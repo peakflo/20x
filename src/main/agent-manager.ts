@@ -1701,7 +1701,10 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
           console.log(`[AgentManager] Session ended normally for ${currentTask.status} task ${taskId} — clearing session_id`)
           this.db.updateTask(taskId, { session_id: null })
           this.sendToRenderer('task:updated', { taskId, updates: { session_id: null } })
-          throw new Error('SESSION_ENDED')
+          // Return a sentinel value instead of throwing, so the IPC handler doesn't
+          // log a noisy error. The public resumeSession() method returns empty string
+          // which signals to the renderer that the session is gone.
+          return ''
         }
 
         // Clear the old session_id in the database

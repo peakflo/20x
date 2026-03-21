@@ -302,6 +302,11 @@ export function registerIpcHandlers(
 
   ipcMain.handle('agentSession:resume', async (_, agentId: string, taskId: string, ocSessionId: string) => {
     const sessionId = await agentManager.resumeSession(agentId, taskId, ocSessionId)
+    if (!sessionId) {
+      // Session ended normally (task completed/reviewed) — session_id already cleared.
+      // Return ended flag so the renderer can clean up without an error.
+      return { sessionId: '', ended: true }
+    }
     return { sessionId }
   })
 

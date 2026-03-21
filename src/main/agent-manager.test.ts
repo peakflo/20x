@@ -792,3 +792,89 @@ describe('AgentManager session ID re-keying redirect', () => {
     expect((mgr as any).sessions.has('real-id')).toBe(false)
   })
 })
+
+describe('AgentManager resumeAdapterSession — SESSION_ENDED for completed tasks', () => {
+  it('returns empty string instead of throwing for ReadyForReview tasks', async () => {
+    const mockDb = {
+      getTask: vi.fn(() => ({
+        id: 'task-1',
+        title: 'Test',
+        agent_id: 'agent-1',
+        status: TaskStatus.ReadyForReview,
+      })),
+      getAgent: vi.fn(() => ({
+        id: 'agent-1',
+        name: 'Agent',
+        config: { coding_agent: 'claude-code' },
+      })),
+      getWorkspaceDir: vi.fn(() => '/tmp/ws'),
+      updateTask: vi.fn(),
+      getMcpServer: vi.fn(() => null),
+      getSecretsByIds: vi.fn(() => []),
+      getSecretsWithValues: vi.fn(() => []),
+      getSetting: vi.fn(() => null),
+    } as unknown as ConstructorParameters<typeof AgentManager>[0]
+
+    const mgr = new AgentManager(mockDb)
+    vi.spyOn(mgr as any, 'sendToRenderer').mockImplementation(() => undefined)
+
+    const adapter = {
+      initialize: vi.fn(async () => undefined),
+      resumeSession: vi.fn(async () => {
+        throw new Error('INCOMPATIBLE_SESSION_ID: session expired')
+      }),
+    }
+
+    vi.spyOn(mgr as any, 'getAdapter').mockReturnValue(adapter)
+    vi.spyOn(mgr as any, 'buildMcpServersForAdapter').mockResolvedValue({})
+    vi.spyOn(mgr as any, 'setupSecretSession').mockReturnValue(null)
+    vi.spyOn(mgr as any, 'buildSecretsSystemPrompt').mockReturnValue('')
+
+    // Should NOT throw — returns empty string to signal session ended
+    const result = await mgr.resumeSession('agent-1', 'task-1', 'old-session-id')
+    expect(result).toBe('')
+
+    // session_id should be cleared
+    expect(mockDb.updateTask).toHaveBeenCalledWith('task-1', { session_id: null })
+  })
+
+  it('still throws for non-completed tasks with incompatible session', async () => {
+    const mockDb = {
+      getTask: vi.fn(() => ({
+        id: 'task-1',
+        title: 'Test',
+        agent_id: 'agent-1',
+        status: TaskStatus.AgentWorking,
+      })),
+      getAgent: vi.fn(() => ({
+        id: 'agent-1',
+        name: 'Agent',
+        config: { coding_agent: 'claude-code' },
+      })),
+      getWorkspaceDir: vi.fn(() => '/tmp/ws'),
+      updateTask: vi.fn(),
+      getMcpServer: vi.fn(() => null),
+      getSecretsByIds: vi.fn(() => []),
+      getSecretsWithValues: vi.fn(() => []),
+      getSetting: vi.fn(() => null),
+    } as unknown as ConstructorParameters<typeof AgentManager>[0]
+
+    const mgr = new AgentManager(mockDb)
+    vi.spyOn(mgr as any, 'sendToRenderer').mockImplementation(() => undefined)
+
+    const adapter = {
+      initialize: vi.fn(async () => undefined),
+      resumeSession: vi.fn(async () => {
+        throw new Error('INCOMPATIBLE_SESSION_ID: session expired')
+      }),
+    }
+
+    vi.spyOn(mgr as any, 'getAdapter').mockReturnValue(adapter)
+    vi.spyOn(mgr as any, 'buildMcpServersForAdapter').mockResolvedValue({})
+    vi.spyOn(mgr as any, 'setupSecretSession').mockReturnValue(null)
+    vi.spyOn(mgr as any, 'buildSecretsSystemPrompt').mockReturnValue('')
+
+    // Should still throw for non-completed tasks
+    await expect(mgr.resumeSession('agent-1', 'task-1', 'old-session-id')).rejects.toThrow()
+  })
+})
