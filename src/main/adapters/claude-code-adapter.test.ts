@@ -359,6 +359,44 @@ describe('ClaudeCodeAdapter error result handling', () => {
   })
 })
 
+describe('Workspace path encoding', () => {
+  // The adapter encodes workspace paths the same way Claude Code CLI does:
+  // all non-alphanumeric, non-hyphen characters are replaced with hyphens.
+  // This must match Claude Code's actual encoding to find session files.
+
+  it('replaces slashes and spaces with hyphens', () => {
+    const path = '/Users/john/my projects/app'
+    const encoded = path.replace(/[^a-zA-Z0-9-]/g, '-')
+    expect(encoded).toBe('-Users-john-my-projects-app')
+  })
+
+  it('replaces underscores with hyphens (matches Claude Code CLI behavior)', () => {
+    const path = '/Users/john/workspaces/task_1774055411603_shbw90l'
+    const encoded = path.replace(/[^a-zA-Z0-9-]/g, '-')
+    expect(encoded).toBe('-Users-john-workspaces-task-1774055411603-shbw90l')
+  })
+
+  it('replaces dots with hyphens (matches Claude Code CLI behavior)', () => {
+    const path = '/Users/john/.paperclip/project'
+    const encoded = path.replace(/[^a-zA-Z0-9-]/g, '-')
+    expect(encoded).toBe('-Users-john--paperclip-project')
+  })
+
+  it('preserves existing hyphens', () => {
+    const path = '/Users/john/my-project'
+    const encoded = path.replace(/[^a-zA-Z0-9-]/g, '-')
+    expect(encoded).toBe('-Users-john-my-project')
+  })
+
+  it('handles the full 20x workspace path correctly', () => {
+    const path = '/Users/dmitryvedenyapin/Library/Application Support/20x/workspaces/task_1774055411603_shbw90l'
+    const encoded = path.replace(/[^a-zA-Z0-9-]/g, '-')
+    expect(encoded).toBe('-Users-dmitryvedenyapin-Library-Application-Support-20x-workspaces-task-1774055411603-shbw90l')
+    // Old regex would produce: -Users-dmitryvedenyapin-Library-Application-Support-20x-workspaces-task_1774055411603_shbw90l
+    // which doesn't match the actual directory Claude Code creates
+  })
+})
+
 describe('ClaudeCodeAdapter task_progress handling', () => {
   it('converts task_started to TASK_PROGRESS part', async () => {
     const msg = {

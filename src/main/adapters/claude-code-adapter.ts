@@ -244,7 +244,8 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
       const { homedir } = await import('os')
 
       const claudeDir = join(homedir(), '.claude', 'projects')
-      const encodedWorkspace = workspaceDir.replace(/[\/\s]/g, '-')
+      // Claude Code CLI encodes workspace paths by replacing all non-alphanumeric/non-hyphen chars with '-'
+      const encodedWorkspace = workspaceDir.replace(/[^a-zA-Z0-9-]/g, '-')
       const sessionFile = join(claudeDir, encodedWorkspace, `${sessionId}.jsonl`)
 
       console.log(`[ClaudeCodeAdapter] Cleaning session file: ${sessionFile}`)
@@ -304,9 +305,9 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
       const { homedir } = await import('os')
 
       // Session files are stored in: ~/.claude/projects/[encoded-workspace]/[sessionId].jsonl
-      // Claude encodes workspace paths by replacing / and spaces with -
+      // Claude Code CLI encodes workspace paths by replacing all non-alphanumeric/non-hyphen chars with '-'
       const claudeDir = join(homedir(), '.claude', 'projects')
-      const encodedWorkspace = workspaceDir.replace(/[\/\s]/g, '-')
+      const encodedWorkspace = workspaceDir.replace(/[^a-zA-Z0-9-]/g, '-')
       const sessionFile = join(claudeDir, encodedWorkspace, `${sessionId}.jsonl`)
 
       console.log(`[ClaudeCodeAdapter] Loading session history from: ${sessionFile}`)
