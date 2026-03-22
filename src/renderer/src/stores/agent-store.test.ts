@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { Mock } from 'vitest'
 import { useAgentStore } from './agent-store'
 import type { Agent, CreateAgentDTO, UpdateAgentDTO } from '@/types'
-import type { AgentOutputBatchEvent } from '@/types/electron'
+import type { AgentOutputBatchEvent, AgentStatusEvent } from '@/types/electron'
 
 const mockElectronAPI = window.electronAPI
 
@@ -12,6 +12,13 @@ let batchCallback: ((event: AgentOutputBatchEvent) => void) | null = null
 {
   const calls = (mockElectronAPI.onAgentOutputBatch as unknown as Mock).mock.calls
   if (calls.length > 0) batchCallback = calls[0][0]
+}
+
+// Capture the onAgentStatus callback for re-keying tests
+let statusCallback: ((event: AgentStatusEvent) => void) | null = null
+{
+  const calls = (mockElectronAPI.onAgentStatus as unknown as Mock).mock.calls
+  if (calls.length > 0) statusCallback = calls[0][0]
 }
 
 beforeEach(() => {
@@ -380,6 +387,42 @@ describe('useAgentStore', () => {
       const session = useAgentStore.getState().sessions.get('task-1')!
       expect(session.sessionId).toBe('real-sess-1')
       expect(session.messages).toHaveLength(1)
+    })
+
+    it('updates sessionId when main process re-keys from temp to real ID', async () => {
+      // Session starts with a temp UUID
+      useAgentStore.getState().initSession('task-1', 'temp-uuid', 'agent-1')
+
+      // Main process sends batch with the real session ID after re-keying
+      batchCallback!({
+        sessionId: 'real-session-id',
+        taskId: 'task-1',
+        messages: [{ id: 'p1', role: 'assistant', content: 'Hello' }]
+      })
+      await flushRaf()
+
+      const session = useAgentStore.getState().sessions.get('task-1')!
+      // Session ID should be updated to the real one, not stuck on temp-uuid
+      expect(session.sessionId).toBe('real-session-id')
+      expect(session.messages).toHaveLength(1)
+    })
+  })
+
+  describe('Session ID re-keying via onAgentStatus', () => {
+    it('updates sessionId when status event carries re-keyed session ID', () => {
+      // Session starts with temp UUID
+      useAgentStore.getState().initSession('task-1', 'temp-uuid', 'agent-1')
+
+      // Main process sends status with real session ID after re-keying
+      statusCallback!({
+        sessionId: 'real-session-id',
+        agentId: 'agent-1',
+        taskId: 'task-1',
+        status: 'working' as any
+      })
+
+      const session = useAgentStore.getState().sessions.get('task-1')!
+      expect(session.sessionId).toBe('real-session-id')
     })
   })
 })

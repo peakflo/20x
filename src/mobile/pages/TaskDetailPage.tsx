@@ -148,7 +148,14 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
   const allTasks = useTaskStore((s) => s.tasks)
 
   const subtasks = useMemo(
-    () => allTasks.filter((t) => t.parent_task_id === taskId),
+    () =>
+      allTasks
+        .filter((t) => t.parent_task_id === taskId)
+        .sort((a, b) => {
+          const orderDiff = (a.sort_order ?? 0) - (b.sort_order ?? 0)
+          if (orderDiff !== 0) return orderDiff
+          return new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+        }),
     [allTasks, taskId]
   )
 

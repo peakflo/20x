@@ -116,8 +116,9 @@ export const useAgentStore = create<AgentState>((set, get) => {
     if (!session) return
 
     const updated = { ...session, status: event.status }
-    // Patch in real sessionId if session was pre-registered with empty string
-    if (!session.sessionId && event.sessionId) updated.sessionId = event.sessionId
+    // Patch in real sessionId when session was pre-registered with empty string
+    // or when the main process re-keyed the session (temp ID → real ID)
+    if (event.sessionId && session.sessionId !== event.sessionId) updated.sessionId = event.sessionId
     // Clear pending approval when session goes idle
     if (event.status === SessionStatus.IDLE) updated.pendingApproval = null
     set({ sessions: new Map(state.sessions).set(session.taskId, updated) })
@@ -284,8 +285,8 @@ export const useAgentStore = create<AgentState>((set, get) => {
       const taskId = session.taskId
       const seen = getSeen(taskId)
 
-      // Resolve sessionId if needed
-      const resolvedSession = (!session.sessionId && event.sessionId)
+      // Resolve sessionId: update when empty OR when main process re-keyed (temp → real)
+      const resolvedSession = (event.sessionId && session.sessionId !== event.sessionId)
         ? { ...session, sessionId: event.sessionId }
         : (nextSessions.get(taskId) || session)
 
