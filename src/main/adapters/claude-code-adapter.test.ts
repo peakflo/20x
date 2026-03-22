@@ -396,7 +396,6 @@ describe('Workspace path encoding', () => {
     // which doesn't match the actual directory Claude Code creates
   })
 })
-
 describe('ClaudeCodeAdapter task_progress handling', () => {
   it('converts task_started to TASK_PROGRESS part', async () => {
     const msg = {

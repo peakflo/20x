@@ -1454,7 +1454,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       // Collect all parts into a batch instead of sending individually.
       // This avoids flooding the renderer with N separate IPC messages
       // that each trigger a Zustand state update + React re-render.
-      const batchMessages: Array<{ id: string; role: string; content: string; partType?: string; tool?: unknown; update?: boolean }> = []
+      const batchMessages: Array<{ id: string; role: string; content: string; partType?: string; tool?: unknown; update?: boolean; taskProgress?: unknown }> = []
       for (const part of newParts) {
         // Allow user messages through so they appear in the transcript during
         // session resume and replay.  The renderer's seenIds dedup prevents
@@ -1466,7 +1466,8 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
           content: part.content || part.text || '',
           partType: part.type,
           tool: part.tool,
-          update: part.update
+          update: part.update,
+          taskProgress: part.taskProgress
         })
       }
 
@@ -1749,7 +1750,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
 
     // Replay messages to renderer in a single batch to avoid UI freeze
     if (shouldReplayToRenderer) {
-      const batchMessages: Array<{ id: string; role: string; content: string; partType?: string; tool?: unknown }> = []
+      const batchMessages: Array<{ id: string; role: string; content: string; partType?: string; tool?: unknown; taskProgress?: unknown }> = []
       for (const message of messages) {
         for (const part of message.parts) {
           batchMessages.push({
@@ -1757,7 +1758,8 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
             role: message.role,
             content: part.content || part.text || '',
             partType: part.type,
-            tool: part.tool
+            tool: part.tool,
+            taskProgress: part.taskProgress
           })
         }
       }
@@ -2583,7 +2585,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     })
 
     // Collect all message parts into a single batch (matching resumeAdapterSession pattern)
-    const batchMessages: Array<{ id: string; role: string; content: string; partType?: string; tool?: unknown; update?: boolean }> = []
+    const batchMessages: Array<{ id: string; role: string; content: string; partType?: string; tool?: unknown; update?: boolean; taskProgress?: unknown }> = []
     for (const msg of messages) {
       for (const part of msg.parts) {
         batchMessages.push({
@@ -2601,6 +2603,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
             questions: part.tool.questions,
             todos: part.tool.todos
           } : undefined,
+          taskProgress: part.taskProgress,
           // Pass update flag so mobile store merges tool results into their
           // pending tool_use entries (e.g. status pending → success)
           ...(part.update ? { update: true } : {})

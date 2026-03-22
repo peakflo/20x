@@ -156,7 +156,7 @@ export const useAgentStore = create<AgentState>((set, get) => {
       content = String(data)
     }
 
-    if (!content && !data.tool && !data.questions && !data.todos) return
+    if (!content && !data.tool && !data.questions && !data.todos && !data.taskProgress) return
     if (!msgId) msgId = `${role}-${content.slice(0, 50)}-${Date.now()}`
 
     set((state) => {

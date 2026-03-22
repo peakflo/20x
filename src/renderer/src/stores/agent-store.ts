@@ -156,8 +156,8 @@ export const useAgentStore = create<AgentState>((set, get) => {
       content = String(data)
     }
 
-    // Allow empty content for tool/question messages (they have tool/questions field instead)
-    if (!content && !data.tool && !data.questions && !data.todos) return
+    // Allow empty content for tool/question/taskProgress messages (they have structured data instead)
+    if (!content && !data.tool && !data.questions && !data.todos && !data.taskProgress) return
     if (!msgId) msgId = (data.id as string) || `${role}-${content.slice(0, 50)}-${Date.now()}`
 
     const taskId = resolvedSession.taskId
