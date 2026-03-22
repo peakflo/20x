@@ -68,6 +68,12 @@ async function shutdownAppServices(): Promise<void> {
     // pkill exits 1 if no processes matched — that's fine
   }
 
+  // Stop all marimo server instances
+  try {
+    const { stopAllMarimo } = await import('./marimo-server')
+    stopAllMarimo()
+  } catch { /* marimo module may not be loaded */ }
+
   db?.close()
 
   if (tray) {

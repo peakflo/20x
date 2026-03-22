@@ -36,9 +36,12 @@
     "@zed-industries/codex-acp": "^0.9.5",
     "better-sqlite3": "^12.6.2",
     "cron-parser": "^5.5.0",
+    "hyparquet": "^1.25.1",
     "js-yaml": "^4.1.1",
+    "papaparse": "^5.5.3",
     "undici": "^7.21.0",
-    "ws": "^8.19.0"
+    "ws": "^8.19.0",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@electron-toolkit/preload": "^3.0.1",
@@ -62,6 +65,7 @@
     "@testing-library/react": "^16.3.2",
     "@types/better-sqlite3": "^7.6.13",
     "@types/js-yaml": "^4.0.9",
+    "@types/papaparse": "^5.5.2",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@types/ws": "^8.18.1",
