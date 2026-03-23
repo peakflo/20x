@@ -3,8 +3,66 @@ import { useVirtualizer } from '@tanstack/react-virtual'
 import { StopCircle, Loader2, Terminal, Send, ChevronRight, ChevronDown, Wrench, AlertTriangle, CheckCircle2, Circle, Clock, RotateCcw, Code2, Eye, ListTodo, FileText, ArrowDown } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { Markdown } from '@/components/ui/Markdown'
+import { DataFilePreview } from '@/components/ui/DataFilePreview'
+import { DataFileDialog } from '@/components/ui/DataFileDialog'
+import { MarimoEmbed } from '@/components/ui/MarimoEmbed'
+import { marimoApi } from '@/lib/ipc-client'
 import type { AgentMessage } from '@/hooks/use-agent-session'
 import { SessionStatus } from '@/stores/agent-store'
+
+const TABULAR_EXT_RE = /\.(csv|tsv|json|jsonl|xlsx|xls|parquet)$/i
+
+function extractFilePath(toolInput: unknown): string | null {
+  if (!toolInput) return null
+  try {
+    const input = typeof toolInput === 'string' ? JSON.parse(toolInput) : toolInput
+    return input.file_path || input.path || input.filePath || input.filename || null
+  } catch {
+    if (typeof toolInput === 'string') return toolInput
+  }
+  return null
+}
+
+function extractTabularFilePath(toolInput: unknown): string | null {
+  const path = extractFilePath(toolInput)
+  if (path && TABULAR_EXT_RE.test(path)) return path
+  return null
+}
+
+function extractMarimoFilePath(toolInput: unknown, toolOutput: unknown): string | null {
+  const path = extractFilePath(toolInput)
+  if (!path || !path.endsWith('.py')) return null
+
+  // Check tool output for marimo markers (content written by agent)
+  const output = typeof toolOutput === 'string' ? toolOutput : ''
+  const input = typeof toolInput === 'string' ? toolInput : JSON.stringify(toolInput || '')
+  const combined = output + input
+
+  if (
+    combined.includes('import marimo') ||
+    combined.includes('marimo.App') ||
+    combined.includes('@app.cell')
+  ) {
+    return path
+  }
+  return null
+}
+
+/**
+ * Hook that async-checks if a .py file is a marimo notebook (reads from disk).
+ * Used as fallback when content isn't visible in tool input/output.
+ */
+function useMarimoDetection(filePath: string | null, isCompleted: boolean): boolean {
+  const [isMarimo, setIsMarimo] = useState(false)
+  useEffect(() => {
+    if (!filePath || !isCompleted || !filePath.endsWith('.py')) {
+      setIsMarimo(false)
+      return
+    }
+    marimoApi.isNotebook(filePath).then(setIsMarimo).catch(() => setIsMarimo(false))
+  }, [filePath, isCompleted])
+  return isMarimo
+}
 
 enum ViewMode {
   MARKDOWN = 'markdown',
@@ -324,53 +382,100 @@ function TaskProgressMessage({ message }: { message: AgentMessage }) {
 
 function ToolCallMessage({ message }: { message: AgentMessage }) {
   const [expanded, setExpanded] = useState(false)
+  const [showDataDialog, setShowDataDialog] = useState(false)
   const tool = message.tool!
   const isRunning = !tool.status || tool.status === 'in_progress' || tool.status === 'running' || tool.status === 'pending'
   const isError = tool.status === 'error' || tool.status === 'failed'
+  const isCompleted = tool.status === 'completed' || tool.status === 'done' || tool.status === 'success'
   const subtitle = deriveToolSubtitle(tool)
 
+  // Detect tabular file from tool input
+  const tabularFilePath = useMemo(() => {
+    if (!isCompleted) return null
+    return extractTabularFilePath(tool.input)
+  }, [isCompleted, tool.input])
+
+  // Detect marimo notebook from tool input/output (sync check via content)
+  const marimoFilePathFromContent = useMemo(() => {
+    if (!isCompleted) return null
+    return extractMarimoFilePath(tool.input, tool.output)
+  }, [isCompleted, tool.input, tool.output])
+
+  // Async fallback: check disk for marimo markers if .py file was written
+  const pyFilePath = useMemo(() => {
+    if (!isCompleted || marimoFilePathFromContent) return null
+    const fp = extractFilePath(tool.input)
+    return fp?.endsWith('.py') ? fp : null
+  }, [isCompleted, tool.input, marimoFilePathFromContent])
+
+  const isMarimoFromDisk = useMarimoDetection(pyFilePath, isCompleted)
+  const marimoFilePath = marimoFilePathFromContent || (isMarimoFromDisk ? pyFilePath : null)
+
   return (
-    <div className="rounded-md bg-[#161b22] border border-border/50 overflow-hidden">
-      <button
-        onClick={() => setExpanded(!expanded)}
-        className="w-full flex items-center gap-2 px-3 py-2 text-xs font-mono hover:bg-white/5 transition-colors"
-      >
-        <ChevronRight className={`h-3 w-3 text-muted-foreground shrink-0 transition-transform ${expanded ? 'rotate-90' : ''}`} />
-        <Wrench className="h-3 w-3 text-muted-foreground shrink-0" />
-        <span className="text-foreground">{tool.name}</span>
-        {subtitle && <span className="text-muted-foreground truncate"> {subtitle}</span>}
-        {isRunning && <Loader2 className="h-3 w-3 ml-auto shrink-0 text-muted-foreground animate-spin" />}
-        {isError && <AlertTriangle className="h-3 w-3 ml-auto shrink-0 text-red-400" />}
-      </button>
-      {expanded && (
-        <div className="border-t border-border/30 px-3 py-2 text-[11px] font-mono space-y-2">
-          {tool.input && (
-            <div>
-              <span className="text-muted-foreground">Input:</span>
-              <pre className="mt-0.5 text-gray-400 whitespace-pre-wrap break-words max-h-40 overflow-y-auto">{sanitizeToolContent(tool.input)}</pre>
-            </div>
-          )}
-          {tool.output && (
-            <div>
-              <span className="text-muted-foreground">Output:</span>
-              <pre className="mt-0.5 text-gray-400 whitespace-pre-wrap break-words max-h-40 overflow-y-auto">{sanitizeToolContent(tool.output)}</pre>
-            </div>
-          )}
-          {tool.error && (
-            <div>
-              <span className="text-red-400">Error:</span>
-              <pre className="mt-0.5 text-red-300 whitespace-pre-wrap break-words">{tool.error}</pre>
-            </div>
-          )}
-        </div>
-      )}
-      <div className="flex items-center gap-2 px-3 pb-1.5">
-        <span className="text-[10px] text-muted-foreground">{message.timestamp.toLocaleTimeString()}</span>
-        {message.stepMeta && (
-          <span className="text-[10px] text-muted-foreground">{formatStepMeta(message.stepMeta)}</span>
+    <>
+      <div className="rounded-md bg-[#161b22] border border-border/50 overflow-hidden">
+        <button
+          onClick={() => setExpanded(!expanded)}
+          className="w-full flex items-center gap-2 px-3 py-2 text-xs font-mono hover:bg-white/5 transition-colors"
+        >
+          <ChevronRight className={`h-3 w-3 text-muted-foreground shrink-0 transition-transform ${expanded ? 'rotate-90' : ''}`} />
+          <Wrench className="h-3 w-3 text-muted-foreground shrink-0" />
+          <span className="text-foreground">{tool.name}</span>
+          {subtitle && <span className="text-muted-foreground truncate"> {subtitle}</span>}
+          {isRunning && <Loader2 className="h-3 w-3 ml-auto shrink-0 text-muted-foreground animate-spin" />}
+          {isError && <AlertTriangle className="h-3 w-3 ml-auto shrink-0 text-red-400" />}
+        </button>
+        {expanded && (
+          <div className="border-t border-border/30 px-3 py-2 text-[11px] font-mono space-y-2">
+            {tool.input && (
+              <div>
+                <span className="text-muted-foreground">Input:</span>
+                <pre className="mt-0.5 text-gray-400 whitespace-pre-wrap break-words max-h-40 overflow-y-auto">{sanitizeToolContent(tool.input)}</pre>
+              </div>
+            )}
+            {tool.output && (
+              <div>
+                <span className="text-muted-foreground">Output:</span>
+                <pre className="mt-0.5 text-gray-400 whitespace-pre-wrap break-words max-h-40 overflow-y-auto">{sanitizeToolContent(tool.output)}</pre>
+              </div>
+            )}
+            {tool.error && (
+              <div>
+                <span className="text-red-400">Error:</span>
+                <pre className="mt-0.5 text-red-300 whitespace-pre-wrap break-words">{tool.error}</pre>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Inline marimo notebook embed */}
+        {marimoFilePath && (
+          <div className="border-t border-border/30 px-2 py-2">
+            <MarimoEmbed filePath={marimoFilePath} compact={true} />
+          </div>
+        )}
+
+        {/* Inline data file preview (non-marimo tabular files) */}
+        {!marimoFilePath && tabularFilePath && (
+          <div className="border-t border-border/30 px-2 py-2">
+            <DataFilePreview
+              filePath={tabularFilePath}
+              compact={true}
+              onExpand={() => setShowDataDialog(true)}
+            />
+          </div>
         )}
       </div>
-    </div>
+
+      {/* Fullscreen data dialog */}
+      {tabularFilePath && !marimoFilePath && (
+        <DataFileDialog
+          open={showDataDialog}
+          onOpenChange={setShowDataDialog}
+          filePath={tabularFilePath}
+        />
+      )}
+    </>
   )
 }
 
