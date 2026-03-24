@@ -28,7 +28,7 @@ import { setTaskApiNotifier, setTranscriptProvider, stopTaskApiServer } from './
 import { startSecretBroker, stopSecretBroker, writeSecretShellWrapper } from './secret-broker'
 import { startMobileApiServer, stopMobileApiServer, broadcastToMobileClients, setMobileApiNotifier } from './mobile-api-server'
 import { initAutoUpdater } from './auto-updater'
-import { initCrashLogger, getCrashLogPath } from './crash-logger'
+import { initCrashLogger } from './crash-logger'
 
 let mainWindow: BrowserWindow | null = null
 let tray: Tray | null = null

@@ -83,6 +83,8 @@ html, body, #root {
 
 /* ── Windows: push content left of the title-bar overlay (min/max/close ≈ 140px) ── */
 [data-platform="win32"] .windows-titlebar-pad { padding-right: 150px; }
+/* ── Windows: any top-right header that sits behind the overlay needs right padding too ── */
+[data-platform="win32"] .windows-titlebar-safe { padding-right: 150px; }
 
 /* ── Scrollbar ────────────────────────────────── */
 ::-webkit-scrollbar { width: 5px; height: 5px; }

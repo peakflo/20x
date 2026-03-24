@@ -13,7 +13,8 @@ export default defineConfig({
         // Bundle pure-JS deps to enable tree-shaking and avoid shipping them in node_modules
         'js-yaml',
         'cron-parser',
-        '@opencode-ai/sdk'
+        '@opencode-ai/sdk',
+        'electron-updater'
       ]
     })],
     resolve: {

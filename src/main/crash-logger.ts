@@ -1,5 +1,5 @@
 import { app, dialog } from 'electron'
-import { writeFileSync, appendFileSync, mkdirSync, existsSync } from 'fs'
+import { appendFileSync, mkdirSync, existsSync } from 'fs'
 import { join } from 'path'
 
 let logPath: string

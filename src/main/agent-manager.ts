@@ -73,7 +73,7 @@ export class AgentManager extends EventEmitter {
   /** Maps old (temp) session IDs to their re-keyed (real) IDs so that
    *  stale IDs from the renderer still resolve after pollSingleSession re-keys. */
   private sessionIdRedirects: Map<string, string> = new Map()
-  private serverInstance: { url: string; close(): void } | null = null  // OpenCode SDK server instance
+  private serverInstance: { close(): void } | null = null  // OpenCode SDK server instance
   private serverUrl: string | null = null
   private serverStarting: Promise<void> | null = null  // Track server startup
   private sdkLoading: Promise<void> | null = null  // Track SDK loading
@@ -1343,17 +1343,18 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     initialSessionId: string,
     adapter: CodingAgentAdapter,
     config: SessionConfig,
-    initialPromptSent?: boolean
+    initialPromptSent?: boolean,
+    existingSession?: AgentSession
   ): void {
     const entry: PollingEntry = {
       sessionId: initialSessionId,
       adapter,
       config,
-      seenMessageIds: new Set<string>(),
-      seenPartIds: new Set<string>(),
-      partContentLengths: new Map<string, string>(),
+      seenMessageIds: existingSession?.seenMessageIds ?? new Set<string>(),
+      seenPartIds: existingSession?.seenPartIds ?? new Set<string>(),
+      partContentLengths: existingSession?.partContentLengths ?? new Map<string, string>(),
       createdAt: Date.now(),
-      hasSeenWork: false,
+      hasSeenWork: existingSession ? true : false,
       initialPromptSent: initialPromptSent || false
     }
 
@@ -1565,7 +1566,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
         // Skip ALL user/human messages from polling — we already show them in the UI
         // via sendToRenderer in startAdapterSession (initial) and doSendAdapterMessage (follow-ups).
         // The adapter echoes them back with different IDs so seenPartIds won't catch duplicates.
-        if (part.role === 'user' || part.role === 'human') {
+        if (part.role === 'user' || (part.role as string) === 'human') {
           continue
         }
         batchMessages.push({
@@ -1706,6 +1707,13 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
         }
 
         console.log(`[AgentManager] Detected IDLE status for ${sessionId}, calling transitionToIdle`)
+        // Sync dedup state from polling entry back to the session so that
+        // if polling restarts (follow-up message), we preserve what was already seen.
+        if (pollingEntry) {
+          for (const id of pollingEntry.seenMessageIds) session.seenMessageIds.add(id)
+          for (const id of pollingEntry.seenPartIds) session.seenPartIds.add(id)
+          for (const [k, v] of pollingEntry.partContentLengths) session.partContentLengths.set(k, v)
+        }
         session.pollingStarted = false
         // Remove from polling FIRST so other sessions aren't starved while
         // transitionToIdle runs (it can be slow due to extractOutputValues).
@@ -1894,6 +1902,21 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       }
     }
 
+    // Build dedup state from replayed messages so that when polling starts
+    // (on follow-up message), it won't re-send messages already shown in the UI.
+    const resumedSeenMessageIds = new Set<string>()
+    const resumedSeenPartIds = new Set<string>()
+    const resumedPartContentLengths = new Map<string, string>()
+    for (const message of messages) {
+      for (const part of message.parts) {
+        const partId = part.id || `${message.role}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+        resumedSeenPartIds.add(partId)
+        if (part.content || part.text) {
+          resumedPartContentLengths.set(partId, String((part.content || part.text || '').length))
+        }
+      }
+    }
+
     // Store session in sessions map — idle until user sends a message
     this.sessions.set(adapterSessionId, {
       id: adapterSessionId,
@@ -1902,9 +1925,9 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       workspaceDir,
       status: 'idle',
       createdAt: new Date(),
-      seenMessageIds: new Set(),
-      seenPartIds: new Set(),
-      partContentLengths: new Map(),
+      seenMessageIds: resumedSeenMessageIds,
+      seenPartIds: resumedSeenPartIds,
+      partContentLengths: resumedPartContentLengths,
       adapter,
       pollingStarted: false,
       secretSessionToken: secretToken
@@ -2557,9 +2580,11 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
 
     // Start polling if not already started (for Claude Code after resume)
     if (!session.pollingStarted) {
-      console.log(`[AgentManager] Starting polling for session ${sessionId}`)
+      console.log(`[AgentManager] Starting polling for session ${sessionId} (preserving dedup state)`)
       session.pollingStarted = true
-      this.startAdapterPolling(sessionId, session.adapter, sessionConfig)
+      // Pass existing session so dedup state (seenMessageIds, seenPartIds) is preserved
+      // from previous polling cycle — prevents old messages from being re-sent to renderer
+      this.startAdapterPolling(sessionId, session.adapter, sessionConfig, undefined, session)
     }
   }
 

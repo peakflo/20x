@@ -604,8 +604,8 @@ export function AgentTranscriptPanel({ title = 'Agent transcript', messages, sta
 
   return (
     <div className={`flex flex-col min-h-0 bg-[#0d1117] border-l border-border ${className ?? ''}`}>
-      {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-border/50 shrink-0">
+      {/* Header — windows-titlebar-safe adds right padding on Windows to avoid title bar overlay */}
+      <div className="flex items-center justify-between px-4 py-3 border-b border-border/50 shrink-0 windows-titlebar-safe">
         <div className="flex items-center gap-2">
           <Terminal className="h-4 w-4 text-muted-foreground" />
           <span className="text-sm font-medium">{title}</span>
