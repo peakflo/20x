@@ -442,7 +442,13 @@ Update existing skills that were helpful or create new ones for patterns worth r
         console.log('[TaskWorkspace] Resuming session for feedback:', task.session_id)
         console.log('[TaskWorkspace] Current session state before resume:', session)
 
-        await resume(task.agent_id, task.id, task.session_id)
+        const resumedSessionId = await resume(task.agent_id, task.id, task.session_id)
+        if (!resumedSessionId) {
+          // Session ended normally — can't send feedback to a dead session.
+          // Refresh tasks so the UI reflects the cleared session_id.
+          fetchTasks()
+          return
+        }
         console.log('[TaskWorkspace] Resume completed successfully')
 
         const afterResumeSession = useAgentStore.getState().sessions.get(task.id)
@@ -486,7 +492,7 @@ Update existing skills that were helpful or create new ones for patterns worth r
       console.error('Failed to send feedback:', error)
       await taskApi.update(task.id, { status: TaskStatus.ReadyForReview })
     }
-  }, [task?.agent_id, task?.id, task?.session_id, session.sessionId, resume, sendMessage])
+  }, [task?.agent_id, task?.id, task?.session_id, session.sessionId, resume, sendMessage, fetchTasks])
 
   const handleFeedbackSkip = useCallback(async () => {
     if (!task?.id) return
@@ -620,6 +626,7 @@ Update existing skills that were helpful or create new ones for patterns worth r
             <AgentTranscriptPanel
               messages={session.messages}
               status={session.status}
+              systemStatus={session.systemStatus}
               onStop={handleAbort}
               onRestart={handleStartFreshSession}
               onSend={handleSend}

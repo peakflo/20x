@@ -109,6 +109,7 @@ export function OrchestratorPanel({ onClose }: OrchestratorPanelProps) {
           title="Mastermind den"
           messages={currentSession?.messages || []}
           status={currentSession?.status || SessionStatus.IDLE}
+          systemStatus={currentSession?.systemStatus}
           onStop={stop}
           onSend={handleSendMessage}
           className="flex-1 min-h-0"

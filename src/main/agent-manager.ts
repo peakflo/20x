@@ -70,7 +70,10 @@ interface PollingEntry {
 
 export class AgentManager extends EventEmitter {
   private sessions: Map<string, AgentSession> = new Map()
-  private serverInstance: { close(): void } | null = null  // OpenCode SDK server instance
+  /** Maps old (temp) session IDs to their re-keyed (real) IDs so that
+   *  stale IDs from the renderer still resolve after pollSingleSession re-keys. */
+  private sessionIdRedirects: Map<string, string> = new Map()
+  private serverInstance: { url: string; close(): void } | null = null  // OpenCode SDK server instance
   private serverUrl: string | null = null
   private serverStarting: Promise<void> | null = null  // Track server startup
   private sdkLoading: Promise<void> | null = null  // Track SDK loading
@@ -1536,6 +1539,9 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
           this.sessions.delete(sessionId)
           this.sessions.set(realSessionId, session)
 
+          // Record redirect so stale IDs from the renderer still resolve
+          this.sessionIdRedirects.set(sessionId, realSessionId)
+
           // Re-key the polling entry
           this.pollingEntries.delete(sessionId)
           entry.sessionId = realSessionId
@@ -1554,7 +1560,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       // Collect all parts into a batch instead of sending individually.
       // This avoids flooding the renderer with N separate IPC messages
       // that each trigger a Zustand state update + React re-render.
-      const batchMessages: Array<{ id: string; role: string; content: string; partType?: string; tool?: unknown; update?: boolean }> = []
+      const batchMessages: Array<{ id: string; role: string; content: string; partType?: string; tool?: unknown; update?: boolean; taskProgress?: unknown }> = []
       for (const part of newParts) {
         // Skip ALL user/human messages from polling — we already show them in the UI
         // via sendToRenderer in startAdapterSession (initial) and doSendAdapterMessage (follow-ups).
@@ -1568,7 +1574,8 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
           content: part.content || part.text || '',
           partType: part.type,
           tool: part.tool,
-          update: part.update
+          update: part.update,
+          taskProgress: part.taskProgress
         })
       }
 
@@ -1728,7 +1735,16 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     const yieldEL = (): Promise<void> => new Promise((r) => setImmediate(r))
 
     const agent = this.db.getAgent(agentId)!
-    const workspaceDir = this.db.getWorkspaceDir(taskId)
+
+    // Use the same workspace resolution as startSession: try git worktree first,
+    // then fall back to the default workspace dir. This is critical because Claude
+    // Code stores session files under ~/.claude/projects/<encoded-workspaceDir>/,
+    // so resuming with a different workspaceDir produces a different path and the
+    // session file won't be found.
+    let workspaceDir = await this.setupWorktreeIfNeeded(taskId)
+    if (!workspaceDir) {
+      workspaceDir = this.db.getWorkspaceDir(taskId)
+    }
 
     // Build MCP servers config
     const isMastermind = taskId === 'mastermind-session'
@@ -1817,7 +1833,10 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
           console.log(`[AgentManager] Session ended normally for ${currentTask.status} task ${taskId} — clearing session_id`)
           this.db.updateTask(taskId, { session_id: null })
           this.sendToRenderer('task:updated', { taskId, updates: { session_id: null } })
-          throw new Error('SESSION_ENDED')
+          // Return a sentinel value instead of throwing, so the IPC handler doesn't
+          // log a noisy error. The public resumeSession() method returns empty string
+          // which signals to the renderer that the session is gone.
+          return ''
         }
 
         // Clear the old session_id in the database
@@ -1853,7 +1872,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
 
     // Replay messages to renderer in a single batch to avoid UI freeze
     if (shouldReplayToRenderer) {
-      const batchMessages: Array<{ id: string; role: string; content: string; partType?: string; tool?: unknown }> = []
+      const batchMessages: Array<{ id: string; role: string; content: string; partType?: string; tool?: unknown; taskProgress?: unknown }> = []
       for (const message of messages) {
         for (const part of message.parts) {
           batchMessages.push({
@@ -1861,7 +1880,8 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
             role: message.role,
             content: part.content || part.text || '',
             partType: part.type,
-            tool: part.tool
+            tool: part.tool,
+            taskProgress: part.taskProgress
           })
         }
       }
@@ -2012,6 +2032,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     }
     return undefined
   }
+
 
   /**
    * Check if a task has a live (working) session in memory.
@@ -2288,7 +2309,17 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
    * Interrupts the current generation, stops polling, keeps transcript.
    */
   async abortSession(sessionId: string): Promise<void> {
-    const session = this.sessions.get(sessionId)
+    let session = this.sessions.get(sessionId)
+
+    // Fallback: session ID may have been re-keyed (temp → real) by pollSingleSession
+    if (!session) {
+      const redirectedId = this.sessionIdRedirects.get(sessionId)
+      if (redirectedId) {
+        console.log(`[AgentManager] Session ${sessionId} re-keyed, redirecting abort to ${redirectedId}`)
+        sessionId = redirectedId
+        session = this.sessions.get(sessionId)
+      }
+    }
     if (!session) return
 
     console.log(`[AgentManager] Aborting session ${sessionId}`)
@@ -2352,6 +2383,13 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
 
     this.sessions.delete(sessionId)
 
+    // Clean up any redirect entries pointing to this session
+    for (const [oldId, newId] of this.sessionIdRedirects.entries()) {
+      if (newId === sessionId) {
+        this.sessionIdRedirects.delete(oldId)
+      }
+    }
+
     // Only reset task status if explicitly requested (e.g., user manually stopped, not app shutdown)
     // But never reset if task is already Completed
     if (resetTaskStatus) {
@@ -2371,6 +2409,16 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
 
   async sendMessage(sessionId: string, message: string, taskId?: string, agentId?: string): Promise<{ newSessionId?: string }> {
     let session = this.sessions.get(sessionId)
+
+    // Check redirect map: session ID may have been re-keyed (temp → real)
+    if (!session) {
+      const redirectedId = this.sessionIdRedirects.get(sessionId)
+      if (redirectedId) {
+        console.log(`[AgentManager] Session ${sessionId} re-keyed, redirecting sendMessage to ${redirectedId}`)
+        sessionId = redirectedId
+        session = this.sessions.get(sessionId)
+      }
+    }
 
     // Session was destroyed — try to RESUME first (preserves conversation history),
     // then fallback to creating a new session
@@ -2516,7 +2564,18 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
   }
 
   async respondToPermission(sessionId: string, approved: boolean, message?: string, optionId?: string): Promise<void> {
-    const session = this.sessions.get(sessionId)
+    let session = this.sessions.get(sessionId)
+
+    // Fallback: session ID may have been re-keyed (temp → real) by pollSingleSession.
+    // The renderer might still hold the stale temp ID. Check the redirect map.
+    if (!session) {
+      const redirectedId = this.sessionIdRedirects.get(sessionId)
+      if (redirectedId) {
+        console.log(`[AgentManager] Session ${sessionId} re-keyed, redirecting to ${redirectedId}`)
+        sessionId = redirectedId
+        session = this.sessions.get(sessionId)
+      }
+    }
     if (!session) throw new Error(`Session not found: ${sessionId}`)
 
     const adapter = this.getAdapter(session.agentId)
@@ -2648,7 +2707,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     })
 
     // Collect all message parts into a single batch (matching resumeAdapterSession pattern)
-    const batchMessages: Array<{ id: string; role: string; content: string; partType?: string; tool?: unknown; update?: boolean }> = []
+    const batchMessages: Array<{ id: string; role: string; content: string; partType?: string; tool?: unknown; update?: boolean; taskProgress?: unknown }> = []
     for (const msg of messages) {
       for (const part of msg.parts) {
         batchMessages.push({
@@ -2666,6 +2725,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
             questions: part.tool.questions,
             todos: part.tool.todos
           } : undefined,
+          taskProgress: part.taskProgress,
           // Pass update flag so mobile store merges tool results into their
           // pending tool_use entries (e.g. status pending → success)
           ...(part.update ? { update: true } : {})

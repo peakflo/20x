@@ -100,7 +100,7 @@ export const agentSessionApi = {
     return window.electronAPI.agentSession.start(agentId, taskId, workspaceDir, skipInitialPrompt)
   },
 
-  resume: (agentId: string, taskId: string, ocSessionId: string): Promise<{ sessionId: string }> => {
+  resume: (agentId: string, taskId: string, ocSessionId: string): Promise<{ sessionId: string; ended?: boolean }> => {
     return window.electronAPI.agentSession.resume(agentId, taskId, ocSessionId)
   },
 

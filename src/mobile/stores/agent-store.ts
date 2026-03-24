@@ -9,6 +9,15 @@ export interface StepMeta {
   tokens?: { input: number; output: number; cache: number }
 }
 
+export interface TaskProgressData {
+  taskId: string
+  status: 'started' | 'running' | 'completed' | 'failed' | 'stopped'
+  description: string
+  lastToolName?: string
+  summary?: string
+  usage?: { total_tokens: number; tool_uses: number; duration_ms: number }
+}
+
 export interface AgentMessage {
   id: string
   role: 'user' | 'assistant' | 'system'
@@ -35,6 +44,7 @@ export interface AgentMessage {
       priority?: string
     }>
   }
+  taskProgress?: TaskProgressData
 }
 
 export enum SessionStatus {
@@ -50,6 +60,8 @@ export interface TaskSession {
   taskId: string
   status: SessionStatus
   messages: AgentMessage[]
+  /** Transient system status indicator (e.g. 'compacting') — cleared on next non-status message */
+  systemStatus?: string | null
 }
 
 export interface Agent {
@@ -144,7 +156,7 @@ export const useAgentStore = create<AgentState>((set, get) => {
       content = String(data)
     }
 
-    if (!content && !data.tool && !data.questions && !data.todos) return
+    if (!content && !data.tool && !data.questions && !data.todos && !data.taskProgress) return
     if (!msgId) msgId = `${role}-${content.slice(0, 50)}-${Date.now()}`
 
     set((state) => {
@@ -191,17 +203,35 @@ export const useAgentStore = create<AgentState>((set, get) => {
         }
       }
 
+      // Absorb system-status: store as transient indicator, don't add as message
+      if (data.partType === 'system-status') {
+        seen.add(msgId)
+        return {
+          sessions: new Map(state.sessions).set(taskId, {
+            ...resolvedSession,
+            systemStatus: content || null
+          })
+        }
+      }
+
       // Streaming update — replace existing message content
       if (data.update && seen.has(msgId)) {
         return {
           sessions: new Map(state.sessions).set(taskId, {
             ...resolvedSession,
+            systemStatus: null, // Clear transient status on real updates
             messages: resolvedSession.messages.map((m): AgentMessage => {
               if (m.id !== msgId) return m
-              const keepPartType = m.partType === 'todowrite' || m.partType === 'question' || m.partType === 'planreview'
+              const keepPartType = m.partType === 'todowrite' || m.partType === 'question' || m.partType === 'planreview' || m.partType === 'task_progress'
               const newPartType = keepPartType ? m.partType : ((data.partType as string) || m.partType)
               const newTool = data.tool ? { ...m.tool, ...(data.tool as AgentMessage['tool']) } as AgentMessage['tool'] : m.tool
-              return { ...m, content, partType: newPartType, tool: newTool }
+              const newTaskProgress = data.taskProgress
+                ? { ...m.taskProgress, ...(data.taskProgress as AgentMessage['taskProgress']) } as AgentMessage['taskProgress']
+                : m.taskProgress
+              const isFinal = m.taskProgress?.status === 'completed' || m.taskProgress?.status === 'failed' || m.taskProgress?.status === 'stopped'
+              const incoming = (data.taskProgress as AgentMessage['taskProgress'])?.status
+              const guardedTP = (isFinal && incoming === 'running') ? m.taskProgress : newTaskProgress
+              return { ...m, content, partType: newPartType, tool: newTool, taskProgress: guardedTP }
             })
           })
         }
@@ -221,7 +251,8 @@ export const useAgentStore = create<AgentState>((set, get) => {
               content,
               timestamp: new Date(),
               partType: data.partType as string,
-              tool: data.tool as AgentMessage['tool']
+              tool: data.tool as AgentMessage['tool'],
+              taskProgress: data.taskProgress as AgentMessage['taskProgress']
             }
           ]
         })
@@ -247,6 +278,7 @@ export const useAgentStore = create<AgentState>((set, get) => {
 
       let messages = [...resolvedSession.messages]
       let changed = false
+      let systemStatusUpdate: string | null | undefined = undefined
 
       for (const msg of event.messages) {
         const role: AgentMessage['role'] = msg.role === 'user' ? 'user' : msg.role === 'assistant' ? 'assistant' : 'system'
@@ -279,14 +311,29 @@ export const useAgentStore = create<AgentState>((set, get) => {
           continue
         }
 
+        // Absorb system-status: store as transient indicator, don't add as message
+        if (msg.partType === 'system-status') {
+          seen.add(msgId)
+          systemStatusUpdate = content || null
+          changed = true
+          continue
+        }
+
         // Streaming update — replace content of existing message
         if (msg.update && seen.has(msgId)) {
           messages = messages.map((m): AgentMessage => {
             if (m.id !== msgId) return m
-            const keepPartType = m.partType === 'todowrite' || m.partType === 'question' || m.partType === 'planreview'
+            const keepPartType = m.partType === 'todowrite' || m.partType === 'question' || m.partType === 'planreview' || m.partType === 'task_progress'
             const newPartType = keepPartType ? m.partType : (msg.partType || m.partType)
             const newTool = msg.tool ? { ...m.tool, ...(msg.tool as AgentMessage['tool']) } as AgentMessage['tool'] : m.tool
-            return { ...m, content, partType: newPartType, tool: newTool }
+            const msgData = msg as Record<string, unknown>
+            const newTaskProgress = msgData.taskProgress
+              ? { ...m.taskProgress, ...(msgData.taskProgress as AgentMessage['taskProgress']) } as AgentMessage['taskProgress']
+              : m.taskProgress
+            const isFinal = m.taskProgress?.status === 'completed' || m.taskProgress?.status === 'failed' || m.taskProgress?.status === 'stopped'
+            const incoming = (msgData.taskProgress as AgentMessage['taskProgress'])?.status
+            const guardedTP = (isFinal && incoming === 'running') ? m.taskProgress : newTaskProgress
+            return { ...m, content, partType: newPartType, tool: newTool, taskProgress: guardedTP }
           })
           changed = true
           continue
@@ -294,7 +341,7 @@ export const useAgentStore = create<AgentState>((set, get) => {
 
         if (seen.has(msgId)) continue
         seen.add(msgId)
-        if (!content && !msg.tool) continue
+        if (!content && !msg.tool && !(msg as Record<string, unknown>).taskProgress) continue
 
         messages.push({
           id: msgId,
@@ -302,7 +349,8 @@ export const useAgentStore = create<AgentState>((set, get) => {
           content,
           timestamp: new Date(),
           partType: msg.partType,
-          tool: msg.tool as AgentMessage['tool']
+          tool: msg.tool as AgentMessage['tool'],
+          taskProgress: (msg as Record<string, unknown>).taskProgress as AgentMessage['taskProgress']
         })
         changed = true
       }
@@ -312,7 +360,8 @@ export const useAgentStore = create<AgentState>((set, get) => {
       return {
         sessions: new Map(state.sessions).set(taskId, {
           ...resolvedSession,
-          messages
+          messages,
+          systemStatus: systemStatusUpdate !== undefined ? systemStatusUpdate : null
         })
       }
     })

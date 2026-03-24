@@ -358,3 +358,206 @@ describe('ClaudeCodeAdapter error result handling', () => {
     })
   })
 })
+
+describe('Workspace path encoding', () => {
+  // The adapter encodes workspace paths the same way Claude Code CLI does:
+  // all non-alphanumeric, non-hyphen characters are replaced with hyphens.
+  // This must match Claude Code's actual encoding to find session files.
+
+  it('replaces slashes and spaces with hyphens', () => {
+    const path = '/Users/john/my projects/app'
+    const encoded = path.replace(/[^a-zA-Z0-9-]/g, '-')
+    expect(encoded).toBe('-Users-john-my-projects-app')
+  })
+
+  it('replaces underscores with hyphens (matches Claude Code CLI behavior)', () => {
+    const path = '/Users/john/workspaces/task_1774055411603_shbw90l'
+    const encoded = path.replace(/[^a-zA-Z0-9-]/g, '-')
+    expect(encoded).toBe('-Users-john-workspaces-task-1774055411603-shbw90l')
+  })
+
+  it('replaces dots with hyphens (matches Claude Code CLI behavior)', () => {
+    const path = '/Users/john/.paperclip/project'
+    const encoded = path.replace(/[^a-zA-Z0-9-]/g, '-')
+    expect(encoded).toBe('-Users-john--paperclip-project')
+  })
+
+  it('preserves existing hyphens', () => {
+    const path = '/Users/john/my-project'
+    const encoded = path.replace(/[^a-zA-Z0-9-]/g, '-')
+    expect(encoded).toBe('-Users-john-my-project')
+  })
+
+  it('handles the full 20x workspace path correctly', () => {
+    const path = '/Users/dmitryvedenyapin/Library/Application Support/20x/workspaces/task_1774055411603_shbw90l'
+    const encoded = path.replace(/[^a-zA-Z0-9-]/g, '-')
+    expect(encoded).toBe('-Users-dmitryvedenyapin-Library-Application-Support-20x-workspaces-task-1774055411603-shbw90l')
+    // Old regex would produce: -Users-dmitryvedenyapin-Library-Application-Support-20x-workspaces-task_1774055411603_shbw90l
+    // which doesn't match the actual directory Claude Code creates
+  })
+})
+describe('ClaudeCodeAdapter task_progress handling', () => {
+  it('converts task_started to TASK_PROGRESS part', async () => {
+    const msg = {
+      type: 'system',
+      subtype: 'task_started',
+      task_id: 'task-abc',
+      description: 'Investigate bug in auth module',
+      uuid: 'ts-1',
+      session_id: 's1',
+    }
+
+    const { adapter } = createAdapterWithSession('s1', [msg])
+    const seenPartIds = new Set<string>()
+    const partContentLengths = new Map<string, string>()
+    const parts = await adapter.pollMessages('s1', new Set(), seenPartIds, partContentLengths, {} as any)
+
+    expect(parts).toHaveLength(1)
+    expect(parts[0].type).toBe('task_progress')
+    expect(parts[0].id).toBe('task-task-abc')
+    expect(parts[0].content).toBe('Investigate bug in auth module')
+    expect(parts[0].taskProgress).toEqual({
+      taskId: 'task-abc',
+      status: 'started',
+      description: 'Investigate bug in auth module',
+    })
+    expect(parts[0].update).toBeUndefined()
+  })
+
+  it('converts task_progress to TASK_PROGRESS part with update flag', async () => {
+    const startMsg = {
+      type: 'system',
+      subtype: 'task_started',
+      task_id: 'task-abc',
+      description: 'Investigate bug',
+      uuid: 'ts-1',
+      session_id: 's1',
+    }
+    const progressMsg = {
+      type: 'system',
+      subtype: 'task_progress',
+      task_id: 'task-abc',
+      description: 'Investigating auth module',
+      last_tool_name: 'Grep',
+      summary: 'Found 3 relevant files',
+      usage: { total_tokens: 5000, tool_uses: 12, duration_ms: 30000 },
+      uuid: 'tp-1',
+      session_id: 's1',
+    }
+
+    const { adapter } = createAdapterWithSession('s1', [startMsg, progressMsg])
+    const seenPartIds = new Set<string>()
+    const partContentLengths = new Map<string, string>()
+    const parts = await adapter.pollMessages('s1', new Set(), seenPartIds, partContentLengths, {} as any)
+
+    // Should have 2 parts: started + progress update
+    expect(parts).toHaveLength(2)
+
+    const progressPart = parts[1]
+    expect(progressPart.type).toBe('task_progress')
+    expect(progressPart.id).toBe('task-task-abc')
+    expect(progressPart.update).toBe(true)
+    expect(progressPart.taskProgress).toEqual({
+      taskId: 'task-abc',
+      status: 'running',
+      description: 'Investigating auth module',
+      lastToolName: 'Grep',
+      summary: 'Found 3 relevant files',
+      usage: { total_tokens: 5000, tool_uses: 12, duration_ms: 30000 },
+    })
+  })
+
+  it('converts task_notification to TASK_PROGRESS part with final status', async () => {
+    const startMsg = {
+      type: 'system',
+      subtype: 'task_started',
+      task_id: 'task-abc',
+      description: 'Fix auth bug',
+      uuid: 'ts-1',
+      session_id: 's1',
+    }
+    const notificationMsg = {
+      type: 'system',
+      subtype: 'task_notification',
+      task_id: 'task-abc',
+      status: 'completed',
+      summary: 'Successfully fixed the auth bug by updating the token validation logic.',
+      usage: { total_tokens: 10000, tool_uses: 25, duration_ms: 60000 },
+      uuid: 'tn-1',
+      session_id: 's1',
+    }
+
+    const { adapter } = createAdapterWithSession('s1', [startMsg, notificationMsg])
+    const seenPartIds = new Set<string>()
+    const partContentLengths = new Map<string, string>()
+    const parts = await adapter.pollMessages('s1', new Set(), seenPartIds, partContentLengths, {} as any)
+
+    expect(parts).toHaveLength(2)
+
+    const notificationPart = parts[1]
+    expect(notificationPart.type).toBe('task_progress')
+    expect(notificationPart.id).toBe('task-task-abc')
+    expect(notificationPart.update).toBe(true)
+    expect(notificationPart.taskProgress?.status).toBe('completed')
+    expect(notificationPart.taskProgress?.summary).toBe('Successfully fixed the auth bug by updating the token validation logic.')
+  })
+
+  it('handles task_progress without prior task_started (creates new entry)', async () => {
+    const progressMsg = {
+      type: 'system',
+      subtype: 'task_progress',
+      task_id: 'task-orphan',
+      description: 'Working on something',
+      usage: { total_tokens: 1000, tool_uses: 3, duration_ms: 5000 },
+      uuid: 'tp-orphan',
+      session_id: 's1',
+    }
+
+    const { adapter } = createAdapterWithSession('s1', [progressMsg])
+    const seenPartIds = new Set<string>()
+    const partContentLengths = new Map<string, string>()
+    const parts = await adapter.pollMessages('s1', new Set(), seenPartIds, partContentLengths, {} as any)
+
+    expect(parts).toHaveLength(1)
+    expect(parts[0].type).toBe('task_progress')
+    expect(parts[0].update).toBeFalsy() // First time seen, no update flag
+    expect(parts[0].taskProgress?.status).toBe('running')
+  })
+
+  it('handles tool_progress by updating existing tool part', async () => {
+    // First emit a tool_use for the tool
+    const toolUseMsg = {
+      type: 'assistant',
+      uuid: 'msg-1',
+      message: {
+        id: 'msg-1',
+        content: [
+          { type: 'tool_use', id: 'tu-123', name: 'Bash', input: { command: 'ls -la' } },
+        ],
+      },
+    }
+    const toolProgressMsg = {
+      type: 'tool_progress',
+      tool_use_id: 'tu-123',
+      tool_name: 'Bash',
+      parent_tool_use_id: null,
+      elapsed_time_seconds: 15,
+      uuid: 'tp-1',
+      session_id: 's1',
+    }
+
+    const { adapter } = createAdapterWithSession('s1', [toolUseMsg, toolProgressMsg])
+    const seenPartIds = new Set<string>()
+    const partContentLengths = new Map<string, string>()
+    const parts = await adapter.pollMessages('s1', new Set(), seenPartIds, partContentLengths, {} as any)
+
+    // Should have: text part (empty, from assistant) + tool part + tool progress update
+    const toolParts = parts.filter((p: any) => p.type === 'tool')
+    expect(toolParts.length).toBeGreaterThanOrEqual(1)
+
+    const progressUpdate = toolParts.find((p: any) => p.update === true)
+    expect(progressUpdate).toBeDefined()
+    expect(progressUpdate!.tool!.status).toBe('running')
+    expect(progressUpdate!.tool!.title).toContain('15s')
+  })
+})

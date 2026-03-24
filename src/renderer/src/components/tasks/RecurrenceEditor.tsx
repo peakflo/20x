@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import type { RecurrencePattern } from '../../types'
 import { Label } from '../ui/Label'
 import { Input } from '../ui/Input'
@@ -115,7 +115,39 @@ export function RecurrenceEditor({ value, onChange }: RecurrenceEditorProps) {
   const [weekdays, setWeekdays] = useState<number[]>(initialState.weekdays)
   const [monthDay, setMonthDay] = useState(initialState.monthDay)
 
+  // Guard to prevent onChange from firing while syncing from value prop
+  const syncingFromProp = useRef(false)
+
+  // Sync internal state when value prop changes externally (e.g. editing an existing task)
   useEffect(() => {
+    syncingFromProp.current = true
+    const shouldBeEnabled = !!value
+    setEnabled(shouldBeEnabled)
+    if (value) {
+      if (typeof value === 'string') {
+        setRawCron(value)
+        const parsed = parseCronToState(value)
+        setType(parsed.type)
+        setInterval(parsed.interval)
+        setTime(parsed.time)
+        setWeekdays(parsed.weekdays)
+        setMonthDay(parsed.monthDay)
+      } else {
+        setType((value.type || 'daily') as FrequencyType)
+        setInterval(value.interval || 1)
+        setTime(value.time || '09:00')
+        setWeekdays(value.weekdays || [1, 2, 3, 4, 5])
+        setMonthDay(value.monthDay || 1)
+      }
+    }
+    // Reset the guard after React processes the state updates
+    requestAnimationFrame(() => { syncingFromProp.current = false })
+  }, [value])
+
+  useEffect(() => {
+    // Skip onChange calls triggered by syncing from value prop to avoid loops
+    if (syncingFromProp.current) return
+
     if (!enabled) {
       onChange(null)
       return

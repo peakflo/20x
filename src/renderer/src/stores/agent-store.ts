@@ -10,6 +10,15 @@ export interface StepMeta {
   tokens?: { input: number; output: number; cache: number }
 }
 
+export interface TaskProgressData {
+  taskId: string
+  status: 'started' | 'running' | 'completed' | 'failed' | 'stopped'
+  description: string
+  lastToolName?: string
+  summary?: string
+  usage?: { total_tokens: number; tool_uses: number; duration_ms: number }
+}
+
 export interface AgentMessage {
   id: string
   role: 'user' | 'assistant' | 'system'
@@ -36,6 +45,7 @@ export interface AgentMessage {
       priority?: string
     }>
   }
+  taskProgress?: TaskProgressData
 }
 
 // ── Per-task session ──────────────────────────────────────────
@@ -54,6 +64,8 @@ export interface TaskSession {
   status: SessionStatus
   messages: AgentMessage[]
   pendingApproval: AgentApprovalRequest | null
+  /** Transient system status indicator (e.g. 'compacting') — cleared on next non-status message */
+  systemStatus?: string | null
 }
 
 // Module-level dedup tracking (avoids unnecessary Zustand re-renders)
@@ -104,8 +116,9 @@ export const useAgentStore = create<AgentState>((set, get) => {
     if (!session) return
 
     const updated = { ...session, status: event.status }
-    // Patch in real sessionId if session was pre-registered with empty string
-    if (!session.sessionId && event.sessionId) updated.sessionId = event.sessionId
+    // Patch in real sessionId when session was pre-registered with empty string
+    // or when the main process re-keyed the session (temp ID → real ID)
+    if (event.sessionId && session.sessionId !== event.sessionId) updated.sessionId = event.sessionId
     // Clear pending approval when session goes idle
     if (event.status === SessionStatus.IDLE) updated.pendingApproval = null
     set({ sessions: new Map(state.sessions).set(session.taskId, updated) })
@@ -143,8 +156,8 @@ export const useAgentStore = create<AgentState>((set, get) => {
       content = String(data)
     }
 
-    // Allow empty content for tool/question messages (they have tool/questions field instead)
-    if (!content && !data.tool && !data.questions && !data.todos) return
+    // Allow empty content for tool/question/taskProgress messages (they have structured data instead)
+    if (!content && !data.tool && !data.questions && !data.todos && !data.taskProgress) return
     if (!msgId) msgId = (data.id as string) || `${role}-${content.slice(0, 50)}-${Date.now()}`
 
     const taskId = resolvedSession.taskId
@@ -187,19 +200,40 @@ export const useAgentStore = create<AgentState>((set, get) => {
       return
     }
 
+    // Absorb system-status: store as transient indicator, don't add as message
+    if (data.partType === 'system-status') {
+      seen.add(msgId)
+      set({
+        sessions: new Map(state.sessions).set(taskId, {
+          ...resolvedSession,
+          systemStatus: content || null
+        })
+      })
+      return
+    }
+
     // Streaming update — replace content of existing message
     if (data.update && seen.has(msgId)) {
       set({
         sessions: new Map(state.sessions).set(taskId, {
           ...resolvedSession,
+          systemStatus: null, // Clear transient status on real updates
           messages: resolvedSession.messages.map((m): AgentMessage => {
             if (m.id !== msgId) return m
-            // Preserve todowrite/question partType — don't let a generic 'tool' update overwrite them
-            const keepPartType = m.partType === 'todowrite' || m.partType === 'question' || m.partType === 'planreview'
+            // Preserve todowrite/question/task_progress partType — don't let a generic 'tool' update overwrite them
+            const keepPartType = m.partType === 'todowrite' || m.partType === 'question' || m.partType === 'planreview' || m.partType === 'task_progress'
             const newPartType = keepPartType ? m.partType : ((data.partType as string) || m.partType)
             // Merge tool objects so todos/questions are preserved across updates
             const newTool = data.tool ? { ...m.tool, ...(data.tool as AgentMessage['tool']) } as AgentMessage['tool'] : m.tool
-            return { ...m, content, partType: newPartType, tool: newTool }
+            // Merge taskProgress data for task_progress updates
+            const newTaskProgress = data.taskProgress
+              ? { ...m.taskProgress, ...(data.taskProgress as AgentMessage['taskProgress']) } as AgentMessage['taskProgress']
+              : m.taskProgress
+            // Guard against stale task_progress overwriting a final status
+            const isFinalStatus = m.taskProgress?.status === 'completed' || m.taskProgress?.status === 'failed' || m.taskProgress?.status === 'stopped'
+            const incomingStatus = (data.taskProgress as AgentMessage['taskProgress'])?.status
+            const guardedTaskProgress = (isFinalStatus && incomingStatus === 'running') ? m.taskProgress : newTaskProgress
+            return { ...m, content, partType: newPartType, tool: newTool, taskProgress: guardedTaskProgress }
           })
         })
       })
@@ -219,7 +253,7 @@ export const useAgentStore = create<AgentState>((set, get) => {
         ...resolvedSession,
         messages: [
           ...resolvedSession.messages,
-          { id: msgId, role, content, timestamp: new Date(), partType: data.partType as string, tool: data.tool as AgentMessage['tool'] }
+          { id: msgId, role, content, timestamp: new Date(), partType: data.partType as string, tool: data.tool as AgentMessage['tool'], taskProgress: data.taskProgress as AgentMessage['taskProgress'] }
         ]
       })
     })
@@ -251,8 +285,8 @@ export const useAgentStore = create<AgentState>((set, get) => {
       const taskId = session.taskId
       const seen = getSeen(taskId)
 
-      // Resolve sessionId if needed
-      const resolvedSession = (!session.sessionId && event.sessionId)
+      // Resolve sessionId: update when empty OR when main process re-keyed (temp → real)
+      const resolvedSession = (event.sessionId && session.sessionId !== event.sessionId)
         ? { ...session, sessionId: event.sessionId }
         : (nextSessions.get(taskId) || session)
 
@@ -291,14 +325,30 @@ export const useAgentStore = create<AgentState>((set, get) => {
           continue
         }
 
+        // Absorb system-status: store as transient indicator, don't add as message
+        if (msg.partType === 'system-status') {
+          seen.add(msgId)
+          nextSessions.set(taskId, { ...resolvedSession, systemStatus: content || null })
+          changed = true
+          continue
+        }
+
         // Streaming update — replace content of existing message
         if (msg.update && seen.has(msgId)) {
           messages = messages.map((m): AgentMessage => {
             if (m.id !== msgId) return m
-            const keepPartType = m.partType === 'todowrite' || m.partType === 'question' || m.partType === 'planreview'
+            const keepPartType = m.partType === 'todowrite' || m.partType === 'question' || m.partType === 'planreview' || m.partType === 'task_progress'
             const newPartType = keepPartType ? m.partType : (msg.partType || m.partType)
             const newTool = msg.tool ? { ...m.tool, ...(msg.tool as AgentMessage['tool']) } as AgentMessage['tool'] : m.tool
-            return { ...m, content, partType: newPartType, tool: newTool }
+            const msgData = msg as Record<string, unknown>
+            const newTaskProgress = msgData.taskProgress
+              ? { ...m.taskProgress, ...(msgData.taskProgress as AgentMessage['taskProgress']) } as AgentMessage['taskProgress']
+              : m.taskProgress
+            // Guard against stale task_progress overwriting a final status
+            const isFinal = m.taskProgress?.status === 'completed' || m.taskProgress?.status === 'failed' || m.taskProgress?.status === 'stopped'
+            const incoming = (msgData.taskProgress as AgentMessage['taskProgress'])?.status
+            const guardedTP = (isFinal && incoming === 'running') ? m.taskProgress : newTaskProgress
+            return { ...m, content, partType: newPartType, tool: newTool, taskProgress: guardedTP }
           })
           messagesChanged = true
           continue
@@ -308,8 +358,8 @@ export const useAgentStore = create<AgentState>((set, get) => {
         if (seen.has(msgId)) continue
         seen.add(msgId)
 
-        // Allow empty content for tool/question messages
-        if (!content && !msg.tool) continue
+        // Allow empty content for tool/question/task_progress messages
+        if (!content && !msg.tool && !(msg as Record<string, unknown>).taskProgress) continue
 
         messages.push({
           id: msgId,
@@ -317,13 +367,14 @@ export const useAgentStore = create<AgentState>((set, get) => {
           content,
           timestamp: new Date(),
           partType: msg.partType,
-          tool: msg.tool as AgentMessage['tool']
+          tool: msg.tool as AgentMessage['tool'],
+          taskProgress: (msg as Record<string, unknown>).taskProgress as AgentMessage['taskProgress']
         })
         messagesChanged = true
       }
 
       if (messagesChanged) {
-        nextSessions.set(taskId, { ...resolvedSession, messages })
+        nextSessions.set(taskId, { ...resolvedSession, messages, systemStatus: null })
         changed = true
       }
     }

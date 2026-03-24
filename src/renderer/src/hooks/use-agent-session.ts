@@ -10,6 +10,8 @@ export interface AgentSessionState {
   status: SessionStatus
   messages: import('@/stores/agent-store').AgentMessage[]
   pendingApproval: AgentApprovalRequest | null
+  /** Transient system status indicator (e.g. 'compacting') — cleared on next non-status message */
+  systemStatus?: string | null
 }
 
 const EMPTY_SESSION: AgentSessionState = {
@@ -30,7 +32,8 @@ export function useAgentSession(taskId: string | undefined) {
         sessionId: session.sessionId,
         status: session.status,
         messages: session.messages,
-        pendingApproval: session.pendingApproval
+        pendingApproval: session.pendingApproval,
+        systemStatus: session.systemStatus
       }
     : EMPTY_SESSION
 
@@ -46,16 +49,23 @@ export function useAgentSession(taskId: string | undefined) {
     [initSession]
   )
 
+  const removeSession = useAgentStore((s) => s.removeSession)
+
   const resume = useCallback(
     async (agentId: string, tId: string, ocSessionId: string) => {
       // Clear message dedup so replayed messages will be added
       clearMessageDedup(tId)
       initSession(tId, '', agentId)
-      const { sessionId } = await agentSessionApi.resume(agentId, tId, ocSessionId)
-      initSession(tId, sessionId, agentId)
-      return sessionId
+      const result = await agentSessionApi.resume(agentId, tId, ocSessionId)
+      if (result.ended) {
+        // Session ended normally (task completed) — clean up the pre-registered session
+        removeSession(tId)
+        return ''
+      }
+      initSession(tId, result.sessionId, agentId)
+      return result.sessionId
     },
-    [initSession, clearMessageDedup]
+    [initSession, clearMessageDedup, removeSession]
   )
 
   const abort = useCallback(async () => {

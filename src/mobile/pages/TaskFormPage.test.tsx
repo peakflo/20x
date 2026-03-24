@@ -238,4 +238,54 @@ describe('TaskFormPage — Edit mode', () => {
     expect(container.textContent).toContain('Not found')
     expect(container.textContent).toContain('Task not found')
   })
+
+  it('shows recurring enabled when editing a recurring task', async () => {
+    const recurringTask: Task = {
+      ...existingTask,
+      id: 't-rec',
+      is_recurring: true,
+      recurrence_pattern: '0 9 * * 1,2,3,4,5'
+    }
+    useTaskStore.setState({ tasks: [recurringTask] })
+
+    const { container } = render(<TaskFormPage taskId="t-rec" onNavigate={mockNavigate} />)
+
+    await waitFor(() => {
+      const checkbox = container.querySelector('#enable-recurrence') as HTMLInputElement
+      expect(checkbox).toBeTruthy()
+      expect(checkbox.checked).toBe(true)
+    })
+  })
+
+  it('submits recurring task with is_recurring true when editing', async () => {
+    const recurringTask: Task = {
+      ...existingTask,
+      id: 't-rec',
+      is_recurring: true,
+      recurrence_pattern: '0 9 * * 1,2,3,4,5'
+    }
+    const updateTaskMock = vi.fn().mockResolvedValue(true)
+    useTaskStore.setState({
+      tasks: [recurringTask],
+      updateTask: updateTaskMock
+    } as unknown as Parameters<typeof useTaskStore.setState>[0])
+
+    const { container } = render(<TaskFormPage taskId="t-rec" onNavigate={mockNavigate} />)
+
+    await waitFor(() => {
+      const titleInput = container.querySelector('input[placeholder="What needs to be done?"]') as HTMLInputElement
+      expect(titleInput.value).toBe('Existing Task')
+    })
+
+    const buttons = container.querySelectorAll('button.bg-primary')
+    const submitBtn = Array.from(buttons).find(b => b.textContent?.includes('Save Changes')) as HTMLButtonElement
+    fireEvent.click(submitBtn)
+
+    await waitFor(() => {
+      expect(updateTaskMock).toHaveBeenCalledWith('t-rec', expect.objectContaining({
+        is_recurring: true,
+        recurrence_pattern: expect.any(String)
+      }))
+    })
+  })
 })
