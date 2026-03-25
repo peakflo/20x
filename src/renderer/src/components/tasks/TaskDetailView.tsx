@@ -274,7 +274,7 @@ export function TaskDetailView({ task, agents, onEdit, onDelete, onUpdateAttachm
 
   // Ensure skills are loaded for badge display
   useEffect(() => {
-    if (task.agent_id && task.skill_ids !== null) {
+    if (task.agent_id && Array.isArray(task.skill_ids)) {
       fetchSkills()
     }
   }, [task.agent_id, task.skill_ids])
@@ -440,7 +440,7 @@ export function TaskDetailView({ task, agents, onEdit, onDelete, onUpdateAttachm
               <>
                 <span className="text-muted-foreground flex items-center gap-2"><BookOpen className="h-3.5 w-3.5" /> Skills</span>
                 <div className="flex flex-wrap items-center gap-1.5">
-                  {task.skill_ids === null ? (
+                  {!Array.isArray(task.skill_ids) ? (
                     <span className="text-sm text-muted-foreground">Using agent defaults</span>
                   ) : (
                     <>
@@ -463,9 +463,9 @@ export function TaskDetailView({ task, agents, onEdit, onDelete, onUpdateAttachm
                   )}
                   <Button variant="ghost" size="sm" onClick={onAddSkills} className="h-6 gap-1 px-2 text-xs text-muted-foreground">
                     <Plus className="h-3 w-3" />
-                    {task.skill_ids === null ? 'Customize' : 'Add'}
+                    {!Array.isArray(task.skill_ids) ? 'Customize' : 'Add'}
                   </Button>
-                  {task.skill_ids !== null && (
+                  {Array.isArray(task.skill_ids) && (
                     <Button
                       variant="ghost"
                       size="sm"
