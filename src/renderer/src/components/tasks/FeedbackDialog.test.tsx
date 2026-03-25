@@ -3,13 +3,11 @@ import { render, screen, fireEvent, within } from '@testing-library/react'
 import { FeedbackDialog } from './FeedbackDialog'
 
 describe('FeedbackDialog', () => {
-  let onSubmit: ReturnType<typeof vi.fn>
-  let onSkip: ReturnType<typeof vi.fn>
+  const onSubmit = vi.fn<(rating: number, comment: string) => void>()
+  const onSkip = vi.fn<() => void>()
 
   beforeEach(() => {
     vi.clearAllMocks()
-    onSubmit = vi.fn()
-    onSkip = vi.fn()
   })
 
   function getDialog() {
