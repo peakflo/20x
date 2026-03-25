@@ -1879,6 +1879,25 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
     return rows.map(deserializeTask)
   }
 
+  /**
+   * Batch-update sort_order for subtasks under a parent.
+   * @param parentId  The parent task ID
+   * @param orderedIds  Subtask IDs in the desired order (index becomes sort_order)
+   */
+  reorderSubtasks(parentId: string, orderedIds: string[]): void {
+    if (!this.ensureDbOpen()) return
+
+    const stmt = this.db.prepare('UPDATE tasks SET sort_order = ?, updated_at = ? WHERE id = ? AND parent_task_id = ?')
+    const now = new Date().toISOString()
+
+    const runAll = this.db.transaction(() => {
+      for (let i = 0; i < orderedIds.length; i++) {
+        stmt.run(i, now, orderedIds[i], parentId)
+      }
+    })
+    runAll()
+  }
+
   createTask(data: CreateTaskData): TaskRecord | undefined {
     const id = createId()
     const now = new Date().toISOString()
@@ -1891,15 +1910,24 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
         ? (typeof data.recurrence_pattern === 'string' ? data.recurrence_pattern : JSON.stringify(data.recurrence_pattern))
         : null
 
+    // When creating a subtask, place it at the end by using max(sort_order) + 1
+    let sortOrder = 0
+    if (data.parent_task_id) {
+      const maxRow = this.db.prepare(
+        'SELECT COALESCE(MAX(sort_order), -1) as max_order FROM tasks WHERE parent_task_id = ?'
+      ).get(data.parent_task_id) as { max_order: number } | undefined
+      sortOrder = (maxRow?.max_order ?? -1) + 1
+    }
+
     this.db.prepare(`
       INSERT INTO tasks (
         id, title, description, type, priority, status, assignee, due_date,
         labels, attachments, repos, output_fields, external_id, source_id, source,
         is_recurring, recurrence_pattern, recurrence_parent_id,
-        parent_task_id,
+        parent_task_id, sort_order,
         created_at, updated_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id,
       data.title,
@@ -1920,6 +1948,7 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
       recurrencePattern,
       data.recurrence_parent_id ?? null,
       data.parent_task_id ?? null,
+      sortOrder,
       now,
       now
     )

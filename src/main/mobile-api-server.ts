@@ -411,6 +411,18 @@ async function routePost(pathname: string, params: Record<string, unknown>): Pro
     )
   }
 
+  // POST /api/tasks/reorder-subtasks — reorder subtasks under a parent
+  if (pathname === '/api/tasks/reorder-subtasks') {
+    const { parentId, orderedIds } = params as { parentId?: string; orderedIds?: string[] }
+    if (!parentId || !Array.isArray(orderedIds)) {
+      throw Object.assign(new Error('parentId and orderedIds are required'), { status: 400 })
+    }
+    db.reorderSubtasks(parentId, orderedIds)
+    broadcastToMobileClients('task:subtasks-reordered', { parentId, orderedIds })
+    if (notifyDesktop) notifyDesktop('task:subtasks-reordered', { parentId, orderedIds })
+    return { success: true }
+  }
+
   // POST /api/tasks — create task (must be checked before the :id update route)
   if (pathname === '/api/tasks') {
     const { title } = params as { title?: string }

@@ -48,7 +48,9 @@ export const api = {
     },
     get: (id: string) => get<unknown>(`/api/tasks/${encodeURIComponent(id)}`),
     create: (data: unknown) => post<unknown>('/api/tasks', data),
-    update: (id: string, data: unknown) => post<unknown>(`/api/tasks/${encodeURIComponent(id)}`, data)
+    update: (id: string, data: unknown) => post<unknown>(`/api/tasks/${encodeURIComponent(id)}`, data),
+    reorderSubtasks: (parentId: string, orderedIds: string[]) =>
+      post<{ success: boolean }>('/api/tasks/reorder-subtasks', { parentId, orderedIds })
   },
   taskSources: {
     syncAll: () => post<unknown[]>('/api/task-sources/sync-all')

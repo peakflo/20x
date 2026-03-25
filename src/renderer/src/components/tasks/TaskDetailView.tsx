@@ -1,5 +1,8 @@
 import React, { useEffect } from 'react'
-import { Pencil, Trash2, Calendar, User, Tag, Clock, Bot, Play, History, GitBranch, Plus, X, BookOpen, AlarmClockOff, BellRing, Folder, Repeat, Star, Sparkles, ListTree, ArrowLeft, ChevronRight } from 'lucide-react'
+import { Pencil, Trash2, Calendar, User, Tag, Clock, Bot, Play, History, GitBranch, Plus, X, BookOpen, AlarmClockOff, BellRing, Folder, Repeat, Star, Sparkles, ListTree, ArrowLeft, ChevronRight, GripVertical } from 'lucide-react'
+import { DndContext, closestCenter, KeyboardSensor, PointerSensor, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core'
+import { arrayMove, SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
+import { CSS } from '@dnd-kit/utilities'
 import { CollapsibleDescription } from '@/components/ui/CollapsibleDescription'
 import { Button } from '@/components/ui/Button'
 import { TaskStatusBadge } from './TaskStatusBadge'
@@ -95,11 +98,60 @@ const subtaskStatusDotColor: Record<TaskStatus, string> = {
   [TaskStatus.Completed]: 'bg-emerald-400'
 }
 
-function SubtasksSection({ subtasks, onNavigateToTask, onAddSubtask }: { subtasks: WorkfloTask[]; onNavigateToTask?: (taskId: string) => void; onAddSubtask?: (title: string) => void }) {
+function SortableSubtaskItem({ subtask, onNavigateToTask }: { subtask: WorkfloTask; onNavigateToTask?: (taskId: string) => void }) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging
+  } = useSortable({ id: subtask.id })
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1,
+    zIndex: isDragging ? 10 : undefined,
+  }
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      className="flex items-center gap-1 px-1 py-2.5 hover:bg-accent/50 transition-colors"
+    >
+      <button
+        className="shrink-0 cursor-grab active:cursor-grabbing p-1 text-muted-foreground/50 hover:text-muted-foreground touch-none"
+        {...attributes}
+        {...listeners}
+      >
+        <GripVertical className="h-3.5 w-3.5" />
+      </button>
+      <button
+        onClick={() => onNavigateToTask?.(subtask.id)}
+        className="flex-1 flex items-center gap-3 text-left cursor-pointer min-w-0 pr-2"
+      >
+        <div className={`h-2 w-2 rounded-full shrink-0 ${subtaskStatusDotColor[subtask.status]}`} />
+        <div className="min-w-0 flex-1">
+          <div className="text-sm truncate">{subtask.title}</div>
+        </div>
+        <ChevronRight className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+      </button>
+    </div>
+  )
+}
+
+function SubtasksSection({ subtasks, onNavigateToTask, onAddSubtask, onReorderSubtasks }: { subtasks: WorkfloTask[]; onNavigateToTask?: (taskId: string) => void; onAddSubtask?: (title: string) => void; onReorderSubtasks?: (orderedIds: string[]) => void }) {
   const [isAdding, setIsAdding] = React.useState(false)
   const [newTitle, setNewTitle] = React.useState('')
   const inputRef = React.useRef<HTMLInputElement>(null)
   const completedCount = subtasks.filter(s => s.status === TaskStatus.Completed).length
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
+  )
 
   React.useEffect(() => {
     if (isAdding) inputRef.current?.focus()
@@ -113,6 +165,20 @@ function SubtasksSection({ subtasks, onNavigateToTask, onAddSubtask }: { subtask
       setIsAdding(false)
     }
   }
+
+  const handleDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event
+    if (!over || active.id === over.id) return
+
+    const oldIndex = subtasks.findIndex(s => s.id === active.id)
+    const newIndex = subtasks.findIndex(s => s.id === over.id)
+    if (oldIndex === -1 || newIndex === -1) return
+
+    const reordered = arrayMove(subtasks, oldIndex, newIndex)
+    onReorderSubtasks?.(reordered.map(s => s.id))
+  }
+
+  const subtaskIds = subtasks.map(s => s.id)
 
   return (
     <div className="space-y-2">
@@ -133,19 +199,17 @@ function SubtasksSection({ subtasks, onNavigateToTask, onAddSubtask }: { subtask
         )}
       </div>
       <div className="rounded-md border divide-y">
-        {subtasks.map((subtask) => (
-          <button
-            key={subtask.id}
-            onClick={() => onNavigateToTask?.(subtask.id)}
-            className="w-full flex items-center gap-3 px-3 py-2.5 text-left hover:bg-accent/50 transition-colors cursor-pointer"
-          >
-            <div className={`h-2 w-2 rounded-full shrink-0 ${subtaskStatusDotColor[subtask.status]}`} />
-            <div className="min-w-0 flex-1">
-              <div className="text-sm truncate">{subtask.title}</div>
-            </div>
-            <ChevronRight className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-          </button>
-        ))}
+        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+          <SortableContext items={subtaskIds} strategy={verticalListSortingStrategy}>
+            {subtasks.map((subtask) => (
+              <SortableSubtaskItem
+                key={subtask.id}
+                subtask={subtask}
+                onNavigateToTask={onNavigateToTask}
+              />
+            ))}
+          </SortableContext>
+        </DndContext>
         {isAdding && (
           <div className="flex items-center gap-2 px-3 py-2">
             <div className="h-2 w-2 rounded-full shrink-0 bg-muted-foreground" />
@@ -201,9 +265,10 @@ interface TaskDetailViewProps {
   parentTask?: WorkfloTask | null
   onNavigateToTask?: (taskId: string) => void
   onAddSubtask?: (title: string) => void
+  onReorderSubtasks?: (orderedIds: string[]) => void
 }
 
-export function TaskDetailView({ task, agents, onEdit, onDelete, onUpdateAttachments, onUpdateOutputFields, onCompleteTask, onAssignAgent, onUpdateRepos, onAddRepos, onUpdateSkillIds, onAddSkills, onStartAgent, canStartAgent, onResumeAgent, canResumeAgent, onRestartAgent, canRestartAgent, onSnooze, onUnsnooze, onReassign, onTriage, canTriage, subtasks, parentTask, onNavigateToTask, onAddSubtask }: TaskDetailViewProps) {
+export function TaskDetailView({ task, agents, onEdit, onDelete, onUpdateAttachments, onUpdateOutputFields, onCompleteTask, onAssignAgent, onUpdateRepos, onAddRepos, onUpdateSkillIds, onAddSkills, onStartAgent, canStartAgent, onResumeAgent, canResumeAgent, onRestartAgent, canRestartAgent, onSnooze, onUnsnooze, onReassign, onTriage, canTriage, subtasks, parentTask, onNavigateToTask, onAddSubtask, onReorderSubtasks }: TaskDetailViewProps) {
   const { skills, fetchSkills } = useSkillStore()
   const isActive = task.status !== TaskStatus.Completed
 
@@ -495,6 +560,7 @@ export function TaskDetailView({ task, agents, onEdit, onDelete, onUpdateAttachm
               subtasks={subtasks || []}
               onNavigateToTask={onNavigateToTask}
               onAddSubtask={onAddSubtask}
+              onReorderSubtasks={onReorderSubtasks}
             />
           )}
 

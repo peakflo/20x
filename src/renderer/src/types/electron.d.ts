@@ -149,6 +149,7 @@ interface ElectronAPI {
     updateTask: (id: string, data: UpdateTaskDTO) => Promise<WorkfloTask | undefined>
     deleteTask: (id: string) => Promise<boolean>
     getSubtasks: (parentId: string) => Promise<WorkfloTask[]>
+    reorderSubtasks: (parentId: string, orderedIds: string[]) => Promise<boolean>
   }
   tasks: {
     getWorkspaceDir: (taskId: string) => Promise<string>

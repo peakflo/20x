@@ -150,9 +150,11 @@ describe('TaskDetailPage', () => {
       <TaskDetailPage taskId="parent-1" onNavigate={mockNavigate} />
     )
 
-    // Find all subtask buttons (inside the subtasks section's divide-y container)
-    const subtaskButtons = container.querySelectorAll('[class*="active:bg-accent"]')
-    const titles = Array.from(subtaskButtons).map(el => el.querySelector('[class*="truncate"]')?.textContent)
+    // Find all subtask title elements inside the subtasks section's divide-y container
+    const subtaskSection = container.querySelector('[class*="divide-y"]')
+    const titles = subtaskSection
+      ? Array.from(subtaskSection.querySelectorAll('[class*="truncate"]')).map(el => el.textContent)
+      : []
 
     // Should be sorted by sort_order: A(0), B(1), C(2)
     expect(titles).toEqual(['Subtask A', 'Subtask B', 'Subtask C'])
@@ -184,8 +186,10 @@ describe('TaskDetailPage', () => {
       <TaskDetailPage taskId="parent-1" onNavigate={mockNavigate} />
     )
 
-    const subtaskButtons = container.querySelectorAll('[class*="active:bg-accent"]')
-    const titles = Array.from(subtaskButtons).map(el => el.querySelector('[class*="truncate"]')?.textContent)
+    const subtaskSection = container.querySelector('[class*="divide-y"]')
+    const titles = subtaskSection
+      ? Array.from(subtaskSection.querySelectorAll('[class*="truncate"]')).map(el => el.textContent)
+      : []
 
     // Same sort_order → older first
     expect(titles).toEqual(['Earlier Subtask', 'Later Subtask'])
