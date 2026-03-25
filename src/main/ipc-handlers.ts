@@ -136,6 +136,11 @@ export function registerIpcHandlers(
     return db.getSubtasks(parentId)
   })
 
+  ipcMain.handle('db:reorderSubtasks', (_, parentId: string, orderedIds: string[]) => {
+    db.reorderSubtasks(parentId, orderedIds)
+    return true
+  })
+
   // Attachment handlers
   ipcMain.handle('attachments:pick', async () => {
     const result = await dialog.showOpenDialog({

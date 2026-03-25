@@ -24,6 +24,10 @@ export const taskApi = {
 
   getSubtasks: (parentId: string): Promise<WorkfloTask[]> => {
     return window.electronAPI.db.getSubtasks(parentId)
+  },
+
+  reorderSubtasks: (parentId: string, orderedIds: string[]): Promise<boolean> => {
+    return window.electronAPI.db.reorderSubtasks(parentId, orderedIds)
   }
 }
 

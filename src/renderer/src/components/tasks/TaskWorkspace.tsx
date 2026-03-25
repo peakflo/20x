@@ -105,6 +105,24 @@ export function TaskWorkspace({
     }
   }, [task, fetchTasks])
 
+  // Reorder subtasks via drag-and-drop
+  const handleReorderSubtasks = useCallback(async (orderedIds: string[]) => {
+    if (!task) return
+    // Optimistic reorder
+    setSubtasks(prev => {
+      const map = new Map(prev.map(s => [s.id, s]))
+      return orderedIds.map(id => map.get(id)!).filter(Boolean)
+    })
+    try {
+      await taskApi.reorderSubtasks(task.id, orderedIds)
+      fetchTasks() // Refresh sidebar to match new order
+    } catch (err) {
+      console.error('[TaskWorkspace] Failed to reorder subtasks:', err)
+      // Re-fetch to restore actual order
+      taskApi.getSubtasks(task.id).then(setSubtasks).catch(() => {})
+    }
+  }, [task, fetchTasks])
+
   // Listen for incompatible session events
   useEffect(() => {
     if (!task?.id) return
@@ -618,6 +636,7 @@ Update existing skills that were helpful or create new ones for patterns worth r
             parentTask={parentTask}
             onNavigateToTask={onNavigateToTask}
             onAddSubtask={handleAddSubtask}
+            onReorderSubtasks={handleReorderSubtasks}
           />
         </div>
 
