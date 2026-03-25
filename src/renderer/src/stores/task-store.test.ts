@@ -26,7 +26,7 @@ describe('useTaskStore', () => {
 
       await useTaskStore.getState().fetchTasks()
 
-      expect(useTaskStore.getState().tasks).toEqual(mockTasks)
+      expect(useTaskStore.getState().tasks).toMatchObject(mockTasks)
       expect(useTaskStore.getState().isLoading).toBe(false)
     })
 
@@ -48,7 +48,7 @@ describe('useTaskStore', () => {
 
       const result = await useTaskStore.getState().createTask({ title: 'New Task' } as unknown as CreateTaskDTO)
 
-      expect(result).toEqual(newTask)
+      expect(result).toMatchObject(newTask)
       const tasks = useTaskStore.getState().tasks
       expect(tasks[0].id).toBe('t2')
       expect(tasks).toHaveLength(2)
@@ -127,6 +127,61 @@ describe('useTaskStore', () => {
       await useTaskStore.getState().deleteTask('t1')
 
       expect(useTaskStore.getState().selectedTaskId).toBe('t2')
+    })
+  })
+
+  describe('normalizeTask (via fetchTasks)', () => {
+    it('normalizes missing array fields to empty arrays', async () => {
+      const taskWithMissingFields = {
+        id: 't1',
+        title: 'Broken task',
+        // labels, repos, attachments, output_fields are missing (undefined)
+        // skill_ids is missing (undefined)
+      }
+      ;(mockElectronAPI.db.getTasks as unknown as Mock).mockResolvedValue([taskWithMissingFields])
+
+      await useTaskStore.getState().fetchTasks()
+
+      const task = useTaskStore.getState().tasks[0]
+      expect(Array.isArray(task.labels)).toBe(true)
+      expect(task.labels).toEqual([])
+      expect(Array.isArray(task.repos)).toBe(true)
+      expect(task.repos).toEqual([])
+      expect(Array.isArray(task.attachments)).toBe(true)
+      expect(task.attachments).toEqual([])
+      expect(Array.isArray(task.output_fields)).toBe(true)
+      expect(task.output_fields).toEqual([])
+      // skill_ids: undefined → null (intentional null semantics for "use agent defaults")
+      expect(task.skill_ids).toBeNull()
+    })
+
+    it('preserves valid array fields as-is', async () => {
+      const taskWithArrays = {
+        id: 't2',
+        title: 'Good task',
+        labels: ['bug', 'urgent'],
+        repos: ['org/repo'],
+        attachments: [{ id: 'a1', filename: 'f.txt' }],
+        output_fields: [{ id: 'o1', label: 'Action' }],
+        skill_ids: ['s1', 's2']
+      }
+      ;(mockElectronAPI.db.getTasks as unknown as Mock).mockResolvedValue([taskWithArrays])
+
+      await useTaskStore.getState().fetchTasks()
+
+      const task = useTaskStore.getState().tasks[0]
+      expect(task.labels).toEqual(['bug', 'urgent'])
+      expect(task.repos).toEqual(['org/repo'])
+      expect(task.skill_ids).toEqual(['s1', 's2'])
+    })
+
+    it('preserves skill_ids null (agent defaults)', async () => {
+      const taskWithNullSkills = { id: 't3', title: 'Task', skill_ids: null }
+      ;(mockElectronAPI.db.getTasks as unknown as Mock).mockResolvedValue([taskWithNullSkills])
+
+      await useTaskStore.getState().fetchTasks()
+
+      expect(useTaskStore.getState().tasks[0].skill_ids).toBeNull()
     })
   })
 
