@@ -82,6 +82,15 @@ export class HeartbeatScheduler {
       heartbeat_next_check_at: nextCheck.toISOString()
     })
 
+    this.sendToRenderer('task:updated', {
+      taskId,
+      updates: {
+        heartbeat_enabled: true,
+        heartbeat_interval_minutes: interval,
+        heartbeat_next_check_at: nextCheck.toISOString()
+      }
+    })
+
     console.log(`[HeartbeatScheduler] Enabled heartbeat for task ${taskId}, interval: ${interval}min, next: ${nextCheck.toISOString()}`)
   }
 
@@ -92,6 +101,14 @@ export class HeartbeatScheduler {
     this.dbManager.updateTask(taskId, {
       heartbeat_enabled: false,
       heartbeat_next_check_at: null
+    })
+
+    this.sendToRenderer('task:updated', {
+      taskId,
+      updates: {
+        heartbeat_enabled: false,
+        heartbeat_next_check_at: null
+      }
     })
 
     console.log(`[HeartbeatScheduler] Disabled heartbeat for task ${taskId}`)

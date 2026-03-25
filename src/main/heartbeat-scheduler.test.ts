@@ -387,6 +387,26 @@ describe('HeartbeatScheduler', () => {
       const call = (db.updateTask as ReturnType<typeof vi.fn>).mock.calls[0][1]
       expect(call.heartbeat_interval_minutes).toBe(HEARTBEAT_DEFAULTS.intervalMinutes)
     })
+
+    it('sends task:updated event to renderer so sidebar updates', () => {
+      vi.setSystemTime(new Date('2024-01-15T12:00:00.000Z'))
+      const mockWindow = { webContents: { send: vi.fn() }, isDestroyed: vi.fn().mockReturnValue(false) }
+      scheduler.start(mockWindow as unknown as import('electron').BrowserWindow)
+
+      scheduler.enableHeartbeat('task-1', 60)
+
+      const sendCalls = mockWindow.webContents.send.mock.calls
+      const taskUpdatedCall = sendCalls.find((call: unknown[]) => call[0] === 'task:updated')
+      expect(taskUpdatedCall).toBeDefined()
+      expect(taskUpdatedCall![1]).toEqual({
+        taskId: 'task-1',
+        updates: {
+          heartbeat_enabled: true,
+          heartbeat_interval_minutes: 60,
+          heartbeat_next_check_at: expect.any(String),
+        }
+      })
+    })
   })
 
   describe('disableHeartbeat', () => {
@@ -397,6 +417,76 @@ describe('HeartbeatScheduler', () => {
         heartbeat_enabled: false,
         heartbeat_next_check_at: null,
       })
+    })
+
+    it('sends task:updated event to renderer so sidebar updates', () => {
+      const mockWindow = { webContents: { send: vi.fn() }, isDestroyed: vi.fn().mockReturnValue(false) }
+      scheduler.start(mockWindow as unknown as import('electron').BrowserWindow)
+
+      scheduler.disableHeartbeat('task-1')
+
+      const sendCalls = mockWindow.webContents.send.mock.calls
+      const taskUpdatedCall = sendCalls.find((call: unknown[]) => call[0] === 'task:updated')
+      expect(taskUpdatedCall).toBeDefined()
+      expect(taskUpdatedCall![1]).toEqual({
+        taskId: 'task-1',
+        updates: {
+          heartbeat_enabled: false,
+          heartbeat_next_check_at: null,
+        }
+      })
+    })
+  })
+
+  // ── task:updated events for sidebar sync ──────────────
+
+  describe('task:updated renderer events', () => {
+    let mockWindow: { webContents: { send: ReturnType<typeof vi.fn> }; isDestroyed: ReturnType<typeof vi.fn> }
+
+    beforeEach(() => {
+      mockWindow = { webContents: { send: vi.fn() }, isDestroyed: vi.fn().mockReturnValue(false) }
+      scheduler.start(mockWindow as unknown as import('electron').BrowserWindow)
+    })
+
+    it('sends task:updated to renderer when heartbeat is enabled', () => {
+      vi.setSystemTime(new Date('2024-01-15T12:00:00.000Z'))
+      scheduler.enableHeartbeat('task-1', 60)
+
+      const updateCall = mockWindow.webContents.send.mock.calls.find(
+        (call) => call[0] === 'task:updated'
+      )
+      expect(updateCall).toBeDefined()
+      expect(updateCall![1]).toEqual({
+        taskId: 'task-1',
+        updates: expect.objectContaining({
+          heartbeat_enabled: true,
+          heartbeat_interval_minutes: 60,
+          heartbeat_next_check_at: expect.any(String),
+        }),
+      })
+    })
+
+    it('sends task:updated to renderer when heartbeat is disabled', () => {
+      scheduler.disableHeartbeat('task-1')
+
+      const updateCall = mockWindow.webContents.send.mock.calls.find(
+        (call) => call[0] === 'task:updated'
+      )
+      expect(updateCall).toBeDefined()
+      expect(updateCall![1]).toEqual({
+        taskId: 'task-1',
+        updates: {
+          heartbeat_enabled: false,
+          heartbeat_next_check_at: null,
+        },
+      })
+    })
+
+    it('does not crash when mainWindow is not set (scheduler not started)', () => {
+      const freshScheduler = new HeartbeatScheduler(db as unknown as DatabaseManager, agent as unknown as AgentManager)
+      // Should not throw - just silently skip the send
+      expect(() => freshScheduler.disableHeartbeat('task-1')).not.toThrow()
+      expect(() => freshScheduler.enableHeartbeat('task-1')).not.toThrow()
     })
   })
 
