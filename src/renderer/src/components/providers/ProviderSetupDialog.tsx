@@ -23,6 +23,13 @@ interface ProviderConfig {
   recommended?: boolean
 }
 
+/** Loose format patterns — just a sanity check, not cryptographic validation */
+const KEY_PATTERNS: Record<Provider, RegExp> = {
+  anthropic: /^sk-ant-[a-zA-Z0-9_-]{20,}$/,
+  openai: /^sk-[a-zA-Z0-9_-]{20,}$/,
+  google: /^AI[a-zA-Z0-9_-]{20,}$/
+}
+
 const PROVIDERS: Record<Provider, ProviderConfig> = {
   anthropic: {
     name: 'Anthropic',
@@ -64,6 +71,14 @@ export function ProviderSetupStep({ onComplete, error, setError }: ProviderSetup
 
     if (!apiKey.trim()) {
       setError('API key is required')
+      return
+    }
+
+    const pattern = KEY_PATTERNS[selectedProvider]
+    if (pattern && !pattern.test(apiKey.trim())) {
+      setError(
+        `That doesn\u2019t look like a valid ${PROVIDERS[selectedProvider].name} API key. Expected format: ${PROVIDERS[selectedProvider].placeholder}`
+      )
       return
     }
 
@@ -171,7 +186,7 @@ export function ProviderSetupStep({ onComplete, error, setError }: ProviderSetup
               autoFocus
             />
             <p className="text-xs text-muted-foreground">
-              Your API key is stored securely and used only by your local OpenCode server
+              Your API key is stored securely on your machine and never sent to 20x servers
             </p>
           </div>
 

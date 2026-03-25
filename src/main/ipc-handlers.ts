@@ -1,10 +1,6 @@
 import { ipcMain, dialog, shell, Notification, app } from 'electron'
 import { copyFileSync, existsSync, unlinkSync, readdirSync, statSync, readFileSync } from 'fs'
-import { execFile } from 'child_process'
-import { promisify } from 'util'
 import { join, basename, extname } from 'path'
-
-const execFileAsync = promisify(execFile)
 import type {
   DatabaseManager,
   CreateTaskData,
@@ -522,28 +518,19 @@ export function registerIpcHandlers(
     return db.deleteSecret(id)
   })
 
-  // Dependency check handler
-  let depsCheckCache: { gh: boolean; opencode: boolean; opencodeBinary: boolean; claudeCodeBinary: boolean; codexBinary: boolean } | null = null
+  // Dependency check handler — delegates to the shared detectInstalledAgents()
+  // which returns Record<string, { installed: boolean; version: string | null }>
+  let depsCheckCache: Record<string, { installed: boolean; version: string | null }> | null = null
 
   ipcMain.handle('deps:check', async () => {
     if (depsCheckCache) {
-      // Return cache only if all binaries were found; otherwise re-check
-      // so that installing a binary mid-session is picked up.
-      const allFound = depsCheckCache.opencodeBinary && depsCheckCache.claudeCodeBinary && depsCheckCache.codexBinary
+      // Return cache only if all agent binaries were found; otherwise re-check
+      const allFound = depsCheckCache.claudeCode?.installed && depsCheckCache.opencode?.installed && depsCheckCache.codex?.installed
       if (allFound) return depsCheckCache
       depsCheckCache = null
     }
 
-    // OpenCode: Check if SDK is installed (it's an npm package)
-    let opencodeAvailable = false
-    try {
-      await import('@opencode-ai/sdk')
-      opencodeAvailable = true
-    } catch {
-      opencodeAvailable = false
-    }
-
-    // OpenCode binary: Check if the `opencode` command is findable
+    // Augment PATH with custom opencode path and common bin dirs before detection
     const { homedir } = await import('os')
     const { join: pathJoin, delimiter } = await import('path')
     const customPath = db.getSetting('OPENCODE_BINARY_PATH')
@@ -560,38 +547,8 @@ export function registerIpcHandlers(
       process.env.PATH = [...extraPaths, process.env.PATH || ''].join(delimiter)
     }
 
-    let check: (cmd: string) => Promise<{ stdout: string; stderr: string }>
-    if (isWin) {
-      const whichCmd = (bin: string) => execFileAsync('where', [bin])
-      check = whichCmd
-    } else {
-      const loginShell = existsSync('/bin/zsh') ? '/bin/zsh' : '/bin/bash'
-      check = (cmd: string) => execFileAsync(loginShell, ['-l', '-c', cmd])
-    }
-
-    const [gh, opencodeBin, claudeCodeBin, codexBin] = await Promise.allSettled(
-      isWin
-        ? [
-            check('gh'),
-            check('opencode'),
-            check('claude.cmd'),
-            check('codex')
-          ]
-        : [
-            check('gh --version'),
-            check('which opencode'),
-            check('which claude'),
-            check('which codex')
-          ]
-    )
-
-    const result = {
-      gh: gh.status === 'fulfilled',
-      opencode: opencodeAvailable,
-      opencodeBinary: opencodeBin.status === 'fulfilled',
-      claudeCodeBinary: claudeCodeBin.status === 'fulfilled',
-      codexBinary: codexBin.status === 'fulfilled'
-    }
+    const { detectInstalledAgents } = await import('./agent-installer/detect.js')
+    const result = await detectInstalledAgents()
     depsCheckCache = result
     return result
   })

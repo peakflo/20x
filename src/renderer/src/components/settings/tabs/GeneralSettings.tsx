@@ -4,7 +4,7 @@ import { SettingsSection } from '../SettingsSection'
 import { Label } from '@/components/ui/Label'
 import { Switch } from '@/components/ui/Switch'
 import { Button } from '@/components/ui/Button'
-import { AgentSetupDialog } from '@/components/AgentSetupWizard'
+import { ToolSetupDialog } from '@/components/AgentSetupWizard'
 import { settingsApi, mobileApi, updaterApi } from '@/lib/ipc-client'
 
 export function GeneralSettings() {
@@ -392,7 +392,7 @@ export function GeneralSettings() {
         <Wrench className="size-4 mr-1.5" />
         Open Setup Wizard
       </Button>
-      <AgentSetupDialog open={setupDialogOpen} onOpenChange={setSetupDialogOpen} />
+      <ToolSetupDialog open={setupDialogOpen} onOpenChange={setSetupDialogOpen} />
     </SettingsSection>
     </>
   )

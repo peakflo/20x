@@ -125,12 +125,20 @@ export interface WorktreeProgressEvent {
   error?: string
 }
 
+export interface ToolStatus {
+  installed: boolean
+  version: string | null
+}
+
 export interface DepsStatus {
-  gh: boolean
-  opencode: boolean
-  opencodeBinary: boolean
-  claudeCodeBinary: boolean
-  codexBinary: boolean
+  nodejs: ToolStatus
+  npm: ToolStatus
+  pnpm: ToolStatus
+  git: ToolStatus
+  gh: ToolStatus
+  claudeCode: ToolStatus
+  opencode: ToolStatus
+  codex: ToolStatus
 }
 
 interface ElectronAPI {

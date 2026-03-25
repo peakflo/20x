@@ -145,6 +145,26 @@ function runInstaller(installerPath, args, agentName, onProgress) {
 }
 
 /**
+ * Resolve the latest Node.js LTS download URL dynamically.
+ * Falls back to a known-good version if the API call fails.
+ */
+async function resolveNodejsUrl() {
+  const arch = process.arch === 'arm64' ? 'arm64' : 'x64'
+  try {
+    const resp = await (await import('electron')).net.fetch('https://nodejs.org/dist/index.json', { signal: AbortSignal.timeout(8000) })
+    if (resp.ok) {
+      const releases = await resp.json()
+      const lts = releases.find(r => r.lts)
+      if (lts) {
+        const ver = lts.version // e.g. "v22.16.0"
+        return `https://nodejs.org/dist/${ver}/node-${ver}-${arch}.msi`
+      }
+    }
+  } catch { /* fall through to fallback */ }
+  return `https://nodejs.org/dist/latest-lts/node-latest-lts-${arch}.msi`
+}
+
+/**
  * Install Node.js on Windows by downloading the MSI installer.
  */
 async function installNodejs(onProgress) {
@@ -165,8 +185,7 @@ async function installNodejs(onProgress) {
   const msiPath = join(downloadDir, 'nodejs-install.msi')
 
   try {
-    // Download the latest LTS Node.js MSI
-    const nodeUrl = 'https://nodejs.org/dist/v22.16.0/node-v22.16.0-x64.msi'
+    const nodeUrl = await resolveNodejsUrl()
     onProgress({ stage: 'installing', output: `Downloading from nodejs.org...\n`, percent: 10 })
     await downloadFile(nodeUrl, msiPath, onProgress)
 
@@ -193,6 +212,27 @@ async function installNodejs(onProgress) {
 }
 
 /**
+ * Resolve the latest Git for Windows download URL dynamically.
+ * Falls back to the GitHub releases redirect if the API call fails.
+ */
+async function resolveGitUrl() {
+  const suffix = process.arch === 'arm64' ? 'arm64.exe' : '64-bit.exe'
+  try {
+    const resp = await (await import('electron')).net.fetch(
+      'https://api.github.com/repos/git-for-windows/git/releases/latest',
+      { signal: AbortSignal.timeout(8000), headers: { 'User-Agent': '20x-app' } }
+    )
+    if (resp.ok) {
+      const release = await resp.json()
+      const asset = release.assets?.find(a => a.name.endsWith(suffix) && !a.name.includes('busybox'))
+      if (asset?.browser_download_url) return asset.browser_download_url
+    }
+  } catch { /* fall through to fallback */ }
+  // Fallback: GitHub will redirect to the latest release asset
+  return `https://github.com/git-for-windows/git/releases/latest/download/Git-64-bit.exe`
+}
+
+/**
  * Install Git on Windows by downloading the installer.
  */
 async function installGit(onProgress) {
@@ -213,8 +253,7 @@ async function installGit(onProgress) {
   const exePath = join(downloadDir, 'git-install.exe')
 
   try {
-    // Download Git for Windows (64-bit)
-    const gitUrl = 'https://github.com/git-for-windows/git/releases/download/v2.49.0.windows.1/Git-2.49.0-64-bit.exe'
+    const gitUrl = await resolveGitUrl()
     onProgress({ stage: 'installing', output: `Downloading from git-scm.com...\n`, percent: 10 })
     await downloadFile(gitUrl, exePath, onProgress)
 
