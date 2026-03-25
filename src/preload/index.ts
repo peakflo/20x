@@ -117,6 +117,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('overdue:check', handler)
     return () => ipcRenderer.removeListener('overdue:check', handler)
   },
+  onTasksRefresh: (callback: () => void): (() => void) => {
+    const handler = (): void => callback()
+    ipcRenderer.on('tasks:refresh', handler)
+    return () => ipcRenderer.removeListener('tasks:refresh', handler)
+  },
   onAgentOutput: (callback: (event: unknown) => void): (() => void) => {
     const handler = (_: unknown, data: unknown): void => callback(data)
     ipcRenderer.on('agent:output', handler)

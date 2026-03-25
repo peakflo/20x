@@ -148,6 +148,9 @@ const mockElectronAPI = {
   }),
   onTaskCreated: vi.fn((_cb: (event: { task: WorkfloTask }) => void) => {
     return vi.fn()
+  }),
+  onTasksRefresh: vi.fn((_cb: () => void) => {
+    return vi.fn()
   })
 }
 

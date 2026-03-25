@@ -339,6 +339,7 @@ interface ElectronAPI {
     getPathForFile: (file: File) => string
   }
   onOverdueCheck: (callback: () => void) => () => void
+  onTasksRefresh: (callback: () => void) => () => void
   onAgentOutput: (callback: (event: AgentOutputEvent) => void) => () => void
   onAgentOutputBatch: (callback: (event: AgentOutputBatchEvent) => void) => () => void
   onAgentStatus: (callback: (event: AgentStatusEvent) => void) => () => void

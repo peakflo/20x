@@ -3,6 +3,7 @@ import { Inbox, ChevronRight } from 'lucide-react'
 import { TaskListItem } from './TaskListItem'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { isSnoozed } from '@/lib/utils'
+import { useSnoozeTick } from '@/hooks/use-snooze-tick'
 import { TaskStatus } from '@/types'
 import type { WorkfloTask } from '@/types'
 
@@ -17,6 +18,10 @@ export function TaskList({ tasks, selectedTaskId, onSelectTask }: TaskListProps)
   const [hiddenOpen, setHiddenOpen] = useState(false)
   const [recurringOpen, setRecurringOpen] = useState(false)
   const [expandedParents, setExpandedParents] = useState<Set<string>>(new Set())
+
+  // Periodically re-evaluate snooze state so tasks move from Hidden → Active
+  // when their snooze time expires (not only when the tasks array changes)
+  const snoozeTick = useSnoozeTick(tasks)
 
   const toggleParentExpanded = (parentId: string) => {
     setExpandedParents(prev => {
@@ -69,7 +74,7 @@ export function TaskList({ tasks, selectedTaskId, onSelectTask }: TaskListProps)
       }
     }
     return { activeTasks: active, snoozedTasks: snoozed, recurringTasks: recurring, completedTasks: completed }
-  }, [tasks])
+  }, [tasks, snoozeTick])
 
   if (tasks.length === 0) {
     return <EmptyState icon={Inbox} title="No tasks" description="Create a task to get started" className="py-10" />
