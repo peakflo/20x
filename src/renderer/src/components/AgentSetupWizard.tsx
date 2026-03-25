@@ -40,7 +40,10 @@ const INSTALLABLE = ['nodejs', 'npm', 'git', 'gh', 'claudeCode', 'opencode', 'co
 // Install order: prerequisites first, then tools, then agents
 const INSTALL_ORDER = ['nodejs', 'git', 'gh', 'claudeCode', 'opencode', 'codex']
 
-export function AgentSetupDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
+/** @deprecated Use `ToolSetupDialog` instead */
+export const AgentSetupDialog = ToolSetupDialog
+
+export function ToolSetupDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   const [status, setStatus] = useState<StatusMap | null>(null)
   const [installing, setInstalling] = useState<string | null>(null)
   const [terminalOutput, setTerminalOutput] = useState('')

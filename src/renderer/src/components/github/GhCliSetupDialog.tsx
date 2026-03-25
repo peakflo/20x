@@ -69,7 +69,21 @@ export function GhCliSetupDialog({ open, onOpenChange, onComplete }: GhCliSetupD
                   <p className="text-sm font-medium">Install GitHub CLI</p>
                   {!isInstalled && (
                     <div className="mt-2 space-y-2">
-                      <code className="block text-xs bg-muted px-3 py-2 rounded">brew install gh</code>
+                      <div className="space-y-1">
+                        {navigator.platform?.toLowerCase().includes('win') ? (
+                          <code className="block text-xs bg-muted px-3 py-2 rounded">winget install GitHub.cli</code>
+                        ) : navigator.platform?.toLowerCase().includes('linux') ? (
+                          <>
+                            <code className="block text-xs bg-muted px-3 py-2 rounded">sudo apt install gh</code>
+                            <code className="block text-xs bg-muted px-3 py-2 rounded">sudo dnf install gh</code>
+                          </>
+                        ) : (
+                          <>
+                            <code className="block text-xs bg-muted px-3 py-2 rounded">brew install gh</code>
+                            <code className="block text-xs bg-muted px-3 py-2 rounded">conda install gh --channel conda-forge</code>
+                          </>
+                        )}
+                      </div>
                       <a
                         href="https://cli.github.com"
                         target="_blank"

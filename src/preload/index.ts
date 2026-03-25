@@ -212,7 +212,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     delete: (id: string): Promise<boolean> => ipcRenderer.invoke('secrets:delete', id)
   },
   deps: {
-    check: (): Promise<{ gh: boolean; opencode: boolean; opencodeBinary: boolean }> =>
+    check: (): Promise<Record<string, { installed: boolean; version: string | null }>> =>
       ipcRenderer.invoke('deps:check'),
     setOpencodePath: (dirPath: string): Promise<{ success: boolean; error?: string }> =>
       ipcRenderer.invoke('deps:setOpencodePath', dirPath)
