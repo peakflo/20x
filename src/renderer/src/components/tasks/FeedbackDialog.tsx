@@ -29,7 +29,7 @@ export function FeedbackDialog({ open, onSubmit, onSkip }: FeedbackDialogProps) 
   }
 
   return (
-    <Dialog open={open}>
+    <Dialog open={open} onOpenChange={(isOpen) => { if (!isOpen) onSkip() }}>
       <DialogContent className="max-w-md">
         <DialogHeader>
           <DialogTitle>Session Feedback</DialogTitle>
