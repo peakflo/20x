@@ -164,6 +164,21 @@ describe('useTasks', () => {
       expect(result.current.tasks[0].id).toBe('t1')
     })
 
+    it('does not crash when task labels is undefined or not an array', () => {
+      useTaskStore.setState({
+        tasks: [
+          makeWorkfloTask({ id: 't1', title: 'Valid', labels: ['bug'] }),
+          makeWorkfloTask({ id: 't2', title: 'No labels', labels: undefined as unknown as string[] }),
+          makeWorkfloTask({ id: 't3', title: 'Null labels', labels: null as unknown as string[] })
+        ]
+      })
+      useUIStore.setState({ searchQuery: 'bug' })
+
+      const { result } = renderHook(() => useTasks())
+      expect(result.current.tasks).toHaveLength(1)
+      expect(result.current.tasks[0].id).toBe('t1')
+    })
+
     it('filters by search query (labels)', () => {
       useTaskStore.setState({
         tasks: [

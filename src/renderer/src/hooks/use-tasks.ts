@@ -58,7 +58,7 @@ export function useTasks() {
         (t) =>
           t.title.toLowerCase().includes(q) ||
           t.description.toLowerCase().includes(q) ||
-          t.labels.some((l) => l.toLowerCase().includes(q))
+          (Array.isArray(t.labels) && t.labels.some((l) => l.toLowerCase().includes(q)))
       )
     }
 
