@@ -474,7 +474,7 @@ export function TaskFormPage({ taskId, onNavigate }: { taskId?: string; onNaviga
                         </select>
                       </div>
                       <div className="space-y-1">
-                        <label className="text-[11px] text-muted-foreground">Time (UTC)</label>
+                        <label className="text-[11px] text-muted-foreground">Time</label>
                         <input
                           type="time"
                           value={freqTime}
