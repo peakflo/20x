@@ -9,6 +9,7 @@
 import { writeFileSync } from 'fs'
 import { join, extname } from 'path'
 import type { TaskRecord } from '../database'
+import { TaskStatus } from '../../shared/constants'
 import { replaceRemoteImageUrlsInTask } from './replace-image-urls'
 import type {
   TaskSourcePlugin,
@@ -472,6 +473,12 @@ export class HubSpotPlugin implements TaskSourcePlugin {
       const client = new HubSpotClient(token)
 
       switch (actionId) {
+        case 'complete':
+          // Completion is handled via exportUpdate when the local task status
+          // changes to Completed (moves ticket to CLOSED pipeline stage).
+          // Return success so the caller can proceed with the local update.
+          return { success: true, taskUpdate: { status: TaskStatus.Completed } }
+
         case 'add_note':
           if (!input) {
             return { success: false, error: 'Note text is required' }

@@ -142,6 +142,23 @@ describe('SyncManager', () => {
       expect(result.error).toContain('Task source not found')
     })
 
+    it('forwards "complete" action to the plugin', async () => {
+      const plugin = makeMockPlugin()
+      ;(db.getTaskSource as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
+        id: 'src-1', plugin_id: 'test', mcp_server_id: 'srv-1', config: {}
+      })
+      ;(registry.get as unknown as ReturnType<typeof vi.fn>).mockReturnValue(plugin)
+      ;(db.getMcpServer as unknown as ReturnType<typeof vi.fn>).mockReturnValue({ id: 'srv-1' })
+
+      const task = { id: 't1' } as TaskRecord
+      const result = await syncManager.executeAction('complete', task, undefined, 'src-1')
+
+      expect(result.success).toBe(true)
+      expect(plugin.executeAction).toHaveBeenCalledWith(
+        'complete', task, undefined, {}, expect.objectContaining({ db })
+      )
+    })
+
     it('applies taskUpdate to local task on success', async () => {
       const plugin = makeMockPlugin()
       ;(db.getTaskSource as unknown as ReturnType<typeof vi.fn>).mockReturnValue({

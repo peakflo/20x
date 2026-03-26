@@ -551,6 +551,14 @@ export class NotionPlugin implements TaskSourcePlugin {
     if (!task.external_id) {
       return { success: false, error: 'Task has no external ID' }
     }
+
+    // "complete" is a generic completion action — treat it as a status change
+    // to "completed" so Notion moves the page to its Done/Complete status.
+    if (actionId === 'complete') {
+      actionId = 'change_status'
+      input = 'completed'
+    }
+
     if (!input) {
       return { success: false, error: 'Input value is required' }
     }

@@ -288,6 +288,7 @@ export class GitHubIssuesPlugin implements TaskSourcePlugin {
           await this.githubManager.addIssueComment(owner, repo, number, input)
           return { success: true }
 
+        case 'complete':
         case 'close_issue':
           await this.githubManager.updateIssue(owner, repo, number, { state: 'closed' })
           return { success: true, taskUpdate: { status: TaskStatus.Completed } }
