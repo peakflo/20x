@@ -39,12 +39,14 @@ export class WorktreeManager {
   async setupWorkspaceForTask(
     taskId: string,
     repos: WorktreeRepo[],
-    org: string
+    org: string,
+    provider?: string
   ): Promise<string> {
     const taskDir = join(WORKSPACES_DIR, taskId)
     console.log(`[WorktreeManager] Setting up workspace for task ${taskId}`)
     console.log(`[WorktreeManager]   Task directory: ${taskDir}`)
     console.log(`[WorktreeManager]   Organization: ${org}`)
+    console.log(`[WorktreeManager]   Provider: ${provider || 'github'}`)
     console.log(`[WorktreeManager]   Repos to setup: ${repos.map(r => r.fullName).join(', ')}`)
 
     mkdirSync(taskDir, { recursive: true })
@@ -53,7 +55,7 @@ export class WorktreeManager {
       const repoName = repo.fullName.split('/').pop() || repo.fullName
       try {
         console.log(`[WorktreeManager] Processing repo: ${repo.fullName}`)
-        await this.ensureBareClone(org, repoName, repo.fullName)
+        await this.ensureBareClone(org, repoName, repo.fullName, provider)
         await this.fetchBareClone(org, repoName)
         await this.createWorktree(taskId, org, repoName, repo.defaultBranch)
         this.sendProgress(taskId, repoName, 'done', true)
@@ -69,7 +71,7 @@ export class WorktreeManager {
     return taskDir
   }
 
-  private async ensureBareClone(org: string, repoName: string, fullName: string): Promise<void> {
+  private async ensureBareClone(org: string, repoName: string, fullName: string, provider?: string): Promise<void> {
     const barePath = this.bareClonePath(org, repoName)
 
     if (existsSync(barePath)) {
@@ -82,10 +84,18 @@ export class WorktreeManager {
     const orgDir = join(REPOS_DIR, org)
     mkdirSync(orgDir, { recursive: true })
 
-    console.log(`[WorktreeManager]   Executing: gh repo clone ${fullName} ${barePath} -- --bare`)
-    await execFileAsync('gh', ['repo', 'clone', fullName, barePath, '--', '--bare'], {
-      timeout: 300000
-    })
+    if (provider === 'gitlab') {
+      // glab repo clone supports the same syntax as gh repo clone
+      console.log(`[WorktreeManager]   Executing: glab repo clone ${fullName} ${barePath} -- --bare`)
+      await execFileAsync('glab', ['repo', 'clone', fullName, barePath, '--', '--bare'], {
+        timeout: 300000
+      })
+    } else {
+      console.log(`[WorktreeManager]   Executing: gh repo clone ${fullName} ${barePath} -- --bare`)
+      await execFileAsync('gh', ['repo', 'clone', fullName, barePath, '--', '--bare'], {
+        timeout: 300000
+      })
+    }
     console.log(`[WorktreeManager]   Bare clone created successfully`)
   }
 

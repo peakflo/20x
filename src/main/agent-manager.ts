@@ -11,6 +11,7 @@ import type { DatabaseManager, AgentMcpServerEntry, OutputFieldRecord, SecretRec
 import { TaskStatus, SessionStatus } from '../shared/constants'
 import type { WorktreeManager } from './worktree-manager'
 import type { GitHubManager } from './github-manager'
+import type { GitLabManager } from './gitlab-manager'
 import { OpencodeAdapter } from './adapters/opencode-adapter'
 import { ClaudeCodeAdapter } from './adapters/claude-code-adapter'
 import { AcpAdapter } from './adapters/acp-adapter'
@@ -82,6 +83,7 @@ export class AgentManager extends EventEmitter {
   private adapters: Map<string, CodingAgentAdapter> = new Map()  // Adapter instances
   private worktreeManager: WorktreeManager | null = null
   private githubManager: GitHubManager | null = null
+  private gitlabManager: GitLabManager | null = null
   private oauthManager: import('./oauth/oauth-manager').OAuthManager | null = null
   private externalListeners: Array<(channel: string, data: unknown) => void> = []
   private enterpriseStateSync: import('./enterprise-state-sync').EnterpriseStateSync | null = null
@@ -155,9 +157,10 @@ export class AgentManager extends EventEmitter {
     this.mainWindow = window
   }
 
-  setManagers(githubManager: GitHubManager, worktreeManager: WorktreeManager): void {
+  setManagers(githubManager: GitHubManager, worktreeManager: WorktreeManager, gitlabManager?: GitLabManager): void {
     this.githubManager = githubManager
     this.worktreeManager = worktreeManager
+    this.gitlabManager = gitlabManager ?? null
   }
 
   setOAuthManager(manager: import('./oauth/oauth-manager').OAuthManager): void {
@@ -172,8 +175,9 @@ export class AgentManager extends EventEmitter {
   private async setupWorktreeIfNeeded(taskId: string): Promise<string | undefined> {
     if (taskId === 'mastermind-session' || taskId.startsWith('heartbeat-')) return undefined
 
-    if (!this.githubManager || !this.worktreeManager) return undefined
+    if (!this.worktreeManager) return undefined
 
+    const gitProvider = this.db.getSetting('git_provider') || 'github'
     const githubOrg = this.db.getSetting('github_org')
     if (!githubOrg) return undefined
 
@@ -183,7 +187,16 @@ export class AgentManager extends EventEmitter {
     if (!task.repos || task.repos.length === 0) return undefined
 
     try {
-      const orgRepos = await this.githubManager.fetchOrgRepos(githubOrg)
+      let orgRepos: Array<{ fullName: string; defaultBranch: string }>
+
+      if (gitProvider === 'gitlab' && this.gitlabManager) {
+        orgRepos = await this.gitlabManager.fetchOrgRepos(githubOrg)
+      } else if (this.githubManager) {
+        orgRepos = await this.githubManager.fetchOrgRepos(githubOrg)
+      } else {
+        return undefined
+      }
+
       const matched = task.repos
         .map((name) => orgRepos.find((r) => r.fullName === name))
         .filter(Boolean) as Array<{ fullName: string; defaultBranch: string }>
@@ -193,7 +206,8 @@ export class AgentManager extends EventEmitter {
       const workspaceDir = await this.worktreeManager.setupWorkspaceForTask(
         taskId,
         matched.map((r) => ({ fullName: r.fullName, defaultBranch: r.defaultBranch })),
-        githubOrg
+        githubOrg,
+        gitProvider
       )
       return workspaceDir
     } catch (error) {
