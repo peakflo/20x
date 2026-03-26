@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { Loader2, RefreshCw, CheckCircle2, XCircle, ExternalLink } from 'lucide-react'
 import { Input } from '@/components/ui/Input'
 import { Label } from '@/components/ui/Label'
@@ -32,6 +32,10 @@ export function YouTrackConfigForm({ value, onChange }: PluginFormProps) {
     [value, onChange]
   )
 
+  // Keep a ref to the latest value to avoid stale closures in callbacks
+  const valueRef = useRef(value)
+  valueRef.current = value
+
   const serverUrl = (value.server_url as string) || ''
   const apiToken = (value.api_token as string) || ''
   const selectedProject = (value.project as string) || ''
@@ -46,23 +50,20 @@ export function YouTrackConfigForm({ value, onChange }: PluginFormProps) {
     setConnectedUser(null)
 
     try {
-      const options = await pluginApi.resolveOptions('youtrack', 'projects', value)
-      if (options.length >= 0) {
-        setConnectionStatus('connected')
-        setProjects(options)
-        // Try to get user info from projects response
-        if (options.length > 0) {
-          setConnectedUser(`${options.length} project${options.length !== 1 ? 's' : ''} accessible`)
-        } else {
-          setConnectedUser('Connected (no projects found)')
-        }
+      const options = await pluginApi.resolveOptions('youtrack', 'projects', valueRef.current)
+      setConnectionStatus('connected')
+      setProjects(options)
+      if (options.length > 0) {
+        setConnectedUser(`${options.length} project${options.length !== 1 ? 's' : ''} accessible`)
+      } else {
+        setConnectedUser('Connected (no projects found)')
       }
     } catch (err) {
       setConnectionStatus('error')
       const msg = err instanceof Error ? err.message : 'Connection failed'
       setConnectionError(msg)
     }
-  }, [hasCredentials, value])
+  }, [hasCredentials])
 
   // Auto-test connection when editing existing source with credentials
   useEffect(() => {
@@ -77,7 +78,7 @@ export function YouTrackConfigForm({ value, onChange }: PluginFormProps) {
 
     setLoadingProjects(true)
     try {
-      const options = await pluginApi.resolveOptions('youtrack', 'projects', value)
+      const options = await pluginApi.resolveOptions('youtrack', 'projects', valueRef.current)
       setProjects(options)
     } catch (err) {
       console.error('Failed to fetch projects:', err)
@@ -85,7 +86,7 @@ export function YouTrackConfigForm({ value, onChange }: PluginFormProps) {
     } finally {
       setLoadingProjects(false)
     }
-  }, [hasCredentials, value])
+  }, [hasCredentials])
 
   // Fetch filter options when project changes
   const fetchFilterOptions = useCallback(async () => {
@@ -93,11 +94,12 @@ export function YouTrackConfigForm({ value, onChange }: PluginFormProps) {
 
     setLoadingFilters(true)
     try {
+      const currentValue = valueRef.current
       const [userOpts, stateOpts, priorityOpts, typeOpts] = await Promise.all([
-        pluginApi.resolveOptions('youtrack', 'users', value).catch(() => []),
-        pluginApi.resolveOptions('youtrack', 'states', value).catch(() => []),
-        pluginApi.resolveOptions('youtrack', 'priorities', value).catch(() => []),
-        pluginApi.resolveOptions('youtrack', 'types', value).catch(() => [])
+        pluginApi.resolveOptions('youtrack', 'users', currentValue).catch(() => []),
+        pluginApi.resolveOptions('youtrack', 'states', currentValue).catch(() => []),
+        pluginApi.resolveOptions('youtrack', 'priorities', currentValue).catch(() => []),
+        pluginApi.resolveOptions('youtrack', 'types', currentValue).catch(() => [])
       ])
       setAssignees(userOpts)
       setStates(stateOpts)
@@ -108,7 +110,7 @@ export function YouTrackConfigForm({ value, onChange }: PluginFormProps) {
     } finally {
       setLoadingFilters(false)
     }
-  }, [hasCredentials, selectedProject, value])
+  }, [hasCredentials, selectedProject])
 
   // Auto-fetch filter options when project changes
   useEffect(() => {
@@ -177,10 +179,9 @@ export function YouTrackConfigForm({ value, onChange }: PluginFormProps) {
           <button
             type="button"
             onClick={() => {
-              const url = serverUrl.trim()
-                ? `${serverUrl.replace(/\/$/, '')}/users/me`
-                : 'https://www.jetbrains.com/help/youtrack/server/manage-permanent-token.html'
-              window.electronAPI.shell.openExternal(url)
+              window.electronAPI.shell.openExternal(
+                'https://www.jetbrains.com/help/youtrack/server/manage-permanent-token.html'
+              )
             }}
             className="text-primary hover:underline inline-flex items-center gap-0.5"
           >

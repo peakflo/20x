@@ -27,6 +27,7 @@ export function SettingsPage({ onNavigate }: SettingsPageProps) {
   const [sources, setSources] = useState<TaskSource[]>([])
   const [plugins, setPlugins] = useState<PluginMeta[]>([])
   const [syncingIds, setSyncingIds] = useState<Set<string>>(new Set())
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     loadData()
@@ -42,16 +43,19 @@ export function SettingsPage({ onNavigate }: SettingsPageProps) {
       setPlugins(pluginsData)
     } catch (err) {
       console.error('Failed to load settings data:', err)
+      setError('Failed to load settings')
     }
   }
 
   const handleSync = useCallback(async (sourceId: string) => {
+    setError(null)
     setSyncingIds((prev) => new Set(prev).add(sourceId))
     try {
       await api.taskSources.sync(sourceId)
       await loadData()
     } catch (err) {
       console.error('Sync failed:', err)
+      setError(err instanceof Error ? err.message : 'Sync failed')
     } finally {
       setSyncingIds((prev) => {
         const next = new Set(prev)
@@ -68,6 +72,7 @@ export function SettingsPage({ onNavigate }: SettingsPageProps) {
       await loadData()
     } catch (err) {
       console.error('Sync all failed:', err)
+      setError(err instanceof Error ? err.message : 'Sync failed')
     } finally {
       setSyncingIds(new Set())
     }
@@ -91,6 +96,14 @@ export function SettingsPage({ onNavigate }: SettingsPageProps) {
       </div>
 
       <div className="flex-1 overflow-y-auto p-4 space-y-6">
+        {/* Error banner */}
+        {error && (
+          <div className="flex items-center justify-between bg-destructive/10 text-destructive text-xs rounded-md px-3 py-2">
+            <span>{error}</span>
+            <button onClick={() => setError(null)} className="ml-2 font-bold">x</button>
+          </div>
+        )}
+
         {/* Task Sources Section */}
         <div>
           <div className="flex items-center justify-between mb-3">
