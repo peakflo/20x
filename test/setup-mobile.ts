@@ -29,6 +29,9 @@ vi.mock('../src/mobile/api/client', () => ({
       abort: vi.fn().mockResolvedValue({ success: true }),
       stop: vi.fn().mockResolvedValue({ success: true })
     },
+    git: {
+      getProvider: vi.fn().mockResolvedValue({ provider: 'github' })
+    },
     github: {
       getOrg: vi.fn().mockResolvedValue({ org: '' }),
       getOrgs: vi.fn().mockResolvedValue([]),

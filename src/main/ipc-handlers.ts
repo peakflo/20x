@@ -441,6 +441,21 @@ export function registerIpcHandlers(
     })
   })
 
+  ipcMain.handle('gitlab:fetchOrgs', async () => {
+    if (!gitlabManager) return []
+    return await gitlabManager.fetchUserOrgs()
+  })
+
+  ipcMain.handle('gitlab:fetchOrgRepos', async (_, org: string) => {
+    if (!gitlabManager) return []
+    return await gitlabManager.fetchOrgRepos(org)
+  })
+
+  ipcMain.handle('gitlab:fetchUserRepos', async () => {
+    if (!gitlabManager) return []
+    return await gitlabManager.fetchUserRepos()
+  })
+
   // Worktree handlers
   ipcMain.handle('worktree:setup', async (_, taskId: string, repos: { fullName: string; defaultBranch: string }[], org: string) => {
     return await worktreeManager.setupWorkspaceForTask(taskId, repos, org)

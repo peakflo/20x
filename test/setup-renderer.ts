@@ -82,7 +82,10 @@ const mockElectronAPI = {
   },
   gitlab: {
     checkCli: vi.fn().mockResolvedValue({ installed: false, authenticated: false }),
-    startAuth: vi.fn().mockResolvedValue(undefined)
+    startAuth: vi.fn().mockResolvedValue(undefined),
+    fetchOrgs: vi.fn().mockResolvedValue([]),
+    fetchOrgRepos: vi.fn().mockResolvedValue([]),
+    fetchUserRepos: vi.fn().mockResolvedValue([])
   },
   worktree: {
     setup: vi.fn().mockResolvedValue(''),

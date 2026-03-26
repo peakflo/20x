@@ -62,6 +62,9 @@ export const api = {
   skills: {
     list: () => get<unknown[]>('/api/skills')
   },
+  git: {
+    getProvider: () => get<{ provider: string }>('/api/git/provider')
+  },
   github: {
     getOrg: () => get<{ org: string }>('/api/github/org'),
     getOrgs: () => get<Array<{ value: string; label: string }>>('/api/github/orgs'),

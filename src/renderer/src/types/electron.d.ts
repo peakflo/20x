@@ -237,6 +237,9 @@ interface ElectronAPI {
   gitlab: {
     checkCli: () => Promise<GlabCliStatus>
     startAuth: () => Promise<void>
+    fetchOrgs: () => Promise<string[]>
+    fetchOrgRepos: (org: string) => Promise<GitHubRepo[]>
+    fetchUserRepos: () => Promise<GitHubRepo[]>
   }
   worktree: {
     setup: (taskId: string, repos: { fullName: string; defaultBranch: string }[], org: string) => Promise<string>

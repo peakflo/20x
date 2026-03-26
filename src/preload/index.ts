@@ -175,7 +175,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   gitlab: {
     checkCli: (): Promise<{ installed: boolean; authenticated: boolean; username?: string }> =>
       ipcRenderer.invoke('gitlab:checkCli'),
-    startAuth: (): Promise<void> => ipcRenderer.invoke('gitlab:startAuth')
+    startAuth: (): Promise<void> => ipcRenderer.invoke('gitlab:startAuth'),
+    fetchOrgs: (): Promise<string[]> => ipcRenderer.invoke('gitlab:fetchOrgs'),
+    fetchOrgRepos: (org: string): Promise<unknown[]> =>
+      ipcRenderer.invoke('gitlab:fetchOrgRepos', org),
+    fetchUserRepos: (): Promise<unknown[]> =>
+      ipcRenderer.invoke('gitlab:fetchUserRepos')
   },
   worktree: {
     setup: (taskId: string, repos: { fullName: string; defaultBranch: string }[], org: string): Promise<string> =>

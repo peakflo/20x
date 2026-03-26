@@ -30,6 +30,7 @@ export function RepoSelectorPage({
   const [isLoading, setIsLoading] = useState(false)
   const [isLoadingOrgs, setIsLoadingOrgs] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [providerLabel, setProviderLabel] = useState('GitHub')
 
   // Initialise selected set from existing task repos
   // Depend on task.repos (serialised) instead of the task object to avoid re-running
@@ -43,6 +44,15 @@ export function RepoSelectorPage({
       setSelected(new Set(initial))
     }
   }, [taskReposKey, selectedOrg])
+
+  // Fetch provider label on mount
+  useEffect(() => {
+    api.git.getProvider()
+      .then(({ provider }) => {
+        setProviderLabel(provider === 'gitlab' ? 'GitLab' : 'GitHub')
+      })
+      .catch(() => {/* default to GitHub */})
+  }, [])
 
   // Fetch org choices on mount
   useEffect(() => {

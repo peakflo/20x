@@ -13,6 +13,7 @@ import { randomUUID, timingSafeEqual } from 'crypto'
 import type { DatabaseManager } from './database'
 import type { AgentManager } from './agent-manager'
 import type { GitHubManager } from './github-manager'
+import type { GitLabManager } from './gitlab-manager'
 import type { SyncManager } from './sync-manager'
 
 // ── State ────────────────────────────────────────────────────
@@ -21,6 +22,7 @@ let wss: WebSocketServer | null = null
 let dbRef: DatabaseManager | null = null
 let agentRef: AgentManager | null = null
 let githubRef: GitHubManager | null = null
+let gitlabRef: GitLabManager | null = null
 let syncManagerRef: SyncManager | null = null
 let authToken: string | null = null
 let notifyDesktop: ((channel: string, data: unknown) => void) | null = null
@@ -43,13 +45,15 @@ export function startMobileApiServer(
   agentManager: AgentManager,
   githubManager: GitHubManager,
   port = 20620,
-  syncManager?: SyncManager | null
+  syncManager?: SyncManager | null,
+  gitlabManager?: GitLabManager | null
 ): Promise<number> {
   if (server) return Promise.resolve(port)
 
   dbRef = db
   agentRef = agentManager
   githubRef = githubManager
+  gitlabRef = gitlabManager ?? null
   syncManagerRef = syncManager ?? null
 
   // Read or generate auth token — auth is always required
@@ -369,8 +373,34 @@ async function routeGet(pathname: string, url: URL): Promise<unknown> {
     return { org }
   }
 
+  // GET /api/git/provider — returns the configured git provider
+  if (pathname === '/api/git/provider') {
+    const provider = db.getSetting('git_provider') || 'github'
+    return { provider }
+  }
+
   // GET /api/github/orgs — returns available orgs + personal account
+  // Respects the configured git provider (github or gitlab)
   if (pathname === '/api/github/orgs') {
+    const provider = db.getSetting('git_provider') || 'github'
+
+    if (provider === 'gitlab') {
+      if (!gitlabRef) throw Object.assign(new Error('GitLab not configured'), { status: 500 })
+      const [status, orgs] = await Promise.all([
+        gitlabRef.checkGlabCli(),
+        gitlabRef.fetchUserOrgs()
+      ])
+      const owners: Array<{ value: string; label: string }> = []
+      if (status.username) {
+        owners.push({ value: status.username, label: `${status.username} (personal)` })
+      }
+      for (const orgName of orgs) {
+        owners.push({ value: orgName, label: orgName })
+      }
+      return owners
+    }
+
+    // Default: GitHub
     if (!githubRef) throw Object.assign(new Error('GitHub not configured'), { status: 500 })
 
     const [status, orgs] = await Promise.all([
@@ -511,10 +541,20 @@ async function routePost(pathname: string, params: Record<string, unknown>): Pro
   }
 
   // POST /api/github/repos — fetch org repos
+  // Respects the configured git provider (github or gitlab)
   if (pathname === '/api/github/repos') {
-    if (!githubRef) throw Object.assign(new Error('GitHub not configured'), { status: 500 })
     const { org } = params as { org?: string }
     if (!org) throw Object.assign(new Error('org is required'), { status: 400 })
+
+    const provider = db.getSetting('git_provider') || 'github'
+
+    if (provider === 'gitlab') {
+      if (!gitlabRef) throw Object.assign(new Error('GitLab not configured'), { status: 500 })
+      const repos = await gitlabRef.fetchOrgRepos(org)
+      return repos
+    }
+
+    if (!githubRef) throw Object.assign(new Error('GitHub not configured'), { status: 500 })
     const repos = await githubRef.fetchOrgRepos(org)
     return repos
   }

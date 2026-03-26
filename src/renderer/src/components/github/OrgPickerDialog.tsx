@@ -1,8 +1,9 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogBody } from '@/components/ui/Dialog'
-import { githubApi } from '@/lib/ipc-client'
+import { getGitProviderApi, getProviderLabel } from '@/lib/git-provider-api'
+import { useSettingsStore } from '@/stores/settings-store'
 
 interface OrgPickerDialogProps {
   open: boolean
@@ -11,6 +12,10 @@ interface OrgPickerDialogProps {
 }
 
 export function OrgPickerDialog({ open, onOpenChange, onSelect }: OrgPickerDialogProps) {
+  const gitProvider = useSettingsStore((s) => s.gitProvider)
+  const providerApi = useMemo(() => getGitProviderApi(gitProvider), [gitProvider])
+  const providerLabel = getProviderLabel(gitProvider)
+
   const [owners, setOwners] = useState<{ value: string; label: string }[]>([])
   const [loading, setLoading] = useState(false)
 
@@ -18,7 +23,7 @@ export function OrgPickerDialog({ open, onOpenChange, onSelect }: OrgPickerDialo
     if (!open) return
     setLoading(true)
 
-    Promise.all([githubApi.checkCli(), githubApi.fetchOrgs()])
+    Promise.all([providerApi.checkCli(), providerApi.fetchOrgs()])
       .then(([status, orgs]) => {
         const list: { value: string; label: string }[] = []
         if (status.username) {
@@ -31,17 +36,17 @@ export function OrgPickerDialog({ open, onOpenChange, onSelect }: OrgPickerDialo
       })
       .catch(() => setOwners([]))
       .finally(() => setLoading(false))
-  }, [open])
+  }, [open, providerApi])
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-sm">
         <DialogHeader>
-          <DialogTitle>Select GitHub Organization</DialogTitle>
+          <DialogTitle>Select {providerLabel} Organization</DialogTitle>
         </DialogHeader>
         <DialogBody className="space-y-3">
           <p className="text-sm text-muted-foreground">
-            Choose the organization or account to browse repositories from.
+            Choose the {providerLabel} organization or account to browse repositories from.
           </p>
 
           {loading ? (

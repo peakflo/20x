@@ -4,7 +4,8 @@ import { Button } from '@/components/ui/Button'
 import { Checkbox } from '@/components/ui/Checkbox'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogBody } from '@/components/ui/Dialog'
 import { Select } from '@/components/ui/Select'
-import { githubApi } from '@/lib/ipc-client'
+import { getGitProviderApi, getProviderLabel } from '@/lib/git-provider-api'
+import { useSettingsStore } from '@/stores/settings-store'
 import type { GitHubRepo } from '@/types/electron'
 
 interface RepoSelectorDialogProps {
@@ -16,6 +17,10 @@ interface RepoSelectorDialogProps {
 }
 
 export function RepoSelectorDialog({ open, onOpenChange, org, initialRepos, onConfirm }: RepoSelectorDialogProps) {
+  const gitProvider = useSettingsStore((s) => s.gitProvider)
+  const providerApi = useMemo(() => getGitProviderApi(gitProvider), [gitProvider])
+  const providerLabel = getProviderLabel(gitProvider)
+
   const [repos, setRepos] = useState<GitHubRepo[]>([])
   const [selectedOrg, setSelectedOrg] = useState(org)
   const [owners, setOwners] = useState<{ value: string; label: string }[]>([])
@@ -35,12 +40,12 @@ export function RepoSelectorDialog({ open, onOpenChange, org, initialRepos, onCo
     if (open && selectedOrg) {
       setIsLoading(true)
       setError(null)
-      githubApi.fetchOrgRepos(selectedOrg)
+      providerApi.fetchOrgRepos(selectedOrg)
         .then(setRepos)
         .catch((err) => setError(err.message))
         .finally(() => setIsLoading(false))
     }
-  }, [open, selectedOrg])
+  }, [open, selectedOrg, providerApi])
 
   useEffect(() => {
     if (open) {
@@ -53,7 +58,7 @@ export function RepoSelectorDialog({ open, onOpenChange, org, initialRepos, onCo
     if (!open) return
     setIsLoadingOwners(true)
 
-    Promise.all([githubApi.checkCli(), githubApi.fetchOrgs()])
+    Promise.all([providerApi.checkCli(), providerApi.fetchOrgs()])
       .then(([status, orgs]) => {
         const list: { value: string; label: string }[] = []
         if (status.username) {
@@ -77,7 +82,7 @@ export function RepoSelectorDialog({ open, onOpenChange, org, initialRepos, onCo
         }
       })
       .finally(() => setIsLoadingOwners(false))
-  }, [open, selectedOrg])
+  }, [open, selectedOrg, providerApi])
 
   const filtered = useMemo(() => {
     if (!search) return repos

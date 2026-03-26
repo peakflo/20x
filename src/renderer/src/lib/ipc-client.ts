@@ -275,6 +275,15 @@ export const gitlabApi = {
   },
   startAuth: (): Promise<void> => {
     return window.electronAPI.gitlab.startAuth()
+  },
+  fetchOrgs: (): Promise<string[]> => {
+    return window.electronAPI.gitlab.fetchOrgs()
+  },
+  fetchOrgRepos: (org: string): Promise<GitHubRepo[]> => {
+    return window.electronAPI.gitlab.fetchOrgRepos(org)
+  },
+  fetchUserRepos: (): Promise<GitHubRepo[]> => {
+    return window.electronAPI.gitlab.fetchUserRepos()
   }
 }
 
