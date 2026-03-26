@@ -27,7 +27,6 @@ export function SettingsPage({ onNavigate }: SettingsPageProps) {
   const [sources, setSources] = useState<TaskSource[]>([])
   const [plugins, setPlugins] = useState<PluginMeta[]>([])
   const [syncingIds, setSyncingIds] = useState<Set<string>>(new Set())
-  const [showAddSource, setShowAddSource] = useState(false)
 
   useEffect(() => {
     loadData()
