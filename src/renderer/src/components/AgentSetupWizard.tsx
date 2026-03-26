@@ -95,7 +95,12 @@ export function ToolSetupDialog({ open, onOpenChange }: { open: boolean; onOpenC
     setInstalling(agentName)
     setTerminalOutput((prev) => prev + `\n── Installing ${TOOL_META[agentName]?.label || agentName} ──\n`)
     try {
-      await window.electronAPI.agentInstaller.install(agentName)
+      const result = await window.electronAPI.agentInstaller.install(agentName) as { success: boolean; error: string | null; newStatus: Record<string, { installed: boolean; version: string | null }> }
+      if (result && !result.success) {
+        setTerminalOutput((prev) => prev + `${result.error || 'Installation not available on this platform.'}\n`)
+        setInstalling(null)
+        if (result.newStatus) setStatus(result.newStatus)
+      }
     } catch (err) {
       setTerminalOutput((prev) => prev + `Error: ${err}\n`)
       setInstalling(null)
@@ -122,7 +127,11 @@ export function ToolSetupDialog({ open, onOpenChange }: { open: boolean; onOpenC
       setInstalling(agentName)
       setTerminalOutput((prev) => prev + `\n── Installing ${TOOL_META[agentName]?.label || agentName} ──\n`)
       try {
-        await window.electronAPI.agentInstaller.install(agentName)
+        const result = await window.electronAPI.agentInstaller.install(agentName) as { success: boolean; error: string | null; newStatus: Record<string, { installed: boolean; version: string | null }> }
+        if (result && !result.success) {
+          setTerminalOutput((prev) => prev + `${result.error || 'Installation not available on this platform.'}\n`)
+          if (result.newStatus) setStatus(result.newStatus)
+        }
       } catch (err) {
         setTerminalOutput((prev) => prev + `Error: ${err}\n`)
       }
