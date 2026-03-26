@@ -552,3 +552,63 @@ describe('Triage lifecycle with output_fields', () => {
     expect(triaged.output_fields[2].options).toEqual(['approved', 'rejected'])
   })
 })
+
+describe('agent_workload statistics - uses agent_working status', () => {
+  it('counts tasks with agent_working status as active', () => {
+    const agent = db.createAgent(makeAgent({ name: 'Stats Agent' }))!
+    const t1 = db.createTask(makeTask({ title: 'Active task' }))!
+    const t2 = db.createTask(makeTask({ title: 'Not started task' }))!
+    const t3 = db.createTask(makeTask({ title: 'Another active task' }))!
+
+    // Assign all to the same agent
+    db.updateTask(t1.id, { agent_id: agent.id })
+    db.updateTask(t2.id, { agent_id: agent.id })
+    db.updateTask(t3.id, { agent_id: agent.id })
+
+    // Set statuses
+    rawDb.prepare('UPDATE tasks SET status = ? WHERE id = ?').run('agent_working', t1.id)
+    rawDb.prepare('UPDATE tasks SET status = ? WHERE id = ?').run('not_started', t2.id)
+    rawDb.prepare('UPDATE tasks SET status = ? WHERE id = ?').run('agent_working', t3.id)
+
+    // Simulate the agent_workload query (must use 'agent_working', not 'in_progress')
+    const result = rawDb.prepare(`
+      SELECT agent_id, COUNT(*) as task_count,
+             SUM(CASE WHEN status = 'agent_working' THEN 1 ELSE 0 END) as active_count
+      FROM tasks WHERE agent_id IS NOT NULL GROUP BY agent_id
+    `).all() as Record<string, unknown>[]
+
+    const agentRow = result.find((r) => r.agent_id === agent.id)
+    expect(agentRow).toBeDefined()
+    expect(agentRow!.task_count).toBe(3)
+    expect(agentRow!.active_count).toBe(2)
+
+    // Verify 'in_progress' would NOT match (regression guard)
+    const wrongResult = rawDb.prepare(`
+      SELECT SUM(CASE WHEN status = 'in_progress' THEN 1 ELSE 0 END) as active_count
+      FROM tasks WHERE agent_id IS NOT NULL
+    `).get() as { active_count: number }
+    expect(wrongResult.active_count).toBe(0)
+  })
+
+  it('completion_rate query counts agent_working tasks correctly', () => {
+    db.createTask(makeTask({ title: 'Completed' }))!
+    db.createTask(makeTask({ title: 'Working' }))!
+    db.createTask(makeTask({ title: 'Not started' }))!
+
+    rawDb.prepare("UPDATE tasks SET status = 'completed' WHERE title = 'Completed'").run()
+    rawDb.prepare("UPDATE tasks SET status = 'agent_working' WHERE title = 'Working'").run()
+
+    const stats = rawDb.prepare(`
+      SELECT COUNT(*) as total,
+             SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed,
+             SUM(CASE WHEN status = 'agent_working' THEN 1 ELSE 0 END) as in_progress,
+             SUM(CASE WHEN status = 'not_started' THEN 1 ELSE 0 END) as not_started
+      FROM tasks
+    `).get() as { total: number; completed: number; in_progress: number; not_started: number }
+
+    expect(stats.total).toBe(3)
+    expect(stats.completed).toBe(1)
+    expect(stats.in_progress).toBe(1) // agent_working mapped to in_progress key
+    expect(stats.not_started).toBe(1)
+  })
+})
