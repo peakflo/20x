@@ -5,6 +5,7 @@ import { FeedbackDialog } from './FeedbackDialog'
 describe('FeedbackDialog', () => {
   const onSubmit = vi.fn<(rating: number, comment: string) => void>()
   const onSkip = vi.fn<() => void>()
+  const onCancel = vi.fn<() => void>()
 
   beforeEach(() => {
     vi.clearAllMocks()
@@ -15,32 +16,34 @@ describe('FeedbackDialog', () => {
   }
 
   it('renders when open', () => {
-    render(<FeedbackDialog open={true} onSubmit={onSubmit} onSkip={onSkip} />)
+    render(<FeedbackDialog open={true} onSubmit={onSubmit} onSkip={onSkip} onCancel={onCancel} />)
     expect(screen.getByText('Session Feedback')).toBeInTheDocument()
   })
 
   it('calls onSkip when Skip button is clicked', () => {
-    render(<FeedbackDialog open={true} onSubmit={onSubmit} onSkip={onSkip} />)
+    render(<FeedbackDialog open={true} onSubmit={onSubmit} onSkip={onSkip} onCancel={onCancel} />)
     const dialog = getDialog()
     fireEvent.click(within(dialog).getByText('Skip'))
     expect(onSkip).toHaveBeenCalledTimes(1)
+    expect(onCancel).not.toHaveBeenCalled()
   })
 
-  it('calls onSkip when the close (X) button is clicked', () => {
-    render(<FeedbackDialog open={true} onSubmit={onSubmit} onSkip={onSkip} />)
+  it('calls onCancel (not onSkip) when the close (X) button is clicked', () => {
+    render(<FeedbackDialog open={true} onSubmit={onSubmit} onSkip={onSkip} onCancel={onCancel} />)
     const closeButton = screen.getByRole('button', { name: /close/i })
     fireEvent.click(closeButton)
-    expect(onSkip).toHaveBeenCalledTimes(1)
+    expect(onCancel).toHaveBeenCalledTimes(1)
+    expect(onSkip).not.toHaveBeenCalled()
   })
 
   it('does not call onSubmit when no rating is selected', () => {
-    render(<FeedbackDialog open={true} onSubmit={onSubmit} onSkip={onSkip} />)
+    render(<FeedbackDialog open={true} onSubmit={onSubmit} onSkip={onSkip} onCancel={onCancel} />)
     const dialog = getDialog()
     expect(within(dialog).getByText('Submit Feedback')).toBeDisabled()
   })
 
   it('calls onSubmit with rating and comment when submitted', () => {
-    render(<FeedbackDialog open={true} onSubmit={onSubmit} onSkip={onSkip} />)
+    render(<FeedbackDialog open={true} onSubmit={onSubmit} onSkip={onSkip} onCancel={onCancel} />)
     const dialog = getDialog()
 
     // Click the 4th star

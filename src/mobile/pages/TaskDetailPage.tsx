@@ -525,6 +525,7 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
         <FeedbackModal
           onSubmit={handleFeedbackSubmit}
           onSkip={handleFeedbackSkip}
+          onCancel={() => setShowFeedback(false)}
         />
       )}
     </div>
@@ -647,14 +648,14 @@ function SubtasksSection({ subtasks, onNavigateToTask, onReorderSubtasks }: { su
   )
 }
 
-function FeedbackModal({ onSubmit, onSkip }: { onSubmit: (rating: number, comment: string) => void; onSkip: () => void }) {
+function FeedbackModal({ onSubmit, onSkip, onCancel }: { onSubmit: (rating: number, comment: string) => void; onSkip: () => void; onCancel: () => void }) {
   const [rating, setRating] = useState(0)
   const [comment, setComment] = useState('')
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center">
       {/* Backdrop */}
-      <div className="fixed inset-0 bg-black/60" onClick={onSkip} />
+      <div className="fixed inset-0 bg-black/60" onClick={onCancel} />
 
       {/* Modal */}
       <div className="relative z-50 w-full max-w-md mx-4 mb-4 bg-card border border-border rounded-xl shadow-xl animate-in slide-in-from-bottom-4 duration-200">

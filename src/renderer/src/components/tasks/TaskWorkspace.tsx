@@ -692,6 +692,7 @@ Update existing skills that were helpful or create new ones for patterns worth r
         open={showFeedback}
         onSubmit={handleFeedbackSubmit}
         onSkip={handleFeedbackSkip}
+        onCancel={() => setShowFeedback(false)}
       />
 
       <SnoozeDialog

@@ -8,9 +8,10 @@ interface FeedbackDialogProps {
   open: boolean
   onSubmit: (rating: number, comment: string) => void
   onSkip: () => void
+  onCancel: () => void
 }
 
-export function FeedbackDialog({ open, onSubmit, onSkip }: FeedbackDialogProps) {
+export function FeedbackDialog({ open, onSubmit, onSkip, onCancel }: FeedbackDialogProps) {
   const [rating, setRating] = useState(0)
   const [hoveredStar, setHoveredStar] = useState(0)
   const [comment, setComment] = useState('')
@@ -29,7 +30,7 @@ export function FeedbackDialog({ open, onSubmit, onSkip }: FeedbackDialogProps) 
   }
 
   return (
-    <Dialog open={open} onOpenChange={(isOpen) => { if (!isOpen) onSkip() }}>
+    <Dialog open={open} onOpenChange={(isOpen) => { if (!isOpen) onCancel() }}>
       <DialogContent className="max-w-md">
         <DialogHeader>
           <DialogTitle>Session Feedback</DialogTitle>
