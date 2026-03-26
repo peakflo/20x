@@ -9,7 +9,7 @@
 import type { PluginContext } from './types'
 
 /** Keys that plugins use to store the original remote URL on attachment records */
-const SOURCE_URL_KEYS = ['linear_url', 'notion_url', 'hubspot_url'] as const
+const SOURCE_URL_KEYS = ['linear_url', 'notion_url', 'hubspot_url', 'youtrack_url'] as const
 
 /**
  * Replace remote image/file URLs in markdown with local app-attachment:// URLs.
