@@ -136,9 +136,16 @@ export interface DepsStatus {
   pnpm: ToolStatus
   git: ToolStatus
   gh: ToolStatus
+  glab: ToolStatus
   claudeCode: ToolStatus
   opencode: ToolStatus
   codex: ToolStatus
+}
+
+export interface GlabCliStatus {
+  installed: boolean
+  authenticated: boolean
+  username?: string
 }
 
 interface ElectronAPI {
@@ -226,6 +233,10 @@ interface ElectronAPI {
     fetchOrgRepos: (org: string) => Promise<GitHubRepo[]>
     fetchUserRepos: () => Promise<GitHubRepo[]>
     fetchCollaborators: (owner: string, repo: string) => Promise<GitHubCollaborator[]>
+  }
+  gitlab: {
+    checkCli: () => Promise<GlabCliStatus>
+    startAuth: () => Promise<void>
   }
   worktree: {
     setup: (taskId: string, repos: { fullName: string; defaultBranch: string }[], org: string) => Promise<string>
@@ -350,6 +361,7 @@ interface ElectronAPI {
   onHeartbeatDisabled: (callback: (event: { taskId: string; reason: string }) => void) => () => void
   onWorktreeProgress: (callback: (event: WorktreeProgressEvent) => void) => () => void
   onGithubDeviceCode: (callback: (code: string) => void) => () => void
+  onGitlabDeviceCode: (callback: (code: string) => void) => () => void
   onOAuthCallback: (callback: (event: { code: string; state: string }) => void) => () => void
 }
 

@@ -14,6 +14,7 @@ const INSTALL_COMMANDS = {
   codex: { cmd: 'npm', args: ['install', '-g', '@openai/codex'] },
   pnpm: { cmd: 'npm', args: ['install', '-g', 'pnpm'] },
   gh: null,
+  glab: null,
   nodejs: null,
   git: null
 }
@@ -28,6 +29,11 @@ export function getInstallCommand(agentName) {
     if (process.platform === 'win32') return 'winget install --id GitHub.cli -e'
     if (process.platform === 'darwin') return 'brew install gh'
     return 'See https://cli.github.com/manual/installation'
+  }
+  if (agentName === 'glab') {
+    if (process.platform === 'win32') return 'winget install --id GLab.GLab -e'
+    if (process.platform === 'darwin') return 'brew install glab'
+    return 'See https://gitlab.com/gitlab-org/cli#installation'
   }
   if (agentName === 'nodejs') return 'Downloads and installs Node.js automatically'
   if (agentName === 'git') return 'Downloads and installs Git automatically'
@@ -312,6 +318,18 @@ export async function installAgent(agentName, onProgress) {
     return {
       success: false,
       error: 'GitHub CLI must be installed manually on this platform. See https://cli.github.com/',
+      newStatus: await detectInstalledAgents()
+    }
+  }
+
+  // GitLab CLI — special case
+  if (agentName === 'glab') {
+    if (isWin) {
+      return spawnInstall('winget', ['install', '--id', 'GLab.GLab', '-e', '--accept-source-agreements', '--accept-package-agreements'], agentName, onProgress)
+    }
+    return {
+      success: false,
+      error: 'GitLab CLI must be installed manually on this platform. See https://gitlab.com/gitlab-org/cli#installation',
       newStatus: await detectInstalledAgents()
     }
   }

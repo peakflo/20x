@@ -172,6 +172,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     fetchCollaborators: (owner: string, repo: string): Promise<unknown[]> =>
       ipcRenderer.invoke('github:fetchCollaborators', owner, repo)
   },
+  gitlab: {
+    checkCli: (): Promise<{ installed: boolean; authenticated: boolean; username?: string }> =>
+      ipcRenderer.invoke('gitlab:checkCli'),
+    startAuth: (): Promise<void> => ipcRenderer.invoke('gitlab:startAuth')
+  },
   worktree: {
     setup: (taskId: string, repos: { fullName: string; defaultBranch: string }[], org: string): Promise<string> =>
       ipcRenderer.invoke('worktree:setup', taskId, repos, org),
@@ -292,6 +297,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const handler = (_: unknown, code: string): void => callback(code)
     ipcRenderer.on('github:deviceCode', handler)
     return () => ipcRenderer.removeListener('github:deviceCode', handler)
+  },
+  onGitlabDeviceCode: (callback: (code: string) => void): (() => void) => {
+    const handler = (_: unknown, code: string): void => callback(code)
+    ipcRenderer.on('gitlab:deviceCode', handler)
+    return () => ipcRenderer.removeListener('gitlab:deviceCode', handler)
   },
   app: {
     getVersion: (): Promise<string> =>

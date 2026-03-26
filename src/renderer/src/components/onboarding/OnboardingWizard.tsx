@@ -24,13 +24,14 @@ import {
   DialogDescription
 } from '@/components/ui/Dialog'
 import { useAgentStore } from '@/stores/agent-store'
+import { useSettingsStore, type GitProvider } from '@/stores/settings-store'
 import { agentConfigApi, depsApi } from '@/lib/ipc-client'
 import { CodingAgentType, CODING_AGENTS, CLAUDE_MODELS, CODEX_MODELS } from '@/types'
 import type { ToolStatus } from '@/types/electron'
 
 /* ─── Types ─── */
 
-type OnboardingStep = 'welcome' | 'tools' | 'agent'
+type OnboardingStep = 'welcome' | 'provider' | 'tools' | 'agent'
 
 interface ProgressEvent {
   agentName: string
@@ -103,6 +104,13 @@ const TOOL_META: Record<
     description: 'GitHub command-line tool',
     category: 'tool'
   },
+  glab: {
+    label: 'GitLab CLI',
+    color: 'bg-orange-500',
+    letter: 'gl',
+    description: 'GitLab command-line tool',
+    category: 'tool'
+  },
   claudeCode: {
     label: 'Claude Code',
     color: 'bg-amber-600',
@@ -126,8 +134,8 @@ const TOOL_META: Record<
   }
 }
 
-const INSTALLABLE = ['nodejs', 'npm', 'git', 'gh', 'claudeCode', 'opencode', 'codex', 'pnpm']
-const INSTALL_ORDER = ['nodejs', 'git', 'gh', 'claudeCode', 'opencode', 'codex']
+const INSTALLABLE = ['nodejs', 'npm', 'git', 'gh', 'glab', 'claudeCode', 'opencode', 'codex', 'pnpm']
+const INSTALL_ORDER = ['nodejs', 'git', 'gh', 'glab', 'claudeCode', 'opencode', 'codex']
 
 /* ─── Step 1: Welcome ─── */
 
@@ -163,14 +171,96 @@ function WelcomeStep({ onNext }: { onNext: () => void }) {
   )
 }
 
+/* ─── Step 1b: Git Provider Choice ─── */
+
+function ProviderChoiceStep({
+  onNext,
+  selectedProvider,
+  onSelectProvider
+}: {
+  onNext: () => void
+  selectedProvider: GitProvider | null
+  onSelectProvider: (provider: GitProvider) => void
+}) {
+  const { setGitProvider } = useSettingsStore()
+
+  const handleSelect = async (provider: GitProvider) => {
+    onSelectProvider(provider)
+    await setGitProvider(provider)
+  }
+
+  return (
+    <div className="flex flex-col items-center text-center py-4">
+      <h2 className="text-2xl font-bold text-foreground mb-2">Choose your Git provider</h2>
+      <p className="text-sm text-muted-foreground mb-6 leading-relaxed max-w-sm">
+        Select the platform where your repositories are hosted. This determines which CLI tool
+        will be used for repo management.
+      </p>
+
+      <div className="grid grid-cols-2 gap-4 w-full max-w-md mb-8">
+        {/* GitHub option */}
+        <button
+          type="button"
+          onClick={() => handleSelect('github')}
+          className={`flex flex-col items-center gap-3 rounded-xl border-2 p-6 transition-all ${
+            selectedProvider === 'github'
+              ? 'border-primary bg-primary/5 shadow-md'
+              : 'border-border hover:border-muted-foreground/50 hover:bg-muted/30'
+          }`}
+        >
+          <div className="bg-gray-600 rounded-full size-12 flex items-center justify-center text-white text-sm font-bold">
+            gh
+          </div>
+          <div>
+            <p className="text-sm font-semibold text-foreground">GitHub</p>
+            <p className="text-xs text-muted-foreground mt-0.5">github.com</p>
+          </div>
+          {selectedProvider === 'github' && (
+            <Check className="size-5 text-primary" />
+          )}
+        </button>
+
+        {/* GitLab option */}
+        <button
+          type="button"
+          onClick={() => handleSelect('gitlab')}
+          className={`flex flex-col items-center gap-3 rounded-xl border-2 p-6 transition-all ${
+            selectedProvider === 'gitlab'
+              ? 'border-primary bg-primary/5 shadow-md'
+              : 'border-border hover:border-muted-foreground/50 hover:bg-muted/30'
+          }`}
+        >
+          <div className="bg-orange-500 rounded-full size-12 flex items-center justify-center text-white text-sm font-bold">
+            gl
+          </div>
+          <div>
+            <p className="text-sm font-semibold text-foreground">GitLab</p>
+            <p className="text-xs text-muted-foreground mt-0.5">gitlab.com</p>
+          </div>
+          {selectedProvider === 'gitlab' && (
+            <Check className="size-5 text-primary" />
+          )}
+        </button>
+      </div>
+
+      <Button onClick={onNext} disabled={!selectedProvider} className="w-full max-w-xs">
+        Continue
+        <ArrowRight className="size-4 ml-1.5" />
+      </Button>
+    </div>
+  )
+}
+
 /* ─── Step 2: Tools & Agents ─── */
 
 function ToolsAndAgentsStep({
   onNext,
-  onSkip
+  onSkip,
+  selectedProvider
 }: {
   onNext: () => void
   onSkip: () => void
+  selectedProvider: GitProvider | null
 }) {
   const [status, setStatus] = useState<Record<string, ToolStatus> | null>(null)
   const [installing, setInstalling] = useState<string | null>(null)
@@ -293,7 +383,13 @@ function ToolsAndAgentsStep({
     category: 'prerequisite' | 'agent' | 'tool',
     title: string
   ) => {
-    const items = Object.entries(TOOL_META).filter(([, meta]) => meta.category === category)
+    const items = Object.entries(TOOL_META).filter(([key, meta]) => {
+      if (meta.category !== category) return false
+      // Only show the relevant CLI tool based on provider choice
+      if (key === 'gh' && selectedProvider === 'gitlab') return false
+      if (key === 'glab' && selectedProvider === 'github') return false
+      return true
+    })
     if (items.length === 0) return null
 
     return (
@@ -721,7 +817,9 @@ export function OnboardingWizard({ open, onOpenChange }: OnboardingWizardProps) 
   const [currentStep, setCurrentStep] = useState(0)
   const [steps, setSteps] = useState<OnboardingStep[]>([])
   const [error, setError] = useState<string | null>(null)
+  const [selectedProvider, setSelectedProvider] = useState<GitProvider | null>(null)
   const { fetchAgents } = useAgentStore()
+  const { fetchSettings, gitProvider } = useSettingsStore()
 
   // Build step list on open
   useEffect(() => {
@@ -729,8 +827,8 @@ export function OnboardingWizard({ open, onOpenChange }: OnboardingWizardProps) 
 
     const force = isForceOnboarding()
 
-    fetchAgents().then(() => {
-      const stepList: OnboardingStep[] = ['welcome', 'tools']
+    Promise.all([fetchAgents(), fetchSettings()]).then(() => {
+      const stepList: OnboardingStep[] = ['welcome', 'provider', 'tools']
 
       // Agent config step — skip if default agent is fully configured
       if (force || !hasCompleteDefaultAgent()) {
@@ -740,8 +838,12 @@ export function OnboardingWizard({ open, onOpenChange }: OnboardingWizardProps) 
       setSteps(stepList)
       setCurrentStep(0)
       setError(null)
+      // Restore previously saved provider choice
+      if (gitProvider) {
+        setSelectedProvider(gitProvider)
+      }
     })
-  }, [open, fetchAgents])
+  }, [open, fetchAgents, fetchSettings])
 
   const advance = useCallback(() => {
     setError(null)
@@ -765,11 +867,13 @@ export function OnboardingWizard({ open, onOpenChange }: OnboardingWizardProps) 
           <DialogTitle>
             {current === 'welcome'
               ? 'Welcome'
-              : current === 'tools'
-                ? 'Agent & Tool Setup'
-                : current === 'agent'
-                  ? 'Agent Configuration'
-                  : 'Setup'}
+              : current === 'provider'
+                ? 'Git Provider'
+                : current === 'tools'
+                  ? 'Agent & Tool Setup'
+                  : current === 'agent'
+                    ? 'Agent Configuration'
+                    : 'Setup'}
           </DialogTitle>
           <DialogDescription>
             {steps.length > 1 && (
@@ -797,7 +901,15 @@ export function OnboardingWizard({ open, onOpenChange }: OnboardingWizardProps) 
         <DialogBody>
           {current === 'welcome' && <WelcomeStep onNext={advance} />}
 
-          {current === 'tools' && <ToolsAndAgentsStep onNext={advance} onSkip={dismiss} />}
+          {current === 'provider' && (
+            <ProviderChoiceStep
+              onNext={advance}
+              selectedProvider={selectedProvider}
+              onSelectProvider={setSelectedProvider}
+            />
+          )}
+
+          {current === 'tools' && <ToolsAndAgentsStep onNext={advance} onSkip={dismiss} selectedProvider={selectedProvider} />}
 
           {current === 'agent' && (
             <div className="px-2 pt-2 pb-2">

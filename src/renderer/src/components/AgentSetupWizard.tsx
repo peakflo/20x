@@ -29,16 +29,17 @@ const TOOL_META: Record<string, { label: string; color: string; letter: string; 
   npm: { label: 'npm', color: 'bg-red-600', letter: 'n', required: true, description: 'Package manager (included with Node.js)', category: 'prerequisite' },
   git: { label: 'Git', color: 'bg-orange-600', letter: 'G', description: 'Version control system', category: 'prerequisite' },
   gh: { label: 'GitHub CLI', color: 'bg-gray-600', letter: 'gh', description: 'GitHub command-line tool', category: 'tool' },
+  glab: { label: 'GitLab CLI', color: 'bg-orange-500', letter: 'gl', description: 'GitLab command-line tool', category: 'tool' },
   claudeCode: { label: 'Claude Code', color: 'bg-amber-600', letter: 'C', description: 'Anthropic\'s coding agent', category: 'agent' },
   opencode: { label: 'OpenCode', color: 'bg-blue-600', letter: 'O', description: 'Open-source coding agent (free models)', category: 'agent' },
   codex: { label: 'Codex', color: 'bg-purple-600', letter: 'X', description: 'OpenAI\'s coding agent', category: 'agent' }
 }
 
 // All tools are now installable
-const INSTALLABLE = ['nodejs', 'npm', 'git', 'gh', 'claudeCode', 'opencode', 'codex', 'pnpm']
+const INSTALLABLE = ['nodejs', 'npm', 'git', 'gh', 'glab', 'claudeCode', 'opencode', 'codex', 'pnpm']
 
 // Install order: prerequisites first, then tools, then agents
-const INSTALL_ORDER = ['nodejs', 'git', 'gh', 'claudeCode', 'opencode', 'codex']
+const INSTALL_ORDER = ['nodejs', 'git', 'gh', 'glab', 'claudeCode', 'opencode', 'codex']
 
 /** @deprecated Use `ToolSetupDialog` instead */
 export const AgentSetupDialog = ToolSetupDialog
