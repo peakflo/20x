@@ -155,17 +155,30 @@ export function TaskListPage({ onNavigate }: { onNavigate: (route: Route) => voi
       <div className="shrink-0 px-4 pt-3 pb-2 border-b border-border/30">
         <div className="flex items-center justify-between mb-2">
           <h1 className="text-lg font-semibold">Tasks</h1>
-          <button
-            onClick={() => syncAndFetch()}
-            disabled={isLoading || isSyncing}
-            className="p-2 active:opacity-60 hover:bg-accent rounded-md transition-colors disabled:opacity-40"
-            aria-label="Sync and refresh tasks"
-            title="Sync all sources"
-          >
-            <svg className={`w-4 h-4 text-foreground ${isSyncing ? 'animate-spin' : ''}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" /><path d="M21 3v5h-5" />
-            </svg>
-          </button>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => syncAndFetch()}
+              disabled={isLoading || isSyncing}
+              className="p-2 active:opacity-60 hover:bg-accent rounded-md transition-colors disabled:opacity-40"
+              aria-label="Sync and refresh tasks"
+              title="Sync all sources"
+            >
+              <svg className={`w-4 h-4 text-foreground ${isSyncing ? 'animate-spin' : ''}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" /><path d="M21 3v5h-5" />
+              </svg>
+            </button>
+            <button
+              onClick={() => onNavigate({ page: 'settings' })}
+              className="p-2 active:opacity-60 hover:bg-accent rounded-md transition-colors"
+              aria-label="Settings"
+              title="Settings"
+            >
+              <svg className="w-4 h-4 text-foreground" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="3" />
+                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
+              </svg>
+            </button>
+          </div>
         </div>
 
         {/* Search */}
