@@ -870,9 +870,8 @@ File attachments on YouTrack issues are downloaded and stored locally.
     }
 
     // Assignee
-    let assignee: string | undefined
     const assigneeField = getCustomField(issue, 'Assignee')
-    assignee = getAssigneeName(assigneeField) || undefined
+    const assignee: string | undefined = getAssigneeName(assigneeField) || undefined
 
     // Labels from tags
     let labels: string[] | undefined
