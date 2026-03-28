@@ -8,9 +8,9 @@ describe('DEFAULT_CODEX_MODEL', () => {
 })
 
 describe('CodexAdapter findCodexExecutable fallback paths', () => {
-  it('should include pnpm and volta paths in source for macOS fallback', () => {
-    const fs = require('fs')
-    const path = require('path')
+  it('should include pnpm and volta paths in source for macOS fallback', async () => {
+    const fs = await import('fs')
+    const path = await import('path')
     const source = fs.readFileSync(
       path.join(__dirname, 'codex-adapter.ts'),
       'utf8'
@@ -21,9 +21,9 @@ describe('CodexAdapter findCodexExecutable fallback paths', () => {
     expect(source).toContain('.volta/bin/codex')
   })
 
-  it('should dynamically detect NVM paths instead of hardcoding', () => {
-    const fs = require('fs')
-    const path = require('path')
+  it('should dynamically detect NVM paths instead of hardcoding', async () => {
+    const fs = await import('fs')
+    const path = await import('path')
     const source = fs.readFileSync(
       path.join(__dirname, 'codex-adapter.ts'),
       'utf8'

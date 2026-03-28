@@ -366,9 +366,8 @@ function buildFallbackPath(): string {
   // Dynamically detect NVM current version path instead of hardcoding
   if (home) {
     try {
-      const { readdirSync: readdir } = require('fs')
       const nvmVersionsDir = join(home, '.nvm', 'versions', 'node')
-      const versions = readdir(nvmVersionsDir) as string[]
+      const versions = readdirSync(nvmVersionsDir) as string[]
       if (versions.length > 0) {
         // Sort descending to pick the latest installed version
         versions.sort((a: string, b: string) => b.localeCompare(a, undefined, { numeric: true }))

@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 // We test the buildFallbackPath() logic and the shell invocation flags
@@ -47,10 +46,10 @@ describe('fixPlatformPath behaviour', () => {
   })
 
   describe('fallback PATH construction', () => {
-    it('should include essential macOS paths in fallback', () => {
+    it('should include essential macOS paths in fallback', async () => {
       // Read the source and verify all critical fallback paths are present
-      const fs = require('fs')
-      const path = require('path')
+      const fs = await import('fs')
+      const path = await import('path')
       const indexSource = fs.readFileSync(
         path.join(__dirname, 'index.ts'),
         'utf8'
@@ -72,9 +71,9 @@ describe('fixPlatformPath behaviour', () => {
       }
     })
 
-    it('should NOT hardcode a specific NVM Node version', () => {
-      const fs = require('fs')
-      const path = require('path')
+    it('should NOT hardcode a specific NVM Node version', async () => {
+      const fs = await import('fs')
+      const path = await import('path')
       const indexSource = fs.readFileSync(
         path.join(__dirname, 'index.ts'),
         'utf8'
