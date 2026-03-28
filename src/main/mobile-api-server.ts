@@ -14,6 +14,7 @@ import type { DatabaseManager } from './database'
 import type { AgentManager } from './agent-manager'
 import type { GitHubManager } from './github-manager'
 import type { SyncManager } from './sync-manager'
+import type { PluginRegistry } from './plugins/registry'
 
 // ── State ────────────────────────────────────────────────────
 let server: HttpServer | null = null
@@ -22,6 +23,7 @@ let dbRef: DatabaseManager | null = null
 let agentRef: AgentManager | null = null
 let githubRef: GitHubManager | null = null
 let syncManagerRef: SyncManager | null = null
+let pluginRegistryRef: PluginRegistry | null = null
 let authToken: string | null = null
 let notifyDesktop: ((channel: string, data: unknown) => void) | null = null
 
@@ -43,7 +45,8 @@ export function startMobileApiServer(
   agentManager: AgentManager,
   githubManager: GitHubManager,
   port = 20620,
-  syncManager?: SyncManager | null
+  syncManager?: SyncManager | null,
+  pluginRegistry?: PluginRegistry | null
 ): Promise<number> {
   if (server) return Promise.resolve(port)
 
@@ -51,6 +54,7 @@ export function startMobileApiServer(
   agentRef = agentManager
   githubRef = githubManager
   syncManagerRef = syncManager ?? null
+  pluginRegistryRef = pluginRegistry ?? null
 
   // Read or generate auth token — auth is always required
   authToken = db.getSetting('mobile_auth_token') ?? null
@@ -363,6 +367,35 @@ async function routeGet(pathname: string, url: URL): Promise<unknown> {
     return getActiveSessions()
   }
 
+  // GET /api/task-sources — list all configured task sources
+  if (pathname === '/api/task-sources') {
+    return db.getTaskSources()
+  }
+
+  // GET /api/plugins — list available plugins
+  if (pathname === '/api/plugins') {
+    if (!pluginRegistryRef) return []
+    return pluginRegistryRef.list()
+  }
+
+  // GET /api/plugins/:id/schema — get config schema for a plugin
+  const pluginSchemaMatch = pathname.match(/^\/api\/plugins\/([^/]+)\/schema$/)
+  if (pluginSchemaMatch) {
+    if (!pluginRegistryRef) throw Object.assign(new Error('Plugin registry not available'), { status: 503 })
+    const plugin = pluginRegistryRef.get(pluginSchemaMatch[1])
+    if (!plugin) throw Object.assign(new Error('Plugin not found'), { status: 404 })
+    return plugin.getConfigSchema()
+  }
+
+  // GET /api/plugins/:id/documentation — get setup documentation for a plugin
+  const pluginDocMatch = pathname.match(/^\/api\/plugins\/([^/]+)\/documentation$/)
+  if (pluginDocMatch) {
+    if (!pluginRegistryRef) throw Object.assign(new Error('Plugin registry not available'), { status: 503 })
+    const plugin = pluginRegistryRef.get(pluginDocMatch[1])
+    if (!plugin) throw Object.assign(new Error('Plugin not found'), { status: 404 })
+    return { documentation: plugin.getSetupDocumentation?.() ?? null }
+  }
+
   // GET /api/github/org — returns the configured github org
   if (pathname === '/api/github/org') {
     const org = db.getSetting('github_org') || ''
@@ -399,7 +432,34 @@ async function routePost(pathname: string, params: Record<string, unknown>): Pro
   const agent = agentRef!
   const db = dbRef!
 
-  // POST /api/task-sources/sync-all — sync all enabled task sources
+  // POST /api/plugins/:id/resolve-options — resolve dynamic options for a plugin config field
+  const pluginResolveMatch = pathname.match(/^\/api\/plugins\/([^/]+)\/resolve-options$/)
+  if (pluginResolveMatch) {
+    if (!pluginRegistryRef) throw Object.assign(new Error('Plugin registry not available'), { status: 503 })
+    const pluginId = pluginResolveMatch[1]
+    const plugin = pluginRegistryRef.get(pluginId)
+    if (!plugin) throw Object.assign(new Error('Plugin not found'), { status: 404 })
+
+    const { resolverKey, config } = params as { resolverKey?: string; config?: Record<string, unknown> }
+    if (!resolverKey) throw Object.assign(new Error('resolverKey is required'), { status: 400 })
+
+    // YouTrack and other non-MCP plugins don't use toolCaller, but the type requires it
+    const ctx = { db } as Parameters<typeof plugin.resolveOptions>[2]
+    const options = await plugin.resolveOptions(resolverKey, config || {}, ctx)
+    return options
+  }
+
+  // POST /api/task-sources — create a new task source
+  if (pathname === '/api/task-sources') {
+    const { name, plugin_id, config, mcp_server_id } = params as {
+      name?: string; plugin_id?: string; config?: Record<string, unknown>; mcp_server_id?: string | null
+    }
+    if (!name || !plugin_id) throw Object.assign(new Error('name and plugin_id are required'), { status: 400 })
+    const source = db.createTaskSource({ name, plugin_id, config: config || {}, mcp_server_id: mcp_server_id || null })
+    return source
+  }
+
+  // POST /api/task-sources/sync-all — sync all enabled task sources (must be before :id routes)
   if (pathname === '/api/task-sources/sync-all') {
     if (!syncManagerRef) throw Object.assign(new Error('Sync manager not available'), { status: 503 })
     const sources = db.getTaskSources().filter((s: { enabled: boolean }) => s.enabled)
@@ -409,6 +469,24 @@ async function routePost(pathname: string, params: Record<string, unknown>): Pro
     return results.map((r) =>
       r.status === 'fulfilled' ? r.value : { error: String((r as PromiseRejectedResult).reason) }
     )
+  }
+
+  // POST /api/task-sources/:id/sync — sync a single task source
+  const sourceSyncMatch = pathname.match(/^\/api\/task-sources\/([^/]+)\/sync$/)
+  if (sourceSyncMatch) {
+    if (!syncManagerRef) throw Object.assign(new Error('Sync manager not available'), { status: 503 })
+    const result = await syncManagerRef.importTasks(sourceSyncMatch[1])
+    return result
+  }
+
+  // POST /api/task-sources/:id — update a task source
+  const sourceUpdateMatch = pathname.match(/^\/api\/task-sources\/([^/]+)$/)
+  if (sourceUpdateMatch) {
+    const sourceId = sourceUpdateMatch[1]
+    const source = db.getTaskSource(sourceId)
+    if (!source) throw Object.assign(new Error('Task source not found'), { status: 404 })
+    const updated = db.updateTaskSource(sourceId, params as Parameters<DatabaseManager['updateTaskSource']>[1])
+    return updated
   }
 
   // POST /api/tasks/reorder-subtasks — reorder subtasks under a parent
