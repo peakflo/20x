@@ -187,6 +187,8 @@ export class AgentManager extends EventEmitter {
     if (!task.repos || task.repos.length === 0) return undefined
 
     try {
+      console.log(`[AgentManager] setupWorktreeIfNeeded: provider=${gitProvider}, org=${githubOrg}, taskRepos=${task.repos.join(', ')}`)
+
       let orgRepos: Array<{ fullName: string; defaultBranch: string }>
 
       if (gitProvider === 'gitlab' && this.gitlabManager) {
@@ -194,14 +196,22 @@ export class AgentManager extends EventEmitter {
       } else if (this.githubManager) {
         orgRepos = await this.githubManager.fetchOrgRepos(githubOrg)
       } else {
+        console.warn(`[AgentManager] No ${gitProvider} manager available, skipping worktree setup`)
         return undefined
       }
+
+      console.log(`[AgentManager] Fetched ${orgRepos.length} org repos, matching against task repos: ${task.repos.join(', ')}`)
 
       const matched = task.repos
         .map((name) => orgRepos.find((r) => r.fullName === name))
         .filter(Boolean) as Array<{ fullName: string; defaultBranch: string }>
 
-      if (matched.length === 0) return undefined
+      if (matched.length === 0) {
+        console.warn(`[AgentManager] No matching repos found. Task repos: [${task.repos.join(', ')}], Org repos: [${orgRepos.map(r => r.fullName).slice(0, 10).join(', ')}${orgRepos.length > 10 ? '...' : ''}]`)
+        return undefined
+      }
+
+      console.log(`[AgentManager] Matched ${matched.length} repos: ${matched.map(r => r.fullName).join(', ')}`)
 
       const workspaceDir = await this.worktreeManager.setupWorkspaceForTask(
         taskId,
@@ -211,7 +221,7 @@ export class AgentManager extends EventEmitter {
       )
       return workspaceDir
     } catch (error) {
-      console.error('[AgentManager] Worktree setup failed:', error)
+      console.error(`[AgentManager] Worktree setup failed for ${gitProvider}:`, error)
       return undefined
     }
   }

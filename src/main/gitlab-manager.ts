@@ -34,43 +34,38 @@ export class GitLabManager {
   }
 
   /**
+   * Fetches paginated results from a GitLab API endpoint.
+   * Uses glab's built-in --paginate flag (supported since glab 1.x) which
+   * automatically follows pagination headers and merges results.
+   * Query params are embedded directly in the URL for clarity.
+   */
+  private async fetchPaginatedProjects(basePath: string, extraParams = ''): Promise<GitHubRepo[]> {
+    const separator = basePath.includes('?') ? '&' : '?'
+    const url = `${basePath}${separator}per_page=100&order_by=updated_at&sort=desc${extraParams ? '&' + extraParams : ''}`
+
+    console.log(`[GitLabManager] Fetching: glab api ${url} --paginate`)
+    const { stdout } = await execFileAsync('glab', [
+      'api', url, '--paginate'
+    ], { maxBuffer: GLAB_API_MAX_BUFFER, timeout: 60000 })
+
+    const raw = JSON.parse(stdout) as Record<string, unknown>[]
+
+    // Deduplicate by fullName
+    const deduped = new Map<string, GitHubRepo>()
+    for (const project of raw) {
+      const mapped = this.mapRepo(project)
+      deduped.set(mapped.fullName, mapped)
+    }
+    console.log(`[GitLabManager] Fetched ${deduped.size} projects from ${basePath}`)
+    return Array.from(deduped.values())
+  }
+
+  /**
    * Fetches all projects accessible to the authenticated user via the GitLab REST API.
    * Uses glab to proxy the request so authentication tokens are handled automatically.
    */
   private async fetchAccessibleRepos(): Promise<GitHubRepo[]> {
-    const allRepos: GitHubRepo[] = []
-    let page = 1
-    const perPage = 100
-
-    // glab api does not support --paginate like gh, so we paginate manually
-    while (true) {
-      const { stdout } = await execFileAsync('glab', [
-        'api', '/projects',
-        '--method', 'GET',
-        '-f', `membership=true`,
-        '-f', `per_page=${perPage}`,
-        '-f', `page=${page}`,
-        '-f', 'order_by=updated_at',
-        '-f', 'sort=desc'
-      ], { maxBuffer: GLAB_API_MAX_BUFFER })
-
-      const raw = JSON.parse(stdout) as Record<string, unknown>[]
-      if (raw.length === 0) break
-
-      for (const project of raw) {
-        allRepos.push(this.mapRepo(project))
-      }
-
-      if (raw.length < perPage) break
-      page++
-    }
-
-    // Deduplicate by fullName
-    const deduped = new Map<string, GitHubRepo>()
-    for (const repo of allRepos) {
-      deduped.set(repo.fullName, repo)
-    }
-    return Array.from(deduped.values())
+    return this.fetchPaginatedProjects('/projects', 'membership=true')
   }
 
   async checkGlabCli(): Promise<GlabCliStatus> {
@@ -186,11 +181,26 @@ export class GitLabManager {
 
   /**
    * Fetches repos for a specific organization/group.
-   * Uses prefix matching similar to GitHubManager.fetchOrgRepos().
+   * Uses the GitLab Groups API directly for efficiency instead of fetching
+   * all accessible projects. Falls back to the general /projects endpoint
+   * with prefix filtering if the group lookup fails (e.g. personal namespace).
    */
   async fetchOrgRepos(org: string): Promise<GitHubRepo[]> {
-    const repos = await this.fetchAccessibleRepos()
-    return repos.filter((repo) => repo.fullName.startsWith(`${org}/`))
+    try {
+      // Use the Groups API — more targeted and reliable than fetching all projects
+      const encodedGroup = encodeURIComponent(org)
+      const repos = await this.fetchPaginatedProjects(
+        `/groups/${encodedGroup}/projects`,
+        'include_subgroups=true'
+      )
+      console.log(`[GitLabManager] fetchOrgRepos via Groups API: ${repos.length} repos for "${org}"`)
+      return repos
+    } catch (error) {
+      // Group lookup can fail for personal namespaces — fall back to general search
+      console.log(`[GitLabManager] Groups API failed for "${org}", falling back to /projects:`, (error as Error).message)
+      const repos = await this.fetchAccessibleRepos()
+      return repos.filter((repo) => repo.fullName.startsWith(`${org}/`))
+    }
   }
 
   /**

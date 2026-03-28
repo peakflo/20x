@@ -85,11 +85,17 @@ export class WorktreeManager {
     mkdirSync(orgDir, { recursive: true })
 
     if (provider === 'gitlab') {
-      // glab repo clone supports the same syntax as gh repo clone
       console.log(`[WorktreeManager]   Executing: glab repo clone ${fullName} ${barePath} -- --bare`)
       await execFileAsync('glab', ['repo', 'clone', fullName, barePath, '--', '--bare'], {
         timeout: 300000
       })
+      // glab bare clone doesn't set fetch refspec — without it, `git fetch origin`
+      // only fetches HEAD as FETCH_HEAD and doesn't create remote tracking branches
+      // (e.g. origin/main). This breaks worktree creation from origin/<branch>.
+      console.log(`[WorktreeManager]   Setting fetch refspec for glab bare clone`)
+      await execFileAsync('git', [
+        'config', 'remote.origin.fetch', '+refs/heads/*:refs/remotes/origin/*'
+      ], { cwd: barePath })
     } else {
       console.log(`[WorktreeManager]   Executing: gh repo clone ${fullName} ${barePath} -- --bare`)
       await execFileAsync('gh', ['repo', 'clone', fullName, barePath, '--', '--bare'], {

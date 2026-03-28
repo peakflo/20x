@@ -136,7 +136,7 @@ describe('GitLabManager', () => {
   })
 
   describe('fetchOrgRepos', () => {
-    const mockProjects = [
+    const mockGroupProjects = [
       {
         path: 'repo-a',
         path_with_namespace: 'myorg/repo-a',
@@ -152,55 +152,39 @@ describe('GitLabManager', () => {
         http_url_to_repo: 'https://gitlab.com/myorg/repo-b.git',
         description: '',
         visibility: 'public'
-      },
-      {
-        path: 'personal-repo',
-        path_with_namespace: 'dmitry/personal-repo',
-        default_branch: 'main',
-        http_url_to_repo: 'https://gitlab.com/dmitry/personal-repo.git',
-        description: 'My personal repo',
-        visibility: 'private'
       }
     ]
 
-    function setupApiMock(): void {
+    function setupGroupApiMock(): void {
       execFileMock.mockImplementation((_file: string, args: string[], _optionsOrCallback: unknown, maybeCallback?: (error: Error | null, stdout?: string, stderr?: string) => void) => {
         const callback = typeof _optionsOrCallback === 'function'
           ? _optionsOrCallback as (error: Error | null, stdout?: string, stderr?: string) => void
           : maybeCallback as (error: Error | null, stdout?: string, stderr?: string) => void
 
-        if (args[0] === '--version') {
-          callback(null, 'glab version 1.36.0', '')
-          return
-        }
-
-        if (args[0] === 'auth' && args[1] === 'status') {
-          callback(null, 'Logged in to gitlab.com as dmitry', '')
-          return
-        }
-
-        if (args[0] === 'api' && args[1] === '/projects') {
-          // Return projects on first page, empty on second
-          let page = 1
-          for (let i = 0; i < args.length; i++) {
-            if (args[i] === '-f' && args[i + 1]?.startsWith('page=')) {
-              page = parseInt(args[i + 1].replace('page=', ''), 10)
-            }
+        // glab api uses --paginate, so all results come back in a single call
+        if (args[0] === 'api' && typeof args[1] === 'string') {
+          const url = args[1]
+          if (url.startsWith('/groups/myorg/projects')) {
+            callback(null, JSON.stringify(mockGroupProjects), '')
+            return
           }
-          if (page === 1) {
-            callback(null, JSON.stringify(mockProjects), '')
-          } else {
-            callback(null, JSON.stringify([]), '')
+          if (url.startsWith('/groups/unknown-org/projects')) {
+            callback(new Error('404 Not Found'))
+            return
           }
-          return
+          // Fallback /projects endpoint (for personal namespace fallback)
+          if (url.startsWith('/projects')) {
+            callback(null, JSON.stringify(mockGroupProjects), '')
+            return
+          }
         }
 
         callback(new Error(`Unexpected call: ${args.join(' ')}`))
       })
     }
 
-    it('filters repos by org prefix', async () => {
-      setupApiMock()
+    it('fetches repos via Groups API', async () => {
+      setupGroupApiMock()
       const manager = new GitLabManager()
       const repos = await manager.fetchOrgRepos('myorg')
 
@@ -212,16 +196,18 @@ describe('GitLabManager', () => {
       expect(repos[1].isPrivate).toBe(false)
     })
 
-    it('returns empty array for unknown org', async () => {
-      setupApiMock()
+    it('falls back to /projects when group not found', async () => {
+      setupGroupApiMock()
       const manager = new GitLabManager()
+      // unknown-org returns 404 from Groups API, triggers fallback
       const repos = await manager.fetchOrgRepos('unknown-org')
 
+      // Fallback fetches all projects, filters by prefix — no match
       expect(repos).toHaveLength(0)
     })
 
     it('maps GitLab fields to GitHubRepo interface correctly', async () => {
-      setupApiMock()
+      setupGroupApiMock()
       const manager = new GitLabManager()
       const repos = await manager.fetchOrgRepos('myorg')
 
@@ -253,23 +239,14 @@ describe('GitLabManager', () => {
           return
         }
 
-        if (args[0] === 'api' && args[1] === '/projects') {
-          let page = 1
-          for (let i = 0; i < args.length; i++) {
-            if (args[i] === '-f' && args[i + 1]?.startsWith('page=')) {
-              page = parseInt(args[i + 1].replace('page=', ''), 10)
-            }
-          }
-          if (page === 1) {
-            callback(null, JSON.stringify([
-              { path: 'r1', path_with_namespace: 'orgA/r1', default_branch: 'main', http_url_to_repo: 'url', description: '', visibility: 'private' },
-              { path: 'r2', path_with_namespace: 'orgB/r2', default_branch: 'main', http_url_to_repo: 'url', description: '', visibility: 'private' },
-              { path: 'r3', path_with_namespace: 'orgA/r3', default_branch: 'main', http_url_to_repo: 'url', description: '', visibility: 'private' },
-              { path: 'my', path_with_namespace: 'dmitry/my', default_branch: 'main', http_url_to_repo: 'url', description: '', visibility: 'private' }
-            ]), '')
-          } else {
-            callback(null, JSON.stringify([]), '')
-          }
+        // --paginate returns all results in one call
+        if (args[0] === 'api' && typeof args[1] === 'string' && args[1].startsWith('/projects')) {
+          callback(null, JSON.stringify([
+            { path: 'r1', path_with_namespace: 'orgA/r1', default_branch: 'main', http_url_to_repo: 'url', description: '', visibility: 'private' },
+            { path: 'r2', path_with_namespace: 'orgB/r2', default_branch: 'main', http_url_to_repo: 'url', description: '', visibility: 'private' },
+            { path: 'r3', path_with_namespace: 'orgA/r3', default_branch: 'main', http_url_to_repo: 'url', description: '', visibility: 'private' },
+            { path: 'my', path_with_namespace: 'dmitry/my', default_branch: 'main', http_url_to_repo: 'url', description: '', visibility: 'private' }
+          ]), '')
           return
         }
 
@@ -302,21 +279,12 @@ describe('GitLabManager', () => {
           return
         }
 
-        if (args[0] === 'api' && args[1] === '/projects') {
-          let page = 1
-          for (let i = 0; i < args.length; i++) {
-            if (args[i] === '-f' && args[i + 1]?.startsWith('page=')) {
-              page = parseInt(args[i + 1].replace('page=', ''), 10)
-            }
-          }
-          if (page === 1) {
-            callback(null, JSON.stringify([
-              { path: 'org-repo', path_with_namespace: 'someorg/org-repo', default_branch: 'main', http_url_to_repo: 'url', description: '', visibility: 'private' },
-              { path: 'my-repo', path_with_namespace: 'dmitry/my-repo', default_branch: 'main', http_url_to_repo: 'url', description: 'Personal', visibility: 'public' }
-            ]), '')
-          } else {
-            callback(null, JSON.stringify([]), '')
-          }
+        // --paginate returns all results in one call
+        if (args[0] === 'api' && typeof args[1] === 'string' && args[1].startsWith('/projects')) {
+          callback(null, JSON.stringify([
+            { path: 'org-repo', path_with_namespace: 'someorg/org-repo', default_branch: 'main', http_url_to_repo: 'url', description: '', visibility: 'private' },
+            { path: 'my-repo', path_with_namespace: 'dmitry/my-repo', default_branch: 'main', http_url_to_repo: 'url', description: 'Personal', visibility: 'public' }
+          ]), '')
           return
         }
 
