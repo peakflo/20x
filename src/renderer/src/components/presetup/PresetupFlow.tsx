@@ -12,6 +12,7 @@ import { PresetupTemplateCard } from './PresetupTemplateCard'
 import { PresetupWizard } from './PresetupWizard'
 import { PresetupProvisioningState } from './PresetupProvisioningState'
 import { PresetupConnectIntegrations } from './PresetupConnectIntegrations'
+import { useEnterpriseStore } from '@/stores/enterprise-store'
 import { Loader2, Package } from 'lucide-react'
 import { VisuallyHidden } from '@/components/ui/VisuallyHidden'
 
@@ -37,6 +38,8 @@ export function PresetupFlow({ open, onOpenChange }: PresetupFlowProps) {
     reset,
     dismiss
   } = usePresetupStore()
+
+  const { currentTenant } = useEnterpriseStore()
 
   // Load templates when dialog opens
   useEffect(() => {
@@ -168,6 +171,7 @@ export function PresetupFlow({ open, onOpenChange }: PresetupFlowProps) {
             <PresetupConnectIntegrations
               integrationKeys={collectIntegrationKeys(selectedTemplate, answers)}
               templateName={selectedTemplate.name}
+              tenantId={currentTenant?.id || ''}
               onComplete={proceedAfterIntegrations}
               onBack={() => {
                 const hasQuestions = selectedTemplate.definition.questions.length > 0

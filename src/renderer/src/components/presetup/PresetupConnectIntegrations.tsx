@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/Button'
 interface PresetupConnectIntegrationsProps {
   integrationKeys: string[]
   templateName: string
+  tenantId: string
   onComplete: () => void
   onBack: () => void
 }
@@ -44,6 +45,7 @@ function apiUrlToUiUrl(apiUrl: string): string {
 export function PresetupConnectIntegrations({
   integrationKeys,
   templateName,
+  tenantId,
   onComplete,
   onBack
 }: PresetupConnectIntegrationsProps) {
@@ -64,7 +66,7 @@ export function PresetupConnectIntegrations({
       const integrationsParam = integrationKeys.join(',')
 
       // Build URL with tokens in hash fragment (never sent to server)
-      let url = `${uiUrl}/presetup/connect?integrations=${encodeURIComponent(integrationsParam)}`
+      let url = `${uiUrl}/presetup/connect?integrations=${encodeURIComponent(integrationsParam)}&tenantId=${encodeURIComponent(tenantId)}`
 
       if (tokens.accessToken && tokens.refreshToken) {
         url += `#access_token=${encodeURIComponent(tokens.accessToken)}&refresh_token=${encodeURIComponent(tokens.refreshToken)}`
