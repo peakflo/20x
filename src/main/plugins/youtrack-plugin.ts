@@ -414,8 +414,12 @@ export class YouTrackPlugin implements TaskSourcePlugin {
 
     try {
       // Build YQL query from config filters
+      // Only use incremental sync if we have previously imported tasks from this source.
+      // Otherwise do a full fetch — prevents the case where last_synced_at is set but
+      // no tasks were actually imported (e.g. first sync returned 0 results).
       const source = ctx.db.getTaskSource(sourceId)
-      const lastSyncedAt = source?.last_synced_at ?? null
+      const existingTasks = ctx.db.getTasks().filter(t => t.source_id === sourceId)
+      const lastSyncedAt = existingTasks.length > 0 ? (source?.last_synced_at ?? null) : null
       const yql = this.buildYqlQuery(config, lastSyncedAt)
       console.log('[youtrack] YQL query:', yql)
 

@@ -34,6 +34,7 @@ function makeContext(overrides: Partial<PluginContext> = {}): PluginContext {
   return {
     db: {
       getTaskSource: vi.fn().mockReturnValue({ name: 'YouTrack', last_synced_at: null }),
+      getTasks: vi.fn().mockReturnValue([]),
       getTaskByExternalId: vi.fn().mockReturnValue(undefined),
       getTask: vi.fn().mockReturnValue({ id: 'task-1', attachments: [] }),
       createTask: vi.fn().mockReturnValue({ id: 'task-new' }),
@@ -456,11 +457,16 @@ describe('YouTrackPlugin', () => {
       mockClientInstance.getAllIssues.mockResolvedValue([])
 
       const ctx = makeContext()
-      const mockDb = ctx.db as unknown as { getTaskSource: ReturnType<typeof vi.fn> }
+      const mockDb = ctx.db as unknown as {
+        getTaskSource: ReturnType<typeof vi.fn>
+        getTasks: ReturnType<typeof vi.fn>
+      }
       mockDb.getTaskSource.mockReturnValue({
         name: 'YouTrack',
         last_synced_at: '2025-06-15T10:30:00.000Z'
       })
+      // Incremental sync only kicks in when existing tasks from this source exist
+      mockDb.getTasks.mockReturnValue([{ source_id: 'src-1' }])
 
       await plugin.importTasks('src-1', defaultConfig, ctx)
 
