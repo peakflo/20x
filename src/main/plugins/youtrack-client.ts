@@ -70,6 +70,27 @@ export interface YouTrackAttachment {
   $type?: string
 }
 
+export interface YouTrackIssueLinkType {
+  name: string
+  sourceToTarget: string
+  targetToSource: string | null
+  directed: boolean
+  $type?: string
+}
+
+export interface YouTrackIssueLink {
+  id: string
+  direction: 'OUTWARD' | 'INWARD' | 'BOTH'
+  linkType: YouTrackIssueLinkType | null
+  issues: Array<{
+    id: string
+    idReadable: string
+    summary: string
+    resolved: number | null
+  }>
+  $type?: string
+}
+
 export interface YouTrackIssue {
   id: string
   idReadable: string
@@ -83,6 +104,7 @@ export interface YouTrackIssue {
   customFields: YouTrackCustomField[]
   tags: YouTrackTag[]
   attachments: YouTrackAttachment[]
+  links: YouTrackIssueLink[]
   $type?: string
 }
 
@@ -124,7 +146,8 @@ const ISSUE_FIELDS = [
   'reporter(login,fullName)',
   'customFields(name,value(name,login,fullName,text,minutes,presentation,id,$type),projectCustomField(field(name,fieldType(id))))',
   'tags(id,name,color(background,foreground))',
-  'attachments(id,name,url,size,mimeType)'
+  'attachments(id,name,url,size,mimeType)',
+  'links(id,direction,linkType(name,sourceToTarget,targetToSource,directed),issues(id,idReadable,summary,resolved))'
 ].join(',')
 
 export class YouTrackClient {

@@ -1044,12 +1044,75 @@ File attachments on YouTrack issues are downloaded and stored locally.
       parts.push(fieldsSection)
     }
 
+    // Linked issues with deep links
+    const linksSection = this.formatLinkedIssues(issue, baseUrl)
+    if (linksSection) {
+      parts.push(linksSection)
+    }
+
     // Link to YouTrack issue
     const issueUrl = `${baseUrl}/issue/${issue.idReadable}`
     parts.push('')
     parts.push(`[View in YouTrack](${issueUrl})`)
 
     return parts.join('\n\n')
+  }
+
+  /**
+   * Format linked issues as a markdown section with deep links.
+   * Groups links by relationship type (e.g. "Depends on", "Subtask of", "Relates to").
+   */
+  private formatLinkedIssues(
+    issue: YouTrackIssue,
+    baseUrl: string
+  ): string | null {
+    if (!issue.links || issue.links.length === 0) return null
+
+    // Collect all link entries grouped by relationship label
+    const grouped: Record<string, Array<{ id: string; summary: string; resolved: boolean }>> = {}
+
+    for (const link of issue.links) {
+      if (!link.linkType || !link.issues || link.issues.length === 0) continue
+
+      // Determine the relationship label based on direction
+      let label: string
+      if (link.direction === 'OUTWARD') {
+        label = link.linkType.sourceToTarget || link.linkType.name
+      } else if (link.direction === 'INWARD') {
+        label = link.linkType.targetToSource || link.linkType.name
+      } else {
+        // BOTH — non-directed link type
+        label = link.linkType.name
+      }
+
+      // Capitalize first letter
+      label = label.charAt(0).toUpperCase() + label.slice(1)
+
+      if (!grouped[label]) grouped[label] = []
+
+      for (const linked of link.issues) {
+        grouped[label].push({
+          id: linked.idReadable,
+          summary: linked.summary,
+          resolved: linked.resolved != null
+        })
+      }
+    }
+
+    const labels = Object.keys(grouped)
+    if (labels.length === 0) return null
+
+    const lines: string[] = ['### Linked Issues', '']
+
+    for (const label of labels) {
+      for (const item of grouped[label]) {
+        const issueUrl = `${baseUrl}/issue/${item.id}`
+        const strikethrough = item.resolved ? '~~' : ''
+        lines.push(`- **${label}**: ${strikethrough}[${item.id}](${issueUrl}) — ${item.summary}${strikethrough}`)
+      }
+    }
+
+    return lines.join('\n')
   }
 
   /**

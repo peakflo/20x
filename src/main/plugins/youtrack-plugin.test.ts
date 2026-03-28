@@ -78,6 +78,7 @@ function makeIssue(overrides: Partial<{
     ],
     tags: [{ id: 'tag-1', name: 'important' }],
     attachments: [],
+    links: [],
     ...overrides
   }
 }
