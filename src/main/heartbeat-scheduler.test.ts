@@ -193,9 +193,33 @@ describe('HeartbeatScheduler', () => {
       expect(requiresCurrentStateChecks('Watch for requested changes on the PR')).toBe(true)
     })
 
-    it('returns false for comments and conflict-only checks', () => {
+    it('returns false for comment-only checks', () => {
       expect(requiresCurrentStateChecks('Check for new PR comments and issue comments')).toBe(false)
-      expect(requiresCurrentStateChecks('Check whether the PR has conflicts')).toBe(false)
+    })
+
+    it('returns true for conflict checks', () => {
+      expect(requiresCurrentStateChecks('Check whether the PR has conflicts')).toBe(true)
+      expect(requiresCurrentStateChecks('Check if there is a merge conflict')).toBe(true)
+    })
+  })
+
+  describe('requiresLlmCurrentStateChecks', () => {
+    const requiresLlmCurrentStateChecks = (content: string) => {
+      const scheduler = new HeartbeatScheduler({} as DatabaseManager, {} as AgentManager)
+      return (scheduler as unknown as {
+        requiresLlmCurrentStateChecks: (heartbeatContent: string) => boolean
+      }).requiresLlmCurrentStateChecks(content)
+    }
+
+    it('returns true for requested-changes checks', () => {
+      expect(requiresLlmCurrentStateChecks('Watch for requested changes on the PR')).toBe(true)
+      expect(requiresLlmCurrentStateChecks('Check whether review requested changes are unresolved')).toBe(true)
+    })
+
+    it('returns false for checks covered by hard preflight logic', () => {
+      expect(requiresLlmCurrentStateChecks('Check whether the PR has conflicts')).toBe(false)
+      expect(requiresLlmCurrentStateChecks('Check for new PR comments and reviews')).toBe(false)
+      expect(requiresLlmCurrentStateChecks('Verify CI pipeline passed')).toBe(false)
     })
   })
 
@@ -241,6 +265,18 @@ describe('HeartbeatScheduler', () => {
 
       const task = makeTask({ title: 'Fix auth bug' })
       const content = '- Check PR conflicts\n- Verify CI pipeline passed'
+      const prompt = buildPrompt.call(scheduler, task, content)
+
+      expect(prompt).toContain('inspect the current state even if the problem started before the last check')
+    })
+
+    it('adds current-state guidance when heartbeat includes a PR link', () => {
+      const buildPrompt = (scheduler as unknown as {
+        buildHeartbeatPrompt: (task: TaskRecord, content: string) => string
+      }).buildHeartbeatPrompt
+
+      const task = makeTask({ title: 'Fix auth bug' })
+      const content = '- Watch https://github.com/acme/app/pull/42'
       const prompt = buildPrompt.call(scheduler, task, content)
 
       expect(prompt).toContain('inspect the current state even if the problem started before the last check')
