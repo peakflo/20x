@@ -12,6 +12,7 @@ import { PresetupTemplateCard } from './PresetupTemplateCard'
 import { PresetupWizard } from './PresetupWizard'
 import { PresetupProvisioningState } from './PresetupProvisioningState'
 import { Loader2, Package } from 'lucide-react'
+import { VisuallyHidden } from '@/components/ui/VisuallyHidden'
 
 interface PresetupFlowProps {
   open: boolean
@@ -40,13 +41,13 @@ export function PresetupFlow({ open, onOpenChange }: PresetupFlowProps) {
     }
   }, [open])
 
-  // Close dialog if nothing to show after check
+  // Auto-close dialog when phase returns to idle (e.g., all templates already provisioned)
+  const hasChecked = usePresetupStore((s) => s.status !== null)
   useEffect(() => {
-    if (open && phase === 'idle' && templates.length === 0) {
-      // Templates loaded but nothing to show — close silently
-      // We only auto-close after an explicit check (not initial idle)
+    if (open && phase === 'idle' && hasChecked) {
+      onOpenChange(false)
     }
-  }, [open, phase, templates])
+  }, [open, phase, hasChecked])
 
   const handleDismiss = () => {
     dismiss()
@@ -106,8 +107,10 @@ export function PresetupFlow({ open, onOpenChange }: PresetupFlowProps) {
             <Package className="h-4 w-4" />
             {dialogTitle()}
           </DialogTitle>
-          {dialogDescription() && (
+          {dialogDescription() ? (
             <DialogDescription>{dialogDescription()}</DialogDescription>
+          ) : (
+            <VisuallyHidden><DialogDescription>Presetup package configuration</DialogDescription></VisuallyHidden>
           )}
         </DialogHeader>
         <DialogBody>
@@ -154,18 +157,30 @@ export function PresetupFlow({ open, onOpenChange }: PresetupFlowProps) {
           )}
 
           {/* Provisioning / Complete / Error */}
-          {(phase === 'provisioning' || phase === 'complete' || phase === 'error') &&
-            selectedTemplate && (
-              <PresetupProvisioningState
-                templateName={selectedTemplate.name}
-                phase={phase}
-                error={error}
-                provisionResult={provisionResult}
-                onRetry={submitProvision}
-                onDismiss={handleDismiss}
-                onComplete={handleComplete}
-              />
-            )}
+          {(phase === 'provisioning' || phase === 'complete') && selectedTemplate && (
+            <PresetupProvisioningState
+              templateName={selectedTemplate.name}
+              phase={phase}
+              error={error}
+              provisionResult={provisionResult}
+              onRetry={submitProvision}
+              onDismiss={handleDismiss}
+              onComplete={handleComplete}
+            />
+          )}
+
+          {/* Error — can happen with or without a selected template (e.g. API unreachable) */}
+          {phase === 'error' && (
+            <PresetupProvisioningState
+              templateName={selectedTemplate?.name || 'Package'}
+              phase="error"
+              error={error}
+              provisionResult={provisionResult}
+              onRetry={selectedTemplate ? submitProvision : checkAndStart}
+              onDismiss={handleDismiss}
+              onComplete={handleComplete}
+            />
+          )}
         </DialogBody>
       </DialogContent>
     </Dialog>
