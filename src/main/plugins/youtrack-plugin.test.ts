@@ -446,7 +446,7 @@ describe('YouTrackPlugin', () => {
 
       const yql = mockClientInstance.getAllIssues.mock.calls[0][0]
       expect(yql).toContain('project: {TST}')
-      expect(yql).toContain('for: john,jane')
+      expect(yql).toContain('for: {john}, {jane}')
       expect(yql).toContain('State: {Open}, {In Progress}')
       expect(yql).toContain('Priority: {Critical}')
       expect(yql).toContain('Type: {Bug}')
