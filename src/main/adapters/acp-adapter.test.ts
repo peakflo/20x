@@ -2218,3 +2218,41 @@ describe('AcpAdapter - Non-content events must not fragment assistant messages',
     expect(session.pendingAssistantTurnSplit).toBe(false)
   })
 })
+
+describe('AcpAdapter node command resolution', () => {
+  it('should use process.execPath with ELECTRON_RUN_AS_NODE on non-Windows', () => {
+    // Read the source to verify the pattern
+    const fs = require('fs')
+    const path = require('path')
+    const source = fs.readFileSync(
+      path.join(__dirname, 'acp-adapter.ts'),
+      'utf8'
+    )
+
+    // Should use process.execPath (not bare 'node') for spawning child processes
+    expect(source).toContain('process.execPath')
+    // Should set ELECTRON_RUN_AS_NODE to make Electron binary act as Node
+    expect(source).toContain('ELECTRON_RUN_AS_NODE')
+  })
+
+  it('codex agent config should include ELECTRON_RUN_AS_NODE in env', () => {
+    const adapter = new AcpAdapter('codex')
+    const config = (adapter as any).agentConfig
+
+    // On macOS/Linux, command should be process.execPath (not 'node')
+    if (process.platform !== 'win32') {
+      expect(config.command).toBe(process.execPath)
+      expect(config.env).toHaveProperty('ELECTRON_RUN_AS_NODE', '1')
+    }
+  })
+
+  it('claude-code agent config should include ELECTRON_RUN_AS_NODE in env', () => {
+    const adapter = new AcpAdapter('claude-code')
+    const config = (adapter as any).agentConfig
+
+    if (process.platform !== 'win32') {
+      expect(config.command).toBe(process.execPath)
+      expect(config.env).toHaveProperty('ELECTRON_RUN_AS_NODE', '1')
+    }
+  })
+})

@@ -138,14 +138,37 @@ export class AcpAdapter implements CodingAgentAdapter {
     this.agentConfig = this.getAgentConfig(agentType)
   }
 
+  /**
+   * Get the Node.js command for spawning child processes.
+   *
+   * In packaged Electron apps, `node` is not on PATH. Instead we use the
+   * Electron binary itself (`process.execPath`) with ELECTRON_RUN_AS_NODE=1,
+   * which makes it behave as a standard Node.js runtime that can also read
+   * files from inside the ASAR archive.
+   *
+   * On Windows, ELECTRON_RUN_AS_NODE doesn't work properly with the packaged
+   * .exe — it still initialises Electron internals — so we fall back to the
+   * system `node` binary (which must be on PATH).
+   */
+  private getNodeCommand(): { command: string; env: Record<string, string> } {
+    const isWin = process.platform === 'win32'
+    return {
+      command: isWin ? 'node' : process.execPath,
+      env: isWin ? {} : { ELECTRON_RUN_AS_NODE: '1' },
+    }
+  }
+
   private getAgentConfig(agentType: AcpAgentType): AcpAgentConfig {
+    const { command, env: nodeEnv } = this.getNodeCommand()
+
     switch (agentType) {
       case 'codex':
-        // codex-acp is a Node.js script, so we need to run it via node
+        // codex-acp is a Node.js script bundled in node_modules (possibly inside ASAR)
         return {
-          command: 'node',
+          command,
           args: [require.resolve('@zed-industries/codex-acp/bin/codex-acp.js')],
           env: {
+            ...nodeEnv,
             // Codex requires OPENAI_API_KEY or CODEX_API_KEY
             ...(process.env.OPENAI_API_KEY && { OPENAI_API_KEY: process.env.OPENAI_API_KEY }),
             ...(process.env.CODEX_API_KEY && { CODEX_API_KEY: process.env.CODEX_API_KEY })
@@ -156,9 +179,9 @@ export class AcpAdapter implements CodingAgentAdapter {
         // Note: ANTHROPIC_API_KEY is NOT included here — it is handled per-session
         // in createSession/resumeSession based on config.authMethod
         return {
-          command: 'node',
+          command,
           args: [require.resolve('@zed-industries/claude-code-acp/dist/index.js')],
-          env: {}
+          env: { ...nodeEnv }
         }
       default:
         throw new Error(`Unsupported ACP agent type: ${agentType}`)

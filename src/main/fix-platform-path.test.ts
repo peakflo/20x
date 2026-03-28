@@ -1,8 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
-// We test the buildFallbackPath() logic and the shell invocation flags
-// indirectly by extracting the relevant code into testable units.
-
 describe('fixPlatformPath behaviour', () => {
   const originalPlatform = process.platform
   const originalEnv = { ...process.env }
@@ -16,9 +13,8 @@ describe('fixPlatformPath behaviour', () => {
     process.env = { ...originalEnv }
   })
 
-  describe('shell invocation flags', () => {
-    it('should use -lc (login, non-interactive) and NOT -ilc', async () => {
-      // Read the source file and verify the shell flags
+  describe('shell invocation uses markers for safe PATH extraction', () => {
+    it('should use -ilc with marker-based PATH extraction in index.ts', async () => {
       const fs = await import('fs')
       const path = await import('path')
       const indexSource = fs.readFileSync(
@@ -26,13 +22,14 @@ describe('fixPlatformPath behaviour', () => {
         'utf8'
       )
 
-      // Verify `-lc` is used (login, non-interactive)
-      expect(indexSource).toContain("'-lc'")
-      // Verify `-ilc` is NOT used (interactive mode causes issues in GUI apps)
-      expect(indexSource).not.toContain("'-ilc'")
+      // Uses interactive login shell to pick up .zshrc paths (NVM, pnpm, etc.)
+      expect(indexSource).toContain("'-ilc'")
+      // Uses markers to extract PATH from noisy interactive shell output
+      expect(indexSource).toContain('__20X_PATH_START__')
+      expect(indexSource).toContain('__20X_PATH_END__')
     })
 
-    it('fix-path-manual.ts should also use -lc and NOT -ilc', async () => {
+    it('fix-path-manual.ts should also use markers', async () => {
       const fs = await import('fs')
       const path = await import('path')
       const source = fs.readFileSync(
@@ -40,14 +37,13 @@ describe('fixPlatformPath behaviour', () => {
         'utf8'
       )
 
-      expect(source).toContain('-lc')
-      expect(source).not.toContain('-ilc')
+      expect(source).toContain('__20X_PATH_START__')
+      expect(source).toContain('__20X_PATH_END__')
     })
   })
 
   describe('fallback PATH construction', () => {
     it('should include essential macOS paths in fallback', async () => {
-      // Read the source and verify all critical fallback paths are present
       const fs = await import('fs')
       const path = await import('path')
       const indexSource = fs.readFileSync(

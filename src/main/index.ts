@@ -324,22 +324,42 @@ function fixPlatformPath(): Promise<void> {
     return Promise.resolve()
   }
   if (process.platform !== 'darwin') return Promise.resolve()
+
+  // We need the interactive shell (`-i`) because tools like NVM, pnpm, bun,
+  // etc. add their paths in `.zshrc` / `.bashrc` (interactive config), NOT in
+  // `.zprofile` / `.bash_profile` (login-only config).
+  //
+  // Problem: interactive mode also causes shell init scripts (oh-my-zsh,
+  // powerlevel10k, gitstatus, etc.) to emit escape codes, error messages,
+  // and prompt strings that corrupt the output.
+  //
+  // Solution: use unique markers around the PATH value so we can reliably
+  // extract it from the noisy output.
+  const PATH_START = '__20X_PATH_START__'
+  const PATH_END = '__20X_PATH_END__'
+
   return new Promise((resolve) => {
     const userShell = process.env.SHELL || '/bin/zsh'
-    // IMPORTANT: Use `-lc` (login, non-interactive) — NOT `-ilc`.
-    // The `-i` (interactive) flag causes shell init scripts (oh-my-zsh,
-    // powerlevel10k, etc.) to emit prompt sequences / escape codes that
-    // corrupt the PATH output, or to hang waiting for TTY input.
-    execFile(userShell, ['-lc', 'echo $PATH'], { timeout: 5000, encoding: 'utf8' }, (err, stdout) => {
-      if (!err && stdout && stdout.trim().length > 0) {
-        console.log('[Main] Setting PATH from shell:', userShell)
-        process.env.PATH = stdout.trim()
-      } else {
+    execFile(
+      userShell,
+      ['-ilc', `echo ${PATH_START}$PATH${PATH_END}`],
+      { timeout: 5000, encoding: 'utf8' },
+      (err, stdout) => {
+        if (!err && stdout) {
+          // Extract PATH from between the markers, ignoring any garbage output
+          const match = stdout.match(new RegExp(`${PATH_START}(.+?)${PATH_END}`))
+          if (match && match[1]) {
+            console.log('[Main] Setting PATH from shell:', userShell)
+            process.env.PATH = match[1]
+            resolve()
+            return
+          }
+        }
         console.error('[Main] Failed to read shell PATH, using fallback:', err?.message)
         process.env.PATH = buildFallbackPath()
+        resolve()
       }
-      resolve()
-    })
+    )
   })
 }
 
