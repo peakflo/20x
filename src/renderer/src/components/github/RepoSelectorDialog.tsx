@@ -76,7 +76,7 @@ export function RepoSelectorDialog({ open, onOpenChange, org, orgProvider, initi
         }
       })
       .finally(() => setIsLoadingOwners(false))
-  }, [open]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [open])
 
   const ownerOptions = useMemo(
     () => owners.map((o) => ({ value: `${o.provider}:${o.value}`, label: o.label })),
