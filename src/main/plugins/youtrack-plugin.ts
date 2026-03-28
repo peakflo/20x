@@ -604,6 +604,18 @@ export class YouTrackPlugin implements TaskSourcePlugin {
       }
     }
 
+    if (actionId === 'complete') {
+      try {
+        await client.updateIssue(task.external_id, {
+          customFields: [{ name: 'State', value: { name: 'Done' } }]
+        })
+        return { success: true, taskUpdate: { status: TaskStatus.Completed } }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Unknown error'
+        return { success: false, error: `Failed to complete issue: ${msg}` }
+      }
+    }
+
     if (actionId === 'change_state') {
       if (!input) {
         return { success: false, error: 'State value is required' }

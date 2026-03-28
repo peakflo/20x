@@ -603,6 +603,42 @@ describe('YouTrackPlugin', () => {
       )
     })
 
+    it('complete action updates State to Done and sets Completed status', async () => {
+      mockClientInstance.updateIssue.mockResolvedValue(undefined)
+
+      const task = { external_id: 'issue-abc' } as TaskRecord
+      const result = await plugin.executeAction(
+        'complete',
+        task,
+        undefined,
+        defaultConfig,
+        makeContext()
+      )
+
+      expect(result.success).toBe(true)
+      expect(result.taskUpdate?.status).toBe(TaskStatus.Completed)
+      expect(mockClientInstance.updateIssue).toHaveBeenCalledWith(
+        'issue-abc',
+        { customFields: [{ name: 'State', value: { name: 'Done' } }] }
+      )
+    })
+
+    it('complete action returns error on API failure', async () => {
+      mockClientInstance.updateIssue.mockRejectedValue(new Error('API timeout'))
+
+      const task = { external_id: 'issue-abc' } as TaskRecord
+      const result = await plugin.executeAction(
+        'complete',
+        task,
+        undefined,
+        defaultConfig,
+        makeContext()
+      )
+
+      expect(result.success).toBe(false)
+      expect(result.error).toContain('Failed to complete issue')
+    })
+
     it('returns error for unknown action', async () => {
       const task = { external_id: 'issue-abc' } as TaskRecord
       const result = await plugin.executeAction(
