@@ -44,7 +44,13 @@ export function PresetupProvisioningState({
   }
 
   if (phase === 'complete') {
-    const resources = provisionResult?.provisionedResources
+    const steps = provisionResult?.steps || []
+    const created = steps.filter((s) => s.status === 'created')
+    const workflows = created.filter((s) => s.type === 'workflow').length
+    const integrations = created.filter((s) => s.type === 'integration').length
+    const skills = created.filter((s) => s.type === 'skill').length
+    const hasDetails = workflows + integrations + skills > 0
+
     return (
       <div className="flex flex-col items-center py-8 gap-4">
         <CheckCircle2 className="h-10 w-10 text-emerald-400" />
@@ -52,11 +58,16 @@ export function PresetupProvisioningState({
           <h3 className="text-sm font-semibold text-foreground">
             {templateName} is ready!
           </h3>
-          {resources && (
+          {hasDetails && (
             <p className="text-xs text-muted-foreground mt-1">
-              Created {resources.workflows.length} workflow{resources.workflows.length !== 1 ? 's' : ''},
-              {' '}{resources.integrations.length} integration{resources.integrations.length !== 1 ? 's' : ''},
-              {' '}and {resources.skills.length} skill{resources.skills.length !== 1 ? 's' : ''}.
+              Created {workflows} workflow{workflows !== 1 ? 's' : ''},
+              {' '}{integrations} integration{integrations !== 1 ? 's' : ''},
+              {' '}and {skills} skill{skills !== 1 ? 's' : ''}.
+            </p>
+          )}
+          {provisionResult?.status === 'already_provisioned' && (
+            <p className="text-xs text-muted-foreground mt-1">
+              This package was already set up for your account.
             </p>
           )}
         </div>

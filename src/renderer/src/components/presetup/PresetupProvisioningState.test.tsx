@@ -33,11 +33,14 @@ describe('PresetupProvisioningState', () => {
         provisionResult={{
           status: 'completed',
           templateSlug: 'ai-accountant',
-          provisionedResources: {
-            workflows: ['invoice'],
-            integrations: ['xero'],
-            skills: ['data-extraction', 'categorization']
-          }
+          templateVersion: '1.0.0',
+          tenantId: 'tenant-1',
+          steps: [
+            { type: 'workflow', identifier: 'invoice', status: 'created' },
+            { type: 'integration', identifier: 'xero', status: 'created' },
+            { type: 'skill', identifier: 'data-extraction', status: 'created' },
+            { type: 'skill', identifier: 'categorization', status: 'created' }
+          ]
         }}
       />
     )
@@ -57,7 +60,9 @@ describe('PresetupProvisioningState', () => {
         provisionResult={{
           status: 'completed',
           templateSlug: 'ai-accountant',
-          provisionedResources: { workflows: [], integrations: [], skills: [] }
+          templateVersion: '1.0.0',
+          tenantId: 'tenant-1',
+          steps: []
         }}
       />
     )

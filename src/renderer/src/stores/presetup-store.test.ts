@@ -33,16 +33,16 @@ const mockTemplate = {
 
 const mockStatusAllUnprovisioned = {
   tenantId: 'tenant-1',
-  templates: [{ slug: 'ai-accountant', name: 'AI Accountant', isProvisioned: false }],
-  provisionedCount: 0,
-  availableCount: 1
+  templates: [{ slug: 'ai-accountant', name: 'AI Accountant', description: '', category: 'finance', icon: 'Calculator', isProvisioned: false, provisionedAt: null, provisionStatus: null }],
+  totalProvisioned: 0,
+  totalAvailable: 1
 }
 
 const mockStatusAllProvisioned = {
   tenantId: 'tenant-1',
-  templates: [{ slug: 'ai-accountant', name: 'AI Accountant', isProvisioned: true, provisionedAt: '2026-01-01' }],
-  provisionedCount: 1,
-  availableCount: 0
+  templates: [{ slug: 'ai-accountant', name: 'AI Accountant', description: '', category: 'finance', icon: 'Calculator', isProvisioned: true, provisionedAt: '2026-01-01', provisionStatus: 'completed' }],
+  totalProvisioned: 1,
+  totalAvailable: 0
 }
 
 beforeEach(() => {
@@ -55,7 +55,7 @@ describe('usePresetupStore', () => {
     it('transitions to template-selection when unprovisioned templates exist', async () => {
       ;(mockElectronAPI.enterprise.apiRequest as unknown as Mock)
         .mockResolvedValueOnce(mockStatusAllUnprovisioned) // getStatus
-        .mockResolvedValueOnce([mockTemplate]) // listTemplates
+        .mockResolvedValueOnce({ templates: [mockTemplate] }) // listTemplates (wrapped)
 
       await usePresetupStore.getState().checkAndStart()
 
@@ -67,7 +67,7 @@ describe('usePresetupStore', () => {
     it('stays idle when all templates are provisioned', async () => {
       ;(mockElectronAPI.enterprise.apiRequest as unknown as Mock)
         .mockResolvedValueOnce(mockStatusAllProvisioned)
-        .mockResolvedValueOnce([mockTemplate])
+        .mockResolvedValueOnce({ templates: [mockTemplate] })
 
       await usePresetupStore.getState().checkAndStart()
 
@@ -105,7 +105,9 @@ describe('usePresetupStore', () => {
         .mockResolvedValueOnce({
           status: 'completed',
           templateSlug: 'ai-accountant',
-          provisionedResources: { workflows: [], integrations: [], skills: [] }
+          templateVersion: '1.0.0',
+          tenantId: 'tenant-1',
+          steps: []
         })
 
       usePresetupStore.getState().selectTemplate(noQuestionsTemplate)
@@ -142,11 +144,13 @@ describe('usePresetupStore', () => {
         .mockResolvedValueOnce({
           status: 'completed',
           templateSlug: 'ai-accountant',
-          provisionedResources: {
-            workflows: ['invoice-processing'],
-            integrations: ['xero'],
-            skills: ['data-extraction']
-          }
+          templateVersion: '1.0.0',
+          tenantId: 'tenant-1',
+          steps: [
+            { type: 'workflow', identifier: 'invoice-processing', status: 'created' },
+            { type: 'integration', identifier: 'xero', status: 'created' },
+            { type: 'skill', identifier: 'data-extraction', status: 'created' }
+          ]
         })
 
       await usePresetupStore.getState().submitProvision()
@@ -170,7 +174,10 @@ describe('usePresetupStore', () => {
       ;(mockElectronAPI.enterprise.apiRequest as unknown as Mock)
         .mockResolvedValueOnce({
           status: 'already_provisioned',
-          templateSlug: 'ai-accountant'
+          templateSlug: 'ai-accountant',
+          templateVersion: '1.0.0',
+          tenantId: 'tenant-1',
+          steps: []
         })
 
       await usePresetupStore.getState().submitProvision()
@@ -189,7 +196,11 @@ describe('usePresetupStore', () => {
         .mockResolvedValueOnce({
           status: 'failed',
           templateSlug: 'ai-accountant',
-          errors: ['Workflow clone failed']
+          templateVersion: '1.0.0',
+          tenantId: 'tenant-1',
+          steps: [
+            { type: 'workflow', identifier: 'invoice-processing', status: 'failed', message: 'Workflow clone failed' }
+          ]
         })
 
       await usePresetupStore.getState().submitProvision()

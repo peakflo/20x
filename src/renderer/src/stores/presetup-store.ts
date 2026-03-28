@@ -107,12 +107,15 @@ export const usePresetupStore = create<PresetupState>((set, get) => ({
     try {
       const result = await presetupApi.provision(selectedTemplate.slug, answers)
 
-      if (result.status === 'completed' || result.status === 'already_provisioned') {
+      if (result.status === 'completed' || result.status === 'partial' || result.status === 'already_provisioned') {
         set({ phase: 'complete', provisionResult: result })
       } else {
+        // status === 'failed' — extract error messages from failed steps
+        const failedSteps = (result.steps || []).filter((s) => s.status === 'failed')
+        const errorMsg = failedSteps.map((s) => s.message || `${s.type} ${s.identifier} failed`).join(', ')
         set({
           phase: 'error',
-          error: result.errors?.join(', ') || 'Provisioning failed',
+          error: errorMsg || 'Provisioning failed',
           provisionResult: result
         })
       }

@@ -63,26 +63,36 @@ export interface PresetupTemplate {
 export interface TemplateStatus {
   slug: string
   name: string
+  description: string
+  category: string
+  icon: string
   isProvisioned: boolean
-  provisionedAt?: string
+  provisionedAt: string | null
+  provisionStatus: string | null
 }
 
 export interface PresetupStatusResponse {
   tenantId: string
   templates: TemplateStatus[]
-  provisionedCount: number
-  availableCount: number
+  totalProvisioned: number
+  totalAvailable: number
+}
+
+export interface ProvisionStepResult {
+  type: 'workflow' | 'integration' | 'skill'
+  identifier: string
+  status: 'created' | 'skipped' | 'failed'
+  message?: string
+  resourceId?: string
 }
 
 export interface ProvisionResult {
-  status: 'completed' | 'already_provisioned' | 'failed'
   templateSlug: string
-  provisionedResources?: {
-    workflows: string[]
-    integrations: string[]
-    skills: string[]
-  }
-  errors?: string[]
+  templateVersion: string
+  tenantId: string
+  status: 'completed' | 'partial' | 'already_provisioned' | 'failed'
+  steps: ProvisionStepResult[]
+  ledgerId?: string
 }
 
 // ---------------------------------------------------------------------------
@@ -96,8 +106,10 @@ export const presetupApi = {
   },
 
   async listTemplates(): Promise<PresetupTemplate[]> {
-    const res = await enterpriseApi.apiRequest('GET', '/api/presetup/templates')
-    return res as PresetupTemplate[]
+    const res = await enterpriseApi.apiRequest('GET', '/api/presetup/templates') as { templates: PresetupTemplate[] } | PresetupTemplate[]
+    // Backend returns { templates: [...] } wrapper
+    if (Array.isArray(res)) return res
+    return (res as { templates: PresetupTemplate[] }).templates ?? []
   },
 
   async getTemplate(slug: string): Promise<PresetupTemplate> {
