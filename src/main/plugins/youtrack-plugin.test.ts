@@ -518,7 +518,7 @@ describe('YouTrackPlugin', () => {
         'issue-abc',
         expect.objectContaining({
           customFields: expect.arrayContaining([
-            { name: 'State', value: { name: 'In Progress' } }
+            { $type: 'StateIssueCustomField', name: 'State', value: { $type: 'StateBundleElement', name: 'In Progress' } }
           ])
         })
       )
@@ -599,7 +599,7 @@ describe('YouTrackPlugin', () => {
       expect(result.taskUpdate?.status).toBe(TaskStatus.AgentWorking)
       expect(mockClientInstance.updateIssue).toHaveBeenCalledWith(
         'issue-abc',
-        { customFields: [{ name: 'State', value: { name: 'In Progress' } }] }
+        { customFields: [{ $type: 'StateIssueCustomField', name: 'State', value: { $type: 'StateBundleElement', name: 'In Progress' } }] }
       )
     })
 
@@ -619,7 +619,7 @@ describe('YouTrackPlugin', () => {
       expect(result.taskUpdate?.status).toBe(TaskStatus.Completed)
       expect(mockClientInstance.updateIssue).toHaveBeenCalledWith(
         'issue-abc',
-        { customFields: [{ name: 'State', value: { name: 'Done' } }] }
+        { customFields: [{ $type: 'StateIssueCustomField', name: 'State', value: { $type: 'StateBundleElement', name: 'Done' } }] }
       )
     })
 
@@ -704,7 +704,7 @@ describe('YouTrackPlugin', () => {
       expect(result.success).toBe(true)
       expect(mockClientInstance.updateIssue).toHaveBeenCalledWith(
         'issue-abc',
-        { customFields: [{ name: 'Assignee', value: { login: 'john' } }] }
+        { customFields: [{ $type: 'SingleUserIssueCustomField', name: 'Assignee', value: { $type: 'User', login: 'john' } }] }
       )
     })
 

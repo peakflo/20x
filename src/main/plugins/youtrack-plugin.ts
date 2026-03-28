@@ -524,7 +524,7 @@ export class YouTrackPlugin implements TaskSourcePlugin {
       }
 
       // For custom field updates, we need to use a different approach
-      const customFieldUpdates: Array<{ name: string; value: unknown }> = []
+      const customFieldUpdates: Array<{ $type: string; name: string; value: unknown }> = []
 
       if (changedFields.status) {
         const stateValue = this.localStatusToYouTrack(
@@ -532,8 +532,9 @@ export class YouTrackPlugin implements TaskSourcePlugin {
         )
         if (stateValue) {
           customFieldUpdates.push({
+            $type: 'StateIssueCustomField',
             name: 'State',
-            value: { name: stateValue }
+            value: { $type: 'StateBundleElement', name: stateValue }
           })
         }
       }
@@ -544,8 +545,9 @@ export class YouTrackPlugin implements TaskSourcePlugin {
         )
         if (priorityValue) {
           customFieldUpdates.push({
+            $type: 'SingleEnumIssueCustomField',
             name: 'Priority',
-            value: { name: priorityValue }
+            value: { $type: 'EnumBundleElement', name: priorityValue }
           })
         }
       }
@@ -608,7 +610,11 @@ export class YouTrackPlugin implements TaskSourcePlugin {
     if (actionId === PluginActionId.Complete) {
       try {
         await client.updateIssue(task.external_id, {
-          customFields: [{ name: 'State', value: { name: 'Done' } }]
+          customFields: [{
+            $type: 'StateIssueCustomField',
+            name: 'State',
+            value: { $type: 'StateBundleElement', name: 'Done' }
+          }]
         })
         return { success: true, taskUpdate: { status: TaskStatus.Completed } }
       } catch (err) {
@@ -623,7 +629,11 @@ export class YouTrackPlugin implements TaskSourcePlugin {
       }
       try {
         await client.updateIssue(task.external_id, {
-          customFields: [{ name: 'State', value: { name: input } }]
+          customFields: [{
+            $type: 'StateIssueCustomField',
+            name: 'State',
+            value: { $type: 'StateBundleElement', name: input }
+          }]
         })
 
         // Map back to local status
@@ -689,7 +699,11 @@ export class YouTrackPlugin implements TaskSourcePlugin {
 
       await client.updateIssue(task.external_id, {
         customFields: [
-          { name: 'Assignee', value: { login } }
+          {
+            $type: 'SingleUserIssueCustomField',
+            name: 'Assignee',
+            value: { $type: 'User', login }
+          }
         ]
       })
 
