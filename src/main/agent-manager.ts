@@ -1313,11 +1313,8 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       const memoryFileName = this.getMemoryFileName(agentId)
       promptText += `\n\nIMPORTANT: First, read the \`${memoryFileName}\` file in the working directory — it has workspace config, skills, and project context.`
 
-      // Show only the task title + description in the UI (not the appended system instructions)
-      const currentTaskForDisplay = task || this.db.getTask(taskId)
-      const displayPrompt = currentTaskForDisplay
-        ? `Work on task: "${currentTaskForDisplay.title}"\n\n${currentTaskForDisplay.description || ''}`
-        : `Work on task: ${taskId}`
+      // Show the full prompt in the UI so the user can see the complete
+      // context sent to the agent (repos, skills, secrets, heartbeat, etc.)
       this.sendToRenderer('agent:output', {
         sessionId: adapterSessionId,
         taskId,
@@ -1325,7 +1322,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
         data: {
           id: `user-initial-${Date.now()}`,
           role: 'user',
-          content: displayPrompt,
+          content: promptText,
           partType: 'text'
         }
       })
