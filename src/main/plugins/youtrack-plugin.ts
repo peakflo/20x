@@ -414,31 +414,15 @@ export class YouTrackPlugin implements TaskSourcePlugin {
     const client = new YouTrackClient(serverUrl, token)
 
     try {
-      // Determine if this is an incremental sync.
-      // Only use incremental sync if we have previously imported tasks from this source.
-      const source = ctx.db.getTaskSource(sourceId)
-      const existingTasks = ctx.db.getTasks().filter(t => t.source_id === sourceId)
-      const isIncremental = existingTasks.length > 0 && !!source?.last_synced_at
-
-      // For full sync: use all configured filters.
-      // For incremental sync: use a relaxed query (project + updated only) so we
-      // catch issues whose state/assignee/priority changed since last sync. We still
-      // need to update already-tracked issues even if they no longer match the filters.
-      const yql = isIncremental
-        ? this.buildIncrementalYqlQuery(config, source!.last_synced_at!)
-        : this.buildYqlQuery(config, null)
-      console.log('[youtrack] YQL query:', yql, isIncremental ? '(incremental)' : '(full)')
+      // Always do a full sync using the configured filters.
+      // This ensures all issues are kept up-to-date (description, links, status, etc.)
+      // regardless of when they were last modified in YouTrack.
+      const yql = this.buildYqlQuery(config)
+      console.log('[youtrack] YQL query:', yql)
 
       // Fetch all matching issues
       const issues = await client.getAllIssues(yql)
-
-      // Debug: log link structure from first issue to verify API shape
-      if (issues.length > 0) {
-        const first = issues[0]
-        console.log(`[youtrack] Issue ${first.idReadable} links:`, JSON.stringify(first.links?.slice(0, 3) ?? [], null, 2))
-        console.log(`[youtrack] Issue ${first.idReadable} parent:`, JSON.stringify(first.parent ?? null, null, 2))
-        console.log(`[youtrack] Issue ${first.idReadable} subtasks:`, JSON.stringify(first.subtasks ?? null, null, 2))
-      }
+      console.log(`[youtrack] Fetched ${issues.length} issues`)
 
       for (const issue of issues) {
         try {
@@ -450,32 +434,18 @@ export class YouTrackPlugin implements TaskSourcePlugin {
 
           const existing = ctx.db.getTaskByExternalId(sourceId, issue.id)
 
+          let taskId: string
           if (existing) {
-            // Always update already-tracked issues (even if filters changed)
             ctx.db.updateTask(existing.id, {
               title: mapped.title,
-              description: description || existing.description,
+              description,
               status: mapped.status,
               priority: mapped.priority,
               assignee: mapped.assignee,
               labels: mapped.labels
             })
+            taskId = existing.id
             result.updated++
-
-            // Download attachments
-            if (issue.attachments && issue.attachments.length > 0) {
-              await this.downloadYouTrackAttachments(
-                existing.id,
-                issue.attachments,
-                client,
-                ctx
-              )
-            }
-            replaceRemoteImageUrlsInTask(existing.id, ctx, '[youtrack]')
-          } else if (isIncremental && !this.issueMatchesFilters(issue, config)) {
-            // Incremental sync fetched this issue because it was updated, but it
-            // doesn't match the user's configured filters — skip creating it.
-            continue
           } else {
             const created = ctx.db.createTask({
               title: mapped.title,
@@ -496,22 +466,25 @@ export class YouTrackPlugin implements TaskSourcePlugin {
               )
               continue
             }
+            taskId = created.id
             result.imported++
-
-            // Download attachments
-            if (issue.attachments && issue.attachments.length > 0) {
-              console.log(
-                `[youtrack] Found ${issue.attachments.length} attachments for issue "${issue.idReadable}"`
-              )
-              await this.downloadYouTrackAttachments(
-                created.id,
-                issue.attachments,
-                client,
-                ctx
-              )
-            }
-            replaceRemoteImageUrlsInTask(created.id, ctx, '[youtrack]')
           }
+
+          // Download attachments
+          if (issue.attachments && issue.attachments.length > 0) {
+            console.log(
+              `[youtrack] Found ${issue.attachments.length} attachments for issue "${issue.idReadable}"`
+            )
+            await this.downloadYouTrackAttachments(
+              taskId,
+              issue.attachments,
+              client,
+              ctx
+            )
+          }
+
+          // Replace remote image URLs with local attachment paths
+          replaceRemoteImageUrlsInTask(taskId, ctx, '[youtrack]')
         } catch (err) {
           const msg = err instanceof Error ? err.message : 'Unknown error'
           result.errors.push(`Issue ${issue.idReadable}: ${msg}`)
@@ -797,8 +770,7 @@ File attachments on YouTrack issues are downloaded and stored locally.
    * Combines project, assignee, state, priority, type, and custom query.
    */
   private buildYqlQuery(
-    config: Record<string, unknown>,
-    _lastSyncedAt?: string | null
+    config: Record<string, unknown>
   ): string {
     const parts: string[] = []
 
@@ -858,113 +830,6 @@ File attachments on YouTrack issues are downloaded and stored locally.
     }
 
     return parts.join(' ')
-  }
-
-  /**
-   * Build a relaxed YQL query for incremental sync.
-   * Only uses project + updated filter so we catch issues whose state/assignee/priority
-   * changed since last sync. New issues are filtered locally via issueMatchesFilters().
-   */
-  private buildIncrementalYqlQuery(
-    config: Record<string, unknown>,
-    lastSyncedAt: string
-  ): string {
-    const parts: string[] = []
-
-    const project = config.project as string
-    if (project) {
-      parts.push(`project: {${project}}`)
-    }
-
-    // Convert ISO date to YouTrack date format (YYYY-MM-DDTHH:MM)
-    const syncDate = new Date(lastSyncedAt)
-    const formatted = `${syncDate.getFullYear()}-${String(syncDate.getMonth() + 1).padStart(2, '0')}-${String(syncDate.getDate()).padStart(2, '0')}T${String(syncDate.getHours()).padStart(2, '0')}:${String(syncDate.getMinutes()).padStart(2, '0')}`
-    parts.push(`updated: ${formatted} .. *`)
-
-    // Custom YQL query (appended as-is)
-    const customQuery = config.custom_query as string | undefined
-    if (customQuery && customQuery.trim()) {
-      parts.push(customQuery.trim())
-    }
-
-    return parts.join(' ')
-  }
-
-  /**
-   * Check if a YouTrack issue matches the user's configured filters.
-   * Used during incremental sync to decide whether to create new tasks
-   * for issues that weren't previously tracked.
-   */
-  private issueMatchesFilters(
-    issue: YouTrackIssue,
-    config: Record<string, unknown>
-  ): boolean {
-    // Assignee filter
-    const assignees = config.assignee as string[] | string | undefined
-    if (assignees) {
-      const assigneeList = Array.isArray(assignees) ? assignees : [assignees]
-      if (assigneeList.length > 0) {
-        const assigneeField =
-          getCustomField(issue, 'Assignee') ||
-          getCustomFieldByType(issue, 'jetbrains.charisma.customfields.complex.user.SingleUserIssueCustomField')
-        const assigneeName = getCustomFieldValueName(assigneeField)
-        const assigneeLogin = assigneeField?.value &&
-          typeof assigneeField.value === 'object' &&
-          !Array.isArray(assigneeField.value)
-          ? (assigneeField.value as { login?: string }).login
-          : undefined
-        if (!assigneeList.some((a) => a === assigneeName || a === assigneeLogin)) {
-          return false
-        }
-      }
-    }
-
-    // State filter
-    const states = config.state as string[] | string | undefined
-    if (states) {
-      const stateList = Array.isArray(states) ? states : [states]
-      if (stateList.length > 0) {
-        const stateField =
-          getCustomField(issue, 'State') ||
-          getCustomFieldByType(issue, STATE_FIELD_TYPE)
-        const stateName = getCustomFieldValueName(stateField)
-        if (!stateName || !stateList.includes(stateName)) {
-          return false
-        }
-      }
-    }
-
-    // Priority filter
-    const priorities = config.priority as string[] | string | undefined
-    if (priorities) {
-      const priorityList = Array.isArray(priorities) ? priorities : [priorities]
-      if (priorityList.length > 0) {
-        const priorityField =
-          getCustomField(issue, 'Priority') ||
-          getCustomFieldByType(issue, PRIORITY_FIELD_TYPE)
-        const priorityName = getCustomFieldValueName(priorityField)
-        if (!priorityName || !priorityList.includes(priorityName)) {
-          return false
-        }
-      }
-    }
-
-    // Type filter
-    const types = config.issue_type as string[] | string | undefined
-    if (types) {
-      const typeList = Array.isArray(types) ? types : [types]
-      if (typeList.length > 0) {
-        const typeField =
-          getCustomField(issue, 'Type') ||
-          getCustomFieldByType(issue, ENUM_FIELD_TYPE)
-        const typeName = getCustomFieldValueName(typeField)
-        if (!typeName || !typeList.includes(typeName)) {
-          return false
-        }
-      }
-    }
-
-    return true
   }
 
   /**

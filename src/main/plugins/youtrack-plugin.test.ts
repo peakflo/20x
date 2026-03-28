@@ -454,26 +454,24 @@ describe('YouTrackPlugin', () => {
       expect(yql).toContain('#Unresolved')
     })
 
-    it('includes updated filter for incremental sync', async () => {
+    it('always does a full sync without incremental updated filter', async () => {
       mockClientInstance.getAllIssues.mockResolvedValue([])
 
       const ctx = makeContext()
       const mockDb = ctx.db as unknown as {
         getTaskSource: ReturnType<typeof vi.fn>
-        getTasks: ReturnType<typeof vi.fn>
       }
       mockDb.getTaskSource.mockReturnValue({
         name: 'YouTrack',
         last_synced_at: '2025-06-15T10:30:00.000Z'
       })
-      // Incremental sync only kicks in when existing tasks from this source exist
-      mockDb.getTasks.mockReturnValue([{ source_id: 'src-1' }])
 
       await plugin.importTasks('src-1', defaultConfig, ctx)
 
       const yql = mockClientInstance.getAllIssues.mock.calls[0][0] as string
-      // The date is converted to local timezone, so just check the pattern
-      expect(yql).toMatch(/updated: \d{4}-\d{2}-\d{2}T\d{2}:\d{2} \.\. \*/)
+      // Full sync should NOT include an updated: filter
+      expect(yql).not.toMatch(/updated:/)
+      expect(yql).toContain('project: {TST}')
     })
 
     it('captures per-issue errors without failing the whole import', async () => {
