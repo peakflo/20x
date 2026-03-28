@@ -412,42 +412,49 @@ async function routeGet(pathname: string, url: URL): Promise<unknown> {
     return { provider }
   }
 
-  // GET /api/github/orgs — returns available orgs + personal account
-  // Respects the configured git provider (github or gitlab)
+  // GET /api/github/orgs — returns available orgs + personal accounts
+  // Fetches from ALL authenticated providers (GitHub and/or GitLab)
   if (pathname === '/api/github/orgs') {
-    const provider = db.getSetting('git_provider') || 'github'
+    const owners: Array<{ value: string; label: string; provider: string }> = []
 
-    if (provider === 'gitlab') {
-      if (!gitlabRef) throw Object.assign(new Error('GitLab not configured'), { status: 500 })
-      const [status, orgs] = await Promise.all([
-        gitlabRef.checkGlabCli(),
-        gitlabRef.fetchUserOrgs()
-      ])
-      const owners: Array<{ value: string; label: string }> = []
-      if (status.username) {
-        owners.push({ value: status.username, label: `${status.username} (personal)` })
-      }
-      for (const orgName of orgs) {
-        owners.push({ value: orgName, label: orgName })
-      }
-      return owners
+    // Try GitHub
+    if (githubRef) {
+      try {
+        const [status, orgs] = await Promise.all([
+          githubRef.checkGhCli(),
+          githubRef.fetchUserOrgs()
+        ])
+        if (status.authenticated) {
+          if (status.username) {
+            owners.push({ value: status.username, label: `${status.username} (GitHub personal)`, provider: 'github' })
+          }
+          for (const orgName of orgs) {
+            owners.push({ value: orgName, label: `${orgName} (GitHub)`, provider: 'github' })
+          }
+        }
+      } catch { /* GitHub not available — skip */ }
     }
 
-    // Default: GitHub
-    if (!githubRef) throw Object.assign(new Error('GitHub not configured'), { status: 500 })
-
-    const [status, orgs] = await Promise.all([
-      githubRef.checkGhCli(),
-      githubRef.fetchUserOrgs()
-    ])
-
-    const owners: Array<{ value: string; label: string }> = []
-    if (status.username) {
-      owners.push({ value: status.username, label: `${status.username} (personal)` })
+    // Try GitLab
+    if (gitlabRef) {
+      try {
+        const [status, orgs] = await Promise.all([
+          gitlabRef.checkGlabCli(),
+          gitlabRef.fetchUserOrgs()
+        ])
+        if (status.authenticated) {
+          if (status.username) {
+            owners.push({ value: status.username, label: `${status.username} (GitLab personal)`, provider: 'gitlab' })
+          }
+          for (const orgName of orgs) {
+            owners.push({ value: orgName, label: `${orgName} (GitLab)`, provider: 'gitlab' })
+          }
+        }
+      } catch { /* GitLab not available — skip */ }
     }
 
-    for (const orgName of orgs) {
-      owners.push({ value: orgName, label: orgName })
+    if (owners.length === 0) {
+      throw Object.assign(new Error('No git provider authenticated'), { status: 500 })
     }
 
     return owners
@@ -619,12 +626,13 @@ async function routePost(pathname: string, params: Record<string, unknown>): Pro
   }
 
   // POST /api/github/repos — fetch org repos
-  // Respects the configured git provider (github or gitlab)
+  // Accepts optional `provider` param ('github' | 'gitlab') to route to the right backend.
+  // Falls back to the configured git_provider setting for backward compat.
   if (pathname === '/api/github/repos') {
-    const { org } = params as { org?: string }
+    const { org, provider: reqProvider } = params as { org?: string; provider?: string }
     if (!org) throw Object.assign(new Error('org is required'), { status: 400 })
 
-    const provider = db.getSetting('git_provider') || 'github'
+    const provider = reqProvider || db.getSetting('git_provider') || 'github'
 
     if (provider === 'gitlab') {
       if (!gitlabRef) throw Object.assign(new Error('GitLab not configured'), { status: 500 })
