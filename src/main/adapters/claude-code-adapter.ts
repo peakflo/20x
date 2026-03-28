@@ -103,7 +103,9 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
       console.log(`[ClaudeCodeAdapter] Found claude executable at: ${this.claudeExecutablePath}`)
       return this.claudeExecutablePath
     } catch {
-      // Common installation locations
+      // Common installation locations — must cover Homebrew, npm globals,
+      // pnpm globals, Volta, and NVM paths so the binary is found even when
+      // the shell PATH wasn't fully resolved (packaged macOS GUI app).
       const home = process.env.HOME || process.env.USERPROFILE || ''
       const commonPaths = isWin
         ? [
@@ -115,8 +117,26 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
             '/usr/local/bin/claude',
             '/opt/homebrew/bin/claude',
             `${home}/.local/bin/claude`,
-            `${home}/.npm-global/bin/claude`
+            `${home}/.npm-global/bin/claude`,
+            `${home}/Library/pnpm/claude`,
+            `${home}/.volta/bin/claude`,
           ]
+
+      // Dynamically detect NVM-managed npm global bin (avoids hardcoding a Node version)
+      if (!isWin && home) {
+        try {
+          const { join } = await import('path')
+          const { readdirSync } = await import('fs')
+          const nvmDir = join(home, '.nvm', 'versions', 'node')
+          const versions = readdirSync(nvmDir)
+          versions.sort((a: string, b: string) => b.localeCompare(a, undefined, { numeric: true }))
+          for (const v of versions) {
+            commonPaths.push(join(nvmDir, v, 'bin', 'claude'))
+          }
+        } catch {
+          // NVM not installed — skip
+        }
+      }
 
       const { existsSync } = await import('fs')
       for (const path of commonPaths) {

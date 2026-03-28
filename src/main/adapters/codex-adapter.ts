@@ -112,7 +112,9 @@ export class CodexAdapter implements CodingAgentAdapter {
       console.log(`[CodexAdapter] Found codex executable at: ${this.codexExecutablePath}`)
       return this.codexExecutablePath
     } catch {
-      // Common installation locations
+      // Common installation locations — must cover Homebrew, npm globals,
+      // pnpm globals, Volta, and NVM paths so the binary is found even when
+      // the shell PATH wasn't fully resolved (packaged macOS GUI app).
       const home = process.env.HOME || process.env.USERPROFILE || ''
       const commonPaths = process.platform === 'win32'
         ? [
@@ -124,7 +126,25 @@ export class CodexAdapter implements CodingAgentAdapter {
             '/opt/homebrew/bin/codex',
             `${home}/.local/bin/codex`,
             `${home}/.npm-global/bin/codex`,
+            `${home}/Library/pnpm/codex`,
+            `${home}/.volta/bin/codex`,
           ]
+
+      // Dynamically detect NVM-managed npm global bin (avoids hardcoding a Node version)
+      if (process.platform !== 'win32' && home) {
+        try {
+          const { join } = await import('path')
+          const { readdirSync } = await import('fs')
+          const nvmDir = join(home, '.nvm', 'versions', 'node')
+          const versions = readdirSync(nvmDir)
+          versions.sort((a: string, b: string) => b.localeCompare(a, undefined, { numeric: true }))
+          for (const v of versions) {
+            commonPaths.push(join(nvmDir, v, 'bin', 'codex'))
+          }
+        } catch {
+          // NVM not installed — skip
+        }
+      }
 
       for (const path of commonPaths) {
         if (existsSync(path)) {

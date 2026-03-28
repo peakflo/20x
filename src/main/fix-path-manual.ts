@@ -17,8 +17,10 @@ export function fixPathManual(): void {
     const shell = process.env.SHELL || '/bin/zsh'
 
     // Execute shell and read PATH
-    // Using login shell to get full environment
-    const shellPath = execSync(`${shell} -ilc 'echo $PATH'`, {
+    // Using login shell (non-interactive) to get full environment.
+    // IMPORTANT: Do NOT use `-i` — interactive mode causes shell init scripts
+    // (oh-my-zsh, powerlevel10k, etc.) to emit garbage or hang in GUI apps.
+    const shellPath = execSync(`${shell} -lc 'echo $PATH'`, {
       encoding: 'utf8',
       timeout: 5000
     }).trim()

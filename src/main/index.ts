@@ -304,6 +304,9 @@ app.on('open-url', (event, url) => {
 })
 
 // Fix PATH for GUI apps (async to avoid blocking startup)
+// macOS GUI apps (launched from /Applications) do NOT inherit the user's shell
+// PATH, so CLI tools like codex, claude, gh etc. cannot be found. We read the
+// PATH from a login shell and apply it to process.env.
 function fixPlatformPath(): Promise<void> {
   if (process.platform === 'win32') {
     // On Windows, ensure common Node/npm/git paths are available
@@ -323,19 +326,63 @@ function fixPlatformPath(): Promise<void> {
   if (process.platform !== 'darwin') return Promise.resolve()
   return new Promise((resolve) => {
     const userShell = process.env.SHELL || '/bin/zsh'
-    execFile(userShell, ['-ilc', 'echo $PATH'], { timeout: 5000, encoding: 'utf8' }, (err, stdout) => {
+    // IMPORTANT: Use `-lc` (login, non-interactive) — NOT `-ilc`.
+    // The `-i` (interactive) flag causes shell init scripts (oh-my-zsh,
+    // powerlevel10k, etc.) to emit prompt sequences / escape codes that
+    // corrupt the PATH output, or to hang waiting for TTY input.
+    execFile(userShell, ['-lc', 'echo $PATH'], { timeout: 5000, encoding: 'utf8' }, (err, stdout) => {
       if (!err && stdout && stdout.trim().length > 0) {
         console.log('[Main] Setting PATH from shell:', userShell)
         process.env.PATH = stdout.trim()
       } else {
-        console.error('[Main] Failed to read shell PATH, using fallback')
-        const commonPaths = ['/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin', process.env.HOME + '/.nvm/versions/node/v22.14.0/bin']
-        const existingPath = process.env.PATH || ''
-        process.env.PATH = [...new Set([...commonPaths, ...existingPath.split(':')])].filter(Boolean).join(':')
+        console.error('[Main] Failed to read shell PATH, using fallback:', err?.message)
+        process.env.PATH = buildFallbackPath()
       }
       resolve()
     })
   })
+}
+
+/**
+ * Build a comprehensive fallback PATH when the shell invocation fails.
+ * Covers Homebrew, system bins, npm/pnpm/volta globals, and NVM.
+ */
+function buildFallbackPath(): string {
+  const home = process.env.HOME || ''
+  const commonPaths = [
+    '/opt/homebrew/bin',
+    '/opt/homebrew/sbin',
+    '/usr/local/bin',
+    '/usr/bin',
+    '/bin',
+    '/usr/sbin',
+    '/sbin',
+    `${home}/.local/bin`,
+    `${home}/.npm-global/bin`,
+    `${home}/Library/pnpm`,
+    `${home}/.volta/bin`,
+  ]
+
+  // Dynamically detect NVM current version path instead of hardcoding
+  if (home) {
+    try {
+      const { readdirSync: readdir } = require('fs')
+      const nvmVersionsDir = join(home, '.nvm', 'versions', 'node')
+      const versions = readdir(nvmVersionsDir) as string[]
+      if (versions.length > 0) {
+        // Sort descending to pick the latest installed version
+        versions.sort((a: string, b: string) => b.localeCompare(a, undefined, { numeric: true }))
+        commonPaths.push(join(nvmVersionsDir, versions[0], 'bin'))
+      }
+    } catch {
+      // NVM not installed — skip
+    }
+  }
+
+  const existingPath = process.env.PATH || ''
+  return [...new Set([...commonPaths, ...existingPath.split(':')])]
+    .filter(Boolean)
+    .join(':')
 }
 
 // Register app-attachment:// as a privileged scheme before app is ready.
