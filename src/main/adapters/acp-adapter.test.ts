@@ -2219,9 +2219,21 @@ describe('AcpAdapter - Non-content events must not fragment assistant messages',
   })
 })
 
-describe('AcpAdapter node command resolution', () => {
-  it('should use process.execPath with ELECTRON_RUN_AS_NODE on non-Windows', () => {
-    // Read the source to verify the pattern
+describe('AcpAdapter process spawning for packaged Electron apps', () => {
+  it('codex should spawn the native binary directly, not via the JS wrapper', () => {
+    const adapter = new AcpAdapter('codex')
+    const config = (adapter as any).agentConfig
+
+    // Command should be the resolved native binary path, NOT 'node'
+    expect(config.command).not.toBe('node')
+    expect(config.command).toContain('codex-acp')
+    // Should not need ELECTRON_RUN_AS_NODE since it's a native binary
+    expect(config.env).not.toHaveProperty('ELECTRON_RUN_AS_NODE')
+    // No args — the binary is run directly
+    expect(config.args).toEqual([])
+  })
+
+  it('codex should replace app.asar with app.asar.unpacked in the binary path', () => {
     const fs = require('fs')
     const path = require('path')
     const source = fs.readFileSync(
@@ -2229,27 +2241,16 @@ describe('AcpAdapter node command resolution', () => {
       'utf8'
     )
 
-    // Should use process.execPath (not bare 'node') for spawning child processes
-    expect(source).toContain('process.execPath')
-    // Should set ELECTRON_RUN_AS_NODE to make Electron binary act as Node
-    expect(source).toContain('ELECTRON_RUN_AS_NODE')
+    // Should have the ASAR → unpacked replacement logic
+    expect(source).toContain("app.asar.unpacked")
+    expect(source).toContain("binaryPath.replace('app.asar', 'app.asar.unpacked')")
   })
 
-  it('codex agent config should include ELECTRON_RUN_AS_NODE in env', () => {
-    const adapter = new AcpAdapter('codex')
-    const config = (adapter as any).agentConfig
-
-    // On macOS/Linux, command should be process.execPath (not 'node')
-    if (process.platform !== 'win32') {
-      expect(config.command).toBe(process.execPath)
-      expect(config.env).toHaveProperty('ELECTRON_RUN_AS_NODE', '1')
-    }
-  })
-
-  it('claude-code agent config should include ELECTRON_RUN_AS_NODE in env', () => {
+  it('claude-code should use process.execPath with ELECTRON_RUN_AS_NODE on non-Windows', () => {
     const adapter = new AcpAdapter('claude-code')
     const config = (adapter as any).agentConfig
 
+    // claude-code-acp is a pure JS script, needs Node.js runtime
     if (process.platform !== 'win32') {
       expect(config.command).toBe(process.execPath)
       expect(config.env).toHaveProperty('ELECTRON_RUN_AS_NODE', '1')
