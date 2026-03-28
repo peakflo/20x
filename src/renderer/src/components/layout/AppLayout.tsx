@@ -7,6 +7,9 @@ import { DeleteConfirmDialog } from '@/components/tasks/DeleteConfirmDialog'
 import { Dialog, DialogContent, DialogHeader, DialogBody, DialogTitle } from '@/components/ui/Dialog'
 import { OrchestratorPanel } from '@/components/orchestrator/OrchestratorPanel'
 import { OnboardingWizard, shouldShowOnboarding } from '@/components/onboarding/OnboardingWizard'
+import { PresetupFlow } from '@/components/presetup/PresetupFlow'
+import { useEnterpriseStore } from '@/stores/enterprise-store'
+import { usePresetupStore } from '@/stores/presetup-store'
 import { useTasks } from '@/hooks/use-tasks'
 import { useUIStore } from '@/stores/ui-store'
 import { useAgentStore } from '@/stores/agent-store'
@@ -58,6 +61,10 @@ export function AppLayout() {
 
   const [showOrchestrator, setShowOrchestrator] = useState(false)
   const [onboardingOpen, setOnboardingOpen] = useState(false)
+  const [presetupOpen, setPresetupOpen] = useState(false)
+
+  const { isAuthenticated, currentTenant } = useEnterpriseStore()
+  const presetupPhase = usePresetupStore((s) => s.phase)
 
   // Auto-open onboarding on first launch or major/minor version bumps
   useEffect(() => {
@@ -77,6 +84,33 @@ export function AppLayout() {
       window.electronAPI?.app?.getVersion().then((v) => {
         if (v) settingsApi.set('setup_completed_version', v)
       })
+      // After onboarding closes, check if we should show presetup
+      if (isAuthenticated && currentTenant) {
+        settingsApi.get('presetup_completed').then((val) => {
+          if (!val) {
+            setPresetupOpen(true)
+          }
+        })
+      }
+    }
+  }
+
+  // Trigger presetup check when enterprise auth completes (and onboarding is not showing)
+  useEffect(() => {
+    if (!isAuthenticated || !currentTenant || onboardingOpen) return
+    settingsApi.get('presetup_completed').then((val) => {
+      if (!val) {
+        setPresetupOpen(true)
+      }
+    })
+  }, [isAuthenticated, currentTenant?.id])
+
+  const handlePresetupChange = (open: boolean) => {
+    setPresetupOpen(open)
+    if (!open && presetupPhase === 'complete') {
+      // Mark presetup as completed so we don't show again
+      settingsApi.set('presetup_completed', new Date().toISOString())
+      usePresetupStore.getState().reset()
     }
   }
 
@@ -278,6 +312,9 @@ export function AppLayout() {
 
       {/* Onboarding Wizard — auto-opens on first launch or major/minor version bumps */}
       <OnboardingWizard open={onboardingOpen} onOpenChange={handleOnboardingChange} />
+
+      {/* Presetup Flow — opens after enterprise login if not yet completed */}
+      <PresetupFlow open={presetupOpen} onOpenChange={handlePresetupChange} />
 
       {/* Toast */}
       {toast && (

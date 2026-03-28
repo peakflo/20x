@@ -122,6 +122,14 @@ const mockElectronAPI = {
     getActions: vi.fn().mockResolvedValue([]),
     executeAction: vi.fn().mockResolvedValue({ success: true })
   },
+  enterprise: {
+    login: vi.fn().mockResolvedValue({ userId: '', email: '', companies: [] }),
+    selectTenant: vi.fn().mockResolvedValue({ token: '', tenant: { id: '', name: '' } }),
+    logout: vi.fn().mockResolvedValue(undefined),
+    getSession: vi.fn().mockResolvedValue({ isAuthenticated: false, userEmail: null, userId: null, currentTenant: null }),
+    refreshToken: vi.fn().mockResolvedValue({ token: '' }),
+    apiRequest: vi.fn().mockResolvedValue({})
+  },
   onOverdueCheck: vi.fn((cb: () => void) => {
     eventCallbacks.onOverdueCheck = cb
     return vi.fn()
