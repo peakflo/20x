@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { Loader2, RefreshCw, CheckCircle2, XCircle, ExternalLink } from 'lucide-react'
+import { Loader2, RefreshCw, CheckCircle2, XCircle } from 'lucide-react'
 import { Input } from '@/components/ui/Input'
 import { Label } from '@/components/ui/Label'
 import { Button } from '@/components/ui/Button'
@@ -175,20 +175,7 @@ export function YouTrackConfigForm({ value, onChange }: PluginFormProps) {
           required
         />
         <p className="text-xs text-muted-foreground">
-          Generate at{' '}
-          <button
-            type="button"
-            onClick={() => {
-              window.electronAPI.shell.openExternal(
-                'https://www.jetbrains.com/help/youtrack/server/manage-permanent-token.html'
-              )
-            }}
-            className="text-primary hover:underline inline-flex items-center gap-0.5"
-          >
-            Profile &gt; Account Security &gt; New Token
-            <ExternalLink className="h-3 w-3" />
-          </button>
-          {' '}(scope: YouTrack)
+          Bottom-left profile icon &rarr; Profile &rarr; Account Security &rarr; New Token (scope: YouTrack)
         </p>
       </div>
 

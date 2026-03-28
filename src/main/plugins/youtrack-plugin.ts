@@ -201,7 +201,7 @@ export class YouTrackPlugin implements TaskSourcePlugin {
         required: true,
         placeholder: 'perm:...',
         description:
-          'Generate at Profile > Account Security > New Token (scope: YouTrack)'
+          'Bottom-left profile icon → Profile → Account Security → New Token (scope: YouTrack). See https://www.jetbrains.com/help/youtrack/server/manage-permanent-token.html'
       },
       {
         key: 'project',
@@ -701,7 +701,9 @@ Import tasks from a YouTrack project. Supports filtering by state, priority, ass
 
 ### 1. Generate a Permanent Token
 
-1. Open YouTrack and click your **profile avatar** (top-right)
+See [JetBrains documentation](https://www.jetbrains.com/help/youtrack/server/manage-permanent-token.html) for full details.
+
+1. Open YouTrack and click the **profile icon** (bottom-left)
 2. Go to **Profile** > **Account Security**
 3. Under **Tokens**, click **New token...**
 4. Enter a **Token name** (e.g. "20x Integration")
