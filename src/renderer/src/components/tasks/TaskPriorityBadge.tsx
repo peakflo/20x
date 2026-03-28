@@ -13,6 +13,6 @@ interface TaskPriorityBadgeProps {
 }
 
 export function TaskPriorityBadge({ priority }: TaskPriorityBadgeProps) {
-  const config = priorityConfig[priority]
+  const config = priorityConfig[priority] ?? priorityConfig.medium
   return <Badge variant={config.variant}>{config.label}</Badge>
 }
