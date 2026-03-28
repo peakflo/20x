@@ -18,6 +18,7 @@ import { LinearPlugin } from './plugins/linear-plugin'
 import { HubSpotPlugin } from './plugins/hubspot-plugin'
 import { GitHubIssuesPlugin } from './plugins/github-issues-plugin'
 import { NotionPlugin } from './plugins/notion-plugin'
+import { YouTrackPlugin } from './plugins/youtrack-plugin'
 import { registerIpcHandlers } from './ipc-handlers'
 import { EnterpriseAuth } from './enterprise-auth'
 import { RecurrenceScheduler } from './recurrence-scheduler'
@@ -414,6 +415,7 @@ app.whenReady().then(async () => {
   pluginRegistry.register(new HubSpotPlugin())
   pluginRegistry.register(new GitHubIssuesPlugin(githubManager))
   pluginRegistry.register(new NotionPlugin())
+  pluginRegistry.register(new YouTrackPlugin())
 
   syncManager = new SyncManager(db, mcpToolCaller, pluginRegistry, oauthManager)
   agentManager.setSyncManager(syncManager)
@@ -488,7 +490,7 @@ app.whenReady().then(async () => {
   // Start mobile API server
   try {
     agentManager.addExternalListener(broadcastToMobileClients)
-    const mobilePort = await startMobileApiServer(db, agentManager, githubManager!, undefined, syncManager, gitlabManager)
+    const mobilePort = await startMobileApiServer(db, agentManager, githubManager!, undefined, syncManager, pluginRegistry, gitlabManager)
     console.log(`[Main] Mobile API server started on port ${mobilePort}`)
   } catch (err) {
     console.error('[Main] Failed to start mobile API server:', err)

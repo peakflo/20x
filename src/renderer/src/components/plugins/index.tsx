@@ -10,6 +10,7 @@ import { HubSpotConfigForm } from './HubSpotConfigForm'
 import { PeakfloConfigForm } from './PeakfloConfigForm'
 import { GitHubIssuesConfigForm } from './GitHubIssuesConfigForm'
 import { NotionConfigForm } from './NotionConfigForm'
+import { YouTrackConfigForm } from './YouTrackConfigForm'
 import type { PluginFormProps } from './PluginFormProps'
 
 export { PluginSetupDocumentation } from './PluginSetupDocumentation'
@@ -24,7 +25,8 @@ export const PLUGIN_FORMS: Record<string, PluginFormComponent> = {
   hubspot: HubSpotConfigForm,
   peakflo: PeakfloConfigForm,
   'github-issues': GitHubIssuesConfigForm,
-  notion: NotionConfigForm
+  notion: NotionConfigForm,
+  youtrack: YouTrackConfigForm
 }
 
 /**

@@ -8,6 +8,7 @@ import { ConversationPage } from './pages/ConversationPage'
 import { RepoSelectorPage } from './pages/RepoSelectorPage'
 import { TaskFormPage } from './pages/TaskFormPage'
 import { SkillSelectorPage } from './pages/SkillSelectorPage'
+import { SettingsPage } from './pages/SettingsPage'
 
 export type Route =
   | { page: 'list' }
@@ -17,6 +18,7 @@ export type Route =
   | { page: 'skills'; taskId: string }
   | { page: 'create' }
   | { page: 'edit'; taskId: string }
+  | { page: 'settings' }
 
 export function App() {
   const [route, setRoute] = useState<Route>({ page: 'list' })
@@ -112,6 +114,9 @@ export function App() {
       )}
       {route.page === 'edit' && (
         <TaskFormPage taskId={route.taskId} onNavigate={navigate} />
+      )}
+      {route.page === 'settings' && (
+        <SettingsPage onNavigate={navigate} />
       )}
     </div>
   )
