@@ -2,15 +2,16 @@ import type { TaskRecord } from '../database'
 import type { GitHubManager, GitHubIssue } from '../github-manager'
 import type { SourceUser, ReassignResult } from '../../shared/types'
 import { TaskStatus } from '../../shared/constants'
-import type {
-  TaskSourcePlugin,
-  PluginConfigSchema,
-  ConfigFieldOption,
-  PluginContext,
-  FieldMapping,
-  PluginAction,
-  PluginSyncResult,
-  ActionResult
+import {
+  PluginActionId,
+  type TaskSourcePlugin,
+  type PluginConfigSchema,
+  type ConfigFieldOption,
+  type PluginContext,
+  type FieldMapping,
+  type PluginAction,
+  type PluginSyncResult,
+  type ActionResult
 } from './types'
 
 // Labels that map to priority (case-insensitive)
@@ -154,7 +155,7 @@ export class GitHubIssuesPlugin implements TaskSourcePlugin {
   getActions(_config: Record<string, unknown>): PluginAction[] {
     return [
       {
-        id: 'add_comment',
+        id: PluginActionId.AddComment,
         label: 'Add Comment',
         icon: 'MessageSquare',
         requiresInput: true,
@@ -162,13 +163,13 @@ export class GitHubIssuesPlugin implements TaskSourcePlugin {
         inputPlaceholder: 'Enter your comment...'
       },
       {
-        id: 'close_issue',
+        id: PluginActionId.CloseIssue,
         label: 'Close Issue',
         icon: 'XCircle',
         variant: 'destructive'
       },
       {
-        id: 'reopen_issue',
+        id: PluginActionId.ReopenIssue,
         label: 'Reopen Issue',
         icon: 'RotateCcw'
       }
@@ -283,17 +284,17 @@ export class GitHubIssuesPlugin implements TaskSourcePlugin {
 
     try {
       switch (actionId) {
-        case 'add_comment':
+        case PluginActionId.AddComment:
           if (!input) return { success: false, error: 'Comment text is required' }
           await this.githubManager.addIssueComment(owner, repo, number, input)
           return { success: true }
 
-        case 'complete':
-        case 'close_issue':
+        case PluginActionId.Complete:
+        case PluginActionId.CloseIssue:
           await this.githubManager.updateIssue(owner, repo, number, { state: 'closed' })
           return { success: true, taskUpdate: { status: TaskStatus.Completed } }
 
-        case 'reopen_issue':
+        case PluginActionId.ReopenIssue:
           await this.githubManager.updateIssue(owner, repo, number, { state: 'open' })
           return { success: true, taskUpdate: { status: TaskStatus.NotStarted } }
 

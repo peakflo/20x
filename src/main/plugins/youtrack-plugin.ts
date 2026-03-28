@@ -1,15 +1,16 @@
 import { writeFileSync } from 'fs'
 import { join } from 'path'
 import { randomUUID } from 'crypto'
-import type {
-  TaskSourcePlugin,
-  PluginConfigSchema,
-  ConfigFieldOption,
-  PluginContext,
-  FieldMapping,
-  PluginAction,
-  PluginSyncResult,
-  ActionResult
+import {
+  PluginActionId,
+  type TaskSourcePlugin,
+  type PluginConfigSchema,
+  type ConfigFieldOption,
+  type PluginContext,
+  type FieldMapping,
+  type PluginAction,
+  type PluginSyncResult,
+  type ActionResult
 } from './types'
 import type { TaskRecord } from '../database'
 import type { SourceUser, ReassignResult } from '../../shared/types'
@@ -379,12 +380,12 @@ export class YouTrackPlugin implements TaskSourcePlugin {
   getActions(_config: Record<string, unknown>): PluginAction[] {
     return [
       {
-        id: 'open_in_youtrack',
+        id: PluginActionId.OpenInYouTrack,
         label: 'Open in YouTrack',
         icon: 'ExternalLink'
       },
       {
-        id: 'add_comment',
+        id: PluginActionId.AddComment,
         label: 'Add Comment',
         icon: 'MessageSquare',
         requiresInput: true,
@@ -392,7 +393,7 @@ export class YouTrackPlugin implements TaskSourcePlugin {
         inputPlaceholder: 'Enter your comment...'
       },
       {
-        id: 'change_state',
+        id: PluginActionId.ChangeState,
         label: 'Change State',
         icon: 'ArrowRightCircle',
         requiresInput: true,
@@ -576,7 +577,7 @@ export class YouTrackPlugin implements TaskSourcePlugin {
     const token = config.api_token as string
     const client = new YouTrackClient(serverUrl, token)
 
-    if (actionId === 'open_in_youtrack') {
+    if (actionId === PluginActionId.OpenInYouTrack) {
       // Fetch the issue to get the readable ID for URL construction
       try {
         const issue = await client.getIssue(task.external_id)
@@ -591,7 +592,7 @@ export class YouTrackPlugin implements TaskSourcePlugin {
       }
     }
 
-    if (actionId === 'add_comment') {
+    if (actionId === PluginActionId.AddComment) {
       if (!input) {
         return { success: false, error: 'Comment text is required' }
       }
@@ -604,7 +605,7 @@ export class YouTrackPlugin implements TaskSourcePlugin {
       }
     }
 
-    if (actionId === 'complete') {
+    if (actionId === PluginActionId.Complete) {
       try {
         await client.updateIssue(task.external_id, {
           customFields: [{ name: 'State', value: { name: 'Done' } }]
@@ -616,7 +617,7 @@ export class YouTrackPlugin implements TaskSourcePlugin {
       }
     }
 
-    if (actionId === 'change_state') {
+    if (actionId === PluginActionId.ChangeState) {
       if (!input) {
         return { success: false, error: 'State value is required' }
       }

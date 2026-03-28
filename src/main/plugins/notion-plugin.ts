@@ -1,14 +1,15 @@
 import { writeFileSync } from 'fs'
 import { join, extname } from 'path'
-import type {
-  TaskSourcePlugin,
-  PluginConfigSchema,
-  ConfigFieldOption,
-  PluginContext,
-  FieldMapping,
-  PluginAction,
-  PluginSyncResult,
-  ActionResult
+import {
+  PluginActionId,
+  type TaskSourcePlugin,
+  type PluginConfigSchema,
+  type ConfigFieldOption,
+  type PluginContext,
+  type FieldMapping,
+  type PluginAction,
+  type PluginSyncResult,
+  type ActionResult
 } from './types'
 import type { TaskRecord } from '../database'
 import type { SourceUser, ReassignResult } from '../../shared/types'
@@ -328,7 +329,7 @@ export class NotionPlugin implements TaskSourcePlugin {
   getActions(_config: Record<string, unknown>): PluginAction[] {
     return [
       {
-        id: 'change_status',
+        id: PluginActionId.ChangeStatus,
         label: 'Change Status',
         icon: 'ArrowRightCircle',
         requiresInput: true,
@@ -336,7 +337,7 @@ export class NotionPlugin implements TaskSourcePlugin {
         inputPlaceholder: 'e.g. Done, In Progress'
       },
       {
-        id: 'update_priority',
+        id: PluginActionId.UpdatePriority,
         label: 'Update Priority',
         icon: 'AlertTriangle',
         requiresInput: true,
@@ -554,8 +555,8 @@ export class NotionPlugin implements TaskSourcePlugin {
 
     // "complete" is a generic completion action — treat it as a status change
     // to "completed" so Notion moves the page to its Done/Complete status.
-    if (actionId === 'complete') {
-      actionId = 'change_status'
+    if (actionId === PluginActionId.Complete) {
+      actionId = PluginActionId.ChangeStatus
       input = 'completed'
     }
 
@@ -572,7 +573,7 @@ export class NotionPlugin implements TaskSourcePlugin {
       const propMap = this.buildPropertyMap(db)
       const properties: Record<string, unknown> = {}
 
-      if (actionId === 'change_status' && propMap.status) {
+      if (actionId === PluginActionId.ChangeStatus && propMap.status) {
         // Try to find a matching status in the DB schema, or use input as-is
         const notionStatus = this.localStatusToNotion(input, db.properties[propMap.status.name]) || input
         if (propMap.status.type === NotionPropertyType.Status) {
@@ -580,7 +581,7 @@ export class NotionPlugin implements TaskSourcePlugin {
         } else {
           properties[propMap.status.name] = { select: { name: notionStatus } }
         }
-      } else if (actionId === 'update_priority' && propMap.priority) {
+      } else if (actionId === PluginActionId.UpdatePriority && propMap.priority) {
         const notionPriority = this.localPriorityToNotion(input, db.properties[propMap.priority.name]) || input
         properties[propMap.priority.name] = { select: { name: notionPriority } }
       } else {
@@ -590,10 +591,10 @@ export class NotionPlugin implements TaskSourcePlugin {
       await client.updatePage(task.external_id, properties)
 
       const taskUpdate: Record<string, unknown> = {}
-      if (actionId === 'change_status') {
+      if (actionId === PluginActionId.ChangeStatus) {
         const localStatus = STATUS_TO_LOCAL[input.toLowerCase()]
         if (localStatus) taskUpdate.status = localStatus
-      } else if (actionId === 'update_priority') {
+      } else if (actionId === PluginActionId.UpdatePriority) {
         const localPriority = PRIORITY_TO_LOCAL[input.toLowerCase()]
         if (localPriority) taskUpdate.priority = localPriority
       }

@@ -16,7 +16,7 @@ import { attachmentApi, worktreeApi, settingsApi } from '@/lib/ipc-client'
 import { useTaskSourceStore } from '@/stores/task-source-store'
 import { isOverdue, isSnoozed } from '@/lib/utils'
 import { useEffect, useState, useCallback } from 'react'
-import { TaskStatus } from '@/types'
+import { TaskStatus, PluginActionId } from '@/types'
 import type { FileAttachment } from '@/types'
 import { MessageSquare } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
@@ -148,7 +148,7 @@ export function AppLayout() {
                 try {
                   if (selectedTask.source_id) {
                     const actionField = selectedTask.output_fields.find((f) => f.id === 'action')
-                    const actionValue = actionField?.value ? String(actionField.value) : 'complete'
+                    const actionValue = actionField?.value ? String(actionField.value) : PluginActionId.Complete
                     const result = await executeAction(actionValue, selectedTask.id, selectedTask.source_id)
                     if (!result.success) {
                       showToast(result.error || 'Failed to complete task', true)

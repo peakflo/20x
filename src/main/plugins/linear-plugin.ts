@@ -9,15 +9,16 @@ import { writeFileSync } from 'fs'
 import { join, extname } from 'path'
 import type { TaskRecord } from '../database'
 import { TaskStatus } from '../../shared/constants'
-import type {
-  TaskSourcePlugin,
-  PluginConfigSchema,
-  ConfigFieldOption,
-  PluginContext,
-  FieldMapping,
-  PluginAction,
-  PluginSyncResult,
-  ActionResult
+import {
+  PluginActionId,
+  type TaskSourcePlugin,
+  type PluginConfigSchema,
+  type ConfigFieldOption,
+  type PluginContext,
+  type FieldMapping,
+  type PluginAction,
+  type PluginSyncResult,
+  type ActionResult
 } from './types'
 import { LinearClient, type LinearIssue } from './linear-client'
 import { replaceRemoteImageUrlsInTask } from './replace-image-urls'
@@ -159,7 +160,7 @@ export class LinearPlugin implements TaskSourcePlugin {
   getActions(_config: Record<string, unknown>): PluginAction[] {
     return [
       {
-        id: 'change_status',
+        id: PluginActionId.ChangeStatus,
         label: 'Change Status',
         icon: 'ArrowRight',
         requiresInput: true,
@@ -167,7 +168,7 @@ export class LinearPlugin implements TaskSourcePlugin {
         inputPlaceholder: 'e.g., In Progress, Done'
       },
       {
-        id: 'update_priority',
+        id: PluginActionId.UpdatePriority,
         label: 'Update Priority',
         icon: 'Flag',
         requiresInput: true,
@@ -175,7 +176,7 @@ export class LinearPlugin implements TaskSourcePlugin {
         inputPlaceholder: 'e.g., Urgent, High, Medium, Low'
       },
       {
-        id: 'add_comment',
+        id: PluginActionId.AddComment,
         label: 'Add Comment',
         icon: 'MessageSquare',
         requiresInput: true,
@@ -390,14 +391,14 @@ export class LinearPlugin implements TaskSourcePlugin {
       const client = new LinearClient(token)
 
       switch (actionId) {
-        case 'add_comment':
+        case PluginActionId.AddComment:
           if (!input) {
             return { success: false, error: 'Comment text is required' }
           }
           await client.addComment(task.external_id, input)
           return { success: true }
 
-        case 'update_priority':
+        case PluginActionId.UpdatePriority:
           if (!input) {
             return { success: false, error: 'Priority is required' }
           }
@@ -411,7 +412,7 @@ export class LinearPlugin implements TaskSourcePlugin {
             taskUpdate: { priority: this.mapPriorityFromLinear(priority) }
           }
 
-        case 'complete': {
+        case PluginActionId.Complete: {
           // Move the Linear issue to its "completed/done" workflow state
           const issue = await client.getIssue(task.external_id)
           if (issue?.team?.id) {
@@ -424,7 +425,7 @@ export class LinearPlugin implements TaskSourcePlugin {
           return { success: true, taskUpdate: { status: TaskStatus.Completed } }
         }
 
-        case 'change_status':
+        case PluginActionId.ChangeStatus:
           if (!input) {
             return { success: false, error: 'Status is required' }
           }

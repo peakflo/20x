@@ -232,8 +232,8 @@ export const OUTPUT_FIELD_TYPES: { value: OutputFieldType; label: string }[] = [
 ]
 
 // ── Re-export shared constants & types ──────────────────────
-import { TaskStatus, TASK_STATUSES, HeartbeatStatus } from '@shared/constants'
-export { TaskStatus, TASK_STATUSES, HeartbeatStatus }
+import { TaskStatus, TASK_STATUSES, HeartbeatStatus, PluginActionId } from '@shared/constants'
+export { TaskStatus, TASK_STATUSES, HeartbeatStatus, PluginActionId }
 export type { SourceUser, ReassignResult } from '@shared/types'
 
 // ── Task types ──────────────────────────────────────────────
