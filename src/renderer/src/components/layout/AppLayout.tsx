@@ -64,7 +64,6 @@ export function AppLayout() {
   const [presetupOpen, setPresetupOpen] = useState(false)
 
   const { isAuthenticated, currentTenant } = useEnterpriseStore()
-  const presetupPhase = usePresetupStore((s) => s.phase)
 
   // Auto-open onboarding on first launch or major/minor version bumps
   useEffect(() => {
@@ -84,13 +83,9 @@ export function AppLayout() {
       window.electronAPI?.app?.getVersion().then((v) => {
         if (v) settingsApi.set('setup_completed_version', v)
       })
-      // After onboarding closes, check if we should show presetup
+      // After onboarding closes, show presetup if enterprise-authenticated
       if (isAuthenticated && currentTenant) {
-        settingsApi.get('presetup_completed').then((val) => {
-          if (!val) {
-            setPresetupOpen(true)
-          }
-        })
+        setPresetupOpen(true)
       }
     }
   }
@@ -98,18 +93,12 @@ export function AppLayout() {
   // Trigger presetup check when enterprise auth completes (and onboarding is not showing)
   useEffect(() => {
     if (!isAuthenticated || !currentTenant || onboardingOpen) return
-    settingsApi.get('presetup_completed').then((val) => {
-      if (!val) {
-        setPresetupOpen(true)
-      }
-    })
-  }, [isAuthenticated, currentTenant?.id])
+    setPresetupOpen(true)
+  }, [isAuthenticated, currentTenant?.id, onboardingOpen])
 
   const handlePresetupChange = (open: boolean) => {
     setPresetupOpen(open)
-    if (!open && presetupPhase === 'complete') {
-      // Mark presetup as completed so we don't show again
-      settingsApi.set('presetup_completed', new Date().toISOString())
+    if (!open) {
       usePresetupStore.getState().reset()
     }
   }

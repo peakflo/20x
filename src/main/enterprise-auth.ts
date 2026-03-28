@@ -482,6 +482,18 @@ export class EnterpriseAuth {
     return jwt
   }
 
+  /**
+   * Returns the Supabase tokens needed to establish a session in the browser.
+   * Used by the presetup flow to open workflow-builder pages with auth.
+   */
+  getSupabaseTokens(): { accessToken: string | null; refreshToken: string | null; apiUrl: string } {
+    return {
+      accessToken: this.getStoredSupabaseAccessToken(),
+      refreshToken: this.getStoredSupabaseRefreshToken(),
+      apiUrl: this.apiUrl
+    }
+  }
+
   private clearStoredData(): void {
     this.cachedJwt = null
     this.cachedJwtExpiresAt = 0

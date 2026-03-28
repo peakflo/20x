@@ -11,6 +11,7 @@ export type PresetupPhase =
   | 'loading'
   | 'template-selection'
   | 'wizard'
+  | 'connect-integrations'
   | 'provisioning'
   | 'complete'
   | 'error'
@@ -33,9 +34,61 @@ interface PresetupState {
   checkAndStart: () => Promise<void>
   selectTemplate: (template: PresetupTemplate) => void
   setAnswer: (questionId: string, value: string) => void
+  /** Called after wizard completes — transitions to connect-integrations or provisioning */
+  proceedAfterWizard: () => void
+  /** Called after user connects integrations — transitions to provisioning */
+  proceedAfterIntegrations: () => void
   submitProvision: () => Promise<void>
   reset: () => void
   dismiss: () => void
+}
+
+/** Check if a template has any OAuth integrations that need connecting */
+function hasOAuthIntegrations(template: PresetupTemplate, answers: Record<string, string>): boolean {
+  const oauthKeys = ['gmail', 'outlook', 'slack', 'hubspot', 'salesforce', 'xero', 'quickbooks', 'linkedin']
+  const integrationKeys = new Set<string>()
+
+  // Base integrations
+  for (const int of template.definition.integrations || []) {
+    integrationKeys.add(int.key)
+  }
+
+  // Integrations from selected options
+  for (const q of template.definition.questions || []) {
+    const selectedValue = answers[q.id]
+    if (!selectedValue) continue
+    const selectedOption = q.options.find((o) => o.value === selectedValue)
+    if (!selectedOption?.integrations) continue
+    for (const int of selectedOption.integrations) {
+      integrationKeys.add(int.key)
+    }
+  }
+
+  return [...integrationKeys].some((key) => oauthKeys.includes(key))
+}
+
+/** Collect all integration keys that need connecting */
+export function collectIntegrationKeys(template: PresetupTemplate, answers: Record<string, string>): string[] {
+  const oauthKeys = ['gmail', 'outlook', 'slack', 'hubspot', 'salesforce', 'xero', 'quickbooks', 'linkedin']
+  const integrationKeys = new Set<string>()
+
+  // Base integrations
+  for (const int of template.definition.integrations || []) {
+    integrationKeys.add(int.key)
+  }
+
+  // Integrations from selected options
+  for (const q of template.definition.questions || []) {
+    const selectedValue = answers[q.id]
+    if (!selectedValue) continue
+    const selectedOption = q.options.find((o) => o.value === selectedValue)
+    if (!selectedOption?.integrations) continue
+    for (const int of selectedOption.integrations) {
+      integrationKeys.add(int.key)
+    }
+  }
+
+  return [...integrationKeys].filter((key) => oauthKeys.includes(key))
 }
 
 export const usePresetupStore = create<PresetupState>((set, get) => ({
@@ -87,9 +140,13 @@ export const usePresetupStore = create<PresetupState>((set, get) => ({
       answers: {},
       phase: hasQuestions ? 'wizard' : 'provisioning'
     })
-    // If no questions, immediately start provisioning
+    // If no questions, check for integrations first, otherwise provision
     if (!hasQuestions) {
-      get().submitProvision()
+      if (hasOAuthIntegrations(template, {})) {
+        set({ phase: 'connect-integrations' })
+      } else {
+        get().submitProvision()
+      }
     }
   },
 
@@ -97,6 +154,21 @@ export const usePresetupStore = create<PresetupState>((set, get) => ({
     set((s) => ({
       answers: { ...s.answers, [questionId]: value }
     }))
+  },
+
+  proceedAfterWizard: () => {
+    const { selectedTemplate, answers } = get()
+    if (!selectedTemplate) return
+
+    if (hasOAuthIntegrations(selectedTemplate, answers)) {
+      set({ phase: 'connect-integrations' })
+    } else {
+      get().submitProvision()
+    }
+  },
+
+  proceedAfterIntegrations: () => {
+    get().submitProvision()
   },
 
   submitProvision: async () => {

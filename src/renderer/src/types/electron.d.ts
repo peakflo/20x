@@ -336,6 +336,7 @@ interface ElectronAPI {
     }>
     refreshToken: () => Promise<{ token: string }>
     apiRequest: (method: string, path: string, body?: unknown) => Promise<unknown>
+    getSupabaseTokens: () => Promise<{ accessToken: string | null; refreshToken: string | null; apiUrl: string }>
   }
   updater: {
     check: () => Promise<{ success: boolean; version?: string; error?: string }>

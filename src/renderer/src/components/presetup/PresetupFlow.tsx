@@ -7,10 +7,11 @@ import {
   DialogTitle,
   DialogDescription
 } from '@/components/ui/Dialog'
-import { usePresetupStore } from '@/stores/presetup-store'
+import { usePresetupStore, collectIntegrationKeys } from '@/stores/presetup-store'
 import { PresetupTemplateCard } from './PresetupTemplateCard'
 import { PresetupWizard } from './PresetupWizard'
 import { PresetupProvisioningState } from './PresetupProvisioningState'
+import { PresetupConnectIntegrations } from './PresetupConnectIntegrations'
 import { Loader2, Package } from 'lucide-react'
 import { VisuallyHidden } from '@/components/ui/VisuallyHidden'
 
@@ -24,11 +25,14 @@ export function PresetupFlow({ open, onOpenChange }: PresetupFlowProps) {
     phase,
     templates,
     selectedTemplate,
+    answers,
     error,
     provisionResult,
     checkAndStart,
     selectTemplate,
     setAnswer,
+    proceedAfterWizard,
+    proceedAfterIntegrations,
     submitProvision,
     reset,
     dismiss
@@ -77,6 +81,8 @@ export function PresetupFlow({ open, onOpenChange }: PresetupFlowProps) {
         return 'Choose a setup package'
       case 'wizard':
         return selectedTemplate?.name || 'Configure package'
+      case 'connect-integrations':
+        return 'Connect integrations'
       case 'provisioning':
         return 'Installing...'
       case 'complete':
@@ -94,6 +100,8 @@ export function PresetupFlow({ open, onOpenChange }: PresetupFlowProps) {
         return 'Select a preconfigured package to get started quickly with workflows, integrations, and skills.'
       case 'wizard':
         return 'Answer a few questions to customise the package for your needs.'
+      case 'connect-integrations':
+        return 'Connect the required integrations before installing the package.'
       default:
         return ''
     }
@@ -140,17 +148,31 @@ export function PresetupFlow({ open, onOpenChange }: PresetupFlowProps) {
             <PresetupWizard
               template={selectedTemplate}
               onComplete={(wizardAnswers) => {
-                // Merge wizard answers into store, then provision
+                // Merge wizard answers into store
                 Object.entries(wizardAnswers).forEach(([qId, val]) => setAnswer(qId, val))
-                // Use the returned answers directly for provisioning
                 usePresetupStore.setState({ answers: wizardAnswers })
-                submitProvision()
+                proceedAfterWizard()
               }}
               onBack={() => {
                 usePresetupStore.setState({
                   phase: 'template-selection',
                   selectedTemplate: null,
                   answers: {}
+                })
+              }}
+            />
+          )}
+
+          {/* Connect integrations */}
+          {phase === 'connect-integrations' && selectedTemplate && (
+            <PresetupConnectIntegrations
+              integrationKeys={collectIntegrationKeys(selectedTemplate, answers)}
+              templateName={selectedTemplate.name}
+              onComplete={proceedAfterIntegrations}
+              onBack={() => {
+                const hasQuestions = selectedTemplate.definition.questions.length > 0
+                usePresetupStore.setState({
+                  phase: hasQuestions ? 'wizard' : 'template-selection'
                 })
               }}
             />

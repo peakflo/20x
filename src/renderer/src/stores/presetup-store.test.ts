@@ -95,10 +95,27 @@ describe('usePresetupStore', () => {
       expect(usePresetupStore.getState().answers).toEqual({})
     })
 
-    it('transitions to provisioning when template has no questions', async () => {
+    it('transitions to connect-integrations when template has no questions but has OAuth integrations', () => {
       const noQuestionsTemplate = {
         ...mockTemplate,
         definition: { ...mockTemplate.definition, questions: [] }
+      }
+
+      usePresetupStore.getState().selectTemplate(noQuestionsTemplate)
+
+      // Should go to connect-integrations since the template has xero integration
+      expect(usePresetupStore.getState().phase).toBe('connect-integrations')
+      expect(usePresetupStore.getState().selectedTemplate?.slug).toBe('ai-accountant')
+    })
+
+    it('transitions to provisioning when template has no questions and no OAuth integrations', async () => {
+      const noQuestionsNoOAuthTemplate = {
+        ...mockTemplate,
+        definition: {
+          ...mockTemplate.definition,
+          questions: [],
+          integrations: [{ key: 'smtp', name: 'SMTP', required: false }]
+        }
       }
 
       ;(mockElectronAPI.enterprise.apiRequest as unknown as Mock)
@@ -110,10 +127,90 @@ describe('usePresetupStore', () => {
           steps: []
         })
 
-      usePresetupStore.getState().selectTemplate(noQuestionsTemplate)
+      usePresetupStore.getState().selectTemplate(noQuestionsNoOAuthTemplate)
 
-      // Should immediately start provisioning
+      // Should go straight to provisioning since smtp is not OAuth
       expect(usePresetupStore.getState().selectedTemplate?.slug).toBe('ai-accountant')
+    })
+  })
+
+  describe('proceedAfterWizard', () => {
+    it('transitions to connect-integrations when OAuth integrations exist', () => {
+      usePresetupStore.setState({
+        selectedTemplate: mockTemplate,
+        answers: { accounting_software: 'xero' },
+        phase: 'wizard'
+      })
+
+      usePresetupStore.getState().proceedAfterWizard()
+
+      expect(usePresetupStore.getState().phase).toBe('connect-integrations')
+    })
+
+    it('transitions to provisioning when no OAuth integrations', async () => {
+      const noOAuthTemplate = {
+        ...mockTemplate,
+        definition: {
+          ...mockTemplate.definition,
+          integrations: [{ key: 'smtp', name: 'SMTP', required: false }],
+          questions: [
+            {
+              id: 'q1',
+              question: 'Question?',
+              hint: '',
+              options: [
+                { value: 'a', label: 'A' }
+              ]
+            }
+          ]
+        }
+      }
+
+      ;(mockElectronAPI.enterprise.apiRequest as unknown as Mock)
+        .mockResolvedValueOnce({
+          status: 'completed',
+          templateSlug: 'ai-accountant',
+          templateVersion: '1.0.0',
+          tenantId: 'tenant-1',
+          steps: []
+        })
+
+      usePresetupStore.setState({
+        selectedTemplate: noOAuthTemplate,
+        answers: { q1: 'a' },
+        phase: 'wizard'
+      })
+
+      usePresetupStore.getState().proceedAfterWizard()
+
+      // Should go to provisioning since smtp is not OAuth
+      expect(usePresetupStore.getState().phase).toBe('provisioning')
+    })
+  })
+
+  describe('proceedAfterIntegrations', () => {
+    it('triggers provisioning', async () => {
+      usePresetupStore.setState({
+        selectedTemplate: mockTemplate,
+        answers: { accounting_software: 'xero' },
+        phase: 'connect-integrations'
+      })
+
+      ;(mockElectronAPI.enterprise.apiRequest as unknown as Mock)
+        .mockResolvedValueOnce({
+          status: 'completed',
+          templateSlug: 'ai-accountant',
+          templateVersion: '1.0.0',
+          tenantId: 'tenant-1',
+          steps: []
+        })
+
+      usePresetupStore.getState().proceedAfterIntegrations()
+
+      // Wait for async provisioning to complete
+      await vi.waitFor(() => {
+        expect(usePresetupStore.getState().phase).toBe('complete')
+      })
     })
   })
 

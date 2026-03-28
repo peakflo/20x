@@ -128,7 +128,8 @@ const mockElectronAPI = {
     logout: vi.fn().mockResolvedValue(undefined),
     getSession: vi.fn().mockResolvedValue({ isAuthenticated: false, userEmail: null, userId: null, currentTenant: null }),
     refreshToken: vi.fn().mockResolvedValue({ token: '' }),
-    apiRequest: vi.fn().mockResolvedValue({})
+    apiRequest: vi.fn().mockResolvedValue({}),
+    getSupabaseTokens: vi.fn().mockResolvedValue({ accessToken: 'test-token', refreshToken: 'test-refresh', apiUrl: 'http://localhost:2000' })
   },
   onOverdueCheck: vi.fn((cb: () => void) => {
     eventCallbacks.onOverdueCheck = cb
