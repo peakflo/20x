@@ -432,6 +432,14 @@ export class YouTrackPlugin implements TaskSourcePlugin {
       // Fetch all matching issues
       const issues = await client.getAllIssues(yql)
 
+      // Debug: log link structure from first issue to verify API shape
+      if (issues.length > 0) {
+        const first = issues[0]
+        console.log(`[youtrack] Issue ${first.idReadable} links:`, JSON.stringify(first.links?.slice(0, 3) ?? [], null, 2))
+        console.log(`[youtrack] Issue ${first.idReadable} parent:`, JSON.stringify(first.parent ?? null, null, 2))
+        console.log(`[youtrack] Issue ${first.idReadable} subtasks:`, JSON.stringify(first.subtasks ?? null, null, 2))
+      }
+
       for (const issue of issues) {
         try {
           const mapped = this.mapIssue(issue)
