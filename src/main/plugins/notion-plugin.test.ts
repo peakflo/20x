@@ -507,5 +507,18 @@ describe('NotionPlugin', () => {
       expect(result.success).toBe(false)
       expect(result.error).toContain('Unknown action')
     })
+
+    it('treats "complete" as change_status to "completed"', async () => {
+      const ctx = makeContext()
+      const task = { id: 'local-1', external_id: 'ext-1' } as TaskRecord
+      // The complete action should be translated to change_status with input "completed",
+      // which goes through localStatusToNotion to find the matching Notion status.
+      const result = await plugin.executeAction('complete', task, undefined, defaultConfig, ctx)
+      // The action should be recognized — it must not return "Unknown action".
+      // It may succeed or fail for other reasons (mock DB schema), but never "Unknown action".
+      if (result.error) {
+        expect(result.error).not.toMatch(/Unknown action/)
+      }
+    })
   })
 })

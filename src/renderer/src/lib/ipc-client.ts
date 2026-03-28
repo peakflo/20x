@@ -165,6 +165,10 @@ export const onOverdueCheck = (callback: () => void): (() => void) => {
   return window.electronAPI.onOverdueCheck(callback)
 }
 
+export const onTasksRefresh = (callback: () => void): (() => void) => {
+  return window.electronAPI.onTasksRefresh(callback)
+}
+
 export const attachmentApi = {
   pick: (): Promise<string[]> => {
     return window.electronAPI.attachments.pick()

@@ -52,7 +52,7 @@ describe('RecurrenceEditor', () => {
       // Should show frequency and time controls
       const labels = Array.from(container.querySelectorAll('label')).map(l => l.textContent)
       expect(labels).toContain('Frequency')
-      expect(labels).toContain('Time (UTC)')
+      expect(labels).toContain('Time')
     })
   })
 

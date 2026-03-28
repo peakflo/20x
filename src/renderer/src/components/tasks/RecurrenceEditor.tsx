@@ -226,7 +226,7 @@ export function RecurrenceEditor({ value, onChange }: RecurrenceEditorProps) {
             </div>
 
             <div>
-              <Label htmlFor="recurrence-time">Time (UTC)</Label>
+              <Label htmlFor="recurrence-time">Time</Label>
               <Input
                 id="recurrence-time"
                 type="time"

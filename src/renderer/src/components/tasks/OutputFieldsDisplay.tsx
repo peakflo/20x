@@ -36,7 +36,11 @@ export function OutputFieldsDisplay({ fields, onChange, isActive, onComplete, ta
     [fields, onChange]
   )
 
-  const allFilled = useMemo(() => fields.every(isFieldFilled), [fields])
+  const requiredFields = useMemo(() => fields.filter((f) => f.required), [fields])
+  const allRequiredFilled = useMemo(
+    () => requiredFields.length === 0 || requiredFields.every(isFieldFilled),
+    [requiredFields]
+  )
   const filledCount = useMemo(() => fields.filter(isFieldFilled).length, [fields])
 
   return (
@@ -52,7 +56,7 @@ export function OutputFieldsDisplay({ fields, onChange, isActive, onComplete, ta
           <OutputFieldInput key={field.id} field={field} onValueChange={(v) => updateValue(field.id, v)} taskUpdatedAt={taskUpdatedAt} />
         ))}
       </div>
-      {isActive && onComplete && allFilled && (
+      {isActive && onComplete && allRequiredFilled && (
         <Button onClick={onComplete} className="w-full gap-2">
           <CheckCircle2 className="h-4 w-4" />
           Complete Task

@@ -181,8 +181,6 @@ describe('GitLabManager', () => {
 
         if (args[0] === 'api' && args[1] === '/projects') {
           // Return projects on first page, empty on second
-          const pageArg = args.find((a) => a === 'page=1' || a === '1')
-          const pageFieldIdx = args.indexOf('-f')
           let page = 1
           for (let i = 0; i < args.length; i++) {
             if (args[i] === '-f' && args[i + 1]?.startsWith('page=')) {

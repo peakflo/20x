@@ -96,7 +96,7 @@ const mastermindTools = [
     inputSchema: {
       type: 'object',
       properties: {
-        status: { type: 'string', enum: ['not_started', 'in_progress', 'completed', 'cancelled'], description: 'Filter by task status' },
+        status: { type: 'string', enum: ['not_started', 'triaging', 'agent_working', 'ready_for_review', 'agent_learning', 'completed'], description: 'Filter by task status' },
         priority: { type: 'string', enum: ['critical', 'high', 'medium', 'low'], description: 'Filter by priority level' },
         has_agent: { type: 'boolean', description: 'Filter tasks with/without assigned agent' },
         labels: { type: 'array', items: { type: 'string' }, description: 'Filter by labels (tasks matching any of these labels)' },
@@ -149,7 +149,7 @@ const mastermindTools = [
         agent_id: { type: 'string', description: 'Assign to agent' },
         repos: { type: 'array', items: { type: 'string' }, description: 'Set repository paths/URLs for this task' },
         priority: { type: 'string', enum: ['critical', 'high', 'medium', 'low'] },
-        status: { type: 'string', enum: ['not_started', 'triaging', 'in_progress', 'completed', 'cancelled'] },
+        status: { type: 'string', enum: ['not_started', 'triaging', 'agent_working', 'ready_for_review', 'agent_learning', 'completed'] },
         output_fields: {
           type: 'array',
           description: 'Define expected output fields for this task. Each field describes a piece of structured data the agent should produce.',
@@ -299,7 +299,7 @@ const subtaskTools = [
         resolution: { type: 'string', description: 'Set resolution/output summary (read by sibling subtasks for coordination)' },
         attachments: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, path: { type: 'string' }, type: { type: 'string' } } }, description: 'Set attachments (e.g. files, screenshots)' },
         labels: { type: 'array', items: { type: 'string' }, description: 'Set labels' },
-        status: { type: 'string', enum: ['not_started', 'in_progress', 'ready_for_review'], description: 'Subtasks cannot self-complete; set ready_for_review when done so the parent task owner can verify.' }
+        status: { type: 'string', enum: ['not_started', 'agent_working', 'ready_for_review'], description: 'Subtasks cannot self-complete; set ready_for_review when done so the parent task owner can verify.' }
       }
     }
   },
@@ -387,6 +387,8 @@ async function handleScopedCall(name: string, args: Record<string, unknown>): Pr
       if (args.status && blockedStatuses.includes(args.status as string)) {
         return { error: `Subtasks cannot set status to "${args.status}". Use "ready_for_review" when done.` }
       }
+      // Normalize legacy status value
+      if (args.status === 'in_progress') args.status = 'agent_working'
       // Normalize MCP-style attachments ({name, path, type}) to FileAttachmentRecord format
       if (Array.isArray(args.attachments)) {
         args.attachments = (args.attachments as Record<string, unknown>[]).map((a) => ({
@@ -450,9 +452,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params as { name: string; arguments?: Record<string, unknown> }
 
   try {
+    // Normalize legacy 'in_progress' status to 'agent_working' for any task update
+    const normalizedArgs = args ? { ...args } : {}
+    if (normalizedArgs.status === 'in_progress') normalizedArgs.status = 'agent_working'
+
     const result = isScoped
-      ? await handleScopedCall(name, args || {}) as Record<string, unknown> | null
-      : await callApi(`/${name}`, args || {}) as Record<string, unknown> | null
+      ? await handleScopedCall(name, normalizedArgs) as Record<string, unknown> | null
+      : await callApi(`/${name}`, normalizedArgs) as Record<string, unknown> | null
 
     if (result?.error) {
       return {

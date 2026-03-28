@@ -223,6 +223,9 @@ async function handleRoute(db: DatabaseManager, route: string, params: Record<st
       const updates: string[] = []
       const qParams: unknown[] = []
 
+      // Normalize legacy 'in_progress' status to 'agent_working'
+      if (params.status === 'in_progress') params.status = 'agent_working'
+
       // When task is in triaging status, skip status changes from the triage agent
       if (params.status) {
         const currentTask = rawDb.prepare('SELECT status FROM tasks WHERE id = ?').get(params.task_id) as { status: string } | undefined
@@ -417,7 +420,7 @@ async function handleRoute(db: DatabaseManager, route: string, params: Record<st
         case 'agent_workload':
           return rawDb.prepare(`
             SELECT agent_id, COUNT(*) as task_count,
-                   SUM(CASE WHEN status = 'in_progress' THEN 1 ELSE 0 END) as active_count
+                   SUM(CASE WHEN status = 'agent_working' THEN 1 ELSE 0 END) as active_count
             FROM tasks WHERE agent_id IS NOT NULL GROUP BY agent_id
           `).all()
         case 'priority_distribution': {
@@ -428,7 +431,7 @@ async function handleRoute(db: DatabaseManager, route: string, params: Record<st
           const stats = rawDb.prepare(`
             SELECT COUNT(*) as total,
                    SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed,
-                   SUM(CASE WHEN status = 'in_progress' THEN 1 ELSE 0 END) as in_progress,
+                   SUM(CASE WHEN status = 'agent_working' THEN 1 ELSE 0 END) as in_progress,
                    SUM(CASE WHEN status = 'not_started' THEN 1 ELSE 0 END) as not_started
             FROM tasks
           `).get() as { total: number; completed: number; in_progress: number; not_started: number }

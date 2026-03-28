@@ -12,6 +12,66 @@ import { MessageBubble } from '../components/MessageBubble'
 import { cn, formatDate, isOverdue, formatRelativeDate, formatRelativeFuture, STATUS_VARIANT, STATUS_DOT_COLORS } from '../lib/utils'
 import type { Route } from '../App'
 
+function ParentTaskContextMobile({ parentTask, onNavigate }: { parentTask: Task; onNavigate: (route: Route) => void }) {
+  const [isExpanded, setIsExpanded] = useState(false)
+
+  return (
+    <div className="border-b border-border/30 bg-accent/30">
+      <div className="flex items-center gap-1">
+        <button
+          onClick={() => setIsExpanded(!isExpanded)}
+          className="flex-1 flex items-center gap-2 px-4 py-2.5 text-left active:opacity-60"
+        >
+          <svg className={cn("h-3 w-3 text-muted-foreground shrink-0 transition-transform", isExpanded && "rotate-90")} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="m9 18 6-6-6-6" />
+          </svg>
+          <span className="text-xs text-muted-foreground shrink-0">Parent task:</span>
+          <span className="text-sm truncate">{parentTask.title}</span>
+        </button>
+        <button
+          onClick={() => onNavigate({ page: 'detail', taskId: parentTask.id })}
+          className="shrink-0 mr-3 px-2 py-1 text-xs text-muted-foreground active:opacity-60 flex items-center gap-1"
+        >
+          <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="m15 18-6-6 6-6" />
+          </svg>
+          Go to parent
+        </button>
+      </div>
+      {isExpanded && (
+        <div className="px-4 pb-3 space-y-2.5 border-t border-border/30">
+          <div className="flex items-center gap-2 pt-2.5 flex-wrap">
+            <TaskStatusDot status={parentTask.status} />
+            {STATUS_VARIANT[parentTask.status] && (
+              <Badge variant={STATUS_VARIANT[parentTask.status].variant}>{STATUS_VARIANT[parentTask.status].label}</Badge>
+            )}
+            <PriorityBadge priority={parentTask.priority} />
+            {parentTask.type !== 'general' && (
+              <Badge variant={parentTask.type === 'coding' ? 'blue' : parentTask.type === 'review' ? 'purple' : 'default'}>
+                {parentTask.type}
+              </Badge>
+            )}
+          </div>
+          {parentTask.description && (
+            <CollapsibleDescription
+              taskId={parentTask.id}
+              description={parentTask.description}
+              size="sm"
+            />
+          )}
+          {parentTask.labels && parentTask.labels.length > 0 && (
+            <div className="flex flex-wrap gap-1">
+              {parentTask.labels.map((label) => (
+                <Badge key={label} variant="blue" className="text-[10px]">{label}</Badge>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavigate: (route: Route) => void }) {
   const task = useTaskStore((s) => s.tasks.find((t) => t.id === taskId))
   const updateTask = useTaskStore((s) => s.updateTask)
@@ -212,17 +272,9 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
       />
 
       <div className="flex-1 overflow-y-auto">
-        {/* Parent task breadcrumb */}
+        {/* Parent task context panel */}
         {parentTask && (
-          <button
-            onClick={() => onNavigate({ page: 'detail', taskId: parentTask.id })}
-            className="flex items-center gap-1.5 px-4 py-2 text-xs text-muted-foreground active:opacity-60 border-b border-border/30"
-          >
-            <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="m15 18-6-6 6-6" />
-            </svg>
-            {parentTask.title}
-          </button>
+          <ParentTaskContextMobile parentTask={parentTask} onNavigate={onNavigate} />
         )}
 
         {/* Badges bar — matches desktop TaskDetailView header */}
@@ -525,6 +577,7 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
         <FeedbackModal
           onSubmit={handleFeedbackSubmit}
           onSkip={handleFeedbackSkip}
+          onCancel={() => setShowFeedback(false)}
         />
       )}
     </div>
@@ -647,14 +700,14 @@ function SubtasksSection({ subtasks, onNavigateToTask, onReorderSubtasks }: { su
   )
 }
 
-function FeedbackModal({ onSubmit, onSkip }: { onSubmit: (rating: number, comment: string) => void; onSkip: () => void }) {
+function FeedbackModal({ onSubmit, onSkip, onCancel }: { onSubmit: (rating: number, comment: string) => void; onSkip: () => void; onCancel: () => void }) {
   const [rating, setRating] = useState(0)
   const [comment, setComment] = useState('')
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center">
       {/* Backdrop */}
-      <div className="fixed inset-0 bg-black/60" onClick={onSkip} />
+      <div className="fixed inset-0 bg-black/60" onClick={onCancel} />
 
       {/* Modal */}
       <div className="relative z-50 w-full max-w-md mx-4 mb-4 bg-card border border-border rounded-xl shadow-xl animate-in slide-in-from-bottom-4 duration-200">

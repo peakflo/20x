@@ -8,6 +8,7 @@
 import { writeFileSync } from 'fs'
 import { join, extname } from 'path'
 import type { TaskRecord } from '../database'
+import { TaskStatus } from '../../shared/constants'
 import type {
   TaskSourcePlugin,
   PluginConfigSchema,
@@ -409,6 +410,19 @@ export class LinearPlugin implements TaskSourcePlugin {
             success: true,
             taskUpdate: { priority: this.mapPriorityFromLinear(priority) }
           }
+
+        case 'complete': {
+          // Move the Linear issue to its "completed/done" workflow state
+          const issue = await client.getIssue(task.external_id)
+          if (issue?.team?.id) {
+            const states = await client.getWorkflowStates(issue.team.id)
+            const doneState = this.findStateForStatus(states, 'completed')
+            if (doneState) {
+              await client.updateIssue(task.external_id, { stateId: doneState.id })
+            }
+          }
+          return { success: true, taskUpdate: { status: TaskStatus.Completed } }
+        }
 
         case 'change_status':
           if (!input) {

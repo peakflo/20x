@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/Button'
 import { Checkbox } from '@/components/ui/Checkbox'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogBody } from '@/components/ui/Dialog'
 import { Select } from '@/components/ui/Select'
-import { getGitProviderApi, getProviderLabel } from '@/lib/git-provider-api'
+import { getGitProviderApi } from '@/lib/git-provider-api'
 import { useSettingsStore } from '@/stores/settings-store'
 import type { GitHubRepo } from '@/types/electron'
 
@@ -19,7 +19,7 @@ interface RepoSelectorDialogProps {
 export function RepoSelectorDialog({ open, onOpenChange, org, initialRepos, onConfirm }: RepoSelectorDialogProps) {
   const gitProvider = useSettingsStore((s) => s.gitProvider)
   const providerApi = useMemo(() => getGitProviderApi(gitProvider), [gitProvider])
-  const providerLabel = getProviderLabel(gitProvider)
+
 
   const [repos, setRepos] = useState<GitHubRepo[]>([])
   const [selectedOrg, setSelectedOrg] = useState(org)

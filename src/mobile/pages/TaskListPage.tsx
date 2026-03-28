@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 import { TaskStatus } from '@shared/constants'
 import { useTaskStore, type Task } from '../stores/task-store'
@@ -32,6 +32,13 @@ export function TaskListPage({ onNavigate }: { onNavigate: (route: Route) => voi
   const [search, setSearch] = useState('')
   const [showCompleted, setShowCompleted] = useState(false)
   const [expandedParents, setExpandedParents] = useState<Set<string>>(new Set())
+
+  // Re-evaluate snooze state every 60s so snoozed tasks appear when their time expires
+  const [snoozeTick, setSnoozeTick] = useState(0)
+  useEffect(() => {
+    const id = setInterval(() => setSnoozeTick((t) => t + 1), 60_000)
+    return () => clearInterval(id)
+  }, [])
 
   const toggleParentExpanded = (parentId: string) => {
     setExpandedParents(prev => {
@@ -95,7 +102,7 @@ export function TaskListPage({ onNavigate }: { onNavigate: (route: Route) => voi
     }
 
     return { active, completed }
-  }, [tasks, filter, search])
+  }, [tasks, filter, search, snoozeTick])
 
   const renderTaskWithSubtasks = (task: Task) => {
     const subtasks = subtasksByParent.get(task.id)

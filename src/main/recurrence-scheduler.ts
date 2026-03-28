@@ -62,9 +62,11 @@ export class RecurrenceScheduler {
   private intervalId: NodeJS.Timeout | null = null
   private mainWindow: BrowserWindow | null = null
   private readonly CHECK_INTERVAL = 60 * 1000 // 60 seconds
+  private timezone: string
 
-  constructor(dbManager: DatabaseManager) {
+  constructor(dbManager: DatabaseManager, timezone?: string) {
     this.dbManager = dbManager
+    this.timezone = timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone
   }
 
   start(mainWindow: BrowserWindow): void {
@@ -280,7 +282,7 @@ export class RecurrenceScheduler {
     try {
       const interval = CronExpressionParser.parse(cron, {
         currentDate: new Date(after),
-        tz: 'UTC'
+        tz: this.timezone
       })
       return interval.next().toISOString()
     } catch {

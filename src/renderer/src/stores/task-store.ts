@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import type { WorkfloTask, CreateTaskDTO, UpdateTaskDTO } from '@/types'
-import { taskApi, taskSourceApi, onTaskUpdated, onTaskCreated } from '@/lib/ipc-client'
+import { taskApi, taskSourceApi, onTaskUpdated, onTaskCreated, onTasksRefresh } from '@/lib/ipc-client'
 
 interface TaskState {
   tasks: WorkfloTask[]
@@ -101,4 +101,9 @@ onTaskCreated((event) => {
     if (state.tasks.some((t) => t.id === event.task.id)) return state
     return { tasks: [event.task, ...state.tasks] }
   })
+})
+
+// Listen for tasks:refresh from main process (recurrence scheduler, heartbeat, etc.)
+onTasksRefresh(() => {
+  useTaskStore.getState().fetchTasks()
 })

@@ -2,7 +2,8 @@ import { describe, it, expect } from 'vitest'
 import { RecurrenceScheduler } from './recurrence-scheduler'
 
 // Minimal mock — we only need calculateNextOccurrence (no DB access)
-const scheduler = new RecurrenceScheduler({} as unknown as import('./database').DatabaseManager)
+// Pass 'UTC' timezone explicitly so tests produce deterministic results regardless of machine timezone
+const scheduler = new RecurrenceScheduler({} as unknown as import('./database').DatabaseManager, 'UTC')
 
 describe('RecurrenceScheduler.calculateNextOccurrence', () => {
   describe('cron strings', () => {

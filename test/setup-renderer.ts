@@ -161,6 +161,9 @@ const mockElectronAPI = {
   }),
   onGitlabDeviceCode: vi.fn((_cb: (code: string) => void) => {
     return vi.fn()
+  }),
+  onTasksRefresh: vi.fn((_cb: () => void) => {
+    return vi.fn()
   })
 }
 
