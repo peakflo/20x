@@ -1,12 +1,13 @@
-import type {
-  TaskSourcePlugin,
-  PluginConfigSchema,
-  ConfigFieldOption,
-  PluginContext,
-  FieldMapping,
-  PluginAction,
-  PluginSyncResult,
-  ActionResult
+import {
+  PluginActionId,
+  type TaskSourcePlugin,
+  type PluginConfigSchema,
+  type ConfigFieldOption,
+  type PluginContext,
+  type FieldMapping,
+  type PluginAction,
+  type PluginSyncResult,
+  type ActionResult
 } from './types'
 import type { TaskRecord, OutputFieldRecord, FileAttachmentRecord } from '../database'
 import type { SourceUser, ReassignResult } from '../../shared/types'
@@ -251,13 +252,13 @@ export class PeakfloPlugin implements TaskSourcePlugin {
   getActions(): PluginAction[] {
     return [
       {
-        id: 'approve',
+        id: PluginActionId.Approve,
         label: 'Approve',
         icon: 'CheckCircle',
         variant: 'default'
       },
       {
-        id: 'reject',
+        id: PluginActionId.Reject,
         label: 'Reject',
         icon: 'XCircle',
         variant: 'destructive',

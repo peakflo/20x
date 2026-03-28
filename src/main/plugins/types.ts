@@ -57,8 +57,10 @@ export interface FieldMapping {
 
 // ── Actions ─────────────────────────────────────────────────
 
+export { PluginActionId } from '../../shared/constants'
+
 export interface PluginAction {
-  id: string
+  id: import('../../shared/constants').PluginActionId | string
   label: string
   icon?: string
   variant?: 'default' | 'destructive'

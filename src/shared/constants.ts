@@ -23,6 +23,28 @@ export const TASK_STATUSES: { value: TaskStatus; label: string }[] = [
   { value: TaskStatus.Completed, label: 'Completed' }
 ]
 
+// ── Plugin Action IDs ───────────────────────────────────────
+
+/** Action IDs used across task source plugins */
+export enum PluginActionId {
+  // Common actions shared across multiple plugins
+  Complete = 'complete',
+  AddComment = 'add_comment',
+  ChangeStatus = 'change_status',
+  UpdatePriority = 'update_priority',
+  // GitHub Issues
+  CloseIssue = 'close_issue',
+  ReopenIssue = 'reopen_issue',
+  // YouTrack
+  OpenInYouTrack = 'open_in_youtrack',
+  ChangeState = 'change_state',
+  // HubSpot
+  AddNote = 'add_note',
+  // Peakflo
+  Approve = 'approve',
+  Reject = 'reject'
+}
+
 // ── Heartbeat types ─────────────────────────────────────────
 
 export enum HeartbeatStatus {

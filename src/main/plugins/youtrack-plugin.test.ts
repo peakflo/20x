@@ -518,7 +518,7 @@ describe('YouTrackPlugin', () => {
         'issue-abc',
         expect.objectContaining({
           customFields: expect.arrayContaining([
-            { name: 'State', value: { name: 'In Progress' } }
+            { $type: 'StateIssueCustomField', name: 'State', value: { $type: 'StateBundleElement', name: 'In Progress' } }
           ])
         })
       )
@@ -599,8 +599,44 @@ describe('YouTrackPlugin', () => {
       expect(result.taskUpdate?.status).toBe(TaskStatus.AgentWorking)
       expect(mockClientInstance.updateIssue).toHaveBeenCalledWith(
         'issue-abc',
-        { customFields: [{ name: 'State', value: { name: 'In Progress' } }] }
+        { customFields: [{ $type: 'StateIssueCustomField', name: 'State', value: { $type: 'StateBundleElement', name: 'In Progress' } }] }
       )
+    })
+
+    it('complete action updates State to Done and sets Completed status', async () => {
+      mockClientInstance.updateIssue.mockResolvedValue(undefined)
+
+      const task = { external_id: 'issue-abc' } as TaskRecord
+      const result = await plugin.executeAction(
+        'complete',
+        task,
+        undefined,
+        defaultConfig,
+        makeContext()
+      )
+
+      expect(result.success).toBe(true)
+      expect(result.taskUpdate?.status).toBe(TaskStatus.Completed)
+      expect(mockClientInstance.updateIssue).toHaveBeenCalledWith(
+        'issue-abc',
+        { customFields: [{ $type: 'StateIssueCustomField', name: 'State', value: { $type: 'StateBundleElement', name: 'Done' } }] }
+      )
+    })
+
+    it('complete action returns error on API failure', async () => {
+      mockClientInstance.updateIssue.mockRejectedValue(new Error('API timeout'))
+
+      const task = { external_id: 'issue-abc' } as TaskRecord
+      const result = await plugin.executeAction(
+        'complete',
+        task,
+        undefined,
+        defaultConfig,
+        makeContext()
+      )
+
+      expect(result.success).toBe(false)
+      expect(result.error).toContain('Failed to complete issue')
     })
 
     it('returns error for unknown action', async () => {
@@ -668,7 +704,7 @@ describe('YouTrackPlugin', () => {
       expect(result.success).toBe(true)
       expect(mockClientInstance.updateIssue).toHaveBeenCalledWith(
         'issue-abc',
-        { customFields: [{ name: 'Assignee', value: { login: 'john' } }] }
+        { customFields: [{ $type: 'SingleUserIssueCustomField', name: 'Assignee', value: { $type: 'User', login: 'john' } }] }
       )
     })
 

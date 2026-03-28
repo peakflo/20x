@@ -8,7 +8,7 @@ import { Agent as UndiciAgent } from 'undici'
 import { Notification } from 'electron'
 import type { BrowserWindow } from 'electron'
 import type { DatabaseManager, AgentMcpServerEntry, OutputFieldRecord, SecretRecord, SkillRecord, TaskRecord } from './database'
-import { TaskStatus, SessionStatus } from '../shared/constants'
+import { TaskStatus, SessionStatus, PluginActionId } from '../shared/constants'
 import type { WorktreeManager } from './worktree-manager'
 import type { GitHubManager } from './github-manager'
 import type { GitLabManager } from './gitlab-manager'
@@ -2241,7 +2241,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       // path used by the renderer's onCompleteTask / handleFeedbackSkip.
       if (task.source_id && this.syncManager) {
         const actionField = task.output_fields?.find((f: OutputFieldRecord) => f.id === 'action')
-        const actionValue = actionField?.value ? String(actionField.value) : 'complete'
+        const actionValue = actionField?.value ? String(actionField.value) : PluginActionId.Complete
         console.log(`[AgentManager] Enterprise task — calling executeAction("${actionValue}") for source ${task.source_id}`)
         try {
           const result = await this.syncManager.executeAction(actionValue, task, undefined, task.source_id)

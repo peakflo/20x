@@ -11,15 +11,16 @@ import { join, extname } from 'path'
 import type { TaskRecord } from '../database'
 import { TaskStatus } from '../../shared/constants'
 import { replaceRemoteImageUrlsInTask } from './replace-image-urls'
-import type {
-  TaskSourcePlugin,
-  PluginConfigSchema,
-  ConfigFieldOption,
-  PluginContext,
-  FieldMapping,
-  PluginAction,
-  PluginSyncResult,
-  ActionResult
+import {
+  PluginActionId,
+  type TaskSourcePlugin,
+  type PluginConfigSchema,
+  type ConfigFieldOption,
+  type PluginContext,
+  type FieldMapping,
+  type PluginAction,
+  type PluginSyncResult,
+  type ActionResult
 } from './types'
 import { HubSpotClient, type HubSpotTicket, type HubSpotPipeline } from './hubspot-client'
 
@@ -207,7 +208,7 @@ export class HubSpotPlugin implements TaskSourcePlugin {
   getActions(_config: Record<string, unknown>): PluginAction[] {
     return [
       {
-        id: 'add_note',
+        id: PluginActionId.AddNote,
         label: 'Add Note',
         icon: 'MessageSquare',
         requiresInput: true,
@@ -215,7 +216,7 @@ export class HubSpotPlugin implements TaskSourcePlugin {
         inputPlaceholder: 'Enter note...'
       },
       {
-        id: 'update_priority',
+        id: PluginActionId.UpdatePriority,
         label: 'Update Priority',
         icon: 'Flag',
         requiresInput: true,
@@ -473,20 +474,20 @@ export class HubSpotPlugin implements TaskSourcePlugin {
       const client = new HubSpotClient(token)
 
       switch (actionId) {
-        case 'complete':
+        case PluginActionId.Complete:
           // Completion is handled via exportUpdate when the local task status
           // changes to Completed (moves ticket to CLOSED pipeline stage).
           // Return success so the caller can proceed with the local update.
           return { success: true, taskUpdate: { status: TaskStatus.Completed } }
 
-        case 'add_note':
+        case PluginActionId.AddNote:
           if (!input) {
             return { success: false, error: 'Note text is required' }
           }
           await client.addTicketNote(task.external_id, input)
           return { success: true }
 
-        case 'update_priority':
+        case PluginActionId.UpdatePriority:
           if (!input) {
             return { success: false, error: 'Priority is required' }
           }

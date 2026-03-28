@@ -1,15 +1,16 @@
 import { writeFileSync } from 'fs'
 import { join } from 'path'
 import { randomUUID } from 'crypto'
-import type {
-  TaskSourcePlugin,
-  PluginConfigSchema,
-  ConfigFieldOption,
-  PluginContext,
-  FieldMapping,
-  PluginAction,
-  PluginSyncResult,
-  ActionResult
+import {
+  PluginActionId,
+  type TaskSourcePlugin,
+  type PluginConfigSchema,
+  type ConfigFieldOption,
+  type PluginContext,
+  type FieldMapping,
+  type PluginAction,
+  type PluginSyncResult,
+  type ActionResult
 } from './types'
 import type { TaskRecord } from '../database'
 import type { SourceUser, ReassignResult } from '../../shared/types'
@@ -379,12 +380,12 @@ export class YouTrackPlugin implements TaskSourcePlugin {
   getActions(_config: Record<string, unknown>): PluginAction[] {
     return [
       {
-        id: 'open_in_youtrack',
+        id: PluginActionId.OpenInYouTrack,
         label: 'Open in YouTrack',
         icon: 'ExternalLink'
       },
       {
-        id: 'add_comment',
+        id: PluginActionId.AddComment,
         label: 'Add Comment',
         icon: 'MessageSquare',
         requiresInput: true,
@@ -392,7 +393,7 @@ export class YouTrackPlugin implements TaskSourcePlugin {
         inputPlaceholder: 'Enter your comment...'
       },
       {
-        id: 'change_state',
+        id: PluginActionId.ChangeState,
         label: 'Change State',
         icon: 'ArrowRightCircle',
         requiresInput: true,
@@ -523,7 +524,7 @@ export class YouTrackPlugin implements TaskSourcePlugin {
       }
 
       // For custom field updates, we need to use a different approach
-      const customFieldUpdates: Array<{ name: string; value: unknown }> = []
+      const customFieldUpdates: Array<{ $type: string; name: string; value: unknown }> = []
 
       if (changedFields.status) {
         const stateValue = this.localStatusToYouTrack(
@@ -531,8 +532,9 @@ export class YouTrackPlugin implements TaskSourcePlugin {
         )
         if (stateValue) {
           customFieldUpdates.push({
+            $type: 'StateIssueCustomField',
             name: 'State',
-            value: { name: stateValue }
+            value: { $type: 'StateBundleElement', name: stateValue }
           })
         }
       }
@@ -543,8 +545,9 @@ export class YouTrackPlugin implements TaskSourcePlugin {
         )
         if (priorityValue) {
           customFieldUpdates.push({
+            $type: 'SingleEnumIssueCustomField',
             name: 'Priority',
-            value: { name: priorityValue }
+            value: { $type: 'EnumBundleElement', name: priorityValue }
           })
         }
       }
@@ -576,7 +579,7 @@ export class YouTrackPlugin implements TaskSourcePlugin {
     const token = config.api_token as string
     const client = new YouTrackClient(serverUrl, token)
 
-    if (actionId === 'open_in_youtrack') {
+    if (actionId === PluginActionId.OpenInYouTrack) {
       // Fetch the issue to get the readable ID for URL construction
       try {
         const issue = await client.getIssue(task.external_id)
@@ -591,7 +594,7 @@ export class YouTrackPlugin implements TaskSourcePlugin {
       }
     }
 
-    if (actionId === 'add_comment') {
+    if (actionId === PluginActionId.AddComment) {
       if (!input) {
         return { success: false, error: 'Comment text is required' }
       }
@@ -604,13 +607,33 @@ export class YouTrackPlugin implements TaskSourcePlugin {
       }
     }
 
-    if (actionId === 'change_state') {
+    if (actionId === PluginActionId.Complete) {
+      try {
+        await client.updateIssue(task.external_id, {
+          customFields: [{
+            $type: 'StateIssueCustomField',
+            name: 'State',
+            value: { $type: 'StateBundleElement', name: 'Done' }
+          }]
+        })
+        return { success: true, taskUpdate: { status: TaskStatus.Completed } }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Unknown error'
+        return { success: false, error: `Failed to complete issue: ${msg}` }
+      }
+    }
+
+    if (actionId === PluginActionId.ChangeState) {
       if (!input) {
         return { success: false, error: 'State value is required' }
       }
       try {
         await client.updateIssue(task.external_id, {
-          customFields: [{ name: 'State', value: { name: input } }]
+          customFields: [{
+            $type: 'StateIssueCustomField',
+            name: 'State',
+            value: { $type: 'StateBundleElement', name: input }
+          }]
         })
 
         // Map back to local status
@@ -676,7 +699,11 @@ export class YouTrackPlugin implements TaskSourcePlugin {
 
       await client.updateIssue(task.external_id, {
         customFields: [
-          { name: 'Assignee', value: { login } }
+          {
+            $type: 'SingleUserIssueCustomField',
+            name: 'Assignee',
+            value: { $type: 'User', login }
+          }
         ]
       })
 
