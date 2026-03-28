@@ -52,8 +52,8 @@ describe('RepoSelectorPage', () => {
 
     ;(api.github.getOrg as unknown as Mock).mockResolvedValue({ org: 'peakflo' })
     ;(api.github.getOrgs as unknown as Mock).mockResolvedValue([
-      { value: 'peakflo', label: 'peakflo' },
-      { value: 'other-org', label: 'other-org' }
+      { value: 'peakflo', label: 'peakflo', provider: 'github' },
+      { value: 'other-org', label: 'other-org', provider: 'github' }
     ])
     ;(api.github.fetchRepos as unknown as Mock).mockImplementation(async (org: string) => {
       if (org === 'other-org') {
@@ -78,7 +78,7 @@ describe('RepoSelectorPage', () => {
     )
 
     await waitFor(() => {
-      expect(api.github.fetchRepos).toHaveBeenCalledWith('peakflo')
+      expect(api.github.fetchRepos).toHaveBeenCalledWith('peakflo', 'github')
     })
 
     const orgSelect = container.querySelector('select') as HTMLSelectElement
@@ -86,7 +86,7 @@ describe('RepoSelectorPage', () => {
 
     await waitFor(() => {
       expect(api.github.setOrg).toHaveBeenCalledWith('other-org')
-      expect(api.github.fetchRepos).toHaveBeenCalledWith('other-org')
+      expect(api.github.fetchRepos).toHaveBeenCalledWith('other-org', 'github')
     })
   })
 })
