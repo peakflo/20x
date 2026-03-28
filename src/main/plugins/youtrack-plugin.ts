@@ -21,7 +21,8 @@ import {
   type YouTrackIssue,
   type YouTrackCustomField,
   type YouTrackCustomFieldValue,
-  type YouTrackAttachment
+  type YouTrackAttachment,
+  type YouTrackIssueLink
 } from './youtrack-client'
 
 // ── Status mapping ───────────────────────────────────────────
@@ -1066,13 +1067,21 @@ File attachments on YouTrack issues are downloaded and stored locally.
     issue: YouTrackIssue,
     baseUrl: string
   ): string | null {
-    if (!issue.links || issue.links.length === 0) return null
-
     // Collect all link entries grouped by relationship label
     const grouped: Record<string, Array<{ id: string; summary: string; resolved: boolean }>> = {}
 
-    for (const link of issue.links) {
-      if (!link.linkType || !link.issues || link.issues.length === 0) continue
+    const addLink = (label: string, linked: { idReadable: string; summary: string; resolved: number | null }) => {
+      const capitalizedLabel = label.charAt(0).toUpperCase() + label.slice(1)
+      if (!grouped[capitalizedLabel]) grouped[capitalizedLabel] = []
+      grouped[capitalizedLabel].push({
+        id: linked.idReadable,
+        summary: linked.summary,
+        resolved: linked.resolved != null
+      })
+    }
+
+    const processIssueLink = (link: YouTrackIssueLink) => {
+      if (!link.linkType || !link.issues || link.issues.length === 0) return
 
       // Determine the relationship label based on direction
       let label: string
@@ -1081,21 +1090,34 @@ File attachments on YouTrack issues are downloaded and stored locally.
       } else if (link.direction === 'INWARD') {
         label = link.linkType.targetToSource || link.linkType.name
       } else {
-        // BOTH — non-directed link type
         label = link.linkType.name
       }
 
-      // Capitalize first letter
-      label = label.charAt(0).toUpperCase() + label.slice(1)
-
-      if (!grouped[label]) grouped[label] = []
-
       for (const linked of link.issues) {
-        grouped[label].push({
-          id: linked.idReadable,
-          summary: linked.summary,
-          resolved: linked.resolved != null
-        })
+        addLink(label, linked)
+      }
+    }
+
+    // Process parent (dedicated field — separate from links array)
+    if (issue.parent?.issues && issue.parent.issues.length > 0) {
+      const parentLabel = issue.parent.linkType?.targetToSource || 'Subtask of'
+      for (const linked of issue.parent.issues) {
+        addLink(parentLabel, linked)
+      }
+    }
+
+    // Process subtasks (dedicated field — separate from links array)
+    if (issue.subtasks?.issues && issue.subtasks.issues.length > 0) {
+      const subtaskLabel = issue.subtasks.linkType?.sourceToTarget || 'Parent for'
+      for (const linked of issue.subtasks.issues) {
+        addLink(subtaskLabel, linked)
+      }
+    }
+
+    // Process general links
+    if (issue.links) {
+      for (const link of issue.links) {
+        processIssueLink(link)
       }
     }
 

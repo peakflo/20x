@@ -105,6 +105,8 @@ export interface YouTrackIssue {
   tags: YouTrackTag[]
   attachments: YouTrackAttachment[]
   links: YouTrackIssueLink[]
+  parent?: YouTrackIssueLink | null
+  subtasks?: YouTrackIssueLink | null
   $type?: string
 }
 
@@ -147,7 +149,9 @@ const ISSUE_FIELDS = [
   'customFields(name,value(name,login,fullName,text,minutes,presentation,id,$type),projectCustomField(field(name,fieldType(id))))',
   'tags(id,name,color(background,foreground))',
   'attachments(id,name,url,size,mimeType)',
-  'links(id,direction,linkType(name,sourceToTarget,targetToSource,directed),issues(id,idReadable,summary,resolved))'
+  'links(id,direction,linkType(name,sourceToTarget,targetToSource,directed),issues(id,idReadable,summary,resolved))',
+  'parent(id,direction,linkType(name,sourceToTarget,targetToSource,directed),issues(id,idReadable,summary,resolved))',
+  'subtasks(id,direction,linkType(name,sourceToTarget,targetToSource,directed),issues(id,idReadable,summary,resolved))'
 ].join(',')
 
 export class YouTrackClient {
