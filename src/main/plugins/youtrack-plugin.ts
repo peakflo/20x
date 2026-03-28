@@ -946,6 +946,8 @@ File attachments on YouTrack issues are downloaded and stored locally.
     const addLink = (label: string, linked: { idReadable: string; summary: string; resolved: number | null }) => {
       const capitalizedLabel = label.charAt(0).toUpperCase() + label.slice(1)
       if (!grouped[capitalizedLabel]) grouped[capitalizedLabel] = []
+      // Deduplicate — same issue can appear in both dedicated fields and links array
+      if (grouped[capitalizedLabel].some(existing => existing.id === linked.idReadable)) return
       grouped[capitalizedLabel].push({
         id: linked.idReadable,
         summary: linked.summary,
