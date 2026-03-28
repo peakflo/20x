@@ -1,29 +1,27 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useCallback } from 'react'
 import { Search, Lock, Globe, Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { Checkbox } from '@/components/ui/Checkbox'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogBody } from '@/components/ui/Dialog'
 import { Select } from '@/components/ui/Select'
-import { getGitProviderApi } from '@/lib/git-provider-api'
-import { useSettingsStore } from '@/stores/settings-store'
+import { getGitProviderApi, fetchAllProviderOrgs, type OrgEntry } from '@/lib/git-provider-api'
+import type { GitProvider } from '@/stores/settings-store'
 import type { GitHubRepo } from '@/types/electron'
 
 interface RepoSelectorDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   org: string
+  orgProvider?: GitProvider
   initialRepos?: string[]
   onConfirm: (repos: GitHubRepo[], org: string) => void
 }
 
-export function RepoSelectorDialog({ open, onOpenChange, org, initialRepos, onConfirm }: RepoSelectorDialogProps) {
-  const gitProvider = useSettingsStore((s) => s.gitProvider)
-  const providerApi = useMemo(() => getGitProviderApi(gitProvider), [gitProvider])
-
-
+export function RepoSelectorDialog({ open, onOpenChange, org, orgProvider, initialRepos, onConfirm }: RepoSelectorDialogProps) {
   const [repos, setRepos] = useState<GitHubRepo[]>([])
   const [selectedOrg, setSelectedOrg] = useState(org)
-  const [owners, setOwners] = useState<{ value: string; label: string }[]>([])
+  const [selectedProvider, setSelectedProvider] = useState<GitProvider>(orgProvider || 'github')
+  const [owners, setOwners] = useState<OrgEntry[]>([])
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [search, setSearch] = useState('')
   const [isLoading, setIsLoading] = useState(false)
@@ -33,19 +31,22 @@ export function RepoSelectorDialog({ open, onOpenChange, org, initialRepos, onCo
   useEffect(() => {
     if (open) {
       setSelectedOrg(org)
+      if (orgProvider) setSelectedProvider(orgProvider)
     }
-  }, [open, org])
+  }, [open, org, orgProvider])
 
+  // Fetch repos for the selected org using the correct provider
   useEffect(() => {
     if (open && selectedOrg) {
       setIsLoading(true)
       setError(null)
-      providerApi.fetchOrgRepos(selectedOrg)
+      const api = getGitProviderApi(selectedProvider)
+      api.fetchOrgRepos(selectedOrg)
         .then(setRepos)
         .catch((err) => setError(err.message))
         .finally(() => setIsLoading(false))
     }
-  }, [open, selectedOrg, providerApi])
+  }, [open, selectedOrg, selectedProvider])
 
   useEffect(() => {
     if (open) {
@@ -54,35 +55,44 @@ export function RepoSelectorDialog({ open, onOpenChange, org, initialRepos, onCo
     }
   }, [open, initialRepos, selectedOrg])
 
+  // Fetch orgs from ALL authenticated providers
   useEffect(() => {
     if (!open) return
     setIsLoadingOwners(true)
 
-    Promise.all([providerApi.checkCli(), providerApi.fetchOrgs()])
-      .then(([status, orgs]) => {
-        const list: { value: string; label: string }[] = []
-        if (status.username) {
-          list.push({ value: status.username, label: `${status.username} (personal)` })
+    fetchAllProviderOrgs()
+      .then((entries) => {
+        // Ensure the currently selected org appears in the list
+        if (selectedOrg && !entries.some((o) => o.value === selectedOrg)) {
+          entries.unshift({ value: selectedOrg, label: selectedOrg, provider: selectedProvider })
         }
-        for (const orgName of orgs) {
-          list.push({ value: orgName, label: orgName })
-        }
-
-        if (selectedOrg && !list.some((o) => o.value === selectedOrg)) {
-          list.unshift({ value: selectedOrg, label: selectedOrg })
-        }
-
-        setOwners(list)
+        setOwners(entries)
       })
       .catch(() => {
         if (selectedOrg) {
-          setOwners([{ value: selectedOrg, label: selectedOrg }])
+          setOwners([{ value: selectedOrg, label: selectedOrg, provider: selectedProvider }])
         } else {
           setOwners([])
         }
       })
       .finally(() => setIsLoadingOwners(false))
-  }, [open, selectedOrg, providerApi])
+  }, [open])
+
+  const ownerOptions = useMemo(
+    () => owners.map((o) => ({ value: `${o.provider}:${o.value}`, label: o.label })),
+    [owners]
+  )
+
+  const handleOrgChange = useCallback(
+    (compositeValue: string) => {
+      const entry = owners.find((o) => `${o.provider}:${o.value}` === compositeValue)
+      if (entry) {
+        setSelectedOrg(entry.value)
+        setSelectedProvider(entry.provider)
+      }
+    },
+    [owners]
+  )
 
   const filtered = useMemo(() => {
     if (!search) return repos
@@ -125,10 +135,10 @@ export function RepoSelectorDialog({ open, onOpenChange, org, initialRepos, onCo
             ) : (
               <Select
                 id="repo-selector-org"
-                value={selectedOrg}
-                options={owners}
-                onChange={(e) => setSelectedOrg(e.target.value)}
-                disabled={owners.length === 0}
+                value={`${selectedProvider}:${selectedOrg}`}
+                options={ownerOptions}
+                onChange={(e) => handleOrgChange(e.target.value)}
+                disabled={ownerOptions.length === 0}
               />
             )}
           </div>

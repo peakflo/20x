@@ -23,14 +23,14 @@ export function RepoSelectorPage({
   const updateTask = useTaskStore((s) => s.updateTask)
 
   const [repos, setRepos] = useState<GitHubRepo[]>([])
-  const [orgOptions, setOrgOptions] = useState<Array<{ value: string; label: string }>>([])
+  const [orgOptions, setOrgOptions] = useState<Array<{ value: string; label: string; provider?: string }>>([])
   const [selectedOrg, setSelectedOrg] = useState('')
+  const [selectedProvider, setSelectedProvider] = useState<string | undefined>(undefined)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [search, setSearch] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const [isLoadingOrgs, setIsLoadingOrgs] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [providerLabel, setProviderLabel] = useState('GitHub')
 
   // Initialise selected set from existing task repos
   // Depend on task.repos (serialised) instead of the task object to avoid re-running
@@ -45,16 +45,7 @@ export function RepoSelectorPage({
     }
   }, [taskReposKey, selectedOrg])
 
-  // Fetch provider label on mount
-  useEffect(() => {
-    api.git.getProvider()
-      .then(({ provider }) => {
-        setProviderLabel(provider === 'gitlab' ? 'GitLab' : 'GitHub')
-      })
-      .catch(() => {/* default to GitHub */})
-  }, [])
-
-  // Fetch org choices on mount
+  // Fetch org choices on mount (returns orgs from all authenticated providers)
   useEffect(() => {
     let cancelled = false
     setIsLoadingOrgs(true)
@@ -66,8 +57,13 @@ export function RepoSelectorPage({
         setOrgOptions(owners)
 
         const fallbackOrg = owners[0]?.value || ''
+        const fallbackProvider = owners[0]?.provider
         const nextOrg = org || fallbackOrg
         setSelectedOrg(nextOrg)
+
+        // Resolve the provider for the selected org
+        const match = owners.find((o) => o.value === nextOrg)
+        setSelectedProvider(match?.provider || fallbackProvider)
 
         if (nextOrg && nextOrg !== org) {
           void api.github.setOrg(nextOrg)
@@ -83,7 +79,7 @@ export function RepoSelectorPage({
     return () => { cancelled = true }
   }, [])
 
-  // Fetch repos for selected org
+  // Fetch repos for selected org using the correct provider
   useEffect(() => {
     let cancelled = false
     if (!selectedOrg) {
@@ -94,7 +90,7 @@ export function RepoSelectorPage({
     setIsLoading(true)
     setError(null)
 
-    api.github.fetchRepos(selectedOrg)
+    api.github.fetchRepos(selectedOrg, selectedProvider)
       .then((data) => {
         if (!cancelled) setRepos(data)
       })
@@ -106,13 +102,15 @@ export function RepoSelectorPage({
       })
 
     return () => { cancelled = true }
-  }, [selectedOrg])
+  }, [selectedOrg, selectedProvider])
 
   const handleOrgChange = useCallback((org: string) => {
     setSelectedOrg(org)
+    const match = orgOptions.find((o) => o.value === org)
+    setSelectedProvider(match?.provider)
     setSelected(new Set((task?.repos ?? []).filter((repo) => repo.startsWith(`${org}/`))))
     void api.github.setOrg(org)
-  }, [task?.repos])
+  }, [task?.repos, orgOptions])
 
   const filtered = useMemo(() => {
     if (!search) return repos
