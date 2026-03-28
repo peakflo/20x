@@ -8,6 +8,7 @@
 
 import { spawn, ChildProcess } from 'child_process'
 import { randomUUID } from 'crypto'
+import { dirname } from 'path'
 import type {
   CodingAgentAdapter,
   SessionConfig,
@@ -188,7 +189,6 @@ export class AcpAdapter implements CodingAgentAdapter {
     const binaryName = process.platform === 'win32' ? 'codex-acp.exe' : 'codex-acp'
 
     // Resolve from codex-acp's own directory so pnpm's nested optional deps are found.
-    const { dirname } = require('path')
     const codexAcpDir = dirname(require.resolve('@zed-industries/codex-acp/package.json'))
     let binaryPath = require.resolve(
       `@zed-industries/${packageName}/bin/${binaryName}`,
