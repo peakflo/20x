@@ -1,0 +1,194 @@
+import { useMemo } from 'react'
+import { Clock, AlertCircle } from 'lucide-react'
+import { Badge } from '@/components/ui/Badge'
+import { useDashboardStore, type DashboardTask } from '@/stores/dashboard-store'
+
+// ── Status column definitions ──────────────────────────────
+
+interface StatusColumn {
+  key: string
+  label: string
+  color: string
+  dotColor: string
+}
+
+const COLUMNS: StatusColumn[] = [
+  { key: 'pending', label: 'Pending', color: 'text-muted-foreground', dotColor: 'bg-gray-400' },
+  { key: 'in_progress', label: 'In Progress', color: 'text-blue-400', dotColor: 'bg-blue-400' },
+  { key: 'completed', label: 'Completed', color: 'text-green-400', dotColor: 'bg-green-400' },
+  { key: 'cancelled', label: 'Cancelled', color: 'text-red-400', dotColor: 'bg-red-400' },
+  { key: 'expired', label: 'Expired', color: 'text-yellow-400', dotColor: 'bg-yellow-400' }
+]
+
+function getPriorityVariant(priority: string): 'red' | 'orange' | 'yellow' | 'default' {
+  switch (priority) {
+    case 'urgent':
+      return 'red'
+    case 'high':
+      return 'orange'
+    case 'medium':
+      return 'yellow'
+    case 'low':
+      return 'default'
+    default:
+      return 'default'
+  }
+}
+
+function formatRelativeDate(dateStr: string | null): string {
+  if (!dateStr) return ''
+  const date = new Date(dateStr)
+  const now = new Date()
+  const diffMs = now.getTime() - date.getTime()
+  const diffHours = Math.floor(Math.abs(diffMs) / (1000 * 60 * 60))
+  const isFuture = diffMs < 0
+
+  if (diffHours < 1) return isFuture ? 'in <1h' : '<1h ago'
+  if (diffHours < 24) return isFuture ? `in ${diffHours}h` : `${diffHours}h ago`
+  const diffDays = Math.floor(diffHours / 24)
+  if (diffDays === 1) return isFuture ? 'tomorrow' : 'yesterday'
+  if (diffDays < 30) return isFuture ? `in ${diffDays}d` : `${diffDays}d ago`
+  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+}
+
+function isOverdue(dateStr: string | null): boolean {
+  if (!dateStr) return false
+  return new Date(dateStr) < new Date()
+}
+
+// ── Task Card ──────────────────────────────────────────────
+
+function TaskCard({ task }: { task: DashboardTask }) {
+  const overdue = task.dueDate && task.status !== 'completed' && task.status !== 'cancelled' && isOverdue(task.dueDate)
+
+  return (
+    <div className="rounded-md border border-border/40 bg-[#0d1117] p-3 hover:border-border/70 transition-colors cursor-default">
+      <div className="flex items-start justify-between gap-2 mb-1.5">
+        <h4 className="text-xs font-medium leading-snug line-clamp-2 flex-1">{task.title}</h4>
+        {task.priority && task.priority !== 'low' && (
+          <Badge variant={getPriorityVariant(task.priority)} className="text-[9px] px-1 py-0 shrink-0">
+            {task.priority}
+          </Badge>
+        )}
+      </div>
+      {task.description && (
+        <p className="text-[11px] text-muted-foreground line-clamp-2 mb-2">{task.description}</p>
+      )}
+      <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
+        {task.dueDate && (
+          <span className={`flex items-center gap-0.5 ${overdue ? 'text-red-400' : ''}`}>
+            {overdue ? <AlertCircle className="h-2.5 w-2.5" /> : <Clock className="h-2.5 w-2.5" />}
+            {formatRelativeDate(task.dueDate)}
+          </span>
+        )}
+        {task.assignees && task.assignees.length > 0 && (
+          <span className="truncate max-w-[100px]">
+            {task.assignees[0].assigneeValue}
+          </span>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ── Column ─────────────────────────────────────────────────
+
+function Column({ column, tasks }: { column: StatusColumn; tasks: DashboardTask[] }) {
+  return (
+    <div className="flex flex-col min-w-[220px] max-w-[280px] flex-1">
+      {/* Column header */}
+      <div className="flex items-center gap-2 px-2 py-2 mb-2">
+        <div className={`h-2 w-2 rounded-full ${column.dotColor}`} />
+        <span className={`text-xs font-semibold ${column.color}`}>{column.label}</span>
+        <span className="text-[10px] text-muted-foreground bg-muted/30 rounded-full px-1.5 py-0.5 min-w-[20px] text-center">
+          {tasks.length}
+        </span>
+      </div>
+      {/* Cards */}
+      <div className="flex-1 space-y-2 overflow-y-auto pr-1 max-h-[400px]">
+        {tasks.length === 0 ? (
+          <div className="text-[11px] text-muted-foreground text-center py-4 px-2">
+            No tasks
+          </div>
+        ) : (
+          tasks.map((task) => <TaskCard key={task.id} task={task} />)
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ── TaskBoard ──────────────────────────────────────────────
+
+export function TaskBoard() {
+  const { tasks, tasksLoading, tasksError } = useDashboardStore()
+
+  const tasksByStatus = useMemo(() => {
+    const grouped: Record<string, DashboardTask[]> = {}
+    for (const col of COLUMNS) {
+      grouped[col.key] = []
+    }
+    for (const task of tasks) {
+      const status = task.status || 'pending'
+      if (grouped[status]) {
+        grouped[status].push(task)
+      } else {
+        // Unknown status → put in pending
+        grouped['pending'].push(task)
+      }
+    }
+    return grouped
+  }, [tasks])
+
+  return (
+    <section>
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="text-sm font-semibold">Task Board</h2>
+        <span className="text-xs text-muted-foreground">
+          {tasks.length} task{tasks.length !== 1 ? 's' : ''}
+        </span>
+      </div>
+
+      {tasksLoading ? (
+        <div className="flex gap-4 overflow-x-auto pb-2">
+          {COLUMNS.map((col) => (
+            <div key={col.key} className="min-w-[220px] flex-1">
+              <div className="flex items-center gap-2 px-2 py-2 mb-2">
+                <div className={`h-2 w-2 rounded-full ${col.dotColor}`} />
+                <span className={`text-xs font-semibold ${col.color}`}>{col.label}</span>
+              </div>
+              <div className="space-y-2">
+                {[1, 2].map((i) => (
+                  <div key={i} className="rounded-md border border-border/40 bg-[#0d1117] p-3">
+                    <div className="h-3 w-28 rounded bg-muted/50 animate-pulse mb-2" />
+                    <div className="h-2.5 w-40 rounded bg-muted/30 animate-pulse" />
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : tasksError ? (
+        <div className="rounded-lg border border-border/50 bg-[#161b22] p-6 text-center">
+          <p className="text-sm text-muted-foreground">{tasksError}</p>
+        </div>
+      ) : tasks.length === 0 ? (
+        <div className="rounded-lg border border-border/50 bg-[#161b22] p-6 text-center">
+          <p className="text-sm text-muted-foreground">
+            No tasks found. Tasks will appear here when workflows create them.
+          </p>
+        </div>
+      ) : (
+        <div className="flex gap-4 overflow-x-auto pb-2">
+          {COLUMNS.map((col) => (
+            <Column
+              key={col.key}
+              column={col}
+              tasks={tasksByStatus[col.key] || []}
+            />
+          ))}
+        </div>
+      )}
+    </section>
+  )
+}

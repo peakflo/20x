@@ -2,6 +2,7 @@ import { Sidebar } from './Sidebar'
 import { TaskWorkspace } from '@/components/tasks/TaskWorkspace'
 import { SkillWorkspace } from '@/components/skills/SkillWorkspace'
 import { SettingsWorkspace } from '@/components/settings/SettingsWorkspace'
+import { DashboardWorkspace } from '@/components/dashboard/DashboardWorkspace'
 import { TaskForm, type TaskFormSubmitData } from '@/components/tasks/TaskForm'
 import { DeleteConfirmDialog } from '@/components/tasks/DeleteConfirmDialog'
 import { Dialog, DialogContent, DialogHeader, DialogBody, DialogTitle } from '@/components/ui/Dialog'
@@ -120,6 +121,8 @@ export function AppLayout() {
           {/* Main workspace content */}
           {activeModal === 'settings' ? (
             <SettingsWorkspace />
+          ) : sidebarView === 'dashboard' ? (
+            <DashboardWorkspace />
           ) : sidebarView === 'skills' ? (
             <SkillWorkspace />
           ) : (

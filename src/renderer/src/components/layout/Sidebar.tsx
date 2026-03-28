@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react'
-import { Plus, Search, ChevronDown, X, Settings, FileText, RefreshCw, Loader2, Play, Pause } from 'lucide-react'
+import { Plus, Search, ChevronDown, X, Settings, FileText, RefreshCw, Loader2, Play, Pause, LayoutDashboard } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { TaskList } from '@/components/tasks/TaskList'
 import { SkillList } from '@/components/skills/SkillList'
@@ -102,26 +102,34 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
       {/* Tab switcher */}
       <div className="no-drag px-3 pb-3 pt-1">
         <div className="flex rounded-md border border-border bg-muted/30 p-0.5">
-          {(['tasks', 'skills'] as SidebarView[]).map((view) => (
+          {(['tasks', 'skills', 'dashboard'] as SidebarView[]).map((view) => (
             <button
               key={view}
               onClick={() => {
                 if (activeModal === 'settings') closeModal()
                 setSidebarView(view)
               }}
-              className={`flex-1 rounded px-3 py-1.5 text-xs font-medium transition-colors cursor-pointer ${
+              className={`flex-1 rounded px-3 py-1.5 text-xs font-medium transition-colors cursor-pointer flex items-center justify-center gap-1 ${
                 sidebarView === view
                   ? 'bg-background text-foreground shadow-sm'
                   : 'text-muted-foreground hover:text-foreground'
               }`}
             >
-              {view === 'tasks' ? 'Tasks' : 'Skills'}
+              {view === 'dashboard' && <LayoutDashboard className="h-3 w-3" />}
+              {view === 'tasks' ? 'Tasks' : view === 'skills' ? 'Skills' : ''}
             </button>
           ))}
         </div>
       </div>
 
-      {sidebarView === 'tasks' ? (
+      {sidebarView === 'dashboard' ? (
+        <div className="flex-1 flex flex-col items-center justify-center px-4 text-center">
+          <LayoutDashboard className="h-8 w-8 text-muted-foreground/50 mb-3" />
+          <p className="text-xs text-muted-foreground">
+            Dashboard is displayed in the main workspace area.
+          </p>
+        </div>
+      ) : sidebarView === 'tasks' ? (
         <>
           <div className="no-drag flex items-center justify-between px-4 pb-4">
             <div className="flex items-center gap-2">
