@@ -15,7 +15,7 @@ interface TaskTypeBadgeProps {
 }
 
 export function TaskTypeBadge({ type }: TaskTypeBadgeProps) {
-  const config = typeConfig[type]
+  const config = typeConfig[type] ?? typeConfig.general
   const Icon = config.icon
   return (
     <Badge variant={config.variant}>

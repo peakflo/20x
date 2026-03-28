@@ -1001,12 +1001,23 @@ File attachments on YouTrack issues are downloaded and stored locally.
       labels = issue.tags.map((t) => t.name)
     }
 
-    // Type
+    // Type — map YouTrack issue types to local task types
     let type: string | undefined
     const typeField = getCustomField(issue, 'Type')
     const rawType = getCustomFieldValueName(typeField)
     if (rawType) {
-      type = rawType.toLowerCase()
+      const TYPE_TO_LOCAL: Record<string, string> = {
+        'bug': 'coding',
+        'feature': 'coding',
+        'task': 'general',
+        'cosmetics': 'coding',
+        'exception': 'coding',
+        'usability problem': 'review',
+        'performance problem': 'coding',
+        'epic': 'general',
+        'story': 'general'
+      }
+      type = TYPE_TO_LOCAL[rawType.toLowerCase()] || 'general'
     }
 
     return { title, status, priority, assignee, labels, type }
