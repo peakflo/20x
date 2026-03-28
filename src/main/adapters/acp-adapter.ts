@@ -166,6 +166,12 @@ export class AcpAdapter implements CodingAgentAdapter {
    * path — but the OS can't execute a native binary from inside an ASAR archive.
    * We bypass the wrapper and resolve the native binary directly, replacing the
    * ASAR path with the unpacked path (electron-builder auto-unpacks native binaries).
+   *
+   * pnpm note: the platform-specific package (e.g. codex-acp-darwin-arm64) is an
+   * optionalDependency of codex-acp, so under pnpm it is NOT hoisted to the root
+   * node_modules. We must resolve it from codex-acp's own directory using the
+   * `{ paths }` option of require.resolve. In a packaged app (ASAR), electron-builder
+   * flattens the structure so a plain require.resolve would also work.
    */
   private resolveCodexBinary(): string {
     const platformMap: Record<string, Record<string, string>> = {
@@ -180,7 +186,14 @@ export class AcpAdapter implements CodingAgentAdapter {
     if (!packageName) throw new Error(`Unsupported arch for codex-acp: ${process.arch} on ${process.platform}`)
 
     const binaryName = process.platform === 'win32' ? 'codex-acp.exe' : 'codex-acp'
-    let binaryPath = require.resolve(`@zed-industries/${packageName}/bin/${binaryName}`)
+
+    // Resolve from codex-acp's own directory so pnpm's nested optional deps are found.
+    const { dirname } = require('path')
+    const codexAcpDir = dirname(require.resolve('@zed-industries/codex-acp/package.json'))
+    let binaryPath = require.resolve(
+      `@zed-industries/${packageName}/bin/${binaryName}`,
+      { paths: [codexAcpDir] }
+    )
 
     // In a packaged Electron app, require.resolve returns an ASAR path like:
     //   /Applications/20x.app/Contents/Resources/app.asar/node_modules/.../bin/codex-acp
@@ -189,6 +202,7 @@ export class AcpAdapter implements CodingAgentAdapter {
       binaryPath = binaryPath.replace('app.asar', 'app.asar.unpacked')
     }
 
+    console.log(`[AcpAdapter/codex] Resolved native binary: ${binaryPath}`)
     return binaryPath
   }
 
