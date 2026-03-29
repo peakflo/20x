@@ -274,7 +274,21 @@ describe('DashboardWorkspace', () => {
     expect(mockUpdateLocalStats).toHaveBeenCalled()
   })
 
-  it('clicking a task card navigates to full task view', () => {
+  it('clicking a task card opens preview modal', () => {
+    useTaskStore.setState({
+      tasks: [
+        makeTask({ id: 'task-abc', title: 'Clickable task', status: TaskStatus.NotStarted })
+      ]
+    })
+
+    render(<DashboardWorkspace />)
+    fireEvent.click(screen.getByText('Clickable task'))
+
+    // Modal should show task preview with "Open full view" button
+    expect(screen.getByText('Open full view')).toBeDefined()
+  })
+
+  it('clicking "Open full view" in modal navigates to task view', () => {
     const mockSelectTask = vi.fn()
     useTaskStore.setState({
       tasks: [
@@ -285,7 +299,10 @@ describe('DashboardWorkspace', () => {
     useUIStore.setState({ sidebarView: 'dashboard' })
 
     render(<DashboardWorkspace />)
+    // Open the preview modal
     fireEvent.click(screen.getByText('Clickable task'))
+    // Click "Open full view"
+    fireEvent.click(screen.getByText('Open full view'))
 
     expect(mockSelectTask).toHaveBeenCalledWith('task-abc')
     expect(useUIStore.getState().sidebarView).toBe('tasks')

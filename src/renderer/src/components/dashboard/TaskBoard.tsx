@@ -1,10 +1,11 @@
-import { useMemo, useCallback } from 'react'
+import { useMemo, useCallback, useState } from 'react'
 import { Clock, AlertCircle } from 'lucide-react'
 import { Badge } from '@/components/ui/Badge'
 import { useTaskStore } from '@/stores/task-store'
 import { useUIStore } from '@/stores/ui-store'
 import { TaskStatus } from '@/types'
 import type { WorkfloTask } from '@/types'
+import { TaskPreviewModal } from './TaskPreviewModal'
 
 // ── Status column definitions (matching 20x local TaskStatus enum) ──
 
@@ -136,12 +137,23 @@ function Column({ column, tasks, onSelect }: { column: StatusColumn; tasks: Work
 export function TaskBoard() {
   const { tasks, isLoading, selectTask } = useTaskStore()
   const { setSidebarView } = useUIStore()
+  const [previewTaskId, setPreviewTaskId] = useState<string | null>(null)
 
   // Only show top-level tasks (not subtasks)
   const topLevelTasks = useMemo(() => tasks.filter((t) => !t.parent_task_id), [tasks])
 
+  const previewTask = useMemo(
+    () => (previewTaskId ? tasks.find((t) => t.id === previewTaskId) ?? null : null),
+    [previewTaskId, tasks]
+  )
+
+  // Open preview modal
+  const handlePreviewTask = useCallback((taskId: string) => {
+    setPreviewTaskId(taskId)
+  }, [])
+
   // Navigate to full task view with agent transcript
-  const handleSelectTask = useCallback((taskId: string) => {
+  const handleOpenFullView = useCallback((taskId: string) => {
     selectTask(taskId)
     setSidebarView('tasks')
   }, [selectTask, setSidebarView])
@@ -204,11 +216,19 @@ export function TaskBoard() {
               key={col.key}
               column={col}
               tasks={tasksByStatus[col.key] || []}
-              onSelect={handleSelectTask}
+              onSelect={handlePreviewTask}
             />
           ))}
         </div>
       )}
+
+      {/* Task preview modal */}
+      <TaskPreviewModal
+        task={previewTask}
+        open={previewTaskId !== null}
+        onOpenChange={(open) => { if (!open) setPreviewTaskId(null) }}
+        onOpenFullView={handleOpenFullView}
+      />
     </section>
   )
 }
