@@ -19,7 +19,7 @@ import { isOverdue, isSnoozed } from '@/lib/utils'
 import { useEffect, useState, useCallback } from 'react'
 import { TaskStatus, PluginActionId } from '@/types'
 import type { FileAttachment } from '@/types'
-import { MessageSquare } from 'lucide-react'
+import { MessageSquare, ExternalLink } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 
 export function AppLayout() {
@@ -28,6 +28,7 @@ export function AppLayout() {
   const { executeAction } = useTaskSourceStore()
   const {
     sidebarView,
+    setSidebarView,
     activeModal,
     editingTaskId,
     deletingTaskId,
@@ -35,7 +36,9 @@ export function AppLayout() {
     openEditModal,
     openDeleteModal,
     openSettings,
-    closeModal
+    closeModal,
+    dashboardPreviewTaskId,
+    closeDashboardPreview
   } = useUIStore()
 
   useEffect(() => {
@@ -44,6 +47,13 @@ export function AppLayout() {
 
   const editingTask = editingTaskId ? tasks.find((t) => t.id === editingTaskId) || selectedTask : undefined
   const deletingTask = deletingTaskId ? tasks.find((t) => t.id === deletingTaskId) : undefined
+  const dashboardPreviewTask = dashboardPreviewTaskId ? allTasks.find((t) => t.id === dashboardPreviewTaskId) : undefined
+
+  const handleGoToFullView = useCallback((taskId: string) => {
+    closeDashboardPreview()
+    selectTask(taskId)
+    setSidebarView('tasks')
+  }, [closeDashboardPreview, selectTask, setSidebarView])
 
   const overdueCount = tasks.filter(
     (t) => isOverdue(t.due_date) && t.status !== TaskStatus.Completed && !isSnoozed(t.snoozed_until)
@@ -281,6 +291,74 @@ export function AppLayout() {
 
       {/* Onboarding Wizard — auto-opens on first launch or major/minor version bumps */}
       <OnboardingWizard open={onboardingOpen} onOpenChange={handleOnboardingChange} />
+
+      {/* Dashboard task preview — reuses the full TaskWorkspace inside a dialog */}
+      <Dialog open={!!dashboardPreviewTaskId} onOpenChange={(open) => { if (!open) closeDashboardPreview() }}>
+        <DialogContent className="max-w-[90vw] max-h-[85vh] w-full">
+          <DialogHeader className="flex-row items-center justify-between gap-4">
+            <DialogTitle className="truncate">{dashboardPreviewTask?.title || 'Task'}</DialogTitle>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="shrink-0 mr-8"
+              onClick={() => dashboardPreviewTaskId && handleGoToFullView(dashboardPreviewTaskId)}
+            >
+              <ExternalLink className="h-3.5 w-3.5 mr-1" />
+              <span className="text-xs">Go to Tasks view</span>
+            </Button>
+          </DialogHeader>
+          <div className="flex-1 overflow-hidden min-h-0">
+            {dashboardPreviewTask && (
+              <TaskWorkspace
+                task={dashboardPreviewTask}
+                agents={agents}
+                onEdit={() => {
+                  if (dashboardPreviewTask) openEditModal(dashboardPreviewTask.id)
+                }}
+                onDelete={() => {
+                  if (dashboardPreviewTask) openDeleteModal(dashboardPreviewTask.id)
+                }}
+                onUpdateAttachments={async (attachments: FileAttachment[]) => {
+                  await updateTask(dashboardPreviewTask.id, { attachments })
+                }}
+                onUpdateOutputFields={async (output_fields) => {
+                  await updateTask(dashboardPreviewTask.id, { output_fields })
+                }}
+                onCompleteTask={async () => {
+                  const taskTitle = dashboardPreviewTask.title
+                  try {
+                    if (dashboardPreviewTask.source_id) {
+                      const actionField = dashboardPreviewTask.output_fields.find((f) => f.id === 'action')
+                      const actionValue = actionField?.value ? String(actionField.value) : PluginActionId.Complete
+                      const result = await executeAction(actionValue, dashboardPreviewTask.id, dashboardPreviewTask.source_id)
+                      if (!result.success) {
+                        showToast(result.error || 'Failed to complete task', true)
+                        return
+                      }
+                    }
+                    await updateTask(dashboardPreviewTask.id, { status: TaskStatus.Completed })
+                  } catch (err) {
+                    console.error('Failed to complete task:', err)
+                    showToast('Failed to complete task', true)
+                    return
+                  }
+                  showToast(`"${taskTitle}" completed`)
+                }}
+                onAssignAgent={async (taskId, agentId) => {
+                  await updateTask(taskId, { agent_id: agentId })
+                }}
+                onUpdateTask={async (taskId, data) => {
+                  await updateTask(taskId, data)
+                }}
+                onNavigateToTask={(taskId) => {
+                  closeDashboardPreview()
+                  handleGoToFullView(taskId)
+                }}
+              />
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* Toast */}
       {toast && (
