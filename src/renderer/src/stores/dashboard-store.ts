@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { enterpriseApi } from '@/lib/ipc-client'
+import { useEnterpriseStore } from '@/stores/enterprise-store'
 import type { WorkfloTask } from '@/types'
 import { TaskStatus } from '@/types'
 
@@ -275,7 +276,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
 
   openApplication: async (workflowId: string) => {
     const app = get().applications.find((a) => a.workflowId === workflowId)
-    const tenantId = app?.tenantId || ''
+    const tenantId = app?.tenantId || useEnterpriseStore.getState().currentTenant?.id || ''
 
     set({
       activeApplicationId: workflowId,
