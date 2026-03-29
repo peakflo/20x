@@ -507,5 +507,13 @@ export const enterpriseApi = {
 
   getJwt: (): Promise<string> => {
     return window.electronAPI.enterprise.getJwt()
+  },
+
+  enableIframeAuth: (): Promise<{ apiUrl: string }> => {
+    return window.electronAPI.enterprise.enableIframeAuth()
+  },
+
+  disableIframeAuth: (): Promise<void> => {
+    return window.electronAPI.enterprise.disableIframeAuth()
   }
 }

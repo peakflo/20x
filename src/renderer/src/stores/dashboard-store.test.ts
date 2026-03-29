@@ -9,7 +9,9 @@ vi.mock('@/lib/ipc-client', () => ({
   enterpriseApi: {
     apiRequest: vi.fn(),
     getApiUrl: vi.fn().mockResolvedValue('http://localhost:2000'),
-    getJwt: vi.fn().mockResolvedValue('mock-jwt-token')
+    getJwt: vi.fn().mockResolvedValue('mock-jwt-token'),
+    enableIframeAuth: vi.fn().mockResolvedValue({ apiUrl: 'http://localhost:2000' }),
+    disableIframeAuth: vi.fn().mockResolvedValue(undefined)
   }
 }))
 

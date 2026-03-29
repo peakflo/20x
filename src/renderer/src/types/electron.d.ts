@@ -338,6 +338,8 @@ interface ElectronAPI {
     apiRequest: (method: string, path: string, body?: unknown) => Promise<unknown>
     getApiUrl: () => Promise<string>
     getJwt: () => Promise<string>
+    enableIframeAuth: () => Promise<{ apiUrl: string }>
+    disableIframeAuth: () => Promise<void>
   }
   updater: {
     check: () => Promise<{ success: boolean; version?: string; error?: string }>

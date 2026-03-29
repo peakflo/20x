@@ -358,7 +358,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getApiUrl: (): Promise<string> =>
       ipcRenderer.invoke('enterprise:getApiUrl'),
     getJwt: (): Promise<string> =>
-      ipcRenderer.invoke('enterprise:getJwt')
+      ipcRenderer.invoke('enterprise:getJwt'),
+    enableIframeAuth: (): Promise<{ apiUrl: string }> =>
+      ipcRenderer.invoke('enterprise:enableIframeAuth'),
+    disableIframeAuth: (): Promise<void> =>
+      ipcRenderer.invoke('enterprise:disableIframeAuth')
   },
   updater: {
     check: (): Promise<{ success: boolean; version?: string; error?: string }> =>

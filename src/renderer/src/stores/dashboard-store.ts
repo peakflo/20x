@@ -219,11 +219,8 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
 
   openApplication: async (workflowId: string) => {
     try {
-      // Get auth token and API URL for the iframe
-      const [apiUrl, jwt] = await Promise.all([
-        enterpriseApi.getApiUrl(),
-        enterpriseApi.getJwt()
-      ])
+      // Enable auth header injection for iframe requests to the API
+      const { apiUrl } = await enterpriseApi.enableIframeAuth()
 
       // Trigger the workflow
       const result = await enterpriseApi.apiRequest('POST', `/api/workflows/${workflowId}/trigger`, {}) as {
@@ -231,38 +228,28 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
         redirectUrl?: string
       }
 
-      // Build the iframe URL with auth token
-      let iframeUrl: string
-      if (result.redirectUrl) {
-        const url = new URL(result.redirectUrl)
-        url.searchParams.set('token', jwt)
-        iframeUrl = url.toString()
-      } else {
-        const params = new URLSearchParams({ token: jwt })
-        if (result.executionId) params.set('executionId', result.executionId)
-        iframeUrl = `${apiUrl}/applications/${workflowId}?${params.toString()}`
-      }
+      // Build the iframe URL
+      const iframeUrl = result.redirectUrl
+        || `${apiUrl}/applications/${workflowId}${result.executionId ? `?executionId=${result.executionId}` : ''}`
 
       set({ activeApplicationId: workflowId, activeApplicationUrl: iframeUrl })
     } catch (err) {
       console.error('Failed to open application:', err)
-      // Fallback: open iframe directly with auth token (no trigger)
+      // Fallback: open iframe directly without triggering
       try {
-        const [apiUrl, jwt] = await Promise.all([
-          enterpriseApi.getApiUrl(),
-          enterpriseApi.getJwt()
-        ])
+        const { apiUrl } = await enterpriseApi.enableIframeAuth()
         set({
           activeApplicationId: workflowId,
-          activeApplicationUrl: `${apiUrl}/applications/${workflowId}?token=${encodeURIComponent(jwt)}`
+          activeApplicationUrl: `${apiUrl}/applications/${workflowId}`
         })
       } catch {
-        // Cannot get API URL or JWT
+        // Cannot enable iframe auth
       }
     }
   },
 
   closeApplication: () => {
     set({ activeApplicationId: null, activeApplicationUrl: null })
+    enterpriseApi.disableIframeAuth().catch(() => {})
   }
 }))
