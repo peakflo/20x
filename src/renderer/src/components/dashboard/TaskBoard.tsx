@@ -187,7 +187,7 @@ export function TaskBoard() {
       </div>
 
       {isLoading ? (
-        <div className="overflow-x-auto">
+        <>
           <div className="flex gap-4 pb-2">
             {COLUMNS.map((col) => (
               <ColumnHeader key={col.key} column={col} count={0} />
@@ -205,7 +205,7 @@ export function TaskBoard() {
               </div>
             ))}
           </div>
-        </div>
+        </>
       ) : topLevelTasks.length === 0 ? (
         <div className="rounded-lg border border-border/50 bg-[#161b22] p-6 text-center">
           <p className="text-sm text-muted-foreground">
@@ -213,7 +213,7 @@ export function TaskBoard() {
           </p>
         </div>
       ) : (
-        <div className="overflow-x-auto">
+        <>
           {/* Sticky column headers — pinned when dashboard scrolls */}
           <div className="flex gap-4 sticky top-0 bg-background z-10 pb-2">
             {COLUMNS.map((col) => (
@@ -234,7 +234,7 @@ export function TaskBoard() {
               />
             ))}
           </div>
-        </div>
+        </>
       )}
     </section>
   )
