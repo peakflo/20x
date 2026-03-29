@@ -294,7 +294,7 @@ export function AppLayout() {
 
       {/* Dashboard task preview — reuses the full TaskWorkspace inside a dialog */}
       <Dialog open={!!dashboardPreviewTaskId} onOpenChange={(open) => { if (!open) closeDashboardPreview() }}>
-        <DialogContent className="max-w-[90vw] max-h-[85vh] w-full">
+        <DialogContent className="max-w-[90vw] h-[85vh] w-full">
           <DialogHeader className="flex-row items-center justify-between gap-4">
             <DialogTitle className="truncate">{dashboardPreviewTask?.title || 'Task'}</DialogTitle>
             <Button
@@ -307,7 +307,7 @@ export function AppLayout() {
               <span className="text-xs">Go to Tasks view</span>
             </Button>
           </DialogHeader>
-          <div className="flex-1 overflow-hidden min-h-0">
+          <div className="flex-1 min-h-0 overflow-hidden">
             {dashboardPreviewTask && (
               <TaskWorkspace
                 task={dashboardPreviewTask}
