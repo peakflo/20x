@@ -149,7 +149,6 @@ describe('DashboardWorkspace', () => {
     render(<DashboardWorkspace />)
     expect(screen.getByText('Dashboard')).toBeDefined()
     expect(screen.getByText('Stats Overview')).toBeDefined()
-    expect(screen.getByText('Applications')).toBeDefined()
     expect(screen.getByText('Task Board')).toBeDefined()
   })
 
@@ -189,7 +188,7 @@ describe('DashboardWorkspace', () => {
     expect(screen.getByText(/No applications found/)).toBeDefined()
   })
 
-  it('renders application cards when data is loaded', () => {
+  it('renders application tabs when data is loaded', () => {
     useEnterpriseStore.setState({ isAuthenticated: true })
     useDashboardStore.setState({
       applications: [
@@ -209,8 +208,6 @@ describe('DashboardWorkspace', () => {
 
     render(<DashboardWorkspace />)
     expect(screen.getByText('AI Accountant')).toBeDefined()
-    expect(screen.getByText('Automated accounting')).toBeDefined()
-    expect(screen.getByText('Runs: 42')).toBeDefined()
   })
 
   it('renders task board columns with local 20x tasks', () => {
