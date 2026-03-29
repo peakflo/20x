@@ -407,7 +407,7 @@ describe('EnterpriseSyncManager — Skills 2-Way Sync', () => {
 
       const result = await syncManager.syncAll('user-1')
 
-      expect(result.errors).toContainEqual(expect.stringContaining('Sync failed'))
+      expect(result.errors).toContainEqual(expect.stringContaining('Org node sync failed'))
     })
 
     it('assigns skills to multiple user nodes', async () => {
@@ -547,6 +547,83 @@ describe('EnterpriseSyncManager — Skills 2-Way Sync', () => {
 
       // Should not call updateSkill at all — nothing changed
       expect(mockApiClient.updateSkill).not.toHaveBeenCalled()
+    })
+
+    // ── No org nodes edge cases ──────────────────────────────────────────
+
+    it('syncs all skills when no org nodes exist (push + pull without node assignment)', async () => {
+      // Simulate: no org nodes created in workflow-builder
+      mockApiClient.listOrgNodes.mockResolvedValue([])
+
+      const localSkill = makeLocalSkill({ enterprise_skill_id: null })
+      mockDb.getSkills.mockReturnValue([localSkill])
+      mockApiClient.createSkill.mockResolvedValue(makeServerSkill({ id: 'pushed-1' }))
+
+      // First listSkills call (in pushLocalSkills) returns empty — no server skills yet
+      // Second listSkills call (before pullServerSkills) returns newly created + remote skills
+      mockApiClient.listSkills
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([
+          makeServerSkill({ id: 'pushed-1', name: 'Test Skill' }),
+          makeServerSkill({ id: 'remote-1', name: 'Remote Skill' })
+        ])
+      mockDb.getSkillByEnterpriseId.mockImplementation((id: string) => {
+        if (id === 'pushed-1') return makeLocalSkill({ enterprise_skill_id: 'pushed-1' })
+        return undefined
+      })
+      mockDb.getSkillByName.mockReturnValue(undefined)
+
+      const result = await syncManager.syncAll('user-1')
+
+      // Skills push still works — local skill pushed to server
+      expect(mockApiClient.createSkill).toHaveBeenCalled()
+      expect(result.skills.pushed).toBe(1)
+
+      // Node assignment is skipped — no nodes to assign to
+      expect(mockApiClient.updateOrgNode).not.toHaveBeenCalled()
+
+      // Skills pull still works — remote skill pulled locally
+      expect(mockDb.createSkill).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: '[Workflo] Remote Skill',
+          enterprise_skill_id: 'remote-1'
+        })
+      )
+      expect(result.skills.created).toBe(1)
+
+      // No errors — this is a valid flow
+      expect(result.errors).toHaveLength(0)
+    })
+
+    it('still syncs skills when listOrgNodes fails (e.g. permission error)', async () => {
+      // Simulate: listOrgNodes throws (e.g. permission denied, network error)
+      mockApiClient.listOrgNodes.mockRejectedValue(new Error('Permission denied: org-nodes:read required'))
+
+      const localSkill = makeLocalSkill({ enterprise_skill_id: null })
+      mockDb.getSkills.mockReturnValue([localSkill])
+      mockApiClient.createSkill.mockResolvedValue(makeServerSkill({ id: 'pushed-1' }))
+      // First listSkills (in pushLocalSkills) returns empty, second (before pull) returns new skill
+      mockApiClient.listSkills
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([
+          makeServerSkill({ id: 'pushed-1', name: 'Test Skill' })
+        ])
+      mockDb.getSkillByEnterpriseId.mockImplementation((id: string) => {
+        if (id === 'pushed-1') return makeLocalSkill({ enterprise_skill_id: 'pushed-1' })
+        return undefined
+      })
+
+      const result = await syncManager.syncAll('user-1')
+
+      // Org node sync error is recorded but non-fatal
+      expect(result.errors).toContainEqual(expect.stringContaining('Org node sync failed'))
+
+      // Skills push still works despite org node failure
+      expect(mockApiClient.createSkill).toHaveBeenCalled()
+      expect(result.skills.pushed).toBe(1)
+
+      // Node assignment is skipped (nodes array is empty due to failure)
+      expect(mockApiClient.updateOrgNode).not.toHaveBeenCalled()
     })
 
     it('handles multiple skills with mixed states', async () => {

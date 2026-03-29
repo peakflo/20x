@@ -120,19 +120,28 @@ export class EnterpriseSyncManager {
       errors: []
     }
 
-    try {
-      // 0. Ensure enterprise_skill_id column exists (safety net for missed migration)
-      this.ensureSkillColumn()
+    // 0. Ensure enterprise_skill_id column exists (safety net for missed migration)
+    this.ensureSkillColumn()
 
+    // Declare outside try so skills sync can use them even if listOrgNodes fails
+    let nodes: WorkfloOrgNode[] = []
+    let userNodes: WorkfloOrgNode[] = []
+
+    // ── Phase 1: Node-dependent sync (agents, MCP servers, task sources) ──
+    try {
       // 1. Fetch all org nodes
-      const nodes = await this.apiClient.listOrgNodes()
+      nodes = await this.apiClient.listOrgNodes()
 
       // 2. Find nodes where this user is assigned
-      const userNodes = nodes.filter(
+      userNodes = nodes.filter(
         (n) => n.userIds && n.userIds.includes(userId)
       )
 
-      if (userNodes.length === 0) {
+      if (nodes.length === 0) {
+        console.log(
+          '[EnterpriseSyncManager] No org nodes found in workflow-builder — skipping node resource sync'
+        )
+      } else if (userNodes.length === 0) {
         // If no specific assignment, sync from all nodes (admin mode)
         console.log(
           '[EnterpriseSyncManager] User not assigned to specific nodes, syncing all'
@@ -145,61 +154,70 @@ export class EnterpriseSyncManager {
           await this.syncNode(node, result)
         }
       }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      result.errors.push(`Org node sync failed: ${msg}`)
+      console.warn(
+        '[EnterpriseSyncManager] Org node sync failed, continuing with skills sync:',
+        msg
+      )
+    }
 
-      // 3. Skills 2-way sync
+    // ── Phase 2: Skills 2-way sync (runs independently of org node availability) ──
+    try {
+      // Step 0: Clean up server-side duplicates (one-time fix for prior sync bugs)
       try {
-        // Step 0: Clean up server-side duplicates (one-time fix for prior sync bugs)
-        try {
-          const cleanup = await this.apiClient.cleanupDuplicateSkills()
-          if (cleanup.deleted > 0) {
-            console.log(
-              `[EnterpriseSyncManager] Cleaned up ${cleanup.deleted} duplicate server skills, kept ${cleanup.kept}`
-            )
-          }
-        } catch (cleanupErr) {
-          // Non-fatal — endpoint may not exist yet on older servers
-          console.log('[EnterpriseSyncManager] Cleanup endpoint not available, skipping')
+        const cleanup = await this.apiClient.cleanupDuplicateSkills()
+        if (cleanup.deleted > 0) {
+          console.log(
+            `[EnterpriseSyncManager] Cleaned up ${cleanup.deleted} duplicate server skills, kept ${cleanup.kept}`
+          )
         }
+      } catch (cleanupErr) {
+        // Non-fatal — endpoint may not exist yet on older servers
+        console.log('[EnterpriseSyncManager] Cleanup endpoint not available, skipping')
+      }
 
-        // Step A0: Collect locally-deleted skill IDs (to exclude from node assignment)
-        const removedSkillIds = this.getLocallyRemovedSkillIds()
+      // Step A0: Collect locally-deleted skill IDs (to exclude from node assignment)
+      const removedSkillIds = this.getLocallyRemovedSkillIds()
 
-        // Step A: Push local skills to server
-        const pushedSkillIds = await this.pushLocalSkills(result)
+      // Step A: Push local skills to server
+      const pushedSkillIds = await this.pushLocalSkills(result)
 
-        // Step B: Assign all skill IDs to user's node(s), excluding locally-deleted ones
-        const targetNodes = userNodes.length > 0 ? userNodes : nodes
+      // Step B: Assign all skill IDs to user's node(s), excluding locally-deleted ones
+      const targetNodes = userNodes.length > 0 ? userNodes : nodes
+      if (targetNodes.length === 0) {
+        console.log(
+          '[EnterpriseSyncManager] No org nodes available — skipping skill-to-node assignment (skills still synced at tenant level)'
+        )
+      } else {
         for (const node of targetNodes) {
           await this.assignSkillsToNode(node.id, pushedSkillIds, removedSkillIds, result)
         }
-
-        // Step C: Pull server skills back (picks up skills from other nodes)
-        // Re-fetch to include any skills we just created
-        const freshServerSkills = await this.apiClient.listSkills() ?? []
-        console.log(
-          `[EnterpriseSyncManager] pullServerSkills: ${freshServerSkills.length} server skills fetched`,
-          freshServerSkills.map((s) => ({ id: s.id, name: s.name }))
-        )
-        if (freshServerSkills.length > 0) {
-          await this.pullServerSkills(freshServerSkills, result)
-        } else {
-          console.log('[EnterpriseSyncManager] No server skills to pull (listSkills returned empty)')
-        }
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err)
-        result.errors.push(`Skills 2-way sync failed: ${msg}`)
       }
 
+      // Step C: Pull server skills back (picks up skills from other nodes/tenant)
+      // Re-fetch to include any skills we just created
+      const freshServerSkills = await this.apiClient.listSkills() ?? []
       console.log(
-        '[EnterpriseSyncManager] Sync complete:',
-        JSON.stringify(result)
+        `[EnterpriseSyncManager] pullServerSkills: ${freshServerSkills.length} server skills fetched`,
+        freshServerSkills.map((s) => ({ id: s.id, name: s.name }))
       )
-      return result
+      if (freshServerSkills.length > 0) {
+        await this.pullServerSkills(freshServerSkills, result)
+      } else {
+        console.log('[EnterpriseSyncManager] No server skills to pull (listSkills returned empty)')
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
-      result.errors.push(`Sync failed: ${msg}`)
-      return result
+      result.errors.push(`Skills 2-way sync failed: ${msg}`)
     }
+
+    console.log(
+      '[EnterpriseSyncManager] Sync complete:',
+      JSON.stringify(result)
+    )
+    return result
   }
 
   /**
