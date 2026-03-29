@@ -342,6 +342,7 @@ export class EnterpriseAuth {
 
     if (!response.ok) {
       const errorBody = await response.json().catch(() => ({}))
+      console.error(`[EnterpriseAuth] API error ${response.status} ${method} ${path}:`, JSON.stringify(errorBody))
       const detail = errorBody.details ? ` ${JSON.stringify(errorBody.details)}` : ''
       throw new Error(errorBody.message || errorBody.error || `API request failed (${response.status})${detail}`)
     }

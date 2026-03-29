@@ -111,6 +111,10 @@ interface DashboardState {
   // Active application iframe
   activeApplicationId: string | null
   activeApplicationUrl: string | null
+  applicationExecuting: boolean
+  applicationPolling: boolean
+  applicationError: string | null
+  applicationExecutionStatus: string | null
 
   // Loading states
   applicationsLoading: boolean
@@ -130,6 +134,54 @@ interface DashboardState {
   closeApplication: () => void
 }
 
+// ── Application URL extraction ─────────────────────────────
+
+interface ExecutionStep {
+  id: string
+  stepName: string
+  nodeId: string
+  status: string
+  stepOutput: Record<string, unknown> | null
+  metadata?: Record<string, unknown>
+}
+
+interface ExecutionData {
+  id: string
+  status: string
+  steps: ExecutionStep[]
+}
+
+function findApplicationUrl(steps: ExecutionStep[]): string | null {
+  const isApplicationStep = (step: ExecutionStep): boolean =>
+    step.metadata?.nodeType === 'APPLICATION' ||
+    step.metadata?.nodeType === 'application' ||
+    step.stepName?.toLowerCase().includes('application') ||
+    step.nodeId?.toLowerCase().includes('application')
+
+  // Prioritise sandbox/daytona URLs (the actual renderable preview) over the
+  // generic 'url' field which may contain a UI deep-link that isn't servable.
+  const urlFields = ['sandboxUrl', 'daytonaUrl', 'previewUrl', 'iframeUrl', 'applicationUrl', 'url']
+
+  for (const step of steps) {
+    if (!isApplicationStep(step) || !step.stepOutput) continue
+    for (const field of urlFields) {
+      const value = step.stepOutput[field]
+      if (typeof value === 'string' && value.startsWith('http')) return value
+    }
+    // Check nested sandbox.url
+    const sandbox = step.stepOutput.sandbox
+    if (
+      sandbox &&
+      typeof sandbox === 'object' &&
+      'url' in sandbox &&
+      typeof (sandbox as Record<string, unknown>).url === 'string'
+    ) {
+      return (sandbox as Record<string, unknown>).url as string
+    }
+  }
+  return null
+}
+
 export const useDashboardStore = create<DashboardState>((set, get) => ({
   applications: [],
   stats: null,
@@ -138,6 +190,10 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
 
   activeApplicationId: null,
   activeApplicationUrl: null,
+  applicationExecuting: false,
+  applicationPolling: false,
+  applicationError: null,
+  applicationExecutionStatus: null,
 
   applicationsLoading: false,
   statsLoading: false,
@@ -218,38 +274,94 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
   },
 
   openApplication: async (workflowId: string) => {
-    try {
-      // Enable auth header injection for iframe requests to the API
-      const { apiUrl } = await enterpriseApi.enableIframeAuth()
+    const app = get().applications.find((a) => a.workflowId === workflowId)
+    const tenantId = app?.tenantId || ''
 
-      // Trigger the workflow
-      const result = await enterpriseApi.apiRequest('POST', `/api/workflows/${workflowId}/trigger`, {}) as {
-        executionId?: string
-        redirectUrl?: string
+    set({
+      activeApplicationId: workflowId,
+      activeApplicationUrl: null,
+      applicationExecuting: true,
+      applicationPolling: false,
+      applicationError: null,
+      applicationExecutionStatus: null
+    })
+
+    try {
+      // Enable auth header injection for iframe requests
+      await enterpriseApi.enableIframeAuth()
+
+      // Execute the workflow via the real backend endpoint
+      const result = await enterpriseApi.apiRequest('POST', '/api/workflows/execute/ui', {
+        workflowId,
+        tenantId,
+        input: {
+          userId: 'current-user',
+          metadata: 'application-execution',
+          timestamp: new Date().toISOString()
+        }
+      }) as { executionId?: string }
+
+      if (!result.executionId) {
+        throw new Error('No execution ID returned from server')
       }
 
-      // Build the iframe URL
-      const iframeUrl = result.redirectUrl
-        || `${apiUrl}/applications/${workflowId}${result.executionId ? `?executionId=${result.executionId}` : ''}`
+      set({ applicationExecuting: false, applicationPolling: true })
 
-      set({ activeApplicationId: workflowId, activeApplicationUrl: iframeUrl })
+      // Poll execution until application URL is found
+      const poll = async (execId: string) => {
+        try {
+          const execution = await enterpriseApi.apiRequest(
+            'GET',
+            `/api/workflow-executions/${execId}`
+          ) as ExecutionData
+
+          set({ applicationExecutionStatus: execution.status })
+
+          const url = findApplicationUrl(execution.steps)
+          if (url) {
+            set({ activeApplicationUrl: url, applicationPolling: false })
+            return
+          }
+
+          const status = execution.status.toLowerCase()
+          if (status === 'running' || status === 'pending') {
+            setTimeout(() => poll(execId), 2000)
+          } else if (status === 'failed') {
+            set({ applicationPolling: false, applicationError: 'Application execution failed' })
+          } else {
+            set({ applicationPolling: false, applicationError: 'No application URL found in execution output' })
+          }
+        } catch (err) {
+          // 404 means execution not written to DB yet — retry
+          const is404 = err instanceof Error && err.message.includes('404')
+          if (is404) {
+            setTimeout(() => poll(execId), 3000)
+            return
+          }
+          set({ applicationPolling: false, applicationError: 'Failed to check execution status' })
+        }
+      }
+
+      poll(result.executionId)
     } catch (err) {
       console.error('Failed to open application:', err)
-      // Fallback: open iframe directly without triggering
-      try {
-        const { apiUrl } = await enterpriseApi.enableIframeAuth()
-        set({
-          activeApplicationId: workflowId,
-          activeApplicationUrl: `${apiUrl}/applications/${workflowId}`
-        })
-      } catch {
-        // Cannot enable iframe auth
-      }
+      set({
+        applicationExecuting: false,
+        applicationPolling: false,
+        applicationError: err instanceof Error ? err.message : 'Failed to execute application'
+      })
     }
   },
 
   closeApplication: () => {
-    set({ activeApplicationId: null, activeApplicationUrl: null })
+    set({
+      activeApplicationId: null,
+      activeApplicationUrl: null,
+      applicationExecuting: false,
+      applicationPolling: false,
+      applicationError: null,
+      applicationExecutionStatus: null
+    })
     enterpriseApi.disableIframeAuth().catch(() => {})
   }
 }))

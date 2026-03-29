@@ -1,4 +1,4 @@
-import { Play, X } from 'lucide-react'
+import { Play, X, Loader2, AlertTriangle, Monitor } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { useDashboardStore } from '@/stores/dashboard-store'
 
@@ -23,9 +23,15 @@ export function ApplicationsList() {
     applicationsError,
     activeApplicationId,
     activeApplicationUrl,
+    applicationExecuting,
+    applicationPolling,
+    applicationError,
+    applicationExecutionStatus,
     openApplication,
     closeApplication
   } = useDashboardStore()
+
+  const isApplicationActive = activeApplicationId !== null
 
   return (
     <section>
@@ -36,8 +42,8 @@ export function ApplicationsList() {
         </span>
       </div>
 
-      {/* Active application iframe */}
-      {activeApplicationUrl && (
+      {/* Active application panel — executing, polling, error, or iframe */}
+      {isApplicationActive && (
         <div className="rounded-lg border border-border/50 bg-[#161b22] mb-4 overflow-hidden">
           <div className="flex items-center justify-between px-4 py-2 border-b border-border/50">
             <span className="text-xs font-medium">
@@ -53,13 +59,58 @@ export function ApplicationsList() {
               <X className="h-3.5 w-3.5" />
             </Button>
           </div>
-          <iframe
-            src={activeApplicationUrl}
-            className="w-full border-0"
-            style={{ height: '70vh' }}
-            title="Application"
-            sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
-          />
+
+          {applicationError ? (
+            <div className="flex items-center justify-center p-12">
+              <div className="text-center space-y-3 max-w-sm">
+                <AlertTriangle className="h-8 w-8 text-destructive mx-auto" />
+                <p className="text-sm font-medium">Execution Error</p>
+                <p className="text-xs text-muted-foreground">{applicationError}</p>
+              </div>
+            </div>
+          ) : applicationExecuting || applicationPolling ? (
+            <div className="flex items-center justify-center p-12">
+              <div className="text-center space-y-3">
+                <div className="relative mx-auto w-10 h-10">
+                  <Loader2 className="h-10 w-10 animate-spin text-primary/30" />
+                  <div className="absolute inset-0 flex items-center justify-center">
+                    <Monitor className="h-4 w-4 text-primary" />
+                  </div>
+                </div>
+                <p className="text-sm font-medium">
+                  {applicationExecuting ? 'Executing Application' : 'Preparing Application'}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {applicationExecuting
+                    ? 'Starting your application workflow...'
+                    : 'Waiting for application to be ready...'}
+                </p>
+                {applicationExecutionStatus && (
+                  <p className="text-[11px] text-muted-foreground">
+                    Status: {applicationExecutionStatus}
+                  </p>
+                )}
+              </div>
+            </div>
+          ) : activeApplicationUrl ? (
+            <iframe
+              src={activeApplicationUrl}
+              className="w-full border-0"
+              style={{ height: '70vh' }}
+              title="Application"
+              sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox"
+            />
+          ) : (
+            <div className="flex items-center justify-center p-12">
+              <div className="text-center space-y-3">
+                <AlertTriangle className="h-8 w-8 text-muted-foreground mx-auto" />
+                <p className="text-sm font-medium">No Application Found</p>
+                <p className="text-xs text-muted-foreground">
+                  The workflow may not contain an application node or the URL was not generated.
+                </p>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
