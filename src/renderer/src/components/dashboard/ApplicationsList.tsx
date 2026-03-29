@@ -107,6 +107,7 @@ function CardsView() {
 
   return (
     <section>
+      <h2 className="text-sm font-semibold mb-3">Applications</h2>
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
         {applications.map((app) => {
           const tab = openTabs.find((t) => t.workflowId === app.workflowId)
