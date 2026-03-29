@@ -18,7 +18,7 @@ const TIME_WINDOW_LABELS: Record<TimeWindow, string> = {
 }
 
 export function DashboardWorkspace() {
-  const { isAuthenticated } = useEnterpriseStore()
+  const { isAuthenticated, loadSession } = useEnterpriseStore()
   const { tasks } = useTaskStore()
   const { openSettings, setSettingsTab } = useUIStore()
   const {
@@ -31,6 +31,11 @@ export function DashboardWorkspace() {
   } = useDashboardStore()
 
   const isLoading = applicationsLoading || statsLoading
+
+  // Restore saved enterprise session on mount
+  useEffect(() => {
+    loadSession()
+  }, [])
 
   // Always compute local stats from task store
   useEffect(() => {
