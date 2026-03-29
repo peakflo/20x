@@ -354,7 +354,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     refreshToken: (): Promise<{ token: string }> =>
       ipcRenderer.invoke('enterprise:refreshToken'),
     apiRequest: (method: string, path: string, body?: unknown): Promise<unknown> =>
-      ipcRenderer.invoke('enterprise:apiRequest', method, path, body)
+      ipcRenderer.invoke('enterprise:apiRequest', method, path, body),
+    getApiUrl: (): Promise<string> =>
+      ipcRenderer.invoke('enterprise:getApiUrl')
   },
   updater: {
     check: (): Promise<{ success: boolean; version?: string; error?: string }> =>

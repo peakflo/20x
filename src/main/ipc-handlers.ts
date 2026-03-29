@@ -923,6 +923,11 @@ export function registerIpcHandlers(
     return await enterpriseAuth.apiRequest(method, path, body)
   })
 
+  ipcMain.handle('enterprise:getApiUrl', () => {
+    if (!enterpriseAuth) throw new Error('Enterprise auth not available')
+    return enterpriseAuth.getApiUrl()
+  })
+
   // ── Claude Plugin Marketplace handlers ─────────────────────
 
   // Marketplace sources

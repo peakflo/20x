@@ -499,5 +499,9 @@ export const enterpriseApi = {
 
   apiRequest: (method: string, path: string, body?: unknown): Promise<unknown> => {
     return window.electronAPI.enterprise.apiRequest(method, path, body)
+  },
+
+  getApiUrl: (): Promise<string> => {
+    return window.electronAPI.enterprise.getApiUrl()
   }
 }

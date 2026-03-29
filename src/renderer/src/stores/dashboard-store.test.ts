@@ -7,7 +7,8 @@ import type { WorkfloTask } from '@/types'
 // Mock the ipc-client enterprise API
 vi.mock('@/lib/ipc-client', () => ({
   enterpriseApi: {
-    apiRequest: vi.fn()
+    apiRequest: vi.fn(),
+    getApiUrl: vi.fn().mockResolvedValue('http://localhost:2000')
   }
 }))
 

@@ -108,6 +108,10 @@ interface DashboardState {
   localStats: DashboardStats | null
   timeWindow: TimeWindow
 
+  // Active application iframe
+  activeApplicationId: string | null
+  activeApplicationUrl: string | null
+
   // Loading states
   applicationsLoading: boolean
   statsLoading: boolean
@@ -122,6 +126,8 @@ interface DashboardState {
   fetchStats: () => Promise<void>
   fetchAll: () => Promise<void>
   updateLocalStats: (tasks: WorkfloTask[]) => void
+  openApplication: (workflowId: string) => Promise<void>
+  closeApplication: () => void
 }
 
 export const useDashboardStore = create<DashboardState>((set, get) => ({
@@ -129,6 +135,9 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
   stats: null,
   localStats: null,
   timeWindow: '7d',
+
+  activeApplicationId: null,
+  activeApplicationUrl: null,
 
   applicationsLoading: false,
   statsLoading: false,
@@ -206,5 +215,38 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
       state.fetchApplications(),
       state.fetchStats()
     ])
+  },
+
+  openApplication: async (workflowId: string) => {
+    try {
+      // Trigger the workflow and get the execution/run URL
+      const result = await enterpriseApi.apiRequest('POST', `/api/workflows/${workflowId}/trigger`, {}) as {
+        executionId?: string
+        redirectUrl?: string
+      }
+
+      // Build the iframe URL from the API base + execution context
+      const apiUrl = await enterpriseApi.getApiUrl()
+      const iframeUrl = result.redirectUrl
+        || `${apiUrl}/applications/${workflowId}${result.executionId ? `?executionId=${result.executionId}` : ''}`
+
+      set({ activeApplicationId: workflowId, activeApplicationUrl: iframeUrl })
+    } catch (err) {
+      console.error('Failed to open application:', err)
+      // Fallback: open iframe directly without triggering
+      try {
+        const apiUrl = await enterpriseApi.getApiUrl()
+        set({
+          activeApplicationId: workflowId,
+          activeApplicationUrl: `${apiUrl}/applications/${workflowId}`
+        })
+      } catch {
+        // Last resort — cannot get API URL
+      }
+    }
+  },
+
+  closeApplication: () => {
+    set({ activeApplicationId: null, activeApplicationUrl: null })
   }
 }))

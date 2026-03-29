@@ -124,6 +124,10 @@ export class EnterpriseAuth {
     })
   }
 
+  getApiUrl(): string {
+    return this.apiUrl
+  }
+
   // ── Login (email/password via Supabase) ───────────────────────────
 
   async login(email: string, password: string): Promise<EnterpriseLoginResult> {

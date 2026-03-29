@@ -16,7 +16,8 @@ vi.mock('@/lib/ipc-client', () => ({
     selectTenant: vi.fn(),
     logout: vi.fn(),
     getSession: vi.fn().mockResolvedValue({ isAuthenticated: false }),
-    refreshToken: vi.fn()
+    refreshToken: vi.fn(),
+    getApiUrl: vi.fn().mockResolvedValue('http://localhost:2000')
   },
   taskApi: {
     getAll: vi.fn().mockResolvedValue([])
@@ -206,7 +207,7 @@ describe('DashboardWorkspace', () => {
     render(<DashboardWorkspace />)
     expect(screen.getByText('AI Accountant')).toBeDefined()
     expect(screen.getByText('Automated accounting')).toBeDefined()
-    expect(screen.getByText('Active')).toBeDefined()
+    expect(screen.getByText('Runs: 42')).toBeDefined()
   })
 
   it('renders task board columns with local 20x tasks', () => {

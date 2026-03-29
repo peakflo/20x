@@ -1,6 +1,5 @@
-import { Play, ExternalLink } from 'lucide-react'
+import { Play, X } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
-import { Badge } from '@/components/ui/Badge'
 import { useDashboardStore } from '@/stores/dashboard-store'
 
 function formatLastRun(lastRun: string | null): string {
@@ -17,21 +16,16 @@ function formatLastRun(lastRun: string | null): string {
   return `${diffDays}d ago`
 }
 
-function getStatusVariant(status: string): 'default' | 'green' | 'yellow' | 'blue' {
-  switch (status.toLowerCase()) {
-    case 'active':
-      return 'green'
-    case 'draft':
-      return 'default'
-    case 'paused':
-      return 'yellow'
-    default:
-      return 'default'
-  }
-}
-
 export function ApplicationsList() {
-  const { applications, applicationsLoading, applicationsError } = useDashboardStore()
+  const {
+    applications,
+    applicationsLoading,
+    applicationsError,
+    activeApplicationId,
+    activeApplicationUrl,
+    openApplication,
+    closeApplication
+  } = useDashboardStore()
 
   return (
     <section>
@@ -41,6 +35,33 @@ export function ApplicationsList() {
           {applications.length} workflow{applications.length !== 1 ? 's' : ''}
         </span>
       </div>
+
+      {/* Active application iframe */}
+      {activeApplicationUrl && (
+        <div className="rounded-lg border border-border/50 bg-[#161b22] mb-4 overflow-hidden">
+          <div className="flex items-center justify-between px-4 py-2 border-b border-border/50">
+            <span className="text-xs font-medium">
+              {applications.find((a) => a.workflowId === activeApplicationId)?.name || 'Application'}
+            </span>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-6 w-6 p-0"
+              onClick={closeApplication}
+              title="Close application"
+            >
+              <X className="h-3.5 w-3.5" />
+            </Button>
+          </div>
+          <iframe
+            src={activeApplicationUrl}
+            className="w-full border-0"
+            style={{ height: '70vh' }}
+            title="Application"
+            sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+          />
+        </div>
+      )}
 
       {applicationsLoading ? (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
@@ -64,36 +85,43 @@ export function ApplicationsList() {
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-          {applications.map((app) => (
-            <div
-              key={`${app.workflowId}-${app.tenantId}`}
-              className="rounded-lg border border-border/50 bg-[#161b22] p-4 hover:border-border transition-colors group"
-            >
-              <div className="flex items-start justify-between mb-1">
-                <h3 className="text-sm font-medium truncate flex-1 mr-2">{app.name}</h3>
-                <Badge variant={getStatusVariant(app.status)} className="text-[10px] px-1.5 py-0 shrink-0">
-                  {app.status}
-                </Badge>
-              </div>
-              <p className="text-xs text-muted-foreground mb-3 line-clamp-2">
-                {app.description || 'No description'}
-              </p>
-              <div className="flex items-center justify-between">
+          {applications.map((app) => {
+            const isActive = activeApplicationId === app.workflowId
+            return (
+              <div
+                key={`${app.workflowId}-${app.tenantId}`}
+                className={`rounded-lg border p-4 transition-colors cursor-pointer group ${
+                  isActive
+                    ? 'border-primary/50 bg-primary/5'
+                    : 'border-border/50 bg-[#161b22] hover:border-border'
+                }`}
+                onClick={() => openApplication(app.workflowId)}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openApplication(app.workflowId) } }}
+              >
+                <div className="flex items-start justify-between mb-1">
+                  <h3 className="text-sm font-medium truncate flex-1 mr-2">{app.name}</h3>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-6 w-6 p-0 opacity-0 group-hover:opacity-100 transition-opacity shrink-0"
+                    title="Run application"
+                    onClick={(e) => { e.stopPropagation(); openApplication(app.workflowId) }}
+                  >
+                    <Play className="h-3 w-3" />
+                  </Button>
+                </div>
+                <p className="text-xs text-muted-foreground mb-3 line-clamp-2">
+                  {app.description || 'No description'}
+                </p>
                 <div className="flex items-center gap-3 text-[11px] text-muted-foreground">
                   <span>Last run: {formatLastRun(app.lastRun)}</span>
                   <span>Runs: {app.runCount}</span>
                 </div>
-                <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                  <Button variant="ghost" size="sm" className="h-6 w-6 p-0" title="Run application">
-                    <Play className="h-3 w-3" />
-                  </Button>
-                  <Button variant="ghost" size="sm" className="h-6 w-6 p-0" title="Open in workflow builder">
-                    <ExternalLink className="h-3 w-3" />
-                  </Button>
-                </div>
               </div>
-            </div>
-          ))}
+            )
+          })}
         </div>
       )}
     </section>
