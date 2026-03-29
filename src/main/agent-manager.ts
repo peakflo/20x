@@ -3557,7 +3557,16 @@ Important:
           try {
             if (Notification.isSupported()) {
               // Only hit the database when we actually need the title for a notification
-              const taskTitle = taskId ? this.db.getTask(taskId)?.title : undefined
+              const task = taskId ? this.db.getTask(taskId) : undefined
+              const taskTitle = task?.title
+
+              // Skip notifications for subtasks whose parent task is already completed
+              if (task?.parent_task_id) {
+                const parentTask = this.db.getTask(task.parent_task_id)
+                if (parentTask?.status === TaskStatus.Completed) {
+                  return
+                }
+              }
 
               let title: string
               let body: string
