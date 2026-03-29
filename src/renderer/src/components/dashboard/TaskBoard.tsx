@@ -24,6 +24,21 @@ const COLUMNS: StatusColumn[] = [
   { key: TaskStatus.AgentLearning, label: 'Agent Learning', color: 'text-blue-400', dotColor: 'bg-blue-400' }
 ]
 
+const PRIORITY_ORDER: Record<string, number> = {
+  critical: 0,
+  high: 1,
+  medium: 2,
+  low: 3
+}
+
+function sortByPriority(tasks: WorkfloTask[]): WorkfloTask[] {
+  return [...tasks].sort((a, b) => {
+    const pa = PRIORITY_ORDER[a.priority || ''] ?? 4
+    const pb = PRIORITY_ORDER[b.priority || ''] ?? 4
+    return pa - pb
+  })
+}
+
 function getPriorityVariant(priority: string): 'red' | 'orange' | 'yellow' | 'default' {
   switch (priority) {
     case 'critical':
@@ -229,7 +244,7 @@ export function TaskBoard() {
             {COLUMNS.map((col) => (
               <ColumnCards
                 key={col.key}
-                tasks={tasksByStatus.grouped[col.key] || []}
+                tasks={sortByPriority(tasksByStatus.grouped[col.key] || [])}
                 onSelect={handleSelectTask}
               />
             ))}
