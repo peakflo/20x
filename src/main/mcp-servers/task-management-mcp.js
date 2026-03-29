@@ -291,7 +291,7 @@ const subtaskTools = [
   },
   {
     name: 'update_own_task',
-    description: 'Update this subtask\'s own metadata (description, resolution, attachments, status, labels).',
+    description: 'Update this subtask\'s own metadata (description, resolution, attachments, status, labels, agent assignment, repos, skills, output fields, priority).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -299,7 +299,27 @@ const subtaskTools = [
         resolution: { type: 'string', description: 'Set resolution/output summary (read by sibling subtasks for coordination)' },
         attachments: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, path: { type: 'string' }, type: { type: 'string' } } }, description: 'Set attachments (e.g. files, screenshots)' },
         labels: { type: 'array', items: { type: 'string' }, description: 'Set labels' },
-        status: { type: 'string', enum: ['not_started', 'agent_working', 'ready_for_review'], description: 'Subtasks cannot self-complete; set ready_for_review when done so the parent task owner can verify.' }
+        skill_ids: { type: 'array', items: { type: 'string' }, description: 'Set task skills' },
+        agent_id: { type: 'string', description: 'Assign to agent' },
+        repos: { type: 'array', items: { type: 'string' }, description: 'Set repository paths/URLs for this task' },
+        priority: { type: 'string', enum: ['critical', 'high', 'medium', 'low'] },
+        status: { type: 'string', enum: ['not_started', 'agent_working', 'ready_for_review'], description: 'Subtasks cannot self-complete; set ready_for_review when done so the parent task owner can verify.' },
+        output_fields: {
+          type: 'array',
+          description: 'Define expected output fields for this task. Each field describes a piece of structured data the agent should produce.',
+          items: {
+            type: 'object',
+            properties: {
+              id: { type: 'string', description: 'Unique identifier for this output field (e.g. "pr_url", "summary")' },
+              name: { type: 'string', description: 'Human-readable name (e.g. "Pull Request URL", "Summary")' },
+              type: { type: 'string', enum: ['text', 'number', 'email', 'textarea', 'list', 'date', 'file', 'boolean', 'country', 'currency', 'url'], description: 'Field type' },
+              required: { type: 'boolean', description: 'Whether this output is required' },
+              multiple: { type: 'boolean', description: 'Whether multiple values are allowed' },
+              options: { type: 'array', items: { type: 'string' }, description: 'Options for list-type fields' }
+            },
+            required: ['id', 'name', 'type']
+          }
+        }
       }
     }
   },
