@@ -122,6 +122,7 @@ interface DashboardState {
   // Multi-tab application state
   openTabs: ApplicationTab[]       // all opened tabs (iframes kept alive)
   activeTabId: string | null       // currently visible tab workflowId
+  expandedView: boolean            // true = showing tabs+iframe, false = showing cards
 
   // Loading states
   applicationsLoading: boolean
@@ -140,6 +141,7 @@ interface DashboardState {
   openApplication: (workflowId: string) => Promise<void>
   switchTab: (workflowId: string) => void
   closeTab: (workflowId: string) => void
+  minimizeToCards: () => void
 }
 
 // ── Application URL extraction ─────────────────────────────
@@ -207,6 +209,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
 
   openTabs: [],
   activeTabId: null,
+  expandedView: false,
 
   applicationsLoading: false,
   statsLoading: false,
@@ -292,7 +295,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     // If already open, just switch to it
     const existing = openTabs.find((t) => t.workflowId === workflowId)
     if (existing) {
-      set({ activeTabId: workflowId })
+      set({ activeTabId: workflowId, expandedView: true })
       return
     }
 
@@ -308,7 +311,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
       error: null,
       executionStatus: null
     }
-    set({ openTabs: [...openTabs, newTab], activeTabId: workflowId })
+    set({ openTabs: [...openTabs, newTab], activeTabId: workflowId, expandedView: true })
 
     try {
       await enterpriseApi.enableIframeAuth()
@@ -392,7 +395,12 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
       : activeTabId
     set({ openTabs: remaining, activeTabId: newActiveId })
     if (remaining.length === 0) {
+      set({ expandedView: false })
       enterpriseApi.disableIframeAuth().catch(() => {})
     }
+  },
+
+  minimizeToCards: () => {
+    set({ expandedView: false })
   }
 }))

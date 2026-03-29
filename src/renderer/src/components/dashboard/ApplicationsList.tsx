@@ -1,6 +1,6 @@
-import { Loader2, AlertTriangle, Monitor, Play } from 'lucide-react'
+import { Loader2, AlertTriangle, Monitor, Play, Minimize2, X, AppWindow } from 'lucide-react'
 import { useDashboardStore } from '@/stores/dashboard-store'
-import type { ApplicationTab } from '@/stores/dashboard-store'
+import type { ApplicationTab, ApplicationItem } from '@/stores/dashboard-store'
 
 function TabContent({ tab }: { tab: ApplicationTab }) {
   if (tab.error) {
@@ -60,15 +60,189 @@ function EmptyTabContent() {
   )
 }
 
+function ApplicationCard({
+  app,
+  tab,
+  onClick
+}: {
+  app: ApplicationItem
+  tab: ApplicationTab | undefined
+  onClick: () => void
+}) {
+  const isLoading = tab?.executing || tab?.polling
+  const hasError = !!tab?.error
+  const isReady = !!tab?.url && !isLoading && !hasError
+
+  return (
+    <div
+      className="rounded-lg border border-border/50 bg-[#161b22] p-4 cursor-pointer transition-all hover:border-border hover:bg-[#1c2129] group"
+      onClick={onClick}
+    >
+      <div className="flex items-start gap-3">
+        <div className="rounded-md bg-primary/10 p-2 shrink-0">
+          <AppWindow className="h-5 w-5 text-primary" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <h3 className="text-sm font-medium truncate">{app.name}</h3>
+            {isLoading && <Loader2 className="h-3 w-3 animate-spin text-muted-foreground shrink-0" />}
+            {hasError && <AlertTriangle className="h-3 w-3 text-destructive shrink-0" />}
+            {isReady && <div className="h-2 w-2 rounded-full bg-green-500 shrink-0" />}
+          </div>
+          {app.description && (
+            <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{app.description}</p>
+          )}
+          <div className="flex items-center gap-3 mt-2 text-[11px] text-muted-foreground">
+            <span className="capitalize">{app.status}</span>
+            {app.runCount > 0 && <span>{app.runCount} runs</span>}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function CardsView() {
+  const { applications, openTabs, openApplication } = useDashboardStore()
+
+  return (
+    <section>
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+        {applications.map((app) => {
+          const tab = openTabs.find((t) => t.workflowId === app.workflowId)
+          return (
+            <ApplicationCard
+              key={app.workflowId}
+              app={app}
+              tab={tab}
+              onClick={() => openApplication(app.workflowId)}
+            />
+          )
+        })}
+      </div>
+    </section>
+  )
+}
+
+function ExpandedView() {
+  const {
+    applications,
+    openTabs,
+    activeTabId,
+    openApplication,
+    switchTab,
+    closeTab,
+    minimizeToCards
+  } = useDashboardStore()
+
+  const activeTab = openTabs.find((t) => t.workflowId === activeTabId)
+
+  return (
+    <section className="flex flex-col" style={{ height: 'calc(100vh - 120px)' }}>
+      {/* Tab bar with minimize button */}
+      <div className="flex items-center border-b border-border/50 shrink-0 bg-[#161b22] rounded-t-lg">
+        <div className="flex items-center overflow-x-auto flex-1">
+          {applications.map((app) => {
+            const tab = openTabs.find((t) => t.workflowId === app.workflowId)
+            const isActive = activeTabId === app.workflowId
+            const isLoading = tab?.executing || tab?.polling
+            const hasError = !!tab?.error
+            const isReady = !!tab?.url && !isLoading && !hasError
+            const isOpen = !!tab
+
+            return (
+              <div
+                key={app.workflowId}
+                className={`flex items-center gap-1.5 px-4 py-2.5 text-xs cursor-pointer border-r border-border/50 shrink-0 transition-colors ${
+                  isActive
+                    ? 'bg-background/50 text-foreground border-b-2 border-b-primary'
+                    : isOpen
+                      ? 'text-foreground/70 hover:text-foreground hover:bg-background/20'
+                      : 'text-muted-foreground hover:text-foreground hover:bg-background/20'
+                }`}
+                onClick={() => {
+                  if (tab) {
+                    switchTab(app.workflowId)
+                  } else {
+                    openApplication(app.workflowId)
+                  }
+                }}
+                role="tab"
+                aria-selected={isActive}
+              >
+                {isLoading && <Loader2 className="h-3 w-3 animate-spin shrink-0" />}
+                {hasError && <AlertTriangle className="h-3 w-3 text-destructive shrink-0" />}
+                {isReady && <div className="h-2 w-2 rounded-full bg-green-500 shrink-0" />}
+                <span className="truncate max-w-[140px] font-medium">
+                  {app.name}
+                </span>
+                {isOpen && (
+                  <button
+                    className="ml-1 rounded p-0.5 hover:bg-background/40 transition-colors"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      closeTab(app.workflowId)
+                    }}
+                    title="Close tab"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                )}
+              </div>
+            )
+          })}
+        </div>
+
+        {/* Minimize back to cards */}
+        <button
+          className="flex items-center gap-1.5 px-3 py-2.5 text-xs text-muted-foreground hover:text-foreground transition-colors shrink-0 border-l border-border/50 cursor-pointer"
+          onClick={minimizeToCards}
+          title="Minimize to cards"
+        >
+          <Minimize2 className="h-3.5 w-3.5" />
+          <span className="hidden sm:inline">Minimize</span>
+        </button>
+      </div>
+
+      {/* Content area — all opened iframes stacked, only active visible */}
+      <div className="flex-1 relative bg-[#161b22] rounded-b-lg overflow-hidden">
+        {/* Placeholder when no tab is active */}
+        {!activeTab && <EmptyTabContent />}
+
+        {/* Render all opened iframes — hidden ones stay mounted to avoid reload */}
+        {openTabs.map((tab) => {
+          const isActive = activeTabId === tab.workflowId
+          const showIframe = tab.url && !tab.error && !tab.executing && !tab.polling
+          return (
+            <div
+              key={tab.workflowId}
+              className="absolute inset-0"
+              style={{ display: isActive ? 'block' : 'none' }}
+            >
+              {showIframe ? (
+                <iframe
+                  src={tab.url!}
+                  className="w-full h-full border-0"
+                  title={`Application - ${tab.workflowId}`}
+                  sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox"
+                />
+              ) : (
+                <TabContent tab={tab} />
+              )}
+            </div>
+          )
+        })}
+      </div>
+    </section>
+  )
+}
+
 export function ApplicationsList() {
   const {
     applications,
     applicationsLoading,
     applicationsError,
-    openTabs,
-    activeTabId,
-    openApplication,
-    switchTab
+    expandedView
   } = useDashboardStore()
 
   if (applicationsLoading) {
@@ -106,77 +280,5 @@ export function ApplicationsList() {
     )
   }
 
-  const activeTab = openTabs.find((t) => t.workflowId === activeTabId)
-
-  return (
-    <section className="flex flex-col" style={{ height: 'calc(100vh - 120px)' }}>
-      {/* Tab bar — all applications as tabs */}
-      <div className="flex items-center border-b border-border/50 overflow-x-auto shrink-0 bg-[#161b22] rounded-t-lg">
-        {applications.map((app) => {
-          const tab = openTabs.find((t) => t.workflowId === app.workflowId)
-          const isActive = activeTabId === app.workflowId
-          const isLoading = tab?.executing || tab?.polling
-          const hasError = !!tab?.error
-          const isReady = !!tab?.url && !isLoading && !hasError
-
-          return (
-            <div
-              key={app.workflowId}
-              className={`flex items-center gap-1.5 px-4 py-2.5 text-xs cursor-pointer border-r border-border/50 shrink-0 transition-colors ${
-                isActive
-                  ? 'bg-background/50 text-foreground border-b-2 border-b-primary'
-                  : 'text-muted-foreground hover:text-foreground hover:bg-background/20'
-              }`}
-              onClick={() => {
-                if (tab) {
-                  switchTab(app.workflowId)
-                } else {
-                  openApplication(app.workflowId)
-                }
-              }}
-              role="tab"
-              aria-selected={isActive}
-            >
-              {isLoading && <Loader2 className="h-3 w-3 animate-spin shrink-0" />}
-              {hasError && <AlertTriangle className="h-3 w-3 text-destructive shrink-0" />}
-              {isReady && <div className="h-2 w-2 rounded-full bg-green-500 shrink-0" />}
-              <span className="truncate max-w-[140px] font-medium">
-                {app.name}
-              </span>
-            </div>
-          )
-        })}
-      </div>
-
-      {/* Content area — all opened iframes stacked, only active visible */}
-      <div className="flex-1 relative bg-[#161b22] rounded-b-lg overflow-hidden">
-        {/* Placeholder when no tab is active */}
-        {!activeTab && <EmptyTabContent />}
-
-        {/* Render all opened iframes — hidden ones stay mounted to avoid reload */}
-        {openTabs.map((tab) => {
-          const isActive = activeTabId === tab.workflowId
-          const showIframe = tab.url && !tab.error && !tab.executing && !tab.polling
-          return (
-            <div
-              key={tab.workflowId}
-              className="absolute inset-0"
-              style={{ display: isActive ? 'block' : 'none' }}
-            >
-              {showIframe ? (
-                <iframe
-                  src={tab.url!}
-                  className="w-full h-full border-0"
-                  title={`Application - ${tab.workflowId}`}
-                  sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox"
-                />
-              ) : (
-                <TabContent tab={tab} />
-              )}
-            </div>
-          )
-        })}
-      </div>
-    </section>
-  )
+  return expandedView ? <ExpandedView /> : <CardsView />
 }
