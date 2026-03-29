@@ -1,9 +1,9 @@
 import { useState, useEffect, useMemo } from 'react'
-import { Plus, Search, ChevronDown, X, Settings, FileText, RefreshCw, Loader2, Play, Pause, LayoutDashboard } from 'lucide-react'
+import { Plus, Search, ChevronDown, X, FileText, RefreshCw, Loader2, Play, Pause } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { TaskList } from '@/components/tasks/TaskList'
 import { SkillList } from '@/components/skills/SkillList'
-import { useUIStore, type SortField, type SidebarView } from '@/stores/ui-store'
+import { useUIStore, type SortField } from '@/stores/ui-store'
 import { useTaskSourceStore } from '@/stores/task-source-store'
 import { useTaskStore } from '@/stores/task-store'
 import { useUserStore } from '@/stores/user-store'
@@ -12,7 +12,6 @@ import { useAgentSchedulerStore } from '@/stores/agent-scheduler-store'
 import { isSnoozed } from '@/lib/utils'
 import { TaskStatus, TASK_STATUSES, TASK_PRIORITIES } from '@/types'
 import type { WorkfloTask, TaskPriority } from '@/types'
-import logo20x from '@/assets/logos/20x.svg'
 
 interface SidebarProps {
   tasks: WorkfloTask[]
@@ -20,7 +19,6 @@ interface SidebarProps {
   overdueCount: number
   onSelectTask: (id: string) => void
   onCreateTask: () => void
-  onOpenSettings: () => void
 }
 
 const statusFilterOptions = [{ value: 'all', label: 'All Statuses' }, ...TASK_STATUSES]
@@ -34,10 +32,10 @@ const sortOptions: { value: SortField; label: string }[] = [
   { value: 'title', label: 'Title' }
 ]
 
-export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onCreateTask, onOpenSettings }: SidebarProps) {
+export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onCreateTask }: SidebarProps) {
   const [filtersOpen, setFiltersOpen] = useState(false)
   const {
-    sidebarView, setSidebarView,
+    sidebarView,
     activeModal, closeModal,
     statusFilter, priorityFilter, sourceFilter, sortField, searchQuery,
     setStatusFilter, setPriorityFilter, setSourceFilter, setSortField, setSearchQuery,
@@ -93,45 +91,10 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
   const hasActiveFilters = statusFilter !== 'all' || priorityFilter !== 'all' || sourceFilter !== 'all'
 
   return (
-    <aside className="flex flex-col h-full border-r bg-sidebar overflow-hidden">
-      <div className="drag-region h-13 shrink-0 flex items-center justify-center gap-2">
-        <img src={logo20x} className="h-5 w-5" alt="20x" />
-        <span className="text-sm font-semibold text-foreground">20x</span>
-      </div>
-
-      {/* Tab switcher */}
-      <div className="no-drag px-3 pb-3 pt-1">
-        <div className="flex rounded-md border border-border bg-muted/30 p-0.5">
-          {(['tasks', 'skills', 'dashboard'] as SidebarView[]).map((view) => (
-            <button
-              key={view}
-              onClick={() => {
-                if (activeModal === 'settings') closeModal()
-                setSidebarView(view)
-              }}
-              className={`flex-1 rounded px-3 py-1.5 text-xs font-medium transition-colors cursor-pointer flex items-center justify-center gap-1 ${
-                sidebarView === view
-                  ? 'bg-background text-foreground shadow-sm'
-                  : 'text-muted-foreground hover:text-foreground'
-              }`}
-            >
-              {view === 'dashboard' && <LayoutDashboard className="h-3 w-3" />}
-              {view === 'tasks' ? 'Tasks' : view === 'skills' ? 'Skills' : ''}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {sidebarView === 'dashboard' ? (
-        <div className="flex-1 flex flex-col items-center justify-center px-4 text-center">
-          <LayoutDashboard className="h-8 w-8 text-muted-foreground/50 mb-3" />
-          <p className="text-xs text-muted-foreground">
-            Dashboard is displayed in the main workspace area.
-          </p>
-        </div>
-      ) : sidebarView === 'tasks' ? (
+    <aside className="flex flex-col h-full w-[260px] shrink-0 border-r bg-sidebar overflow-hidden">
+      {sidebarView === 'tasks' ? (
         <>
-          <div className="no-drag flex items-center justify-between px-4 pb-4">
+          <div className="no-drag flex items-center justify-between px-4 py-3">
             <div className="flex items-center gap-2">
               <h2 className="text-sm font-semibold">Tasks</h2>
               {overdueCount > 0 && (
@@ -153,9 +116,6 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
                 title={isAutoStartEnabled ? 'Disable auto-run' : 'Enable auto-run'}
               >
                 {isAutoStartEnabled ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
-              </Button>
-              <Button size="sm" variant="ghost" onClick={onOpenSettings} title="Settings">
-                <Settings className="h-3.5 w-3.5" />
               </Button>
               <Button size="sm" onClick={onCreateTask}>
                 <Plus className="h-3.5 w-3.5" />

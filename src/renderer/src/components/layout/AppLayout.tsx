@@ -19,8 +19,10 @@ import { isOverdue, isSnoozed } from '@/lib/utils'
 import { useEffect, useState, useCallback } from 'react'
 import { TaskStatus, PluginActionId } from '@/types'
 import type { FileAttachment } from '@/types'
-import { MessageSquare, ExternalLink } from 'lucide-react'
+import { MessageSquare, ExternalLink, LayoutDashboard, CheckSquare, Zap, Settings } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
+import type { SidebarView } from '@/stores/ui-store'
+import logo20x from '@/assets/logos/20x.svg'
 
 export function AppLayout() {
   const { tasks, allTasks, selectedTask, createTask, updateTask, deleteTask, selectTask } = useTasks()
@@ -99,44 +101,93 @@ export function AppLayout() {
     showToast
   })
 
+  const NAV_ITEMS: { key: SidebarView; label: string; icon: typeof LayoutDashboard }[] = [
+    { key: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+    { key: 'tasks', label: 'Tasks', icon: CheckSquare },
+    { key: 'skills', label: 'Skills', icon: Zap }
+  ]
+
   return (
     <>
-      {/* Sidebar — constrained to 280px by CSS Grid on #root */}
-      <Sidebar
-        tasks={tasks}
-        selectedTaskId={selectedTask?.id || null}
-        overdueCount={overdueCount}
-        onSelectTask={selectTask}
-        onCreateTask={openCreateModal}
-        onOpenSettings={openSettings}
-      />
+      {/* ── Top bar: drag region with logo (left) + nav switcher (center-left) + actions (right) ── */}
+      <div className="drag-region h-12 flex-shrink-0 flex items-center px-4 border-b border-border/50 windows-titlebar-pad">
+        {/* Logo */}
+        <div className="flex items-center gap-2 mr-6">
+          <img src={logo20x} className="h-5 w-5" alt="20x" />
+          <span className="text-sm font-semibold text-foreground">20x</span>
+        </div>
 
-      {/* Workspace — fills remaining space via CSS Grid 1fr */}
-      <main className="flex flex-col min-w-0 overflow-hidden bg-background">
-        {/* Drag region for traffic lights (macOS) / title bar (Windows) with mastermind toggle.
-            On Windows, the title bar overlay (min/max/close) sits on top-right ~140px wide,
-            so we add extra right padding to keep the Mastermind button visible. */}
-        <div className="drag-region h-12 flex-shrink-0 flex items-center justify-end px-4 windows-titlebar-pad">
+        {/* View switcher */}
+        <div className="no-drag flex rounded-md border border-border bg-muted/30 p-0.5">
+          {NAV_ITEMS.map(({ key, label, icon: Icon }) => (
+            <button
+              key={key}
+              onClick={() => {
+                if (activeModal === 'settings') closeModal()
+                setSidebarView(key)
+              }}
+              className={`rounded px-3 py-1 text-xs font-medium transition-colors cursor-pointer flex items-center gap-1.5 ${
+                sidebarView === key
+                  ? 'bg-background text-foreground shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              <Icon className="h-3 w-3" />
+              {label}
+            </button>
+          ))}
+        </div>
+
+        <div className="flex-1" />
+
+        {/* Global actions */}
+        <div className="no-drag flex items-center gap-1">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={openSettings}
+            className="h-7 px-2"
+            title="Settings"
+          >
+            <Settings className="h-3.5 w-3.5" />
+          </Button>
           <Button
             variant={showOrchestrator ? 'default' : 'ghost'}
             size="sm"
             onClick={() => setShowOrchestrator(!showOrchestrator)}
-            className="no-drag h-7 px-2"
+            className="h-7 px-2"
           >
             <MessageSquare className="h-3.5 w-3.5 mr-1" />
             <span className="text-xs">Mastermind</span>
           </Button>
         </div>
-        <div className="flex-1 overflow-hidden relative">
-          {/* Main workspace content */}
-          {activeModal === 'settings' ? (
-            <SettingsWorkspace />
-          ) : sidebarView === 'dashboard' ? (
-            <DashboardWorkspace />
-          ) : sidebarView === 'skills' ? (
-            <SkillWorkspace />
-          ) : (
-            <TaskWorkspace
+      </div>
+
+      {/* ── Content area: optional sidebar + workspace ── */}
+      <div className="flex flex-1 min-h-0 overflow-hidden">
+        {/* Sidebar — only for tasks and skills views */}
+        {sidebarView !== 'dashboard' && (
+          <Sidebar
+            tasks={tasks}
+            selectedTaskId={selectedTask?.id || null}
+            overdueCount={overdueCount}
+            onSelectTask={selectTask}
+            onCreateTask={openCreateModal}
+          />
+        )}
+
+        {/* Workspace */}
+        <main className="flex flex-col flex-1 min-w-0 overflow-hidden bg-background">
+          <div className="flex-1 overflow-hidden relative">
+            {/* Main workspace content */}
+            {activeModal === 'settings' ? (
+              <SettingsWorkspace />
+            ) : sidebarView === 'dashboard' ? (
+              <DashboardWorkspace />
+            ) : sidebarView === 'skills' ? (
+              <SkillWorkspace />
+            ) : (
+              <TaskWorkspace
               task={selectedTask}
               agents={agents}
               onEdit={() => {
@@ -198,8 +249,9 @@ export function AppLayout() {
           >
             <OrchestratorPanel onClose={() => setShowOrchestrator(false)} />
           </div>
-        </div>
-      </main>
+          </div>
+        </main>
+      </div>
 
       {/* Create Task Dialog */}
       <Dialog open={activeModal === 'create'} onOpenChange={(open) => !open && closeModal()}>

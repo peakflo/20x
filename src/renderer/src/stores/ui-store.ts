@@ -41,7 +41,7 @@ interface UIState {
 }
 
 export const useUIStore = create<UIState>((set) => ({
-  sidebarView: 'tasks',
+  sidebarView: 'dashboard',
   statusFilter: 'all',
   priorityFilter: 'all',
   sourceFilter: 'all',
