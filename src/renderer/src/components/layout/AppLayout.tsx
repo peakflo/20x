@@ -8,6 +8,9 @@ import { DeleteConfirmDialog } from '@/components/tasks/DeleteConfirmDialog'
 import { Dialog, DialogContent, DialogHeader, DialogBody, DialogTitle } from '@/components/ui/Dialog'
 import { OrchestratorPanel } from '@/components/orchestrator/OrchestratorPanel'
 import { OnboardingWizard, shouldShowOnboarding } from '@/components/onboarding/OnboardingWizard'
+import { PresetupFlow } from '@/components/presetup/PresetupFlow'
+import { useEnterpriseStore } from '@/stores/enterprise-store'
+import { usePresetupStore } from '@/stores/presetup-store'
 import { useTasks } from '@/hooks/use-tasks'
 import { useUIStore } from '@/stores/ui-store'
 import { useAgentStore } from '@/stores/agent-store'
@@ -70,6 +73,9 @@ export function AppLayout() {
 
   const [showOrchestrator, setShowOrchestrator] = useState(false)
   const [onboardingOpen, setOnboardingOpen] = useState(false)
+  const [presetupOpen, setPresetupOpen] = useState(false)
+
+  const { isAuthenticated, currentTenant } = useEnterpriseStore()
 
   // Auto-open onboarding on first launch or major/minor version bumps
   useEffect(() => {
@@ -89,6 +95,23 @@ export function AppLayout() {
       window.electronAPI?.app?.getVersion().then((v) => {
         if (v) settingsApi.set('setup_completed_version', v)
       })
+      // After onboarding closes, show presetup if enterprise-authenticated
+      if (isAuthenticated && currentTenant) {
+        setPresetupOpen(true)
+      }
+    }
+  }
+
+  // Trigger presetup check when enterprise auth completes (and onboarding is not showing)
+  useEffect(() => {
+    if (!isAuthenticated || !currentTenant || onboardingOpen) return
+    setPresetupOpen(true)
+  }, [isAuthenticated, currentTenant?.id, onboardingOpen])
+
+  const handlePresetupChange = (open: boolean) => {
+    setPresetupOpen(open)
+    if (!open) {
+      usePresetupStore.getState().reset()
     }
   }
 
@@ -334,6 +357,9 @@ export function AppLayout() {
 
       {/* Onboarding Wizard — auto-opens on first launch or major/minor version bumps */}
       <OnboardingWizard open={onboardingOpen} onOpenChange={handleOnboardingChange} />
+
+      {/* Presetup Flow — opens after enterprise login if not yet completed */}
+      <PresetupFlow open={presetupOpen} onOpenChange={handlePresetupChange} />
 
       {/* Dashboard task preview — reuses the full TaskWorkspace inside a dialog */}
       <Dialog open={!!dashboardPreviewTaskId} onOpenChange={(open) => { if (!open) closeDashboardPreview() }}>

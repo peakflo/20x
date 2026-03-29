@@ -336,6 +336,7 @@ interface ElectronAPI {
     }>
     refreshToken: () => Promise<{ token: string }>
     apiRequest: (method: string, path: string, body?: unknown) => Promise<unknown>
+    getSupabaseTokens: () => Promise<{ accessToken: string | null; refreshToken: string | null; apiUrl: string }>
     getApiUrl: () => Promise<string>
     getJwt: () => Promise<string>
     enableIframeAuth: () => Promise<{ apiUrl: string }>
