@@ -1,5 +1,7 @@
 import { create } from 'zustand'
 import { enterpriseApi } from '@/lib/ipc-client'
+import type { WorkfloTask } from '@/types'
+import { TaskStatus } from '@/types'
 
 // ── Types ───────────────────────────────────────────────────
 
@@ -35,10 +37,75 @@ export interface DashboardStats {
 
 export type TimeWindow = '24h' | '7d' | '30d' | 'all'
 
+// ── Local stats computation ─────────────────────────────────
+
+function getWindowStart(timeWindow: TimeWindow): Date | null {
+  if (timeWindow === 'all') return null
+  const now = new Date()
+  switch (timeWindow) {
+    case '24h':
+      return new Date(now.getTime() - 24 * 60 * 60 * 1000)
+    case '7d':
+      return new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
+    case '30d':
+      return new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000)
+  }
+}
+
+/** Compute dashboard stats from local tasks (no cloud required). */
+export function computeLocalStats(tasks: WorkfloTask[], timeWindow: TimeWindow): DashboardStats {
+  // Filter to top-level tasks only (consistent with TaskBoard)
+  const topLevel = tasks.filter((t) => !t.parent_task_id)
+  const windowStart = getWindowStart(timeWindow)
+
+  const tasksByStatus: Record<string, number> = {}
+  for (const t of topLevel) {
+    const s = t.status || TaskStatus.NotStarted
+    tasksByStatus[s] = (tasksByStatus[s] || 0) + 1
+  }
+
+  const tasksCreatedInWindow = windowStart
+    ? topLevel.filter((t) => new Date(t.created_at) >= windowStart).length
+    : topLevel.length
+
+  const completedTasks = topLevel.filter((t) => t.status === TaskStatus.Completed)
+  const tasksCompletedInWindow = windowStart
+    ? completedTasks.filter((t) => new Date(t.updated_at) >= windowStart).length
+    : completedTasks.length
+
+  // Agent-related tasks (tasks that have/had an agent assigned)
+  const agentTasks = topLevel.filter((t) => t.agent_id)
+  const agentCompletedTasks = agentTasks.filter((t) => t.status === TaskStatus.Completed)
+
+  return {
+    totalTasks: topLevel.length,
+    tasksByStatus,
+    tasksCreatedInWindow,
+    tasksCompletedInWindow,
+    // Completion time can't be computed locally (no completed_at timestamp)
+    avgTaskCompletionTimeHours: null,
+    p50CompletionTimeHours: null,
+    p90CompletionTimeHours: null,
+    totalAgentRuns: agentTasks.length,
+    agentSuccessRate: agentTasks.length > 0
+      ? (agentCompletedTasks.length / agentTasks.length) * 100
+      : null,
+    autonomousTasksCompleted: agentCompletedTasks.length,
+    humanReviewedTasksCompleted: completedTasks.length - agentCompletedTasks.length,
+    aiAutonomyRate: completedTasks.length > 0
+      ? (agentCompletedTasks.length / completedTasks.length) * 100
+      : null,
+    activeUsers: 1, // Local is always single-user
+    totalUsers: 1,
+    adoptionRate: null
+  }
+}
+
 interface DashboardState {
   // Data
   applications: ApplicationItem[]
   stats: DashboardStats | null
+  localStats: DashboardStats | null
   timeWindow: TimeWindow
 
   // Loading states
@@ -54,11 +121,13 @@ interface DashboardState {
   fetchApplications: () => Promise<void>
   fetchStats: () => Promise<void>
   fetchAll: () => Promise<void>
+  updateLocalStats: (tasks: WorkfloTask[]) => void
 }
 
 export const useDashboardStore = create<DashboardState>((set, get) => ({
   applications: [],
   stats: null,
+  localStats: null,
   timeWindow: '7d',
 
   applicationsLoading: false,
@@ -71,6 +140,11 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     set({ timeWindow })
     // Re-fetch stats with new window
     get().fetchStats()
+  },
+
+  updateLocalStats: (tasks: WorkfloTask[]) => {
+    const { timeWindow } = get()
+    set({ localStats: computeLocalStats(tasks, timeWindow) })
   },
 
   fetchApplications: async () => {

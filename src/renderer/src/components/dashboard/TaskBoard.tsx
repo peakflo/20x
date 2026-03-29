@@ -1,7 +1,8 @@
-import { useMemo } from 'react'
+import { useMemo, useCallback } from 'react'
 import { Clock, AlertCircle } from 'lucide-react'
 import { Badge } from '@/components/ui/Badge'
 import { useTaskStore } from '@/stores/task-store'
+import { useUIStore } from '@/stores/ui-store'
 import { TaskStatus } from '@/types'
 import type { WorkfloTask } from '@/types'
 
@@ -61,11 +62,17 @@ function isOverdue(dateStr: string | null): boolean {
 
 // ── Task Card ──────────────────────────────────────────────
 
-function TaskCard({ task }: { task: WorkfloTask }) {
+function TaskCard({ task, onSelect }: { task: WorkfloTask; onSelect: (id: string) => void }) {
   const overdue = task.due_date && task.status !== TaskStatus.Completed && isOverdue(task.due_date)
 
   return (
-    <div className="rounded-md border border-border/40 bg-[#0d1117] p-3 hover:border-border/70 transition-colors cursor-default">
+    <div
+      className="rounded-md border border-border/40 bg-[#0d1117] p-3 hover:border-border/70 hover:bg-[#161b22] transition-colors cursor-pointer"
+      onClick={() => onSelect(task.id)}
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect(task.id) } }}
+    >
       <div className="flex items-start justify-between gap-2 mb-1.5">
         <h4 className="text-xs font-medium leading-snug line-clamp-2 flex-1">{task.title}</h4>
         {task.priority && task.priority !== 'low' && (
@@ -99,7 +106,7 @@ function TaskCard({ task }: { task: WorkfloTask }) {
 
 // ── Column ─────────────────────────────────────────────────
 
-function Column({ column, tasks }: { column: StatusColumn; tasks: WorkfloTask[] }) {
+function Column({ column, tasks, onSelect }: { column: StatusColumn; tasks: WorkfloTask[]; onSelect: (id: string) => void }) {
   return (
     <div className="flex flex-col min-w-[200px] max-w-[260px] flex-1">
       {/* Column header */}
@@ -117,7 +124,7 @@ function Column({ column, tasks }: { column: StatusColumn; tasks: WorkfloTask[] 
             No tasks
           </div>
         ) : (
-          tasks.map((task) => <TaskCard key={task.id} task={task} />)
+          tasks.map((task) => <TaskCard key={task.id} task={task} onSelect={onSelect} />)
         )}
       </div>
     </div>
@@ -127,10 +134,17 @@ function Column({ column, tasks }: { column: StatusColumn; tasks: WorkfloTask[] 
 // ── TaskBoard ──────────────────────────────────────────────
 
 export function TaskBoard() {
-  const { tasks, isLoading } = useTaskStore()
+  const { tasks, isLoading, selectTask } = useTaskStore()
+  const { setSidebarView } = useUIStore()
 
   // Only show top-level tasks (not subtasks)
   const topLevelTasks = useMemo(() => tasks.filter((t) => !t.parent_task_id), [tasks])
+
+  // Navigate to full task view with agent transcript
+  const handleSelectTask = useCallback((taskId: string) => {
+    selectTask(taskId)
+    setSidebarView('tasks')
+  }, [selectTask, setSidebarView])
 
   const tasksByStatus = useMemo(() => {
     const grouped: Record<string, WorkfloTask[]> = {}
@@ -190,6 +204,7 @@ export function TaskBoard() {
               key={col.key}
               column={col}
               tasks={tasksByStatus[col.key] || []}
+              onSelect={handleSelectTask}
             />
           ))}
         </div>

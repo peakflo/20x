@@ -1,8 +1,9 @@
 import { useEffect } from 'react'
-import { RefreshCw, Loader2 } from 'lucide-react'
+import { RefreshCw, Loader2, Cloud } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { useDashboardStore, type TimeWindow } from '@/stores/dashboard-store'
 import { useEnterpriseStore } from '@/stores/enterprise-store'
+import { useTaskStore } from '@/stores/task-store'
 import { StatsSection } from './StatsSection'
 import { ApplicationsList } from './ApplicationsList'
 import { TaskBoard } from './TaskBoard'
@@ -16,34 +17,29 @@ const TIME_WINDOW_LABELS: Record<TimeWindow, string> = {
 
 export function DashboardWorkspace() {
   const { isAuthenticated } = useEnterpriseStore()
+  const { tasks } = useTaskStore()
   const {
     timeWindow,
     setTimeWindow,
     fetchAll,
+    updateLocalStats,
     applicationsLoading,
     statsLoading
   } = useDashboardStore()
 
   const isLoading = applicationsLoading || statsLoading
 
+  // Always compute local stats from task store
+  useEffect(() => {
+    updateLocalStats(tasks)
+  }, [tasks, timeWindow])
+
+  // Fetch cloud data when authenticated
   useEffect(() => {
     if (isAuthenticated) {
       fetchAll()
     }
   }, [isAuthenticated])
-
-  if (!isAuthenticated) {
-    return (
-      <div className="flex items-center justify-center h-full">
-        <div className="text-center max-w-md">
-          <h2 className="text-lg font-semibold mb-2">Connect to 20x Cloud</h2>
-          <p className="text-sm text-muted-foreground">
-            Sign in to your enterprise account in Settings → Enterprise to view your dashboard.
-          </p>
-        </div>
-      </div>
-    )
-  }
 
   return (
     <div className="h-full overflow-y-auto">
@@ -53,11 +49,13 @@ export function DashboardWorkspace() {
           <div>
             <h1 className="text-xl font-bold tracking-tight">Dashboard</h1>
             <p className="text-sm text-muted-foreground">
-              Applications, stats, and task overview
+              {isAuthenticated
+                ? 'Applications, stats, and task overview'
+                : 'Stats and task overview'}
             </p>
           </div>
           <div className="flex items-center gap-2">
-            {/* Time window selector */}
+            {/* Time window selector — always available */}
             <div className="flex rounded-md border border-border bg-muted/30 p-0.5">
               {(Object.keys(TIME_WINDOW_LABELS) as TimeWindow[]).map((w) => (
                 <button
@@ -73,29 +71,43 @@ export function DashboardWorkspace() {
                 </button>
               ))}
             </div>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={fetchAll}
-              disabled={isLoading}
-              title="Refresh all"
-            >
-              {isLoading ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <RefreshCw className="h-3.5 w-3.5" />
-              )}
-            </Button>
+            {isAuthenticated && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={fetchAll}
+                disabled={isLoading}
+                title="Refresh all"
+              >
+                {isLoading ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <RefreshCw className="h-3.5 w-3.5" />
+                )}
+              </Button>
+            )}
           </div>
         </div>
 
-        {/* Stats Section */}
+        {/* Stats — always available (local data fallback when not connected) */}
         <StatsSection />
 
-        {/* Applications List */}
-        <ApplicationsList />
+        {/* Applications — cloud only, shows connect prompt when not authenticated */}
+        {isAuthenticated ? (
+          <ApplicationsList />
+        ) : (
+          <div className="rounded-lg border border-border/50 bg-[#161b22] p-4 flex items-center gap-3">
+            <Cloud className="h-5 w-5 text-muted-foreground shrink-0" />
+            <div>
+              <p className="text-sm font-medium">Connect to 20x Cloud for more insights</p>
+              <p className="text-xs text-muted-foreground">
+                Sign in via Settings → Enterprise to see application workflows and enhanced stats.
+              </p>
+            </div>
+          </div>
+        )}
 
-        {/* Task Kanban Board */}
+        {/* Task Kanban Board — always available (local data) */}
         <TaskBoard />
       </div>
     </div>

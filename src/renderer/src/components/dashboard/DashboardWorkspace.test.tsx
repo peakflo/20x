@@ -1,9 +1,10 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
-import { render, screen, cleanup } from '@testing-library/react'
+import { render, screen, cleanup, fireEvent } from '@testing-library/react'
 import { DashboardWorkspace } from './DashboardWorkspace'
 import { useDashboardStore } from '@/stores/dashboard-store'
 import { useEnterpriseStore } from '@/stores/enterprise-store'
 import { useTaskStore } from '@/stores/task-store'
+import { useUIStore } from '@/stores/ui-store'
 import { TaskStatus } from '@/types'
 import type { WorkfloTask } from '@/types'
 
@@ -70,12 +71,14 @@ beforeEach(() => {
   useDashboardStore.setState({
     applications: [],
     stats: null,
+    localStats: null,
     timeWindow: '7d',
     applicationsLoading: false,
     statsLoading: false,
     applicationsError: null,
     statsError: null,
-    fetchAll: vi.fn()
+    fetchAll: vi.fn(),
+    updateLocalStats: vi.fn()
   })
   useEnterpriseStore.setState({
     isAuthenticated: false,
@@ -95,10 +98,45 @@ beforeEach(() => {
 })
 
 describe('DashboardWorkspace', () => {
-  it('shows connect prompt when not authenticated', () => {
+  it('shows connect prompt for applications when not authenticated', () => {
     render(<DashboardWorkspace />)
-    expect(screen.getByText('Connect to 20x Cloud')).toBeDefined()
-    expect(screen.getByText(/Sign in to your enterprise account/)).toBeDefined()
+    expect(screen.getByText('Connect to 20x Cloud for more insights')).toBeDefined()
+    expect(screen.getByText(/Sign in via Settings/)).toBeDefined()
+  })
+
+  it('always shows stats section even when not authenticated', () => {
+    useDashboardStore.setState({
+      localStats: {
+        totalTasks: 5,
+        tasksByStatus: { not_started: 3, completed: 2 },
+        tasksCreatedInWindow: 5,
+        tasksCompletedInWindow: 2,
+        avgTaskCompletionTimeHours: null,
+        p50CompletionTimeHours: null,
+        p90CompletionTimeHours: null,
+        totalAgentRuns: 0,
+        agentSuccessRate: null,
+        autonomousTasksCompleted: 0,
+        humanReviewedTasksCompleted: 2,
+        aiAutonomyRate: 0,
+        activeUsers: 1,
+        totalUsers: 1,
+        adoptionRate: null
+      }
+    })
+
+    render(<DashboardWorkspace />)
+    expect(screen.getByText('Stats Overview')).toBeDefined()
+    expect(screen.getByText('5')).toBeDefined() // totalTasks
+    expect(screen.getByText('Task Board')).toBeDefined()
+  })
+
+  it('always shows time window selector', () => {
+    render(<DashboardWorkspace />)
+    expect(screen.getByText('24h')).toBeDefined()
+    expect(screen.getByText('7d')).toBeDefined()
+    expect(screen.getByText('30d')).toBeDefined()
+    expect(screen.getByText('All')).toBeDefined()
   })
 
   it('renders dashboard sections when authenticated', () => {
@@ -111,17 +149,7 @@ describe('DashboardWorkspace', () => {
     expect(screen.getByText('Task Board')).toBeDefined()
   })
 
-  it('renders time window selector buttons', () => {
-    useEnterpriseStore.setState({ isAuthenticated: true })
-
-    render(<DashboardWorkspace />)
-    expect(screen.getByText('24h')).toBeDefined()
-    expect(screen.getByText('7d')).toBeDefined()
-    expect(screen.getByText('30d')).toBeDefined()
-    expect(screen.getByText('All')).toBeDefined()
-  })
-
-  it('shows stats values when data is loaded', () => {
+  it('shows stats values when cloud data is loaded', () => {
     useEnterpriseStore.setState({ isAuthenticated: true })
     useDashboardStore.setState({
       stats: {
@@ -229,5 +257,36 @@ describe('DashboardWorkspace', () => {
 
     render(<DashboardWorkspace />)
     expect(mockFetchAll).toHaveBeenCalledOnce()
+  })
+
+  it('computes local stats on mount even when not authenticated', () => {
+    const mockUpdateLocalStats = vi.fn()
+    useDashboardStore.setState({ updateLocalStats: mockUpdateLocalStats })
+    useTaskStore.setState({
+      tasks: [
+        makeTask({ id: 'task-1', title: 'Task 1', status: TaskStatus.NotStarted }),
+        makeTask({ id: 'task-2', title: 'Task 2', status: TaskStatus.Completed })
+      ]
+    })
+
+    render(<DashboardWorkspace />)
+    expect(mockUpdateLocalStats).toHaveBeenCalled()
+  })
+
+  it('clicking a task card navigates to full task view', () => {
+    const mockSelectTask = vi.fn()
+    useTaskStore.setState({
+      tasks: [
+        makeTask({ id: 'task-abc', title: 'Clickable task', status: TaskStatus.NotStarted })
+      ],
+      selectTask: mockSelectTask
+    })
+    useUIStore.setState({ sidebarView: 'dashboard' })
+
+    render(<DashboardWorkspace />)
+    fireEvent.click(screen.getByText('Clickable task'))
+
+    expect(mockSelectTask).toHaveBeenCalledWith('task-abc')
+    expect(useUIStore.getState().sidebarView).toBe('tasks')
   })
 })

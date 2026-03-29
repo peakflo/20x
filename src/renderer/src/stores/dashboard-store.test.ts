@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { useDashboardStore } from './dashboard-store'
+import { useDashboardStore, computeLocalStats } from './dashboard-store'
 import type { ApplicationItem, DashboardStats } from './dashboard-store'
+import { TaskStatus } from '@/types'
+import type { WorkfloTask } from '@/types'
 
 // Mock the ipc-client enterprise API
 vi.mock('@/lib/ipc-client', () => ({
@@ -56,12 +58,50 @@ const mockStats: DashboardStats = {
   adoptionRate: 41.7
 }
 
+function makeTask(overrides: Partial<WorkfloTask> = {}): WorkfloTask {
+  return {
+    id: 'task-1',
+    title: 'Test task',
+    description: '',
+    type: 'general',
+    priority: 'medium',
+    status: TaskStatus.NotStarted,
+    assignee: '',
+    due_date: null,
+    labels: [],
+    attachments: [],
+    repos: [],
+    output_fields: [],
+    agent_id: null,
+    session_id: null,
+    external_id: null,
+    source_id: null,
+    source: 'local',
+    skill_ids: null,
+    snoozed_until: null,
+    resolution: null,
+    feedback_rating: null,
+    feedback_comment: null,
+    is_recurring: false,
+    recurrence_pattern: null,
+    recurrence_parent_id: null,
+    last_occurrence_at: null,
+    next_occurrence_at: null,
+    parent_task_id: null,
+    sort_order: 0,
+    created_at: '2026-03-28T08:00:00Z',
+    updated_at: '2026-03-28T08:00:00Z',
+    ...overrides
+  }
+}
+
 describe('useDashboardStore', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     useDashboardStore.setState({
       applications: [],
       stats: null,
+      localStats: null,
       timeWindow: '7d',
       applicationsLoading: false,
       statsLoading: false,
@@ -74,6 +114,7 @@ describe('useDashboardStore', () => {
     const state = useDashboardStore.getState()
     expect(state.applications).toEqual([])
     expect(state.stats).toBeNull()
+    expect(state.localStats).toBeNull()
     expect(state.timeWindow).toBe('7d')
     expect(state.applicationsLoading).toBe(false)
     expect(state.statsLoading).toBe(false)
@@ -158,5 +199,133 @@ describe('useDashboardStore', () => {
     const state = useDashboardStore.getState()
     expect(state.stats).toBeNull()
     expect(state.statsLoading).toBe(false)
+  })
+
+  it('updateLocalStats computes stats from tasks', () => {
+    const tasks: WorkfloTask[] = [
+      makeTask({ id: 't1', status: TaskStatus.NotStarted }),
+      makeTask({ id: 't2', status: TaskStatus.Completed }),
+      makeTask({ id: 't3', status: TaskStatus.AgentWorking, agent_id: 'agent-1' }),
+      makeTask({ id: 't4', status: TaskStatus.Completed, agent_id: 'agent-1' })
+    ]
+
+    useDashboardStore.getState().updateLocalStats(tasks)
+
+    const { localStats } = useDashboardStore.getState()
+    expect(localStats).not.toBeNull()
+    expect(localStats!.totalTasks).toBe(4)
+    expect(localStats!.tasksCompletedInWindow).toBe(2)
+    expect(localStats!.totalAgentRuns).toBe(2)
+    expect(localStats!.autonomousTasksCompleted).toBe(1)
+    expect(localStats!.humanReviewedTasksCompleted).toBe(1)
+  })
+
+  it('updateLocalStats excludes subtasks', () => {
+    const tasks: WorkfloTask[] = [
+      makeTask({ id: 'parent', status: TaskStatus.NotStarted }),
+      makeTask({ id: 'sub-1', status: TaskStatus.NotStarted, parent_task_id: 'parent' })
+    ]
+
+    useDashboardStore.getState().updateLocalStats(tasks)
+
+    const { localStats } = useDashboardStore.getState()
+    expect(localStats!.totalTasks).toBe(1)
+  })
+})
+
+describe('computeLocalStats', () => {
+  it('computes basic counts from tasks', () => {
+    const tasks: WorkfloTask[] = [
+      makeTask({ id: 't1', status: TaskStatus.NotStarted }),
+      makeTask({ id: 't2', status: TaskStatus.Completed }),
+      makeTask({ id: 't3', status: TaskStatus.AgentWorking })
+    ]
+
+    const stats = computeLocalStats(tasks, 'all')
+
+    expect(stats.totalTasks).toBe(3)
+    expect(stats.tasksCompletedInWindow).toBe(1)
+    expect(stats.tasksByStatus).toEqual({
+      not_started: 1,
+      completed: 1,
+      agent_working: 1
+    })
+  })
+
+  it('filters by time window for created tasks', () => {
+    const now = new Date()
+    const twoDaysAgo = new Date(now.getTime() - 2 * 24 * 60 * 60 * 1000).toISOString()
+    const tenDaysAgo = new Date(now.getTime() - 10 * 24 * 60 * 60 * 1000).toISOString()
+
+    const tasks: WorkfloTask[] = [
+      makeTask({ id: 't1', created_at: twoDaysAgo, updated_at: twoDaysAgo }),
+      makeTask({ id: 't2', created_at: tenDaysAgo, updated_at: tenDaysAgo })
+    ]
+
+    const stats24h = computeLocalStats(tasks, '24h')
+    expect(stats24h.tasksCreatedInWindow).toBe(0)
+
+    const stats7d = computeLocalStats(tasks, '7d')
+    expect(stats7d.tasksCreatedInWindow).toBe(1)
+
+    const stats30d = computeLocalStats(tasks, '30d')
+    expect(stats30d.tasksCreatedInWindow).toBe(2)
+  })
+
+  it('computes AI autonomy rate correctly', () => {
+    const tasks: WorkfloTask[] = [
+      makeTask({ id: 't1', status: TaskStatus.Completed, agent_id: 'agent-1' }),
+      makeTask({ id: 't2', status: TaskStatus.Completed, agent_id: 'agent-1' }),
+      makeTask({ id: 't3', status: TaskStatus.Completed, agent_id: null })
+    ]
+
+    const stats = computeLocalStats(tasks, 'all')
+
+    expect(stats.aiAutonomyRate).toBeCloseTo(66.7, 1)
+    expect(stats.autonomousTasksCompleted).toBe(2)
+    expect(stats.humanReviewedTasksCompleted).toBe(1)
+  })
+
+  it('computes agent success rate correctly', () => {
+    const tasks: WorkfloTask[] = [
+      makeTask({ id: 't1', status: TaskStatus.Completed, agent_id: 'agent-1' }),
+      makeTask({ id: 't2', status: TaskStatus.AgentWorking, agent_id: 'agent-1' }),
+      makeTask({ id: 't3', status: TaskStatus.NotStarted, agent_id: 'agent-1' })
+    ]
+
+    const stats = computeLocalStats(tasks, 'all')
+
+    expect(stats.agentSuccessRate).toBeCloseTo(33.3, 1)
+    expect(stats.totalAgentRuns).toBe(3)
+  })
+
+  it('returns null rates when no tasks', () => {
+    const stats = computeLocalStats([], 'all')
+
+    expect(stats.totalTasks).toBe(0)
+    expect(stats.aiAutonomyRate).toBeNull()
+    expect(stats.agentSuccessRate).toBeNull()
+    expect(stats.avgTaskCompletionTimeHours).toBeNull()
+  })
+
+  it('excludes subtasks from counts', () => {
+    const tasks: WorkfloTask[] = [
+      makeTask({ id: 'parent', status: TaskStatus.NotStarted }),
+      makeTask({ id: 'sub-1', status: TaskStatus.Completed, parent_task_id: 'parent' }),
+      makeTask({ id: 'sub-2', status: TaskStatus.Completed, parent_task_id: 'parent' })
+    ]
+
+    const stats = computeLocalStats(tasks, 'all')
+
+    expect(stats.totalTasks).toBe(1)
+    expect(stats.tasksCompletedInWindow).toBe(0) // Only parent counted, which is not_started
+  })
+
+  it('sets single-user defaults', () => {
+    const stats = computeLocalStats([], 'all')
+
+    expect(stats.activeUsers).toBe(1)
+    expect(stats.totalUsers).toBe(1)
+    expect(stats.adoptionRate).toBeNull()
   })
 })

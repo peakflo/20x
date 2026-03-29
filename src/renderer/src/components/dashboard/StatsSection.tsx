@@ -59,7 +59,10 @@ function StatCard({ title, value, description, icon: Icon, loading, accent }: St
 }
 
 export function StatsSection() {
-  const { stats, statsLoading } = useDashboardStore()
+  const { stats, localStats, statsLoading } = useDashboardStore()
+
+  // Use cloud stats when available, otherwise fall back to local stats
+  const effectiveStats = stats || localStats
 
   return (
     <section>
@@ -67,10 +70,10 @@ export function StatsSection() {
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
         <StatCard
           title="AI Autonomy"
-          value={formatPercent(stats?.aiAutonomyRate ?? null)}
+          value={formatPercent(effectiveStats?.aiAutonomyRate ?? null)}
           description={
-            stats
-              ? `${formatNumber(stats.autonomousTasksCompleted)} autonomous`
+            effectiveStats
+              ? `${formatNumber(effectiveStats.autonomousTasksCompleted)} autonomous`
               : 'Tasks without human review'
           }
           icon={Bot}
@@ -79,37 +82,37 @@ export function StatsSection() {
         />
         <StatCard
           title="Agent Success"
-          value={formatPercent(stats?.agentSuccessRate ?? null)}
-          description={`${formatNumber(stats?.totalAgentRuns)} total runs`}
+          value={formatPercent(effectiveStats?.agentSuccessRate ?? null)}
+          description={`${formatNumber(effectiveStats?.totalAgentRuns)} total runs`}
           icon={Cpu}
           loading={statsLoading}
           accent="#059669"
         />
         <StatCard
           title="Total Tasks"
-          value={formatNumber(stats?.totalTasks)}
-          description={`${formatNumber(stats?.tasksCompletedInWindow)} completed`}
+          value={formatNumber(effectiveStats?.totalTasks)}
+          description={`${formatNumber(effectiveStats?.tasksCompletedInWindow)} completed`}
           icon={BarChart3}
           loading={statsLoading}
         />
         <StatCard
           title="Completed"
-          value={formatNumber(stats?.tasksCompletedInWindow)}
+          value={formatNumber(effectiveStats?.tasksCompletedInWindow)}
           description="In selected window"
           icon={CheckCircle2}
           loading={statsLoading}
         />
         <StatCard
           title="Avg Completion"
-          value={formatHours(stats?.avgTaskCompletionTimeHours ?? null)}
-          description={`p50: ${formatHours(stats?.p50CompletionTimeHours ?? null)} / p90: ${formatHours(stats?.p90CompletionTimeHours ?? null)}`}
+          value={formatHours(effectiveStats?.avgTaskCompletionTimeHours ?? null)}
+          description={`p50: ${formatHours(effectiveStats?.p50CompletionTimeHours ?? null)} / p90: ${formatHours(effectiveStats?.p90CompletionTimeHours ?? null)}`}
           icon={Clock}
           loading={statsLoading}
         />
         <StatCard
           title="Active Users"
-          value={formatNumber(stats?.activeUsers)}
-          description={`${formatNumber(stats?.totalUsers)} total`}
+          value={formatNumber(effectiveStats?.activeUsers)}
+          description={`${formatNumber(effectiveStats?.totalUsers)} total`}
           icon={Users}
           loading={statsLoading}
           accent="#0891b2"
