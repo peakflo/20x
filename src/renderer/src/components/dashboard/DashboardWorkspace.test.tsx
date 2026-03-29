@@ -17,7 +17,8 @@ vi.mock('@/lib/ipc-client', () => ({
     logout: vi.fn(),
     getSession: vi.fn().mockResolvedValue({ isAuthenticated: false }),
     refreshToken: vi.fn(),
-    getApiUrl: vi.fn().mockResolvedValue('http://localhost:2000')
+    getApiUrl: vi.fn().mockResolvedValue('http://localhost:2000'),
+    getJwt: vi.fn().mockResolvedValue('mock-jwt-token')
   },
   taskApi: {
     getAll: vi.fn().mockResolvedValue([])

@@ -8,7 +8,8 @@ import type { WorkfloTask } from '@/types'
 vi.mock('@/lib/ipc-client', () => ({
   enterpriseApi: {
     apiRequest: vi.fn(),
-    getApiUrl: vi.fn().mockResolvedValue('http://localhost:2000')
+    getApiUrl: vi.fn().mockResolvedValue('http://localhost:2000'),
+    getJwt: vi.fn().mockResolvedValue('mock-jwt-token')
   }
 }))
 

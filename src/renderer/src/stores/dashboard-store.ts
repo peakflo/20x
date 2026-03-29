@@ -219,29 +219,45 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
 
   openApplication: async (workflowId: string) => {
     try {
-      // Trigger the workflow and get the execution/run URL
+      // Get auth token and API URL for the iframe
+      const [apiUrl, jwt] = await Promise.all([
+        enterpriseApi.getApiUrl(),
+        enterpriseApi.getJwt()
+      ])
+
+      // Trigger the workflow
       const result = await enterpriseApi.apiRequest('POST', `/api/workflows/${workflowId}/trigger`, {}) as {
         executionId?: string
         redirectUrl?: string
       }
 
-      // Build the iframe URL from the API base + execution context
-      const apiUrl = await enterpriseApi.getApiUrl()
-      const iframeUrl = result.redirectUrl
-        || `${apiUrl}/applications/${workflowId}${result.executionId ? `?executionId=${result.executionId}` : ''}`
+      // Build the iframe URL with auth token
+      let iframeUrl: string
+      if (result.redirectUrl) {
+        const url = new URL(result.redirectUrl)
+        url.searchParams.set('token', jwt)
+        iframeUrl = url.toString()
+      } else {
+        const params = new URLSearchParams({ token: jwt })
+        if (result.executionId) params.set('executionId', result.executionId)
+        iframeUrl = `${apiUrl}/applications/${workflowId}?${params.toString()}`
+      }
 
       set({ activeApplicationId: workflowId, activeApplicationUrl: iframeUrl })
     } catch (err) {
       console.error('Failed to open application:', err)
-      // Fallback: open iframe directly without triggering
+      // Fallback: open iframe directly with auth token (no trigger)
       try {
-        const apiUrl = await enterpriseApi.getApiUrl()
+        const [apiUrl, jwt] = await Promise.all([
+          enterpriseApi.getApiUrl(),
+          enterpriseApi.getJwt()
+        ])
         set({
           activeApplicationId: workflowId,
-          activeApplicationUrl: `${apiUrl}/applications/${workflowId}`
+          activeApplicationUrl: `${apiUrl}/applications/${workflowId}?token=${encodeURIComponent(jwt)}`
         })
       } catch {
-        // Last resort — cannot get API URL
+        // Cannot get API URL or JWT
       }
     }
   },

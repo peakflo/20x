@@ -337,6 +337,7 @@ interface ElectronAPI {
     refreshToken: () => Promise<{ token: string }>
     apiRequest: (method: string, path: string, body?: unknown) => Promise<unknown>
     getApiUrl: () => Promise<string>
+    getJwt: () => Promise<string>
   }
   updater: {
     check: () => Promise<{ success: boolean; version?: string; error?: string }>

@@ -503,5 +503,9 @@ export const enterpriseApi = {
 
   getApiUrl: (): Promise<string> => {
     return window.electronAPI.enterprise.getApiUrl()
+  },
+
+  getJwt: (): Promise<string> => {
+    return window.electronAPI.enterprise.getJwt()
   }
 }

@@ -128,6 +128,10 @@ export class EnterpriseAuth {
     return this.apiUrl
   }
 
+  async getJwt(): Promise<string> {
+    return this.getValidJwt()
+  }
+
   // ── Login (email/password via Supabase) ───────────────────────────
 
   async login(email: string, password: string): Promise<EnterpriseLoginResult> {
