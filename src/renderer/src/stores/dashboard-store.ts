@@ -333,9 +333,10 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
             set({ applicationPolling: false, applicationError: 'No application URL found in execution output' })
           }
         } catch (err) {
-          // 404 means execution not written to DB yet — retry
-          const is404 = err instanceof Error && err.message.includes('404')
-          if (is404) {
+          // Execution may not be written to DB yet — retry on "not found" style errors
+          const msg = err instanceof Error ? err.message.toLowerCase() : ''
+          const isNotFound = msg.includes('404') || msg.includes('not found') || msg.includes('execution')
+          if (isNotFound) {
             setTimeout(() => poll(execId), 3000)
             return
           }
