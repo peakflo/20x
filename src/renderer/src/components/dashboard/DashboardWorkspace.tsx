@@ -4,6 +4,8 @@ import { Button } from '@/components/ui/Button'
 import { useDashboardStore, type TimeWindow } from '@/stores/dashboard-store'
 import { useEnterpriseStore } from '@/stores/enterprise-store'
 import { useTaskStore } from '@/stores/task-store'
+import { useUIStore } from '@/stores/ui-store'
+import { SettingsTab } from '@/types'
 import { StatsSection } from './StatsSection'
 import { ApplicationsList } from './ApplicationsList'
 import { TaskBoard } from './TaskBoard'
@@ -18,6 +20,7 @@ const TIME_WINDOW_LABELS: Record<TimeWindow, string> = {
 export function DashboardWorkspace() {
   const { isAuthenticated } = useEnterpriseStore()
   const { tasks } = useTaskStore()
+  const { openSettings, setSettingsTab } = useUIStore()
   const {
     timeWindow,
     setTimeWindow,
@@ -96,14 +99,26 @@ export function DashboardWorkspace() {
         {isAuthenticated ? (
           <ApplicationsList />
         ) : (
-          <div className="rounded-lg border border-border/50 bg-[#161b22] p-4 flex items-center gap-3">
-            <Cloud className="h-5 w-5 text-muted-foreground shrink-0" />
-            <div>
-              <p className="text-sm font-medium">Connect to 20x Cloud for more insights</p>
-              <p className="text-xs text-muted-foreground">
-                Sign in via Settings → Enterprise to see application workflows and enhanced stats.
-              </p>
+          <div className="rounded-lg border border-border/50 bg-[#161b22] p-4 flex items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <Cloud className="h-5 w-5 text-muted-foreground shrink-0" />
+              <div>
+                <p className="text-sm font-medium">Connect to 20x Cloud</p>
+                <p className="text-xs text-muted-foreground">
+                  See application workflows and enhanced stats.
+                </p>
+              </div>
             </div>
+            <Button
+              variant="default"
+              size="sm"
+              onClick={() => {
+                setSettingsTab(SettingsTab.ENTERPRISE)
+                openSettings()
+              }}
+            >
+              Connect
+            </Button>
           </div>
         )}
 

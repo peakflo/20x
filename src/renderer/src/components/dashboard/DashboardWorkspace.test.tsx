@@ -98,10 +98,10 @@ beforeEach(() => {
 })
 
 describe('DashboardWorkspace', () => {
-  it('shows connect prompt for applications when not authenticated', () => {
+  it('shows connect CTA when not authenticated', () => {
     render(<DashboardWorkspace />)
-    expect(screen.getByText('Connect to 20x Cloud for more insights')).toBeDefined()
-    expect(screen.getByText(/Sign in via Settings/)).toBeDefined()
+    expect(screen.getByText('Connect to 20x Cloud')).toBeDefined()
+    expect(screen.getByText('Connect')).toBeDefined() // CTA button
   })
 
   it('always shows stats section even when not authenticated', () => {
@@ -240,8 +240,8 @@ describe('DashboardWorkspace', () => {
     render(<DashboardWorkspace />)
     expect(screen.getByText('Parent task')).toBeDefined()
     expect(screen.queryByText('Subtask')).toBeNull()
-    // Count shows 1 task (only parent)
-    expect(screen.getByText('1 task')).toBeDefined()
+    // Count shows 1 active task (only parent)
+    expect(screen.getByText('1 active task')).toBeDefined()
   })
 
   it('shows empty task board when no tasks', () => {

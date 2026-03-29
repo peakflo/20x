@@ -1,5 +1,5 @@
 import { useMemo, useCallback } from 'react'
-import { Clock, AlertCircle } from 'lucide-react'
+import { Clock, AlertCircle, CheckCircle2 } from 'lucide-react'
 import { Badge } from '@/components/ui/Badge'
 import { useTaskStore } from '@/stores/task-store'
 import { useUIStore } from '@/stores/ui-store'
@@ -7,6 +7,7 @@ import { TaskStatus } from '@/types'
 import type { WorkfloTask } from '@/types'
 
 // ── Status column definitions (matching 20x local TaskStatus enum) ──
+// Completed is excluded from columns — shown as a count-only summary instead.
 
 interface StatusColumn {
   key: TaskStatus
@@ -20,8 +21,7 @@ const COLUMNS: StatusColumn[] = [
   { key: TaskStatus.Triaging, label: 'Triaging', color: 'text-muted-foreground', dotColor: 'bg-muted-foreground' },
   { key: TaskStatus.AgentWorking, label: 'Agent Working', color: 'text-amber-400', dotColor: 'bg-amber-400' },
   { key: TaskStatus.ReadyForReview, label: 'Ready for Review', color: 'text-purple-400', dotColor: 'bg-purple-400' },
-  { key: TaskStatus.AgentLearning, label: 'Agent Learning', color: 'text-blue-400', dotColor: 'bg-blue-400' },
-  { key: TaskStatus.Completed, label: 'Completed', color: 'text-emerald-400', dotColor: 'bg-emerald-400' }
+  { key: TaskStatus.AgentLearning, label: 'Agent Learning', color: 'text-blue-400', dotColor: 'bg-blue-400' }
 ]
 
 function getPriorityVariant(priority: string): 'red' | 'orange' | 'yellow' | 'default' {
@@ -109,16 +109,16 @@ function TaskCard({ task, onSelect }: { task: WorkfloTask; onSelect: (id: string
 function Column({ column, tasks, onSelect }: { column: StatusColumn; tasks: WorkfloTask[]; onSelect: (id: string) => void }) {
   return (
     <div className="flex flex-col min-w-[200px] max-w-[260px] flex-1">
-      {/* Column header */}
-      <div className="flex items-center gap-2 px-2 py-2 mb-2">
+      {/* Column header — sticky within the kanban scroll area */}
+      <div className="flex items-center gap-2 px-2 py-2 mb-2 sticky top-0 bg-background z-10">
         <div className={`h-2 w-2 rounded-full ${column.dotColor}`} />
         <span className={`text-xs font-semibold ${column.color}`}>{column.label}</span>
         <span className="text-[10px] text-muted-foreground bg-muted/30 rounded-full px-1.5 py-0.5 min-w-[20px] text-center">
           {tasks.length}
         </span>
       </div>
-      {/* Cards */}
-      <div className="flex-1 space-y-2 overflow-y-auto pr-1 max-h-[400px]">
+      {/* Cards — no max-height, all visible; dashboard itself scrolls */}
+      <div className="space-y-2">
         {tasks.length === 0 ? (
           <div className="text-[11px] text-muted-foreground text-center py-4 px-2">
             No tasks
@@ -150,25 +150,37 @@ export function TaskBoard() {
     for (const col of COLUMNS) {
       grouped[col.key] = []
     }
+    let completedCount = 0
     for (const task of topLevelTasks) {
       const status = task.status || TaskStatus.NotStarted
-      if (grouped[status]) {
+      if (status === TaskStatus.Completed) {
+        completedCount++
+      } else if (grouped[status]) {
         grouped[status].push(task)
       } else {
-        // Unknown status → put in not_started
         grouped[TaskStatus.NotStarted].push(task)
       }
     }
-    return grouped
+    return { grouped, completedCount }
   }, [topLevelTasks])
+
+  const activeTasks = topLevelTasks.length - tasksByStatus.completedCount
 
   return (
     <section>
       <div className="flex items-center justify-between mb-3">
         <h2 className="text-sm font-semibold">Task Board</h2>
-        <span className="text-xs text-muted-foreground">
-          {topLevelTasks.length} task{topLevelTasks.length !== 1 ? 's' : ''}
-        </span>
+        <div className="flex items-center gap-3">
+          {tasksByStatus.completedCount > 0 && (
+            <span className="flex items-center gap-1 text-xs text-emerald-400">
+              <CheckCircle2 className="h-3 w-3" />
+              {tasksByStatus.completedCount} completed
+            </span>
+          )}
+          <span className="text-xs text-muted-foreground">
+            {activeTasks} active task{activeTasks !== 1 ? 's' : ''}
+          </span>
+        </div>
       </div>
 
       {isLoading ? (
@@ -202,7 +214,7 @@ export function TaskBoard() {
             <Column
               key={col.key}
               column={col}
-              tasks={tasksByStatus[col.key] || []}
+              tasks={tasksByStatus.grouped[col.key] || []}
               onSelect={handleSelectTask}
             />
           ))}
