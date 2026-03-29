@@ -33,60 +33,39 @@ export interface DashboardStats {
   adoptionRate: number | null
 }
 
-export interface DashboardTask {
-  id: string
-  title: string
-  description: string | null
-  status: string
-  priority: string
-  dueDate: string | null
-  assignees: Array<{ assigneeType: string; assigneeValue: string }>
-  createdAt: string
-  updatedAt: string
-  workflowId?: string
-  executionId?: string
-}
-
 export type TimeWindow = '24h' | '7d' | '30d' | 'all'
 
 interface DashboardState {
   // Data
   applications: ApplicationItem[]
   stats: DashboardStats | null
-  tasks: DashboardTask[]
   timeWindow: TimeWindow
 
   // Loading states
   applicationsLoading: boolean
   statsLoading: boolean
-  tasksLoading: boolean
 
   // Error states
   applicationsError: string | null
   statsError: string | null
-  tasksError: string | null
 
   // Actions
   setTimeWindow: (window: TimeWindow) => void
   fetchApplications: () => Promise<void>
   fetchStats: () => Promise<void>
-  fetchTasks: () => Promise<void>
   fetchAll: () => Promise<void>
 }
 
 export const useDashboardStore = create<DashboardState>((set, get) => ({
   applications: [],
   stats: null,
-  tasks: [],
   timeWindow: '7d',
 
   applicationsLoading: false,
   statsLoading: false,
-  tasksLoading: false,
 
   applicationsError: null,
   statsError: null,
-  tasksError: null,
 
   setTimeWindow: (timeWindow) => {
     set({ timeWindow })
@@ -97,7 +76,8 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
   fetchApplications: async () => {
     set({ applicationsLoading: true, applicationsError: null })
     try {
-      const result = await enterpriseApi.apiRequest('GET', '/api/workflows?triggerType=APPLICATION_TRIGGER') as {
+      // Must use lowercase 'application_trigger' to match the NodeType enum value in workflow-builder
+      const result = await enterpriseApi.apiRequest('GET', '/api/workflows?triggerType=application_trigger') as {
         workflows: Array<{
           workflowId: string
           tenantId?: string
@@ -146,27 +126,11 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     }
   },
 
-  fetchTasks: async () => {
-    set({ tasksLoading: true, tasksError: null })
-    try {
-      const result = await enterpriseApi.apiRequest('GET', '/api/tasks?pageSize=200') as {
-        tasks: DashboardTask[]
-      }
-      set({ tasks: result.tasks || [], tasksLoading: false })
-    } catch (err) {
-      set({
-        tasksLoading: false,
-        tasksError: err instanceof Error ? err.message : 'Failed to fetch tasks'
-      })
-    }
-  },
-
   fetchAll: async () => {
     const state = get()
     await Promise.allSettled([
       state.fetchApplications(),
-      state.fetchStats(),
-      state.fetchTasks()
+      state.fetchStats()
     ])
   }
 }))

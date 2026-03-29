@@ -21,11 +21,10 @@ export function DashboardWorkspace() {
     setTimeWindow,
     fetchAll,
     applicationsLoading,
-    statsLoading,
-    tasksLoading
+    statsLoading
   } = useDashboardStore()
 
-  const isLoading = applicationsLoading || statsLoading || tasksLoading
+  const isLoading = applicationsLoading || statsLoading
 
   useEffect(() => {
     if (isAuthenticated) {

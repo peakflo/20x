@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { useDashboardStore } from './dashboard-store'
-import type { ApplicationItem, DashboardStats, DashboardTask } from './dashboard-store'
+import type { ApplicationItem, DashboardStats } from './dashboard-store'
 
 // Mock the ipc-client enterprise API
 vi.mock('@/lib/ipc-client', () => ({
@@ -56,56 +56,17 @@ const mockStats: DashboardStats = {
   adoptionRate: 41.7
 }
 
-const mockTasks: DashboardTask[] = [
-  {
-    id: 'task-1',
-    title: 'Review invoice #1234',
-    description: 'Check amounts match PO',
-    status: 'pending',
-    priority: 'high',
-    dueDate: '2026-03-30T00:00:00Z',
-    assignees: [{ assigneeType: 'email', assigneeValue: 'user@example.com' }],
-    createdAt: '2026-03-28T08:00:00Z',
-    updatedAt: '2026-03-28T08:00:00Z'
-  },
-  {
-    id: 'task-2',
-    title: 'Process payment batch',
-    description: null,
-    status: 'in_progress',
-    priority: 'medium',
-    dueDate: null,
-    assignees: [],
-    createdAt: '2026-03-27T10:00:00Z',
-    updatedAt: '2026-03-28T09:00:00Z'
-  },
-  {
-    id: 'task-3',
-    title: 'Completed reconciliation',
-    description: 'Done',
-    status: 'completed',
-    priority: 'low',
-    dueDate: null,
-    assignees: [],
-    createdAt: '2026-03-26T10:00:00Z',
-    updatedAt: '2026-03-27T15:00:00Z'
-  }
-]
-
 describe('useDashboardStore', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     useDashboardStore.setState({
       applications: [],
       stats: null,
-      tasks: [],
       timeWindow: '7d',
       applicationsLoading: false,
       statsLoading: false,
-      tasksLoading: false,
       applicationsError: null,
-      statsError: null,
-      tasksError: null
+      statsError: null
     })
   })
 
@@ -113,11 +74,9 @@ describe('useDashboardStore', () => {
     const state = useDashboardStore.getState()
     expect(state.applications).toEqual([])
     expect(state.stats).toBeNull()
-    expect(state.tasks).toEqual([])
     expect(state.timeWindow).toBe('7d')
     expect(state.applicationsLoading).toBe(false)
     expect(state.statsLoading).toBe(false)
-    expect(state.tasksLoading).toBe(false)
   })
 
   it('setTimeWindow updates window and re-fetches stats', async () => {
@@ -126,13 +85,12 @@ describe('useDashboardStore', () => {
     useDashboardStore.getState().setTimeWindow('30d')
 
     expect(useDashboardStore.getState().timeWindow).toBe('30d')
-    // Wait for async fetch to complete
     await vi.waitFor(() => {
       expect(mockApiRequest).toHaveBeenCalledWith('GET', '/api/20x/sync/stats?window=30d')
     })
   })
 
-  it('fetchApplications populates applications list', async () => {
+  it('fetchApplications uses lowercase application_trigger', async () => {
     mockApiRequest.mockResolvedValueOnce({
       workflows: mockApplications.map((a) => ({
         workflowId: a.workflowId,
@@ -154,7 +112,8 @@ describe('useDashboardStore', () => {
     expect(state.applications[1].name).toBe('AI SDR')
     expect(state.applicationsLoading).toBe(false)
     expect(state.applicationsError).toBeNull()
-    expect(mockApiRequest).toHaveBeenCalledWith('GET', '/api/workflows?triggerType=APPLICATION_TRIGGER')
+    // Verify lowercase triggerType value matching NodeType.APPLICATION_TRIGGER enum
+    expect(mockApiRequest).toHaveBeenCalledWith('GET', '/api/workflows?triggerType=application_trigger')
   })
 
   it('fetchApplications handles errors', async () => {
@@ -181,27 +140,14 @@ describe('useDashboardStore', () => {
     expect(mockApiRequest).toHaveBeenCalledWith('GET', '/api/20x/sync/stats?window=7d')
   })
 
-  it('fetchTasks populates tasks', async () => {
-    mockApiRequest.mockResolvedValueOnce({ tasks: mockTasks })
-
-    await useDashboardStore.getState().fetchTasks()
-
-    const state = useDashboardStore.getState()
-    expect(state.tasks).toHaveLength(3)
-    expect(state.tasks[0].title).toBe('Review invoice #1234')
-    expect(state.tasksLoading).toBe(false)
-    expect(mockApiRequest).toHaveBeenCalledWith('GET', '/api/tasks?pageSize=200')
-  })
-
-  it('fetchAll calls all three fetch methods', async () => {
+  it('fetchAll calls applications and stats fetches', async () => {
     mockApiRequest
       .mockResolvedValueOnce({ workflows: [] })
       .mockResolvedValueOnce({ stats: null })
-      .mockResolvedValueOnce({ tasks: [] })
 
     await useDashboardStore.getState().fetchAll()
 
-    expect(mockApiRequest).toHaveBeenCalledTimes(3)
+    expect(mockApiRequest).toHaveBeenCalledTimes(2)
   })
 
   it('handles null stats response', async () => {
@@ -212,15 +158,5 @@ describe('useDashboardStore', () => {
     const state = useDashboardStore.getState()
     expect(state.stats).toBeNull()
     expect(state.statsLoading).toBe(false)
-  })
-
-  it('handles empty tasks array', async () => {
-    mockApiRequest.mockResolvedValueOnce({ tasks: [] })
-
-    await useDashboardStore.getState().fetchTasks()
-
-    const state = useDashboardStore.getState()
-    expect(state.tasks).toEqual([])
-    expect(state.tasksLoading).toBe(false)
   })
 })

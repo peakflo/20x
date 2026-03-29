@@ -3,6 +3,9 @@ import { render, screen, cleanup } from '@testing-library/react'
 import { DashboardWorkspace } from './DashboardWorkspace'
 import { useDashboardStore } from '@/stores/dashboard-store'
 import { useEnterpriseStore } from '@/stores/enterprise-store'
+import { useTaskStore } from '@/stores/task-store'
+import { TaskStatus } from '@/types'
+import type { WorkfloTask } from '@/types'
 
 // Mock ipc-client - prevent real API calls during tests
 vi.mock('@/lib/ipc-client', () => ({
@@ -13,24 +16,65 @@ vi.mock('@/lib/ipc-client', () => ({
     logout: vi.fn(),
     getSession: vi.fn().mockResolvedValue({ isAuthenticated: false }),
     refreshToken: vi.fn()
-  }
+  },
+  taskApi: {
+    getAll: vi.fn().mockResolvedValue([])
+  },
+  onTaskUpdated: vi.fn(() => () => {}),
+  onTaskCreated: vi.fn(() => () => {}),
+  onTasksRefresh: vi.fn(() => () => {}),
+  taskSourceApi: { sync: vi.fn() }
 }))
 
 afterEach(cleanup)
 
+function makeTask(overrides: Partial<WorkfloTask> = {}): WorkfloTask {
+  return {
+    id: 'task-1',
+    title: 'Test task',
+    description: '',
+    type: 'general',
+    priority: 'medium',
+    status: TaskStatus.NotStarted,
+    assignee: '',
+    due_date: null,
+    labels: [],
+    attachments: [],
+    repos: [],
+    output_fields: [],
+    agent_id: null,
+    session_id: null,
+    external_id: null,
+    source_id: null,
+    source: 'local',
+    skill_ids: null,
+    snoozed_until: null,
+    resolution: null,
+    feedback_rating: null,
+    feedback_comment: null,
+    is_recurring: false,
+    recurrence_pattern: null,
+    recurrence_parent_id: null,
+    last_occurrence_at: null,
+    next_occurrence_at: null,
+    parent_task_id: null,
+    sort_order: 0,
+    created_at: '2026-03-28T08:00:00Z',
+    updated_at: '2026-03-28T08:00:00Z',
+    ...overrides
+  }
+}
+
 beforeEach(() => {
-  // Reset store with fetchAll as a no-op so useEffect doesn't overwrite pre-set data
+  // Reset dashboard store with fetchAll as a no-op
   useDashboardStore.setState({
     applications: [],
     stats: null,
-    tasks: [],
     timeWindow: '7d',
     applicationsLoading: false,
     statsLoading: false,
-    tasksLoading: false,
     applicationsError: null,
     statsError: null,
-    tasksError: null,
     fetchAll: vi.fn()
   })
   useEnterpriseStore.setState({
@@ -41,6 +85,12 @@ beforeEach(() => {
     userId: null,
     currentTenant: null,
     availableTenants: null
+  })
+  useTaskStore.setState({
+    tasks: [],
+    selectedTaskId: null,
+    isLoading: false,
+    error: null
   })
 })
 
@@ -106,13 +156,6 @@ describe('DashboardWorkspace', () => {
     expect(screen.getByText(/No applications found/)).toBeDefined()
   })
 
-  it('shows empty state for task board when no data', () => {
-    useEnterpriseStore.setState({ isAuthenticated: true })
-
-    render(<DashboardWorkspace />)
-    expect(screen.getByText(/No tasks found/)).toBeDefined()
-  })
-
   it('renders application cards when data is loaded', () => {
     useEnterpriseStore.setState({ isAuthenticated: true })
     useDashboardStore.setState({
@@ -137,51 +180,46 @@ describe('DashboardWorkspace', () => {
     expect(screen.getByText('Active')).toBeDefined()
   })
 
-  it('renders task board columns with task cards', () => {
+  it('renders task board columns with local 20x tasks', () => {
     useEnterpriseStore.setState({ isAuthenticated: true })
-    useDashboardStore.setState({
+    useTaskStore.setState({
       tasks: [
-        {
-          id: 'task-1',
-          title: 'Review invoice',
-          description: null,
-          status: 'pending',
-          priority: 'high',
-          dueDate: null,
-          assignees: [],
-          createdAt: '2026-03-28T08:00:00Z',
-          updatedAt: '2026-03-28T08:00:00Z'
-        },
-        {
-          id: 'task-2',
-          title: 'Process payment',
-          description: null,
-          status: 'in_progress',
-          priority: 'medium',
-          dueDate: null,
-          assignees: [],
-          createdAt: '2026-03-27T10:00:00Z',
-          updatedAt: '2026-03-28T09:00:00Z'
-        }
+        makeTask({ id: 'task-1', title: 'Review invoice', status: TaskStatus.NotStarted, priority: 'high' }),
+        makeTask({ id: 'task-2', title: 'Process payment', status: TaskStatus.AgentWorking, priority: 'medium' })
       ]
     })
 
     render(<DashboardWorkspace />)
-    // Column headers
-    expect(screen.getByText('Pending')).toBeDefined()
-    expect(screen.getByText('In Progress')).toBeDefined()
+    // Column headers (20x task statuses)
+    expect(screen.getByText('Not Started')).toBeDefined()
+    expect(screen.getByText('Agent Working')).toBeDefined()
     // Task cards
     expect(screen.getByText('Review invoice')).toBeDefined()
     expect(screen.getByText('Process payment')).toBeDefined()
     expect(screen.getByText('high')).toBeDefined()
   })
 
-  it('shows loading state for applications', () => {
+  it('filters out subtasks from the task board', () => {
     useEnterpriseStore.setState({ isAuthenticated: true })
-    useDashboardStore.setState({ applicationsLoading: true })
+    useTaskStore.setState({
+      tasks: [
+        makeTask({ id: 'parent-1', title: 'Parent task', status: TaskStatus.NotStarted }),
+        makeTask({ id: 'sub-1', title: 'Subtask', status: TaskStatus.NotStarted, parent_task_id: 'parent-1' })
+      ]
+    })
 
     render(<DashboardWorkspace />)
-    expect(screen.queryByText(/No applications found/)).toBeNull()
+    expect(screen.getByText('Parent task')).toBeDefined()
+    expect(screen.queryByText('Subtask')).toBeNull()
+    // Count shows 1 task (only parent)
+    expect(screen.getByText('1 task')).toBeDefined()
+  })
+
+  it('shows empty task board when no tasks', () => {
+    useEnterpriseStore.setState({ isAuthenticated: true })
+
+    render(<DashboardWorkspace />)
+    expect(screen.getByText(/No tasks yet/)).toBeDefined()
   })
 
   it('calls fetchAll on mount when authenticated', () => {
