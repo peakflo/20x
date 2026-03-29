@@ -102,6 +102,16 @@ export function computeLocalStats(tasks: WorkfloTask[], timeWindow: TimeWindow):
   }
 }
 
+/** Per-tab state for an opened application */
+export interface ApplicationTab {
+  workflowId: string
+  url: string | null
+  executing: boolean
+  polling: boolean
+  error: string | null
+  executionStatus: string | null
+}
+
 interface DashboardState {
   // Data
   applications: ApplicationItem[]
@@ -109,13 +119,9 @@ interface DashboardState {
   localStats: DashboardStats | null
   timeWindow: TimeWindow
 
-  // Active application iframe
-  activeApplicationId: string | null
-  activeApplicationUrl: string | null
-  applicationExecuting: boolean
-  applicationPolling: boolean
-  applicationError: string | null
-  applicationExecutionStatus: string | null
+  // Multi-tab application state
+  openTabs: ApplicationTab[]       // all opened tabs (iframes kept alive)
+  activeTabId: string | null       // currently visible tab workflowId
 
   // Loading states
   applicationsLoading: boolean
@@ -132,7 +138,8 @@ interface DashboardState {
   fetchAll: () => Promise<void>
   updateLocalStats: (tasks: WorkfloTask[]) => void
   openApplication: (workflowId: string) => Promise<void>
-  closeApplication: () => void
+  switchTab: (workflowId: string) => void
+  closeTab: (workflowId: string) => void
 }
 
 // ── Application URL extraction ─────────────────────────────
@@ -183,18 +190,23 @@ function findApplicationUrl(steps: ExecutionStep[]): string | null {
   return null
 }
 
+// Helper to update a single tab within openTabs
+function updateTab(
+  tabs: ApplicationTab[],
+  workflowId: string,
+  patch: Partial<ApplicationTab>
+): ApplicationTab[] {
+  return tabs.map((t) => (t.workflowId === workflowId ? { ...t, ...patch } : t))
+}
+
 export const useDashboardStore = create<DashboardState>((set, get) => ({
   applications: [],
   stats: null,
   localStats: null,
   timeWindow: '7d',
 
-  activeApplicationId: null,
-  activeApplicationUrl: null,
-  applicationExecuting: false,
-  applicationPolling: false,
-  applicationError: null,
-  applicationExecutionStatus: null,
+  openTabs: [],
+  activeTabId: null,
 
   applicationsLoading: false,
   statsLoading: false,
@@ -275,23 +287,32 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
   },
 
   openApplication: async (workflowId: string) => {
+    const { openTabs } = get()
+
+    // If already open, just switch to it
+    const existing = openTabs.find((t) => t.workflowId === workflowId)
+    if (existing) {
+      set({ activeTabId: workflowId })
+      return
+    }
+
     const app = get().applications.find((a) => a.workflowId === workflowId)
     const tenantId = app?.tenantId || useEnterpriseStore.getState().currentTenant?.id || ''
 
-    set({
-      activeApplicationId: workflowId,
-      activeApplicationUrl: null,
-      applicationExecuting: true,
-      applicationPolling: false,
-      applicationError: null,
-      applicationExecutionStatus: null
-    })
+    // Create new tab in executing state
+    const newTab: ApplicationTab = {
+      workflowId,
+      url: null,
+      executing: true,
+      polling: false,
+      error: null,
+      executionStatus: null
+    }
+    set({ openTabs: [...openTabs, newTab], activeTabId: workflowId })
 
     try {
-      // Enable auth header injection for iframe requests
       await enterpriseApi.enableIframeAuth()
 
-      // Execute the workflow via the real backend endpoint
       const result = await enterpriseApi.apiRequest('POST', '/api/workflows/execute/ui', {
         workflowId,
         tenantId,
@@ -306,21 +327,24 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
         throw new Error('No execution ID returned from server')
       }
 
-      set({ applicationExecuting: false, applicationPolling: true })
+      set({ openTabs: updateTab(get().openTabs, workflowId, { executing: false, polling: true }) })
 
       // Poll execution until application URL is found
       const poll = async (execId: string) => {
+        // Stop polling if tab was closed while we were waiting
+        if (!get().openTabs.find((t) => t.workflowId === workflowId)) return
+
         try {
           const execution = await enterpriseApi.apiRequest(
             'GET',
             `/api/workflow-executions/${execId}`
           ) as ExecutionData
 
-          set({ applicationExecutionStatus: execution.status })
+          set({ openTabs: updateTab(get().openTabs, workflowId, { executionStatus: execution.status }) })
 
           const url = findApplicationUrl(execution.steps)
           if (url) {
-            set({ activeApplicationUrl: url, applicationPolling: false })
+            set({ openTabs: updateTab(get().openTabs, workflowId, { url, polling: false }) })
             return
           }
 
@@ -328,19 +352,18 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
           if (status === 'running' || status === 'pending') {
             setTimeout(() => poll(execId), 2000)
           } else if (status === 'failed') {
-            set({ applicationPolling: false, applicationError: 'Application execution failed' })
+            set({ openTabs: updateTab(get().openTabs, workflowId, { polling: false, error: 'Application execution failed' }) })
           } else {
-            set({ applicationPolling: false, applicationError: 'No application URL found in execution output' })
+            set({ openTabs: updateTab(get().openTabs, workflowId, { polling: false, error: 'No application URL found in execution output' }) })
           }
         } catch (err) {
-          // Execution may not be written to DB yet — retry on "not found" style errors
           const msg = err instanceof Error ? err.message.toLowerCase() : ''
           const isNotFound = msg.includes('404') || msg.includes('not found') || msg.includes('execution')
           if (isNotFound) {
             setTimeout(() => poll(execId), 3000)
             return
           }
-          set({ applicationPolling: false, applicationError: 'Failed to check execution status' })
+          set({ openTabs: updateTab(get().openTabs, workflowId, { polling: false, error: 'Failed to check execution status' }) })
         }
       }
 
@@ -348,22 +371,28 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     } catch (err) {
       console.error('Failed to open application:', err)
       set({
-        applicationExecuting: false,
-        applicationPolling: false,
-        applicationError: err instanceof Error ? err.message : 'Failed to execute application'
+        openTabs: updateTab(get().openTabs, workflowId, {
+          executing: false,
+          polling: false,
+          error: err instanceof Error ? err.message : 'Failed to execute application'
+        })
       })
     }
   },
 
-  closeApplication: () => {
-    set({
-      activeApplicationId: null,
-      activeApplicationUrl: null,
-      applicationExecuting: false,
-      applicationPolling: false,
-      applicationError: null,
-      applicationExecutionStatus: null
-    })
-    enterpriseApi.disableIframeAuth().catch(() => {})
+  switchTab: (workflowId: string) => {
+    set({ activeTabId: workflowId })
+  },
+
+  closeTab: (workflowId: string) => {
+    const { openTabs, activeTabId } = get()
+    const remaining = openTabs.filter((t) => t.workflowId !== workflowId)
+    const newActiveId = activeTabId === workflowId
+      ? (remaining.length > 0 ? remaining[remaining.length - 1].workflowId : null)
+      : activeTabId
+    set({ openTabs: remaining, activeTabId: newActiveId })
+    if (remaining.length === 0) {
+      enterpriseApi.disableIframeAuth().catch(() => {})
+    }
   }
 }))
