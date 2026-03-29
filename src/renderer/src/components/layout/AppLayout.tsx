@@ -22,7 +22,6 @@ import type { FileAttachment } from '@/types'
 import { MessageSquare, ExternalLink, LayoutDashboard, CheckSquare, Zap, Settings } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import type { SidebarView } from '@/stores/ui-store'
-import logo20x from '@/assets/logos/20x.svg'
 
 export function AppLayout() {
   const { tasks, allTasks, selectedTask, createTask, updateTask, deleteTask, selectTask } = useTasks()
@@ -110,14 +109,8 @@ export function AppLayout() {
   return (
     <>
       {/* ── Top bar: drag region with logo (left) + nav switcher (center-left) + actions (right) ── */}
-      <div className="drag-region h-12 flex-shrink-0 flex items-center px-4 border-b border-border/50 windows-titlebar-pad">
-        {/* Logo */}
-        <div className="flex items-center gap-2 mr-6">
-          <img src={logo20x} className="h-5 w-5" alt="20x" />
-          <span className="text-sm font-semibold text-foreground">20x</span>
-        </div>
-
-        {/* View switcher */}
+      <div className="drag-region h-12 flex-shrink-0 flex items-center justify-center px-4 border-b border-border/50 windows-titlebar-pad">
+        {/* View switcher — centered */}
         <div className="no-drag flex rounded-md border border-border bg-muted/30 p-0.5">
           {NAV_ITEMS.map(({ key, label, icon: Icon }) => (
             <button
@@ -138,10 +131,8 @@ export function AppLayout() {
           ))}
         </div>
 
-        <div className="flex-1" />
-
-        {/* Global actions */}
-        <div className="no-drag flex items-center gap-1">
+        {/* Global actions — pinned right */}
+        <div className="no-drag absolute right-4 flex items-center gap-1">
           <Button
             variant="ghost"
             size="sm"
