@@ -127,7 +127,7 @@ describe('DashboardWorkspace', () => {
 
     render(<DashboardWorkspace />)
     expect(screen.getByText('Stats Overview')).toBeDefined()
-    expect(screen.getByText('5')).toBeDefined() // totalTasks
+    expect(screen.getByText('5')).toBeDefined() // tasksCreatedInWindow
     expect(screen.getByText('Task Board')).toBeDefined()
   })
 
@@ -172,9 +172,10 @@ describe('DashboardWorkspace', () => {
     })
 
     render(<DashboardWorkspace />)
-    expect(screen.getByText('75.0%')).toBeDefined()
-    expect(screen.getByText('92.5%')).toBeDefined()
-    expect(screen.getByText('150')).toBeDefined()
+    expect(screen.getByText('75.0%')).toBeDefined() // AI Autonomy
+    expect(screen.getByText('92.5%')).toBeDefined() // Agent Success
+    expect(screen.getByText('25')).toBeDefined() // Tasks Created (tasksCreatedInWindow)
+    expect(screen.getByText('18')).toBeDefined() // Completed (tasksCompletedInWindow)
   })
 
   it('shows empty state for applications when no data', () => {

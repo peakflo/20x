@@ -16,12 +16,12 @@ interface StatusColumn {
 }
 
 const COLUMNS: StatusColumn[] = [
-  { key: TaskStatus.NotStarted, label: 'Not Started', color: 'text-muted-foreground', dotColor: 'bg-gray-400' },
-  { key: TaskStatus.Triaging, label: 'Triaging', color: 'text-blue-400', dotColor: 'bg-blue-400' },
-  { key: TaskStatus.AgentWorking, label: 'Agent Working', color: 'text-purple-400', dotColor: 'bg-purple-400' },
-  { key: TaskStatus.ReadyForReview, label: 'Ready for Review', color: 'text-yellow-400', dotColor: 'bg-yellow-400' },
-  { key: TaskStatus.AgentLearning, label: 'Agent Learning', color: 'text-cyan-400', dotColor: 'bg-cyan-400' },
-  { key: TaskStatus.Completed, label: 'Completed', color: 'text-green-400', dotColor: 'bg-green-400' }
+  { key: TaskStatus.NotStarted, label: 'Not Started', color: 'text-muted-foreground', dotColor: 'bg-muted-foreground' },
+  { key: TaskStatus.Triaging, label: 'Triaging', color: 'text-muted-foreground', dotColor: 'bg-muted-foreground' },
+  { key: TaskStatus.AgentWorking, label: 'Agent Working', color: 'text-amber-400', dotColor: 'bg-amber-400' },
+  { key: TaskStatus.ReadyForReview, label: 'Ready for Review', color: 'text-purple-400', dotColor: 'bg-purple-400' },
+  { key: TaskStatus.AgentLearning, label: 'Agent Learning', color: 'text-blue-400', dotColor: 'bg-blue-400' },
+  { key: TaskStatus.Completed, label: 'Completed', color: 'text-emerald-400', dotColor: 'bg-emerald-400' }
 ]
 
 function getPriorityVariant(priority: string): 'red' | 'orange' | 'yellow' | 'default' {

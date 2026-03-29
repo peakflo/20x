@@ -1,19 +1,10 @@
 import {
-  BarChart3,
   Bot,
   CheckCircle2,
-  Clock,
   Cpu,
-  Users
+  PlusCircle
 } from 'lucide-react'
 import { useDashboardStore } from '@/stores/dashboard-store'
-
-function formatHours(hours: number | null): string {
-  if (hours === null || hours === undefined) return '--'
-  if (hours < 1) return `${Math.round(hours * 60)}m`
-  if (hours < 24) return `${hours.toFixed(1)}h`
-  return `${(hours / 24).toFixed(1)}d`
-}
 
 function formatPercent(value: number | null): string {
   if (value === null || value === undefined) return '--'
@@ -67,7 +58,7 @@ export function StatsSection() {
   return (
     <section>
       <h2 className="text-sm font-semibold mb-3">Stats Overview</h2>
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <StatCard
           title="AI Autonomy"
           value={formatPercent(effectiveStats?.aiAutonomyRate ?? null)}
@@ -89,10 +80,10 @@ export function StatsSection() {
           accent="#059669"
         />
         <StatCard
-          title="Total Tasks"
-          value={formatNumber(effectiveStats?.totalTasks)}
-          description={`${formatNumber(effectiveStats?.tasksCompletedInWindow)} completed`}
-          icon={BarChart3}
+          title="Tasks Created"
+          value={formatNumber(effectiveStats?.tasksCreatedInWindow)}
+          description={`${formatNumber(effectiveStats?.totalTasks)} total`}
+          icon={PlusCircle}
           loading={statsLoading}
         />
         <StatCard
@@ -101,21 +92,6 @@ export function StatsSection() {
           description="In selected window"
           icon={CheckCircle2}
           loading={statsLoading}
-        />
-        <StatCard
-          title="Avg Completion"
-          value={formatHours(effectiveStats?.avgTaskCompletionTimeHours ?? null)}
-          description={`p50: ${formatHours(effectiveStats?.p50CompletionTimeHours ?? null)} / p90: ${formatHours(effectiveStats?.p90CompletionTimeHours ?? null)}`}
-          icon={Clock}
-          loading={statsLoading}
-        />
-        <StatCard
-          title="Active Users"
-          value={formatNumber(effectiveStats?.activeUsers)}
-          description={`${formatNumber(effectiveStats?.totalUsers)} total`}
-          icon={Users}
-          loading={statsLoading}
-          accent="#0891b2"
         />
       </div>
     </section>
