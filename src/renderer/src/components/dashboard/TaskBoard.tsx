@@ -104,29 +104,32 @@ function TaskCard({ task, onSelect }: { task: WorkfloTask; onSelect: (id: string
   )
 }
 
-// ── Column ─────────────────────────────────────────────────
+// ── Column header (rendered in a separate sticky row) ─────
 
-function Column({ column, tasks, onSelect }: { column: StatusColumn; tasks: WorkfloTask[]; onSelect: (id: string) => void }) {
+function ColumnHeader({ column, count }: { column: StatusColumn; count: number }) {
   return (
-    <div className="flex flex-col min-w-[200px] max-w-[260px] flex-1">
-      {/* Column header — sticky within the kanban scroll area */}
-      <div className="flex items-center gap-2 px-2 py-2 mb-2 sticky top-0 bg-background z-10">
-        <div className={`h-2 w-2 rounded-full ${column.dotColor}`} />
-        <span className={`text-xs font-semibold ${column.color}`}>{column.label}</span>
-        <span className="text-[10px] text-muted-foreground bg-muted/30 rounded-full px-1.5 py-0.5 min-w-[20px] text-center">
-          {tasks.length}
-        </span>
-      </div>
-      {/* Cards — no max-height, all visible; dashboard itself scrolls */}
-      <div className="space-y-2">
-        {tasks.length === 0 ? (
-          <div className="text-[11px] text-muted-foreground text-center py-4 px-2">
-            No tasks
-          </div>
-        ) : (
-          tasks.map((task) => <TaskCard key={task.id} task={task} onSelect={onSelect} />)
-        )}
-      </div>
+    <div className="flex items-center gap-2 px-2 py-2 min-w-[200px] max-w-[260px] flex-1">
+      <div className={`h-2 w-2 rounded-full ${column.dotColor}`} />
+      <span className={`text-xs font-semibold ${column.color}`}>{column.label}</span>
+      <span className="text-[10px] text-muted-foreground bg-muted/30 rounded-full px-1.5 py-0.5 min-w-[20px] text-center">
+        {count}
+      </span>
+    </div>
+  )
+}
+
+// ── Column cards ──────────────────────────────────────────
+
+function ColumnCards({ tasks, onSelect }: { tasks: WorkfloTask[]; onSelect: (id: string) => void }) {
+  return (
+    <div className="min-w-[200px] max-w-[260px] flex-1 space-y-2">
+      {tasks.length === 0 ? (
+        <div className="text-[11px] text-muted-foreground text-center py-4 px-2">
+          No tasks
+        </div>
+      ) : (
+        tasks.map((task) => <TaskCard key={task.id} task={task} onSelect={onSelect} />)
+      )}
     </div>
   )
 }
@@ -184,14 +187,15 @@ export function TaskBoard() {
       </div>
 
       {isLoading ? (
-        <div className="flex gap-4 overflow-x-auto pb-2">
-          {COLUMNS.map((col) => (
-            <div key={col.key} className="min-w-[200px] flex-1">
-              <div className="flex items-center gap-2 px-2 py-2 mb-2">
-                <div className={`h-2 w-2 rounded-full ${col.dotColor}`} />
-                <span className={`text-xs font-semibold ${col.color}`}>{col.label}</span>
-              </div>
-              <div className="space-y-2">
+        <div className="overflow-x-auto">
+          <div className="flex gap-4 pb-2">
+            {COLUMNS.map((col) => (
+              <ColumnHeader key={col.key} column={col} count={0} />
+            ))}
+          </div>
+          <div className="flex gap-4 pb-2">
+            {COLUMNS.map((col) => (
+              <div key={col.key} className="min-w-[200px] max-w-[260px] flex-1 space-y-2">
                 {[1, 2].map((i) => (
                   <div key={i} className="rounded-md border border-border/40 bg-[#0d1117] p-3">
                     <div className="h-3 w-28 rounded bg-muted/50 animate-pulse mb-2" />
@@ -199,8 +203,8 @@ export function TaskBoard() {
                   </div>
                 ))}
               </div>
-            </div>
-          ))}
+            ))}
+          </div>
         </div>
       ) : topLevelTasks.length === 0 ? (
         <div className="rounded-lg border border-border/50 bg-[#161b22] p-6 text-center">
@@ -209,15 +213,27 @@ export function TaskBoard() {
           </p>
         </div>
       ) : (
-        <div className="flex gap-4 overflow-x-auto pb-2">
-          {COLUMNS.map((col) => (
-            <Column
-              key={col.key}
-              column={col}
-              tasks={tasksByStatus.grouped[col.key] || []}
-              onSelect={handleSelectTask}
-            />
-          ))}
+        <div className="overflow-x-auto">
+          {/* Sticky column headers — pinned when dashboard scrolls */}
+          <div className="flex gap-4 sticky top-0 bg-background z-10 pb-2">
+            {COLUMNS.map((col) => (
+              <ColumnHeader
+                key={col.key}
+                column={col}
+                count={(tasksByStatus.grouped[col.key] || []).length}
+              />
+            ))}
+          </div>
+          {/* Card columns */}
+          <div className="flex gap-4 pb-2">
+            {COLUMNS.map((col) => (
+              <ColumnCards
+                key={col.key}
+                tasks={tasksByStatus.grouped[col.key] || []}
+                onSelect={handleSelectTask}
+              />
+            ))}
+          </div>
         </div>
       )}
     </section>
