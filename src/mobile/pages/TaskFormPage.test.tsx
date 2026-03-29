@@ -239,6 +239,41 @@ describe('TaskFormPage — Edit mode', () => {
     expect(container.textContent).toContain('Task not found')
   })
 
+  it('does not overwrite user edits when store updates (polling/WebSocket)', async () => {
+    useTaskStore.setState({ tasks: [existingTask] })
+
+    const { container } = render(<TaskFormPage taskId="t1" onNavigate={mockNavigate} />)
+
+    // Wait for initial population
+    await waitFor(() => {
+      const titleInput = container.querySelector('input[placeholder="What needs to be done?"]') as HTMLInputElement
+      expect(titleInput.value).toBe('Existing Task')
+    })
+
+    // User types a new title
+    const titleInput = container.querySelector('input[placeholder="What needs to be done?"]') as HTMLInputElement
+    fireEvent.change(titleInput, { target: { value: 'My Edited Title' } })
+    expect(titleInput.value).toBe('My Edited Title')
+
+    // User types a new description
+    const descInput = container.querySelector('textarea[placeholder="Add details, context, or notes..."]') as HTMLTextAreaElement
+    fireEvent.change(descInput, { target: { value: 'My new description' } })
+    expect(descInput.value).toBe('My new description')
+
+    // Simulate store update from polling or WebSocket (new object reference)
+    useTaskStore.setState({
+      tasks: [{ ...existingTask, updated_at: '2026-01-02T00:00:00.000Z' }]
+    })
+
+    // Form fields should still show the user's edits, NOT the original values
+    await waitFor(() => {
+      const titleAfter = container.querySelector('input[placeholder="What needs to be done?"]') as HTMLInputElement
+      const descAfter = container.querySelector('textarea[placeholder="Add details, context, or notes..."]') as HTMLTextAreaElement
+      expect(titleAfter.value).toBe('My Edited Title')
+      expect(descAfter.value).toBe('My new description')
+    })
+  })
+
   it('shows recurring enabled when editing a recurring task', async () => {
     const recurringTask: Task = {
       ...existingTask,

@@ -382,6 +382,71 @@ describe('AgentManager OS notifications', () => {
     expect(notificationInstances).toHaveLength(0)
   })
 
+  it('does NOT show notification for subtask of a completed parent task', () => {
+    const mockDb = createMockDb({})
+    // Override getTask to return a subtask with a completed parent
+    mockDb.getTask = vi.fn((id: string) => {
+      if (id === 'subtask-1') {
+        return { id: 'subtask-1', title: 'Subtask', parent_task_id: 'parent-1', repos: [], skill_ids: [] }
+      }
+      if (id === 'parent-1') {
+        return { id: 'parent-1', title: 'Parent Task', status: TaskStatus.Completed, repos: [], skill_ids: [] }
+      }
+      return null
+    }) as any
+    const mgr = new AgentManager(mockDb)
+    const mockWindow = {
+      isDestroyed: vi.fn(() => false),
+      isFocused: vi.fn(() => false),
+      show: vi.fn(),
+      focus: vi.fn(),
+      webContents: { send: vi.fn() },
+    }
+    mgr.setMainWindow(mockWindow as any)
+
+    ;(mgr as any).sendToRenderer('agent:status', {
+      sessionId: 's1', agentId: 'a1', taskId: 'subtask-1', status: SessionStatus.WORKING
+    })
+    ;(mgr as any).sendToRenderer('agent:status', {
+      sessionId: 's1', agentId: 'a1', taskId: 'subtask-1', status: SessionStatus.IDLE
+    })
+
+    expect(notificationInstances).toHaveLength(0)
+  })
+
+  it('shows notification for subtask of a non-completed parent task', () => {
+    const mockDb = createMockDb({})
+    mockDb.getTask = vi.fn((id: string) => {
+      if (id === 'subtask-1') {
+        return { id: 'subtask-1', title: 'Subtask', parent_task_id: 'parent-1', repos: [], skill_ids: [] }
+      }
+      if (id === 'parent-1') {
+        return { id: 'parent-1', title: 'Parent Task', status: TaskStatus.AgentWorking, repos: [], skill_ids: [] }
+      }
+      return null
+    }) as any
+    const mgr = new AgentManager(mockDb)
+    const mockWindow = {
+      isDestroyed: vi.fn(() => false),
+      isFocused: vi.fn(() => false),
+      show: vi.fn(),
+      focus: vi.fn(),
+      webContents: { send: vi.fn() },
+    }
+    mgr.setMainWindow(mockWindow as any)
+
+    ;(mgr as any).sendToRenderer('agent:status', {
+      sessionId: 's1', agentId: 'a1', taskId: 'subtask-1', status: SessionStatus.WORKING
+    })
+    ;(mgr as any).sendToRenderer('agent:status', {
+      sessionId: 's1', agentId: 'a1', taskId: 'subtask-1', status: SessionStatus.IDLE
+    })
+
+    expect(notificationInstances).toHaveLength(1)
+    expect(notificationInstances[0].opts.title).toBe('Agent finished')
+    expect(notificationInstances[0].opts.body).toContain('Subtask')
+  })
+
   it('clicking notification brings the window to focus', () => {
     const { mgr, mockWindow } = createManagerWithWindow({ isFocused: false })
 

@@ -5,7 +5,7 @@ import type { TaskPriority } from '@/types'
 export type SortField = 'created_at' | 'updated_at' | 'priority' | 'due_date' | 'title' | 'status'
 export type SortDirection = 'asc' | 'desc'
 export type ActiveModal = 'create' | 'edit' | 'delete' | 'settings' | 'repo-selector' | 'gh-setup' | null
-export type SidebarView = 'tasks' | 'skills'
+export type SidebarView = 'tasks' | 'skills' | 'dashboard'
 
 interface UIState {
   sidebarView: SidebarView
@@ -20,6 +20,7 @@ interface UIState {
   editingTaskId: string | null
   deletingTaskId: string | null
   settingsTab: SettingsTab
+  dashboardPreviewTaskId: string | null
 
   setSidebarView: (view: SidebarView) => void
   setStatusFilter: (filter: TaskStatus | 'all') => void
@@ -35,10 +36,12 @@ interface UIState {
   openDeleteModal: (taskId: string) => void
   openSettings: () => void
   closeModal: () => void
+  openDashboardPreview: (taskId: string) => void
+  closeDashboardPreview: () => void
 }
 
 export const useUIStore = create<UIState>((set) => ({
-  sidebarView: 'tasks',
+  sidebarView: 'dashboard',
   statusFilter: 'all',
   priorityFilter: 'all',
   sourceFilter: 'all',
@@ -50,6 +53,7 @@ export const useUIStore = create<UIState>((set) => ({
   editingTaskId: null,
   deletingTaskId: null,
   settingsTab: SettingsTab.GENERAL,
+  dashboardPreviewTaskId: null,
 
   setSidebarView: (sidebarView) => set({ sidebarView }),
   setStatusFilter: (statusFilter) => set({ statusFilter }),
@@ -76,5 +80,7 @@ export const useUIStore = create<UIState>((set) => ({
   openEditModal: (taskId) => set({ activeModal: 'edit', editingTaskId: taskId }),
   openDeleteModal: (taskId) => set({ activeModal: 'delete', deletingTaskId: taskId }),
   openSettings: () => set({ activeModal: 'settings' }),
-  closeModal: () => set({ activeModal: null, editingTaskId: null, deletingTaskId: null })
+  closeModal: () => set({ activeModal: null, editingTaskId: null, deletingTaskId: null }),
+  openDashboardPreview: (taskId) => set({ dashboardPreviewTaskId: taskId }),
+  closeDashboardPreview: () => set({ dashboardPreviewTaskId: null })
 }))

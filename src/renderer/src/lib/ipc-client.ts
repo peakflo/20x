@@ -499,5 +499,21 @@ export const enterpriseApi = {
 
   apiRequest: (method: string, path: string, body?: unknown): Promise<unknown> => {
     return window.electronAPI.enterprise.apiRequest(method, path, body)
+  },
+
+  getApiUrl: (): Promise<string> => {
+    return window.electronAPI.enterprise.getApiUrl()
+  },
+
+  getJwt: (): Promise<string> => {
+    return window.electronAPI.enterprise.getJwt()
+  },
+
+  enableIframeAuth: (): Promise<{ apiUrl: string }> => {
+    return window.electronAPI.enterprise.enableIframeAuth()
+  },
+
+  disableIframeAuth: (): Promise<void> => {
+    return window.electronAPI.enterprise.disableIframeAuth()
   }
 }

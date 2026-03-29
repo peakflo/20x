@@ -1,4 +1,4 @@
-import { ipcMain, dialog, shell, Notification, app } from 'electron'
+import { ipcMain, dialog, shell, Notification, app, session } from 'electron'
 import { copyFileSync, existsSync, unlinkSync, readdirSync, statSync, readFileSync } from 'fs'
 import { join, basename, extname } from 'path'
 import type {
@@ -926,6 +926,47 @@ export function registerIpcHandlers(
   ipcMain.handle('enterprise:getSupabaseTokens', async () => {
     if (!enterpriseAuth) throw new Error('Enterprise auth not available')
     return enterpriseAuth.getSupabaseTokens()
+  })
+
+  ipcMain.handle('enterprise:getApiUrl', () => {
+    if (!enterpriseAuth) throw new Error('Enterprise auth not available')
+    return enterpriseAuth.getApiUrl()
+  })
+
+  ipcMain.handle('enterprise:getJwt', async () => {
+    if (!enterpriseAuth) throw new Error('Enterprise auth not available')
+    return enterpriseAuth.getJwt()
+  })
+
+  // Inject Authorization header for iframe requests to the enterprise API.
+  // The interceptor is scoped to the API URL so it only affects API-bound requests.
+  let iframeAuthEnabled = false
+
+  ipcMain.handle('enterprise:enableIframeAuth', async () => {
+    if (!enterpriseAuth) throw new Error('Enterprise auth not available')
+    if (iframeAuthEnabled) return { apiUrl: enterpriseAuth.getApiUrl() }
+
+    const apiUrl = enterpriseAuth.getApiUrl()
+    const filter = { urls: [`${apiUrl}/*`] }
+
+    session.defaultSession.webRequest.onBeforeSendHeaders(filter, async (details, callback) => {
+      if (iframeAuthEnabled && enterpriseAuth) {
+        try {
+          const jwt = await enterpriseAuth.getJwt()
+          details.requestHeaders['Authorization'] = `Bearer ${jwt}`
+        } catch {
+          // If JWT retrieval fails, proceed without auth
+        }
+      }
+      callback({ requestHeaders: details.requestHeaders })
+    })
+
+    iframeAuthEnabled = true
+    return { apiUrl }
+  })
+
+  ipcMain.handle('enterprise:disableIframeAuth', () => {
+    iframeAuthEnabled = false
   })
 
   // ── Claude Plugin Marketplace handlers ─────────────────────

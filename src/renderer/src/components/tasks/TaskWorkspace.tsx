@@ -13,7 +13,7 @@ import { SkillSelectorDialog } from '@/components/skills/SkillSelectorDialog'
 import { WorktreeProgressOverlay } from '@/components/github/WorktreeProgressOverlay'
 import { useAgentSession } from '@/hooks/use-agent-session'
 import { useAgentStore, SessionStatus } from '@/stores/agent-store'
-import { useSettingsStore } from '@/stores/settings-store'
+import { useSettingsStore, type GitProvider } from '@/stores/settings-store'
 import { useTaskStore } from '@/stores/task-store'
 import { taskApi, worktreeApi, taskSourceApi, onAgentIncompatibleSession, onWorktreeProgress } from '@/lib/ipc-client'
 import { useEffect, useCallback, useRef, useState } from 'react'
@@ -48,12 +48,13 @@ export function TaskWorkspace({
 }: TaskWorkspaceProps) {
   const { session, start, resume, abort, stop, sendMessage, approve } = useAgentSession(task?.id)
   const { removeSession } = useAgentStore()
-  const { githubOrg, checkGhCli, setGithubOrg, fetchSettings } = useSettingsStore()
+  const { githubOrg, checkGhCli, checkGlabCli, setGithubOrg, fetchSettings } = useSettingsStore()
 
   const [showGhSetup, setShowGhSetup] = useState(false)
   const [showOrgPicker, setShowOrgPicker] = useState(false)
   const [showRepoSelector, setShowRepoSelector] = useState(false)
   const [showSkillSelector, setShowSkillSelector] = useState(false)
+  const [orgProvider, setOrgProvider] = useState<GitProvider>('github')
   const [isSettingUpWorktree, setIsSettingUpWorktree] = useState(false)
   const [showFeedback, setShowFeedback] = useState(false)
   const [showSnooze, setShowSnooze] = useState(false)
@@ -243,15 +244,22 @@ export function TaskWorkspace({
     }
   }, [githubOrg])
 
-  const handleOrgSelected = useCallback(async (org: string) => {
+  const handleOrgSelected = useCallback(async (org: string, provider: GitProvider) => {
     await setGithubOrg(org)
+    setOrgProvider(provider)
     setShowOrgPicker(false)
     setShowRepoSelector(true)
   }, [setGithubOrg])
 
   const handleAddRepos = useCallback(async () => {
-    const cliStatus = await checkGhCli()
-    if (!cliStatus.installed || !cliStatus.authenticated) {
+    // Check if at least one git provider is authenticated
+    const [ghStatus, glabStatus] = await Promise.all([
+      checkGhCli().catch(() => ({ installed: false, authenticated: false })),
+      checkGlabCli().catch(() => ({ installed: false, authenticated: false }))
+    ])
+    const anyAuthed = (ghStatus.installed && ghStatus.authenticated) ||
+                      (glabStatus.installed && glabStatus.authenticated)
+    if (!anyAuthed) {
       setShowGhSetup(true)
       return
     }
@@ -260,7 +268,7 @@ export function TaskWorkspace({
       return
     }
     setShowRepoSelector(true)
-  }, [githubOrg, checkGhCli])
+  }, [githubOrg, checkGhCli, checkGlabCli])
 
   const handleReposConfirmed = useCallback(async (selectedRepos: GitHubRepo[], selectedOrg: string) => {
     if (!task) return
@@ -674,6 +682,7 @@ Update existing skills that were helpful or create new ones for patterns worth r
           open={showRepoSelector}
           onOpenChange={setShowRepoSelector}
           org={githubOrg}
+          orgProvider={orgProvider}
           initialRepos={task.repos}
           onConfirm={handleReposConfirmed}
         />

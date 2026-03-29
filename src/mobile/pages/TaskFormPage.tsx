@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { TaskStatus, TASK_STATUSES } from '@shared/constants'
 import { useTaskStore } from '../stores/task-store'
 import { cn } from '../lib/utils'
@@ -129,9 +129,16 @@ export function TaskFormPage({ taskId, onNavigate }: { taskId?: string; onNaviga
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState<string | null>(null)
 
-  // ── Populate form when editing ──────────────────────────
+  // ── Populate form when editing (only once on initial load) ──
+  // Track whether we've already populated the form to prevent
+  // background polling / WebSocket updates from overwriting edits.
+  const formPopulatedRef = useRef(false)
+
   useEffect(() => {
     if (!existingTask) return
+    if (formPopulatedRef.current) return
+    formPopulatedRef.current = true
+
     setTitle(existingTask.title)
     setDescription(existingTask.description)
     setType(existingTask.type)

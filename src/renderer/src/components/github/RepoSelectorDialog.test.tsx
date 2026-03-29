@@ -59,7 +59,7 @@ describe('RepoSelectorDialog', () => {
     })
 
     const orgSelect = screen.getByLabelText('Organization') as HTMLSelectElement
-    fireEvent.change(orgSelect, { target: { value: 'other-org' } })
+    fireEvent.change(orgSelect, { target: { value: 'github:other-org' } })
 
     await waitFor(() => {
       expect(mockElectronAPI.github.fetchOrgRepos).toHaveBeenCalledWith('other-org')

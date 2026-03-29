@@ -72,9 +72,8 @@ html, body, #root {
 
 /* ── App Shell ────────────────────────────────── */
 #root {
-  display: grid;
-  grid-template-columns: 260px 1fr;
-  grid-template-rows: 100%;
+  display: flex;
+  flex-direction: column;
 }
 
 /* ── Drag regions for macOS traffic lights ────── */

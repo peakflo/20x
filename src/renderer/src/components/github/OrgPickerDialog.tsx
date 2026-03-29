@@ -1,52 +1,38 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect } from 'react'
 import { Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogBody } from '@/components/ui/Dialog'
-import { getGitProviderApi, getProviderLabel } from '@/lib/git-provider-api'
-import { useSettingsStore } from '@/stores/settings-store'
+import { fetchAllProviderOrgs, type OrgEntry } from '@/lib/git-provider-api'
 
 interface OrgPickerDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
-  onSelect: (org: string) => void
+  onSelect: (org: string, provider: OrgEntry['provider']) => void
 }
 
 export function OrgPickerDialog({ open, onOpenChange, onSelect }: OrgPickerDialogProps) {
-  const gitProvider = useSettingsStore((s) => s.gitProvider)
-  const providerApi = useMemo(() => getGitProviderApi(gitProvider), [gitProvider])
-  const providerLabel = getProviderLabel(gitProvider)
-
-  const [owners, setOwners] = useState<{ value: string; label: string }[]>([])
+  const [owners, setOwners] = useState<OrgEntry[]>([])
   const [loading, setLoading] = useState(false)
 
   useEffect(() => {
     if (!open) return
     setLoading(true)
 
-    Promise.all([providerApi.checkCli(), providerApi.fetchOrgs()])
-      .then(([status, orgs]) => {
-        const list: { value: string; label: string }[] = []
-        if (status.username) {
-          list.push({ value: status.username, label: `${status.username} (personal)` })
-        }
-        for (const org of orgs) {
-          list.push({ value: org, label: org })
-        }
-        setOwners(list)
-      })
+    fetchAllProviderOrgs()
+      .then(setOwners)
       .catch(() => setOwners([]))
       .finally(() => setLoading(false))
-  }, [open, providerApi])
+  }, [open])
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-sm">
         <DialogHeader>
-          <DialogTitle>Select {providerLabel} Organization</DialogTitle>
+          <DialogTitle>Select Organization</DialogTitle>
         </DialogHeader>
         <DialogBody className="space-y-3">
           <p className="text-sm text-muted-foreground">
-            Choose the {providerLabel} organization or account to browse repositories from.
+            Choose the organization or account to browse repositories from.
           </p>
 
           {loading ? (
@@ -61,10 +47,10 @@ export function OrgPickerDialog({ open, onOpenChange, onSelect }: OrgPickerDialo
             <div className="space-y-1">
               {owners.map((o) => (
                 <Button
-                  key={o.value}
+                  key={`${o.provider}:${o.value}`}
                   variant="ghost"
                   className="w-full justify-start"
-                  onClick={() => onSelect(o.value)}
+                  onClick={() => onSelect(o.value, o.provider)}
                 >
                   {o.label}
                 </Button>
