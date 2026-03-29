@@ -608,7 +608,12 @@ export function AgentTranscriptPanel({ title = 'Agent transcript', messages, sta
       <div className="flex items-center justify-between px-4 py-3 border-b border-border/50 shrink-0 windows-titlebar-safe">
         <div className="flex items-center gap-2">
           <Terminal className="h-4 w-4 text-muted-foreground" />
-          <span className="text-sm font-medium">{title}</span>
+          <span className="text-sm font-medium">
+            {title}
+            <span className="ml-2 text-xs font-mono text-muted-foreground">
+              ({messages.length})
+            </span>
+          </span>
         </div>
         <div className="flex items-center gap-3">
           <span className={`text-xs flex items-center gap-1 ${getStatusColor()}`}>
@@ -757,9 +762,6 @@ export function AgentTranscriptPanel({ title = 'Agent transcript', messages, sta
             </Button>
           </div>
         )}
-        <div className="px-4 py-1.5 text-[10px] text-muted-foreground font-mono">
-          {messages.length} message{messages.length !== 1 ? 's' : ''}
-        </div>
       </div>
     </div>
   )
