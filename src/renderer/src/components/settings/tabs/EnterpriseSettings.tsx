@@ -125,7 +125,7 @@ export function EnterpriseSettings() {
           title="Setup Packages"
           description="Pre-configured workflow packages available for your organization"
         >
-          <PresetList key={presetupKey} onSelectTemplate={handleSelectTemplate} />
+          <PresetList key={presetupKey} onSelectTemplate={handleSelectTemplate} collapsible={false} />
         </SettingsSection>
 
         {/* Presetup Flow Dialog */}

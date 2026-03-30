@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react'
-import { RefreshCw, Loader2, Cloud, Package } from 'lucide-react'
+import { RefreshCw, Loader2, Cloud } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { useDashboardStore, type TimeWindow } from '@/stores/dashboard-store'
 import { useEnterpriseStore } from '@/stores/enterprise-store'
@@ -152,10 +152,6 @@ export function DashboardWorkspace() {
         {/* Setup Packages — shown when enterprise-authenticated */}
         {isAuthenticated && (
           <div>
-            <div className="flex items-center gap-2 mb-3">
-              <Package className="h-4 w-4 text-muted-foreground" />
-              <h2 className="text-sm font-semibold">Setup Packages</h2>
-            </div>
             <PresetList key={presetupKey} onSelectTemplate={handleSelectTemplate} />
             <PresetupFlow open={presetupOpen} onOpenChange={handlePresetupClose} />
           </div>
