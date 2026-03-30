@@ -1,11 +1,15 @@
-import { useEffect } from 'react'
-import { RefreshCw, Loader2, Cloud } from 'lucide-react'
+import { useEffect, useState, useCallback } from 'react'
+import { RefreshCw, Loader2, Cloud, Package } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { useDashboardStore, type TimeWindow } from '@/stores/dashboard-store'
 import { useEnterpriseStore } from '@/stores/enterprise-store'
+import { usePresetupStore } from '@/stores/presetup-store'
 import { useTaskStore } from '@/stores/task-store'
 import { useUIStore } from '@/stores/ui-store'
 import { SettingsTab } from '@/types'
+import type { PresetupTemplate } from '@/lib/presetup-api'
+import { PresetList } from '@/components/presetup/PresetList'
+import { PresetupFlow } from '@/components/presetup/PresetupFlow'
 import { StatsSection } from './StatsSection'
 import { ApplicationsList } from './ApplicationsList'
 import { TaskBoard } from './TaskBoard'
@@ -31,6 +35,24 @@ export function DashboardWorkspace() {
   } = useDashboardStore()
 
   const isLoading = applicationsLoading || statsLoading
+
+  // Presetup state
+  const [presetupOpen, setPresetupOpen] = useState(false)
+  const [presetupKey, setPresetupKey] = useState(0)
+
+  const handleSelectTemplate = useCallback((template: PresetupTemplate) => {
+    usePresetupStore.getState().reset()
+    usePresetupStore.getState().selectTemplate(template)
+    setPresetupOpen(true)
+  }, [])
+
+  const handlePresetupClose = useCallback((open: boolean) => {
+    setPresetupOpen(open)
+    if (!open) {
+      usePresetupStore.getState().reset()
+      setPresetupKey((k) => k + 1)
+    }
+  }, [])
 
   // Restore saved enterprise session on mount
   useEffect(() => {
@@ -124,6 +146,18 @@ export function DashboardWorkspace() {
             >
               Connect
             </Button>
+          </div>
+        )}
+
+        {/* Setup Packages — shown when enterprise-authenticated */}
+        {isAuthenticated && (
+          <div>
+            <div className="flex items-center gap-2 mb-3">
+              <Package className="h-4 w-4 text-muted-foreground" />
+              <h2 className="text-sm font-semibold">Setup Packages</h2>
+            </div>
+            <PresetList key={presetupKey} onSelectTemplate={handleSelectTemplate} />
+            <PresetupFlow open={presetupOpen} onOpenChange={handlePresetupClose} />
           </div>
         )}
 
