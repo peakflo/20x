@@ -1,12 +1,10 @@
 import { useState, useEffect, useCallback } from 'react'
 import { Button } from '@/components/ui/Button'
-import { Badge } from '@/components/ui/Badge'
 import { presetupApi } from '@/lib/presetup-api'
 import type { PresetupTemplate, TemplateStatus } from '@/lib/presetup-api'
 import { getTemplateIcon } from '@/components/presetup/icon-map'
 import {
   Loader2,
-  CheckCircle2,
   Workflow,
   Plug,
   Sparkles,
@@ -129,7 +127,7 @@ export function PresetList({
     <div>
       {header}
       {!collapsed && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
           {templates.map((template) => {
             const status = statuses.get(template.slug)
             const isInstalled = status?.isProvisioned ?? false
@@ -139,11 +137,11 @@ export function PresetList({
             return (
               <div
                 key={template.slug}
-                className={`border rounded-lg p-3 transition-colors ${
+                className={`rounded-lg border p-4 transition-all ${
                   isInstalled
-                    ? 'border-green-200 bg-green-50/30 dark:border-green-800/50 dark:bg-green-900/10'
-                    : 'border-border hover:border-primary/50 cursor-pointer'
-                }`}
+                    ? 'border-green-500/30 bg-[#161b22]'
+                    : 'border-border/50 bg-[#161b22] cursor-pointer hover:border-border hover:bg-[#1c2129]'
+                } group`}
                 onClick={!isInstalled ? () => onSelectTemplate(template) : undefined}
                 role={!isInstalled ? 'button' : undefined}
                 tabIndex={!isInstalled ? 0 : undefined}
@@ -154,60 +152,42 @@ export function PresetList({
                   }
                 } : undefined}
               >
-                {/* Icon + title row */}
-                <div className="flex items-center gap-2 mb-1">
-                  <div className={`h-6 w-6 rounded flex items-center justify-center flex-shrink-0 ${
-                    isInstalled ? 'bg-green-100 dark:bg-green-900/30' : 'bg-primary/10'
+                <div className="flex items-start gap-3">
+                  <div className={`rounded-md p-2 shrink-0 ${
+                    isInstalled ? 'bg-green-500/10' : 'bg-primary/10'
                   }`}>
-                    <Icon className={`h-3.5 w-3.5 ${isInstalled ? 'text-green-600 dark:text-green-400' : 'text-primary'}`} />
+                    <Icon className={`h-5 w-5 ${isInstalled ? 'text-green-500' : 'text-primary'}`} />
                   </div>
-                  <h4 className="text-sm font-medium text-foreground truncate flex-1">{template.name}</h4>
-                  {isInstalled && (
-                    <Badge variant="green" className="shrink-0 gap-1 text-[10px] px-1.5 py-0">
-                      <CheckCircle2 className="h-2.5 w-2.5" />
-                      Installed
-                    </Badge>
-                  )}
-                </div>
-
-                {/* Description */}
-                <p className="text-xs text-muted-foreground line-clamp-1 mb-2">{template.description}</p>
-
-                {/* Footer: resource counts + action */}
-                <div className="flex items-center justify-between">
-                  <div className="flex flex-wrap gap-1.5">
-                    {workflows.length > 0 && (
-                      <span className="inline-flex items-center text-[11px] text-muted-foreground">
-                        <Workflow className="h-3 w-3 mr-0.5" />
-                        {workflows.length}
-                      </span>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <h3 className="text-sm font-medium truncate">{template.name}</h3>
+                      {isInstalled && <div className="h-2 w-2 rounded-full bg-green-500 shrink-0" />}
+                    </div>
+                    {template.description && (
+                      <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{template.description}</p>
                     )}
-                    {integrations.length > 0 && (
-                      <span className="inline-flex items-center text-[11px] text-muted-foreground">
-                        <Plug className="h-3 w-3 mr-0.5" />
-                        {integrations.length}
-                      </span>
-                    )}
-                    {skills.length > 0 && (
-                      <span className="inline-flex items-center text-[11px] text-muted-foreground">
-                        <Sparkles className="h-3 w-3 mr-0.5" />
-                        {skills.length}
-                      </span>
-                    )}
+                    <div className="flex items-center gap-3 mt-2 text-[11px] text-muted-foreground">
+                      {workflows.length > 0 && (
+                        <span className="inline-flex items-center gap-0.5">
+                          <Workflow className="h-3 w-3" />
+                          {workflows.length}
+                        </span>
+                      )}
+                      {integrations.length > 0 && (
+                        <span className="inline-flex items-center gap-0.5">
+                          <Plug className="h-3 w-3" />
+                          {integrations.length}
+                        </span>
+                      )}
+                      {skills.length > 0 && (
+                        <span className="inline-flex items-center gap-0.5">
+                          <Sparkles className="h-3 w-3" />
+                          {skills.length}
+                        </span>
+                      )}
+                      {isInstalled && <span>Installed</span>}
+                    </div>
                   </div>
-                  {!isInstalled && (
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      className="h-6 text-xs px-2"
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        onSelectTemplate(template)
-                      }}
-                    >
-                      Install
-                    </Button>
-                  )}
                 </div>
               </div>
             )
