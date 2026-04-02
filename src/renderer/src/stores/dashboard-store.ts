@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { enterpriseApi } from '@/lib/ipc-client'
 import { useEnterpriseStore } from '@/stores/enterprise-store'
+import { isSnoozed } from '@/lib/utils'
 import type { WorkfloTask } from '@/types'
 import { TaskStatus } from '@/types'
 
@@ -55,8 +56,8 @@ function getWindowStart(timeWindow: TimeWindow): Date | null {
 
 /** Compute dashboard stats from local tasks (no cloud required). */
 export function computeLocalStats(tasks: WorkfloTask[], timeWindow: TimeWindow): DashboardStats {
-  // Filter to top-level tasks only (consistent with TaskBoard)
-  const topLevel = tasks.filter((t) => !t.parent_task_id)
+  // Filter to top-level, non-snoozed tasks only (consistent with TaskBoard)
+  const topLevel = tasks.filter((t) => !t.parent_task_id && !isSnoozed(t.snoozed_until))
   const windowStart = getWindowStart(timeWindow)
 
   const tasksByStatus: Record<string, number> = {}

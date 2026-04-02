@@ -8,6 +8,11 @@ import { useUIStore } from '@/stores/ui-store'
 import { TaskStatus } from '@/types'
 import type { WorkfloTask } from '@/types'
 
+// Mock use-snooze-tick to avoid IPC dependency in tests
+vi.mock('@/hooks/use-snooze-tick', () => ({
+  useSnoozeTick: () => 0
+}))
+
 // Mock ipc-client - prevent real API calls during tests
 vi.mock('@/lib/ipc-client', () => ({
   enterpriseApi: {
@@ -273,6 +278,36 @@ describe('DashboardWorkspace', () => {
 
     render(<DashboardWorkspace />)
     expect(mockUpdateLocalStats).toHaveBeenCalled()
+  })
+
+  it('hides snoozed tasks from the task board', () => {
+    const futureDate = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
+    useTaskStore.setState({
+      tasks: [
+        makeTask({ id: 'active-1', title: 'Active task', status: TaskStatus.NotStarted }),
+        makeTask({ id: 'snoozed-1', title: 'Snoozed task', status: TaskStatus.NotStarted, snoozed_until: futureDate }),
+        makeTask({ id: 'snoozed-2', title: 'Someday task', status: TaskStatus.AgentWorking, snoozed_until: '9999-12-31T00:00:00.000Z' })
+      ]
+    })
+
+    render(<DashboardWorkspace />)
+    expect(screen.getByText('Active task')).toBeDefined()
+    expect(screen.queryByText('Snoozed task')).toBeNull()
+    expect(screen.queryByText('Someday task')).toBeNull()
+    // Only 1 active task (snoozed ones are excluded)
+    expect(screen.getByText('1 active task')).toBeDefined()
+  })
+
+  it('shows tasks whose snooze has expired', () => {
+    const pastDate = new Date(Date.now() - 60 * 60 * 1000).toISOString()
+    useTaskStore.setState({
+      tasks: [
+        makeTask({ id: 'expired-snooze', title: 'Expired snooze task', status: TaskStatus.NotStarted, snoozed_until: pastDate })
+      ]
+    })
+
+    render(<DashboardWorkspace />)
+    expect(screen.getByText('Expired snooze task')).toBeDefined()
   })
 
   it('clicking a task card sets dashboardPreviewTaskId in UI store', () => {

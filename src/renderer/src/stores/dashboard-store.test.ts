@@ -325,6 +325,24 @@ describe('computeLocalStats', () => {
     expect(stats.tasksCompletedInWindow).toBe(0) // Only parent counted, which is not_started
   })
 
+  it('excludes snoozed tasks from counts', () => {
+    const futureDate = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
+    const pastDate = new Date(Date.now() - 60 * 60 * 1000).toISOString()
+    const tasks: WorkfloTask[] = [
+      makeTask({ id: 'active', status: TaskStatus.NotStarted }),
+      makeTask({ id: 'snoozed-future', status: TaskStatus.NotStarted, snoozed_until: futureDate }),
+      makeTask({ id: 'snoozed-someday', status: TaskStatus.AgentWorking, snoozed_until: '9999-12-31T00:00:00.000Z' }),
+      makeTask({ id: 'snoozed-expired', status: TaskStatus.NotStarted, snoozed_until: pastDate })
+    ]
+
+    const stats = computeLocalStats(tasks, 'all')
+
+    // Only active + expired-snooze should be counted (2 tasks)
+    expect(stats.totalTasks).toBe(2)
+    expect(stats.tasksByStatus[TaskStatus.NotStarted]).toBe(2)
+    expect(stats.tasksByStatus[TaskStatus.AgentWorking]).toBeUndefined()
+  })
+
   it('sets single-user defaults', () => {
     const stats = computeLocalStats([], 'all')
 

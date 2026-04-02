@@ -3,6 +3,8 @@ import { Clock, AlertCircle, CheckCircle2 } from 'lucide-react'
 import { Badge } from '@/components/ui/Badge'
 import { useTaskStore } from '@/stores/task-store'
 import { useUIStore } from '@/stores/ui-store'
+import { useSnoozeTick } from '@/hooks/use-snooze-tick'
+import { isSnoozed } from '@/lib/utils'
 import { TaskStatus } from '@/types'
 import type { WorkfloTask } from '@/types'
 
@@ -154,9 +156,13 @@ function ColumnCards({ tasks, onSelect }: { tasks: WorkfloTask[]; onSelect: (id:
 export function TaskBoard() {
   const { tasks, isLoading } = useTaskStore()
   const { openDashboardPreview } = useUIStore()
+  const snoozeTick = useSnoozeTick(tasks)
 
-  // Only show top-level tasks (not subtasks)
-  const topLevelTasks = useMemo(() => tasks.filter((t) => !t.parent_task_id), [tasks])
+  // Only show top-level tasks that are not snoozed (not subtasks)
+  const topLevelTasks = useMemo(
+    () => tasks.filter((t) => !t.parent_task_id && !isSnoozed(t.snoozed_until)),
+    [tasks, snoozeTick]
+  )
 
   // Open task preview modal (rendered by AppLayout with full TaskWorkspace)
   const handleSelectTask = useCallback((taskId: string) => {
