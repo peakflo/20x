@@ -27,7 +27,7 @@ interface StatCardProps {
 
 function StatCard({ title, value, description, icon: Icon, loading, accent }: StatCardProps) {
   return (
-    <div className="relative rounded-lg border border-border/50 bg-[#161b22] p-4 overflow-hidden">
+    <div className="relative rounded-lg border border-border/50 bg-card p-4 overflow-hidden">
       {accent && (
         <div className="absolute top-0 left-0 w-full h-0.5" style={{ backgroundColor: accent }} />
       )}
@@ -69,7 +69,7 @@ export function StatsSection() {
           }
           icon={Bot}
           loading={statsLoading}
-          accent="#6d28d9"
+          accent="#82819F"
         />
         <StatCard
           title="Agent Success"
@@ -77,7 +77,7 @@ export function StatsSection() {
           description={`${formatNumber(effectiveStats?.totalAgentRuns)} total runs`}
           icon={Cpu}
           loading={statsLoading}
-          accent="#059669"
+          accent="#A6BF91"
         />
         <StatCard
           title="Tasks Created"

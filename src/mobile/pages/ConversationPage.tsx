@@ -135,7 +135,7 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
   const canStop = isSessionRunning
 
   return (
-    <div className="flex flex-col h-full bg-[#0d1117]">
+    <div className="flex flex-col h-full bg-background">
       {/* Header — matches desktop AgentTranscriptPanel header */}
       <div className="shrink-0 flex items-center justify-between px-4 py-3 border-b border-border/50">
         <div className="flex items-center gap-2 min-w-0">
@@ -362,7 +362,7 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
         {showScrollToBottom && messages.length > 0 && (
           <button
             onClick={scrollToBottom}
-            className="absolute bottom-3 right-3 flex items-center gap-1.5 rounded-full bg-[#161b22] border border-border/50 px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:border-border shadow-lg transition-all duration-200 opacity-80 hover:opacity-100 active:opacity-100"
+            className="absolute bottom-3 right-3 flex items-center gap-1.5 rounded-full bg-card border border-border/50 px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:border-border shadow-lg transition-all duration-200 opacity-80 hover:opacity-100 active:opacity-100"
             title="Scroll to bottom"
           >
             <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

@@ -1,30 +1,31 @@
 @import "tailwindcss";
 
 @theme {
-  --color-background: #09090b;
-  --color-foreground: #fafafa;
-  --color-card: #0c0c0f;
-  --color-card-foreground: #fafafa;
-  --color-popover: #0c0c0f;
-  --color-popover-foreground: #fafafa;
-  --color-primary: #3b82f6;
-  --color-primary-foreground: #ffffff;
-  --color-secondary: #1a1a2e;
-  --color-secondary-foreground: #fafafa;
-  --color-muted: #18181b;
-  --color-muted-foreground: #71717a;
-  --color-accent: #1a1a2e;
-  --color-accent-foreground: #fafafa;
-  --color-destructive: #ef4444;
-  --color-destructive-foreground: #ffffff;
-  --color-border: #1e1e2e;
-  --color-input: #1e1e2e;
-  --color-ring: #3b82f6;
-  --color-sidebar: #0c0c0f;
-  --color-sidebar-foreground: #a1a1aa;
-  --color-sidebar-border: #1e1e2e;
-  --color-sidebar-accent: #1a1a2e;
-  --color-sidebar-muted: #18181b;
+  /* Cursor Dark Midnight palette */
+  --color-background: #1E2127;
+  --color-foreground: #EBEEF4;
+  --color-card: #191D23;
+  --color-card-foreground: #EBEEF4;
+  --color-popover: #191D23;
+  --color-popover-foreground: #EBEEF4;
+  --color-primary: #85A4C3;
+  --color-primary-foreground: #1E2127;
+  --color-secondary: #30353F;
+  --color-secondary-foreground: #EBEEF4;
+  --color-muted: #30353F;
+  --color-muted-foreground: #535D71;
+  --color-accent: #313C47;
+  --color-accent-foreground: #EBEEF4;
+  --color-destructive: #C06771;
+  --color-destructive-foreground: #EBEEF4;
+  --color-border: #30353F;
+  --color-input: #30353F;
+  --color-ring: #85A4C3;
+  --color-sidebar: #191D23;
+  --color-sidebar-foreground: #E4E8F0;
+  --color-sidebar-border: #30353F;
+  --color-sidebar-accent: #313C47;
+  --color-sidebar-muted: #30353F;
   --radius-sm: 6px;
   --radius-md: 8px;
   --radius-lg: 12px;
@@ -89,7 +90,7 @@ html, body, #root {
 ::-webkit-scrollbar { width: 5px; height: 5px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: 99px; }
-::-webkit-scrollbar-thumb:hover { background: #2a2a3e; }
+::-webkit-scrollbar-thumb:hover { background: #535D71; }
 
 /* ── Native form elements ─────────────────────── */
 select {

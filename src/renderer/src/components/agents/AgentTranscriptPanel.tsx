@@ -128,7 +128,7 @@ function QuestionMessage({ message, onAnswer, canAnswer }: { message: AgentMessa
   }
 
   return (
-    <div className="rounded-md bg-[#161b22] border border-primary/30 overflow-hidden">
+    <div className="rounded-md bg-card border border-primary/30 overflow-hidden">
       {questions.map((q, qi) => {
         const hasOptions = q.options && q.options.length > 0
         return (
@@ -149,7 +149,7 @@ function QuestionMessage({ message, onAnswer, canAnswer }: { message: AgentMessa
                           ? 'bg-primary/20 border-primary/50 text-foreground'
                           : isLocked
                             ? 'border-border/30 text-muted-foreground opacity-50 cursor-default'
-                            : 'border-border/50 hover:bg-white/5 hover:border-border text-gray-300 cursor-pointer'
+                            : 'border-border/50 hover:bg-white/5 hover:border-border text-foreground/80 cursor-pointer'
                       }`}
                     >
                       <span className="font-medium">{opt.label}</span>
@@ -209,7 +209,7 @@ function TodoWriteMessage({ message }: { message: AgentMessage }) {
   }
 
   return (
-    <div className="rounded-md bg-[#161b22] border border-border/50 overflow-hidden">
+    <div className="rounded-md bg-card border border-border/50 overflow-hidden">
       <div className="flex items-center gap-2 px-4 py-2.5 border-b border-border/30">
         <span className="text-[10px] text-muted-foreground font-medium uppercase tracking-wide">Tasks</span>
         <span className="text-[10px] text-muted-foreground ml-auto">{completed}/{todos.length} done</span>
@@ -244,7 +244,7 @@ function PlanReviewMessage({ message }: { message: AgentMessage }) {
   const details = /^(exit|enter) plan mode\??$/i.test(rawOutput.trim()) ? '' : rawOutput
 
   return (
-    <div className="rounded-md bg-[#161b22] border border-border/50 overflow-hidden">
+    <div className="rounded-md bg-card border border-border/50 overflow-hidden">
       <div className="flex items-center gap-2 px-3 py-2 text-xs font-mono">
         <FileText className="h-3 w-3 text-muted-foreground shrink-0" />
         <span className="text-foreground">{label}</span>
@@ -275,7 +275,7 @@ function TaskProgressMessage({ message }: { message: AgentMessage }) {
   const isStopped = tp.status === 'stopped'
 
   return (
-    <div className={`rounded-md bg-[#161b22] border overflow-hidden ${
+    <div className={`rounded-md bg-card border overflow-hidden ${
       isError ? 'border-red-500/30' : isStopped ? 'border-yellow-500/30' : isDone ? 'border-border/50' : 'border-blue-500/30'
     }`}>
       <button
@@ -330,7 +330,7 @@ function ToolCallMessage({ message }: { message: AgentMessage }) {
   const subtitle = deriveToolSubtitle(tool)
 
   return (
-    <div className="rounded-md bg-[#161b22] border border-border/50 overflow-hidden">
+    <div className="rounded-md bg-card border border-border/50 overflow-hidden">
       <button
         onClick={() => setExpanded(!expanded)}
         className="w-full flex items-center gap-2 px-3 py-2 text-xs font-mono hover:bg-white/5 transition-colors"
@@ -347,13 +347,13 @@ function ToolCallMessage({ message }: { message: AgentMessage }) {
           {tool.input && (
             <div>
               <span className="text-muted-foreground">Input:</span>
-              <pre className="mt-0.5 text-gray-400 whitespace-pre-wrap break-words max-h-40 overflow-y-auto">{sanitizeToolContent(tool.input)}</pre>
+              <pre className="mt-0.5 text-muted-foreground whitespace-pre-wrap break-words max-h-40 overflow-y-auto">{sanitizeToolContent(tool.input)}</pre>
             </div>
           )}
           {tool.output && (
             <div>
               <span className="text-muted-foreground">Output:</span>
-              <pre className="mt-0.5 text-gray-400 whitespace-pre-wrap break-words max-h-40 overflow-y-auto">{sanitizeToolContent(tool.output)}</pre>
+              <pre className="mt-0.5 text-muted-foreground whitespace-pre-wrap break-words max-h-40 overflow-y-auto">{sanitizeToolContent(tool.output)}</pre>
             </div>
           )}
           {tool.error && (
@@ -413,12 +413,12 @@ function MessageBubble({ message, onAnswer, viewMode, canAnswerQuestion = false 
           isError
             ? 'bg-red-500/10 text-red-200 border border-red-500/20'
             : isUser
-              ? 'bg-primary/20 text-foreground'
+              ? 'bg-secondary text-foreground'
               : isSystem
                 ? 'bg-yellow-500/10 text-yellow-200'
                 : isReasoning
                   ? 'bg-purple-500/10 text-purple-200 border border-purple-500/20'
-                  : 'bg-[#161b22] text-gray-300 border border-border/50'
+                  : 'bg-card text-foreground/80 border border-border/50'
         }`}
       >
         {isError && (
@@ -603,7 +603,7 @@ export function AgentTranscriptPanel({ title = 'Agent transcript', messages, sta
   }
 
   return (
-    <div className={`flex flex-col min-h-0 bg-[#0d1117] border-l border-border ${className ?? ''}`}>
+    <div className={`flex flex-col min-h-0 bg-background border-l border-border ${className ?? ''}`}>
       {/* Header — windows-titlebar-safe adds right padding on Windows to avoid title bar overlay */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-border/50 shrink-0 windows-titlebar-safe">
         <div className="flex items-center gap-2">
@@ -726,7 +726,7 @@ export function AgentTranscriptPanel({ title = 'Agent transcript', messages, sta
         {showScrollToBottom && messages.length > 0 && (
           <button
             onClick={scrollToBottom}
-            className="absolute bottom-3 right-3 flex items-center gap-1.5 rounded-full bg-[#161b22] border border-border/50 px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:border-border shadow-lg transition-all duration-200 opacity-80 hover:opacity-100"
+            className="absolute bottom-3 right-3 flex items-center gap-1.5 rounded-full bg-card border border-border/50 px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:border-border shadow-lg transition-all duration-200 opacity-80 hover:opacity-100"
             title="Scroll to bottom"
           >
             <ArrowDown className="h-3 w-3" />
