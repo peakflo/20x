@@ -121,6 +121,7 @@ interface AcpSession {
   activeTurnId: number | null  // Current turn tied to an in-flight session/prompt
   pendingAssistantTurnSplit: boolean  // True after tool activity; next assistant chunk must start a new turn
   toolCallMetadata: Map<string, { name: string; input: string; title?: string }>  // Cached metadata from initial tool_call events
+  lastError: string | null  // Last error message (e.g., quota exceeded) for status reporting
 }
 
 /**
@@ -361,7 +362,8 @@ export class AcpAdapter implements CodingAgentAdapter {
       lastSessionUpdateType: null,
       activeTurnId: null,
       pendingAssistantTurnSplit: false,
-      toolCallMetadata: new Map()
+      toolCallMetadata: new Map(),
+      lastError: null
     }
 
     // Temporarily store with workspace ID, will re-key after getting ACP session ID
@@ -533,7 +535,8 @@ export class AcpAdapter implements CodingAgentAdapter {
       lastSessionUpdateType: null,
       activeTurnId: null,
       pendingAssistantTurnSplit: false,
-      toolCallMetadata: new Map()
+      toolCallMetadata: new Map(),
+      lastError: null
     }
 
     // Store with the Codex UUID (same as sessionId since we now return UUID from createSession)
@@ -651,6 +654,7 @@ export class AcpAdapter implements CodingAgentAdapter {
     } as unknown as JsonRpcNotification)
 
     session.status = SessionStatusType.BUSY
+    session.lastError = null  // Clear any previous error (e.g., quota limit) for recovery
     session.currentTurnId++
     session.activeTurnId = session.currentTurnId
     session.lastChunkTime = null
@@ -677,7 +681,7 @@ export class AcpAdapter implements CodingAgentAdapter {
 
     return {
       type: session.status,
-      message: session.status === 'error' ? 'Process error' : undefined
+      message: session.status === 'error' ? (session.lastError || 'Process error') : undefined
     }
   }
 
@@ -958,6 +962,11 @@ export class AcpAdapter implements CodingAgentAdapter {
 
         const response = message as JsonRpcResponse | JsonRpcError
         if ('error' in response && response.error) {
+          // Check for quota/usage limit errors from the provider
+          const errorInfo = this.extractCodexErrorInfo(response.error)
+          if (errorInfo) {
+            this.handleQuotaError(session, errorInfo)
+          }
           pending.reject(new Error(response.error.message))
         } else if ('result' in response) {
           pending.resolve(response.result)
@@ -968,6 +977,13 @@ export class AcpAdapter implements CodingAgentAdapter {
       // No pending request - could be error for permission response or other async operation
       const response = message as JsonRpcResponse | JsonRpcError
       if ('error' in response && response.error) {
+        // Check for quota/usage limit errors from the provider
+        const errorInfo = this.extractCodexErrorInfo(response.error)
+        if (errorInfo) {
+          this.handleQuotaError(session, errorInfo)
+          return
+        }
+
         console.error(`[AcpAdapter/${this.agentType}] Unexpected error response:`, response.error)
         // Push error to message buffers
         const errorEvent = {
@@ -1033,6 +1049,65 @@ export class AcpAdapter implements CodingAgentAdapter {
       // Update session status based on notification
       this.updateSessionStatus(session, notification)
     }
+  }
+
+  /**
+   * Extract codex-specific error info from an RPC error response.
+   * Returns a user-friendly error message if this is a known codex error type,
+   * or null if it's a generic error that should be handled normally.
+   */
+  private extractCodexErrorInfo(error: { code: number; message: string; data?: unknown }): {
+    errorType: string
+    userMessage: string
+  } | null {
+    const data = error.data as Record<string, unknown> | undefined
+    if (!data?.codex_error_info) return null
+
+    const errorType = String(data.codex_error_info)
+    const providerMessage = typeof data.message === 'string' ? data.message : error.message
+
+    switch (errorType) {
+      case 'usage_limit_exceeded':
+        return {
+          errorType,
+          userMessage: `Quota exceeded: ${providerMessage}. Please check your Codex plan and billing details to continue.`
+        }
+      case 'rate_limit_exceeded':
+        return {
+          errorType,
+          userMessage: `Rate limit reached: ${providerMessage}. Please wait a moment before trying again.`
+        }
+      default:
+        return {
+          errorType,
+          userMessage: `Codex error (${errorType}): ${providerMessage}`
+        }
+    }
+  }
+
+  /**
+   * Handle a quota/usage limit error by setting session state and surfacing
+   * a clear, actionable error message to the user.
+   */
+  private handleQuotaError(session: AcpSession, errorInfo: { errorType: string; userMessage: string }): void {
+    console.warn(
+      `[AcpAdapter/${this.agentType}] Provider error (${errorInfo.errorType}):`,
+      errorInfo.userMessage
+    )
+
+    session.status = SessionStatusType.ERROR
+    session.lastError = errorInfo.userMessage
+    session.activeTurnId = null
+
+    // Push a user-friendly error event to the message buffers
+    const errorEvent = {
+      _isError: true,
+      message: errorInfo.userMessage,
+      data: null  // Don't expose raw error data for known error types
+    }
+    session.messageBuffer.push(errorEvent)
+    session.permanentMessages.push(errorEvent)
+    this.onDataAvailable?.(session.sessionId)
   }
 
   private updateSessionStatus(session: AcpSession, notification: JsonRpcNotification): void {

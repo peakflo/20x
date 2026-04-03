@@ -37,6 +37,12 @@ interface AcpAdapterPrivate {
   handlePermissionRequest(session: AcpSessionForTest, request: JsonRpcRequestForTest): void
   sendRpcResponse(session: AcpSessionForTest, id: string | number, result: unknown): void
   updateSessionStatus(session: AcpSessionForTest, notification: unknown): void
+  extractCodexErrorInfo(error: { code: number; message: string; data?: unknown }): {
+    errorType: string
+    userMessage: string
+  } | null
+  handleQuotaError(session: AcpSessionForTest, errorInfo: { errorType: string; userMessage: string }): void
+  handleRpcMessage(session: AcpSessionForTest, message: unknown): void
 }
 
 interface JsonRpcRequestForTest {
@@ -71,6 +77,7 @@ interface AcpSessionForTest {
   activeTurnId: number | null
   pendingAssistantTurnSplit: boolean
   toolCallMetadata: Map<string, { name: string; input: string; title?: string }>
+  lastError: string | null
 }
 
 /** Cast adapter to access private members for testing */
@@ -100,7 +107,8 @@ function createMockSession(sessionId: string): AcpSessionForTest {
     lastSessionUpdateType: null,
     activeTurnId: null,
     pendingAssistantTurnSplit: false,
-    toolCallMetadata: new Map()
+    toolCallMetadata: new Map(),
+    lastError: null
   }
 }
 
@@ -2255,5 +2263,294 @@ describe('AcpAdapter process spawning for packaged Electron apps', () => {
       expect(config.command).toBe(process.execPath)
       expect(config.env).toHaveProperty('ELECTRON_RUN_AS_NODE', '1')
     }
+  })
+})
+
+describe('AcpAdapter - Codex Quota/Error Handling', () => {
+  let adapter: AcpAdapter
+
+  beforeEach(() => {
+    adapter = new AcpAdapter('codex')
+  })
+
+  describe('extractCodexErrorInfo', () => {
+    it('should return null for generic errors without codex_error_info', () => {
+      const result = adapterPrivate(adapter).extractCodexErrorInfo({
+        code: -32603,
+        message: 'Internal error'
+      })
+      expect(result).toBeNull()
+    })
+
+    it('should return null for errors with no data', () => {
+      const result = adapterPrivate(adapter).extractCodexErrorInfo({
+        code: -32603,
+        message: 'Internal error',
+        data: undefined
+      })
+      expect(result).toBeNull()
+    })
+
+    it('should extract usage_limit_exceeded error', () => {
+      const result = adapterPrivate(adapter).extractCodexErrorInfo({
+        code: -32603,
+        message: 'Internal error',
+        data: {
+          message: 'Quota exceeded. Check your plan and billing details.',
+          codex_error_info: 'usage_limit_exceeded'
+        }
+      })
+      expect(result).not.toBeNull()
+      expect(result!.errorType).toBe('usage_limit_exceeded')
+      expect(result!.userMessage).toContain('Quota exceeded')
+      expect(result!.userMessage).toContain('plan and billing')
+    })
+
+    it('should extract rate_limit_exceeded error', () => {
+      const result = adapterPrivate(adapter).extractCodexErrorInfo({
+        code: -32603,
+        message: 'Internal error',
+        data: {
+          message: 'Too many requests',
+          codex_error_info: 'rate_limit_exceeded'
+        }
+      })
+      expect(result).not.toBeNull()
+      expect(result!.errorType).toBe('rate_limit_exceeded')
+      expect(result!.userMessage).toContain('Rate limit')
+      expect(result!.userMessage).toContain('wait')
+    })
+
+    it('should handle unknown codex error types gracefully', () => {
+      const result = adapterPrivate(adapter).extractCodexErrorInfo({
+        code: -32603,
+        message: 'Internal error',
+        data: {
+          message: 'Something went wrong',
+          codex_error_info: 'some_new_error_type'
+        }
+      })
+      expect(result).not.toBeNull()
+      expect(result!.errorType).toBe('some_new_error_type')
+      expect(result!.userMessage).toContain('some_new_error_type')
+    })
+
+    it('should fall back to error.message when data.message is not a string', () => {
+      const result = adapterPrivate(adapter).extractCodexErrorInfo({
+        code: -32603,
+        message: 'Internal error',
+        data: {
+          codex_error_info: 'usage_limit_exceeded'
+        }
+      })
+      expect(result).not.toBeNull()
+      expect(result!.userMessage).toContain('Internal error')
+    })
+  })
+
+  describe('handleQuotaError', () => {
+    it('should set session to ERROR status with lastError', () => {
+      const session = createMockSession('test-session')
+      session.activeTurnId = 1
+
+      adapterPrivate(adapter).handleQuotaError(session, {
+        errorType: 'usage_limit_exceeded',
+        userMessage: 'Quota exceeded: Check your plan.'
+      })
+
+      expect(session.status).toBe(SessionStatusType.ERROR)
+      expect(session.lastError).toBe('Quota exceeded: Check your plan.')
+      expect(session.activeTurnId).toBeNull()
+    })
+
+    it('should push error event to message buffers', () => {
+      const session = createMockSession('test-session')
+
+      adapterPrivate(adapter).handleQuotaError(session, {
+        errorType: 'usage_limit_exceeded',
+        userMessage: 'Quota exceeded: Check your plan.'
+      })
+
+      expect(session.messageBuffer).toHaveLength(1)
+      expect(session.permanentMessages).toHaveLength(1)
+
+      const errorEvent = session.messageBuffer[0] as Record<string, unknown>
+      expect(errorEvent._isError).toBe(true)
+      expect(errorEvent.message).toBe('Quota exceeded: Check your plan.')
+      expect(errorEvent.data).toBeNull()
+    })
+
+    it('should trigger onDataAvailable callback', () => {
+      const session = createMockSession('test-session')
+      const onDataAvailable = vi.fn()
+      ;(adapter as any).onDataAvailable = onDataAvailable
+
+      adapterPrivate(adapter).handleQuotaError(session, {
+        errorType: 'usage_limit_exceeded',
+        userMessage: 'Quota exceeded'
+      })
+
+      expect(onDataAvailable).toHaveBeenCalledWith('test-session')
+    })
+  })
+
+  describe('handleRpcMessage with quota error', () => {
+    it('should handle quota error for pending request', () => {
+      const session = createMockSession('test-session')
+      const rejectFn = vi.fn()
+      session.pendingRequests.set(5, {
+        resolve: vi.fn(),
+        reject: rejectFn
+      })
+
+      // Register session in adapter
+      adapterPrivate(adapter).sessions.set('test-session', session)
+
+      const quotaErrorMessage = {
+        jsonrpc: '2.0',
+        id: 5,
+        error: {
+          code: -32603,
+          message: 'Internal error',
+          data: {
+            message: 'Quota exceeded. Check your plan and billing details.',
+            codex_error_info: 'usage_limit_exceeded'
+          }
+        }
+      }
+
+      adapterPrivate(adapter).handleRpcMessage(session, quotaErrorMessage)
+
+      // Should set session to error state
+      expect(session.status).toBe(SessionStatusType.ERROR)
+      expect(session.lastError).toContain('Quota exceeded')
+
+      // Should still reject the pending promise
+      expect(rejectFn).toHaveBeenCalled()
+
+      // Should have error event in buffers
+      expect(session.messageBuffer).toHaveLength(1)
+      const errorEvent = session.messageBuffer[0] as Record<string, unknown>
+      expect(errorEvent._isError).toBe(true)
+    })
+
+    it('should handle quota error for non-pending request', () => {
+      const session = createMockSession('test-session')
+
+      // Register session in adapter
+      adapterPrivate(adapter).sessions.set('test-session', session)
+
+      const quotaErrorMessage = {
+        jsonrpc: '2.0',
+        id: 99,
+        error: {
+          code: -32603,
+          message: 'Internal error',
+          data: {
+            message: 'Quota exceeded. Check your plan and billing details.',
+            codex_error_info: 'usage_limit_exceeded'
+          }
+        }
+      }
+
+      adapterPrivate(adapter).handleRpcMessage(session, quotaErrorMessage)
+
+      // Should set session to error state
+      expect(session.status).toBe(SessionStatusType.ERROR)
+      expect(session.lastError).toContain('Quota exceeded')
+      expect(session.messageBuffer).toHaveLength(1)
+    })
+
+    it('should handle generic errors normally (no codex_error_info)', () => {
+      const session = createMockSession('test-session')
+
+      // Register session in adapter
+      adapterPrivate(adapter).sessions.set('test-session', session)
+
+      const genericErrorMessage = {
+        jsonrpc: '2.0',
+        id: 99,
+        error: {
+          code: -32603,
+          message: 'Some generic error'
+        }
+      }
+
+      adapterPrivate(adapter).handleRpcMessage(session, genericErrorMessage)
+
+      // Should NOT set lastError (generic errors don't)
+      expect(session.lastError).toBeNull()
+      // Should still push error event to buffer
+      expect(session.messageBuffer).toHaveLength(1)
+      const errorEvent = session.messageBuffer[0] as Record<string, unknown>
+      expect(errorEvent._isError).toBe(true)
+      expect(errorEvent.message).toBe('Some generic error')
+    })
+  })
+
+  describe('getStatus with lastError', () => {
+    it('should return lastError message when session is in error state', async () => {
+      const session = createMockSession('test-session')
+      session.status = SessionStatusType.ERROR
+      session.lastError = 'Quota exceeded: Check your plan.'
+
+      adapterPrivate(adapter).sessions.set('test-session', session)
+
+      const status = await adapter.getStatus('test-session', {} as any)
+      expect(status.type).toBe(SessionStatusType.ERROR)
+      expect(status.message).toBe('Quota exceeded: Check your plan.')
+    })
+
+    it('should return generic Process error when no lastError', async () => {
+      const session = createMockSession('test-session')
+      session.status = SessionStatusType.ERROR
+
+      adapterPrivate(adapter).sessions.set('test-session', session)
+
+      const status = await adapter.getStatus('test-session', {} as any)
+      expect(status.type).toBe(SessionStatusType.ERROR)
+      expect(status.message).toBe('Process error')
+    })
+
+    it('should return no message when session is not in error state', async () => {
+      const session = createMockSession('test-session')
+      session.status = SessionStatusType.IDLE
+
+      adapterPrivate(adapter).sessions.set('test-session', session)
+
+      const status = await adapter.getStatus('test-session', {} as any)
+      expect(status.type).toBe(SessionStatusType.IDLE)
+      expect(status.message).toBeUndefined()
+    })
+  })
+
+  describe('error rendering in convertAcpEventToMessageParts', () => {
+    it('should render quota error event with clean message (no raw data)', () => {
+      const session = createMockSession('test-session')
+      const seenPartIds = new Set<string>()
+      const partContentLengths = new Map<string, string>()
+
+      // This is how handleQuotaError creates the error event
+      const errorEvent = {
+        _isError: true,
+        message: 'Quota exceeded: Quota exceeded. Check your plan and billing details. Please check your Codex plan and billing details to continue.',
+        data: null
+      }
+
+      const parts = adapterPrivate(adapter).convertAcpEventToMessageParts(
+        errorEvent,
+        new Set<string>(),
+        seenPartIds,
+        partContentLengths,
+        session
+      )
+
+      expect(parts).toHaveLength(1)
+      expect(parts[0].type).toBe(MessagePartType.TEXT)
+      expect(parts[0].text).toContain('Quota exceeded')
+      // Should NOT contain raw data stringified
+      expect(parts[0].text).not.toContain('[object Object]')
+      expect(parts[0].text).not.toContain('codex_error_info')
+    })
   })
 })
