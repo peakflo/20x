@@ -27,7 +27,7 @@ interface StatCardProps {
 
 function StatCard({ title, value, description, icon: Icon, loading, accent }: StatCardProps) {
   return (
-    <div className="relative rounded-lg border border-border/50 bg-[#191D23] p-4 overflow-hidden">
+    <div className="relative rounded-lg border border-border/50 bg-card p-4 overflow-hidden">
       {accent && (
         <div className="absolute top-0 left-0 w-full h-0.5" style={{ backgroundColor: accent }} />
       )}
