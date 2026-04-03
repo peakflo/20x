@@ -8,7 +8,7 @@ on:
 
 jobs:
   tag:
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-2
     permissions:
       contents: write
 

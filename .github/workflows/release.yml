@@ -72,7 +72,7 @@ jobs:
             dist/*.exe
 
   build-linux:
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-2
 
     steps:
       - uses: actions/checkout@v4
@@ -105,7 +105,7 @@ jobs:
 
   release:
     needs: [build-mac, build-windows, build-linux]
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-2
     permissions:
       contents: write
 
