@@ -518,8 +518,8 @@ describe('AgentManager implicit resume behavior', () => {
     // after idle periods on both mobile and desktop
     const outputBatchEvents = sendToRendererSpy.mock.calls.filter(([channel]) => channel === 'agent:output-batch')
     expect(outputBatchEvents).toHaveLength(1)
-    expect(outputBatchEvents[0][1].messages).toHaveLength(1)
-    expect(outputBatchEvents[0][1].messages[0].content).toBe('Hello')
+    expect((outputBatchEvents[0][1] as { messages: { content: string }[] }).messages).toHaveLength(1)
+    expect((outputBatchEvents[0][1] as { messages: { content: string }[] }).messages[0].content).toBe('Hello')
   })
 
   it('still replays transcript during explicit resume', async () => {
