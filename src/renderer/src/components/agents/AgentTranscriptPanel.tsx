@@ -413,7 +413,7 @@ function MessageBubble({ message, onAnswer, viewMode, canAnswerQuestion = false 
           isError
             ? 'bg-red-500/10 text-red-200 border border-red-500/20'
             : isUser
-              ? 'bg-primary/20 text-foreground'
+              ? 'bg-[#30353F] text-foreground'
               : isSystem
                 ? 'bg-yellow-500/10 text-yellow-200'
                 : isReasoning

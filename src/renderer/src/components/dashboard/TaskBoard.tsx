@@ -84,7 +84,7 @@ function TaskCard({ task, onSelect }: { task: WorkfloTask; onSelect: (id: string
 
   return (
     <div
-      className="rounded-md border border-border/40 bg-[#1E2127] p-3 hover:border-border/70 hover:bg-[#21252B] transition-colors cursor-pointer"
+      className="rounded-md border border-border/40 bg-[#1E2127] p-3 hover:border-border/70 hover:bg-[#191D23] transition-colors cursor-pointer"
       onClick={() => onSelect(task.id)}
       role="button"
       tabIndex={0}
@@ -228,7 +228,7 @@ export function TaskBoard() {
           </div>
         </>
       ) : topLevelTasks.length === 0 ? (
-        <div className="rounded-lg border border-border/50 bg-[#21252B] p-6 text-center">
+        <div className="rounded-lg border border-border/50 bg-[#191D23] p-6 text-center">
           <p className="text-sm text-muted-foreground">
             No tasks yet. Create tasks or sync from an integration to see them here.
           </p>
