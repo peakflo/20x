@@ -16,7 +16,7 @@ import { useAgentStore, SessionStatus } from '@/stores/agent-store'
 import { useSettingsStore, type GitProvider } from '@/stores/settings-store'
 import { useTaskStore } from '@/stores/task-store'
 import { taskApi, worktreeApi, taskSourceApi, onAgentIncompatibleSession, onWorktreeProgress } from '@/lib/ipc-client'
-import { useEffect, useCallback, useRef, useState } from 'react'
+import { useEffect, useCallback, useRef, useState, useMemo } from 'react'
 import { TaskStatus } from '@/types'
 import type { WorkfloTask, FileAttachment, OutputField, Agent } from '@/types'
 import type { GitHubRepo } from '@/types/electron'
@@ -60,31 +60,36 @@ export function TaskWorkspace({
   const [showSnooze, setShowSnooze] = useState(false)
   const [showIncompatibleSession, setShowIncompatibleSession] = useState(false)
   const [incompatibleSessionError, setIncompatibleSessionError] = useState<string>()
-  const [subtasks, setSubtasks] = useState<WorkfloTask[]>([])
   const [parentTask, setParentTask] = useState<WorkfloTask | null>(null)
   const startingRef = useRef(false)
 
   const { fetchTasks, updateTask: updateTaskInStore } = useTaskStore()
 
+  // Derive subtasks reactively from the task store so status changes (e.g., from
+  // mobile-initiated sessions) update immediately without needing a re-fetch.
+  const allTasks = useTaskStore((s) => s.tasks)
+  const subtasks = useMemo(() => {
+    if (!task) return []
+    return allTasks
+      .filter((t) => t.parent_task_id === task.id)
+      .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.created_at.localeCompare(b.created_at))
+  }, [allTasks, task?.id])
+
   // Fetch settings on mount
   useEffect(() => { fetchSettings() }, [])
 
-  // Fetch subtasks and parent task when task changes
+  // Fetch parent task when task changes
   useEffect(() => {
     if (!task) {
-      setSubtasks([])
       setParentTask(null)
       return
     }
-    // Fetch subtasks
-    taskApi.getSubtasks(task.id).then(setSubtasks).catch(() => setSubtasks([]))
-    // Fetch parent task
     if (task.parent_task_id) {
       taskApi.getById(task.parent_task_id).then(p => setParentTask(p ?? null)).catch(() => setParentTask(null))
     } else {
       setParentTask(null)
     }
-  }, [task?.id, task?.parent_task_id, task?.updated_at])
+  }, [task?.id, task?.parent_task_id])
 
   // Create a subtask under the current task
   const handleAddSubtask = useCallback(async (title: string) => {
@@ -98,8 +103,7 @@ export function TaskWorkspace({
         repos: task.repos,
       })
       if (newSubtask) {
-        setSubtasks(prev => [...prev, newSubtask])
-        fetchTasks() // Refresh sidebar
+        fetchTasks() // Refresh store — subtasks are derived reactively
       }
     } catch (err) {
       console.error('[TaskWorkspace] Failed to create subtask:', err)
@@ -109,18 +113,12 @@ export function TaskWorkspace({
   // Reorder subtasks via drag-and-drop
   const handleReorderSubtasks = useCallback(async (orderedIds: string[]) => {
     if (!task) return
-    // Optimistic reorder
-    setSubtasks(prev => {
-      const map = new Map(prev.map(s => [s.id, s]))
-      return orderedIds.map(id => map.get(id)!).filter(Boolean)
-    })
     try {
       await taskApi.reorderSubtasks(task.id, orderedIds)
-      fetchTasks() // Refresh sidebar to match new order
+      fetchTasks() // Refresh store — subtasks are derived reactively
     } catch (err) {
       console.error('[TaskWorkspace] Failed to reorder subtasks:', err)
-      // Re-fetch to restore actual order
-      taskApi.getSubtasks(task.id).then(setSubtasks).catch(() => {})
+      fetchTasks() // Re-fetch to restore actual order
     }
   }, [task, fetchTasks])
 
