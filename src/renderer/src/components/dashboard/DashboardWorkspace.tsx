@@ -104,7 +104,7 @@ export function DashboardWorkspace() {
         {isAuthenticated ? (
           <ApplicationsList />
         ) : (
-          <div className="rounded-lg border border-border/50 bg-[#161b22] p-4 flex items-center justify-between gap-4">
+          <div className="rounded-lg border border-border/50 bg-[#21252B] p-4 flex items-center justify-between gap-4">
             <div className="flex items-center gap-3">
               <Cloud className="h-5 w-5 text-muted-foreground shrink-0" />
               <div>

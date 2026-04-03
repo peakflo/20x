@@ -23,7 +23,7 @@ function QuestionMessage({ message, onAnswer, canAnswer }: { message: AgentMessa
   }
 
   return (
-    <div className="rounded-md bg-[#161b22] border border-primary/30 overflow-hidden">
+    <div className="rounded-md bg-[#21252B] border border-primary/30 overflow-hidden">
       {questions.map((q, qi) => (
         <div key={qi} className="space-y-2">
           {q.header && (
@@ -77,7 +77,7 @@ function QuestionMessage({ message, onAnswer, canAnswer }: { message: AgentMessa
 function TodoList({ message }: { message: AgentMessage }) {
   const todos = message.tool?.todos || []
   return (
-    <div className="rounded-md bg-[#161b22] border border-border/50 overflow-hidden">
+    <div className="rounded-md bg-[#21252B] border border-border/50 overflow-hidden">
       <div className="px-4 py-2.5 border-b border-border/30">
         <span className="text-[10px] text-muted-foreground font-medium uppercase tracking-wide">Tasks</span>
       </div>
@@ -114,7 +114,7 @@ function PlanReviewMessage({ message }: { message: AgentMessage }) {
   const details = /^(exit|enter) plan mode\??$/i.test(rawOutput.trim()) ? '' : rawOutput
 
   return (
-    <div className="rounded-md bg-[#161b22] border border-border/50 overflow-hidden">
+    <div className="rounded-md bg-[#21252B] border border-border/50 overflow-hidden">
       <div className="flex items-center gap-2 px-3 py-2 font-mono text-xs">
         {/* FileText icon */}
         <svg className="h-3 w-3 text-muted-foreground shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -163,7 +163,7 @@ function TaskProgressMessage({ message }: { message: AgentMessage }) {
 
   return (
     <div className={cn(
-      'rounded-md bg-[#161b22] border overflow-hidden',
+      'rounded-md bg-[#21252B] border overflow-hidden',
       isError && 'border-red-500/30',
       isStopped && 'border-yellow-500/30',
       isRunning && 'border-blue-500/30',
@@ -239,7 +239,7 @@ function ToolCallMessage({ message }: { message: AgentMessage }) {
   const subtitle = deriveToolSubtitle(tool)
 
   return (
-    <div className="rounded-md bg-[#161b22] border border-border/50 overflow-hidden">
+    <div className="rounded-md bg-[#21252B] border border-border/50 overflow-hidden">
       <button
         onClick={() => setExpanded(!expanded)}
         className="w-full flex items-center gap-2 px-3 py-2 font-mono text-xs hover:bg-white/5 transition-colors"
@@ -387,7 +387,7 @@ export function MessageBubble({ message, onAnswer, canAnswerQuestion = false }: 
         isSystem && !isError && 'bg-yellow-500/10 text-yellow-200',
         isError && 'bg-red-500/10 text-red-200 border border-red-500/20',
         isReasoning && 'bg-purple-500/10 text-purple-200 border border-purple-500/20',
-        !isUser && !isSystem && !isError && !isReasoning && 'bg-[#161b22] text-gray-300 border border-border/50'
+        !isUser && !isSystem && !isError && !isReasoning && 'bg-[#21252B] text-gray-300 border border-border/50'
       )}>
         <div className="break-words min-w-0">
           <Markdown size="sm">{message.content}</Markdown>

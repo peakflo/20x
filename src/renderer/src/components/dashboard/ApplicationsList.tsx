@@ -75,7 +75,7 @@ function ApplicationCard({
 
   return (
     <div
-      className="rounded-lg border border-border/50 bg-[#161b22] p-4 cursor-pointer transition-all hover:border-border hover:bg-[#1c2129] group"
+      className="rounded-lg border border-border/50 bg-[#21252B] p-4 cursor-pointer transition-all hover:border-border hover:bg-[#30353F] group"
       onClick={onClick}
     >
       <div className="flex items-start gap-3">
@@ -141,7 +141,7 @@ function ExpandedView() {
   return (
     <section className="flex flex-col" style={{ height: 'calc(100vh - 120px)' }}>
       {/* Tab bar with minimize button */}
-      <div className="flex items-center border-b border-border/50 shrink-0 bg-[#161b22] rounded-t-lg">
+      <div className="flex items-center border-b border-border/50 shrink-0 bg-[#21252B] rounded-t-lg">
         <div className="flex items-center overflow-x-auto flex-1">
           {applications.map((app) => {
             const tab = openTabs.find((t) => t.workflowId === app.workflowId)
@@ -206,7 +206,7 @@ function ExpandedView() {
       </div>
 
       {/* Content area — all opened iframes stacked, only active visible */}
-      <div className="flex-1 relative bg-[#161b22] rounded-b-lg overflow-hidden">
+      <div className="flex-1 relative bg-[#21252B] rounded-b-lg overflow-hidden">
         {/* Placeholder when no tab is active */}
         {!activeTab && <EmptyTabContent />}
 
@@ -249,7 +249,7 @@ export function ApplicationsList() {
   if (applicationsLoading) {
     return (
       <section>
-        <div className="rounded-lg border border-border/50 bg-[#161b22] p-6">
+        <div className="rounded-lg border border-border/50 bg-[#21252B] p-6">
           <div className="flex items-center gap-2 text-muted-foreground">
             <Loader2 className="h-4 w-4 animate-spin" />
             <span className="text-sm">Loading applications...</span>
@@ -262,7 +262,7 @@ export function ApplicationsList() {
   if (applicationsError) {
     return (
       <section>
-        <div className="rounded-lg border border-border/50 bg-[#161b22] p-6 text-center">
+        <div className="rounded-lg border border-border/50 bg-[#21252B] p-6 text-center">
           <p className="text-sm text-muted-foreground">{applicationsError}</p>
         </div>
       </section>
@@ -272,7 +272,7 @@ export function ApplicationsList() {
   if (applications.length === 0) {
     return (
       <section>
-        <div className="rounded-lg border border-border/50 bg-[#161b22] p-6 text-center">
+        <div className="rounded-lg border border-border/50 bg-[#21252B] p-6 text-center">
           <p className="text-sm text-muted-foreground">
             No applications found. Applications appear here when workflows with application triggers are created.
           </p>

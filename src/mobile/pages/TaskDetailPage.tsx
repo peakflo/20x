@@ -553,7 +553,7 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
             </button>
             {hasMessages && (
               <>
-                <div className="space-y-2 bg-[#0d1117] rounded-md border border-border/50 p-3">
+                <div className="space-y-2 bg-[#1E2127] rounded-md border border-border/50 p-3">
                   {previewMessages.map((msg) => (
                     <MessageBubble key={msg.id} message={msg} />
                   ))}
