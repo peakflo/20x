@@ -373,12 +373,20 @@ export class AgentManager extends EventEmitter {
     const taskScope = isSubtask && task?.parent_task_id ? { taskId, parentTaskId: task.parent_task_id } : undefined
     const mcpServers = await this.buildMcpServersForAdapter(agentId, { ensureTaskManagement: isMastermind || isTriageSession || isSubtask, taskScope })
 
+    // Build system prompt with task context so follow-up messages after idle
+    // retain awareness of what task the agent is working on. Without this,
+    // doSendAdapterMessage sends a bare prompt and the agent loses context.
+    const baseSystemPrompt = agent.config?.system_prompt || ''
+    const taskContext = task
+      ? `\n\n[Task Context]\nTask: "${task.title}"\n${task.description || ''}`
+      : ''
+
     const config: SessionConfig = {
       agentId,
       taskId,
       workspaceDir: workspaceDir || this.db.getWorkspaceDir(taskId),
       model: agent.config?.model,
-      systemPrompt: agent.config?.system_prompt,
+      systemPrompt: baseSystemPrompt + taskContext,
       mcpServers,
       authMethod: agent.config?.auth_method,
       permissionMode: agent.config?.permission_mode,
