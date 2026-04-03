@@ -2479,8 +2479,12 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
             console.log(`[AgentManager] Session ${sessionId} not found, attempting resume from ${persistedSessionId} for task ${taskId}`)
             const adapter = this.getAdapter(resolvedAgentId)
             if (adapter) {
+              // Replay messages to the renderer so the client doesn't lose
+              // conversation context after an idle period. Previously this used
+              // replayToRenderer: false which caused ~20% context loss on mobile
+              // and desktop when the in-memory session was evicted.
               const resumedId = await this.resumeAdapterSession(adapter, resolvedAgentId, taskId, persistedSessionId, {
-                replayToRenderer: false
+                replayToRenderer: true
               })
               session = this.sessions.get(resumedId)
               if (session) {
@@ -2730,7 +2734,17 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
   }
 
   getSessionStatus(sessionId: string): { status: string; agentId: string; taskId: string } | null {
-    const session = this.sessions.get(sessionId)
+    let session = this.sessions.get(sessionId)
+
+    // Fallback: session ID may have been re-keyed (temp → real) by pollSingleSession.
+    // The mobile client might still hold the stale temp ID. Check the redirect map.
+    if (!session) {
+      const redirectedId = this.sessionIdRedirects.get(sessionId)
+      if (redirectedId) {
+        session = this.sessions.get(redirectedId)
+      }
+    }
+
     if (!session) return null
     return { status: session.status, agentId: session.agentId, taskId: session.taskId }
   }
@@ -2743,7 +2757,18 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
    * that affect individual agent:output events.
    */
   async replaySessionMessages(sessionId: string): Promise<void> {
-    const session = this.sessions.get(sessionId)
+    let session = this.sessions.get(sessionId)
+
+    // Fallback: session ID may have been re-keyed (temp → real).
+    // The mobile client might still hold the stale temp ID.
+    if (!session) {
+      const redirectedId = this.sessionIdRedirects.get(sessionId)
+      if (redirectedId) {
+        sessionId = redirectedId
+        session = this.sessions.get(sessionId)
+      }
+    }
+
     if (!session?.adapter?.getAllMessages) return
 
     const messages = await session.adapter.getAllMessages(sessionId, {

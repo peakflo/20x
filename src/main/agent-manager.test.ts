@@ -472,7 +472,7 @@ describe('AgentManager implicit resume behavior', () => {
     vi.clearAllMocks()
   })
 
-  it('does not replay transcript when sendMessage implicitly resumes a session', async () => {
+  it('replays transcript to renderer when sendMessage implicitly resumes a session', async () => {
     const mockDb = {
       getTask: vi.fn(() => ({
         id: 'task-1',
@@ -494,7 +494,12 @@ describe('AgentManager implicit resume behavior', () => {
     } as unknown as ConstructorParameters<typeof AgentManager>[0]
 
     const manager = new AgentManager(mockDb)
-    const adapter = { initialize: vi.fn(async () => undefined), resumeSession: vi.fn(async () => ([])) }
+    const adapter = {
+      initialize: vi.fn(async () => undefined),
+      resumeSession: vi.fn(async () => ([
+        { id: 'msg-1', role: 'assistant', parts: [{ id: 'part-1', type: 'text', text: 'Hello' }] }
+      ]))
+    }
 
     vi.spyOn(manager as any, 'getAdapter').mockReturnValue(adapter)
     vi.spyOn(manager as any, 'buildMcpServersForAdapter').mockResolvedValue({})
@@ -509,13 +514,12 @@ describe('AgentManager implicit resume behavior', () => {
     expect(adapter.resumeSession).toHaveBeenCalledOnce()
     expect(doSendAdapterMessageSpy).toHaveBeenCalledOnce()
 
+    // Implicit resume now replays messages to renderer to prevent context loss
+    // after idle periods on both mobile and desktop
     const outputBatchEvents = sendToRendererSpy.mock.calls.filter(([channel]) => channel === 'agent:output-batch')
-    expect(outputBatchEvents).toHaveLength(0)
-
-    const userMessageEvents = sendToRendererSpy.mock.calls.filter(([channel, payload]) => (
-      channel === 'agent:output' && (payload as { data?: { role?: string; content?: string } }).data?.role === 'user'
-    ))
-    expect(userMessageEvents).toHaveLength(0)
+    expect(outputBatchEvents).toHaveLength(1)
+    expect(outputBatchEvents[0][1].messages).toHaveLength(1)
+    expect(outputBatchEvents[0][1].messages[0].content).toBe('Hello')
   })
 
   it('still replays transcript during explicit resume', async () => {
