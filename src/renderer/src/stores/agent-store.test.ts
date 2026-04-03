@@ -425,4 +425,64 @@ describe('useAgentStore', () => {
       expect(session.sessionId).toBe('real-session-id')
     })
   })
+
+  describe('Auto-create session from remote events (mobile-initiated)', () => {
+    it('creates session entry when status event arrives for unknown task with working status', () => {
+      // No session exists for task-1 — session was started from mobile
+      expect(useAgentStore.getState().sessions.has('task-1')).toBe(false)
+
+      // Main process broadcasts agent:status after mobile starts a session
+      statusCallback!({
+        sessionId: 'mobile-sess-1',
+        agentId: 'agent-1',
+        taskId: 'task-1',
+        status: 'working' as any
+      })
+
+      const session = useAgentStore.getState().sessions.get('task-1')
+      expect(session).toBeDefined()
+      expect(session!.sessionId).toBe('mobile-sess-1')
+      expect(session!.agentId).toBe('agent-1')
+      expect(session!.taskId).toBe('task-1')
+      expect(session!.status).toBe('working')
+      expect(session!.messages).toEqual([])
+    })
+
+    it('does NOT create session for idle status events (avoids phantom sessions)', () => {
+      statusCallback!({
+        sessionId: 'sess-old',
+        agentId: 'agent-1',
+        taskId: 'task-1',
+        status: 'idle' as any
+      })
+
+      // Should not create a session entry for an idle notification
+      expect(useAgentStore.getState().sessions.has('task-1')).toBe(false)
+    })
+
+    it('receives messages after auto-created session via batch handler', async () => {
+      // Auto-create session from status event
+      statusCallback!({
+        sessionId: 'mobile-sess-1',
+        agentId: 'agent-1',
+        taskId: 'task-1',
+        status: 'working' as any
+      })
+
+      // Batch messages should now be received
+      batchCallback!({
+        sessionId: 'mobile-sess-1',
+        taskId: 'task-1',
+        messages: [
+          { id: 'p1', role: 'assistant', content: 'Hello from mobile session' }
+        ]
+      })
+
+      await new Promise((resolve) => requestAnimationFrame(() => resolve(undefined)))
+
+      const session = useAgentStore.getState().sessions.get('task-1')!
+      expect(session.messages).toHaveLength(1)
+      expect(session.messages[0].content).toBe('Hello from mobile session')
+    })
+  })
 })

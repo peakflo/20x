@@ -113,7 +113,24 @@ export const useAgentStore = create<AgentState>((set, get) => {
     const state = get()
     const session = findBySessionId(state.sessions, event.sessionId)
       || state.sessions.get(event.taskId)
-    if (!session) return
+
+    // Auto-create session entry when a session is started remotely (e.g., from mobile)
+    // so the desktop app can track and display it
+    if (!session) {
+      if (event.taskId && event.sessionId && event.status !== SessionStatus.IDLE) {
+        set({
+          sessions: new Map(state.sessions).set(event.taskId, {
+            sessionId: event.sessionId,
+            agentId: event.agentId || '',
+            taskId: event.taskId,
+            status: event.status,
+            messages: [],
+            pendingApproval: null
+          })
+        })
+      }
+      return
+    }
 
     const updated = { ...session, status: event.status }
     // Patch in real sessionId when session was pre-registered with empty string

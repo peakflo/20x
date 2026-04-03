@@ -134,7 +134,9 @@ export const useAgentStore = create<AgentState>((set, get) => {
       if (!session) return state
 
       const updated = { ...session, status: event.status }
-      if (!session.sessionId && event.sessionId) updated.sessionId = event.sessionId
+      // Patch in real sessionId when session was pre-registered with empty string
+      // or when the main process re-keyed the session (temp ID → real ID)
+      if (event.sessionId && session.sessionId !== event.sessionId) updated.sessionId = event.sessionId
       return { sessions: new Map(state.sessions).set(session.taskId, updated) }
     })
   })

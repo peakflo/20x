@@ -1,7 +1,18 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { Mock } from 'vitest'
+import { onEvent } from '../api/websocket'
 import { useAgentStore, SessionStatus, type AgentMessage, type TaskSession } from './agent-store'
 import { api } from '../api/client'
+
+// Capture the onEvent callbacks registered at store init time
+const eventHandlers = new Map<string, (payload: unknown) => void>()
+{
+  const calls = (onEvent as unknown as Mock).mock.calls
+  for (const [type, handler] of calls) {
+    eventHandlers.set(type as string, handler as (payload: unknown) => void)
+  }
+}
+const statusHandler = eventHandlers.get('agent:status')
 
 beforeEach(() => {
   useAgentStore.setState({
@@ -290,6 +301,59 @@ describe('useAgentStore', () => {
 
       const session = useAgentStore.getState().sessions.get('task-1')
       expect(session?.messages).toHaveLength(0)
+    })
+  })
+
+  describe('Session ID re-keying via agent:status WebSocket event', () => {
+    it('updates sessionId when status event carries re-keyed session ID', () => {
+      // Session starts with temp UUID (from initial start call)
+      setSession('task-1', {
+        sessionId: 'temp-uuid',
+        agentId: 'agent-1',
+        status: SessionStatus.WORKING
+      })
+
+      // Backend sends status with real session ID after polling detects re-key
+      statusHandler!({
+        sessionId: 'real-session-id',
+        agentId: 'agent-1',
+        taskId: 'task-1',
+        status: SessionStatus.WORKING
+      })
+
+      const session = useAgentStore.getState().sessions.get('task-1')!
+      // Session ID should be updated to the real one, not stuck on temp-uuid
+      expect(session.sessionId).toBe('real-session-id')
+    })
+
+    it('updates sessionId when pre-registered with empty string', () => {
+      // Session pre-registered with empty sessionId (before start completes)
+      setSession('task-1', {
+        sessionId: '',
+        agentId: 'agent-1',
+        status: SessionStatus.WORKING
+      })
+
+      statusHandler!({
+        sessionId: 'new-session-id',
+        agentId: 'agent-1',
+        taskId: 'task-1',
+        status: SessionStatus.WORKING
+      })
+
+      const session = useAgentStore.getState().sessions.get('task-1')!
+      expect(session.sessionId).toBe('new-session-id')
+    })
+
+    it('ignores status events for unknown tasks', () => {
+      statusHandler!({
+        sessionId: 'sess-x',
+        agentId: 'agent-1',
+        taskId: 'unknown-task',
+        status: SessionStatus.WORKING
+      })
+
+      expect(useAgentStore.getState().sessions.has('unknown-task')).toBe(false)
     })
   })
 })
