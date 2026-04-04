@@ -17,9 +17,8 @@ export function OrchestratorPanel({ onClose }: OrchestratorPanelProps) {
   const [agents, setAgents] = useState<Agent[]>([])
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null)
   const { start, stop, sendMessage, approve } = useAgentSession(MASTERMIND_SESSION_ID)
-  const getSession = useAgentStore((state) => state.getSession)
+  const currentSession = useAgentStore((state) => state.sessions.get(MASTERMIND_SESSION_ID))
   const removeSession = useAgentStore((state) => state.removeSession)
-  const currentSession = getSession(MASTERMIND_SESSION_ID)
   const startingRef = useRef(false)
 
   // Load agents on mount
