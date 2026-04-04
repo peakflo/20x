@@ -204,7 +204,7 @@ describe('ClaudeCodeAdapter error result handling', () => {
       expect(session.status).toBe('error')
     })
 
-    it('does NOT reset queryIterator when stream completes normally (idle)', async () => {
+    it('resets queryIterator when stream completes normally (idle) so resume is used instead of continue', async () => {
       const adapter = new ClaudeCodeAdapter()
 
       const fakeIterator = {
@@ -227,8 +227,11 @@ describe('ClaudeCodeAdapter error result handling', () => {
 
       await (adapter as any).consumeStream('s1', session)
 
-      // queryIterator should remain set — process is alive for continue
-      expect(session.queryIterator).toBe(fakeIterator)
+      // queryIterator is always reset when stream ends — even on normal idle.
+      // This ensures sendPrompt uses --resume (exact session) instead of
+      // --continue (most-recent in directory), which could pick up the wrong
+      // conversation if another session ran in the same workspace.
+      expect(session.queryIterator).toBeNull()
       expect(session.status).toBe('idle')
     })
 
@@ -325,6 +328,106 @@ describe('ClaudeCodeAdapter error result handling', () => {
       expect(session.status).toBe('idle')
       // Only the valid message should be buffered
       expect(session.messageBuffer.length).toBe(1)
+    })
+  })
+
+  describe('sendPrompt session continuation mode', () => {
+    it('uses resume when queryIterator is null but session has a Claude Code UUID (error recovery)', async () => {
+      const adapter = new ClaudeCodeAdapter()
+      await adapter.initialize()
+
+      // Simulate a session that had an error: queryIterator is null, isResumed is false,
+      // but sessionId has the real Claude Code UUID from a previous successful run.
+      const session: any = {
+        sessionId: 'abc-def-123', // Real Claude Code UUID from previous run
+        queryIterator: null, // Null because of error recovery
+        abortController: null,
+        status: 'error',
+        messageBuffer: [],
+        messageCursor: 0,
+        streamTask: null,
+        lastError: 'Rate limit exceeded',
+        config: {} as any,
+        isResumed: false, // NOT a resumed session — was created via startSession
+      }
+      ;(adapter as any).sessions.set('s1', session)
+
+      // Mock findClaudeExecutable and the SDK query
+      ;(adapter as any).findClaudeExecutable = vi.fn().mockResolvedValue('/usr/bin/claude')
+
+      // Capture the options passed to query
+      let capturedOptions: any = null
+      const { query } = await import('@anthropic-ai/claude-agent-sdk')
+      ;(query as any).mockImplementation(({ options }: any) => {
+        capturedOptions = options
+        // Return async iterable that immediately completes
+        return {
+          [Symbol.asyncIterator]() { return this },
+          async next() { return { done: true, value: undefined } },
+        }
+      })
+
+      const config = {
+        workspaceDir: '/tmp/test',
+        model: 'claude-sonnet-4-20250514',
+        systemPrompt: 'test',
+        agentId: 'a1',
+        taskId: 't1',
+      } as any
+
+      await adapter.sendPrompt('s1', [{ type: 'text', text: 'follow up' }] as any, config)
+
+      // Should use resume with the real Claude Code session UUID, NOT start a new session
+      expect(capturedOptions).toBeDefined()
+      expect(capturedOptions.resume).toBe('abc-def-123')
+      expect(capturedOptions.continue).toBeUndefined()
+    })
+
+    it('does NOT use resume for brand-new sessions with empty sessionId', async () => {
+      const adapter = new ClaudeCodeAdapter()
+      await adapter.initialize()
+
+      // Brand-new session: empty sessionId, no queryIterator
+      const session: any = {
+        sessionId: '', // Empty — brand new, no Claude Code UUID yet
+        queryIterator: null,
+        abortController: null,
+        status: 'idle',
+        messageBuffer: [],
+        messageCursor: 0,
+        streamTask: null,
+        lastError: null,
+        config: {} as any,
+        isResumed: false,
+      }
+      ;(adapter as any).sessions.set('s1', session)
+
+      ;(adapter as any).findClaudeExecutable = vi.fn().mockResolvedValue('/usr/bin/claude')
+
+      let capturedOptions: any = null
+      const { query } = await import('@anthropic-ai/claude-agent-sdk')
+      ;(query as any).mockImplementation(({ options }: any) => {
+        capturedOptions = options
+        return {
+          [Symbol.asyncIterator]() { return this },
+          async next() { return { done: true, value: undefined } },
+        }
+      })
+
+      const config = {
+        workspaceDir: '/tmp/test',
+        model: 'claude-sonnet-4-20250514',
+        systemPrompt: 'test',
+        agentId: 'a1',
+        taskId: 't1',
+      } as any
+
+      await adapter.sendPrompt('s1', [{ type: 'text', text: 'first message' }] as any, config)
+
+      // Should NOT resume — this is a brand new session
+      expect(capturedOptions).toBeDefined()
+      expect(capturedOptions.resume).toBeUndefined()
+      expect(capturedOptions.continue).toBeUndefined()
     })
   })
 

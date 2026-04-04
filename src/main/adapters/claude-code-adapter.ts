@@ -645,11 +645,16 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
       // First prompt after resume: use resume to load persisted session
       options.resume = sessionId
       // Don't use continue with resume - they're mutually exclusive
+    } else if (isFirstPrompt && session.sessionId) {
+      // Process exited (error recovery or idle timeout) but session has a
+      // valid Claude Code UUID. Resume from persistence so the agent keeps
+      // its full conversation history instead of starting from scratch.
+      options.resume = session.sessionId
     } else if (!isFirstPrompt) {
       // Subsequent prompts: continue existing session in same process
       options.continue = true
     }
-    // Otherwise: new session, no continue/resume needed
+    // Otherwise: brand-new session, no continue/resume needed
 
     console.log('[ClaudeCodeAdapter] Starting query with options:', {
       cwd: options.cwd,
@@ -1099,13 +1104,21 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
       }
     } finally {
       console.log('[ClaudeCodeAdapter] Stream consumption ended')
+      // Always reset queryIterator when the stream ends (process exited).
+      // Previously only error paths did this, leaving a truthy-but-exhausted
+      // iterator after normal completion.  That caused the next sendPrompt to
+      // use `--continue` (most-recent conversation in directory) instead of
+      // `--resume <sessionId>` (exact session).  If any other session
+      // (heartbeat, subtask) ran in the same directory during idle, --continue
+      // would pick up the wrong conversation — the intermittent context-loss bug.
+      session.queryIterator = null
       if (session.status === 'error') {
-        // Reset queryIterator so the next sendPrompt starts a fresh process
-        // instead of setting `continue: true` on a dead process (which would
-        // immediately fail again, trapping the user in an error loop).
-        session.queryIterator = null
+        // Error path: queryIterator already null above; no extra work needed.
       } else {
         session.status = 'idle'
+        // Mark as resumed so the next sendPrompt uses --resume with the exact
+        // session ID rather than --continue (which targets most-recent in dir).
+        session.isResumed = true
       }
     }
   }
