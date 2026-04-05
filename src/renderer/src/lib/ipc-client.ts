@@ -509,6 +509,10 @@ export const enterpriseApi = {
     return window.electronAPI.enterprise.getJwt()
   },
 
+  getAuthTokens: (): Promise<{ accessToken: string; refreshToken: string; tenantId: string | null }> => {
+    return window.electronAPI.enterprise.getAuthTokens()
+  },
+
   enableIframeAuth: (): Promise<{ apiUrl: string }> => {
     return window.electronAPI.enterprise.enableIframeAuth()
   },

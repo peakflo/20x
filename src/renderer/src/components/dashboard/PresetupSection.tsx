@@ -1,12 +1,13 @@
+import { useState } from 'react'
 import {
   Calculator,
   UserPlus,
   Package,
   CheckCircle2,
-  Loader2,
   ArrowRight
 } from 'lucide-react'
 import { useDashboardStore, type PresetupTemplate } from '@/stores/dashboard-store'
+import { PresetupWizard } from './PresetupWizard'
 
 const ICON_MAP: Record<string, React.ElementType> = {
   Calculator: Calculator,
@@ -22,10 +23,14 @@ const CATEGORY_COLORS: Record<string, string> = {
   sales: 'bg-blue-500/10 text-blue-600 dark:text-blue-400'
 }
 
-function TemplateCard({ template }: { template: PresetupTemplate }) {
-  const { presetupProvisioning, provisionPresetup } = useDashboardStore()
+function TemplateCard({
+  template,
+  onSetup
+}: {
+  template: PresetupTemplate
+  onSetup: (template: PresetupTemplate) => void
+}) {
   const Icon = getIcon(template.icon)
-  const isProvisioning = presetupProvisioning === template.slug
   const categoryColor =
     CATEGORY_COLORS[template.category] ||
     'bg-muted text-muted-foreground'
@@ -76,21 +81,11 @@ function TemplateCard({ template }: { template: PresetupTemplate }) {
           </p>
           <div className="mt-3">
             <button
-              className="inline-flex items-center gap-1.5 text-xs font-medium text-primary hover:text-primary/80 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-              onClick={() => provisionPresetup(template.slug)}
-              disabled={isProvisioning}
+              className="inline-flex items-center gap-1.5 text-xs font-medium text-primary hover:text-primary/80 transition-colors cursor-pointer"
+              onClick={() => onSetup(template)}
             >
-              {isProvisioning ? (
-                <>
-                  <Loader2 className="h-3 w-3 animate-spin" />
-                  Setting up...
-                </>
-              ) : (
-                <>
-                  Set up
-                  <ArrowRight className="h-3 w-3" />
-                </>
-              )}
+              Set up
+              <ArrowRight className="h-3 w-3" />
             </button>
           </div>
         </div>
@@ -101,6 +96,7 @@ function TemplateCard({ template }: { template: PresetupTemplate }) {
 
 export function PresetupSection() {
   const { presetupTemplates, presetupLoading } = useDashboardStore()
+  const [wizardTemplate, setWizardTemplate] = useState<PresetupTemplate | null>(null)
 
   if (presetupLoading) {
     return (
@@ -123,13 +119,26 @@ export function PresetupSection() {
   }
 
   return (
-    <section>
-      <h2 className="text-sm font-semibold mb-3">Get Started</h2>
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
-        {presetupTemplates.map((template) => (
-          <TemplateCard key={template.slug} template={template} />
-        ))}
-      </div>
-    </section>
+    <>
+      <section>
+        <h2 className="text-sm font-semibold mb-3">Get Started</h2>
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+          {presetupTemplates.map((template) => (
+            <TemplateCard
+              key={template.slug}
+              template={template}
+              onSetup={setWizardTemplate}
+            />
+          ))}
+        </div>
+      </section>
+
+      {wizardTemplate && (
+        <PresetupWizard
+          template={wizardTemplate}
+          onClose={() => setWizardTemplate(null)}
+        />
+      )}
+    </>
   )
 }
