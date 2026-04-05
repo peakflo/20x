@@ -844,6 +844,38 @@ export function registerIpcHandlers(
         console.warn('[enterprise] Failed to register MCP Dev Server (non-fatal):', mcpErr)
       }
 
+      // Auto-add all [Workflo] MCP servers to the default agent so they're
+      // immediately available without manual configuration
+      try {
+        const allServers = db.getMcpServers()
+        const workfloServers = allServers.filter((s) => s.name.startsWith('[Workflo]'))
+
+        const defaultAgent = db.getAgents().find((a) => a.is_default)
+        if (defaultAgent && workfloServers.length > 0) {
+          const config = { ...defaultAgent.config }
+          const mcpServers = [...(config.mcp_servers || [])]
+          let added = 0
+
+          for (const server of workfloServers) {
+            const alreadyPresent = mcpServers.some((s) =>
+              typeof s === 'string' ? s === server.id : s.serverId === server.id
+            )
+            if (!alreadyPresent) {
+              mcpServers.push(server.id)
+              added++
+            }
+          }
+
+          if (added > 0) {
+            config.mcp_servers = mcpServers
+            db.updateAgent(defaultAgent.id, { config })
+            console.log(`[enterprise] Added ${added} Workflo MCP server(s) to default agent`)
+          }
+        }
+      } catch (err) {
+        console.warn('[enterprise] Failed to add MCP servers to default agent (non-fatal):', err)
+      }
+
       // Auto-create Peakflo task source if none exists
       const existingSources = db.getTaskSources()
       const hasPeakfloSource = existingSources.some(
