@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useCallback, useMemo } from 'react'
 import {
   Calculator,
   UserPlus,
@@ -7,19 +7,23 @@ import {
   ArrowRight,
   ArrowLeft,
   Check,
-  X
+  CheckCircle2,
+  XCircle,
+  RefreshCw,
+  X,
+  Plug
 } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { enterpriseApi } from '@/lib/ipc-client'
 import { useDashboardStore, type PresetupTemplate } from '@/stores/dashboard-store'
 
-// ─── Types from presetup template definition ─────────────────
+// ─── Types ────────────────────────────────────────────────────
 
 interface QuestionOption {
   value: string
   label: string
-  workflows?: unknown[]
-  integrations?: unknown[]
+  workflows?: { marketplaceTemplateSlug: string }[]
+  integrations?: { key: string; name: string; required?: boolean; description?: string }[]
 }
 
 interface TemplateQuestion {
@@ -29,10 +33,18 @@ interface TemplateQuestion {
   options: QuestionOption[]
 }
 
+interface IntegrationRef {
+  key: string
+  name: string
+  required?: boolean
+  description?: string
+}
+
 interface TemplateDefinition {
-  questions?: TemplateQuestion[]
-  workflows?: unknown[]
-  integrations?: unknown[]
+  questions: TemplateQuestion[]
+  workflows: { marketplaceTemplateSlug: string }[]
+  integrations: IntegrationRef[]
+  skills: { name: string; description: string }[]
 }
 
 interface FullTemplate {
@@ -40,7 +52,7 @@ interface FullTemplate {
   name: string
   description: string
   category: string
-  icon: string
+  icon: string | null
   definition: TemplateDefinition
 }
 
@@ -50,12 +62,327 @@ const ICON_MAP: Record<string, React.ElementType> = {
   Calculator,
   UserPlus
 }
-
-function getIcon(iconName: string): React.ElementType {
-  return ICON_MAP[iconName] || Package
+function getIcon(name: string | null): React.ElementType {
+  return (name && ICON_MAP[name]) || Package
 }
 
-// ─── Wizard component ─────────────────────────────────────────
+// ─── Collect integrations from base + selected options ────────
+
+function collectIntegrations(
+  base: IntegrationRef[],
+  questions: TemplateQuestion[],
+  selectedOptions: Record<string, string>
+): IntegrationRef[] {
+  const merged = new Map<string, IntegrationRef>()
+
+  for (const int of base) {
+    merged.set(int.key, int)
+  }
+
+  for (const q of questions) {
+    const val = selectedOptions[q.id]
+    if (!val) continue
+    const opt = q.options.find((o) => o.value === val)
+    if (!opt?.integrations) continue
+    for (const int of opt.integrations) {
+      const existing = merged.get(int.key)
+      merged.set(int.key, {
+        key: int.key,
+        name: int.name,
+        required: existing?.required || int.required || false,
+        description: int.description || existing?.description
+      })
+    }
+  }
+  return Array.from(merged.values())
+}
+
+// ─── Sub-components ───────────────────────────────────────────
+
+type WizardStep = 'wizard' | 'connect-integrations' | 'provisioning'
+
+/** Step 1: Walk through questions */
+function WizardQuestions({
+  template,
+  onComplete,
+  onBack
+}: {
+  template: FullTemplate
+  onComplete: (opts: Record<string, string>) => void
+  onBack: () => void
+}) {
+  const questions = template.definition.questions
+  const [step, setStep] = useState(0)
+  const [answers, setAnswers] = useState<Record<string, string>>({})
+
+  const Icon = getIcon(template.icon)
+  const current = questions[step]
+  const isLast = step === questions.length - 1
+  const hasAnswer = current ? !!answers[current.id] : false
+
+  // No questions — skip straight to completion
+  if (questions.length === 0) {
+    return (
+      <div className="space-y-4">
+        <div className="flex items-center gap-3">
+          <div className="rounded-xl bg-primary/10 p-2.5 shrink-0">
+            <Icon className="h-5 w-5 text-primary" />
+          </div>
+          <div>
+            <p className="font-medium text-sm">{template.name}</p>
+            <p className="text-xs text-muted-foreground">{template.description}</p>
+          </div>
+        </div>
+        <p className="text-sm text-muted-foreground">
+          This package is ready to be installed with default settings.
+        </p>
+        <div className="flex gap-3">
+          <Button variant="outline" onClick={onBack} className="flex-1">
+            Cancel
+          </Button>
+          <Button onClick={() => onComplete({})} className="flex-1">
+            Install package
+            <Check className="ml-2 h-4 w-4" />
+          </Button>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-5">
+      {/* Progress dots */}
+      <div className="flex items-center gap-3">
+        <p className="text-xs text-muted-foreground shrink-0">
+          Step {step + 1} of {questions.length}
+        </p>
+        <div className="flex gap-1.5 flex-1">
+          {questions.map((_, idx) => (
+            <div
+              key={idx}
+              className={`h-1.5 flex-1 rounded-full transition-colors ${
+                idx <= step ? 'bg-primary' : 'bg-muted'
+              }`}
+            />
+          ))}
+        </div>
+      </div>
+
+      {/* Question */}
+      {current && (
+        <div className="space-y-3">
+          <div>
+            <h3 className="text-sm font-medium">{current.question}</h3>
+            {current.hint && (
+              <p className="text-xs text-muted-foreground mt-1">{current.hint}</p>
+            )}
+          </div>
+          <div className="space-y-2">
+            {current.options.map((opt) => {
+              const selected = answers[current.id] === opt.value
+              return (
+                <button
+                  key={opt.value}
+                  className={`w-full rounded-xl border-2 p-3 text-left transition-all cursor-pointer ${
+                    selected
+                      ? 'border-primary bg-primary/5 shadow-sm'
+                      : 'border-border hover:border-primary/40 hover:bg-muted/50'
+                  }`}
+                  onClick={() => setAnswers((a) => ({ ...a, [current.id]: opt.value }))}
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="font-medium text-xs">{opt.label}</span>
+                    {selected && <Check className="h-3.5 w-3.5 text-primary" />}
+                  </div>
+                  {(opt.workflows?.length || opt.integrations?.length) ? (
+                    <div className="mt-1.5 flex flex-wrap gap-1.5">
+                      {opt.integrations?.map((int) => (
+                        <span
+                          key={int.key}
+                          className="inline-flex rounded-md bg-green-500/10 px-2 py-0.5 text-[10px] text-green-700 dark:text-green-300"
+                        >
+                          + {int.name}
+                        </span>
+                      ))}
+                      {opt.workflows?.map((wf) => (
+                        <span
+                          key={wf.marketplaceTemplateSlug}
+                          className="inline-flex rounded-md bg-blue-500/10 px-2 py-0.5 text-[10px] text-blue-700 dark:text-blue-300"
+                        >
+                          + workflow
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
+                </button>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Nav */}
+      <div className="flex gap-3">
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => (step === 0 ? onBack() : setStep((s) => s - 1))}
+          className="flex-1"
+        >
+          {step === 0 ? 'Cancel' : <><ArrowLeft className="mr-1 h-3.5 w-3.5" /> Previous</>}
+        </Button>
+        <Button
+          size="sm"
+          onClick={() => (isLast ? onComplete(answers) : setStep((s) => s + 1))}
+          disabled={!hasAnswer}
+          className="flex-1"
+        >
+          {isLast ? (
+            <>Next <ArrowRight className="ml-1 h-3.5 w-3.5" /></>
+          ) : (
+            <>Next <ArrowRight className="ml-1 h-3.5 w-3.5" /></>
+          )}
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+/** Step 2: Review integrations that will be configured */
+function ConnectIntegrations({
+  integrations,
+  templateName,
+  onComplete,
+  onBack
+}: {
+  integrations: IntegrationRef[]
+  templateName: string
+  onComplete: () => void
+  onBack: () => void
+}) {
+  useEffect(() => {
+    if (integrations.length === 0) {
+      onComplete()
+    }
+  }, [integrations.length, onComplete])
+
+  if (integrations.length === 0) {
+    return null
+  }
+
+  return (
+    <div className="space-y-5">
+      <div>
+        <h3 className="text-sm font-medium">Integrations for {templateName}</h3>
+        <p className="text-xs text-muted-foreground mt-1">
+          These integrations will be configured. You can connect them in Settings after setup.
+        </p>
+      </div>
+
+      <div className="space-y-2">
+        {integrations.map((int) => (
+          <div
+            key={int.key}
+            className="flex items-center gap-3 rounded-xl border border-border/50 p-3"
+          >
+            <div className="rounded-lg bg-muted p-2 shrink-0">
+              <Plug className="h-4 w-4 text-muted-foreground" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-medium">{int.name}</span>
+                {int.required && (
+                  <span className="text-[10px] text-orange-600 dark:text-orange-400 font-medium">
+                    Required
+                  </span>
+                )}
+              </div>
+              {int.description && (
+                <p className="text-[10px] text-muted-foreground mt-0.5 truncate">
+                  {int.description}
+                </p>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="flex gap-3">
+        <Button variant="outline" size="sm" onClick={onBack} className="flex-1">
+          <ArrowLeft className="mr-1 h-3.5 w-3.5" /> Previous
+        </Button>
+        <Button size="sm" onClick={onComplete} className="flex-1">
+          Install package <ArrowRight className="ml-1 h-3.5 w-3.5" />
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+/** Step 3: Provisioning progress / result */
+function ProvisioningState({
+  templateName,
+  isLoading,
+  error,
+  isSuccess,
+  onRetry,
+  onContinue
+}: {
+  templateName: string
+  isLoading: boolean
+  error: string | null
+  isSuccess: boolean
+  onRetry: () => void
+  onContinue: () => void
+}) {
+  return (
+    <div className="py-4">
+      {isLoading && (
+        <div className="flex flex-col items-center gap-3 py-6">
+          <Loader2 className="h-10 w-10 animate-spin text-primary" />
+          <h3 className="text-sm font-semibold">Setting up {templateName}</h3>
+          <p className="text-xs text-muted-foreground text-center max-w-xs">
+            Configuring workflows, integrations, and AI skills. This usually takes a few seconds.
+          </p>
+          <div className="w-full max-w-xs h-1.5 bg-muted rounded-full overflow-hidden">
+            <div className="h-full bg-primary rounded-full animate-pulse" style={{ width: '60%' }} />
+          </div>
+        </div>
+      )}
+
+      {isSuccess && (
+        <div className="flex flex-col items-center gap-3 py-6">
+          <CheckCircle2 className="h-10 w-10 text-green-500" />
+          <h3 className="text-sm font-semibold">{templateName} is ready!</h3>
+          <p className="text-xs text-muted-foreground text-center max-w-xs">
+            Your workflows, integrations, and AI skills have been configured.
+          </p>
+          <Button size="sm" onClick={onContinue} className="w-full max-w-xs">
+            Done
+          </Button>
+        </div>
+      )}
+
+      {error && (
+        <div className="flex flex-col items-center gap-3 py-6">
+          <XCircle className="h-10 w-10 text-destructive" />
+          <h3 className="text-sm font-semibold">Setup encountered an issue</h3>
+          <p className="text-xs text-destructive text-center max-w-xs">{error}</p>
+          <div className="flex gap-3 w-full max-w-xs">
+            <Button variant="outline" size="sm" onClick={onRetry} className="flex-1">
+              <RefreshCw className="mr-1 h-3.5 w-3.5" /> Try again
+            </Button>
+            <Button variant="ghost" size="sm" onClick={onContinue} className="flex-1">
+              Skip for now
+            </Button>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ─── Main wizard dialog ───────────────────────────────────────
 
 interface PresetupWizardProps {
   template: PresetupTemplate
@@ -63,20 +390,15 @@ interface PresetupWizardProps {
 }
 
 export function PresetupWizard({ template, onClose }: PresetupWizardProps) {
-  // Full template data fetched from API (includes questions)
   const [fullTemplate, setFullTemplate] = useState<FullTemplate | null>(null)
   const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+  const [fetchError, setFetchError] = useState<string | null>(null)
 
-  // Wizard state
-  const [currentStep, setCurrentStep] = useState(0)
+  const [dialogStep, setDialogStep] = useState<WizardStep>('wizard')
   const [selectedOptions, setSelectedOptions] = useState<Record<string, string>>({})
-  const [provisioning, setProvisioning] = useState(false)
-  const [provisionDone, setProvisionDone] = useState(false)
-
-  const Icon = getIcon(template.icon)
-  const questions = fullTemplate?.definition?.questions || []
-  const totalSteps = questions.length + 1 // overview + questions
+  const [isProvisioning, setIsProvisioning] = useState(false)
+  const [provisionSuccess, setProvisionSuccess] = useState(false)
+  const [provisionError, setProvisionError] = useState<string | null>(null)
 
   // Fetch full template on mount
   useEffect(() => {
@@ -91,251 +413,140 @@ export function PresetupWizard({ template, onClose }: PresetupWizardProps) {
       })
       .catch((err: Error) => {
         if (!cancelled) {
-          console.error('Failed to fetch template details:', err)
-          setError(err.message || 'Failed to load template details')
+          setFetchError(err.message || 'Failed to load template')
           setLoading(false)
         }
       })
-    return () => {
-      cancelled = true
-    }
+    return () => { cancelled = true }
   }, [template.slug])
 
-  const handleSelectOption = (questionId: string, value: string) => {
-    setSelectedOptions((prev) => ({ ...prev, [questionId]: value }))
-  }
+  // Integrations to show after wizard questions
+  const integrationsToConnect = useMemo(() => {
+    if (!fullTemplate) return []
+    return collectIntegrations(
+      fullTemplate.definition.integrations,
+      fullTemplate.definition.questions,
+      selectedOptions
+    )
+  }, [fullTemplate, selectedOptions])
 
-  const handleProvision = async () => {
-    setProvisioning(true)
+  const handleWizardComplete = useCallback((opts: Record<string, string>) => {
+    setSelectedOptions(opts)
+    setDialogStep('connect-integrations')
+  }, [])
+
+  const handleIntegrationsComplete = useCallback(async () => {
+    setDialogStep('provisioning')
+    setIsProvisioning(true)
+    setProvisionSuccess(false)
+    setProvisionError(null)
+
     try {
       await enterpriseApi.apiRequest('POST', '/api/presetup/provision', {
         templateSlug: template.slug,
         selectedOptions
       })
-      setProvisionDone(true)
-      // Refresh presetup status in dashboard
+      setProvisionSuccess(true)
       await useDashboardStore.getState().fetchPresetups()
     } catch (err) {
-      console.error('Provisioning failed:', err)
-      setError(err instanceof Error ? err.message : 'Provisioning failed')
+      setProvisionError(err instanceof Error ? err.message : 'Provisioning failed')
     } finally {
-      setProvisioning(false)
+      setIsProvisioning(false)
     }
-  }
+  }, [template.slug, selectedOptions])
 
-  const canProceed = () => {
-    if (currentStep === 0) return true // overview step — always can proceed
-    const question = questions[currentStep - 1]
-    if (!question) return true
-    return !!selectedOptions[question.id]
-  }
+  const handleRetry = useCallback(() => {
+    setDialogStep('connect-integrations')
+    setProvisionError(null)
+    setProvisionSuccess(false)
+  }, [])
 
-  const handleNext = () => {
-    if (currentStep < totalSteps - 1) {
-      setCurrentStep((s) => s + 1)
-    } else {
-      handleProvision()
+  // ─── Dialog titles ────────────────────────────────────
+
+  const title = useMemo(() => {
+    switch (dialogStep) {
+      case 'wizard': return `Set up ${template.name}`
+      case 'connect-integrations': return 'Connect integrations'
+      case 'provisioning': return ''
     }
-  }
+  }, [dialogStep, template.name])
 
-  const handleBack = () => {
-    if (currentStep > 0) {
-      setCurrentStep((s) => s - 1)
+  const subtitle = useMemo(() => {
+    switch (dialogStep) {
+      case 'wizard': return `Answer a few questions to configure ${template.name} for your team.`
+      case 'connect-integrations': return `Sign in to your services so ${template.name} can work with them.`
+      case 'provisioning': return ''
     }
-  }
-
-  // ─── Render ─────────────────────────────────────────────────
+  }, [dialogStep, template.name])
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-      <div className="relative w-full max-w-lg mx-4 rounded-xl border border-border bg-background shadow-2xl overflow-hidden">
-        {/* Close button */}
-        <button
-          className="absolute top-4 right-4 text-muted-foreground hover:text-foreground transition-colors z-10 cursor-pointer"
-          onClick={onClose}
-        >
-          <X className="h-4 w-4" />
-        </button>
-
-        {/* Progress bar */}
-        {!loading && !error && !provisionDone && (
-          <div className="h-1 bg-muted">
-            <div
-              className="h-full bg-primary transition-all duration-300"
-              style={{ width: `${((currentStep + 1) / (totalSteps + 1)) * 100}%` }}
-            />
-          </div>
+      <div className="relative w-full max-w-md mx-4 rounded-xl border border-border bg-background shadow-2xl overflow-hidden">
+        {/* Close button — hidden during provisioning */}
+        {!isProvisioning && (
+          <button
+            className="absolute top-3.5 right-3.5 text-muted-foreground hover:text-foreground transition-colors z-10 cursor-pointer"
+            onClick={onClose}
+          >
+            <X className="h-4 w-4" />
+          </button>
         )}
 
-        <div className="p-6">
-          {/* Loading state */}
+        <div className="p-5">
+          {/* Loading */}
           {loading && (
-            <div className="flex flex-col items-center justify-center py-12 gap-3">
+            <div className="flex flex-col items-center justify-center py-10 gap-3">
               <Loader2 className="h-8 w-8 animate-spin text-primary" />
-              <p className="text-sm text-muted-foreground">Loading setup wizard...</p>
+              <p className="text-xs text-muted-foreground">Loading setup wizard...</p>
             </div>
           )}
 
-          {/* Error state */}
-          {error && !loading && (
-            <div className="flex flex-col items-center justify-center py-12 gap-3">
-              <p className="text-sm text-destructive">{error}</p>
-              <Button variant="outline" size="sm" onClick={onClose}>
-                Close
-              </Button>
+          {/* Fetch error */}
+          {fetchError && !loading && (
+            <div className="flex flex-col items-center justify-center py-10 gap-3">
+              <p className="text-xs text-destructive">{fetchError}</p>
+              <Button variant="outline" size="sm" onClick={onClose}>Close</Button>
             </div>
           )}
 
-          {/* Done state */}
-          {provisionDone && (
-            <div className="flex flex-col items-center justify-center py-12 gap-4">
-              <div className="rounded-full bg-green-500/10 p-4">
-                <Check className="h-8 w-8 text-green-600 dark:text-green-400" />
-              </div>
-              <div className="text-center">
-                <h3 className="text-lg font-semibold">{template.name} is ready!</h3>
-                <p className="text-sm text-muted-foreground mt-1">
-                  Your workflows and integrations have been set up.
-                </p>
-              </div>
-              <Button onClick={onClose}>
-                Done
-              </Button>
-            </div>
-          )}
-
-          {/* Wizard steps */}
-          {!loading && !error && !provisionDone && (
+          {/* Wizard content */}
+          {!loading && !fetchError && fullTemplate && (
             <>
-              {/* Step 0: Overview */}
-              {currentStep === 0 && (
-                <div className="space-y-4">
-                  <div className="flex items-start gap-4">
-                    <div className="rounded-lg bg-primary/10 p-3 shrink-0">
-                      <Icon className="h-6 w-6 text-primary" />
-                    </div>
-                    <div>
-                      <h2 className="text-lg font-semibold">{template.name}</h2>
-                      <p className="text-sm text-muted-foreground mt-1">
-                        {template.description}
-                      </p>
-                    </div>
-                  </div>
-
-                  {/* What's included */}
-                  <div className="rounded-lg border border-border/50 bg-muted/30 p-4 space-y-3">
-                    <h3 className="text-sm font-medium">What&apos;s included:</h3>
-                    <ul className="space-y-2">
-                      {(fullTemplate?.definition?.workflows || []).length > 0 && (
-                        <li className="text-sm text-muted-foreground flex items-center gap-2">
-                          <Check className="h-3.5 w-3.5 text-primary shrink-0" />
-                          {fullTemplate!.definition.workflows!.length} workflow{fullTemplate!.definition.workflows!.length > 1 ? 's' : ''}
-                        </li>
-                      )}
-                      {(fullTemplate?.definition?.integrations || []).length > 0 && (
-                        <li className="text-sm text-muted-foreground flex items-center gap-2">
-                          <Check className="h-3.5 w-3.5 text-primary shrink-0" />
-                          {fullTemplate!.definition.integrations!.length} integration{fullTemplate!.definition.integrations!.length > 1 ? 's' : ''}
-                        </li>
-                      )}
-                      {questions.length > 0 && (
-                        <li className="text-sm text-muted-foreground flex items-center gap-2">
-                          <Check className="h-3.5 w-3.5 text-primary shrink-0" />
-                          Customizable setup ({questions.length} question{questions.length > 1 ? 's' : ''})
-                        </li>
-                      )}
-                    </ul>
-                  </div>
+              {/* Header */}
+              {title && dialogStep !== 'provisioning' && (
+                <div className="mb-4">
+                  <h2 className="text-sm font-semibold">{title}</h2>
+                  {subtitle && <p className="text-xs text-muted-foreground mt-0.5">{subtitle}</p>}
                 </div>
               )}
 
-              {/* Question steps */}
-              {currentStep > 0 && currentStep <= questions.length && (() => {
-                const question = questions[currentStep - 1]
-                if (!question) return null
-                const selected = selectedOptions[question.id]
+              {dialogStep === 'wizard' && (
+                <WizardQuestions
+                  template={fullTemplate}
+                  onComplete={handleWizardComplete}
+                  onBack={onClose}
+                />
+              )}
 
-                return (
-                  <div className="space-y-4">
-                    <div>
-                      <p className="text-xs text-muted-foreground mb-1">
-                        Step {currentStep} of {questions.length}
-                      </p>
-                      <h2 className="text-lg font-semibold">{question.question}</h2>
-                      {question.hint && (
-                        <p className="text-sm text-muted-foreground mt-1">{question.hint}</p>
-                      )}
-                    </div>
+              {dialogStep === 'connect-integrations' && (
+                <ConnectIntegrations
+                  integrations={integrationsToConnect}
+                  templateName={fullTemplate.name}
+                  onComplete={handleIntegrationsComplete}
+                  onBack={() => setDialogStep('wizard')}
+                />
+              )}
 
-                    <div className="space-y-2">
-                      {question.options.map((option) => (
-                        <button
-                          key={option.value}
-                          className={`w-full text-left rounded-lg border p-4 transition-all cursor-pointer ${
-                            selected === option.value
-                              ? 'border-primary bg-primary/5 ring-1 ring-primary'
-                              : 'border-border/50 hover:border-border hover:bg-muted/30'
-                          }`}
-                          onClick={() => handleSelectOption(question.id, option.value)}
-                        >
-                          <div className="flex items-center gap-3">
-                            <div
-                              className={`h-4 w-4 rounded-full border-2 flex items-center justify-center shrink-0 transition-colors ${
-                                selected === option.value
-                                  ? 'border-primary'
-                                  : 'border-muted-foreground/30'
-                              }`}
-                            >
-                              {selected === option.value && (
-                                <div className="h-2 w-2 rounded-full bg-primary" />
-                              )}
-                            </div>
-                            <span className="text-sm font-medium">{option.label}</span>
-                          </div>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )
-              })()}
-
-              {/* Navigation buttons */}
-              <div className="flex items-center justify-between mt-6 pt-4 border-t border-border/50">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={handleBack}
-                  disabled={currentStep === 0}
-                  className="gap-1.5"
-                >
-                  <ArrowLeft className="h-3.5 w-3.5" />
-                  Back
-                </Button>
-
-                <Button
-                  size="sm"
-                  onClick={handleNext}
-                  disabled={!canProceed() || provisioning}
-                  className="gap-1.5"
-                >
-                  {provisioning ? (
-                    <>
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                      Setting up...
-                    </>
-                  ) : currentStep >= totalSteps - 1 ? (
-                    <>
-                      Set up
-                      <Check className="h-3.5 w-3.5" />
-                    </>
-                  ) : (
-                    <>
-                      Next
-                      <ArrowRight className="h-3.5 w-3.5" />
-                    </>
-                  )}
-                </Button>
-              </div>
+              {dialogStep === 'provisioning' && (
+                <ProvisioningState
+                  templateName={fullTemplate.name}
+                  isLoading={isProvisioning}
+                  error={provisionError}
+                  isSuccess={provisionSuccess}
+                  onRetry={handleRetry}
+                  onContinue={onClose}
+                />
+              )}
             </>
           )}
         </div>
