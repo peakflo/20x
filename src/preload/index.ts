@@ -355,6 +355,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('enterprise:refreshToken'),
     apiRequest: (method: string, path: string, body?: unknown): Promise<unknown> =>
       ipcRenderer.invoke('enterprise:apiRequest', method, path, body),
+    getSupabaseTokens: (): Promise<{ accessToken: string | null; refreshToken: string | null; apiUrl: string }> =>
+      ipcRenderer.invoke('enterprise:getSupabaseTokens'),
     getApiUrl: (): Promise<string> =>
       ipcRenderer.invoke('enterprise:getApiUrl'),
     getJwt: (): Promise<string> =>
