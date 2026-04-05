@@ -11,7 +11,8 @@ import {
   XCircle,
   RefreshCw,
   X,
-  Plug
+  Plug,
+  ExternalLink
 } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { enterpriseApi } from '@/lib/ipc-client'
@@ -99,7 +100,7 @@ function collectIntegrations(
 
 // ─── Sub-components ───────────────────────────────────────────
 
-type WizardStep = 'wizard' | 'connect-integrations' | 'provisioning'
+type WizardStep = 'wizard' | 'provisioning'
 
 /** Step 1: Walk through questions */
 function WizardQuestions({
@@ -238,7 +239,7 @@ function WizardQuestions({
           className="flex-1"
         >
           {isLast ? (
-            <>Next <ArrowRight className="ml-1 h-3.5 w-3.5" /></>
+            <>Install <ArrowRight className="ml-1 h-3.5 w-3.5" /></>
           ) : (
             <>Next <ArrowRight className="ml-1 h-3.5 w-3.5" /></>
           )}
@@ -248,71 +249,10 @@ function WizardQuestions({
   )
 }
 
-/** Step 2: Review integrations — then provision and open workflow-builder to connect */
-function ConnectIntegrations({
-  integrations,
-  onComplete,
-  onBack
-}: {
-  integrations: IntegrationRef[]
-  onComplete: () => void
-  onBack: () => void
-}) {
-  useEffect(() => {
-    if (integrations.length === 0) {
-      onComplete()
-    }
-  }, [integrations.length, onComplete])
-
-  if (integrations.length === 0) {
-    return null
-  }
-
-  return (
-    <div className="space-y-5">
-      <div className="space-y-2">
-        {integrations.map((int) => (
-          <div
-            key={int.key}
-            className="flex items-center gap-3 rounded-xl border border-border/50 p-3"
-          >
-            <div className="rounded-lg bg-muted p-2 shrink-0">
-              <Plug className="h-4 w-4 text-muted-foreground" />
-            </div>
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-medium">{int.name}</span>
-                {int.required && (
-                  <span className="text-[10px] text-orange-600 dark:text-orange-400 font-medium">
-                    Required
-                  </span>
-                )}
-              </div>
-              {int.description && (
-                <p className="text-[10px] text-muted-foreground mt-0.5 truncate">
-                  {int.description}
-                </p>
-              )}
-            </div>
-          </div>
-        ))}
-      </div>
-
-      <div className="flex gap-3">
-        <Button variant="outline" size="sm" onClick={onBack} className="flex-1">
-          <ArrowLeft className="mr-1 h-3.5 w-3.5" /> Previous
-        </Button>
-        <Button size="sm" onClick={onComplete} className="flex-1">
-          Install &amp; connect <ArrowRight className="ml-1 h-3.5 w-3.5" />
-        </Button>
-      </div>
-    </div>
-  )
-}
-
-/** Step 3: Provisioning progress / result */
+/** Step 2: Provisioning progress / result — with link to connect integrations in workflow-builder */
 function ProvisioningState({
   templateName,
+  integrations,
   isLoading,
   error,
   isSuccess,
@@ -321,6 +261,7 @@ function ProvisioningState({
   onConnectIntegrations
 }: {
   templateName: string
+  integrations: IntegrationRef[]
   isLoading: boolean
   error: string | null
   isSuccess: boolean
@@ -328,6 +269,8 @@ function ProvisioningState({
   onContinue: () => void
   onConnectIntegrations: () => void
 }) {
+  const hasIntegrations = integrations.length > 0
+
   return (
     <div className="py-4">
       {isLoading && (
@@ -348,13 +291,44 @@ function ProvisioningState({
           <CheckCircle2 className="h-10 w-10 text-green-500" />
           <h3 className="text-sm font-semibold">{templateName} is ready!</h3>
           <p className="text-xs text-muted-foreground text-center max-w-xs">
-            Workflows and AI skills have been configured. Connect your integrations to start using them.
+            {hasIntegrations
+              ? 'Workflows and AI skills have been configured. Connect your integrations to activate them.'
+              : 'Your workflows, integrations, and AI skills have been configured.'}
           </p>
-          <Button size="sm" onClick={onConnectIntegrations} className="w-full max-w-xs">
-            Connect integrations <ArrowRight className="ml-1 h-3.5 w-3.5" />
-          </Button>
-          <Button variant="ghost" size="sm" onClick={onContinue} className="w-full max-w-xs">
-            I&apos;ll do it later
+
+          {/* Show integrations that need connecting */}
+          {hasIntegrations && (
+            <div className="w-full max-w-xs space-y-2 mt-1">
+              <div className="space-y-1.5">
+                {integrations.map((int) => (
+                  <div
+                    key={int.key}
+                    className="flex items-center gap-2 rounded-lg border border-border/50 px-3 py-2"
+                  >
+                    <Plug className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                    <span className="text-xs font-medium flex-1">{int.name}</span>
+                    {int.required && (
+                      <span className="text-[10px] text-orange-600 dark:text-orange-400 font-medium">
+                        Required
+                      </span>
+                    )}
+                  </div>
+                ))}
+              </div>
+              <Button size="sm" onClick={onConnectIntegrations} className="w-full">
+                Connect integrations
+                <ExternalLink className="ml-1.5 h-3.5 w-3.5" />
+              </Button>
+            </div>
+          )}
+
+          <Button
+            variant={hasIntegrations ? 'ghost' : 'default'}
+            size="sm"
+            onClick={onContinue}
+            className="w-full max-w-xs"
+          >
+            {hasIntegrations ? 'Skip for now' : 'Done'}
           </Button>
         </div>
       )}
@@ -426,16 +400,32 @@ export function PresetupWizard({ template, onClose }: PresetupWizardProps) {
     )
   }, [fullTemplate, selectedOptions])
 
-  const handleWizardComplete = useCallback((opts: Record<string, string>) => {
+  // After wizard questions → provision immediately
+  const handleWizardComplete = useCallback(async (opts: Record<string, string>) => {
     setSelectedOptions(opts)
-    setDialogStep('connect-integrations')
-  }, [])
-
-  const handleIntegrationsComplete = useCallback(async () => {
     setDialogStep('provisioning')
     setIsProvisioning(true)
     setProvisionSuccess(false)
     setProvisionError(null)
+
+    try {
+      await enterpriseApi.apiRequest('POST', '/api/presetup/provision', {
+        templateSlug: template.slug,
+        selectedOptions: opts
+      })
+      setProvisionSuccess(true)
+      await useDashboardStore.getState().fetchPresetups()
+    } catch (err) {
+      setProvisionError(err instanceof Error ? err.message : 'Provisioning failed')
+    } finally {
+      setIsProvisioning(false)
+    }
+  }, [template.slug])
+
+  const handleRetry = useCallback(async () => {
+    setIsProvisioning(true)
+    setProvisionError(null)
+    setProvisionSuccess(false)
 
     try {
       await enterpriseApi.apiRequest('POST', '/api/presetup/provision', {
@@ -451,12 +441,6 @@ export function PresetupWizard({ template, onClose }: PresetupWizardProps) {
     }
   }, [template.slug, selectedOptions])
 
-  const handleRetry = useCallback(() => {
-    setDialogStep('connect-integrations')
-    setProvisionError(null)
-    setProvisionSuccess(false)
-  }, [])
-
   const handleConnectIntegrations = useCallback(async () => {
     try {
       const apiUrl = await enterpriseApi.getApiUrl()
@@ -469,24 +453,6 @@ export function PresetupWizard({ template, onClose }: PresetupWizardProps) {
     }
     onClose()
   }, [template.slug, onClose])
-
-  // ─── Dialog titles ────────────────────────────────────
-
-  const title = useMemo(() => {
-    switch (dialogStep) {
-      case 'wizard': return `Set up ${template.name}`
-      case 'connect-integrations': return 'Connect integrations'
-      case 'provisioning': return ''
-    }
-  }, [dialogStep, template.name])
-
-  const subtitle = useMemo(() => {
-    switch (dialogStep) {
-      case 'wizard': return `Answer a few questions to configure ${template.name} for your team.`
-      case 'connect-integrations': return `These integrations will be connected after setup.`
-      case 'provisioning': return ''
-    }
-  }, [dialogStep, template.name])
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
@@ -521,11 +487,13 @@ export function PresetupWizard({ template, onClose }: PresetupWizardProps) {
           {/* Wizard content */}
           {!loading && !fetchError && fullTemplate && (
             <>
-              {/* Header */}
-              {title && dialogStep !== 'provisioning' && (
+              {/* Header — only for wizard step */}
+              {dialogStep === 'wizard' && (
                 <div className="mb-4">
-                  <h2 className="text-sm font-semibold">{title}</h2>
-                  {subtitle && <p className="text-xs text-muted-foreground mt-0.5">{subtitle}</p>}
+                  <h2 className="text-sm font-semibold">Set up {template.name}</h2>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    Answer a few questions to configure {template.name} for your team.
+                  </p>
                 </div>
               )}
 
@@ -537,17 +505,10 @@ export function PresetupWizard({ template, onClose }: PresetupWizardProps) {
                 />
               )}
 
-              {dialogStep === 'connect-integrations' && (
-                <ConnectIntegrations
-                  integrations={integrationsToConnect}
-                  onComplete={handleIntegrationsComplete}
-                  onBack={() => setDialogStep('wizard')}
-                />
-              )}
-
               {dialogStep === 'provisioning' && (
                 <ProvisioningState
                   templateName={fullTemplate.name}
+                  integrations={integrationsToConnect}
                   isLoading={isProvisioning}
                   error={provisionError}
                   isSuccess={provisionSuccess}
