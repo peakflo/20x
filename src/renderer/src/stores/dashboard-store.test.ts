@@ -93,8 +93,8 @@ function makeTask(overrides: Partial<WorkfloTask> = {}): WorkfloTask {
     next_occurrence_at: null,
     parent_task_id: null,
     sort_order: 0,
-    created_at: '2026-03-28T08:00:00Z',
-    updated_at: '2026-03-28T08:00:00Z',
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
     ...overrides
   }
 }
