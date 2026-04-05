@@ -85,6 +85,7 @@ export class AgentManager extends EventEmitter {
   private githubManager: GitHubManager | null = null
   private gitlabManager: GitLabManager | null = null
   private oauthManager: import('./oauth/oauth-manager').OAuthManager | null = null
+  private enterpriseAuth: import('./enterprise-auth').EnterpriseAuth | null = null
   private externalListeners: Array<(channel: string, data: unknown) => void> = []
   private enterpriseStateSync: import('./enterprise-state-sync').EnterpriseStateSync | null = null
   private syncManager: import('./sync-manager').SyncManager | null = null
@@ -120,6 +121,14 @@ export class AgentManager extends EventEmitter {
    */
   setEnterpriseStateSync(stateSync: import('./enterprise-state-sync').EnterpriseStateSync | null): void {
     this.enterpriseStateSync = stateSync
+  }
+
+  /**
+   * Set the enterprise auth instance for injecting JWT tokens into MCP Dev Server requests.
+   * Called when enterprise auth succeeds.
+   */
+  setEnterpriseAuth(auth: import('./enterprise-auth').EnterpriseAuth | null): void {
+    this.enterpriseAuth = auth
   }
 
   /**
@@ -319,6 +328,16 @@ export class AgentManager extends EventEmitter {
           const token = await this.oauthManager.getValidMcpServerToken(mcpServer.id)
           if (token) {
             finalHeaders = { ...finalHeaders, Authorization: `Bearer ${token}` }
+          }
+        }
+
+        // Inject enterprise JWT for Workflo MCP Dev Server
+        if (mcpServer.name === '[Workflo] MCP Dev Server' && this.enterpriseAuth) {
+          try {
+            const jwt = await this.enterpriseAuth.getJwt()
+            finalHeaders = { ...finalHeaders, Authorization: `Bearer ${jwt}` }
+          } catch (err) {
+            console.warn('[AgentManager] Failed to inject enterprise JWT for MCP Dev Server:', err)
           }
         }
 

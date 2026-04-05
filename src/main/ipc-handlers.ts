@@ -803,10 +803,46 @@ export function registerIpcHandlers(
       // Wire enterprise connection into sync manager (after state sync is ready)
       syncManager.setEnterpriseConnection(apiClient, enterpriseSyncMgr, userId, enterpriseStateSync)
 
+      // Pass enterprise auth to agent manager so it can inject JWT into MCP Dev Server requests
+      agentManager.setEnterpriseAuth(enterpriseAuth)
+
       // Run initial sync (agents, skills, MCP servers)
       console.log('[enterprise] Running initial resource sync...')
       const syncResult = await enterpriseSyncMgr.syncAll(userId)
       console.log('[enterprise] Initial sync result:', JSON.stringify(syncResult))
+
+      // Auto-register MCP Dev Server (Workflo's MCP endpoint that exposes
+      // workflows-as-tools, integrations, datastores, and data tables).
+      // Uses the enterprise JWT for authentication — no separate API key needed.
+      try {
+        const mcpDevServerName = '[Workflo] MCP Dev Server'
+        const apiUrl = enterpriseAuth.getApiUrl()
+        const mcpDevUrl = `${apiUrl}/api/mcp/dev/mcp`
+
+        const localServers = db.getMcpServers()
+        const existingMcpDev = localServers.find((s) => s.name === mcpDevServerName)
+
+        if (existingMcpDev) {
+          // Update URL in case environment changed (e.g. local → stage → prod)
+          if (existingMcpDev.url !== mcpDevUrl) {
+            db.updateMcpServer(existingMcpDev.id, { url: mcpDevUrl })
+            console.log('[enterprise] Updated MCP Dev Server URL:', mcpDevUrl)
+          }
+        } else {
+          db.createMcpServer({
+            name: mcpDevServerName,
+            type: 'remote',
+            url: mcpDevUrl,
+            headers: {},
+            // The enterprise JWT is injected dynamically by the MCP transport
+            // layer (via EnterpriseAuth.getJwt()), not stored statically here.
+            // The MCP client retrieves a fresh JWT before each connection.
+          })
+          console.log('[enterprise] Registered MCP Dev Server:', mcpDevUrl)
+        }
+      } catch (mcpErr) {
+        console.warn('[enterprise] Failed to register MCP Dev Server (non-fatal):', mcpErr)
+      }
 
       // Auto-create Peakflo task source if none exists
       const existingSources = db.getTaskSources()
@@ -840,6 +876,7 @@ export function registerIpcHandlers(
   ipcMain.handle('enterprise:logout', async () => {
     if (!enterpriseAuth) throw new Error('Enterprise auth not available')
     syncManager.clearEnterpriseConnection()
+    agentManager.setEnterpriseAuth(null)
 
     // Stop enterprise heartbeat
     if (enterpriseHeartbeat) {
