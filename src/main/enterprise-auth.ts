@@ -249,6 +249,22 @@ export class EnterpriseAuth {
     }
   }
 
+  // ── Get Auth Tokens (for deep-linking into workflow-builder) ─────
+
+  async getAuthTokens(): Promise<{
+    accessToken: string
+    refreshToken: string
+    tenantId: string | null
+  }> {
+    const accessToken = this.getStoredSupabaseAccessToken()
+    const refreshToken = this.getStoredSupabaseRefreshToken()
+    if (!accessToken || !refreshToken) {
+      throw new Error('Not authenticated — please sign in first')
+    }
+    const tenantId = this.db.getSetting(KEYS.TENANT_ID) ?? null
+    return { accessToken, refreshToken, tenantId }
+  }
+
   // ── Refresh Token ────────────────────────────────────────────────
 
   async refreshToken(): Promise<{ token: string }> {

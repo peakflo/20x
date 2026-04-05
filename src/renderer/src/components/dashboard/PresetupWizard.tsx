@@ -247,21 +247,54 @@ export function PresetupWizard({ template, onClose }: PresetupWizardProps) {
     }
   }, [template.slug])
 
-  // After wizard questions → open workflow-builder connect page with selected options
+  // After wizard questions → open workflow-builder connect page with resolved integration keys
   const handleWizardComplete = useCallback(
     async (opts: Record<string, string>) => {
       try {
         const frontendUrl = await getWorkfloFrontendUrl()
-        // Build deep-link: /presetup/{slug}/connect?questionId=selectedValue&...
-        const params = new URLSearchParams(opts)
-        const connectUrl = `${frontendUrl}/presetup/${template.slug}/connect?${params.toString()}`
+
+        // Collect integration keys from base template + selected question options
+        const integrationKeys = new Set<string>()
+
+        // Base template integrations
+        for (const int of fullTemplate?.definition.integrations ?? []) {
+          integrationKeys.add(int.key)
+        }
+
+        // Integrations added by selected question options
+        for (const question of fullTemplate?.definition.questions ?? []) {
+          const selectedValue = opts[question.id]
+          if (!selectedValue) continue
+          const option = question.options.find((o) => o.value === selectedValue)
+          if (option?.integrations) {
+            for (const int of option.integrations) {
+              integrationKeys.add(int.key)
+            }
+          }
+        }
+
+        // Build deep-link: /presetup/connect?integrations=gmail,xero&tenantId=abc#access_token=...&refresh_token=...
+        const params = new URLSearchParams()
+        if (integrationKeys.size > 0) {
+          params.set('integrations', Array.from(integrationKeys).join(','))
+        }
+
+        // Get auth tokens and tenantId for WB authentication
+        const { accessToken, refreshToken, tenantId } = await enterpriseApi.getAuthTokens()
+        if (tenantId) params.set('tenantId', tenantId)
+
+        const hashParams = new URLSearchParams()
+        hashParams.set('access_token', accessToken)
+        hashParams.set('refresh_token', refreshToken)
+
+        const connectUrl = `${frontendUrl}/presetup/connect?${params.toString()}#${hashParams.toString()}`
         await window.electronAPI.shell.openExternal(connectUrl)
       } catch {
         // Best-effort fallback
       }
       onClose()
     },
-    [template.slug, onClose]
+    [fullTemplate, onClose]
   )
 
   return (

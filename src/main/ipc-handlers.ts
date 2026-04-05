@@ -1002,6 +1002,11 @@ export function registerIpcHandlers(
     return enterpriseAuth.getJwt()
   })
 
+  ipcMain.handle('enterprise:getAuthTokens', async () => {
+    if (!enterpriseAuth) throw new Error('Enterprise auth not available')
+    return enterpriseAuth.getAuthTokens()
+  })
+
   // Inject Authorization header for iframe requests to the enterprise API.
   // The interceptor is scoped to the API URL so it only affects API-bound requests.
   let iframeAuthEnabled = false
