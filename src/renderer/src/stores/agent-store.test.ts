@@ -485,4 +485,62 @@ describe('useAgentStore', () => {
       expect(session.messages[0].content).toBe('Hello from mobile session')
     })
   })
+
+  describe('Session data accessible via direct Map lookup (regression: idle chat new conversation)', () => {
+    it('sessions.get() returns up-to-date session after initSession', () => {
+      // This verifies that the Zustand selector pattern
+      // `state => state.sessions.get(taskId)` works correctly
+      // for reactive session access (vs the old getSession function pattern
+      // which returned a stable function ref that never triggered re-renders).
+      useAgentStore.getState().initSession('mastermind-session', 'sess-1', 'agent-1')
+
+      const session = useAgentStore.getState().sessions.get('mastermind-session')
+      expect(session).toBeDefined()
+      expect(session!.sessionId).toBe('sess-1')
+    })
+
+    it('sessions.get() reflects status changes after onAgentStatus', () => {
+      useAgentStore.getState().initSession('mastermind-session', 'sess-1', 'agent-1')
+
+      // Simulate agent going idle
+      statusCallback!({
+        sessionId: 'sess-1',
+        agentId: 'agent-1',
+        taskId: 'mastermind-session',
+        status: 'idle' as any
+      })
+
+      const session = useAgentStore.getState().sessions.get('mastermind-session')
+      expect(session).toBeDefined()
+      expect(session!.sessionId).toBe('sess-1') // sessionId preserved after idle
+      expect(session!.status).toBe('idle')
+    })
+
+    it('sessions.get() preserves sessionId through idle transition (critical for follow-up messages)', () => {
+      // Regression test: OrchestratorPanel must see sessionId after idle
+      // so it uses sendMessage() instead of creating a new conversation.
+      useAgentStore.getState().initSession('mastermind-session', '', 'agent-1')
+      useAgentStore.getState().initSession('mastermind-session', 'real-sess-id', 'agent-1')
+
+      // Session goes working → idle
+      statusCallback!({
+        sessionId: 'real-sess-id',
+        agentId: 'agent-1',
+        taskId: 'mastermind-session',
+        status: 'working' as any
+      })
+      statusCallback!({
+        sessionId: 'real-sess-id',
+        agentId: 'agent-1',
+        taskId: 'mastermind-session',
+        status: 'idle' as any
+      })
+
+      // After idle, session must still be accessible with sessionId intact
+      const session = useAgentStore.getState().sessions.get('mastermind-session')
+      expect(session).toBeDefined()
+      expect(session!.sessionId).toBe('real-sess-id')
+      expect(session!.status).toBe('idle')
+    })
+  })
 })

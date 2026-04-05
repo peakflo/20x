@@ -206,11 +206,12 @@ describe('useDashboardStore', () => {
   })
 
   it('updateLocalStats computes stats from tasks', () => {
+    const now = new Date().toISOString()
     const tasks: WorkfloTask[] = [
       makeTask({ id: 't1', status: TaskStatus.NotStarted }),
-      makeTask({ id: 't2', status: TaskStatus.Completed }),
+      makeTask({ id: 't2', status: TaskStatus.Completed, updated_at: now }),
       makeTask({ id: 't3', status: TaskStatus.AgentWorking, agent_id: 'agent-1' }),
-      makeTask({ id: 't4', status: TaskStatus.Completed, agent_id: 'agent-1' })
+      makeTask({ id: 't4', status: TaskStatus.Completed, agent_id: 'agent-1', updated_at: now })
     ]
 
     useDashboardStore.getState().updateLocalStats(tasks)
