@@ -41,10 +41,10 @@ interface IntegrationRef {
 }
 
 interface TemplateDefinition {
-  questions: TemplateQuestion[]
-  workflows: { marketplaceTemplateSlug: string }[]
-  integrations: IntegrationRef[]
-  skills: { name: string; description: string }[]
+  questions?: TemplateQuestion[]
+  workflows?: { marketplaceTemplateSlug: string }[]
+  integrations?: IntegrationRef[]
+  skills?: { name: string; description: string }[]
 }
 
 interface FullTemplate {
@@ -111,7 +111,7 @@ function WizardQuestions({
   onComplete: (opts: Record<string, string>) => void
   onBack: () => void
 }) {
-  const questions = template.definition.questions
+  const questions = template.definition.questions ?? []
   const [step, setStep] = useState(0)
   const [answers, setAnswers] = useState<Record<string, string>>({})
 
@@ -424,8 +424,8 @@ export function PresetupWizard({ template, onClose }: PresetupWizardProps) {
   const integrationsToConnect = useMemo(() => {
     if (!fullTemplate) return []
     return collectIntegrations(
-      fullTemplate.definition.integrations,
-      fullTemplate.definition.questions,
+      fullTemplate.definition.integrations ?? [],
+      fullTemplate.definition.questions ?? [],
       selectedOptions
     )
   }, [fullTemplate, selectedOptions])
