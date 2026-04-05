@@ -273,10 +273,18 @@ export function PresetupWizard({ template, onClose }: PresetupWizardProps) {
           }
         }
 
-        // Build deep-link: /presetup/connect?integrations=gmail,xero&tenantId=abc#access_token=...&refresh_token=...
+        // Build deep-link: /presetup/connect?integrations=gmail,xero&templateSlug=ai-sdr&selectedOptions=key:val,key:val&tenantId=abc#access_token=...&refresh_token=...
         const params = new URLSearchParams()
         if (integrationKeys.size > 0) {
           params.set('integrations', Array.from(integrationKeys).join(','))
+        }
+
+        // Pass template slug and selected options for provisioning
+        params.set('templateSlug', template.slug)
+        if (Object.keys(opts).length > 0) {
+          // Encode as "key:value,key:value" format
+          const optPairs = Object.entries(opts).map(([k, v]) => `${k}:${v}`)
+          params.set('selectedOptions', optPairs.join(','))
         }
 
         // Get auth tokens and tenantId for WB authentication
