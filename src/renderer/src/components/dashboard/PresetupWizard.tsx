@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useMemo } from 'react'
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import {
   Calculator,
   UserPlus,
@@ -24,7 +24,13 @@ interface QuestionOption {
   value: string
   label: string
   workflows?: { marketplaceTemplateSlug: string }[]
-  integrations?: { key: string; name: string; required?: boolean; description?: string }[]
+  integrations?: {
+    key: string
+    name: string
+    type?: string
+    required?: boolean
+    description?: string
+  }[]
 }
 
 interface TemplateQuestion {
@@ -37,6 +43,7 @@ interface TemplateQuestion {
 interface IntegrationRef {
   key: string
   name: string
+  type?: string
   required?: boolean
   description?: string
 }
@@ -55,6 +62,14 @@ interface FullTemplate {
   category: string
   icon: string | null
   definition: TemplateDefinition
+}
+
+/** Shape returned by GET /api/integrations */
+interface TenantIntegration {
+  id: string
+  type: string
+  name?: string
+  isActive?: boolean
 }
 
 // ─── Icon map ─────────────────────────────────────────────────
@@ -90,6 +105,7 @@ function collectIntegrations(
       merged.set(int.key, {
         key: int.key,
         name: int.name,
+        type: int.type || existing?.type,
         required: existing?.required || int.required || false,
         description: int.description || existing?.description
       })
@@ -98,9 +114,12 @@ function collectIntegrations(
   return Array.from(merged.values())
 }
 
+// ─── Polling interval for integration checks ─────────────────
+const POLL_INTERVAL_MS = 3000
+
 // ─── Sub-components ───────────────────────────────────────────
 
-type WizardStep = 'wizard' | 'provisioning'
+type WizardStep = 'wizard' | 'connect' | 'provisioning' | 'success'
 
 /** Step 1: Walk through questions */
 function WizardQuestions({
@@ -142,8 +161,8 @@ function WizardQuestions({
             Cancel
           </Button>
           <Button onClick={() => onComplete({})} className="flex-1">
-            Install package
-            <Check className="ml-2 h-4 w-4" />
+            Continue
+            <ArrowRight className="ml-2 h-4 w-4" />
           </Button>
         </div>
       </div>
@@ -239,7 +258,7 @@ function WizardQuestions({
           className="flex-1"
         >
           {isLast ? (
-            <>Install <ArrowRight className="ml-1 h-3.5 w-3.5" /></>
+            <>Next <ArrowRight className="ml-1 h-3.5 w-3.5" /></>
           ) : (
             <>Next <ArrowRight className="ml-1 h-3.5 w-3.5" /></>
           )}
@@ -249,105 +268,135 @@ function WizardQuestions({
   )
 }
 
-/** Step 2: Provisioning progress / result — with link to connect integrations in workflow-builder */
-function ProvisioningState({
-  templateName,
+/** Step 2: Connect integrations — open workflow-builder, poll until connected */
+function ConnectIntegrationsStep({
   integrations,
-  isLoading,
-  error,
-  isSuccess,
-  onRetry,
-  onContinue,
-  onConnectIntegrations
+  onComplete,
+  onBack,
+  onOpenIntegrations
 }: {
-  templateName: string
   integrations: IntegrationRef[]
-  isLoading: boolean
-  error: string | null
-  isSuccess: boolean
-  onRetry: () => void
-  onContinue: () => void
-  onConnectIntegrations: () => void
+  onComplete: () => void
+  onBack: () => void
+  onOpenIntegrations: () => void
 }) {
-  const hasIntegrations = integrations.length > 0
+  const [connectedTypes, setConnectedTypes] = useState<Set<string>>(new Set())
+  const [polling, setPolling] = useState(false)
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  // Types we need to find in tenant integrations
+  const requiredTypes = useMemo(
+    () => integrations.filter((i) => i.type).map((i) => i.type!),
+    [integrations]
+  )
+
+  // Check which integrations are already connected
+  const checkIntegrations = useCallback(async () => {
+    try {
+      const result = await enterpriseApi.apiRequest('GET', '/api/integrations')
+      const list = (Array.isArray(result) ? result : []) as TenantIntegration[]
+      const activeTypes = new Set(list.filter((i) => i.isActive !== false).map((i) => i.type))
+      setConnectedTypes(activeTypes)
+    } catch {
+      // Silently fail — will retry on next poll
+    }
+  }, [])
+
+  // Start polling when component mounts
+  useEffect(() => {
+    checkIntegrations()
+    setPolling(true)
+    pollRef.current = setInterval(checkIntegrations, POLL_INTERVAL_MS)
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current)
+    }
+  }, [checkIntegrations])
+
+  // Check if all required integration types are connected
+  const allConnected = requiredTypes.length > 0
+    ? requiredTypes.every((t) => connectedTypes.has(t))
+    : true
 
   return (
-    <div className="py-4">
-      {isLoading && (
-        <div className="flex flex-col items-center gap-3 py-6">
-          <Loader2 className="h-10 w-10 animate-spin text-primary" />
-          <h3 className="text-sm font-semibold">Setting up {templateName}</h3>
-          <p className="text-xs text-muted-foreground text-center max-w-xs">
-            Configuring workflows, integrations, and AI skills. This usually takes a few seconds.
-          </p>
-          <div className="w-full max-w-xs h-1.5 bg-muted rounded-full overflow-hidden">
-            <div className="h-full bg-primary rounded-full animate-pulse" style={{ width: '60%' }} />
-          </div>
-        </div>
-      )}
-
-      {isSuccess && (
-        <div className="flex flex-col items-center gap-3 py-6">
-          <CheckCircle2 className="h-10 w-10 text-green-500" />
-          <h3 className="text-sm font-semibold">{templateName} is ready!</h3>
-          <p className="text-xs text-muted-foreground text-center max-w-xs">
-            {hasIntegrations
-              ? 'Workflows and AI skills have been configured. Connect your integrations to activate them.'
-              : 'Your workflows, integrations, and AI skills have been configured.'}
-          </p>
-
-          {/* Show integrations that need connecting */}
-          {hasIntegrations && (
-            <div className="w-full max-w-xs space-y-2 mt-1">
-              <div className="space-y-1.5">
-                {integrations.map((int) => (
-                  <div
-                    key={int.key}
-                    className="flex items-center gap-2 rounded-lg border border-border/50 px-3 py-2"
-                  >
-                    <Plug className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                    <span className="text-xs font-medium flex-1">{int.name}</span>
-                    {int.required && (
-                      <span className="text-[10px] text-orange-600 dark:text-orange-400 font-medium">
-                        Required
-                      </span>
-                    )}
-                  </div>
-                ))}
+    <div className="space-y-5">
+      <div className="space-y-2">
+        {integrations.map((int) => {
+          const isConnected = int.type ? connectedTypes.has(int.type) : false
+          return (
+            <div
+              key={int.key}
+              className={`flex items-center gap-3 rounded-xl border-2 p-3 transition-colors ${
+                isConnected
+                  ? 'border-green-500/30 bg-green-500/5'
+                  : 'border-border/50'
+              }`}
+            >
+              <div className={`rounded-lg p-2 shrink-0 ${
+                isConnected ? 'bg-green-500/10' : 'bg-muted'
+              }`}>
+                {isConnected
+                  ? <CheckCircle2 className="h-4 w-4 text-green-500" />
+                  : <Plug className="h-4 w-4 text-muted-foreground" />
+                }
               </div>
-              <Button size="sm" onClick={onConnectIntegrations} className="w-full">
-                Connect integrations
-                <ExternalLink className="ml-1.5 h-3.5 w-3.5" />
-              </Button>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-medium">{int.name}</span>
+                  {int.required && !isConnected && (
+                    <span className="text-[10px] text-orange-600 dark:text-orange-400 font-medium">
+                      Required
+                    </span>
+                  )}
+                  {isConnected && (
+                    <span className="text-[10px] text-green-600 dark:text-green-400 font-medium">
+                      Connected
+                    </span>
+                  )}
+                </div>
+                {int.description && (
+                  <p className="text-[10px] text-muted-foreground mt-0.5 truncate">
+                    {int.description}
+                  </p>
+                )}
+              </div>
             </div>
-          )}
+          )
+        })}
+      </div>
 
-          <Button
-            variant={hasIntegrations ? 'ghost' : 'default'}
-            size="sm"
-            onClick={onContinue}
-            className="w-full max-w-xs"
-          >
-            {hasIntegrations ? 'Skip for now' : 'Done'}
-          </Button>
-        </div>
+      {/* Open workflow-builder to connect */}
+      {!allConnected && (
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={onOpenIntegrations}
+          className="w-full"
+        >
+          Open integrations page
+          <ExternalLink className="ml-1.5 h-3.5 w-3.5" />
+        </Button>
       )}
 
-      {error && (
-        <div className="flex flex-col items-center gap-3 py-6">
-          <XCircle className="h-10 w-10 text-destructive" />
-          <h3 className="text-sm font-semibold">Setup encountered an issue</h3>
-          <p className="text-xs text-destructive text-center max-w-xs">{error}</p>
-          <div className="flex gap-3 w-full max-w-xs">
-            <Button variant="outline" size="sm" onClick={onRetry} className="flex-1">
-              <RefreshCw className="mr-1 h-3.5 w-3.5" /> Try again
-            </Button>
-            <Button variant="ghost" size="sm" onClick={onContinue} className="flex-1">
-              Skip for now
-            </Button>
-          </div>
-        </div>
+      {polling && !allConnected && (
+        <p className="text-[10px] text-muted-foreground text-center flex items-center justify-center gap-1.5">
+          <Loader2 className="h-3 w-3 animate-spin" />
+          Waiting for integrations to be connected...
+        </p>
       )}
+
+      <div className="flex gap-3">
+        <Button variant="outline" size="sm" onClick={onBack} className="flex-1">
+          <ArrowLeft className="mr-1 h-3.5 w-3.5" /> Previous
+        </Button>
+        <Button
+          size="sm"
+          onClick={onComplete}
+          disabled={!allConnected}
+          className="flex-1"
+        >
+          Install <ArrowRight className="ml-1 h-3.5 w-3.5" />
+        </Button>
+      </div>
     </div>
   )
 }
@@ -367,7 +416,6 @@ export function PresetupWizard({ template, onClose }: PresetupWizardProps) {
   const [dialogStep, setDialogStep] = useState<WizardStep>('wizard')
   const [selectedOptions, setSelectedOptions] = useState<Record<string, string>>({})
   const [isProvisioning, setIsProvisioning] = useState(false)
-  const [provisionSuccess, setProvisionSuccess] = useState(false)
   const [provisionError, setProvisionError] = useState<string | null>(null)
 
   // Fetch full template on mount
@@ -387,10 +435,12 @@ export function PresetupWizard({ template, onClose }: PresetupWizardProps) {
           setLoading(false)
         }
       })
-    return () => { cancelled = true }
+    return () => {
+      cancelled = true
+    }
   }, [template.slug])
 
-  // Integrations to show after wizard questions
+  // Integrations collected from base + selected question options
   const integrationsToConnect = useMemo(() => {
     if (!fullTemplate) return []
     return collectIntegrations(
@@ -400,59 +450,93 @@ export function PresetupWizard({ template, onClose }: PresetupWizardProps) {
     )
   }, [fullTemplate, selectedOptions])
 
-  // After wizard questions → provision immediately
-  const handleWizardComplete = useCallback(async (opts: Record<string, string>) => {
-    setSelectedOptions(opts)
-    setDialogStep('provisioning')
-    setIsProvisioning(true)
-    setProvisionSuccess(false)
-    setProvisionError(null)
+  // After wizard questions → go to connect integrations (or skip if none)
+  const handleWizardComplete = useCallback(
+    (opts: Record<string, string>) => {
+      setSelectedOptions(opts)
 
-    try {
-      await enterpriseApi.apiRequest('POST', '/api/presetup/provision', {
-        templateSlug: template.slug,
-        selectedOptions: opts
-      })
-      setProvisionSuccess(true)
-      await useDashboardStore.getState().fetchPresetups()
-    } catch (err) {
-      setProvisionError(err instanceof Error ? err.message : 'Provisioning failed')
-    } finally {
-      setIsProvisioning(false)
-    }
-  }, [template.slug])
+      // Compute integrations for these options
+      const ints = fullTemplate
+        ? collectIntegrations(
+            fullTemplate.definition.integrations ?? [],
+            fullTemplate.definition.questions ?? [],
+            opts
+          )
+        : []
 
-  const handleRetry = useCallback(async () => {
-    setIsProvisioning(true)
-    setProvisionError(null)
-    setProvisionSuccess(false)
+      if (ints.length === 0) {
+        // No integrations needed — go straight to provisioning
+        doProvision(opts)
+      } else {
+        setDialogStep('connect')
+      }
+    },
+    [fullTemplate]
+  )
 
-    try {
-      await enterpriseApi.apiRequest('POST', '/api/presetup/provision', {
-        templateSlug: template.slug,
-        selectedOptions
-      })
-      setProvisionSuccess(true)
-      await useDashboardStore.getState().fetchPresetups()
-    } catch (err) {
-      setProvisionError(err instanceof Error ? err.message : 'Provisioning failed')
-    } finally {
-      setIsProvisioning(false)
-    }
-  }, [template.slug, selectedOptions])
-
-  const handleConnectIntegrations = useCallback(async () => {
+  // Open workflow-builder integrations page in browser
+  const handleOpenIntegrations = useCallback(async () => {
     try {
       const apiUrl = await enterpriseApi.getApiUrl()
-      const integrationsUrl = `${apiUrl}/settings/integrations?presetup=${template.slug}`
-      await window.electronAPI.shell.openExternal(integrationsUrl)
+      const url = `${apiUrl}/settings/integrations`
+      await window.electronAPI.shell.openExternal(url)
     } catch {
-      // Fallback — try without query param
-      const apiUrl = await enterpriseApi.getApiUrl()
-      await window.electronAPI.shell.openExternal(`${apiUrl}/settings/integrations`)
+      // Best-effort
     }
-    onClose()
-  }, [template.slug, onClose])
+  }, [])
+
+  // Provision the template
+  const doProvision = useCallback(
+    async (opts?: Record<string, string>) => {
+      const options = opts ?? selectedOptions
+      setDialogStep('provisioning')
+      setIsProvisioning(true)
+      setProvisionError(null)
+
+      try {
+        await enterpriseApi.apiRequest('POST', '/api/presetup/provision', {
+          templateSlug: template.slug,
+          selectedOptions: options
+        })
+        setDialogStep('success')
+        await useDashboardStore.getState().fetchPresetups()
+      } catch (err) {
+        setProvisionError(err instanceof Error ? err.message : 'Provisioning failed')
+      } finally {
+        setIsProvisioning(false)
+      }
+    },
+    [template.slug, selectedOptions]
+  )
+
+  // After integrations connected → install
+  const handleConnectComplete = useCallback(() => {
+    doProvision()
+  }, [doProvision])
+
+  // Retry provisioning on error
+  const handleRetry = useCallback(() => {
+    doProvision()
+  }, [doProvision])
+
+  // ─── Dialog titles per step ────────────────────────────
+  const stepTitle = useMemo(() => {
+    switch (dialogStep) {
+      case 'wizard':
+        return {
+          title: `Set up ${template.name}`,
+          subtitle: `Answer a few questions to configure ${template.name} for your team.`
+        }
+      case 'connect':
+        return {
+          title: 'Connect integrations',
+          subtitle:
+            'Connect the required integrations before installing. Click below to open the integrations page.'
+        }
+      default:
+        return null
+    }
+  }, [dialogStep, template.name])
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
@@ -480,23 +564,26 @@ export function PresetupWizard({ template, onClose }: PresetupWizardProps) {
           {fetchError && !loading && (
             <div className="flex flex-col items-center justify-center py-10 gap-3">
               <p className="text-xs text-destructive">{fetchError}</p>
-              <Button variant="outline" size="sm" onClick={onClose}>Close</Button>
+              <Button variant="outline" size="sm" onClick={onClose}>
+                Close
+              </Button>
             </div>
           )}
 
           {/* Wizard content */}
           {!loading && !fetchError && fullTemplate && (
             <>
-              {/* Header — only for wizard step */}
-              {dialogStep === 'wizard' && (
+              {/* Header */}
+              {stepTitle && (
                 <div className="mb-4">
-                  <h2 className="text-sm font-semibold">Set up {template.name}</h2>
+                  <h2 className="text-sm font-semibold">{stepTitle.title}</h2>
                   <p className="text-xs text-muted-foreground mt-0.5">
-                    Answer a few questions to configure {template.name} for your team.
+                    {stepTitle.subtitle}
                   </p>
                 </div>
               )}
 
+              {/* Step 1: Questions */}
               {dialogStep === 'wizard' && (
                 <WizardQuestions
                   template={fullTemplate}
@@ -505,17 +592,85 @@ export function PresetupWizard({ template, onClose }: PresetupWizardProps) {
                 />
               )}
 
-              {dialogStep === 'provisioning' && (
-                <ProvisioningState
-                  templateName={fullTemplate.name}
+              {/* Step 2: Connect integrations */}
+              {dialogStep === 'connect' && (
+                <ConnectIntegrationsStep
                   integrations={integrationsToConnect}
-                  isLoading={isProvisioning}
-                  error={provisionError}
-                  isSuccess={provisionSuccess}
-                  onRetry={handleRetry}
-                  onContinue={onClose}
-                  onConnectIntegrations={handleConnectIntegrations}
+                  onComplete={handleConnectComplete}
+                  onBack={() => setDialogStep('wizard')}
+                  onOpenIntegrations={handleOpenIntegrations}
                 />
+              )}
+
+              {/* Step 3: Provisioning */}
+              {dialogStep === 'provisioning' && (
+                <div className="py-4">
+                  {isProvisioning && (
+                    <div className="flex flex-col items-center gap-3 py-6">
+                      <Loader2 className="h-10 w-10 animate-spin text-primary" />
+                      <h3 className="text-sm font-semibold">
+                        Installing {fullTemplate.name}
+                      </h3>
+                      <p className="text-xs text-muted-foreground text-center max-w-xs">
+                        Configuring workflows, integrations, and AI skills. This usually
+                        takes a few seconds.
+                      </p>
+                      <div className="w-full max-w-xs h-1.5 bg-muted rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-primary rounded-full animate-pulse"
+                          style={{ width: '60%' }}
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  {provisionError && !isProvisioning && (
+                    <div className="flex flex-col items-center gap-3 py-6">
+                      <XCircle className="h-10 w-10 text-destructive" />
+                      <h3 className="text-sm font-semibold">
+                        Setup encountered an issue
+                      </h3>
+                      <p className="text-xs text-destructive text-center max-w-xs">
+                        {provisionError}
+                      </p>
+                      <div className="flex gap-3 w-full max-w-xs">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={handleRetry}
+                          className="flex-1"
+                        >
+                          <RefreshCw className="mr-1 h-3.5 w-3.5" /> Try again
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={onClose}
+                          className="flex-1"
+                        >
+                          Skip for now
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Step 4: Success */}
+              {dialogStep === 'success' && (
+                <div className="flex flex-col items-center gap-3 py-6">
+                  <CheckCircle2 className="h-10 w-10 text-green-500" />
+                  <h3 className="text-sm font-semibold">
+                    {fullTemplate.name} installed!
+                  </h3>
+                  <p className="text-xs text-muted-foreground text-center max-w-xs">
+                    Your workflows, integrations, and AI skills have been configured
+                    successfully.
+                  </p>
+                  <Button size="sm" onClick={onClose} className="w-full max-w-xs">
+                    Done
+                  </Button>
+                </div>
               )}
             </>
           )}
