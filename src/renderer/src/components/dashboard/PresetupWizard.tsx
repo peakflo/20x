@@ -248,15 +248,13 @@ function WizardQuestions({
   )
 }
 
-/** Step 2: Review integrations that will be configured */
+/** Step 2: Review integrations — then provision and open workflow-builder to connect */
 function ConnectIntegrations({
   integrations,
-  templateName,
   onComplete,
   onBack
 }: {
   integrations: IntegrationRef[]
-  templateName: string
   onComplete: () => void
   onBack: () => void
 }) {
@@ -272,13 +270,6 @@ function ConnectIntegrations({
 
   return (
     <div className="space-y-5">
-      <div>
-        <h3 className="text-sm font-medium">Integrations for {templateName}</h3>
-        <p className="text-xs text-muted-foreground mt-1">
-          These integrations will be configured. You can connect them in Settings after setup.
-        </p>
-      </div>
-
       <div className="space-y-2">
         {integrations.map((int) => (
           <div
@@ -312,7 +303,7 @@ function ConnectIntegrations({
           <ArrowLeft className="mr-1 h-3.5 w-3.5" /> Previous
         </Button>
         <Button size="sm" onClick={onComplete} className="flex-1">
-          Install package <ArrowRight className="ml-1 h-3.5 w-3.5" />
+          Install &amp; connect <ArrowRight className="ml-1 h-3.5 w-3.5" />
         </Button>
       </div>
     </div>
@@ -326,7 +317,8 @@ function ProvisioningState({
   error,
   isSuccess,
   onRetry,
-  onContinue
+  onContinue,
+  onConnectIntegrations
 }: {
   templateName: string
   isLoading: boolean
@@ -334,6 +326,7 @@ function ProvisioningState({
   isSuccess: boolean
   onRetry: () => void
   onContinue: () => void
+  onConnectIntegrations: () => void
 }) {
   return (
     <div className="py-4">
@@ -355,10 +348,13 @@ function ProvisioningState({
           <CheckCircle2 className="h-10 w-10 text-green-500" />
           <h3 className="text-sm font-semibold">{templateName} is ready!</h3>
           <p className="text-xs text-muted-foreground text-center max-w-xs">
-            Your workflows, integrations, and AI skills have been configured.
+            Workflows and AI skills have been configured. Connect your integrations to start using them.
           </p>
-          <Button size="sm" onClick={onContinue} className="w-full max-w-xs">
-            Done
+          <Button size="sm" onClick={onConnectIntegrations} className="w-full max-w-xs">
+            Connect integrations <ArrowRight className="ml-1 h-3.5 w-3.5" />
+          </Button>
+          <Button variant="ghost" size="sm" onClick={onContinue} className="w-full max-w-xs">
+            I&apos;ll do it later
           </Button>
         </div>
       )}
@@ -461,6 +457,19 @@ export function PresetupWizard({ template, onClose }: PresetupWizardProps) {
     setProvisionSuccess(false)
   }, [])
 
+  const handleConnectIntegrations = useCallback(async () => {
+    try {
+      const apiUrl = await enterpriseApi.getApiUrl()
+      const integrationsUrl = `${apiUrl}/settings/integrations?presetup=${template.slug}`
+      await window.electronAPI.shell.openExternal(integrationsUrl)
+    } catch {
+      // Fallback — try without query param
+      const apiUrl = await enterpriseApi.getApiUrl()
+      await window.electronAPI.shell.openExternal(`${apiUrl}/settings/integrations`)
+    }
+    onClose()
+  }, [template.slug, onClose])
+
   // ─── Dialog titles ────────────────────────────────────
 
   const title = useMemo(() => {
@@ -474,7 +483,7 @@ export function PresetupWizard({ template, onClose }: PresetupWizardProps) {
   const subtitle = useMemo(() => {
     switch (dialogStep) {
       case 'wizard': return `Answer a few questions to configure ${template.name} for your team.`
-      case 'connect-integrations': return `Sign in to your services so ${template.name} can work with them.`
+      case 'connect-integrations': return `These integrations will be connected after setup.`
       case 'provisioning': return ''
     }
   }, [dialogStep, template.name])
@@ -531,7 +540,6 @@ export function PresetupWizard({ template, onClose }: PresetupWizardProps) {
               {dialogStep === 'connect-integrations' && (
                 <ConnectIntegrations
                   integrations={integrationsToConnect}
-                  templateName={fullTemplate.name}
                   onComplete={handleIntegrationsComplete}
                   onBack={() => setDialogStep('wizard')}
                 />
@@ -545,6 +553,7 @@ export function PresetupWizard({ template, onClose }: PresetupWizardProps) {
                   isSuccess={provisionSuccess}
                   onRetry={handleRetry}
                   onContinue={onClose}
+                  onConnectIntegrations={handleConnectIntegrations}
                 />
               )}
             </>
