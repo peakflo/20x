@@ -270,15 +270,7 @@ export function ApplicationsList() {
   }
 
   if (applications.length === 0) {
-    return (
-      <section>
-        <div className="rounded-lg border border-border/50 bg-card p-6 text-center">
-          <p className="text-sm text-muted-foreground">
-            No applications found. Applications appear here when workflows with application triggers are created.
-          </p>
-        </div>
-      </section>
-    )
+    return null
   }
 
   return expandedView ? <ExpandedView /> : <CardsView />

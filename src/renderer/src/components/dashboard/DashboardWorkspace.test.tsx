@@ -79,10 +79,13 @@ beforeEach(() => {
   // Reset dashboard store with fetchAll as a no-op
   useDashboardStore.setState({
     applications: [],
+    presetupTemplates: [],
     stats: null,
     localStats: null,
     timeWindow: '7d',
     applicationsLoading: false,
+    presetupLoading: false,
+    presetupProvisioning: null,
     statsLoading: false,
     applicationsError: null,
     statsError: null,
@@ -186,11 +189,13 @@ describe('DashboardWorkspace', () => {
     expect(screen.getByText('18')).toBeDefined() // Completed (tasksCompletedInWindow)
   })
 
-  it('shows empty state for applications when no data', () => {
+  it('hides applications section when no data', () => {
     useEnterpriseStore.setState({ isAuthenticated: true })
 
     render(<DashboardWorkspace />)
-    expect(screen.getByText(/No applications found/)).toBeDefined()
+    // Applications block should not render at all when empty
+    expect(screen.queryByText(/No applications found/)).toBeNull()
+    expect(screen.queryByText('Applications')).toBeNull()
   })
 
   it('renders application tabs when data is loaded', () => {

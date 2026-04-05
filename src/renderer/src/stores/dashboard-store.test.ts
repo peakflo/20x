@@ -185,14 +185,16 @@ describe('useDashboardStore', () => {
     expect(mockApiRequest).toHaveBeenCalledWith('GET', '/api/20x/sync/stats?window=7d')
   })
 
-  it('fetchAll calls applications and stats fetches', async () => {
+  it('fetchAll calls applications, presetups, and stats fetches', async () => {
     mockApiRequest
-      .mockResolvedValueOnce({ workflows: [] })
-      .mockResolvedValueOnce({ stats: null })
+      .mockResolvedValueOnce({ workflows: [] })   // fetchApplications
+      .mockResolvedValueOnce({ templates: [] })    // fetchPresetups
+      .mockResolvedValueOnce({ stats: null })      // fetchStats
 
     await useDashboardStore.getState().fetchAll()
 
-    expect(mockApiRequest).toHaveBeenCalledTimes(2)
+    expect(mockApiRequest).toHaveBeenCalledTimes(3)
+    expect(mockApiRequest).toHaveBeenCalledWith('GET', '/api/presetup/status')
   })
 
   it('handles null stats response', async () => {

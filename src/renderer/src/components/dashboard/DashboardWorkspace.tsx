@@ -7,6 +7,7 @@ import { useTaskStore } from '@/stores/task-store'
 import { useUIStore } from '@/stores/ui-store'
 import { SettingsTab } from '@/types'
 import { StatsSection } from './StatsSection'
+import { PresetupSection } from './PresetupSection'
 import { ApplicationsList } from './ApplicationsList'
 import { TaskBoard } from './TaskBoard'
 
@@ -100,9 +101,12 @@ export function DashboardWorkspace() {
         {/* Stats — always available (local data fallback when not connected) */}
         <StatsSection />
 
-        {/* Applications — cloud only, shows connect prompt when not authenticated */}
+        {/* Presetups + Applications — cloud only, shows connect prompt when not authenticated */}
         {isAuthenticated ? (
-          <ApplicationsList />
+          <>
+            <PresetupSection />
+            <ApplicationsList />
+          </>
         ) : (
           <div className="rounded-lg border border-border/50 bg-card p-4 flex items-center justify-between gap-4">
             <div className="flex items-center gap-3">

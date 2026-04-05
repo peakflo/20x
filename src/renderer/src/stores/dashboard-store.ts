@@ -19,6 +19,17 @@ export interface ApplicationItem {
   version: number
 }
 
+export interface PresetupTemplate {
+  slug: string
+  name: string
+  description: string
+  category: string
+  icon: string
+  isProvisioned: boolean
+  provisionedAt: string | null
+  provisionStatus: string | null
+}
+
 export interface DashboardStats {
   totalTasks: number
   tasksByStatus: Record<string, number>
@@ -116,6 +127,7 @@ export interface ApplicationTab {
 interface DashboardState {
   // Data
   applications: ApplicationItem[]
+  presetupTemplates: PresetupTemplate[]
   stats: DashboardStats | null
   localStats: DashboardStats | null
   timeWindow: TimeWindow
@@ -127,6 +139,8 @@ interface DashboardState {
 
   // Loading states
   applicationsLoading: boolean
+  presetupLoading: boolean
+  presetupProvisioning: string | null  // slug being provisioned
   statsLoading: boolean
 
   // Error states
@@ -136,6 +150,8 @@ interface DashboardState {
   // Actions
   setTimeWindow: (window: TimeWindow) => void
   fetchApplications: () => Promise<void>
+  fetchPresetups: () => Promise<void>
+  provisionPresetup: (slug: string) => Promise<void>
   fetchStats: () => Promise<void>
   fetchAll: () => Promise<void>
   updateLocalStats: (tasks: WorkfloTask[]) => void
@@ -204,6 +220,7 @@ function updateTab(
 
 export const useDashboardStore = create<DashboardState>((set, get) => ({
   applications: [],
+  presetupTemplates: [],
   stats: null,
   localStats: null,
   timeWindow: '7d',
@@ -213,6 +230,8 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
   expandedView: false,
 
   applicationsLoading: false,
+  presetupLoading: false,
+  presetupProvisioning: null,
   statsLoading: false,
 
   applicationsError: null,
@@ -266,6 +285,34 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     }
   },
 
+  fetchPresetups: async () => {
+    set({ presetupLoading: true })
+    try {
+      const result = await enterpriseApi.apiRequest('GET', '/api/presetup/status') as {
+        templates: PresetupTemplate[]
+      }
+      set({ presetupTemplates: result.templates || [], presetupLoading: false })
+    } catch {
+      // Silently fail — presetups are optional, don't block the dashboard
+      set({ presetupTemplates: [], presetupLoading: false })
+    }
+  },
+
+  provisionPresetup: async (slug: string) => {
+    set({ presetupProvisioning: slug })
+    try {
+      await enterpriseApi.apiRequest('POST', '/api/presetup/provision', {
+        templateSlug: slug
+      })
+      // Refresh presetup status after provisioning
+      await get().fetchPresetups()
+    } catch (err) {
+      console.error('Failed to provision presetup:', err)
+    } finally {
+      set({ presetupProvisioning: null })
+    }
+  },
+
   fetchStats: async () => {
     set({ statsLoading: true, statsError: null })
     try {
@@ -286,6 +333,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     const state = get()
     await Promise.allSettled([
       state.fetchApplications(),
+      state.fetchPresetups(),
       state.fetchStats()
     ])
   },
