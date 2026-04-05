@@ -148,7 +148,12 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
           <svg className="h-4 w-4 text-muted-foreground shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <polyline points="4 17 10 11 4 5"/><line x1="12" x2="20" y1="19" y2="19"/>
           </svg>
-          <span className="text-sm font-medium truncate">{task?.title || 'Agent transcript'}</span>
+          <span className="text-sm font-medium truncate">
+            {task?.title || 'Agent transcript'}
+            <span className="ml-2 text-xs font-mono text-muted-foreground">
+              ({messages.length})
+            </span>
+          </span>
         </div>
         <div className="flex items-center gap-3 shrink-0">
           {/* Status indicator — matches desktop */}
@@ -372,13 +377,6 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
           </button>
         )}
       </div>
-
-      {/* Message count footer — matches desktop */}
-      {messages.length > 0 && (
-        <div className="px-4 py-2 text-[10px] text-muted-foreground font-mono border-t border-border/30">
-          {messages.length} messages
-        </div>
-      )}
 
       {/* Input area — matches desktop transcript panel input */}
       <div className="shrink-0 border-t border-border/50">
