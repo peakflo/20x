@@ -474,12 +474,22 @@ export function PresetupWizard({ template, onClose }: PresetupWizardProps) {
     [fullTemplate]
   )
 
-  // Open workflow-builder integrations page in browser
+  // Open workflow-builder frontend integrations page in browser
   const handleOpenIntegrations = useCallback(async () => {
     try {
       const apiUrl = await enterpriseApi.getApiUrl()
-      const url = `${apiUrl}/settings/integrations`
-      await window.electronAPI.shell.openExternal(url)
+      // Derive frontend URL from API URL:
+      //   local:  http://localhost:2000 → http://localhost:4000
+      //   stage:  https://stage-api.peakflo.ai → https://stage-app.peakflo.ai
+      //   prod:   https://api.peakflo.ai → https://app.peakflo.ai
+      const parsed = new URL(apiUrl)
+      if (parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1') {
+        parsed.port = '4000'
+      } else {
+        parsed.hostname = parsed.hostname.replace('-api.', '-app.').replace(/^api\./, 'app.')
+      }
+      const frontendUrl = `${parsed.origin}/settings/integrations`
+      await window.electronAPI.shell.openExternal(frontendUrl)
     } catch {
       // Best-effort
     }
