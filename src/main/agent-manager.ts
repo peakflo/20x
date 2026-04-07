@@ -1199,6 +1199,7 @@ export class AgentManager extends EventEmitter {
 
     // Store session ID in database
     this.db.updateTask(taskId, { session_id: adapterSessionId })
+    console.log(`[SessionTracker] CREATED session=${adapterSessionId} task=${taskId} agent=${agentId} reason=new_session`)
 
     // Update task status (preserve Triaging status for triage sessions)
     if (!isTriageSession) {
@@ -1578,6 +1579,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       const realSessionId = newParts.find(p => p.realSessionId)?.realSessionId
       if (realSessionId && realSessionId !== sessionId) {
         console.log(`[AgentManager] Session ID updated: ${sessionId} -> ${realSessionId}`)
+        console.log(`[SessionTracker] REKEYED old=${sessionId} new=${realSessionId} task=${config.taskId} reason=adapter_provided_real_id`)
 
         // Update database with real session ID
         this.db.updateTask(config.taskId, { session_id: realSessionId })
@@ -2233,6 +2235,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
 
       // Clean up backend session — triage is done, no need to keep it
       this.sessions.delete(sessionId)
+      console.log(`[SessionTracker] DESTROYED session=${sessionId} task=${session.taskId} reason=triage_completed`)
       return
     }
 
@@ -2386,7 +2389,9 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     if (!session) {
       const redirectedId = this.sessionIdRedirects.get(sessionId)
       if (redirectedId) {
+        const originalId = sessionId
         console.log(`[AgentManager] Session ${sessionId} re-keyed, redirecting abort to ${redirectedId}`)
+        console.log(`[SessionTracker] REDIRECT from=${originalId} to=${redirectedId} reason=stale_id_in_abortSession`)
         sessionId = redirectedId
         session = this.sessions.get(sessionId)
       }
@@ -2453,6 +2458,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     }
 
     this.sessions.delete(sessionId)
+    console.log(`[SessionTracker] DESTROYED session=${sessionId} task=${session.taskId} resetStatus=${resetTaskStatus} reason=stop_session`)
 
     // Clean up any redirect entries pointing to this session
     for (const [oldId, newId] of this.sessionIdRedirects.entries()) {
@@ -2486,6 +2492,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       const redirectedId = this.sessionIdRedirects.get(sessionId)
       if (redirectedId) {
         console.log(`[AgentManager] Session ${sessionId} re-keyed, redirecting sendMessage to ${redirectedId}`)
+        console.log(`[SessionTracker] REDIRECT from=${sessionId} to=${redirectedId} reason=stale_id_in_sendMessage`)
         sessionId = redirectedId
         session = this.sessions.get(sessionId)
       }
@@ -2504,6 +2511,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
         if (persistedSessionId) {
           try {
             console.log(`[AgentManager] Session ${sessionId} not found, attempting resume from ${persistedSessionId} for task ${taskId}`)
+            console.log(`[SessionTracker] RESUME_ATTEMPT old=${sessionId} persisted=${persistedSessionId} task=${taskId} reason=session_not_in_memory`)
             const adapter = this.getAdapter(resolvedAgentId)
             if (adapter) {
               // Replay messages to the renderer so the client doesn't lose
@@ -2530,6 +2538,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
           session = this.sessions.get(newSessionId)
           if (!session) throw new Error('Failed to restart session')
           sessionId = newSessionId
+          console.log(`[SessionTracker] CREATED_FALLBACK session=${newSessionId} task=${taskId} reason=resume_failed_or_no_persisted_session`)
         }
 
         // Send the user's message (fire-and-forget to avoid blocking IPC response)
@@ -2649,6 +2658,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       const redirectedId = this.sessionIdRedirects.get(sessionId)
       if (redirectedId) {
         console.log(`[AgentManager] Session ${sessionId} re-keyed, redirecting to ${redirectedId}`)
+        console.log(`[SessionTracker] REDIRECT from=${sessionId} to=${redirectedId} reason=stale_id_in_respondToPermission`)
         sessionId = redirectedId
         session = this.sessions.get(sessionId)
       }

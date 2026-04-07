@@ -55,34 +55,38 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
   // Smart send handler — mirrors desktop TaskWorkspace.handleSend logic
   const handleSend = useCallback(
     async (message: string) => {
-      if (!session?.sessionId) return
+      // Get latest session from store, not from closure, to avoid stale closure bug
+      const currentSession = useAgentStore.getState().sessions.get(taskId)
+      if (!currentSession?.sessionId) return
       try {
         if (isQuestion) {
-          await api.sessions.approve(session.sessionId, true, message)
+          await api.sessions.approve(currentSession.sessionId, true, message)
         } else {
-          const result = await api.sessions.send(session.sessionId, message, taskId, session.agentId)
+          const result = await api.sessions.send(currentSession.sessionId, message, taskId, currentSession.agentId)
           if (result.newSessionId && taskId) {
-            initSession(taskId, result.newSessionId, session.agentId)
+            initSession(taskId, result.newSessionId, currentSession.agentId)
           }
         }
       } catch (e) {
         console.error('Failed to send message:', e)
       }
     },
-    [session, taskId, isQuestion, initSession]
+    [taskId, isQuestion, initSession]
   )
 
   // Handle question answer from QuestionMessage options
   const handleAnswer = useCallback(
     async (answer: string) => {
-      if (!session?.sessionId || !isWaitingApproval) return
+      // Get latest session from store, not from closure, to avoid stale closure bug
+      const currentSession = useAgentStore.getState().sessions.get(taskId)
+      if (!currentSession?.sessionId || !isWaitingApproval) return
       try {
-        await api.sessions.approve(session.sessionId, true, answer)
+        await api.sessions.approve(currentSession.sessionId, true, answer)
       } catch (e) {
         console.error('Failed to send answer:', e)
       }
     },
-    [session, isWaitingApproval]
+    [taskId, isWaitingApproval]
   )
 
   // Session controls (shared hook provides double-click protection and rollback)
