@@ -112,10 +112,13 @@ function runInstaller(installerPath, args, agentName, onProgress) {
   return new Promise((resolve) => {
     onProgress({ stage: 'installing', output: `Running installer...\n`, percent: 75 })
 
-    // Use PowerShell Start-Process with -Verb RunAs for UAC elevation
+    // Use PowerShell Start-Process with -Verb RunAs for UAC elevation.
+    // Store the process in a variable and call WaitForExit() explicitly
+    // to avoid "Process must exit before requested information" errors
+    // that occur when piping -PassThru to Select-Object with UAC elevation.
     const psArgs = [
       '-NoProfile', '-Command',
-      `Start-Process -FilePath '${installerPath}' -ArgumentList '${args.join("','")}' -Wait -PassThru | Select-Object -ExpandProperty ExitCode`
+      `$p = Start-Process -FilePath '${installerPath}' -ArgumentList @(${args.map(a => `'${a}'`).join(',')}) -Verb RunAs -PassThru; $p.WaitForExit(); exit $p.ExitCode`
     ]
 
     const proc = spawn('powershell.exe', psArgs, {
@@ -140,11 +143,10 @@ function runInstaller(installerPath, args, agentName, onProgress) {
     })
 
     proc.on('close', (code) => {
-      const exitCode = parseInt(output.trim()) || code
-      if (exitCode === 0 || exitCode === 3010) { // 3010 = success, reboot required
+      if (code === 0 || code === 3010) { // 3010 = success, reboot required
         resolve({ success: true, error: null })
       } else {
-        resolve({ success: false, error: `Installer exited with code ${exitCode}` })
+        resolve({ success: false, error: `Installer exited with code ${code}` })
       }
     })
   })
