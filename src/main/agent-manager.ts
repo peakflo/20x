@@ -192,7 +192,7 @@ export class AgentManager extends EventEmitter {
 
     const task = this.db.getTask(taskId)
     if (!task) return undefined
-    if (task.status === TaskStatus.Triaging) return undefined
+    if (task.status === TaskStatus.Triaging && !task.session_id) return undefined
     if (!task.repos || task.repos.length === 0) return undefined
 
     try {
