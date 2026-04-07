@@ -7,7 +7,8 @@ export enum SessionStatusType {
   IDLE = 'idle',
   BUSY = 'busy',
   RETRY = 'retry',
-  ERROR = 'error'
+  ERROR = 'error',
+  WAITING_APPROVAL = 'waiting_approval'
 }
 
 export enum MessageRole {

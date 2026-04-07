@@ -1741,6 +1741,27 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
         }
         this.stopAdapterPolling(sessionId)
         return
+      } else if (status.type === SessionStatusType.WAITING_APPROVAL && session) {
+        if (session.status !== 'waiting_approval') {
+          session.status = 'waiting_approval'
+          this.sendToRenderer('agent:status', {
+            sessionId,
+            agentId: config.agentId,
+            taskId: config.taskId,
+            status: 'waiting_approval'
+          })
+        }
+        return
+      } else if (status.type === SessionStatusType.BUSY && session) {
+        if (session.status !== 'working') {
+          session.status = 'working'
+          this.sendToRenderer('agent:status', {
+            sessionId,
+            agentId: config.agentId,
+            taskId: config.taskId,
+            status: 'working'
+          })
+        }
       } else if (status.type === SessionStatusType.IDLE && session) {
         // Grace period: don't transition to IDLE within the first 15 seconds of
         // session creation. The prompt is sent asynchronously (fire-and-forget) and

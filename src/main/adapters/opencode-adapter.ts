@@ -494,7 +494,11 @@ export class OpencodeAdapter implements CodingAgentAdapter {
       return { type: SessionStatusType.IDLE }
     }
 
-    const sdkType = ocStatus.type || 'idle'
+    const sdkType = (ocStatus.type || 'idle') as string
+    if (sdkType === 'waiting_approval') {
+      return { type: SessionStatusType.WAITING_APPROVAL }
+    }
+
     const statusType = sdkType.toUpperCase() as keyof typeof SessionStatusType
     return {
       type: SessionStatusType[statusType] ?? SessionStatusType.IDLE,

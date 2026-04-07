@@ -1313,7 +1313,7 @@ export class AcpAdapter implements CodingAgentAdapter {
     }
 
     // Update session status to waiting for approval
-    session.status = SessionStatusType.BUSY
+    session.status = SessionStatusType.WAITING_APPROVAL
 
     console.log(`[AcpAdapter/${this.agentType}] Awaiting user approval...`)
   }
