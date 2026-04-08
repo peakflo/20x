@@ -206,7 +206,7 @@ export function TaskWorkspace({
   }, [task?.id]) // intentionally run only on mount/task switch
 
   const handleStartSession = useCallback(async () => {
-    if (!task?.agent_id || startingRef.current || session.sessionId) return
+    if (!task?.agent_id || task.status === TaskStatus.Triaging || startingRef.current || session.sessionId) return
     startingRef.current = true
 
     try {
@@ -598,7 +598,7 @@ Update existing skills that were helpful or create new ones for patterns worth r
   const canResume = task.agent_id && task.session_id && !session.sessionId && session.status === SessionStatus.IDLE && session.messages.length === 0
   const canRestart = task.agent_id && task.session_id && !session.sessionId && session.status === SessionStatus.IDLE && session.messages.length > 0
   const canStart = task.agent_id && !task.session_id && !session.sessionId && session.status === SessionStatus.IDLE
-    && task.status !== TaskStatus.Completed
+    && task.status !== TaskStatus.Completed && task.status !== TaskStatus.Triaging
   const canTriage = !task.agent_id && agents.length > 0 && session.status === SessionStatus.IDLE
     && task.status !== TaskStatus.Completed && task.status !== TaskStatus.Triaging
 

@@ -101,6 +101,18 @@ beforeEach(() => {
 })
 
 describe('TaskWorkspace – stale triage session cleanup', () => {
+  it('does not show Start button while task is still triaging', () => {
+    const task = makeRendererTask({
+      status: TaskStatus.Triaging,
+      agent_id: 'agent-1',
+      session_id: null
+    })
+
+    renderWorkspace(task)
+
+    expect(screen.queryByRole('button', { name: 'Start' })).not.toBeInTheDocument()
+  })
+
   it('removes stale triage session on mount when task is no longer triaging', () => {
     // Simulate a leftover triage session: sessionId set, idle, has messages, but task
     // has already transitioned to NotStarted and has no persisted session_id.
