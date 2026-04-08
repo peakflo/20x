@@ -90,7 +90,9 @@ describe('EnterpriseAuth logging', () => {
 
   it('logs reason when API request 401 retry path ends in auth clear', async () => {
     db.setSetting('enterprise_jwt', Buffer.from('jwt-token', 'utf8').toString('base64'))
-    db.setSetting('enterprise_jwt_expires_at', String(Date.now() + 60_000))
+    // Keep JWT valid beyond the 5-minute early-refresh window so apiRequest()
+    // uses it first, receives 401, and enters the retry/clear branch.
+    db.setSetting('enterprise_jwt_expires_at', String(Date.now() + 10 * 60_000))
     vi.stubGlobal('fetch', vi.fn(async () => ({
       ok: false,
       status: 401,
