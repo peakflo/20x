@@ -495,8 +495,25 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     }
 
     const sdkType = (ocStatus.type || 'idle') as string
-    if (sdkType === 'waiting_approval') {
+    if (sdkType === 'waiting_approval' || sdkType === 'waiting_input' || sdkType === 'waiting_user') {
       return { type: SessionStatusType.WAITING_APPROVAL }
+    }
+
+    // Check for pending questions via V2 SDK
+    try {
+      const v2 = this.getV2Client(config)
+      const listResult = await v2.question.list({
+        ...(config.workspaceDir && { directory: config.workspaceDir })
+      })
+      if (!listResult.error && listResult.data) {
+        const questions = listResult.data
+        const targetQuestion = questions.find((q: any) => q.sessionID === sessionId)
+        if (targetQuestion?.id) {
+          return { type: SessionStatusType.WAITING_APPROVAL }
+        }
+      }
+    } catch (err) {
+      // Ignore errors when checking for questions
     }
 
     const statusType = sdkType.toUpperCase() as keyof typeof SessionStatusType
