@@ -202,7 +202,7 @@ describe('TaskWorkspace – stale triage session cleanup', () => {
     expect(useAgentStore.getState().sessions.has(taskId)).toBe(true)
   })
 
-  it('routes stale question replies to sendMessage when not waiting approval', async () => {
+  it('routes unresolved question replies to approve even when status is not waiting approval', async () => {
     const taskId = 'task-1'
     const agentId = 'agent-1'
 
@@ -243,9 +243,9 @@ describe('TaskWorkspace – stale triage session cleanup', () => {
     fireEvent.click(screen.getByTestId('mock-send'))
 
     await waitFor(() => {
-      expect(window.electronAPI.agentSession.send).toHaveBeenCalledWith('session-1', 'approved', taskId, agentId)
+      expect(window.electronAPI.agentSession.approve).toHaveBeenCalledWith('session-1', true, 'approved')
     })
-    expect(window.electronAPI.agentSession.approve).not.toHaveBeenCalled()
+    expect(window.electronAPI.agentSession.send).not.toHaveBeenCalled()
   })
 
   it('resumes a persisted session before sending a follow-up message', async () => {
