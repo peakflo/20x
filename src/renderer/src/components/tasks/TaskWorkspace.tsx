@@ -395,12 +395,16 @@ export function TaskWorkspace({
 
   const handleSend = useCallback(
     async (message: string) => {
-      // Check if this is a question answer (for permission requests)
-      // Question answers should use approve() instead of sendMessage()
-      const lastMessage = session.messages[session.messages.length - 1]
-      const hasActiveQuestion = session.status === SessionStatus.WAITING_APPROVAL
-        && lastMessage?.partType === 'question'
-        && !!lastMessage?.tool?.questions
+      // Route unresolved question responses through approve(), even if status lags.
+      let questionIndex = -1
+      for (let i = session.messages.length - 1; i >= 0; i--) {
+        if (session.messages[i].partType === 'question' && session.messages[i].tool?.questions) {
+          questionIndex = i
+          break
+        }
+      }
+      const hasActiveQuestion = questionIndex >= 0
+        && !session.messages.slice(questionIndex + 1).some((m) => m.role === 'user')
       if (hasActiveQuestion) {
         await approve(true, message)
         return
@@ -410,7 +414,7 @@ export function TaskWorkspace({
       if (!readySessionId) return
       await sendMessage(message)
     },
-    [approve, ensureChatSession, sendMessage, session.messages, session.status]
+    [approve, ensureChatSession, sendMessage, session.messages]
   )
 
   // ── Feedback orchestration ──────────────────────────────────

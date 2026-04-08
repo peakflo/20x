@@ -26,10 +26,24 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
   const isWaitingApproval = session?.status === SessionStatus.WAITING_APPROVAL
   const hasSession = !!session?.sessionId
 
+  const activeQuestionId = useMemo(() => {
+    let questionIndex = -1
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].partType === 'question' && messages[i].tool?.questions) {
+        questionIndex = i
+        break
+      }
+    }
+    if (questionIndex === -1) return null
+
+    const hasUserReplyAfter = messages.slice(questionIndex + 1).some((m) => m.role === 'user')
+    if (hasUserReplyAfter) return null
+
+    return messages[questionIndex].id
+  }, [messages])
+
   // Smart routing: detect if last message is a question
-  const isQuestion = isWaitingApproval
-    && lastMessage?.partType === 'question'
-    && !!lastMessage?.tool?.questions
+  const isQuestion = !!activeQuestionId
 
   // Can the user send input?
   const canSendInput = hasSession && (isWorking || isWaitingApproval || session?.status === SessionStatus.IDLE)
@@ -79,14 +93,14 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
     async (answer: string) => {
       // Get latest session from store, not from closure, to avoid stale closure bug
       const currentSession = useAgentStore.getState().sessions.get(taskId)
-      if (!currentSession?.sessionId || !isWaitingApproval) return
+      if (!currentSession?.sessionId || !activeQuestionId) return
       try {
         await api.sessions.approve(currentSession.sessionId, true, answer)
       } catch (e) {
         console.error('Failed to send answer:', e)
       }
     },
-    [taskId, isWaitingApproval]
+    [taskId, activeQuestionId]
   )
 
   // Session controls (shared hook provides double-click protection and rollback)
@@ -350,7 +364,7 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
               key={msg.id}
               message={msg}
               onAnswer={handleAnswer}
-              canAnswerQuestion={isWaitingApproval && msg.id === lastMessage?.id}
+              canAnswerQuestion={msg.id === activeQuestionId}
             />
           ))}
 

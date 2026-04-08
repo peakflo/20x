@@ -506,13 +506,13 @@ export class OpencodeAdapter implements CodingAgentAdapter {
         ...(config.workspaceDir && { directory: config.workspaceDir })
       })
       if (!listResult.error && listResult.data) {
-        const questions = listResult.data
-        const targetQuestion = questions.find((q: any) => q.sessionID === sessionId)
+        const questions = listResult.data as Array<Record<string, unknown>>
+        const targetQuestion = questions.find((q) => (q.sessionID as string | undefined) === sessionId || (q.sessionId as string | undefined) === sessionId)
         if (targetQuestion?.id) {
           return { type: SessionStatusType.WAITING_APPROVAL }
         }
       }
-    } catch (err) {
+    } catch {
       // Ignore errors when checking for questions
     }
 
@@ -833,10 +833,18 @@ export class OpencodeAdapter implements CodingAgentAdapter {
       }
 
       const questions: V2QuestionRequest[] = listResult.data ?? []
-      console.log(`[OpencodeAdapter] Pending questions (${questions.length}):`, questions.map(q => ({ id: q.id, sessionID: q.sessionID, questionCount: q.questions?.length })))
+      console.log(
+        `[OpencodeAdapter] Pending questions (${questions.length}):`,
+        questions.map(q => ({
+          id: q.id,
+          sessionID: q.sessionID,
+          sessionId: (q as unknown as { sessionId?: string }).sessionId,
+          questionCount: q.questions?.length
+        }))
+      )
 
       // Find the question for this session
-      const question = questions.find(q => q.sessionID === sessionId)
+      const question = questions.find(q => q.sessionID === sessionId || (q as unknown as { sessionId?: string }).sessionId === sessionId)
       if (!question?.id) {
         console.warn(`[OpencodeAdapter] No pending question found for session ${sessionId}`)
         return

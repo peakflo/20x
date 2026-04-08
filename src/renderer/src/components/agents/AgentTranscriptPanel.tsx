@@ -516,13 +516,24 @@ export function AgentTranscriptPanel({ title = 'Agent transcript', messages, sta
   }, [messages])
 
   const activeQuestionId = useMemo(() => {
-    if (status !== SessionStatus.WAITING_APPROVAL) return null
+    let questionIndex = -1
     for (let i = messages.length - 1; i >= 0; i--) {
       if (messages[i].partType === 'question' && messages[i].tool?.questions) {
-        return messages[i].id
+        questionIndex = i
+        break
       }
     }
-    return null
+    if (questionIndex === -1) return null
+
+    const hasUserReplyAfter = messages.slice(questionIndex + 1).some((m) => m.role === 'user')
+    if (hasUserReplyAfter) return null
+
+    // Primary path: explicit waiting status from backend.
+    if (status === SessionStatus.WAITING_APPROVAL) return messages[questionIndex].id
+
+    // Fallback: if an unanswered question is the latest actionable item,
+    // allow selection even when status propagation lags.
+    return messages[questionIndex].id
   }, [messages, status])
 
   /** Auto-resize the textarea to fit its content, up to a max height */
