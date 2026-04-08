@@ -533,6 +533,7 @@ app.whenReady().then(async () => {
   // Eagerly restore enterprise connection on startup so sync works immediately
   if (enterpriseAuth) {
     try {
+      console.log('[EnterpriseAuth] auth_session_restore_started')
       const session = await enterpriseAuth.getSession()
       console.log('[Main] Enterprise session on startup:', {
         isAuthenticated: session.isAuthenticated,
@@ -564,14 +565,31 @@ app.whenReady().then(async () => {
         syncManager.setEnterpriseConnection(apiClient, enterpriseSyncMgr, session.userId, enterpriseStateSyncInstance)
 
         console.log('[Main] Enterprise connection restored on startup (with heartbeat)')
+        console.log('[EnterpriseAuth] auth_session_restore_result {"status":"restored"}')
       } else {
         console.log('[Main] Enterprise session not complete — skipping restore')
+        console.log(
+          `[EnterpriseAuth] auth_session_restore_result ${JSON.stringify({
+            status: 'skipped',
+            reason: 'missing_session_fields',
+            hasUserId: !!session.userId,
+            hasTenant: !!session.currentTenant,
+            isAuthenticated: session.isAuthenticated
+          })}`
+        )
       }
     } catch (err) {
       console.warn('[Main] Could not restore enterprise connection on startup:', err)
+      console.warn(
+        `[EnterpriseAuth] auth_session_restore_result ${JSON.stringify({
+          status: 'failed',
+          reason: err instanceof Error ? err.message : String(err)
+        })}`
+      )
     }
   } else {
     console.log('[Main] No enterprise auth instance — skipping restore')
+    console.log('[EnterpriseAuth] auth_session_restore_result {"status":"skipped","reason":"enterprise_auth_not_initialized"}')
   }
 
   registerIpcHandlers(db, agentManager, githubManager, worktreeManager, syncManager, pluginRegistry, mcpToolCaller, oauthManager, recurrenceScheduler, enterpriseAuth ?? undefined, claudePluginManager, heartbeatScheduler, enterpriseHeartbeatInstance ?? undefined, enterpriseStateSyncInstance ?? undefined, gitlabManager ?? undefined)

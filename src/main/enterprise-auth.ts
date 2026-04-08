@@ -212,6 +212,8 @@ export class EnterpriseAuth {
   // ── Logout ───────────────────────────────────────────────────────
 
   async logout(): Promise<void> {
+    this.logAuthEvent('auth_logout_manual')
+
     // Sign out from Supabase (best-effort — token may already be invalid)
     try {
       await this.supabase.auth.signOut()
@@ -271,6 +273,7 @@ export class EnterpriseAuth {
     // First refresh the Supabase session
     const refreshToken = this.getStoredSupabaseRefreshToken()
     if (!refreshToken) {
+      this.logAuthEvent('auth_clear_missing_refresh_token')
       this.clearStoredData()
       throw new Error('No refresh token available — please sign in again')
     }
@@ -280,6 +283,10 @@ export class EnterpriseAuth {
     })
 
     if (error || !data.session) {
+      this.logAuthEvent('auth_clear_supabase_refresh_failed', {
+        message: error?.message || 'No session returned',
+        status: (error as { status?: number } | null)?.status
+      })
       this.clearStoredData()
       throw new Error('Session expired — please sign in again')
     }
@@ -350,7 +357,12 @@ export class EnterpriseAuth {
         }
 
         return retryResponse.json().catch(() => null)
-      } catch {
+      } catch (error) {
+        this.logAuthEvent('auth_clear_after_api_401_retry_failed', {
+          method: method.toUpperCase(),
+          path,
+          error: this.describeError(error)
+        })
         this.clearStoredData()
         throw new Error('Session expired — please sign in again')
       }
@@ -386,7 +398,11 @@ export class EnterpriseAuth {
         const retryJwt = await this.getValidJwt()
         headers['Authorization'] = `Bearer ${retryJwt}`
         response = await fetch(url, { method: 'GET', headers })
-      } catch {
+      } catch (error) {
+        this.logAuthEvent('auth_clear_after_download_401_retry_failed', {
+          path,
+          error: this.describeError(error)
+        })
         this.clearStoredData()
         throw new Error('Session expired — please sign in again')
       }
@@ -508,11 +524,30 @@ export class EnterpriseAuth {
   }
 
   private clearStoredData(): void {
+    this.logAuthEvent('auth_state_cleared')
     this.cachedJwt = null
     this.cachedJwtExpiresAt = 0
 
     for (const key of Object.values(KEYS)) {
       this.db.deleteSetting(key)
     }
+  }
+
+  private logAuthEvent(event: string, details?: Record<string, unknown>): void {
+    if (details) {
+      console.warn(`[EnterpriseAuth] ${event} ${JSON.stringify(details)}`)
+      return
+    }
+    console.warn(`[EnterpriseAuth] ${event}`)
+  }
+
+  private describeError(error: unknown): Record<string, unknown> {
+    if (error instanceof Error) {
+      return { name: error.name, message: error.message }
+    }
+    if (typeof error === 'object' && error !== null) {
+      return { raw: String(error) }
+    }
+    return { raw: String(error) }
   }
 }

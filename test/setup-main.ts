@@ -4,7 +4,13 @@ vi.mock('electron', () => ({
   app: {
     getPath: vi.fn(() => '/tmp/pf-desktop-test'),
     getName: vi.fn(() => 'pf-desktop'),
-    getVersion: vi.fn(() => '1.0.0')
+    getVersion: vi.fn(() => '1.0.0'),
+    isPackaged: false
+  },
+  safeStorage: {
+    isEncryptionAvailable: vi.fn(() => false),
+    encryptString: vi.fn((value: string) => Buffer.from(value, 'utf8')),
+    decryptString: vi.fn((value: Buffer) => value.toString('utf8'))
   },
   ipcMain: {
     handle: vi.fn(),
