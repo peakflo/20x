@@ -101,7 +101,7 @@ describe('EnterpriseAuth logging', () => {
 
     const auth = new EnterpriseAuth(db as never)
 
-    await expect(auth.apiRequest('GET', '/api/test')).rejects.toThrow('No refresh token available')
+    await expect(auth.apiRequest('GET', '/api/test')).rejects.toThrow('Session expired')
 
     expect(
       warnSpy.mock.calls.some((call) => call[0].includes('auth_clear_after_api_401_retry_failed'))
