@@ -3,7 +3,10 @@ import { EnterpriseAuth } from './enterprise-auth'
 
 const authMock = {
   signOut: vi.fn(async () => ({})),
-  refreshSession: vi.fn(async () => ({ data: { session: null }, error: null })),
+  refreshSession: vi.fn(async (): Promise<{
+    data: { session: null }
+    error: { message: string; status?: number } | null
+  }> => ({ data: { session: null }, error: null })),
   signInWithPassword: vi.fn(async () => ({ data: null, error: null }))
 }
 
