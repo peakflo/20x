@@ -2201,6 +2201,58 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
    * Extracts output field values BEFORE notifying so the renderer
    * picks up the updated task data on re-fetch.
    */
+  private async replayMissedTranscriptPartsBeforeIdle(sessionId: string, session: AgentSession): Promise<void> {
+    if (!session.adapter?.getAllMessages) return
+
+    try {
+      const config: SessionConfig = {
+        agentId: session.agentId,
+        taskId: session.taskId,
+        workspaceDir: session.workspaceDir || this.db.getWorkspaceDir(session.taskId)
+      }
+      const messages = await session.adapter.getAllMessages(sessionId, config)
+      const batchMessages: Array<{ id: string; role: string; content: string; partType?: string; tool?: unknown; taskProgress?: unknown }> = []
+
+      for (const message of messages) {
+        if (message.role === MessageRole.USER) continue
+
+        for (const part of message.parts) {
+          const partId = part.id
+          if (!partId || session.seenPartIds.has(partId)) continue
+          const partType = String(part.type)
+          if (partType === 'step-start' || partType === 'step-finish' || partType === 'system-status') {
+            continue
+          }
+
+          session.seenPartIds.add(partId)
+          if (part.content || part.text) {
+            session.partContentLengths.set(partId, String((part.content || part.text || '').length))
+          }
+
+          batchMessages.push({
+            id: partId,
+            role: message.role,
+            content: part.content || part.text || '',
+            partType,
+            tool: part.tool,
+            taskProgress: part.taskProgress
+          })
+        }
+      }
+
+      if (batchMessages.length > 0) {
+        console.log(`[AgentManager] Replaying ${batchMessages.length} missed transcript part(s) for ${sessionId} before idle`)
+        this.sendToRenderer('agent:output-batch', {
+          sessionId,
+          taskId: session.taskId,
+          messages: batchMessages
+        })
+      }
+    } catch (err) {
+      console.error(`[AgentManager] replayMissedTranscriptPartsBeforeIdle error for ${sessionId}:`, err)
+    }
+  }
+
   private async transitionToIdle(sessionId: string, session: AgentSession): Promise<void> {
     if (session.status === 'idle') {
       console.log(`[AgentManager] transitionToIdle: session ${sessionId} already idle, skipping`)
@@ -2238,6 +2290,12 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       console.log(`[SessionTracker] DESTROYED session=${sessionId} task=${session.taskId} reason=triage_completed`)
       return
     }
+
+    // Polling can observe IDLE in the same tick that the adapter persists the
+    // final assistant message. Reconcile once against the stored transcript so
+    // the UI doesn't miss the last response.
+    await this.replayMissedTranscriptPartsBeforeIdle(sessionId, session)
+    await yieldEventLoop()
 
     // Check if task exists (e.g., orchestrator-session doesn't have a real task)
     const task = this.db.getTask(session.taskId)
@@ -3211,7 +3269,6 @@ Important:
           taskId: session.taskId,
           workspaceDir: session.workspaceDir || process.cwd()
         })
-        console.log(`[AgentManager] Retrieved ${messages.length} messages from adapter`)
       } else {
         console.warn('[AgentManager] Adapter does not implement getAllMessages')
         return
@@ -3224,8 +3281,6 @@ Important:
 
       // Filter for assistant messages
       const assistantMessages = messages.filter((m) => m.role === 'assistant')
-      console.log(`[AgentManager] Found ${assistantMessages.length} assistant messages`)
-
       let parsedValues: Record<string, unknown> = {}
 
       // Collect file paths from completed write/edit tool calls
@@ -3249,57 +3304,30 @@ Important:
       // Extract JSON block from ALL assistant text (search last message first, then earlier ones)
       for (let i = assistantMessages.length - 1; i >= 0; i--) {
         const msg = assistantMessages[i]
-        console.log(`[AgentManager] Processing message ${i}, parts count:`, msg.parts?.length)
         if (!msg.parts) continue
-
-        // Debug: log part types and small text samples
-        msg.parts.forEach((p, idx) => {
-          console.log(`[AgentManager]   Part ${idx}: type=${p.type}, hasText=${!!p.text}, textLength=${p.text?.length || 0}`)
-          // Log small text parts in full, large ones as preview
-          if (p.text) {
-            if (p.text.length < 300) {
-              console.log(`[AgentManager]   Part ${idx} full text:`, p.text)
-            } else {
-              console.log(`[AgentManager]   Part ${idx} text preview (first 300 chars):`, p.text.slice(0, 300) + '...')
-            }
-          }
-        })
 
         const fullText = msg.parts
           .filter((p) => p.type === 'text' && p.text)
           .map((p) => p.text)
           .join('\n')
 
-        console.log(`[AgentManager] Full text length: ${fullText.length}`)
-        if (fullText.length > 0) {
-          console.log(`[AgentManager] Full text preview (first 500 chars):`, fullText.slice(0, 500))
-        }
         if (!fullText) continue
 
         const jsonMatch = fullText.match(/```json\s*\n?([\s\S]*?)\n?\s*```/)
           || fullText.match(/```\s*\n?([\s\S]*?)\n?\s*```/)
 
         if (jsonMatch) {
-          console.log(`[AgentManager] Found JSON block in message ${i}`)
           const raw = jsonMatch[1].trim()
-          console.log(`[AgentManager] Raw JSON content (first 300 chars):`, raw.slice(0, 300))
           try {
             parsedValues = JSON.parse(raw)
-            console.log(`[AgentManager] Successfully parsed output values:`, parsedValues)
             break
           } catch (err) {
-            console.log(`[AgentManager] JSON parse failed:`, err)
             // JSON truncated — extract complete key-value pairs via regex
             parsedValues = this.extractPartialJson(raw)
             if (Object.keys(parsedValues).length > 0) {
-              console.log(`[AgentManager] Extracted partial output values:`, parsedValues)
               break
-            } else {
-              console.log(`[AgentManager] Partial extraction also returned empty`)
             }
           }
-        } else {
-          console.log(`[AgentManager] No JSON block found in message ${i}`)
         }
       }
 

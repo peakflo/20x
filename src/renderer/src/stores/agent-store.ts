@@ -107,6 +107,28 @@ interface AgentState {
 }
 
 export const useAgentStore = create<AgentState>((set, get) => {
+  const ensureSessionForEvent = (
+    sessions: Map<string, TaskSession>,
+    event: { taskId?: string; sessionId?: string; agentId?: string }
+  ): { sessions: Map<string, TaskSession>; session?: TaskSession } => {
+    const existing = (event.sessionId ? findBySessionId(sessions, event.sessionId) : undefined)
+      || (event.taskId ? sessions.get(event.taskId) : undefined)
+    if (existing) return { sessions, session: existing }
+    if (!event.taskId || !event.sessionId) return { sessions, session: undefined }
+
+    const nextSessions = new Map(sessions)
+    const created: TaskSession = {
+      sessionId: event.sessionId,
+      agentId: event.agentId || '',
+      taskId: event.taskId,
+      status: SessionStatus.WORKING,
+      messages: [],
+      pendingApproval: null
+    }
+    nextSessions.set(event.taskId, created)
+    return { sessions: nextSessions, session: created }
+  }
+
   // ── IPC event subscriptions ──
 
   onAgentStatus((event: AgentStatusEvent) => {
@@ -143,15 +165,8 @@ export const useAgentStore = create<AgentState>((set, get) => {
 
   onAgentOutput((event: AgentOutputEvent) => {
     const state = get()
-    const session = findBySessionId(state.sessions, event.sessionId)
-      || (event.taskId ? state.sessions.get(event.taskId) : undefined)
-
-    console.log('[agent-store] onAgentOutput received:', {
-      eventSessionId: event.sessionId,
-      eventTaskId: event.taskId,
-      foundSession: !!session,
-      messageId: (event.data as Record<string, unknown>)?.id
-    })
+    const ensured = ensureSessionForEvent(state.sessions, event)
+    const session = ensured.session
 
     if (!session) return
 
@@ -257,16 +272,11 @@ export const useAgentStore = create<AgentState>((set, get) => {
       return
     }
 
-    if (seen.has(msgId)) {
-      console.log('[agent-store] Message already seen, skipping:', msgId)
-      return
-    }
+    if (seen.has(msgId)) return
     seen.add(msgId)
 
-    console.log('[agent-store] Adding new message:', { taskId, msgId, role, contentLength: content.length })
-
     set({
-      sessions: new Map(state.sessions).set(taskId, {
+      sessions: new Map(ensured.sessions).set(taskId, {
         ...resolvedSession,
         messages: [
           ...resolvedSession.messages,
@@ -276,36 +286,38 @@ export const useAgentStore = create<AgentState>((set, get) => {
     })
   })
 
-  // ── Batched output handler with rAF debouncing ──
+  // ── Batched output handler with microtask debouncing ──
   // Collects batch events from ALL sessions and flushes them in a single
-  // Zustand set() call on the next animation frame. This prevents N separate
-  // state updates (and N React re-renders) when multiple agents send parts
-  // in the same polling tick.
+  // Zustand set() call on the next microtask. This prevents N separate state
+  // updates (and N React re-renders) when multiple agents send parts in the
+  // same polling tick, without depending on requestAnimationFrame firing.
   let pendingBatches: AgentOutputBatchEvent[] = []
-  let batchRafId: number | null = null
+  let batchFlushScheduled = false
 
   function flushPendingBatches(): void {
-    batchRafId = null
+    batchFlushScheduled = false
     const batches = pendingBatches
     pendingBatches = []
     if (batches.length === 0) return
 
     const state = get()
-    const nextSessions = new Map(state.sessions)
+    let nextSessions = new Map(state.sessions)
     let changed = false
 
     for (const event of batches) {
-      const session = findBySessionId(state.sessions, event.sessionId)
-        || state.sessions.get(event.taskId)
+      const ensured = ensureSessionForEvent(nextSessions, event)
+      nextSessions = ensured.sessions
+      const session = ensured.session
       if (!session) continue
 
       const taskId = session.taskId
       const seen = getSeen(taskId)
 
       // Resolve sessionId: update when empty OR when main process re-keyed (temp → real)
-      const resolvedSession = (event.sessionId && session.sessionId !== event.sessionId)
-        ? { ...session, sessionId: event.sessionId }
-        : (nextSessions.get(taskId) || session)
+      const currentSession = nextSessions.get(taskId) || session
+      const resolvedSession = (event.sessionId && currentSession.sessionId !== event.sessionId)
+        ? { ...currentSession, sessionId: event.sessionId }
+        : currentSession
 
       let messages = [...resolvedSession.messages]
       let messagesChanged = false
@@ -403,8 +415,9 @@ export const useAgentStore = create<AgentState>((set, get) => {
 
   onAgentOutputBatch((event: AgentOutputBatchEvent) => {
     pendingBatches.push(event)
-    if (batchRafId === null) {
-      batchRafId = requestAnimationFrame(flushPendingBatches)
+    if (!batchFlushScheduled) {
+      batchFlushScheduled = true
+      queueMicrotask(flushPendingBatches)
     }
   })
 
@@ -479,7 +492,6 @@ export const useAgentStore = create<AgentState>((set, get) => {
 
     initSession: (taskId, sessionId, agentId) => {
       const existing = get().sessions.get(taskId)
-      console.log('[agent-store] initSession:', { taskId, sessionId, agentId, hasExisting: !!existing })
       // Only clear dedup state for a truly new session (not a sessionId update)
       if (!existing) seenIds.delete(taskId)
 
@@ -521,14 +533,12 @@ export const useAgentStore = create<AgentState>((set, get) => {
     },
 
     clearMessageDedup: (taskId) => {
-      console.log('[agent-store] clearMessageDedup called for task:', taskId)
       seenIds.delete(taskId)
       stepStartTimes.delete(taskId)
       // Clear messages array so replayed messages will be added fresh
       set((state) => {
         const session = state.sessions.get(taskId)
         if (!session) return state
-        console.log('[agent-store] Cleared messages for task:', taskId)
         return {
           sessions: new Map(state.sessions).set(taskId, {
             ...session,

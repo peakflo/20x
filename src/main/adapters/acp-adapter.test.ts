@@ -43,6 +43,8 @@ interface AcpAdapterPrivate {
   } | null
   handleQuotaError(session: AcpSessionForTest, errorInfo: { errorType: string; userMessage: string }): void
   handleRpcMessage(session: AcpSessionForTest, message: unknown): void
+  authenticateSession(session: AcpSessionForTest, initResult: unknown): Promise<void>
+  sendRpcRequest(session: AcpSessionForTest, method: string, params?: unknown): Promise<unknown>
 }
 
 interface JsonRpcRequestForTest {
@@ -195,6 +197,47 @@ describe('AcpAdapter - Turn Detection', () => {
             optionId: 'approved-for-session'
           }
         }
+      })
+    })
+  })
+
+  describe('Authentication selection', () => {
+    it('prefers non-key Codex auth when no API key is available', async () => {
+      const priv = adapterPrivate(adapter)
+      const session = createMockSession('auth-session')
+      const sendRpcRequestSpy = vi.spyOn(priv, 'sendRpcRequest').mockResolvedValue({})
+
+      delete process.env.OPENAI_API_KEY
+      delete process.env.CODEX_API_KEY
+
+      await priv.authenticateSession(session, {
+        authMethods: [
+          { id: 'codex-api-key' },
+          { id: 'chatgpt' }
+        ]
+      })
+
+      expect(sendRpcRequestSpy).toHaveBeenCalledWith(session, 'authenticate', {
+        methodId: 'chatgpt'
+      })
+    })
+
+    it('prefers key-based Codex auth when an API key is available', async () => {
+      const priv = adapterPrivate(adapter)
+      const session = createMockSession('auth-session')
+      const sendRpcRequestSpy = vi.spyOn(priv, 'sendRpcRequest').mockResolvedValue({})
+
+      process.env.CODEX_API_KEY = 'test-key'
+
+      await priv.authenticateSession(session, {
+        authMethods: [
+          { id: 'chatgpt' },
+          { id: 'codex-api-key' }
+        ]
+      })
+
+      expect(sendRpcRequestSpy).toHaveBeenCalledWith(session, 'authenticate', {
+        methodId: 'codex-api-key'
       })
     })
   })

@@ -200,8 +200,8 @@ describe('useAgentStore', () => {
 
   describe('Batched output handler (onAgentOutputBatch)', () => {
     /** Flush pending rAF-debounced batches synchronously */
-    function flushRaf(): Promise<void> {
-      return new Promise((resolve) => requestAnimationFrame(() => resolve()))
+    function flushBatches(): Promise<void> {
+      return Promise.resolve().then(() => undefined)
     }
 
     it('adds new messages from a batch event', async () => {
@@ -216,7 +216,7 @@ describe('useAgentStore', () => {
         ]
       })
 
-      await flushRaf()
+      await flushBatches()
 
       const msgs = useAgentStore.getState().sessions.get('task-1')!.messages
       expect(msgs).toHaveLength(2)
@@ -234,7 +234,7 @@ describe('useAgentStore', () => {
         taskId: 'task-1',
         messages: [{ id: 'p1', role: 'assistant', content: 'Hello' }]
       })
-      await flushRaf()
+      await flushBatches()
 
       // Second batch with same message id
       batchCallback!({
@@ -242,7 +242,7 @@ describe('useAgentStore', () => {
         taskId: 'task-1',
         messages: [{ id: 'p1', role: 'assistant', content: 'Hello again' }]
       })
-      await flushRaf()
+      await flushBatches()
 
       const msgs = useAgentStore.getState().sessions.get('task-1')!.messages
       expect(msgs).toHaveLength(1)
@@ -260,7 +260,7 @@ describe('useAgentStore', () => {
           { id: 'tool-123', role: 'assistant', content: 'Bash', partType: 'tool', tool: { name: 'Bash', status: 'pending', title: 'ls' } }
         ]
       })
-      await flushRaf()
+      await flushBatches()
 
       // Tool result update
       batchCallback!({
@@ -270,7 +270,7 @@ describe('useAgentStore', () => {
           { id: 'tool-123', role: 'assistant', content: 'Tool completed', partType: 'tool', tool: { name: 'Bash', status: 'success', output: 'file.txt' }, update: true }
         ]
       })
-      await flushRaf()
+      await flushBatches()
 
       const msgs = useAgentStore.getState().sessions.get('task-1')!.messages
       expect(msgs).toHaveLength(1)
@@ -290,7 +290,7 @@ describe('useAgentStore', () => {
           { id: 'q-1', role: 'assistant', content: 'Question', partType: 'question', tool: { name: 'AskUser', status: 'pending', questions: [] } }
         ]
       })
-      await flushRaf()
+      await flushBatches()
 
       // Update with generic partType
       batchCallback!({
@@ -300,7 +300,7 @@ describe('useAgentStore', () => {
           { id: 'q-1', role: 'assistant', content: 'Updated', partType: 'tool', tool: { name: 'AskUser', status: 'success' }, update: true }
         ]
       })
-      await flushRaf()
+      await flushBatches()
 
       const msgs = useAgentStore.getState().sessions.get('task-1')!.messages
       expect(msgs[0].partType).toBe('question') // preserved, not overwritten to 'tool'
@@ -319,7 +319,7 @@ describe('useAgentStore', () => {
           { id: 'step-f-1', role: 'assistant', content: '', partType: 'step-finish' }
         ]
       })
-      await flushRaf()
+      await flushBatches()
 
       const msgs = useAgentStore.getState().sessions.get('task-1')!.messages
       // step-start and step-finish should not appear as messages
@@ -351,7 +351,7 @@ describe('useAgentStore', () => {
       })
 
       // Both should be processed in a single rAF flush
-      await flushRaf()
+      await flushBatches()
 
       unsub()
 
@@ -363,15 +363,34 @@ describe('useAgentStore', () => {
       expect(useAgentStore.getState().sessions.get('task-2')!.messages).toHaveLength(1)
     })
 
-    it('ignores batch for unknown session', async () => {
+    it('recreates session from batch when none exists', async () => {
       batchCallback!({
         sessionId: 'unknown-sess',
         taskId: 'unknown-task',
         messages: [{ id: 'x1', role: 'assistant', content: 'Ghost' }]
       })
-      await flushRaf()
+      await flushBatches()
 
-      expect(useAgentStore.getState().sessions.size).toBe(0)
+      const session = useAgentStore.getState().sessions.get('unknown-task')
+      expect(session).toBeDefined()
+      expect(session!.sessionId).toBe('unknown-sess')
+      expect(session!.messages).toHaveLength(1)
+    })
+
+    it('recreates a missing session row from batch output events', async () => {
+      batchCallback!({
+        sessionId: 'sess-recreated',
+        taskId: 'task-1',
+        messages: [{ id: 'p1', role: 'assistant', content: 'Recovered transcript' }]
+      })
+
+      await flushBatches()
+
+      const session = useAgentStore.getState().sessions.get('task-1')
+      expect(session).toBeDefined()
+      expect(session!.sessionId).toBe('sess-recreated')
+      expect(session!.messages).toHaveLength(1)
+      expect(session!.messages[0].content).toBe('Recovered transcript')
     })
 
     it('resolves session by taskId when sessionId does not match', async () => {
@@ -382,7 +401,7 @@ describe('useAgentStore', () => {
         taskId: 'task-1',
         messages: [{ id: 'p1', role: 'assistant', content: 'Hello' }]
       })
-      await flushRaf()
+      await flushBatches()
 
       const session = useAgentStore.getState().sessions.get('task-1')!
       expect(session.sessionId).toBe('real-sess-1')
@@ -399,7 +418,7 @@ describe('useAgentStore', () => {
         taskId: 'task-1',
         messages: [{ id: 'p1', role: 'assistant', content: 'Hello' }]
       })
-      await flushRaf()
+      await flushBatches()
 
       const session = useAgentStore.getState().sessions.get('task-1')!
       // Session ID should be updated to the real one, not stuck on temp-uuid
@@ -478,7 +497,7 @@ describe('useAgentStore', () => {
         ]
       })
 
-      await new Promise((resolve) => requestAnimationFrame(() => resolve(undefined)))
+      await Promise.resolve()
 
       const session = useAgentStore.getState().sessions.get('task-1')!
       expect(session.messages).toHaveLength(1)

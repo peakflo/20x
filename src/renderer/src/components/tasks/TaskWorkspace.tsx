@@ -375,8 +375,26 @@ export function TaskWorkspace({
     [approve]
   )
 
+  const ensureChatSession = useCallback(async (): Promise<string | null> => {
+    if (!task?.agent_id) return null
+
+    const latestSession = useAgentStore.getState().sessions.get(task.id)
+    if (latestSession?.sessionId) return latestSession.sessionId
+
+    if (task.session_id) {
+      const resumedSessionId = await resume(task.agent_id, task.id, task.session_id)
+      if (!resumedSessionId) {
+        fetchTasks()
+        return null
+      }
+      return resumedSessionId
+    }
+
+    return start(task.agent_id, task.id)
+  }, [fetchTasks, resume, start, task?.agent_id, task?.id, task?.session_id])
+
   const handleSend = useCallback(
-    (message: string) => {
+    async (message: string) => {
       // Check if this is a question answer (for permission requests)
       // Question answers should use approve() instead of sendMessage()
       const lastMessage = session.messages[session.messages.length - 1]
@@ -384,14 +402,15 @@ export function TaskWorkspace({
         && lastMessage?.partType === 'question'
         && !!lastMessage?.tool?.questions
       if (hasActiveQuestion) {
-        // This is an answer to a question - use approve
-        approve(true, message).catch(console.error)
-      } else {
-        // Regular message
-        sendMessage(message).catch(console.error)
+        await approve(true, message)
+        return
       }
+
+      const readySessionId = await ensureChatSession()
+      if (!readySessionId) return
+      await sendMessage(message)
     },
-    [sendMessage, approve, session.messages, session.status]
+    [approve, ensureChatSession, sendMessage, session.messages, session.status]
   )
 
   // ── Feedback orchestration ──────────────────────────────────
@@ -461,34 +480,15 @@ tags:
 Update existing skills that were helpful or create new ones for patterns worth reusing.`
 
     try {
-      // If no active session, resume from task.session_id
-      if (!session.sessionId && task.session_id) {
-        console.log('[TaskWorkspace] Resuming session for feedback:', task.session_id)
-        console.log('[TaskWorkspace] Current session state before resume:', session)
-
-        const resumedSessionId = await resume(task.agent_id, task.id, task.session_id)
-        if (!resumedSessionId) {
-          // Session ended normally — can't send feedback to a dead session.
-          // Refresh tasks so the UI reflects the cleared session_id.
-          fetchTasks()
-          return
-        }
-        console.log('[TaskWorkspace] Resume completed successfully')
-
-        const afterResumeSession = useAgentStore.getState().sessions.get(task.id)
-        console.log('[TaskWorkspace] Session state after resume:', afterResumeSession)
+      if (!session.sessionId) {
+        const readySessionId = await ensureChatSession()
+        if (!readySessionId) return
 
         // Wait for messages to load (poll for session to be ready)
-        console.log('[TaskWorkspace] Waiting for messages to load...')
         await new Promise<void>((resolve) => {
           const checkReady = () => {
             const latestSession = useAgentStore.getState().sessions.get(task.id)
-            console.log('[TaskWorkspace] Checking session ready:', {
-              hasSession: !!latestSession,
-              messageCount: latestSession?.messages.length || 0
-            })
             if (latestSession?.messages && latestSession.messages.length > 0) {
-              console.log('[TaskWorkspace] Messages loaded, proceeding')
               resolve()
             } else {
               setTimeout(checkReady, 500)
@@ -497,26 +497,20 @@ Update existing skills that were helpful or create new ones for patterns worth r
           setTimeout(checkReady, 500)
           // Timeout after 10 seconds
           setTimeout(() => {
-            console.log('[TaskWorkspace] Timeout waiting for messages, proceeding anyway')
             resolve()
           }, 10000)
         })
       }
 
-      console.log('[TaskWorkspace] About to send feedback message')
-      // Verify task status is still AgentLearning before sending
-      const taskBeforeSend = await taskApi.getById(task.id)
-      console.log('[TaskWorkspace] Task status before sending message:', taskBeforeSend?.status)
       // Send feedback message through normal flow so it shows in UI
       await sendMessage(prompt)
-      console.log('[TaskWorkspace] Feedback message sent')
 
       // Backend will handle skill sync and task completion when session goes idle
     } catch (error) {
       console.error('Failed to send feedback:', error)
       await taskApi.update(task.id, { status: TaskStatus.ReadyForReview })
     }
-  }, [task?.agent_id, task?.id, task?.session_id, session.sessionId, resume, sendMessage, fetchTasks])
+  }, [ensureChatSession, sendMessage, session.sessionId, task?.id])
 
   const handleFeedbackSkip = useCallback(async () => {
     if (!task?.id) return

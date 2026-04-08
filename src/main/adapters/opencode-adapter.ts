@@ -73,6 +73,12 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     await this.ensureSDKLoaded()
   }
 
+  private getScopedPartId(messageId: string, rawPartId: string | undefined, fallbackIndex?: number): string | undefined {
+    if (rawPartId) return `${messageId}:${rawPartId}`
+    if (fallbackIndex !== undefined) return `${messageId}:part-${fallbackIndex}`
+    return undefined
+  }
+
   async checkHealth(): Promise<{ available: boolean; reason?: string }> {
     try {
       await this.ensureSDKLoaded()
@@ -403,12 +409,16 @@ export class OpencodeAdapter implements CodingAgentAdapter {
       for (const msg of messagesResult.data) {
         if (!msg.info) continue
         const rawParts = msg.parts || []
-        const transformedParts: MessagePart[] = rawParts.map((part: Record<string, unknown>) => {
+        const transformedParts: MessagePart[] = rawParts.map((part: Record<string, unknown>, partIndex: number) => {
+          const scopedPartId = this.getScopedPartId(String(msg.info.id), part.id as string | undefined, partIndex)
           if (part.type === 'tool') {
-            return this.transformToolPart(part)
+            return {
+              ...this.transformToolPart(part),
+              id: scopedPartId
+            }
           }
           return {
-            id: part.id as string,
+            id: scopedPartId,
             type: part.type as MessagePartType,
             text: part.text as string,
             content: part.text as string
@@ -577,7 +587,7 @@ export class OpencodeAdapter implements CodingAgentAdapter {
 
       const parts = msg.parts && Array.isArray(msg.parts) ? msg.parts : []
       for (const part of parts) {
-        const partId = part.id
+        const partId = this.getScopedPartId(String(msgId), part.id as string | undefined)
         if (!partId) continue
         // Cast part to a loose record for uniform property access across SDK Part union members
         const p = part as unknown as Record<string, unknown>
@@ -599,7 +609,7 @@ export class OpencodeAdapter implements CodingAgentAdapter {
 
             if (part.type === 'tool') {
               const transformed = this.transformToolPart(p)
-              newParts.push({ ...transformed, role: msgRole, update: !isNewPart })
+              newParts.push({ ...transformed, id: partId, role: msgRole, update: !isNewPart })
             } else {
               newParts.push({
                 id: partId,
@@ -733,31 +743,17 @@ export class OpencodeAdapter implements CodingAgentAdapter {
         return []
       }
 
-      console.log(`[OpencodeAdapter] getAllMessages: Retrieved ${messagesResult.data.length} messages`)
-
       // Convert OpenCode messages to SessionMessage format
       const messages = messagesResult.data.map((msg: Record<string, unknown>, idx: number) => {
         const msgInfo = msg.info as Record<string, unknown> | undefined
         const role = (msgInfo?.role as string) || 'assistant'
         const parts = (msg.parts || []) as Record<string, unknown>[]
 
-        // Log raw parts for debugging
-        console.log(`[OpencodeAdapter] Message ${idx} role=${role}, parts count=${parts.length}`)
-        parts.forEach((p: Record<string, unknown>, pIdx: number) => {
-          const pText = p.text as string | undefined
-          console.log(`[OpencodeAdapter]   Part ${pIdx}:`, {
-            type: p.type,
-            hasText: !!pText,
-            textLength: pText?.length,
-            textPreview: pText?.slice(0, 100)
-          })
-        })
-
         return {
           id: (msgInfo?.id as string) || `msg-${idx}`,
           role: (role === 'user' ? MessageRole.USER : MessageRole.ASSISTANT) as MessageRole,
-          parts: parts.map((p: Record<string, unknown>) => ({
-            id: p.id as string,
+          parts: parts.map((p: Record<string, unknown>, partIndex: number) => ({
+            id: this.getScopedPartId(String((msgInfo?.id as string) || `msg-${idx}`), p.id as string | undefined, partIndex),
             type: (p.type as string) as unknown as MessagePartType,
             text: p.text as string,
             content: p.text as string

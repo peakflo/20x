@@ -255,10 +255,21 @@ export class AcpAdapter implements CodingAgentAdapter {
     const authMethods = (Array.isArray(initObj?.authMethods) ? initObj.authMethods : []) as Array<{ id: string; [key: string]: unknown }>
 
     if (authMethods.length > 0 && this.agentType !== 'claude-code') {
-      // Prefer API key auth methods (they read from environment)
-      const authMethod = authMethods.find((m) =>
+      const hasOpenAiKey = !!session.config.apiKeys?.openai || !!process.env.OPENAI_API_KEY || !!process.env.CODEX_API_KEY
+      const apiKeyMethod = authMethods.find((m) =>
         m.id === 'openai-api-key' || m.id === 'codex-api-key'
-      ) || authMethods[0]
+      )
+
+      // Codex ACP can reuse existing Codex CLI login (for example ChatGPT subscription)
+      // via a non-key auth method. Only force API-key auth when a key is actually available.
+      const authMethod = hasOpenAiKey
+        ? (apiKeyMethod || authMethods[0])
+        : (authMethods.find((m) => m.id !== 'openai-api-key' && m.id !== 'codex-api-key') || null)
+
+      if (!authMethod) {
+        console.log(`[AcpAdapter/${this.agentType}] No usable auth method found; skipping authenticate and relying on existing agent auth`)
+        return
+      }
 
       console.log(`[AcpAdapter/${this.agentType}] Authenticating with method: ${authMethod.id}`)
 

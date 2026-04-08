@@ -580,6 +580,7 @@ describe('AgentManager transitionToIdle — enterprise task completion after fee
     return {
       getTask: vi.fn(() => task),
       getAgent: vi.fn(() => ({ id: 'agent-1', name: 'Test Agent', config: {} })),
+      getWorkspaceDir: vi.fn(() => '/tmp/test-workspace'),
       getSkills: vi.fn(() => []),
       getSkillsByIds: vi.fn(() => []),
       getSkillByName: vi.fn(() => null),
@@ -727,6 +728,47 @@ describe('AgentManager transitionToIdle — enterprise task completion after fee
 
     // Task should still be marked as Completed (graceful degradation)
     expect(mockDb.updateTask).toHaveBeenCalledWith('task-1', { status: TaskStatus.Completed })
+  })
+
+  it('replays missed transcript parts before transitioning idle', async () => {
+    const mockDb = createEnterpriseTaskDb({
+      status: TaskStatus.AgentWorking,
+      output_fields: [],
+      source_id: null,
+    })
+    const { mgr, session } = setupManager(mockDb)
+    const adapter = {
+      getAllMessages: vi.fn(async () => ([
+        {
+          id: 'msg-1',
+          role: MessageRole.ASSISTANT,
+          parts: [
+            { id: 'seen-part', type: MessagePartType.TEXT, text: 'Earlier reply', content: 'Earlier reply' },
+            { id: 'final-part', type: MessagePartType.TEXT, text: 'Final persisted reply', content: 'Final persisted reply' }
+          ]
+        }
+      ]))
+    }
+
+    const sessionWithAdapter = {
+      ...session,
+      adapter: adapter as any
+    }
+    sessionWithAdapter.seenPartIds.add('seen-part')
+    vi.spyOn(mgr as any, 'extractOutputValues').mockResolvedValue(undefined)
+
+    const sendSpy = vi.spyOn(mgr as any, 'sendToRenderer')
+
+    await (mgr as any).transitionToIdle('session-1', sessionWithAdapter)
+
+    const replayCall = sendSpy.mock.calls.find(
+      ([channel, payload]) => channel === 'agent:output-batch'
+        && (payload as any)?.messages?.some((msg: any) => msg.id === 'final-part' && msg.content === 'Final persisted reply')
+    )
+
+    expect(adapter.getAllMessages).toHaveBeenCalledOnce()
+    expect(replayCall).toBeDefined()
+    expect(sessionWithAdapter.seenPartIds.has('final-part')).toBe(true)
   })
 })
 

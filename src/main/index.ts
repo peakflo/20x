@@ -303,11 +303,12 @@ app.on('open-url', (event, url) => {
   }
 })
 
-// Fix PATH for GUI apps (async to avoid blocking startup)
+// Load shell environment for GUI apps (async to avoid blocking startup)
 // macOS GUI apps (launched from /Applications) do NOT inherit the user's shell
-// PATH, so CLI tools like codex, claude, gh etc. cannot be found. We read the
-// PATH from a login shell and apply it to process.env.
-function fixPlatformPath(): Promise<void> {
+// environment, so CLI tools like codex, claude, gh etc. cannot be found and
+// auth env vars like CODEX_API_KEY / OPENAI_API_KEY / ANTHROPIC_API_KEY are
+// missing. We read the values from a login shell and apply them to process.env.
+function loadPlatformShellEnv(): Promise<void> {
   if (process.platform === 'win32') {
     // On Windows, ensure common Node/npm/git paths are available
     const home = process.env.USERPROFILE || process.env.HOME || ''
@@ -337,24 +338,55 @@ function fixPlatformPath(): Promise<void> {
   // extract it from the noisy output.
   const PATH_START = '__20X_PATH_START__'
   const PATH_END = '__20X_PATH_END__'
+  const OPENAI_API_KEY_START = '__20X_OPENAI_API_KEY_START__'
+  const OPENAI_API_KEY_END = '__20X_OPENAI_API_KEY_END__'
+  const CODEX_API_KEY_START = '__20X_CODEX_API_KEY_START__'
+  const CODEX_API_KEY_END = '__20X_CODEX_API_KEY_END__'
+  const ANTHROPIC_API_KEY_START = '__20X_ANTHROPIC_API_KEY_START__'
+  const ANTHROPIC_API_KEY_END = '__20X_ANTHROPIC_API_KEY_END__'
+
+  const command = [
+    `printf '%s%s%s\\n' "${PATH_START}" "$PATH" "${PATH_END}"`,
+    `printf '%s%s%s\\n' "${OPENAI_API_KEY_START}" "$OPENAI_API_KEY" "${OPENAI_API_KEY_END}"`,
+    `printf '%s%s%s\\n' "${CODEX_API_KEY_START}" "$CODEX_API_KEY" "${CODEX_API_KEY_END}"`,
+    `printf '%s%s%s\\n' "${ANTHROPIC_API_KEY_START}" "$ANTHROPIC_API_KEY" "${ANTHROPIC_API_KEY_END}"`
+  ].join('; ')
+
+  const extractMarkedValue = (stdout: string, start: string, end: string): string | undefined => {
+    const match = stdout.match(new RegExp(`${start}([\\s\\S]*?)${end}`))
+    return match?.[1] || undefined
+  }
 
   return new Promise((resolve) => {
     const userShell = process.env.SHELL || '/bin/zsh'
     execFile(
       userShell,
-      ['-ilc', `echo ${PATH_START}$PATH${PATH_END}`],
+      ['-ilc', command],
       { timeout: 5000, encoding: 'utf8' },
       (err, stdout) => {
         if (!err && stdout) {
-          // Extract PATH from between the markers, ignoring any garbage output
-          const match = stdout.match(new RegExp(`${PATH_START}(.+?)${PATH_END}`))
-          if (match && match[1]) {
+          const pathFromShell = extractMarkedValue(stdout, PATH_START, PATH_END)
+          if (pathFromShell) {
             console.log('[Main] Setting PATH from shell:', userShell)
-            process.env.PATH = match[1]
-            resolve()
-            return
+            process.env.PATH = pathFromShell
+          } else {
+            console.error('[Main] Failed to read shell PATH, using fallback')
+            process.env.PATH = buildFallbackPath()
           }
+
+          const openAiApiKey = extractMarkedValue(stdout, OPENAI_API_KEY_START, OPENAI_API_KEY_END)
+          if (openAiApiKey) process.env.OPENAI_API_KEY = openAiApiKey
+
+          const codexApiKey = extractMarkedValue(stdout, CODEX_API_KEY_START, CODEX_API_KEY_END)
+          if (codexApiKey) process.env.CODEX_API_KEY = codexApiKey
+
+          const anthropicApiKey = extractMarkedValue(stdout, ANTHROPIC_API_KEY_START, ANTHROPIC_API_KEY_END)
+          if (anthropicApiKey) process.env.ANTHROPIC_API_KEY = anthropicApiKey
+
+          resolve()
+          return
         }
+
         console.error('[Main] Failed to read shell PATH, using fallback:', err?.message)
         process.env.PATH = buildFallbackPath()
         resolve()
@@ -453,7 +485,7 @@ app.whenReady().then(async () => {
   })
 
   // Start PATH fix and DB init in parallel — both are independent
-  const pathFixPromise = fixPlatformPath()
+  const pathFixPromise = loadPlatformShellEnv()
 
   db = new DatabaseManager()
   db.initialize()

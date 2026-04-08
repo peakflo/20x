@@ -14,6 +14,8 @@ vi.mock('@/components/agents/AgentTranscriptPanel', () => ({
 // Add missing electronAPI mocks that child components need
 const api = window.electronAPI as unknown as Record<string, unknown>
 if (!api.onGithubDeviceCode) api.onGithubDeviceCode = vi.fn(() => vi.fn())
+if (!api.onHeartbeatAlert) api.onHeartbeatAlert = vi.fn(() => vi.fn())
+if (!api.onHeartbeatDisabled) api.onHeartbeatDisabled = vi.fn(() => vi.fn())
 if (!api.tasks) api.tasks = { getWorkspaceDir: vi.fn().mockResolvedValue('/tmp') }
 
 // Minimal task factory
@@ -244,5 +246,51 @@ describe('TaskWorkspace – stale triage session cleanup', () => {
       expect(window.electronAPI.agentSession.send).toHaveBeenCalledWith('session-1', 'approved', taskId, agentId)
     })
     expect(window.electronAPI.agentSession.approve).not.toHaveBeenCalled()
+  })
+
+  it('resumes a persisted session before sending a follow-up message', async () => {
+    const taskId = 'task-1'
+    const agentId = 'agent-1'
+
+    useAgentStore.setState({
+      sessions: new Map([
+        [taskId, {
+          sessionId: null,
+          agentId,
+          taskId,
+          status: SessionStatus.IDLE,
+          messages: [
+            {
+              id: 'msg-1',
+              role: 'assistant',
+              content: 'Previous transcript',
+              timestamp: new Date()
+            }
+          ],
+          pendingApproval: null
+        }]
+      ])
+    })
+
+    vi.mocked(window.electronAPI.agentSession.resume).mockResolvedValue({ sessionId: 'resumed-session-1' })
+
+    const task = makeRendererTask({
+      id: taskId,
+      status: TaskStatus.ReadyForReview,
+      agent_id: agentId,
+      session_id: 'persisted-session-1'
+    })
+
+    renderWorkspace(task)
+
+    fireEvent.click(screen.getByTestId('mock-send'))
+
+    await waitFor(() => {
+      expect(window.electronAPI.agentSession.resume).toHaveBeenCalledWith(agentId, taskId, 'persisted-session-1')
+    })
+
+    await waitFor(() => {
+      expect(window.electronAPI.agentSession.send).toHaveBeenCalledWith('resumed-session-1', 'approved', taskId, agentId)
+    })
   })
 })
