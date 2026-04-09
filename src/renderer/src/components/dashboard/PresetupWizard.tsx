@@ -394,7 +394,8 @@ export function PresetupWizard({ template, onClose }: PresetupWizardProps) {
     }
   }, [template.slug])
 
-  // Open workflow-builder connect page with resolved integration keys and pre-selected IDs
+  // Open workflow-builder connect page with resolved integration keys and pre-selected IDs.
+  // Uses a secure one-time auth code exchange instead of embedding tokens in the URL.
   const handleOpenInBrowser = useCallback(
     async (opts: Record<string, string>, integrationSelections: Record<string, string | null>) => {
       try {
@@ -434,14 +435,22 @@ export function PresetupWizard({ template, onClose }: PresetupWizardProps) {
           params.set('connectedIntegrations', connectedEntries.join(','))
         }
 
+        // ── Secure auth handshake ────────────────────────────────────────────────
+        // Exchange Supabase tokens for a short-lived one-time code on the server,
+        // then pass only the code in the URL. This avoids embedding sensitive tokens
+        // in the URL (browser history, server logs, referrer headers).
         const { accessToken, refreshToken, tenantId } = await enterpriseApi.getAuthTokens()
         if (tenantId) params.set('tenantId', tenantId)
 
-        const hashParams = new URLSearchParams()
-        hashParams.set('access_token', accessToken)
-        hashParams.set('refresh_token', refreshToken)
+        const authCodeRes = await enterpriseApi.apiRequest('POST', '/api/presetup/auth-code', {
+          supabaseAccessToken: accessToken,
+          supabaseRefreshToken: refreshToken,
+          tenantId
+        }) as { code: string }
 
-        const connectUrl = `${frontendUrl}/presetup/connect?${params.toString()}#${hashParams.toString()}`
+        params.set('authCode', authCodeRes.code)
+
+        const connectUrl = `${frontendUrl}/presetup/connect?${params.toString()}`
         await window.electronAPI.shell.openExternal(connectUrl)
       } catch {
         // Best-effort fallback
