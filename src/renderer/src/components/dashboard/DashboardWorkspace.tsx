@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { RefreshCw, Loader2, Cloud } from 'lucide-react'
+import { RefreshCw, Loader2, Cloud, Plus } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { useDashboardStore, type TimeWindow } from '@/stores/dashboard-store'
 import { useEnterpriseStore } from '@/stores/enterprise-store'
@@ -21,7 +21,7 @@ const TIME_WINDOW_LABELS: Record<TimeWindow, string> = {
 export function DashboardWorkspace() {
   const { isAuthenticated, loadSession } = useEnterpriseStore()
   const { tasks } = useTaskStore()
-  const { openSettings, setSettingsTab } = useUIStore()
+  const { openSettings, setSettingsTab, openCreateModal } = useUIStore()
   const {
     timeWindow,
     setTimeWindow,
@@ -64,6 +64,15 @@ export function DashboardWorkspace() {
             </p>
           </div>
           <div className="flex items-center gap-2">
+            <Button
+              variant="default"
+              size="sm"
+              onClick={openCreateModal}
+              title="Create new task"
+            >
+              <Plus className="h-3.5 w-3.5 mr-1" />
+              New Task
+            </Button>
             {/* Time window selector — always available */}
             <div className="flex rounded-md border border-border bg-muted/30 p-0.5">
               {(Object.keys(TIME_WINDOW_LABELS) as TimeWindow[]).map((w) => (

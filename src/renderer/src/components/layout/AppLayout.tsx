@@ -326,6 +326,10 @@ export function AppLayout() {
               showToast(`Failed to delete task: ${reason}`, true)
               return
             }
+            // Close dashboard preview if the deleted task was being previewed
+            if (dashboardPreviewTaskId === deletingTaskId) {
+              closeDashboardPreview()
+            }
             closeModal()
           }
         }}

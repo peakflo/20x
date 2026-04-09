@@ -315,6 +315,15 @@ describe('DashboardWorkspace', () => {
     expect(screen.getByText('Expired snooze task')).toBeDefined()
   })
 
+  it('shows "New Task" button that opens create modal', () => {
+    render(<DashboardWorkspace />)
+    const newTaskBtn = screen.getByText('New Task')
+    expect(newTaskBtn).toBeDefined()
+
+    fireEvent.click(newTaskBtn)
+    expect(useUIStore.getState().activeModal).toBe('create')
+  })
+
   it('clicking a task card sets dashboardPreviewTaskId in UI store', () => {
     useTaskStore.setState({
       tasks: [
