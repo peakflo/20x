@@ -553,6 +553,53 @@ describe('Triage lifecycle with output_fields', () => {
   })
 })
 
+describe('/list_tasks - excludes recurring parent templates', () => {
+  it('excludes recurring parent template tasks from list_tasks results', () => {
+    // Create a normal task
+    db.createTask(makeTask({ title: 'Normal Task' }))
+
+    // Create a recurring template (is_recurring=1, recurrence_parent_id=NULL)
+    const template = db.createTask(makeTask({ title: 'Daily Standup Template' }))!
+    rawDb.prepare('UPDATE tasks SET is_recurring = 1, recurrence_pattern = ? WHERE id = ?')
+      .run('0 9 * * *', template.id)
+
+    // Create a recurring instance (is_recurring=0, recurrence_parent_id set)
+    const instance = db.createTask(makeTask({ title: 'Daily Standup - Apr 9' }))!
+    rawDb.prepare('UPDATE tasks SET recurrence_parent_id = ? WHERE id = ?')
+      .run(template.id, instance.id)
+
+    // Simulate /list_tasks query — should exclude recurring parent templates
+    const query = 'SELECT * FROM tasks WHERE NOT (is_recurring = 1 AND recurrence_parent_id IS NULL) ORDER BY created_at DESC'
+    const tasks = rawDb.prepare(query).all() as Record<string, unknown>[]
+
+    expect(tasks).toHaveLength(2)
+    const titles = tasks.map((t) => t.title)
+    expect(titles).toContain('Normal Task')
+    expect(titles).toContain('Daily Standup - Apr 9')
+    expect(titles).not.toContain('Daily Standup Template')
+  })
+
+  it('includes recurring instances (tasks with recurrence_parent_id)', () => {
+    const template = db.createTask(makeTask({ title: 'Template' }))!
+    rawDb.prepare('UPDATE tasks SET is_recurring = 1, recurrence_pattern = ? WHERE id = ?')
+      .run('0 9 * * *', template.id)
+
+    // Create two instances from the template
+    const i1 = db.createTask(makeTask({ title: 'Instance 1' }))!
+    rawDb.prepare('UPDATE tasks SET recurrence_parent_id = ? WHERE id = ?').run(template.id, i1.id)
+    const i2 = db.createTask(makeTask({ title: 'Instance 2' }))!
+    rawDb.prepare('UPDATE tasks SET recurrence_parent_id = ? WHERE id = ?').run(template.id, i2.id)
+
+    const query = 'SELECT * FROM tasks WHERE NOT (is_recurring = 1 AND recurrence_parent_id IS NULL) ORDER BY created_at DESC'
+    const tasks = rawDb.prepare(query).all() as Record<string, unknown>[]
+
+    const titles = tasks.map((t) => t.title)
+    expect(titles).toContain('Instance 1')
+    expect(titles).toContain('Instance 2')
+    expect(titles).not.toContain('Template')
+  })
+})
+
 describe('agent_workload statistics - uses agent_working status', () => {
   it('counts tasks with agent_working status as active', () => {
     const agent = db.createAgent(makeAgent({ name: 'Stats Agent' }))!

@@ -53,11 +53,19 @@ export function useAgentAutoStart({ tasks, agents, sessions, showToast }: UseAge
     return new Date(snoozedUntil) > new Date()
   }, [])
 
+  // Helper: Check if task is a recurring parent template (should never be triaged or auto-started)
+  const isRecurringTemplate = useCallback((task: WorkfloTask): boolean => {
+    return task.is_recurring && !task.recurrence_parent_id
+  }, [])
+
   // Helper: Select triage candidates (tasks with no agent_id that need triage)
   const selectTriageCandidates = useCallback(
     (allTasks: WorkfloTask[], allSessions: Map<string, TaskSession>): string[] => {
       return allTasks
         .filter((task) => {
+          // Skip recurring parent template tasks — they are templates, not actionable tasks
+          if (isRecurringTemplate(task)) return false
+
           const isNotStarted = task.status === TaskStatus.NotStarted
           const hasNoAgent = !task.agent_id
           const notSnoozed = !isSnoozed(task.snoozed_until)
@@ -70,7 +78,7 @@ export function useAgentAutoStart({ tasks, agents, sessions, showToast }: UseAge
         })
         .map((task) => task.id)
     },
-    [isSnoozed]
+    [isSnoozed, isRecurringTemplate]
   )
 
   // Helper: Start triage for a task
@@ -124,6 +132,9 @@ export function useAgentAutoStart({ tasks, agents, sessions, showToast }: UseAge
       const tasksByAgent = new Map<string, string[]>()
 
       allTasks.forEach((task) => {
+        // Skip recurring parent template tasks — they are templates, not actionable tasks
+        if (isRecurringTemplate(task)) return
+
         // Log why tasks are excluded
         const isNotStarted = task.status === TaskStatus.NotStarted
         const hasAgent = !!task.agent_id
@@ -163,7 +174,7 @@ export function useAgentAutoStart({ tasks, agents, sessions, showToast }: UseAge
 
       return tasksByAgent
     },
-    [isSnoozed]
+    [isSnoozed, isRecurringTemplate]
   )
 
   // Helper: Start tasks for an agent (respecting max parallel limit)
@@ -228,6 +239,7 @@ export function useAgentAutoStart({ tasks, agents, sessions, showToast }: UseAge
 
       // Verify task is still eligible
       if (
+        isRecurringTemplate(task) ||
         task.status !== TaskStatus.NotStarted ||
         task.agent_id !== agentId ||
         isSnoozed(task.snoozed_until) ||
@@ -396,7 +408,9 @@ export function useAgentAutoStart({ tasks, agents, sessions, showToast }: UseAge
     if (!isEnabled) return
 
     const unsubscribe = onTaskCreated((event) => {
-      const task = event.task
+      const task = event.task as WorkfloTask
+      // Skip recurring parent template tasks
+      if (task.is_recurring && !task.recurrence_parent_id) return
       if (
         task.status === TaskStatus.NotStarted &&
         !task.agent_id &&
@@ -428,6 +442,9 @@ export function useAgentAutoStart({ tasks, agents, sessions, showToast }: UseAge
 
       // Merge event updates with stale task to get current state
       const task = { ...staleTask, ...event.updates } as WorkfloTask
+
+      // Skip recurring parent template tasks
+      if (task.is_recurring && !task.recurrence_parent_id) return
 
       // Check if task is eligible for auto-start (has agent_id)
       if (

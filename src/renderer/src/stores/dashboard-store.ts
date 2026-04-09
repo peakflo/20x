@@ -67,8 +67,8 @@ function getWindowStart(timeWindow: TimeWindow): Date | null {
 
 /** Compute dashboard stats from local tasks (no cloud required). */
 export function computeLocalStats(tasks: WorkfloTask[], timeWindow: TimeWindow): DashboardStats {
-  // Filter to top-level, non-snoozed tasks only (consistent with TaskBoard)
-  const topLevel = tasks.filter((t) => !t.parent_task_id && !isSnoozed(t.snoozed_until))
+  // Filter to top-level, non-snoozed, non-template tasks only (consistent with TaskBoard)
+  const topLevel = tasks.filter((t) => !t.parent_task_id && !isSnoozed(t.snoozed_until) && !(t.is_recurring && !t.recurrence_parent_id))
   const windowStart = getWindowStart(timeWindow)
 
   const tasksByStatus: Record<string, number> = {}
