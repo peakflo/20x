@@ -202,7 +202,8 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
    * so every bash command fetches secrets from the broker transparently.
    */
   private buildClaudeEnvironment(): Record<string, string> {
-    const env = { ...process.env } as Record<string, string>
+    const { sanitizeEnvForChild } = require('../security-utils')
+    const env = sanitizeEnvForChild()
 
     // Remove CLAUDECODE to prevent nested session error
     delete env.CLAUDECODE

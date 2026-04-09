@@ -20,6 +20,7 @@ import { SessionStatusType, MessagePartType, MessageRole } from './adapters/codi
 import { getTaskApiPort, waitForTaskApiServer } from './task-api-server'
 import { randomUUID } from 'crypto'
 import { registerSecretSession, unregisterSecretSession, getSecretBrokerPort, writeSecretShellWrapper } from './secret-broker'
+import { sanitizeEnvForChild } from './security-utils'
 
 let OpenCodeSDK: typeof import('@opencode-ai/sdk') | null = null
 
@@ -903,7 +904,7 @@ export class AgentManager extends EventEmitter {
 
     // Read OpenCode auth.json to inject API keys as env vars
     // OpenCode stores credentials in auth.json but expects env vars at runtime
-    const serverEnv: Record<string, string> = { ...process.env } as Record<string, string>
+    const serverEnv: Record<string, string> = sanitizeEnvForChild()
     try {
       const authPath = join(homedir(), '.local', 'share', 'opencode', 'auth.json')
       if (existsSync(authPath)) {
@@ -3024,7 +3025,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       const proc = spawn(serverData.command!, serverData.args || [], {
         stdio: ['pipe', 'pipe', 'pipe'],
         ...(needsShell ? { shell: true } : {}),
-        env: { ...process.env, npm_config_yes: 'true', ...(serverData.environment || {}), ...extraEnv }
+        env: sanitizeEnvForChild({ npm_config_yes: 'true', ...(serverData.environment || {}), ...extraEnv })
       })
 
       let buffer = ''
