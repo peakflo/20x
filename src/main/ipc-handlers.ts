@@ -753,6 +753,11 @@ export function registerIpcHandlers(
     return await enterpriseAuth.login(email, password)
   })
 
+  ipcMain.handle('enterprise:listCompanies', async () => {
+    if (!enterpriseAuth) throw new Error('Enterprise auth not available')
+    return await enterpriseAuth.listCompanies()
+  })
+
   ipcMain.handle('enterprise:selectTenant', async (event, tenantId: string) => {
     if (!enterpriseAuth) throw new Error('Enterprise auth not available')
     const result = await enterpriseAuth.selectTenant(tenantId)

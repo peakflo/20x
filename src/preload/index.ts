@@ -339,6 +339,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       email: string
       companies: { id: string; name: string; isPrimary: boolean }[]
     }> => ipcRenderer.invoke('enterprise:login', email, password),
+    listCompanies: (): Promise<{ id: string; name: string; isPrimary: boolean }[]> =>
+      ipcRenderer.invoke('enterprise:listCompanies'),
     selectTenant: (tenantId: string): Promise<{
       token: string
       tenant: { id: string; name: string }

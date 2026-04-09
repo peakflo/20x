@@ -12,6 +12,7 @@ export function EnterpriseSettings() {
     isSyncing,
     userEmail,
     currentTenant,
+    switchOrg,
     logout,
     loadSession,
     setSyncing
@@ -40,16 +41,13 @@ export function EnterpriseSettings() {
     await logout()
   }, [logout])
 
-  const handleSwitchOrg = useCallback(() => {
-    // Clear current tenant and open modal for re-selection
-    useEnterpriseStore.setState({
-      isAuthenticated: false,
-      currentTenant: null,
-      availableTenants: null
-    })
-    // Logout to start fresh (need to re-authenticate to get companies list)
-    logout().then(() => setShowLoginModal(true))
-  }, [logout])
+  const handleSwitchOrg = useCallback(async () => {
+    // Fetch companies using existing session (no re-login needed)
+    await switchOrg()
+    // Open modal — it will show the tenant selection step since
+    // availableTenants is now populated and currentTenant is cleared
+    setShowLoginModal(true)
+  }, [switchOrg])
 
   // ── Connected view ─────────────────────────────────────────────
   if (isAuthenticated && currentTenant) {

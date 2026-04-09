@@ -473,6 +473,10 @@ export const enterpriseApi = {
     return window.electronAPI.enterprise.login(email, password)
   },
 
+  listCompanies: (): Promise<{ id: string; name: string; isPrimary: boolean }[]> => {
+    return window.electronAPI.enterprise.listCompanies()
+  },
+
   selectTenant: (tenantId: string): Promise<{
     token: string
     tenant: { id: string; name: string }

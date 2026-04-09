@@ -19,6 +19,7 @@ interface EnterpriseLoginModalProps {
 
 export function EnterpriseLoginModal({ open, onClose }: EnterpriseLoginModalProps) {
   const {
+    isAuthenticated,
     isLoading,
     error,
     userEmail,
@@ -49,25 +50,34 @@ export function EnterpriseLoginModal({ open, onClose }: EnterpriseLoginModalProp
 
   const handleClose = useCallback(() => {
     // If we're in the middle of tenant selection, clear partial state
+    // But only clear user info if we came from the login flow (not switch org)
     if (showTenantSelection) {
-      useEnterpriseStore.setState({
-        availableTenants: null,
-        userEmail: null,
-        userId: null
-      })
+      if (isAuthenticated) {
+        // Switch org flow — just clear the tenant list, keep user session
+        useEnterpriseStore.setState({ availableTenants: null })
+      } else {
+        // Login flow abandoned — clear partial state
+        useEnterpriseStore.setState({
+          availableTenants: null,
+          userEmail: null,
+          userId: null
+        })
+      }
     }
     setEmail('')
     setPassword('')
     clearError()
     onClose()
-  }, [showTenantSelection, clearError, onClose])
+  }, [showTenantSelection, isAuthenticated, clearError, onClose])
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && handleClose()}>
       <DialogContent className="max-w-md">
         <DialogHeader>
           <DialogTitle>
-            {showTenantSelection ? 'Select Organization' : 'Sign in to 20x Cloud'}
+            {showTenantSelection
+              ? (isAuthenticated ? 'Switch Organization' : 'Select Organization')
+              : 'Sign in to 20x Cloud'}
           </DialogTitle>
           <DialogDescription>
             {showTenantSelection

@@ -426,6 +426,36 @@ export class EnterpriseAuth {
     return { buffer, filename, contentType }
   }
 
+  // ── List Companies (using existing session) ─────────────────────
+
+  /**
+   * Fetch the user's available companies using the stored Supabase access token.
+   * Does NOT require re-authentication — reuses the existing session.
+   * Refreshes the token first if needed.
+   */
+  async listCompanies(): Promise<EnterpriseCompany[]> {
+    // Try refreshing the token first to ensure it's still valid
+    let accessToken = this.getStoredSupabaseAccessToken()
+    if (!accessToken) {
+      throw new Error('Not authenticated — please sign in first')
+    }
+
+    try {
+      return await this.fetchCompanies(accessToken)
+    } catch {
+      // Token may be expired — try refreshing
+      try {
+        await this.refreshToken()
+        // refreshToken stores the new tokens; re-read from storage
+        accessToken = this.getStoredSupabaseAccessToken()
+        if (!accessToken) throw new Error('Token refresh failed')
+        return await this.fetchCompanies(accessToken)
+      } catch {
+        throw new Error('Session expired — please sign in again')
+      }
+    }
+  }
+
   // ── Private helpers ──────────────────────────────────────────────
 
   private async fetchCompanies(accessToken: string): Promise<EnterpriseCompany[]> {

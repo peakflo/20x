@@ -323,6 +323,7 @@ interface ElectronAPI {
       email: string
       companies: { id: string; name: string; isPrimary: boolean }[]
     }>
+    listCompanies: () => Promise<{ id: string; name: string; isPrimary: boolean }[]>
     selectTenant: (tenantId: string) => Promise<{
       token: string
       tenant: { id: string; name: string }
