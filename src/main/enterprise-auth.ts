@@ -368,6 +368,15 @@ export class EnterpriseAuth {
       }
     }
 
+    if (response.status === 403) {
+      const errorBody = await response.json().catch(() => ({}))
+      console.error(`[EnterpriseAuth] Permission denied ${method} ${path}:`, JSON.stringify(errorBody))
+      // Include diagnostic details from the server so users/developers
+      // can understand WHY permission was denied (e.g. missing role)
+      const details = errorBody.details ? ` (${JSON.stringify(errorBody.details)})` : ''
+      throw new Error(errorBody.message || errorBody.error || `Permission denied (${response.status})${details}`)
+    }
+
     if (!response.ok) {
       const errorBody = await response.json().catch(() => ({}))
       console.error(`[EnterpriseAuth] API error ${response.status} ${method} ${path}:`, JSON.stringify(errorBody))
