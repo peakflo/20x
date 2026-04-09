@@ -112,6 +112,7 @@ export class EnterpriseSyncManager {
   }
 
   private async _doSync(userId: string): Promise<EnterpriseSyncResult> {
+    const syncStartTime = Date.now()
     const result: EnterpriseSyncResult = {
       agents: { created: 0, updated: 0 },
       skills: { created: 0, updated: 0, pushed: 0 },
@@ -165,6 +166,8 @@ export class EnterpriseSyncManager {
 
     // ── Phase 2: Skills 2-way sync (runs independently of org node availability) ──
     try {
+      const skillSyncStart = Date.now()
+
       // Step 0: Clean up server-side duplicates (one-time fix for prior sync bugs)
       try {
         const cleanup = await this.apiClient.cleanupDuplicateSkills()
@@ -181,8 +184,8 @@ export class EnterpriseSyncManager {
       // Step A0: Collect locally-deleted skill IDs (to exclude from node assignment)
       const removedSkillIds = this.getLocallyRemovedSkillIds()
 
-      // Step A: Push local skills to server
-      const pushedSkillIds = await this.pushLocalSkills(result)
+      // Step A+C combined: Batch sync local skills and receive all tenant skills back
+      const { pushedSkillIds, allServerSkills } = await this.batchSyncSkills(result)
 
       // Step B: Assign all skill IDs to user's node(s), excluding locally-deleted ones
       const targetNodes = userNodes.length > 0 ? userNodes : nodes
@@ -196,25 +199,27 @@ export class EnterpriseSyncManager {
         }
       }
 
-      // Step C: Pull server skills back (picks up skills from other nodes/tenant)
-      // Re-fetch to include any skills we just created
-      const freshServerSkills = await this.apiClient.listSkills() ?? []
+      // Step C: Pull server skills into local DB (using batch-sync response — no extra API call)
       console.log(
-        `[EnterpriseSyncManager] pullServerSkills: ${freshServerSkills.length} server skills fetched`,
-        freshServerSkills.map((s) => ({ id: s.id, name: s.name }))
+        `[EnterpriseSyncManager] pullServerSkills: ${allServerSkills.length} server skills from batch-sync response`,
+        allServerSkills.map((s) => ({ id: s.id, name: s.name }))
       )
-      if (freshServerSkills.length > 0) {
-        await this.pullServerSkills(freshServerSkills, result)
+      if (allServerSkills.length > 0) {
+        await this.pullServerSkills(allServerSkills, result)
       } else {
-        console.log('[EnterpriseSyncManager] No server skills to pull (listSkills returned empty)')
+        console.log('[EnterpriseSyncManager] No server skills to pull (batch-sync returned empty)')
       }
+
+      const skillSyncMs = Date.now() - skillSyncStart
+      console.log(`[EnterpriseSyncManager] Skills sync completed in ${skillSyncMs}ms`)
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       result.errors.push(`Skills 2-way sync failed: ${msg}`)
     }
 
+    const totalSyncMs = Date.now() - syncStartTime
     console.log(
-      '[EnterpriseSyncManager] Sync complete:',
+      `[EnterpriseSyncManager] Sync complete in ${totalSyncMs}ms:`,
       JSON.stringify(result)
     )
     return result
@@ -329,197 +334,213 @@ export class EnterpriseSyncManager {
   }
 
   /**
-   * Push local skills to the server. Returns array of server skill IDs
-   * that should be assigned to this node.
-   *
-   * - Skills with enterprise_skill_id: update on server if locally newer
-   * - Skills without enterprise_skill_id (local-only): create on server
-   * - Skips built-in skills (e.g. Mastermind)
+   * Maximum number of skills per batch-sync request (server limit).
    */
-  private async pushLocalSkills(
-    result: EnterpriseSyncResult
-  ): Promise<string[]> {
-    const localSkills = this.db.getSkills()
-    const serverSkillIds: string[] = []
+  private static readonly BATCH_SYNC_MAX_SKILLS = 200
 
-    // Fetch server skills to compare content before pushing updates
-    const currentServerSkills = await this.apiClient.listSkills() ?? []
-    const serverSkillMap = new Map<string, WorkfloSkill>()
+  /**
+   * Maximum number of retry attempts for batch-sync API calls.
+   */
+  private static readonly BATCH_SYNC_MAX_RETRIES = 3
+
+  /**
+   * Base delay for exponential backoff (ms).
+   */
+  private static readonly BATCH_SYNC_BASE_DELAY_MS = 500
+
+  /**
+   * Batch sync local skills to the server using the batch-sync endpoint.
+   * Replaces per-skill sequential push with a single (or chunked) API call.
+   *
+   * Returns:
+   *   - pushedSkillIds: server skill IDs for node assignment
+   *   - allServerSkills: ALL tenant skills from batch-sync response (for pull phase)
+   */
+  private async batchSyncSkills(
+    result: EnterpriseSyncResult
+  ): Promise<{ pushedSkillIds: string[]; allServerSkills: WorkfloSkill[] }> {
+    const localSkills = this.db.getSkills()
+
+    console.log(
+      `[EnterpriseSyncManager] batchSyncSkills: ${localSkills.length} local skills found`,
+      localSkills.map((s) => ({ name: s.name, enterprise_skill_id: s.enterprise_skill_id }))
+    )
+
+    // Filter and prepare skills for batch sync
+    const skillsToSync: Array<{
+      localId: string
+      payload: {
+        name: string
+        description: string
+        content: string
+        confidence?: number
+        uses?: number
+        lastUsed?: string | null
+        tags?: string[]
+      }
+    }> = []
+
+    for (const skill of localSkills) {
+      // Skip built-in system skills
+      if (this.isBuiltInSkill(skill)) continue
+
+      // Skip [Workflo]-prefixed skills — these were pulled from the server
+      if (skill.name.startsWith(WORKFLO_SKILL_PREFIX)) continue
+
+      const localName = this.stripWorkfloPrefix(skill.name)
+
+      // Include the skill in the batch — server does upsert by name
+      skillsToSync.push({
+        localId: skill.id,
+        payload: {
+          name: localName,
+          description: skill.description,
+          content: skill.content,
+          confidence: skill.confidence,
+          uses: skill.uses,
+          lastUsed: this.normalizeDateTime(skill.last_used),
+          tags: skill.tags
+        }
+      })
+    }
+
+    console.log(
+      `[EnterpriseSyncManager] batchSyncSkills: ${skillsToSync.length} skills to sync (${localSkills.length - skillsToSync.length} skipped)`
+    )
+
+    // Send skills in chunks of BATCH_SYNC_MAX_SKILLS
+    let allServerSkills: WorkfloSkill[] = []
+    let totalCreated = 0
+    let totalUpdated = 0
+
+    const chunks = this.chunkArray(
+      skillsToSync,
+      EnterpriseSyncManager.BATCH_SYNC_MAX_SKILLS
+    )
+
+    for (let i = 0; i < chunks.length; i++) {
+      const chunk = chunks[i]
+      const payloads = chunk.map((s) => s.payload)
+
+      try {
+        const batchResult = await this.batchSyncWithRetry(payloads)
+        totalCreated += batchResult.created
+        totalUpdated += batchResult.updated
+        // Last chunk's response has the full tenant skill set
+        allServerSkills = batchResult.skills
+        console.log(
+          `[EnterpriseSyncManager] Batch chunk ${i + 1}/${chunks.length}: created=${batchResult.created}, updated=${batchResult.updated}, total_skills=${batchResult.skills.length}`
+        )
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        result.errors.push(`Batch sync chunk ${i + 1}/${chunks.length} failed: ${msg}`)
+        console.error(`[EnterpriseSyncManager] Batch sync chunk ${i + 1} failed after retries:`, msg)
+      }
+    }
+
+    // If no skills to sync but we still need the server skill list (for pull),
+    // do a single empty batch or fall back to listSkills
+    if (skillsToSync.length === 0) {
+      try {
+        // Send empty batch — server returns all tenant skills
+        const batchResult = await this.batchSyncWithRetry([])
+        allServerSkills = batchResult.skills
+      } catch {
+        // Fall back to listSkills if batch-sync with empty payload fails
+        try {
+          allServerSkills = await this.apiClient.listSkills() ?? []
+        } catch (listErr) {
+          const msg = listErr instanceof Error ? listErr.message : String(listErr)
+          result.errors.push(`Fallback listSkills failed: ${msg}`)
+        }
+      }
+    }
+
+    result.skills.pushed = totalCreated + totalUpdated
+
+    // Build a name→server skill map for linking local skills
     const serverSkillByName = new Map<string, WorkfloSkill>()
-    for (const s of currentServerSkills) {
-      serverSkillMap.set(s.id, s)
-      // Index by name for cross-device dedup (first match wins)
+    for (const s of allServerSkills) {
       if (!serverSkillByName.has(s.name)) {
         serverSkillByName.set(s.name, s)
       }
     }
 
+    // Link local skills to their server counterparts and collect IDs for node assignment
+    const pushedSkillIds: string[] = []
+    for (const { localId, payload } of skillsToSync) {
+      const serverSkill = serverSkillByName.get(payload.name)
+      if (serverSkill) {
+        // Update local record with server ID and sync baseline
+        const localSkill = localSkills.find((s) => s.id === localId)
+        if (localSkill) {
+          this.db.updateSkill(localId, {
+            enterprise_skill_id: serverSkill.id,
+            uses_at_last_sync: localSkill.uses
+          })
+        }
+        pushedSkillIds.push(serverSkill.id)
+      }
+    }
+
     console.log(
-      `[EnterpriseSyncManager] pushLocalSkills: ${localSkills.length} local skills found`,
-      localSkills.map((s) => ({ name: s.name, enterprise_skill_id: s.enterprise_skill_id }))
+      `[EnterpriseSyncManager] batchSyncSkills complete: pushed=${result.skills.pushed}, linked=${pushedSkillIds.length}, server_total=${allServerSkills.length}`
     )
 
-    for (const skill of localSkills) {
+    return { pushedSkillIds, allServerSkills }
+  }
+
+  /**
+   * Call batchSyncSkills API with exponential backoff retry.
+   */
+  private async batchSyncWithRetry(
+    skills: Array<{
+      name: string
+      description: string
+      content: string
+      confidence?: number
+      uses?: number
+      lastUsed?: string | null
+      tags?: string[]
+    }>
+  ): Promise<{ created: number; updated: number; skills: WorkfloSkill[] }> {
+    let lastError: Error | null = null
+
+    for (let attempt = 0; attempt < EnterpriseSyncManager.BATCH_SYNC_MAX_RETRIES; attempt++) {
       try {
-        // Skip built-in system skills
-        if (this.isBuiltInSkill(skill)) {
-          continue
-        }
-
-        // Skip [Workflo]-prefixed skills — these were pulled from the server
-        // (from other nodes). Don't push them back or assign them to this node.
-        if (skill.name.startsWith(WORKFLO_SKILL_PREFIX)) {
-          continue
-        }
-
-        // Compute usage delta since last sync (for additive server-side merge)
-        const usesDelta = skill.uses - (skill.uses_at_last_sync ?? 0)
-
-        const localName = this.stripWorkfloPrefix(skill.name)
-
-        if (skill.enterprise_skill_id) {
-          let serverVersion = serverSkillMap.get(skill.enterprise_skill_id)
-
-          // If linked ID no longer exists on server (e.g. deleted by cleanup),
-          // re-link to surviving copy by name or clear the stale ID to create fresh
-          if (!serverVersion) {
-            const byName = serverSkillByName.get(localName)
-            if (byName) {
-              console.log(
-                `[EnterpriseSyncManager] Re-linking "${skill.name}" from deleted ${skill.enterprise_skill_id} to surviving ${byName.id}`
-              )
-              this.db.updateSkill(skill.id, { enterprise_skill_id: byName.id })
-              skill.enterprise_skill_id = byName.id
-              serverVersion = byName
-            } else {
-              // Server skill is gone and no surviving copy by name — clear stale ID
-              // so it falls through to the create path below
-              console.log(
-                `[EnterpriseSyncManager] Skill "${skill.name}" gone from server (${skill.enterprise_skill_id}), will re-create`
-              )
-              this.db.updateSkill(skill.id, { enterprise_skill_id: null })
-              skill.enterprise_skill_id = null
-            }
-          }
-        }
-
-        if (skill.enterprise_skill_id) {
-          // Linked to a valid server skill — compare content to decide if we need to push
-          const serverVersion = serverSkillMap.get(skill.enterprise_skill_id)!
-          const contentChanged =
-            serverVersion.name !== localName ||
-            serverVersion.description !== skill.description ||
-            serverVersion.content !== skill.content ||
-            serverVersion.confidence !== skill.confidence ||
-            JSON.stringify(serverVersion.tags) !== JSON.stringify(skill.tags)
-
-          if (!contentChanged && usesDelta <= 0) {
-            // No changes — just include the ID for node assignment
-            serverSkillIds.push(skill.enterprise_skill_id)
-            continue
-          }
-
-          const updatePayload: Record<string, unknown> = {}
-          if (contentChanged) {
-            updatePayload.name = localName
-            updatePayload.description = skill.description
-            updatePayload.content = skill.content
-            updatePayload.confidence = skill.confidence
-            updatePayload.tags = skill.tags
-          }
-          if (usesDelta > 0) {
-            updatePayload.usesDelta = usesDelta
-            updatePayload.lastUsed = this.normalizeDateTime(skill.last_used)
-          }
-
-          const serverSkill = await this.apiClient.updateSkill(
-            skill.enterprise_skill_id,
-            updatePayload as Parameters<typeof this.apiClient.updateSkill>[1]
-          )
-          serverSkillIds.push(serverSkill.id)
-          result.skills.pushed++
-
-          // Reset uses_at_last_sync after successful push
-          this.db.updateSkill(skill.id, { uses_at_last_sync: skill.uses })
-        } else {
-          // New local skill — check if same-name skill already exists on server
-          // (handles multi-device scenario: another 20x already pushed this skill)
-          const localName = this.stripWorkfloPrefix(skill.name)
-          const existingServer = serverSkillByName.get(localName)
-
-          if (existingServer) {
-            // Link to existing server skill instead of creating a duplicate
-            console.log(
-              `[EnterpriseSyncManager] Linking local skill "${skill.name}" to existing server skill ${existingServer.id}`
-            )
-            this.db.updateSkill(skill.id, {
-              enterprise_skill_id: existingServer.id,
-              uses_at_last_sync: skill.uses
-            })
-            serverSkillIds.push(existingServer.id)
-
-            // Push content updates and usage delta
-            const contentChanged =
-              existingServer.name !== localName ||
-              existingServer.description !== skill.description ||
-              existingServer.content !== skill.content ||
-              existingServer.confidence !== skill.confidence ||
-              JSON.stringify(existingServer.tags) !== JSON.stringify(skill.tags)
-
-            if (contentChanged || usesDelta > 0) {
-              const updatePayload: Record<string, unknown> = {}
-              if (contentChanged) {
-                updatePayload.name = localName
-                updatePayload.description = skill.description
-                updatePayload.content = skill.content
-                updatePayload.confidence = skill.confidence
-                updatePayload.tags = skill.tags
-              }
-              if (usesDelta > 0) {
-                updatePayload.usesDelta = usesDelta
-                updatePayload.lastUsed = this.normalizeDateTime(skill.last_used)
-              }
-              await this.apiClient.updateSkill(
-                existingServer.id,
-                updatePayload as Parameters<typeof this.apiClient.updateSkill>[1]
-              )
-              result.skills.pushed++
-            }
-          } else {
-            // Truly new — create on server (uses is absolute for initial create)
-            const created = await this.apiClient.createSkill({
-              name: localName,
-              description: skill.description,
-              content: skill.content,
-              confidence: skill.confidence,
-              tags: skill.tags,
-              uses: skill.uses,
-              lastUsed: this.normalizeDateTime(skill.last_used)
-            })
-
-            // Store the server ID and sync baseline locally
-            this.db.updateSkill(skill.id, {
-              enterprise_skill_id: created.id,
-              uses_at_last_sync: skill.uses
-            })
-            serverSkillIds.push(created.id)
-            result.skills.pushed++
-
-            // Add to name map so subsequent skills in this batch won't duplicate
-            serverSkillByName.set(localName, { ...created, tags: skill.tags } as WorkfloSkill)
-          }
-        }
+        return await this.apiClient.batchSyncSkills(skills)
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err)
-        result.errors.push(`Push skill ${skill.name}: ${msg}`)
-        // Still include the enterprise_skill_id if we have one
-        if (skill.enterprise_skill_id) {
-          serverSkillIds.push(skill.enterprise_skill_id)
+        lastError = err instanceof Error ? err : new Error(String(err))
+
+        // Don't retry on 400 (validation error) — it won't succeed
+        if (lastError.message.includes('400') || lastError.message.includes('validation')) {
+          throw lastError
+        }
+
+        if (attempt < EnterpriseSyncManager.BATCH_SYNC_MAX_RETRIES - 1) {
+          const delay = EnterpriseSyncManager.BATCH_SYNC_BASE_DELAY_MS * Math.pow(2, attempt)
+          console.log(
+            `[EnterpriseSyncManager] Batch sync attempt ${attempt + 1} failed, retrying in ${delay}ms...`
+          )
+          await new Promise((resolve) => setTimeout(resolve, delay))
         }
       }
     }
 
-    return serverSkillIds
+    throw lastError!
+  }
+
+  /**
+   * Split an array into chunks of the given size.
+   */
+  private chunkArray<T>(array: T[], size: number): T[][] {
+    const chunks: T[][] = []
+    for (let i = 0; i < array.length; i += size) {
+      chunks.push(array.slice(i, i + size))
+    }
+    // Ensure at least one empty chunk so the caller still fires a request
+    if (chunks.length === 0) chunks.push([])
+    return chunks
   }
 
   /**

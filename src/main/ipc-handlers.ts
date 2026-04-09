@@ -807,9 +807,11 @@ export function registerIpcHandlers(
       agentManager.setEnterpriseAuth(enterpriseAuth)
 
       // Run initial sync (agents, skills, MCP servers)
+      const syncStart = Date.now()
       console.log('[enterprise] Running initial resource sync...')
       const syncResult = await enterpriseSyncMgr.syncAll(userId)
-      console.log('[enterprise] Initial sync result:', JSON.stringify(syncResult))
+      const syncMs = Date.now() - syncStart
+      console.log(`[enterprise] Initial sync completed in ${syncMs}ms — result:`, JSON.stringify(syncResult))
 
       // Auto-register MCP Dev Server (Workflo's MCP endpoint that exposes
       // workflows-as-tools, integrations, datastores, and data tables).

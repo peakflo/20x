@@ -312,6 +312,28 @@ export class WorkfloApiClient {
   }
 
   /**
+   * Batch sync skills — push multiple skills in a single API call.
+   * The server upserts by name and returns ALL tenant skills after sync.
+   * Max 200 skills per request; caller must chunk if more.
+   */
+  async batchSyncSkills(skills: Array<{
+    name: string
+    description: string
+    content: string
+    confidence?: number
+    uses?: number
+    lastUsed?: string | null
+    tags?: string[]
+  }>): Promise<{ created: number; updated: number; skills: WorkfloSkill[] }> {
+    const result = (await this.auth.apiRequest(
+      'POST',
+      '/api/skills/batch-sync',
+      { skills }
+    )) as { created: number; updated: number; skills: WorkfloSkill[] }
+    return result
+  }
+
+  /**
    * Clean up duplicate skills on the server (keeps oldest per name)
    */
   async cleanupDuplicateSkills(): Promise<{ deleted: number; kept: number }> {

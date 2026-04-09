@@ -56,7 +56,7 @@ function makeOrgNode(overrides: Partial<WorkfloOrgNode> = {}): WorkfloOrgNode {
 
 // ── Test Suite ────────────────────────────────────────────────────────────
 
-describe('EnterpriseSyncManager — Skills 2-Way Sync', () => {
+describe('EnterpriseSyncManager — Skills 2-Way Sync (Batch)', () => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let mockDb: any
   let mockApiClient: Record<string, ReturnType<typeof vi.fn>>
@@ -65,7 +65,7 @@ describe('EnterpriseSyncManager — Skills 2-Way Sync', () => {
   beforeEach(() => {
     mockDb = {
       db: {
-        pragma: vi.fn().mockReturnValue([{ name: 'enterprise_skill_id' }]),
+        pragma: vi.fn().mockReturnValue([{ name: 'enterprise_skill_id' }, { name: 'uses_at_last_sync' }]),
         exec: vi.fn()
       },
       getSkills: vi.fn().mockReturnValue([]),
@@ -95,6 +95,7 @@ describe('EnterpriseSyncManager — Skills 2-Way Sync', () => {
         taskSources: []
       }),
       listSkills: vi.fn().mockResolvedValue([]),
+      batchSyncSkills: vi.fn().mockResolvedValue({ created: 0, updated: 0, skills: [] }),
       createSkill: vi.fn().mockResolvedValue(makeServerSkill()),
       updateSkill: vi.fn().mockResolvedValue(makeServerSkill()),
       deleteSkill: vi.fn().mockResolvedValue(undefined),
@@ -105,27 +106,37 @@ describe('EnterpriseSyncManager — Skills 2-Way Sync', () => {
     syncManager = new EnterpriseSyncManager(mockDb as never, mockApiClient as never)
   })
 
-  // ── Push local skills to server ──────────────────────────────────────
+  // ── Batch sync skills to server ──────────────────────────────────────
 
-  describe('pushLocalSkills', () => {
-    it('creates new skill on server for local skill without enterprise_skill_id', async () => {
+  describe('batchSyncSkills', () => {
+    it('sends all local skills in a single batch-sync API call', async () => {
       const localSkill = makeLocalSkill({ enterprise_skill_id: null })
       mockDb.getSkills.mockReturnValue([localSkill])
-      mockApiClient.createSkill.mockResolvedValue(makeServerSkill({ id: 'server-new' }))
+      mockApiClient.batchSyncSkills.mockResolvedValue({
+        created: 1,
+        updated: 0,
+        skills: [makeServerSkill({ id: 'server-new', name: 'Test Skill' })]
+      })
 
       const result = await syncManager.syncAll('user-1')
 
-      expect(mockApiClient.createSkill).toHaveBeenCalledWith({
+      // Should use batchSyncSkills instead of createSkill/updateSkill
+      expect(mockApiClient.batchSyncSkills).toHaveBeenCalledTimes(1)
+      expect(mockApiClient.batchSyncSkills).toHaveBeenCalledWith([{
         name: 'Test Skill',
         description: 'A test skill',
         content: '# Test',
         confidence: 0.8,
-        tags: ['test'],
         uses: 5,
-        lastUsed: '2026-03-10T00:00:00Z'
-      })
+        lastUsed: '2026-03-10T00:00:00Z',
+        tags: ['test']
+      }])
 
-      // Should store the server ID and sync baseline locally
+      // Should NOT use per-skill API calls
+      expect(mockApiClient.createSkill).not.toHaveBeenCalled()
+      expect(mockApiClient.updateSkill).not.toHaveBeenCalled()
+
+      // Should link local skill to server skill
       expect(mockDb.updateSkill).toHaveBeenCalledWith('local-1', {
         enterprise_skill_id: 'server-new',
         uses_at_last_sync: 5
@@ -133,102 +144,156 @@ describe('EnterpriseSyncManager — Skills 2-Way Sync', () => {
       expect(result.skills.pushed).toBe(1)
     })
 
-    it('updates existing skill on server for local skill with enterprise_skill_id', async () => {
-      const localSkill = makeLocalSkill({ enterprise_skill_id: 'server-existing', uses: 5, uses_at_last_sync: 0 })
-      mockDb.getSkills.mockReturnValue([localSkill])
-      // Server must have the skill so it's found in serverSkillMap
-      mockApiClient.listSkills.mockResolvedValue([
-        makeServerSkill({ id: 'server-existing', name: 'Test Skill' })
-      ])
-      mockApiClient.updateSkill.mockResolvedValue(makeServerSkill({ id: 'server-existing' }))
-
-      const result = await syncManager.syncAll('user-1')
-
-      expect(mockApiClient.updateSkill).toHaveBeenCalledWith('server-existing', {
-        name: 'Test Skill',
-        description: 'A test skill',
-        content: '# Test',
-        confidence: 0.8,
-        tags: ['test'],
-        usesDelta: 5,
-        lastUsed: '2026-03-10T00:00:00Z'
-      })
-      expect(result.skills.pushed).toBe(1)
-    })
-
-    it('skips [Workflo]-prefixed skills entirely (pulled from server)', async () => {
+    it('skips [Workflo]-prefixed skills from batch sync', async () => {
       const localSkill = makeLocalSkill({
         name: '[Workflo] My Skill',
         enterprise_skill_id: null
       })
       mockDb.getSkills.mockReturnValue([localSkill])
+      mockApiClient.batchSyncSkills.mockResolvedValue({
+        created: 0,
+        updated: 0,
+        skills: []
+      })
 
       await syncManager.syncAll('user-1')
 
-      // [Workflo] skills are pulled copies — should not be pushed back
-      expect(mockApiClient.createSkill).not.toHaveBeenCalled()
-      expect(mockApiClient.updateSkill).not.toHaveBeenCalled()
+      // batch-sync should be called with empty array (the skill was filtered)
+      const batchCall = mockApiClient.batchSyncSkills.mock.calls[0]
+      expect(batchCall[0]).toEqual([])
     })
 
-    it('skips built-in Mastermind skill', async () => {
+    it('skips built-in Mastermind skill from batch sync', async () => {
       const mastermind = makeLocalSkill({ name: 'Mastermind' })
       mockDb.getSkills.mockReturnValue([mastermind])
+      mockApiClient.batchSyncSkills.mockResolvedValue({
+        created: 0,
+        updated: 0,
+        skills: []
+      })
 
       const result = await syncManager.syncAll('user-1')
 
-      expect(mockApiClient.createSkill).not.toHaveBeenCalled()
-      expect(mockApiClient.updateSkill).not.toHaveBeenCalled()
+      const batchCall = mockApiClient.batchSyncSkills.mock.calls[0]
+      expect(batchCall[0]).toEqual([])
       expect(result.skills.pushed).toBe(0)
     })
 
-    it('clears stale enterprise_skill_id and creates fresh when server skill is gone', async () => {
-      const localSkill = makeLocalSkill({ enterprise_skill_id: 'deleted-server-id' })
-      mockDb.getSkills.mockReturnValue([localSkill])
-      // listSkills returns empty — the linked ID doesn't exist on server
-      mockApiClient.listSkills.mockResolvedValue([])
-      mockApiClient.createSkill.mockResolvedValue(makeServerSkill({ id: 'new-server-id' }))
+    it('handles multiple skills in a single batch call', async () => {
+      const skills = [
+        makeLocalSkill({ id: 'local-1', name: 'Skill A', enterprise_skill_id: null }),
+        makeLocalSkill({ id: 'local-2', name: 'Skill B', enterprise_skill_id: null })
+      ]
+      mockDb.getSkills.mockReturnValue(skills)
+      mockApiClient.batchSyncSkills.mockResolvedValue({
+        created: 2,
+        updated: 0,
+        skills: [
+          makeServerSkill({ id: 'server-a', name: 'Skill A' }),
+          makeServerSkill({ id: 'server-b', name: 'Skill B' })
+        ]
+      })
 
       const result = await syncManager.syncAll('user-1')
 
-      // Should clear stale ID first
-      expect(mockDb.updateSkill).toHaveBeenCalledWith('local-1', {
-        enterprise_skill_id: null
-      })
-      // Then create fresh
-      expect(mockApiClient.createSkill).toHaveBeenCalled()
-      expect(mockDb.updateSkill).toHaveBeenCalledWith('local-1', {
-        enterprise_skill_id: 'new-server-id',
-        uses_at_last_sync: 5
-      })
-      expect(result.skills.pushed).toBe(1)
+      expect(mockApiClient.batchSyncSkills).toHaveBeenCalledTimes(1)
+      const payload = mockApiClient.batchSyncSkills.mock.calls[0][0]
+      expect(payload).toHaveLength(2)
+      expect(payload[0].name).toBe('Skill A')
+      expect(payload[1].name).toBe('Skill B')
+      expect(result.skills.pushed).toBe(2)
     })
 
-    it('records error but continues on push failure', async () => {
-      const skill1 = makeLocalSkill({ id: 'local-1', name: 'Skill 1' })
-      const skill2 = makeLocalSkill({ id: 'local-2', name: 'Skill 2' })
-      mockDb.getSkills.mockReturnValue([skill1, skill2])
-      mockApiClient.createSkill
-        .mockRejectedValueOnce(new Error('Network error'))
-        .mockResolvedValueOnce(makeServerSkill({ id: 'server-2' }))
+    it('retries on transient failure with exponential backoff', async () => {
+      const localSkill = makeLocalSkill({ enterprise_skill_id: null })
+      mockDb.getSkills.mockReturnValue([localSkill])
+      mockApiClient.batchSyncSkills
+        .mockRejectedValueOnce(new Error('500 Internal Server Error'))
+        .mockResolvedValueOnce({
+          created: 1,
+          updated: 0,
+          skills: [makeServerSkill({ id: 'server-1', name: 'Test Skill' })]
+        })
 
       const result = await syncManager.syncAll('user-1')
 
-      expect(result.errors).toContainEqual(expect.stringContaining('Push skill Skill 1'))
-      expect(result.skills.pushed).toBe(1) // Second skill succeeded
+      expect(mockApiClient.batchSyncSkills).toHaveBeenCalledTimes(2)
+      expect(result.skills.pushed).toBe(1)
+      expect(result.errors).toHaveLength(0)
+    })
+
+    it('does not retry on 400 validation error', async () => {
+      const localSkill = makeLocalSkill({ enterprise_skill_id: null })
+      mockDb.getSkills.mockReturnValue([localSkill])
+      mockApiClient.batchSyncSkills.mockRejectedValue(new Error('400 Bad Request: validation failed'))
+
+      const result = await syncManager.syncAll('user-1')
+
+      expect(mockApiClient.batchSyncSkills).toHaveBeenCalledTimes(1)
+      expect(result.errors).toContainEqual(expect.stringContaining('Batch sync chunk'))
+    })
+
+    it('records error but does not crash on batch sync failure', async () => {
+      const localSkill = makeLocalSkill({ enterprise_skill_id: null })
+      mockDb.getSkills.mockReturnValue([localSkill])
+      mockApiClient.batchSyncSkills.mockRejectedValue(new Error('Network error'))
+
+      const result = await syncManager.syncAll('user-1')
+
+      expect(result.errors.length).toBeGreaterThan(0)
+      expect(result.errors).toContainEqual(expect.stringContaining('Batch sync chunk'))
+    })
+
+    it('uses batch-sync response for pull phase (no extra listSkills call)', async () => {
+      const localSkill = makeLocalSkill({ enterprise_skill_id: null })
+      mockDb.getSkills.mockReturnValue([localSkill])
+
+      const remoteSkill = makeServerSkill({ id: 'remote-1', name: 'Remote Skill' })
+      const pushedSkill = makeServerSkill({ id: 'pushed-1', name: 'Test Skill' })
+
+      mockApiClient.batchSyncSkills.mockResolvedValue({
+        created: 1,
+        updated: 0,
+        skills: [pushedSkill, remoteSkill] // Response includes ALL tenant skills
+      })
+
+      // After batch sync links the pushed skill, getSkillByEnterpriseId should find it
+      mockDb.getSkillByEnterpriseId.mockImplementation((id: string) => {
+        if (id === 'pushed-1') return makeLocalSkill({ enterprise_skill_id: 'pushed-1' })
+        return undefined
+      })
+      mockDb.getSkillByName.mockReturnValue(undefined)
+
+      const result = await syncManager.syncAll('user-1')
+
+      // listSkills should NOT be called — batch-sync response is used for pull
+      expect(mockApiClient.listSkills).not.toHaveBeenCalled()
+
+      // Remote skill should be pulled locally
+      expect(mockDb.createSkill).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: '[Workflo] Remote Skill',
+          enterprise_skill_id: 'remote-1'
+        })
+      )
+      expect(result.skills.created).toBe(1)
     })
   })
 
   // ── Assign skills to node ────────────────────────────────────────────
 
   describe('assignSkillsToNode', () => {
-    it('assigns only pushed skill IDs to node (no merge with existing)', async () => {
+    it('assigns pushed skill IDs to node', async () => {
       const localSkill = makeLocalSkill({ enterprise_skill_id: null })
       mockDb.getSkills.mockReturnValue([localSkill])
-      mockApiClient.createSkill.mockResolvedValue(makeServerSkill({ id: 'pushed-1' }))
+      mockApiClient.batchSyncSkills.mockResolvedValue({
+        created: 1,
+        updated: 0,
+        skills: [makeServerSkill({ id: 'pushed-1', name: 'Test Skill' })]
+      })
 
       await syncManager.syncAll('user-1')
 
-      // Should only contain the pushed ID, not any pre-existing node IDs
       expect(mockApiClient.updateOrgNode).toHaveBeenCalledWith('node-1', {
         skillIds: ['pushed-1']
       })
@@ -237,7 +302,11 @@ describe('EnterpriseSyncManager — Skills 2-Way Sync', () => {
     it('deduplicates skill IDs', async () => {
       const localSkill = makeLocalSkill({ enterprise_skill_id: 'already-on-node' })
       mockDb.getSkills.mockReturnValue([localSkill])
-      mockApiClient.updateSkill.mockResolvedValue(makeServerSkill({ id: 'already-on-node' }))
+      mockApiClient.batchSyncSkills.mockResolvedValue({
+        created: 0,
+        updated: 1,
+        skills: [makeServerSkill({ id: 'already-on-node', name: 'Test Skill' })]
+      })
 
       await syncManager.syncAll('user-1')
 
@@ -253,7 +322,11 @@ describe('EnterpriseSyncManager — Skills 2-Way Sync', () => {
   describe('pullServerSkills', () => {
     it('creates new local skill from server skill not seen before', async () => {
       const serverSkill = makeServerSkill({ id: 'server-new', name: 'Remote Skill' })
-      mockApiClient.listSkills.mockResolvedValue([serverSkill])
+      mockApiClient.batchSyncSkills.mockResolvedValue({
+        created: 0,
+        updated: 0,
+        skills: [serverSkill]
+      })
       mockDb.getSkillByEnterpriseId.mockReturnValue(undefined)
       mockDb.getSkillByName.mockReturnValue(undefined)
 
@@ -274,7 +347,11 @@ describe('EnterpriseSyncManager — Skills 2-Way Sync', () => {
         content: '# Updated',
         updatedAt: '2026-03-15T00:00:00Z'
       })
-      mockApiClient.listSkills.mockResolvedValue([serverSkill])
+      mockApiClient.batchSyncSkills.mockResolvedValue({
+        created: 0,
+        updated: 0,
+        skills: [serverSkill]
+      })
 
       const linkedLocal = makeLocalSkill({
         enterprise_skill_id: 'server-1',
@@ -296,7 +373,11 @@ describe('EnterpriseSyncManager — Skills 2-Way Sync', () => {
         id: 'server-1',
         updatedAt: '2026-03-05T00:00:00Z'
       })
-      mockApiClient.listSkills.mockResolvedValue([serverSkill])
+      mockApiClient.batchSyncSkills.mockResolvedValue({
+        created: 0,
+        updated: 0,
+        skills: [serverSkill]
+      })
 
       const linkedLocal = makeLocalSkill({
         enterprise_skill_id: 'server-1',
@@ -306,13 +387,16 @@ describe('EnterpriseSyncManager — Skills 2-Way Sync', () => {
 
       const result = await syncManager.syncAll('user-1')
 
-      // updateSkill should NOT be called with content update (only from push)
       expect(result.skills.updated).toBe(0)
     })
 
     it('links existing [Workflo]-prefixed skill by name', async () => {
       const serverSkill = makeServerSkill({ id: 'server-x', name: 'My Skill' })
-      mockApiClient.listSkills.mockResolvedValue([serverSkill])
+      mockApiClient.batchSyncSkills.mockResolvedValue({
+        created: 0,
+        updated: 0,
+        skills: [serverSkill]
+      })
       mockDb.getSkillByEnterpriseId.mockReturnValue(undefined)
 
       const existingByName = makeLocalSkill({
@@ -327,7 +411,6 @@ describe('EnterpriseSyncManager — Skills 2-Way Sync', () => {
 
       await syncManager.syncAll('user-1')
 
-      // Should link the enterprise ID
       expect(mockDb.updateSkill).toHaveBeenCalledWith('local-by-name', {
         enterprise_skill_id: 'server-x'
       })
@@ -335,7 +418,11 @@ describe('EnterpriseSyncManager — Skills 2-Way Sync', () => {
 
     it('links existing skill by exact name (no prefix)', async () => {
       const serverSkill = makeServerSkill({ id: 'server-y', name: 'Exact Name' })
-      mockApiClient.listSkills.mockResolvedValue([serverSkill])
+      mockApiClient.batchSyncSkills.mockResolvedValue({
+        created: 0,
+        updated: 0,
+        skills: [serverSkill]
+      })
       mockDb.getSkillByEnterpriseId.mockReturnValue(undefined)
 
       const existingByExactName = makeLocalSkill({
@@ -350,7 +437,6 @@ describe('EnterpriseSyncManager — Skills 2-Way Sync', () => {
 
       await syncManager.syncAll('user-1')
 
-      // Should link the enterprise ID
       expect(mockDb.updateSkill).toHaveBeenCalledWith('local-exact', {
         enterprise_skill_id: 'server-y'
       })
@@ -360,16 +446,19 @@ describe('EnterpriseSyncManager — Skills 2-Way Sync', () => {
   // ── Full sync flow ────────────────────────────────────────────────────
 
   describe('full syncAll flow', () => {
-    it('pushes, assigns, then pulls in correct order', async () => {
+    it('batch syncs, assigns, then pulls in correct order', async () => {
       const localSkill = makeLocalSkill({ enterprise_skill_id: null })
       mockDb.getSkills.mockReturnValue([localSkill])
-      mockApiClient.createSkill.mockResolvedValue(makeServerSkill({ id: 'pushed-id' }))
-      mockApiClient.listSkills.mockResolvedValue([
-        makeServerSkill({ id: 'pushed-id', name: 'Test Skill' }),
-        makeServerSkill({ id: 'other-id', name: 'Other Team Skill' })
-      ])
+      mockApiClient.batchSyncSkills.mockResolvedValue({
+        created: 1,
+        updated: 0,
+        skills: [
+          makeServerSkill({ id: 'pushed-id', name: 'Test Skill' }),
+          makeServerSkill({ id: 'other-id', name: 'Other Team Skill' })
+        ]
+      })
 
-      // After push, the skill has enterprise_skill_id
+      // After batch sync links, the skill has enterprise_skill_id
       mockDb.getSkillByEnterpriseId.mockImplementation((id: string) => {
         if (id === 'pushed-id') return makeLocalSkill({ enterprise_skill_id: 'pushed-id' })
         return undefined
@@ -377,7 +466,8 @@ describe('EnterpriseSyncManager — Skills 2-Way Sync', () => {
 
       const result = await syncManager.syncAll('user-1')
 
-      // Push happened
+      // Batch sync happened (single API call)
+      expect(mockApiClient.batchSyncSkills).toHaveBeenCalledTimes(1)
       expect(result.skills.pushed).toBe(1)
       // Node assignment happened
       expect(mockApiClient.updateOrgNode).toHaveBeenCalled()
@@ -395,6 +485,11 @@ describe('EnterpriseSyncManager — Skills 2-Way Sync', () => {
         mcpServers: [],
         taskSources: []
       })
+      mockApiClient.batchSyncSkills.mockResolvedValue({
+        created: 0,
+        updated: 0,
+        skills: []
+      })
 
       const result = await syncManager.syncAll('user-1')
 
@@ -404,6 +499,11 @@ describe('EnterpriseSyncManager — Skills 2-Way Sync', () => {
 
     it('reports errors in result without crashing', async () => {
       mockApiClient.listOrgNodes.mockRejectedValue(new Error('Network down'))
+      mockApiClient.batchSyncSkills.mockResolvedValue({
+        created: 0,
+        updated: 0,
+        skills: []
+      })
 
       const result = await syncManager.syncAll('user-1')
 
@@ -422,7 +522,11 @@ describe('EnterpriseSyncManager — Skills 2-Way Sync', () => {
 
       const localSkill = makeLocalSkill({ enterprise_skill_id: null })
       mockDb.getSkills.mockReturnValue([localSkill])
-      mockApiClient.createSkill.mockResolvedValue(makeServerSkill({ id: 'pushed-1' }))
+      mockApiClient.batchSyncSkills.mockResolvedValue({
+        created: 1,
+        updated: 0,
+        skills: [makeServerSkill({ id: 'pushed-1', name: 'Test Skill' })]
+      })
 
       await syncManager.syncAll('user-1')
 
@@ -432,37 +536,46 @@ describe('EnterpriseSyncManager — Skills 2-Way Sync', () => {
       expect(mockApiClient.updateOrgNode).toHaveBeenCalledWith('node-b', expect.objectContaining({ skillIds: expect.any(Array) }))
     })
 
-    it('skips Mastermind from push and node assignment', async () => {
+    it('skips Mastermind from batch sync and node assignment', async () => {
       const mastermind = makeLocalSkill({
         name: 'Mastermind',
         enterprise_skill_id: 'mastermind-server-id'
       })
       mockDb.getSkills.mockReturnValue([mastermind])
+      mockApiClient.batchSyncSkills.mockResolvedValue({
+        created: 0,
+        updated: 0,
+        skills: []
+      })
 
       await syncManager.syncAll('user-1')
 
-      // Should not push
-      expect(mockApiClient.createSkill).not.toHaveBeenCalled()
-      // Should assign empty skillIds (Mastermind is skipped)
+      // Batch sync should have empty payload (Mastermind filtered out)
+      const batchPayload = mockApiClient.batchSyncSkills.mock.calls[0][0]
+      expect(batchPayload).toEqual([])
+      // Should assign empty skillIds
       expect(mockApiClient.updateOrgNode).toHaveBeenCalledWith(
         'node-1',
         { skillIds: [] }
       )
     })
 
-    it('skips [Workflo]-prefixed skills from push and node assignment', async () => {
+    it('skips [Workflo]-prefixed skills from batch sync and node assignment', async () => {
       const pulledSkill = makeLocalSkill({
         name: '[Workflo] Other Team Skill',
         enterprise_skill_id: 'other-team-id'
       })
       mockDb.getSkills.mockReturnValue([pulledSkill])
+      mockApiClient.batchSyncSkills.mockResolvedValue({
+        created: 0,
+        updated: 0,
+        skills: []
+      })
 
       await syncManager.syncAll('user-1')
 
-      // Should not push pulled skills back
-      expect(mockApiClient.createSkill).not.toHaveBeenCalled()
-      expect(mockApiClient.updateSkill).not.toHaveBeenCalled()
-      // Should not assign pulled skills to this node
+      const batchPayload = mockApiClient.batchSyncSkills.mock.calls[0][0]
+      expect(batchPayload).toEqual([])
       expect(mockApiClient.updateOrgNode).toHaveBeenCalledWith(
         'node-1',
         { skillIds: [] }
@@ -472,9 +585,12 @@ describe('EnterpriseSyncManager — Skills 2-Way Sync', () => {
     it('handles assign skills failure gracefully', async () => {
       const localSkill = makeLocalSkill({ enterprise_skill_id: null })
       mockDb.getSkills.mockReturnValue([localSkill])
-      mockApiClient.createSkill.mockResolvedValue(makeServerSkill({ id: 'pushed-1' }))
+      mockApiClient.batchSyncSkills.mockResolvedValue({
+        created: 1,
+        updated: 0,
+        skills: [makeServerSkill({ id: 'pushed-1', name: 'Test Skill' })]
+      })
       mockApiClient.updateOrgNode.mockRejectedValue(new Error('Permission denied'))
-      // getOrgNode is called both in syncNode and assignSkillsToNode
       mockApiClient.getOrgNode.mockResolvedValue({
         node: makeOrgNode(),
         mcpServers: [],
@@ -483,90 +599,38 @@ describe('EnterpriseSyncManager — Skills 2-Way Sync', () => {
 
       const result = await syncManager.syncAll('user-1')
 
-      // Should report assignment error but still succeed on push and pull
       expect(result.errors).toContainEqual(expect.stringContaining('Assign skills to node'))
       expect(result.skills.pushed).toBe(1)
     })
 
     it('includes result.skills.pushed in sync output', async () => {
+      mockApiClient.batchSyncSkills.mockResolvedValue({
+        created: 0,
+        updated: 0,
+        skills: []
+      })
+
       const result = await syncManager.syncAll('user-1')
 
-      // Verify the pushed counter exists in the result shape
       expect(result.skills).toHaveProperty('pushed')
       expect(result.skills).toHaveProperty('created')
       expect(result.skills).toHaveProperty('updated')
     })
 
-    it('sends usesDelta (not absolute uses) when pushing to server', async () => {
-      // Skill used 10 times total, 3 since last sync
-      const localSkill = makeLocalSkill({
-        enterprise_skill_id: 'server-1',
-        uses: 10,
-        uses_at_last_sync: 7
-      })
-      mockDb.getSkills.mockReturnValue([localSkill])
-      // Server must have the skill so it's found in serverSkillMap
-      mockApiClient.listSkills.mockResolvedValue([
-        makeServerSkill({ id: 'server-1', name: 'Test Skill' })
-      ])
-      mockApiClient.updateSkill.mockResolvedValue(makeServerSkill({ id: 'server-1' }))
-
-      await syncManager.syncAll('user-1')
-
-      expect(mockApiClient.updateSkill).toHaveBeenCalledWith('server-1',
-        expect.objectContaining({ usesDelta: 3 })
-      )
-      // Should NOT send absolute uses
-      const callArgs = mockApiClient.updateSkill.mock.calls[0][1]
-      expect(callArgs).not.toHaveProperty('uses')
-
-      // Should update uses_at_last_sync locally after push
-      expect(mockDb.updateSkill).toHaveBeenCalledWith('local-1', { uses_at_last_sync: 10 })
-    })
-
-    it('skips usage push when no delta (uses_at_last_sync matches uses)', async () => {
-      const localSkill = makeLocalSkill({
-        enterprise_skill_id: 'server-1',
-        uses: 5,
-        uses_at_last_sync: 5
-      })
-      // Server has same content — no content change AND no usage delta
-      mockApiClient.listSkills.mockResolvedValue([
-        makeServerSkill({
-          id: 'server-1',
-          name: 'Test Skill',
-          description: 'A test skill',
-          content: '# Test',
-          confidence: 0.8,
-          tags: ['test']
-        })
-      ])
-      mockDb.getSkills.mockReturnValue([localSkill])
-
-      await syncManager.syncAll('user-1')
-
-      // Should not call updateSkill at all — nothing changed
-      expect(mockApiClient.updateSkill).not.toHaveBeenCalled()
-    })
-
-    // ── No org nodes edge cases ──────────────────────────────────────────
-
-    it('syncs all skills when no org nodes exist (push + pull without node assignment)', async () => {
-      // Simulate: no org nodes created in workflow-builder
+    it('syncs all skills when no org nodes exist (batch sync + pull without node assignment)', async () => {
       mockApiClient.listOrgNodes.mockResolvedValue([])
 
       const localSkill = makeLocalSkill({ enterprise_skill_id: null })
       mockDb.getSkills.mockReturnValue([localSkill])
-      mockApiClient.createSkill.mockResolvedValue(makeServerSkill({ id: 'pushed-1' }))
 
-      // First listSkills call (in pushLocalSkills) returns empty — no server skills yet
-      // Second listSkills call (before pullServerSkills) returns newly created + remote skills
-      mockApiClient.listSkills
-        .mockResolvedValueOnce([])
-        .mockResolvedValueOnce([
+      mockApiClient.batchSyncSkills.mockResolvedValue({
+        created: 1,
+        updated: 0,
+        skills: [
           makeServerSkill({ id: 'pushed-1', name: 'Test Skill' }),
           makeServerSkill({ id: 'remote-1', name: 'Remote Skill' })
-        ])
+        ]
+      })
       mockDb.getSkillByEnterpriseId.mockImplementation((id: string) => {
         if (id === 'pushed-1') return makeLocalSkill({ enterprise_skill_id: 'pushed-1' })
         return undefined
@@ -575,14 +639,14 @@ describe('EnterpriseSyncManager — Skills 2-Way Sync', () => {
 
       const result = await syncManager.syncAll('user-1')
 
-      // Skills push still works — local skill pushed to server
-      expect(mockApiClient.createSkill).toHaveBeenCalled()
+      // Batch sync works
+      expect(mockApiClient.batchSyncSkills).toHaveBeenCalled()
       expect(result.skills.pushed).toBe(1)
 
       // Node assignment is skipped — no nodes to assign to
       expect(mockApiClient.updateOrgNode).not.toHaveBeenCalled()
 
-      // Skills pull still works — remote skill pulled locally
+      // Remote skill pulled locally
       expect(mockDb.createSkill).toHaveBeenCalledWith(
         expect.objectContaining({
           name: '[Workflo] Remote Skill',
@@ -590,24 +654,19 @@ describe('EnterpriseSyncManager — Skills 2-Way Sync', () => {
         })
       )
       expect(result.skills.created).toBe(1)
-
-      // No errors — this is a valid flow
       expect(result.errors).toHaveLength(0)
     })
 
-    it('still syncs skills when listOrgNodes fails (e.g. permission error)', async () => {
-      // Simulate: listOrgNodes throws (e.g. permission denied, network error)
-      mockApiClient.listOrgNodes.mockRejectedValue(new Error('Permission denied: org-nodes:read required'))
+    it('still syncs skills when listOrgNodes fails', async () => {
+      mockApiClient.listOrgNodes.mockRejectedValue(new Error('Permission denied'))
 
       const localSkill = makeLocalSkill({ enterprise_skill_id: null })
       mockDb.getSkills.mockReturnValue([localSkill])
-      mockApiClient.createSkill.mockResolvedValue(makeServerSkill({ id: 'pushed-1' }))
-      // First listSkills (in pushLocalSkills) returns empty, second (before pull) returns new skill
-      mockApiClient.listSkills
-        .mockResolvedValueOnce([])
-        .mockResolvedValueOnce([
-          makeServerSkill({ id: 'pushed-1', name: 'Test Skill' })
-        ])
+      mockApiClient.batchSyncSkills.mockResolvedValue({
+        created: 1,
+        updated: 0,
+        skills: [makeServerSkill({ id: 'pushed-1', name: 'Test Skill' })]
+      })
       mockDb.getSkillByEnterpriseId.mockImplementation((id: string) => {
         if (id === 'pushed-1') return makeLocalSkill({ enterprise_skill_id: 'pushed-1' })
         return undefined
@@ -615,14 +674,9 @@ describe('EnterpriseSyncManager — Skills 2-Way Sync', () => {
 
       const result = await syncManager.syncAll('user-1')
 
-      // Org node sync error is recorded but non-fatal
       expect(result.errors).toContainEqual(expect.stringContaining('Org node sync failed'))
-
-      // Skills push still works despite org node failure
-      expect(mockApiClient.createSkill).toHaveBeenCalled()
+      expect(mockApiClient.batchSyncSkills).toHaveBeenCalled()
       expect(result.skills.pushed).toBe(1)
-
-      // Node assignment is skipped (nodes array is empty due to failure)
       expect(mockApiClient.updateOrgNode).not.toHaveBeenCalled()
     })
 
@@ -634,18 +688,26 @@ describe('EnterpriseSyncManager — Skills 2-Way Sync', () => {
         makeLocalSkill({ id: 'local-4', name: 'Existing Skill', enterprise_skill_id: 'server-existing' })
       ]
       mockDb.getSkills.mockReturnValue(skills)
-      // Server must have the existing skill so it's found in serverSkillMap
-      mockApiClient.listSkills.mockResolvedValue([
-        makeServerSkill({ id: 'server-existing', name: 'Existing Skill' })
-      ])
-      mockApiClient.createSkill.mockResolvedValue(makeServerSkill({ id: 'server-new' }))
-      mockApiClient.updateSkill.mockResolvedValue(makeServerSkill({ id: 'server-existing' }))
+      mockApiClient.batchSyncSkills.mockResolvedValue({
+        created: 1,
+        updated: 1,
+        skills: [
+          makeServerSkill({ id: 'server-new', name: 'New Skill' }),
+          makeServerSkill({ id: 'server-existing', name: 'Existing Skill' })
+        ]
+      })
 
       const result = await syncManager.syncAll('user-1')
 
-      // New Skill → created, Existing Skill → updated, [Workflo] Pulled → skipped, Mastermind → skipped
-      expect(mockApiClient.createSkill).toHaveBeenCalledTimes(1)
-      expect(mockApiClient.updateSkill).toHaveBeenCalledTimes(1)
+      // Batch sync should only include non-skipped skills
+      const batchPayload = mockApiClient.batchSyncSkills.mock.calls[0][0]
+      expect(batchPayload).toHaveLength(2) // New Skill + Existing Skill
+      expect(batchPayload.map((p: { name: string }) => p.name)).toEqual(['New Skill', 'Existing Skill'])
+
+      // Should NOT include [Workflo] or Mastermind
+      expect(batchPayload.map((p: { name: string }) => p.name)).not.toContain('[Workflo] Pulled Skill')
+      expect(batchPayload.map((p: { name: string }) => p.name)).not.toContain('Mastermind')
+
       expect(result.skills.pushed).toBe(2)
 
       // Node should only have local skills, not pulled [Workflo] ones
@@ -654,6 +716,37 @@ describe('EnterpriseSyncManager — Skills 2-Way Sync', () => {
       })
       const assignedIds = mockApiClient.updateOrgNode.mock.calls[0][1].skillIds
       expect(assignedIds).not.toContain('server-pulled')
+    })
+
+    it('makes only 1 API call for skills instead of N per-skill calls', async () => {
+      // 5 local skills that would have been 5+ API calls before
+      const skills = Array.from({ length: 5 }, (_, i) =>
+        makeLocalSkill({
+          id: `local-${i}`,
+          name: `Skill ${i}`,
+          enterprise_skill_id: null
+        })
+      )
+      mockDb.getSkills.mockReturnValue(skills)
+
+      const serverSkills = skills.map((_, i) =>
+        makeServerSkill({ id: `server-${i}`, name: `Skill ${i}` })
+      )
+      mockApiClient.batchSyncSkills.mockResolvedValue({
+        created: 5,
+        updated: 0,
+        skills: serverSkills
+      })
+
+      await syncManager.syncAll('user-1')
+
+      // Only 1 batch-sync call instead of 5 create calls
+      expect(mockApiClient.batchSyncSkills).toHaveBeenCalledTimes(1)
+      expect(mockApiClient.createSkill).not.toHaveBeenCalled()
+      expect(mockApiClient.updateSkill).not.toHaveBeenCalled()
+
+      // No separate listSkills call for pull phase
+      expect(mockApiClient.listSkills).not.toHaveBeenCalled()
     })
   })
 })
