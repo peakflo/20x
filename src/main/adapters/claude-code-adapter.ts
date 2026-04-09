@@ -17,6 +17,7 @@ import type {
   MessagePart,
 } from './coding-agent-adapter'
 import { SessionStatusType, MessagePartType, MessageRole } from './coding-agent-adapter'
+import { sanitizeEnvForChild } from '../security-utils'
 
 type ClaudeSDK = typeof import('@anthropic-ai/claude-agent-sdk')
 type Query = import('@anthropic-ai/claude-agent-sdk').Query
@@ -202,7 +203,6 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
    * so every bash command fetches secrets from the broker transparently.
    */
   private buildClaudeEnvironment(): Record<string, string> {
-    const { sanitizeEnvForChild } = require('../security-utils')
     const env = sanitizeEnvForChild()
 
     // Remove CLAUDECODE to prevent nested session error
