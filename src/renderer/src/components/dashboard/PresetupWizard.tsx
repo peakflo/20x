@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useMemo } from 'react'
 import {
   Calculator,
   UserPlus,
@@ -43,6 +43,23 @@ interface FullTemplate {
   category: string
   icon: string | null
   definition: TemplateDefinition
+}
+
+// ─── Integration key → IntegrationType mapping ───────────────
+
+// Maps presetup template integration keys to IntegrationType (same as workflow-builder)
+const INTEGRATION_KEY_TO_TYPE: Record<string, string> = {
+  email: 'google-mail',
+  gmail: 'google-mail',
+  outlook: 'outlook',
+  slack: 'slack',
+  hubspot: 'hubspot',
+  salesforce: 'salesforce',
+  xero: 'xero',
+}
+
+function isOAuthIntegration(key: string): boolean {
+  return key in INTEGRATION_KEY_TO_TYPE
 }
 
 // ─── Icon map ─────────────────────────────────────────────────
@@ -213,6 +230,129 @@ function WizardQuestions({
   )
 }
 
+// ─── Integrations step ───────────────────────────────────────
+
+interface ExistingIntegration {
+  id: string
+  name: string
+  type: string
+}
+
+interface RequiredIntegration {
+  key: string
+  name: string
+  required: boolean
+}
+
+function IntegrationsStep({
+  requiredIntegrations,
+  existingIntegrations,
+  loadingIntegrations,
+  selectedIntegrations,
+  onSelectIntegration,
+  onContinue,
+  onBack,
+}: {
+  requiredIntegrations: RequiredIntegration[]
+  existingIntegrations: ExistingIntegration[]
+  loadingIntegrations: boolean
+  selectedIntegrations: Record<string, string | null>
+  onSelectIntegration: (key: string, id: string | null) => void
+  onContinue: () => void
+  onBack: () => void
+}) {
+  const existingByType = useMemo(() => {
+    const byType: Record<string, ExistingIntegration[]> = {}
+    for (const intg of existingIntegrations) {
+      if (!byType[intg.type]) byType[intg.type] = []
+      byType[intg.type].push(intg)
+    }
+    return byType
+  }, [existingIntegrations])
+
+  if (loadingIntegrations) {
+    return (
+      <div className="flex flex-col items-center justify-center py-10 gap-3">
+        <Loader2 className="h-6 w-6 animate-spin text-primary" />
+        <p className="text-xs text-muted-foreground">Loading integrations...</p>
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <h3 className="text-sm font-medium">Connect integrations</h3>
+        <p className="text-xs text-muted-foreground mt-1">
+          Select existing connections or connect new accounts in your browser.
+        </p>
+      </div>
+
+      <div className="space-y-2">
+        {requiredIntegrations.map((integration) => {
+          const integrationType = INTEGRATION_KEY_TO_TYPE[integration.key]
+          const existing = integrationType ? (existingByType[integrationType] ?? []) : []
+          const selectedId = selectedIntegrations[integration.key]
+
+          return (
+            <div
+              key={integration.key}
+              className="rounded-xl border border-border p-3 space-y-2"
+            >
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Package className="h-4 w-4 text-muted-foreground" />
+                  <span className="text-xs font-medium">{integration.name}</span>
+                  {integration.required && (
+                    <span className="text-[10px] text-orange-600 dark:text-orange-400 font-medium">
+                      Required
+                    </span>
+                  )}
+                </div>
+                {selectedId !== null && selectedId !== undefined ? (
+                  <Check className="h-3.5 w-3.5 text-green-500" />
+                ) : null}
+              </div>
+
+              {existing.length > 0 ? (
+                <select
+                  value={selectedId ?? '__new__'}
+                  onChange={(e) => {
+                    const val = e.target.value
+                    onSelectIntegration(integration.key, val === '__new__' ? null : val)
+                  }}
+                  className="w-full rounded-lg border border-border bg-background px-2 py-1.5 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                >
+                  <option value="__new__">🔗 Connect new in browser</option>
+                  {existing.map((intg) => (
+                    <option key={intg.id} value={intg.id}>
+                      ✓ {intg.name}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  Will connect in browser
+                </p>
+              )}
+            </div>
+          )
+        })}
+      </div>
+
+      <div className="flex gap-3">
+        <Button variant="outline" size="sm" onClick={onBack} className="flex-1">
+          <ArrowLeft className="mr-1 h-3.5 w-3.5" /> Back
+        </Button>
+        <Button size="sm" onClick={onContinue} className="flex-1">
+          Open in browser
+          <ArrowRight className="ml-1 h-3.5 w-3.5" />
+        </Button>
+      </div>
+    </div>
+  )
+}
+
 // ─── Main wizard dialog ───────────────────────────────────────
 
 interface PresetupWizardProps {
@@ -224,6 +364,13 @@ export function PresetupWizard({ template, onClose }: PresetupWizardProps) {
   const [fullTemplate, setFullTemplate] = useState<FullTemplate | null>(null)
   const [loading, setLoading] = useState(true)
   const [fetchError, setFetchError] = useState<string | null>(null)
+
+  type WizardStep = 'questions' | 'integrations'
+  const [wizardStep, setWizardStep] = useState<WizardStep>('questions')
+  const [wizardAnswers, setWizardAnswers] = useState<Record<string, string>>({})
+  const [existingIntegrations, setExistingIntegrations] = useState<ExistingIntegration[]>([])
+  const [loadingIntegrations, setLoadingIntegrations] = useState(false)
+  const [selectedIntegrations, setSelectedIntegrations] = useState<Record<string, string | null>>({})
 
   // Fetch full template on mount
   useEffect(() => {
@@ -247,21 +394,16 @@ export function PresetupWizard({ template, onClose }: PresetupWizardProps) {
     }
   }, [template.slug])
 
-  // After wizard questions → open workflow-builder connect page with resolved integration keys
-  const handleWizardComplete = useCallback(
-    async (opts: Record<string, string>) => {
+  // Open workflow-builder connect page with resolved integration keys and pre-selected IDs
+  const handleOpenInBrowser = useCallback(
+    async (opts: Record<string, string>, integrationSelections: Record<string, string | null>) => {
       try {
         const frontendUrl = await getWorkfloFrontendUrl()
 
-        // Collect integration keys from base template + selected question options
         const integrationKeys = new Set<string>()
-
-        // Base template integrations
         for (const int of fullTemplate?.definition.integrations ?? []) {
           integrationKeys.add(int.key)
         }
-
-        // Integrations added by selected question options
         for (const question of fullTemplate?.definition.questions ?? []) {
           const selectedValue = opts[question.id]
           if (!selectedValue) continue
@@ -273,20 +415,25 @@ export function PresetupWizard({ template, onClose }: PresetupWizardProps) {
           }
         }
 
-        // Build deep-link: /presetup/connect?integrations=gmail,xero&templateSlug=ai-sdr&selectedOptions=key:val,key:val&tenantId=abc#access_token=...&refresh_token=...
         const params = new URLSearchParams()
         if (integrationKeys.size > 0) {
           params.set('integrations', Array.from(integrationKeys).join(','))
         }
 
-        // Pass template slug and selected options for provisioning
         params.set('templateSlug', template.slug)
         if (Object.keys(opts).length > 0) {
           const optPairs = Object.entries(opts).map(([k, v]) => `${k}:${v}`)
           params.set('selectedOptions', optPairs.join(','))
         }
 
-        // Get auth tokens and tenantId for WB authentication
+        // Pass pre-selected existing integration IDs
+        const connectedEntries = Object.entries(integrationSelections)
+          .filter(([, id]) => id !== null)
+          .map(([key, id]) => `${key}:${id}`)
+        if (connectedEntries.length > 0) {
+          params.set('connectedIntegrations', connectedEntries.join(','))
+        }
+
         const { accessToken, refreshToken, tenantId } = await enterpriseApi.getAuthTokens()
         if (tenantId) params.set('tenantId', tenantId)
 
@@ -301,8 +448,74 @@ export function PresetupWizard({ template, onClose }: PresetupWizardProps) {
       }
       onClose()
     },
-    [fullTemplate, onClose]
+    [fullTemplate, template.slug, onClose]
   )
+
+  // After wizard questions → transition to integrations step (or open browser directly)
+  const handleQuestionsComplete = useCallback(
+    async (opts: Record<string, string>) => {
+      setWizardAnswers(opts)
+
+      // Collect required OAuth integration keys
+      const integrationKeys = new Set<string>()
+      for (const int of fullTemplate?.definition.integrations ?? []) {
+        if (isOAuthIntegration(int.key)) integrationKeys.add(int.key)
+      }
+      for (const question of fullTemplate?.definition.questions ?? []) {
+        const selectedValue = opts[question.id]
+        if (!selectedValue) continue
+        const option = question.options.find((o) => o.value === selectedValue)
+        if (option?.integrations) {
+          for (const int of option.integrations) {
+            if (isOAuthIntegration(int.key)) integrationKeys.add(int.key)
+          }
+        }
+      }
+
+      if (integrationKeys.size === 0) {
+        // No integrations needed, go directly to browser
+        await handleOpenInBrowser(opts, {})
+        return
+      }
+
+      setWizardStep('integrations')
+
+      // Fetch existing integrations
+      setLoadingIntegrations(true)
+      try {
+        const data = await enterpriseApi.apiRequest('GET', '/api/integrations')
+        setExistingIntegrations(data as ExistingIntegration[])
+      } catch {
+        setExistingIntegrations([])
+      } finally {
+        setLoadingIntegrations(false)
+      }
+    },
+    [fullTemplate, handleOpenInBrowser]
+  )
+
+  // Compute required integrations for the integrations step
+  const requiredIntegrations = useMemo((): RequiredIntegration[] => {
+    if (!fullTemplate) return []
+    const seen = new Set<string>()
+    const result: RequiredIntegration[] = []
+
+    const addInt = (int: { key: string; name: string; required?: boolean }) => {
+      if (seen.has(int.key) || !isOAuthIntegration(int.key)) return
+      seen.add(int.key)
+      result.push({ key: int.key, name: int.name, required: int.required ?? false })
+    }
+
+    for (const int of fullTemplate.definition.integrations ?? []) addInt(int)
+    for (const question of fullTemplate.definition.questions ?? []) {
+      const val = wizardAnswers[question.id]
+      if (!val) continue
+      const option = question.options.find((o) => o.value === val)
+      option?.integrations?.forEach(addInt)
+    }
+
+    return result
+  }, [fullTemplate, wizardAnswers])
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
@@ -339,15 +552,33 @@ export function PresetupWizard({ template, onClose }: PresetupWizardProps) {
               <div className="mb-4">
                 <h2 className="text-sm font-semibold">Set up {template.name}</h2>
                 <p className="text-xs text-muted-foreground mt-0.5">
-                  Answer a few questions to configure {template.name} for your team.
+                  {wizardStep === 'questions'
+                    ? `Answer a few questions to configure ${template.name} for your team.`
+                    : 'Configure your integrations before installing.'}
                 </p>
               </div>
 
-              <WizardQuestions
-                template={fullTemplate}
-                onComplete={handleWizardComplete}
-                onBack={onClose}
-              />
+              {wizardStep === 'questions' && (
+                <WizardQuestions
+                  template={fullTemplate}
+                  onComplete={handleQuestionsComplete}
+                  onBack={onClose}
+                />
+              )}
+
+              {wizardStep === 'integrations' && (
+                <IntegrationsStep
+                  requiredIntegrations={requiredIntegrations}
+                  existingIntegrations={existingIntegrations}
+                  loadingIntegrations={loadingIntegrations}
+                  selectedIntegrations={selectedIntegrations}
+                  onSelectIntegration={(key, id) =>
+                    setSelectedIntegrations((prev) => ({ ...prev, [key]: id }))
+                  }
+                  onContinue={() => handleOpenInBrowser(wizardAnswers, selectedIntegrations)}
+                  onBack={() => setWizardStep('questions')}
+                />
+              )}
             </>
           )}
         </div>
