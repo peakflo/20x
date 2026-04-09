@@ -442,10 +442,12 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     const newActiveId = activeTabId === workflowId
       ? (remaining.length > 0 ? remaining[remaining.length - 1].workflowId : null)
       : activeTabId
-    set({ openTabs: remaining, activeTabId: newActiveId })
+    // Single set() call to avoid intermediate renders with inconsistent state
     if (remaining.length === 0) {
-      set({ expandedView: false })
+      set({ openTabs: remaining, activeTabId: newActiveId, expandedView: false })
       enterpriseApi.disableIframeAuth().catch(() => {})
+    } else {
+      set({ openTabs: remaining, activeTabId: newActiveId })
     }
   },
 

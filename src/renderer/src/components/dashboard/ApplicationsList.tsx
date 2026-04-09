@@ -138,36 +138,37 @@ function ExpandedView() {
 
   const activeTab = openTabs.find((t) => t.workflowId === activeTabId)
 
+  // Build a lookup from workflowId → application name for open tabs
+  const appNameByWorkflowId = new Map(
+    applications.map((a) => [a.workflowId, a.name])
+  )
+
+  // Applications that are not yet opened (available for launching)
+  const unopenedApps = applications.filter(
+    (app) => !openTabs.some((t) => t.workflowId === app.workflowId)
+  )
+
   return (
     <section className="flex flex-col" style={{ height: 'calc(100vh - 120px)' }}>
       {/* Tab bar with minimize button */}
       <div className="flex items-center border-b border-border/50 shrink-0 bg-card rounded-t-lg">
         <div className="flex items-center overflow-x-auto flex-1">
-          {applications.map((app) => {
-            const tab = openTabs.find((t) => t.workflowId === app.workflowId)
-            const isActive = activeTabId === app.workflowId
-            const isLoading = tab?.executing || tab?.polling
-            const hasError = !!tab?.error
-            const isReady = !!tab?.url && !isLoading && !hasError
-            const isOpen = !!tab
+          {/* Render tab headers from openTabs only — correlate by workflowId */}
+          {openTabs.map((tab) => {
+            const isActive = activeTabId === tab.workflowId
+            const isLoading = tab.executing || tab.polling
+            const hasError = !!tab.error
+            const isReady = !!tab.url && !isLoading && !hasError
 
             return (
               <div
-                key={app.workflowId}
+                key={tab.workflowId}
                 className={`flex items-center gap-1.5 px-4 py-2.5 text-xs cursor-pointer border-r border-border/50 shrink-0 transition-colors ${
                   isActive
                     ? 'bg-background/50 text-foreground border-b-2 border-b-primary'
-                    : isOpen
-                      ? 'text-foreground/70 hover:text-foreground hover:bg-background/20'
-                      : 'text-muted-foreground hover:text-foreground hover:bg-background/20'
+                    : 'text-foreground/70 hover:text-foreground hover:bg-background/20'
                 }`}
-                onClick={() => {
-                  if (tab) {
-                    switchTab(app.workflowId)
-                  } else {
-                    openApplication(app.workflowId)
-                  }
-                }}
+                onClick={() => switchTab(tab.workflowId)}
                 role="tab"
                 aria-selected={isActive}
               >
@@ -175,23 +176,36 @@ function ExpandedView() {
                 {hasError && <AlertTriangle className="h-3 w-3 text-destructive shrink-0" />}
                 {isReady && <div className="h-2 w-2 rounded-full bg-green-500 shrink-0" />}
                 <span className="truncate max-w-[140px] font-medium">
-                  {app.name}
+                  {appNameByWorkflowId.get(tab.workflowId) || tab.workflowId}
                 </span>
-                {isOpen && (
-                  <button
-                    className="ml-1 rounded p-0.5 hover:bg-background/40 transition-colors"
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      closeTab(app.workflowId)
-                    }}
-                    title="Close tab"
-                  >
-                    <X className="h-3 w-3" />
-                  </button>
-                )}
+                <button
+                  className="ml-1 rounded p-0.5 hover:bg-background/40 transition-colors"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    closeTab(tab.workflowId)
+                  }}
+                  title="Close tab"
+                >
+                  <X className="h-3 w-3" />
+                </button>
               </div>
             )
           })}
+
+          {/* Launcher buttons for unopened applications */}
+          {unopenedApps.map((app) => (
+            <div
+              key={app.workflowId}
+              className="flex items-center gap-1.5 px-4 py-2.5 text-xs cursor-pointer border-r border-border/50 shrink-0 transition-colors text-muted-foreground hover:text-foreground hover:bg-background/20"
+              onClick={() => openApplication(app.workflowId)}
+              role="tab"
+              aria-selected={false}
+            >
+              <span className="truncate max-w-[140px] font-medium">
+                {app.name}
+              </span>
+            </div>
+          ))}
         </div>
 
         {/* Minimize back to cards */}
@@ -243,8 +257,15 @@ export function ApplicationsList() {
     applications,
     applicationsLoading,
     applicationsError,
-    expandedView
+    expandedView,
+    openTabs
   } = useDashboardStore()
+
+  // When the expanded view is active with open tabs, never unmount it —
+  // replacing it with a loading spinner would destroy all live iframes.
+  if (expandedView && openTabs.length > 0) {
+    return <ExpandedView />
+  }
 
   if (applicationsLoading) {
     return (

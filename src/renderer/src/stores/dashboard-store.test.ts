@@ -107,7 +107,12 @@ describe('useDashboardStore', () => {
       stats: null,
       localStats: null,
       timeWindow: '7d',
+      openTabs: [],
+      activeTabId: null,
+      expandedView: false,
       applicationsLoading: false,
+      presetupLoading: false,
+      presetupProvisioning: null,
       statsLoading: false,
       applicationsError: null,
       statsError: null
@@ -365,5 +370,212 @@ describe('computeLocalStats', () => {
     expect(stats.activeUsers).toBe(1)
     expect(stats.totalUsers).toBe(1)
     expect(stats.adoptionRate).toBeNull()
+  })
+})
+
+describe('tab management', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    useDashboardStore.setState({
+      applications: mockApplications,
+      openTabs: [],
+      activeTabId: null,
+      expandedView: false,
+      applicationsLoading: false,
+      applicationsError: null,
+      stats: null,
+      localStats: null,
+      timeWindow: '7d',
+      presetupLoading: false,
+      presetupProvisioning: null,
+      statsLoading: false,
+      statsError: null
+    })
+  })
+
+  it('openApplication creates a tab and sets activeTabId by workflowId', async () => {
+    mockApiRequest
+      .mockResolvedValueOnce({ executionId: 'exec-1' }) // execute/ui
+      .mockResolvedValueOnce({ id: 'exec-1', status: 'running', steps: [] }) // poll
+
+    // Don't await — openApplication starts async polling
+    const promise = useDashboardStore.getState().openApplication('wf-1')
+
+    // Tab should be created immediately (before any await)
+    const state = useDashboardStore.getState()
+    expect(state.openTabs).toHaveLength(1)
+    expect(state.openTabs[0].workflowId).toBe('wf-1')
+    expect(state.activeTabId).toBe('wf-1')
+    expect(state.expandedView).toBe(true)
+
+    await promise
+  })
+
+  it('openApplication switches to existing tab by workflowId without creating a duplicate', async () => {
+    // Pre-populate with an open tab
+    useDashboardStore.setState({
+      openTabs: [{ workflowId: 'wf-1', url: 'http://app1.test', executing: false, polling: false, error: null, executionStatus: 'completed' }],
+      activeTabId: 'wf-1',
+      expandedView: true
+    })
+
+    // Open a second tab
+    mockApiRequest
+      .mockResolvedValueOnce({ executionId: 'exec-2' })
+      .mockResolvedValueOnce({ id: 'exec-2', status: 'running', steps: [] })
+
+    const promise = useDashboardStore.getState().openApplication('wf-2')
+
+    let state = useDashboardStore.getState()
+    expect(state.openTabs).toHaveLength(2)
+    expect(state.activeTabId).toBe('wf-2')
+
+    await promise
+
+    // Now re-open wf-1 — should NOT create a new tab, just switch
+    await useDashboardStore.getState().openApplication('wf-1')
+
+    state = useDashboardStore.getState()
+    expect(state.openTabs).toHaveLength(2) // still 2, not 3
+    expect(state.activeTabId).toBe('wf-1')
+  })
+
+  it('switchTab changes activeTabId by workflowId only', () => {
+    useDashboardStore.setState({
+      openTabs: [
+        { workflowId: 'wf-1', url: 'http://app1.test', executing: false, polling: false, error: null, executionStatus: null },
+        { workflowId: 'wf-2', url: 'http://app2.test', executing: false, polling: false, error: null, executionStatus: null }
+      ],
+      activeTabId: 'wf-1',
+      expandedView: true
+    })
+
+    useDashboardStore.getState().switchTab('wf-2')
+
+    const state = useDashboardStore.getState()
+    expect(state.activeTabId).toBe('wf-2')
+    // Tabs array should be unchanged
+    expect(state.openTabs).toHaveLength(2)
+    expect(state.openTabs[0].workflowId).toBe('wf-1')
+    expect(state.openTabs[1].workflowId).toBe('wf-2')
+  })
+
+  it('switchTab back and forth preserves all tab state', () => {
+    useDashboardStore.setState({
+      openTabs: [
+        { workflowId: 'wf-1', url: 'http://app1.test', executing: false, polling: false, error: null, executionStatus: null },
+        { workflowId: 'wf-2', url: 'http://app2.test', executing: false, polling: false, error: null, executionStatus: null }
+      ],
+      activeTabId: 'wf-1',
+      expandedView: true
+    })
+
+    // Switch to wf-2
+    useDashboardStore.getState().switchTab('wf-2')
+    expect(useDashboardStore.getState().activeTabId).toBe('wf-2')
+
+    // Switch back to wf-1
+    useDashboardStore.getState().switchTab('wf-1')
+    expect(useDashboardStore.getState().activeTabId).toBe('wf-1')
+
+    // Both tabs should still have their original URLs
+    const { openTabs } = useDashboardStore.getState()
+    expect(openTabs[0].url).toBe('http://app1.test')
+    expect(openTabs[1].url).toBe('http://app2.test')
+  })
+
+  it('closeTab removes tab and switches activeTabId to remaining tab', () => {
+    useDashboardStore.setState({
+      openTabs: [
+        { workflowId: 'wf-1', url: 'http://app1.test', executing: false, polling: false, error: null, executionStatus: null },
+        { workflowId: 'wf-2', url: 'http://app2.test', executing: false, polling: false, error: null, executionStatus: null }
+      ],
+      activeTabId: 'wf-1',
+      expandedView: true
+    })
+
+    useDashboardStore.getState().closeTab('wf-1')
+
+    const state = useDashboardStore.getState()
+    expect(state.openTabs).toHaveLength(1)
+    expect(state.openTabs[0].workflowId).toBe('wf-2')
+    expect(state.activeTabId).toBe('wf-2')
+    expect(state.expandedView).toBe(true) // still expanded, one tab left
+  })
+
+  it('closeTab on inactive tab preserves activeTabId', () => {
+    useDashboardStore.setState({
+      openTabs: [
+        { workflowId: 'wf-1', url: 'http://app1.test', executing: false, polling: false, error: null, executionStatus: null },
+        { workflowId: 'wf-2', url: 'http://app2.test', executing: false, polling: false, error: null, executionStatus: null }
+      ],
+      activeTabId: 'wf-2',
+      expandedView: true
+    })
+
+    useDashboardStore.getState().closeTab('wf-1')
+
+    const state = useDashboardStore.getState()
+    expect(state.openTabs).toHaveLength(1)
+    expect(state.activeTabId).toBe('wf-2') // unchanged
+  })
+
+  it('closeTab last tab sets expandedView false in single set call', () => {
+    useDashboardStore.setState({
+      openTabs: [
+        { workflowId: 'wf-1', url: 'http://app1.test', executing: false, polling: false, error: null, executionStatus: null }
+      ],
+      activeTabId: 'wf-1',
+      expandedView: true
+    })
+
+    useDashboardStore.getState().closeTab('wf-1')
+
+    const state = useDashboardStore.getState()
+    expect(state.openTabs).toHaveLength(0)
+    expect(state.activeTabId).toBeNull()
+    expect(state.expandedView).toBe(false)
+  })
+
+  it('tab-content correlation uses workflowId only, not array position', () => {
+    // Simulate: open wf-2 first, then wf-1 — order in openTabs differs from applications order
+    useDashboardStore.setState({
+      openTabs: [
+        { workflowId: 'wf-2', url: 'http://app2.test', executing: false, polling: false, error: null, executionStatus: null },
+        { workflowId: 'wf-1', url: 'http://app1.test', executing: false, polling: false, error: null, executionStatus: null }
+      ],
+      activeTabId: 'wf-2',
+      expandedView: true
+    })
+
+    // Switch to wf-1 (which is at index 1 in openTabs but index 0 in applications)
+    useDashboardStore.getState().switchTab('wf-1')
+
+    const state = useDashboardStore.getState()
+    expect(state.activeTabId).toBe('wf-1')
+
+    // The active tab content should be wf-1 — verify by checking openTabs lookup
+    const activeTab = state.openTabs.find((t) => t.workflowId === state.activeTabId)
+    expect(activeTab).toBeDefined()
+    expect(activeTab!.workflowId).toBe('wf-1')
+    expect(activeTab!.url).toBe('http://app1.test')
+  })
+
+  it('minimizeToCards preserves openTabs state', () => {
+    useDashboardStore.setState({
+      openTabs: [
+        { workflowId: 'wf-1', url: 'http://app1.test', executing: false, polling: false, error: null, executionStatus: null }
+      ],
+      activeTabId: 'wf-1',
+      expandedView: true
+    })
+
+    useDashboardStore.getState().minimizeToCards()
+
+    const state = useDashboardStore.getState()
+    expect(state.expandedView).toBe(false)
+    // Tabs should still exist so re-expanding doesn't lose iframes
+    expect(state.openTabs).toHaveLength(1)
+    expect(state.activeTabId).toBe('wf-1')
   })
 })
