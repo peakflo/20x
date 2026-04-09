@@ -131,7 +131,7 @@ export class AcpAdapter implements CodingAgentAdapter {
   private agentType: AcpAgentType
   private agentConfig: AcpAgentConfig
   private sessions = new Map<string, AcpSession>()
-  private verboseRpcLogs: boolean
+  private debugRpcLogs: boolean
 
   /** Callback set by agent-manager to trigger an immediate poll cycle */
   onDataAvailable?: (sessionId: string) => void
@@ -139,13 +139,13 @@ export class AcpAdapter implements CodingAgentAdapter {
   constructor(agentType: AcpAgentType) {
     this.agentType = agentType
     this.agentConfig = this.getAgentConfig(agentType)
-    this.verboseRpcLogs = AcpAdapter.isTruthyEnv(process.env.ACP_VERBOSE_RPC_LOGS)
+    this.debugRpcLogs = AcpAdapter.isDebugLogLevel(process.env.LOG_LEVEL)
   }
 
-  private static isTruthyEnv(value: string | undefined): boolean {
+  private static isDebugLogLevel(value: string | undefined): boolean {
     if (!value) return false
     const normalized = value.trim().toLowerCase()
-    return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on'
+    return normalized === 'debug' || normalized === 'trace'
   }
 
   /**
@@ -971,7 +971,7 @@ export class AcpAdapter implements CodingAgentAdapter {
   }
 
   private handleRpcMessage(session: AcpSession, message: JsonRpcMessage): void {
-    if (this.verboseRpcLogs) {
+    if (this.debugRpcLogs) {
       console.log(`[AcpAdapter/${this.agentType}] Received RPC message:`, JSON.stringify(message))
     }
 
@@ -1035,7 +1035,7 @@ export class AcpAdapter implements CodingAgentAdapter {
     // Handle requests from agent (e.g., session/request_permission)
     if ('method' in message && 'id' in message && message.id !== undefined) {
       const request = message as JsonRpcRequest
-      if (this.verboseRpcLogs) {
+      if (this.debugRpcLogs) {
         console.log(`[AcpAdapter/${this.agentType}] << Request: ${request.method}`)
       }
 
@@ -1055,7 +1055,7 @@ export class AcpAdapter implements CodingAgentAdapter {
     if ('method' in message && !('id' in message)) {
       const notification = message as JsonRpcNotification
 
-      if (this.verboseRpcLogs) {
+      if (this.debugRpcLogs) {
         console.log(`[AcpAdapter/${this.agentType}] << Notification: ${notification.method}`)
         if (notification.method === 'session/update') {
           const params = notification.params as { update?: SessionUpdate } | undefined
@@ -1708,7 +1708,7 @@ export class AcpAdapter implements CodingAgentAdapter {
         // Format: { content: { type: 'text', text: '...' } }
         const turnId = session ? this.getAssistantTurnId(session) : 0
         const messageId = turnId > 0 ? `agent-response-${turnId}` : 'agent-response'
-        if (this.verboseRpcLogs) {
+        if (this.debugRpcLogs) {
           console.log(`[AcpAdapter] agent_message_chunk: turnId=${turnId}, messageId=${messageId}`)
         }
 

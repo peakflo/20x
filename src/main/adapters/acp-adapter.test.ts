@@ -2612,9 +2612,9 @@ describe('AcpAdapter - Codex Quota/Error Handling', () => {
       expect(loggedLines.some((line) => line.includes('<< Notification'))).toBe(false)
     })
 
-    it('enables detailed RPC logs when ACP_VERBOSE_RPC_LOGS=true', () => {
-      const originalValue = process.env.ACP_VERBOSE_RPC_LOGS
-      process.env.ACP_VERBOSE_RPC_LOGS = 'true'
+    it('enables detailed RPC logs when LOG_LEVEL=debug', () => {
+      const originalValue = process.env.LOG_LEVEL
+      process.env.LOG_LEVEL = 'debug'
 
       try {
         const verboseAdapter = new AcpAdapter('codex')
@@ -2631,9 +2631,9 @@ describe('AcpAdapter - Codex Quota/Error Handling', () => {
         expect(loggedLines.some((line) => line.includes('<< Notification: agent/ping'))).toBe(true)
       } finally {
         if (originalValue === undefined) {
-          delete process.env.ACP_VERBOSE_RPC_LOGS
+          delete process.env.LOG_LEVEL
         } else {
-          process.env.ACP_VERBOSE_RPC_LOGS = originalValue
+          process.env.LOG_LEVEL = originalValue
         }
       }
     })
