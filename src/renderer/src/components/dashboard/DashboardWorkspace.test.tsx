@@ -30,6 +30,11 @@ vi.mock('@/lib/ipc-client', () => ({
   taskApi: {
     getAll: vi.fn().mockResolvedValue([])
   },
+  settingsApi: {
+    get: vi.fn().mockResolvedValue(null),
+    set: vi.fn().mockResolvedValue(undefined),
+    getAll: vi.fn().mockResolvedValue({})
+  },
   onTaskUpdated: vi.fn(() => () => {}),
   onTaskCreated: vi.fn(() => () => {}),
   onTasksRefresh: vi.fn(() => () => {}),

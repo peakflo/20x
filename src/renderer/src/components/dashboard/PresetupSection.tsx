@@ -1,13 +1,18 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import {
   Calculator,
   UserPlus,
   Package,
   CheckCircle2,
-  ArrowRight
+  ArrowRight,
+  ChevronDown,
+  ChevronRight
 } from 'lucide-react'
 import { useDashboardStore, type PresetupTemplate } from '@/stores/dashboard-store'
+import { settingsApi } from '@/lib/ipc-client'
 import { PresetupWizard } from './PresetupWizard'
+
+const COLLAPSED_KEY = 'dashboard_presetup_collapsed'
 
 const ICON_MAP: Record<string, React.ElementType> = {
   Calculator: Calculator,
@@ -97,8 +102,24 @@ function TemplateCard({
 export function PresetupSection() {
   const { presetupTemplates, presetupLoading } = useDashboardStore()
   const [wizardTemplate, setWizardTemplate] = useState<PresetupTemplate | null>(null)
+  const [collapsed, setCollapsed] = useState(false)
+  const [loaded, setLoaded] = useState(false)
 
-  if (presetupLoading) {
+  // Restore collapsed state from persisted settings
+  useEffect(() => {
+    settingsApi.get(COLLAPSED_KEY).then((val) => {
+      if (val === 'true') setCollapsed(true)
+      setLoaded(true)
+    }).catch(() => setLoaded(true))
+  }, [])
+
+  const toggleCollapsed = () => {
+    const next = !collapsed
+    setCollapsed(next)
+    settingsApi.set(COLLAPSED_KEY, String(next)).catch(() => {})
+  }
+
+  if (presetupLoading || !loaded) {
     return (
       <section>
         <h2 className="text-sm font-semibold mb-3">Get Started</h2>
@@ -118,19 +139,38 @@ export function PresetupSection() {
     return null
   }
 
+  const provisionedCount = presetupTemplates.filter((t) => t.isProvisioned).length
+
   return (
     <>
       <section>
-        <h2 className="text-sm font-semibold mb-3">Get Started</h2>
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
-          {presetupTemplates.map((template) => (
-            <TemplateCard
-              key={template.slug}
-              template={template}
-              onSetup={setWizardTemplate}
-            />
-          ))}
-        </div>
+        <button
+          onClick={toggleCollapsed}
+          className="flex items-center gap-1.5 mb-3 group cursor-pointer"
+        >
+          {collapsed ? (
+            <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
+          ) : (
+            <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+          )}
+          <h2 className="text-sm font-semibold">Get Started</h2>
+          {collapsed && provisionedCount > 0 && (
+            <span className="text-[11px] text-muted-foreground font-normal">
+              {provisionedCount}/{presetupTemplates.length} set up
+            </span>
+          )}
+        </button>
+        {!collapsed && (
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+            {presetupTemplates.map((template) => (
+              <TemplateCard
+                key={template.slug}
+                template={template}
+                onSetup={setWizardTemplate}
+              />
+            ))}
+          </div>
+        )}
       </section>
 
       {wizardTemplate && (
