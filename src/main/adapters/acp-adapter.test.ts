@@ -2596,4 +2596,68 @@ describe('AcpAdapter - Codex Quota/Error Handling', () => {
       expect(parts[0].text).not.toContain('codex_error_info')
     })
   })
+
+  describe('verbose RPC logging toggle', () => {
+    it('suppresses high-frequency RPC logs by default', () => {
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+      const session = createMockSession('test-session')
+
+      adapterPrivate(adapter).handleRpcMessage(session, {
+        jsonrpc: '2.0',
+        method: 'agent/ping'
+      })
+
+      const loggedLines = logSpy.mock.calls.map((call) => String(call[0]))
+      expect(loggedLines.some((line) => line.includes('Received RPC message'))).toBe(false)
+      expect(loggedLines.some((line) => line.includes('<< Notification'))).toBe(false)
+    })
+
+    it('enables detailed RPC logs when ACP_VERBOSE_RPC_LOGS=true', () => {
+      const originalValue = process.env.ACP_VERBOSE_RPC_LOGS
+      process.env.ACP_VERBOSE_RPC_LOGS = 'true'
+
+      try {
+        const verboseAdapter = new AcpAdapter('codex')
+        const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+        const session = createMockSession('test-session')
+
+        adapterPrivate(verboseAdapter).handleRpcMessage(session, {
+          jsonrpc: '2.0',
+          method: 'agent/ping'
+        })
+
+        const loggedLines = logSpy.mock.calls.map((call) => String(call[0]))
+        expect(loggedLines.some((line) => line.includes('Received RPC message'))).toBe(true)
+        expect(loggedLines.some((line) => line.includes('<< Notification: agent/ping'))).toBe(true)
+      } finally {
+        if (originalValue === undefined) {
+          delete process.env.ACP_VERBOSE_RPC_LOGS
+        } else {
+          process.env.ACP_VERBOSE_RPC_LOGS = originalValue
+        }
+      }
+    })
+
+    it('suppresses per-chunk assistant logs by default', () => {
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+
+      adapterPrivate(adapter).convertAcpEventToMessageParts(
+        {
+          method: 'session/update',
+          params: {
+            update: {
+              sessionUpdate: 'agent_message_chunk',
+              content: { type: 'text', text: 'hello' }
+            }
+          }
+        },
+        new Set<string>(),
+        new Set<string>(),
+        new Map<string, string>()
+      )
+
+      const loggedLines = logSpy.mock.calls.map((call) => String(call[0]))
+      expect(loggedLines.some((line) => line.includes('agent_message_chunk: turnId='))).toBe(false)
+    })
+  })
 })
