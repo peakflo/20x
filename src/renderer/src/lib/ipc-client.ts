@@ -519,5 +519,9 @@ export const enterpriseApi = {
 
   disableIframeAuth: (): Promise<void> => {
     return window.electronAPI.enterprise.disableIframeAuth()
+  },
+
+  onSyncComplete: (callback: (data: { success: boolean; syncMs?: number; error?: string }) => void): (() => void) => {
+    return window.electronAPI.enterprise.onSyncComplete(callback)
   }
 }

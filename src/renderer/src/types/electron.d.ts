@@ -341,6 +341,7 @@ interface ElectronAPI {
     getAuthTokens: () => Promise<{ accessToken: string; refreshToken: string; tenantId: string | null }>
     enableIframeAuth: () => Promise<{ apiUrl: string }>
     disableIframeAuth: () => Promise<void>
+    onSyncComplete: (callback: (data: { success: boolean; syncMs?: number; error?: string }) => void) => () => void
   }
   updater: {
     check: () => Promise<{ success: boolean; version?: string; error?: string }>

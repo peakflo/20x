@@ -16,6 +16,7 @@ interface EnterpriseState {
   // Auth state
   isAuthenticated: boolean
   isLoading: boolean
+  isSyncing: boolean
   error: string | null
 
   // User info
@@ -30,11 +31,13 @@ interface EnterpriseState {
   logout: () => Promise<void>
   loadSession: () => Promise<void>
   clearError: () => void
+  setSyncing: (syncing: boolean) => void
 }
 
 export const useEnterpriseStore = create<EnterpriseState>((set) => ({
   isAuthenticated: false,
   isLoading: false,
+  isSyncing: false,
   error: null,
   userEmail: null,
   userId: null,
@@ -61,9 +64,11 @@ export const useEnterpriseStore = create<EnterpriseState>((set) => ({
         set({ isLoading: true })
         try {
           await enterpriseApi.selectTenant(tenant.id)
+          // Show "Connected" immediately — sync runs in background
           set({
             isLoading: false,
             isAuthenticated: true,
+            isSyncing: true,
             currentTenant: { id: tenant.id, name: tenant.name },
             availableTenants: result.companies
           })
@@ -86,9 +91,11 @@ export const useEnterpriseStore = create<EnterpriseState>((set) => ({
     set({ isLoading: true, error: null })
     try {
       const result = await enterpriseApi.selectTenant(tenantId)
+      // Show "Connected" immediately — sync runs in background
       set({
         isLoading: false,
         isAuthenticated: true,
+        isSyncing: true,
         currentTenant: result.tenant
       })
     } catch (err) {
@@ -109,6 +116,7 @@ export const useEnterpriseStore = create<EnterpriseState>((set) => ({
     set({
       isLoading: false,
       isAuthenticated: false,
+      isSyncing: false,
       userEmail: null,
       userId: null,
       currentTenant: null,
@@ -139,5 +147,7 @@ export const useEnterpriseStore = create<EnterpriseState>((set) => ({
     }
   },
 
-  clearError: () => set({ error: null })
+  clearError: () => set({ error: null }),
+
+  setSyncing: (syncing: boolean) => set({ isSyncing: syncing })
 }))

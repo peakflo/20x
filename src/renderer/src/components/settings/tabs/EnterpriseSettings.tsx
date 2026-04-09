@@ -9,10 +9,12 @@ export function EnterpriseSettings() {
   const {
     isAuthenticated,
     isLoading,
+    isSyncing,
     userEmail,
     currentTenant,
     logout,
-    loadSession
+    loadSession,
+    setSyncing
   } = useEnterpriseStore()
 
   const [showLoginModal, setShowLoginModal] = useState(false)
@@ -20,6 +22,19 @@ export function EnterpriseSettings() {
   useEffect(() => {
     loadSession()
   }, [loadSession])
+
+  // Listen for background sync completion from main process
+  useEffect(() => {
+    const unsubscribe = window.electronAPI?.enterprise?.onSyncComplete?.((data) => {
+      setSyncing(false)
+      if (data.success) {
+        console.log(`[enterprise] Sync completed in ${data.syncMs}ms`)
+      } else {
+        console.warn('[enterprise] Sync failed:', data.error)
+      }
+    })
+    return () => unsubscribe?.()
+  }, [setSyncing])
 
   const handleLogout = useCallback(async () => {
     await logout()
@@ -46,8 +61,20 @@ export function EnterpriseSettings() {
         <div className="space-y-4">
           {/* Connected status */}
           <div className="flex items-center gap-2 py-2">
-            <div className="h-2 w-2 rounded-full bg-green-500" />
-            <span className="text-sm font-medium text-foreground">Connected</span>
+            {isSyncing ? (
+              <>
+                <svg className="animate-spin h-3 w-3 text-blue-400" viewBox="0 0 24 24" fill="none">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                </svg>
+                <span className="text-sm font-medium text-foreground">Connected — Syncing...</span>
+              </>
+            ) : (
+              <>
+                <div className="h-2 w-2 rounded-full bg-green-500" />
+                <span className="text-sm font-medium text-foreground">Connected</span>
+              </>
+            )}
           </div>
 
           {/* User email */}

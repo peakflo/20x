@@ -753,156 +753,173 @@ export function registerIpcHandlers(
     return await enterpriseAuth.login(email, password)
   })
 
-  ipcMain.handle('enterprise:selectTenant', async (_, tenantId: string) => {
+  ipcMain.handle('enterprise:selectTenant', async (event, tenantId: string) => {
     if (!enterpriseAuth) throw new Error('Enterprise auth not available')
     const result = await enterpriseAuth.selectTenant(tenantId)
 
-    // Phase 2.6: On enterprise connect, set up API client, sync resources, auto-create task source
-    try {
-      const { WorkfloApiClient } = await import('./workflo-api-client')
-      const { EnterpriseSyncManager } = await import('./enterprise-sync')
+    // Return auth result immediately — run post-connect setup (sync, MCP, etc.) in background
+    // so the UI shows "Connected" right away with a "Syncing..." indicator.
+    const sender = event.sender
 
-      const apiClient = new WorkfloApiClient(enterpriseAuth)
-      const enterpriseSyncMgr = new EnterpriseSyncManager(db, apiClient)
-
-      // Get user ID from stored session
-      const session = await enterpriseAuth.getSession()
-      const userId = session.userId || ''
-
-      // Start enterprise heartbeat (1-min interval)
-      {
-        const { EnterpriseHeartbeat: EHB } = await import('./enterprise-heartbeat')
-        if (!enterpriseHeartbeat) {
-          enterpriseHeartbeat = new EHB(apiClient)
-        } else {
-          enterpriseHeartbeat.setApiClient(apiClient)
-        }
-        enterpriseHeartbeat.start({
-          userEmail: session.userEmail || undefined,
-          userName: session.userEmail || undefined
-        })
-      }
-
-      // Wire enterprise state sync
-      {
-        const { EnterpriseStateSync: ESS } = await import('./enterprise-state-sync')
-        if (!enterpriseStateSync) {
-          enterpriseStateSync = new ESS(apiClient)
-        } else {
-          enterpriseStateSync.setApiClient(apiClient)
-        }
-        enterpriseStateSync.setUserName(session.userEmail || 'Unknown')
-        agentManager.setEnterpriseStateSync(enterpriseStateSync)
-
-        // Attach state sync to heartbeat so events flush every 60s
-        if (enterpriseHeartbeat) {
-          enterpriseHeartbeat.setStateSync(enterpriseStateSync)
-        }
-      }
-
-      // Wire enterprise connection into sync manager (after state sync is ready)
-      syncManager.setEnterpriseConnection(apiClient, enterpriseSyncMgr, userId, enterpriseStateSync)
-
-      // Pass enterprise auth to agent manager so it can inject JWT into MCP Dev Server requests
-      agentManager.setEnterpriseAuth(enterpriseAuth)
-
-      // Run initial sync (agents, skills, MCP servers)
-      const syncStart = Date.now()
-      console.log('[enterprise] Running initial resource sync...')
-      const syncResult = await enterpriseSyncMgr.syncAll(userId)
-      const syncMs = Date.now() - syncStart
-      console.log(`[enterprise] Initial sync completed in ${syncMs}ms — result:`, JSON.stringify(syncResult))
-
-      // Auto-register MCP Dev Server (Workflo's MCP endpoint that exposes
-      // workflows-as-tools, integrations, datastores, and data tables).
-      // Uses the enterprise JWT for authentication — no separate API key needed.
+    // Fire-and-forget: run sync and setup in background
+    ;(async () => {
       try {
-        const mcpDevServerName = '[Workflo] MCP Dev Server'
-        const apiUrl = enterpriseAuth.getApiUrl()
-        const mcpDevUrl = `${apiUrl}/api/mcp/dev/mcp`
+        const { WorkfloApiClient } = await import('./workflo-api-client')
+        const { EnterpriseSyncManager } = await import('./enterprise-sync')
 
-        const localServers = db.getMcpServers()
-        const existingMcpDev = localServers.find((s) => s.name === mcpDevServerName)
+        const apiClient = new WorkfloApiClient(enterpriseAuth!)
+        const enterpriseSyncMgr = new EnterpriseSyncManager(db, apiClient)
 
-        if (existingMcpDev) {
-          // Update URL in case environment changed (e.g. local → stage → prod)
-          if (existingMcpDev.url !== mcpDevUrl) {
-            db.updateMcpServer(existingMcpDev.id, { url: mcpDevUrl })
-            console.log('[enterprise] Updated MCP Dev Server URL:', mcpDevUrl)
+        // Get user ID from stored session
+        const session = await enterpriseAuth!.getSession()
+        const userId = session.userId || ''
+
+        // Start enterprise heartbeat (1-min interval)
+        {
+          const { EnterpriseHeartbeat: EHB } = await import('./enterprise-heartbeat')
+          if (!enterpriseHeartbeat) {
+            enterpriseHeartbeat = new EHB(apiClient)
+          } else {
+            enterpriseHeartbeat.setApiClient(apiClient)
           }
-        } else {
-          db.createMcpServer({
-            name: mcpDevServerName,
-            type: 'remote',
-            url: mcpDevUrl,
-            headers: {},
-            // The enterprise JWT is injected dynamically by the MCP transport
-            // layer (via EnterpriseAuth.getJwt()), not stored statically here.
-            // The MCP client retrieves a fresh JWT before each connection.
+          enterpriseHeartbeat.start({
+            userEmail: session.userEmail || undefined,
+            userName: session.userEmail || undefined
           })
-          console.log('[enterprise] Registered MCP Dev Server:', mcpDevUrl)
         }
-      } catch (mcpErr) {
-        console.warn('[enterprise] Failed to register MCP Dev Server (non-fatal):', mcpErr)
-      }
 
-      // Auto-add all [Workflo] MCP servers to the default agent so they're
-      // immediately available without manual configuration
-      try {
-        const allServers = db.getMcpServers()
-        const workfloServers = allServers.filter((s) => s.name.startsWith('[Workflo]'))
+        // Wire enterprise state sync
+        {
+          const { EnterpriseStateSync: ESS } = await import('./enterprise-state-sync')
+          if (!enterpriseStateSync) {
+            enterpriseStateSync = new ESS(apiClient)
+          } else {
+            enterpriseStateSync.setApiClient(apiClient)
+          }
+          enterpriseStateSync.setUserName(session.userEmail || 'Unknown')
+          agentManager.setEnterpriseStateSync(enterpriseStateSync)
 
-        const defaultAgent = db.getAgents().find((a) => a.is_default)
-        if (defaultAgent && workfloServers.length > 0) {
-          const config = { ...defaultAgent.config }
-          const mcpServers = [...(config.mcp_servers || [])]
-          let added = 0
+          // Attach state sync to heartbeat so events flush every 60s
+          if (enterpriseHeartbeat) {
+            enterpriseHeartbeat.setStateSync(enterpriseStateSync)
+          }
+        }
 
-          for (const server of workfloServers) {
-            const alreadyPresent = mcpServers.some((s) =>
-              typeof s === 'string' ? s === server.id : s.serverId === server.id
-            )
-            if (!alreadyPresent) {
-              mcpServers.push(server.id)
-              added++
+        // Wire enterprise connection into sync manager (after state sync is ready)
+        syncManager.setEnterpriseConnection(apiClient, enterpriseSyncMgr, userId, enterpriseStateSync)
+
+        // Pass enterprise auth to agent manager so it can inject JWT into MCP Dev Server requests
+        agentManager.setEnterpriseAuth(enterpriseAuth!)
+
+        // Run initial sync (agents, skills, MCP servers)
+        const syncStart = Date.now()
+        console.log('[enterprise] Running initial resource sync...')
+        const syncResult = await enterpriseSyncMgr.syncAll(userId)
+        const syncMs = Date.now() - syncStart
+        console.log(`[enterprise] Initial sync completed in ${syncMs}ms — result:`, JSON.stringify(syncResult))
+
+        // Auto-register MCP Dev Server (Workflo's MCP endpoint that exposes
+        // workflows-as-tools, integrations, datastores, and data tables).
+        // Uses the enterprise JWT for authentication — no separate API key needed.
+        try {
+          const mcpDevServerName = '[Workflo] MCP Dev Server'
+          const apiUrl = enterpriseAuth!.getApiUrl()
+          const mcpDevUrl = `${apiUrl}/api/mcp/dev/mcp`
+
+          const localServers = db.getMcpServers()
+          const existingMcpDev = localServers.find((s) => s.name === mcpDevServerName)
+
+          if (existingMcpDev) {
+            // Update URL in case environment changed (e.g. local → stage → prod)
+            if (existingMcpDev.url !== mcpDevUrl) {
+              db.updateMcpServer(existingMcpDev.id, { url: mcpDevUrl })
+              console.log('[enterprise] Updated MCP Dev Server URL:', mcpDevUrl)
+            }
+          } else {
+            db.createMcpServer({
+              name: mcpDevServerName,
+              type: 'remote',
+              url: mcpDevUrl,
+              headers: {},
+              // The enterprise JWT is injected dynamically by the MCP transport
+              // layer (via EnterpriseAuth.getJwt()), not stored statically here.
+              // The MCP client retrieves a fresh JWT before each connection.
+            })
+            console.log('[enterprise] Registered MCP Dev Server:', mcpDevUrl)
+          }
+        } catch (mcpErr) {
+          console.warn('[enterprise] Failed to register MCP Dev Server (non-fatal):', mcpErr)
+        }
+
+        // Auto-add all [Workflo] MCP servers to the default agent so they're
+        // immediately available without manual configuration
+        try {
+          const allServers = db.getMcpServers()
+          const workfloServers = allServers.filter((s) => s.name.startsWith('[Workflo]'))
+
+          const defaultAgent = db.getAgents().find((a) => a.is_default)
+          if (defaultAgent && workfloServers.length > 0) {
+            const config = { ...defaultAgent.config }
+            const mcpServers = [...(config.mcp_servers || [])]
+            let added = 0
+
+            for (const server of workfloServers) {
+              const alreadyPresent = mcpServers.some((s) =>
+                typeof s === 'string' ? s === server.id : s.serverId === server.id
+              )
+              if (!alreadyPresent) {
+                mcpServers.push(server.id)
+                added++
+              }
+            }
+
+            if (added > 0) {
+              config.mcp_servers = mcpServers
+              db.updateAgent(defaultAgent.id, { config })
+              console.log(`[enterprise] Added ${added} Workflo MCP server(s) to default agent`)
             }
           }
+        } catch (err) {
+          console.warn('[enterprise] Failed to add MCP servers to default agent (non-fatal):', err)
+        }
 
-          if (added > 0) {
-            config.mcp_servers = mcpServers
-            db.updateAgent(defaultAgent.id, { config })
-            console.log(`[enterprise] Added ${added} Workflo MCP server(s) to default agent`)
-          }
+        // Auto-create Peakflo task source if none exists
+        const existingSources = db.getTaskSources()
+        const hasPeakfloSource = existingSources.some(
+          (s) => s.plugin_id === 'peakflo' && (s.config as Record<string, unknown>).enterprise_mode
+        )
+        if (!hasPeakfloSource) {
+          console.log('[enterprise] Auto-creating Peakflo task source...')
+          db.createTaskSource({
+            mcp_server_id: null,
+            name: `Workflo (${result.tenant.name})`,
+            plugin_id: 'peakflo',
+            config: {
+              enterprise_mode: true,
+              status_filter: 'all',
+              auto_sync_interval: 5
+            },
+            list_tool: '',
+            list_tool_args: {},
+            update_tool: '',
+            update_tool_args: {}
+          })
+        }
+
+        // Notify renderer that background sync is complete
+        if (!sender.isDestroyed()) {
+          sender.send('enterprise:syncComplete', { success: true, syncMs })
         }
       } catch (err) {
-        console.warn('[enterprise] Failed to add MCP servers to default agent (non-fatal):', err)
+        console.error('[enterprise] Post-connect setup error (non-fatal):', err)
+        if (!sender.isDestroyed()) {
+          sender.send('enterprise:syncComplete', {
+            success: false,
+            error: err instanceof Error ? err.message : String(err)
+          })
+        }
       }
-
-      // Auto-create Peakflo task source if none exists
-      const existingSources = db.getTaskSources()
-      const hasPeakfloSource = existingSources.some(
-        (s) => s.plugin_id === 'peakflo' && (s.config as Record<string, unknown>).enterprise_mode
-      )
-      if (!hasPeakfloSource) {
-        console.log('[enterprise] Auto-creating Peakflo task source...')
-        db.createTaskSource({
-          mcp_server_id: null,
-          name: `Workflo (${result.tenant.name})`,
-          plugin_id: 'peakflo',
-          config: {
-            enterprise_mode: true,
-            status_filter: 'all',
-            auto_sync_interval: 5
-          },
-          list_tool: '',
-          list_tool_args: {},
-          update_tool: '',
-          update_tool_args: {}
-        })
-      }
-    } catch (err) {
-      console.error('[enterprise] Post-connect setup error (non-fatal):', err)
-    }
+    })()
 
     return result
   })
