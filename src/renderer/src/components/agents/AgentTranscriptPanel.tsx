@@ -258,7 +258,8 @@ function PlanReviewMessage({ message }: { message: AgentMessage }) {
   )
 }
 
-function formatDuration(ms: number): string {
+export function formatDuration(ms: number): string {
+  if (ms == null || ms < 0) return '0s'
   const seconds = Math.floor(ms / 1000)
   if (seconds < 60) return `${seconds}s`
   const minutes = Math.floor(seconds / 60)
@@ -266,41 +267,96 @@ function formatDuration(ms: number): string {
   return `${minutes}m ${remainingSeconds}s`
 }
 
-function TaskProgressMessage({ message }: { message: AgentMessage }) {
+/** Live elapsed timer that counts up while a task is running */
+function useElapsedTimer(isRunning: boolean, baseDurationMs?: number): string | null {
+  const [elapsed, setElapsed] = useState<number>(baseDurationMs || 0)
+  const startRef = useRef<number>(Date.now() - (baseDurationMs || 0))
+
+  useEffect(() => {
+    if (!isRunning) {
+      setElapsed(baseDurationMs || 0)
+      return
+    }
+    startRef.current = Date.now() - (baseDurationMs || 0)
+    const interval = setInterval(() => {
+      setElapsed(Date.now() - startRef.current)
+    }, 1000)
+    return () => clearInterval(interval)
+  }, [isRunning, baseDurationMs])
+
+  if (!isRunning && baseDurationMs) return formatDuration(baseDurationMs)
+  if (!isRunning) return null
+  return formatDuration(elapsed)
+}
+
+export function TaskProgressMessage({ message }: { message: AgentMessage }) {
   const [expanded, setExpanded] = useState(false)
-  const tp = message.taskProgress!
+  const tp = message.taskProgress
+  // Guard against malformed/missing taskProgress data
+  if (!tp) return null
+
   const isRunning = tp.status === 'started' || tp.status === 'running'
   const isError = tp.status === 'failed'
   const isDone = tp.status === 'completed'
   const isStopped = tp.status === 'stopped'
+  const elapsedStr = useElapsedTimer(isRunning, tp.usage?.duration_ms)
+
+  const borderClass = isError
+    ? 'border-red-500/30'
+    : isStopped
+      ? 'border-yellow-500/30'
+      : isDone
+        ? 'border-green-500/20'
+        : 'border-blue-500/30'
+
+  const statusLabel = isDone ? 'completed' : isError ? 'failed' : isStopped ? 'stopped' : isRunning ? 'running' : tp.status
 
   return (
-    <div className={`rounded-md bg-card border overflow-hidden ${
-      isError ? 'border-red-500/30' : isStopped ? 'border-yellow-500/30' : isDone ? 'border-border/50' : 'border-blue-500/30'
-    }`}>
+    <div
+      className={`group rounded-md bg-card border overflow-hidden transition-colors duration-300 ${borderClass}`}
+      data-testid="task-progress-message"
+      data-status={tp.status}
+    >
       <button
         onClick={() => setExpanded(!expanded)}
         className="w-full flex items-center gap-2 px-3 py-2 text-xs font-mono hover:bg-white/5 transition-colors"
       >
-        <ChevronRight className={`h-3 w-3 text-muted-foreground shrink-0 transition-transform ${expanded ? 'rotate-90' : ''}`} />
-        <Terminal className="h-3 w-3 text-blue-400 shrink-0" />
+        <ChevronRight className={`h-3 w-3 text-muted-foreground shrink-0 transition-transform duration-200 ${expanded ? 'rotate-90' : ''}`} />
+        <Terminal className={`h-3 w-3 shrink-0 ${isDone ? 'text-green-400' : isError ? 'text-red-400' : 'text-blue-400'}`} />
         <span className="text-foreground truncate">{tp.description || 'Subagent task'}</span>
         {tp.lastToolName && isRunning && (
-          <span className="text-muted-foreground text-[10px] truncate">· {tp.lastToolName}</span>
+          <span className="text-muted-foreground text-[10px] truncate ml-1">· {tp.lastToolName}</span>
         )}
         <span className="ml-auto flex items-center gap-1.5 shrink-0">
-          {tp.usage && (
+          {tp.usage?.tool_uses != null && (
             <span className="text-[10px] text-muted-foreground">
-              {tp.usage.tool_uses} tools · {formatDuration(tp.usage.duration_ms)}
+              {tp.usage.tool_uses} tools
+            </span>
+          )}
+          {elapsedStr && (
+            <span className={`text-[10px] ${isRunning ? 'text-blue-400/70 tabular-nums' : 'text-muted-foreground'}`}>
+              {elapsedStr}
             </span>
           )}
           {isRunning && <Loader2 className="h-3 w-3 text-blue-400 animate-spin" />}
+          {isDone && <CheckCircle2 className="h-3 w-3 text-green-400" />}
           {isError && <AlertTriangle className="h-3 w-3 text-red-400" />}
           {isStopped && <Circle className="h-3 w-3 text-yellow-400" />}
         </span>
       </button>
+      {isRunning && (
+        <div className="h-0.5 bg-blue-500/10 overflow-hidden">
+          <div className="h-full bg-blue-500/40 animate-pulse" style={{ width: '100%' }} />
+        </div>
+      )}
       {expanded && (
         <div className="border-t border-border/30 px-3 py-2 space-y-2">
+          <div className="flex items-center gap-2 text-[10px] text-muted-foreground font-mono">
+            <span className={`inline-block h-1.5 w-1.5 rounded-full ${
+              isDone ? 'bg-green-400' : isError ? 'bg-red-400' : isStopped ? 'bg-yellow-400' : 'bg-blue-400 animate-pulse'
+            }`} />
+            <span className="capitalize">{statusLabel}</span>
+          </div>
           {tp.summary && (
             <div className="text-xs">
               <Markdown size="sm">{tp.summary}</Markdown>
@@ -308,8 +364,8 @@ function TaskProgressMessage({ message }: { message: AgentMessage }) {
           )}
           {tp.usage && (
             <div className="flex items-center gap-3 text-[10px] text-muted-foreground font-mono">
-              <span>{tp.usage.tool_uses} tool uses</span>
-              <span>{tp.usage.total_tokens.toLocaleString()} tokens</span>
+              <span>{tp.usage.tool_uses ?? 0} tool uses</span>
+              <span>{(tp.usage.total_tokens ?? 0).toLocaleString()} tokens</span>
               <span>{formatDuration(tp.usage.duration_ms)}</span>
             </div>
           )}
