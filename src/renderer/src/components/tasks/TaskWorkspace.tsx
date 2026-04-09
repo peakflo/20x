@@ -268,13 +268,14 @@ export function TaskWorkspace({
     setShowRepoSelector(true)
   }, [githubOrg, checkGhCli, checkGlabCli])
 
-  const handleReposConfirmed = useCallback(async (selectedRepos: GitHubRepo[], selectedOrg: string) => {
+  const handleReposConfirmed = useCallback(async (selectedRepos: GitHubRepo[], selectedOrg: string, selectedProvider: GitProvider) => {
     if (!task) return
     setShowRepoSelector(false)
 
     if (selectedOrg && selectedOrg !== githubOrg) {
       await setGithubOrg(selectedOrg)
     }
+    setOrgProvider(selectedProvider)
 
     const repoNames = selectedRepos.map((r) => r.fullName)
     const merged = [...new Set([...task.repos, ...repoNames])]
@@ -289,7 +290,8 @@ export function TaskWorkspace({
         await worktreeApi.setup(
           task.id,
           newRepos.map((r) => ({ fullName: r.fullName, defaultBranch: r.defaultBranch })),
-          selectedOrg
+          selectedOrg,
+          selectedProvider
         )
       } catch (err) {
         console.error('Failed to setup worktrees for new repos:', err)

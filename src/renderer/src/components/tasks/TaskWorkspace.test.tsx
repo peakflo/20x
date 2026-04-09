@@ -13,9 +13,9 @@ vi.mock('@/components/agents/AgentTranscriptPanel', () => ({
 }))
 
 vi.mock('@/components/github/RepoSelectorDialog', () => ({
-  RepoSelectorDialog: ({ open, onConfirm }: { open: boolean; onConfirm: (repos: Array<{ fullName: string; defaultBranch: string }>, org: string) => void }) => (
+  RepoSelectorDialog: ({ open, onConfirm }: { open: boolean; onConfirm: (repos: Array<{ fullName: string; defaultBranch: string }>, org: string, provider: 'github' | 'gitlab') => void }) => (
     open
-      ? <button data-testid="mock-confirm-repo" onClick={() => onConfirm([{ fullName: 'peakflo/api', defaultBranch: 'main' }], 'peakflo')}>confirm repo</button>
+      ? <button data-testid="mock-confirm-repo" onClick={() => onConfirm([{ fullName: 'peakflo/api', defaultBranch: 'main' }], 'peakflo', 'github')}>confirm repo</button>
       : null
   )
 }))
@@ -142,7 +142,8 @@ describe('TaskWorkspace – stale triage session cleanup', () => {
       expect(window.electronAPI.worktree.setup).toHaveBeenCalledWith(
         task.id,
         [{ fullName: 'peakflo/api', defaultBranch: 'main' }],
-        'peakflo'
+        'peakflo',
+        'github'
       )
     })
   })
