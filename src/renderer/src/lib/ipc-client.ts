@@ -452,8 +452,8 @@ export const claudePluginApi = {
 }
 
 export const worktreeApi = {
-  setup: (taskId: string, repos: { fullName: string; defaultBranch: string }[], org: string): Promise<string> => {
-    return window.electronAPI.worktree.setup(taskId, repos, org)
+  setup: (taskId: string, repos: { fullName: string; defaultBranch: string }[], org: string, provider: 'github' | 'gitlab'): Promise<string> => {
+    return window.electronAPI.worktree.setup(taskId, repos, org, provider)
   },
   cleanup: (taskId: string, repos: { fullName: string }[], org: string, removeTaskDir?: boolean): Promise<void> => {
     return window.electronAPI.worktree.cleanup(taskId, repos, org, removeTaskDir)

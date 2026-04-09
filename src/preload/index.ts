@@ -188,8 +188,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('gitlab:fetchUserRepos')
   },
   worktree: {
-    setup: (taskId: string, repos: { fullName: string; defaultBranch: string }[], org: string): Promise<string> =>
-      ipcRenderer.invoke('worktree:setup', taskId, repos, org),
+    setup: (taskId: string, repos: { fullName: string; defaultBranch: string }[], org: string, provider: 'github' | 'gitlab'): Promise<string> =>
+      ipcRenderer.invoke('worktree:setup', taskId, repos, org, provider),
     cleanup: (taskId: string, repos: { fullName: string }[], org: string, removeTaskDir?: boolean): Promise<void> =>
       ipcRenderer.invoke('worktree:cleanup', taskId, repos, org, removeTaskDir)
   },

@@ -242,7 +242,7 @@ interface ElectronAPI {
     fetchUserRepos: () => Promise<GitHubRepo[]>
   }
   worktree: {
-    setup: (taskId: string, repos: { fullName: string; defaultBranch: string }[], org: string) => Promise<string>
+    setup: (taskId: string, repos: { fullName: string; defaultBranch: string }[], org: string, provider: 'github' | 'gitlab') => Promise<string>
     cleanup: (taskId: string, repos: { fullName: string }[], org: string, removeTaskDir?: boolean) => Promise<void>
   }
   taskSources: {

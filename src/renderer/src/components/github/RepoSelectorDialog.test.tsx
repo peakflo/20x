@@ -72,7 +72,8 @@ describe('RepoSelectorDialog', () => {
       expect.arrayContaining([
         expect.objectContaining({ fullName: 'other-org/other-repo' })
       ]),
-      'other-org'
+      'other-org',
+      'github'
     )
   })
 })

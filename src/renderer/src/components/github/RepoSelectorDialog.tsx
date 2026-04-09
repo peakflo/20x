@@ -14,7 +14,7 @@ interface RepoSelectorDialogProps {
   org: string
   orgProvider?: GitProvider
   initialRepos?: string[]
-  onConfirm: (repos: GitHubRepo[], org: string) => void
+  onConfirm: (repos: GitHubRepo[], org: string, provider: GitProvider) => void
 }
 
 export function RepoSelectorDialog({ open, onOpenChange, org, orgProvider, initialRepos, onConfirm }: RepoSelectorDialogProps) {
@@ -111,7 +111,7 @@ export function RepoSelectorDialog({ open, onOpenChange, org, orgProvider, initi
 
   const handleConfirm = () => {
     const selectedRepos = repos.filter((r) => selected.has(r.fullName))
-    onConfirm(selectedRepos, selectedOrg)
+    onConfirm(selectedRepos, selectedOrg, selectedProvider)
   }
 
   const selectedInCurrentOrg = repos.filter((r) => selected.has(r.fullName)).length
