@@ -158,9 +158,9 @@ export function TaskBoard() {
   const { openDashboardPreview } = useUIStore()
   const snoozeTick = useSnoozeTick(tasks)
 
-  // Only show top-level tasks that are not snoozed (not subtasks)
+  // Only show top-level tasks that are not snoozed (not subtasks) and not recurring templates
   const topLevelTasks = useMemo(
-    () => tasks.filter((t) => !t.parent_task_id && !isSnoozed(t.snoozed_until)),
+    () => tasks.filter((t) => !t.parent_task_id && !isSnoozed(t.snoozed_until) && !(t.is_recurring && !t.recurrence_parent_id)),
     [tasks, snoozeTick]
   )
 

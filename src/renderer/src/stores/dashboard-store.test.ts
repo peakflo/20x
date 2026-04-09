@@ -346,6 +346,19 @@ describe('computeLocalStats', () => {
     expect(stats.tasksByStatus[TaskStatus.AgentWorking]).toBeUndefined()
   })
 
+  it('excludes recurring parent template tasks from counts', () => {
+    const tasks: WorkfloTask[] = [
+      makeTask({ id: 'normal', status: TaskStatus.NotStarted }),
+      makeTask({ id: 'template', status: TaskStatus.NotStarted, is_recurring: true, recurrence_parent_id: null }),
+      makeTask({ id: 'instance', status: TaskStatus.NotStarted, is_recurring: false, recurrence_parent_id: 'template' })
+    ]
+
+    const stats = computeLocalStats(tasks, 'all')
+
+    // Template should be excluded; normal + instance should be counted
+    expect(stats.totalTasks).toBe(2)
+  })
+
   it('sets single-user defaults', () => {
     const stats = computeLocalStats([], 'all')
 

@@ -117,6 +117,93 @@ describe('useAgentAutoStart', () => {
     expect(updateCallOrder).toBeLessThan(startCallOrder)
   })
 
+  it('does not triage recurring parent template tasks', async () => {
+    const templateTask = makeTask({
+      id: 'template-1',
+      title: 'Daily standup template',
+      is_recurring: true,
+      recurrence_parent_id: null,
+      recurrence_pattern: '0 9 * * 1-5'
+    })
+    const triageAgent = makeAgent({ id: 'agent-triage', is_default: true })
+
+    renderHook(() =>
+      useAgentAutoStart({
+        tasks: [templateTask],
+        agents: [triageAgent],
+        sessions: new Map(),
+        showToast: vi.fn()
+      })
+    )
+
+    await act(async () => {
+      vi.advanceTimersByTime(350)
+      await Promise.resolve()
+    })
+
+    // Should NOT update status or start a session for the template
+    expect(mockElectronAPI.db.updateTask).not.toHaveBeenCalled()
+    expect(mockElectronAPI.agentSession.start).not.toHaveBeenCalled()
+  })
+
+  it('does not auto-start recurring parent template tasks with assigned agent', async () => {
+    const templateTask = makeTask({
+      id: 'template-2',
+      title: 'Weekly report template',
+      is_recurring: true,
+      recurrence_parent_id: null,
+      recurrence_pattern: '0 10 * * 1',
+      agent_id: 'agent-1',
+      status: TaskStatus.NotStarted
+    })
+    const agent = makeAgent({ id: 'agent-1', is_default: false })
+
+    renderHook(() =>
+      useAgentAutoStart({
+        tasks: [templateTask],
+        agents: [agent],
+        sessions: new Map(),
+        showToast: vi.fn()
+      })
+    )
+
+    await act(async () => {
+      vi.advanceTimersByTime(350)
+      await Promise.resolve()
+    })
+
+    // Should NOT start a session for the template
+    expect(mockElectronAPI.agentSession.start).not.toHaveBeenCalled()
+  })
+
+  it('still triages recurring instances (tasks with recurrence_parent_id)', async () => {
+    const instanceTask = makeTask({
+      id: 'instance-1',
+      title: 'Daily standup - 2026-04-09',
+      is_recurring: false,
+      recurrence_parent_id: 'template-1'
+    })
+    const triageAgent = makeAgent({ id: 'agent-triage', is_default: true })
+
+    renderHook(() =>
+      useAgentAutoStart({
+        tasks: [instanceTask],
+        agents: [triageAgent],
+        sessions: new Map(),
+        showToast: vi.fn()
+      })
+    )
+
+    await act(async () => {
+      vi.advanceTimersByTime(350)
+      await Promise.resolve()
+    })
+
+    // Should triage the instance normally
+    expect(mockElectronAPI.db.updateTask).toHaveBeenCalledWith(instanceTask.id, { status: TaskStatus.Triaging })
+    expect(mockElectronAPI.agentSession.start).toHaveBeenCalledWith(triageAgent.id, instanceTask.id, undefined, undefined)
+  })
+
   it('starts assigned agent immediately after successful triage completion', async () => {
     const task = makeTask({ id: 'task-2', title: 'Needs triage' })
     const triageAgent = makeAgent({ id: 'agent-triage', is_default: true, name: 'Triage Agent' })

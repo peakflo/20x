@@ -116,7 +116,8 @@ async function handleRoute(db: DatabaseManager, route: string, params: Record<st
 
   switch (route) {
     case '/list_tasks': {
-      let query = 'SELECT * FROM tasks WHERE 1=1'
+      // Exclude recurring parent template tasks — they are not actionable tasks
+      let query = 'SELECT * FROM tasks WHERE NOT (is_recurring = 1 AND recurrence_parent_id IS NULL)'
       const qParams: unknown[] = []
 
       if (params.status) { query += ' AND status = ?'; qParams.push(params.status) }
