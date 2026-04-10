@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { RefreshCw, Loader2, Cloud, Plus } from 'lucide-react'
+import { RefreshCw, Cloud, Plus } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { useDashboardStore, type TimeWindow } from '@/stores/dashboard-store'
 import { useEnterpriseStore } from '@/stores/enterprise-store'
@@ -26,12 +26,12 @@ export function DashboardWorkspace() {
     timeWindow,
     setTimeWindow,
     fetchAll,
+    fetchAllIfNeeded,
+    startPeriodicRefresh,
+    stopPeriodicRefresh,
     updateLocalStats,
-    applicationsLoading,
-    statsLoading
+    isRefreshing
   } = useDashboardStore()
-
-  const isLoading = applicationsLoading || statsLoading
 
   // Restore saved enterprise session on mount
   useEffect(() => {
@@ -43,11 +43,13 @@ export function DashboardWorkspace() {
     updateLocalStats(tasks)
   }, [tasks, timeWindow])
 
-  // Fetch cloud data when authenticated
+  // Fetch cloud data when authenticated — only on first load, then periodically
   useEffect(() => {
     if (isAuthenticated) {
-      fetchAll()
+      fetchAllIfNeeded()
+      startPeriodicRefresh()
     }
+    return () => stopPeriodicRefresh()
   }, [isAuthenticated])
 
   return (
@@ -94,14 +96,10 @@ export function DashboardWorkspace() {
                 variant="ghost"
                 size="sm"
                 onClick={fetchAll}
-                disabled={isLoading}
+                disabled={isRefreshing}
                 title="Refresh all"
               >
-                {isLoading ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <RefreshCw className="h-3.5 w-3.5" />
-                )}
+                <RefreshCw className={`h-3.5 w-3.5 transition-transform ${isRefreshing ? 'animate-spin' : ''}`} />
               </Button>
             )}
           </div>

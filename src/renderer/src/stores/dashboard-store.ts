@@ -124,6 +124,9 @@ export interface ApplicationTab {
   executionStatus: string | null
 }
 
+/** How often to background-refresh dashboard data (ms). */
+const REFRESH_INTERVAL_MS = 60_000 // 1 minute
+
 interface DashboardState {
   // Data
   applications: ApplicationItem[]
@@ -137,15 +140,24 @@ interface DashboardState {
   activeTabId: string | null       // currently visible tab workflowId
   expandedView: boolean            // true = showing tabs+iframe, false = showing cards
 
-  // Loading states
+  // Loading states — only true on *initial* load (no cached data yet)
   applicationsLoading: boolean
   presetupLoading: boolean
   presetupProvisioning: string | null  // slug being provisioned
   statsLoading: boolean
 
+  // Whether we have fetched at least once (prevents reload on tab switch)
+  hasFetchedOnce: boolean
+
+  // True while a manual refresh is in-flight (for animating the refresh button)
+  isRefreshing: boolean
+
   // Error states
   applicationsError: string | null
   statsError: string | null
+
+  // Periodic refresh
+  _refreshTimer: ReturnType<typeof setInterval> | null
 
   // Actions
   setTimeWindow: (window: TimeWindow) => void
@@ -154,6 +166,12 @@ interface DashboardState {
   provisionPresetup: (slug: string) => Promise<void>
   fetchStats: () => Promise<void>
   fetchAll: () => Promise<void>
+  /** Fetch all if not fetched yet; otherwise no-op. */
+  fetchAllIfNeeded: () => Promise<void>
+  /** Start periodic background refresh (idempotent). */
+  startPeriodicRefresh: () => void
+  /** Stop periodic background refresh. */
+  stopPeriodicRefresh: () => void
   updateLocalStats: (tasks: WorkfloTask[]) => void
   openApplication: (workflowId: string) => Promise<void>
   switchTab: (workflowId: string) => void
@@ -234,8 +252,13 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
   presetupProvisioning: null,
   statsLoading: false,
 
+  hasFetchedOnce: false,
+  isRefreshing: false,
+
   applicationsError: null,
   statsError: null,
+
+  _refreshTimer: null,
 
   setTimeWindow: (timeWindow) => {
     set({ timeWindow })
@@ -249,7 +272,10 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
   },
 
   fetchApplications: async () => {
-    set({ applicationsLoading: true, applicationsError: null })
+    const hasData = get().applications.length > 0
+    // Only show loading skeleton on initial fetch (no cached data)
+    if (!hasData) set({ applicationsLoading: true })
+    set({ applicationsError: null })
     try {
       // Must use lowercase 'application_trigger' to match the NodeType enum value in workflow-builder
       const result = await enterpriseApi.apiRequest('GET', '/api/workflows?triggerType=application_trigger') as {
@@ -286,7 +312,9 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
   },
 
   fetchPresetups: async () => {
-    set({ presetupLoading: true })
+    const hasData = get().presetupTemplates.length > 0
+    // Only show loading skeleton on initial fetch (no cached data)
+    if (!hasData) set({ presetupLoading: true })
     try {
       const result = await enterpriseApi.apiRequest('GET', '/api/presetup/status') as {
         templates: PresetupTemplate[]
@@ -294,7 +322,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
       set({ presetupTemplates: result.templates || [], presetupLoading: false })
     } catch {
       // Silently fail — presetups are optional, don't block the dashboard
-      set({ presetupTemplates: [], presetupLoading: false })
+      if (!hasData) set({ presetupTemplates: [], presetupLoading: false })
     }
   },
 
@@ -314,7 +342,10 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
   },
 
   fetchStats: async () => {
-    set({ statsLoading: true, statsError: null })
+    const hasData = get().stats !== null || get().localStats !== null
+    // Only show loading skeleton on initial fetch (no cached data)
+    if (!hasData) set({ statsLoading: true })
+    set({ statsError: null })
     try {
       const { timeWindow } = get()
       const result = await enterpriseApi.apiRequest('GET', `/api/20x/sync/stats?window=${timeWindow}`) as {
@@ -330,12 +361,46 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
   },
 
   fetchAll: async () => {
+    set({ isRefreshing: true })
     const state = get()
     await Promise.allSettled([
       state.fetchApplications(),
       state.fetchPresetups(),
       state.fetchStats()
     ])
+    set({ hasFetchedOnce: true, isRefreshing: false })
+  },
+
+  fetchAllIfNeeded: async () => {
+    if (get().hasFetchedOnce) return
+    await get().fetchAll()
+  },
+
+  startPeriodicRefresh: () => {
+    // Idempotent — don't start multiple timers
+    if (get()._refreshTimer) return
+    const timer = setInterval(() => {
+      // Only refresh if authenticated
+      const isAuth = useEnterpriseStore.getState().isAuthenticated
+      if (isAuth) {
+        const state = get()
+        // Background refresh — loading flags won't be set because data already exists
+        Promise.allSettled([
+          state.fetchApplications(),
+          state.fetchPresetups(),
+          state.fetchStats()
+        ])
+      }
+    }, REFRESH_INTERVAL_MS)
+    set({ _refreshTimer: timer })
+  },
+
+  stopPeriodicRefresh: () => {
+    const timer = get()._refreshTimer
+    if (timer) {
+      clearInterval(timer)
+      set({ _refreshTimer: null })
+    }
   },
 
   openApplication: async (workflowId: string) => {

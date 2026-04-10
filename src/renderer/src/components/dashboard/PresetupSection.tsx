@@ -119,7 +119,8 @@ export function PresetupSection() {
     settingsApi.set(COLLAPSED_KEY, String(next)).catch(() => {})
   }
 
-  if (presetupLoading || !loaded) {
+  // Only show skeleton on initial load when there's no cached data
+  if ((presetupLoading && presetupTemplates.length === 0) || !loaded) {
     return (
       <section>
         <h2 className="text-sm font-semibold mb-3">Get Started</h2>

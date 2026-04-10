@@ -92,9 +92,13 @@ beforeEach(() => {
     presetupLoading: false,
     presetupProvisioning: null,
     statsLoading: false,
+    hasFetchedOnce: false,
     applicationsError: null,
     statsError: null,
     fetchAll: vi.fn(),
+    fetchAllIfNeeded: vi.fn(),
+    startPeriodicRefresh: vi.fn(),
+    stopPeriodicRefresh: vi.fn(),
     updateLocalStats: vi.fn()
   })
   useEnterpriseStore.setState({
@@ -267,13 +271,37 @@ describe('DashboardWorkspace', () => {
     expect(screen.getByText(/No tasks yet/)).toBeDefined()
   })
 
-  it('calls fetchAll on mount when authenticated', () => {
-    const mockFetchAll = vi.fn()
-    useDashboardStore.setState({ fetchAll: mockFetchAll })
+  it('calls fetchAllIfNeeded on mount when authenticated (no reload on tab switch)', () => {
+    const mockFetchAllIfNeeded = vi.fn()
+    const mockStartPeriodicRefresh = vi.fn()
+    useDashboardStore.setState({
+      fetchAllIfNeeded: mockFetchAllIfNeeded,
+      startPeriodicRefresh: mockStartPeriodicRefresh
+    })
     useEnterpriseStore.setState({ isAuthenticated: true })
 
     render(<DashboardWorkspace />)
-    expect(mockFetchAll).toHaveBeenCalledOnce()
+    expect(mockFetchAllIfNeeded).toHaveBeenCalledOnce()
+    expect(mockStartPeriodicRefresh).toHaveBeenCalledOnce()
+  })
+
+  it('does not refetch when component remounts (tab switch) if data already loaded', () => {
+    const mockFetchAll = vi.fn()
+    const mockFetchAllIfNeeded = vi.fn()
+    useDashboardStore.setState({
+      fetchAll: mockFetchAll,
+      fetchAllIfNeeded: mockFetchAllIfNeeded,
+      startPeriodicRefresh: vi.fn(),
+      stopPeriodicRefresh: vi.fn(),
+      hasFetchedOnce: true
+    })
+    useEnterpriseStore.setState({ isAuthenticated: true })
+
+    render(<DashboardWorkspace />)
+    // fetchAllIfNeeded is called but should be a no-op since hasFetchedOnce is true
+    expect(mockFetchAllIfNeeded).toHaveBeenCalledOnce()
+    // fetchAll should NOT be called directly
+    expect(mockFetchAll).not.toHaveBeenCalled()
   })
 
   it('computes local stats on mount even when not authenticated', () => {
