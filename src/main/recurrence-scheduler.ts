@@ -4,6 +4,12 @@ import type { DatabaseManager, RecurrencePatternRecord, RecurrencePatternObject,
 import { createId } from '@paralleldrive/cuid2'
 import { TaskStatus } from '../shared/constants'
 
+/** Safely parse a JSON column that should be an array */
+function safeParseArray<T = string>(raw: string | null | undefined): T[] {
+  const parsed = JSON.parse(raw || '[]')
+  return Array.isArray(parsed) ? parsed : (parsed != null && parsed !== '' ? [parsed] : [])
+}
+
 /** Raw row shape returned by SQLite for the tasks table (before JSON deserialization). */
 interface RawTaskRow {
   id: string
@@ -374,14 +380,14 @@ export class RecurrenceScheduler {
   private deserializeTaskRow(row: RawTaskRow): TaskRecord {
     return {
       ...row,
-      labels: JSON.parse(row.labels || '[]'),
-      attachments: JSON.parse(row.attachments || '[]'),
-      repos: (() => { const v = JSON.parse(row.repos || '[]'); return Array.isArray(v) ? v : (typeof v === 'string' && v.length > 0 ? [v] : []); })(),
-      output_fields: JSON.parse(row.output_fields || '[]'),
+      labels: safeParseArray(row.labels),
+      attachments: safeParseArray(row.attachments),
+      repos: safeParseArray(row.repos),
+      output_fields: safeParseArray(row.output_fields),
       agent_id: row.agent_id ?? null,
       external_id: row.external_id ?? null,
       source_id: row.source_id ?? null,
-      skill_ids: row.skill_ids ? JSON.parse(row.skill_ids) : null,
+      skill_ids: row.skill_ids ? safeParseArray(row.skill_ids) : null,
       session_id: row.session_id ?? null,
       snoozed_until: row.snoozed_until ?? null,
       resolution: row.resolution ?? null,

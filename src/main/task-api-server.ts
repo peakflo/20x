@@ -564,14 +564,18 @@ async function handleRoute(db: DatabaseManager, route: string, params: Record<st
   }
 }
 
+function safeParseArray(raw: string | null | undefined): unknown[] {
+  const parsed = JSON.parse((raw as string) || '[]')
+  return Array.isArray(parsed) ? parsed : (parsed != null && parsed !== '' ? [parsed] : [])
+}
+
 function parseTask(task: Record<string, unknown>) {
   if (!task) return task
-  task.labels = JSON.parse((task.labels as string) || '[]')
-  task.skill_ids = JSON.parse((task.skill_ids as string) || '[]')
-  task.attachments = JSON.parse((task.attachments as string) || '[]')
-  task.output_fields = JSON.parse((task.output_fields as string) || '[]')
-  const parsedRepos = JSON.parse((task.repos as string) || '[]')
-  task.repos = Array.isArray(parsedRepos) ? parsedRepos : (typeof parsedRepos === 'string' && parsedRepos.length > 0 ? [parsedRepos] : [])
+  task.labels = safeParseArray(task.labels as string)
+  task.skill_ids = safeParseArray(task.skill_ids as string)
+  task.attachments = safeParseArray(task.attachments as string)
+  task.output_fields = safeParseArray(task.output_fields as string)
+  task.repos = safeParseArray(task.repos as string)
   task.feedback_rating = task.feedback_rating ?? null
   task.feedback_comment = task.feedback_comment ?? null
   return task

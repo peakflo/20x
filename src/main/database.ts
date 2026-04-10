@@ -409,24 +409,30 @@ const UPDATABLE_COLUMNS = new Set([
 
 const JSON_COLUMNS = new Set(['labels', 'attachments', 'repos', 'output_fields', 'skill_ids'])
 
-/** Ensure a parsed JSON value is a string array (guards against double-stringified or scalar values) */
-function ensureArray(value: unknown): string[] {
-  if (Array.isArray(value)) return value as string[]
-  if (typeof value === 'string' && value.length > 0) return [value]
+/** Ensure a parsed JSON value is always an array (guards against double-stringified or scalar values) */
+function ensureArray<T = string>(value: unknown): T[] {
+  if (Array.isArray(value)) return value as T[]
+  if (value != null && value !== '') return [value] as T[]
   return []
+}
+
+/** Safely parse a JSON column that should be an array */
+function parseJsonArray<T = string>(raw: string | null | undefined, fallback = '[]'): T[] {
+  const parsed = JSON.parse(raw || fallback)
+  return ensureArray<T>(parsed)
 }
 
 function deserializeTask(row: TaskRow): TaskRecord {
   return {
     ...row,
-    labels: JSON.parse(row.labels) as string[],
-    attachments: JSON.parse(row.attachments) as FileAttachmentRecord[],
-    repos: ensureArray(JSON.parse(row.repos || '[]')),
-    output_fields: JSON.parse(row.output_fields || '[]') as OutputFieldRecord[],
+    labels: parseJsonArray(row.labels),
+    attachments: parseJsonArray<FileAttachmentRecord>(row.attachments),
+    repos: parseJsonArray(row.repos),
+    output_fields: parseJsonArray<OutputFieldRecord>(row.output_fields),
     agent_id: row.agent_id ?? null,
     external_id: row.external_id ?? null,
     source_id: row.source_id ?? null,
-    skill_ids: row.skill_ids ? JSON.parse(row.skill_ids) as string[] : null,
+    skill_ids: row.skill_ids ? parseJsonArray(row.skill_ids) : null,
     session_id: row.session_id ?? null,
     snoozed_until: row.snoozed_until ?? null,
     resolution: row.resolution ?? null,

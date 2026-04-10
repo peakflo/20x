@@ -1327,7 +1327,7 @@ export class AgentManager extends EventEmitter {
         }
 
         // Append output field instructions
-        if (currentTask?.output_fields && currentTask.output_fields.length > 0) {
+        if (currentTask?.output_fields && Array.isArray(currentTask.output_fields) && currentTask.output_fields.length > 0) {
           promptText += this.buildOutputFieldInstructions(currentTask.output_fields)
         }
 
