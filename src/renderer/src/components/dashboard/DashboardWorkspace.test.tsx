@@ -357,6 +357,31 @@ describe('DashboardWorkspace', () => {
     expect(useUIStore.getState().activeModal).toBe('create')
   })
 
+  it('resets hasFetchedOnce and errors when isAuthenticated goes false (re-login scenario)', () => {
+    // Simulate: previous fetch failed and set hasFetchedOnce + errors
+    useDashboardStore.setState({
+      hasFetchedOnce: true,
+      applicationsError: 'No refresh token available — please sign in again',
+      statsError: 'Session expired — please sign in again',
+      fetchAllIfNeeded: vi.fn(),
+      startPeriodicRefresh: vi.fn(),
+      stopPeriodicRefresh: vi.fn()
+    })
+    useEnterpriseStore.setState({ isAuthenticated: true })
+
+    const { rerender } = render(<DashboardWorkspace />)
+
+    // Simulate logout / session clear: isAuthenticated → false
+    useEnterpriseStore.setState({ isAuthenticated: false })
+    rerender(<DashboardWorkspace />)
+
+    // Dashboard fetch state should be reset
+    const state = useDashboardStore.getState()
+    expect(state.hasFetchedOnce).toBe(false)
+    expect(state.applicationsError).toBeNull()
+    expect(state.statsError).toBeNull()
+  })
+
   it('clicking a task card sets dashboardPreviewTaskId in UI store', () => {
     useTaskStore.setState({
       tasks: [

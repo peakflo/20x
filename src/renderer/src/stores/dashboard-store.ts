@@ -5,6 +5,23 @@ import { isSnoozed } from '@/lib/utils'
 import type { WorkfloTask } from '@/types'
 import { TaskStatus } from '@/types'
 
+// ── Auth error detection ────────────────────────────────────
+// When the main process clears stored tokens (e.g. expired refresh token),
+// the renderer still thinks the user is authenticated.  Detecting auth-
+// related error messages and re-loading the session ensures the UI shows
+// the login prompt instead of a stale error.
+
+const AUTH_ERROR_PATTERNS = ['sign in again', 'refresh token', 'session expired']
+
+function isAuthError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message.toLowerCase() : String(err).toLowerCase()
+  return AUTH_ERROR_PATTERNS.some((p) => msg.includes(p))
+}
+
+function handleAuthError(): void {
+  useEnterpriseStore.getState().loadSession()
+}
+
 // ── Types ───────────────────────────────────────────────────
 
 export interface ApplicationItem {
@@ -304,6 +321,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
       }))
       set({ applications, applicationsLoading: false })
     } catch (err) {
+      if (isAuthError(err)) handleAuthError()
       set({
         applicationsLoading: false,
         applicationsError: err instanceof Error ? err.message : 'Failed to fetch applications'
@@ -353,6 +371,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
       }
       set({ stats: result.stats, statsLoading: false })
     } catch (err) {
+      if (isAuthError(err)) handleAuthError()
       set({
         statsLoading: false,
         statsError: err instanceof Error ? err.message : 'Failed to fetch stats'
