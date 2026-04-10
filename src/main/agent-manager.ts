@@ -977,7 +977,7 @@ export class AgentManager extends EventEmitter {
       join(homedir(), '.opencode', 'bin'),
       ...(process.platform === 'win32'
         ? [join(homedir(), 'AppData', 'Roaming', 'npm')]
-        : ['/usr/local/bin']),
+        : ['/opt/homebrew/bin', '/usr/local/bin']),
       join(homedir(), '.local', 'bin')
     ].filter(p => !currentPath.includes(p))
 
@@ -3189,7 +3189,11 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       // Default to home directory so project-scoped OpenCode configs are picked up
       const dir = directory || homedir()
 
-      const ocClient = OpenCodeSDK.createOpencodeClient({ baseUrl, fetch: noTimeoutFetch })
+      // Use this.serverUrl (verified by startServer/findAccessibleServer) instead of
+      // the raw baseUrl from the frontend, which may use 'localhost' that resolves
+      // to IPv6 on some macOS systems while the server only listens on IPv4
+      const resolvedUrl = this.serverUrl || baseUrl
+      const ocClient = OpenCodeSDK.createOpencodeClient({ baseUrl: resolvedUrl, fetch: noTimeoutFetch })
       const result = await ocClient.config.providers({
         query: { directory: dir }
       })
