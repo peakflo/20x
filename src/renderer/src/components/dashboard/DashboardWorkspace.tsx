@@ -43,11 +43,20 @@ export function DashboardWorkspace() {
     updateLocalStats(tasks)
   }, [tasks, timeWindow])
 
-  // Fetch cloud data when authenticated — only on first load, then periodically
+  // Fetch cloud data when authenticated — only on first load, then periodically.
+  // When isAuthenticated goes false (logout / session expiry), reset dashboard
+  // fetch state so the next login triggers a fresh data load instead of being
+  // short-circuited by the stale hasFetchedOnce flag.
   useEffect(() => {
     if (isAuthenticated) {
       fetchAllIfNeeded()
       startPeriodicRefresh()
+    } else {
+      useDashboardStore.setState({
+        hasFetchedOnce: false,
+        applicationsError: null,
+        statsError: null
+      })
     }
     return () => stopPeriodicRefresh()
   }, [isAuthenticated])

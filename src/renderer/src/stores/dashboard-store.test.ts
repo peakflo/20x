@@ -11,11 +11,19 @@ vi.mock('@/lib/ipc-client', () => ({
     getApiUrl: vi.fn().mockResolvedValue('http://localhost:2000'),
     getJwt: vi.fn().mockResolvedValue('mock-jwt-token'),
     enableIframeAuth: vi.fn().mockResolvedValue({ apiUrl: 'http://localhost:2000' }),
-    disableIframeAuth: vi.fn().mockResolvedValue(undefined)
+    disableIframeAuth: vi.fn().mockResolvedValue(undefined),
+    login: vi.fn(),
+    selectTenant: vi.fn(),
+    logout: vi.fn(),
+    getSession: vi.fn().mockResolvedValue({ isAuthenticated: false }),
+    refreshToken: vi.fn(),
+    getAuthTokens: vi.fn(),
+    listCompanies: vi.fn()
   }
 }))
 
 import { enterpriseApi } from '@/lib/ipc-client'
+import { useEnterpriseStore } from '@/stores/enterprise-store'
 
 const mockApiRequest = vi.mocked(enterpriseApi.apiRequest)
 
@@ -242,6 +250,75 @@ describe('useDashboardStore', () => {
 
     const { localStats } = useDashboardStore.getState()
     expect(localStats!.totalTasks).toBe(1)
+  })
+})
+
+describe('auth error detection', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    useDashboardStore.setState({
+      applications: [],
+      stats: null,
+      localStats: null,
+      timeWindow: '7d',
+      applicationsLoading: false,
+      statsLoading: false,
+      applicationsError: null,
+      statsError: null
+    })
+    useEnterpriseStore.setState({
+      isAuthenticated: true,
+      isLoading: false,
+      error: null,
+      userEmail: 'test@example.com',
+      userId: 'user-1',
+      currentTenant: { id: 't1', name: 'Test' },
+      availableTenants: null
+    })
+  })
+
+  it('fetchApplications refreshes enterprise session on "sign in again" error', async () => {
+    const loadSessionSpy = vi.fn()
+    useEnterpriseStore.setState({ loadSession: loadSessionSpy })
+    mockApiRequest.mockRejectedValueOnce(new Error('No refresh token available — please sign in again'))
+
+    await useDashboardStore.getState().fetchApplications()
+
+    expect(loadSessionSpy).toHaveBeenCalledOnce()
+    expect(useDashboardStore.getState().applicationsError).toContain('sign in again')
+  })
+
+  it('fetchStats refreshes enterprise session on "Session expired" error', async () => {
+    const loadSessionSpy = vi.fn()
+    useEnterpriseStore.setState({ loadSession: loadSessionSpy })
+    mockApiRequest.mockRejectedValueOnce(new Error('Session expired — please sign in again'))
+
+    await useDashboardStore.getState().fetchStats()
+
+    expect(loadSessionSpy).toHaveBeenCalledOnce()
+    expect(useDashboardStore.getState().statsError).toContain('Session expired')
+  })
+
+  it('fetchApplications does NOT refresh session on non-auth error', async () => {
+    const loadSessionSpy = vi.fn()
+    useEnterpriseStore.setState({ loadSession: loadSessionSpy })
+    mockApiRequest.mockRejectedValueOnce(new Error('Network error'))
+
+    await useDashboardStore.getState().fetchApplications()
+
+    expect(loadSessionSpy).not.toHaveBeenCalled()
+    expect(useDashboardStore.getState().applicationsError).toBe('Network error')
+  })
+
+  it('fetchStats does NOT refresh session on non-auth error', async () => {
+    const loadSessionSpy = vi.fn()
+    useEnterpriseStore.setState({ loadSession: loadSessionSpy })
+    mockApiRequest.mockRejectedValueOnce(new Error('Server error'))
+
+    await useDashboardStore.getState().fetchStats()
+
+    expect(loadSessionSpy).not.toHaveBeenCalled()
+    expect(useDashboardStore.getState().statsError).toBe('Server error')
   })
 })
 
