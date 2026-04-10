@@ -409,12 +409,19 @@ const UPDATABLE_COLUMNS = new Set([
 
 const JSON_COLUMNS = new Set(['labels', 'attachments', 'repos', 'output_fields', 'skill_ids'])
 
+/** Ensure a parsed JSON value is a string array (guards against double-stringified or scalar values) */
+function ensureArray(value: unknown): string[] {
+  if (Array.isArray(value)) return value as string[]
+  if (typeof value === 'string' && value.length > 0) return [value]
+  return []
+}
+
 function deserializeTask(row: TaskRow): TaskRecord {
   return {
     ...row,
     labels: JSON.parse(row.labels) as string[],
     attachments: JSON.parse(row.attachments) as FileAttachmentRecord[],
-    repos: JSON.parse(row.repos) as string[],
+    repos: ensureArray(JSON.parse(row.repos || '[]')),
     output_fields: JSON.parse(row.output_fields || '[]') as OutputFieldRecord[],
     agent_id: row.agent_id ?? null,
     external_id: row.external_id ?? null,

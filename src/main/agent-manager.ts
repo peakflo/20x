@@ -190,7 +190,7 @@ export class AgentManager extends EventEmitter {
 
     const task = this.db.getTask(taskId)
     if (!task) return undefined
-    if (!task.repos || task.repos.length === 0) return undefined
+    if (!task.repos || !Array.isArray(task.repos) || task.repos.length === 0) return undefined
 
     const workspaceDir = this.db.getWorkspaceDir(taskId)
     const missingRepoFolders = task.repos.some((repo) => {

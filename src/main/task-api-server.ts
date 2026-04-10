@@ -243,7 +243,12 @@ async function handleRoute(db: DatabaseManager, route: string, params: Record<st
       if (params.labels !== undefined) { updates.push('labels = ?'); qParams.push(JSON.stringify(params.labels)) }
       if (params.skill_ids !== undefined) { updates.push('skill_ids = ?'); qParams.push(JSON.stringify(params.skill_ids)) }
       if (params.agent_id !== undefined) { updates.push('agent_id = ?'); qParams.push(params.agent_id) }
-      if (params.repos !== undefined) { updates.push('repos = ?'); qParams.push(JSON.stringify(params.repos)) }
+      if (params.repos !== undefined) {
+        const normalizedRepos = Array.isArray(params.repos)
+          ? params.repos
+          : (typeof params.repos === 'string' && params.repos.length > 0 ? [params.repos] : [])
+        updates.push('repos = ?'); qParams.push(JSON.stringify(normalizedRepos))
+      }
       if (params.priority) { updates.push('priority = ?'); qParams.push(params.priority) }
       if (params.output_fields !== undefined) { updates.push('output_fields = ?'); qParams.push(JSON.stringify(params.output_fields)) }
 
@@ -565,7 +570,8 @@ function parseTask(task: Record<string, unknown>) {
   task.skill_ids = JSON.parse((task.skill_ids as string) || '[]')
   task.attachments = JSON.parse((task.attachments as string) || '[]')
   task.output_fields = JSON.parse((task.output_fields as string) || '[]')
-  task.repos = JSON.parse((task.repos as string) || '[]')
+  const parsedRepos = JSON.parse((task.repos as string) || '[]')
+  task.repos = Array.isArray(parsedRepos) ? parsedRepos : (typeof parsedRepos === 'string' && parsedRepos.length > 0 ? [parsedRepos] : [])
   task.feedback_rating = task.feedback_rating ?? null
   task.feedback_comment = task.feedback_comment ?? null
   return task

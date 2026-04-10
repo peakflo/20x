@@ -109,6 +109,31 @@ describe('JSON deserialization', () => {
     expect(task.repos).toEqual(['owner/repo1'])
   })
 
+  it('deserializes double-stringified repos safely as array', () => {
+    // Simulate corrupted data: repos stored as double-stringified JSON
+    const task = db.createTask(makeTask({ repos: ['owner/repo1'] }))!
+    const rawDb = (db as unknown as { db: import('better-sqlite3').Database }).db
+    // Write a double-stringified value directly to the database
+    rawDb.prepare('UPDATE tasks SET repos = ? WHERE id = ?')
+      .run(JSON.stringify(JSON.stringify(['owner/repo1'])), task.id)
+    const reloaded = db.getTask(task.id)!
+    expect(Array.isArray(reloaded.repos)).toBe(true)
+    // The double-stringified value becomes a string after one parse;
+    // ensureArray wraps it into an array
+    expect(reloaded.repos).toEqual(['["owner/repo1"]'])
+  })
+
+  it('deserializes scalar string repos safely as array', () => {
+    const task = db.createTask(makeTask())!
+    const rawDb = (db as unknown as { db: import('better-sqlite3').Database }).db
+    // Write a scalar string value (not an array) to the repos column
+    rawDb.prepare('UPDATE tasks SET repos = ? WHERE id = ?')
+      .run(JSON.stringify('owner/repo1'), task.id)
+    const reloaded = db.getTask(task.id)!
+    expect(Array.isArray(reloaded.repos)).toBe(true)
+    expect(reloaded.repos).toEqual(['owner/repo1'])
+  })
+
   it('deserializes output_fields as objects', () => {
     const outputFields = [{ id: 'f1', name: 'Result', type: 'text' }]
     const task = db.createTask(makeTask({ output_fields: outputFields }))!

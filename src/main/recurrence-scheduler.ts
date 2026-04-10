@@ -376,7 +376,7 @@ export class RecurrenceScheduler {
       ...row,
       labels: JSON.parse(row.labels || '[]'),
       attachments: JSON.parse(row.attachments || '[]'),
-      repos: JSON.parse(row.repos || '[]'),
+      repos: (() => { const v = JSON.parse(row.repos || '[]'); return Array.isArray(v) ? v : (typeof v === 'string' && v.length > 0 ? [v] : []); })(),
       output_fields: JSON.parse(row.output_fields || '[]'),
       agent_id: row.agent_id ?? null,
       external_id: row.external_id ?? null,
