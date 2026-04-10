@@ -2013,9 +2013,9 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
       WHERE heartbeat_enabled = 1
         AND heartbeat_next_check_at IS NOT NULL
         AND heartbeat_next_check_at <= ?
-        AND status != 'completed'
+        AND status != ?
       ORDER BY heartbeat_next_check_at ASC
-    `).all(now) as TaskRow[]
+    `).all(now, TaskStatus.Completed) as TaskRow[]
     return rows.map(deserializeTask)
   }
 

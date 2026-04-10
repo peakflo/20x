@@ -6,7 +6,7 @@ import { promisify } from 'util'
 import { join } from 'path'
 import type { DatabaseManager, TaskRecord } from './database'
 import type { AgentManager } from './agent-manager'
-import { HeartbeatStatus, HEARTBEAT_OK_TOKEN, HEARTBEAT_INFO_TOKEN, HEARTBEAT_DEFAULTS } from '../shared/constants'
+import { HeartbeatStatus, HEARTBEAT_OK_TOKEN, HEARTBEAT_INFO_TOKEN, HEARTBEAT_DEFAULTS, TaskStatus } from '../shared/constants'
 
 const execFileAsync = promisify(execFile)
 
@@ -251,7 +251,7 @@ export class HeartbeatScheduler {
         }
 
         // Skip completed tasks and disable their heartbeat
-        if (task.status === 'completed') {
+        if (task.status === TaskStatus.Completed) {
           console.log(`[HeartbeatScheduler] Task ${task.id} is completed, disabling heartbeat`)
           this.disableHeartbeat(task.id)
           continue
