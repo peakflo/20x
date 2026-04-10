@@ -6,7 +6,7 @@ import { promisify } from 'util'
 import { join } from 'path'
 import type { DatabaseManager, TaskRecord } from './database'
 import type { AgentManager } from './agent-manager'
-import { HeartbeatStatus, HEARTBEAT_OK_TOKEN, HEARTBEAT_INFO_TOKEN, HEARTBEAT_DEFAULTS } from '../shared/constants'
+import { HeartbeatStatus, HEARTBEAT_OK_TOKEN, HEARTBEAT_INFO_TOKEN, HEARTBEAT_DEFAULTS, TaskStatus } from '../shared/constants'
 
 const execFileAsync = promisify(execFile)
 
@@ -247,6 +247,13 @@ export class HeartbeatScheduler {
         // Skip if task has a live agent session (user is actively working)
         if (this.agentManager.hasActiveSessionForTask(task.id)) {
           console.log(`[HeartbeatScheduler] Skipping task ${task.id} — active agent session in progress`)
+          continue
+        }
+
+        // Skip completed tasks and disable their heartbeat
+        if (task.status === TaskStatus.Completed) {
+          console.log(`[HeartbeatScheduler] Task ${task.id} is completed, disabling heartbeat`)
+          this.disableHeartbeat(task.id)
           continue
         }
 

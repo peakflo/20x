@@ -18,6 +18,7 @@ import type {
   UpdateSecretData
 } from './database'
 import type { AgentManager } from './agent-manager'
+import { TaskStatus } from '../shared/constants'
 import type { GitHubManager } from './github-manager'
 import type { GitLabManager } from './gitlab-manager'
 import type { WorktreeManager } from './worktree-manager'
@@ -106,6 +107,11 @@ export function registerIpcHandlers(
     }
 
     const updated = db.updateTask(id, data)
+
+    // Auto-disable heartbeat when task is completed
+    if (heartbeatScheduler && data.status === TaskStatus.Completed && updated?.heartbeat_enabled) {
+      heartbeatScheduler.disableHeartbeat(id)
+    }
 
     // Record status change event for enterprise sync
     // Note: for completions, only emit task_completed (not both status_changed + completed)
