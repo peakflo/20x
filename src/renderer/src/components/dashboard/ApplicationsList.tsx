@@ -267,7 +267,8 @@ export function ApplicationsList() {
     return <ExpandedView />
   }
 
-  if (applicationsLoading) {
+  // Only show loading skeleton on initial load when there's no cached data
+  if (applicationsLoading && applications.length === 0) {
     return (
       <section>
         <div className="rounded-lg border border-border/50 bg-card p-6">

@@ -55,6 +55,9 @@ export function StatsSection() {
   // Use cloud stats when available, otherwise fall back to local stats
   const effectiveStats = stats || localStats
 
+  // Only show skeleton loaders when there's no data at all (initial load)
+  const showLoading = statsLoading && !effectiveStats
+
   return (
     <section>
       <h2 className="text-sm font-semibold mb-3">Stats Overview</h2>
@@ -68,7 +71,7 @@ export function StatsSection() {
               : 'Tasks without human review'
           }
           icon={Bot}
-          loading={statsLoading}
+          loading={showLoading}
           accent="#82819F"
         />
         <StatCard
@@ -76,7 +79,7 @@ export function StatsSection() {
           value={formatPercent(effectiveStats?.agentSuccessRate ?? null)}
           description={`${formatNumber(effectiveStats?.totalAgentRuns)} total runs`}
           icon={Cpu}
-          loading={statsLoading}
+          loading={showLoading}
           accent="#A6BF91"
         />
         <StatCard
@@ -84,14 +87,14 @@ export function StatsSection() {
           value={formatNumber(effectiveStats?.tasksCreatedInWindow)}
           description={`${formatNumber(effectiveStats?.totalTasks)} total`}
           icon={PlusCircle}
-          loading={statsLoading}
+          loading={showLoading}
         />
         <StatCard
           title="Completed"
           value={formatNumber(effectiveStats?.tasksCompletedInWindow)}
           description="In selected window"
           icon={CheckCircle2}
-          loading={statsLoading}
+          loading={showLoading}
         />
       </div>
     </section>

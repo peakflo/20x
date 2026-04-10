@@ -26,6 +26,9 @@ export function DashboardWorkspace() {
     timeWindow,
     setTimeWindow,
     fetchAll,
+    fetchAllIfNeeded,
+    startPeriodicRefresh,
+    stopPeriodicRefresh,
     updateLocalStats,
     applicationsLoading,
     statsLoading
@@ -43,11 +46,13 @@ export function DashboardWorkspace() {
     updateLocalStats(tasks)
   }, [tasks, timeWindow])
 
-  // Fetch cloud data when authenticated
+  // Fetch cloud data when authenticated — only on first load, then periodically
   useEffect(() => {
     if (isAuthenticated) {
-      fetchAll()
+      fetchAllIfNeeded()
+      startPeriodicRefresh()
     }
+    return () => stopPeriodicRefresh()
   }, [isAuthenticated])
 
   return (
