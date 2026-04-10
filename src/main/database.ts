@@ -2005,7 +2005,7 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
 
   // ── Heartbeat CRUD ──────────────────────────────────────────
 
-  /** Get all tasks that have heartbeat due (enabled + next_check_at <= now). */
+  /** Get all tasks that have heartbeat due (enabled + next_check_at <= now, excluding completed tasks). */
   getHeartbeatDueTasks(): TaskRecord[] {
     const now = new Date().toISOString()
     const rows = this.db.prepare(`
@@ -2013,6 +2013,7 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
       WHERE heartbeat_enabled = 1
         AND heartbeat_next_check_at IS NOT NULL
         AND heartbeat_next_check_at <= ?
+        AND status != 'completed'
       ORDER BY heartbeat_next_check_at ASC
     `).all(now) as TaskRow[]
     return rows.map(deserializeTask)

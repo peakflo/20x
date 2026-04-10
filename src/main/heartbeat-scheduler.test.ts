@@ -687,6 +687,39 @@ describe('HeartbeatScheduler', () => {
     })
   })
 
+  // ── completed task handling ────────────────────────────
+
+  describe('checkHeartbeats skips completed tasks', () => {
+    it('disables heartbeat for completed tasks returned by getHeartbeatDueTasks', async () => {
+      const completedTask = makeTask({ id: 'completed-task', status: 'completed' as TaskRecord['status'] })
+      ;(db.getHeartbeatDueTasks as ReturnType<typeof vi.fn>).mockReturnValue([completedTask])
+
+      const mockWindow = { webContents: { send: vi.fn() }, isDestroyed: vi.fn().mockReturnValue(false) }
+      scheduler.start(mockWindow as unknown as import('electron').BrowserWindow)
+
+      // Wait for the initial checkHeartbeats to run
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(db.updateTask).toHaveBeenCalledWith('completed-task', {
+        heartbeat_enabled: false,
+        heartbeat_next_check_at: null,
+      })
+    })
+
+    it('does not run heartbeat for completed tasks even if they have heartbeat enabled', async () => {
+      const completedTask = makeTask({ id: 'completed-task', status: 'completed' as TaskRecord['status'] })
+      ;(db.getHeartbeatDueTasks as ReturnType<typeof vi.fn>).mockReturnValue([completedTask])
+
+      const mockWindow = { webContents: { send: vi.fn() }, isDestroyed: vi.fn().mockReturnValue(false) }
+      scheduler.start(mockWindow as unknown as import('electron').BrowserWindow)
+
+      await vi.advanceTimersByTimeAsync(0)
+
+      // Agent session should NOT have been started for the completed task
+      expect(agent.startHeartbeatSession).not.toHaveBeenCalled()
+    })
+  })
+
   // ── resolveAgentId ─────────────────────────────────────
 
   describe('resolveAgentId', () => {

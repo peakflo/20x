@@ -107,6 +107,11 @@ export function registerIpcHandlers(
 
     const updated = db.updateTask(id, data)
 
+    // Auto-disable heartbeat when task is completed
+    if (heartbeatScheduler && data.status === 'completed' && updated?.heartbeat_enabled) {
+      heartbeatScheduler.disableHeartbeat(id)
+    }
+
     // Record status change event for enterprise sync
     // Note: for completions, only emit task_completed (not both status_changed + completed)
     // to avoid double-counting in downstream aggregation

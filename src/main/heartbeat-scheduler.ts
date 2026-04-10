@@ -250,6 +250,13 @@ export class HeartbeatScheduler {
           continue
         }
 
+        // Skip completed tasks and disable their heartbeat
+        if (task.status === 'completed') {
+          console.log(`[HeartbeatScheduler] Task ${task.id} is completed, disabling heartbeat`)
+          this.disableHeartbeat(task.id)
+          continue
+        }
+
         // Verify heartbeat.md still exists
         if (!this.hasHeartbeatFile(task.id)) {
           console.log(`[HeartbeatScheduler] No heartbeat.md for task ${task.id}, disabling heartbeat`)
