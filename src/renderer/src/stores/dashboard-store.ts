@@ -149,6 +149,9 @@ interface DashboardState {
   // Whether we have fetched at least once (prevents reload on tab switch)
   hasFetchedOnce: boolean
 
+  // True while a manual refresh is in-flight (for animating the refresh button)
+  isRefreshing: boolean
+
   // Error states
   applicationsError: string | null
   statsError: string | null
@@ -250,6 +253,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
   statsLoading: false,
 
   hasFetchedOnce: false,
+  isRefreshing: false,
 
   applicationsError: null,
   statsError: null,
@@ -357,13 +361,14 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
   },
 
   fetchAll: async () => {
+    set({ isRefreshing: true })
     const state = get()
     await Promise.allSettled([
       state.fetchApplications(),
       state.fetchPresetups(),
       state.fetchStats()
     ])
-    set({ hasFetchedOnce: true })
+    set({ hasFetchedOnce: true, isRefreshing: false })
   },
 
   fetchAllIfNeeded: async () => {
