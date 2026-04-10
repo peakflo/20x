@@ -108,6 +108,9 @@ export class EnterpriseAuth {
   private cachedJwt: string | null = null
   private cachedJwtExpiresAt: number = 0
 
+  // Mutex: in-flight refresh promise to prevent concurrent refresh races
+  private refreshInFlight: Promise<{ token: string }> | null = null
+
   constructor(db: DatabaseManager) {
     this.db = db
 
@@ -270,6 +273,22 @@ export class EnterpriseAuth {
   // ── Refresh Token ────────────────────────────────────────────────
 
   async refreshToken(): Promise<{ token: string }> {
+    // Deduplicate concurrent refresh calls: if a refresh is already
+    // in-flight, all callers share the same promise instead of racing
+    // and accidentally rotating the Supabase refresh token out from
+    // under each other (which causes auth_clear_missing_refresh_token).
+    if (this.refreshInFlight) {
+      return this.refreshInFlight
+    }
+
+    this.refreshInFlight = this.executeRefresh().finally(() => {
+      this.refreshInFlight = null
+    })
+
+    return this.refreshInFlight
+  }
+
+  private async executeRefresh(): Promise<{ token: string }> {
     // First refresh the Supabase session
     const refreshToken = this.getStoredSupabaseRefreshToken()
     if (!refreshToken) {
