@@ -20,7 +20,7 @@ import type {
 } from './coding-agent-adapter'
 import { SessionStatusType, MessagePartType, MessageRole } from './coding-agent-adapter'
 
-export const DEFAULT_CODEX_MODEL = 'gpt-5.4-codex'
+export const DEFAULT_CODEX_MODEL = 'gpt-5.4'
 
 interface JsonRpcRequest {
   jsonrpc: '2.0'

@@ -61,7 +61,6 @@ export const CLAUDE_MODELS: { id: ClaudeModel; name: string }[] = [
 ]
 
 export enum CodexModel {
-  GPT_5_4_CODEX = 'gpt-5.4-codex',
   GPT_5_3_CODEX = 'gpt-5.3-codex',
   GPT_5_2_CODEX = 'gpt-5.2-codex',
   GPT_5_1_CODEX_MAX = 'gpt-5.1-codex-max',
@@ -74,14 +73,13 @@ export enum CodexModel {
 }
 
 export const CODEX_MODELS: { id: CodexModel; name: string }[] = [
-  { id: CodexModel.GPT_5_4_CODEX, name: 'GPT-5.4 Codex (Recommended)' },
+  { id: CodexModel.GPT_5_4, name: 'GPT-5.4 (Recommended)' },
   { id: CodexModel.GPT_5_3_CODEX, name: 'GPT-5.3 Codex' },
   { id: CodexModel.GPT_5_2_CODEX, name: 'GPT-5.2 Codex' },
   { id: CodexModel.GPT_5_1_CODEX_MAX, name: 'GPT-5.1 Codex Max' },
   { id: CodexModel.GPT_5_1_CODEX, name: 'GPT-5.1 Codex' },
   { id: CodexModel.GPT_5_1_CODEX_MINI, name: 'GPT-5.1 Codex Mini' },
   { id: CodexModel.GPT_5_CODEX, name: 'GPT-5 Codex' },
-  { id: CodexModel.GPT_5_4, name: 'GPT-5.4' },
   { id: CodexModel.GPT_5, name: 'GPT-5' },
   { id: CodexModel.GPT_5_MINI, name: 'GPT-5 Mini (Fastest)' }
 ]
