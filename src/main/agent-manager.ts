@@ -67,6 +67,7 @@ interface PollingEntry {
   initialPromptSent?: boolean
   createdAt: number  // Timestamp to enforce grace period before IDLE transition
   hasSeenWork?: boolean  // True once we've seen at least one non-IDLE status
+  lastPartReceivedAt?: number  // Timestamp of last received data — used for secondary grace period
 }
 
 export class AgentManager extends EventEmitter {
@@ -1638,8 +1639,11 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
 
       // Mark that the session has done real work once we receive any messages.
       // This disables the IDLE grace period so future IDLE means truly done.
-      if (newParts.length > 0 && !entry.hasSeenWork) {
-        entry.hasSeenWork = true
+      if (newParts.length > 0) {
+        if (!entry.hasSeenWork) {
+          entry.hasSeenWork = true
+        }
+        entry.lastPartReceivedAt = Date.now()
       }
 
       // Collect all parts into a batch instead of sending individually.
@@ -1809,6 +1813,19 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
         if (!pollingEntry?.hasSeenWork && sessionAge < IDLE_GRACE_PERIOD_MS) {
           // Still within grace period and haven't seen any work yet — keep polling
           return
+        }
+
+        // Secondary grace period: after receiving data, don't immediately declare
+        // IDLE. Models like featherless kimi k2.5 may have brief idle gaps between
+        // tool call rounds where the status API momentarily reports idle before the
+        // next tool execution starts. Wait at least 5 seconds after the last
+        // received data before allowing IDLE transition.
+        const POST_DATA_GRACE_MS = 5_000
+        if (pollingEntry?.lastPartReceivedAt) {
+          const timeSinceLastData = Date.now() - pollingEntry.lastPartReceivedAt
+          if (timeSinceLastData < POST_DATA_GRACE_MS) {
+            return
+          }
         }
 
         console.log(`[AgentManager] Detected IDLE status for ${sessionId}, calling transitionToIdle`)

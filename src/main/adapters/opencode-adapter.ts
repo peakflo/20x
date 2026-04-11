@@ -456,7 +456,11 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     const promptAbort = new AbortController()
     this.promptAborts.set(sessionId, promptAbort)
 
-    // Fire-and-forget prompt
+    // Fire-and-forget prompt — the HTTP call stays open until the full agent
+    // loop completes (including tool call execution).  getStatus() checks
+    // promptAborts to reliably report BUSY while this call is in flight.
+    const promptStartTime = Date.now()
+    console.log(`[OpencodeAdapter] Sending prompt for session ${sessionId} (model: ${config.model || 'default'})`)
     ocClient.session.prompt({
       path: { id: sessionId },
       body: {
@@ -466,6 +470,22 @@ export class OpencodeAdapter implements CodingAgentAdapter {
       },
       ...(config.workspaceDir && { query: { directory: config.workspaceDir } }),
       signal: promptAbort.signal
+    }).then((result: unknown) => {
+      const elapsed = Date.now() - promptStartTime
+      console.log(`[OpencodeAdapter] Prompt completed for session ${sessionId} after ${elapsed}ms`)
+      // Log tool call details from the response for debugging
+      const res = result as { data?: { parts?: Array<Record<string, unknown>> } } | undefined
+      if (res?.data?.parts) {
+        const toolParts = res.data.parts.filter((p: Record<string, unknown>) => p.type === 'tool')
+        if (toolParts.length > 0) {
+          console.log(`[OpencodeAdapter] Response contains ${toolParts.length} tool part(s):`,
+            toolParts.map((p: Record<string, unknown>) => ({
+              tool: p.tool,
+              status: (p.state as Record<string, unknown> | undefined)?.status
+            }))
+          )
+        }
+      }
     }).catch((err: unknown) => {
       if (!(err instanceof Error) || err.name !== 'AbortError') {
         console.error('[OpencodeAdapter] prompt error:', err)
@@ -479,6 +499,16 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     const ocClient = this.clients.get(sessionId)
     if (!ocClient) {
       return { type: SessionStatusType.ERROR, message: 'Client not found' }
+    }
+
+    // If the session.prompt() HTTP call is still in-flight, the agent is
+    // definitely still working — regardless of what the status API reports.
+    // This prevents premature IDLE detection when the status API briefly
+    // returns idle between tool call rounds or when using models (like
+    // featherless kimi k2.5) whose tool call format may not be fully
+    // reflected in the status endpoint.
+    if (this.promptAborts.has(sessionId)) {
+      return { type: SessionStatusType.BUSY }
     }
 
     const statusResult = await ocClient.session.status({
@@ -514,6 +544,40 @@ export class OpencodeAdapter implements CodingAgentAdapter {
       }
     } catch {
       // Ignore errors when checking for questions
+    }
+
+    // If the status API says idle, double-check the messages for tool parts
+    // that are still pending/running. Some models (like featherless kimi k2.5)
+    // may have tool calls in flight that the status API doesn't reflect.
+    if (sdkType === 'idle') {
+      try {
+        const messagesResult = await ocClient.session.messages({
+          path: { id: sessionId },
+          ...(config.workspaceDir && { query: { directory: config.workspaceDir } })
+        })
+        if (messagesResult.data && Array.isArray(messagesResult.data)) {
+          // Check the last assistant message for pending tool parts
+          for (let i = messagesResult.data.length - 1; i >= 0; i--) {
+            const msg = messagesResult.data[i]
+            if (!msg.info || msg.info.role === 'user') continue
+            const parts = msg.parts || []
+            for (const part of parts) {
+              if (part.type === 'tool') {
+                const state = (part as Record<string, unknown>).state as Record<string, unknown> | undefined
+                const toolStatus = state?.status as string | undefined
+                if (toolStatus === 'pending' || toolStatus === 'running') {
+                  console.log(`[OpencodeAdapter] Status API says idle but tool part ${part.id} is ${toolStatus} — reporting BUSY`)
+                  return { type: SessionStatusType.BUSY }
+                }
+              }
+            }
+            // Only check the last assistant message
+            break
+          }
+        }
+      } catch (err) {
+        console.warn('[OpencodeAdapter] Failed to check messages for pending tools:', err)
+      }
     }
 
     const statusType = sdkType.toUpperCase() as keyof typeof SessionStatusType
