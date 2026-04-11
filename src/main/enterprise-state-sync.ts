@@ -29,6 +29,11 @@ export class EnterpriseStateSync {
     this.apiClient = apiClient
   }
 
+  /** Shorthand for the enterprise cloud domain (for error logs). */
+  private get domain(): string {
+    return this.apiClient.getDomain()
+  }
+
   /**
    * Set the display name used in changelog entries.
    */
@@ -197,7 +202,7 @@ export class EnterpriseStateSync {
           // Re-queue events on failure (they'll be sent next flush)
           this.pendingEvents.unshift(...events)
           const msg = err instanceof Error ? err.message : String(err)
-          console.warn(`[EnterpriseStateSync] Failed to send events: ${msg}`)
+          console.warn(`[EnterpriseStateSync] Failed to send events (domain: ${this.domain}): ${msg}`)
         }
       }
     } finally {

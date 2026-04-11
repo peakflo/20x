@@ -32,6 +32,11 @@ export class EnterpriseHeartbeat {
     this.apiClient = apiClient
   }
 
+  /** Shorthand for the enterprise cloud domain (for error logs). */
+  private get domain(): string {
+    return this.apiClient.getDomain()
+  }
+
   /**
    * Attach an EnterpriseStateSync instance so pending events
    * are flushed alongside every heartbeat (every 60s).
@@ -101,21 +106,21 @@ export class EnterpriseHeartbeat {
       if (this.stateSync) {
         this.stateSync.flush().catch((err) => {
           const msg = err instanceof Error ? err.message : String(err)
-          console.warn(`[EnterpriseHeartbeat] State sync flush error (non-fatal): ${msg}`)
+          console.warn(`[EnterpriseHeartbeat] State sync flush error (non-fatal) (domain: ${this.domain}): ${msg}`)
         })
       }
     } catch (err) {
       this.consecutiveErrors++
       const msg = err instanceof Error ? err.message : String(err)
       console.warn(
-        `[EnterpriseHeartbeat] Failed (${this.consecutiveErrors}/${this.MAX_CONSECUTIVE_ERRORS}): ${msg}`
+        `[EnterpriseHeartbeat] Failed (${this.consecutiveErrors}/${this.MAX_CONSECUTIVE_ERRORS}) (domain: ${this.domain}): ${msg}`
       )
 
       // After too many consecutive errors, stop to avoid log spam.
       // The heartbeat will be restarted on next successful auth.
       if (this.consecutiveErrors >= this.MAX_CONSECUTIVE_ERRORS) {
         console.error(
-          '[EnterpriseHeartbeat] Too many consecutive errors, stopping.'
+          `[EnterpriseHeartbeat] Too many consecutive errors (domain: ${this.domain}), stopping.`
         )
         this.stop()
       }

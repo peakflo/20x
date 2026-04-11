@@ -154,6 +154,14 @@ export interface WorkfloSyncEvent {
 export class WorkfloApiClient {
   constructor(private auth: EnterpriseAuth) {}
 
+  /**
+   * Get the domain (hostname) of the enterprise cloud API.
+   * Delegates to EnterpriseAuth for use in error logging by consumers.
+   */
+  getDomain(): string {
+    return this.auth.getDomain()
+  }
+
   // ── Tasks ─────────────────────────────────────────────────────────────
 
   /**
