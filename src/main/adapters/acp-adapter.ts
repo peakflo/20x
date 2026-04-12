@@ -413,6 +413,8 @@ export class AcpAdapter implements CodingAgentAdapter {
 
     // Extract agent capabilities for transport filtering
     const agentCaps = this.extractAgentCapabilities(initResult)
+    console.log(`[AcpAdapter/${this.agentType}] initialize response capabilities:`, JSON.stringify(initResult))
+    console.log(`[AcpAdapter/${this.agentType}] MCP transport support: http=${agentCaps.supportsHttp}, sse=${agentCaps.supportsSse}`)
 
     // Authenticate if required
     await this.authenticateSession(session, initResult)
@@ -589,6 +591,8 @@ export class AcpAdapter implements CodingAgentAdapter {
 
     // Extract agent capabilities for transport filtering
     const agentCaps = this.extractAgentCapabilities(initResult)
+    console.log(`[AcpAdapter/${this.agentType}] initialize response capabilities:`, JSON.stringify(initResult))
+    console.log(`[AcpAdapter/${this.agentType}] MCP transport support: http=${agentCaps.supportsHttp}, sse=${agentCaps.supportsSse}`)
 
     // Authenticate if required
     await this.authenticateSession(session, initResult)
