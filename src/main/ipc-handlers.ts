@@ -1004,6 +1004,11 @@ export function registerIpcHandlers(
 
         // Wire enterprise connection (after state sync is ready)
         syncManager.setEnterpriseConnection(apiClient, enterpriseSyncMgr, session.userId, enterpriseStateSync)
+
+        // Pass enterprise auth to agent manager so it can inject JWT into MCP Dev Server requests.
+        // Without this, buildMcpServersForAdapter sees enterpriseAuth=null and the MCP Dev Server
+        // gets empty auth headers, making it unusable after app restart.
+        agentManager.setEnterpriseAuth(enterpriseAuth)
       } catch (err) {
         console.error('[enterprise] Failed to restore connection:', err)
       }

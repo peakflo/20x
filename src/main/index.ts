@@ -564,6 +564,10 @@ app.whenReady().then(async () => {
 
         syncManager.setEnterpriseConnection(apiClient, enterpriseSyncMgr, session.userId, enterpriseStateSyncInstance)
 
+        // Pass enterprise auth to agent manager so it can inject JWT into MCP Dev Server requests.
+        // Without this, buildMcpServersForAdapter sees enterpriseAuth=null after app restart.
+        agentManager.setEnterpriseAuth(enterpriseAuth)
+
         console.log('[Main] Enterprise connection restored on startup (with heartbeat)')
         console.log('[EnterpriseAuth] auth_session_restore_result {"status":"restored"}')
       } else {

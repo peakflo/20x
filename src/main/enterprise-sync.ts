@@ -232,16 +232,13 @@ export class EnterpriseSyncManager {
     node: WorkfloOrgNode,
     result: EnterpriseSyncResult
   ): Promise<void> {
-    // Sync agents from node
-    if (node.agents && node.agents.length > 0) {
-      await this.syncAgents(node.agents, result)
-    }
-
     // Fetch node details to get MCP servers and task sources
+    // MCP servers MUST be synced BEFORE agents so that agent configs
+    // referencing MCP server IDs can be resolved immediately.
     try {
       const detail = await this.apiClient.getOrgNode(node.id)
 
-      // Sync MCP servers
+      // Sync MCP servers FIRST — agents reference these by ID
       if (detail.mcpServers && detail.mcpServers.length > 0) {
         await this.syncMcpServers(detail.mcpServers, result)
       }
@@ -253,6 +250,11 @@ export class EnterpriseSyncManager {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       result.errors.push(`Node ${node.name} detail fetch failed: ${msg}`)
+    }
+
+    // Sync agents AFTER MCP servers so their mcp_servers IDs resolve correctly
+    if (node.agents && node.agents.length > 0) {
+      await this.syncAgents(node.agents, result)
     }
   }
 

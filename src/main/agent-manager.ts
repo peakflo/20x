@@ -331,7 +331,10 @@ export class AgentManager extends EventEmitter {
     for (const entry of mcpEntries) {
       const serverId = typeof entry === 'string' ? entry : (entry as AgentMcpServerEntry).serverId
       const mcpServer = this.db.getMcpServer(serverId)
-      if (!mcpServer) continue
+      if (!mcpServer) {
+        console.warn(`[AgentManager] buildMcpServersForAdapter - MCP server not found in DB, skipping: ${serverId} (agent: ${agentId})`)
+        continue
+      }
 
       if (mcpServer.type === 'local') {
         // Inject TASK_API_URL for the task-management MCP server
@@ -366,12 +369,16 @@ export class AgentManager extends EventEmitter {
         }
 
         // Inject enterprise JWT for Workflo MCP Dev Server
-        if (mcpServer.name === '[Workflo] MCP Dev Server' && this.enterpriseAuth) {
-          try {
-            const jwt = await this.enterpriseAuth.getJwt()
-            finalHeaders = { ...finalHeaders, Authorization: `Bearer ${jwt}` }
-          } catch (err) {
-            console.warn('[AgentManager] Failed to inject enterprise JWT for MCP Dev Server:', err)
+        if (mcpServer.name === '[Workflo] MCP Dev Server') {
+          if (this.enterpriseAuth) {
+            try {
+              const jwt = await this.enterpriseAuth.getJwt()
+              finalHeaders = { ...finalHeaders, Authorization: `Bearer ${jwt}` }
+            } catch (err) {
+              console.warn('[AgentManager] Failed to inject enterprise JWT for MCP Dev Server:', err)
+            }
+          } else {
+            console.warn('[AgentManager] buildMcpServersForAdapter - enterpriseAuth is null, MCP Dev Server will have no auth headers (agent: ' + agentId + ')')
           }
         }
 

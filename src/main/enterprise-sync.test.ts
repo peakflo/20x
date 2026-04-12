@@ -750,3 +750,105 @@ describe('EnterpriseSyncManager — Skills 2-Way Sync (Batch)', () => {
     })
   })
 })
+
+// ── Sync Ordering: MCP servers before agents ──────────────────────────────
+
+describe('EnterpriseSyncManager — MCP servers synced before agents', () => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let mockDb: any
+  let mockApiClient: Record<string, ReturnType<typeof vi.fn>>
+  let syncManager: EnterpriseSyncManager
+
+  beforeEach(() => {
+    mockDb = {
+      db: {
+        pragma: vi.fn().mockReturnValue([{ name: 'enterprise_skill_id' }, { name: 'uses_at_last_sync' }]),
+        exec: vi.fn()
+      },
+      getSkills: vi.fn().mockReturnValue([]),
+      getSkill: vi.fn(),
+      getSkillByName: vi.fn().mockReturnValue(undefined),
+      getSkillByEnterpriseId: vi.fn().mockReturnValue(undefined),
+      getDeletedEnterpriseSkills: vi.fn().mockReturnValue([]),
+      createSkill: vi.fn().mockImplementation((data) => ({ id: 'new-local-id', ...data })),
+      updateSkill: vi.fn().mockImplementation((id, data) => ({ id, ...data })),
+      deleteSkill: vi.fn(),
+      hardDeleteSkill: vi.fn().mockReturnValue(true),
+      getAgents: vi.fn().mockReturnValue([]),
+      createAgent: vi.fn(),
+      updateAgent: vi.fn(),
+      getMcpServers: vi.fn().mockReturnValue([]),
+      createMcpServer: vi.fn(),
+      updateMcpServer: vi.fn(),
+      getTaskSources: vi.fn().mockReturnValue([]),
+      createTaskSource: vi.fn()
+    }
+
+    mockApiClient = {
+      listOrgNodes: vi.fn().mockResolvedValue([]),
+      getOrgNode: vi.fn().mockResolvedValue({
+        node: makeOrgNode(),
+        mcpServers: [],
+        taskSources: []
+      }),
+      listSkills: vi.fn().mockResolvedValue([]),
+      batchSyncSkills: vi.fn().mockResolvedValue({ created: 0, updated: 0, skills: [] }),
+      createSkill: vi.fn().mockResolvedValue(makeServerSkill()),
+      updateSkill: vi.fn().mockResolvedValue(makeServerSkill()),
+      deleteSkill: vi.fn().mockResolvedValue(undefined),
+      updateOrgNode: vi.fn().mockResolvedValue(makeOrgNode()),
+      cleanupDuplicateSkills: vi.fn().mockResolvedValue({ deleted: 0, kept: 0 })
+    }
+
+    syncManager = new EnterpriseSyncManager(mockDb as never, mockApiClient as never)
+  })
+
+  it('should sync MCP servers before agents so agent MCP references resolve', async () => {
+    const callOrder: string[] = []
+
+    // Node has both agents and MCP servers
+    const node = makeOrgNode({
+      agents: [{
+        id: 'agent-1',
+        name: 'Test Agent',
+        config: { coding_agent: 'codex' },
+        mcpServerIds: ['mcp-srv-1'],
+        systemPrompt: null
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      }] as any
+    })
+
+    mockApiClient.listOrgNodes.mockResolvedValue([node])
+
+    // getOrgNode returns MCP server details
+    mockApiClient.getOrgNode.mockResolvedValue({
+      node,
+      mcpServers: [{
+        id: 'mcp-srv-1',
+        name: 'My MCP Server',
+        type: 'local',
+        isActive: true,
+        config: { command: '/usr/bin/mcp', args: [], environment: {} },
+        updatedAt: '2026-03-10T00:00:00Z'
+      }],
+      taskSources: []
+    })
+
+    // Track call order for MCP server creation vs agent creation
+    mockDb.createMcpServer.mockImplementation(() => {
+      callOrder.push('createMcpServer')
+    })
+    mockDb.createAgent.mockImplementation(() => {
+      callOrder.push('createAgent')
+    })
+
+    await syncManager.syncAll('user-1')
+
+    // MCP server should be created BEFORE agent
+    const mcpIdx = callOrder.indexOf('createMcpServer')
+    const agentIdx = callOrder.indexOf('createAgent')
+    expect(mcpIdx).toBeGreaterThanOrEqual(0)
+    expect(agentIdx).toBeGreaterThanOrEqual(0)
+    expect(mcpIdx).toBeLessThan(agentIdx)
+  })
+})
