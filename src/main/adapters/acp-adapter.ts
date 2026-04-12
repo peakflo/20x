@@ -411,11 +411,14 @@ export class AcpAdapter implements CodingAgentAdapter {
       }
     })
 
+    // Extract agent capabilities for transport filtering
+    const agentCaps = this.extractAgentCapabilities(initResult)
+
     // Authenticate if required
     await this.authenticateSession(session, initResult)
 
     // Create ACP session (only accepts cwd and mcpServers per ACP spec)
-    const convertedMcpServers = this.convertMcpServers(config.mcpServers) || []
+    const convertedMcpServers = this.convertMcpServers(config.mcpServers, agentCaps) || []
     console.log(`[AcpAdapter/${this.agentType}] session/new mcpServers:`, JSON.stringify(convertedMcpServers))
     const result = await this.sendRpcRequest(session, 'session/new', {
       cwd: config.workspaceDir,
@@ -584,6 +587,9 @@ export class AcpAdapter implements CodingAgentAdapter {
       }
     })
 
+    // Extract agent capabilities for transport filtering
+    const agentCaps = this.extractAgentCapabilities(initResult)
+
     // Authenticate if required
     await this.authenticateSession(session, initResult)
 
@@ -592,7 +598,7 @@ export class AcpAdapter implements CodingAgentAdapter {
       await this.sendRpcRequest(session, 'session/load', {
         sessionId: sessionId,
         cwd: config.workspaceDir,
-        mcpServers: this.convertMcpServers(config.mcpServers) || []
+        mcpServers: this.convertMcpServers(config.mcpServers, agentCaps) || []
       })
 
       console.log(`[AcpAdapter/${this.agentType}] Session loaded successfully: ${sessionId}`)
@@ -1341,6 +1347,28 @@ export class AcpAdapter implements CodingAgentAdapter {
   }
 
   /**
+   * Extract agent capabilities from the ACP initialize response.
+   * Used to determine which MCP server transport types the agent supports.
+   * Per ACP spec, all agents MUST support stdio; http and sse are optional.
+   */
+  private extractAgentCapabilities(initResult: unknown): { supportsHttp: boolean; supportsSse: boolean } {
+    const defaults = { supportsHttp: false, supportsSse: false }
+    if (!initResult || typeof initResult !== 'object') return defaults
+
+    const obj = initResult as Record<string, unknown>
+    const caps = obj.agentCapabilities as Record<string, unknown> | undefined
+    if (!caps) return defaults
+
+    const mcpCaps = caps.mcpCapabilities as Record<string, unknown> | undefined
+    if (!mcpCaps) return defaults
+
+    return {
+      supportsHttp: mcpCaps.http === true,
+      supportsSse: mcpCaps.sse === true
+    }
+  }
+
+  /**
    * Convert internal McpServerConfig map to ACP-spec McpServer array.
    * ACP spec: https://agentclientprotocol.com/protocol/schema
    *
@@ -1348,8 +1376,12 @@ export class AcpAdapter implements CodingAgentAdapter {
    * - stdio variant: { name, command, args: string[], env: EnvVariable[] }
    * - http variant:  { type: "http", name, url, headers: HttpHeader[] }
    * - EnvVariable / HttpHeader = { name: string, value: string }
+   *
+   * Per ACP spec, Clients MUST check agentCapabilities.mcpCapabilities before
+   * sending HTTP or SSE transport servers. Unsupported transports are skipped
+   * with a warning so users know why a server is missing.
    */
-  private convertMcpServers(servers?: Record<string, McpServerConfig>): unknown[] {
+  private convertMcpServers(servers?: Record<string, McpServerConfig>, agentCaps?: { supportsHttp: boolean; supportsSse: boolean }): unknown[] {
     if (!servers) return []
 
     const result: unknown[] = []
@@ -1366,9 +1398,42 @@ export class AcpAdapter implements CodingAgentAdapter {
           args: config.args || [],
           env: envArray
         })
+      } else if (config.type === 'http') {
+        // Per ACP spec, client MUST check mcpCapabilities.http before sending
+        if (agentCaps && !agentCaps.supportsHttp) {
+          console.warn(`[AcpAdapter/${this.agentType}] Skipping MCP server "${name}" — agent does not support HTTP transport`)
+          continue
+        }
+
+        const headersArray = config.headers
+          ? Object.entries(config.headers).map(([k, v]) => ({ name: k, value: v }))
+          : []
+
+        result.push({
+          type: config.type,
+          name,
+          url: config.url,
+          headers: headersArray
+        })
+      } else if (config.type === 'sse') {
+        // Per ACP spec, client MUST check mcpCapabilities.sse before sending
+        if (agentCaps && !agentCaps.supportsSse) {
+          console.warn(`[AcpAdapter/${this.agentType}] Skipping MCP server "${name}" — agent does not support SSE transport`)
+          continue
+        }
+
+        const headersArray = config.headers
+          ? Object.entries(config.headers).map(([k, v]) => ({ name: k, value: v }))
+          : []
+
+        result.push({
+          type: config.type,
+          name,
+          url: config.url,
+          headers: headersArray
+        })
       } else {
-        // http or sse — ACP requires a "type" discriminator for non-stdio variants
-        // Convert headers from Record<string,string> to ACP HttpHeader[]
+        // Unknown transport type — include as-is (forward compatibility)
         const headersArray = config.headers
           ? Object.entries(config.headers).map(([k, v]) => ({ name: k, value: v }))
           : []

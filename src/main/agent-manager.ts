@@ -331,7 +331,10 @@ export class AgentManager extends EventEmitter {
     for (const entry of mcpEntries) {
       const serverId = typeof entry === 'string' ? entry : (entry as AgentMcpServerEntry).serverId
       const mcpServer = this.db.getMcpServer(serverId)
-      if (!mcpServer) continue
+      if (!mcpServer) {
+        console.warn(`[AgentManager] buildMcpServersForAdapter - MCP server not found in DB, skipping: ${serverId} (agent: ${agentId})`)
+        continue
+      }
 
       if (mcpServer.type === 'local') {
         // Inject TASK_API_URL for the task-management MCP server

@@ -45,6 +45,8 @@ interface AcpAdapterPrivate {
   handleRpcMessage(session: AcpSessionForTest, message: unknown): void
   authenticateSession(session: AcpSessionForTest, initResult: unknown): Promise<void>
   sendRpcRequest(session: AcpSessionForTest, method: string, params?: unknown): Promise<unknown>
+  convertMcpServers(servers?: Record<string, unknown>, agentCaps?: { supportsHttp: boolean; supportsSse: boolean }): unknown[]
+  extractAgentCapabilities(initResult: unknown): { supportsHttp: boolean; supportsSse: boolean }
 }
 
 interface JsonRpcRequestForTest {
@@ -2659,5 +2661,156 @@ describe('AcpAdapter - Codex Quota/Error Handling', () => {
       const loggedLines = logSpy.mock.calls.map((call) => String(call[0]))
       expect(loggedLines.some((line) => line.includes('agent_message_chunk: turnId='))).toBe(false)
     })
+  })
+})
+
+// ─── MCP Server Capability Filtering Tests ───────────────────────────────────
+
+describe('AcpAdapter - extractAgentCapabilities', () => {
+  let adapter: AcpAdapter
+
+  beforeEach(() => {
+    adapter = new AcpAdapter('codex')
+  })
+
+  it('should return defaults when initResult is null', () => {
+    const caps = adapterPrivate(adapter).extractAgentCapabilities(null)
+    expect(caps).toEqual({ supportsHttp: false, supportsSse: false })
+  })
+
+  it('should return defaults when initResult has no agentCapabilities', () => {
+    const caps = adapterPrivate(adapter).extractAgentCapabilities({ protocolVersion: 1 })
+    expect(caps).toEqual({ supportsHttp: false, supportsSse: false })
+  })
+
+  it('should return defaults when agentCapabilities has no mcpCapabilities', () => {
+    const caps = adapterPrivate(adapter).extractAgentCapabilities({
+      agentCapabilities: { loadSession: true }
+    })
+    expect(caps).toEqual({ supportsHttp: false, supportsSse: false })
+  })
+
+  it('should detect http support', () => {
+    const caps = adapterPrivate(adapter).extractAgentCapabilities({
+      agentCapabilities: { mcpCapabilities: { http: true } }
+    })
+    expect(caps).toEqual({ supportsHttp: true, supportsSse: false })
+  })
+
+  it('should detect sse support', () => {
+    const caps = adapterPrivate(adapter).extractAgentCapabilities({
+      agentCapabilities: { mcpCapabilities: { sse: true } }
+    })
+    expect(caps).toEqual({ supportsHttp: false, supportsSse: true })
+  })
+
+  it('should detect both http and sse support', () => {
+    const caps = adapterPrivate(adapter).extractAgentCapabilities({
+      agentCapabilities: { mcpCapabilities: { http: true, sse: true } }
+    })
+    expect(caps).toEqual({ supportsHttp: true, supportsSse: true })
+  })
+})
+
+describe('AcpAdapter - convertMcpServers transport filtering', () => {
+  let adapter: AcpAdapter
+
+  beforeEach(() => {
+    adapter = new AcpAdapter('codex')
+  })
+
+  it('should always include stdio servers regardless of capabilities', () => {
+    const servers = {
+      'my-server': { type: 'stdio' as const, command: '/usr/bin/server', args: ['--flag'], env: { KEY: 'val' } }
+    }
+    const noCaps = { supportsHttp: false, supportsSse: false }
+    const result = adapterPrivate(adapter).convertMcpServers(servers, noCaps)
+    expect(result).toHaveLength(1)
+    expect(result[0]).toEqual({
+      name: 'my-server',
+      command: '/usr/bin/server',
+      args: ['--flag'],
+      env: [{ name: 'KEY', value: 'val' }]
+    })
+  })
+
+  it('should skip http servers when agent does not support http', () => {
+    const servers = {
+      'remote-api': { type: 'http' as const, url: 'https://api.example.com/mcp', headers: { Authorization: 'Bearer tok' } }
+    }
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const result = adapterPrivate(adapter).convertMcpServers(servers, { supportsHttp: false, supportsSse: false })
+    expect(result).toHaveLength(0)
+    expect(warnSpy.mock.calls.some((call) => String(call[0]).includes('does not support HTTP transport'))).toBe(true)
+    warnSpy.mockRestore()
+  })
+
+  it('should include http servers when agent supports http', () => {
+    const servers = {
+      'remote-api': { type: 'http' as const, url: 'https://api.example.com/mcp', headers: { Authorization: 'Bearer tok' } }
+    }
+    const result = adapterPrivate(adapter).convertMcpServers(servers, { supportsHttp: true, supportsSse: false })
+    expect(result).toHaveLength(1)
+    expect(result[0]).toEqual({
+      type: 'http',
+      name: 'remote-api',
+      url: 'https://api.example.com/mcp',
+      headers: [{ name: 'Authorization', value: 'Bearer tok' }]
+    })
+  })
+
+  it('should skip sse servers when agent does not support sse', () => {
+    const servers = {
+      'event-stream': { type: 'sse' as const, url: 'https://events.example.com/mcp', headers: {} }
+    }
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const result = adapterPrivate(adapter).convertMcpServers(servers, { supportsHttp: false, supportsSse: false })
+    expect(result).toHaveLength(0)
+    expect(warnSpy.mock.calls.some((call) => String(call[0]).includes('does not support SSE transport'))).toBe(true)
+    warnSpy.mockRestore()
+  })
+
+  it('should include sse servers when agent supports sse', () => {
+    const servers = {
+      'event-stream': { type: 'sse' as const, url: 'https://events.example.com/mcp', headers: { 'X-Key': 'abc' } }
+    }
+    const result = adapterPrivate(adapter).convertMcpServers(servers, { supportsHttp: false, supportsSse: true })
+    expect(result).toHaveLength(1)
+    expect(result[0]).toEqual({
+      type: 'sse',
+      name: 'event-stream',
+      url: 'https://events.example.com/mcp',
+      headers: [{ name: 'X-Key', value: 'abc' }]
+    })
+  })
+
+  it('should filter mixed servers based on capabilities', () => {
+    const servers = {
+      'local-tool': { type: 'stdio' as const, command: '/usr/bin/tool', args: [], env: {} },
+      'remote-api': { type: 'http' as const, url: 'https://api.example.com/mcp', headers: {} },
+      'event-stream': { type: 'sse' as const, url: 'https://events.example.com/mcp', headers: {} }
+    }
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    // Agent only supports http, not sse
+    const result = adapterPrivate(adapter).convertMcpServers(servers, { supportsHttp: true, supportsSse: false })
+    expect(result).toHaveLength(2)
+    expect((result[0] as Record<string, unknown>).name).toBe('local-tool')
+    expect((result[1] as Record<string, unknown>).name).toBe('remote-api')
+    warnSpy.mockRestore()
+  })
+
+  it('should include all servers when no agentCaps provided (backward compat)', () => {
+    const servers = {
+      'local-tool': { type: 'stdio' as const, command: '/usr/bin/tool', args: [], env: {} },
+      'remote-api': { type: 'http' as const, url: 'https://api.example.com/mcp', headers: {} }
+    }
+    // No agentCaps → don't filter (backward compatibility)
+    const result = adapterPrivate(adapter).convertMcpServers(servers, undefined)
+    expect(result).toHaveLength(2)
+  })
+
+  it('should return empty array when servers is undefined', () => {
+    const result = adapterPrivate(adapter).convertMcpServers(undefined)
+    expect(result).toEqual([])
   })
 })
