@@ -38,6 +38,22 @@ vi.mock('@/lib/ipc-client', () => ({
   onTaskUpdated: vi.fn(() => () => {}),
   onTaskCreated: vi.fn(() => () => {}),
   onTasksRefresh: vi.fn(() => () => {}),
+  onAgentStatus: vi.fn(() => () => {}),
+  onAgentOutput: vi.fn(() => () => {}),
+  onAgentOutputBatch: vi.fn(() => () => {}),
+  onAgentApproval: vi.fn(() => () => {}),
+  onAgentIncompatibleSession: vi.fn(() => () => {}),
+  agentApi: {
+    getAll: vi.fn().mockResolvedValue([]),
+    create: vi.fn(),
+    update: vi.fn(),
+    delete: vi.fn(),
+    startSession: vi.fn(),
+    stopSession: vi.fn(),
+    sendMessage: vi.fn(),
+    approveAction: vi.fn(),
+    rejectAction: vi.fn()
+  },
   taskSourceApi: { sync: vi.fn() }
 }))
 
