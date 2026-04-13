@@ -145,27 +145,6 @@ function getSourceConfig(source: string): { label: string; color: string } {
   return { label: source, color: 'text-muted-foreground bg-muted/20 border-border/30' }
 }
 
-// ── Label colors for task labels ────────────────────────────
-
-const LABEL_COLORS = [
-  'bg-blue-500/20 text-blue-300',
-  'bg-emerald-500/20 text-emerald-300',
-  'bg-amber-500/20 text-amber-300',
-  'bg-purple-500/20 text-purple-300',
-  'bg-rose-500/20 text-rose-300',
-  'bg-cyan-500/20 text-cyan-300',
-  'bg-orange-500/20 text-orange-300',
-  'bg-indigo-500/20 text-indigo-300',
-]
-
-function getLabelColor(label: string): string {
-  let hash = 0
-  for (let i = 0; i < label.length; i++) {
-    hash = label.charCodeAt(i) + ((hash << 5) - hash)
-  }
-  return LABEL_COLORS[Math.abs(hash) % LABEL_COLORS.length]
-}
-
 // ── Task Card ──────────────────────────────────────────────
 
 function TaskCard({ task, onSelect }: { task: WorkfloTask; onSelect: (id: string) => void }) {
@@ -180,25 +159,6 @@ function TaskCard({ task, onSelect }: { task: WorkfloTask; onSelect: (id: string
       tabIndex={0}
       onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect(task.id) } }}
     >
-      {/* Labels row */}
-      {task.labels && task.labels.length > 0 && (
-        <div className="flex flex-wrap gap-1 mb-2">
-          {task.labels.slice(0, 3).map((label) => (
-            <span
-              key={label}
-              className={`text-[9px] font-medium px-1.5 py-0.5 rounded-full ${getLabelColor(label)}`}
-            >
-              {label}
-            </span>
-          ))}
-          {task.labels.length > 3 && (
-            <span className="text-[9px] text-muted-foreground px-1 py-0.5">
-              +{task.labels.length - 3}
-            </span>
-          )}
-        </div>
-      )}
-
       {/* Title + Priority */}
       <div className="flex items-start justify-between gap-2 mb-1">
         <h4 className="text-[13px] font-medium leading-snug line-clamp-2 flex-1 text-foreground/90 group-hover:text-foreground transition-colors">
@@ -214,6 +174,25 @@ function TaskCard({ task, onSelect }: { task: WorkfloTask; onSelect: (id: string
       {/* Description */}
       {task.description && (
         <p className="text-[11px] text-muted-foreground/80 line-clamp-2 mb-2.5 leading-relaxed">{task.description}</p>
+      )}
+
+      {/* Labels */}
+      {task.labels && task.labels.length > 0 && (
+        <div className="flex flex-wrap gap-1 mb-2">
+          {task.labels.slice(0, 3).map((label) => (
+            <span
+              key={label}
+              className="text-[9px] font-medium px-1.5 py-0.5 rounded-full bg-muted/30 text-muted-foreground"
+            >
+              {label}
+            </span>
+          ))}
+          {task.labels.length > 3 && (
+            <span className="text-[9px] text-muted-foreground/60 px-1 py-0.5">
+              +{task.labels.length - 3}
+            </span>
+          )}
+        </div>
       )}
 
       {/* Footer: metadata + assignee */}
