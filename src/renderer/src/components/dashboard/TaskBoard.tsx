@@ -1,5 +1,5 @@
 import { useMemo, useCallback } from 'react'
-import { Clock, AlertCircle, CheckCircle2, ExternalLink } from 'lucide-react'
+import { Clock, AlertCircle, CheckCircle2, ExternalLink, Bot } from 'lucide-react'
 import { Badge } from '@/components/ui/Badge'
 import { useTaskStore } from '@/stores/task-store'
 import { useUIStore } from '@/stores/ui-store'
@@ -195,7 +195,7 @@ function TaskCard({ task, onSelect }: { task: WorkfloTask; onSelect: (id: string
         </div>
       )}
 
-      {/* Footer: metadata + assignee */}
+      {/* Footer: metadata + assignee/agent */}
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2 text-[10px] text-muted-foreground min-w-0">
           {task.due_date && (
@@ -211,9 +211,19 @@ function TaskCard({ task, onSelect }: { task: WorkfloTask; onSelect: (id: string
             </span>
           )}
         </div>
-        {task.assignee && (
-          <AssigneeAvatar name={task.assignee} />
-        )}
+        <div className="flex items-center gap-1.5 shrink-0">
+          {task.agent_id && (
+            <div
+              className="h-5 w-5 rounded-full flex items-center justify-center bg-emerald-500/15 ring-1 ring-emerald-500/20 shrink-0"
+              title={`Agent: ${task.agent_id}`}
+            >
+              <Bot className="h-2.5 w-2.5 text-emerald-400" />
+            </div>
+          )}
+          {task.assignee && (
+            <AssigneeAvatar name={task.assignee} />
+          )}
+        </div>
       </div>
     </div>
   )
