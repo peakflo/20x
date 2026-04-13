@@ -336,7 +336,7 @@ export function TaskBoard() {
       </div>
 
       {isLoading ? (
-        <div className="flex gap-3 pb-2">
+        <div className="flex gap-3 pb-2 justify-center">
           {COLUMNS.map((col) => (
             <div key={col.key} className={`min-w-[230px] max-w-[280px] flex-1 rounded-xl ${col.columnBg} border border-border/15`}>
               <div className="px-3 py-2.5 border-b border-border/15">
@@ -364,7 +364,7 @@ export function TaskBoard() {
           </p>
         </div>
       ) : (
-        <div className="flex gap-3 pb-2">
+        <div className="flex gap-3 pb-2 justify-center">
           {COLUMNS.map((col) => (
             <BoardColumn
               key={col.key}
