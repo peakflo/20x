@@ -11,6 +11,7 @@ vi.mock('fs', async (importOriginal) => {
     ...actual,
     mkdirSync: vi.fn(),
     writeFileSync: vi.fn(),
+    copyFileSync: vi.fn(),
     existsSync: vi.fn(() => false),
   }
 })
@@ -50,11 +51,13 @@ vi.mock('./secret-broker', () => ({
 }))
 
 import { mkdir as mkdirAsync, writeFile as writeFileAsync } from 'fs/promises'
-import { existsSync } from 'fs'
+import { existsSync, copyFileSync, mkdirSync } from 'fs'
 
 const mockedMkdirAsync = vi.mocked(mkdirAsync)
 const mockedWriteFileAsync = vi.mocked(writeFileAsync)
 const mockedExistsSync = vi.mocked(existsSync)
+const mockedCopyFileSync = vi.mocked(copyFileSync)
+const mockedMkdirSync = vi.mocked(mkdirSync)
 
 function makeSkillRecord(overrides: Partial<{
   id: string; name: string; description: string; content: string;
@@ -1154,5 +1157,110 @@ describe('AgentManager resumeAdapterSession — SESSION_ENDED for completed task
 
     // Should still throw for non-completed tasks
     await expect(mgr.resumeSession('agent-1', 'task-1', 'old-session-id')).rejects.toThrow()
+  })
+})
+
+describe('syncAttachmentsToWorkspace', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('copies task attachments from DB storage to workspace/attachments/', () => {
+    const mockDb = {
+      ...createMockDb(),
+      getTask: vi.fn(() => ({
+        id: 'task-1',
+        title: 'Test Task',
+        attachments: [
+          { id: 'att-1', filename: 'design.png', size: 1024, mime_type: 'image/png', added_at: '2026-04-01' },
+          { id: 'att-2', filename: 'spec.pdf', size: 2048, mime_type: 'application/pdf', added_at: '2026-04-02' },
+        ],
+      })),
+      getAttachmentsDir: vi.fn(() => '/data/attachments/task-1'),
+    } as unknown as ConstructorParameters<typeof AgentManager>[0]
+
+    const mgr = new AgentManager(mockDb)
+
+    // All source files exist
+    mockedExistsSync.mockImplementation((p: any) => {
+      const path = String(p)
+      if (path.includes('att-1-design.png') || path.includes('att-2-spec.pdf')) return true
+      // destDir doesn't exist yet
+      if (path.endsWith('/attachments')) return false
+      return false
+    })
+
+    const refs = (mgr as any).syncAttachmentsToWorkspace('task-1', '/tmp/ws')
+
+    // Should create the destination directory
+    expect(mockedMkdirSync).toHaveBeenCalledWith('/tmp/ws/attachments', { recursive: true })
+
+    // Should copy both files
+    expect(mockedCopyFileSync).toHaveBeenCalledWith(
+      '/data/attachments/task-1/att-1-design.png',
+      '/tmp/ws/attachments/design.png'
+    )
+    expect(mockedCopyFileSync).toHaveBeenCalledWith(
+      '/data/attachments/task-1/att-2-spec.pdf',
+      '/tmp/ws/attachments/spec.pdf'
+    )
+
+    // Should return references
+    expect(refs).toEqual([
+      '- attachments/design.png',
+      '- attachments/spec.pdf',
+    ])
+  })
+
+  it('returns empty array when task has no attachments', () => {
+    const mockDb = {
+      ...createMockDb(),
+      getTask: vi.fn(() => ({
+        id: 'task-1',
+        title: 'Test Task',
+        attachments: [],
+      })),
+    } as unknown as ConstructorParameters<typeof AgentManager>[0]
+
+    const mgr = new AgentManager(mockDb)
+
+    const refs = (mgr as any).syncAttachmentsToWorkspace('task-1', '/tmp/ws')
+    expect(refs).toEqual([])
+    expect(mockedCopyFileSync).not.toHaveBeenCalled()
+  })
+
+  it('skips missing source files gracefully', () => {
+    const mockDb = {
+      ...createMockDb(),
+      getTask: vi.fn(() => ({
+        id: 'task-1',
+        title: 'Test Task',
+        attachments: [
+          { id: 'att-1', filename: 'exists.txt', size: 100, mime_type: 'text/plain', added_at: '2026-04-01' },
+          { id: 'att-2', filename: 'missing.txt', size: 200, mime_type: 'text/plain', added_at: '2026-04-02' },
+        ],
+      })),
+      getAttachmentsDir: vi.fn(() => '/data/attachments/task-1'),
+    } as unknown as ConstructorParameters<typeof AgentManager>[0]
+
+    const mgr = new AgentManager(mockDb)
+
+    mockedExistsSync.mockImplementation((p: any) => {
+      const path = String(p)
+      if (path.includes('att-1-exists.txt')) return true
+      if (path.includes('att-2-missing.txt')) return false
+      if (path.endsWith('/attachments')) return true // destDir already exists
+      return false
+    })
+
+    const refs = (mgr as any).syncAttachmentsToWorkspace('task-1', '/tmp/ws')
+
+    // Only the existing file should be copied
+    expect(mockedCopyFileSync).toHaveBeenCalledTimes(1)
+    expect(mockedCopyFileSync).toHaveBeenCalledWith(
+      '/data/attachments/task-1/att-1-exists.txt',
+      '/tmp/ws/attachments/exists.txt'
+    )
+    expect(refs).toEqual(['- attachments/exists.txt'])
   })
 })
