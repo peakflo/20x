@@ -231,15 +231,15 @@ function TaskCard({ task, onSelect, agent }: { task: WorkfloTask; onSelect: (id:
             </span>
           )}
         </div>
-        <div className="flex items-center gap-1.5 shrink-0">
+        <div className="flex items-center gap-1.5 min-w-0">
           {(() => {
             const agentDisplay = getAgentDisplay(agent)
             if (!agentDisplay) return null
             const { name, Logo } = agentDisplay
             return (
-              <span className="flex items-center gap-1 text-[9px] text-muted-foreground" title={name}>
-                <Logo className="h-3 w-3 opacity-70" />
-                <span className="truncate max-w-[60px]">{name}</span>
+              <span className="flex items-center gap-1 text-[9px] text-muted-foreground min-w-0" title={name}>
+                <Logo className="h-3 w-3 opacity-70 shrink-0" />
+                <span className="truncate">{name}</span>
               </span>
             )
           })()}
