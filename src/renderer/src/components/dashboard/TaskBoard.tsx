@@ -1,5 +1,5 @@
 import { useMemo, useCallback } from 'react'
-import { Clock, AlertCircle, CheckCircle2 } from 'lucide-react'
+import { Clock, AlertCircle, CheckCircle2, ExternalLink } from 'lucide-react'
 import { Badge } from '@/components/ui/Badge'
 import { useTaskStore } from '@/stores/task-store'
 import { useUIStore } from '@/stores/ui-store'
@@ -16,14 +16,15 @@ interface StatusColumn {
   label: string
   color: string
   dotColor: string
+  headerBg: string
 }
 
 const COLUMNS: StatusColumn[] = [
-  { key: TaskStatus.NotStarted, label: 'Not Started', color: 'text-muted-foreground', dotColor: 'bg-muted-foreground' },
-  { key: TaskStatus.Triaging, label: 'Triaging', color: 'text-muted-foreground', dotColor: 'bg-muted-foreground' },
-  { key: TaskStatus.AgentWorking, label: 'Agent Working', color: 'text-amber-400', dotColor: 'bg-amber-400' },
-  { key: TaskStatus.ReadyForReview, label: 'Ready for Review', color: 'text-purple-400', dotColor: 'bg-purple-400' },
-  { key: TaskStatus.AgentLearning, label: 'Agent Learning', color: 'text-blue-400', dotColor: 'bg-blue-400' }
+  { key: TaskStatus.NotStarted, label: 'Not Started', color: 'text-gray-400', dotColor: 'bg-gray-400', headerBg: 'bg-gray-500/10' },
+  { key: TaskStatus.Triaging, label: 'Triaging', color: 'text-slate-300', dotColor: 'bg-slate-400', headerBg: 'bg-slate-500/10' },
+  { key: TaskStatus.AgentWorking, label: 'Agent Working', color: 'text-amber-400', dotColor: 'bg-amber-400', headerBg: 'bg-amber-500/10' },
+  { key: TaskStatus.ReadyForReview, label: 'Ready for Review', color: 'text-purple-400', dotColor: 'bg-purple-400', headerBg: 'bg-purple-500/10' },
+  { key: TaskStatus.AgentLearning, label: 'Agent Learning', color: 'text-blue-400', dotColor: 'bg-blue-400', headerBg: 'bg-blue-500/10' }
 ]
 
 const PRIORITY_ORDER: Record<string, number> = {
@@ -56,6 +57,21 @@ function getPriorityVariant(priority: string): 'red' | 'orange' | 'yellow' | 'de
   }
 }
 
+function getPriorityAccent(priority: string): string {
+  switch (priority) {
+    case 'critical':
+      return 'border-l-red-500'
+    case 'high':
+      return 'border-l-orange-500'
+    case 'medium':
+      return 'border-l-amber-400'
+    case 'low':
+      return 'border-l-gray-500'
+    default:
+      return 'border-l-gray-500/50'
+  }
+}
+
 function formatRelativeDate(dateStr: string | null): string {
   if (!dateStr) return ''
   const date = new Date(dateStr)
@@ -77,76 +93,186 @@ function isOverdue(dateStr: string | null): boolean {
   return new Date(dateStr) < new Date()
 }
 
+// ── Initials Avatar ──────────────────────────────────────────
+
+const AVATAR_COLORS = [
+  'bg-blue-500/80',
+  'bg-emerald-500/80',
+  'bg-purple-500/80',
+  'bg-amber-500/80',
+  'bg-rose-500/80',
+  'bg-cyan-500/80',
+  'bg-indigo-500/80',
+  'bg-teal-500/80',
+]
+
+function getAvatarColor(name: string): string {
+  let hash = 0
+  for (let i = 0; i < name.length; i++) {
+    hash = name.charCodeAt(i) + ((hash << 5) - hash)
+  }
+  return AVATAR_COLORS[Math.abs(hash) % AVATAR_COLORS.length]
+}
+
+function getInitials(name: string): string {
+  const parts = name.trim().split(/\s+/)
+  if (parts.length >= 2) return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
+  return name.slice(0, 2).toUpperCase()
+}
+
+function AssigneeAvatar({ name }: { name: string }) {
+  return (
+    <div
+      className={`h-5 w-5 rounded-full flex items-center justify-center text-[8px] font-bold text-white shrink-0 ring-1 ring-white/10 ${getAvatarColor(name)}`}
+      title={name}
+    >
+      {getInitials(name)}
+    </div>
+  )
+}
+
+// ── Source badge ──────────────────────────────────────────────
+
+function getSourceConfig(source: string): { label: string; color: string } {
+  const s = source.toLowerCase()
+  if (s.includes('trello')) return { label: 'Trello', color: 'text-blue-400 bg-blue-500/10 border-blue-500/20' }
+  if (s.includes('jira')) return { label: 'Jira', color: 'text-blue-300 bg-blue-400/10 border-blue-400/20' }
+  if (s.includes('linear')) return { label: 'Linear', color: 'text-indigo-400 bg-indigo-500/10 border-indigo-500/20' }
+  if (s.includes('asana')) return { label: 'Asana', color: 'text-rose-400 bg-rose-500/10 border-rose-500/20' }
+  if (s.includes('github')) return { label: 'GitHub', color: 'text-gray-300 bg-gray-500/10 border-gray-500/20' }
+  if (s.includes('notion')) return { label: 'Notion', color: 'text-gray-300 bg-gray-400/10 border-gray-400/20' }
+  return { label: source, color: 'text-muted-foreground bg-muted/20 border-border/30' }
+}
+
+// ── Label colors for task labels ────────────────────────────
+
+const LABEL_COLORS = [
+  'bg-blue-500/20 text-blue-300',
+  'bg-emerald-500/20 text-emerald-300',
+  'bg-amber-500/20 text-amber-300',
+  'bg-purple-500/20 text-purple-300',
+  'bg-rose-500/20 text-rose-300',
+  'bg-cyan-500/20 text-cyan-300',
+  'bg-orange-500/20 text-orange-300',
+  'bg-indigo-500/20 text-indigo-300',
+]
+
+function getLabelColor(label: string): string {
+  let hash = 0
+  for (let i = 0; i < label.length; i++) {
+    hash = label.charCodeAt(i) + ((hash << 5) - hash)
+  }
+  return LABEL_COLORS[Math.abs(hash) % LABEL_COLORS.length]
+}
+
 // ── Task Card ──────────────────────────────────────────────
 
 function TaskCard({ task, onSelect }: { task: WorkfloTask; onSelect: (id: string) => void }) {
   const overdue = task.due_date && task.status !== TaskStatus.Completed && isOverdue(task.due_date)
+  const sourceConfig = task.source && task.source !== 'local' ? getSourceConfig(task.source) : null
 
   return (
     <div
-      className="rounded-md border border-border/40 bg-background p-3 hover:border-border/70 hover:bg-card transition-colors cursor-pointer"
+      className={`group rounded-lg border border-border/30 bg-card/80 backdrop-blur-sm p-3.5 hover:border-border/60 hover:bg-card hover:shadow-md hover:shadow-black/10 transition-all duration-200 cursor-pointer border-l-2 ${getPriorityAccent(task.priority)}`}
       onClick={() => onSelect(task.id)}
       role="button"
       tabIndex={0}
       onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect(task.id) } }}
     >
-      <div className="flex items-start justify-between gap-2 mb-1.5">
-        <h4 className="text-xs font-medium leading-snug line-clamp-2 flex-1">{task.title}</h4>
+      {/* Labels row */}
+      {task.labels && task.labels.length > 0 && (
+        <div className="flex flex-wrap gap-1 mb-2">
+          {task.labels.slice(0, 3).map((label) => (
+            <span
+              key={label}
+              className={`text-[9px] font-medium px-1.5 py-0.5 rounded-full ${getLabelColor(label)}`}
+            >
+              {label}
+            </span>
+          ))}
+          {task.labels.length > 3 && (
+            <span className="text-[9px] text-muted-foreground px-1 py-0.5">
+              +{task.labels.length - 3}
+            </span>
+          )}
+        </div>
+      )}
+
+      {/* Title + Priority */}
+      <div className="flex items-start justify-between gap-2 mb-1">
+        <h4 className="text-[13px] font-medium leading-snug line-clamp-2 flex-1 text-foreground/90 group-hover:text-foreground transition-colors">
+          {task.title}
+        </h4>
         {task.priority && task.priority !== 'low' && (
-          <Badge variant={getPriorityVariant(task.priority)} className="text-[9px] px-1 py-0 shrink-0">
+          <Badge variant={getPriorityVariant(task.priority)} className="text-[9px] px-1.5 py-0 shrink-0 uppercase tracking-wider font-semibold">
             {task.priority}
           </Badge>
         )}
       </div>
+
+      {/* Description */}
       {task.description && (
-        <p className="text-[11px] text-muted-foreground line-clamp-2 mb-2">{task.description}</p>
+        <p className="text-[11px] text-muted-foreground/80 line-clamp-2 mb-2.5 leading-relaxed">{task.description}</p>
       )}
-      <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
-        {task.due_date && (
-          <span className={`flex items-center gap-0.5 ${overdue ? 'text-red-400' : ''}`}>
-            {overdue ? <AlertCircle className="h-2.5 w-2.5" /> : <Clock className="h-2.5 w-2.5" />}
-            {formatRelativeDate(task.due_date)}
-          </span>
-        )}
+
+      {/* Footer: metadata + assignee */}
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 text-[10px] text-muted-foreground min-w-0">
+          {task.due_date && (
+            <span className={`flex items-center gap-1 shrink-0 ${overdue ? 'text-red-400 font-medium' : ''}`}>
+              {overdue ? <AlertCircle className="h-3 w-3" /> : <Clock className="h-3 w-3 opacity-60" />}
+              {formatRelativeDate(task.due_date)}
+            </span>
+          )}
+          {sourceConfig && (
+            <span className={`flex items-center gap-1 text-[9px] px-1.5 py-0.5 rounded-full border shrink-0 ${sourceConfig.color}`}>
+              <ExternalLink className="h-2.5 w-2.5" />
+              {sourceConfig.label}
+            </span>
+          )}
+        </div>
         {task.assignee && (
-          <span className="truncate max-w-[100px]">
-            {task.assignee}
-          </span>
-        )}
-        {task.source && task.source !== 'local' && (
-          <span className="text-[9px] bg-muted/30 px-1 rounded">{task.source}</span>
+          <AssigneeAvatar name={task.assignee} />
         )}
       </div>
     </div>
   )
 }
 
-// ── Column header (rendered in a separate sticky row) ─────
+// ── Column header ────────────────────────────────────────────
 
 function ColumnHeader({ column, count }: { column: StatusColumn; count: number }) {
   return (
-    <div className="flex items-center gap-2 px-2 py-2 min-w-[200px] max-w-[260px] flex-1">
-      <div className={`h-2 w-2 rounded-full ${column.dotColor}`} />
-      <span className={`text-xs font-semibold ${column.color}`}>{column.label}</span>
-      <span className="text-[10px] text-muted-foreground bg-muted/30 rounded-full px-1.5 py-0.5 min-w-[20px] text-center">
+    <div className="flex items-center gap-2 px-3 py-2.5">
+      <div className={`h-2.5 w-2.5 rounded-full ${column.dotColor} ring-2 ring-black/20`} />
+      <span className={`text-xs font-semibold tracking-wide ${column.color}`}>{column.label}</span>
+      <span className={`text-[10px] font-medium rounded-full px-2 py-0.5 min-w-[22px] text-center ${column.headerBg} ${column.color}`}>
         {count}
       </span>
     </div>
   )
 }
 
-// ── Column cards ──────────────────────────────────────────
+// ── Column wrapper ───────────────────────────────────────────
 
-function ColumnCards({ tasks, onSelect }: { tasks: WorkfloTask[]; onSelect: (id: string) => void }) {
+function BoardColumn({ column, tasks, onSelect }: { column: StatusColumn; tasks: WorkfloTask[]; onSelect: (id: string) => void }) {
   return (
-    <div className="min-w-[200px] max-w-[260px] flex-1 space-y-2">
-      {tasks.length === 0 ? (
-        <div className="text-[11px] text-muted-foreground text-center py-4 px-2">
-          No tasks
-        </div>
-      ) : (
-        tasks.map((task) => <TaskCard key={task.id} task={task} onSelect={onSelect} />)
-      )}
+    <div className="min-w-[230px] max-w-[280px] flex-1 flex flex-col rounded-xl bg-muted/10 border border-border/20">
+      {/* Sticky header within column */}
+      <div className="sticky top-0 z-10 bg-muted/10 backdrop-blur-md rounded-t-xl border-b border-border/20">
+        <ColumnHeader column={column} count={tasks.length} />
+      </div>
+
+      {/* Cards */}
+      <div className="flex-1 p-2 space-y-2 overflow-y-auto">
+        {tasks.length === 0 ? (
+          <div className="text-[11px] text-muted-foreground/50 text-center py-8 px-2">
+            No tasks
+          </div>
+        ) : (
+          tasks.map((task) => <TaskCard key={task.id} task={task} onSelect={onSelect} />)
+        )}
+      </div>
     </div>
   )
 }
@@ -192,11 +318,12 @@ export function TaskBoard() {
 
   return (
     <section>
-      <div className="flex items-center justify-between mb-3">
-        <h2 className="text-sm font-semibold">Task Board</h2>
+      {/* Header */}
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="text-sm font-semibold tracking-wide">Task Board</h2>
         <div className="flex items-center gap-3">
           {tasksByStatus.completedCount > 0 && (
-            <span className="flex items-center gap-1 text-xs text-emerald-400">
+            <span className="flex items-center gap-1.5 text-xs text-emerald-400 bg-emerald-500/10 px-2.5 py-1 rounded-full">
               <CheckCircle2 className="h-3 w-3" />
               {tasksByStatus.completedCount} completed
             </span>
@@ -208,54 +335,44 @@ export function TaskBoard() {
       </div>
 
       {isLoading ? (
-        <>
-          <div className="flex gap-4 pb-2 justify-center">
-            {COLUMNS.map((col) => (
-              <ColumnHeader key={col.key} column={col} count={0} />
-            ))}
-          </div>
-          <div className="flex gap-4 pb-2 justify-center">
-            {COLUMNS.map((col) => (
-              <div key={col.key} className="min-w-[200px] max-w-[260px] flex-1 space-y-2">
+        <div className="flex gap-3 pb-2">
+          {COLUMNS.map((col) => (
+            <div key={col.key} className="min-w-[230px] max-w-[280px] flex-1 rounded-xl bg-muted/10 border border-border/20">
+              <div className="px-3 py-2.5 border-b border-border/20">
+                <div className="flex items-center gap-2">
+                  <div className={`h-2.5 w-2.5 rounded-full ${col.dotColor} opacity-40`} />
+                  <span className="text-xs font-semibold text-muted-foreground/50">{col.label}</span>
+                </div>
+              </div>
+              <div className="p-2 space-y-2">
                 {[1, 2].map((i) => (
-                  <div key={i} className="rounded-md border border-border/40 bg-background p-3">
-                    <div className="h-3 w-28 rounded bg-muted/50 animate-pulse mb-2" />
-                    <div className="h-2.5 w-40 rounded bg-muted/30 animate-pulse" />
+                  <div key={i} className="rounded-lg border border-border/20 bg-card/40 p-3.5 border-l-2 border-l-gray-500/30">
+                    <div className="h-3 w-24 rounded-md bg-muted/40 animate-pulse mb-2.5" />
+                    <div className="h-2.5 w-36 rounded-md bg-muted/25 animate-pulse mb-2" />
+                    <div className="h-2 w-20 rounded-md bg-muted/15 animate-pulse" />
                   </div>
                 ))}
               </div>
-            ))}
-          </div>
-        </>
+            </div>
+          ))}
+        </div>
       ) : topLevelTasks.length === 0 ? (
-        <div className="rounded-lg border border-border/50 bg-card p-6 text-center">
+        <div className="rounded-xl border border-border/30 bg-card/50 p-8 text-center">
           <p className="text-sm text-muted-foreground">
             No tasks yet. Create tasks or sync from an integration to see them here.
           </p>
         </div>
       ) : (
-        <>
-          {/* Sticky column headers — pinned when dashboard scrolls */}
-          <div className="flex gap-4 sticky top-0 bg-background z-10 pb-2 justify-center">
-            {COLUMNS.map((col) => (
-              <ColumnHeader
-                key={col.key}
-                column={col}
-                count={(tasksByStatus.grouped[col.key] || []).length}
-              />
-            ))}
-          </div>
-          {/* Card columns */}
-          <div className="flex gap-4 pb-2 justify-center">
-            {COLUMNS.map((col) => (
-              <ColumnCards
-                key={col.key}
-                tasks={sortByPriority(tasksByStatus.grouped[col.key] || [])}
-                onSelect={handleSelectTask}
-              />
-            ))}
-          </div>
-        </>
+        <div className="flex gap-3 pb-2">
+          {COLUMNS.map((col) => (
+            <BoardColumn
+              key={col.key}
+              column={col}
+              tasks={sortByPriority(tasksByStatus.grouped[col.key] || [])}
+              onSelect={handleSelectTask}
+            />
+          ))}
+        </div>
       )}
     </section>
   )
