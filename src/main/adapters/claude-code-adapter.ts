@@ -1043,6 +1043,8 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
         // Drop already-processed messages from the front when limit is exceeded.
         if (session.messageBuffer.length > MAX_MESSAGE_BUFFER_SIZE) {
           const drop = session.messageBuffer.length - MAX_MESSAGE_BUFFER_SIZE
+          const unprocessed = session.messageBuffer.length - session.messageCursor
+          console.warn(`[ClaudeCodeAdapter] Buffer overflow: dropping ${drop} messages (${unprocessed} unprocessed, cursor=${session.messageCursor}, bufLen=${session.messageBuffer.length})`)
           session.messageBuffer.splice(0, drop)
           session.messageCursor = Math.max(0, session.messageCursor - drop)
         }
@@ -1196,6 +1198,13 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
     // Exception: system messages (task_started, task_progress, task_notification,
     // status) do NOT carry parent_tool_use_id and must always be processed.
     if (msgWithProps.parent_tool_use_id) {
+      // Log filtered messages so we can diagnose if the SDK incorrectly sets
+      // parent_tool_use_id on main-agent responses (potential cause of missing responses)
+      const contentBlocks = (msgWithProps.message?.content || []) as Array<Record<string, unknown>>
+      const hasText = contentBlocks.some((b) => b.type === 'text' && b.text)
+      if (hasText) {
+        console.log(`[ClaudeCodeAdapter] Filtering assistant message with parent_tool_use_id=${msgWithProps.parent_tool_use_id}, type=${msgWithProps.type}, uuid=${msgWithProps.uuid}, textBlocks=${contentBlocks.filter((b) => b.type === 'text').length}`)
+      }
       return parts
     }
 
