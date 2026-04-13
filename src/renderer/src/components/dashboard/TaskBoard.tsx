@@ -151,16 +151,17 @@ function getSourceConfig(source: string): { label: string; color: string } {
 
 function getAgentDisplay(agent: Agent | undefined): { name: string; Logo: React.FC<{ className?: string }> } | null {
   if (!agent) return null
+  const name = agent.name || 'Agent'
   const codingAgent = agent.config?.coding_agent
   switch (codingAgent) {
     case CodingAgentType.CLAUDE_CODE:
-      return { name: 'Claude Code', Logo: AnthropicLogo }
+      return { name, Logo: AnthropicLogo }
     case CodingAgentType.OPENCODE:
-      return { name: 'OpenCode', Logo: OpenCodeLogo }
+      return { name, Logo: OpenCodeLogo }
     case CodingAgentType.CODEX:
-      return { name: 'Codex', Logo: OpenAILogo }
+      return { name, Logo: OpenAILogo }
     default:
-      return { name: agent.name || 'Agent', Logo: ({ className }: { className?: string }) => <Bot className={className} /> }
+      return { name, Logo: ({ className }: { className?: string }) => <Bot className={className} /> }
   }
 }
 
