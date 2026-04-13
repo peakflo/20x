@@ -1,12 +1,14 @@
 import { useMemo, useCallback } from 'react'
 import { Clock, AlertCircle, CheckCircle2, ExternalLink, Bot } from 'lucide-react'
 import { Badge } from '@/components/ui/Badge'
+import { OpenCodeLogo, AnthropicLogo, OpenAILogo } from '@/components/icons/AgentLogos'
 import { useTaskStore } from '@/stores/task-store'
+import { useAgentStore } from '@/stores/agent-store'
 import { useUIStore } from '@/stores/ui-store'
 import { useSnoozeTick } from '@/hooks/use-snooze-tick'
 import { isSnoozed } from '@/lib/utils'
-import { TaskStatus } from '@/types'
-import type { WorkfloTask } from '@/types'
+import { TaskStatus, CodingAgentType } from '@/types'
+import type { WorkfloTask, Agent } from '@/types'
 
 // ── Status column definitions (matching 20x local TaskStatus enum) ──
 // Completed is excluded from columns — shown as a count-only summary instead.
@@ -145,9 +147,26 @@ function getSourceConfig(source: string): { label: string; color: string } {
   return { label: source, color: 'text-muted-foreground bg-muted/20 border-border/30' }
 }
 
+// ── Agent display helper ─────────────────────────────────
+
+function getAgentDisplay(agent: Agent | undefined): { name: string; Logo: React.FC<{ className?: string }> } | null {
+  if (!agent) return null
+  const codingAgent = agent.config?.coding_agent
+  switch (codingAgent) {
+    case CodingAgentType.CLAUDE_CODE:
+      return { name: 'Claude Code', Logo: AnthropicLogo }
+    case CodingAgentType.OPENCODE:
+      return { name: 'OpenCode', Logo: OpenCodeLogo }
+    case CodingAgentType.CODEX:
+      return { name: 'Codex', Logo: OpenAILogo }
+    default:
+      return { name: agent.name || 'Agent', Logo: ({ className }: { className?: string }) => <Bot className={className} /> }
+  }
+}
+
 // ── Task Card ──────────────────────────────────────────────
 
-function TaskCard({ task, onSelect }: { task: WorkfloTask; onSelect: (id: string) => void }) {
+function TaskCard({ task, onSelect, agent }: { task: WorkfloTask; onSelect: (id: string) => void; agent?: Agent }) {
   const overdue = task.due_date && task.status !== TaskStatus.Completed && isOverdue(task.due_date)
   const sourceConfig = task.source && task.source !== 'local' ? getSourceConfig(task.source) : null
 
@@ -212,14 +231,17 @@ function TaskCard({ task, onSelect }: { task: WorkfloTask; onSelect: (id: string
           )}
         </div>
         <div className="flex items-center gap-1.5 shrink-0">
-          {task.agent_id && (
-            <div
-              className="h-5 w-5 rounded-full flex items-center justify-center bg-emerald-500/15 ring-1 ring-emerald-500/20 shrink-0"
-              title={`Agent: ${task.agent_id}`}
-            >
-              <Bot className="h-2.5 w-2.5 text-emerald-400" />
-            </div>
-          )}
+          {(() => {
+            const agentDisplay = getAgentDisplay(agent)
+            if (!agentDisplay) return null
+            const { name, Logo } = agentDisplay
+            return (
+              <span className="flex items-center gap-1 text-[9px] text-muted-foreground" title={name}>
+                <Logo className="h-3 w-3 opacity-70" />
+                <span className="truncate max-w-[60px]">{name}</span>
+              </span>
+            )
+          })()}
           {task.assignee && (
             <AssigneeAvatar name={task.assignee} />
           )}
@@ -245,7 +267,7 @@ function ColumnHeader({ column, count }: { column: StatusColumn; count: number }
 
 // ── Column wrapper ───────────────────────────────────────────
 
-function BoardColumn({ column, tasks, onSelect }: { column: StatusColumn; tasks: WorkfloTask[]; onSelect: (id: string) => void }) {
+function BoardColumn({ column, tasks, onSelect, agentMap }: { column: StatusColumn; tasks: WorkfloTask[]; onSelect: (id: string) => void; agentMap: Map<string, Agent> }) {
   return (
     <div className={`min-w-[230px] max-w-[280px] flex-1 flex flex-col rounded-xl ${column.columnBg} border border-border/15`}>
       {/* Sticky header within column */}
@@ -260,7 +282,7 @@ function BoardColumn({ column, tasks, onSelect }: { column: StatusColumn; tasks:
             No tasks
           </div>
         ) : (
-          tasks.map((task) => <TaskCard key={task.id} task={task} onSelect={onSelect} />)
+          tasks.map((task) => <TaskCard key={task.id} task={task} onSelect={onSelect} agent={task.agent_id ? agentMap.get(task.agent_id) : undefined} />)
         )}
       </div>
     </div>
@@ -271,8 +293,18 @@ function BoardColumn({ column, tasks, onSelect }: { column: StatusColumn; tasks:
 
 export function TaskBoard() {
   const { tasks, isLoading } = useTaskStore()
+  const { agents } = useAgentStore()
   const { openDashboardPreview } = useUIStore()
   const snoozeTick = useSnoozeTick(tasks)
+
+  // Build agent lookup map by id
+  const agentMap = useMemo(() => {
+    const map = new Map<string, Agent>()
+    for (const agent of agents) {
+      map.set(agent.id, agent)
+    }
+    return map
+  }, [agents])
 
   // Only show top-level tasks that are not snoozed (not subtasks) and not recurring templates
   const topLevelTasks = useMemo(
@@ -360,6 +392,7 @@ export function TaskBoard() {
               column={col}
               tasks={sortByPriority(tasksByStatus.grouped[col.key] || [])}
               onSelect={handleSelectTask}
+              agentMap={agentMap}
             />
           ))}
         </div>
