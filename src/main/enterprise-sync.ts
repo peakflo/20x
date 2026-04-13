@@ -51,6 +51,11 @@ export class EnterpriseSyncManager {
     private apiClient: WorkfloApiClient
   ) {}
 
+  /** Shorthand for the enterprise cloud domain (for error logs). */
+  private get domain(): string {
+    return this.apiClient.getDomain()
+  }
+
   /**
    * Ensure the enterprise_skill_id column exists before syncing.
    * This is a safety net in case the database migration didn't run.
@@ -75,7 +80,7 @@ export class EnterpriseSyncManager {
       }
       this.migrationChecked = true
     } catch (err) {
-      console.error('[EnterpriseSyncManager] Failed to ensure skill column:', err)
+      console.error(`[EnterpriseSyncManager] Failed to ensure skill column (domain: ${this.domain}):`, err)
     }
   }
 
@@ -157,9 +162,9 @@ export class EnterpriseSyncManager {
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
-      result.errors.push(`Org node sync failed: ${msg}`)
+      result.errors.push(`Org node sync failed (domain: ${this.domain}): ${msg}`)
       console.warn(
-        '[EnterpriseSyncManager] Org node sync failed, continuing with skills sync:',
+        `[EnterpriseSyncManager] Org node sync failed (domain: ${this.domain}), continuing with skills sync:`,
         msg
       )
     }
@@ -214,7 +219,7 @@ export class EnterpriseSyncManager {
       console.log(`[EnterpriseSyncManager] Skills sync completed in ${skillSyncMs}ms`)
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
-      result.errors.push(`Skills 2-way sync failed: ${msg}`)
+      result.errors.push(`Skills 2-way sync failed (domain: ${this.domain}): ${msg}`)
     }
 
     const totalSyncMs = Date.now() - syncStartTime
@@ -252,7 +257,7 @@ export class EnterpriseSyncManager {
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
-      result.errors.push(`Node ${node.name} detail fetch failed: ${msg}`)
+      result.errors.push(`Node ${node.name} detail fetch failed (domain: ${this.domain}): ${msg}`)
     }
   }
 
@@ -300,7 +305,7 @@ export class EnterpriseSyncManager {
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
-        result.errors.push(`Agent ${agent.name}: ${msg}`)
+        result.errors.push(`Agent ${agent.name} (domain: ${this.domain}): ${msg}`)
       }
     }
   }
@@ -433,8 +438,8 @@ export class EnterpriseSyncManager {
         )
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
-        result.errors.push(`Batch sync chunk ${i + 1}/${chunks.length} failed: ${msg}`)
-        console.error(`[EnterpriseSyncManager] Batch sync chunk ${i + 1} failed after retries:`, msg)
+        result.errors.push(`Batch sync chunk ${i + 1}/${chunks.length} failed (domain: ${this.domain}): ${msg}`)
+        console.error(`[EnterpriseSyncManager] Batch sync chunk ${i + 1} failed after retries (domain: ${this.domain}):`, msg)
       }
     }
 
@@ -451,7 +456,7 @@ export class EnterpriseSyncManager {
           allServerSkills = await this.apiClient.listSkills() ?? []
         } catch (listErr) {
           const msg = listErr instanceof Error ? listErr.message : String(listErr)
-          result.errors.push(`Fallback listSkills failed: ${msg}`)
+          result.errors.push(`Fallback listSkills failed (domain: ${this.domain}): ${msg}`)
         }
       }
     }
@@ -574,7 +579,7 @@ export class EnterpriseSyncManager {
       )
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
-      result.errors.push(`Assign skills to node ${nodeId}: ${msg}`)
+      result.errors.push(`Assign skills to node ${nodeId} (domain: ${this.domain}): ${msg}`)
     }
   }
 
@@ -677,7 +682,7 @@ export class EnterpriseSyncManager {
         result.skills.created++
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
-        result.errors.push(`Pull skill ${skill.name}: ${msg}`)
+        result.errors.push(`Pull skill ${skill.name} (domain: ${this.domain}): ${msg}`)
       }
     }
   }
@@ -749,7 +754,7 @@ export class EnterpriseSyncManager {
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
-        result.errors.push(`MCP Server ${server.name}: ${msg}`)
+        result.errors.push(`MCP Server ${server.name} (domain: ${this.domain}): ${msg}`)
       }
     }
   }
@@ -838,7 +843,7 @@ export class EnterpriseSyncManager {
         // Don't update existing — user may have customized locally
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
-        result.errors.push(`Task Source ${source.name}: ${msg}`)
+        result.errors.push(`Task Source ${source.name} (domain: ${this.domain}): ${msg}`)
       }
     }
   }

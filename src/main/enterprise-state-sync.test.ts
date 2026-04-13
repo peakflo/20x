@@ -21,11 +21,13 @@ describe('EnterpriseStateSync', () => {
   let stateSync: EnterpriseStateSync
   let mockApiClient: {
     sendSyncEvents: ReturnType<typeof vi.fn>
+    getDomain: ReturnType<typeof vi.fn>
   }
 
   beforeEach(() => {
     mockApiClient = {
-      sendSyncEvents: vi.fn().mockResolvedValue({ ok: true, inserted: 0 })
+      sendSyncEvents: vi.fn().mockResolvedValue({ ok: true, inserted: 0 }),
+      getDomain: vi.fn().mockReturnValue('stage-api.peakflo.ai')
     }
     stateSync = new EnterpriseStateSync(mockApiClient as never)
     stateSync.setUserName('Test User')
@@ -133,6 +135,24 @@ describe('EnterpriseStateSync', () => {
 
       // Events should be re-queued
       expect(stateSync.pendingCount).toBe(1)
+    })
+
+    it('includes domain in error log on flush failure', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const task = makeTask()
+      stateSync.recordTaskCreated(task)
+
+      mockApiClient.sendSyncEvents.mockRejectedValue(new Error('network error'))
+
+      await stateSync.flush()
+
+      const failCall = warnSpy.mock.calls.find((c) =>
+        c[0].includes('[EnterpriseStateSync] Failed to send events')
+      )
+      expect(failCall).toBeDefined()
+      expect(failCall![0]).toContain('(domain: stage-api.peakflo.ai)')
+
+      warnSpy.mockRestore()
     })
 
     it('prevents concurrent flushes', async () => {

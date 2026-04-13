@@ -131,6 +131,19 @@ export class EnterpriseAuth {
     return this.apiUrl
   }
 
+  /**
+   * Extract the domain (hostname) from the configured API URL.
+   * Used in error/warning logs so operators can identify which
+   * enterprise cloud instance produced the error.
+   */
+  getDomain(): string {
+    try {
+      return new URL(this.apiUrl).hostname
+    } catch {
+      return this.apiUrl
+    }
+  }
+
   async getJwt(): Promise<string> {
     return this.getValidJwt()
   }
@@ -389,7 +402,7 @@ export class EnterpriseAuth {
 
     if (response.status === 403) {
       const errorBody = await response.json().catch(() => ({}))
-      console.error(`[EnterpriseAuth] Permission denied ${method} ${path}:`, JSON.stringify(errorBody))
+      console.error(`[EnterpriseAuth] Permission denied ${method} ${path} (domain: ${this.getDomain()}):`, JSON.stringify(errorBody))
       // Include diagnostic details from the server so users/developers
       // can understand WHY permission was denied (e.g. missing role)
       const details = errorBody.details ? ` (${JSON.stringify(errorBody.details)})` : ''
@@ -398,7 +411,7 @@ export class EnterpriseAuth {
 
     if (!response.ok) {
       const errorBody = await response.json().catch(() => ({}))
-      console.error(`[EnterpriseAuth] API error ${response.status} ${method} ${path}:`, JSON.stringify(errorBody))
+      console.error(`[EnterpriseAuth] API error ${response.status} ${method} ${path} (domain: ${this.getDomain()}):`, JSON.stringify(errorBody))
       const detail = errorBody.details ? ` ${JSON.stringify(errorBody.details)}` : ''
       throw new Error(errorBody.message || errorBody.error || `API request failed (${response.status})${detail}`)
     }
@@ -437,6 +450,7 @@ export class EnterpriseAuth {
     }
 
     if (!response.ok) {
+      console.error(`[EnterpriseAuth] File download failed ${response.status} ${path} (domain: ${this.getDomain()})`)
       throw new Error(`File download failed (${response.status})`)
     }
 
@@ -592,11 +606,12 @@ export class EnterpriseAuth {
   }
 
   private logAuthEvent(event: string, details?: Record<string, unknown>): void {
+    const domain = this.getDomain()
     if (details) {
-      console.warn(`[EnterpriseAuth] ${event} ${JSON.stringify(details)}`)
+      console.warn(`[EnterpriseAuth] ${event} (domain: ${domain}) ${JSON.stringify(details)}`)
       return
     }
-    console.warn(`[EnterpriseAuth] ${event}`)
+    console.warn(`[EnterpriseAuth] ${event} (domain: ${domain})`)
   }
 
   private describeError(error: unknown): Record<string, unknown> {

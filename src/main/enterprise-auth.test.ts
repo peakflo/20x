@@ -55,12 +55,19 @@ describe('EnterpriseAuth logging', () => {
     vi.clearAllMocks()
   })
 
-  it('logs reason for manual logout', async () => {
+  it('logs reason for manual logout with domain', async () => {
     const auth = new EnterpriseAuth(db as never)
     await auth.logout()
 
-    expect(warnSpy).toHaveBeenCalledWith('[EnterpriseAuth] auth_logout_manual')
-    expect(warnSpy).toHaveBeenCalledWith('[EnterpriseAuth] auth_state_cleared')
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('auth_logout_manual')
+    )
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('auth_state_cleared')
+    )
+    // Domain should be included in log messages
+    const logoutCall = warnSpy.mock.calls.find((c) => c[0].includes('auth_logout_manual'))
+    expect(logoutCall?.[0]).toMatch(/\(domain: .+\)/)
   })
 
   it('logs reason when refresh token is missing and credentials are cleared', async () => {
@@ -68,8 +75,12 @@ describe('EnterpriseAuth logging', () => {
 
     await expect(auth.refreshToken()).rejects.toThrow('No refresh token available')
 
-    expect(warnSpy).toHaveBeenCalledWith('[EnterpriseAuth] auth_clear_missing_refresh_token')
-    expect(warnSpy).toHaveBeenCalledWith('[EnterpriseAuth] auth_state_cleared')
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('auth_clear_missing_refresh_token')
+    )
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('auth_state_cleared')
+    )
   })
 
   it('logs reason when supabase refresh fails', async () => {
@@ -176,6 +187,27 @@ describe('EnterpriseAuth logging', () => {
     await expect(p2).rejects.toThrow('No refresh token available')
   })
 
+  it('getDomain() returns hostname from configured API URL', () => {
+    const auth = new EnterpriseAuth(db as never)
+    const domain = auth.getDomain()
+    // Returns a valid hostname (varies by env config: localhost, stage-api.peakflo.ai, etc.)
+    expect(domain).toBeTruthy()
+    expect(typeof domain).toBe('string')
+    expect(domain.length).toBeGreaterThan(0)
+  })
+
+  it('includes domain in all logAuthEvent messages', async () => {
+    const auth = new EnterpriseAuth(db as never)
+    await auth.logout()
+
+    // Every warn call should include "(domain: ...)"
+    for (const call of warnSpy.mock.calls) {
+      if (call[0].startsWith('[EnterpriseAuth]')) {
+        expect(call[0]).toMatch(/\(domain: .+\)/)
+      }
+    }
+  })
+
   it('logs reason when API request 401 retry path ends in auth clear', async () => {
     db.setSetting('enterprise_jwt', Buffer.from('jwt-token', 'utf8').toString('base64'))
     // Keep JWT valid beyond the 5-minute early-refresh window so apiRequest()
@@ -194,5 +226,52 @@ describe('EnterpriseAuth logging', () => {
     expect(
       warnSpy.mock.calls.some((call) => call[0].includes('auth_clear_after_api_401_retry_failed'))
     ).toBe(true)
+  })
+
+  it('includes domain in API error logs for 403 responses', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    db.setSetting('enterprise_jwt', Buffer.from('jwt-token', 'utf8').toString('base64'))
+    db.setSetting('enterprise_jwt_expires_at', String(Date.now() + 10 * 60_000))
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: false,
+      status: 403,
+      json: async () => ({ message: 'Forbidden', details: { role: 'viewer' } })
+    })))
+
+    const auth = new EnterpriseAuth(db as never)
+
+    await expect(auth.apiRequest('GET', '/api/nodes')).rejects.toThrow('Forbidden')
+
+    const errCall = errorSpy.mock.calls.find((c) =>
+      c[0].includes('[EnterpriseAuth] Permission denied')
+    )
+    expect(errCall).toBeDefined()
+    expect(errCall![0]).toMatch(/\(domain: .+\)/)
+
+    errorSpy.mockRestore()
+  })
+
+  it('includes domain in API error logs for non-ok responses', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    db.setSetting('enterprise_jwt', Buffer.from('jwt-token', 'utf8').toString('base64'))
+    db.setSetting('enterprise_jwt_expires_at', String(Date.now() + 10 * 60_000))
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: false,
+      status: 500,
+      json: async () => ({ message: 'Internal Server Error' })
+    })))
+
+    const auth = new EnterpriseAuth(db as never)
+
+    await expect(auth.apiRequest('POST', '/api/skills')).rejects.toThrow('Internal Server Error')
+
+    const errCall = errorSpy.mock.calls.find((c) =>
+      c[0].includes('[EnterpriseAuth] API error')
+    )
+    expect(errCall).toBeDefined()
+    expect(errCall![0]).toMatch(/\(domain: .+\)/)
+    expect(errCall![0]).toContain('500')
+
+    errorSpy.mockRestore()
   })
 })

@@ -8,11 +8,12 @@ import { EnterpriseHeartbeat } from './enterprise-heartbeat'
 
 describe('EnterpriseHeartbeat', () => {
   let heartbeat: EnterpriseHeartbeat
-  let mockApiClient: { sendHeartbeat: ReturnType<typeof vi.fn> }
+  let mockApiClient: { sendHeartbeat: ReturnType<typeof vi.fn>; getDomain: ReturnType<typeof vi.fn> }
 
   beforeEach(() => {
     mockApiClient = {
-      sendHeartbeat: vi.fn().mockResolvedValue({ ok: true, timestamp: new Date().toISOString() })
+      sendHeartbeat: vi.fn().mockResolvedValue({ ok: true, timestamp: new Date().toISOString() }),
+      getDomain: vi.fn().mockReturnValue('api.peakflo.ai')
     }
     heartbeat = new EnterpriseHeartbeat(mockApiClient as never)
   })
@@ -75,7 +76,8 @@ describe('EnterpriseHeartbeat', () => {
 
   it('can update API client', () => {
     const newClient = {
-      sendHeartbeat: vi.fn().mockResolvedValue({ ok: true, timestamp: new Date().toISOString() })
+      sendHeartbeat: vi.fn().mockResolvedValue({ ok: true, timestamp: new Date().toISOString() }),
+      getDomain: vi.fn().mockReturnValue('api.peakflo.ai')
     }
 
     heartbeat.setApiClient(newClient as never)
@@ -104,5 +106,23 @@ describe('EnterpriseHeartbeat', () => {
       userEmail: undefined,
       userName: undefined
     })
+  })
+
+  it('includes domain name in error logs on heartbeat failure', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    mockApiClient.sendHeartbeat.mockRejectedValue(new Error('Connection refused'))
+
+    heartbeat.start()
+    // Wait for the async sendHeartbeat to complete
+    await vi.waitFor(() => {
+      expect(warnSpy).toHaveBeenCalled()
+    })
+
+    const failCall = warnSpy.mock.calls.find((c) => c[0].includes('[EnterpriseHeartbeat] Failed'))
+    expect(failCall).toBeDefined()
+    expect(failCall![0]).toContain('(domain: api.peakflo.ai)')
+    expect(failCall![0]).toContain('Connection refused')
+
+    warnSpy.mockRestore()
   })
 })

@@ -100,7 +100,8 @@ describe('EnterpriseSyncManager — Skills 2-Way Sync (Batch)', () => {
       updateSkill: vi.fn().mockResolvedValue(makeServerSkill()),
       deleteSkill: vi.fn().mockResolvedValue(undefined),
       updateOrgNode: vi.fn().mockResolvedValue(makeOrgNode()),
-      cleanupDuplicateSkills: vi.fn().mockResolvedValue({ deleted: 0, kept: 0 })
+      cleanupDuplicateSkills: vi.fn().mockResolvedValue({ deleted: 0, kept: 0 }),
+      getDomain: vi.fn().mockReturnValue('api.peakflo.ai')
     }
 
     syncManager = new EnterpriseSyncManager(mockDb as never, mockApiClient as never)
@@ -497,7 +498,7 @@ describe('EnterpriseSyncManager — Skills 2-Way Sync (Batch)', () => {
       expect(result.errors.length).toBe(0)
     })
 
-    it('reports errors in result without crashing', async () => {
+    it('reports errors in result without crashing and includes domain', async () => {
       mockApiClient.listOrgNodes.mockRejectedValue(new Error('Network down'))
       mockApiClient.batchSyncSkills.mockResolvedValue({
         created: 0,
@@ -508,6 +509,7 @@ describe('EnterpriseSyncManager — Skills 2-Way Sync (Batch)', () => {
       const result = await syncManager.syncAll('user-1')
 
       expect(result.errors).toContainEqual(expect.stringContaining('Org node sync failed'))
+      expect(result.errors).toContainEqual(expect.stringContaining('(domain: api.peakflo.ai)'))
     })
 
     it('assigns skills to multiple user nodes', async () => {
@@ -582,7 +584,7 @@ describe('EnterpriseSyncManager — Skills 2-Way Sync (Batch)', () => {
       )
     })
 
-    it('handles assign skills failure gracefully', async () => {
+    it('handles assign skills failure gracefully with domain in error', async () => {
       const localSkill = makeLocalSkill({ enterprise_skill_id: null })
       mockDb.getSkills.mockReturnValue([localSkill])
       mockApiClient.batchSyncSkills.mockResolvedValue({
@@ -600,6 +602,7 @@ describe('EnterpriseSyncManager — Skills 2-Way Sync (Batch)', () => {
       const result = await syncManager.syncAll('user-1')
 
       expect(result.errors).toContainEqual(expect.stringContaining('Assign skills to node'))
+      expect(result.errors).toContainEqual(expect.stringContaining('(domain: api.peakflo.ai)'))
       expect(result.skills.pushed).toBe(1)
     })
 
