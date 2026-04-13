@@ -485,6 +485,35 @@ export class AgentManager extends EventEmitter {
    * Returns the memory file name for an agent based on its type.
    * Claude Code agents use CLAUDE.md; all other agents use AGENTS.md.
    */
+  /**
+   * Syncs task attachments from the database storage directory into the workspace.
+   * Returns an array of relative path references (e.g., "- attachments/file.pdf")
+   * for use in prompts. Safe to call multiple times — already-copied files are
+   * overwritten (cheap for small attachments, guarantees freshness).
+   */
+  private syncAttachmentsToWorkspace(taskId: string, workspaceDir: string): string[] {
+    const task = this.db.getTask(taskId)
+    const refs: string[] = []
+    if (!task?.attachments?.length) return refs
+
+    const attachDir = this.db.getAttachmentsDir(taskId)
+    const destDir = join(workspaceDir, 'attachments')
+    if (!existsSync(destDir)) mkdirSync(destDir, { recursive: true })
+
+    for (const att of task.attachments) {
+      const srcPath = join(attachDir, `${att.id}-${att.filename}`)
+      if (!existsSync(srcPath)) continue
+      const destPath = join(destDir, att.filename)
+      try {
+        copyFileSync(srcPath, destPath)
+        refs.push(`- attachments/${att.filename}`)
+      } catch {
+        continue
+      }
+    }
+    return refs
+  }
+
   private getMemoryFileName(agentId: string): string {
     const agent = this.db.getAgent(agentId)
     const backendType = (agent?.config?.coding_agent as string) || CodingAgentType.OPENCODE
@@ -1332,24 +1361,7 @@ export class AgentManager extends EventEmitter {
         }
 
         // Copy attachments and build references
-        const attachmentRefs: string[] = []
-        if (currentTask?.attachments?.length && workspaceDir) {
-          const attachDir = this.db.getAttachmentsDir(taskId)
-          const destDir = join(workspaceDir, 'attachments')
-          if (!existsSync(destDir)) mkdirSync(destDir, { recursive: true })
-
-          for (const att of currentTask.attachments) {
-            const srcPath = join(attachDir, `${att.id}-${att.filename}`)
-            if (!existsSync(srcPath)) continue
-            const destPath = join(destDir, att.filename)
-            try {
-              copyFileSync(srcPath, destPath)
-              attachmentRefs.push(`- attachments/${att.filename}`)
-            } catch {
-              continue
-            }
-          }
-        }
+        const attachmentRefs = workspaceDir ? this.syncAttachmentsToWorkspace(taskId, workspaceDir) : []
         if (attachmentRefs.length > 0) {
           promptText += `\n\nAttached files (relative to your working directory):\n${attachmentRefs.join('\n')}`
         }
@@ -1857,6 +1869,11 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     let workspaceDir = await this.setupWorktreeIfNeeded(taskId)
     if (!workspaceDir) {
       workspaceDir = this.db.getWorkspaceDir(taskId)
+    }
+
+    // Sync any attachments added since the session was started/last resumed
+    if (workspaceDir) {
+      this.syncAttachmentsToWorkspace(taskId, workspaceDir)
     }
 
     // Build MCP servers config
@@ -2704,6 +2721,12 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       session.pollingStarted = false
     }
     if (!session.adapter) throw new Error('Adapter not initialized')
+
+    // Sync any attachments added mid-session into the workspace so
+    // the agent can reference them immediately.
+    if (session.workspaceDir) {
+      this.syncAttachmentsToWorkspace(session.taskId, session.workspaceDir)
+    }
 
     // Update status to working (but preserve AgentLearning if set)
     session.status = 'working'
