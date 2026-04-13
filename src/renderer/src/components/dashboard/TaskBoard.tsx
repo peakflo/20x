@@ -17,14 +17,15 @@ interface StatusColumn {
   color: string
   dotColor: string
   headerBg: string
+  columnBg: string
 }
 
 const COLUMNS: StatusColumn[] = [
-  { key: TaskStatus.NotStarted, label: 'Not Started', color: 'text-gray-400', dotColor: 'bg-gray-400', headerBg: 'bg-gray-500/10' },
-  { key: TaskStatus.Triaging, label: 'Triaging', color: 'text-slate-300', dotColor: 'bg-slate-400', headerBg: 'bg-slate-500/10' },
-  { key: TaskStatus.AgentWorking, label: 'Agent Working', color: 'text-amber-400', dotColor: 'bg-amber-400', headerBg: 'bg-amber-500/10' },
-  { key: TaskStatus.ReadyForReview, label: 'Ready for Review', color: 'text-purple-400', dotColor: 'bg-purple-400', headerBg: 'bg-purple-500/10' },
-  { key: TaskStatus.AgentLearning, label: 'Agent Learning', color: 'text-blue-400', dotColor: 'bg-blue-400', headerBg: 'bg-blue-500/10' }
+  { key: TaskStatus.NotStarted, label: 'Not Started', color: 'text-gray-400', dotColor: 'bg-gray-400', headerBg: 'bg-gray-500/8', columnBg: 'bg-gray-500/[0.03]' },
+  { key: TaskStatus.Triaging, label: 'Triaging', color: 'text-slate-300', dotColor: 'bg-slate-400', headerBg: 'bg-slate-500/8', columnBg: 'bg-slate-500/[0.03]' },
+  { key: TaskStatus.AgentWorking, label: 'Agent Working', color: 'text-amber-400', dotColor: 'bg-amber-400', headerBg: 'bg-amber-500/8', columnBg: 'bg-amber-500/[0.03]' },
+  { key: TaskStatus.ReadyForReview, label: 'Ready for Review', color: 'text-purple-400', dotColor: 'bg-purple-400', headerBg: 'bg-purple-500/8', columnBg: 'bg-purple-500/[0.03]' },
+  { key: TaskStatus.AgentLearning, label: 'Agent Learning', color: 'text-blue-400', dotColor: 'bg-blue-400', headerBg: 'bg-blue-500/8', columnBg: 'bg-blue-500/[0.03]' }
 ]
 
 const PRIORITY_ORDER: Record<string, number> = {
@@ -60,15 +61,15 @@ function getPriorityVariant(priority: string): 'red' | 'orange' | 'yellow' | 'de
 function getPriorityAccent(priority: string): string {
   switch (priority) {
     case 'critical':
-      return 'border-l-red-500'
+      return 'border-l-red-500/40'
     case 'high':
-      return 'border-l-orange-500'
+      return 'border-l-orange-500/40'
     case 'medium':
-      return 'border-l-amber-400'
+      return 'border-l-amber-400/35'
     case 'low':
-      return 'border-l-gray-500'
+      return 'border-l-gray-500/25'
     default:
-      return 'border-l-gray-500/50'
+      return 'border-l-gray-500/15'
   }
 }
 
@@ -257,9 +258,9 @@ function ColumnHeader({ column, count }: { column: StatusColumn; count: number }
 
 function BoardColumn({ column, tasks, onSelect }: { column: StatusColumn; tasks: WorkfloTask[]; onSelect: (id: string) => void }) {
   return (
-    <div className="min-w-[230px] max-w-[280px] flex-1 flex flex-col rounded-xl bg-muted/10 border border-border/20">
+    <div className={`min-w-[230px] max-w-[280px] flex-1 flex flex-col rounded-xl ${column.columnBg} border border-border/15`}>
       {/* Sticky header within column */}
-      <div className="sticky top-0 z-10 bg-muted/10 backdrop-blur-md rounded-t-xl border-b border-border/20">
+      <div className={`sticky top-0 z-10 ${column.columnBg} backdrop-blur-md rounded-t-xl border-b border-border/15`}>
         <ColumnHeader column={column} count={tasks.length} />
       </div>
 
@@ -337,8 +338,8 @@ export function TaskBoard() {
       {isLoading ? (
         <div className="flex gap-3 pb-2">
           {COLUMNS.map((col) => (
-            <div key={col.key} className="min-w-[230px] max-w-[280px] flex-1 rounded-xl bg-muted/10 border border-border/20">
-              <div className="px-3 py-2.5 border-b border-border/20">
+            <div key={col.key} className={`min-w-[230px] max-w-[280px] flex-1 rounded-xl ${col.columnBg} border border-border/15`}>
+              <div className="px-3 py-2.5 border-b border-border/15">
                 <div className="flex items-center gap-2">
                   <div className={`h-2.5 w-2.5 rounded-full ${col.dotColor} opacity-40`} />
                   <span className="text-xs font-semibold text-muted-foreground/50">{col.label}</span>
