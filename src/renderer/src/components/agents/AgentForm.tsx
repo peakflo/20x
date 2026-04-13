@@ -7,7 +7,7 @@ import { Label } from '@/components/ui/Label'
 import { Checkbox } from '@/components/ui/Checkbox'
 import { agentConfigApi } from '@/lib/ipc-client'
 import { useMcpStore } from '@/stores/mcp-store'
-import { SkillSelector } from '@/components/skills/SkillSelector'
+import { SkillSelectorDialog } from '@/components/skills/SkillSelectorDialog'
 import { SecretSelector } from '@/components/secrets/SecretSelector'
 import type { Agent, CreateAgentDTO, UpdateAgentDTO, AgentMcpServerEntry, ClaudeAuthMethod, AgentPermissionMode } from '@/types'
 import { CodingAgentType, CODING_AGENTS, CLAUDE_MODELS, CODEX_MODELS } from '@/types'
@@ -45,6 +45,7 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
   const [systemPrompt, setSystemPrompt] = useState(agent?.config.system_prompt ?? '')
   const [maxParallelSessions, setMaxParallelSessions] = useState(agent?.config.max_parallel_sessions ?? 1)
   const [skillIds, setSkillIds] = useState<string[] | undefined>(agent?.config.skill_ids)
+  const [showSkillSelector, setShowSkillSelector] = useState(false)
   const [secretIds, setSecretIds] = useState<string[]>(agent?.config.secret_ids ?? [])
   const [mcpSelection, setMcpSelection] = useState<Map<string, string[] | undefined>>(
     () => parseMcpSelection(agent?.config.mcp_servers)
@@ -582,7 +583,25 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
 
       <div className="space-y-2">
         <Label>Skills</Label>
-        <SkillSelector selectedIds={skillIds} onChange={setSkillIds} />
+        <div className="rounded-md border border-border p-3 space-y-2.5">
+          {skillIds === undefined ? (
+            <p className="text-sm text-muted-foreground">All skills enabled</p>
+          ) : (
+            <p className="text-sm text-muted-foreground">
+              {skillIds.length} skill{skillIds.length !== 1 ? 's' : ''} selected
+            </p>
+          )}
+          <div className="flex items-center gap-2">
+            <Button type="button" variant="outline" size="sm" onClick={() => setShowSkillSelector(true)}>
+              {skillIds === undefined ? 'Customize skills' : 'Edit skills'}
+            </Button>
+            {skillIds !== undefined && (
+              <Button type="button" variant="ghost" size="sm" onClick={() => setSkillIds(undefined)}>
+                Use all skills
+              </Button>
+            )}
+          </div>
+        </div>
       </div>
 
       <div className="space-y-2">
@@ -599,6 +618,13 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
           {agent ? 'Save' : 'Create'}
         </Button>
       </div>
+
+      <SkillSelectorDialog
+        open={showSkillSelector}
+        onOpenChange={setShowSkillSelector}
+        initialSkillIds={skillIds ?? []}
+        onConfirm={setSkillIds}
+      />
     </form>
   )
 }
