@@ -431,13 +431,19 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
         }
 
         // Parse message content
+        // Use the stable API message ID for part IDs — must match the pattern
+        // in convertSDKMessageToParts so that dedup state from loadSessionHistory
+        // correctly prevents re-emission of historical messages during streaming replay.
+        const stableId = entry.message?.id || entry.uuid || entry.type
         if (entry.message?.content) {
-          for (const contentPart of entry.message.content) {
+          for (let blockIdx = 0; blockIdx < entry.message.content.length; blockIdx++) {
+            const contentPart = entry.message.content[blockIdx]
             if (contentPart.type === 'text') {
               // Skip empty text blocks (corrupt messages)
               if (!contentPart.text || contentPart.text.trim() === '') continue
 
               message.parts.push({
+                id: `${stableId}-text-${blockIdx}`,
                 type: MessagePartType.TEXT,
                 text: contentPart.text,
                 content: contentPart.text
@@ -486,7 +492,8 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
                 }
               }
 
-              message.parts.push({ type: partType as MessagePartType, tool: toolObj })
+              const toolPartId = contentPart.id ? `tool-${contentPart.id}` : `${stableId}-tool_use-${contentPart.id || blockIdx}`
+              message.parts.push({ id: toolPartId, type: partType as MessagePartType, tool: toolObj })
               if (contentPart.id) toolUseParts.set(contentPart.id, toolObj)
             } else if (contentPart.type === 'tool_result' && contentPart.tool_use_id) {
               // Merge result into the matching tool_use part instead of creating separate entry
@@ -1036,6 +1043,8 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
         // Drop already-processed messages from the front when limit is exceeded.
         if (session.messageBuffer.length > MAX_MESSAGE_BUFFER_SIZE) {
           const drop = session.messageBuffer.length - MAX_MESSAGE_BUFFER_SIZE
+          const unprocessed = session.messageBuffer.length - session.messageCursor
+          console.warn(`[ClaudeCodeAdapter] Buffer overflow: dropping ${drop} messages (${unprocessed} unprocessed, cursor=${session.messageCursor}, bufLen=${session.messageBuffer.length})`)
           session.messageBuffer.splice(0, drop)
           session.messageCursor = Math.max(0, session.messageCursor - drop)
         }
@@ -1189,6 +1198,13 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
     // Exception: system messages (task_started, task_progress, task_notification,
     // status) do NOT carry parent_tool_use_id and must always be processed.
     if (msgWithProps.parent_tool_use_id) {
+      // Log filtered messages so we can diagnose if the SDK incorrectly sets
+      // parent_tool_use_id on main-agent responses (potential cause of missing responses)
+      const contentBlocks = (msgWithProps.message?.content || []) as Array<Record<string, unknown>>
+      const hasText = contentBlocks.some((b) => b.type === 'text' && b.text)
+      if (hasText) {
+        console.log(`[ClaudeCodeAdapter] Filtering assistant message with parent_tool_use_id=${msgWithProps.parent_tool_use_id}, type=${msgWithProps.type}, uuid=${msgWithProps.uuid}, textBlocks=${contentBlocks.filter((b) => b.type === 'text').length}`)
+      }
       return parts
     }
 
@@ -1208,18 +1224,37 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
         // For text blocks (no id), use stable message ID + block index for consistent dedup.
         // For tool_use blocks, blockWithProps.id is the tool_use_id which is already stable.
         const partId = `${stableId}-${blockWithProps.type}-${blockWithProps.id || blockIdx}`
-        if (seenPartIds.has(partId)) continue
-        seenPartIds.add(partId)
 
         if (blockWithProps.type === 'text') {
           const text = blockWithProps.text || ''
+          if (seenPartIds.has(partId)) {
+            // Check if text content has grown since last seen (streaming update).
+            // Without this, the first chunk (possibly empty/partial) gets recorded
+            // and all subsequent chunks with the complete text are silently dropped,
+            // causing missing assistant responses in the UI.
+            const previousLength = partContentLengths.get(partId)
+            if (previousLength !== undefined && String(text.length) !== previousLength && text.length > 0) {
+              partContentLengths.set(partId, String(text.length))
+              parts.push({
+                id: partId,
+                type: MessagePartType.TEXT,
+                text,
+                update: true,
+              })
+            }
+            continue
+          }
+          seenPartIds.add(partId)
           partContentLengths.set(partId, String(text.length))
           parts.push({
             id: partId,
             type: MessagePartType.TEXT,
             text,
           })
+        } else if (seenPartIds.has(partId)) {
+          continue
         } else if (blockWithProps.type === 'tool_use') {
+          seenPartIds.add(partId)
           const toolName = blockWithProps.name || 'unknown'
           const rawInput = blockWithProps.input as Record<string, unknown> | undefined
           const input = rawInput ? JSON.stringify(rawInput, null, 2) : undefined
@@ -1438,10 +1473,9 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
         // If tool hasn't been seen yet, skip — progress before tool_use is meaningless
       }
     } else if (msgWithProps.type === 'result') {
-      // Surface error result messages (e.g., rate limit errors) to the UI
       const resultMsg = msg as Record<string, unknown>
       if (resultMsg.is_error) {
-        // Extract error text from all available fields (result, errors, error)
+        // Surface error result messages (e.g., rate limit errors) to the UI
         const resultField = resultMsg.result
         const errorsField = Array.isArray(resultMsg.errors) ? resultMsg.errors : []
         const errorField = typeof resultMsg.error === 'string' ? resultMsg.error : ''
@@ -1469,6 +1503,35 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
             text: errorText,
             role: 'system',
           })
+        }
+      } else {
+        // Non-error result: extract the final assistant text as a safety net.
+        // Normally the text was already sent in a preceding assistant message event,
+        // but if the first streaming chunk had empty text and no subsequent chunk
+        // updated it, the result message is the only source of the final response.
+        const resultText = typeof resultMsg.result === 'string' ? resultMsg.result : ''
+        if (resultText) {
+          // Check if any assistant text part was already emitted with non-empty content.
+          // If so, skip — the text is already shown.  If not, emit it now.
+          let hasNonEmptyText = false
+          for (const [pid, len] of partContentLengths) {
+            if (pid.includes('-text-') && parseInt(len, 10) > 0) {
+              hasNonEmptyText = true
+              break
+            }
+          }
+          if (!hasNonEmptyText) {
+            const partId = `result-text-${msgWithProps.uuid || Date.now()}`
+            if (!seenPartIds.has(partId)) {
+              seenPartIds.add(partId)
+              partContentLengths.set(partId, String(resultText.length))
+              parts.push({
+                id: partId,
+                type: MessagePartType.TEXT,
+                text: resultText,
+              })
+            }
+          }
         }
       }
     } else if (msgWithProps.type === 'system') {

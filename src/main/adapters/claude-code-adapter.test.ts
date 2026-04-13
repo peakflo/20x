@@ -678,3 +678,132 @@ describe('ClaudeCodeAdapter task_progress handling', () => {
     expect(progressUpdate!.tool!.title).toContain('15s')
   })
 })
+
+describe('ClaudeCodeAdapter streaming text dedup fix', () => {
+  it('emits update when text content changes in a subsequent streaming chunk', async () => {
+    // Simulate Claude Code sending multiple chunks for the same assistant message:
+    // First chunk has empty text, second chunk has the real text.
+    const chunk1 = {
+      type: 'assistant',
+      uuid: 'chunk-1',
+      message: {
+        id: 'msg_01ABC',
+        content: [{ type: 'text', text: '' }],
+      },
+    }
+    const chunk2 = {
+      type: 'assistant',
+      uuid: 'chunk-2',
+      message: {
+        id: 'msg_01ABC',
+        content: [{ type: 'text', text: 'Hello world' }],
+      },
+    }
+
+    const { adapter } = createAdapterWithSession('s1', [chunk1, chunk2])
+    const seenPartIds = new Set<string>()
+    const partContentLengths = new Map<string, string>()
+    const parts = await adapter.pollMessages('s1', new Set(), seenPartIds, partContentLengths, {} as any)
+
+    // Should have 2 parts: initial empty text + update with real text
+    const textParts = parts.filter((p: any) => p.type === 'text')
+    expect(textParts.length).toBe(2)
+
+    // First part: empty text (initial)
+    expect(textParts[0].text).toBe('')
+    expect(textParts[0].update).toBeUndefined()
+
+    // Second part: real text (update)
+    expect(textParts[1].text).toBe('Hello world')
+    expect(textParts[1].update).toBe(true)
+    expect(textParts[1].id).toBe(textParts[0].id)
+  })
+
+  it('does not emit update when text content is unchanged', async () => {
+    // Same text in both chunks — should only emit once
+    const chunk1 = {
+      type: 'assistant',
+      uuid: 'chunk-1',
+      message: {
+        id: 'msg_01ABC',
+        content: [{ type: 'text', text: 'Hello' }],
+      },
+    }
+    const chunk2 = {
+      type: 'assistant',
+      uuid: 'chunk-2',
+      message: {
+        id: 'msg_01ABC',
+        content: [{ type: 'text', text: 'Hello' }],
+      },
+    }
+
+    const { adapter } = createAdapterWithSession('s1', [chunk1, chunk2])
+    const seenPartIds = new Set<string>()
+    const partContentLengths = new Map<string, string>()
+    const parts = await adapter.pollMessages('s1', new Set(), seenPartIds, partContentLengths, {} as any)
+
+    const textParts = parts.filter((p: any) => p.type === 'text')
+    expect(textParts.length).toBe(1)
+    expect(textParts[0].text).toBe('Hello')
+  })
+})
+
+describe('ClaudeCodeAdapter non-error result text extraction', () => {
+  it('extracts text from non-error result when no assistant text was emitted', async () => {
+    // Simulate: assistant message with empty text + non-error result with the actual text
+    const assistantMsg = {
+      type: 'assistant',
+      uuid: 'msg-1',
+      message: {
+        id: 'msg_01ABC',
+        content: [{ type: 'text', text: '' }],
+      },
+    }
+    const resultMsg = {
+      type: 'result',
+      is_error: false,
+      result: 'The task is complete.',
+      uuid: 'result-1',
+    }
+
+    const { adapter } = createAdapterWithSession('s1', [assistantMsg, resultMsg])
+    const seenPartIds = new Set<string>()
+    const partContentLengths = new Map<string, string>()
+    const parts = await adapter.pollMessages('s1', new Set(), seenPartIds, partContentLengths, {} as any)
+
+    // Should have the fallback text from the result message
+    const textParts = parts.filter((p: any) => p.type === 'text' && p.text && p.text.length > 0)
+    expect(textParts.length).toBeGreaterThanOrEqual(1)
+    const resultTextPart = textParts.find((p: any) => p.text === 'The task is complete.')
+    expect(resultTextPart).toBeDefined()
+  })
+
+  it('does not extract result text when assistant text was already emitted', async () => {
+    // Simulate: assistant message with real text + non-error result
+    const assistantMsg = {
+      type: 'assistant',
+      uuid: 'msg-1',
+      message: {
+        id: 'msg_01ABC',
+        content: [{ type: 'text', text: 'I completed the task.' }],
+      },
+    }
+    const resultMsg = {
+      type: 'result',
+      is_error: false,
+      result: 'I completed the task.',
+      uuid: 'result-1',
+    }
+
+    const { adapter } = createAdapterWithSession('s1', [assistantMsg, resultMsg])
+    const seenPartIds = new Set<string>()
+    const partContentLengths = new Map<string, string>()
+    const parts = await adapter.pollMessages('s1', new Set(), seenPartIds, partContentLengths, {} as any)
+
+    // Should only have the assistant text, not a duplicate from result
+    const textParts = parts.filter((p: any) => p.type === 'text')
+    expect(textParts.length).toBe(1)
+    expect(textParts[0].text).toBe('I completed the task.')
+  })
+})
