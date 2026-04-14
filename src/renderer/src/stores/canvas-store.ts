@@ -218,7 +218,7 @@ export function calculateSnap(
   otherPanels: CanvasPanelData[],
   threshold = SNAP_THRESHOLD
 ): { x: number; y: number; guides: SnapGuide[] } {
-  let { x, y } = draggingPanel
+  const { x, y } = draggingPanel
   const guides: SnapGuide[] = []
   const { width: dw, height: dh } = draggingPanel
 

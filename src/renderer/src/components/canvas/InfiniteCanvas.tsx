@@ -60,6 +60,8 @@ export function InfiniteCanvas() {
   // ── Consume pending task from "Open in Canvas" button ────
   const canvasPendingTaskId = useUIStore((s) => s.canvasPendingTaskId)
   const clearCanvasPendingTask = useUIStore((s) => s.clearCanvasPendingTask)
+  const canvasPendingApp = useUIStore((s) => s.canvasPendingApp)
+  const clearCanvasPendingApp = useUIStore((s) => s.clearCanvasPendingApp)
   const allTasks = useTaskStore((s) => s.tasks)
 
   useEffect(() => {
@@ -97,7 +99,40 @@ export function InfiniteCanvas() {
       width: DEFAULT_PANEL_WIDTH,
       height: DEFAULT_PANEL_HEIGHT,
     })
-  }, [canvasPendingTaskId]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [canvasPendingTaskId]) // eslint-disable-line
+
+  // ── Consume pending app from "Open in Canvas" button ────
+  useEffect(() => {
+    if (!canvasPendingApp) return
+    const { workflowId, name } = canvasPendingApp
+    clearCanvasPendingApp()
+
+    const currentPanels = useCanvasStore.getState().panels
+    const alreadyExists = currentPanels.some(
+      (p) => p.type === 'app' && p.refId === workflowId
+    )
+    if (alreadyExists) return
+
+    const container = containerRef.current
+    const rect = container?.getBoundingClientRect()
+    const vp = useCanvasStore.getState().viewport
+    const centerX = rect
+      ? (rect.width / 2 - vp.x) / vp.zoom - DEFAULT_PANEL_WIDTH / 2
+      : 0
+    const centerY = rect
+      ? (rect.height / 2 - vp.y) / vp.zoom - DEFAULT_PANEL_HEIGHT / 2
+      : 0
+    const offset = (currentPanels.length % 5) * 30
+    addPanel({
+      type: 'app',
+      title: name,
+      refId: workflowId,
+      x: centerX + offset,
+      y: centerY + offset,
+      width: DEFAULT_PANEL_WIDTH,
+      height: DEFAULT_PANEL_HEIGHT,
+    })
+  }, [canvasPendingApp]) // eslint-disable-line
 
   // ── Wheel handler (zoom + trackpad pan) ──────────────────
   const handleWheel = useCallback(

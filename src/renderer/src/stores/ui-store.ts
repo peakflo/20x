@@ -23,6 +23,8 @@ interface UIState {
   dashboardPreviewTaskId: string | null
   /** Task ID to add to canvas when switching to canvas view */
   canvasPendingTaskId: string | null
+  /** App to add to canvas when switching to canvas view */
+  canvasPendingApp: { workflowId: string; name: string } | null
 
   setSidebarView: (view: SidebarView) => void
   setStatusFilter: (filter: TaskStatus | 'all') => void
@@ -43,6 +45,9 @@ interface UIState {
   /** Switch to canvas view and queue a task to be added as a panel */
   openTaskOnCanvas: (taskId: string) => void
   clearCanvasPendingTask: () => void
+  /** Switch to canvas view and queue an app to be added as a panel */
+  openAppOnCanvas: (workflowId: string, name: string) => void
+  clearCanvasPendingApp: () => void
 }
 
 export const useUIStore = create<UIState>((set) => ({
@@ -60,6 +65,7 @@ export const useUIStore = create<UIState>((set) => ({
   settingsTab: SettingsTab.GENERAL,
   dashboardPreviewTaskId: null,
   canvasPendingTaskId: null,
+  canvasPendingApp: null,
 
   setSidebarView: (sidebarView) => set({ sidebarView }),
   setStatusFilter: (statusFilter) => set({ statusFilter }),
@@ -90,5 +96,7 @@ export const useUIStore = create<UIState>((set) => ({
   openDashboardPreview: (taskId) => set({ dashboardPreviewTaskId: taskId }),
   closeDashboardPreview: () => set({ dashboardPreviewTaskId: null }),
   openTaskOnCanvas: (taskId) => set({ sidebarView: 'canvas', canvasPendingTaskId: taskId }),
-  clearCanvasPendingTask: () => set({ canvasPendingTaskId: null })
+  clearCanvasPendingTask: () => set({ canvasPendingTaskId: null }),
+  openAppOnCanvas: (workflowId, name) => set({ sidebarView: 'canvas', canvasPendingApp: { workflowId, name } }),
+  clearCanvasPendingApp: () => set({ canvasPendingApp: null })
 }))

@@ -24,6 +24,8 @@ vi.mock('@/stores/ui-store', () => ({
     const state = {
       canvasPendingTaskId: null,
       clearCanvasPendingTask: vi.fn(),
+      canvasPendingApp: null,
+      clearCanvasPendingApp: vi.fn(),
       sidebarView: 'canvas',
     }
     return selector ? selector(state) : state
