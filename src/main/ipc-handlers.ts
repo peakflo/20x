@@ -1,4 +1,5 @@
 import { ipcMain, dialog, shell, Notification, app, session } from 'electron'
+import * as childProcess from 'child_process'
 import { copyFileSync, existsSync, unlinkSync, readdirSync, statSync, readFileSync } from 'fs'
 import { join, basename, extname } from 'path'
 import type {
@@ -1202,44 +1203,122 @@ export function registerIpcHandlers(
   // ── Terminal (PTY) handlers ─────────────────────────────────
   // Each terminal is identified by a unique ID. The renderer creates/writes/resizes
   // terminals via IPC, and receives output via 'terminal:data' events.
+  //
+  // Strategy: try node-pty first (full PTY with resize support).
+  // If node-pty fails (common when native module isn't rebuilt for Electron),
+  // fall back to macOS `script` command which allocates a real PTY via
+  // child_process.spawn — interactive shells, colors, and cursor all work.
 
-  const terminals = new Map<string, import('node-pty').IPty>()
+  interface TerminalHandle {
+    write: (data: string) => void
+    resize?: (cols: number, rows: number) => void
+    kill: () => void
+    pid: number
+  }
+
+  const terminals = new Map<string, TerminalHandle>()
+
+  /** Resolve the user's preferred shell */
+  function resolveShell(): string {
+    if (process.platform === 'win32') return 'powershell.exe'
+    const candidates = [process.env.SHELL, '/bin/zsh', '/bin/bash', '/bin/sh'].filter(Boolean) as string[]
+    return candidates.find((s) => existsSync(s)) || '/bin/sh'
+  }
+
+  /** Try to create a terminal via node-pty (best experience) */
+  async function tryNodePty(
+    id: string, shellPath: string, cols: number, rows: number,
+    sender: Electron.WebContents
+  ): Promise<TerminalHandle | null> {
+    try {
+      const pty = await import('node-pty')
+      const term = pty.spawn(shellPath, [], {
+        name: 'xterm-256color',
+        cols: cols || 80,
+        rows: rows || 24,
+        cwd: process.env.HOME || process.cwd(),
+        env: { ...process.env } as Record<string, string>,
+      })
+
+      term.onData((data: string) => {
+        sender.send('terminal:data', { id, data })
+      })
+
+      term.onExit(() => {
+        terminals.delete(id)
+        sender.send('terminal:exit', { id })
+      })
+
+      return {
+        write: (data: string) => term.write(data),
+        resize: (c: number, r: number) => term.resize(c, r),
+        kill: () => term.kill(),
+        pid: term.pid,
+      }
+    } catch (err) {
+      console.warn(`[Terminal] node-pty failed, will use fallback:`, (err as Error).message)
+      return null
+    }
+  }
+
+  /** Fallback: use macOS `script` command to get a real PTY via child_process */
+  function createScriptPty(
+    id: string, shellPath: string, cols: number, rows: number,
+    sender: Electron.WebContents
+  ): TerminalHandle {
+    const { spawn } = childProcess
+
+    // `script -q /dev/null <shell>` allocates a PTY on macOS.
+    // On Linux it's `script -qc <shell> /dev/null`.
+    const isLinux = process.platform === 'linux'
+    const args = isLinux
+      ? ['-q', '-c', shellPath, '/dev/null']
+      : ['-q', '/dev/null', shellPath]
+
+    const child = spawn('script', args, {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      cwd: process.env.HOME || process.cwd(),
+      env: {
+        ...process.env,
+        TERM: 'xterm-256color',
+        COLUMNS: String(cols || 80),
+        LINES: String(rows || 24),
+      } as Record<string, string>,
+    })
+
+    child.stdout?.on('data', (data: Buffer) => {
+      sender.send('terminal:data', { id, data: data.toString() })
+    })
+
+    child.stderr?.on('data', (data: Buffer) => {
+      sender.send('terminal:data', { id, data: data.toString() })
+    })
+
+    child.on('exit', () => {
+      terminals.delete(id)
+      sender.send('terminal:exit', { id })
+    })
+
+    return {
+      write: (data: string) => child.stdin?.write(data),
+      kill: () => child.kill(),
+      pid: child.pid || 0,
+    }
+  }
 
   ipcMain.handle('terminal:create', async (event, { id, cols, rows }: { id: string; cols: number; rows: number }) => {
-    const pty = await import('node-pty')
+    const shellPath = resolveShell()
+    console.log(`[Terminal] Creating terminal id=${id} shell=${shellPath} cols=${cols} rows=${rows}`)
 
-    // Determine shell — try user's SHELL, fall back to common paths
-    let shellPath: string
-    if (process.platform === 'win32') {
-      shellPath = 'powershell.exe'
-    } else {
-      const candidates = [process.env.SHELL, '/bin/zsh', '/bin/bash', '/bin/sh'].filter(Boolean) as string[]
-      const { existsSync } = await import('fs')
-      shellPath = candidates.find((s) => existsSync(s)) || '/bin/sh'
+    // Try node-pty first, fall back to script-based PTY
+    let handle = await tryNodePty(id, shellPath, cols, rows, event.sender)
+    if (!handle) {
+      console.log(`[Terminal] Using script-based PTY fallback for id=${id}`)
+      handle = createScriptPty(id, shellPath, cols, rows, event.sender)
     }
 
-    console.log(`[Terminal] Creating PTY id=${id} shell=${shellPath} cols=${cols} rows=${rows}`)
-
-    const term = pty.spawn(shellPath, [], {
-      name: 'xterm-256color',
-      cols: cols || 80,
-      rows: rows || 24,
-      cwd: process.env.HOME || process.cwd(),
-      env: { ...process.env } as Record<string, string>,
-    })
-
-    terminals.set(id, term)
-
-    term.onData((data: string) => {
-      event.sender.send('terminal:data', { id, data })
-    })
-
-    term.onExit(() => {
-      terminals.delete(id)
-      event.sender.send('terminal:exit', { id })
-    })
-
-    return { pid: term.pid }
+    terminals.set(id, handle)
+    return { pid: handle.pid }
   })
 
   ipcMain.handle('terminal:write', (_, { id, data }: { id: string; data: string }) => {
@@ -1247,7 +1326,7 @@ export function registerIpcHandlers(
   })
 
   ipcMain.handle('terminal:resize', (_, { id, cols, rows }: { id: string; cols: number; rows: number }) => {
-    try { terminals.get(id)?.resize(cols, rows) } catch { /* ignore resize errors */ }
+    try { terminals.get(id)?.resize?.(cols, rows) } catch { /* ignore resize errors */ }
   })
 
   ipcMain.handle('terminal:kill', (_, { id }: { id: string }) => {
