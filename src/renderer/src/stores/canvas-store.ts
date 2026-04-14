@@ -216,6 +216,8 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   fitToContent: (containerWidth: number, containerHeight: number) => {
     const { panels } = get()
     if (panels.length === 0) return
+    // Guard against zero-size container (window minimized, being dragged, not laid out yet)
+    if (!containerWidth || !containerHeight || containerWidth < 10 || containerHeight < 10) return
 
     // Calculate bounding box of all panels
     const PAD = 60
@@ -229,15 +231,19 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
 
     const contentW = maxX - minX + PAD * 2
     const contentH = maxY - minY + PAD * 2
+    if (contentW <= 0 || contentH <= 0) return
 
     // Fit zoom to show all panels (capped at 1x so we never zoom in past 100%)
-    const zoom = Math.min(1, containerWidth / contentW, containerHeight / contentH)
+    const zoom = Math.max(MIN_ZOOM, Math.min(1, containerWidth / contentW, containerHeight / contentH))
 
     // Center the bounding box in the viewport
     const centerX = (minX + maxX) / 2
     const centerY = (minY + maxY) / 2
     const x = containerWidth / 2 - centerX * zoom
     const y = containerHeight / 2 - centerY * zoom
+
+    // Final safety check — never set NaN/Infinity
+    if (!isFinite(x) || !isFinite(y) || !isFinite(zoom)) return
 
     set({ viewport: { x, y, zoom } })
     scheduleSave()

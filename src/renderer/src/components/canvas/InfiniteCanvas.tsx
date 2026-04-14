@@ -583,6 +583,9 @@ function CanvasGrid({
   if (!container) return null
 
   const rect = container.getBoundingClientRect()
+  // Guard against zero-size container (during window move/minimize transitions)
+  if (!rect.width || !rect.height || !zoom) return null
+
   const visibleLeft = -viewportX / zoom
   const visibleTop = -viewportY / zoom
   const visibleWidth = rect.width / zoom
@@ -629,6 +632,8 @@ function SnapGuides({
   if (!container) return null
 
   const rect = container.getBoundingClientRect()
+  if (!rect.width || !rect.height || !viewport.zoom) return null
+
   const visibleLeft = -viewport.x / viewport.zoom
   const visibleTop = -viewport.y / viewport.zoom
   const visibleWidth = rect.width / viewport.zoom
