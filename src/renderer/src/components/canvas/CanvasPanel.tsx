@@ -212,6 +212,7 @@ export function CanvasPanel({ panel, zoom }: CanvasPanelProps) {
   return (
     <div
       ref={panelRef}
+      data-canvas-panel="true"
       onMouseDown={handleMouseDown}
       className={`absolute rounded-xl border bg-[#161b22] shadow-2xl flex flex-col overflow-hidden select-none transition-shadow duration-150 ${borderAccent} ${
         isDragging ? 'shadow-indigo-500/10 ring-1 ring-indigo-500/20' : ''

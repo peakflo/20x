@@ -33,13 +33,22 @@ export function InfiniteCanvas() {
     panels,
     snapGuides,
     connectingFromId,
+    isLoaded,
     panBy,
     zoomAtPoint,
     zoomTo,
     resetViewport,
     addPanel,
     setConnectingFromId,
+    loadCanvas,
   } = useCanvasStore()
+
+  // ── Load persisted canvas state on mount ────────────────
+  useEffect(() => {
+    if (!isLoaded) {
+      loadCanvas()
+    }
+  }, [isLoaded, loadCanvas])
 
   // Panning state
   const [isPanning, setIsPanning] = useState(false)
@@ -137,9 +146,44 @@ export function InfiniteCanvas() {
   // ── Wheel handler (zoom + trackpad pan) ──────────────────
   const handleWheel = useCallback(
     (e: WheelEvent) => {
-      e.preventDefault()
       const container = containerRef.current
       if (!container) return
+
+      // Check if the wheel event is inside a scrollable panel element.
+      // If so, let the panel scroll naturally instead of panning the canvas.
+      // Exception: Ctrl/Meta+wheel is always zoom regardless of target.
+      if (!(e.ctrlKey || e.metaKey)) {
+        let el = e.target as HTMLElement | null
+        while (el && el !== container) {
+          // Check for data attribute marking panel content areas
+          if (el.dataset?.canvasPanel === 'true') break // reached panel boundary, stop
+          const style = window.getComputedStyle(el)
+          const overflowY = style.overflowY
+          const overflowX = style.overflowX
+          const isScrollableY =
+            (overflowY === 'auto' || overflowY === 'scroll') &&
+            el.scrollHeight > el.clientHeight
+          const isScrollableX =
+            (overflowX === 'auto' || overflowX === 'scroll') &&
+            el.scrollWidth > el.clientWidth
+
+          if (isScrollableY || isScrollableX) {
+            // Check if the element can still scroll in the direction of the wheel
+            const canScrollDown = isScrollableY && e.deltaY > 0 && el.scrollTop < el.scrollHeight - el.clientHeight - 1
+            const canScrollUp = isScrollableY && e.deltaY < 0 && el.scrollTop > 0
+            const canScrollRight = isScrollableX && e.deltaX > 0 && el.scrollLeft < el.scrollWidth - el.clientWidth - 1
+            const canScrollLeft = isScrollableX && e.deltaX < 0 && el.scrollLeft > 0
+
+            if (canScrollDown || canScrollUp || canScrollRight || canScrollLeft) {
+              // Let the nested element handle scroll naturally
+              return
+            }
+          }
+          el = el.parentElement
+        }
+      }
+
+      e.preventDefault()
 
       if (e.ctrlKey || e.metaKey) {
         const rect = container.getBoundingClientRect()

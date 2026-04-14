@@ -1,6 +1,15 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { useCanvasStore, MIN_ZOOM, MAX_ZOOM, calculateSnap, SNAP_GAP } from './canvas-store'
 import type { CanvasPanelData } from './canvas-store'
+
+// Mock settingsApi to prevent actual IPC calls during tests
+vi.mock('@/lib/ipc-client', () => ({
+  settingsApi: {
+    get: vi.fn().mockResolvedValue(null),
+    set: vi.fn().mockResolvedValue(undefined),
+    getAll: vi.fn().mockResolvedValue({}),
+  },
+}))
 
 describe('canvas-store', () => {
   beforeEach(() => {

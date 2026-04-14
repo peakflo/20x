@@ -42,6 +42,7 @@ describe('InfiniteCanvas', () => {
       draggingPanelId: null,
       snapGuides: [],
       connectingFromId: null,
+      isLoaded: true, // Skip async load in tests
     })
   })
 

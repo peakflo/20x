@@ -1,4 +1,9 @@
 import { create } from 'zustand'
+import { settingsApi } from '@/lib/ipc-client'
+
+const CANVAS_STORAGE_KEY = 'canvas_state'
+let saveTimer: ReturnType<typeof setTimeout> | null = null
+const SAVE_DEBOUNCE_MS = 1000
 
 // ── Panel types ────────────────────────────────────────────
 
@@ -52,18 +57,31 @@ export const DEFAULT_PANEL_HEIGHT = 780
 
 // ── Store ──────────────────────────────────────────────────
 
+// ── Persistence shape ─────────────────────────────────────
+
+interface CanvasPersistedState {
+  viewport: Viewport
+  panels: CanvasPanelData[]
+  edges: CanvasEdge[]
+  nextZIndex: number
+}
+
 interface CanvasState {
   viewport: Viewport
   panels: CanvasPanelData[]
   edges: CanvasEdge[]
   nextZIndex: number
 
-  // Drag state
+  // Drag state (transient, not persisted)
   draggingPanelId: string | null
   snapGuides: SnapGuide[]
 
-  // Connection drawing state
+  // Connection drawing state (transient)
   connectingFromId: string | null
+
+  // Persistence
+  isLoaded: boolean
+  loadCanvas: () => Promise<void>
 
   // Viewport actions
   setViewport: (viewport: Partial<Viewport>) => void
@@ -94,6 +112,18 @@ interface CanvasState {
 let panelCounter = 0
 let edgeCounter = 0
 
+/** Debounced persist of canvas state to SQLite settings table */
+function scheduleSave() {
+  if (saveTimer) clearTimeout(saveTimer)
+  saveTimer = setTimeout(() => {
+    const { viewport, panels, edges, nextZIndex } = useCanvasStore.getState()
+    const data: CanvasPersistedState = { viewport, panels, edges, nextZIndex }
+    settingsApi.set(CANVAS_STORAGE_KEY, JSON.stringify(data)).catch((err) => {
+      console.error('[Canvas] Failed to persist state:', err)
+    })
+  }, SAVE_DEBOUNCE_MS)
+}
+
 export const useCanvasStore = create<CanvasState>((set, get) => ({
   viewport: { x: 0, y: 0, zoom: 1 },
   panels: [],
@@ -102,14 +132,49 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   draggingPanelId: null,
   snapGuides: [],
   connectingFromId: null,
+  isLoaded: false,
 
-  setViewport: (partial) =>
-    set((s) => ({ viewport: { ...s.viewport, ...partial } })),
+  loadCanvas: async () => {
+    try {
+      const raw = await settingsApi.get(CANVAS_STORAGE_KEY)
+      if (!raw) {
+        set({ isLoaded: true })
+        return
+      }
+      const data = JSON.parse(raw) as CanvasPersistedState
+      // Restore counters from persisted panel/edge IDs
+      for (const p of data.panels) {
+        const match = p.id.match(/^panel-(\d+)/)
+        if (match) panelCounter = Math.max(panelCounter, parseInt(match[1], 10))
+      }
+      for (const e of data.edges) {
+        const match = e.id.match(/^edge-(\d+)/)
+        if (match) edgeCounter = Math.max(edgeCounter, parseInt(match[1], 10))
+      }
+      set({
+        viewport: data.viewport,
+        panels: data.panels,
+        edges: data.edges,
+        nextZIndex: data.nextZIndex,
+        isLoaded: true,
+      })
+    } catch (err) {
+      console.error('[Canvas] Failed to load persisted state:', err)
+      set({ isLoaded: true })
+    }
+  },
 
-  panBy: (dx, dy) =>
+  setViewport: (partial) => {
+    set((s) => ({ viewport: { ...s.viewport, ...partial } }))
+    scheduleSave()
+  },
+
+  panBy: (dx, dy) => {
     set((s) => ({
       viewport: { ...s.viewport, x: s.viewport.x + dx, y: s.viewport.y + dy }
-    })),
+    }))
+    scheduleSave()
+  },
 
   zoomTo: (zoom, centerX, centerY) => {
     const clamped = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, zoom))
@@ -122,6 +187,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       }
       return { viewport: { ...s.viewport, zoom: clamped } }
     })
+    scheduleSave()
   },
 
   zoomAtPoint: (delta, clientX, clientY, containerRect) => {
@@ -136,9 +202,13 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     const newY = clientY - containerRect.top - pointY * newZoom
 
     set({ viewport: { x: newX, y: newY, zoom: newZoom } })
+    scheduleSave()
   },
 
-  resetViewport: () => set({ viewport: { x: 0, y: 0, zoom: 1 } }),
+  resetViewport: () => {
+    set({ viewport: { x: 0, y: 0, zoom: 1 } })
+    scheduleSave()
+  },
 
   addPanel: (panel) => {
     const id = `panel-${++panelCounter}-${Date.now()}`
@@ -147,19 +217,22 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       panels: [...s.panels, { ...panel, id, zIndex: nextZIndex }],
       nextZIndex: nextZIndex + 1
     }))
+    scheduleSave()
     return id
   },
 
   removePanel: (id) => {
-    // Also remove any edges connected to this panel
     get().removeEdgesForPanel(id)
     set((s) => ({ panels: s.panels.filter((p) => p.id !== id) }))
+    scheduleSave()
   },
 
-  updatePanel: (id, updates) =>
+  updatePanel: (id, updates) => {
     set((s) => ({
       panels: s.panels.map((p) => (p.id === id ? { ...p, ...updates } : p))
-    })),
+    }))
+    scheduleSave()
+  },
 
   bringToFront: (id) => {
     const { nextZIndex } = get()
@@ -167,9 +240,13 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       panels: s.panels.map((p) => (p.id === id ? { ...p, zIndex: nextZIndex } : p)),
       nextZIndex: nextZIndex + 1
     }))
+    scheduleSave()
   },
 
-  clearPanels: () => set({ panels: [], edges: [], nextZIndex: 1 }),
+  clearPanels: () => {
+    set({ panels: [], edges: [], nextZIndex: 1 })
+    scheduleSave()
+  },
 
   // Drag
   setDraggingPanelId: (id) => set({ draggingPanelId: id }),
@@ -177,7 +254,6 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
 
   // Edges
   addEdge: (fromPanelId, toPanelId) => {
-    // Don't add duplicate edges
     const { edges } = get()
     const exists = edges.some(
       (e) =>
@@ -189,22 +265,30 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     set((s) => ({
       edges: [...s.edges, { id, fromPanelId, toPanelId }]
     }))
+    scheduleSave()
     return id
   },
 
-  removeEdge: (id) =>
-    set((s) => ({ edges: s.edges.filter((e) => e.id !== id) })),
+  removeEdge: (id) => {
+    set((s) => ({ edges: s.edges.filter((e) => e.id !== id) }))
+    scheduleSave()
+  },
 
-  removeEdgesForPanel: (panelId) =>
+  removeEdgesForPanel: (panelId) => {
     set((s) => ({
       edges: s.edges.filter(
         (e) => e.fromPanelId !== panelId && e.toPanelId !== panelId
       )
-    })),
+    }))
+    // No scheduleSave here — caller (removePanel) will save
+  },
 
   setConnectingFromId: (id) => set({ connectingFromId: id }),
 
-  clearEdges: () => set({ edges: [] })
+  clearEdges: () => {
+    set({ edges: [] })
+    scheduleSave()
+  }
 }))
 
 // ── Snapping utility ──────────────────────────────────────
