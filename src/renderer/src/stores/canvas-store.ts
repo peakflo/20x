@@ -91,6 +91,7 @@ interface CanvasState {
   zoomTo: (zoom: number, centerX?: number, centerY?: number) => void
   zoomAtPoint: (delta: number, clientX: number, clientY: number, containerRect: DOMRect) => void
   resetViewport: () => void
+  fitToContent: (containerWidth: number, containerHeight: number) => void
 
   // Panel actions
   addPanel: (panel: Omit<CanvasPanelData, 'id' | 'zIndex'>) => string
@@ -209,6 +210,36 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
 
   resetViewport: () => {
     set({ viewport: { x: 0, y: 0, zoom: 1 } })
+    scheduleSave()
+  },
+
+  fitToContent: (containerWidth: number, containerHeight: number) => {
+    const { panels } = get()
+    if (panels.length === 0) return
+
+    // Calculate bounding box of all panels
+    const PAD = 60
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+    for (const p of panels) {
+      minX = Math.min(minX, p.x)
+      minY = Math.min(minY, p.y)
+      maxX = Math.max(maxX, p.x + p.width)
+      maxY = Math.max(maxY, p.y + p.height)
+    }
+
+    const contentW = maxX - minX + PAD * 2
+    const contentH = maxY - minY + PAD * 2
+
+    // Fit zoom to show all panels (capped at 1x so we never zoom in past 100%)
+    const zoom = Math.min(1, containerWidth / contentW, containerHeight / contentH)
+
+    // Center the bounding box in the viewport
+    const centerX = (minX + maxX) / 2
+    const centerY = (minY + maxY) / 2
+    const x = containerWidth / 2 - centerX * zoom
+    const y = containerHeight / 2 - centerY * zoom
+
+    set({ viewport: { x, y, zoom } })
     scheduleSave()
   },
 

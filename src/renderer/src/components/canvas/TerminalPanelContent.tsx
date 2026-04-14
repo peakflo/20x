@@ -29,11 +29,11 @@ export function TerminalPanelContent({ terminalId }: TerminalPanelContentProps) 
       fontFamily: 'Menlo, Monaco, "Courier New", monospace',
       lineHeight: 1.2,
       theme: {
-        background: '#0d1117',
+        background: '#141a26',
         foreground: '#c9d1d9',
         cursor: '#58a6ff',
         selectionBackground: '#264f78',
-        black: '#0d1117',
+        black: '#141a26',
         red: '#ff7b72',
         green: '#3fb950',
         yellow: '#d29922',
@@ -161,7 +161,7 @@ export function TerminalPanelContent({ terminalId }: TerminalPanelContentProps) 
     <div
       ref={containerRef}
       className="h-full w-full"
-      style={{ background: '#0d1117' }}
+      style={{ background: '#141a26' }}
     />
   )
 }

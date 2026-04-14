@@ -183,11 +183,11 @@ export function CanvasPanel({ panel, zoom }: CanvasPanelProps) {
 
   // ── Panel type styling ────────────────────────────────────
   const TYPE_CONFIG: Record<string, { label: string; color: string; border: string }> = {
-    task: { label: 'Task', color: 'bg-blue-500/20 text-blue-400', border: 'border-blue-500/20' },
-    transcript: { label: 'Transcript', color: 'bg-purple-500/20 text-purple-400', border: 'border-purple-500/20' },
-    app: { label: 'App', color: 'bg-green-500/20 text-green-400', border: 'border-green-500/20' },
-    webpage: { label: 'Web', color: 'bg-cyan-500/20 text-cyan-400', border: 'border-cyan-500/20' },
-    terminal: { label: 'Terminal', color: 'bg-amber-500/20 text-amber-400', border: 'border-amber-500/20' },
+    task: { label: 'Task', color: 'bg-blue-500/20 text-blue-400', border: 'border-blue-500/40' },
+    transcript: { label: 'Transcript', color: 'bg-purple-500/20 text-purple-400', border: 'border-purple-500/40' },
+    app: { label: 'App', color: 'bg-green-500/20 text-green-400', border: 'border-green-500/40' },
+    webpage: { label: 'Web', color: 'bg-cyan-500/20 text-cyan-400', border: 'border-cyan-500/40' },
+    terminal: { label: 'Terminal', color: 'bg-amber-500/20 text-amber-400', border: 'border-amber-500/50' },
   }
   const cfg = TYPE_CONFIG[panel.type] ?? { label: 'Panel', color: 'bg-muted/30 text-muted-foreground', border: 'border-border/50' }
   const typeLabel = cfg.label
@@ -201,8 +201,8 @@ export function CanvasPanel({ panel, zoom }: CanvasPanelProps) {
       ref={panelRef}
       data-canvas-panel="true"
       onMouseDown={handleMouseDown}
-      className={`absolute rounded-xl border bg-[#161b22] shadow-2xl flex flex-col overflow-hidden select-none transition-shadow duration-150 ${borderAccent} ${
-        isDragging ? 'shadow-indigo-500/10 ring-1 ring-indigo-500/20' : ''
+      className={`absolute rounded-xl border bg-[#1a2030] shadow-2xl flex flex-col overflow-hidden select-none transition-shadow duration-150 ${borderAccent} ${
+        isDragging ? 'shadow-indigo-500/10 ring-1 ring-indigo-500/30' : ''
       } ${isConnectTarget ? 'ring-1 ring-indigo-400/40 cursor-crosshair' : ''} ${
         isConnecting ? 'ring-2 ring-indigo-500/50' : ''
       }`}
@@ -218,7 +218,7 @@ export function CanvasPanel({ panel, zoom }: CanvasPanelProps) {
     >
       {/* Title bar — drag handle */}
       <div
-        className="flex items-center gap-2 px-3 py-2 border-b border-border/30 bg-[#0d1117]/60 flex-shrink-0 cursor-grab active:cursor-grabbing group"
+        className="flex items-center gap-2 px-3 py-2 border-b border-border/40 bg-[#141a26] flex-shrink-0 cursor-grab active:cursor-grabbing group"
         onMouseDown={handleDragStart}
       >
         <span

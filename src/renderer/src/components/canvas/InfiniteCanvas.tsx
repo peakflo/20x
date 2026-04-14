@@ -38,6 +38,7 @@ export function InfiniteCanvas() {
     zoomAtPoint,
     zoomTo,
     resetViewport,
+    fitToContent,
     addPanel,
     setConnectingFromId,
     loadCanvas,
@@ -46,9 +47,19 @@ export function InfiniteCanvas() {
   // ── Load persisted canvas state on mount ────────────────
   useEffect(() => {
     if (!isLoaded) {
-      loadCanvas()
+      loadCanvas().then(() => {
+        // After loading, fit the viewport to show all panels
+        const container = containerRef.current
+        if (container) {
+          const rect = container.getBoundingClientRect()
+          const { panels: loadedPanels } = useCanvasStore.getState()
+          if (loadedPanels.length > 0) {
+            fitToContent(rect.width, rect.height)
+          }
+        }
+      })
     }
-  }, [isLoaded, loadCanvas])
+  }, [isLoaded, loadCanvas, fitToContent])
 
   // Panning state
   const [isPanning, setIsPanning] = useState(false)
@@ -370,7 +381,7 @@ export function InfiniteCanvas() {
       : 'default'
 
   return (
-    <div className="relative w-full h-full overflow-hidden bg-[#0d1117]">
+    <div className="relative w-full h-full overflow-hidden bg-[#131820]">
       {/* Canvas container */}
       <div
         ref={containerRef}
@@ -419,7 +430,7 @@ export function InfiniteCanvas() {
       </div>
 
       {/* ── HUD: zoom controls ── */}
-      <div className="absolute bottom-4 left-4 flex items-center gap-1 bg-[#161b22]/90 backdrop-blur-sm border border-border/30 rounded-lg p-1 z-10">
+      <div className="absolute bottom-4 left-4 flex items-center gap-1 bg-[#1a2030]/90 backdrop-blur-sm border border-border/40 rounded-lg p-1 z-10">
         <Button
           variant="ghost"
           size="sm"
@@ -456,7 +467,7 @@ export function InfiniteCanvas() {
       {/* ── HUD: Add Panel button ── */}
       <div ref={addMenuRef} className="absolute bottom-4 right-4 z-10">
         {showAddMenu && (
-          <div className="absolute bottom-full right-0 mb-2 w-56 bg-[#161b22]/95 backdrop-blur-sm border border-border/40 rounded-xl shadow-2xl overflow-hidden animate-in fade-in slide-in-from-bottom-2 duration-150">
+          <div className="absolute bottom-full right-0 mb-2 w-56 bg-[#1a2030]/95 backdrop-blur-sm border border-border/40 rounded-xl shadow-2xl overflow-hidden animate-in fade-in slide-in-from-bottom-2 duration-150">
             <div className="flex items-center justify-between px-3 py-2 border-b border-border/20">
               <span className="text-[11px] font-medium text-muted-foreground/70">Add Panel</span>
               <button
@@ -501,7 +512,7 @@ export function InfiniteCanvas() {
         <Button
           variant="ghost"
           size="sm"
-          className="h-8 px-3 bg-[#161b22]/90 backdrop-blur-sm border border-border/30 hover:border-border/50 text-xs gap-1.5"
+          className="h-8 px-3 bg-[#1a2030]/90 backdrop-blur-sm border border-border/40 hover:border-border/60 text-xs gap-1.5"
           onClick={() => setShowAddMenu(!showAddMenu)}
           title="Add panel"
         >
@@ -592,7 +603,7 @@ function CanvasGrid({
         top: gridTop,
         width: gridWidth,
         height: gridHeight,
-        backgroundImage: `radial-gradient(circle, rgba(255,255,255,0.06) ${dotSize}px, transparent ${dotSize}px)`,
+        backgroundImage: `radial-gradient(circle, rgba(255,255,255,0.08) ${dotSize}px, transparent ${dotSize}px)`,
         backgroundSize: `${GRID_SIZE}px ${GRID_SIZE}px`,
         backgroundPosition: `${GRID_SIZE / 2}px ${GRID_SIZE / 2}px`,
         pointerEvents: 'none',
