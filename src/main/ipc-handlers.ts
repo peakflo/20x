@@ -1204,10 +1204,8 @@ export function registerIpcHandlers(
   // Each terminal is identified by a unique ID. The renderer creates/writes/resizes
   // terminals via IPC, and receives output via 'terminal:data' events.
   //
-  // Strategy: try node-pty first (full PTY with resize support).
-  // If node-pty fails (common when native module isn't rebuilt for Electron),
-  // fall back to macOS `script` command which allocates a real PTY via
-  // child_process.spawn — interactive shells, colors, and cursor all work.
+  // Uses macOS/Linux `script` command to allocate a real PTY via child_process.
+  // This avoids node-pty which requires native module rebuild for Electron.
 
   interface TerminalHandle {
     write: (data: string) => void
@@ -1217,6 +1215,8 @@ export function registerIpcHandlers(
   }
 
   const terminals = new Map<string, TerminalHandle>()
+  // Note: we use `script` command to allocate PTYs instead of node-pty,
+  // because node-pty requires native module rebuild for Electron's Node version.
 
   /** Resolve the user's preferred shell */
   function resolveShell(): string {
@@ -1225,43 +1225,8 @@ export function registerIpcHandlers(
     return candidates.find((s) => existsSync(s)) || '/bin/sh'
   }
 
-  /** Try to create a terminal via node-pty (best experience) */
-  async function tryNodePty(
-    id: string, shellPath: string, cols: number, rows: number,
-    sender: Electron.WebContents
-  ): Promise<TerminalHandle | null> {
-    try {
-      const pty = await import('node-pty')
-      const term = pty.spawn(shellPath, [], {
-        name: 'xterm-256color',
-        cols: cols || 80,
-        rows: rows || 24,
-        cwd: process.env.HOME || process.cwd(),
-        env: { ...process.env } as Record<string, string>,
-      })
-
-      term.onData((data: string) => {
-        sender.send('terminal:data', { id, data })
-      })
-
-      term.onExit(() => {
-        terminals.delete(id)
-        sender.send('terminal:exit', { id })
-      })
-
-      return {
-        write: (data: string) => term.write(data),
-        resize: (c: number, r: number) => term.resize(c, r),
-        kill: () => term.kill(),
-        pid: term.pid,
-      }
-    } catch (err) {
-      console.warn(`[Terminal] node-pty failed, will use fallback:`, (err as Error).message)
-      return null
-    }
-  }
-
-  /** Fallback: use macOS `script` command to get a real PTY via child_process */
+  /** Create a terminal using macOS/Linux `script` command which allocates a real PTY via child_process.
+   *  This avoids node-pty entirely — no native module rebuild needed. */
   function createScriptPty(
     id: string, shellPath: string, cols: number, rows: number,
     sender: Electron.WebContents
@@ -1310,13 +1275,7 @@ export function registerIpcHandlers(
     const shellPath = resolveShell()
     console.log(`[Terminal] Creating terminal id=${id} shell=${shellPath} cols=${cols} rows=${rows}`)
 
-    // Try node-pty first, fall back to script-based PTY
-    let handle = await tryNodePty(id, shellPath, cols, rows, event.sender)
-    if (!handle) {
-      console.log(`[Terminal] Using script-based PTY fallback for id=${id}`)
-      handle = createScriptPty(id, shellPath, cols, rows, event.sender)
-    }
-
+    const handle = createScriptPty(id, shellPath, cols, rows, event.sender)
     terminals.set(id, handle)
     return { pid: handle.pid }
   })
