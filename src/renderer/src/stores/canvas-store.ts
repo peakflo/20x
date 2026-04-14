@@ -47,8 +47,8 @@ export interface Viewport {
 
 export const MIN_ZOOM = 0.1
 export const MAX_ZOOM = 3
-export const DEFAULT_PANEL_WIDTH = 420
-export const DEFAULT_PANEL_HEIGHT = 340
+export const DEFAULT_PANEL_WIDTH = 1020
+export const DEFAULT_PANEL_HEIGHT = 780
 
 // ── Store ──────────────────────────────────────────────────
 

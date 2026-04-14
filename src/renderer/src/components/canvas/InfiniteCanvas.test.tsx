@@ -19,6 +19,17 @@ vi.mock('@/stores/agent-store', () => ({
   SessionStatus: { IDLE: 'idle', WORKING: 'working', ERROR: 'error', WAITING_APPROVAL: 'waiting_approval' },
 }))
 
+vi.mock('@/stores/ui-store', () => ({
+  useUIStore: vi.fn((selector) => {
+    const state = {
+      canvasPendingTaskId: null,
+      clearCanvasPendingTask: vi.fn(),
+      sidebarView: 'canvas',
+    }
+    return selector ? selector(state) : state
+  }),
+}))
+
 describe('InfiniteCanvas', () => {
   beforeEach(() => {
     useCanvasStore.setState({
@@ -46,19 +57,6 @@ describe('InfiniteCanvas', () => {
     expect(screen.getByTitle('Zoom in')).toBeTruthy()
     expect(screen.getByTitle('Zoom out')).toBeTruthy()
     expect(screen.getByTitle('Reset view (Ctrl+0)')).toBeTruthy()
-  })
-
-  it('should show Add Panel button', () => {
-    render(<InfiniteCanvas />)
-    expect(screen.getByText('Add Panel')).toBeTruthy()
-  })
-
-  it('should add a panel when Add Panel is clicked', () => {
-    render(<InfiniteCanvas />)
-    fireEvent.click(screen.getByText('Add Panel'))
-    const { panels } = useCanvasStore.getState()
-    expect(panels).toHaveLength(1)
-    expect(panels[0].title).toBe('Panel 1')
   })
 
   it('should render panels when they exist', () => {
@@ -159,9 +157,7 @@ describe('InfiniteCanvas', () => {
       height: 300,
     })
     render(<InfiniteCanvas />)
-    // "My App" appears in both title and content, so use getAllByText
     expect(screen.getAllByText('My App').length).toBeGreaterThanOrEqual(1)
-    // "App" badge should exist (type label)
     expect(screen.getAllByText('App').length).toBeGreaterThanOrEqual(1)
   })
 

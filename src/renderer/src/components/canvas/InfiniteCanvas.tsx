@@ -6,7 +6,7 @@ import { useTaskStore } from '@/stores/task-store'
 import { CanvasPanel } from './CanvasPanel'
 import { CanvasConnections } from './CanvasConnections'
 import { CanvasContextMenu } from './CanvasContextMenu'
-import { Move, ZoomIn, ZoomOut, RotateCcw, Plus, MousePointer } from 'lucide-react'
+import { Move, ZoomIn, ZoomOut, RotateCcw, MousePointer } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 
 // Grid dot spacing in canvas-space pixels
@@ -64,41 +64,39 @@ export function InfiniteCanvas() {
 
   useEffect(() => {
     if (!canvasPendingTaskId) return
+    // Clear immediately to prevent double-fire on re-render
+    clearCanvasPendingTask()
+
     const task = allTasks.find((t) => t.id === canvasPendingTaskId)
-    if (!task) {
-      clearCanvasPendingTask()
-      return
-    }
-    // Don't add if already on canvas
-    const alreadyExists = panels.some(
+    if (!task) return
+
+    // Read panels from store directly to avoid stale closure
+    const currentPanels = useCanvasStore.getState().panels
+    const alreadyExists = currentPanels.some(
       (p) => p.type === 'task' && p.refId === canvasPendingTaskId
     )
-    if (alreadyExists) {
-      clearCanvasPendingTask()
-      return
-    }
+    if (alreadyExists) return
+
     // Place at center of viewport
     const container = containerRef.current
     const rect = container?.getBoundingClientRect()
-    const w = 680
-    const h = 520
+    const vp = useCanvasStore.getState().viewport
     const centerX = rect
-      ? (rect.width / 2 - viewport.x) / viewport.zoom - w / 2
+      ? (rect.width / 2 - vp.x) / vp.zoom - DEFAULT_PANEL_WIDTH / 2
       : 0
     const centerY = rect
-      ? (rect.height / 2 - viewport.y) / viewport.zoom - h / 2
+      ? (rect.height / 2 - vp.y) / vp.zoom - DEFAULT_PANEL_HEIGHT / 2
       : 0
-    const offset = (panels.length % 5) * 30
+    const offset = (currentPanels.length % 5) * 30
     addPanel({
       type: 'task',
       title: task.title,
       refId: task.id,
       x: centerX + offset,
       y: centerY + offset,
-      width: w,
-      height: h,
+      width: DEFAULT_PANEL_WIDTH,
+      height: DEFAULT_PANEL_HEIGHT,
     })
-    clearCanvasPendingTask()
   }, [canvasPendingTaskId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Wheel handler (zoom + trackpad pan) ──────────────────
@@ -238,26 +236,6 @@ export function InfiniteCanvas() {
     }
   }, [viewport.zoom, zoomTo, resetViewport, setConnectingFromId])
 
-  // ── Add panel at center ──────────────────────────────────
-  const handleAddPanel = useCallback(() => {
-    const container = containerRef.current
-    if (!container) return
-    const rect = container.getBoundingClientRect()
-    const centerCanvasX =
-      (rect.width / 2 - viewport.x) / viewport.zoom - DEFAULT_PANEL_WIDTH / 2
-    const centerCanvasY =
-      (rect.height / 2 - viewport.y) / viewport.zoom - DEFAULT_PANEL_HEIGHT / 2
-    const offset = (panels.length % 5) * 30
-    addPanel({
-      type: 'placeholder',
-      title: `Panel ${panels.length + 1}`,
-      x: centerCanvasX + offset,
-      y: centerCanvasY + offset,
-      width: DEFAULT_PANEL_WIDTH,
-      height: DEFAULT_PANEL_HEIGHT,
-    })
-  }, [addPanel, panels.length, viewport])
-
   const zoomPercent = Math.round(viewport.zoom * 100)
 
   const cursorStyle = connectingFromId
@@ -350,20 +328,6 @@ export function InfiniteCanvas() {
         </Button>
       </div>
 
-      {/* ── HUD: Add panel button ── */}
-      <div className="absolute bottom-4 right-4 z-10">
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-8 px-3 bg-[#161b22]/90 backdrop-blur-sm border border-border/30"
-          onClick={handleAddPanel}
-          title="Add a panel (or right-click on canvas)"
-        >
-          <Plus className="h-3.5 w-3.5 mr-1" />
-          <span className="text-xs">Add Panel</span>
-        </Button>
-      </div>
-
       {/* ── HUD: Viewport info ── */}
       <div className="absolute top-3 right-3 flex items-center gap-2 text-[10px] text-muted-foreground/40 z-10 select-none">
         <Move className="h-3 w-3" />
@@ -392,7 +356,7 @@ export function InfiniteCanvas() {
             </div>
             <div className="text-muted-foreground/20 text-xs">
               Scroll to pan &middot; Pinch or Ctrl+scroll to zoom &middot;
-              Right-click to add panels
+              Right-click to add tasks &amp; apps
             </div>
           </div>
         </div>

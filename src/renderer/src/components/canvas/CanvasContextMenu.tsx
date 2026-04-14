@@ -60,17 +60,14 @@ export function CanvasContextMenu({ position, onClose }: CanvasContextMenuProps)
 
       // Offset slightly to avoid exact overlap with existing panels
       const offset = (panels.length % 5) * 20
-      // Task panels need more space for the full workspace
-      const width = type === 'task' ? 680 : type === 'transcript' ? 480 : DEFAULT_PANEL_WIDTH
-      const height = type === 'task' ? 520 : type === 'transcript' ? 480 : DEFAULT_PANEL_HEIGHT
       addPanel({
         type,
         title,
         refId,
         x: position.canvasX + offset,
         y: position.canvasY + offset,
-        width,
-        height,
+        width: DEFAULT_PANEL_WIDTH,
+        height: DEFAULT_PANEL_HEIGHT,
       })
       onClose()
     },
