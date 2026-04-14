@@ -2000,13 +2000,33 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
 
     const shouldReplayToRenderer = options?.replayToRenderer !== false
 
-    // Replay messages to renderer in a single batch to avoid UI freeze
-    if (shouldReplayToRenderer) {
-      const batchMessages: Array<{ id: string; role: string; content: string; partType?: string; tool?: unknown; taskProgress?: unknown }> = []
-      for (const message of messages) {
-        for (const part of message.parts) {
+    // Build replay batch AND dedup state in a SINGLE pass so that both use
+    // the same generated IDs.  Previously two separate loops each called
+    // `Date.now() + Math.random()` for parts without an id, producing
+    // different IDs.  The frontend's `seen` set then held the batch IDs while
+    // the session's seenPartIds held different IDs, so when polling started
+    // on a follow-up message the streaming replay (with yet another set of
+    // stableId-based IDs) was not deduped by either — causing every
+    // historical message to appear twice.
+    const batchMessages: Array<{ id: string; role: string; content: string; partType?: string; tool?: unknown; taskProgress?: unknown }> = []
+    const resumedSeenMessageIds = new Set<string>()
+    const resumedSeenPartIds = new Set<string>()
+    const resumedPartContentLengths = new Map<string, string>()
+    for (const message of messages) {
+      // Track message-level IDs so adapters that dedup by message ID
+      // (e.g. Codex pollMessages) won't re-send historical messages.
+      if (message.id) resumedSeenMessageIds.add(message.id)
+      for (const part of message.parts) {
+        const partId = part.id || `${message.role}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+        // Dedup state
+        resumedSeenPartIds.add(partId)
+        if (part.content || part.text) {
+          resumedPartContentLengths.set(partId, String((part.content || part.text || '').length))
+        }
+        // Batch message (only if we're replaying to the renderer)
+        if (shouldReplayToRenderer) {
           batchMessages.push({
-            id: part.id || `${message.role}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+            id: partId,
             role: message.role,
             content: part.content || part.text || '',
             partType: part.type,
@@ -2015,28 +2035,13 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
           })
         }
       }
-      if (batchMessages.length > 0) {
-        this.sendToRenderer('agent:output-batch', {
-          sessionId: adapterSessionId,
-          taskId,
-          messages: batchMessages
-        })
-      }
     }
-
-    // Build dedup state from replayed messages so that when polling starts
-    // (on follow-up message), it won't re-send messages already shown in the UI.
-    const resumedSeenMessageIds = new Set<string>()
-    const resumedSeenPartIds = new Set<string>()
-    const resumedPartContentLengths = new Map<string, string>()
-    for (const message of messages) {
-      for (const part of message.parts) {
-        const partId = part.id || `${message.role}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-        resumedSeenPartIds.add(partId)
-        if (part.content || part.text) {
-          resumedPartContentLengths.set(partId, String((part.content || part.text || '').length))
-        }
-      }
+    if (shouldReplayToRenderer && batchMessages.length > 0) {
+      this.sendToRenderer('agent:output-batch', {
+        sessionId: adapterSessionId,
+        taskId,
+        messages: batchMessages
+      })
     }
 
     // Store session in sessions map — idle until user sends a message
