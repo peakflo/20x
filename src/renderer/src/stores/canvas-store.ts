@@ -7,13 +7,15 @@ const SAVE_DEBOUNCE_MS = 1000
 
 // ── Panel types ────────────────────────────────────────────
 
-export type CanvasPanelType = 'task' | 'transcript' | 'app' | 'placeholder'
+export type CanvasPanelType = 'task' | 'transcript' | 'app' | 'webpage' | 'placeholder'
 
 export interface CanvasPanelData {
   id: string
   type: CanvasPanelType
   /** Reference ID (task ID, session ID, app ID, etc.) */
   refId?: string
+  /** URL for webpage panels */
+  url?: string
   title: string
   x: number
   y: number

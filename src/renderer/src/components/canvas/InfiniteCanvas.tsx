@@ -6,7 +6,7 @@ import { useTaskStore } from '@/stores/task-store'
 import { CanvasPanel } from './CanvasPanel'
 import { CanvasConnections } from './CanvasConnections'
 import { CanvasContextMenu } from './CanvasContextMenu'
-import { Move, ZoomIn, ZoomOut, RotateCcw, MousePointer } from 'lucide-react'
+import { Move, ZoomIn, ZoomOut, RotateCcw, MousePointer, Plus, Globe, X } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 
 // Grid dot spacing in canvas-space pixels
@@ -65,6 +65,12 @@ export function InfiniteCanvas() {
 
   // Mouse position in canvas space (for connection drawing)
   const [mouseCanvasPos, setMouseCanvasPos] = useState<{ x: number; y: number } | null>(null)
+
+  // Add panel dropdown state
+  const [showAddMenu, setShowAddMenu] = useState(false)
+  const [showUrlInput, setShowUrlInput] = useState(false)
+  const [urlInput, setUrlInput] = useState('')
+  const addMenuRef = useRef<HTMLDivElement>(null)
 
   // ── Consume pending task from "Open in Canvas" button ────
   const canvasPendingTaskId = useUIStore((s) => s.canvasPendingTaskId)
@@ -278,6 +284,63 @@ export function InfiniteCanvas() {
     [viewport]
   )
 
+  // ── Add web page panel ───────────────────────────────────
+  const handleAddWebPage = useCallback(() => {
+    let url = urlInput.trim()
+    if (!url) return
+    // Auto-prepend https:// if no protocol
+    if (!/^https?:\/\//i.test(url)) {
+      url = 'https://' + url
+    }
+    const container = containerRef.current
+    const rect = container?.getBoundingClientRect()
+    const vp = useCanvasStore.getState().viewport
+    const currentPanels = useCanvasStore.getState().panels
+    const centerX = rect
+      ? (rect.width / 2 - vp.x) / vp.zoom - DEFAULT_PANEL_WIDTH / 2
+      : 0
+    const centerY = rect
+      ? (rect.height / 2 - vp.y) / vp.zoom - DEFAULT_PANEL_HEIGHT / 2
+      : 0
+    const offset = (currentPanels.length % 5) * 30
+    // Extract a display title from the URL
+    let displayTitle: string
+    try {
+      displayTitle = new URL(url).hostname
+    } catch {
+      displayTitle = url
+    }
+    addPanel({
+      type: 'webpage',
+      title: displayTitle,
+      url,
+      x: centerX + offset,
+      y: centerY + offset,
+      width: DEFAULT_PANEL_WIDTH,
+      height: DEFAULT_PANEL_HEIGHT,
+    })
+    setUrlInput('')
+    setShowUrlInput(false)
+    setShowAddMenu(false)
+  }, [urlInput, addPanel])
+
+  // Close add menu on outside click
+  useEffect(() => {
+    if (!showAddMenu) return
+    const handleClick = (e: MouseEvent) => {
+      if (addMenuRef.current && !addMenuRef.current.contains(e.target as Node)) {
+        setShowAddMenu(false)
+        setShowUrlInput(false)
+        setUrlInput('')
+      }
+    }
+    const timer = setTimeout(() => document.addEventListener('mousedown', handleClick), 0)
+    return () => {
+      clearTimeout(timer)
+      document.removeEventListener('mousedown', handleClick)
+    }
+  }, [showAddMenu])
+
   // ── Keyboard shortcuts ───────────────────────────────────
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -404,6 +467,80 @@ export function InfiniteCanvas() {
           title="Reset view (Ctrl+0)"
         >
           <RotateCcw className="h-3.5 w-3.5" />
+        </Button>
+      </div>
+
+      {/* ── HUD: Add Panel button ── */}
+      <div ref={addMenuRef} className="absolute bottom-4 right-4 z-10">
+        {showAddMenu && (
+          <div className="absolute bottom-full right-0 mb-2 w-72 bg-[#161b22]/95 backdrop-blur-sm border border-border/40 rounded-xl shadow-2xl overflow-hidden animate-in fade-in slide-in-from-bottom-2 duration-150">
+            <div className="flex items-center justify-between px-3 py-2 border-b border-border/20">
+              <span className="text-[11px] font-medium text-muted-foreground/70">Add Panel</span>
+              <button
+                onClick={() => { setShowAddMenu(false); setShowUrlInput(false); setUrlInput('') }}
+                className="text-muted-foreground/40 hover:text-muted-foreground/80 transition-colors"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </div>
+            <div className="py-1">
+              {!showUrlInput ? (
+                <button
+                  onClick={() => setShowUrlInput(true)}
+                  className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-white/5 transition-colors group"
+                >
+                  <Globe className="h-4 w-4 text-cyan-400 flex-shrink-0" />
+                  <div>
+                    <div className="text-[12px] text-foreground/80 group-hover:text-foreground transition-colors">
+                      Web Page
+                    </div>
+                    <div className="text-[10px] text-muted-foreground/40">
+                      Embed any website in an iframe
+                    </div>
+                  </div>
+                </button>
+              ) : (
+                <div className="px-3 py-2 space-y-2">
+                  <div className="flex items-center gap-2">
+                    <Globe className="h-4 w-4 text-cyan-400 flex-shrink-0" />
+                    <span className="text-[12px] text-foreground/80">Web Page URL</span>
+                  </div>
+                  <form
+                    onSubmit={(e) => { e.preventDefault(); handleAddWebPage() }}
+                    className="flex gap-1.5"
+                  >
+                    <input
+                      type="text"
+                      value={urlInput}
+                      onChange={(e) => setUrlInput(e.target.value)}
+                      placeholder="https://example.com"
+                      autoFocus
+                      className="flex-1 text-xs bg-[#0d1117] border border-border/40 rounded-md px-2 py-1.5 text-foreground placeholder:text-muted-foreground/30 focus:outline-none focus:border-cyan-500/50 focus:ring-1 focus:ring-cyan-500/20"
+                    />
+                    <Button
+                      type="submit"
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 px-3 text-xs bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-400"
+                      disabled={!urlInput.trim()}
+                    >
+                      Add
+                    </Button>
+                  </form>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-8 px-3 bg-[#161b22]/90 backdrop-blur-sm border border-border/30 hover:border-border/50 text-xs gap-1.5"
+          onClick={() => { setShowAddMenu(!showAddMenu); setShowUrlInput(false); setUrlInput('') }}
+          title="Add panel"
+        >
+          <Plus className="h-3.5 w-3.5" />
+          <span>Add Panel</span>
         </Button>
       </div>
 

@@ -8,6 +8,7 @@ import { X, Link, Maximize2, Minimize2 } from 'lucide-react'
 import { TaskPanelContent } from './TaskPanelContent'
 import { TranscriptPanelContent } from './TranscriptPanelContent'
 import { AppPanelContent } from './AppPanelContent'
+import { WebPagePanelContent } from './WebPagePanelContent'
 
 interface CanvasPanelProps {
   panel: CanvasPanelData
@@ -187,7 +188,9 @@ export function CanvasPanel({ panel, zoom }: CanvasPanelProps) {
         ? 'Transcript'
         : panel.type === 'app'
           ? 'App'
-          : 'Panel'
+          : panel.type === 'webpage'
+            ? 'Web'
+            : 'Panel'
 
   const typeColor =
     panel.type === 'task'
@@ -196,7 +199,9 @@ export function CanvasPanel({ panel, zoom }: CanvasPanelProps) {
         ? 'bg-purple-500/20 text-purple-400'
         : panel.type === 'app'
           ? 'bg-green-500/20 text-green-400'
-          : 'bg-muted/30 text-muted-foreground'
+          : panel.type === 'webpage'
+            ? 'bg-cyan-500/20 text-cyan-400'
+            : 'bg-muted/30 text-muted-foreground'
 
   const borderAccent =
     panel.type === 'task'
@@ -205,7 +210,9 @@ export function CanvasPanel({ panel, zoom }: CanvasPanelProps) {
         ? 'border-purple-500/20'
         : panel.type === 'app'
           ? 'border-green-500/20'
-          : 'border-border/50'
+          : panel.type === 'webpage'
+            ? 'border-cyan-500/20'
+            : 'border-border/50'
 
   const isConnecting = connectingFromId === panel.id
 
@@ -287,7 +294,7 @@ export function CanvasPanel({ panel, zoom }: CanvasPanelProps) {
 
       {/* Content area */}
       {!isCollapsed && (
-        <div className={`flex-1 overflow-hidden min-h-0 ${panel.type === 'task' || panel.type === 'transcript' || (panel.type === 'app' && panel.refId) ? '' : 'p-3 overflow-auto'}`}>
+        <div className={`flex-1 overflow-hidden min-h-0 ${panel.type === 'task' || panel.type === 'transcript' || panel.type === 'webpage' || (panel.type === 'app' && panel.refId) ? '' : 'p-3 overflow-auto'}`}>
           <PanelContent panel={panel} />
         </div>
       )}
@@ -325,6 +332,9 @@ function PanelContent({ panel }: { panel: CanvasPanelData }) {
   }
   if (panel.type === 'app') {
     return <AppPanelContent appId={panel.refId} title={panel.title} />
+  }
+  if (panel.type === 'webpage' && panel.url) {
+    return <WebPagePanelContent url={panel.url} title={panel.title} />
   }
   return (
     <div className="flex items-center justify-center h-full text-muted-foreground/50 text-xs">
