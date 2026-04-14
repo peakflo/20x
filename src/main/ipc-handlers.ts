@@ -1207,8 +1207,20 @@ export function registerIpcHandlers(
 
   ipcMain.handle('terminal:create', async (event, { id, cols, rows }: { id: string; cols: number; rows: number }) => {
     const pty = await import('node-pty')
-    const shell = process.platform === 'win32' ? 'powershell.exe' : process.env.SHELL || '/bin/zsh'
-    const term = pty.spawn(shell, [], {
+
+    // Determine shell — try user's SHELL, fall back to common paths
+    let shellPath: string
+    if (process.platform === 'win32') {
+      shellPath = 'powershell.exe'
+    } else {
+      const candidates = [process.env.SHELL, '/bin/zsh', '/bin/bash', '/bin/sh'].filter(Boolean) as string[]
+      const { existsSync } = await import('fs')
+      shellPath = candidates.find((s) => existsSync(s)) || '/bin/sh'
+    }
+
+    console.log(`[Terminal] Creating PTY id=${id} shell=${shellPath} cols=${cols} rows=${rows}`)
+
+    const term = pty.spawn(shellPath, [], {
       name: 'xterm-256color',
       cols: cols || 80,
       rows: rows || 24,

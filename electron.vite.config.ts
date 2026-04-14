@@ -22,7 +22,7 @@ export default defineConfig({
     },
     build: {
       rollupOptions: {
-        external: ['better-sqlite3'],
+        external: ['better-sqlite3', 'node-pty'],
         input: {
           index: resolve(__dirname, 'src/main/index.ts'),
           'mcp-servers/task-management-mcp': resolve(__dirname, 'src/main/mcp-servers/task-management-mcp.js')
