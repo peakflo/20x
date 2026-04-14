@@ -19,6 +19,24 @@ export interface CanvasPanelData {
   minHeight?: number
 }
 
+// ── Connections / Edges ───────────────────────────────────
+
+export interface CanvasEdge {
+  id: string
+  fromPanelId: string
+  toPanelId: string
+}
+
+// ── Snapping helpers ──────────────────────────────────────
+
+export const SNAP_THRESHOLD = 12 // px distance to trigger snap
+export const SNAP_GAP = 8 // px gap between snapped panels
+
+export interface SnapGuide {
+  axis: 'x' | 'y'
+  position: number
+}
+
 // ── Viewport state ─────────────────────────────────────────
 
 export interface Viewport {
@@ -29,15 +47,23 @@ export interface Viewport {
 
 export const MIN_ZOOM = 0.1
 export const MAX_ZOOM = 3
-export const DEFAULT_PANEL_WIDTH = 400
-export const DEFAULT_PANEL_HEIGHT = 300
+export const DEFAULT_PANEL_WIDTH = 420
+export const DEFAULT_PANEL_HEIGHT = 340
 
 // ── Store ──────────────────────────────────────────────────
 
 interface CanvasState {
   viewport: Viewport
   panels: CanvasPanelData[]
+  edges: CanvasEdge[]
   nextZIndex: number
+
+  // Drag state
+  draggingPanelId: string | null
+  snapGuides: SnapGuide[]
+
+  // Connection drawing state
+  connectingFromId: string | null
 
   // Viewport actions
   setViewport: (viewport: Partial<Viewport>) => void
@@ -52,14 +78,30 @@ interface CanvasState {
   updatePanel: (id: string, updates: Partial<Omit<CanvasPanelData, 'id'>>) => void
   bringToFront: (id: string) => void
   clearPanels: () => void
+
+  // Drag actions
+  setDraggingPanelId: (id: string | null) => void
+  setSnapGuides: (guides: SnapGuide[]) => void
+
+  // Edge / connection actions
+  addEdge: (fromPanelId: string, toPanelId: string) => string
+  removeEdge: (id: string) => void
+  removeEdgesForPanel: (panelId: string) => void
+  setConnectingFromId: (id: string | null) => void
+  clearEdges: () => void
 }
 
 let panelCounter = 0
+let edgeCounter = 0
 
 export const useCanvasStore = create<CanvasState>((set, get) => ({
   viewport: { x: 0, y: 0, zoom: 1 },
   panels: [],
+  edges: [],
   nextZIndex: 1,
+  draggingPanelId: null,
+  snapGuides: [],
+  connectingFromId: null,
 
   setViewport: (partial) =>
     set((s) => ({ viewport: { ...s.viewport, ...partial } })),
@@ -73,7 +115,6 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     const clamped = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, zoom))
     set((s) => {
       if (centerX !== undefined && centerY !== undefined) {
-        // Zoom towards a point: adjust viewport so the point stays fixed
         const ratio = clamped / s.viewport.zoom
         const newX = centerX - (centerX - s.viewport.x) * ratio
         const newY = centerY - (centerY - s.viewport.y) * ratio
@@ -88,11 +129,9 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     const factor = delta > 0 ? 0.9 : 1.1
     const newZoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, viewport.zoom * factor))
 
-    // Point in canvas space that should stay fixed
     const pointX = (clientX - containerRect.left - viewport.x) / viewport.zoom
     const pointY = (clientY - containerRect.top - viewport.y) / viewport.zoom
 
-    // After zoom, recalculate viewport so the same canvas point is under the cursor
     const newX = clientX - containerRect.left - pointX * newZoom
     const newY = clientY - containerRect.top - pointY * newZoom
 
@@ -111,8 +150,11 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     return id
   },
 
-  removePanel: (id) =>
-    set((s) => ({ panels: s.panels.filter((p) => p.id !== id) })),
+  removePanel: (id) => {
+    // Also remove any edges connected to this panel
+    get().removeEdgesForPanel(id)
+    set((s) => ({ panels: s.panels.filter((p) => p.id !== id) }))
+  },
 
   updatePanel: (id, updates) =>
     set((s) => ({
@@ -127,5 +169,118 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     }))
   },
 
-  clearPanels: () => set({ panels: [], nextZIndex: 1 })
+  clearPanels: () => set({ panels: [], edges: [], nextZIndex: 1 }),
+
+  // Drag
+  setDraggingPanelId: (id) => set({ draggingPanelId: id }),
+  setSnapGuides: (guides) => set({ snapGuides: guides }),
+
+  // Edges
+  addEdge: (fromPanelId, toPanelId) => {
+    // Don't add duplicate edges
+    const { edges } = get()
+    const exists = edges.some(
+      (e) =>
+        (e.fromPanelId === fromPanelId && e.toPanelId === toPanelId) ||
+        (e.fromPanelId === toPanelId && e.toPanelId === fromPanelId)
+    )
+    if (exists) return ''
+    const id = `edge-${++edgeCounter}-${Date.now()}`
+    set((s) => ({
+      edges: [...s.edges, { id, fromPanelId, toPanelId }]
+    }))
+    return id
+  },
+
+  removeEdge: (id) =>
+    set((s) => ({ edges: s.edges.filter((e) => e.id !== id) })),
+
+  removeEdgesForPanel: (panelId) =>
+    set((s) => ({
+      edges: s.edges.filter(
+        (e) => e.fromPanelId !== panelId && e.toPanelId !== panelId
+      )
+    })),
+
+  setConnectingFromId: (id) => set({ connectingFromId: id }),
+
+  clearEdges: () => set({ edges: [] })
 }))
+
+// ── Snapping utility ──────────────────────────────────────
+
+/**
+ * Calculate snap position and guides for a panel being dragged.
+ * Returns adjusted (x, y) and active snap guides.
+ */
+export function calculateSnap(
+  draggingPanel: { x: number; y: number; width: number; height: number },
+  otherPanels: CanvasPanelData[],
+  threshold = SNAP_THRESHOLD
+): { x: number; y: number; guides: SnapGuide[] } {
+  let { x, y } = draggingPanel
+  const guides: SnapGuide[] = []
+  const { width: dw, height: dh } = draggingPanel
+
+  const dLeft = x
+  const dRight = x + dw
+  const dCenterX = x + dw / 2
+  const dTop = y
+  const dBottom = y + dh
+  const dCenterY = y + dh / 2
+
+  let bestDx = Infinity
+  let bestDy = Infinity
+  let snapX = x
+  let snapY = y
+  let guideX: SnapGuide | null = null
+  let guideY: SnapGuide | null = null
+
+  for (const p of otherPanels) {
+    const pLeft = p.x
+    const pRight = p.x + p.width
+    const pCenterX = p.x + p.width / 2
+    const pTop = p.y
+    const pBottom = p.y + p.height
+    const pCenterY = p.y + p.height / 2
+
+    // X-axis snapping: left-left, right-right, left-right (with gap), right-left (with gap), center-center
+    const xCandidates = [
+      { dist: Math.abs(dLeft - pLeft), snap: pLeft, guide: pLeft },
+      { dist: Math.abs(dRight - pRight), snap: pRight - dw, guide: pRight },
+      { dist: Math.abs(dLeft - (pRight + SNAP_GAP)), snap: pRight + SNAP_GAP, guide: pRight + SNAP_GAP / 2 },
+      { dist: Math.abs(dRight - (pLeft - SNAP_GAP)), snap: pLeft - SNAP_GAP - dw, guide: pLeft - SNAP_GAP / 2 },
+      { dist: Math.abs(dCenterX - pCenterX), snap: pCenterX - dw / 2, guide: pCenterX },
+    ]
+
+    for (const c of xCandidates) {
+      if (c.dist < threshold && c.dist < bestDx) {
+        bestDx = c.dist
+        snapX = c.snap
+        guideX = { axis: 'x', position: c.guide }
+      }
+    }
+
+    // Y-axis snapping: top-top, bottom-bottom, top-bottom (with gap), bottom-top (with gap), center-center
+    const yCandidates = [
+      { dist: Math.abs(dTop - pTop), snap: pTop, guide: pTop },
+      { dist: Math.abs(dBottom - pBottom), snap: pBottom - dh, guide: pBottom },
+      { dist: Math.abs(dTop - (pBottom + SNAP_GAP)), snap: pBottom + SNAP_GAP, guide: pBottom + SNAP_GAP / 2 },
+      { dist: Math.abs(dBottom - (pTop - SNAP_GAP)), snap: pTop - SNAP_GAP - dh, guide: pTop - SNAP_GAP / 2 },
+      { dist: Math.abs(dCenterY - pCenterY), snap: pCenterY - dh / 2, guide: pCenterY },
+    ]
+
+    for (const c of yCandidates) {
+      if (c.dist < threshold && c.dist < bestDy) {
+        bestDy = c.dist
+        snapY = c.snap
+        guideY = { axis: 'y', position: c.guide }
+      }
+    }
+  }
+
+  if (guideX) guides.push(guideX)
+  if (guideY) guides.push(guideY)
+
+  return { x: bestDx < threshold ? snapX : x, y: bestDy < threshold ? snapY : y, guides }
+}

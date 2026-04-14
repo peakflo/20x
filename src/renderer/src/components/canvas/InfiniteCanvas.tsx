@@ -1,7 +1,10 @@
 import { useCallback, useRef, useState, useEffect } from 'react'
 import { useCanvasStore, DEFAULT_PANEL_WIDTH, DEFAULT_PANEL_HEIGHT } from '@/stores/canvas-store'
+import type { SnapGuide } from '@/stores/canvas-store'
 import { CanvasPanel } from './CanvasPanel'
-import { Move, ZoomIn, ZoomOut, RotateCcw, Plus } from 'lucide-react'
+import { CanvasConnections } from './CanvasConnections'
+import { CanvasContextMenu } from './CanvasContextMenu'
+import { Move, ZoomIn, ZoomOut, RotateCcw, Plus, MousePointer } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 
 // Grid dot spacing in canvas-space pixels
@@ -15,17 +18,42 @@ const GRID_SIZE = 40
  * - Click-drag panning
  * - Trackpad two-finger pan (wheel events without ctrl)
  * - Pinch-to-zoom on trackpad (wheel events with ctrlKey)
- * - Keyboard shortcuts (space+drag for pan, +/- for zoom)
+ * - Keyboard shortcuts (space+drag for pan, +/- for zoom, Delete to remove selected)
  * - Panel rendering at canvas coordinates via CSS transforms
+ * - Right-click context menu to add panels
+ * - Panel connections (visual edges)
+ * - Snap guides during drag
  */
 export function InfiniteCanvas() {
   const containerRef = useRef<HTMLDivElement>(null)
-  const { viewport, panels, panBy, zoomAtPoint, zoomTo, resetViewport, addPanel } = useCanvasStore()
+  const {
+    viewport,
+    panels,
+    snapGuides,
+    connectingFromId,
+    panBy,
+    zoomAtPoint,
+    zoomTo,
+    resetViewport,
+    addPanel,
+    setConnectingFromId,
+  } = useCanvasStore()
 
   // Panning state
   const [isPanning, setIsPanning] = useState(false)
   const panStartRef = useRef({ x: 0, y: 0 })
   const [spaceHeld, setSpaceHeld] = useState(false)
+
+  // Context menu state
+  const [contextMenu, setContextMenu] = useState<{
+    clientX: number
+    clientY: number
+    canvasX: number
+    canvasY: number
+  } | null>(null)
+
+  // Mouse position in canvas space (for connection drawing)
+  const [mouseCanvasPos, setMouseCanvasPos] = useState<{ x: number; y: number } | null>(null)
 
   // ── Wheel handler (zoom + trackpad pan) ──────────────────
   const handleWheel = useCallback(
@@ -35,18 +63,15 @@ export function InfiniteCanvas() {
       if (!container) return
 
       if (e.ctrlKey || e.metaKey) {
-        // Pinch-to-zoom (trackpad) or Ctrl+wheel
         const rect = container.getBoundingClientRect()
         zoomAtPoint(e.deltaY, e.clientX, e.clientY, rect)
       } else {
-        // Two-finger trackpad pan / regular scroll
         panBy(-e.deltaX, -e.deltaY)
       }
     },
     [panBy, zoomAtPoint]
   )
 
-  // Attach wheel listener with { passive: false } to allow preventDefault
   useEffect(() => {
     const el = containerRef.current
     if (!el) return
@@ -57,9 +82,26 @@ export function InfiniteCanvas() {
   // ── Mouse-drag panning ───────────────────────────────────
   const handleMouseDown = useCallback(
     (e: React.MouseEvent) => {
-      // Only pan on middle-click, or left-click on the canvas background (not on panels)
+      // Close context menu on any click
+      if (contextMenu) {
+        setContextMenu(null)
+        return
+      }
+
+      // Cancel connect mode on background click
+      if (connectingFromId && e.button === 0) {
+        const target = e.target as HTMLElement
+        if (target === containerRef.current || target.dataset?.canvasBg === 'true') {
+          setConnectingFromId(null)
+          return
+        }
+      }
+
       const isMiddle = e.button === 1
-      const isLeftOnCanvas = e.button === 0 && (e.target === containerRef.current || (e.target as HTMLElement).dataset?.canvasBg === 'true')
+      const isLeftOnCanvas =
+        e.button === 0 &&
+        (e.target === containerRef.current ||
+          (e.target as HTMLElement).dataset?.canvasBg === 'true')
       const isSpacePan = e.button === 0 && spaceHeld
 
       if (isMiddle || isLeftOnCanvas || isSpacePan) {
@@ -68,23 +110,50 @@ export function InfiniteCanvas() {
         panStartRef.current = { x: e.clientX, y: e.clientY }
       }
     },
-    [spaceHeld]
+    [spaceHeld, contextMenu, connectingFromId, setConnectingFromId]
   )
 
   const handleMouseMove = useCallback(
     (e: React.MouseEvent) => {
+      // Track mouse position for connection drawing
+      if (connectingFromId && containerRef.current) {
+        const rect = containerRef.current.getBoundingClientRect()
+        const canvasX = (e.clientX - rect.left - viewport.x) / viewport.zoom
+        const canvasY = (e.clientY - rect.top - viewport.y) / viewport.zoom
+        setMouseCanvasPos({ x: canvasX, y: canvasY })
+      }
+
       if (!isPanning) return
       const dx = e.clientX - panStartRef.current.x
       const dy = e.clientY - panStartRef.current.y
       panStartRef.current = { x: e.clientX, y: e.clientY }
       panBy(dx, dy)
     },
-    [isPanning, panBy]
+    [isPanning, panBy, connectingFromId, viewport.x, viewport.y, viewport.zoom]
   )
 
   const handleMouseUp = useCallback(() => {
     setIsPanning(false)
   }, [])
+
+  // ── Context menu ─────────────────────────────────────────
+  const handleContextMenu = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault()
+      const container = containerRef.current
+      if (!container) return
+      const rect = container.getBoundingClientRect()
+      const canvasX = (e.clientX - rect.left - viewport.x) / viewport.zoom
+      const canvasY = (e.clientY - rect.top - viewport.y) / viewport.zoom
+      setContextMenu({
+        clientX: e.clientX,
+        clientY: e.clientY,
+        canvasX,
+        canvasY,
+      })
+    },
+    [viewport]
+  )
 
   // ── Keyboard shortcuts ───────────────────────────────────
   useEffect(() => {
@@ -104,6 +173,11 @@ export function InfiniteCanvas() {
         e.preventDefault()
         resetViewport()
       }
+      // Escape: cancel connect mode
+      if (e.code === 'Escape') {
+        setConnectingFromId(null)
+        setContextMenu(null)
+      }
     }
     const handleKeyUp = (e: KeyboardEvent) => {
       if (e.code === 'Space') {
@@ -116,17 +190,17 @@ export function InfiniteCanvas() {
       window.removeEventListener('keydown', handleKeyDown)
       window.removeEventListener('keyup', handleKeyUp)
     }
-  }, [viewport.zoom, zoomTo, resetViewport])
+  }, [viewport.zoom, zoomTo, resetViewport, setConnectingFromId])
 
-  // ── Add demo panel ───────────────────────────────────────
+  // ── Add panel at center ──────────────────────────────────
   const handleAddPanel = useCallback(() => {
-    // Place new panel at center of current viewport
     const container = containerRef.current
     if (!container) return
     const rect = container.getBoundingClientRect()
-    const centerCanvasX = (rect.width / 2 - viewport.x) / viewport.zoom - DEFAULT_PANEL_WIDTH / 2
-    const centerCanvasY = (rect.height / 2 - viewport.y) / viewport.zoom - DEFAULT_PANEL_HEIGHT / 2
-    // Slight random offset to avoid stacking exactly
+    const centerCanvasX =
+      (rect.width / 2 - viewport.x) / viewport.zoom - DEFAULT_PANEL_WIDTH / 2
+    const centerCanvasY =
+      (rect.height / 2 - viewport.y) / viewport.zoom - DEFAULT_PANEL_HEIGHT / 2
     const offset = (panels.length % 5) * 30
     addPanel({
       type: 'placeholder',
@@ -140,19 +214,26 @@ export function InfiniteCanvas() {
 
   const zoomPercent = Math.round(viewport.zoom * 100)
 
+  const cursorStyle = connectingFromId
+    ? 'crosshair'
+    : isPanning || spaceHeld
+      ? 'grabbing'
+      : 'default'
+
   return (
     <div className="relative w-full h-full overflow-hidden bg-[#0d1117]">
-      {/* Canvas container — captures all mouse events for pan */}
+      {/* Canvas container */}
       <div
         ref={containerRef}
         className="absolute inset-0"
-        style={{ cursor: isPanning || spaceHeld ? 'grabbing' : 'default' }}
+        style={{ cursor: cursorStyle }}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
         onMouseLeave={handleMouseUp}
+        onContextMenu={handleContextMenu}
       >
-        {/* Transformed layer — this moves/scales with the viewport */}
+        {/* Transformed layer */}
         <div
           style={{
             transform: `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.zoom})`,
@@ -165,15 +246,26 @@ export function InfiniteCanvas() {
           }}
         >
           {/* Background grid dots */}
-          <CanvasGrid zoom={viewport.zoom} viewportX={viewport.x} viewportY={viewport.y} containerRef={containerRef} />
+          <CanvasGrid
+            zoom={viewport.zoom}
+            viewportX={viewport.x}
+            viewportY={viewport.y}
+            containerRef={containerRef}
+          />
+
+          {/* Snap guides */}
+          <SnapGuides guides={snapGuides} containerRef={containerRef} viewport={viewport} />
+
+          {/* Connection lines */}
+          <CanvasConnections mouseCanvasPos={connectingFromId ? mouseCanvasPos : null} />
 
           {/* Render panels */}
           {panels.map((panel) => (
-            <CanvasPanel key={panel.id} panel={panel} />
+            <CanvasPanel key={panel.id} panel={panel} zoom={viewport.zoom} />
           ))}
         </div>
 
-        {/* Click target for background (enables left-click pan on empty area) */}
+        {/* Click target for background */}
         <div data-canvas-bg="true" className="absolute inset-0" style={{ zIndex: -1 }} />
       </div>
 
@@ -219,20 +311,31 @@ export function InfiniteCanvas() {
           size="sm"
           className="h-8 px-3 bg-[#161b22]/90 backdrop-blur-sm border border-border/30"
           onClick={handleAddPanel}
-          title="Add a panel"
+          title="Add a panel (or right-click on canvas)"
         >
           <Plus className="h-3.5 w-3.5 mr-1" />
           <span className="text-xs">Add Panel</span>
         </Button>
       </div>
 
-      {/* ── HUD: Viewport info (top-right) ── */}
+      {/* ── HUD: Viewport info ── */}
       <div className="absolute top-3 right-3 flex items-center gap-2 text-[10px] text-muted-foreground/40 z-10 select-none">
         <Move className="h-3 w-3" />
         <span className="tabular-nums">
-          {Math.round(-viewport.x / viewport.zoom)}, {Math.round(-viewport.y / viewport.zoom)}
+          {Math.round(-viewport.x / viewport.zoom)},{' '}
+          {Math.round(-viewport.y / viewport.zoom)}
         </span>
       </div>
+
+      {/* ── Connect mode indicator ── */}
+      {connectingFromId && (
+        <div className="absolute top-3 left-1/2 -translate-x-1/2 z-10 animate-in fade-in slide-in-from-top-2 duration-200">
+          <div className="flex items-center gap-2 bg-indigo-500/20 border border-indigo-500/30 text-indigo-300 rounded-lg px-3 py-1.5 text-xs backdrop-blur-sm">
+            <MousePointer className="h-3 w-3" />
+            <span>Click a panel to connect, or press Esc to cancel</span>
+          </div>
+        </div>
+      )}
 
       {/* ── Empty state ── */}
       {panels.length === 0 && (
@@ -242,10 +345,19 @@ export function InfiniteCanvas() {
               Infinite Canvas
             </div>
             <div className="text-muted-foreground/20 text-xs">
-              Scroll to pan &middot; Pinch or Ctrl+scroll to zoom &middot; Click "Add Panel" to start
+              Scroll to pan &middot; Pinch or Ctrl+scroll to zoom &middot;
+              Right-click to add panels
             </div>
           </div>
         </div>
+      )}
+
+      {/* ── Context menu ── */}
+      {contextMenu && (
+        <CanvasContextMenu
+          position={contextMenu}
+          onClose={() => setContextMenu(null)}
+        />
       )}
     </div>
   )
@@ -257,32 +369,27 @@ function CanvasGrid({
   zoom,
   viewportX,
   viewportY,
-  containerRef
+  containerRef,
 }: {
   zoom: number
   viewportX: number
   viewportY: number
   containerRef: React.RefObject<HTMLDivElement | null>
 }) {
-  // Use a CSS background pattern on a large backing div to draw dots
-  // The div is sized to cover the visible area (in canvas space)
   const container = containerRef.current
   if (!container) return null
 
   const rect = container.getBoundingClientRect()
-  // Calculate the visible area in canvas space
   const visibleLeft = -viewportX / zoom
   const visibleTop = -viewportY / zoom
   const visibleWidth = rect.width / zoom
   const visibleHeight = rect.height / zoom
 
-  // Snap to grid for clean alignment
   const gridLeft = Math.floor(visibleLeft / GRID_SIZE) * GRID_SIZE - GRID_SIZE
   const gridTop = Math.floor(visibleTop / GRID_SIZE) * GRID_SIZE - GRID_SIZE
   const gridWidth = visibleWidth + GRID_SIZE * 3
   const gridHeight = visibleHeight + GRID_SIZE * 3
 
-  // Adapt dot size to zoom level so dots don't become huge
   const dotSize = Math.max(1, Math.min(2, 1.5 / zoom))
 
   return (
@@ -299,5 +406,56 @@ function CanvasGrid({
         pointerEvents: 'none',
       }}
     />
+  )
+}
+
+// ── Snap guide lines ───────────────────────────────────────
+
+function SnapGuides({
+  guides,
+  containerRef,
+  viewport,
+}: {
+  guides: SnapGuide[]
+  containerRef: React.RefObject<HTMLDivElement | null>
+  viewport: { x: number; y: number; zoom: number }
+}) {
+  if (guides.length === 0) return null
+
+  const container = containerRef.current
+  if (!container) return null
+
+  const rect = container.getBoundingClientRect()
+  const visibleLeft = -viewport.x / viewport.zoom
+  const visibleTop = -viewport.y / viewport.zoom
+  const visibleWidth = rect.width / viewport.zoom
+  const visibleHeight = rect.height / viewport.zoom
+
+  return (
+    <>
+      {guides.map((guide, i) => (
+        <div
+          key={`${guide.axis}-${guide.position}-${i}`}
+          className="absolute pointer-events-none"
+          style={
+            guide.axis === 'x'
+              ? {
+                  left: guide.position,
+                  top: visibleTop - 1000,
+                  width: 1,
+                  height: visibleHeight + 2000,
+                  background: 'rgba(99,102,241,0.25)',
+                }
+              : {
+                  left: visibleLeft - 1000,
+                  top: guide.position,
+                  width: visibleWidth + 2000,
+                  height: 1,
+                  background: 'rgba(99,102,241,0.25)',
+                }
+          }
+        />
+      ))}
+    </>
   )
 }
