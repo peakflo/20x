@@ -59,7 +59,11 @@ export function TerminalPanelContent({ terminalId }: TerminalPanelContentProps) 
     term.loadAddon(webLinksAddon)
 
     term.open(containerRef.current)
-    fitAddon.fit()
+    // Only fit if container has real dimensions (prevents toFixed crash in xterm renderer)
+    const rect = containerRef.current.getBoundingClientRect()
+    if (rect.width > 0 && rect.height > 0) {
+      fitAddon.fit()
+    }
 
     xtermRef.current = term
     fitAddonRef.current = fitAddon
@@ -127,7 +131,11 @@ export function TerminalPanelContent({ terminalId }: TerminalPanelContentProps) 
   useEffect(() => {
     if (!containerRef.current || !fitAddonRef.current) return
 
-    const observer = new ResizeObserver(() => {
+    const observer = new ResizeObserver((entries) => {
+      // Skip resize when container has zero dimensions (window drag/minimize)
+      // — xterm's renderer calls .toFixed() on dimension values which crashes if they're invalid
+      const entry = entries[0]
+      if (!entry || entry.contentRect.width < 1 || entry.contentRect.height < 1) return
       try {
         fitAddonRef.current?.fit()
         if (xtermRef.current && isReady) {
