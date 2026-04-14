@@ -333,8 +333,8 @@ function PanelContent({ panel }: { panel: CanvasPanelData }) {
   if (panel.type === 'app') {
     return <AppPanelContent appId={panel.refId} title={panel.title} />
   }
-  if (panel.type === 'webpage' && panel.url) {
-    return <WebPagePanelContent url={panel.url} title={panel.title} />
+  if (panel.type === 'webpage') {
+    return <WebPagePanelContent panelId={panel.id} url={panel.url} title={panel.title} />
   }
   return (
     <div className="flex items-center justify-center h-full text-muted-foreground/50 text-xs">

@@ -109,6 +109,25 @@ function createWindow(): void {
     }
   })
 
+  // Strip X-Frame-Options and frame-ancestors CSP from responses so external
+  // websites can be embedded in iframes on the canvas.
+  mainWindow.webContents.session.webRequest.onHeadersReceived((details, callback) => {
+    const headers = { ...details.responseHeaders }
+    // Remove X-Frame-Options (case-insensitive key matching)
+    for (const key of Object.keys(headers)) {
+      if (key.toLowerCase() === 'x-frame-options') {
+        delete headers[key]
+      }
+      // Strip frame-ancestors from Content-Security-Policy
+      if (key.toLowerCase() === 'content-security-policy') {
+        headers[key] = headers[key]!.map((v) =>
+          v.replace(/frame-ancestors\s+[^;]+(;|$)/gi, '').trim()
+        ).filter(Boolean)
+      }
+    }
+    callback({ responseHeaders: headers })
+  })
+
   mainWindow.on('ready-to-show', () => {
     mainWindow?.show()
 
