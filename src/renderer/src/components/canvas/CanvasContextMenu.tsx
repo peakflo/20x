@@ -3,6 +3,7 @@ import { CheckSquare, MessageSquare, Monitor, X } from 'lucide-react'
 import { useTaskStore } from '@/stores/task-store'
 import { useAgentStore } from '@/stores/agent-store'
 import { useCanvasStore, DEFAULT_PANEL_WIDTH, DEFAULT_PANEL_HEIGHT } from '@/stores/canvas-store'
+import { TaskStatus } from '@/types'
 import type { CanvasPanelType } from '@/stores/canvas-store'
 
 interface ContextMenuPosition {
@@ -48,25 +49,37 @@ export function CanvasContextMenu({ position, onClose }: CanvasContextMenuProps)
 
   const handleAddPanel = useCallback(
     (type: CanvasPanelType, title: string, refId?: string) => {
+      // Don't add duplicate task/transcript panels for the same refId
+      if (refId && (type === 'task' || type === 'transcript')) {
+        const exists = panels.some((p) => p.type === type && p.refId === refId)
+        if (exists) {
+          onClose()
+          return
+        }
+      }
+
       // Offset slightly to avoid exact overlap with existing panels
       const offset = (panels.length % 5) * 20
+      // Task panels need more space for the full workspace
+      const width = type === 'task' ? 680 : type === 'transcript' ? 480 : DEFAULT_PANEL_WIDTH
+      const height = type === 'task' ? 520 : type === 'transcript' ? 480 : DEFAULT_PANEL_HEIGHT
       addPanel({
         type,
         title,
         refId,
         x: position.canvasX + offset,
         y: position.canvasY + offset,
-        width: DEFAULT_PANEL_WIDTH,
-        height: DEFAULT_PANEL_HEIGHT,
+        width,
+        height,
       })
       onClose()
     },
-    [addPanel, onClose, panels.length, position.canvasX, position.canvasY]
+    [addPanel, onClose, panels, position.canvasX, position.canvasY]
   )
 
   // Reusable tasks for the menu (non-completed, max 10)
   const availableTasks = tasks
-    .filter((t) => t.status !== 'completed')
+    .filter((t) => t.status !== TaskStatus.Completed)
     .slice(0, 10)
 
   // Tasks with active sessions

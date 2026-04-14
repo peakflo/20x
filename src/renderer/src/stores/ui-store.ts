@@ -21,6 +21,8 @@ interface UIState {
   deletingTaskId: string | null
   settingsTab: SettingsTab
   dashboardPreviewTaskId: string | null
+  /** Task ID to add to canvas when switching to canvas view */
+  canvasPendingTaskId: string | null
 
   setSidebarView: (view: SidebarView) => void
   setStatusFilter: (filter: TaskStatus | 'all') => void
@@ -38,6 +40,9 @@ interface UIState {
   closeModal: () => void
   openDashboardPreview: (taskId: string) => void
   closeDashboardPreview: () => void
+  /** Switch to canvas view and queue a task to be added as a panel */
+  openTaskOnCanvas: (taskId: string) => void
+  clearCanvasPendingTask: () => void
 }
 
 export const useUIStore = create<UIState>((set) => ({
@@ -54,6 +59,7 @@ export const useUIStore = create<UIState>((set) => ({
   deletingTaskId: null,
   settingsTab: SettingsTab.GENERAL,
   dashboardPreviewTaskId: null,
+  canvasPendingTaskId: null,
 
   setSidebarView: (sidebarView) => set({ sidebarView }),
   setStatusFilter: (statusFilter) => set({ statusFilter }),
@@ -82,5 +88,7 @@ export const useUIStore = create<UIState>((set) => ({
   openSettings: () => set({ activeModal: 'settings' }),
   closeModal: () => set({ activeModal: null, editingTaskId: null, deletingTaskId: null }),
   openDashboardPreview: (taskId) => set({ dashboardPreviewTaskId: taskId }),
-  closeDashboardPreview: () => set({ dashboardPreviewTaskId: null })
+  closeDashboardPreview: () => set({ dashboardPreviewTaskId: null }),
+  openTaskOnCanvas: (taskId) => set({ sidebarView: 'canvas', canvasPendingTaskId: taskId }),
+  clearCanvasPendingTask: () => set({ canvasPendingTaskId: null })
 }))

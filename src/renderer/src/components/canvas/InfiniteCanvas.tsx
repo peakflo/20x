@@ -1,6 +1,8 @@
 import { useCallback, useRef, useState, useEffect } from 'react'
 import { useCanvasStore, DEFAULT_PANEL_WIDTH, DEFAULT_PANEL_HEIGHT } from '@/stores/canvas-store'
 import type { SnapGuide } from '@/stores/canvas-store'
+import { useUIStore } from '@/stores/ui-store'
+import { useTaskStore } from '@/stores/task-store'
 import { CanvasPanel } from './CanvasPanel'
 import { CanvasConnections } from './CanvasConnections'
 import { CanvasContextMenu } from './CanvasContextMenu'
@@ -54,6 +56,50 @@ export function InfiniteCanvas() {
 
   // Mouse position in canvas space (for connection drawing)
   const [mouseCanvasPos, setMouseCanvasPos] = useState<{ x: number; y: number } | null>(null)
+
+  // ── Consume pending task from "Open in Canvas" button ────
+  const canvasPendingTaskId = useUIStore((s) => s.canvasPendingTaskId)
+  const clearCanvasPendingTask = useUIStore((s) => s.clearCanvasPendingTask)
+  const allTasks = useTaskStore((s) => s.tasks)
+
+  useEffect(() => {
+    if (!canvasPendingTaskId) return
+    const task = allTasks.find((t) => t.id === canvasPendingTaskId)
+    if (!task) {
+      clearCanvasPendingTask()
+      return
+    }
+    // Don't add if already on canvas
+    const alreadyExists = panels.some(
+      (p) => p.type === 'task' && p.refId === canvasPendingTaskId
+    )
+    if (alreadyExists) {
+      clearCanvasPendingTask()
+      return
+    }
+    // Place at center of viewport
+    const container = containerRef.current
+    const rect = container?.getBoundingClientRect()
+    const w = 680
+    const h = 520
+    const centerX = rect
+      ? (rect.width / 2 - viewport.x) / viewport.zoom - w / 2
+      : 0
+    const centerY = rect
+      ? (rect.height / 2 - viewport.y) / viewport.zoom - h / 2
+      : 0
+    const offset = (panels.length % 5) * 30
+    addPanel({
+      type: 'task',
+      title: task.title,
+      refId: task.id,
+      x: centerX + offset,
+      y: centerY + offset,
+      width: w,
+      height: h,
+    })
+    clearCanvasPendingTask()
+  }, [canvasPendingTaskId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Wheel handler (zoom + trackpad pan) ──────────────────
   const handleWheel = useCallback(

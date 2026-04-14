@@ -286,7 +286,7 @@ export function CanvasPanel({ panel, zoom }: CanvasPanelProps) {
 
       {/* Content area */}
       {!isCollapsed && (
-        <div className="flex-1 overflow-auto p-3 min-h-0">
+        <div className={`flex-1 overflow-hidden min-h-0 ${panel.type === 'task' || panel.type === 'transcript' ? '' : 'p-3 overflow-auto'}`}>
           <PanelContent panel={panel} />
         </div>
       )}
