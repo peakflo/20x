@@ -1204,19 +1204,17 @@ export function registerIpcHandlers(
   // Each terminal is identified by a unique ID. The renderer creates/writes/resizes
   // terminals via IPC, and receives output via 'terminal:data' events.
   //
-  // Uses macOS/Linux `script` command to allocate a real PTY via child_process.
-  // This avoids node-pty which requires native module rebuild for Electron.
+  // Uses Python's pty module to allocate a real PTY. This avoids node-pty
+  // (which requires native module rebuild for Electron) and avoids macOS
+  // `script` command (which fails with piped stdio).
 
   interface TerminalHandle {
     write: (data: string) => void
-    resize?: (cols: number, rows: number) => void
     kill: () => void
     pid: number
   }
 
   const terminals = new Map<string, TerminalHandle>()
-  // Note: we use `script` command to allocate PTYs instead of node-pty,
-  // because node-pty requires native module rebuild for Electron's Node version.
 
   /** Resolve the user's preferred shell */
   function resolveShell(): string {
@@ -1225,48 +1223,131 @@ export function registerIpcHandlers(
     return candidates.find((s) => existsSync(s)) || '/bin/sh'
   }
 
-  /** Create a terminal using macOS/Linux `script` command which allocates a real PTY via child_process.
-   *  This avoids node-pty entirely — no native module rebuild needed. */
-  function createScriptPty(
+  /**
+   * Create a terminal using Python's pty module.
+   * Python's pty.openpty() creates a real PTY master/slave pair, then we
+   * fork and exec the shell on the slave side. The master fd is read/written
+   * via the Python process's stdin/stdout which ARE regular pipes — no
+   * tcgetattr issues. This gives a fully interactive terminal with colors,
+   * cursor control, and ANSI codes — without any native Node modules.
+   */
+  function createPythonPty(
     id: string, shellPath: string, cols: number, rows: number,
     sender: Electron.WebContents
   ): TerminalHandle {
     const { spawn } = childProcess
 
-    // `script -q /dev/null <shell>` allocates a PTY on macOS.
-    // On Linux it's `script -qc <shell> /dev/null`.
-    const isLinux = process.platform === 'linux'
-    const args = isLinux
-      ? ['-q', '-c', shellPath, '/dev/null']
-      : ['-q', '/dev/null', shellPath]
+    // Inline Python script that:
+    // 1. Creates a PTY pair via pty.openpty()
+    // 2. Forks, sets up the slave as the child's controlling terminal
+    // 3. Execs the shell in the child
+    // 4. In the parent, bridges stdin→master and master→stdout using select()
+    const pythonScript = `
+import pty, os, sys, select, signal, struct, fcntl, termios
 
-    const child = spawn('script', args, {
+shell = sys.argv[1]
+cols = int(sys.argv[2])
+rows = int(sys.argv[3])
+
+master, slave = pty.openpty()
+
+# Set initial window size on the PTY
+winsize = struct.pack('HHHH', rows, cols, 0, 0)
+fcntl.ioctl(slave, termios.TIOCSWINSZ, winsize)
+
+pid = os.fork()
+if pid == 0:
+    # Child: set up slave as controlling terminal
+    os.close(master)
+    os.setsid()
+    fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
+    os.dup2(slave, 0)
+    os.dup2(slave, 1)
+    os.dup2(slave, 2)
+    if slave > 2:
+        os.close(slave)
+    env = dict(os.environ)
+    env['TERM'] = 'xterm-256color'
+    env['COLUMNS'] = str(cols)
+    env['LINES'] = str(rows)
+    os.execvpe(shell, [shell], env)
+else:
+    # Parent: bridge stdin <-> master fd
+    os.close(slave)
+    # Make stdin non-blocking
+    import errno
+    stdin_fd = sys.stdin.fileno()
+    fl = fcntl.fcntl(stdin_fd, fcntl.F_GETFL)
+    fcntl.fcntl(stdin_fd, fcntl.F_SETFL, fl | os.O_NONBLOCK)
+
+    try:
+        while True:
+            try:
+                rlist, _, _ = select.select([master, stdin_fd], [], [], 0.05)
+            except (select.error, ValueError):
+                break
+            if master in rlist:
+                try:
+                    data = os.read(master, 4096)
+                    if not data:
+                        break
+                    sys.stdout.buffer.write(data)
+                    sys.stdout.buffer.flush()
+                except OSError:
+                    break
+            if stdin_fd in rlist:
+                try:
+                    data = os.read(stdin_fd, 4096)
+                    if not data:
+                        break
+                    os.write(master, data)
+                except OSError as e:
+                    if e.errno != errno.EAGAIN:
+                        break
+    except KeyboardInterrupt:
+        pass
+    finally:
+        os.close(master)
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError:
+            pass
+        os.waitpid(pid, 0)
+`
+
+    const child = spawn('python3', ['-u', '-c', pythonScript, shellPath, String(cols || 80), String(rows || 24)], {
       stdio: ['pipe', 'pipe', 'pipe'],
       cwd: process.env.HOME || process.cwd(),
-      env: {
-        ...process.env,
-        TERM: 'xterm-256color',
-        COLUMNS: String(cols || 80),
-        LINES: String(rows || 24),
-      } as Record<string, string>,
+      env: { ...process.env } as Record<string, string>,
     })
 
     child.stdout?.on('data', (data: Buffer) => {
-      sender.send('terminal:data', { id, data: data.toString() })
+      if (!sender.isDestroyed()) {
+        sender.send('terminal:data', { id, data: data.toString() })
+      }
     })
 
     child.stderr?.on('data', (data: Buffer) => {
-      sender.send('terminal:data', { id, data: data.toString() })
+      // Forward stderr too (e.g. shell startup errors)
+      if (!sender.isDestroyed()) {
+        sender.send('terminal:data', { id, data: data.toString() })
+      }
     })
 
     child.on('exit', () => {
       terminals.delete(id)
-      sender.send('terminal:exit', { id })
+      if (!sender.isDestroyed()) {
+        sender.send('terminal:exit', { id })
+      }
     })
 
     return {
-      write: (data: string) => child.stdin?.write(data),
-      kill: () => child.kill(),
+      write: (data: string) => {
+        if (child.stdin?.writable) child.stdin.write(data)
+      },
+      kill: () => {
+        try { child.kill('SIGTERM') } catch { /* ignore */ }
+      },
       pid: child.pid || 0,
     }
   }
@@ -1275,7 +1356,7 @@ export function registerIpcHandlers(
     const shellPath = resolveShell()
     console.log(`[Terminal] Creating terminal id=${id} shell=${shellPath} cols=${cols} rows=${rows}`)
 
-    const handle = createScriptPty(id, shellPath, cols, rows, event.sender)
+    const handle = createPythonPty(id, shellPath, cols, rows, event.sender)
     terminals.set(id, handle)
     return { pid: handle.pid }
   })
@@ -1284,8 +1365,9 @@ export function registerIpcHandlers(
     terminals.get(id)?.write(data)
   })
 
-  ipcMain.handle('terminal:resize', (_, { id, cols, rows }: { id: string; cols: number; rows: number }) => {
-    try { terminals.get(id)?.resize?.(cols, rows) } catch { /* ignore resize errors */ }
+  ipcMain.handle('terminal:resize', (_event, { id, cols, rows }: { id: string; cols: number; rows: number }) => {
+    // Resize not supported without node-pty — COLUMNS/LINES set at creation
+    void id; void cols; void rows
   })
 
   ipcMain.handle('terminal:kill', (_, { id }: { id: string }) => {
