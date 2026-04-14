@@ -5,7 +5,7 @@ import type { TaskPriority } from '@/types'
 export type SortField = 'created_at' | 'updated_at' | 'priority' | 'due_date' | 'title' | 'status'
 export type SortDirection = 'asc' | 'desc'
 export type ActiveModal = 'create' | 'edit' | 'delete' | 'settings' | 'repo-selector' | 'gh-setup' | null
-export type SidebarView = 'tasks' | 'skills' | 'dashboard'
+export type SidebarView = 'tasks' | 'skills' | 'dashboard' | 'canvas'
 
 interface UIState {
   sidebarView: SidebarView

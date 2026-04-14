@@ -3,6 +3,7 @@ import { TaskWorkspace } from '@/components/tasks/TaskWorkspace'
 import { SkillWorkspace } from '@/components/skills/SkillWorkspace'
 import { SettingsWorkspace } from '@/components/settings/SettingsWorkspace'
 import { DashboardWorkspace } from '@/components/dashboard/DashboardWorkspace'
+import { InfiniteCanvas } from '@/components/canvas/InfiniteCanvas'
 import { TaskForm, type TaskFormSubmitData } from '@/components/tasks/TaskForm'
 import { DeleteConfirmDialog } from '@/components/tasks/DeleteConfirmDialog'
 import { Dialog, DialogContent, DialogHeader, DialogBody, DialogTitle } from '@/components/ui/Dialog'
@@ -19,7 +20,7 @@ import { isOverdue, isSnoozed } from '@/lib/utils'
 import { useEffect, useState, useCallback } from 'react'
 import { TaskStatus, PluginActionId } from '@/types'
 import type { FileAttachment } from '@/types'
-import { MessageSquare, ExternalLink, LayoutDashboard, CheckSquare, Zap, Settings } from 'lucide-react'
+import { MessageSquare, ExternalLink, LayoutDashboard, CheckSquare, Zap, Settings, Layers } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import type { SidebarView } from '@/stores/ui-store'
 
@@ -103,6 +104,7 @@ export function AppLayout() {
   const NAV_ITEMS: { key: SidebarView; label: string; icon: typeof LayoutDashboard }[] = [
     { key: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
     { key: 'tasks', label: 'Tasks', icon: CheckSquare },
+    { key: 'canvas', label: 'Canvas', icon: Layers },
     { key: 'skills', label: 'Skills', icon: Zap }
   ]
 
@@ -157,7 +159,7 @@ export function AppLayout() {
       {/* ── Content area: optional sidebar + workspace ── */}
       <div className="flex flex-1 min-h-0 overflow-hidden">
         {/* Sidebar — only for tasks and skills views */}
-        {sidebarView !== 'dashboard' && (
+        {sidebarView !== 'dashboard' && sidebarView !== 'canvas' && (
           <Sidebar
             tasks={tasks}
             selectedTaskId={selectedTask?.id || null}
@@ -175,6 +177,8 @@ export function AppLayout() {
               <SettingsWorkspace />
             ) : sidebarView === 'dashboard' ? (
               <DashboardWorkspace />
+            ) : sidebarView === 'canvas' ? (
+              <InfiniteCanvas />
             ) : sidebarView === 'skills' ? (
               <SkillWorkspace />
             ) : (
