@@ -99,7 +99,7 @@ export function InfiniteCanvas() {
       width: DEFAULT_PANEL_WIDTH,
       height: DEFAULT_PANEL_HEIGHT,
     })
-  }, [canvasPendingTaskId]) // eslint-disable-line
+  }, [canvasPendingTaskId])
 
   // ── Consume pending app from "Open in Canvas" button ────
   useEffect(() => {
@@ -132,7 +132,7 @@ export function InfiniteCanvas() {
       width: DEFAULT_PANEL_WIDTH,
       height: DEFAULT_PANEL_HEIGHT,
     })
-  }, [canvasPendingApp]) // eslint-disable-line
+  }, [canvasPendingApp])
 
   // ── Wheel handler (zoom + trackpad pan) ──────────────────
   const handleWheel = useCallback(
