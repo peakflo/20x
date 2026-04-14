@@ -9,6 +9,7 @@ import { TaskPanelContent } from './TaskPanelContent'
 import { TranscriptPanelContent } from './TranscriptPanelContent'
 import { AppPanelContent } from './AppPanelContent'
 import { WebPagePanelContent } from './WebPagePanelContent'
+import { TerminalPanelContent } from './TerminalPanelContent'
 
 interface CanvasPanelProps {
   panel: CanvasPanelData
@@ -181,38 +182,17 @@ export function CanvasPanel({ panel, zoom }: CanvasPanelProps) {
   )
 
   // ── Panel type styling ────────────────────────────────────
-  const typeLabel =
-    panel.type === 'task'
-      ? 'Task'
-      : panel.type === 'transcript'
-        ? 'Transcript'
-        : panel.type === 'app'
-          ? 'App'
-          : panel.type === 'webpage'
-            ? 'Web'
-            : 'Panel'
-
-  const typeColor =
-    panel.type === 'task'
-      ? 'bg-blue-500/20 text-blue-400'
-      : panel.type === 'transcript'
-        ? 'bg-purple-500/20 text-purple-400'
-        : panel.type === 'app'
-          ? 'bg-green-500/20 text-green-400'
-          : panel.type === 'webpage'
-            ? 'bg-cyan-500/20 text-cyan-400'
-            : 'bg-muted/30 text-muted-foreground'
-
-  const borderAccent =
-    panel.type === 'task'
-      ? 'border-blue-500/20'
-      : panel.type === 'transcript'
-        ? 'border-purple-500/20'
-        : panel.type === 'app'
-          ? 'border-green-500/20'
-          : panel.type === 'webpage'
-            ? 'border-cyan-500/20'
-            : 'border-border/50'
+  const TYPE_CONFIG: Record<string, { label: string; color: string; border: string }> = {
+    task: { label: 'Task', color: 'bg-blue-500/20 text-blue-400', border: 'border-blue-500/20' },
+    transcript: { label: 'Transcript', color: 'bg-purple-500/20 text-purple-400', border: 'border-purple-500/20' },
+    app: { label: 'App', color: 'bg-green-500/20 text-green-400', border: 'border-green-500/20' },
+    webpage: { label: 'Web', color: 'bg-cyan-500/20 text-cyan-400', border: 'border-cyan-500/20' },
+    terminal: { label: 'Terminal', color: 'bg-amber-500/20 text-amber-400', border: 'border-amber-500/20' },
+  }
+  const cfg = TYPE_CONFIG[panel.type] ?? { label: 'Panel', color: 'bg-muted/30 text-muted-foreground', border: 'border-border/50' }
+  const typeLabel = cfg.label
+  const typeColor = cfg.color
+  const borderAccent = cfg.border
 
   const isConnecting = connectingFromId === panel.id
 
@@ -294,7 +274,7 @@ export function CanvasPanel({ panel, zoom }: CanvasPanelProps) {
 
       {/* Content area */}
       {!isCollapsed && (
-        <div className={`flex-1 overflow-hidden min-h-0 ${panel.type === 'task' || panel.type === 'transcript' || panel.type === 'webpage' || (panel.type === 'app' && panel.refId) ? '' : 'p-3 overflow-auto'}`}>
+        <div className={`flex-1 overflow-hidden min-h-0 ${panel.type === 'task' || panel.type === 'transcript' || panel.type === 'webpage' || panel.type === 'terminal' || (panel.type === 'app' && panel.refId) ? '' : 'p-3 overflow-auto'}`}>
           <PanelContent panel={panel} />
         </div>
       )}
@@ -335,6 +315,9 @@ function PanelContent({ panel }: { panel: CanvasPanelData }) {
   }
   if (panel.type === 'webpage') {
     return <WebPagePanelContent panelId={panel.id} url={panel.url} title={panel.title} />
+  }
+  if (panel.type === 'terminal') {
+    return <TerminalPanelContent terminalId={panel.id} />
   }
   return (
     <div className="flex items-center justify-center h-full text-muted-foreground/50 text-xs">

@@ -1198,4 +1198,51 @@ export function registerIpcHandlers(
     const { getInstallCommand } = await import('./agent-installer/install.js')
     return getInstallCommand(agentName)
   })
+
+  // ── Terminal (PTY) handlers ─────────────────────────────────
+  // Each terminal is identified by a unique ID. The renderer creates/writes/resizes
+  // terminals via IPC, and receives output via 'terminal:data' events.
+
+  const terminals = new Map<string, import('node-pty').IPty>()
+
+  ipcMain.handle('terminal:create', async (event, { id, cols, rows }: { id: string; cols: number; rows: number }) => {
+    const pty = await import('node-pty')
+    const shell = process.platform === 'win32' ? 'powershell.exe' : process.env.SHELL || '/bin/zsh'
+    const term = pty.spawn(shell, [], {
+      name: 'xterm-256color',
+      cols: cols || 80,
+      rows: rows || 24,
+      cwd: process.env.HOME || process.cwd(),
+      env: { ...process.env } as Record<string, string>,
+    })
+
+    terminals.set(id, term)
+
+    term.onData((data: string) => {
+      event.sender.send('terminal:data', { id, data })
+    })
+
+    term.onExit(() => {
+      terminals.delete(id)
+      event.sender.send('terminal:exit', { id })
+    })
+
+    return { pid: term.pid }
+  })
+
+  ipcMain.handle('terminal:write', (_, { id, data }: { id: string; data: string }) => {
+    terminals.get(id)?.write(data)
+  })
+
+  ipcMain.handle('terminal:resize', (_, { id, cols, rows }: { id: string; cols: number; rows: number }) => {
+    try { terminals.get(id)?.resize(cols, rows) } catch { /* ignore resize errors */ }
+  })
+
+  ipcMain.handle('terminal:kill', (_, { id }: { id: string }) => {
+    const term = terminals.get(id)
+    if (term) {
+      term.kill()
+      terminals.delete(id)
+    }
+  })
 }

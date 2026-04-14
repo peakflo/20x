@@ -6,7 +6,7 @@ import { useTaskStore } from '@/stores/task-store'
 import { CanvasPanel } from './CanvasPanel'
 import { CanvasConnections } from './CanvasConnections'
 import { CanvasContextMenu } from './CanvasContextMenu'
-import { Move, ZoomIn, ZoomOut, RotateCcw, MousePointer, Plus, Globe, X } from 'lucide-react'
+import { Move, ZoomIn, ZoomOut, RotateCcw, MousePointer, Plus, Globe, TerminalSquare, X } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 
 // Grid dot spacing in canvas-space pixels
@@ -282,29 +282,32 @@ export function InfiniteCanvas() {
     [viewport]
   )
 
-  // ── Add blank web page panel ─────────────────────────────
-  const handleAddWebPage = useCallback(() => {
-    const container = containerRef.current
-    const rect = container?.getBoundingClientRect()
-    const vp = useCanvasStore.getState().viewport
-    const currentPanels = useCanvasStore.getState().panels
-    const centerX = rect
-      ? (rect.width / 2 - vp.x) / vp.zoom - DEFAULT_PANEL_WIDTH / 2
-      : 0
-    const centerY = rect
-      ? (rect.height / 2 - vp.y) / vp.zoom - DEFAULT_PANEL_HEIGHT / 2
-      : 0
-    const offset = (currentPanels.length % 5) * 30
-    addPanel({
-      type: 'webpage',
-      title: 'Web Page',
-      x: centerX + offset,
-      y: centerY + offset,
-      width: DEFAULT_PANEL_WIDTH,
-      height: DEFAULT_PANEL_HEIGHT,
-    })
-    setShowAddMenu(false)
-  }, [addPanel])
+  // ── Add panel helpers ────────────────────────────────────
+  const addPanelAtCenter = useCallback(
+    (type: 'webpage' | 'terminal', title: string) => {
+      const container = containerRef.current
+      const rect = container?.getBoundingClientRect()
+      const vp = useCanvasStore.getState().viewport
+      const currentPanels = useCanvasStore.getState().panels
+      const centerX = rect
+        ? (rect.width / 2 - vp.x) / vp.zoom - DEFAULT_PANEL_WIDTH / 2
+        : 0
+      const centerY = rect
+        ? (rect.height / 2 - vp.y) / vp.zoom - DEFAULT_PANEL_HEIGHT / 2
+        : 0
+      const offset = (currentPanels.length % 5) * 30
+      addPanel({
+        type,
+        title,
+        x: centerX + offset,
+        y: centerY + offset,
+        width: DEFAULT_PANEL_WIDTH,
+        height: DEFAULT_PANEL_HEIGHT,
+      })
+      setShowAddMenu(false)
+    },
+    [addPanel]
+  )
 
   // Close add menu on outside click
   useEffect(() => {
@@ -465,7 +468,7 @@ export function InfiniteCanvas() {
             </div>
             <div className="py-1">
               <button
-                onClick={handleAddWebPage}
+                onClick={() => addPanelAtCenter('webpage', 'Web Page')}
                 className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-white/5 transition-colors group"
               >
                 <Globe className="h-4 w-4 text-cyan-400 flex-shrink-0" />
@@ -475,6 +478,20 @@ export function InfiniteCanvas() {
                   </div>
                   <div className="text-[10px] text-muted-foreground/40">
                     Embed any website
+                  </div>
+                </div>
+              </button>
+              <button
+                onClick={() => addPanelAtCenter('terminal', 'Terminal')}
+                className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-white/5 transition-colors group"
+              >
+                <TerminalSquare className="h-4 w-4 text-amber-400 flex-shrink-0" />
+                <div>
+                  <div className="text-[12px] text-foreground/80 group-hover:text-foreground transition-colors">
+                    Terminal
+                  </div>
+                  <div className="text-[10px] text-muted-foreground/40">
+                    Interactive shell session
                   </div>
                 </div>
               </button>
