@@ -103,8 +103,8 @@ export function AppLayout() {
 
   const NAV_ITEMS: { key: SidebarView; label: string; icon: typeof LayoutDashboard }[] = [
     { key: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
-    { key: 'tasks', label: 'Tasks', icon: CheckSquare },
     { key: 'canvas', label: 'Canvas', icon: Layers },
+    { key: 'tasks', label: 'Tasks', icon: CheckSquare },
     { key: 'skills', label: 'Skills', icon: Zap }
   ]
 
@@ -172,16 +172,22 @@ export function AppLayout() {
         {/* Workspace */}
         <main className="flex flex-col flex-1 min-w-0 overflow-hidden bg-background">
           <div className="flex-1 h-0 overflow-hidden relative">
-            {/* Main workspace content */}
+            {/* Canvas — always mounted so iframes/terminals survive navigation */}
+            <div
+              className="absolute inset-0"
+              style={{ visibility: sidebarView === 'canvas' && activeModal !== 'settings' ? 'visible' : 'hidden' }}
+            >
+              <InfiniteCanvas />
+            </div>
+
+            {/* Other workspace content — conditionally rendered */}
             {activeModal === 'settings' ? (
               <SettingsWorkspace />
             ) : sidebarView === 'dashboard' ? (
               <DashboardWorkspace />
-            ) : sidebarView === 'canvas' ? (
-              <InfiniteCanvas />
             ) : sidebarView === 'skills' ? (
               <SkillWorkspace />
-            ) : (
+            ) : sidebarView !== 'canvas' ? (
               <TaskWorkspace
               task={selectedTask}
               agents={agents}
@@ -233,7 +239,7 @@ export function AppLayout() {
               }}
               onNavigateToTask={(taskId) => selectTask(taskId)}
             />
-          )}
+          ) : null}
 
           {/* Orchestrator slide-in panel */}
           <div

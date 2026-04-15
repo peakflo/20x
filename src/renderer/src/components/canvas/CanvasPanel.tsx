@@ -14,6 +14,8 @@ import { TerminalPanelContent } from './TerminalPanelContent'
 interface CanvasPanelProps {
   panel: CanvasPanelData
   zoom: number
+  /** When true, the panel is off-viewport — heavy content (iframes, terminals) is hidden */
+  frozen?: boolean
 }
 
 /**
@@ -23,7 +25,7 @@ interface CanvasPanelProps {
  * Memoized so that only the panel whose data changed re-renders — prevents
  * iframes/terminals from being remounted when a *different* panel moves.
  */
-export const CanvasPanel = memo(function CanvasPanel({ panel, zoom }: CanvasPanelProps) {
+export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = false }: CanvasPanelProps) {
   const bringToFront = useCanvasStore((s) => s.bringToFront)
   const updatePanel = useCanvasStore((s) => s.updatePanel)
   const removePanel = useCanvasStore((s) => s.removePanel)
@@ -253,7 +255,10 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom }: CanvasPane
 
       {/* Content area */}
       {!isCollapsed && (
-        <div className={`flex-1 overflow-hidden min-h-0 ${panel.type === 'task' || panel.type === 'transcript' || panel.type === 'webpage' || panel.type === 'terminal' || (panel.type === 'app' && panel.refId) ? '' : 'p-3 overflow-auto'}`}>
+        <div
+          className={`flex-1 overflow-hidden min-h-0 ${panel.type === 'task' || panel.type === 'transcript' || panel.type === 'webpage' || panel.type === 'terminal' || (panel.type === 'app' && panel.refId) ? '' : 'p-3 overflow-auto'}`}
+          style={frozen ? { visibility: 'hidden' } : undefined}
+        >
           <MemoizedPanelContent
             type={panel.type}
             id={panel.id}

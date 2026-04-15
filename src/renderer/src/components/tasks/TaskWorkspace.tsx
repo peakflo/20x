@@ -21,6 +21,9 @@ import { TaskStatus } from '@/types'
 import type { WorkfloTask, FileAttachment, OutputField, Agent } from '@/types'
 import type { GitHubRepo } from '@/types/electron'
 
+/** Controls which columns are visible in the TaskWorkspace grid */
+export type TaskWorkspaceLayout = 'both' | 'task-only' | 'transcript-only'
+
 interface TaskWorkspaceProps {
   task?: WorkfloTask
   agents: Agent[]
@@ -32,6 +35,8 @@ interface TaskWorkspaceProps {
   onAssignAgent: (taskId: string, agentId: string | null) => void
   onUpdateTask?: (taskId: string, data: Partial<WorkfloTask>) => Promise<void>
   onNavigateToTask?: (taskId: string) => void
+  /** Override the layout — which panels to show. Default: 'both' */
+  panelLayout?: TaskWorkspaceLayout
 }
 
 export function TaskWorkspace({
@@ -44,7 +49,8 @@ export function TaskWorkspace({
   onCompleteTask,
   onAssignAgent,
   onUpdateTask,
-  onNavigateToTask
+  onNavigateToTask,
+  panelLayout = 'both'
 }: TaskWorkspaceProps) {
   const { session, start, resume, abort, stop, sendMessage, approve } = useAgentSession(task?.id)
   const { removeSession } = useAgentStore()
@@ -606,7 +612,8 @@ Update existing skills that were helpful or create new ones for patterns worth r
 
   return (
     <>
-      <div className={`grid ${showPanel ? 'grid-cols-2' : 'grid-cols-1'} relative`} style={{ height: '100%' }}>
+      <div className={`grid ${showPanel && panelLayout !== 'task-only' && panelLayout !== 'transcript-only' ? 'grid-cols-2' : 'grid-cols-1'} relative`} style={{ height: '100%' }}>
+        {panelLayout !== 'transcript-only' && (
         <div className="min-h-0 min-w-0 flex flex-col">
           <AgentApprovalBanner
             request={session.pendingApproval}
@@ -647,8 +654,9 @@ Update existing skills that were helpful or create new ones for patterns worth r
             onReorderSubtasks={handleReorderSubtasks}
           />
         </div>
+        )}
 
-        {showPanel && (
+        {showPanel && panelLayout !== 'task-only' && (
           <div className="min-h-0 min-w-0 h-full">
             <AgentTranscriptPanel
               messages={session.messages}
