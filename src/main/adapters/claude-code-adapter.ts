@@ -1224,37 +1224,18 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
         // For text blocks (no id), use stable message ID + block index for consistent dedup.
         // For tool_use blocks, blockWithProps.id is the tool_use_id which is already stable.
         const partId = `${stableId}-${blockWithProps.type}-${blockWithProps.id || blockIdx}`
+        if (seenPartIds.has(partId)) continue
+        seenPartIds.add(partId)
 
         if (blockWithProps.type === 'text') {
           const text = blockWithProps.text || ''
-          if (seenPartIds.has(partId)) {
-            // Check if text content has grown since last seen (streaming update).
-            // Without this, the first chunk (possibly empty/partial) gets recorded
-            // and all subsequent chunks with the complete text are silently dropped,
-            // causing missing assistant responses in the UI.
-            const previousLength = partContentLengths.get(partId)
-            if (previousLength !== undefined && String(text.length) !== previousLength && text.length > 0) {
-              partContentLengths.set(partId, String(text.length))
-              parts.push({
-                id: partId,
-                type: MessagePartType.TEXT,
-                text,
-                update: true,
-              })
-            }
-            continue
-          }
-          seenPartIds.add(partId)
           partContentLengths.set(partId, String(text.length))
           parts.push({
             id: partId,
             type: MessagePartType.TEXT,
             text,
           })
-        } else if (seenPartIds.has(partId)) {
-          continue
         } else if (blockWithProps.type === 'tool_use') {
-          seenPartIds.add(partId)
           const toolName = blockWithProps.name || 'unknown'
           const rawInput = blockWithProps.input as Record<string, unknown> | undefined
           const input = rawInput ? JSON.stringify(rawInput, null, 2) : undefined
@@ -1503,35 +1484,6 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
             text: errorText,
             role: 'system',
           })
-        }
-      } else {
-        // Non-error result: extract the final assistant text as a safety net.
-        // Normally the text was already sent in a preceding assistant message event,
-        // but if the first streaming chunk had empty text and no subsequent chunk
-        // updated it, the result message is the only source of the final response.
-        const resultText = typeof resultMsg.result === 'string' ? resultMsg.result : ''
-        if (resultText) {
-          // Check if any assistant text part was already emitted with non-empty content.
-          // If so, skip — the text is already shown.  If not, emit it now.
-          let hasNonEmptyText = false
-          for (const [pid, len] of partContentLengths) {
-            if (pid.includes('-text-') && parseInt(len, 10) > 0) {
-              hasNonEmptyText = true
-              break
-            }
-          }
-          if (!hasNonEmptyText) {
-            const partId = `result-text-${msgWithProps.uuid || Date.now()}`
-            if (!seenPartIds.has(partId)) {
-              seenPartIds.add(partId)
-              partContentLengths.set(partId, String(resultText.length))
-              parts.push({
-                id: partId,
-                type: MessagePartType.TEXT,
-                text: resultText,
-              })
-            }
-          }
         }
       }
     } else if (msgWithProps.type === 'system') {
