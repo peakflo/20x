@@ -36,6 +36,8 @@ export class OpencodeAdapter implements CodingAgentAdapter {
   private serverInstance: unknown = null
   private serverUrl: string | null = null
   private serverStarting: Promise<void> | null = null
+  /** The shared SDK client created alongside the server via createOpencode */
+  private sharedClient: OpencodeClient | null = null
   private clients: Map<string, OpencodeClient> = new Map() // sessionId -> ocClient
   private v2Client: V2OpencodeClient | null = null
   private promptAborts: Map<string, AbortController> = new Map()
@@ -199,6 +201,19 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     return undefined
   }
 
+  /**
+   * Returns the shared SDK client, ensuring the server is running first.
+   */
+  private async getClient(serverUrl?: string): Promise<OpencodeClient> {
+    const baseUrl = serverUrl || this.serverUrl || DEFAULT_SERVER_URL
+    await this.ensureServerRunning(baseUrl)
+
+    if (!this.sharedClient) {
+      throw new Error('OpenCode client not available after server startup')
+    }
+    return this.sharedClient
+  }
+
   async getProviders(
     serverUrl?: string,
     directory?: string
@@ -207,19 +222,9 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     default: Record<string, string>
   } | null> {
     try {
-      await this.ensureSDKLoaded()
+      const client = await this.getClient(serverUrl)
 
-      const baseUrl = serverUrl || this.serverUrl || DEFAULT_SERVER_URL
-
-      // Ensure server is running before querying providers
-      await this.ensureServerRunning(baseUrl)
-
-      const ocClient = OpenCodeSDK!.createOpencodeClient({
-        baseUrl: this.serverUrl || baseUrl,
-        fetch: noTimeoutFetch as unknown as (request: Request) => ReturnType<typeof fetch>
-      })
-
-      const result = await ocClient.config.providers({
+      const result = await client.config.providers({
         ...(directory && { query: { directory } })
       })
 
@@ -243,10 +248,11 @@ export class OpencodeAdapter implements CodingAgentAdapter {
 
   async checkHealth(): Promise<{ available: boolean; reason?: string }> {
     try {
-      await this.ensureSDKLoaded()
+      // Ensure server is running and client is available
+      await this.getClient()
+      const baseUrl = this.serverUrl || DEFAULT_SERVER_URL
 
-      // Try to connect to default server
-      const response = await fetch(`${DEFAULT_SERVER_URL}/global/health`, {
+      const response = await fetch(`${baseUrl}/global/health`, {
         signal: AbortSignal.timeout(2000)
       })
 
@@ -254,9 +260,11 @@ export class OpencodeAdapter implements CodingAgentAdapter {
         return { available: false, reason: 'Server not responding' }
       }
 
+      const health = await response.json()
+      console.log('[OpencodeAdapter] Health check OK, version:', health.version)
       return { available: true }
-    } catch {
-      return { available: false, reason: 'SDK not available or server not accessible' }
+    } catch (error: unknown) {
+      return { available: false, reason: error instanceof Error ? error.message : 'Server not accessible' }
     }
   }
 
@@ -329,6 +337,11 @@ export class OpencodeAdapter implements CodingAgentAdapter {
         if (accessibleUrl) {
           this.serverUrl = accessibleUrl
           this.serverInstance = null
+          // Create a client for the existing server
+          this.sharedClient = OpenCodeSDK!.createOpencodeClient({
+            baseUrl: accessibleUrl,
+            fetch: noTimeoutFetch as unknown as (request: Request) => ReturnType<typeof fetch>
+          })
           return
         }
 
@@ -352,7 +365,7 @@ export class OpencodeAdapter implements CodingAgentAdapter {
         const mergedConfig = buildMergedOpencodeConfig(extraConfig)
 
         console.log(`[OpencodeAdapter] Creating opencode instance at ${hostname}:${port} via SDK createOpencode`)
-        const { server } = await OpenCodeSDK!.createOpencode({
+        const { client, server } = await OpenCodeSDK!.createOpencode({
           hostname,
           port,
           timeout: 10000,
@@ -361,6 +374,7 @@ export class OpencodeAdapter implements CodingAgentAdapter {
 
         this.serverInstance = server
         this.serverUrl = server.url
+        this.sharedClient = client
         console.log(`[OpencodeAdapter] OpenCode instance created at ${server.url}`)
       } finally {
         this.serverStarting = null
@@ -1016,6 +1030,7 @@ export class OpencodeAdapter implements CodingAgentAdapter {
       }
       this.serverInstance = null
       this.serverUrl = null
+      this.sharedClient = null
     }
   }
 }
