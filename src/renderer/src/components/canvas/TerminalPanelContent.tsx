@@ -82,6 +82,17 @@ export function TerminalPanelContent({ terminalId }: TerminalPanelContentProps) 
     xtermRef.current = term
     fitAddonRef.current = fitAddon
 
+    // Wait two animation frames so xterm's renderer finishes computing
+    // dimensions.css.canvas.width/height. Without this, the shell's
+    // initial terminal-size query (CSI t) hits _reportWindowsOptions()
+    // before dimensions are populated, causing ".toFixed is not a function".
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+    })
+
+    // Bail if component was unmounted during the wait
+    if (!xtermRef.current) return
+
     try {
       await window.electronAPI.terminal.create(
         terminalId,
