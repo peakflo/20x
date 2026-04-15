@@ -1,79 +1,322 @@
-import { useCallback, useRef } from 'react'
-import { useCanvasStore, type CanvasPanelData } from '@/stores/canvas-store'
+import { useCallback, useRef, useState, useEffect, memo } from 'react'
+import {
+  useCanvasStore,
+  calculateSnap,
+  type CanvasPanelData,
+} from '@/stores/canvas-store'
+import { X, Focus, Maximize2, Minimize2 } from 'lucide-react'
+import { TaskPanelContent } from './TaskPanelContent'
+import { TranscriptPanelContent } from './TranscriptPanelContent'
+import { AppPanelContent } from './AppPanelContent'
+import { WebPagePanelContent } from './WebPagePanelContent'
+import { TerminalPanelContent } from './TerminalPanelContent'
 
 interface CanvasPanelProps {
   panel: CanvasPanelData
-  children?: React.ReactNode
+  zoom: number
 }
 
 /**
- * A positioned, resizable floating panel rendered on the infinite canvas.
- * Handles z-index layering via click-to-front.
- * Drag and resize logic will be added in the sibling subtask (panel interactions).
+ * A positioned, draggable, resizable floating panel on the infinite canvas.
+ * Handles: drag to reposition, click-to-front z-index, close, resize, focus.
+ *
+ * Memoized so that only the panel whose data changed re-renders — prevents
+ * iframes/terminals from being remounted when a *different* panel moves.
  */
-export function CanvasPanel({ panel, children }: CanvasPanelProps) {
+export const CanvasPanel = memo(function CanvasPanel({ panel, zoom }: CanvasPanelProps) {
   const bringToFront = useCanvasStore((s) => s.bringToFront)
-  const panelRef = useRef<HTMLDivElement>(null)
+  const updatePanel = useCanvasStore((s) => s.updatePanel)
+  const removePanel = useCanvasStore((s) => s.removePanel)
+  const focusPanel = useCanvasStore((s) => s.focusPanel)
+  const setDraggingPanelId = useCanvasStore((s) => s.setDraggingPanelId)
+  const setSnapGuides = useCanvasStore((s) => s.setSnapGuides)
 
+  const panelRef = useRef<HTMLDivElement>(null)
+  const [isDragging, setIsDragging] = useState(false)
+  const [isResizing, setIsResizing] = useState(false)
+  const [isCollapsed, setIsCollapsed] = useState(false)
+  const dragStart = useRef({ x: 0, y: 0, panelX: 0, panelY: 0 })
+  const resizeStart = useRef({ x: 0, y: 0, w: 0, h: 0 })
+
+  // ── Drag handling ─────────────────────────────────────────
+  const handleDragStart = useCallback(
+    (e: React.MouseEvent) => {
+      if (e.button !== 0) return
+      e.preventDefault()
+      e.stopPropagation()
+      bringToFront(panel.id)
+      setIsDragging(true)
+      setDraggingPanelId(panel.id)
+      dragStart.current = {
+        x: e.clientX,
+        y: e.clientY,
+        panelX: panel.x,
+        panelY: panel.y,
+      }
+    },
+    [bringToFront, panel.id, panel.x, panel.y, setDraggingPanelId]
+  )
+
+  useEffect(() => {
+    if (!isDragging) return
+
+    const handleMove = (e: MouseEvent) => {
+      const dx = (e.clientX - dragStart.current.x) / zoom
+      const dy = (e.clientY - dragStart.current.y) / zoom
+      const newX = dragStart.current.panelX + dx
+      const newY = dragStart.current.panelY + dy
+
+      // Read panels imperatively — avoids reactive subscription that re-renders all panels
+      const otherPanels = useCanvasStore.getState().panels.filter((p) => p.id !== panel.id)
+      const { x: snappedX, y: snappedY, guides } = calculateSnap(
+        { x: newX, y: newY, width: panel.width, height: panel.height },
+        otherPanels
+      )
+
+      updatePanel(panel.id, { x: snappedX, y: snappedY })
+      setSnapGuides(guides)
+    }
+
+    const handleUp = () => {
+      setIsDragging(false)
+      setDraggingPanelId(null)
+      setSnapGuides([])
+    }
+
+    window.addEventListener('mousemove', handleMove)
+    window.addEventListener('mouseup', handleUp)
+    return () => {
+      window.removeEventListener('mousemove', handleMove)
+      window.removeEventListener('mouseup', handleUp)
+    }
+  }, [isDragging, panel.id, panel.width, panel.height, zoom, updatePanel, setDraggingPanelId, setSnapGuides])
+
+  // ── Resize handling ───────────────────────────────────────
+  const handleResizeStart = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault()
+      e.stopPropagation()
+      bringToFront(panel.id)
+      setIsResizing(true)
+      resizeStart.current = {
+        x: e.clientX,
+        y: e.clientY,
+        w: panel.width,
+        h: panel.height,
+      }
+    },
+    [bringToFront, panel.id, panel.width, panel.height]
+  )
+
+  useEffect(() => {
+    if (!isResizing) return
+
+    const handleMove = (e: MouseEvent) => {
+      const dx = (e.clientX - resizeStart.current.x) / zoom
+      const dy = (e.clientY - resizeStart.current.y) / zoom
+      const minW = panel.minWidth ?? 200
+      const minH = panel.minHeight ?? 150
+      updatePanel(panel.id, {
+        width: Math.max(minW, resizeStart.current.w + dx),
+        height: Math.max(minH, resizeStart.current.h + dy),
+      })
+    }
+
+    const handleUp = () => setIsResizing(false)
+
+    window.addEventListener('mousemove', handleMove)
+    window.addEventListener('mouseup', handleUp)
+    return () => {
+      window.removeEventListener('mousemove', handleMove)
+      window.removeEventListener('mouseup', handleUp)
+    }
+  }, [isResizing, panel.id, panel.minWidth, panel.minHeight, zoom, updatePanel])
+
+  // ── Click handling ────────────────────────────────────────
   const handleMouseDown = useCallback(
-    (_e: React.MouseEvent) => {
-      // Bring panel to front on any click
+    () => {
       bringToFront(panel.id)
     },
     [bringToFront, panel.id]
   )
 
-  const typeLabel =
-    panel.type === 'task'
-      ? 'Task'
-      : panel.type === 'transcript'
-        ? 'Transcript'
-        : panel.type === 'app'
-          ? 'App'
-          : 'Panel'
+  // ── Focus (zoom-to-fit this panel) ────────────────────────
+  const handleFocus = useCallback(
+    (e: React.MouseEvent) => {
+      e.stopPropagation()
+      const canvas = panelRef.current?.closest('[data-canvas-root]') as HTMLElement | null
+      if (canvas) {
+        const rect = canvas.getBoundingClientRect()
+        focusPanel(panel.id, rect.width, rect.height)
+      }
+    },
+    [focusPanel, panel.id]
+  )
 
-  const typeColor =
-    panel.type === 'task'
-      ? 'bg-blue-500/20 text-blue-400'
-      : panel.type === 'transcript'
-        ? 'bg-purple-500/20 text-purple-400'
-        : panel.type === 'app'
-          ? 'bg-green-500/20 text-green-400'
-          : 'bg-muted/30 text-muted-foreground'
+  // ── Close ─────────────────────────────────────────────────
+  const handleClose = useCallback(
+    (e: React.MouseEvent) => {
+      e.stopPropagation()
+      removePanel(panel.id)
+    },
+    [removePanel, panel.id]
+  )
+
+  // ── Toggle collapse ───────────────────────────────────────
+  const handleToggleCollapse = useCallback(
+    (e: React.MouseEvent) => {
+      e.stopPropagation()
+      setIsCollapsed((prev) => !prev)
+    },
+    []
+  )
+
+  // ── Panel type styling ────────────────────────────────────
+  const TYPE_CONFIG: Record<string, { label: string; color: string; border: string }> = {
+    task: { label: 'Task', color: 'bg-blue-500/20 text-blue-400', border: 'border-blue-500/40' },
+    transcript: { label: 'Transcript', color: 'bg-purple-500/20 text-purple-400', border: 'border-purple-500/40' },
+    app: { label: 'App', color: 'bg-green-500/20 text-green-400', border: 'border-green-500/40' },
+    webpage: { label: 'Web', color: 'bg-cyan-500/20 text-cyan-400', border: 'border-cyan-500/40' },
+    terminal: { label: 'Terminal', color: 'bg-amber-500/20 text-amber-400', border: 'border-amber-500/50' },
+  }
+  const cfg = TYPE_CONFIG[panel.type] ?? { label: 'Panel', color: 'bg-muted/30 text-muted-foreground', border: 'border-border/50' }
 
   return (
     <div
       ref={panelRef}
+      data-canvas-panel="true"
       onMouseDown={handleMouseDown}
-      className="absolute rounded-xl border border-border/50 bg-[#161b22] shadow-2xl flex flex-col overflow-hidden select-none"
+      className={`absolute rounded-xl border bg-[#1a2030] shadow-2xl flex flex-col overflow-hidden select-none transition-shadow duration-150 ${cfg.border} ${
+        isDragging ? 'shadow-indigo-500/10 ring-1 ring-indigo-500/30' : ''
+      }`}
       style={{
         left: panel.x,
         top: panel.y,
         width: panel.width,
-        height: panel.height,
+        height: isCollapsed ? 'auto' : panel.height,
         zIndex: panel.zIndex,
         minWidth: panel.minWidth ?? 200,
-        minHeight: panel.minHeight ?? 150,
+        minHeight: isCollapsed ? undefined : (panel.minHeight ?? 150),
       }}
     >
-      {/* Title bar */}
-      <div className="flex items-center gap-2 px-3 py-2 border-b border-border/30 bg-[#0d1117]/60 flex-shrink-0">
-        <span className={`text-[10px] font-medium uppercase px-1.5 py-0.5 rounded ${typeColor}`}>
-          {typeLabel}
+      {/* Title bar — drag handle */}
+      <div
+        className="flex items-center gap-2 px-3 py-2 border-b border-border/40 bg-[#141a26] flex-shrink-0 cursor-grab active:cursor-grabbing group"
+        onMouseDown={handleDragStart}
+      >
+        <span
+          className={`text-[10px] font-medium uppercase px-1.5 py-0.5 rounded ${cfg.color}`}
+        >
+          {cfg.label}
         </span>
         <span className="text-xs text-foreground truncate flex-1 font-medium">
           {panel.title}
         </span>
+
+        {/* Panel actions — visible on hover */}
+        <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity duration-150">
+          {/* Focus / zoom-to-fit button */}
+          <button
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={handleFocus}
+            className="h-5 w-5 rounded flex items-center justify-center hover:bg-white/10 text-muted-foreground/50 hover:text-muted-foreground transition-colors"
+            title="Focus panel (zoom to fit)"
+          >
+            <Focus className="h-3 w-3" />
+          </button>
+
+          {/* Collapse/expand */}
+          <button
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={handleToggleCollapse}
+            className="h-5 w-5 rounded flex items-center justify-center hover:bg-white/10 text-muted-foreground/50 hover:text-muted-foreground transition-colors"
+            title={isCollapsed ? 'Expand' : 'Collapse'}
+          >
+            {isCollapsed ? (
+              <Maximize2 className="h-3 w-3" />
+            ) : (
+              <Minimize2 className="h-3 w-3" />
+            )}
+          </button>
+
+          {/* Close button */}
+          <button
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={handleClose}
+            className="h-5 w-5 rounded flex items-center justify-center hover:bg-red-500/20 text-muted-foreground/50 hover:text-red-400 transition-colors"
+            title="Close panel"
+          >
+            <X className="h-3 w-3" />
+          </button>
+        </div>
       </div>
 
       {/* Content area */}
-      <div className="flex-1 overflow-auto p-3">
-        {children || (
-          <div className="flex items-center justify-center h-full text-muted-foreground/50 text-xs">
-            Panel content will appear here
-          </div>
-        )}
-      </div>
+      {!isCollapsed && (
+        <div className={`flex-1 overflow-hidden min-h-0 ${panel.type === 'task' || panel.type === 'transcript' || panel.type === 'webpage' || panel.type === 'terminal' || (panel.type === 'app' && panel.refId) ? '' : 'p-3 overflow-auto'}`}>
+          <MemoizedPanelContent
+            type={panel.type}
+            id={panel.id}
+            refId={panel.refId}
+            url={panel.url}
+            title={panel.title}
+          />
+        </div>
+      )}
+
+      {/* Resize handle (bottom-right corner) */}
+      {!isCollapsed && (
+        <div
+          onMouseDown={handleResizeStart}
+          className="absolute bottom-0 right-0 w-4 h-4 cursor-se-resize group/resize"
+        >
+          <svg
+            className="absolute bottom-1 right-1 text-muted-foreground/20 group-hover/resize:text-muted-foreground/50 transition-colors"
+            width="8"
+            height="8"
+            viewBox="0 0 8 8"
+          >
+            <path d="M 6 0 L 8 0 L 8 2 Z" fill="currentColor" />
+            <path d="M 3 3 L 8 3 L 8 5 L 5 5 L 5 8 L 3 8 Z" fill="currentColor" />
+            <path d="M 0 6 L 2 6 L 2 8 L 0 8 Z" fill="currentColor" />
+          </svg>
+        </div>
+      )}
     </div>
   )
+})
+
+// ── Memoized panel content router ──────────────────────────
+// Only re-renders when the content-relevant props change (type, refId, url, id).
+// Position/size/zIndex changes do NOT cause content to remount.
+
+interface PanelContentProps {
+  type: string
+  id: string
+  refId?: string
+  url?: string
+  title: string
 }
+
+const MemoizedPanelContent = memo(function PanelContent({ type, id, refId, url, title }: PanelContentProps) {
+  if (type === 'task' && refId) {
+    return <TaskPanelContent taskId={refId} />
+  }
+  if (type === 'transcript' && refId) {
+    return <TranscriptPanelContent taskId={refId} />
+  }
+  if (type === 'app') {
+    return <AppPanelContent appId={refId} title={title} />
+  }
+  if (type === 'webpage') {
+    return <WebPagePanelContent panelId={id} url={url} title={title} />
+  }
+  if (type === 'terminal') {
+    return <TerminalPanelContent terminalId={id} />
+  }
+  return (
+    <div className="flex items-center justify-center h-full text-muted-foreground/50 text-xs">
+      Panel content will appear here
+    </div>
+  )
+})

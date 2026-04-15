@@ -171,7 +171,7 @@ export function AppLayout() {
 
         {/* Workspace */}
         <main className="flex flex-col flex-1 min-w-0 overflow-hidden bg-background">
-          <div className="flex-1 overflow-hidden relative">
+          <div className="flex-1 h-0 overflow-hidden relative">
             {/* Main workspace content */}
             {activeModal === 'settings' ? (
               <SettingsWorkspace />
