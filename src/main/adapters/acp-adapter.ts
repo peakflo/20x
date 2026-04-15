@@ -783,6 +783,36 @@ export class AcpAdapter implements CodingAgentAdapter {
     // Use a Map to keep only the latest version of each part (by ID)
     const partsByIdAndRole = new Map<string, MessagePart>()
 
+    // Snapshot turn-related session state before processing.
+    // convertAcpEventToMessageParts() mutates turn counters (currentTurnId,
+    // activeTurnId, pendingAssistantTurnSplit, etc.) as it processes events.
+    // When getAllMessages() is called from replayMissedTranscriptPartsBeforeIdle
+    // AFTER a follow-up response, the session state has already advanced.
+    // Re-processing all permanent messages from the beginning with that
+    // advanced state produces DIFFERENT turn-based IDs (e.g. agent-response-5
+    // instead of agent-response-1), which bypass the seenPartIds dedup and
+    // cause every historical message to appear again in the transcript.
+    // By resetting to zero and restoring afterward, we ensure getAllMessages()
+    // always generates deterministic, stable IDs from the permanent history.
+    const savedTurnState = {
+      currentTurnId: session.currentTurnId,
+      activeTurnId: session.activeTurnId,
+      currentUserTurnId: session.currentUserTurnId,
+      lastChunkTime: session.lastChunkTime,
+      lastSessionUpdateType: session.lastSessionUpdateType,
+      pendingAssistantTurnSplit: session.pendingAssistantTurnSplit,
+      toolCallMetadata: new Map(session.toolCallMetadata),
+    }
+
+    // Reset to initial state so turn IDs are computed deterministically
+    session.currentTurnId = 0
+    session.activeTurnId = null
+    session.currentUserTurnId = 0
+    session.lastChunkTime = null
+    session.lastSessionUpdateType = null
+    session.pendingAssistantTurnSplit = false
+    session.toolCallMetadata = new Map()
+
     // Process all permanent messages
     for (const event of session.permanentMessages) {
       const parts = this.convertAcpEventToMessageParts(
@@ -802,6 +832,17 @@ export class AcpAdapter implements CodingAgentAdapter {
         }
       }
     }
+
+    // Restore live session state so polling / follow-up prompts continue
+    // from where they left off. The turn IDs computed above are only used
+    // for the returned messages — they must not leak into the live session.
+    session.currentTurnId = savedTurnState.currentTurnId
+    session.activeTurnId = savedTurnState.activeTurnId
+    session.currentUserTurnId = savedTurnState.currentUserTurnId
+    session.lastChunkTime = savedTurnState.lastChunkTime
+    session.lastSessionUpdateType = savedTurnState.lastSessionUpdateType
+    session.pendingAssistantTurnSplit = savedTurnState.pendingAssistantTurnSplit
+    session.toolCallMetadata = savedTurnState.toolCallMetadata
 
     const allParts = Array.from(partsByIdAndRole.values())
 
