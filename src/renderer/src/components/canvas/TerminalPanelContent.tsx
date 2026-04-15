@@ -10,7 +10,16 @@ interface TerminalPanelContentProps {
 
 /**
  * Interactive terminal panel on the canvas.
- * Spawns a real shell (via node-pty in the main process) and renders it with xterm.js.
+ * Spawns a real shell (via the main process) and renders it with xterm.js.
+ *
+ * IMPORTANT: xterm.js's canvas renderer calls `.toFixed()` on computed
+ * cell dimensions. When the container has 0×0 size (window drag, minimize,
+ * canvas viewport transitions) those values become NaN, crashing with
+ * "f.toFixed is not a function". To prevent this:
+ *   1. We only open() xterm after a ResizeObserver confirms real dimensions.
+ *   2. The container always has min-width/min-height so the renderer never
+ *      sees truly-zero values even during layout shifts.
+ *   3. Every fit() call is wrapped in try-catch.
  */
 export function TerminalPanelContent({ terminalId }: TerminalPanelContentProps) {
   const containerRef = useRef<HTMLDivElement>(null)
@@ -19,9 +28,18 @@ export function TerminalPanelContent({ terminalId }: TerminalPanelContentProps) 
   const [isReady, setIsReady] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const cleanupRef = useRef<(() => void)[]>([])
+  const initCalledRef = useRef(false)
 
   const initTerminal = useCallback(async () => {
-    if (!containerRef.current || xtermRef.current) return
+    if (!containerRef.current || xtermRef.current || initCalledRef.current) return
+
+    // Wait until the container actually has dimensions.
+    // During canvas viewport changes or panel open animations the container
+    // may still be 0×0 when this runs.
+    const rect = containerRef.current.getBoundingClientRect()
+    if (rect.width < 10 || rect.height < 10) return
+
+    initCalledRef.current = true
 
     const term = new XTerm({
       cursorBlink: true,
@@ -59,36 +77,28 @@ export function TerminalPanelContent({ terminalId }: TerminalPanelContentProps) 
     term.loadAddon(webLinksAddon)
 
     term.open(containerRef.current)
-    // Only fit if container has real dimensions (prevents toFixed crash in xterm renderer)
-    const rect = containerRef.current.getBoundingClientRect()
-    if (rect.width > 0 && rect.height > 0) {
-      try { fitAddon.fit() } catch { /* ignore fit errors during init */ }
-    }
+    try { fitAddon.fit() } catch { /* ignore fit errors during init */ }
 
     xtermRef.current = term
     fitAddonRef.current = fitAddon
 
     try {
-      // Create PTY in main process
       await window.electronAPI.terminal.create(
         terminalId,
         term.cols,
         term.rows
       )
 
-      // Forward terminal input to PTY
       const inputDispose = term.onData((data) => {
         window.electronAPI.terminal.write(terminalId, data)
       })
 
-      // Receive PTY output
       const removeDataListener = window.electronAPI.terminal.onData(({ id, data }) => {
         if (id === terminalId) {
           term.write(data)
         }
       })
 
-      // Handle PTY exit
       const removeExitListener = window.electronAPI.terminal.onExit(({ id }) => {
         if (id === terminalId) {
           term.write('\r\n\x1b[90m[Process exited]\x1b[0m\r\n')
@@ -108,36 +118,29 @@ export function TerminalPanelContent({ terminalId }: TerminalPanelContentProps) 
     }
   }, [terminalId])
 
-  // Initialize on mount
+  // Use ResizeObserver to detect when the container first gets real
+  // dimensions, then initialize xterm. This is the primary guard
+  // against the toFixed crash — we never call term.open() on a
+  // zero-size container.
   useEffect(() => {
-    initTerminal()
-
-    return () => {
-      // Cleanup listeners
-      for (const fn of cleanupRef.current) fn()
-      cleanupRef.current = []
-
-      // Kill PTY
-      window.electronAPI.terminal.kill(terminalId).catch(() => {})
-
-      // Dispose xterm
-      xtermRef.current?.dispose()
-      xtermRef.current = null
-      fitAddonRef.current = null
-    }
-  }, [initTerminal, terminalId])
-
-  // Resize observer — fit terminal when panel resizes
-  useEffect(() => {
-    if (!containerRef.current || !fitAddonRef.current) return
+    if (!containerRef.current) return
 
     const observer = new ResizeObserver((entries) => {
-      // Skip resize when container has zero dimensions (window drag/minimize)
-      // — xterm's renderer calls .toFixed() on dimension values which crashes if they're invalid
       const entry = entries[0]
-      if (!entry || entry.contentRect.width < 1 || entry.contentRect.height < 1) return
+      if (!entry) return
+      const { width, height } = entry.contentRect
+
+      // ── First paint: init terminal once container is big enough ──
+      if (!xtermRef.current && !initCalledRef.current && width >= 10 && height >= 10) {
+        initTerminal()
+        return
+      }
+
+      // ── Subsequent resizes: refit ──
+      if (!xtermRef.current || !fitAddonRef.current) return
+      if (width < 10 || height < 10) return // still too small — skip
       try {
-        fitAddonRef.current?.fit()
+        fitAddonRef.current.fit()
         if (xtermRef.current && isReady) {
           window.electronAPI.terminal.resize(
             terminalId,
@@ -151,8 +154,28 @@ export function TerminalPanelContent({ terminalId }: TerminalPanelContentProps) 
     })
 
     observer.observe(containerRef.current)
-    return () => observer.disconnect()
-  }, [terminalId, isReady])
+
+    // Also try to init immediately if container already has dimensions
+    // (common path — panel is already visible when component mounts)
+    initTerminal()
+
+    return () => {
+      observer.disconnect()
+
+      // Cleanup listeners
+      for (const fn of cleanupRef.current) fn()
+      cleanupRef.current = []
+
+      // Kill PTY
+      window.electronAPI.terminal.kill(terminalId).catch(() => {})
+
+      // Dispose xterm
+      xtermRef.current?.dispose()
+      xtermRef.current = null
+      fitAddonRef.current = null
+      initCalledRef.current = false
+    }
+  }, [initTerminal, terminalId, isReady])
 
   if (error) {
     return (
@@ -169,7 +192,13 @@ export function TerminalPanelContent({ terminalId }: TerminalPanelContentProps) 
     <div
       ref={containerRef}
       className="h-full w-full"
-      style={{ background: '#141a26' }}
+      style={{
+        background: '#141a26',
+        // Minimum dimensions prevent xterm's internal canvas renderer from
+        // computing NaN cell sizes (which causes the toFixed crash).
+        minWidth: 100,
+        minHeight: 50,
+      }}
     />
   )
 }
