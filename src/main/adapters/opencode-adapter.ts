@@ -1,6 +1,7 @@
 import { Agent as UndiciAgent } from 'undici'
 import { mkdirSync, writeFileSync, rmSync, existsSync } from 'fs'
-import { join } from 'path'
+import { join, delimiter } from 'path'
+import { homedir } from 'os'
 import { buildMergedOpencodeConfig } from '../utils/opencode-config'
 import type {
   CodingAgentAdapter,
@@ -284,6 +285,26 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     return null
   }
 
+  /**
+   * Ensures common binary install paths (e.g. ~/.opencode/bin) are in PATH
+   * so the SDK's createOpencode can find the `opencode` binary.
+   */
+  private ensureBinaryPaths(): void {
+    const currentPath = process.env.PATH || ''
+    const extraPaths = [
+      join(homedir(), '.opencode', 'bin'),
+      ...(process.platform === 'win32'
+        ? [join(homedir(), 'AppData', 'Roaming', 'npm')]
+        : ['/usr/local/bin']),
+      join(homedir(), '.local', 'bin')
+    ].filter(p => !currentPath.includes(p))
+
+    if (extraPaths.length > 0) {
+      process.env.PATH = [...extraPaths, currentPath].join(delimiter)
+      console.log('[OpencodeAdapter] Added binary paths to PATH:', extraPaths)
+    }
+  }
+
   private async ensureServerRunning(targetUrl: string = DEFAULT_SERVER_URL): Promise<void> {
     if (this.serverUrl) {
       if (this.serverUrl === targetUrl) {
@@ -296,6 +317,9 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     }
 
     await this.ensureSDKLoaded()
+
+    // Ensure common binary install paths are in PATH so the SDK can find `opencode`
+    this.ensureBinaryPaths()
 
     const isDefaultUrl = targetUrl === DEFAULT_SERVER_URL || targetUrl === 'http://127.0.0.1:4096'
 
