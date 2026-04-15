@@ -28,19 +28,17 @@ const GRID_SIZE = 40
  */
 export function InfiniteCanvas() {
   const containerRef = useRef<HTMLDivElement>(null)
-  const {
-    viewport,
-    panels,
-    snapGuides,
-    isLoaded,
-    panBy,
-    zoomAtPoint,
-    zoomTo,
-    resetViewport,
-    fitToContent,
-    addPanel,
-    loadCanvas,
-  } = useCanvasStore()
+  const viewport = useCanvasStore((s) => s.viewport)
+  const panels = useCanvasStore((s) => s.panels)
+  const snapGuides = useCanvasStore((s) => s.snapGuides)
+  const isLoaded = useCanvasStore((s) => s.isLoaded)
+  const panBy = useCanvasStore((s) => s.panBy)
+  const zoomAtPoint = useCanvasStore((s) => s.zoomAtPoint)
+  const zoomTo = useCanvasStore((s) => s.zoomTo)
+  const resetViewport = useCanvasStore((s) => s.resetViewport)
+  const fitToContent = useCanvasStore((s) => s.fitToContent)
+  const addPanel = useCanvasStore((s) => s.addPanel)
+  const loadCanvas = useCanvasStore((s) => s.loadCanvas)
 
   // ── Load persisted canvas state on mount ────────────────
   useEffect(() => {

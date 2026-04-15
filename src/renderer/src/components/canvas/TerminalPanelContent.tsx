@@ -62,7 +62,7 @@ export function TerminalPanelContent({ terminalId }: TerminalPanelContentProps) 
     // Only fit if container has real dimensions (prevents toFixed crash in xterm renderer)
     const rect = containerRef.current.getBoundingClientRect()
     if (rect.width > 0 && rect.height > 0) {
-      fitAddon.fit()
+      try { fitAddon.fit() } catch { /* ignore fit errors during init */ }
     }
 
     xtermRef.current = term

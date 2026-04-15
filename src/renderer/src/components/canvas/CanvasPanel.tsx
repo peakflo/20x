@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState, useEffect } from 'react'
+import { useCallback, useRef, useState, useEffect, memo } from 'react'
 import {
   useCanvasStore,
   calculateSnap,
@@ -18,14 +18,16 @@ interface CanvasPanelProps {
 
 /**
  * A positioned, draggable, resizable floating panel on the infinite canvas.
- * Handles: drag to reposition, click-to-front z-index, close, resize, connect.
+ * Handles: drag to reposition, click-to-front z-index, close, resize, focus.
+ *
+ * Memoized so that only the panel whose data changed re-renders — prevents
+ * iframes/terminals from being remounted when a *different* panel moves.
  */
-export function CanvasPanel({ panel, zoom }: CanvasPanelProps) {
+export const CanvasPanel = memo(function CanvasPanel({ panel, zoom }: CanvasPanelProps) {
   const bringToFront = useCanvasStore((s) => s.bringToFront)
   const updatePanel = useCanvasStore((s) => s.updatePanel)
   const removePanel = useCanvasStore((s) => s.removePanel)
   const focusPanel = useCanvasStore((s) => s.focusPanel)
-  const panels = useCanvasStore((s) => s.panels)
   const setDraggingPanelId = useCanvasStore((s) => s.setDraggingPanelId)
   const setSnapGuides = useCanvasStore((s) => s.setSnapGuides)
 
@@ -64,8 +66,8 @@ export function CanvasPanel({ panel, zoom }: CanvasPanelProps) {
       const newX = dragStart.current.panelX + dx
       const newY = dragStart.current.panelY + dy
 
-      // Calculate snap against other panels
-      const otherPanels = panels.filter((p) => p.id !== panel.id)
+      // Read panels imperatively — avoids reactive subscription that re-renders all panels
+      const otherPanels = useCanvasStore.getState().panels.filter((p) => p.id !== panel.id)
       const { x: snappedX, y: snappedY, guides } = calculateSnap(
         { x: newX, y: newY, width: panel.width, height: panel.height },
         otherPanels
@@ -87,7 +89,7 @@ export function CanvasPanel({ panel, zoom }: CanvasPanelProps) {
       window.removeEventListener('mousemove', handleMove)
       window.removeEventListener('mouseup', handleUp)
     }
-  }, [isDragging, panel.id, panel.width, panel.height, panels, zoom, updatePanel, setDraggingPanelId, setSnapGuides])
+  }, [isDragging, panel.id, panel.width, panel.height, zoom, updatePanel, setDraggingPanelId, setSnapGuides])
 
   // ── Resize handling ───────────────────────────────────────
   const handleResizeStart = useCallback(
@@ -142,7 +144,6 @@ export function CanvasPanel({ panel, zoom }: CanvasPanelProps) {
   const handleFocus = useCallback(
     (e: React.MouseEvent) => {
       e.stopPropagation()
-      // Find the canvas container to get its dimensions
       const canvas = panelRef.current?.closest('[data-canvas-root]') as HTMLElement | null
       if (canvas) {
         const rect = canvas.getBoundingClientRect()
@@ -179,16 +180,13 @@ export function CanvasPanel({ panel, zoom }: CanvasPanelProps) {
     terminal: { label: 'Terminal', color: 'bg-amber-500/20 text-amber-400', border: 'border-amber-500/50' },
   }
   const cfg = TYPE_CONFIG[panel.type] ?? { label: 'Panel', color: 'bg-muted/30 text-muted-foreground', border: 'border-border/50' }
-  const typeLabel = cfg.label
-  const typeColor = cfg.color
-  const borderAccent = cfg.border
 
   return (
     <div
       ref={panelRef}
       data-canvas-panel="true"
       onMouseDown={handleMouseDown}
-      className={`absolute rounded-xl border bg-[#1a2030] shadow-2xl flex flex-col overflow-hidden select-none transition-shadow duration-150 ${borderAccent} ${
+      className={`absolute rounded-xl border bg-[#1a2030] shadow-2xl flex flex-col overflow-hidden select-none transition-shadow duration-150 ${cfg.border} ${
         isDragging ? 'shadow-indigo-500/10 ring-1 ring-indigo-500/30' : ''
       }`}
       style={{
@@ -207,9 +205,9 @@ export function CanvasPanel({ panel, zoom }: CanvasPanelProps) {
         onMouseDown={handleDragStart}
       >
         <span
-          className={`text-[10px] font-medium uppercase px-1.5 py-0.5 rounded ${typeColor}`}
+          className={`text-[10px] font-medium uppercase px-1.5 py-0.5 rounded ${cfg.color}`}
         >
-          {typeLabel}
+          {cfg.label}
         </span>
         <span className="text-xs text-foreground truncate flex-1 font-medium">
           {panel.title}
@@ -256,7 +254,13 @@ export function CanvasPanel({ panel, zoom }: CanvasPanelProps) {
       {/* Content area */}
       {!isCollapsed && (
         <div className={`flex-1 overflow-hidden min-h-0 ${panel.type === 'task' || panel.type === 'transcript' || panel.type === 'webpage' || panel.type === 'terminal' || (panel.type === 'app' && panel.refId) ? '' : 'p-3 overflow-auto'}`}>
-          <PanelContent panel={panel} />
+          <MemoizedPanelContent
+            type={panel.type}
+            id={panel.id}
+            refId={panel.refId}
+            url={panel.url}
+            title={panel.title}
+          />
         </div>
       )}
 
@@ -280,29 +284,39 @@ export function CanvasPanel({ panel, zoom }: CanvasPanelProps) {
       )}
     </div>
   )
+})
+
+// ── Memoized panel content router ──────────────────────────
+// Only re-renders when the content-relevant props change (type, refId, url, id).
+// Position/size/zIndex changes do NOT cause content to remount.
+
+interface PanelContentProps {
+  type: string
+  id: string
+  refId?: string
+  url?: string
+  title: string
 }
 
-// ── Panel content router ────────────────────────────────────
-
-function PanelContent({ panel }: { panel: CanvasPanelData }) {
-  if (panel.type === 'task' && panel.refId) {
-    return <TaskPanelContent taskId={panel.refId} />
+const MemoizedPanelContent = memo(function PanelContent({ type, id, refId, url, title }: PanelContentProps) {
+  if (type === 'task' && refId) {
+    return <TaskPanelContent taskId={refId} />
   }
-  if (panel.type === 'transcript' && panel.refId) {
-    return <TranscriptPanelContent taskId={panel.refId} />
+  if (type === 'transcript' && refId) {
+    return <TranscriptPanelContent taskId={refId} />
   }
-  if (panel.type === 'app') {
-    return <AppPanelContent appId={panel.refId} title={panel.title} />
+  if (type === 'app') {
+    return <AppPanelContent appId={refId} title={title} />
   }
-  if (panel.type === 'webpage') {
-    return <WebPagePanelContent panelId={panel.id} url={panel.url} title={panel.title} />
+  if (type === 'webpage') {
+    return <WebPagePanelContent panelId={id} url={url} title={title} />
   }
-  if (panel.type === 'terminal') {
-    return <TerminalPanelContent terminalId={panel.id} />
+  if (type === 'terminal') {
+    return <TerminalPanelContent terminalId={id} />
   }
   return (
     <div className="flex items-center justify-center h-full text-muted-foreground/50 text-xs">
       Panel content will appear here
     </div>
   )
-}
+})
