@@ -3,6 +3,85 @@ import { OpencodeAdapter } from './opencode-adapter'
 import { SessionStatusType } from './coding-agent-adapter'
 
 describe('OpencodeAdapter', () => {
+  describe('waitForMcpServersReady', () => {
+    it('prefers SDK mcp.list when available', async () => {
+      const adapter = new OpencodeAdapter()
+      const list = vi.fn().mockResolvedValue({
+        data: [
+          { name: 'server-a', status: 'connected' },
+          { name: 'server-b', status: 'failed' }
+        ]
+      })
+      const status = vi.fn()
+      const mockClient = { mcp: { list, status } }
+
+      const result = await (adapter as any).waitForMcpServersReady(
+        mockClient,
+        ['server-a', 'server-b'],
+        '/tmp/ws',
+        1,
+        0
+      )
+
+      expect(list).toHaveBeenCalledTimes(1)
+      expect(status).not.toHaveBeenCalled()
+      expect(result.get('server-a')).toBe('connected')
+      expect(result.get('server-b')).toBe('failed')
+    })
+
+    it('falls back to SDK mcp.status and batches checks per attempt', async () => {
+      const adapter = new OpencodeAdapter()
+      const status = vi
+        .fn()
+        .mockResolvedValueOnce({
+          data: {
+            'server-a': { status: 'connecting' },
+            'server-b': { status: 'connecting' }
+          }
+        })
+        .mockResolvedValueOnce({
+          data: {
+            'server-a': { status: 'connected' },
+            'server-b': { status: 'failed' }
+          }
+        })
+      const mockClient = { mcp: { status } }
+
+      const result = await (adapter as any).waitForMcpServersReady(
+        mockClient,
+        ['server-a', 'server-b'],
+        '/tmp/ws',
+        2,
+        0
+      )
+
+      expect(status).toHaveBeenCalledTimes(2)
+      expect(result.get('server-a')).toBe('connected')
+      expect(result.get('server-b')).toBe('failed')
+    })
+
+    it('marks unresolved servers as timeout', async () => {
+      const adapter = new OpencodeAdapter()
+      const status = vi.fn().mockResolvedValue({
+        data: {
+          'server-a': { status: 'connecting' }
+        }
+      })
+      const mockClient = { mcp: { status } }
+
+      const result = await (adapter as any).waitForMcpServersReady(
+        mockClient,
+        ['server-a'],
+        '/tmp/ws',
+        2,
+        0
+      )
+
+      expect(status).toHaveBeenCalledTimes(2)
+      expect(result.get('server-a')).toBe('timeout')
+    })
+  })
+
   it('scopes part ids by message id when polling and replaying messages', async () => {
     const adapter = new OpencodeAdapter()
     const mockClient = {

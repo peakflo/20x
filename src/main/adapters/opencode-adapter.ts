@@ -73,6 +73,125 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     await this.ensureSDKLoaded()
   }
 
+  /**
+   * Wait for a group of MCP servers to reach a terminal state.
+   * Uses one status query per retry cycle (batched) instead of polling per server.
+   */
+  private async waitForMcpServersReady(
+    ocClient: OpencodeClient,
+    serverNames: string[],
+    workspaceDir?: string,
+    maxAttempts = 5,
+    delayMs = 300
+  ): Promise<Map<string, 'connected' | 'failed' | 'timeout'>> {
+    const pending = new Set(serverNames)
+    const states = new Map<string, 'connected' | 'failed' | 'timeout'>()
+
+    for (let attempt = 0; attempt < maxAttempts && pending.size > 0; attempt++) {
+      try {
+        const statusMap = await this.getMcpStatusMap(ocClient, workspaceDir)
+
+        for (const name of [...pending]) {
+          const serverStatus = statusMap?.[name]
+          if (!serverStatus?.status) continue
+
+          if (serverStatus.status === 'connected') {
+            states.set(name, 'connected')
+            pending.delete(name)
+            console.log(`[OpencodeAdapter] MCP server '${name}' status: connected (attempt ${attempt + 1})`)
+          } else if (serverStatus.status === 'failed') {
+            states.set(name, 'failed')
+            pending.delete(name)
+            console.error(`[OpencodeAdapter] MCP server '${name}' status: failed${serverStatus.error ? ` - ${serverStatus.error}` : ''}`)
+          }
+        }
+      } catch (statusErr) {
+        console.warn('[OpencodeAdapter] Failed to query MCP status:', statusErr)
+      }
+
+      if (pending.size > 0 && attempt < maxAttempts - 1 && delayMs > 0) {
+        await new Promise(resolve => setTimeout(resolve, delayMs))
+      }
+    }
+
+    for (const name of pending) {
+      states.set(name, 'timeout')
+    }
+
+    return states
+  }
+
+  /**
+   * Query MCP status via SDK.
+   * Prefer mcp.list() (same view as `opencode mcp list`), fall back to mcp.status().
+   */
+  private async getMcpStatusMap(
+    ocClient: OpencodeClient,
+    workspaceDir?: string
+  ): Promise<Record<string, { status?: string; error?: string }> | undefined> {
+    const query = workspaceDir ? { query: { directory: workspaceDir } } : {}
+    const mcpClient = ocClient.mcp as unknown as {
+      list?: (args?: unknown) => Promise<{ data?: unknown; error?: unknown }>
+      status: (args?: unknown) => Promise<{ data?: unknown; error?: unknown }>
+    }
+
+    if (typeof mcpClient.list === 'function') {
+      try {
+        const listResult = await mcpClient.list(query)
+        if (!listResult.error) {
+          const parsed = this.parseMcpListData(listResult.data)
+          if (parsed) return parsed
+        }
+      } catch (err) {
+        console.warn('[OpencodeAdapter] mcp.list failed, falling back to mcp.status:', err)
+      }
+    }
+
+    const statusResult = await mcpClient.status(query)
+    return statusResult.data as Record<string, { status?: string; error?: string }> | undefined
+  }
+
+  private parseMcpListData(
+    data: unknown
+  ): Record<string, { status?: string; error?: string }> | undefined {
+    if (!data) return undefined
+
+    if (Array.isArray(data)) {
+      const out: Record<string, { status?: string; error?: string }> = {}
+      for (const item of data) {
+        const rec = item as {
+          name?: string
+          id?: string
+          status?: string
+          state?: string
+          error?: string
+          auth?: { status?: string; error?: string }
+        }
+        const name = rec.name || rec.id
+        if (!name) continue
+        out[name] = {
+          status: rec.status || rec.state || rec.auth?.status,
+          error: rec.error || rec.auth?.error
+        }
+      }
+      return Object.keys(out).length > 0 ? out : undefined
+    }
+
+    if (typeof data === 'object') {
+      const obj = data as Record<string, { status?: string; state?: string; error?: string }>
+      const out: Record<string, { status?: string; error?: string }> = {}
+      for (const [name, value] of Object.entries(obj)) {
+        out[name] = {
+          status: value?.status || value?.state,
+          error: value?.error
+        }
+      }
+      return Object.keys(out).length > 0 ? out : undefined
+    }
+
+    return undefined
+  }
+
   private getScopedPartId(messageId: string, rawPartId: string | undefined, fallbackIndex?: number): string | undefined {
     if (rawPartId) return `${messageId}:${rawPartId}`
     if (fallbackIndex !== undefined) return `${messageId}:part-${fallbackIndex}`
@@ -259,6 +378,8 @@ export class OpencodeAdapter implements CodingAgentAdapter {
 
     // Register MCP servers BEFORE creating session so the session picks them up
     if (config.mcpServers) {
+      const connectCandidates: string[] = []
+
       for (const [name, mcpConfig] of Object.entries(config.mcpServers)) {
         try {
           const mcpAddConfig = mcpConfig.type === 'http'
@@ -303,43 +424,23 @@ export class OpencodeAdapter implements CodingAgentAdapter {
             console.error(`[OpencodeAdapter] mcp.connect returned false for ${name} — server failed to connect`)
             continue
           }
+          connectCandidates.push(name)
+        } catch (mcpError) {
+          console.error(`[OpencodeAdapter] Failed to register MCP server ${name}:`, mcpError)
+        }
+      }
 
-          // Wait for MCP server to fully connect with retries
-          let connected = false
-          for (let attempt = 0; attempt < 5; attempt++) {
-            try {
-              const statusResult = await ocClient.mcp.status({
-                ...(config.workspaceDir && { query: { directory: config.workspaceDir } })
-              })
-              const serverStatus = statusResult.data?.[name] as { status: string; error?: string } | undefined
-              if (serverStatus) {
-                if (serverStatus.status === 'connected') {
-                  console.log(`[OpencodeAdapter] MCP server '${name}' status: connected (attempt ${attempt + 1})`)
-                  connected = true
-                  break
-                } else if (serverStatus.status === 'failed') {
-                  console.error(`[OpencodeAdapter] MCP server '${name}' status: failed${serverStatus.error ? ` - ${serverStatus.error}` : ''}`)
-                  break
-                } else {
-                  console.log(`[OpencodeAdapter] MCP server '${name}' status: ${serverStatus.status}, waiting... (attempt ${attempt + 1})`)
-                }
-              } else {
-                console.log(`[OpencodeAdapter] MCP server '${name}' not yet in status response (attempt ${attempt + 1})`)
-              }
-            } catch (statusErr) {
-              console.warn(`[OpencodeAdapter] Failed to check MCP server status for ${name}:`, statusErr)
-            }
-            // Wait before retrying (500ms, 1s, 1.5s, 2s, 2.5s)
-            await new Promise(resolve => setTimeout(resolve, 500 * (attempt + 1)))
-          }
-
-          if (connected) {
+      if (connectCandidates.length > 0) {
+        const readiness = await this.waitForMcpServersReady(ocClient, connectCandidates, config.workspaceDir)
+        for (const name of connectCandidates) {
+          const state = readiness.get(name)
+          if (state === 'connected') {
             console.log(`[OpencodeAdapter] Successfully registered MCP server: ${name}`)
+          } else if (state === 'failed') {
+            console.error(`[OpencodeAdapter] MCP server '${name}' failed to connect`)
           } else {
             console.error(`[OpencodeAdapter] MCP server '${name}' did not reach connected status — tools may not work`)
           }
-        } catch (mcpError) {
-          console.error(`[OpencodeAdapter] Failed to register MCP server ${name}:`, mcpError)
         }
       }
     }
