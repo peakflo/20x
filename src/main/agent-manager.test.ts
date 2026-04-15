@@ -178,6 +178,33 @@ describe('AgentManager skill file paths', () => {
         '/tmp/test-workspace/.agents/skills/test-skill/SKILL.md'
       )
     })
+
+    it('strips YAML-breaking characters from skill name and description in SKILL.md frontmatter', async () => {
+      const mockDb = {
+        ...createMockDb({ coding_agent: 'codex' }),
+        getSkillsByIds: vi.fn(() => [
+          makeSkillRecord({
+            name: '[Workflo] gh-pr-base-branch-check',
+            description: 'Check base branch {details}: see #docs',
+          }),
+        ]),
+      } as unknown as ConstructorParameters<typeof AgentManager>[0]
+      manager = new AgentManager(mockDb)
+
+      await (manager as any).writeSkillFiles('task-1', 'agent-1', '/tmp/test-workspace')
+
+      const writeFileCall = mockedWriteFileAsync.mock.calls.find(c =>
+        (c[0] as string).endsWith('SKILL.md')
+      )
+      expect(writeFileCall).toBeDefined()
+      const writtenContent = writeFileCall![1] as string
+      // Square brackets, curly braces and hash must not appear in the frontmatter name/description lines
+      const frontmatterLines = writtenContent.split('---')[1]
+      expect(frontmatterLines).not.toMatch(/[\[\]{}"'#]/)
+      // The sanitised values should still be readable
+      expect(frontmatterLines).toContain('Workflo gh-pr-base-branch-check')
+      expect(frontmatterLines).toContain('Check base branch details: see docs')
+    })
   })
 
   describe('writeAgentsDocumentation', () => {
@@ -939,6 +966,72 @@ describe('AgentManager transitionToIdle — enterprise task completion after fee
     expect(adapter.getAllMessages).toHaveBeenCalledOnce()
     expect(replayCall).toBeDefined()
     expect(sessionWithAdapter.seenPartIds.has('final-part')).toBe(true)
+  })
+
+  it('resumeAdapterSession uses same IDs for batch replay and dedup state (regression: dual-loop bug)', async () => {
+    // This test ensures the batch replay IDs and dedup state IDs are identical.
+    // Previously, two separate loops each called Date.now() + Math.random() for
+    // parts without an id, producing different IDs — causing message duplication
+    // on follow-up messages.
+    const mockDb = createMockDb({})
+    const mgr = new AgentManager(mockDb)
+    const sendSpy = vi.spyOn(mgr as any, 'sendToRenderer')
+
+    const adapter = {
+      initialize: vi.fn(async () => {}),
+      resumeSession: vi.fn(async () => [
+        {
+          id: 'msg-1',
+          role: MessageRole.ASSISTANT,
+          parts: [
+            // Part WITHOUT an id — triggers random ID generation
+            { type: MessagePartType.TEXT, text: 'Hello world', content: 'Hello world' },
+          ]
+        },
+        {
+          id: 'msg-2',
+          role: MessageRole.ASSISTANT,
+          parts: [
+            // Part WITH an id — uses stable id
+            { id: 'stable-part-id', type: MessagePartType.TEXT, text: 'Stable', content: 'Stable' },
+          ]
+        }
+      ]),
+    }
+
+    vi.spyOn(mgr as any, 'getAdapter').mockReturnValue(adapter)
+    vi.spyOn(mgr as any, 'db', 'get').mockReturnValue({
+      ...mockDb,
+      getWorkspaceDir: vi.fn(() => '/tmp/ws'),
+    })
+
+    await (mgr as any).resumeAdapterSession(adapter, 'agent-1', 'task-1', 'session-1', {
+      replayToRenderer: true
+    })
+
+    // Get the batch messages sent to renderer
+    const batchCall = sendSpy.mock.calls.find(
+      ([channel]) => channel === 'agent:output-batch'
+    )
+    expect(batchCall).toBeDefined()
+    const batchMessages = (batchCall![1] as any).messages as Array<{ id: string }>
+
+    // Get the session's dedup state
+    const session = (mgr as any).sessions.get('session-1')
+    expect(session).toBeDefined()
+
+    // CRITICAL: Every batch message ID must be in the dedup state
+    for (const msg of batchMessages) {
+      expect(session.seenPartIds.has(msg.id)).toBe(true)
+    }
+
+    // Stable part should use its own id
+    expect(batchMessages.find((m: { id: string }) => m.id === 'stable-part-id')).toBeDefined()
+    expect(session.seenPartIds.has('stable-part-id')).toBe(true)
+
+    // Message-level IDs should also be tracked for codex-style message dedup
+    expect(session.seenMessageIds.has('msg-1')).toBe(true)
+    expect(session.seenMessageIds.has('msg-2')).toBe(true)
   })
 })
 
