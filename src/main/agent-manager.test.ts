@@ -178,6 +178,33 @@ describe('AgentManager skill file paths', () => {
         '/tmp/test-workspace/.agents/skills/test-skill/SKILL.md'
       )
     })
+
+    it('strips YAML-breaking characters from skill name and description in SKILL.md frontmatter', async () => {
+      const mockDb = {
+        ...createMockDb({ coding_agent: 'codex' }),
+        getSkillsByIds: vi.fn(() => [
+          makeSkillRecord({
+            name: '[Workflo] gh-pr-base-branch-check',
+            description: 'Check base branch {details}: see #docs',
+          }),
+        ]),
+      } as unknown as ConstructorParameters<typeof AgentManager>[0]
+      manager = new AgentManager(mockDb)
+
+      await (manager as any).writeSkillFiles('task-1', 'agent-1', '/tmp/test-workspace')
+
+      const writeFileCall = mockedWriteFileAsync.mock.calls.find(c =>
+        (c[0] as string).endsWith('SKILL.md')
+      )
+      expect(writeFileCall).toBeDefined()
+      const writtenContent = writeFileCall![1] as string
+      // Square brackets, curly braces and hash must not appear in the frontmatter name/description lines
+      const frontmatterLines = writtenContent.split('---')[1]
+      expect(frontmatterLines).not.toMatch(/[\[\]{}"'#]/)
+      // The sanitised values should still be readable
+      expect(frontmatterLines).toContain('Workflo gh-pr-base-branch-check')
+      expect(frontmatterLines).toContain('Check base branch details: see docs')
+    })
   })
 
   describe('writeAgentsDocumentation', () => {

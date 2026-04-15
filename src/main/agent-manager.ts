@@ -568,6 +568,18 @@ export class AgentManager extends EventEmitter {
   }
 
   /**
+   * Strips characters that would break YAML scalar parsing when the value is
+   * written unquoted.  Square/curly brackets are YAML flow-sequence/mapping
+   * indicators; colons followed by a space are key separators; hash signs
+   * introduce comments.  Removing them keeps the frontmatter valid without
+   * requiring a full YAML library.
+   */
+  private static sanitizeYamlValue(value: string): string {
+    // eslint-disable-next-line no-control-regex
+    return value.replace(/[\[\]{}"'#]/g, '').trim()
+  }
+
+  /**
    * Resolves and writes SKILL.md files to the workspace directory.
    * Priority: task.skill_ids > agent.config.skill_ids > all skills.
    * Also generates AGENTS.md and CLAUDE.md with skill directory.
@@ -604,8 +616,10 @@ export class AgentManager extends EventEmitter {
         for (const skill of skills) {
           const dir = join(skillsDir, skill.name)
           await mkdir(dir, { recursive: true })
+          const safeName = AgentManager.sanitizeYamlValue(skill.name)
           const desc = skill.description || skill.name
-          const content = `---\nname: ${skill.name}\ndescription: ${desc}\n---\n\n${skill.content}`
+          const safeDesc = AgentManager.sanitizeYamlValue(desc)
+          const content = `---\nname: ${safeName}\ndescription: ${safeDesc}\n---\n\n${skill.content}`
           await writeFile(join(dir, 'SKILL.md'), content, 'utf-8')
         }
         console.log(`[AgentManager] Wrote ${skills.length} SKILL.md file(s) to ${skillsDir}`)
