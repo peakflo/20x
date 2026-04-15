@@ -3228,12 +3228,12 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
         return null // No server, no providers - this is OK during onboarding
       }
 
-      // Default to home directory so project-scoped OpenCode configs are picked up
-      const dir = directory || homedir()
+      // Default to undefined so OpenCode's default search path is used (picks up global and local configs)
+      const dir = directory
 
       const ocClient = OpenCodeSDK.createOpencodeClient({ baseUrl, fetch: noTimeoutFetch })
       const result = await ocClient.config.providers({
-        query: { directory: dir }
+        ...(dir && { query: { directory: dir } })
       })
 
       if (result.error) {
