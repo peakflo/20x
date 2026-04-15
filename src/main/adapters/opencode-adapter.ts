@@ -406,6 +406,10 @@ export class OpencodeAdapter implements CodingAgentAdapter {
               console.error(`[OpencodeAdapter] MCP server '${name}' failed immediately after add: ${addStatus.error}`)
               continue
             }
+            if (addStatus.status === 'connected') {
+              console.log(`[OpencodeAdapter] Successfully registered MCP server: ${name} (connected via mcp.add)`)
+              continue
+            }
           }
 
           // Connect to MCP server
