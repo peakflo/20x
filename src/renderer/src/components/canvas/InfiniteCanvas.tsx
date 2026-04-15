@@ -1,6 +1,6 @@
-import { useCallback, useRef, useState, useEffect } from 'react'
+import { useCallback, useRef, useState, useEffect, useMemo } from 'react'
 import { useCanvasStore, DEFAULT_PANEL_WIDTH, DEFAULT_PANEL_HEIGHT } from '@/stores/canvas-store'
-import type { SnapGuide } from '@/stores/canvas-store'
+import type { SnapGuide, CanvasPanelData, Viewport } from '@/stores/canvas-store'
 import { useUIStore } from '@/stores/ui-store'
 import { useTaskStore } from '@/stores/task-store'
 import { CanvasPanel } from './CanvasPanel'
@@ -8,6 +8,38 @@ import { CanvasConnections } from './CanvasConnections'
 import { CanvasContextMenu } from './CanvasContextMenu'
 import { Move, ZoomIn, ZoomOut, RotateCcw, Plus, Globe, TerminalSquare, X } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
+
+/**
+ * Check if a panel is visible in the current viewport (with generous margin).
+ * Off-viewport panels get "frozen" — their heavy content (iframes, terminals)
+ * is hidden to save resources.
+ */
+function isPanelVisible(
+  panel: CanvasPanelData,
+  viewport: Viewport,
+  containerWidth: number,
+  containerHeight: number
+): boolean {
+  if (!containerWidth || !containerHeight) return true // assume visible if unknown
+
+  // Visible region in canvas coordinates
+  const margin = 200 // generous margin to avoid flickering at edges
+  const visibleLeft = -viewport.x / viewport.zoom - margin
+  const visibleTop = -viewport.y / viewport.zoom - margin
+  const visibleRight = visibleLeft + containerWidth / viewport.zoom + margin * 2
+  const visibleBottom = visibleTop + containerHeight / viewport.zoom + margin * 2
+
+  const panelRight = panel.x + panel.width
+  const panelBottom = panel.y + panel.height
+
+  // AABB overlap test
+  return (
+    panel.x < visibleRight &&
+    panelRight > visibleLeft &&
+    panel.y < visibleBottom &&
+    panelBottom > visibleTop
+  )
+}
 
 // Grid dot spacing in canvas-space pixels
 const GRID_SIZE = 40
@@ -73,6 +105,30 @@ export function InfiniteCanvas() {
   // Add panel dropdown state
   const [showAddMenu, setShowAddMenu] = useState(false)
   const addMenuRef = useRef<HTMLDivElement>(null)
+
+  // Track container size for viewport visibility culling
+  const [containerSize, setContainerSize] = useState({ width: 0, height: 0 })
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el) return
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0]
+      if (entry) setContainerSize({ width: entry.contentRect.width, height: entry.contentRect.height })
+    })
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [])
+
+  // Compute which panels are visible in the current viewport
+  const visiblePanelIds = useMemo(() => {
+    const set = new Set<string>()
+    for (const p of panels) {
+      if (isPanelVisible(p, viewport, containerSize.width, containerSize.height)) {
+        set.add(p.id)
+      }
+    }
+    return set
+  }, [panels, viewport, containerSize])
 
   // ── Consume pending task from "Open in Canvas" button ────
   const canvasPendingTaskId = useUIStore((s) => s.canvasPendingTaskId)
@@ -392,9 +448,14 @@ export function InfiniteCanvas() {
           {/* Connection lines */}
           <CanvasConnections mouseCanvasPos={null} />
 
-          {/* Render panels */}
+          {/* Render panels — off-viewport panels are frozen (content hidden) */}
           {panels.map((panel) => (
-            <CanvasPanel key={panel.id} panel={panel} zoom={viewport.zoom} />
+            <CanvasPanel
+              key={panel.id}
+              panel={panel}
+              zoom={viewport.zoom}
+              frozen={!visiblePanelIds.has(panel.id)}
+            />
           ))}
         </div>
 
