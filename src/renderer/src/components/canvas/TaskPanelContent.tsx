@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react'
+import { useCallback } from 'react'
 import { TaskWorkspace, type TaskWorkspaceLayout } from '@/components/tasks/TaskWorkspace'
 import { useTaskStore } from '@/stores/task-store'
 import { useAgentStore } from '@/stores/agent-store'
@@ -6,25 +6,23 @@ import { useUIStore } from '@/stores/ui-store'
 import { useTaskSourceStore } from '@/stores/task-source-store'
 import { TaskStatus, PluginActionId } from '@/types'
 import type { FileAttachment } from '@/types'
-import { PanelLeft, PanelRight, Columns2 } from 'lucide-react'
 
 interface TaskPanelContentProps {
   taskId: string
+  /** Controlled layout from CanvasPanel title bar */
+  panelLayout?: TaskWorkspaceLayout
 }
 
 /**
  * Embeds the full TaskWorkspace inside a canvas panel.
  * Self-contained: fetches its own task from the store and provides all callbacks.
- * Adds a layout toggle bar to switch between task-only, transcript-only, or both views.
  */
-export function TaskPanelContent({ taskId }: TaskPanelContentProps) {
+export function TaskPanelContent({ taskId, panelLayout = 'both' }: TaskPanelContentProps) {
   const task = useTaskStore((s) => s.tasks.find((t) => t.id === taskId))
   const agents = useAgentStore((s) => s.agents)
   const updateTask = useTaskStore((s) => s.updateTask)
   const { executeAction } = useTaskSourceStore()
   const { openEditModal, openDeleteModal } = useUIStore()
-
-  const [layout, setLayout] = useState<TaskWorkspaceLayout>('both')
 
   const handleEdit = useCallback(() => {
     if (task) openEditModal(task.id)
@@ -93,49 +91,19 @@ export function TaskPanelContent({ taskId }: TaskPanelContentProps) {
     )
   }
 
-  const LAYOUT_OPTIONS: { key: TaskWorkspaceLayout; icon: typeof Columns2; label: string }[] = [
-    { key: 'task-only', icon: PanelLeft, label: 'Task details only' },
-    { key: 'both', icon: Columns2, label: 'Task + Transcript' },
-    { key: 'transcript-only', icon: PanelRight, label: 'Transcript only' },
-  ]
-
   return (
-    <div className="flex flex-col h-full">
-      {/* Layout toggle bar */}
-      <div className="flex items-center justify-center gap-0.5 px-2 py-1 border-b border-border/30 bg-[#141a26]/50 flex-shrink-0">
-        {LAYOUT_OPTIONS.map(({ key, icon: Icon, label }) => (
-          <button
-            key={key}
-            onClick={() => setLayout(key)}
-            className={`h-6 px-2 rounded text-[10px] font-medium flex items-center gap-1 transition-colors ${
-              layout === key
-                ? 'bg-white/10 text-foreground'
-                : 'text-muted-foreground/50 hover:text-muted-foreground hover:bg-white/5'
-            }`}
-            title={label}
-          >
-            <Icon className="h-3 w-3" />
-            <span className="hidden sm:inline">{label}</span>
-          </button>
-        ))}
-      </div>
-
-      {/* Task workspace with controlled layout */}
-      <div className="flex-1 min-h-0">
-        <TaskWorkspace
-          task={task}
-          agents={agents}
-          onEdit={handleEdit}
-          onDelete={handleDelete}
-          onUpdateAttachments={handleUpdateAttachments}
-          onUpdateOutputFields={handleUpdateOutputFields}
-          onCompleteTask={handleCompleteTask}
-          onAssignAgent={handleAssignAgent}
-          onUpdateTask={handleUpdateTask}
-          onNavigateToTask={handleNavigateToTask}
-          panelLayout={layout}
-        />
-      </div>
-    </div>
+    <TaskWorkspace
+      task={task}
+      agents={agents}
+      onEdit={handleEdit}
+      onDelete={handleDelete}
+      onUpdateAttachments={handleUpdateAttachments}
+      onUpdateOutputFields={handleUpdateOutputFields}
+      onCompleteTask={handleCompleteTask}
+      onAssignAgent={handleAssignAgent}
+      onUpdateTask={handleUpdateTask}
+      onNavigateToTask={handleNavigateToTask}
+      panelLayout={panelLayout}
+    />
   )
 }

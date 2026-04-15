@@ -4,7 +4,8 @@ import {
   calculateSnap,
   type CanvasPanelData,
 } from '@/stores/canvas-store'
-import { X, Focus, Maximize2, Minimize2 } from 'lucide-react'
+import { X, Focus, Maximize2, Minimize2, PanelLeft, PanelRight, Columns2 } from 'lucide-react'
+import type { TaskWorkspaceLayout } from '@/components/tasks/TaskWorkspace'
 import { TaskPanelContent } from './TaskPanelContent'
 import { TranscriptPanelContent } from './TranscriptPanelContent'
 import { AppPanelContent } from './AppPanelContent'
@@ -37,6 +38,7 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
   const [isDragging, setIsDragging] = useState(false)
   const [isResizing, setIsResizing] = useState(false)
   const [isCollapsed, setIsCollapsed] = useState(false)
+  const [taskLayout, setTaskLayout] = useState<TaskWorkspaceLayout>('both')
   const dragStart = useRef({ x: 0, y: 0, panelX: 0, panelY: 0 })
   const resizeStart = useRef({ x: 0, y: 0, w: 0, h: 0 })
 
@@ -215,6 +217,31 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
           {panel.title}
         </span>
 
+        {/* Task layout toggle — always visible for task panels */}
+        {panel.type === 'task' && (
+          <div className="flex items-center gap-0.5 mr-1">
+            {([
+              { key: 'task-only' as const, icon: PanelLeft, label: 'Task details only' },
+              { key: 'both' as const, icon: Columns2, label: 'Task + Transcript' },
+              { key: 'transcript-only' as const, icon: PanelRight, label: 'Transcript only' },
+            ]).map(({ key, icon: Icon, label }) => (
+              <button
+                key={key}
+                onMouseDown={(e) => e.stopPropagation()}
+                onClick={() => setTaskLayout(key)}
+                className={`h-5 w-5 rounded flex items-center justify-center transition-colors ${
+                  taskLayout === key
+                    ? 'bg-white/15 text-foreground'
+                    : 'text-muted-foreground/40 hover:text-muted-foreground hover:bg-white/10'
+                }`}
+                title={label}
+              >
+                <Icon className="h-3 w-3" />
+              </button>
+            ))}
+          </div>
+        )}
+
         {/* Panel actions — visible on hover */}
         <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity duration-150">
           {/* Focus / zoom-to-fit button */}
@@ -265,6 +292,7 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
             refId={panel.refId}
             url={panel.url}
             title={panel.title}
+            taskLayout={taskLayout}
           />
         </div>
       )}
@@ -301,11 +329,12 @@ interface PanelContentProps {
   refId?: string
   url?: string
   title: string
+  taskLayout?: TaskWorkspaceLayout
 }
 
-const MemoizedPanelContent = memo(function PanelContent({ type, id, refId, url, title }: PanelContentProps) {
+const MemoizedPanelContent = memo(function PanelContent({ type, id, refId, url, title, taskLayout }: PanelContentProps) {
   if (type === 'task' && refId) {
-    return <TaskPanelContent taskId={refId} />
+    return <TaskPanelContent taskId={refId} panelLayout={taskLayout} />
   }
   if (type === 'transcript' && refId) {
     return <TranscriptPanelContent taskId={refId} />
