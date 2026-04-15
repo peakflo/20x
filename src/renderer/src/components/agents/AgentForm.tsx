@@ -121,7 +121,7 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
         return
       }
 
-      const result = await agentConfigApi.getProviders(serverUrl)
+      const result = await agentConfigApi.getProviders(serverUrl, codingAgent)
 
       if (result && result.providers) {
         // Flatten all models from all providers

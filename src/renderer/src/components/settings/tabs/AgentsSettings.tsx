@@ -63,7 +63,7 @@ export function AgentsSettings() {
 
     // Test OpenCode server connection
     try {
-      const result = await agentConfigApi.getProviders(agent.server_url)
+      const result = await agentConfigApi.getProviders(agent.server_url, agent.config.coding_agent)
       if (result && result.providers) {
         let modelCount = 0
         const providers = Array.isArray(result.providers) ? result.providers : []

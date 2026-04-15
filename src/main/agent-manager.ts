@@ -2906,7 +2906,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
   }
 
 
-  async getProviders(serverUrl?: string, directory?: string): Promise<{ providers: { id: string; name: string; [key: string]: unknown }[]; default: Record<string, string> } | null> {
+  async getProviders(serverUrl?: string, directory?: string, backendType?: string): Promise<{ providers: { id: string; name: string; [key: string]: unknown }[]; default: Record<string, string> } | null> {
     try {
       // Determine which server URL to use
       const baseUrl = serverUrl || (() => {
@@ -2915,15 +2915,23 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
         return defaultAgent?.server_url || DEFAULT_SERVER_URL
       })()
 
-      // Determine backend type from the default agent's config
-      const agents = this.db.getAgents()
-      const defaultAgent = agents.find((a) => a.is_default) || agents[0]
-      const backendType = (defaultAgent?.config?.coding_agent as string) || CodingAgentType.OPENCODE
+      // Identify the backend type: use the explicit parameter, fall back to default agent config
+      const resolvedBackend = backendType || (() => {
+        const agents = this.db.getAgents()
+        const defaultAgent = agents.find((a) => a.is_default) || agents[0]
+        return (defaultAgent?.config?.coding_agent as string) || CodingAgentType.OPENCODE
+      })()
 
-      // Delegate to the appropriate adapter
-      const adapter = this.getAdapterByType(backendType)
+      // Only the OpenCode adapter exposes configurable providers/models.
+      // For other backends (claude-code, codex), provider listing isn't supported.
+      if (resolvedBackend !== CodingAgentType.OPENCODE) {
+        console.log(`[AgentManager] Backend "${resolvedBackend}" does not support provider listing, skipping`)
+        return null
+      }
+
+      const adapter = this.getAdapterByType(resolvedBackend)
       if (!adapter?.getProviders) {
-        console.log('[AgentManager] Adapter does not support getProviders for backend:', backendType)
+        console.log(`[AgentManager] Adapter for "${resolvedBackend}" does not support getProviders`)
         return null
       }
 

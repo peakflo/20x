@@ -193,7 +193,7 @@ interface ElectronAPI {
     learnFromSession: (sessionId: string, message: string) => Promise<SkillSyncResult>
   }
   agentConfig: {
-    getProviders: (serverUrl?: string) => Promise<{ providers: { id: string; name: string; models: unknown }[]; default: Record<string, string> } | null>
+    getProviders: (serverUrl?: string, backendType?: string) => Promise<{ providers: { id: string; name: string; models: unknown }[]; default: Record<string, string> } | null>
   }
   attachments: {
     pick: () => Promise<string[]>

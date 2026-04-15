@@ -650,7 +650,7 @@ function AgentConfigStep({
 
     // OpenCode — fetch from server
     agentConfigApi
-      .getProviders()
+      .getProviders(undefined, CodingAgentType.OPENCODE)
       .then((result) => {
         if (cancelled) return
         if (result?.providers) {
