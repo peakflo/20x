@@ -354,7 +354,7 @@ export function InfiniteCanvas() {
       : 'default'
 
   return (
-    <div data-canvas-root="true" className="absolute inset-0 overflow-hidden bg-[#131820]">
+    <div data-canvas-root="true" className="overflow-hidden bg-[#131820]" style={{ position: 'relative', width: '100%', height: '100%' }}>
       {/* Canvas container */}
       <div
         ref={containerRef}
