@@ -52,7 +52,7 @@ export function startSecretBroker(db: DatabaseManager): Promise<number> {
       if (url.pathname === '/secrets/export') {
         const token = url.searchParams.get('token')
         if (!token || !activeSessions.has(token)) {
-          console.log(`[SecretBroker] 403 — invalid/missing token: ${token ? token.substring(0, 8) + '...' : 'null'}`)
+          console.log(`[SecretBroker] 403 — invalid or missing token`)
           res.writeHead(403, { 'Content-Type': 'text/plain' })
           res.end('')
           return
@@ -66,9 +66,9 @@ export function startSecretBroker(db: DatabaseManager): Promise<number> {
           return
         }
 
-        console.log(`[SecretBroker] Fetching secrets for agent ${session.agentId}, secretIds: [${session.secretIds.join(', ')}]`)
+        console.log(`[SecretBroker] Fetching secrets for agent ${session.agentId} (${session.secretIds.length} secret(s))`)
         const secrets = dbRef.getSecretsWithValues(session.secretIds)
-        console.log(`[SecretBroker] Found ${secrets.length} secret(s): [${secrets.map(s => `${s.env_var_name}(${s.value.length} chars)`).join(', ')}]`)
+        console.log(`[SecretBroker] Found ${secrets.length} secret(s)`)
 
         // Return shell export statements
         // Single-quote values and escape embedded single quotes
@@ -76,7 +76,7 @@ export function startSecretBroker(db: DatabaseManager): Promise<number> {
           .map(s => `export ${s.env_var_name}='${s.value.replace(/'/g, "'\\''")}'`)
           .join('\n')
 
-        console.log(`[SecretBroker] Response body length: ${exports.length} bytes`)
+        console.log(`[SecretBroker] Serving ${secrets.length} export(s) to agent ${session.agentId}`)
         res.writeHead(200, { 'Content-Type': 'text/plain' })
         res.end(exports)
         return

@@ -1,6 +1,7 @@
 import { spawn } from 'child_process'
 import type { McpServerRecord } from './database'
 import { getTaskApiPort } from './task-api-server'
+import { sanitizeEnvForChild, validateUrlNotLocal, redactSensitiveData } from './security-utils'
 
 export interface McpToolCallResult {
   success: boolean
@@ -26,7 +27,7 @@ export class McpToolCaller {
       ? await this.callRemoteTool(server, toolName, toolArgs)
       : await this.callLocalTool(server, toolName, toolArgs)
     if (result.success) {
-      console.log('[mcp] callTool result:', toolName, JSON.stringify(result.result).slice(0, 500))
+      console.log('[mcp] callTool result:', toolName, redactSensitiveData(JSON.stringify(result.result).slice(0, 500)))
     } else {
       console.error('[mcp] callTool failed:', result.error)
     }
@@ -96,15 +97,14 @@ export class McpToolCaller {
     const proc = spawn(server.command!, server.args || [], {
       stdio: ['pipe', 'pipe', 'pipe'],
       ...(needsShell ? { shell: true } : {}),
-      env: {
-        ...process.env,
+      env: sanitizeEnvForChild({
         npm_config_yes: 'true',
         ...server.environment,
         // Inject TASK_API_URL for task-management MCP server
         ...(server.name === 'task-management' && getTaskApiPort()
           ? { TASK_API_URL: `http://127.0.0.1:${getTaskApiPort()}` }
           : {})
-      }
+      })
     })
 
     const session: LocalMcpSession = {
@@ -263,6 +263,13 @@ export class McpToolCaller {
   ): Promise<McpToolCallResult> {
     if (!server.url) {
       return { success: false, error: 'No URL specified' }
+    }
+
+    // Block requests to localhost / private IPs to prevent SSRF
+    const urlCheck = validateUrlNotLocal(server.url)
+    if (!urlCheck.safe) {
+      console.error('[mcp] SSRF blocked:', urlCheck.reason)
+      return { success: false, error: urlCheck.reason! }
     }
 
     try {

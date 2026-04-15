@@ -35,6 +35,20 @@ describe('McpToolCaller', () => {
       expect(result.error).toBe('No URL specified')
     })
 
+    it('blocks localhost URLs (SSRF protection)', async () => {
+      const server = makeServer({ type: 'remote', url: 'http://127.0.0.1:9999/secrets/export' })
+      const result = await caller.callTool(server, 'test_tool', {})
+      expect(result.success).toBe(false)
+      expect(result.error).toContain('Blocked')
+    })
+
+    it('blocks private IP URLs (SSRF protection)', async () => {
+      const server = makeServer({ type: 'remote', url: 'http://10.0.0.1:8080/api' })
+      const result = await caller.callTool(server, 'test_tool', {})
+      expect(result.success).toBe(false)
+      expect(result.error).toContain('private')
+    })
+
     it('returns error on HTTP failure', async () => {
       const server = makeServer({ type: 'remote', url: 'https://api.test.com' })
       const mockFetch = vi.fn().mockResolvedValue({
