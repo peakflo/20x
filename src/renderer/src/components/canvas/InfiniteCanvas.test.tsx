@@ -164,7 +164,7 @@ describe('InfiniteCanvas', () => {
     expect(screen.getAllByText('App').length).toBeGreaterThanOrEqual(1)
   })
 
-  it('should show connect/collapse/close actions on panel', () => {
+  it('should show focus/collapse/close actions on panel', () => {
     useCanvasStore.getState().addPanel({
       type: 'task',
       title: 'Interactive Panel',
@@ -174,7 +174,7 @@ describe('InfiniteCanvas', () => {
       height: 300,
     })
     render(<InfiniteCanvas />)
-    expect(screen.getByTitle('Connect to another panel')).toBeTruthy()
+    expect(screen.getByTitle('Focus panel (zoom to fit)')).toBeTruthy()
     expect(screen.getByTitle('Collapse')).toBeTruthy()
     expect(screen.getByTitle('Close panel')).toBeTruthy()
   })
