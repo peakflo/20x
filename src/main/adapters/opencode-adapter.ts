@@ -15,10 +15,12 @@ import { SessionStatusType, MessagePartType, MessageRole } from './coding-agent-
 let OpenCodeSDK: typeof import('@opencode-ai/sdk') | null = null
 
 type OpencodeClient = import('@opencode-ai/sdk').OpencodeClient
-type OpenCodeV2Module = typeof import('@opencode-ai/sdk/v2/client')
+type OpenCodeV2Module = typeof import('@opencode-ai/sdk/v2')
+type V2ClientModule = typeof import('@opencode-ai/sdk/v2/client')
 type V2OpencodeClient = import('@opencode-ai/sdk/v2/client').OpencodeClient
 type V2QuestionRequest = import('@opencode-ai/sdk/v2/client').QuestionRequest
 let OpenCodeV2: OpenCodeV2Module | null = null
+let OpenCodeV2Client: V2ClientModule | null = null
 
 // Custom fetch with no timeout — agent prompts can run indefinitely
 const noTimeoutAgent = new UndiciAgent({ headersTimeout: 0, bodyTimeout: 0 })
@@ -36,8 +38,8 @@ export class OpencodeAdapter implements CodingAgentAdapter {
   private serverInstance: unknown = null
   private serverUrl: string | null = null
   private serverStarting: Promise<void> | null = null
-  /** The shared SDK client created alongside the server via createOpencode */
-  private sharedClient: OpencodeClient | null = null
+  /** The shared V2 SDK client created alongside the server via createOpencode */
+  private sharedClient: V2OpencodeClient | null = null
   private clients: Map<string, OpencodeClient> = new Map() // sessionId -> ocClient
   private v2Client: V2OpencodeClient | null = null
   private promptAborts: Map<string, AbortController> = new Map()
@@ -53,8 +55,9 @@ export class OpencodeAdapter implements CodingAgentAdapter {
   private async loadSDK(): Promise<void> {
     try {
       OpenCodeSDK = await import('@opencode-ai/sdk')
-      OpenCodeV2 = await import('@opencode-ai/sdk/v2/client')
-      console.log('[OpencodeAdapter] SDK loaded successfully')
+      OpenCodeV2 = await import('@opencode-ai/sdk/v2')
+      OpenCodeV2Client = await import('@opencode-ai/sdk/v2/client')
+      console.log('[OpencodeAdapter] SDK loaded successfully (v2 available)')
     } catch (error) {
       console.error('[OpencodeAdapter] Failed to load SDK:', error)
     } finally {
@@ -204,7 +207,7 @@ export class OpencodeAdapter implements CodingAgentAdapter {
   /**
    * Returns the shared SDK client, ensuring the server is running first.
    */
-  private async getClient(serverUrl?: string): Promise<OpencodeClient> {
+  private async getClient(serverUrl?: string): Promise<V2OpencodeClient> {
     const baseUrl = serverUrl || this.serverUrl || DEFAULT_SERVER_URL
     await this.ensureServerRunning(baseUrl)
 
@@ -225,7 +228,7 @@ export class OpencodeAdapter implements CodingAgentAdapter {
       const client = await this.getClient(serverUrl)
 
       const result = await client.config.providers({
-        ...(directory && { query: { directory } })
+        ...(directory && { directory })
       })
 
       if (result.error) {
@@ -248,19 +251,14 @@ export class OpencodeAdapter implements CodingAgentAdapter {
 
   async checkHealth(): Promise<{ available: boolean; reason?: string }> {
     try {
-      // Ensure server is running and client is available
-      await this.getClient()
-      const baseUrl = this.serverUrl || DEFAULT_SERVER_URL
+      const client = await this.getClient()
+      const result = await client.global.health()
 
-      const response = await fetch(`${baseUrl}/global/health`, {
-        signal: AbortSignal.timeout(2000)
-      })
-
-      if (!response.ok) {
+      if (result.error) {
         return { available: false, reason: 'Server not responding' }
       }
 
-      const health = await response.json()
+      const health = result.data as { healthy: boolean; version: string }
       console.log('[OpencodeAdapter] Health check OK, version:', health.version)
       return { available: true }
     } catch (error: unknown) {
@@ -337,10 +335,10 @@ export class OpencodeAdapter implements CodingAgentAdapter {
         if (accessibleUrl) {
           this.serverUrl = accessibleUrl
           this.serverInstance = null
-          // Create a client for the existing server
-          this.sharedClient = OpenCodeSDK!.createOpencodeClient({
+          // Create a V2 client for the existing server (has global.health())
+          this.sharedClient = OpenCodeV2Client!.createOpencodeClient({
             baseUrl: accessibleUrl,
-            fetch: noTimeoutFetch as unknown as (request: Request) => ReturnType<typeof fetch>
+            fetch: noTimeoutFetch as unknown as typeof fetch
           })
           return
         }
@@ -364,12 +362,12 @@ export class OpencodeAdapter implements CodingAgentAdapter {
         }
         const mergedConfig = buildMergedOpencodeConfig(extraConfig)
 
-        console.log(`[OpencodeAdapter] Creating opencode instance at ${hostname}:${port} via SDK createOpencode`)
-        const { client, server } = await OpenCodeSDK!.createOpencode({
+        console.log(`[OpencodeAdapter] Creating opencode instance at ${hostname}:${port} via SDK v2 createOpencode`)
+        const { client, server } = await OpenCodeV2!.createOpencode({
           hostname,
           port,
           timeout: 10000,
-          config: mergedConfig as import('@opencode-ai/sdk').Config
+          config: mergedConfig as import('@opencode-ai/sdk/v2/client').Config
         })
 
         this.serverInstance = server
@@ -946,10 +944,10 @@ export class OpencodeAdapter implements CodingAgentAdapter {
 
   private getV2Client(config: SessionConfig): V2OpencodeClient {
     if (this.v2Client) return this.v2Client
-    if (!OpenCodeV2) throw new Error('OpenCode V2 SDK not loaded')
+    if (!OpenCodeV2Client) throw new Error('OpenCode V2 SDK not loaded')
 
     const baseUrl = this.serverUrl || config.serverUrl || DEFAULT_SERVER_URL
-    this.v2Client = OpenCodeV2.createOpencodeClient({ baseUrl, fetch: noTimeoutFetch as unknown as typeof fetch })
+    this.v2Client = OpenCodeV2Client.createOpencodeClient({ baseUrl, fetch: noTimeoutFetch as unknown as typeof fetch })
     return this.v2Client
   }
 
@@ -1031,6 +1029,7 @@ export class OpencodeAdapter implements CodingAgentAdapter {
       this.serverInstance = null
       this.serverUrl = null
       this.sharedClient = null
+      this.v2Client = null
     }
   }
 }
