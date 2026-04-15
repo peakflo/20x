@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
-import { Loader2, ChevronRight } from 'lucide-react'
+import { Loader2, ChevronRight, Plus, X } from 'lucide-react'
+import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
 import { Textarea } from '@/components/ui/Textarea'
@@ -7,6 +8,7 @@ import { Label } from '@/components/ui/Label'
 import { Checkbox } from '@/components/ui/Checkbox'
 import { agentConfigApi } from '@/lib/ipc-client'
 import { useMcpStore } from '@/stores/mcp-store'
+import { useSkillStore } from '@/stores/skill-store'
 import { SkillSelectorDialog } from '@/components/skills/SkillSelectorDialog'
 import { SecretSelector } from '@/components/secrets/SecretSelector'
 import type { Agent, CreateAgentDTO, UpdateAgentDTO, AgentMcpServerEntry, ClaudeAuthMethod, AgentPermissionMode } from '@/types'
@@ -69,9 +71,11 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
   const [hasAnthropicEnv, setHasAnthropicEnv] = useState(false)
 
   const { servers: globalMcpServers, fetchServers: fetchMcpServers } = useMcpStore()
+  const { skills, fetchSkills } = useSkillStore()
 
   useEffect(() => {
     fetchMcpServers()
+    fetchSkills()
 
     // Check for environment variables
     window.electronAPI.env.get('OPENAI_API_KEY').then(value => {
@@ -587,16 +591,35 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
           {skillIds === undefined ? (
             <p className="text-sm text-muted-foreground">All skills enabled</p>
           ) : (
-            <p className="text-sm text-muted-foreground">
-              {skillIds.length} skill{skillIds.length !== 1 ? 's' : ''} selected
-            </p>
+            <div className="flex flex-wrap items-center gap-1.5">
+              {skillIds.map((skillId) => {
+                const skill = skills.find((s) => s.id === skillId)
+                if (!skill) return null
+                return (
+                  <Badge key={skillId} className="gap-1 pr-1">
+                    {skill.name}
+                    <button
+                      type="button"
+                      onClick={() => setSkillIds(skillIds.filter((id) => id !== skillId))}
+                      className="rounded-full hover:bg-foreground/10 p-0.5"
+                    >
+                      <X className="h-2.5 w-2.5" />
+                    </button>
+                  </Badge>
+                )
+              })}
+              {skillIds.length === 0 && (
+                <span className="text-sm text-muted-foreground">No skills selected</span>
+              )}
+            </div>
           )}
           <div className="flex items-center gap-2">
-            <Button type="button" variant="outline" size="sm" onClick={() => setShowSkillSelector(true)}>
-              {skillIds === undefined ? 'Customize skills' : 'Edit skills'}
+            <Button type="button" variant="ghost" size="sm" onClick={() => setShowSkillSelector(true)} className="h-6 gap-1 px-2 text-xs text-muted-foreground">
+              <Plus className="h-3 w-3" />
+              {!Array.isArray(skillIds) ? 'Customize' : 'Add'}
             </Button>
             {skillIds !== undefined && (
-              <Button type="button" variant="ghost" size="sm" onClick={() => setSkillIds(undefined)}>
+              <Button type="button" variant="ghost" size="sm" onClick={() => setSkillIds(undefined)} className="h-6 text-xs text-muted-foreground">
                 Use all skills
               </Button>
             )}
