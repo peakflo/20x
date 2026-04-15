@@ -657,14 +657,19 @@ function AgentConfigStep({
           const list: ModelOption[] = []
           const providers = Array.isArray(result.providers) ? result.providers : []
           for (const p of providers) {
-            const pModels = Array.isArray(p.models)
-              ? p.models
-              : p.models && typeof p.models === 'object'
-                ? Object.values(p.models)
-                : []
-            for (const m of pModels as { id?: string; name?: string }[]) {
-              if (m?.id)
-                list.push({ id: `${p.id}/${m.id}`, name: `${p.name} – ${m.name || m.id}` })
+            if (Array.isArray(p.models)) {
+              for (const m of p.models as { id?: string; name?: string }[]) {
+                if (m?.id)
+                  list.push({ id: `${p.id}/${m.id}`, name: `${p.name} – ${m.name || m.id}` })
+              }
+            } else if (p.models && typeof p.models === 'object') {
+              // Use Object.entries so the map key serves as fallback model ID
+              // (custom providers like routerAI may not have id on the value)
+              for (const [key, m] of Object.entries(p.models as Record<string, { id?: string; name?: string }>)) {
+                const modelId = m?.id || key
+                if (modelId)
+                  list.push({ id: `${p.id}/${modelId}`, name: `${p.name} – ${m?.name || modelId}` })
+              }
             }
           }
           setModels(list)

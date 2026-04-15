@@ -1,10 +1,8 @@
 import { EventEmitter } from 'events'
 import { spawn } from 'child_process'
-import { homedir } from 'os'
-import { join, delimiter } from 'path'
+import { join } from 'path'
 import { existsSync, copyFileSync, mkdirSync, readFileSync, readdirSync, statSync } from 'fs'
 import { mkdir, writeFile } from 'fs/promises'
-import { Agent as UndiciAgent } from 'undici'
 import { Notification } from 'electron'
 import type { BrowserWindow } from 'electron'
 import type { DatabaseManager, AgentMcpServerEntry, OutputFieldRecord, SecretRecord, SkillRecord, TaskRecord } from './database'
@@ -21,19 +19,12 @@ import { getTaskApiPort, waitForTaskApiServer } from './task-api-server'
 import { randomUUID } from 'crypto'
 import { registerSecretSession, unregisterSecretSession, getSecretBrokerPort, writeSecretShellWrapper } from './secret-broker'
 
-let OpenCodeSDK: typeof import('@opencode-ai/sdk') | null = null
-
 // Coding agent backend type enum
 enum CodingAgentType {
   OPENCODE = 'opencode',
   CLAUDE_CODE = 'claude-code',
   CODEX = 'codex'
 }
-
-// Custom fetch with no timeout — agent prompts can run indefinitely
-const noTimeoutAgent = new UndiciAgent({ headersTimeout: 0, bodyTimeout: 0 })
-const noTimeoutFetch = (req: Request): ReturnType<typeof fetch> =>
-  (globalThis.fetch as (input: Request, init: Record<string, unknown>) => ReturnType<typeof fetch>)(req, { dispatcher: noTimeoutAgent })
 
 // Default OpenCode server URL (matches database default)
 const DEFAULT_SERVER_URL = 'http://localhost:4096'
@@ -74,10 +65,6 @@ export class AgentManager extends EventEmitter {
   /** Maps old (temp) session IDs to their re-keyed (real) IDs so that
    *  stale IDs from the renderer still resolve after pollSingleSession re-keys. */
   private sessionIdRedirects: Map<string, string> = new Map()
-  private serverInstance: { close(): void } | null = null  // OpenCode SDK server instance
-  private serverUrl: string | null = null
-  private serverStarting: Promise<void> | null = null  // Track server startup
-  private sdkLoading: Promise<void> | null = null  // Track SDK loading
   private db: DatabaseManager
   private mainWindow: BrowserWindow | null = null
   private adapters: Map<string, CodingAgentAdapter> = new Map()  // Adapter instances
@@ -137,29 +124,6 @@ export class AgentManager extends EventEmitter {
    */
   setSyncManager(syncManager: import('./sync-manager').SyncManager): void {
     this.syncManager = syncManager
-  }
-
-  private async loadSDK(): Promise<void> {
-    try {
-      OpenCodeSDK = await import('@opencode-ai/sdk')
-      console.log('[AgentManager] OpenCode SDK loaded successfully')
-    } catch (error) {
-      console.error('[AgentManager] Failed to load OpenCode SDK:', error)
-    } finally {
-      this.sdkLoading = null
-    }
-  }
-
-  /**
-   * Ensures the SDK is loaded before proceeding with any operations.
-   * Lazily triggers loading on first call.
-   */
-  private async ensureSDKLoaded(): Promise<void> {
-    if (OpenCodeSDK) return
-    if (!this.sdkLoading) {
-      this.sdkLoading = this.loadSDK()
-    }
-    await this.sdkLoading
   }
 
   setMainWindow(window: BrowserWindow): void {
@@ -907,269 +871,12 @@ export class AgentManager extends EventEmitter {
     return md
   }
 
-  /**
-   * Ensures API keys are loaded from settings into process.env
-   */
-  private loadApiKeysToEnv(): void {
-    const providers = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'GOOGLE_API_KEY']
-    const envVars: Record<string, string> = {}
-
-    for (const key of providers) {
-      const value = this.db.getSetting(key)
-      if (value) {
-        if (!process.env[key]) {
-          envVars[key] = value
-          process.env[key] = value
-        } else {
-          console.log(`[AgentManager] ${key} already set in environment, skipping`)
-        }
-      }
-    }
-
-    if (Object.keys(envVars).length > 0) {
-      console.log(`[AgentManager] Loaded ${Object.keys(envVars).length} API key(s) from settings:`, Object.keys(envVars))
-    } else {
-      console.log('[AgentManager] No new API keys loaded (may already be in environment)')
-    }
-  }
-
-  /**
-   * Spawns the opencode server process with platform-aware settings.
-   * On Windows, uses shell: true so .cmd wrappers are resolved.
-   */
-  private spawnOpencodeServer(hostname: string, port: number, isWin: boolean): Promise<{ close: () => void }> {
-    const args = ['serve', `--hostname=${hostname}`, `--port=${port}`]
-    const cmd = isWin ? 'opencode.cmd' : 'opencode'
-    const timeout = 10000
-
-    console.log(`[AgentManager] Spawning: ${cmd} ${args.join(' ')} (shell=${isWin})`)
-
-    // Read OpenCode auth.json to inject API keys as env vars
-    // OpenCode stores credentials in auth.json but expects env vars at runtime
-    const serverEnv: Record<string, string> = { ...process.env } as Record<string, string>
-    try {
-      const authPath = join(homedir(), '.local', 'share', 'opencode', 'auth.json')
-      if (existsSync(authPath)) {
-        const auth = JSON.parse(readFileSync(authPath, 'utf-8'))
-        if (auth.google?.key && !serverEnv.GOOGLE_GENERATIVE_AI_API_KEY) {
-          serverEnv.GOOGLE_GENERATIVE_AI_API_KEY = auth.google.key
-          console.log('[AgentManager] Injected GOOGLE_GENERATIVE_AI_API_KEY from OpenCode auth.json')
-        }
-        if (auth.openai?.key && !serverEnv.OPENAI_API_KEY) {
-          serverEnv.OPENAI_API_KEY = auth.openai.key
-          console.log('[AgentManager] Injected OPENAI_API_KEY from OpenCode auth.json')
-        }
-      }
-    } catch (e) {
-      console.log('[AgentManager] Could not read OpenCode auth.json:', e)
-    }
-
-    const proc = spawn(cmd, args, {
-      shell: isWin,
-      windowsHide: true,
-      env: serverEnv
-    })
-
-    return new Promise((resolve, reject) => {
-      const id = setTimeout(() => {
-        reject(new Error(`Timeout waiting for opencode server after ${timeout}ms`))
-      }, timeout)
-
-      let output = ''
-
-      proc.stdout?.on('data', (chunk: Buffer) => {
-        output += chunk.toString()
-        const lines = output.split('\n')
-        for (const line of lines) {
-          if (line.startsWith('opencode server listening')) {
-            clearTimeout(id)
-            console.log(`[AgentManager] OpenCode server started: ${line.trim()}`)
-            resolve({ close: () => proc.kill() })
-            return
-          }
-        }
-      })
-
-      proc.stderr?.on('data', (chunk: Buffer) => {
-        output += chunk.toString()
-      })
-
-      proc.on('exit', (code) => {
-        clearTimeout(id)
-        let msg = `opencode server exited with code ${code}`
-        if (output.trim()) msg += `\nOutput: ${output.slice(0, 500)}`
-        reject(new Error(msg))
-      })
-
-      proc.on('error', (error) => {
-        clearTimeout(id)
-        reject(error)
-      })
-    })
-  }
-
-  /**
-   * Ensures common binary install paths (e.g. ~/.opencode/bin) are in PATH
-   * so the OpenCode SDK can find the `opencode` binary via spawn().
-   */
-  private ensureBinaryPaths(): void {
-    const currentPath = process.env.PATH || ''
-    const customPath = this.db.getSetting('OPENCODE_BINARY_PATH')
-    const extraPaths = [
-      ...(customPath ? [customPath] : []),
-      join(homedir(), '.opencode', 'bin'),
-      ...(process.platform === 'win32'
-        ? [join(homedir(), 'AppData', 'Roaming', 'npm')]
-        : ['/usr/local/bin']),
-      join(homedir(), '.local', 'bin')
-    ].filter(p => !currentPath.includes(p))
-
-    if (extraPaths.length > 0) {
-      process.env.PATH = [...extraPaths, currentPath].join(delimiter)
-      console.log('[AgentManager] Added binary paths to PATH:', extraPaths)
-    }
-  }
-
-  /**
-   * Checks if a server is accessible at the given URL
-   * Tries both the given URL and its localhost/127.0.0.1 variant
-   * Returns the working URL if found, null otherwise
-   */
-  private async findAccessibleServer(url: string): Promise<string | null> {
-    const urls = [url]
-
-    // Add localhost variant if URL uses 127.0.0.1 (and vice versa)
-    // This handles macOS DNS resolution issues when launched from UI
-    if (url.includes('localhost')) {
-      urls.push(url.replace('localhost', '127.0.0.1'))
-    } else if (url.includes('127.0.0.1')) {
-      urls.push(url.replace('127.0.0.1', 'localhost'))
-    }
-
-    for (const testUrl of urls) {
-      try {
-        console.log('[AgentManager] Checking server at', testUrl)
-        // Use the correct OpenCode health endpoint: /global/health
-        const response = await fetch(`${testUrl}/global/health`, {
-          signal: AbortSignal.timeout(2000)
-        })
-        if (response.ok) {
-          const health = await response.json()
-          console.log('[AgentManager] Server accessible at', testUrl, 'version:', health.version)
-          return testUrl
-        }
-      } catch (error: unknown) {
-        console.log('[AgentManager] Server not accessible at', testUrl, ':', error instanceof Error ? error.message : error)
-      }
-    }
-
-    return null
-  }
-
-  /**
-   * Starts or detects an OpenCode server.
-   * Only creates embedded server if targetUrl is the default and no server is running.
-   * For custom URLs, just validates they're accessible.
-   */
-  async startServer(targetUrl: string = DEFAULT_SERVER_URL): Promise<void> {
-    // Always load API keys first (for both embedded and external servers)
-    this.loadApiKeysToEnv()
-
-    // Ensure common binary install paths are in PATH so the SDK can find `opencode`
-    this.ensureBinaryPaths()
-
-    // If we already have a server running, check if it matches the target
-    if (this.serverUrl) {
-      if (this.serverUrl === targetUrl) {
-        console.log('[AgentManager] Server already available at', this.serverUrl)
-        return
-      }
-      // Different URL requested, will need to start/detect a different server
-      console.log('[AgentManager] Different server URL requested:', targetUrl)
-    }
-
-    // If server is starting, wait for it
-    if (this.serverStarting) {
-      console.log('[AgentManager] Server startup in progress, waiting...')
-      return this.serverStarting
-    }
-
-    // Ensure SDK is loaded
-    await this.ensureSDKLoaded()
-    if (!OpenCodeSDK) {
-      throw new Error('OpenCode SDK not loaded')
-    }
-
-    const isDefaultUrl = targetUrl === DEFAULT_SERVER_URL ||
-                         targetUrl === 'http://127.0.0.1:4096' // Also accept 127.0.0.1 variant
-
-    // Create startup promise to prevent race conditions
-    this.serverStarting = (async () => {
-      try {
-        console.log('[AgentManager] Checking for server at', targetUrl)
-
-        // Check if server is already accessible (tries localhost and 127.0.0.1 variants)
-        const accessibleUrl = await this.findAccessibleServer(targetUrl)
-        if (accessibleUrl) {
-          console.log('[AgentManager] Found existing server at', accessibleUrl)
-          this.serverUrl = accessibleUrl
-          this.serverInstance = null // External server
-          return
-        }
-
-        // Server not accessible
-        if (!isDefaultUrl) {
-          // Custom URL but not accessible - fail
-          throw new Error(`OpenCode server not accessible at ${targetUrl}`)
-        }
-
-        // Default URL and not accessible - create embedded server
-        console.log('[AgentManager] Creating embedded OpenCode server...')
-
-        // Parse hostname and port from URL
-        const url = new URL(targetUrl)
-        const hostname = url.hostname
-        const port = parseInt(url.port || '4096', 10)
-
-        // On Windows, the SDK's createOpencodeServer uses spawn('opencode', ...)
-        // which can't find .cmd wrappers. Use a platform-aware spawn instead.
-        const isWin = process.platform === 'win32'
-        const serverResult = await this.spawnOpencodeServer(hostname, port, isWin)
-
-        this.serverInstance = serverResult
-        this.serverUrl = targetUrl
-
-        console.log(`[AgentManager] Embedded server created at ${this.serverUrl}`)
-      } catch (error) {
-        console.error('[AgentManager] Failed to start server:', error)
-        this.serverInstance = null
-        this.serverUrl = null
-        this.serverStarting = null
-        throw error
-      } finally {
-        this.serverStarting = null
-      }
-    })()
-
-    return this.serverStarting
-  }
-
   async stopServer(): Promise<void> {
-    if (this.serverInstance) {
-      // Only stop if we created the server (embedded server)
-      console.log('[AgentManager] Stopping embedded OpenCode server...')
-      try {
-        await this.serverInstance.close()
-        console.log('[AgentManager] Embedded OpenCode server stopped')
-      } catch (error) {
-        console.error('[AgentManager] Error stopping server:', error)
-      }
-      this.serverInstance = null
-      this.serverUrl = null
-    } else if (this.serverUrl) {
-      // We're using an external server, just clear the URL
-      console.log('[AgentManager] Disconnecting from external OpenCode server')
-      this.serverUrl = null
+    // Delegate to the OpenCode adapter if it exists
+    const adapter = this.adapters.get(CodingAgentType.OPENCODE)
+    if (adapter && 'stopServer' in adapter && typeof (adapter as { stopServer: () => Promise<void> }).stopServer === 'function') {
+      console.log('[AgentManager] Delegating server stop to OpencodeAdapter')
+      await (adapter as { stopServer: () => Promise<void> }).stopServer()
     }
   }
 
@@ -3200,54 +2907,55 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
 
 
   async getProviders(serverUrl?: string, directory?: string): Promise<{ providers: { id: string; name: string; [key: string]: unknown }[]; default: Record<string, string> } | null> {
-    await this.ensureSDKLoaded()
-    if (!OpenCodeSDK) return null
-
     try {
       // Determine which server URL to use
-      let baseUrl = serverUrl
-      if (!baseUrl) {
-        // Try to get from existing server or agent config
-        if (this.serverUrl) {
-          baseUrl = this.serverUrl
-        } else {
-          const agents = this.db.getAgents()
-          const defaultAgent = agents.find((a) => a.is_default) || agents[0]
-          baseUrl = defaultAgent?.server_url || DEFAULT_SERVER_URL
-        }
-      }
+      const baseUrl = serverUrl || (() => {
+        const agents = this.db.getAgents()
+        const defaultAgent = agents.find((a) => a.is_default) || agents[0]
+        return defaultAgent?.server_url || DEFAULT_SERVER_URL
+      })()
 
-      // Try to detect/start server - if it fails, return null gracefully
-      try {
-        if (!this.serverUrl || this.serverUrl !== baseUrl) {
-          console.log('[AgentManager] Checking for OpenCode server to fetch providers...')
-          await this.startServer(baseUrl)
-        }
-      } catch (serverError: unknown) {
-        console.log('[AgentManager] No OpenCode server available:', serverError instanceof Error ? serverError.message : serverError)
-        return null // No server, no providers - this is OK during onboarding
-      }
+      // Determine backend type from the default agent's config
+      const agents = this.db.getAgents()
+      const defaultAgent = agents.find((a) => a.is_default) || agents[0]
+      const backendType = (defaultAgent?.config?.coding_agent as string) || CodingAgentType.OPENCODE
 
-      // Default to undefined so OpenCode's default search path is used (picks up global and local configs)
-      const dir = directory
-
-      const ocClient = OpenCodeSDK.createOpencodeClient({ baseUrl, fetch: noTimeoutFetch })
-      const result = await ocClient.config.providers({
-        ...(dir && { query: { directory: dir } })
-      })
-
-      if (result.error) {
-        console.log('[AgentManager] No providers configured on server')
+      // Delegate to the appropriate adapter
+      const adapter = this.getAdapterByType(backendType)
+      if (!adapter?.getProviders) {
+        console.log('[AgentManager] Adapter does not support getProviders for backend:', backendType)
         return null
       }
 
-      const data = result.data as { providers?: { id: string; name: string; [key: string]: unknown }[]; default?: Record<string, string> } | undefined
-      console.log('[AgentManager] Found providers:', data?.providers?.map((p) => p.id))
-      return data ? { providers: data.providers || [], default: data.default || {} } : null
+      return await adapter.getProviders(baseUrl, directory)
     } catch (error: unknown) {
       console.log('[AgentManager] Could not get providers:', error instanceof Error ? error.message : error)
-      return null // Gracefully return null - no providers available
+      return null
     }
+  }
+
+  /**
+   * Gets or creates an adapter by backend type (without requiring an agent ID).
+   */
+  private getAdapterByType(backendType: string): CodingAgentAdapter | null {
+    if (this.adapters.has(backendType)) {
+      return this.adapters.get(backendType)!
+    }
+
+    let adapter: CodingAgentAdapter | null = null
+    switch (backendType) {
+      case CodingAgentType.OPENCODE:
+        adapter = new OpencodeAdapter()
+        break
+      case CodingAgentType.CLAUDE_CODE:
+        adapter = new ClaudeCodeAdapter()
+        break
+    }
+
+    if (adapter) {
+      this.adapters.set(backendType, adapter)
+    }
+    return adapter
   }
 
   /**

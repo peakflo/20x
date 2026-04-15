@@ -141,12 +141,15 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
                 })
               } else if (typeof provider.models === 'object') {
                 // Handle object format (model IDs as keys)
-                Object.values(provider.models as Record<string, unknown>).forEach((m: unknown) => {
+                // Use Object.entries so the map key serves as fallback model ID
+                // (custom providers like routerAI may not have id on the value)
+                Object.entries(provider.models as Record<string, unknown>).forEach(([key, m]) => {
                   const model = m as { id?: string; name?: string }
-                  if (model && model.id) {
+                  const modelId = model?.id || key
+                  if (modelId) {
                     models.push({
-                      id: `${provider.id}/${model.id}`,
-                      name: `${provider.name} - ${model.name || model.id}`
+                      id: `${provider.id}/${modelId}`,
+                      name: `${provider.name} - ${model?.name || modelId}`
                     })
                   }
                 })

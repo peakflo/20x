@@ -1,7 +1,7 @@
 import { Agent as UndiciAgent } from 'undici'
-import { spawn } from 'child_process'
 import { mkdirSync, writeFileSync, rmSync, existsSync } from 'fs'
 import { join } from 'path'
+import { buildMergedOpencodeConfig } from '../utils/opencode-config'
 import type {
   CodingAgentAdapter,
   SessionConfig,
@@ -198,6 +198,48 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     return undefined
   }
 
+  async getProviders(
+    serverUrl?: string,
+    directory?: string
+  ): Promise<{
+    providers: { id: string; name: string; models: unknown; [key: string]: unknown }[]
+    default: Record<string, string>
+  } | null> {
+    try {
+      await this.ensureSDKLoaded()
+
+      const baseUrl = serverUrl || this.serverUrl || DEFAULT_SERVER_URL
+
+      // Ensure server is running before querying providers
+      await this.ensureServerRunning(baseUrl)
+
+      const ocClient = OpenCodeSDK!.createOpencodeClient({
+        baseUrl: this.serverUrl || baseUrl,
+        fetch: noTimeoutFetch as unknown as (request: Request) => ReturnType<typeof fetch>
+      })
+
+      const result = await ocClient.config.providers({
+        ...(directory && { query: { directory } })
+      })
+
+      if (result.error) {
+        console.log('[OpencodeAdapter] No providers configured on server')
+        return null
+      }
+
+      const data = result.data as {
+        providers?: { id: string; name: string; models: unknown; [key: string]: unknown }[]
+        default?: Record<string, string>
+      } | undefined
+
+      console.log('[OpencodeAdapter] Found providers:', data?.providers?.map((p) => p.id))
+      return data ? { providers: data.providers || [], default: data.default || {} } : null
+    } catch (error: unknown) {
+      console.log('[OpencodeAdapter] Could not get providers:', error instanceof Error ? error.message : error)
+      return null
+    }
+  }
+
   async checkHealth(): Promise<{ available: boolean; reason?: string }> {
     try {
       await this.ensureSDKLoaded()
@@ -215,61 +257,6 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     } catch {
       return { available: false, reason: 'SDK not available or server not accessible' }
     }
-  }
-
-  private spawnOpencodeServer(hostname: string, port: number, config: Record<string, unknown>): Promise<{ close: () => void }> {
-    const isWin = process.platform === 'win32'
-    const args = ['serve', `--hostname=${hostname}`, `--port=${port}`]
-    const cmd = isWin ? 'opencode.cmd' : 'opencode'
-    const timeout = 10000
-
-    console.log(`[OpencodeAdapter] Spawning: ${cmd} ${args.join(' ')} (shell=${isWin})`)
-
-    const proc = spawn(cmd, args, {
-      shell: isWin,
-      windowsHide: true,
-      env: {
-        ...process.env,
-        OPENCODE_CONFIG_CONTENT: JSON.stringify(config)
-      }
-    })
-
-    return new Promise((resolve, reject) => {
-      const id = setTimeout(() => {
-        reject(new Error(`Timeout waiting for opencode server after ${timeout}ms`))
-      }, timeout)
-
-      let output = ''
-
-      proc.stdout?.on('data', (chunk: Buffer) => {
-        output += chunk.toString()
-        const lines = output.split('\n')
-        for (const line of lines) {
-          if (line.startsWith('opencode server listening')) {
-            clearTimeout(id)
-            console.log(`[OpencodeAdapter] Server started: ${line.trim()}`)
-            resolve({ close: () => proc.kill() })
-            return
-          }
-        }
-      })
-
-      proc.stderr?.on('data', (chunk: Buffer) => {
-        output += chunk.toString()
-      })
-
-      proc.on('exit', (code) => {
-        clearTimeout(id)
-        let msg = `opencode server exited with code ${code}`
-        if (output.trim()) msg += `\nOutput: ${output.slice(0, 500)}`
-        reject(new Error(msg))
-      })
-
-      proc.on('error', (error) => {
-        clearTimeout(id)
-        reject(error)
-      })
-    })
   }
 
   private async findAccessibleServer(url: string): Promise<string | null> {
@@ -325,24 +312,32 @@ export class OpencodeAdapter implements CodingAgentAdapter {
           throw new Error(`OpenCode server not accessible at ${targetUrl}`)
         }
 
-        // Create embedded server
+        // Use SDK's createOpencode (starts server + client together, per docs).
+        // The SDK picks up opencode.json automatically; we pass a merged config
+        // that injects auth.json API keys into custom provider options so
+        // providers like routerAI are properly authenticated.
         const url = new URL(targetUrl)
         const hostname = url.hostname
         const port = parseInt(url.port || '4096', 10)
 
-        // Pass secret-injector plugin path via config so OpenCode loads it at startup
-        const serverConfig: Record<string, unknown> = {}
+        const extraConfig: Record<string, unknown> = {}
         if (this.pluginFilePath) {
-          serverConfig.plugin = [this.pluginFilePath]
+          extraConfig.plugin = [this.pluginFilePath]
           console.log(`[OpencodeAdapter] Passing plugin to server config: ${this.pluginFilePath}`)
         }
+        const mergedConfig = buildMergedOpencodeConfig(extraConfig)
 
-        // Spawn opencode server with platform-aware settings.
-        // The SDK's createOpencode uses spawn('opencode', ...) without shell: true,
-        // which fails on Windows because opencode is a .cmd wrapper.
-        const serverResult = await this.spawnOpencodeServer(hostname, port, serverConfig)
-        this.serverInstance = serverResult
-        this.serverUrl = targetUrl
+        console.log(`[OpencodeAdapter] Creating opencode instance at ${hostname}:${port} via SDK createOpencode`)
+        const { server } = await OpenCodeSDK!.createOpencode({
+          hostname,
+          port,
+          timeout: 10000,
+          config: mergedConfig as import('@opencode-ai/sdk').Config
+        })
+
+        this.serverInstance = server
+        this.serverUrl = server.url
+        console.log(`[OpencodeAdapter] OpenCode instance created at ${server.url}`)
       } finally {
         this.serverStarting = null
       }
