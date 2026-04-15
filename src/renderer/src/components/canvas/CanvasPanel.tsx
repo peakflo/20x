@@ -4,7 +4,7 @@ import {
   calculateSnap,
   type CanvasPanelData,
 } from '@/stores/canvas-store'
-import { X, Link, Maximize2, Minimize2 } from 'lucide-react'
+import { X, Focus, Maximize2, Minimize2 } from 'lucide-react'
 import { TaskPanelContent } from './TaskPanelContent'
 import { TranscriptPanelContent } from './TranscriptPanelContent'
 import { AppPanelContent } from './AppPanelContent'
@@ -24,12 +24,10 @@ export function CanvasPanel({ panel, zoom }: CanvasPanelProps) {
   const bringToFront = useCanvasStore((s) => s.bringToFront)
   const updatePanel = useCanvasStore((s) => s.updatePanel)
   const removePanel = useCanvasStore((s) => s.removePanel)
+  const focusPanel = useCanvasStore((s) => s.focusPanel)
   const panels = useCanvasStore((s) => s.panels)
   const setDraggingPanelId = useCanvasStore((s) => s.setDraggingPanelId)
   const setSnapGuides = useCanvasStore((s) => s.setSnapGuides)
-  const connectingFromId = useCanvasStore((s) => s.connectingFromId)
-  const setConnectingFromId = useCanvasStore((s) => s.setConnectingFromId)
-  const addEdge = useCanvasStore((s) => s.addEdge)
 
   const panelRef = useRef<HTMLDivElement>(null)
   const [isDragging, setIsDragging] = useState(false)
@@ -37,8 +35,6 @@ export function CanvasPanel({ panel, zoom }: CanvasPanelProps) {
   const [isCollapsed, setIsCollapsed] = useState(false)
   const dragStart = useRef({ x: 0, y: 0, panelX: 0, panelY: 0 })
   const resizeStart = useRef({ x: 0, y: 0, w: 0, h: 0 })
-
-  const isConnectTarget = connectingFromId !== null && connectingFromId !== panel.id
 
   // ── Drag handling ─────────────────────────────────────────
   const handleDragStart = useCallback(
@@ -136,31 +132,24 @@ export function CanvasPanel({ panel, zoom }: CanvasPanelProps) {
 
   // ── Click handling ────────────────────────────────────────
   const handleMouseDown = useCallback(
-    (e: React.MouseEvent) => {
-      // If we're in connect mode and clicking a target panel, create edge
-      if (isConnectTarget && connectingFromId) {
-        e.preventDefault()
-        e.stopPropagation()
-        addEdge(connectingFromId, panel.id)
-        setConnectingFromId(null)
-        return
-      }
+    () => {
       bringToFront(panel.id)
     },
-    [bringToFront, panel.id, isConnectTarget, connectingFromId, addEdge, setConnectingFromId]
+    [bringToFront, panel.id]
   )
 
-  // ── Connect mode ──────────────────────────────────────────
-  const handleConnect = useCallback(
+  // ── Focus (zoom-to-fit this panel) ────────────────────────
+  const handleFocus = useCallback(
     (e: React.MouseEvent) => {
       e.stopPropagation()
-      if (connectingFromId === panel.id) {
-        setConnectingFromId(null)
-      } else {
-        setConnectingFromId(panel.id)
+      // Find the canvas container to get its dimensions
+      const canvas = panelRef.current?.closest('[data-canvas-root]') as HTMLElement | null
+      if (canvas) {
+        const rect = canvas.getBoundingClientRect()
+        focusPanel(panel.id, rect.width, rect.height)
       }
     },
-    [connectingFromId, panel.id, setConnectingFromId]
+    [focusPanel, panel.id]
   )
 
   // ── Close ─────────────────────────────────────────────────
@@ -194,8 +183,6 @@ export function CanvasPanel({ panel, zoom }: CanvasPanelProps) {
   const typeColor = cfg.color
   const borderAccent = cfg.border
 
-  const isConnecting = connectingFromId === panel.id
-
   return (
     <div
       ref={panelRef}
@@ -203,8 +190,6 @@ export function CanvasPanel({ panel, zoom }: CanvasPanelProps) {
       onMouseDown={handleMouseDown}
       className={`absolute rounded-xl border bg-[#1a2030] shadow-2xl flex flex-col overflow-hidden select-none transition-shadow duration-150 ${borderAccent} ${
         isDragging ? 'shadow-indigo-500/10 ring-1 ring-indigo-500/30' : ''
-      } ${isConnectTarget ? 'ring-1 ring-indigo-400/40 cursor-crosshair' : ''} ${
-        isConnecting ? 'ring-2 ring-indigo-500/50' : ''
       }`}
       style={{
         left: panel.x,
@@ -232,18 +217,14 @@ export function CanvasPanel({ panel, zoom }: CanvasPanelProps) {
 
         {/* Panel actions — visible on hover */}
         <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity duration-150">
-          {/* Connect button */}
+          {/* Focus / zoom-to-fit button */}
           <button
             onMouseDown={(e) => e.stopPropagation()}
-            onClick={handleConnect}
-            className={`h-5 w-5 rounded flex items-center justify-center transition-colors ${
-              isConnecting
-                ? 'bg-indigo-500/20 text-indigo-400'
-                : 'hover:bg-white/10 text-muted-foreground/50 hover:text-muted-foreground'
-            }`}
-            title={isConnecting ? 'Cancel connection' : 'Connect to another panel'}
+            onClick={handleFocus}
+            className="h-5 w-5 rounded flex items-center justify-center hover:bg-white/10 text-muted-foreground/50 hover:text-muted-foreground transition-colors"
+            title="Focus panel (zoom to fit)"
           >
-            <Link className="h-3 w-3" />
+            <Focus className="h-3 w-3" />
           </button>
 
           {/* Collapse/expand */}

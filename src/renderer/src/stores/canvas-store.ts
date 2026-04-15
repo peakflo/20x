@@ -92,6 +92,7 @@ interface CanvasState {
   zoomAtPoint: (delta: number, clientX: number, clientY: number, containerRect: DOMRect) => void
   resetViewport: () => void
   fitToContent: (containerWidth: number, containerHeight: number) => void
+  focusPanel: (id: string, containerWidth: number, containerHeight: number) => void
 
   // Panel actions
   addPanel: (panel: Omit<CanvasPanelData, 'id' | 'zIndex'>) => string
@@ -246,6 +247,33 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     if (!isFinite(x) || !isFinite(y) || !isFinite(zoom)) return
 
     set({ viewport: { x, y, zoom } })
+    scheduleSave()
+  },
+
+  focusPanel: (id, containerWidth, containerHeight) => {
+    const { panels, nextZIndex } = get()
+    const panel = panels.find((p) => p.id === id)
+    if (!panel) return
+    if (!containerWidth || !containerHeight || containerWidth < 10 || containerHeight < 10) return
+
+    const PAD = 80
+    const contentW = panel.width + PAD * 2
+    const contentH = panel.height + PAD * 2
+    const zoom = Math.max(MIN_ZOOM, Math.min(1, containerWidth / contentW, containerHeight / contentH))
+
+    const centerX = panel.x + panel.width / 2
+    const centerY = panel.y + panel.height / 2
+    const x = containerWidth / 2 - centerX * zoom
+    const y = containerHeight / 2 - centerY * zoom
+
+    if (!isFinite(x) || !isFinite(y) || !isFinite(zoom)) return
+
+    // Bring panel to front too
+    set((s) => ({
+      viewport: { x, y, zoom },
+      panels: s.panels.map((p) => (p.id === id ? { ...p, zIndex: nextZIndex } : p)),
+      nextZIndex: nextZIndex + 1,
+    }))
     scheduleSave()
   },
 

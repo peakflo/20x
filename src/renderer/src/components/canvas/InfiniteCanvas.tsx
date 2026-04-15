@@ -6,7 +6,7 @@ import { useTaskStore } from '@/stores/task-store'
 import { CanvasPanel } from './CanvasPanel'
 import { CanvasConnections } from './CanvasConnections'
 import { CanvasContextMenu } from './CanvasContextMenu'
-import { Move, ZoomIn, ZoomOut, RotateCcw, MousePointer, Plus, Globe, TerminalSquare, X } from 'lucide-react'
+import { Move, ZoomIn, ZoomOut, RotateCcw, Plus, Globe, TerminalSquare, X } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 
 // Grid dot spacing in canvas-space pixels
@@ -32,7 +32,6 @@ export function InfiniteCanvas() {
     viewport,
     panels,
     snapGuides,
-    connectingFromId,
     isLoaded,
     panBy,
     zoomAtPoint,
@@ -40,7 +39,6 @@ export function InfiniteCanvas() {
     resetViewport,
     fitToContent,
     addPanel,
-    setConnectingFromId,
     loadCanvas,
   } = useCanvasStore()
 
@@ -73,9 +71,6 @@ export function InfiniteCanvas() {
     canvasX: number
     canvasY: number
   } | null>(null)
-
-  // Mouse position in canvas space (for connection drawing)
-  const [mouseCanvasPos, setMouseCanvasPos] = useState<{ x: number; y: number } | null>(null)
 
   // Add panel dropdown state
   const [showAddMenu, setShowAddMenu] = useState(false)
@@ -226,15 +221,6 @@ export function InfiniteCanvas() {
         return
       }
 
-      // Cancel connect mode on background click
-      if (connectingFromId && e.button === 0) {
-        const target = e.target as HTMLElement
-        if (target === containerRef.current || target.dataset?.canvasBg === 'true') {
-          setConnectingFromId(null)
-          return
-        }
-      }
-
       const isMiddle = e.button === 1
       const isLeftOnCanvas =
         e.button === 0 &&
@@ -248,26 +234,18 @@ export function InfiniteCanvas() {
         panStartRef.current = { x: e.clientX, y: e.clientY }
       }
     },
-    [spaceHeld, contextMenu, connectingFromId, setConnectingFromId]
+    [spaceHeld, contextMenu]
   )
 
   const handleMouseMove = useCallback(
     (e: React.MouseEvent) => {
-      // Track mouse position for connection drawing
-      if (connectingFromId && containerRef.current) {
-        const rect = containerRef.current.getBoundingClientRect()
-        const canvasX = (e.clientX - rect.left - viewport.x) / viewport.zoom
-        const canvasY = (e.clientY - rect.top - viewport.y) / viewport.zoom
-        setMouseCanvasPos({ x: canvasX, y: canvasY })
-      }
-
       if (!isPanning) return
       const dx = e.clientX - panStartRef.current.x
       const dy = e.clientY - panStartRef.current.y
       panStartRef.current = { x: e.clientX, y: e.clientY }
       panBy(dx, dy)
     },
-    [isPanning, panBy, connectingFromId, viewport.x, viewport.y, viewport.zoom]
+    [isPanning, panBy]
   )
 
   const handleMouseUp = useCallback(() => {
@@ -353,9 +331,8 @@ export function InfiniteCanvas() {
         e.preventDefault()
         resetViewport()
       }
-      // Escape: cancel connect mode
+      // Escape: close context menu
       if (e.code === 'Escape') {
-        setConnectingFromId(null)
         setContextMenu(null)
       }
     }
@@ -370,18 +347,16 @@ export function InfiniteCanvas() {
       window.removeEventListener('keydown', handleKeyDown)
       window.removeEventListener('keyup', handleKeyUp)
     }
-  }, [viewport.zoom, zoomTo, resetViewport, setConnectingFromId])
+  }, [viewport.zoom, zoomTo, resetViewport])
 
   const zoomPercent = Math.round(viewport.zoom * 100)
 
-  const cursorStyle = connectingFromId
-    ? 'crosshair'
-    : isPanning || spaceHeld
+  const cursorStyle = isPanning || spaceHeld
       ? 'grabbing'
       : 'default'
 
   return (
-    <div className="absolute inset-0 overflow-hidden bg-[#131820]">
+    <div data-canvas-root="true" className="absolute inset-0 overflow-hidden bg-[#131820]">
       {/* Canvas container */}
       <div
         ref={containerRef}
@@ -417,7 +392,7 @@ export function InfiniteCanvas() {
           <SnapGuides guides={snapGuides} containerRef={containerRef} viewport={viewport} />
 
           {/* Connection lines */}
-          <CanvasConnections mouseCanvasPos={connectingFromId ? mouseCanvasPos : null} />
+          <CanvasConnections mouseCanvasPos={null} />
 
           {/* Render panels */}
           {panels.map((panel) => (
@@ -529,16 +504,6 @@ export function InfiniteCanvas() {
           {Math.round(-viewport.y / viewport.zoom)}
         </span>
       </div>
-
-      {/* ── Connect mode indicator ── */}
-      {connectingFromId && (
-        <div className="absolute top-3 left-1/2 -translate-x-1/2 z-10 animate-in fade-in slide-in-from-top-2 duration-200">
-          <div className="flex items-center gap-2 bg-indigo-500/20 border border-indigo-500/30 text-indigo-300 rounded-lg px-3 py-1.5 text-xs backdrop-blur-sm">
-            <MousePointer className="h-3 w-3" />
-            <span>Click a panel to connect, or press Esc to cancel</span>
-          </div>
-        </div>
-      )}
 
       {/* ── Empty state ── */}
       {panels.length === 0 && (
