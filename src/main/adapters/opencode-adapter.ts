@@ -340,6 +340,25 @@ export class OpencodeAdapter implements CodingAgentAdapter {
             baseUrl: accessibleUrl,
             fetch: noTimeoutFetch as unknown as typeof fetch
           })
+
+          // Push merged config (with auth.json keys injected) to the running server
+          // so custom providers like routerAI are properly authenticated.
+          try {
+            const mergedConfig = buildMergedOpencodeConfig()
+            if (mergedConfig.provider) {
+              const castConfig = mergedConfig as import('@opencode-ai/sdk/v2/client').Config
+              // Try global config first, then per-directory config as fallback
+              try {
+                await this.sharedClient.global.config.update({ config: castConfig })
+              } catch {
+                await this.sharedClient.config.update({ config: castConfig })
+              }
+              console.log('[OpencodeAdapter] Pushed merged provider config to existing server')
+            }
+          } catch (err) {
+            console.warn('[OpencodeAdapter] Failed to push config to existing server:', err)
+          }
+
           return
         }
 
