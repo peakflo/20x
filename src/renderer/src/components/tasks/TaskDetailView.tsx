@@ -483,26 +483,31 @@ export function TaskDetailView({ task, agents, onEdit, onDelete, onUpdateAttachm
                       </div>
                     )
                   })()}
+                  {/* Per-row action buttons are outline/secondary — the big
+                      state-aware primary CTA lives at the bottom of the view
+                      (see the prioritized CTA section). Keeping these inline
+                      for quick access but visually secondary so there's only
+                      one primary-colored button on screen at a time. */}
                   {canTriage && onTriage && (
-                    <Button variant="default" size="sm" onClick={onTriage} className="h-7 gap-1.5 px-3">
+                    <Button variant="outline" size="sm" onClick={onTriage} className="h-7 gap-1.5 px-3">
                       <Sparkles className="h-3 w-3" />
                       Triage
                     </Button>
                   )}
                   {canResumeAgent && onResumeAgent && (
-                    <Button variant="default" size="sm" onClick={onResumeAgent} className="h-7 gap-1.5 px-3">
+                    <Button variant="outline" size="sm" onClick={onResumeAgent} className="h-7 gap-1.5 px-3">
                       <History className="h-3 w-3" />
                       Resume session
                     </Button>
                   )}
                   {canRestartAgent && onRestartAgent && (
-                    <Button variant="default" size="sm" onClick={onRestartAgent} className="h-7 gap-1.5 px-3">
+                    <Button variant="outline" size="sm" onClick={onRestartAgent} className="h-7 gap-1.5 px-3">
                       <Play className="h-3 w-3" />
                       Restart session
                     </Button>
                   )}
                   {canStartAgent && onStartAgent && (
-                    <Button variant="default" size="sm" onClick={onStartAgent} className="h-7 gap-1.5 px-3">
+                    <Button variant="outline" size="sm" onClick={onStartAgent} className="h-7 gap-1.5 px-3">
                       <Play className="h-3 w-3" />
                       Start
                     </Button>

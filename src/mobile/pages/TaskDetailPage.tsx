@@ -334,8 +334,14 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
                   <option key={a.id} value={a.id}>{a.name}</option>
                 ))}
               </select>
+              {/* Per-row action buttons are outline/secondary — the big
+                  state-aware primary CTA lives in the main CTA section below
+                  (see the Main CTA block). Keeping these inline for quick
+                  access but visually secondary so there's only one primary-
+                  colored button on screen at a time. Stop stays destructive
+                  since it's a conceptually distinct "halt" action. */}
               {canTriage && (
-                <button onClick={handleTriage} className="inline-flex items-center gap-1.5 bg-primary text-primary-foreground hover:bg-primary/90 h-7 rounded-md px-3 text-xs font-medium shrink-0">
+                <button onClick={handleTriage} className="inline-flex items-center gap-1.5 border border-border bg-transparent text-foreground hover:bg-accent h-7 rounded-md px-3 text-xs font-medium shrink-0">
                   <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/>
                   </svg>
@@ -343,12 +349,12 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
                 </button>
               )}
               {canStart && (
-                <button onClick={handleStart} className="inline-flex items-center gap-1.5 bg-primary text-primary-foreground hover:bg-primary/90 h-7 rounded-md px-3 text-xs font-medium shrink-0">
+                <button onClick={handleStart} className="inline-flex items-center gap-1.5 border border-border bg-transparent text-foreground hover:bg-accent h-7 rounded-md px-3 text-xs font-medium shrink-0">
                   Start
                 </button>
               )}
               {canResume && (
-                <button onClick={handleResume} className="inline-flex items-center gap-1.5 bg-primary text-primary-foreground hover:bg-primary/90 h-7 rounded-md px-3 text-xs font-medium shrink-0">
+                <button onClick={handleResume} className="inline-flex items-center gap-1.5 border border-border bg-transparent text-foreground hover:bg-accent h-7 rounded-md px-3 text-xs font-medium shrink-0">
                   Resume
                 </button>
               )}
