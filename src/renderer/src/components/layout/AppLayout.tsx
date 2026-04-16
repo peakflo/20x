@@ -131,8 +131,8 @@ export function AppLayout() {
           ))}
         </div>
 
-        {/* Global actions — pinned right */}
-        <div className="no-drag absolute right-4 flex items-center gap-1">
+        {/* Global actions — pinned right; windows-titlebar-actions offsets on Windows to avoid title bar overlay */}
+        <div className="no-drag absolute right-4 flex items-center gap-1 windows-titlebar-actions">
           <Button
             variant="ghost"
             size="sm"
