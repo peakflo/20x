@@ -1170,7 +1170,14 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       seenPartIds: existingSession?.seenPartIds ?? new Set<string>(),
       partContentLengths: existingSession?.partContentLengths ?? new Map<string, string>(),
       createdAt: Date.now(),
-      hasSeenWork: existingSession ? true : false,
+      // Always start fresh: each call to startAdapterPolling corresponds to a
+      // newly-sent (fire-and-forget) prompt.  The IDLE grace period must apply
+      // to every new prompt — not only to brand-new sessions — because the
+      // backend can briefly report IDLE after a follow-up prompt while it is
+      // still ingesting the request.  Pre-setting this to true when resuming
+      // with an existing session caused follow-up messages (especially on
+      // opencode) to transition to idle before any response was produced.
+      hasSeenWork: false,
       initialPromptSent: initialPromptSent || false
     }
 
