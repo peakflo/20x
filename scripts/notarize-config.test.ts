@@ -42,6 +42,16 @@ describe('notarize-config', () => {
     expect(result).toEqual({ enabled: false, reason: 'SKIP_NOTARIZE=true' })
   })
 
+  it('skips builder-managed notarization when CI manual notarization is enabled', () => {
+    const result = shouldNotarize(createContext('darwin'), {
+      CI_MANUAL_NOTARIZE: 'true',
+      APPLE_ID: 'dev@company.com',
+      APPLE_APP_SPECIFIC_PASSWORD: 'xxxx-xxxx-xxxx-xxxx',
+      APPLE_TEAM_ID: 'ABCD123456'
+    })
+    expect(result).toEqual({ enabled: false, reason: 'CI_MANUAL_NOTARIZE=true' })
+  })
+
   it('skips notarization on non-mac platforms', () => {
     const result = shouldNotarize(createContext('win32'), {
       APPLE_ID: 'dev@company.com',
