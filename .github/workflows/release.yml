@@ -8,6 +8,7 @@ on:
 jobs:
   build-mac:
     runs-on: macos-latest
+    environment: main
 
     strategy:
       matrix:
@@ -31,6 +32,20 @@ jobs:
 
       - name: Build app
         run: pnpm build
+
+      - name: Validate signing secrets
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          test -n "$CSC_LINK"
+          test -n "$CSC_KEY_PASSWORD"
+          test -n "$APPLE_ID"
+          test -n "$APPLE_APP_SPECIFIC_PASSWORD"
+          test -n "$APPLE_TEAM_ID"
 
       - name: Import Apple Developer ID certificate
         uses: apple-actions/import-codesign-certs@v3
