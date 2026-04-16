@@ -480,19 +480,6 @@ export function TaskDetailView({ task, agents, onEdit, onDelete, onUpdateAttachm
                       </div>
                     )
                   })()}
-                  {task.agent_id && onEditAgent && (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => onEditAgent(task.agent_id!)}
-                      className="h-7 gap-1.5 px-2 text-xs text-muted-foreground"
-                      title="Edit agent configuration"
-                      data-testid="edit-agent-button"
-                    >
-                      <Settings2 className="h-3 w-3" />
-                      Edit agent
-                    </Button>
-                  )}
                   {canTriage && onTriage && (
                     <Button variant="default" size="sm" onClick={onTriage} className="h-7 gap-1.5 px-3">
                       <Sparkles className="h-3 w-3" />
@@ -517,14 +504,30 @@ export function TaskDetailView({ task, agents, onEdit, onDelete, onUpdateAttachm
                       Start
                     </Button>
                   )}
+                </div>
+                <div className="flex items-center gap-1 flex-wrap">
+                  {task.agent_id && onEditAgent && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => onEditAgent(task.agent_id!)}
+                      className="h-7 gap-1.5 px-2 text-xs text-muted-foreground"
+                      title="Edit agent configuration"
+                      data-testid="edit-agent-button"
+                    >
+                      <Settings2 className="h-3 w-3" />
+                      Edit agent
+                    </Button>
+                  )}
                   <Button
                     variant="ghost"
-                    size="icon"
+                    size="sm"
                     onClick={handleOpenFolder}
-                    className="h-7 w-7"
+                    className="h-7 gap-1.5 px-2 text-xs text-muted-foreground"
                     title="Open workspace folder"
                   >
-                    <Folder className="h-3.5 w-3.5" />
+                    <Folder className="h-3 w-3" />
+                    Open workspace folder
                   </Button>
                 </div>
                 <AgentConfigWarning
