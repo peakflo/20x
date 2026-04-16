@@ -352,8 +352,8 @@ export function registerIpcHandlers(
   })
 
   // Agent Config handlers
-  ipcMain.handle('agentConfig:getProviders', async (_, serverUrl?: string) => {
-    return await agentManager.getProviders(serverUrl)
+  ipcMain.handle('agentConfig:getProviders', async (_, serverUrl?: string, backendType?: string) => {
+    return await agentManager.getProviders(serverUrl, undefined, backendType)
   })
 
 

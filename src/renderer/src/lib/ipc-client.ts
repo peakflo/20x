@@ -138,8 +138,8 @@ export const agentSessionApi = {
 }
 
 export const agentConfigApi = {
-  getProviders: (serverUrl?: string): Promise<{ providers: { id: string; name: string; models: unknown }[]; default: Record<string, string> } | null> => {
-    return window.electronAPI.agentConfig.getProviders(serverUrl)
+  getProviders: (serverUrl?: string, backendType?: string): Promise<{ providers: { id: string; name: string; models: unknown }[]; default: Record<string, string> } | null> => {
+    return window.electronAPI.agentConfig.getProviders(serverUrl, backendType)
   }
 }
 
