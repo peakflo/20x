@@ -66,12 +66,64 @@ jobs:
       - name: Package for macOS
         env:
           DEBUG: electron-builder,electron-notarize*
+          CI_MANUAL_NOTARIZE: 'true'
           CSC_LINK: ${{ secrets.CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: pnpm exec electron-builder --mac --${{ matrix.arch }} --publish never
+
+      - name: Resolve mac artifacts
+        id: mac-artifacts
+        run: |
+          APP_PATH="$(find dist -maxdepth 2 -type d -name '20x.app' | head -n 1)"
+          ZIP_PATH="$(find dist -maxdepth 1 -type f -name '20x-*-${{ matrix.arch }}.zip' | head -n 1)"
+          DMG_PATH="$(find dist -maxdepth 1 -type f -name '20x-*-${{ matrix.arch }}.dmg' | head -n 1)"
+
+          test -n "$APP_PATH"
+          test -f "$ZIP_PATH"
+          test -f "$DMG_PATH"
+
+          echo "app_path=$APP_PATH" >> "$GITHUB_OUTPUT"
+          echo "zip_path=$ZIP_PATH" >> "$GITHUB_OUTPUT"
+          echo "dmg_path=$DMG_PATH" >> "$GITHUB_OUTPUT"
+
+      - name: Inspect packaged outputs
+        run: |
+          ls -lah dist
+          ls -lah "${{ steps.mac-artifacts.outputs.app_path }}"
+          echo "ZIP: ${{ steps.mac-artifacts.outputs.zip_path }}"
+          echo "DMG: ${{ steps.mac-artifacts.outputs.dmg_path }}"
+
+      - name: Notarize mac ZIP and staple app
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          xcrun notarytool submit "${{ steps.mac-artifacts.outputs.zip_path }}" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait
+          xcrun stapler staple "${{ steps.mac-artifacts.outputs.app_path }}"
+          xcrun stapler validate "${{ steps.mac-artifacts.outputs.app_path }}"
+          spctl --assess --type execute --verbose=4 "${{ steps.mac-artifacts.outputs.app_path }}"
+
+      - name: Notarize and staple mac DMG
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          xcrun notarytool submit "${{ steps.mac-artifacts.outputs.dmg_path }}" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait
+          xcrun stapler staple "${{ steps.mac-artifacts.outputs.dmg_path }}"
+          xcrun stapler validate "${{ steps.mac-artifacts.outputs.dmg_path }}"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4

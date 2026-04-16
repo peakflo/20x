@@ -8,6 +8,11 @@ const { notarize } = require('@electron/notarize')
 const { shouldNotarize, getNotarizeOptions } = require('./notarize-config')
 
 async function notarizeApp(context) {
+  const productFilename = context.packager?.appInfo?.productFilename || 'app'
+  console.log(
+    `[notarize] appOutDir=${context.appOutDir} productFilename=${productFilename} platform=${context.electronPlatformName}`
+  )
+
   const decision = shouldNotarize(context, process.env)
   if (!decision.enabled) {
     console.log(`[notarize] Skipping notarization: ${decision.reason}`)

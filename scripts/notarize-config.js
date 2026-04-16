@@ -10,6 +10,10 @@ function shouldNotarize(context, env = process.env) {
     return { enabled: false, reason: 'not darwin build' }
   }
 
+  if (String(env.CI_MANUAL_NOTARIZE || '').toLowerCase() === 'true') {
+    return { enabled: false, reason: 'CI_MANUAL_NOTARIZE=true' }
+  }
+
   if (String(env.SKIP_NOTARIZE || '').toLowerCase() === 'true') {
     return { enabled: false, reason: 'SKIP_NOTARIZE=true' }
   }
