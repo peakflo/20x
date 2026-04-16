@@ -10,6 +10,7 @@ import { GhCliSetupDialog } from '@/components/github/GhCliSetupDialog'
 import { OrgPickerDialog } from '@/components/github/OrgPickerDialog'
 import { RepoSelectorDialog } from '@/components/github/RepoSelectorDialog'
 import { SkillSelectorDialog } from '@/components/skills/SkillSelectorDialog'
+import { AgentFormDialog } from '@/components/settings/forms/AgentFormDialog'
 import { WorktreeProgressOverlay } from '@/components/github/WorktreeProgressOverlay'
 import { useAgentSession } from '@/hooks/use-agent-session'
 import { useAgentStore, SessionStatus } from '@/stores/agent-store'
@@ -18,8 +19,9 @@ import { useTaskStore } from '@/stores/task-store'
 import { taskApi, worktreeApi, taskSourceApi, onAgentIncompatibleSession, onWorktreeProgress } from '@/lib/ipc-client'
 import { useEffect, useCallback, useRef, useState, useMemo } from 'react'
 import { TaskStatus } from '@/types'
-import type { WorkfloTask, FileAttachment, OutputField, Agent } from '@/types'
+import type { WorkfloTask, FileAttachment, OutputField, Agent, UpdateAgentDTO, CreateAgentDTO } from '@/types'
 import type { GitHubRepo } from '@/types/electron'
+import { isAgentConfigured } from '@shared/agent-utils'
 
 interface TaskWorkspaceProps {
   task?: WorkfloTask
@@ -47,13 +49,14 @@ export function TaskWorkspace({
   onNavigateToTask
 }: TaskWorkspaceProps) {
   const { session, start, resume, abort, stop, sendMessage, approve } = useAgentSession(task?.id)
-  const { removeSession } = useAgentStore()
+  const { removeSession, updateAgent } = useAgentStore()
   const { githubOrg, checkGhCli, checkGlabCli, setGithubOrg, fetchSettings } = useSettingsStore()
 
   const [showGhSetup, setShowGhSetup] = useState(false)
   const [showOrgPicker, setShowOrgPicker] = useState(false)
   const [showRepoSelector, setShowRepoSelector] = useState(false)
   const [showSkillSelector, setShowSkillSelector] = useState(false)
+  const [editingAgentId, setEditingAgentId] = useState<string | null>(null)
   const [orgProvider, setOrgProvider] = useState<GitProvider>('github')
   const [isSettingUpWorktree, setIsSettingUpWorktree] = useState(false)
   const [showFeedback, setShowFeedback] = useState(false)
@@ -597,12 +600,25 @@ Update existing skills that were helpful or create new ones for patterns worth r
 
   // Show panel if session exists (active or past transcript with messages)
   const showPanel = session.status !== SessionStatus.IDLE || session.messages.length > 0
+  const assignedAgent = task.agent_id ? agents.find((a) => a.id === task.agent_id) : null
+  const assignedAgentConfigured = isAgentConfigured(assignedAgent)
+  // Triage uses the default agent (or the first agent in the list as a fallback).
+  const triageAgent = !task.agent_id ? (agents.find((a) => a.is_default) || agents[0] || null) : null
+  const triageAgentConfigured = isAgentConfigured(triageAgent)
   const canResume = task.agent_id && task.session_id && !session.sessionId && session.status === SessionStatus.IDLE && session.messages.length === 0
   const canRestart = task.agent_id && task.session_id && !session.sessionId && session.status === SessionStatus.IDLE && session.messages.length > 0
-  const canStart = task.agent_id && !task.session_id && !session.sessionId && session.status === SessionStatus.IDLE
+  const canStart = task.agent_id && assignedAgentConfigured && !task.session_id && !session.sessionId && session.status === SessionStatus.IDLE
     && task.status !== TaskStatus.Completed
-  const canTriage = !task.agent_id && agents.length > 0 && session.status === SessionStatus.IDLE
+  const canTriage = !task.agent_id && agents.length > 0 && triageAgentConfigured && session.status === SessionStatus.IDLE
     && task.status !== TaskStatus.Completed && task.status !== TaskStatus.Triaging
+
+  const handleEditAgent = (agentId: string) => setEditingAgentId(agentId)
+  const handleSaveAgent = async (data: CreateAgentDTO | UpdateAgentDTO) => {
+    if (!editingAgentId) return
+    await updateAgent(editingAgentId, data as UpdateAgentDTO)
+    setEditingAgentId(null)
+  }
+  const editingAgent = editingAgentId ? agents.find((a) => a.id === editingAgentId) : undefined
 
   return (
     <>
@@ -640,6 +656,7 @@ Update existing skills that were helpful or create new ones for patterns worth r
             onReassign={handleReassign}
             onTriage={handleTriage}
             canTriage={!!canTriage}
+            onEditAgent={handleEditAgent}
             subtasks={subtasks}
             parentTask={parentTask}
             onNavigateToTask={onNavigateToTask}
@@ -715,6 +732,13 @@ Update existing skills that were helpful or create new ones for patterns worth r
         onOpenChange={setShowIncompatibleSession}
         onStartFresh={handleStartFreshSession}
         error={incompatibleSessionError}
+      />
+
+      <AgentFormDialog
+        agent={editingAgent}
+        open={!!editingAgentId}
+        onClose={() => setEditingAgentId(null)}
+        onSubmit={handleSaveAgent}
       />
     </>
   )

@@ -1,5 +1,6 @@
 import { useMemo, useCallback, useState, useRef } from 'react'
 import { TaskStatus } from '@shared/constants'
+import { isAgentConfigured, getAgentConfigIssue } from '@shared/agent-utils'
 import { CollapsibleDescription } from '../components/CollapsibleDescription'
 import { useTaskStore, type Task } from '../stores/task-store'
 import { useAgentStore, SessionStatus } from '../stores/agent-store'
@@ -242,11 +243,21 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
     )
   }
 
+  // Agent configuration gating — block start/triage when the relevant agent is
+  // missing a provider or model. Mirrors the desktop TaskDetailView behavior.
+  const assignedAgent = task.agent_id ? agents.find((a) => a.id === task.agent_id) : null
+  const triageAgent = !task.agent_id ? (agents.find((a) => a.is_default) || agents[0] || null) : null
+  const assignedAgentConfigured = isAgentConfigured(assignedAgent)
+  const triageAgentConfigured = isAgentConfigured(triageAgent)
+  const unconfiguredAgent = assignedAgent && !assignedAgentConfigured
+    ? assignedAgent
+    : (triageAgent && !triageAgentConfigured ? triageAgent : null)
+
   // Session state logic — don't show Resume if session is already running
-  const canStart = task.agent_id && !task.session_id && (!session || session.status === SessionStatus.IDLE) && task.status !== TaskStatus.Completed
+  const canStart = task.agent_id && assignedAgentConfigured && !task.session_id && (!session || session.status === SessionStatus.IDLE) && task.status !== TaskStatus.Completed
   const canResume = task.agent_id && task.session_id && !isSessionRunning && (!session?.sessionId) && (!session || session.status === SessionStatus.IDLE)
   const canStop = isSessionRunning
-  const canTriage = !task.agent_id && agents.length > 0 && task.status !== TaskStatus.Completed && task.status !== TaskStatus.Triaging && !isSessionRunning
+  const canTriage = !task.agent_id && agents.length > 0 && triageAgentConfigured && task.status !== TaskStatus.Completed && task.status !== TaskStatus.Triaging && !isSessionRunning
   const canComplete = task.status !== TaskStatus.Completed && !isSessionRunning
   const hasMessages = session && session.messages.length > 0
 
@@ -368,6 +379,23 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
                   {session.status === SessionStatus.ERROR && '● Error'}
                   {session.status === SessionStatus.WAITING_APPROVAL && '● Waiting'}
                 </span>
+              )}
+              {unconfiguredAgent && task.status !== TaskStatus.Completed && (
+                <div
+                  data-testid="agent-config-warning"
+                  className="w-full mt-1 flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-300"
+                >
+                  <svg className="h-3.5 w-3.5 shrink-0 mt-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="12" cy="12" r="10" />
+                    <line x1="12" x2="12" y1="8" y2="12" />
+                    <line x1="12" x2="12.01" y1="16" y2="16" />
+                  </svg>
+                  <p className="flex-1 leading-snug">
+                    {assignedAgent
+                      ? `${getAgentConfigIssue(unconfiguredAgent) || 'Agent is not fully configured'}. Start is disabled — edit this agent on desktop to continue.`
+                      : `The default agent "${unconfiguredAgent.name}" is not fully configured (${(getAgentConfigIssue(unconfiguredAgent) || 'missing settings').toLowerCase()}). Triage is disabled — edit the agent on desktop to continue.`}
+                  </p>
+                </div>
               )}
             </div>
 
