@@ -8,7 +8,7 @@ on:
 jobs:
   build-mac:
     runs-on: macos-latest
-    environment: main
+    environment: release
 
     strategy:
       matrix:
