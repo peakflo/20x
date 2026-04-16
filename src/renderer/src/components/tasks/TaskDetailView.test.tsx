@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, cleanup } from '@testing-library/react'
 import { TaskDetailView } from './TaskDetailView'
-import { TaskStatus } from '@/types'
-import type { WorkfloTask } from '@/types'
+import { CodingAgentType, TaskStatus } from '@/types'
+import type { Agent, WorkfloTask } from '@/types'
 
 // Mock CollapsibleDescription to avoid markdown rendering complexity
 vi.mock('@/components/ui/CollapsibleDescription', () => ({
@@ -60,16 +60,38 @@ function makeTask(overrides: Partial<WorkfloTask> = {}): WorkfloTask {
 
 const noopFn = vi.fn()
 
+function makeAgent(overrides: Partial<Agent> = {}): Agent {
+  return {
+    id: 'agent-1',
+    name: 'Test Agent',
+    server_url: 'http://localhost:4096',
+    config: {
+      coding_agent: CodingAgentType.CLAUDE_CODE,
+      model: 'anthropic/claude-sonnet-4-20250514'
+    },
+    is_default: true,
+    created_at: '2026-01-01T00:00:00Z',
+    updated_at: '2026-01-01T00:00:00Z',
+    ...overrides
+  } as Agent
+}
+
 function renderDetailView(overrides: {
   task?: Partial<WorkfloTask>
+  agents?: Agent[]
   parentTask?: WorkfloTask | null
   onNavigateToTask?: (taskId: string) => void
+  onEditAgent?: (agentId: string) => void
+  onTriage?: () => void
+  canTriage?: boolean
+  onStartAgent?: () => void
+  canStartAgent?: boolean
 } = {}) {
   const task = makeTask(overrides.task)
   return render(
     <TaskDetailView
       task={task}
-      agents={[]}
+      agents={overrides.agents ?? []}
       onEdit={noopFn}
       onDelete={noopFn}
       onUpdateAttachments={noopFn}
@@ -80,6 +102,11 @@ function renderDetailView(overrides: {
       onAddRepos={noopFn}
       parentTask={overrides.parentTask ?? null}
       onNavigateToTask={overrides.onNavigateToTask}
+      onEditAgent={overrides.onEditAgent}
+      onTriage={overrides.onTriage}
+      canTriage={overrides.canTriage}
+      onStartAgent={overrides.onStartAgent}
+      canStartAgent={overrides.canStartAgent}
     />
   )
 }
@@ -181,5 +208,94 @@ describe('TaskDetailView – parent task context panel', () => {
 
     // Should not crash, status badges should still show
     expect(screen.getByText('No Desc Parent')).toBeInTheDocument()
+  })
+})
+
+describe('TaskDetailView – edit agent action', () => {
+  it('shows an Edit agent button when an agent is assigned', () => {
+    const agent = makeAgent()
+    const onEditAgent = vi.fn()
+    renderDetailView({
+      task: { agent_id: agent.id },
+      agents: [agent],
+      onEditAgent
+    })
+    const btn = screen.getByTestId('edit-agent-button')
+    expect(btn).toBeInTheDocument()
+    fireEvent.click(btn)
+    expect(onEditAgent).toHaveBeenCalledWith(agent.id)
+  })
+
+  it('does not render the Edit agent button when no agent is assigned', () => {
+    renderDetailView({ task: { agent_id: null }, agents: [makeAgent()], onEditAgent: vi.fn() })
+    expect(screen.queryByTestId('edit-agent-button')).not.toBeInTheDocument()
+  })
+})
+
+describe('TaskDetailView – unconfigured agent blocking', () => {
+  const unconfiguredAgent = makeAgent({
+    id: 'agent-unconfigured',
+    name: 'Unconfigured',
+    is_default: true,
+    config: { coding_agent: undefined, model: undefined }
+  })
+  const configuredAgent = makeAgent({ id: 'agent-ok', name: 'Ready' })
+
+  it('renders a warning when the assigned agent is missing provider and model', () => {
+    renderDetailView({
+      task: { agent_id: unconfiguredAgent.id },
+      agents: [unconfiguredAgent],
+      onEditAgent: vi.fn(),
+      // canStartAgent is expected to be false upstream — but the warning does
+      // not depend on that flag.
+      canStartAgent: false
+    })
+    const warning = screen.getByTestId('agent-config-warning')
+    expect(warning).toBeInTheDocument()
+    expect(warning.textContent).toMatch(/Provider and model are not selected/i)
+    expect(warning.textContent).toMatch(/Start is disabled/i)
+  })
+
+  it('renders a warning naming the default agent when unassigned + default is unconfigured', () => {
+    renderDetailView({
+      task: { agent_id: null },
+      agents: [unconfiguredAgent],
+      onEditAgent: vi.fn(),
+      canTriage: false
+    })
+    const warning = screen.getByTestId('agent-config-warning')
+    expect(warning.textContent).toMatch(/Unconfigured/)
+    expect(warning.textContent).toMatch(/Triage is disabled/i)
+  })
+
+  it('clicking the warning\'s Edit agent button invokes onEditAgent with the target agent id', () => {
+    const onEditAgent = vi.fn()
+    renderDetailView({
+      task: { agent_id: unconfiguredAgent.id },
+      agents: [unconfiguredAgent],
+      onEditAgent
+    })
+    fireEvent.click(screen.getByTestId('agent-config-warning-edit'))
+    expect(onEditAgent).toHaveBeenCalledWith(unconfiguredAgent.id)
+  })
+
+  it('does not render the warning when assigned agent is fully configured', () => {
+    renderDetailView({
+      task: { agent_id: configuredAgent.id },
+      agents: [configuredAgent],
+      onEditAgent: vi.fn(),
+      canStartAgent: true
+    })
+    expect(screen.queryByTestId('agent-config-warning')).not.toBeInTheDocument()
+  })
+
+  it('does not render the warning when the default triage agent is fully configured', () => {
+    renderDetailView({
+      task: { agent_id: null },
+      agents: [configuredAgent],
+      onEditAgent: vi.fn(),
+      canTriage: true
+    })
+    expect(screen.queryByTestId('agent-config-warning')).not.toBeInTheDocument()
   })
 })

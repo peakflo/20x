@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react'
-import { Pencil, Trash2, Calendar, User, Tag, Clock, Bot, Play, History, GitBranch, Plus, X, BookOpen, AlarmClockOff, BellRing, Folder, Repeat, Star, Sparkles, ListTree, ArrowLeft, ChevronRight, ChevronDown, GripVertical } from 'lucide-react'
+import { Pencil, Trash2, Calendar, User, Tag, Clock, Bot, Play, History, GitBranch, Plus, X, BookOpen, AlarmClockOff, BellRing, Folder, Repeat, Star, Sparkles, ListTree, ArrowLeft, ChevronRight, ChevronDown, GripVertical, Settings2, AlertCircle } from 'lucide-react'
 import { DndContext, closestCenter, KeyboardSensor, PointerSensor, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core'
 import { arrayMove, SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
@@ -18,6 +18,7 @@ import { TaskStatus, CodingAgentType } from '@/types'
 import type { WorkfloTask, FileAttachment, OutputField, Agent, RecurrencePattern, RecurrencePatternObject } from '@/types'
 import { AnthropicLogo, OpenCodeLogo, OpenAILogo } from '@/components/icons/AgentLogos'
 import { HeartbeatSection } from './HeartbeatSection'
+import { isAgentConfigured, getAgentConfigIssue } from '@shared/agent-utils'
 
 function ordinal(n: number): string {
   if (n >= 11 && n <= 13) return `${n}th`
@@ -292,6 +293,51 @@ function ParentTaskContext({ parentTask, onNavigateToTask }: { parentTask: Workf
   )
 }
 
+/**
+ * Inline warning shown under the Agent row when the task's agent (or, when no
+ * agent is assigned, the default agent picked by Triage) is missing a provider
+ * or model. Blocks the user from starting/triaging until they fix it.
+ */
+function AgentConfigWarning({ task, agents, onEditAgent }: { task: WorkfloTask; agents: Agent[]; onEditAgent?: (agentId: string) => void }) {
+  // When a specific agent is assigned, warn about that agent.
+  // Otherwise, warn about the default agent used by Triage.
+  const assignedAgent = task.agent_id ? agents.find((a) => a.id === task.agent_id) : null
+  const triageAgent = !task.agent_id ? (agents.find((a) => a.is_default) || agents[0] || null) : null
+  const targetAgent = assignedAgent || triageAgent
+  if (!targetAgent) return null
+  if (isAgentConfigured(targetAgent)) return null
+
+  const issue = getAgentConfigIssue(targetAgent) || 'Agent is not fully configured'
+  const isAssigned = !!assignedAgent
+  const action = isAssigned ? 'Start' : 'Triage'
+  const message = isAssigned
+    ? `${issue}. ${action} is disabled — edit the agent to continue.`
+    : `The default agent "${targetAgent.name}" is not fully configured (${issue.toLowerCase()}). ${action} is disabled — edit the agent to continue.`
+
+  return (
+    <div
+      data-testid="agent-config-warning"
+      className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-300"
+    >
+      <AlertCircle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+      <div className="flex-1 min-w-0 space-y-1.5">
+        <p className="leading-snug">{message}</p>
+        {onEditAgent && (
+          <button
+            type="button"
+            onClick={() => onEditAgent(targetAgent.id)}
+            className="inline-flex items-center gap-1 rounded-md border border-amber-500/40 bg-amber-500/10 hover:bg-amber-500/20 px-2 py-0.5 text-[11px] font-medium text-amber-200 transition-colors cursor-pointer"
+            data-testid="agent-config-warning-edit"
+          >
+            <Settings2 className="h-3 w-3" />
+            Edit agent
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
+
 interface TaskDetailViewProps {
   task: WorkfloTask
   agents: Agent[]
@@ -316,6 +362,8 @@ interface TaskDetailViewProps {
   onReassign?: (userIds: string[], displayName: string) => Promise<void>
   onTriage?: () => void
   canTriage?: boolean
+  /** Open the agent editor dialog for a specific agent (or the currently assigned one). */
+  onEditAgent?: (agentId: string) => void
   subtasks?: WorkfloTask[]
   parentTask?: WorkfloTask | null
   onNavigateToTask?: (taskId: string) => void
@@ -323,7 +371,7 @@ interface TaskDetailViewProps {
   onReorderSubtasks?: (orderedIds: string[]) => void
 }
 
-export function TaskDetailView({ task, agents, onEdit, onDelete, onUpdateAttachments, onUpdateOutputFields, onCompleteTask, onAssignAgent, onUpdateRepos, onAddRepos, onUpdateSkillIds, onAddSkills, onStartAgent, canStartAgent, onResumeAgent, canResumeAgent, onRestartAgent, canRestartAgent, onSnooze, onUnsnooze, onReassign, onTriage, canTriage, subtasks, parentTask, onNavigateToTask, onAddSubtask, onReorderSubtasks }: TaskDetailViewProps) {
+export function TaskDetailView({ task, agents, onEdit, onDelete, onUpdateAttachments, onUpdateOutputFields, onCompleteTask, onAssignAgent, onUpdateRepos, onAddRepos, onUpdateSkillIds, onAddSkills, onStartAgent, canStartAgent, onResumeAgent, canResumeAgent, onRestartAgent, canRestartAgent, onSnooze, onUnsnooze, onReassign, onTriage, canTriage, onEditAgent, subtasks, parentTask, onNavigateToTask, onAddSubtask, onReorderSubtasks }: TaskDetailViewProps) {
   const { skills, fetchSkills } = useSkillStore()
   const isActive = task.status !== TaskStatus.Completed
 
@@ -402,68 +450,91 @@ export function TaskDetailView({ task, agents, onEdit, onDelete, onUpdateAttachm
             </>
             <>
               <span className="text-muted-foreground flex items-center gap-2"><Bot className="h-3.5 w-3.5" /> Agent</span>
-              <div className="flex items-center gap-2">
-                <select
-                  value={task.agent_id || ''}
-                  onChange={(e) => onAssignAgent(e.target.value || null)}
-                  className="bg-transparent border border-border rounded px-2 py-1 text-sm cursor-pointer"
-                >
-                  <option value="">No agent assigned</option>
-                  {agents.map((agent) => (
-                    <option key={agent.id} value={agent.id}>{agent.name}</option>
-                  ))}
-                </select>
-                {canTriage && onTriage && (
-                  <Button variant="default" size="sm" onClick={onTriage} className="h-7 gap-1.5 px-3">
-                    <Sparkles className="h-3 w-3" />
-                    Triage
-                  </Button>
-                )}
-                {task.agent_id && agents.find(a => a.id === task.agent_id)?.config.coding_agent && (() => {
-                  const agent = agents.find(a => a.id === task.agent_id)
-                  const codingAgent = agent?.config.coding_agent
-                  const agentName = codingAgent === CodingAgentType.CLAUDE_CODE ? 'Claude Code' :
-                                   codingAgent === CodingAgentType.OPENCODE ? 'OpenCode' :
-                                   'Codex'
-                  const LogoComponent = codingAgent === CodingAgentType.CLAUDE_CODE ? AnthropicLogo :
-                                       codingAgent === CodingAgentType.OPENCODE ? OpenCodeLogo :
-                                       OpenAILogo
-                  return (
-                    <div
-                      className="w-4 h-4 flex items-center justify-center opacity-70 hover:opacity-100 transition-opacity"
-                      title={agentName}
+              <div className="flex flex-col gap-1.5">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <select
+                    value={task.agent_id || ''}
+                    onChange={(e) => onAssignAgent(e.target.value || null)}
+                    className="bg-transparent border border-border rounded px-2 py-1 text-sm cursor-pointer"
+                  >
+                    <option value="">No agent assigned</option>
+                    {agents.map((agent) => (
+                      <option key={agent.id} value={agent.id}>{agent.name}</option>
+                    ))}
+                  </select>
+                  {task.agent_id && agents.find(a => a.id === task.agent_id)?.config.coding_agent && (() => {
+                    const agent = agents.find(a => a.id === task.agent_id)
+                    const codingAgent = agent?.config.coding_agent
+                    const agentName = codingAgent === CodingAgentType.CLAUDE_CODE ? 'Claude Code' :
+                                     codingAgent === CodingAgentType.OPENCODE ? 'OpenCode' :
+                                     'Codex'
+                    const LogoComponent = codingAgent === CodingAgentType.CLAUDE_CODE ? AnthropicLogo :
+                                         codingAgent === CodingAgentType.OPENCODE ? OpenCodeLogo :
+                                         OpenAILogo
+                    return (
+                      <div
+                        className="w-4 h-4 flex items-center justify-center opacity-70 hover:opacity-100 transition-opacity"
+                        title={agentName}
+                      >
+                        <LogoComponent className="w-full h-full" />
+                      </div>
+                    )
+                  })()}
+                  {canTriage && onTriage && (
+                    <Button variant="default" size="sm" onClick={onTriage} className="h-7 gap-1.5 px-3">
+                      <Sparkles className="h-3 w-3" />
+                      Triage
+                    </Button>
+                  )}
+                  {canResumeAgent && onResumeAgent && (
+                    <Button variant="default" size="sm" onClick={onResumeAgent} className="h-7 gap-1.5 px-3">
+                      <History className="h-3 w-3" />
+                      Resume session
+                    </Button>
+                  )}
+                  {canRestartAgent && onRestartAgent && (
+                    <Button variant="default" size="sm" onClick={onRestartAgent} className="h-7 gap-1.5 px-3">
+                      <Play className="h-3 w-3" />
+                      Restart session
+                    </Button>
+                  )}
+                  {canStartAgent && onStartAgent && (
+                    <Button variant="default" size="sm" onClick={onStartAgent} className="h-7 gap-1.5 px-3">
+                      <Play className="h-3 w-3" />
+                      Start
+                    </Button>
+                  )}
+                </div>
+                <div className="flex items-center gap-1 flex-wrap">
+                  {task.agent_id && onEditAgent && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => onEditAgent(task.agent_id!)}
+                      className="h-7 gap-1.5 px-2 text-xs text-muted-foreground"
+                      title="Edit agent configuration"
+                      data-testid="edit-agent-button"
                     >
-                      <LogoComponent className="w-full h-full" />
-                    </div>
-                  )
-                })()}
-                {canResumeAgent && onResumeAgent && (
-                  <Button variant="default" size="sm" onClick={onResumeAgent} className="h-7 gap-1.5 px-3">
-                    <History className="h-3 w-3" />
-                    Resume session
+                      <Settings2 className="h-3 w-3" />
+                      Edit agent
+                    </Button>
+                  )}
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={handleOpenFolder}
+                    className="h-7 gap-1.5 px-2 text-xs text-muted-foreground"
+                    title="Open workspace folder"
+                  >
+                    <Folder className="h-3 w-3" />
+                    Open workspace folder
                   </Button>
-                )}
-                {canRestartAgent && onRestartAgent && (
-                  <Button variant="default" size="sm" onClick={onRestartAgent} className="h-7 gap-1.5 px-3">
-                    <Play className="h-3 w-3" />
-                    Restart session
-                  </Button>
-                )}
-                {canStartAgent && onStartAgent && (
-                  <Button variant="default" size="sm" onClick={onStartAgent} className="h-7 gap-1.5 px-3">
-                    <Play className="h-3 w-3" />
-                    Start
-                  </Button>
-                )}
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={handleOpenFolder}
-                  className="h-7 w-7"
-                  title="Open workspace folder"
-                >
-                  <Folder className="h-3.5 w-3.5" />
-                </Button>
+                </div>
+                <AgentConfigWarning
+                  task={task}
+                  agents={agents}
+                  onEditAgent={onEditAgent}
+                />
               </div>
             </>
             <>
