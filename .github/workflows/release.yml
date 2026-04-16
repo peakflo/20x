@@ -15,7 +15,7 @@ jobs:
       matrix:
         include:
           - arch: x64
-            runner: macos-13
+            runner: macos-15-large
           - arch: arm64
             runner: macos-14
 
@@ -66,13 +66,12 @@ jobs:
       - name: Package for macOS
         env:
           DEBUG: electron-builder,electron-notarize*
-          CI_MANUAL_NOTARIZE: 'true'
           CSC_LINK: ${{ secrets.CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: pnpm exec electron-builder --mac --${{ matrix.arch }} --publish never
+        run: pnpm exec electron-builder --config ./scripts/electron-builder-ci-mac-config.js --mac --${{ matrix.arch }} --publish never
 
       - name: Resolve mac artifacts
         id: mac-artifacts
