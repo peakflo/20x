@@ -7,13 +7,17 @@ on:
 
 jobs:
   build-mac:
-    runs-on: macos-14
+    runs-on: ${{ matrix.runner }}
     environment: release
 
     strategy:
       fail-fast: false
       matrix:
-        arch: [x64, arm64]
+        include:
+          - arch: x64
+            runner: macos-13
+          - arch: arm64
+            runner: macos-14
 
     steps:
       - uses: actions/checkout@v4
