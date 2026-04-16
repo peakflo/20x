@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest'
-
-const { getMissingNotarizeEnv, shouldNotarize, getNotarizeOptions } = require('./notarize-config')
+import { getMissingNotarizeEnv, shouldNotarize, getNotarizeOptions } from './notarize-config'
 
 function createContext(platform: string) {
   return {
