@@ -644,6 +644,15 @@ Update existing skills that were helpful or create new ones for patterns worth r
             onUpdateSkillIds={async (skillIds) => {
               if (onUpdateTask) await onUpdateTask(task.id, { skill_ids: skillIds })
             }}
+            onUpdateDescription={onUpdateTask
+              ? async (description) => {
+                await onUpdateTask(task.id, { description })
+              }
+              : async (description) => {
+                await taskApi.update(task.id, { description })
+                updateTaskInStore(task.id, { description })
+              }
+            }
             onAddSkills={() => setShowSkillSelector(true)}
             onStartAgent={handleStartSession}
             canStartAgent={!!canStart}

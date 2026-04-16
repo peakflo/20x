@@ -302,16 +302,18 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
           )}
         </div>
 
-        {/* Description — matches desktop max-w-2xl content area */}
-        {task.description && (
-          <div className="px-4 py-4 border-b border-border">
-            <CollapsibleDescription
-              taskId={task.id}
-              description={task.description}
-              size="sm"
-            />
-          </div>
-        )}
+        {/* Description — matches desktop max-w-2xl content area. Always render
+            when we can edit, so users can add a description inline. */}
+        <div className="px-4 py-4 border-b border-border">
+          <CollapsibleDescription
+            taskId={task.id}
+            description={task.description || ''}
+            size="sm"
+            onSave={async (description) => {
+              await updateTask(task.id, { description })
+            }}
+          />
+        </div>
 
         {/* Metadata grid — matches desktop grid-cols-[auto_1fr], always visible */}
         <div className="px-4 py-4 border-b border-border">
@@ -353,14 +355,6 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
               {canStop && (
                 <button onClick={handleStop} className="inline-flex items-center gap-1.5 bg-destructive text-destructive-foreground hover:bg-destructive/90 h-7 rounded-md px-3 text-xs font-medium shrink-0">
                   Stop
-                </button>
-              )}
-              {canComplete && (
-                <button onClick={handleCompleteTask} className="inline-flex items-center gap-1.5 bg-green-600 text-white hover:bg-green-700 h-7 rounded-md px-3 text-xs font-medium shrink-0">
-                  <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <polyline points="20 6 9 17 4 12"/>
-                  </svg>
-                  Complete
                 </button>
               )}
               {session && (
@@ -563,6 +557,55 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
             onReorderSubtasks={handleReorderSubtasks}
           />
         )}
+
+        {/* Main CTA — Start Task is the primary action; Complete is secondary.
+            This mirrors the desktop TaskDetailView: users typically want to
+            kick off an agent first, and Complete should not dominate the UI. */}
+        {(canStart || canResume || canTriage || canComplete) && (() => {
+          type PrimaryAction = { label: string; onClick: () => void; testId: string }
+          let primary: PrimaryAction | null = null
+          if (canStart) {
+            primary = { label: 'Start Task', onClick: handleStart, testId: 'main-cta-start' }
+          } else if (canResume) {
+            primary = { label: 'Resume Session', onClick: handleResume, testId: 'main-cta-resume' }
+          } else if (canTriage) {
+            primary = { label: 'Triage', onClick: handleTriage, testId: 'main-cta-triage' }
+          }
+
+          return (
+            <div className="px-4 py-4 flex flex-col gap-2 border-b border-border">
+              {primary && (
+                <button
+                  onClick={primary.onClick}
+                  data-testid={primary.testId}
+                  className="w-full inline-flex items-center justify-center gap-2 bg-primary text-primary-foreground hover:bg-primary/90 active:opacity-60 rounded-md px-4 py-2.5 text-sm font-medium"
+                >
+                  <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <polygon points="6 3 20 12 6 21 6 3" />
+                  </svg>
+                  {primary.label}
+                </button>
+              )}
+              {canComplete && (
+                <button
+                  onClick={handleCompleteTask}
+                  data-testid="main-cta-complete"
+                  className={cn(
+                    'w-full inline-flex items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-medium active:opacity-60',
+                    primary
+                      ? 'border border-border bg-transparent text-foreground hover:bg-accent'
+                      : 'bg-primary text-primary-foreground hover:bg-primary/90'
+                  )}
+                >
+                  <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="20 6 9 17 4 12" />
+                  </svg>
+                  Complete Task
+                </button>
+              )}
+            </div>
+          )
+        })()}
 
         {/* Transcript — always show link when agent is assigned */}
         {task.agent_id && (

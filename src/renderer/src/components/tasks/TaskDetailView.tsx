@@ -364,6 +364,8 @@ interface TaskDetailViewProps {
   canTriage?: boolean
   /** Open the agent editor dialog for a specific agent (or the currently assigned one). */
   onEditAgent?: (agentId: string) => void
+  /** Save an inline description edit. When provided, the description becomes editable. */
+  onUpdateDescription?: (description: string) => void | Promise<void>
   subtasks?: WorkfloTask[]
   parentTask?: WorkfloTask | null
   onNavigateToTask?: (taskId: string) => void
@@ -371,7 +373,7 @@ interface TaskDetailViewProps {
   onReorderSubtasks?: (orderedIds: string[]) => void
 }
 
-export function TaskDetailView({ task, agents, onEdit, onDelete, onUpdateAttachments, onUpdateOutputFields, onCompleteTask, onAssignAgent, onUpdateRepos, onAddRepos, onUpdateSkillIds, onAddSkills, onStartAgent, canStartAgent, onResumeAgent, canResumeAgent, onRestartAgent, canRestartAgent, onSnooze, onUnsnooze, onReassign, onTriage, canTriage, onEditAgent, subtasks, parentTask, onNavigateToTask, onAddSubtask, onReorderSubtasks }: TaskDetailViewProps) {
+export function TaskDetailView({ task, agents, onEdit, onDelete, onUpdateAttachments, onUpdateOutputFields, onCompleteTask, onAssignAgent, onUpdateRepos, onAddRepos, onUpdateSkillIds, onAddSkills, onStartAgent, canStartAgent, onResumeAgent, canResumeAgent, onRestartAgent, canRestartAgent, onSnooze, onUnsnooze, onReassign, onTriage, canTriage, onEditAgent, onUpdateDescription, subtasks, parentTask, onNavigateToTask, onAddSubtask, onReorderSubtasks }: TaskDetailViewProps) {
   const { skills, fetchSkills } = useSkillStore()
   const isActive = task.status !== TaskStatus.Completed
 
@@ -428,12 +430,13 @@ export function TaskDetailView({ task, agents, onEdit, onDelete, onUpdateAttachm
 
           <div>
             <h1 className="text-xl font-semibold">{task.title}</h1>
-            {task.description && (
+            {(task.description || onUpdateDescription) && (
               <CollapsibleDescription
                 taskId={task.id}
                 description={task.description}
                 size="sm"
                 className="mt-3 text-muted-foreground"
+                onSave={onUpdateDescription}
               />
             )}
           </div>
@@ -697,7 +700,7 @@ export function TaskDetailView({ task, agents, onEdit, onDelete, onUpdateAttachm
 
           {/* Heartbeat monitoring — handled inside the properties grid above */}
 
-          {task.output_fields.length > 0 ? (
+          {task.output_fields.length > 0 && (
             <div className="rounded-md border p-4">
               <OutputFieldsDisplay
                 fields={task.output_fields}
@@ -707,11 +710,59 @@ export function TaskDetailView({ task, agents, onEdit, onDelete, onUpdateAttachm
                 taskUpdatedAt={task.updated_at}
               />
             </div>
-          ) : isActive && (
-            <Button onClick={onCompleteTask} className="w-full">
-              Complete Task
-            </Button>
           )}
+
+          {isActive && (() => {
+            // Prioritized main CTA: Start > Resume > Restart > Triage > Complete.
+            // Complete is always available as a secondary action so users can
+            // close a task without agent involvement, but it no longer dominates
+            // the page as the primary call-to-action.
+            type PrimaryAction = { label: string; icon: typeof Play; onClick: () => void; testId: string }
+            let primary: PrimaryAction | null = null
+            if (canStartAgent && onStartAgent) {
+              primary = { label: 'Start Task', icon: Play, onClick: onStartAgent, testId: 'main-cta-start' }
+            } else if (canResumeAgent && onResumeAgent) {
+              primary = { label: 'Resume Session', icon: History, onClick: onResumeAgent, testId: 'main-cta-resume' }
+            } else if (canRestartAgent && onRestartAgent) {
+              primary = { label: 'Restart Session', icon: Play, onClick: onRestartAgent, testId: 'main-cta-restart' }
+            } else if (canTriage && onTriage) {
+              primary = { label: 'Triage', icon: Sparkles, onClick: onTriage, testId: 'main-cta-triage' }
+            }
+
+            const hasOutputCompleteButton = task.output_fields.length > 0
+            // If OutputFieldsDisplay already renders its own Complete button (when
+            // all required fields are filled), don't render another here.
+            const showCompleteButton = !hasOutputCompleteButton
+
+            if (!primary && !showCompleteButton) return null
+
+            return (
+              <div className="flex flex-col gap-2">
+                {primary && (
+                  <Button
+                    onClick={primary.onClick}
+                    size="lg"
+                    className="w-full gap-2"
+                    data-testid={primary.testId}
+                  >
+                    <primary.icon className="h-4 w-4" />
+                    {primary.label}
+                  </Button>
+                )}
+                {showCompleteButton && (
+                  <Button
+                    onClick={onCompleteTask}
+                    variant={primary ? 'outline' : 'default'}
+                    size={primary ? 'default' : 'lg'}
+                    className="w-full"
+                    data-testid="main-cta-complete"
+                  >
+                    Complete Task
+                  </Button>
+                )}
+              </div>
+            )
+          })()}
 
           <div className="pt-2 border-t text-xs text-muted-foreground">
             Source: <Badge className="ml-1">{task.source}</Badge>
