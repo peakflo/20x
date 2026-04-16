@@ -713,20 +713,27 @@ export function TaskDetailView({ task, agents, onEdit, onDelete, onUpdateAttachm
           )}
 
           {isActive && (() => {
-            // Prioritized main CTA: Start > Resume > Restart > Triage > Complete.
-            // Complete is always available as a secondary action so users can
-            // close a task without agent involvement, but it no longer dominates
-            // the page as the primary call-to-action.
-            type PrimaryAction = { label: string; icon: typeof Play; onClick: () => void; testId: string }
-            let primary: PrimaryAction | null = null
+            // Prioritized main CTA — state-aware.
+            //
+            // In most states the happy path is to move the task forward with an
+            // agent action, so Start > Resume > Restart > Triage wins over the
+            // always-available Complete escape hatch.
+            //
+            // In ReadyForReview the happy path flips: the agent has already
+            // finished, so the user is reviewing the result and the expected
+            // next step is to accept (Complete). Resume stays visible as a
+            // secondary "needs another pass" affordance. Mirrors how code
+            // review tools promote Merge/Approve after an agent finishes.
+            type AgentAction = { label: string; icon: typeof Play; onClick: () => void; testId: string }
+            let agentAction: AgentAction | null = null
             if (canStartAgent && onStartAgent) {
-              primary = { label: 'Start Task', icon: Play, onClick: onStartAgent, testId: 'main-cta-start' }
+              agentAction = { label: 'Start Task', icon: Play, onClick: onStartAgent, testId: 'main-cta-start' }
             } else if (canResumeAgent && onResumeAgent) {
-              primary = { label: 'Resume Session', icon: History, onClick: onResumeAgent, testId: 'main-cta-resume' }
+              agentAction = { label: 'Resume Session', icon: History, onClick: onResumeAgent, testId: 'main-cta-resume' }
             } else if (canRestartAgent && onRestartAgent) {
-              primary = { label: 'Restart Session', icon: Play, onClick: onRestartAgent, testId: 'main-cta-restart' }
+              agentAction = { label: 'Restart Session', icon: Play, onClick: onRestartAgent, testId: 'main-cta-restart' }
             } else if (canTriage && onTriage) {
-              primary = { label: 'Triage', icon: Sparkles, onClick: onTriage, testId: 'main-cta-triage' }
+              agentAction = { label: 'Triage', icon: Sparkles, onClick: onTriage, testId: 'main-cta-triage' }
             }
 
             const hasOutputCompleteButton = task.output_fields.length > 0
@@ -734,30 +741,49 @@ export function TaskDetailView({ task, agents, onEdit, onDelete, onUpdateAttachm
             // all required fields are filled), don't render another here.
             const showCompleteButton = !hasOutputCompleteButton
 
-            if (!primary && !showCompleteButton) return null
+            // In ReadyForReview, the happy path is to accept the agent's work
+            // rather than iterate again — so Complete takes the primary slot
+            // and the agent action (usually Resume) drops to secondary.
+            const completeIsPrimary =
+              showCompleteButton && (!agentAction || task.status === TaskStatus.ReadyForReview)
+
+            if (!agentAction && !showCompleteButton) return null
+
+            const agentActionIsPrimary = !!agentAction && !completeIsPrimary
 
             return (
               <div className="flex flex-col gap-2">
-                {primary && (
+                {agentAction && agentActionIsPrimary && (
                   <Button
-                    onClick={primary.onClick}
+                    onClick={agentAction.onClick}
                     size="lg"
                     className="w-full gap-2"
-                    data-testid={primary.testId}
+                    data-testid={agentAction.testId}
                   >
-                    <primary.icon className="h-4 w-4" />
-                    {primary.label}
+                    <agentAction.icon className="h-4 w-4" />
+                    {agentAction.label}
                   </Button>
                 )}
                 {showCompleteButton && (
                   <Button
                     onClick={onCompleteTask}
-                    variant={primary ? 'outline' : 'default'}
-                    size={primary ? 'default' : 'lg'}
+                    variant={completeIsPrimary ? 'default' : 'outline'}
+                    size={completeIsPrimary ? 'lg' : 'default'}
                     className="w-full"
                     data-testid="main-cta-complete"
                   >
                     Complete Task
+                  </Button>
+                )}
+                {agentAction && !agentActionIsPrimary && (
+                  <Button
+                    onClick={agentAction.onClick}
+                    variant="outline"
+                    className="w-full gap-2"
+                    data-testid={agentAction.testId}
+                  >
+                    <agentAction.icon className="h-4 w-4" />
+                    {agentAction.label}
                   </Button>
                 )}
               </div>

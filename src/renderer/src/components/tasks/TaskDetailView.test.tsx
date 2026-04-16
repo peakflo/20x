@@ -342,15 +342,43 @@ describe('TaskDetailView – main CTA priority', () => {
     expect(onComplete).toHaveBeenCalledTimes(1)
   })
 
-  it('renders Resume Session as the primary CTA when canResumeAgent is true', () => {
+  it('in ReadyForReview promotes Complete Task to primary and demotes Resume Session to secondary', () => {
+    // Rationale: the agent has finished; the expected "happy path" for the
+    // user reviewing the result is to accept (Complete). Resume stays
+    // visible as an outline secondary action for the "needs another pass"
+    // case. Mirrors code-review tools that promote Approve/Merge after the
+    // agent finishes.
     renderDetailView({
       task: { agent_id: agent.id, status: TaskStatus.ReadyForReview, session_id: 'sess-1' },
       agents: [agent],
       onResumeAgent: vi.fn(),
       canResumeAgent: true
     })
-    expect(screen.getByTestId('main-cta-resume')).toBeInTheDocument()
-    expect(screen.queryByTestId('main-cta-start')).not.toBeInTheDocument()
+    const completeBtn = screen.getByTestId('main-cta-complete')
+    const resumeBtn = screen.getByTestId('main-cta-resume')
+    expect(completeBtn).toBeInTheDocument()
+    expect(resumeBtn).toBeInTheDocument()
+    // Complete is the primary (filled bg-primary) button
+    expect(completeBtn.className).toMatch(/bg-primary/)
+    // Resume is the outline/secondary button (no bg-primary fill)
+    expect(resumeBtn.className).not.toMatch(/bg-primary/)
+  })
+
+  it('renders Resume Session as the primary CTA in non-ReadyForReview states that allow resume', () => {
+    // In a state that isn't ReadyForReview (e.g., AgentLearning) but still
+    // allows resume, Resume should remain the primary — the "accept the
+    // work" flip is specific to ReadyForReview.
+    renderDetailView({
+      task: { agent_id: agent.id, status: TaskStatus.AgentLearning, session_id: 'sess-1' },
+      agents: [agent],
+      onResumeAgent: vi.fn(),
+      canResumeAgent: true
+    })
+    const resumeBtn = screen.getByTestId('main-cta-resume')
+    expect(resumeBtn).toBeInTheDocument()
+    expect(resumeBtn.className).toMatch(/bg-primary/)
+    const completeBtn = screen.getByTestId('main-cta-complete')
+    expect(completeBtn.className).not.toMatch(/bg-primary/)
   })
 
   it('renders Triage as the primary CTA when canTriage is true and no agent is assigned', () => {

@@ -558,49 +558,69 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
           />
         )}
 
-        {/* Main CTA — Start Task is the primary action; Complete is secondary.
-            This mirrors the desktop TaskDetailView: users typically want to
-            kick off an agent first, and Complete should not dominate the UI. */}
+        {/* Main CTA — state-aware primary.
+            In most states the happy path is to move the task forward with an
+            agent action, so Start > Resume > Triage wins over the always-
+            available Complete escape hatch. In ReadyForReview the happy path
+            flips: the agent has finished, the user is reviewing the result,
+            and the expected next step is to accept (Complete). Resume stays
+            visible as a secondary "needs another pass" affordance. */}
         {(canStart || canResume || canTriage || canComplete) && (() => {
-          type PrimaryAction = { label: string; onClick: () => void; testId: string }
-          let primary: PrimaryAction | null = null
+          type AgentAction = { label: string; onClick: () => void; testId: string }
+          let agentAction: AgentAction | null = null
           if (canStart) {
-            primary = { label: 'Start Task', onClick: handleStart, testId: 'main-cta-start' }
+            agentAction = { label: 'Start Task', onClick: handleStart, testId: 'main-cta-start' }
           } else if (canResume) {
-            primary = { label: 'Resume Session', onClick: handleResume, testId: 'main-cta-resume' }
+            agentAction = { label: 'Resume Session', onClick: handleResume, testId: 'main-cta-resume' }
           } else if (canTriage) {
-            primary = { label: 'Triage', onClick: handleTriage, testId: 'main-cta-triage' }
+            agentAction = { label: 'Triage', onClick: handleTriage, testId: 'main-cta-triage' }
           }
+
+          const completeIsPrimary =
+            canComplete && (!agentAction || task.status === TaskStatus.ReadyForReview)
+          const agentActionIsPrimary = !!agentAction && !completeIsPrimary
+
+          const primaryBtnClass =
+            'w-full inline-flex items-center justify-center gap-2 bg-primary text-primary-foreground hover:bg-primary/90 active:opacity-60 rounded-md px-4 py-2.5 text-sm font-medium'
+          const secondaryBtnClass =
+            'w-full inline-flex items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-medium active:opacity-60 border border-border bg-transparent text-foreground hover:bg-accent'
 
           return (
             <div className="px-4 py-4 flex flex-col gap-2 border-b border-border">
-              {primary && (
+              {agentAction && agentActionIsPrimary && (
                 <button
-                  onClick={primary.onClick}
-                  data-testid={primary.testId}
-                  className="w-full inline-flex items-center justify-center gap-2 bg-primary text-primary-foreground hover:bg-primary/90 active:opacity-60 rounded-md px-4 py-2.5 text-sm font-medium"
+                  onClick={agentAction.onClick}
+                  data-testid={agentAction.testId}
+                  className={primaryBtnClass}
                 >
                   <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <polygon points="6 3 20 12 6 21 6 3" />
                   </svg>
-                  {primary.label}
+                  {agentAction.label}
                 </button>
               )}
               {canComplete && (
                 <button
                   onClick={handleCompleteTask}
                   data-testid="main-cta-complete"
-                  className={cn(
-                    'w-full inline-flex items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-medium active:opacity-60',
-                    primary
-                      ? 'border border-border bg-transparent text-foreground hover:bg-accent'
-                      : 'bg-primary text-primary-foreground hover:bg-primary/90'
-                  )}
+                  className={completeIsPrimary ? primaryBtnClass : secondaryBtnClass}
                 >
                   <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <polyline points="20 6 9 17 4 12" />
                   </svg>
                   Complete Task
+                </button>
+              )}
+              {agentAction && !agentActionIsPrimary && (
+                <button
+                  onClick={agentAction.onClick}
+                  data-testid={agentAction.testId}
+                  className={secondaryBtnClass}
+                >
+                  <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <polygon points="6 3 20 12 6 21 6 3" />
+                  </svg>
+                  {agentAction.label}
                 </button>
               )}
             </div>
