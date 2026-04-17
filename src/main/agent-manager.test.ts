@@ -1459,6 +1459,98 @@ describe('AgentManager startAdapterPolling — IDLE grace period for follow-up m
     expect((mgr as any).pollingEntries.has('session-1')).toBe(true)
   })
 
+  it('pollSingleSession does NOT set hasSeenWork when only user echo parts are returned (root cause of premature idle)', async () => {
+    // ROOT CAUSE regression test: OpenCode echoes back the user's prompt as a
+    // `role: "user"` part.  The old code set `hasSeenWork = true` on ANY part
+    // (including user echoes), which disabled the IDLE grace period.  On the
+    // very same poll cycle `getStatus` returns IDLE (backend still ingesting),
+    // so transitionToIdle fired immediately with no assistant response.
+    const mgr = buildManager()
+    const adapter = buildAdapter()
+
+    // pollMessages returns only a user echo — no assistant work yet
+    adapter.pollMessages.mockResolvedValueOnce([
+      { id: 'echo-1', role: 'user', content: 'Hello', type: 'text' }
+    ])
+    // Backend still reports IDLE while ingesting the prompt
+    adapter.getStatus.mockResolvedValueOnce({ type: 'idle' as const })
+
+    const session = {
+      agentId: 'agent-1',
+      taskId: 'task-1',
+      status: 'working',
+      createdAt: new Date(),
+      seenMessageIds: new Set<string>(),
+      seenPartIds: new Set<string>(),
+      partContentLengths: new Map<string, string>(),
+      adapter,
+    }
+    ;(mgr as any).sessions.set('session-1', session)
+
+    ;(mgr as any).startAdapterPolling(
+      'session-1',
+      adapter,
+      { agentId: 'agent-1', taskId: 'task-1', workspaceDir: '/tmp/ws' }
+    )
+
+    const entry = (mgr as any).pollingEntries.get('session-1')
+    // Keep it fresh — within grace period
+    entry.createdAt = Date.now()
+
+    const transitionSpy = vi.spyOn(mgr as any, 'transitionToIdle').mockResolvedValue(undefined)
+
+    await (mgr as any).pollSingleSession(entry)
+
+    // hasSeenWork must stay false — user echoes are not real work
+    expect(entry.hasSeenWork).toBe(false)
+    // Grace period should prevent transition
+    expect(transitionSpy).not.toHaveBeenCalled()
+    expect((mgr as any).pollingEntries.has('session-1')).toBe(true)
+  })
+
+  it('pollSingleSession DOES set hasSeenWork when assistant parts are returned', async () => {
+    const mgr = buildManager()
+    const adapter = buildAdapter()
+
+    // pollMessages returns an assistant response alongside a user echo
+    adapter.pollMessages.mockResolvedValueOnce([
+      { id: 'echo-1', role: 'user', content: 'Hello', type: 'text' },
+      { id: 'resp-1', role: 'assistant', content: 'Hi there!', type: 'text' }
+    ])
+    adapter.getStatus.mockResolvedValueOnce({ type: 'idle' as const })
+
+    const session = {
+      agentId: 'agent-1',
+      taskId: 'task-1',
+      status: 'working',
+      createdAt: new Date(),
+      seenMessageIds: new Set<string>(),
+      seenPartIds: new Set<string>(),
+      partContentLengths: new Map<string, string>(),
+      adapter,
+      lastAssistantText: '',
+    }
+    ;(mgr as any).sessions.set('session-1', session)
+
+    ;(mgr as any).startAdapterPolling(
+      'session-1',
+      adapter,
+      { agentId: 'agent-1', taskId: 'task-1', workspaceDir: '/tmp/ws' }
+    )
+
+    const entry = (mgr as any).pollingEntries.get('session-1')
+    entry.createdAt = Date.now()
+
+    const transitionSpy = vi.spyOn(mgr as any, 'transitionToIdle').mockResolvedValue(undefined)
+
+    await (mgr as any).pollSingleSession(entry)
+
+    // NOW hasSeenWork should be true — we got an assistant response
+    expect(entry.hasSeenWork).toBe(true)
+    // And since hasSeenWork is true, IDLE means truly done → transition fires
+    expect(transitionSpy).toHaveBeenCalledOnce()
+  })
+
   it('pollSingleSession transitions to idle after grace period expires without work (new session stuck)', async () => {
     const mgr = buildManager()
     const adapter = buildAdapter()

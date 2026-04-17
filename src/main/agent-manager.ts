@@ -1376,10 +1376,18 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
         }
       }
 
-      // Mark that the session has done real work once we receive any messages.
+      // Mark that the session has done real work once we receive non-user parts.
       // This disables the IDLE grace period so future IDLE means truly done.
-      if (newParts.length > 0 && !entry.hasSeenWork) {
-        entry.hasSeenWork = true
+      // IMPORTANT: only count assistant/tool parts as "work". User message echoes
+      // (the adapter echoing back the prompt we sent) do NOT count — the backend
+      // may still be ingesting the prompt while the echo is already available,
+      // so treating it as "work" would disable the grace period prematurely and
+      // cause the session to transition to idle before any response is produced.
+      if (!entry.hasSeenWork && newParts.length > 0) {
+        const hasNonUserParts = newParts.some(p => p.role !== 'user' && (p.role as string) !== 'human')
+        if (hasNonUserParts) {
+          entry.hasSeenWork = true
+        }
       }
 
       // Collect all parts into a batch instead of sending individually.
@@ -1548,10 +1556,11 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
 
         if (!pollingEntry?.hasSeenWork && sessionAge < IDLE_GRACE_PERIOD_MS) {
           // Still within grace period and haven't seen any work yet — keep polling
+          console.log(`[AgentManager] IDLE grace period active for ${sessionId} (age=${sessionAge}ms, hasSeenWork=${pollingEntry?.hasSeenWork}) — waiting`)
           return
         }
 
-        console.log(`[AgentManager] Detected IDLE status for ${sessionId}, calling transitionToIdle`)
+        console.log(`[AgentManager] Detected IDLE status for ${sessionId}, calling transitionToIdle (age=${sessionAge}ms, hasSeenWork=${pollingEntry?.hasSeenWork})`)
         // Sync dedup state from polling entry back to the session so that
         // if polling restarts (follow-up message), we preserve what was already seen.
         if (pollingEntry) {
