@@ -41,11 +41,23 @@ export function AppLayout() {
 
   const { initListeners: initUpdateListeners, loadVersion } = useUpdateStore()
 
+  const { openUpdateDialog } = useUIStore()
+
   useEffect(() => {
     fetchAgents()
     loadVersion()
     const cleanupUpdate = initUpdateListeners()
-    return cleanupUpdate
+
+    // Listen for "Check for Updates" from the native application menu
+    const handleMenuUpdate = (): void => {
+      openUpdateDialog()
+    }
+    window.addEventListener('open-update-dialog', handleMenuUpdate)
+
+    return () => {
+      cleanupUpdate()
+      window.removeEventListener('open-update-dialog', handleMenuUpdate)
+    }
   }, [])
 
   const editingTask = editingTaskId ? tasks.find((t) => t.id === editingTaskId) || selectedTask : undefined

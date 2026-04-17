@@ -13,9 +13,11 @@ export function UpdateDialog({ open, onClose }: UpdateDialogProps) {
   const {
     updateAvailable,
     currentVersion,
+    isChecking,
     isDownloading,
     downloadProgress,
     isReadyToInstall,
+    isUpToDate,
     error,
     downloadUpdate,
     installUpdate
@@ -31,6 +33,53 @@ export function UpdateDialog({ open, onClose }: UpdateDialogProps) {
     } catch (err) {
       console.error('[UpdateDialog] installUpdate error:', err)
     }
+  }
+
+  // Show checking / up-to-date state when opened from menu with no update available
+  if (!updateAvailable && open) {
+    return (
+      <Dialog open={open} onOpenChange={(isOpen) => !isOpen && onClose()}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Software Update</DialogTitle>
+            <DialogDescription>
+              {isChecking ? 'Checking for updates…' : isUpToDate ? 'You\'re up to date!' : 'Check for 20x updates'}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogBody>
+            <div className="space-y-4">
+              <div className="flex items-center gap-3 text-sm">
+                <span className="text-muted-foreground">Current version:</span>
+                <code className="bg-muted px-1.5 py-0.5 rounded text-xs">
+                  v{currentVersion ?? '?'}
+                </code>
+              </div>
+              {isChecking && (
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Checking for updates…
+                </div>
+              )}
+              {isUpToDate && !isChecking && (
+                <div className="text-sm text-green-400">
+                  20x is up to date. You&apos;re running the latest version.
+                </div>
+              )}
+              {error && (
+                <div className="text-sm text-destructive bg-destructive/10 rounded-lg px-3 py-2">
+                  {error}
+                </div>
+              )}
+              <div className="flex justify-end pt-2">
+                <Button variant="outline" onClick={onClose}>
+                  Close
+                </Button>
+              </div>
+            </div>
+          </DialogBody>
+        </DialogContent>
+      </Dialog>
+    )
   }
 
   if (!updateAvailable) return null

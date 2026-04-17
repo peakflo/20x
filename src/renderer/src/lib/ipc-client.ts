@@ -407,3 +407,7 @@ export const onUpdateDownloaded = (callback: () => void): (() => void) => {
 export const onUpdateError = (callback: (message: string) => void): (() => void) => {
   return window.electronAPI.onUpdateError(callback)
 }
+
+export const onMenuCheckForUpdates = (callback: () => void): (() => void) => {
+  return window.electronAPI.onMenuCheckForUpdates(callback)
+}

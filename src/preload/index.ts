@@ -288,6 +288,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('update:error', handler)
     return () => ipcRenderer.removeListener('update:error', handler)
   },
+  onMenuCheckForUpdates: (callback: () => void): (() => void) => {
+    const handler = (): void => callback()
+    ipcRenderer.on('menu:check-for-updates', handler)
+    return () => ipcRenderer.removeListener('menu:check-for-updates', handler)
+  },
   webUtils: {
     getPathForFile: (file: File): string => webUtils.getPathForFile(file)
   }

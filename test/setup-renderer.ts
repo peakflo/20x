@@ -171,6 +171,9 @@ const mockElectronAPI = {
   }),
   onUpdateError: vi.fn((_cb: (message: string) => void) => {
     return vi.fn()
+  }),
+  onMenuCheckForUpdates: vi.fn((_cb: () => void) => {
+    return vi.fn()
   })
 }
 

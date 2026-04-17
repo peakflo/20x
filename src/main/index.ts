@@ -1,5 +1,5 @@
 import { execFile } from 'child_process'
-import { app, BrowserWindow, shell, Tray, Menu, nativeImage } from 'electron'
+import { app, BrowserWindow, shell, Tray, Menu, nativeImage, dialog } from 'electron'
 import { join } from 'path'
 import { is } from '@electron-toolkit/utils'
 import { DatabaseManager } from './database'
@@ -16,7 +16,7 @@ import { HubSpotPlugin } from './plugins/hubspot-plugin'
 import { GitHubIssuesPlugin } from './plugins/github-issues-plugin'
 import { NotionPlugin } from './plugins/notion-plugin'
 import { registerIpcHandlers } from './ipc-handlers'
-import { initUpdater, checkForUpdates, shouldCheckForUpdate, recordUpdateCheck } from './updater'
+import { initUpdater, checkForUpdates, shouldCheckForUpdate, recordUpdateCheck, isUpdateReadyToInstall, getPendingUpdateVersion, quitAndInstall } from './updater'
 import { RecurrenceScheduler } from './recurrence-scheduler'
 import { setTaskApiNotifier } from './task-api-server'
 import { startSecretBroker, stopSecretBroker, writeSecretShellWrapper } from './secret-broker'
@@ -175,6 +175,102 @@ function createTray(): void {
   })
 }
 
+/**
+ * Build and set the application menu.
+ * Adds a "Check for Updates…" item under the app menu (macOS) or Help menu (Win/Linux).
+ */
+function buildAppMenu(): void {
+  const isMac = process.platform === 'darwin'
+
+  const checkForUpdatesItem: Electron.MenuItemConstructorOptions = {
+    label: 'Check for Updates…',
+    click: () => {
+      // Trigger an update check and show the window so the user sees the result
+      mainWindow?.show()
+      mainWindow?.webContents.send('menu:check-for-updates')
+    }
+  }
+
+  const template: Electron.MenuItemConstructorOptions[] = [
+    // macOS app menu
+    ...(isMac
+      ? [
+          {
+            label: app.name,
+            submenu: [
+              { role: 'about' as const },
+              { type: 'separator' as const },
+              checkForUpdatesItem,
+              { type: 'separator' as const },
+              { role: 'services' as const },
+              { type: 'separator' as const },
+              { role: 'hide' as const },
+              { role: 'hideOthers' as const },
+              { role: 'unhide' as const },
+              { type: 'separator' as const },
+              { role: 'quit' as const }
+            ]
+          }
+        ]
+      : []),
+    // Edit menu (for clipboard shortcuts)
+    {
+      label: 'Edit',
+      submenu: [
+        { role: 'undo' },
+        { role: 'redo' },
+        { type: 'separator' },
+        { role: 'cut' },
+        { role: 'copy' },
+        { role: 'paste' },
+        { role: 'selectAll' }
+      ]
+    },
+    // View menu
+    {
+      label: 'View',
+      submenu: [
+        { role: 'reload' },
+        { role: 'forceReload' },
+        { role: 'toggleDevTools' },
+        { type: 'separator' },
+        { role: 'resetZoom' },
+        { role: 'zoomIn' },
+        { role: 'zoomOut' },
+        { type: 'separator' },
+        { role: 'togglefullscreen' }
+      ]
+    },
+    // Window menu
+    {
+      label: 'Window',
+      submenu: [
+        { role: 'minimize' },
+        { role: 'zoom' },
+        ...(isMac
+          ? [{ type: 'separator' as const }, { role: 'front' as const }]
+          : [{ role: 'close' as const }])
+      ]
+    },
+    // Help menu (non-macOS gets "Check for Updates" here)
+    {
+      label: 'Help',
+      submenu: [
+        ...(!isMac ? [checkForUpdatesItem, { type: 'separator' as const }] : []),
+        {
+          label: 'View on GitHub',
+          click: () => {
+            shell.openExternal('https://github.com/peakflo/20x')
+          }
+        }
+      ]
+    }
+  ]
+
+  const menu = Menu.buildFromTemplate(template)
+  Menu.setApplicationMenu(menu)
+}
+
 // Register custom protocol for OAuth callback
 if (process.defaultApp) {
   if (process.argv.length >= 2) {
@@ -288,6 +384,9 @@ app.whenReady().then(async () => {
 
   registerIpcHandlers(db, agentManager, githubManager, worktreeManager, syncManager, pluginRegistry, mcpToolCaller, oauthManager, recurrenceScheduler)
 
+  // Build the application menu (includes "Check for Updates…")
+  buildAppMenu()
+
   // Start secret broker and write shell wrapper (awaited so broker is ready before any sessions)
   try {
     const brokerPort = await startSecretBroker(db)
@@ -336,7 +435,47 @@ app.on('window-all-closed', () => {
   }
 })
 
-app.on('before-quit', () => {
+app.on('before-quit', async (event) => {
+  if (isQuitting) {
+    // Already handled — proceed with quit
+    agentManager?.stopAllSessions()
+    agentManager?.stopServer()
+    mcpToolCaller?.destroy()
+    oauthManager?.destroy()
+    db?.close()
+    if (tray) {
+      tray.destroy()
+      tray = null
+    }
+    return
+  }
+
+  // If a downloaded update is ready, ask the user before quitting
+  if (isUpdateReadyToInstall()) {
+    event.preventDefault()
+    const pendingVersion = getPendingUpdateVersion()
+    const { response } = await dialog.showMessageBox({
+      type: 'info',
+      title: 'Update Ready',
+      message: `A new version${pendingVersion ? ` (v${pendingVersion})` : ''} has been downloaded.`,
+      detail: 'Would you like to install the update and restart, or quit without updating?',
+      buttons: ['Install & Restart', 'Quit Without Updating'],
+      defaultId: 0,
+      cancelId: 1
+    })
+
+    if (response === 0) {
+      // Install & restart — quitAndInstall handles the cleanup
+      isQuitting = true
+      quitAndInstall()
+    } else {
+      // Quit without updating
+      isQuitting = true
+      app.quit()
+    }
+    return
+  }
+
   isQuitting = true
   // Ensure cleanup before quitting
   agentManager?.stopAllSessions()

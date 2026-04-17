@@ -287,6 +287,7 @@ interface ElectronAPI {
   onUpdateDownloadProgress: (callback: (progress: UpdateDownloadProgress) => void) => () => void
   onUpdateDownloaded: (callback: () => void) => () => void
   onUpdateError: (callback: (message: string) => void) => () => void
+  onMenuCheckForUpdates: (callback: () => void) => () => void
 }
 
 declare global {

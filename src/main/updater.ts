@@ -41,8 +41,8 @@ export function initUpdater(mainWindow: BrowserWindow): void {
   // Allow update checks in dev mode (uses dev-app-update.yml)
   autoUpdater.forceDevUpdateConfig = true
 
-  // Don't auto-download — let the user decide
-  autoUpdater.autoDownload = false
+  // Silently download in the background so updates are ready when the user quits
+  autoUpdater.autoDownload = true
   autoUpdater.autoInstallOnAppQuit = false
 
   autoUpdater.on('update-available', (info) => {
@@ -275,6 +275,20 @@ function macOSManualInstall(zipPath: string): void {
   }).unref()
 
   app.exit(0)
+}
+
+/**
+ * Whether an update has been downloaded and is ready to install.
+ */
+export function isUpdateReadyToInstall(): boolean {
+  return downloadedFilePath !== null || findCachedUpdate() !== null
+}
+
+/**
+ * Get the version of the pending update, if any.
+ */
+export function getPendingUpdateVersion(): string | null {
+  return pendingUpdateVersion
 }
 
 /**

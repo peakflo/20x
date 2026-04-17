@@ -234,5 +234,59 @@ describe('useUpdateStore', () => {
 
       expect(useUpdateStore.getState().error).toBeNull()
     })
+
+    it('subscribes to onMenuCheckForUpdates', () => {
+      useUpdateStore.getState().initListeners()
+      expect(window.electronAPI.onMenuCheckForUpdates).toHaveBeenCalled()
+    })
+
+    it('onMenuCheckForUpdates triggers checkForUpdates when no update available', () => {
+      // Ensure window.dispatchEvent is available
+      if (!window.dispatchEvent) {
+        (window as any).dispatchEvent = vi.fn()
+      }
+      const dispatchSpy = vi.fn()
+      window.dispatchEvent = dispatchSpy
+
+      let menuCb: (() => void) | null = null
+      window.electronAPI.onMenuCheckForUpdates = vi.fn((cb) => {
+        menuCb = cb
+        return vi.fn()
+      })
+
+      useUpdateStore.setState({ updateAvailable: null })
+      useUpdateStore.getState().initListeners()
+
+      expect(menuCb).not.toBeNull()
+      menuCb!()
+
+      // Should have started checking
+      expect(useUpdateStore.getState().isChecking).toBe(true)
+      // Should have dispatched the open-update-dialog event
+      expect(dispatchSpy).toHaveBeenCalled()
+    })
+
+    it('onMenuCheckForUpdates skips checkForUpdates when update already available', () => {
+      if (!window.dispatchEvent) {
+        (window as any).dispatchEvent = vi.fn()
+      }
+      window.dispatchEvent = vi.fn()
+
+      let menuCb: (() => void) | null = null
+      window.electronAPI.onMenuCheckForUpdates = vi.fn((cb) => {
+        menuCb = cb
+        return vi.fn()
+      })
+
+      useUpdateStore.setState({
+        updateAvailable: { version: '2.0.0', releaseNotes: 'New', releaseDate: '' }
+      })
+      useUpdateStore.getState().initListeners()
+
+      menuCb!()
+
+      // Should NOT have started checking since update is already known
+      expect(useUpdateStore.getState().isChecking).toBe(false)
+    })
   })
 })

@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { updateApi, onUpdateAvailable, onUpdateNotAvailable, onUpdateDownloadProgress, onUpdateDownloaded, onUpdateError } from '@/lib/ipc-client'
+import { updateApi, onUpdateAvailable, onUpdateNotAvailable, onUpdateDownloadProgress, onUpdateDownloaded, onUpdateError, onMenuCheckForUpdates } from '@/lib/ipc-client'
 import type { UpdateInfo, UpdateDownloadProgress } from '@/types/electron'
 
 interface UpdateState {
@@ -117,6 +117,18 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
           isDownloading: false,
           error: state.isChecking || state.isDownloading ? message : null
         })
+      }),
+      onMenuCheckForUpdates(() => {
+        // Triggered from the native application menu "Check for Updates…"
+        // If no update is known yet, trigger a check; otherwise the existing
+        // updateAvailable state will cause the UI to show the dialog via
+        // the menuCheckForUpdates listener in AppLayout.
+        const state = get()
+        if (!state.updateAvailable) {
+          state.checkForUpdates()
+        }
+        // Emit a custom event so AppLayout can open the update dialog
+        window.dispatchEvent(new CustomEvent('open-update-dialog'))
       })
     ]
 
