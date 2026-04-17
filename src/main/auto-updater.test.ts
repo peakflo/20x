@@ -65,12 +65,11 @@ describe('auto-updater', () => {
       expect(events).toContain('error')
     })
 
-    it('should register IPC handlers for updater:check, updater:download, updater:install, updater:getVersion', async () => {
+    it('should register IPC handlers via registerUpdaterIpc', async () => {
       const { ipcMain } = await import('electron')
-      const { initAutoUpdater } = await import('./auto-updater')
-      const mockWindow = { isDestroyed: vi.fn(() => false), webContents: { send: vi.fn() } } as any
+      const { registerUpdaterIpc } = await import('./auto-updater')
 
-      initAutoUpdater(mockWindow)
+      registerUpdaterIpc()
 
       const registeredChannels = (ipcMain.handle as any).mock.calls.map((c: any[]) => c[0])
       expect(registeredChannels).toContain('updater:check')

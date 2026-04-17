@@ -29,7 +29,7 @@ import { EnterpriseStateSync } from './enterprise-state-sync'
 import { setTaskApiNotifier, setTranscriptProvider, stopTaskApiServer } from './task-api-server'
 import { startSecretBroker, stopSecretBroker, writeSecretShellWrapper } from './secret-broker'
 import { startMobileApiServer, stopMobileApiServer, broadcastToMobileClients, setMobileApiNotifier } from './mobile-api-server'
-import { initAutoUpdater, isUpdateDownloaded, getPendingVersion } from './auto-updater'
+import { registerUpdaterIpc, initAutoUpdater, isUpdateDownloaded, getPendingVersion } from './auto-updater'
 import { initCrashLogger } from './crash-logger'
 
 let mainWindow: BrowserWindow | null = null
@@ -682,6 +682,9 @@ app.whenReady().then(async () => {
   }
 
   registerIpcHandlers(db, agentManager, githubManager, worktreeManager, syncManager, pluginRegistry, mcpToolCaller, oauthManager, recurrenceScheduler, enterpriseAuth ?? undefined, claudePluginManager, heartbeatScheduler, enterpriseHeartbeatInstance ?? undefined, enterpriseStateSyncInstance ?? undefined, gitlabManager ?? undefined)
+
+  // Register updater IPC handlers (safe in dev mode — returns no-op results)
+  registerUpdaterIpc()
 
   // Build the application menu (includes "Check for Updates…")
   buildAppMenu()

@@ -2,6 +2,7 @@ import { autoUpdater, type UpdateInfo } from 'electron-updater'
 import { app, BrowserWindow, ipcMain } from 'electron'
 
 let mainWin: BrowserWindow | null = null
+let updaterActive = false
 
 /** Version of the latest available update (set when update-available fires) */
 let pendingVersion: string | null = null
@@ -11,8 +12,50 @@ let updateDownloaded = false
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000
 
+/**
+ * Register updater IPC handlers. Must be called early (before the renderer
+ * loads) so that `ipcRenderer.invoke('updater:*')` never throws
+ * "No handler registered". Safe to call in dev mode — the handlers simply
+ * return no-op results when the real updater hasn't been started.
+ */
+export function registerUpdaterIpc(): void {
+  ipcMain.handle('updater:check', async () => {
+    if (!updaterActive) return { success: false, error: 'Updater not available in dev mode' }
+    try {
+      const result = await autoUpdater.checkForUpdates()
+      return { success: true, version: result?.updateInfo?.version ?? null }
+    } catch (err) {
+      return { success: false, error: (err as Error).message }
+    }
+  })
+
+  ipcMain.handle('updater:download', async () => {
+    if (!updaterActive) return { success: false, error: 'Updater not available in dev mode' }
+    try {
+      await autoUpdater.downloadUpdate()
+      return { success: true }
+    } catch (err) {
+      return { success: false, error: (err as Error).message }
+    }
+  })
+
+  ipcMain.handle('updater:install', () => {
+    if (!updaterActive) return
+    autoUpdater.quitAndInstall()
+  })
+
+  ipcMain.handle('updater:getVersion', () => {
+    return app.getVersion()
+  })
+}
+
+/**
+ * Start the real auto-updater (production only).
+ * Call registerUpdaterIpc() first so the IPC handlers exist.
+ */
 export function initAutoUpdater(win: BrowserWindow): void {
   mainWin = win
+  updaterActive = true
 
   // Silently download in the background so the update is ready when the user quits
   autoUpdater.autoDownload = true
@@ -65,33 +108,6 @@ export function initAutoUpdater(win: BrowserWindow): void {
       status: 'error',
       error: err.message
     })
-  })
-
-  // IPC handlers
-  ipcMain.handle('updater:check', async () => {
-    try {
-      const result = await autoUpdater.checkForUpdates()
-      return { success: true, version: result?.updateInfo?.version ?? null }
-    } catch (err) {
-      return { success: false, error: (err as Error).message }
-    }
-  })
-
-  ipcMain.handle('updater:download', async () => {
-    try {
-      await autoUpdater.downloadUpdate()
-      return { success: true }
-    } catch (err) {
-      return { success: false, error: (err as Error).message }
-    }
-  })
-
-  ipcMain.handle('updater:install', () => {
-    autoUpdater.quitAndInstall()
-  })
-
-  ipcMain.handle('updater:getVersion', () => {
-    return app.getVersion()
   })
 
   // Check for updates on startup (after a short delay)
