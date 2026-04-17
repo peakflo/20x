@@ -8,7 +8,10 @@ describe('electron-builder-ci-mac-config', () => {
 
     expect(config.afterSign).toBeUndefined()
     expect(config.afterPack).toBe('./scripts/after-pack.js')
-    expect(config.mac).toEqual(packageJson.build.mac)
+    expect(config.mac).toEqual({
+      ...packageJson.build.mac,
+      notarize: false
+    })
     expect(config.win).toEqual(packageJson.build.win)
     expect(config.linux).toEqual(packageJson.build.linux)
   })
