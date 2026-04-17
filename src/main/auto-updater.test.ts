@@ -40,13 +40,13 @@ describe('auto-updater', () => {
   })
 
   describe('initAutoUpdater', () => {
-    it('should set autoDownload to true for silent background downloads', async () => {
+    it('should set autoDownload to false (user-initiated download only)', async () => {
       const { initAutoUpdater } = await import('./auto-updater')
       const mockWindow = { isDestroyed: vi.fn(() => false), webContents: { send: vi.fn() } } as any
 
       initAutoUpdater(mockWindow)
 
-      expect(mockAutoUpdater.autoDownload).toBe(true)
+      expect(mockAutoUpdater.autoDownload).toBe(false)
       expect(mockAutoUpdater.autoInstallOnAppQuit).toBe(false)
     })
 
