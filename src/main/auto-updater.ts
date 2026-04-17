@@ -1,5 +1,5 @@
 import { autoUpdater, type UpdateInfo } from 'electron-updater'
-import { app, BrowserWindow, dialog, ipcMain } from 'electron'
+import { app, BrowserWindow, ipcMain } from 'electron'
 
 let mainWin: BrowserWindow | null = null
 
