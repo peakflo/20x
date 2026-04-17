@@ -164,23 +164,41 @@ function createWindow(): void {
   // window instead of a webview panel — without this, the entire app UI gets
   // replaced by whatever URL was opened.
   //
-  // We use BOTH will-navigate (catches user-initiated navigations) AND
-  // did-start-navigation (catches programmatic navigations via CDP Page.navigate,
-  // webContents.loadURL, etc. that bypass will-navigate).
-  const blockNonAppNavigation = (event: Electron.Event, url: string) => {
+  // Layer 1: will-navigate (catches user-initiated navigations)
+  mainWindow.webContents.on('will-navigate', (event, url) => {
     const appOrigins = ['http://localhost:', 'file://']
     const isAppUrl = appOrigins.some((origin) => url.startsWith(origin))
     if (!isAppUrl) {
       console.warn(`[Main] Blocked navigation of main window to: ${url}`)
       event.preventDefault()
     }
-  }
-  mainWindow.webContents.on('will-navigate', blockNonAppNavigation)
-  mainWindow.webContents.on('did-start-navigation', (event, url, _isInPlace, isMainFrame) => {
-    if (isMainFrame) {
-      blockNonAppNavigation(event, url)
-    }
   })
+
+  // Layer 2: Network-level interception via webRequest API.
+  // This is the DEFINITIVE guard — CDP Page.navigate bypasses will-navigate
+  // and did-start-navigation events, but it CANNOT bypass network-level blocking.
+  // We block any main-frame navigation of the main window to non-app URLs.
+  const mainWcId = mainWindow.webContents.id
+  mainWindow.webContents.session.webRequest.onBeforeRequest(
+    { urls: ['*://*/*'] },
+    (details, callback) => {
+      // Only block main-frame navigations of the main window to non-app URLs.
+      // Sub-resources (scripts, images, XHR) and webview requests pass through.
+      if (
+        details.webContentsId === mainWcId &&
+        details.resourceType === 'mainFrame'
+      ) {
+        const isAppUrl =
+          details.url.startsWith('http://localhost:') || details.url.startsWith('file://')
+        if (!isAppUrl) {
+          console.warn(`[Main] Network-level block: main window navigation to: ${details.url}`)
+          callback({ cancel: true })
+          return
+        }
+      }
+      callback({})
+    }
+  )
 
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
     mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
