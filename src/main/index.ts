@@ -105,7 +105,8 @@ function createWindow(): void {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false
+      sandbox: false,
+      webviewTag: true
     }
   })
 
@@ -541,6 +542,12 @@ protocol.registerSchemesAsPrivileged([
 
 // Initialize crash logger as early as possible
 initCrashLogger()
+
+// Enable Chrome DevTools Protocol (CDP) on a fixed port so that agent-browser
+// (and other CDP clients) can connect to webview tabs embedded in the canvas.
+// Port 0 lets Chromium pick a free port; we read it back via the /json endpoint.
+const CDP_PORT = 19222
+app.commandLine.appendSwitch('remote-debugging-port', String(CDP_PORT))
 
 // Ignore EPIPE errors from broken stdout/stderr pipes (e.g. when piped through head/tail)
 process.stdout?.on?.('error', (err: NodeJS.ErrnoException) => { if (err.code !== 'EPIPE') throw err })

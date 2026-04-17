@@ -226,16 +226,21 @@ function EdgeLabel({
   const mx = (x1 + x2) / 2
   const my = (y1 + y2) / 2
 
+  // Show a ⚡ icon + "CDP :19222" label — indicates active agent-browser access
+  const label = '⚡ CDP :19222'
+  const pillW = 76
+  const pillH = 18
+
   return (
     <g
       className="pointer-events-auto cursor-pointer"
       onClick={(e) => { e.stopPropagation(); onDelete() }}
     >
       <rect
-        x={mx - 28}
-        y={my - 9}
-        width="56"
-        height="18"
+        x={mx - pillW / 2}
+        y={my - pillH / 2}
+        width={pillW}
+        height={pillH}
         rx="9"
         fill="#1c1208"
         stroke="rgba(249,115,22,0.3)"
@@ -250,7 +255,7 @@ function EdgeLabel({
         fontFamily="system-ui, sans-serif"
         fontWeight="500"
       >
-        Browser
+        {label}
       </text>
     </g>
   )

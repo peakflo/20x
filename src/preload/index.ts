@@ -428,5 +428,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.on('terminal:exit', handler)
       return () => ipcRenderer.removeListener('terminal:exit', handler)
     }
+  },
+  browser: {
+    getCdpPort: (): Promise<{ port: number }> =>
+      ipcRenderer.invoke('browser:getCdpPort')
   }
 })

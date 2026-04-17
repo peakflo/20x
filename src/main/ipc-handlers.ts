@@ -1377,4 +1377,11 @@ else:
       terminals.delete(id)
     }
   })
+
+  // ── Browser CDP ─────────────────────────────────────────
+  // Returns the CDP (Chrome DevTools Protocol) port that agent-browser
+  // can use to connect to webview tabs on the canvas.
+  ipcMain.handle('browser:getCdpPort', () => {
+    return { port: 19222 }
+  })
 }
