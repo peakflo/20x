@@ -581,6 +581,22 @@ export class OpencodeAdapter implements CodingAgentAdapter {
             content: part.text as string
           }
         })
+
+        // Surface provider errors stored in msg.info.error (e.g. "Payment
+        // Required", quota exceeded).  OpenCode records these on the message
+        // info but creates no parts for them, so without this they vanish on
+        // resume.
+        const msgError = (msg.info as Record<string, unknown>).error as { name?: string; data?: { message?: string } } | undefined
+        if (msgError && transformedParts.length === 0) {
+          const errorText = msgError.data?.message || msgError.name || 'Unknown provider error'
+          transformedParts.push({
+            id: `error-${msg.info.id}`,
+            type: 'text' as unknown as MessagePartType,
+            text: `⚠️ Provider error: ${errorText}`,
+            content: `⚠️ Provider error: ${errorText}`
+          })
+        }
+
         messages.push({
           id: msg.info.id,
           role: (msg.info.role || 'assistant') as unknown as MessageRole,
