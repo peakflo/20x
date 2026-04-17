@@ -1,9 +1,16 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest'
 import { render, screen, waitFor, fireEvent } from '@testing-library/react'
 import { UpdateDialog } from './UpdateDialog'
 
-// Access the mock electronAPI from setup-renderer.ts
-const mockUpdater = window.electronAPI.updater
+// Access the mock electronAPI from setup-renderer.ts — cast to Mock for vi helpers
+const mockUpdater = window.electronAPI.updater as unknown as {
+  check: Mock
+  download: Mock
+  install: Mock
+  getVersion: Mock
+  onStatus: Mock
+  onMenuCheckForUpdates: Mock
+}
 
 describe('UpdateDialog', () => {
   beforeEach(() => {
