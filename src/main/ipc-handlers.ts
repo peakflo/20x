@@ -1416,4 +1416,18 @@ else:
       return { targetId: null }
     }
   })
+
+  // Returns all webview CDP targets. Called from the renderer to resolve
+  // CDP target IDs without CORS issues (renderer can't fetch localhost:19222).
+  ipcMain.handle('browser:getCdpTargets', async () => {
+    try {
+      const res = await fetch('http://localhost:19222/json/list')
+      const targets = (await res.json()) as Array<{ id: string; url: string; type: string; title: string }>
+      return targets
+        .filter((t) => t.type === 'webview')
+        .map((t) => ({ id: t.id, url: t.url, title: t.title }))
+    } catch {
+      return []
+    }
+  })
 }

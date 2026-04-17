@@ -98,12 +98,11 @@ export function BrowserPanelContent({
           }
         }
 
-        // Fallback: query CDP /json/list directly and match by webview URL
+        // Fallback: query CDP targets via IPC (avoids CORS) and match by webview URL
         const wvUrl = wv.getURL?.()
         if (!wvUrl) return
-        const res = await fetch(`http://localhost:${CDP_PORT}/json/list`)
-        const targets = (await res.json()) as Array<{ id: string; url: string; type: string }>
-        const match = targets.find((t) => t.type === 'webview' && t.url === wvUrl)
+        const targets = await window.electronAPI.browser.getCdpTargets()
+        const match = targets.find((t) => t.url === wvUrl)
         if (match) {
           cdpTargetResolved.current = true
           updatePanel(panelId, { cdpTargetId: match.id })

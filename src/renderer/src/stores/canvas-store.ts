@@ -524,14 +524,12 @@ function notifyAgentOfBrowserConnection(
     const browserTitle = browserPanel.title || 'Browser'
     const browserUrl = browserPanel.url || ''
 
-    // ALWAYS resolve the CDP target ID fresh from /json/list.
+    // ALWAYS resolve the CDP target ID fresh via IPC (main process queries
+    // localhost:19222/json/list — no CORS issues unlike renderer fetch).
     // Stored cdpTargetId goes stale on every app restart (CDP reassigns IDs).
-    // We verify it still exists, and fall back to URL matching if not.
     let cdpTargetId: string | null = null
     try {
-      const res = await fetch(`http://localhost:${CDP_PORT}/json/list`)
-      const targets = (await res.json()) as Array<{ id: string; url: string; type: string }>
-      const webviews = targets.filter((t) => t.type === 'webview')
+      const webviews = await window.electronAPI.browser.getCdpTargets()
 
       // 1. Check if the stored target ID is still valid
       const storedId = browserPanel.cdpTargetId
@@ -546,7 +544,7 @@ function notifyAgentOfBrowserConnection(
         // 3. No URL — pick first available webview
         cdpTargetId = webviews[0]?.id || null
       }
-    } catch { /* CDP query failed */ }
+    } catch { /* IPC query failed */ }
 
     // SAFETY: Only send connection instructions when we have a confirmed webview target.
     // Without it, agent-browser would default to the main app window and break the UI.
