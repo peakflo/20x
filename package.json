@@ -103,6 +103,11 @@
   "build": {
     "appId": "com.20x.app",
     "productName": "20x",
+    "publish": {
+      "provider": "github",
+      "owner": "peakflo",
+      "repo": "20x"
+    },
     "directories": {
       "buildResources": "resources"
     },
