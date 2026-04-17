@@ -38,12 +38,12 @@ export function BrowserPanelContent({
   // initialSrc is set once and never changed — prevents the webview from
   // reloading when React re-renders.  All subsequent navigations go through
   // webviewRef.current.loadURL() which doesn't touch this ref.
-  const initialSrc = useRef(initialUrl || '')
-  const [inputValue, setInputValue] = useState(initialUrl || '')
+  const DEFAULT_URL = 'https://www.google.com'
+  const initialSrc = useRef(initialUrl || DEFAULT_URL)
+  const [inputValue, setInputValue] = useState(initialUrl || DEFAULT_URL)
   const [isLoading, setIsLoading] = useState(false)
   const [canGoBack, setCanGoBack] = useState(false)
   const [canGoForward, setCanGoForward] = useState(false)
-  const [isSetup, setIsSetup] = useState(!initialUrl)
 
   // ── Check if this browser is connected to a task via an edge ──
   // Uses imperative reads + subscribe to avoid re-rendering on every panel move
@@ -121,7 +121,7 @@ export function BrowserPanelContent({
       wv.removeEventListener('did-navigate', resolveTargetId)
       wv.removeEventListener('dom-ready', resolveTargetId)
     }
-  }, [panelId, updatePanel, isSetup])
+  }, [panelId, updatePanel])
 
   // ── Webview event wiring ──────────────────────────────────
   // Debounce store updates to avoid re-render storms from SPA sites (e.g. Google Maps)
@@ -177,7 +177,7 @@ export function BrowserPanelContent({
       if (pendingUrlUpdate.current) clearTimeout(pendingUrlUpdate.current)
       if (pendingTitleUpdate.current) clearTimeout(pendingTitleUpdate.current)
     }
-  }, [panelId, updatePanel, isSetup])
+  }, [panelId, updatePanel])
 
   // ── Navigation handlers ───────────────────────────────────
   const navigate = useCallback((url: string) => {
@@ -192,7 +192,6 @@ export function BrowserPanelContent({
       }
     }
     setInputValue(finalUrl)
-    setIsSetup(false)
     // Navigate via loadURL — never set the src attribute reactively
     const wv = webviewRef.current
     if (wv) {
@@ -219,44 +218,6 @@ export function BrowserPanelContent({
   const handleRefresh = useCallback(() => {
     webviewRef.current?.reload()
   }, [])
-
-  // ── Setup screen ──────────────────────────────────────────
-  if (isSetup) {
-    return (
-      <div className="flex flex-col h-full min-h-0">
-        <BrowserUrlBar
-          inputValue={inputValue}
-          isLoading={false}
-          canGoBack={false}
-          canGoForward={false}
-          onInputChange={setInputValue}
-          onSubmit={handleSubmit}
-          onBack={handleBack}
-          onForward={handleForward}
-          onRefresh={handleRefresh}
-          connectedTaskName={connectedTaskName}
-          autoFocus
-        />
-        <div className="flex-1 flex items-center justify-center">
-          <div className="text-center space-y-3 px-6">
-            <div className="w-14 h-14 mx-auto rounded-2xl bg-orange-500/10 flex items-center justify-center">
-              <Globe className="h-7 w-7 text-orange-400/60" />
-            </div>
-            <div>
-              <div className="text-sm font-medium text-foreground/70 mb-1">Browser</div>
-              <div className="text-[11px] text-muted-foreground/40 leading-relaxed max-w-[240px]">
-                Type a URL or search query above. This is a real browser —
-                the agent can control it and you can interact with it.
-              </div>
-              <div className="mt-3 text-[10px] text-muted-foreground/30 font-mono">
-                CDP port {CDP_PORT}
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    )
-  }
 
   // ── Live browser ──────────────────────────────────────────
   return (

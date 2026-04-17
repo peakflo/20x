@@ -487,35 +487,36 @@ export function InfiniteCanvas() {
         </Button>
       </div>
 
-      {/* ── HUD: Add + Viewport info ── */}
-      <div className="absolute top-3 right-3 flex items-center gap-2 z-10 select-none">
+      {/* ── HUD: Add button (top-left, primary CTA) ── */}
+      <div className="absolute top-3 left-3 z-10">
         <Button
-          variant="ghost"
           size="sm"
-          className="h-7 w-7 p-0 bg-[#1a2030]/90 backdrop-blur-sm border border-border/40 hover:border-border/60"
-          onClick={() => {
+          className="h-8 px-3 bg-primary text-primary-foreground hover:bg-primary/90 shadow-sm text-xs gap-1.5"
+          onClick={(e) => {
+            const btn = e.currentTarget.getBoundingClientRect()
             const rect = containerRef.current?.getBoundingClientRect()
             if (!rect) return
-            const cx = rect.left + rect.width / 2
-            const cy = rect.top + rect.height / 2
             setContextMenu({
-              clientX: cx,
-              clientY: cy,
-              canvasX: (cx - rect.left - viewport.x) / viewport.zoom,
-              canvasY: (cy - rect.top - viewport.y) / viewport.zoom,
+              clientX: btn.left,
+              clientY: btn.bottom + 4,
+              canvasX: (btn.left - rect.left - viewport.x) / viewport.zoom,
+              canvasY: (btn.bottom + 4 - rect.top - viewport.y) / viewport.zoom,
             })
           }}
           title="Add to canvas"
         >
           <Plus className="h-3.5 w-3.5" />
+          <span>Add</span>
         </Button>
-        <div className="flex items-center gap-2 text-[10px] text-muted-foreground/40">
-          <Move className="h-3 w-3" />
-          <span className="tabular-nums">
-            {Math.round(-viewport.x / viewport.zoom)},{' '}
-            {Math.round(-viewport.y / viewport.zoom)}
-          </span>
-        </div>
+      </div>
+
+      {/* ── HUD: Viewport info (top-right) ── */}
+      <div className="absolute top-3 right-3 flex items-center gap-2 text-[10px] text-muted-foreground/40 z-10 select-none">
+        <Move className="h-3 w-3" />
+        <span className="tabular-nums">
+          {Math.round(-viewport.x / viewport.zoom)},{' '}
+          {Math.round(-viewport.y / viewport.zoom)}
+        </span>
       </div>
 
       {/* ── Empty state ── */}
