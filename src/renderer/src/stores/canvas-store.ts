@@ -7,7 +7,7 @@ const SAVE_DEBOUNCE_MS = 1000
 
 // ── Panel types ────────────────────────────────────────────
 
-export type CanvasPanelType = 'task' | 'transcript' | 'app' | 'webpage' | 'terminal' | 'placeholder'
+export type CanvasPanelType = 'task' | 'transcript' | 'app' | 'webpage' | 'terminal' | 'browser' | 'placeholder'
 
 export interface CanvasPanelData {
   id: string
@@ -16,6 +16,10 @@ export interface CanvasPanelData {
   refId?: string
   /** URL for webpage panels */
   url?: string
+  /** Browser session name (for browser panels) */
+  browserSessionId?: string
+  /** WebSocket streaming port (for browser panels) */
+  streamPort?: number
   title: string
   x: number
   y: number
@@ -28,10 +32,14 @@ export interface CanvasPanelData {
 
 // ── Connections / Edges ───────────────────────────────────
 
+export type CanvasEdgeType = 'default' | 'browser'
+
 export interface CanvasEdge {
   id: string
   fromPanelId: string
   toPanelId: string
+  /** Visual style for the edge — 'browser' gets animated pulsing style */
+  edgeType?: CanvasEdgeType
 }
 
 // ── Snapping helpers ──────────────────────────────────────
@@ -106,7 +114,7 @@ interface CanvasState {
   setSnapGuides: (guides: SnapGuide[]) => void
 
   // Edge / connection actions
-  addEdge: (fromPanelId: string, toPanelId: string) => string
+  addEdge: (fromPanelId: string, toPanelId: string, edgeType?: CanvasEdgeType) => string
   removeEdge: (id: string) => void
   removeEdgesForPanel: (panelId: string) => void
   setConnectingFromId: (id: string | null) => void
@@ -320,7 +328,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   setSnapGuides: (guides) => set({ snapGuides: guides }),
 
   // Edges
-  addEdge: (fromPanelId, toPanelId) => {
+  addEdge: (fromPanelId, toPanelId, edgeType) => {
     const { edges } = get()
     const exists = edges.some(
       (e) =>
@@ -330,7 +338,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     if (exists) return ''
     const id = `edge-${++edgeCounter}-${Date.now()}`
     set((s) => ({
-      edges: [...s.edges, { id, fromPanelId, toPanelId }]
+      edges: [...s.edges, { id, fromPanelId, toPanelId, edgeType }]
     }))
     scheduleSave()
     return id

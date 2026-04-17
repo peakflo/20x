@@ -11,6 +11,7 @@ import { TranscriptPanelContent } from './TranscriptPanelContent'
 import { AppPanelContent } from './AppPanelContent'
 import { WebPagePanelContent } from './WebPagePanelContent'
 import { TerminalPanelContent } from './TerminalPanelContent'
+import { BrowserPanelContent } from './BrowserPanelContent'
 
 interface CanvasPanelProps {
   panel: CanvasPanelData
@@ -182,6 +183,7 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
     app: { label: 'App', color: 'bg-green-500/20 text-green-400', border: 'border-green-500/40' },
     webpage: { label: 'Web', color: 'bg-cyan-500/20 text-cyan-400', border: 'border-cyan-500/40' },
     terminal: { label: 'Terminal', color: 'bg-amber-500/20 text-amber-400', border: 'border-amber-500/50' },
+    browser: { label: 'Browser', color: 'bg-orange-500/20 text-orange-400', border: 'border-orange-500/40' },
   }
   const cfg = TYPE_CONFIG[panel.type] ?? { label: 'Panel', color: 'bg-muted/30 text-muted-foreground', border: 'border-border/50' }
 
@@ -283,7 +285,7 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
       {/* Content area */}
       {!isCollapsed && (
         <div
-          className={`flex-1 overflow-hidden min-h-0 ${panel.type === 'task' || panel.type === 'transcript' || panel.type === 'webpage' || panel.type === 'terminal' || (panel.type === 'app' && panel.refId) ? '' : 'p-3 overflow-auto'}`}
+          className={`flex-1 overflow-hidden min-h-0 ${panel.type === 'task' || panel.type === 'transcript' || panel.type === 'webpage' || panel.type === 'terminal' || panel.type === 'browser' || (panel.type === 'app' && panel.refId) ? '' : 'p-3 overflow-auto'}`}
           style={frozen ? { visibility: 'hidden' } : undefined}
         >
           <MemoizedPanelContent
@@ -293,6 +295,8 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
             url={panel.url}
             title={panel.title}
             taskLayout={taskLayout}
+            browserSessionId={panel.browserSessionId}
+            streamPort={panel.streamPort}
           />
         </div>
       )}
@@ -330,9 +334,11 @@ interface PanelContentProps {
   url?: string
   title: string
   taskLayout?: TaskWorkspaceLayout
+  browserSessionId?: string
+  streamPort?: number
 }
 
-const MemoizedPanelContent = memo(function PanelContent({ type, id, refId, url, title, taskLayout }: PanelContentProps) {
+const MemoizedPanelContent = memo(function PanelContent({ type, id, refId, url, title, taskLayout, browserSessionId, streamPort }: PanelContentProps) {
   if (type === 'task' && refId) {
     return <TaskPanelContent taskId={refId} panelLayout={taskLayout} />
   }
@@ -347,6 +353,9 @@ const MemoizedPanelContent = memo(function PanelContent({ type, id, refId, url, 
   }
   if (type === 'terminal') {
     return <TerminalPanelContent terminalId={id} />
+  }
+  if (type === 'browser') {
+    return <BrowserPanelContent panelId={id} sessionName={browserSessionId} streamPort={streamPort} />
   }
   return (
     <div className="flex items-center justify-center h-full text-muted-foreground/50 text-xs">
