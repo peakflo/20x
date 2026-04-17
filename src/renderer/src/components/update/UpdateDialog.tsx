@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { Dialog, DialogContent, DialogHeader, DialogBody, DialogTitle, DialogDescription } from '@/components/ui/Dialog'
 import { Button } from '@/components/ui/Button'
 import { updaterApi } from '@/lib/ipc-client'
-import { Download, RotateCw, Loader2, ExternalLink, Check } from 'lucide-react'
+import { Download, RotateCw, Loader2, ExternalLink, Check, RefreshCw } from 'lucide-react'
 
 interface UpdateDialogProps {
   open: boolean
@@ -77,6 +77,18 @@ export function UpdateDialog({ open, onClose }: UpdateDialogProps) {
 
   const handleInstall = () => {
     updaterApi.install()
+  }
+
+  const handleRetry = () => {
+    setState((s) => ({ ...s, status: 'checking', error: null }))
+    updaterApi.check().then((result) => {
+      if (result && !result.success) {
+        setState((s) => s.status === 'checking'
+          ? { ...s, status: 'error', error: result.error ?? 'Update check failed' }
+          : s
+        )
+      }
+    })
   }
 
   const hasUpdate = state.status === 'available' || state.status === 'downloading' || state.status === 'downloaded'
@@ -199,6 +211,11 @@ export function UpdateDialog({ open, onClose }: UpdateDialogProps) {
                 <Button disabled className="flex-1">
                   <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                   Downloading...
+                </Button>
+              ) : state.status === 'error' ? (
+                <Button onClick={handleRetry} className="flex-1">
+                  <RefreshCw className="h-4 w-4 mr-2" />
+                  Retry
                 </Button>
               ) : null}
               <Button variant="outline" onClick={onClose}>

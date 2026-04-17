@@ -57,8 +57,10 @@ export function initAutoUpdater(win: BrowserWindow): void {
   mainWin = win
   updaterActive = true
 
-  // Silently download in the background so the update is ready when the user quits
-  autoUpdater.autoDownload = true
+  // Don't auto-download — just detect updates. The user triggers the download
+  // from the UpdateDialog. This avoids repeated ~170 MB downloads on every
+  // app launch that can fail with ERR_CONNECTION_CLOSED on flaky connections.
+  autoUpdater.autoDownload = false
   autoUpdater.autoInstallOnAppQuit = false // We handle quit-time prompt ourselves
 
   autoUpdater.on('checking-for-update', () => {
@@ -103,6 +105,19 @@ export function initAutoUpdater(win: BrowserWindow): void {
     // 404 / no releases published yet → treat as up-to-date so the UI resolves
     if (err.message?.includes('404') || err.message?.includes('Cannot find latest')) {
       send('updater:status', { status: 'up-to-date', currentVersion: app.getVersion() })
+      return
+    }
+    // Network errors → user-friendly message; silently ignore from background checks
+    const isNetworkError = err.message?.includes('ERR_CONNECTION') ||
+      err.message?.includes('ENOTFOUND') ||
+      err.message?.includes('ETIMEDOUT') ||
+      err.message?.includes('ECONNREFUSED') ||
+      err.message?.includes('net::')
+    if (isNetworkError) {
+      send('updater:status', {
+        status: 'error',
+        error: 'Could not check for updates. Please check your internet connection and try again.'
+      })
       return
     }
     send('updater:status', {
