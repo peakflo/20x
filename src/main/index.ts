@@ -751,7 +751,8 @@ app.on('before-quit', async (event) => {
     })
 
     if (response === 0) {
-      // Install & restart — autoUpdater handles the process
+      // Install & restart — set flag first to prevent before-quit loop
+      isShuttingDown = true
       const { autoUpdater } = await import('electron-updater')
       autoUpdater.quitAndInstall()
       return

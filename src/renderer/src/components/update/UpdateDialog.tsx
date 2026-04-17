@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react'
 import { Dialog, DialogContent, DialogHeader, DialogBody, DialogTitle, DialogDescription } from '@/components/ui/Dialog'
 import { Button } from '@/components/ui/Button'
-import { Markdown } from '@/components/ui/Markdown'
 import { updaterApi } from '@/lib/ipc-client'
 import { Download, RotateCw, Loader2, ExternalLink, Check } from 'lucide-react'
 
@@ -131,15 +130,16 @@ export function UpdateDialog({ open, onClose }: UpdateDialogProps) {
               </div>
             )}
 
-            {/* Release notes */}
+            {/* Release notes (may be HTML from GitHub or markdown) */}
             {hasUpdate && state.releaseNotes && (
               <div className="border border-border rounded-lg p-4 max-h-64 overflow-y-auto">
                 <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
                   What&apos;s New
                 </h4>
-                <Markdown size="xs">
-                  {state.releaseNotes}
-                </Markdown>
+                <div
+                  className="text-xs text-foreground prose prose-invert prose-xs max-w-none [&_a]:text-primary [&_a]:underline [&_ul]:list-disc [&_ul]:pl-4 [&_li]:my-0.5"
+                  dangerouslySetInnerHTML={{ __html: state.releaseNotes }}
+                />
               </div>
             )}
 
