@@ -138,8 +138,8 @@ export const agentSessionApi = {
 }
 
 export const agentConfigApi = {
-  getProviders: (serverUrl?: string): Promise<{ providers: { id: string; name: string; models: unknown }[]; default: Record<string, string> } | null> => {
-    return window.electronAPI.agentConfig.getProviders(serverUrl)
+  getProviders: (serverUrl?: string, backendType?: string): Promise<{ providers: { id: string; name: string; models: unknown }[]; default: Record<string, string> } | null> => {
+    return window.electronAPI.agentConfig.getProviders(serverUrl, backendType)
   }
 }
 
@@ -241,8 +241,14 @@ export const updaterApi = {
   install: (): Promise<void> => {
     return window.electronAPI?.updater?.install() ?? Promise.resolve()
   },
-  onStatus: (callback: (data: { status: string; version?: string; percent?: number; error?: string }) => void): (() => void) => {
+  getVersion: (): Promise<string> => {
+    return window.electronAPI?.updater?.getVersion() ?? Promise.resolve('?.?.?')
+  },
+  onStatus: (callback: (data: { status: string; version?: string; percent?: number; error?: string; releaseNotes?: string; releaseDate?: string; currentVersion?: string }) => void): (() => void) => {
     return window.electronAPI?.updater?.onStatus(callback) ?? (() => {})
+  },
+  onMenuCheckForUpdates: (callback: () => void): (() => void) => {
+    return window.electronAPI?.updater?.onMenuCheckForUpdates(callback) ?? (() => {})
   }
 }
 

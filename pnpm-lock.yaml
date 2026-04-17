@@ -30,8 +30,8 @@ importers:
         specifier: ^1.26.0
         version: 1.26.0(zod@4.3.6)
       '@opencode-ai/sdk':
-        specifier: ^1.1.53
-        version: 1.1.53
+        specifier: ^1.4.6
+        version: 1.4.6
       '@paralleldrive/cuid2':
         specifier: ^2.2.2
         version: 2.3.1
@@ -81,6 +81,9 @@ importers:
       '@electron-toolkit/tsconfig':
         specifier: ^1.0.1
         version: 1.0.1(@types/node@25.2.3)
+      '@electron/notarize':
+        specifier: ^2.5.0
+        version: 2.5.0
       '@electron/rebuild':
         specifier: ^4.0.3
         version: 4.0.3
@@ -1013,8 +1016,8 @@ packages:
     engines: {node: ^12.13.0 || ^14.15.0 || >=16.0.0}
     deprecated: This functionality has been moved to @npmcli/fs
 
-  '@opencode-ai/sdk@1.1.53':
-    resolution: {integrity: sha512-RUIVnPOP1CyyU32FrOOYuE7Ge51lOBuhaFp2NSX98ncApT7ffoNetmwzqrhOiJQgZB1KrbCHLYOCK6AZfacxag==}
+  '@opencode-ai/sdk@1.4.6':
+    resolution: {integrity: sha512-sQaVfEfQW3m3DeCVlurSTUjgIYdIk+gIfOys51MVFYzJHw+FyjjuAt7EKKA+LeZU5AiWGlpkIRa1rJo5KWMXCw==}
 
   '@paralleldrive/cuid2@2.3.1':
     resolution: {integrity: sha512-XO7cAxhnTZl0Yggq6jOgjiOHhbgcO4NqFqwSmQpjK3b6TEE6Uj/jfSk6wzYyemh3+I0sHirKSetjQwn5cZktFw==}
@@ -5899,7 +5902,9 @@ snapshots:
       mkdirp: 1.0.4
       rimraf: 3.0.2
 
-  '@opencode-ai/sdk@1.1.53': {}
+  '@opencode-ai/sdk@1.4.6':
+    dependencies:
+      cross-spawn: 7.0.6
 
   '@paralleldrive/cuid2@2.3.1':
     dependencies:

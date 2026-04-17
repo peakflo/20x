@@ -1,7 +1,8 @@
 import { Agent as UndiciAgent } from 'undici'
-import { spawn } from 'child_process'
 import { mkdirSync, writeFileSync, rmSync, existsSync } from 'fs'
-import { join } from 'path'
+import { join, delimiter } from 'path'
+import { homedir } from 'os'
+import { buildMergedOpencodeConfig } from '../utils/opencode-config'
 import type {
   CodingAgentAdapter,
   SessionConfig,
@@ -14,10 +15,12 @@ import { SessionStatusType, MessagePartType, MessageRole } from './coding-agent-
 let OpenCodeSDK: typeof import('@opencode-ai/sdk') | null = null
 
 type OpencodeClient = import('@opencode-ai/sdk').OpencodeClient
-type OpenCodeV2Module = typeof import('@opencode-ai/sdk/v2/client')
+type OpenCodeV2Module = typeof import('@opencode-ai/sdk/v2')
+type V2ClientModule = typeof import('@opencode-ai/sdk/v2/client')
 type V2OpencodeClient = import('@opencode-ai/sdk/v2/client').OpencodeClient
 type V2QuestionRequest = import('@opencode-ai/sdk/v2/client').QuestionRequest
 let OpenCodeV2: OpenCodeV2Module | null = null
+let OpenCodeV2Client: V2ClientModule | null = null
 
 // Custom fetch with no timeout — agent prompts can run indefinitely
 const noTimeoutAgent = new UndiciAgent({ headersTimeout: 0, bodyTimeout: 0 })
@@ -35,9 +38,13 @@ export class OpencodeAdapter implements CodingAgentAdapter {
   private serverInstance: unknown = null
   private serverUrl: string | null = null
   private serverStarting: Promise<void> | null = null
+  /** The shared V2 SDK client created alongside the server via createOpencode */
+  private sharedClient: V2OpencodeClient | null = null
   private clients: Map<string, OpencodeClient> = new Map() // sessionId -> ocClient
   private v2Client: V2OpencodeClient | null = null
   private promptAborts: Map<string, AbortController> = new Map()
+  /** Provider errors captured from prompt results (surfaced via getStatus) */
+  private promptErrors: Map<string, string> = new Map()
   /** Absolute path to the secret-injector plugin file (written before server start) */
   private pluginFilePath: string | null = null
   /** Absolute path to the secrets exports file (read dynamically by the plugin) */
@@ -50,8 +57,9 @@ export class OpencodeAdapter implements CodingAgentAdapter {
   private async loadSDK(): Promise<void> {
     try {
       OpenCodeSDK = await import('@opencode-ai/sdk')
-      OpenCodeV2 = await import('@opencode-ai/sdk/v2/client')
-      console.log('[OpencodeAdapter] SDK loaded successfully')
+      OpenCodeV2 = await import('@opencode-ai/sdk/v2')
+      OpenCodeV2Client = await import('@opencode-ai/sdk/v2/client')
+      console.log('[OpencodeAdapter] SDK loaded successfully (v2 available)')
     } catch (error) {
       console.error('[OpencodeAdapter] Failed to load SDK:', error)
     } finally {
@@ -198,78 +206,66 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     return undefined
   }
 
-  async checkHealth(): Promise<{ available: boolean; reason?: string }> {
-    try {
-      await this.ensureSDKLoaded()
+  /**
+   * Returns the shared SDK client, ensuring the server is running first.
+   */
+  private async getClient(serverUrl?: string): Promise<V2OpencodeClient> {
+    const baseUrl = serverUrl || this.serverUrl || DEFAULT_SERVER_URL
+    await this.ensureServerRunning(baseUrl)
 
-      // Try to connect to default server
-      const response = await fetch(`${DEFAULT_SERVER_URL}/global/health`, {
-        signal: AbortSignal.timeout(2000)
+    if (!this.sharedClient) {
+      throw new Error('OpenCode client not available after server startup')
+    }
+    return this.sharedClient
+  }
+
+  async getProviders(
+    serverUrl?: string,
+    directory?: string
+  ): Promise<{
+    providers: { id: string; name: string; models: unknown; [key: string]: unknown }[]
+    default: Record<string, string>
+  } | null> {
+    try {
+      const client = await this.getClient(serverUrl)
+
+      const result = await client.config.providers({
+        ...(directory && { directory })
       })
 
-      if (!response.ok) {
-        return { available: false, reason: 'Server not responding' }
+      if (result.error) {
+        console.log('[OpencodeAdapter] No providers configured on server')
+        return null
       }
 
-      return { available: true }
-    } catch {
-      return { available: false, reason: 'SDK not available or server not accessible' }
+      const data = result.data as {
+        providers?: { id: string; name: string; models: unknown; [key: string]: unknown }[]
+        default?: Record<string, string>
+      } | undefined
+
+      console.log('[OpencodeAdapter] Found providers:', data?.providers?.map((p) => p.id))
+      return data ? { providers: data.providers || [], default: data.default || {} } : null
+    } catch (error: unknown) {
+      console.log('[OpencodeAdapter] Could not get providers:', error instanceof Error ? error.message : error)
+      return null
     }
   }
 
-  private spawnOpencodeServer(hostname: string, port: number, config: Record<string, unknown>): Promise<{ close: () => void }> {
-    const isWin = process.platform === 'win32'
-    const args = ['serve', `--hostname=${hostname}`, `--port=${port}`]
-    const cmd = isWin ? 'opencode.cmd' : 'opencode'
-    const timeout = 10000
+  async checkHealth(): Promise<{ available: boolean; reason?: string }> {
+    try {
+      const client = await this.getClient()
+      const result = await client.global.health()
 
-    console.log(`[OpencodeAdapter] Spawning: ${cmd} ${args.join(' ')} (shell=${isWin})`)
-
-    const proc = spawn(cmd, args, {
-      shell: isWin,
-      windowsHide: true,
-      env: {
-        ...process.env,
-        OPENCODE_CONFIG_CONTENT: JSON.stringify(config)
+      if (result.error) {
+        return { available: false, reason: 'Server not responding' }
       }
-    })
 
-    return new Promise((resolve, reject) => {
-      const id = setTimeout(() => {
-        reject(new Error(`Timeout waiting for opencode server after ${timeout}ms`))
-      }, timeout)
-
-      let output = ''
-
-      proc.stdout?.on('data', (chunk: Buffer) => {
-        output += chunk.toString()
-        const lines = output.split('\n')
-        for (const line of lines) {
-          if (line.startsWith('opencode server listening')) {
-            clearTimeout(id)
-            console.log(`[OpencodeAdapter] Server started: ${line.trim()}`)
-            resolve({ close: () => proc.kill() })
-            return
-          }
-        }
-      })
-
-      proc.stderr?.on('data', (chunk: Buffer) => {
-        output += chunk.toString()
-      })
-
-      proc.on('exit', (code) => {
-        clearTimeout(id)
-        let msg = `opencode server exited with code ${code}`
-        if (output.trim()) msg += `\nOutput: ${output.slice(0, 500)}`
-        reject(new Error(msg))
-      })
-
-      proc.on('error', (error) => {
-        clearTimeout(id)
-        reject(error)
-      })
-    })
+      const health = result.data as { healthy: boolean; version: string }
+      console.log('[OpencodeAdapter] Health check OK, version:', health.version)
+      return { available: true }
+    } catch (error: unknown) {
+      return { available: false, reason: error instanceof Error ? error.message : 'Server not accessible' }
+    }
   }
 
   private async findAccessibleServer(url: string): Promise<string | null> {
@@ -297,6 +293,26 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     return null
   }
 
+  /**
+   * Ensures common binary install paths (e.g. ~/.opencode/bin) are in PATH
+   * so the SDK's createOpencode can find the `opencode` binary.
+   */
+  private ensureBinaryPaths(): void {
+    const currentPath = process.env.PATH || ''
+    const extraPaths = [
+      join(homedir(), '.opencode', 'bin'),
+      ...(process.platform === 'win32'
+        ? [join(homedir(), 'AppData', 'Roaming', 'npm')]
+        : ['/usr/local/bin']),
+      join(homedir(), '.local', 'bin')
+    ].filter(p => !currentPath.includes(p))
+
+    if (extraPaths.length > 0) {
+      process.env.PATH = [...extraPaths, currentPath].join(delimiter)
+      console.log('[OpencodeAdapter] Added binary paths to PATH:', extraPaths)
+    }
+  }
+
   private async ensureServerRunning(targetUrl: string = DEFAULT_SERVER_URL): Promise<void> {
     if (this.serverUrl) {
       if (this.serverUrl === targetUrl) {
@@ -310,6 +326,9 @@ export class OpencodeAdapter implements CodingAgentAdapter {
 
     await this.ensureSDKLoaded()
 
+    // Ensure common binary install paths are in PATH so the SDK can find `opencode`
+    this.ensureBinaryPaths()
+
     const isDefaultUrl = targetUrl === DEFAULT_SERVER_URL || targetUrl === 'http://127.0.0.1:4096'
 
     this.serverStarting = (async () => {
@@ -318,6 +337,30 @@ export class OpencodeAdapter implements CodingAgentAdapter {
         if (accessibleUrl) {
           this.serverUrl = accessibleUrl
           this.serverInstance = null
+          // Create a V2 client for the existing server (has global.health())
+          this.sharedClient = OpenCodeV2Client!.createOpencodeClient({
+            baseUrl: accessibleUrl,
+            fetch: noTimeoutFetch as unknown as typeof fetch
+          })
+
+          // Push merged config (with auth.json keys injected) to the running server
+          // so custom providers like routerAI are properly authenticated.
+          try {
+            const mergedConfig = buildMergedOpencodeConfig()
+            if (mergedConfig.provider) {
+              const castConfig = mergedConfig as import('@opencode-ai/sdk/v2/client').Config
+              // Try global config first, then per-directory config as fallback
+              try {
+                await this.sharedClient.global.config.update({ config: castConfig })
+              } catch {
+                await this.sharedClient.config.update({ config: castConfig })
+              }
+              console.log('[OpencodeAdapter] Pushed merged provider config to existing server')
+            }
+          } catch (err) {
+            console.warn('[OpencodeAdapter] Failed to push config to existing server:', err)
+          }
+
           return
         }
 
@@ -325,24 +368,33 @@ export class OpencodeAdapter implements CodingAgentAdapter {
           throw new Error(`OpenCode server not accessible at ${targetUrl}`)
         }
 
-        // Create embedded server
+        // Use SDK's createOpencode (starts server + client together, per docs).
+        // The SDK picks up opencode.json automatically; we pass a merged config
+        // that injects auth.json API keys into custom provider options so
+        // providers like routerAI are properly authenticated.
         const url = new URL(targetUrl)
         const hostname = url.hostname
         const port = parseInt(url.port || '4096', 10)
 
-        // Pass secret-injector plugin path via config so OpenCode loads it at startup
-        const serverConfig: Record<string, unknown> = {}
+        const extraConfig: Record<string, unknown> = {}
         if (this.pluginFilePath) {
-          serverConfig.plugin = [this.pluginFilePath]
+          extraConfig.plugin = [this.pluginFilePath]
           console.log(`[OpencodeAdapter] Passing plugin to server config: ${this.pluginFilePath}`)
         }
+        const mergedConfig = buildMergedOpencodeConfig(extraConfig)
 
-        // Spawn opencode server with platform-aware settings.
-        // The SDK's createOpencode uses spawn('opencode', ...) without shell: true,
-        // which fails on Windows because opencode is a .cmd wrapper.
-        const serverResult = await this.spawnOpencodeServer(hostname, port, serverConfig)
-        this.serverInstance = serverResult
-        this.serverUrl = targetUrl
+        console.log(`[OpencodeAdapter] Creating opencode instance at ${hostname}:${port} via SDK v2 createOpencode`)
+        const { client, server } = await OpenCodeV2!.createOpencode({
+          hostname,
+          port,
+          timeout: 10000,
+          config: mergedConfig as import('@opencode-ai/sdk/v2/client').Config
+        })
+
+        this.serverInstance = server
+        this.serverUrl = server.url
+        this.sharedClient = client
+        console.log(`[OpencodeAdapter] OpenCode instance created at ${server.url}`)
       } finally {
         this.serverStarting = null
       }
@@ -529,6 +581,22 @@ export class OpencodeAdapter implements CodingAgentAdapter {
             content: part.text as string
           }
         })
+
+        // Surface provider errors stored in msg.info.error (e.g. "Payment
+        // Required", quota exceeded).  OpenCode records these on the message
+        // info but creates no parts for them, so without this they vanish on
+        // resume.
+        const msgError = (msg.info as Record<string, unknown>).error as { name?: string; data?: { message?: string } } | undefined
+        if (msgError && transformedParts.length === 0) {
+          const errorText = msgError.data?.message || msgError.name || 'Unknown provider error'
+          transformedParts.push({
+            id: `error-${msg.info.id}`,
+            type: 'text' as unknown as MessagePartType,
+            text: `⚠️ Provider error: ${errorText}`,
+            content: `⚠️ Provider error: ${errorText}`
+          })
+        }
+
         messages.push({
           id: msg.info.id,
           role: (msg.info.role || 'assistant') as unknown as MessageRole,
@@ -571,6 +639,21 @@ export class OpencodeAdapter implements CodingAgentAdapter {
       },
       ...(config.workspaceDir && { query: { directory: config.workspaceDir } }),
       signal: promptAbort.signal
+    }).then((result: unknown) => {
+      // Check for provider errors in the prompt response (e.g. quota exceeded,
+      // payment required, rate limit).  OpenCode wraps these in result.data.info.error
+      // but does NOT create a message with the error text, so pollMessages never
+      // picks them up and the user sees "idle" with no response.
+      const r = result as { data?: { info?: { error?: { name?: string; data?: { message?: string } } } } } | undefined
+      const promptError = r?.data?.info?.error
+      if (promptError) {
+        const errorMsg = promptError.data?.message || promptError.name || 'Unknown provider error'
+        console.error(`[OpencodeAdapter] Provider error for ${sessionId}: ${errorMsg}`)
+        this.promptErrors.set(sessionId, errorMsg)
+        if (this.onDataAvailable) {
+          this.onDataAvailable(sessionId)
+        }
+      }
     }).catch((err: unknown) => {
       if (!(err instanceof Error) || err.name !== 'AbortError') {
         console.error('[OpencodeAdapter] prompt error:', err)
@@ -591,12 +674,12 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     })
 
     if (!statusResult.data) {
-      return { type: SessionStatusType.IDLE }
+      return this.resolveIdleOrPromptError(sessionId)
     }
 
     const ocStatus = statusResult.data[sessionId]
     if (!ocStatus) {
-      return { type: SessionStatusType.IDLE }
+      return this.resolveIdleOrPromptError(sessionId)
     }
 
     const sdkType = (ocStatus.type || 'idle') as string
@@ -622,10 +705,29 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     }
 
     const statusType = sdkType.toUpperCase() as keyof typeof SessionStatusType
+    const resolvedType = SessionStatusType[statusType] ?? SessionStatusType.IDLE
+
+    if (resolvedType === SessionStatusType.IDLE) {
+      return this.resolveIdleOrPromptError(sessionId)
+    }
+
     return {
-      type: SessionStatusType[statusType] ?? SessionStatusType.IDLE,
+      type: resolvedType,
       message: 'message' in ocStatus ? (ocStatus as { message: string }).message : undefined
     }
+  }
+
+  /**
+   * Returns ERROR with captured prompt error if one exists, otherwise IDLE.
+   * Called from getStatus when the backend reports no active work.
+   */
+  private resolveIdleOrPromptError(sessionId: string): SessionStatus {
+    const promptError = this.promptErrors.get(sessionId)
+    if (promptError) {
+      this.promptErrors.delete(sessionId)
+      return { type: SessionStatusType.ERROR, message: promptError }
+    }
+    return { type: SessionStatusType.IDLE }
   }
 
   /**
@@ -913,10 +1015,10 @@ export class OpencodeAdapter implements CodingAgentAdapter {
 
   private getV2Client(config: SessionConfig): V2OpencodeClient {
     if (this.v2Client) return this.v2Client
-    if (!OpenCodeV2) throw new Error('OpenCode V2 SDK not loaded')
+    if (!OpenCodeV2Client) throw new Error('OpenCode V2 SDK not loaded')
 
     const baseUrl = this.serverUrl || config.serverUrl || DEFAULT_SERVER_URL
-    this.v2Client = OpenCodeV2.createOpencodeClient({ baseUrl, fetch: noTimeoutFetch as unknown as typeof fetch })
+    this.v2Client = OpenCodeV2Client.createOpencodeClient({ baseUrl, fetch: noTimeoutFetch as unknown as typeof fetch })
     return this.v2Client
   }
 
@@ -997,6 +1099,8 @@ export class OpencodeAdapter implements CodingAgentAdapter {
       }
       this.serverInstance = null
       this.serverUrl = null
+      this.sharedClient = null
+      this.v2Client = null
     }
   }
 }

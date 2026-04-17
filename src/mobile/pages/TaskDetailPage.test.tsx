@@ -195,6 +195,74 @@ describe('TaskDetailPage', () => {
     expect(titles).toEqual(['Earlier Subtask', 'Later Subtask'])
   })
 
+  it('blocks Start and shows a config warning when the assigned agent has no provider/model', () => {
+    const unconfiguredAgent = {
+      id: 'agent-1',
+      name: 'Test Agent',
+      server_url: 'http://local:4096',
+      config: {} as Record<string, unknown>,
+      is_default: true,
+      created_at: '2026-01-01T00:00:00.000Z',
+      updated_at: '2026-01-01T00:00:00.000Z'
+    }
+    useAgentStore.setState({ agents: [unconfiguredAgent] })
+    const task = makeTask({ agent_id: 'agent-1' })
+    useTaskStore.setState({ tasks: [task], isLoading: false })
+
+    const { container } = render(<TaskDetailPage taskId="task-1" onNavigate={mockNavigate} />)
+
+    // Warning is visible
+    expect(container.querySelector('[data-testid="agent-config-warning"]')).toBeTruthy()
+    // Start button (exact label) must not render
+    const startButton = Array.from(container.querySelectorAll('button'))
+      .find((b) => b.textContent?.trim() === 'Start')
+    expect(startButton).toBeUndefined()
+  })
+
+  it('blocks Triage and shows a config warning naming the default agent when unconfigured', () => {
+    const unconfiguredDefault = {
+      id: 'agent-default',
+      name: 'Default Agent',
+      server_url: 'http://local:4096',
+      config: { coding_agent: 'claude_code' } as Record<string, unknown>, // missing model
+      is_default: true,
+      created_at: '2026-01-01T00:00:00.000Z',
+      updated_at: '2026-01-01T00:00:00.000Z'
+    }
+    useAgentStore.setState({ agents: [unconfiguredDefault] })
+    const task = makeTask({ agent_id: null })
+    useTaskStore.setState({ tasks: [task], isLoading: false })
+
+    const { container } = render(<TaskDetailPage taskId="task-1" onNavigate={mockNavigate} />)
+
+    const warning = container.querySelector('[data-testid="agent-config-warning"]')
+    expect(warning).toBeTruthy()
+    expect(warning?.textContent).toMatch(/Default Agent/)
+    expect(warning?.textContent).toMatch(/Triage is disabled/i)
+    // Triage button (with exact "Triage" label) must not be present
+    const triageButton = Array.from(container.querySelectorAll('button'))
+      .find((b) => b.textContent?.trim() === 'Triage')
+    expect(triageButton).toBeUndefined()
+  })
+
+  it('does not show a config warning when the assigned agent is fully configured', () => {
+    const configuredAgent = {
+      id: 'agent-ok',
+      name: 'Ready',
+      server_url: 'http://local:4096',
+      config: { coding_agent: 'claude_code', model: 'anthropic/claude-sonnet-4' } as Record<string, unknown>,
+      is_default: true,
+      created_at: '2026-01-01T00:00:00.000Z',
+      updated_at: '2026-01-01T00:00:00.000Z'
+    }
+    useAgentStore.setState({ agents: [configuredAgent] })
+    const task = makeTask({ agent_id: 'agent-ok' })
+    useTaskStore.setState({ tasks: [task], isLoading: false })
+
+    const { container } = render(<TaskDetailPage taskId="task-1" onNavigate={mockNavigate} />)
+    expect(container.querySelector('[data-testid="agent-config-warning"]')).toBeFalsy()
+  })
+
   it('does not crash when task store updates with new object references', () => {
     // Simulates what happens when fetchTasks polling replaces task objects
     const task = makeTask({ id: 'task-1', title: 'Test task' })
