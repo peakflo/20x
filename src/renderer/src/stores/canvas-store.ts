@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { settingsApi } from '@/lib/ipc-client'
 
 const CANVAS_STORAGE_KEY = 'canvas_state'
+const CDP_PORT = 19222
 let saveTimer: ReturnType<typeof setTimeout> | null = null
 const SAVE_DEBOUNCE_MS = 1000
 
@@ -329,7 +330,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
 
   // Edges
   addEdge: (fromPanelId, toPanelId, edgeType) => {
-    const { edges } = get()
+    const { edges, panels } = get()
     const exists = edges.some(
       (e) =>
         (e.fromPanelId === fromPanelId && e.toPanelId === toPanelId) ||
@@ -341,6 +342,12 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       edges: [...s.edges, { id, fromPanelId, toPanelId, edgeType }]
     }))
     scheduleSave()
+
+    // ── Notify agent when a browser edge connects browser↔task ──
+    if (edgeType === 'browser') {
+      notifyAgentOfBrowserConnection(panels, fromPanelId, toPanelId)
+    }
+
     return id
   },
 
@@ -442,4 +449,44 @@ export function calculateSnap(
   if (guideY) guides.push(guideY)
 
   return { x: bestDx < threshold ? snapX : x, y: bestDy < threshold ? snapY : y, guides }
+}
+
+// ── Browser↔Task edge notification ──────────────────────────
+// Lazy-imports agent-store and ipc-client to avoid circular deps in tests.
+
+function notifyAgentOfBrowserConnection(
+  panels: CanvasPanelData[],
+  fromPanelId: string,
+  toPanelId: string
+) {
+  const fromPanel = panels.find((p) => p.id === fromPanelId)
+  const toPanel = panels.find((p) => p.id === toPanelId)
+  const taskPanel = fromPanel?.type === 'task' ? fromPanel : toPanel?.type === 'task' ? toPanel : null
+  const browserPanel = fromPanel?.type === 'browser' ? fromPanel : toPanel?.type === 'browser' ? toPanel : null
+
+  if (!taskPanel?.refId || !browserPanel) return
+
+  // Lazy imports to avoid pulling agent-store into canvas-store at module level
+  Promise.all([
+    import('./agent-store'),
+    import('@/lib/ipc-client'),
+  ]).then(([{ useAgentStore }, { agentSessionApi }]) => {
+    const session = useAgentStore.getState().getSession(taskPanel.refId!)
+    if (!session?.sessionId) return
+
+    const browserUrl = browserPanel.url || '(no URL loaded yet)'
+    agentSessionApi.send(
+      session.sessionId,
+      `[System] A browser panel has been connected to your task on the canvas. You now have access to control it.\n\n` +
+      `To use it:\n` +
+      `  agent-browser connect ${CDP_PORT}\n` +
+      `  agent-browser tab                # find the tab showing: ${browserUrl}\n` +
+      `  agent-browser snapshot -i         # get interactive elements\n\n` +
+      `The user can see everything you do in the browser in real time on the canvas.`,
+      taskPanel.refId!,
+      session.agentId
+    ).catch((err: unknown) => console.error('[Canvas] Failed to notify agent of browser connection:', err))
+  }).catch(() => {
+    // Silently ignore — can happen in test environments
+  })
 }
