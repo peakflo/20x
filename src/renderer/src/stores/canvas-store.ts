@@ -537,13 +537,14 @@ function notifyAgentOfBrowserConnection(
       const storedId = browserPanel.cdpTargetId
       if (storedId && webviews.some((t) => t.id === storedId)) {
         cdpTargetId = storedId
-      } else {
+      } else if (browserUrl) {
         // 2. Match by URL
         const urlBase = browserUrl.split('?')[0].split('#')[0]
-        const match = urlBase
-          ? webviews.find((t) => t.url.startsWith(urlBase))
-          : null
-        cdpTargetId = match?.id || (webviews.length === 1 ? webviews[0].id : null)
+        const match = webviews.find((t) => t.url.startsWith(urlBase))
+        cdpTargetId = match?.id || webviews[0]?.id || null
+      } else {
+        // 3. No URL — pick first available webview
+        cdpTargetId = webviews[0]?.id || null
       }
     } catch { /* CDP query failed */ }
 
