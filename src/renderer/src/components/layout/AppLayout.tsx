@@ -5,6 +5,7 @@ import { SettingsWorkspace } from '@/components/settings/SettingsWorkspace'
 import { DashboardWorkspace } from '@/components/dashboard/DashboardWorkspace'
 import { TaskForm, type TaskFormSubmitData } from '@/components/tasks/TaskForm'
 import { DeleteConfirmDialog } from '@/components/tasks/DeleteConfirmDialog'
+import { UpdateDialog } from '@/components/update/UpdateDialog'
 import { Dialog, DialogContent, DialogHeader, DialogBody, DialogTitle } from '@/components/ui/Dialog'
 import { OrchestratorPanel } from '@/components/orchestrator/OrchestratorPanel'
 import { OnboardingWizard, shouldShowOnboarding } from '@/components/onboarding/OnboardingWizard'
@@ -13,7 +14,7 @@ import { useUIStore } from '@/stores/ui-store'
 import { useAgentStore } from '@/stores/agent-store'
 import { useAgentAutoStart } from '@/hooks/use-agent-auto-start'
 import { useOverdueNotifications } from '@/hooks/use-overdue-notifications'
-import { attachmentApi, worktreeApi, settingsApi } from '@/lib/ipc-client'
+import { attachmentApi, worktreeApi, settingsApi, updaterApi } from '@/lib/ipc-client'
 import { useTaskSourceStore } from '@/stores/task-source-store'
 import { isOverdue, isSnoozed } from '@/lib/utils'
 import { useEffect, useState, useCallback } from 'react'
@@ -22,6 +23,7 @@ import type { FileAttachment } from '@/types'
 import { MessageSquare, ExternalLink, LayoutDashboard, CheckSquare, Zap, Settings } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import type { SidebarView } from '@/stores/ui-store'
+import logo20x from '@/assets/logos/20x.svg'
 
 export function AppLayout() {
   const { tasks, allTasks, selectedTask, createTask, updateTask, deleteTask, selectTask } = useTasks()
@@ -42,8 +44,29 @@ export function AppLayout() {
     closeDashboardPreview
   } = useUIStore()
 
+  // ── Update indicator state ──
+  const [updateAvailableVersion, setUpdateAvailableVersion] = useState<string | null>(null)
+  const [updateDialogOpen, setUpdateDialogOpen] = useState(false)
+
   useEffect(() => {
     fetchAgents()
+
+    // Listen for update status events to show the yellow dot
+    const cleanupStatus = updaterApi.onStatus((data) => {
+      if (data.status === 'available' || data.status === 'downloading' || data.status === 'downloaded') {
+        setUpdateAvailableVersion(data.version ?? null)
+      }
+    })
+
+    // Listen for "Check for Updates" from the native application menu
+    const cleanupMenu = updaterApi.onMenuCheckForUpdates(() => {
+      setUpdateDialogOpen(true)
+    })
+
+    return () => {
+      cleanupStatus()
+      cleanupMenu()
+    }
   }, [])
 
   const editingTask = editingTaskId ? tasks.find((t) => t.id === editingTaskId) || selectedTask : undefined
@@ -108,8 +131,23 @@ export function AppLayout() {
 
   return (
     <>
-      {/* ── Top bar: drag region with logo (left) + nav switcher (center-left) + actions (right) ── */}
+      {/* ── Top bar: drag region with logo (left) + nav switcher (center) + actions (right) ── */}
       <div className="drag-region h-12 flex-shrink-0 flex items-center justify-center px-4 border-b border-border/50 windows-titlebar-pad">
+        {/* Logo + update indicator — pinned left */}
+        <div className="no-drag absolute left-4 flex items-center gap-2 macos-titlebar-pad">
+          <div className="relative">
+            <img src={logo20x} className="h-5 w-5" alt="20x" />
+            {updateAvailableVersion && (
+              <button
+                onClick={() => setUpdateDialogOpen(true)}
+                className="absolute -top-1 -right-1 h-2.5 w-2.5 rounded-full bg-amber-400 ring-2 ring-background cursor-pointer animate-pulse"
+                title={`Update available: v${updateAvailableVersion}`}
+              />
+            )}
+          </div>
+          <span className="text-sm font-semibold text-foreground">20x</span>
+        </div>
+
         {/* View switcher — centered */}
         <div className="no-drag flex rounded-md border border-border bg-muted/30 p-0.5">
           {NAV_ITEMS.map(({ key, label, icon: Icon }) => (
@@ -406,6 +444,9 @@ export function AppLayout() {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Update dialog */}
+      <UpdateDialog open={updateDialogOpen} onClose={() => setUpdateDialogOpen(false)} />
 
       {/* Toast */}
       {toast && (
