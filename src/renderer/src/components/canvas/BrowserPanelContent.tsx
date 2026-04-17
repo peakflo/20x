@@ -87,22 +87,40 @@ export function BrowserPanelContent({
 
     const resolveTargetId = async () => {
       try {
+        // First try via IPC (uses debugger API or CDP match in main process)
         const wcId = wv.getWebContentsId?.()
-        if (!wcId) return
-        const { targetId } = await window.electronAPI.browser.getTargetId(wcId)
-        if (targetId) {
+        if (wcId) {
+          const result = await window.electronAPI.browser.getTargetId(wcId)
+          if (result.targetId) {
+            cdpTargetResolved.current = true
+            updatePanel(panelId, { cdpTargetId: result.targetId })
+            return
+          }
+        }
+
+        // Fallback: query CDP /json/list directly and match by webview URL
+        const wvUrl = wv.getURL?.()
+        if (!wvUrl) return
+        const res = await fetch(`http://localhost:${CDP_PORT}/json/list`)
+        const targets = (await res.json()) as Array<{ id: string; url: string; type: string }>
+        const match = targets.find((t) => t.type === 'webview' && t.url === wvUrl)
+        if (match) {
           cdpTargetResolved.current = true
-          updatePanel(panelId, { cdpTargetId: targetId })
+          updatePanel(panelId, { cdpTargetId: match.id })
         }
       } catch {
         // Silently ignore — webview may not be ready yet
       }
     }
 
+    wv.addEventListener('did-navigate', resolveTargetId)
     wv.addEventListener('dom-ready', resolveTargetId)
     // Also try immediately in case it's already loaded
     resolveTargetId()
-    return () => wv.removeEventListener('dom-ready', resolveTargetId)
+    return () => {
+      wv.removeEventListener('did-navigate', resolveTargetId)
+      wv.removeEventListener('dom-ready', resolveTargetId)
+    }
   }, [panelId, updatePanel, isSetup])
 
   // ── Webview event wiring ──────────────────────────────────

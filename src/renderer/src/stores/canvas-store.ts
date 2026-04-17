@@ -468,19 +468,34 @@ function notifyAgentOfBrowserConnection(
 
   if (!taskPanel?.refId || !browserPanel) return
 
-  // Lazy imports to avoid pulling agent-store into canvas-store at module level
-  Promise.all([
-    import('./agent-store'),
-    import('@/lib/ipc-client'),
-  ]).then(([{ useAgentStore }, { agentSessionApi }]) => {
+  // Resolve the CDP target ID for this webview by querying /json/list
+  // and matching the browser panel's URL. This is done at notification time
+  // so it always picks up the latest target, even if cdpTargetId wasn't stored yet.
+  const resolveAndNotify = async () => {
+    const [{ useAgentStore }, { agentSessionApi }] = await Promise.all([
+      import('./agent-store'),
+      import('@/lib/ipc-client'),
+    ])
+
     const session = useAgentStore.getState().getSession(taskPanel.refId!)
     if (!session?.sessionId) return
 
-    const cdpTargetId = browserPanel.cdpTargetId
     const browserTitle = browserPanel.title || 'Browser'
+    const browserUrl = browserPanel.url || ''
+
+    // Try to resolve the CDP target ID
+    let cdpTargetId = browserPanel.cdpTargetId || null
+    if (!cdpTargetId && browserUrl) {
+      try {
+        const res = await fetch(`http://localhost:${CDP_PORT}/json/list`)
+        const targets = (await res.json()) as Array<{ id: string; url: string; type: string }>
+        const match = targets.find((t) => t.type === 'webview' && t.url.startsWith(browserUrl.split('?')[0].split('#')[0]))
+          || targets.find((t) => t.type === 'webview')
+        if (match) cdpTargetId = match.id
+      } catch { /* CDP query failed — use fallback */ }
+    }
 
     // If we have the CDP target ID, give the agent a direct WebSocket URL
-    // Otherwise fall back to generic connect + tab instructions
     let connectSection: string
     if (cdpTargetId) {
       connectSection =
@@ -508,7 +523,9 @@ function notifyAgentOfBrowserConnection(
       taskPanel.refId!,
       session.agentId
     ).catch((err: unknown) => console.error('[Canvas] Failed to notify agent of browser connection:', err))
-  }).catch(() => {
+  }
+
+  resolveAndNotify().catch(() => {
     // Silently ignore — can happen in test environments
   })
 }

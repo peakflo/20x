@@ -1388,14 +1388,30 @@ else:
   // Returns the CDP target ID for a webview given its webContentsId.
   // This allows the renderer to store the target ID on the panel data,
   // so agent-browser can connect directly via ws://localhost:19222/devtools/page/<targetId>
-  ipcMain.handle('browser:getTargetId', (_event, webContentsId: number) => {
+  ipcMain.handle('browser:getTargetId', async (_event, webContentsId: number) => {
     try {
       const wc = webContents.fromId(webContentsId)
       if (!wc) return { targetId: null }
-      // devToolsTargetId is the CDP TargetID (a UUID string)
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const targetId = (wc as any).devToolsTargetId
-      return { targetId: targetId || null }
+
+      // Use the debugger API to get the CDP target info
+      try {
+        wc.debugger.attach('1.3')
+        const { targetInfo } = await wc.debugger.sendCommand('Target.getTargetInfo')
+        const targetId = targetInfo?.targetId || null
+        wc.debugger.detach()
+        return { targetId }
+      } catch {
+        try { wc.debugger.detach() } catch { /* already detached */ }
+        // Fallback: query CDP /json/list and match by URL
+        const wcUrl = wc.getURL()
+        if (!wcUrl) return { targetId: null }
+        const res = await fetch(`http://localhost:19222/json/list`)
+        const targets = await res.json()
+        const match = targets.find((t: { url: string; type: string }) =>
+          t.type === 'webview' && t.url === wcUrl
+        )
+        return { targetId: match?.id || null }
+      }
     } catch {
       return { targetId: null }
     }
