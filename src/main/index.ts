@@ -159,6 +159,19 @@ function createWindow(): void {
     return { action: 'deny' }
   })
 
+  // SAFETY: Prevent the main window from ever navigating away from the app.
+  // This guards against agent-browser or CDP accidentally targeting the main
+  // window instead of a webview panel — without this, the entire app UI gets
+  // replaced by whatever URL was opened.
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    const appOrigins = ['http://localhost:', 'file://']
+    const isAppUrl = appOrigins.some((origin) => url.startsWith(origin))
+    if (!isAppUrl) {
+      console.warn(`[Main] Blocked navigation of main window to: ${url}`)
+      event.preventDefault()
+    }
+  })
+
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
     mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
   } else {
