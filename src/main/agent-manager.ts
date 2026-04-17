@@ -1376,19 +1376,13 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
         }
       }
 
-      // Mark that the session has done real work once we receive non-user parts.
-      // This disables the IDLE grace period so future IDLE means truly done.
-      // IMPORTANT: only count assistant/tool parts as "work". User message echoes
-      // (the adapter echoing back the prompt we sent) do NOT count — the backend
-      // may still be ingesting the prompt while the echo is already available,
-      // so treating it as "work" would disable the grace period prematurely and
-      // cause the session to transition to idle before any response is produced.
-      if (!entry.hasSeenWork && newParts.length > 0) {
-        const hasNonUserParts = newParts.some(p => p.role !== 'user' && (p.role as string) !== 'human')
-        if (hasNonUserParts) {
-          entry.hasSeenWork = true
-        }
-      }
+      // NOTE: hasSeenWork is NO LONGER set here based on message content.
+      // Message-based detection is unreliable: user echoes, stale tool-part
+      // fingerprint updates from the previous turn, and replayed history can
+      // all produce non-user parts before the backend has even started
+      // processing the new prompt.  Instead, hasSeenWork is set exclusively
+      // in the BUSY / WAITING_APPROVAL status handler below — that is the
+      // authoritative signal that the backend is actually working.
 
       // Collect all parts into a batch instead of sending individually.
       // This avoids flooding the renderer with N separate IPC messages
@@ -1524,6 +1518,11 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
         this.stopAdapterPolling(sessionId)
         return
       } else if (status.type === SessionStatusType.WAITING_APPROVAL && session) {
+        // Backend is actively processing — disable the IDLE grace period.
+        const peWA = this.pollingEntries.get(sessionId)
+        if (peWA && !peWA.hasSeenWork) {
+          peWA.hasSeenWork = true
+        }
         if (session.status !== 'waiting_approval') {
           session.status = 'waiting_approval'
           this.sendToRenderer('agent:status', {
@@ -1535,6 +1534,11 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
         }
         return
       } else if (status.type === SessionStatusType.BUSY && session) {
+        // Backend is actively processing — disable the IDLE grace period.
+        const peBusy = this.pollingEntries.get(sessionId)
+        if (peBusy && !peBusy.hasSeenWork) {
+          peBusy.hasSeenWork = true
+        }
         if (session.status !== 'working') {
           session.status = 'working'
           this.sendToRenderer('agent:status', {
