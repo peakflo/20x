@@ -524,42 +524,49 @@ function notifyAgentOfBrowserConnection(
     const browserTitle = browserPanel.title || 'Browser'
     const browserUrl = browserPanel.url || ''
 
-    // Try to resolve the CDP target ID
+    // Resolve the CDP target ID — ONLY use webview targets, never the main app window.
     let cdpTargetId = browserPanel.cdpTargetId || null
-    if (!cdpTargetId && browserUrl) {
+    if (!cdpTargetId) {
       try {
         const res = await fetch(`http://localhost:${CDP_PORT}/json/list`)
         const targets = (await res.json()) as Array<{ id: string; url: string; type: string }>
-        const match = targets.find((t) => t.type === 'webview' && t.url.startsWith(browserUrl.split('?')[0].split('#')[0]))
-          || targets.find((t) => t.type === 'webview')
-        if (match) cdpTargetId = match.id
-      } catch { /* CDP query failed — use fallback */ }
+        // Only match webview targets — never "page" (which is the main app)
+        const match = browserUrl
+          ? targets.find((t) => t.type === 'webview' && t.url.startsWith(browserUrl.split('?')[0].split('#')[0]))
+          : null
+        cdpTargetId = match?.id || targets.find((t) => t.type === 'webview')?.id || null
+      } catch { /* CDP query failed */ }
     }
 
-    // If we have the CDP target ID, give the agent a direct WebSocket URL
-    let connectSection: string
-    if (cdpTargetId) {
-      connectSection =
-        `  agent-browser --cdp "ws://localhost:${CDP_PORT}/devtools/page/${cdpTargetId}" open about:blank\n` +
-        `  # Direct connection to "${browserTitle}" webview\n`
-    } else {
-      connectSection =
-        `  agent-browser connect ${CDP_PORT}\n` +
-        `  agent-browser tab              # list tabs to find the browser panel\n` +
-        `  agent-browser tab t<N>          # switch to it (not t1 — that's the main app)\n`
+    // SAFETY: Only send connection instructions when we have a confirmed webview target.
+    // Without it, agent-browser would default to the main app window and break the UI.
+    if (!cdpTargetId) {
+      agentSessionApi.send(
+        session.sessionId,
+        `[System] A browser panel "${browserTitle}" has been connected to your task on the canvas.\n\n` +
+        `The browser panel is not loaded yet — the user needs to navigate to a URL first.\n` +
+        `Once loaded, you will receive updated connection instructions.\n\n` +
+        `IMPORTANT: Do NOT use "agent-browser connect" or "agent-browser open" — ` +
+        `that would navigate the main application window. Wait for the direct WebSocket URL.`,
+        taskPanel.refId!,
+        session.agentId
+      ).catch((err: unknown) => console.error('[Canvas] Failed to notify agent of browser connection:', err))
+      return
     }
 
+    const wsUrl = `ws://localhost:${CDP_PORT}/devtools/page/${cdpTargetId}`
     agentSessionApi.send(
       session.sessionId,
       `[System] A browser panel "${browserTitle}" has been connected to your task on the canvas. You now have access to control it.\n\n` +
       `To connect:\n` +
-      connectSection +
+      `  agent-browser --cdp "${wsUrl}" open about:blank\n` +
+      `  # Direct connection to "${browserTitle}" webview\n` +
       `  agent-browser snapshot -i      # get interactive elements\n\n` +
-      `Important: if commands stop working, kill stale daemons first:\n` +
+      `If commands stop working, kill stale daemons first:\n` +
       `  pkill -f agent-browser; sleep 1\n` +
-      (cdpTargetId
-        ? `  agent-browser --cdp "ws://localhost:${CDP_PORT}/devtools/page/${cdpTargetId}" open about:blank\n\n`
-        : `  agent-browser connect ${CDP_PORT}\n\n`) +
+      `  agent-browser --cdp "${wsUrl}" open about:blank\n\n` +
+      `IMPORTANT: Do NOT use "agent-browser connect" or "agent-browser open" without --cdp flag — ` +
+      `that would navigate the main application window.\n\n` +
       `The user can see everything you do in the browser in real time on the canvas.`,
       taskPanel.refId!,
       session.agentId
