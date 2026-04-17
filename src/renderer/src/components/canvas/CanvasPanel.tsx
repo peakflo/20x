@@ -4,7 +4,7 @@ import {
   calculateSnap,
   type CanvasPanelData,
 } from '@/stores/canvas-store'
-import { X, Focus, Maximize2, Minimize2, PanelLeft, PanelRight, Columns2 } from 'lucide-react'
+import { X, Focus, Maximize2, Minimize2, PanelLeft, PanelRight, Columns2, Link2 } from 'lucide-react'
 import type { TaskWorkspaceLayout } from '@/components/tasks/TaskWorkspace'
 import { TaskPanelContent } from './TaskPanelContent'
 import { TranscriptPanelContent } from './TranscriptPanelContent'
@@ -34,6 +34,9 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
   const focusPanel = useCanvasStore((s) => s.focusPanel)
   const setDraggingPanelId = useCanvasStore((s) => s.setDraggingPanelId)
   const setSnapGuides = useCanvasStore((s) => s.setSnapGuides)
+  const connectingFromId = useCanvasStore((s) => s.connectingFromId)
+  const setConnectingFromId = useCanvasStore((s) => s.setConnectingFromId)
+  const addEdge = useCanvasStore((s) => s.addEdge)
 
   const panelRef = useRef<HTMLDivElement>(null)
   const [isDragging, setIsDragging] = useState(false)
@@ -137,12 +140,40 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
     }
   }, [isResizing, panel.id, panel.minWidth, panel.minHeight, zoom, updatePanel])
 
+  // ── Connect (edge drawing) ─────────────────────────────────
+  const isConnecting = connectingFromId === panel.id
+  const isConnectTarget = !!connectingFromId && connectingFromId !== panel.id
+
+  const handleStartConnect = useCallback(
+    (e: React.MouseEvent) => {
+      e.stopPropagation()
+      setConnectingFromId(panel.id)
+    },
+    [setConnectingFromId, panel.id]
+  )
+
+  // When this panel is clicked while another panel is in "connecting" mode,
+  // complete the edge. Auto-detect browser edge type.
+  const handleClickWhileConnecting = useCallback(() => {
+    if (connectingFromId && connectingFromId !== panel.id) {
+      const fromPanel = useCanvasStore.getState().panels.find((p) => p.id === connectingFromId)
+      const isBrowserEdge =
+        panel.type === 'browser' || fromPanel?.type === 'browser'
+      addEdge(connectingFromId, panel.id, isBrowserEdge ? 'browser' : undefined)
+      setConnectingFromId(null)
+    }
+  }, [connectingFromId, panel.id, panel.type, addEdge, setConnectingFromId])
+
   // ── Click handling ────────────────────────────────────────
   const handleMouseDown = useCallback(
     () => {
+      if (isConnectTarget) {
+        handleClickWhileConnecting()
+        return
+      }
       bringToFront(panel.id)
     },
-    [bringToFront, panel.id]
+    [bringToFront, panel.id, isConnectTarget, handleClickWhileConnecting]
   )
 
   // ── Focus (zoom-to-fit this panel) ────────────────────────
@@ -192,8 +223,10 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
       ref={panelRef}
       data-canvas-panel="true"
       onMouseDown={handleMouseDown}
-      className={`absolute rounded-xl border bg-[#1a2030] shadow-2xl flex flex-col overflow-hidden select-none transition-shadow duration-150 ${cfg.border} ${
+      className={`absolute rounded-xl border bg-[#1a2030] shadow-2xl flex flex-col overflow-hidden select-none transition-all duration-150 ${cfg.border} ${
         isDragging ? 'shadow-indigo-500/10 ring-1 ring-indigo-500/30' : ''
+      } ${isConnecting ? 'ring-2 ring-orange-500/50 shadow-orange-500/10' : ''} ${
+        isConnectTarget ? 'ring-2 ring-indigo-400/50 shadow-indigo-500/10 cursor-crosshair' : ''
       }`}
       style={{
         left: panel.x,
@@ -244,8 +277,22 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
           </div>
         )}
 
-        {/* Panel actions — visible on hover */}
-        <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity duration-150">
+        {/* Panel actions — visible on hover (or always when connecting) */}
+        <div className={`flex items-center gap-0.5 transition-opacity duration-150 ${isConnecting ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
+          {/* Connect / link to another panel */}
+          <button
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={isConnecting ? () => setConnectingFromId(null) : handleStartConnect}
+            className={`h-5 w-5 rounded flex items-center justify-center transition-colors ${
+              isConnecting
+                ? 'bg-orange-500/20 text-orange-400 ring-1 ring-orange-500/40'
+                : 'hover:bg-white/10 text-muted-foreground/50 hover:text-muted-foreground'
+            }`}
+            title={isConnecting ? 'Cancel connecting (click another panel to connect)' : 'Connect to another panel'}
+          >
+            <Link2 className="h-3 w-3" />
+          </button>
+
           {/* Focus / zoom-to-fit button */}
           <button
             onMouseDown={(e) => e.stopPropagation()}

@@ -102,6 +102,11 @@ export function InfiniteCanvas() {
     canvasY: number
   } | null>(null)
 
+  // Connection drawing state
+  const connectingFromId = useCanvasStore((s) => s.connectingFromId)
+  const setConnectingFromId = useCanvasStore((s) => s.setConnectingFromId)
+  const [mouseCanvasPos, setMouseCanvasPos] = useState<{ x: number; y: number } | null>(null)
+
   // Add panel dropdown state
   const [showAddMenu, setShowAddMenu] = useState(false)
   const addMenuRef = useRef<HTMLDivElement>(null)
@@ -275,6 +280,18 @@ export function InfiniteCanvas() {
         return
       }
 
+      // Cancel connection drawing on background click
+      const { connectingFromId: cid } = useCanvasStore.getState()
+      if (cid && e.button === 0) {
+        const target = e.target as HTMLElement
+        const isBackground = target === containerRef.current || target.dataset?.canvasBg === 'true'
+        if (isBackground) {
+          setConnectingFromId(null)
+          setMouseCanvasPos(null)
+          return
+        }
+      }
+
       const isMiddle = e.button === 1
       const isLeftOnCanvas =
         e.button === 0 &&
@@ -293,6 +310,19 @@ export function InfiniteCanvas() {
 
   const handleMouseMove = useCallback(
     (e: React.MouseEvent) => {
+      // Track mouse position in canvas space for connection line rendering
+      if (connectingFromId) {
+        const container = containerRef.current
+        if (container) {
+          const rect = container.getBoundingClientRect()
+          const vp = useCanvasStore.getState().viewport
+          setMouseCanvasPos({
+            x: (e.clientX - rect.left - vp.x) / vp.zoom,
+            y: (e.clientY - rect.top - vp.y) / vp.zoom,
+          })
+        }
+      }
+
       if (!isPanning) return
       const dx = e.clientX - panStartRef.current.x
       const dy = e.clientY - panStartRef.current.y
@@ -385,8 +415,13 @@ export function InfiniteCanvas() {
         e.preventDefault()
         resetViewport()
       }
-      // Escape: close context menu
+      // Escape: cancel connecting or close context menu
       if (e.code === 'Escape') {
+        const { connectingFromId: cid } = useCanvasStore.getState()
+        if (cid) {
+          setConnectingFromId(null)
+          setMouseCanvasPos(null)
+        }
         setContextMenu(null)
       }
     }
@@ -446,7 +481,7 @@ export function InfiniteCanvas() {
           <SnapGuides guides={snapGuides} containerRef={containerRef} viewport={viewport} />
 
           {/* Connection lines */}
-          <CanvasConnections mouseCanvasPos={null} />
+          <CanvasConnections mouseCanvasPos={mouseCanvasPos} />
 
           {/* Render panels — off-viewport panels are frozen (content hidden) */}
           {panels.map((panel) => (
