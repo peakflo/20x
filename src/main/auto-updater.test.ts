@@ -105,6 +105,26 @@ describe('auto-updater', () => {
         currentVersion: '0.0.31'
       }))
     })
+
+    it('should send up-to-date status on 404 errors instead of suppressing', async () => {
+      const { initAutoUpdater } = await import('./auto-updater')
+      const sendMock = vi.fn()
+      const mockWindow = { isDestroyed: vi.fn(() => false), webContents: { send: sendMock } } as any
+
+      initAutoUpdater(mockWindow)
+
+      const errorHandler = mockAutoUpdater.on.mock.calls.find(
+        (c: any[]) => c[0] === 'error'
+      )?.[1]
+
+      expect(errorHandler).toBeDefined()
+      errorHandler(new Error('HttpError: 404 Not Found'))
+
+      expect(sendMock).toHaveBeenCalledWith('updater:status', expect.objectContaining({
+        status: 'up-to-date',
+        currentVersion: '0.0.31'
+      }))
+    })
   })
 
   describe('isUpdateDownloaded', () => {
