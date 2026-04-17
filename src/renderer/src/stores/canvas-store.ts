@@ -478,10 +478,18 @@ function notifyAgentOfBrowserConnection(
     agentSessionApi.send(
       session.sessionId,
       `[System] A browser panel has been connected to your task on the canvas. You now have access to control it.\n\n` +
-      `To use it:\n` +
-      `  agent-browser connect ${CDP_PORT}\n` +
-      `  agent-browser tab                # find the tab showing: ${browserUrl}\n` +
-      `  agent-browser snapshot -i         # get interactive elements\n\n` +
+      `The browser webview appears as an "iframe" CDP target (not a tab). To connect:\n\n` +
+      `  # Find the webview's WebSocket URL\n` +
+      `  curl -s http://localhost:${CDP_PORT}/json/list | python3 -c "\n` +
+      `  import json, sys\n` +
+      `  targets = json.load(sys.stdin)\n` +
+      `  for t in targets:\n` +
+      `      if t.get('parentId'):\n` +
+      `          print(t['webSocketDebuggerUrl'])\n` +
+      `  "\n\n` +
+      `  # Connect using the WebSocket URL from above\n` +
+      `  agent-browser --cdp <ws-url> open ${browserUrl}\n` +
+      `  agent-browser snapshot -i\n\n` +
       `The user can see everything you do in the browser in real time on the canvas.`,
       taskPanel.refId!,
       session.agentId
