@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef } from 'react'
-import { CheckSquare, MessageSquare, Monitor, AppWindow, Globe, X } from 'lucide-react'
+import { CheckSquare, MessageSquare, Monitor, AppWindow, Globe, TerminalSquare, X } from 'lucide-react'
 import { useTaskStore } from '@/stores/task-store'
 import { useAgentStore } from '@/stores/agent-store'
 import { useDashboardStore } from '@/stores/dashboard-store'
@@ -106,13 +106,19 @@ export function CanvasContextMenu({ position, onClose }: CanvasContextMenuProps)
       </div>
 
       <div className="py-1 max-h-[400px] overflow-y-auto custom-scrollbar">
-        {/* Browser section — always available */}
-        <MenuSection title="Browser">
+        {/* Browser & Terminal — always available */}
+        <MenuSection title="Tools">
           <MenuItem
             icon={<Globe className="h-3.5 w-3.5 text-orange-400" />}
             label="Agent Browser"
-            sublabel="Connect to agent-browser session"
+            sublabel="Browser controlled by agent via CDP"
             onClick={() => handleAddPanel('browser', 'Agent Browser')}
+          />
+          <MenuItem
+            icon={<TerminalSquare className="h-3.5 w-3.5 text-amber-400" />}
+            label="Terminal"
+            sublabel="Interactive shell session"
+            onClick={() => handleAddPanel('terminal', 'Terminal')}
           />
         </MenuSection>
 

@@ -472,12 +472,49 @@ function notifyAgentOfBrowserConnection(
   // and matching the browser panel's URL. This is done at notification time
   // so it always picks up the latest target, even if cdpTargetId wasn't stored yet.
   const resolveAndNotify = async () => {
-    const [{ useAgentStore }, { agentSessionApi }] = await Promise.all([
+    const [{ useAgentStore }, { agentSessionApi }, { useTaskStore }] = await Promise.all([
       import('./agent-store'),
       import('@/lib/ipc-client'),
+      import('./task-store'),
     ])
 
-    const session = useAgentStore.getState().getSession(taskPanel.refId!)
+    const taskId = taskPanel.refId!
+    let session = useAgentStore.getState().getSession(taskId)
+
+    // If no active session, auto-start or resume the task
+    if (!session?.sessionId) {
+      const task = useTaskStore.getState().tasks.find((t) => t.id === taskId)
+      if (!task?.agent_id) return // No agent assigned — can't start
+
+      const initSession = useAgentStore.getState().initSession
+      try {
+        if (task.session_id) {
+          // Resume existing session
+          useAgentStore.getState().clearMessageDedup(taskId)
+          initSession(taskId, '', task.agent_id)
+          const result = await agentSessionApi.resume(task.agent_id, taskId, task.session_id)
+          if (result.ended) {
+            // Session ended — start fresh
+            initSession(taskId, '', task.agent_id)
+            const { sessionId } = await agentSessionApi.start(task.agent_id, taskId)
+            initSession(taskId, sessionId, task.agent_id)
+          } else {
+            initSession(taskId, result.sessionId, task.agent_id)
+          }
+        } else {
+          // Start new session
+          initSession(taskId, '', task.agent_id)
+          const { sessionId } = await agentSessionApi.start(task.agent_id, taskId)
+          initSession(taskId, sessionId, task.agent_id)
+        }
+        // Re-fetch the session after start/resume
+        session = useAgentStore.getState().getSession(taskId)
+      } catch (err) {
+        console.error('[Canvas] Failed to auto-start/resume task for browser connection:', err)
+        return
+      }
+    }
+
     if (!session?.sessionId) return
 
     const browserTitle = browserPanel.title || 'Browser'
