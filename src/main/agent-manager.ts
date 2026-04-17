@@ -256,7 +256,7 @@ export class AgentManager extends EventEmitter {
     switch (backendType) {
       case CodingAgentType.OPENCODE:
         console.log('[AgentManager] Creating new OpencodeAdapter')
-        adapter = new OpencodeAdapter()
+        adapter = new OpencodeAdapter(this.db)
         break
       case CodingAgentType.CLAUDE_CODE:
         console.log('[AgentManager] Creating new ClaudeCodeAdapter')
@@ -2953,7 +2953,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     let adapter: CodingAgentAdapter | null = null
     switch (backendType) {
       case CodingAgentType.OPENCODE:
-        adapter = new OpencodeAdapter()
+        adapter = new OpencodeAdapter(this.db)
         break
       case CodingAgentType.CLAUDE_CODE:
         adapter = new ClaudeCodeAdapter()
