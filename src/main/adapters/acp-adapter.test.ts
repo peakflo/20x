@@ -202,7 +202,7 @@ describe('AcpAdapter - Turn Detection', () => {
   })
 
   describe('Authentication selection', () => {
-    it('prefers non-key Codex auth when no API key is available', async () => {
+    it('uses chatgpt (Codex CLI login) when no API key is available', async () => {
       const priv = adapterPrivate(adapter)
       const session = createMockSession('auth-session')
       const sendRpcRequestSpy = vi.spyOn(priv, 'sendRpcRequest').mockResolvedValue({})
@@ -217,6 +217,7 @@ describe('AcpAdapter - Turn Detection', () => {
         ]
       })
 
+      // Without an API key, should fall back to chatgpt (Codex CLI login)
       expect(sendRpcRequestSpy).toHaveBeenCalledWith(session, 'authenticate', {
         methodId: 'chatgpt'
       })

@@ -427,8 +427,8 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
             </p>
           )}
           {!openaiApiKey && !hasOpenaiEnv && (
-            <p className="text-xs text-destructive">
-              Required: Enter your OpenAI API key or set OPENAI_API_KEY environment variable
+            <p className="text-xs text-muted-foreground">
+              Optional — leave empty to use Codex CLI login (requires a paid ChatGPT subscription)
             </p>
           )}
         </div>
