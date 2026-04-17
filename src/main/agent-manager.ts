@@ -1376,13 +1376,10 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
         }
       }
 
-      // NOTE: hasSeenWork is NO LONGER set here based on message content.
-      // Message-based detection is unreliable: user echoes, stale tool-part
-      // fingerprint updates from the previous turn, and replayed history can
-      // all produce non-user parts before the backend has even started
-      // processing the new prompt.  Instead, hasSeenWork is set exclusively
-      // in the BUSY / WAITING_APPROVAL status handler below — that is the
-      // authoritative signal that the backend is actually working.
+      // hasSeenWork is set exclusively in the BUSY / WAITING_APPROVAL status
+      // handler below — not here.  Message content is unreliable (user echoes,
+      // stale fingerprint updates from previous turns can produce non-user parts
+      // before the backend has started processing the new prompt).
 
       // Collect all parts into a batch instead of sending individually.
       // This avoids flooding the renderer with N separate IPC messages
@@ -1559,12 +1556,10 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
         const IDLE_GRACE_PERIOD_MS = 15_000
 
         if (!pollingEntry?.hasSeenWork && sessionAge < IDLE_GRACE_PERIOD_MS) {
-          // Still within grace period and haven't seen any work yet — keep polling
-          console.log(`[AgentManager] IDLE grace period active for ${sessionId} (age=${sessionAge}ms, hasSeenWork=${pollingEntry?.hasSeenWork}) — waiting`)
           return
         }
 
-        console.log(`[AgentManager] Detected IDLE status for ${sessionId}, calling transitionToIdle (age=${sessionAge}ms, hasSeenWork=${pollingEntry?.hasSeenWork})`)
+        console.log(`[AgentManager] Detected IDLE status for ${sessionId}, calling transitionToIdle`)
         // Sync dedup state from polling entry back to the session so that
         // if polling restarts (follow-up message), we preserve what was already seen.
         if (pollingEntry) {
