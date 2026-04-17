@@ -381,6 +381,29 @@ describe('TaskDetailView – main CTA priority', () => {
     expect(completeBtn.className).not.toMatch(/bg-primary/)
   })
 
+  it('demotes Resume to secondary in ReadyForReview even when task has output_fields (OutputFieldsDisplay owns Complete)', () => {
+    // When output_fields exist, OutputFieldsDisplay renders its own Complete
+    // button. Our CTA section skips its own Complete but must still demote
+    // Resume to outline so the user doesn't see two green buttons.
+    renderDetailView({
+      task: {
+        agent_id: agent.id,
+        status: TaskStatus.ReadyForReview,
+        session_id: 'sess-1',
+        output_fields: [{ id: 'f1', name: 'URL', type: 'url', required: true, value: 'https://example.com' }]
+      },
+      agents: [agent],
+      onResumeAgent: vi.fn(),
+      canResumeAgent: true
+    })
+    const resumeBtn = screen.getByTestId('main-cta-resume')
+    expect(resumeBtn).toBeInTheDocument()
+    // Resume must NOT be primary — outline only
+    expect(resumeBtn.className).not.toMatch(/bg-primary/)
+    // Our Complete button should not render (OutputFieldsDisplay has one)
+    expect(screen.queryByTestId('main-cta-complete')).not.toBeInTheDocument()
+  })
+
   it('renders Triage as the primary CTA when canTriage is true and no agent is assigned', () => {
     renderDetailView({
       task: { agent_id: null, status: TaskStatus.NotStarted },

@@ -746,15 +746,19 @@ export function TaskDetailView({ task, agents, onEdit, onDelete, onUpdateAttachm
             // all required fields are filled), don't render another here.
             const showCompleteButton = !hasOutputCompleteButton
 
-            // In ReadyForReview, the happy path is to accept the agent's work
-            // rather than iterate again — so Complete takes the primary slot
-            // and the agent action (usually Resume) drops to secondary.
+            const isReadyForReview = task.status === TaskStatus.ReadyForReview
+
+            // In ReadyForReview the happy path is acceptance (Complete) — the
+            // agent action stays visible for "needs another pass" but as a
+            // secondary outline button. This applies even when our own Complete
+            // isn't rendered (because OutputFieldsDisplay has one when
+            // output_fields exist) — we still demote the agent action so there
+            // aren't two green buttons on screen.
+            const agentActionIsPrimary = !!agentAction && !isReadyForReview
             const completeIsPrimary =
-              showCompleteButton && (!agentAction || task.status === TaskStatus.ReadyForReview)
+              showCompleteButton && (!agentAction || isReadyForReview)
 
             if (!agentAction && !showCompleteButton) return null
-
-            const agentActionIsPrimary = !!agentAction && !completeIsPrimary
 
             return (
               <div className="flex flex-col gap-2">

@@ -582,9 +582,14 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
             agentAction = { label: 'Triage', onClick: handleTriage, testId: 'main-cta-triage' }
           }
 
+          const isReadyForReview = task.status === TaskStatus.ReadyForReview
+
+          // In ReadyForReview the happy path is acceptance — the agent action
+          // stays visible for "needs another pass" but always as secondary,
+          // even when canComplete is false (e.g. output fields not yet filled).
+          const agentActionIsPrimary = !!agentAction && !isReadyForReview
           const completeIsPrimary =
-            canComplete && (!agentAction || task.status === TaskStatus.ReadyForReview)
-          const agentActionIsPrimary = !!agentAction && !completeIsPrimary
+            canComplete && (!agentAction || isReadyForReview)
 
           const primaryBtnClass =
             'w-full inline-flex items-center justify-center gap-2 bg-primary text-primary-foreground hover:bg-primary/90 active:opacity-60 rounded-md px-4 py-2.5 text-sm font-medium'
