@@ -35,7 +35,10 @@ export function BrowserPanelContent({
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const webviewRef = useRef<any>(null)
 
-  const [currentUrl, setCurrentUrl] = useState(initialUrl || '')
+  // initialSrc is set once and never changed — prevents the webview from
+  // reloading when React re-renders.  All subsequent navigations go through
+  // webviewRef.current.loadURL() which doesn't touch this ref.
+  const initialSrc = useRef(initialUrl || '')
   const [inputValue, setInputValue] = useState(initialUrl || '')
   const [isLoading, setIsLoading] = useState(false)
   const [canGoBack, setCanGoBack] = useState(false)
@@ -90,8 +93,7 @@ export function BrowserPanelContent({
       setCanGoForward(wv.canGoForward())
     }
     const onNavigate = (e: { url: string }) => {
-      // Update local state immediately (fast UI)
-      setCurrentUrl(e.url)
+      // Only update the URL bar text — never feed back into <webview src>
       setInputValue(e.url)
       // Debounce store update to avoid flooding zustand on SPA navigations
       if (pendingUrlUpdate.current) clearTimeout(pendingUrlUpdate.current)
@@ -135,12 +137,15 @@ export function BrowserPanelContent({
         finalUrl = `https://www.google.com/search?q=${encodeURIComponent(finalUrl)}`
       }
     }
-    setCurrentUrl(finalUrl)
     setInputValue(finalUrl)
     setIsSetup(false)
+    // Navigate via loadURL — never set the src attribute reactively
     const wv = webviewRef.current
     if (wv) {
       wv.loadURL(finalUrl)
+    } else {
+      // Webview not mounted yet — set initial src for first render
+      initialSrc.current = finalUrl
     }
   }, [])
 
@@ -219,7 +224,7 @@ export function BrowserPanelContent({
       <div className="flex-1 min-h-0">
         <webview
           ref={webviewRef as any}
-          src={currentUrl}
+          src={initialSrc.current}
           className="w-full h-full"
           /* @ts-expect-error — Electron webview attributes not typed in JSX */
           allowpopups="true"
