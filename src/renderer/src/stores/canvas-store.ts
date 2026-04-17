@@ -21,6 +21,8 @@ export interface CanvasPanelData {
   browserSessionId?: string
   /** WebSocket streaming port (for browser panels) */
   streamPort?: number
+  /** CDP target ID for this webview — used to connect agent-browser directly */
+  cdpTargetId?: string
   title: string
   x: number
   y: number
@@ -470,44 +472,38 @@ function notifyAgentOfBrowserConnection(
   Promise.all([
     import('./agent-store'),
     import('@/lib/ipc-client'),
-  ]).then(async ([{ useAgentStore }, { agentSessionApi }]) => {
+  ]).then(([{ useAgentStore }, { agentSessionApi }]) => {
     const session = useAgentStore.getState().getSession(taskPanel.refId!)
     if (!session?.sessionId) return
 
-    const browserUrl = browserPanel.url || '(no URL loaded yet)'
+    const cdpTargetId = browserPanel.cdpTargetId
+    const browserTitle = browserPanel.title || 'Browser'
 
-    // Resolve the actual tab ID by matching the webview's URL against CDP targets
-    let tabHint = 'agent-browser tab              # list tabs to find the right one'
-    try {
-      const res = await fetch(`http://localhost:${CDP_PORT}/json/list`)
-      const targets = (await res.json()) as Array<{ id: string; title: string; url: string; type: string }>
-      // Match by URL prefix (webview URLs may have extra params)
-      const browserUrlBase = (browserPanel.url || '').split('?')[0].split('#')[0]
-      const match = browserUrlBase
-        ? targets.find((t) => t.url.startsWith(browserUrlBase) && t.type === 'page')
-        : null
-      if (match) {
-        // agent-browser uses t1, t2, ... based on the target list order
-        const pageTargets = targets.filter((t) => t.type === 'page')
-        const idx = pageTargets.findIndex((t) => t.id === match.id)
-        if (idx >= 0) {
-          tabHint = `agent-browser tab t${idx + 1}           # "${match.title}" — ${browserUrl}`
-        }
-      }
-    } catch {
-      // CDP query failed — fall back to generic hint
+    // If we have the CDP target ID, give the agent a direct WebSocket URL
+    // Otherwise fall back to generic connect + tab instructions
+    let connectSection: string
+    if (cdpTargetId) {
+      connectSection =
+        `  agent-browser --cdp "ws://localhost:${CDP_PORT}/devtools/page/${cdpTargetId}" open about:blank\n` +
+        `  # Direct connection to "${browserTitle}" webview\n`
+    } else {
+      connectSection =
+        `  agent-browser connect ${CDP_PORT}\n` +
+        `  agent-browser tab              # list tabs to find the browser panel\n` +
+        `  agent-browser tab t<N>          # switch to it (not t1 — that's the main app)\n`
     }
 
     agentSessionApi.send(
       session.sessionId,
-      `[System] A browser panel has been connected to your task on the canvas. You now have access to control it.\n\n` +
+      `[System] A browser panel "${browserTitle}" has been connected to your task on the canvas. You now have access to control it.\n\n` +
       `To connect:\n` +
-      `  agent-browser connect ${CDP_PORT}\n` +
-      `  ${tabHint}\n` +
+      connectSection +
       `  agent-browser snapshot -i      # get interactive elements\n\n` +
       `Important: if commands stop working, kill stale daemons first:\n` +
       `  pkill -f agent-browser; sleep 1\n` +
-      `  agent-browser connect ${CDP_PORT}\n\n` +
+      (cdpTargetId
+        ? `  agent-browser --cdp "ws://localhost:${CDP_PORT}/devtools/page/${cdpTargetId}" open about:blank\n\n`
+        : `  agent-browser connect ${CDP_PORT}\n\n`) +
       `The user can see everything you do in the browser in real time on the canvas.`,
       taskPanel.refId!,
       session.agentId

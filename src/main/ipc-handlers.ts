@@ -1,4 +1,4 @@
-import { ipcMain, dialog, shell, Notification, app, session } from 'electron'
+import { ipcMain, dialog, shell, Notification, app, session, webContents } from 'electron'
 import * as childProcess from 'child_process'
 import { copyFileSync, existsSync, unlinkSync, readdirSync, statSync, readFileSync } from 'fs'
 import { join, basename, extname } from 'path'
@@ -1383,5 +1383,21 @@ else:
   // can use to connect to webview tabs on the canvas.
   ipcMain.handle('browser:getCdpPort', () => {
     return { port: 19222 }
+  })
+
+  // Returns the CDP target ID for a webview given its webContentsId.
+  // This allows the renderer to store the target ID on the panel data,
+  // so agent-browser can connect directly via ws://localhost:19222/devtools/page/<targetId>
+  ipcMain.handle('browser:getTargetId', (_event, webContentsId: number) => {
+    try {
+      const wc = webContents.fromId(webContentsId)
+      if (!wc) return { targetId: null }
+      // devToolsTargetId is the CDP TargetID (a UUID string)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const targetId = (wc as any).devToolsTargetId
+      return { targetId: targetId || null }
+    } catch {
+      return { targetId: null }
+    }
   })
 }

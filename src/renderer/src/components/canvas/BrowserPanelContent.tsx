@@ -77,6 +77,34 @@ export function BrowserPanelContent({
     return unsub
   }, [panelId])
 
+  // ── Resolve CDP target ID once the webview is ready ──────
+  // The webview exposes getWebContentsId() which we send to main process
+  // to get the CDP target ID — stored on the panel for agent-browser to use.
+  const cdpTargetResolved = useRef(false)
+  useEffect(() => {
+    const wv = webviewRef.current
+    if (!wv || cdpTargetResolved.current) return
+
+    const resolveTargetId = async () => {
+      try {
+        const wcId = wv.getWebContentsId?.()
+        if (!wcId) return
+        const { targetId } = await window.electronAPI.browser.getTargetId(wcId)
+        if (targetId) {
+          cdpTargetResolved.current = true
+          updatePanel(panelId, { cdpTargetId: targetId })
+        }
+      } catch {
+        // Silently ignore — webview may not be ready yet
+      }
+    }
+
+    wv.addEventListener('dom-ready', resolveTargetId)
+    // Also try immediately in case it's already loaded
+    resolveTargetId()
+    return () => wv.removeEventListener('dom-ready', resolveTargetId)
+  }, [panelId, updatePanel, isSetup])
+
   // ── Webview event wiring ──────────────────────────────────
   // Debounce store updates to avoid re-render storms from SPA sites (e.g. Google Maps)
   const pendingUrlUpdate = useRef<ReturnType<typeof setTimeout> | null>(null)

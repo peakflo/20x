@@ -384,6 +384,7 @@ interface ElectronAPI {
   onGithubDeviceCode: (callback: (code: string) => void) => () => void
   browser: {
     getCdpPort: () => Promise<{ port: number }>
+    getTargetId: (webContentsId: number) => Promise<{ targetId: string | null }>
   }
   onGitlabDeviceCode: (callback: (code: string) => void) => () => void
   onOAuthCallback: (callback: (event: { code: string; state: string }) => void) => () => void

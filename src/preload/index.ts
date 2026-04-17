@@ -431,6 +431,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   browser: {
     getCdpPort: (): Promise<{ port: number }> =>
-      ipcRenderer.invoke('browser:getCdpPort')
+      ipcRenderer.invoke('browser:getCdpPort'),
+    getTargetId: (webContentsId: number): Promise<{ targetId: string | null }> =>
+      ipcRenderer.invoke('browser:getTargetId', webContentsId)
   }
 })
