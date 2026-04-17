@@ -524,19 +524,28 @@ function notifyAgentOfBrowserConnection(
     const browserTitle = browserPanel.title || 'Browser'
     const browserUrl = browserPanel.url || ''
 
-    // Resolve the CDP target ID — ONLY use webview targets, never the main app window.
-    let cdpTargetId = browserPanel.cdpTargetId || null
-    if (!cdpTargetId) {
-      try {
-        const res = await fetch(`http://localhost:${CDP_PORT}/json/list`)
-        const targets = (await res.json()) as Array<{ id: string; url: string; type: string }>
-        // Only match webview targets — never "page" (which is the main app)
-        const match = browserUrl
-          ? targets.find((t) => t.type === 'webview' && t.url.startsWith(browserUrl.split('?')[0].split('#')[0]))
+    // ALWAYS resolve the CDP target ID fresh from /json/list.
+    // Stored cdpTargetId goes stale on every app restart (CDP reassigns IDs).
+    // We verify it still exists, and fall back to URL matching if not.
+    let cdpTargetId: string | null = null
+    try {
+      const res = await fetch(`http://localhost:${CDP_PORT}/json/list`)
+      const targets = (await res.json()) as Array<{ id: string; url: string; type: string }>
+      const webviews = targets.filter((t) => t.type === 'webview')
+
+      // 1. Check if the stored target ID is still valid
+      const storedId = browserPanel.cdpTargetId
+      if (storedId && webviews.some((t) => t.id === storedId)) {
+        cdpTargetId = storedId
+      } else {
+        // 2. Match by URL
+        const urlBase = browserUrl.split('?')[0].split('#')[0]
+        const match = urlBase
+          ? webviews.find((t) => t.url.startsWith(urlBase))
           : null
-        cdpTargetId = match?.id || targets.find((t) => t.type === 'webview')?.id || null
-      } catch { /* CDP query failed */ }
-    }
+        cdpTargetId = match?.id || (webviews.length === 1 ? webviews[0].id : null)
+      }
+    } catch { /* CDP query failed */ }
 
     // SAFETY: Only send connection instructions when we have a confirmed webview target.
     // Without it, agent-browser would default to the main app window and break the UI.
