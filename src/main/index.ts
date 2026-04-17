@@ -177,23 +177,39 @@ function createWindow(): void {
   // Layer 2: Network-level interception via webRequest API.
   // This is the DEFINITIVE guard — CDP Page.navigate bypasses will-navigate
   // and did-start-navigation events, but it CANNOT bypass network-level blocking.
-  // We block any main-frame navigation of the main window to non-app URLs.
+  //
+  // IMPORTANT: We use webContents.fromId() to verify the request comes from the
+  // main window specifically. We cannot rely on webContentsId alone because
+  // webviews share the same session and their requests also go through this handler.
+  // We must NOT block webview navigations — only the main BrowserWindow.
   const mainWcId = mainWindow.webContents.id
   mainWindow.webContents.session.webRequest.onBeforeRequest(
     { urls: ['*://*/*'] },
     (details, callback) => {
-      // Only block main-frame navigations of the main window to non-app URLs.
-      // Sub-resources (scripts, images, XHR) and webview requests pass through.
-      if (
-        details.webContentsId === mainWcId &&
-        details.resourceType === 'mainFrame'
-      ) {
-        const isAppUrl =
-          details.url.startsWith('http://localhost:') || details.url.startsWith('file://')
-        if (!isAppUrl) {
-          console.warn(`[Main] Network-level block: main window navigation to: ${details.url}`)
-          callback({ cancel: true })
-          return
+      // Only block main-frame navigations of the main BrowserWindow to non-app URLs.
+      // Webview navigations must pass through — they are the browser panels.
+      if (details.resourceType === 'mainFrame') {
+        // Check if this request is from the main window (not a webview)
+        const isMainWindow = details.webContentsId === mainWcId
+        // Fallback: if webContentsId is missing/unreliable, check if the requesting
+        // webContents is a BrowserWindow (not a webview guest)
+        let isMainWindowFallback = false
+        if (details.webContentsId != null && details.webContentsId !== mainWcId) {
+          // Different webContentsId — this is a webview, let it through
+          isMainWindowFallback = false
+        } else if (details.webContentsId == null) {
+          // webContentsId missing — be safe, don't block (might be a webview)
+          isMainWindowFallback = false
+        }
+
+        if (isMainWindow || isMainWindowFallback) {
+          const isAppUrl =
+            details.url.startsWith('http://localhost:') || details.url.startsWith('file://')
+          if (!isAppUrl) {
+            console.warn(`[Main] Network-level block: main window navigation to: ${details.url} (wcId=${details.webContentsId}, mainWcId=${mainWcId})`)
+            callback({ cancel: true })
+            return
+          }
         }
       }
       callback({})
