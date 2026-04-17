@@ -121,6 +121,9 @@ jobs:
           xcrun stapler staple "${{ steps.mac-artifacts.outputs.dmg_path }}"
           xcrun stapler validate "${{ steps.mac-artifacts.outputs.dmg_path }}"
 
+      - name: Rename arch-specific update manifest
+        run: cp dist/latest-mac.yml dist/latest-mac-${{ matrix.arch }}.yml
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -128,6 +131,8 @@ jobs:
           path: |
             dist/*.dmg
             dist/*.zip
+            dist/*.blockmap
+            dist/latest-mac-${{ matrix.arch }}.yml
 
   build-windows:
     runs-on: windows-latest
@@ -156,6 +161,8 @@ jobs:
           name: windows-x64
           path: |
             dist/*.exe
+            dist/*.blockmap
+            dist/latest.yml
 
   build-linux:
     runs-on: ubicloud-standard-2
@@ -188,6 +195,7 @@ jobs:
           name: linux-x64
           path: |
             dist/*.AppImage
+            dist/latest-linux.yml
 
   release:
     needs: [build-mac, build-windows, build-linux]
@@ -201,6 +209,41 @@ jobs:
         with:
           path: artifacts
           merge-multiple: true
+
+      - name: Merge mac update manifests
+        working-directory: artifacts
+        run: |
+          # Combine arm64 + x64 latest-mac manifests into one latest-mac.yml
+          if [ -f latest-mac-arm64.yml ] && [ -f latest-mac-x64.yml ]; then
+            python3 << 'EOF'
+          import re
+
+          def get_files_block(text):
+              """Extract indented file entries from under 'files:' key."""
+              m = re.search(r"^files:\n((?:  .+\n)+)", text, re.MULTILINE)
+              return m.group(1) if m else ""
+
+          arm64 = open("latest-mac-arm64.yml").read()
+          x64 = open("latest-mac-x64.yml").read()
+          x64_files = get_files_block(x64)
+
+          # Append x64 file entries into arm64's files block
+          merged = re.sub(
+              r"(^files:\n(?:  .+\n)+)",
+              lambda m: m.group(0) + x64_files,
+              arm64, count=1, flags=re.MULTILINE
+          )
+          open("latest-mac.yml", "w").write(merged)
+          print("Merged latest-mac.yml")
+          EOF
+            rm -f latest-mac-arm64.yml latest-mac-x64.yml
+          elif [ -f latest-mac-arm64.yml ]; then
+            mv latest-mac-arm64.yml latest-mac.yml
+          elif [ -f latest-mac-x64.yml ]; then
+            mv latest-mac-x64.yml latest-mac.yml
+          fi
+          echo "--- latest-mac.yml ---"
+          cat latest-mac.yml
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
