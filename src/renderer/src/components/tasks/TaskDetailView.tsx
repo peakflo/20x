@@ -364,6 +364,8 @@ interface TaskDetailViewProps {
   canTriage?: boolean
   /** Open the agent editor dialog for a specific agent (or the currently assigned one). */
   onEditAgent?: (agentId: string) => void
+  /** Save an inline description edit. When provided, the description becomes editable. */
+  onUpdateDescription?: (description: string) => void | Promise<void>
   subtasks?: WorkfloTask[]
   parentTask?: WorkfloTask | null
   onNavigateToTask?: (taskId: string) => void
@@ -371,7 +373,7 @@ interface TaskDetailViewProps {
   onReorderSubtasks?: (orderedIds: string[]) => void
 }
 
-export function TaskDetailView({ task, agents, onEdit, onDelete, onUpdateAttachments, onUpdateOutputFields, onCompleteTask, onAssignAgent, onUpdateRepos, onAddRepos, onUpdateSkillIds, onAddSkills, onStartAgent, canStartAgent, onResumeAgent, canResumeAgent, onRestartAgent, canRestartAgent, onSnooze, onUnsnooze, onReassign, onTriage, canTriage, onEditAgent, subtasks, parentTask, onNavigateToTask, onAddSubtask, onReorderSubtasks }: TaskDetailViewProps) {
+export function TaskDetailView({ task, agents, onEdit, onDelete, onUpdateAttachments, onUpdateOutputFields, onCompleteTask, onAssignAgent, onUpdateRepos, onAddRepos, onUpdateSkillIds, onAddSkills, onStartAgent, canStartAgent, onResumeAgent, canResumeAgent, onRestartAgent, canRestartAgent, onSnooze, onUnsnooze, onReassign, onTriage, canTriage, onEditAgent, onUpdateDescription, subtasks, parentTask, onNavigateToTask, onAddSubtask, onReorderSubtasks }: TaskDetailViewProps) {
   const { skills, fetchSkills } = useSkillStore()
   const isActive = task.status !== TaskStatus.Completed
 
@@ -428,12 +430,13 @@ export function TaskDetailView({ task, agents, onEdit, onDelete, onUpdateAttachm
 
           <div>
             <h1 className="text-xl font-semibold">{task.title}</h1>
-            {task.description && (
+            {(task.description || onUpdateDescription) && (
               <CollapsibleDescription
                 taskId={task.id}
                 description={task.description}
                 size="sm"
                 className="mt-3 text-muted-foreground"
+                onSave={onUpdateDescription}
               />
             )}
           </div>
@@ -480,26 +483,31 @@ export function TaskDetailView({ task, agents, onEdit, onDelete, onUpdateAttachm
                       </div>
                     )
                   })()}
+                  {/* Per-row action buttons are outline/secondary — the big
+                      state-aware primary CTA lives at the bottom of the view
+                      (see the prioritized CTA section). Keeping these inline
+                      for quick access but visually secondary so there's only
+                      one primary-colored button on screen at a time. */}
                   {canTriage && onTriage && (
-                    <Button variant="default" size="sm" onClick={onTriage} className="h-7 gap-1.5 px-3">
+                    <Button variant="outline" size="sm" onClick={onTriage} className="h-7 gap-1.5 px-3">
                       <Sparkles className="h-3 w-3" />
                       Triage
                     </Button>
                   )}
                   {canResumeAgent && onResumeAgent && (
-                    <Button variant="default" size="sm" onClick={onResumeAgent} className="h-7 gap-1.5 px-3">
+                    <Button variant="outline" size="sm" onClick={onResumeAgent} className="h-7 gap-1.5 px-3">
                       <History className="h-3 w-3" />
                       Resume session
                     </Button>
                   )}
                   {canRestartAgent && onRestartAgent && (
-                    <Button variant="default" size="sm" onClick={onRestartAgent} className="h-7 gap-1.5 px-3">
+                    <Button variant="outline" size="sm" onClick={onRestartAgent} className="h-7 gap-1.5 px-3">
                       <Play className="h-3 w-3" />
                       Restart session
                     </Button>
                   )}
                   {canStartAgent && onStartAgent && (
-                    <Button variant="default" size="sm" onClick={onStartAgent} className="h-7 gap-1.5 px-3">
+                    <Button variant="outline" size="sm" onClick={onStartAgent} className="h-7 gap-1.5 px-3">
                       <Play className="h-3 w-3" />
                       Start
                     </Button>
@@ -697,7 +705,7 @@ export function TaskDetailView({ task, agents, onEdit, onDelete, onUpdateAttachm
 
           {/* Heartbeat monitoring — handled inside the properties grid above */}
 
-          {task.output_fields.length > 0 ? (
+          {task.output_fields.length > 0 && (
             <div className="rounded-md border p-4">
               <OutputFieldsDisplay
                 fields={task.output_fields}
@@ -707,11 +715,89 @@ export function TaskDetailView({ task, agents, onEdit, onDelete, onUpdateAttachm
                 taskUpdatedAt={task.updated_at}
               />
             </div>
-          ) : isActive && (
-            <Button onClick={onCompleteTask} className="w-full">
-              Complete Task
-            </Button>
           )}
+
+          {isActive && (() => {
+            // Prioritized main CTA — state-aware.
+            //
+            // In most states the happy path is to move the task forward with an
+            // agent action, so Start > Resume > Restart > Triage wins over the
+            // always-available Complete escape hatch.
+            //
+            // In ReadyForReview the happy path flips: the agent has already
+            // finished, so the user is reviewing the result and the expected
+            // next step is to accept (Complete). Resume stays visible as a
+            // secondary "needs another pass" affordance. Mirrors how code
+            // review tools promote Merge/Approve after an agent finishes.
+            type AgentAction = { label: string; icon: typeof Play; onClick: () => void; testId: string }
+            let agentAction: AgentAction | null = null
+            if (canStartAgent && onStartAgent) {
+              agentAction = { label: 'Start Task', icon: Play, onClick: onStartAgent, testId: 'main-cta-start' }
+            } else if (canResumeAgent && onResumeAgent) {
+              agentAction = { label: 'Resume Session', icon: History, onClick: onResumeAgent, testId: 'main-cta-resume' }
+            } else if (canRestartAgent && onRestartAgent) {
+              agentAction = { label: 'Restart Session', icon: Play, onClick: onRestartAgent, testId: 'main-cta-restart' }
+            } else if (canTriage && onTriage) {
+              agentAction = { label: 'Triage', icon: Sparkles, onClick: onTriage, testId: 'main-cta-triage' }
+            }
+
+            const hasOutputCompleteButton = task.output_fields.length > 0
+            // If OutputFieldsDisplay already renders its own Complete button (when
+            // all required fields are filled), don't render another here.
+            const showCompleteButton = !hasOutputCompleteButton
+
+            const isReadyForReview = task.status === TaskStatus.ReadyForReview
+
+            // In ReadyForReview the happy path is acceptance (Complete) — the
+            // agent action stays visible for "needs another pass" but as a
+            // secondary outline button. This applies even when our own Complete
+            // isn't rendered (because OutputFieldsDisplay has one when
+            // output_fields exist) — we still demote the agent action so there
+            // aren't two green buttons on screen.
+            const agentActionIsPrimary = !!agentAction && !isReadyForReview
+            const completeIsPrimary =
+              showCompleteButton && (!agentAction || isReadyForReview)
+
+            if (!agentAction && !showCompleteButton) return null
+
+            return (
+              <div className="flex flex-col gap-2">
+                {agentAction && agentActionIsPrimary && (
+                  <Button
+                    onClick={agentAction.onClick}
+                    size="lg"
+                    className="w-full gap-2"
+                    data-testid={agentAction.testId}
+                  >
+                    <agentAction.icon className="h-4 w-4" />
+                    {agentAction.label}
+                  </Button>
+                )}
+                {showCompleteButton && (
+                  <Button
+                    onClick={onCompleteTask}
+                    variant={completeIsPrimary ? 'default' : 'outline'}
+                    size={completeIsPrimary ? 'lg' : 'default'}
+                    className="w-full"
+                    data-testid="main-cta-complete"
+                  >
+                    Complete Task
+                  </Button>
+                )}
+                {agentAction && !agentActionIsPrimary && (
+                  <Button
+                    onClick={agentAction.onClick}
+                    variant="outline"
+                    className="w-full gap-2"
+                    data-testid={agentAction.testId}
+                  >
+                    <agentAction.icon className="h-4 w-4" />
+                    {agentAction.label}
+                  </Button>
+                )}
+              </div>
+            )
+          })()}
 
           <div className="pt-2 border-t text-xs text-muted-foreground">
             Source: <Badge className="ml-1">{task.source}</Badge>
