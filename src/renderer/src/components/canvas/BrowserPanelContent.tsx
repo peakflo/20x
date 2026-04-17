@@ -154,11 +154,18 @@ export function BrowserPanelContent({
       }, 500)
     }
 
+    // Prevent webview from going fullscreen — it covers the entire app
+    const onEnterFullScreen = () => {
+      // Immediately exit fullscreen by pressing Escape in the webview
+      wv.executeJavaScript('document.exitFullscreen?.().catch(()=>{})').catch(() => {})
+    }
+
     wv.addEventListener('did-start-loading', onStartLoading)
     wv.addEventListener('did-stop-loading', onStopLoading)
     wv.addEventListener('did-navigate', onNavigate)
     wv.addEventListener('did-navigate-in-page', onNavigate as any)
     wv.addEventListener('page-title-updated', onTitleUpdate)
+    wv.addEventListener('enter-html-full-screen', onEnterFullScreen)
 
     return () => {
       wv.removeEventListener('did-start-loading', onStartLoading)
@@ -166,6 +173,7 @@ export function BrowserPanelContent({
       wv.removeEventListener('did-navigate', onNavigate)
       wv.removeEventListener('did-navigate-in-page', onNavigate as any)
       wv.removeEventListener('page-title-updated', onTitleUpdate)
+      wv.removeEventListener('enter-html-full-screen', onEnterFullScreen)
       if (pendingUrlUpdate.current) clearTimeout(pendingUrlUpdate.current)
       if (pendingTitleUpdate.current) clearTimeout(pendingTitleUpdate.current)
     }
