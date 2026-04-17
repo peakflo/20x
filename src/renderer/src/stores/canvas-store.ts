@@ -470,26 +470,44 @@ function notifyAgentOfBrowserConnection(
   Promise.all([
     import('./agent-store'),
     import('@/lib/ipc-client'),
-  ]).then(([{ useAgentStore }, { agentSessionApi }]) => {
+  ]).then(async ([{ useAgentStore }, { agentSessionApi }]) => {
     const session = useAgentStore.getState().getSession(taskPanel.refId!)
     if (!session?.sessionId) return
 
     const browserUrl = browserPanel.url || '(no URL loaded yet)'
+
+    // Resolve the actual tab ID by matching the webview's URL against CDP targets
+    let tabHint = 'agent-browser tab              # list tabs to find the right one'
+    try {
+      const res = await fetch(`http://localhost:${CDP_PORT}/json/list`)
+      const targets = (await res.json()) as Array<{ id: string; title: string; url: string; type: string }>
+      // Match by URL prefix (webview URLs may have extra params)
+      const browserUrlBase = (browserPanel.url || '').split('?')[0].split('#')[0]
+      const match = browserUrlBase
+        ? targets.find((t) => t.url.startsWith(browserUrlBase) && t.type === 'page')
+        : null
+      if (match) {
+        // agent-browser uses t1, t2, ... based on the target list order
+        const pageTargets = targets.filter((t) => t.type === 'page')
+        const idx = pageTargets.findIndex((t) => t.id === match.id)
+        if (idx >= 0) {
+          tabHint = `agent-browser tab t${idx + 1}           # "${match.title}" — ${browserUrl}`
+        }
+      }
+    } catch {
+      // CDP query failed — fall back to generic hint
+    }
+
     agentSessionApi.send(
       session.sessionId,
       `[System] A browser panel has been connected to your task on the canvas. You now have access to control it.\n\n` +
-      `The browser webview appears as an "iframe" CDP target (not a tab). To connect:\n\n` +
-      `  # Find the webview's WebSocket URL\n` +
-      `  curl -s http://localhost:${CDP_PORT}/json/list | python3 -c "\n` +
-      `  import json, sys\n` +
-      `  targets = json.load(sys.stdin)\n` +
-      `  for t in targets:\n` +
-      `      if t.get('parentId'):\n` +
-      `          print(t['webSocketDebuggerUrl'])\n` +
-      `  "\n\n` +
-      `  # Connect using the WebSocket URL from above\n` +
-      `  agent-browser --cdp <ws-url> open ${browserUrl}\n` +
-      `  agent-browser snapshot -i\n\n` +
+      `To connect:\n` +
+      `  agent-browser connect ${CDP_PORT}\n` +
+      `  ${tabHint}\n` +
+      `  agent-browser snapshot -i      # get interactive elements\n\n` +
+      `Important: if commands stop working, kill stale daemons first:\n` +
+      `  pkill -f agent-browser; sleep 1\n` +
+      `  agent-browser connect ${CDP_PORT}\n\n` +
       `The user can see everything you do in the browser in real time on the canvas.`,
       taskPanel.refId!,
       session.agentId
