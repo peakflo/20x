@@ -612,6 +612,7 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     this.promptAborts.set(sessionId, promptAbort)
 
     // Fire-and-forget prompt
+    console.log(`[OpencodeAdapter] sendPrompt: sessionId=${sessionId}, partsCount=${parts.length}, model=${config.model ?? 'default'}, workspaceDir=${config.workspaceDir ?? 'none'}`)
     ocClient.session.prompt({
       path: { id: sessionId },
       body: {
@@ -621,9 +622,13 @@ export class OpencodeAdapter implements CodingAgentAdapter {
       },
       ...(config.workspaceDir && { query: { directory: config.workspaceDir } }),
       signal: promptAbort.signal
+    }).then((result: unknown) => {
+      console.log(`[OpencodeAdapter] prompt resolved: sessionId=${sessionId}, result=${JSON.stringify(result).slice(0, 500)}`)
     }).catch((err: unknown) => {
       if (!(err instanceof Error) || err.name !== 'AbortError') {
         console.error('[OpencodeAdapter] prompt error:', err)
+      } else {
+        console.log(`[OpencodeAdapter] prompt aborted: sessionId=${sessionId}`)
       }
     }).finally(() => {
       this.promptAborts.delete(sessionId)
@@ -641,15 +646,18 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     })
 
     if (!statusResult.data) {
+      console.log(`[OpencodeAdapter] getStatus: sessionId=${sessionId}, statusResult.data is empty → IDLE`)
       return { type: SessionStatusType.IDLE }
     }
 
     const ocStatus = statusResult.data[sessionId]
     if (!ocStatus) {
+      console.log(`[OpencodeAdapter] getStatus: sessionId=${sessionId}, no entry in statusResult.data (keys: ${Object.keys(statusResult.data).join(', ')}) → IDLE`)
       return { type: SessionStatusType.IDLE }
     }
 
     const sdkType = (ocStatus.type || 'idle') as string
+    console.log(`[OpencodeAdapter] getStatus: sessionId=${sessionId}, sdkType=${sdkType}, raw=${JSON.stringify(ocStatus).slice(0, 300)}`)
     if (sdkType === 'waiting_approval' || sdkType === 'waiting_input' || sdkType === 'waiting_user') {
       return { type: SessionStatusType.WAITING_APPROVAL }
     }
@@ -745,9 +753,11 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     })
 
     if (!messagesResult.data || !Array.isArray(messagesResult.data)) {
+      console.log(`[OpencodeAdapter] pollMessages: sessionId=${sessionId}, no data returned`)
       return []
     }
 
+    console.log(`[OpencodeAdapter] pollMessages: sessionId=${sessionId}, totalMessages=${messagesResult.data.length}, seenMsgIds=${seenMessageIds.size}, seenPartIds=${seenPartIds.size}`)
     const newParts: MessagePart[] = []
 
     for (const msg of messagesResult.data) {
@@ -810,6 +820,9 @@ export class OpencodeAdapter implements CodingAgentAdapter {
       }
     }
 
+    if (newParts.length > 0) {
+      console.log(`[OpencodeAdapter] pollMessages: sessionId=${sessionId}, newParts=${newParts.length}, roles=[${newParts.map(p => p.role).join(',')}], types=[${newParts.map(p => p.type).join(',')}], updates=[${newParts.map(p => (p as Record<string, unknown>).update ?? false).join(',')}]`)
+    }
     return newParts
   }
 
