@@ -6,7 +6,7 @@ import { useTaskStore } from '@/stores/task-store'
 import { CanvasPanel } from './CanvasPanel'
 import { CanvasConnections } from './CanvasConnections'
 import { CanvasContextMenu } from './CanvasContextMenu'
-import { Move, ZoomIn, ZoomOut, RotateCcw } from 'lucide-react'
+import { Move, ZoomIn, ZoomOut, RotateCcw, Plus } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 
 /**
@@ -487,13 +487,35 @@ export function InfiniteCanvas() {
         </Button>
       </div>
 
-      {/* ── HUD: Viewport info ── */}
-      <div className="absolute top-3 right-3 flex items-center gap-2 text-[10px] text-muted-foreground/40 z-10 select-none">
-        <Move className="h-3 w-3" />
-        <span className="tabular-nums">
-          {Math.round(-viewport.x / viewport.zoom)},{' '}
-          {Math.round(-viewport.y / viewport.zoom)}
-        </span>
+      {/* ── HUD: Add + Viewport info ── */}
+      <div className="absolute top-3 right-3 flex items-center gap-2 z-10 select-none">
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-7 w-7 p-0 bg-[#1a2030]/90 backdrop-blur-sm border border-border/40 hover:border-border/60"
+          onClick={() => {
+            const rect = containerRef.current?.getBoundingClientRect()
+            if (!rect) return
+            const cx = rect.left + rect.width / 2
+            const cy = rect.top + rect.height / 2
+            setContextMenu({
+              clientX: cx,
+              clientY: cy,
+              canvasX: (cx - rect.left - viewport.x) / viewport.zoom,
+              canvasY: (cy - rect.top - viewport.y) / viewport.zoom,
+            })
+          }}
+          title="Add to canvas"
+        >
+          <Plus className="h-3.5 w-3.5" />
+        </Button>
+        <div className="flex items-center gap-2 text-[10px] text-muted-foreground/40">
+          <Move className="h-3 w-3" />
+          <span className="tabular-nums">
+            {Math.round(-viewport.x / viewport.zoom)},{' '}
+            {Math.round(-viewport.y / viewport.zoom)}
+          </span>
+        </div>
       </div>
 
       {/* ── Empty state ── */}

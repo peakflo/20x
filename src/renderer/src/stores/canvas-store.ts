@@ -207,7 +207,11 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
 
   zoomAtPoint: (delta, clientX, clientY, containerRect) => {
     const { viewport } = get()
-    const factor = delta > 0 ? 0.9 : 1.1
+    // Scale zoom factor by delta magnitude for smooth trackpad pinch-to-zoom.
+    // Mac trackpads send small deltas (~2-4px) per event; mice send larger (~100px).
+    // Clamp the intensity so it never exceeds a ~15% step per event.
+    const intensity = Math.min(Math.abs(delta) / 100, 0.15)
+    const factor = delta > 0 ? 1 - intensity : 1 + intensity
     const newZoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, viewport.zoom * factor))
 
     const pointX = (clientX - containerRect.left - viewport.x) / viewport.zoom
