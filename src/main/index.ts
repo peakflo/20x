@@ -163,12 +163,22 @@ function createWindow(): void {
   // This guards against agent-browser or CDP accidentally targeting the main
   // window instead of a webview panel — without this, the entire app UI gets
   // replaced by whatever URL was opened.
-  mainWindow.webContents.on('will-navigate', (event, url) => {
+  //
+  // We use BOTH will-navigate (catches user-initiated navigations) AND
+  // did-start-navigation (catches programmatic navigations via CDP Page.navigate,
+  // webContents.loadURL, etc. that bypass will-navigate).
+  const blockNonAppNavigation = (event: Electron.Event, url: string) => {
     const appOrigins = ['http://localhost:', 'file://']
     const isAppUrl = appOrigins.some((origin) => url.startsWith(origin))
     if (!isAppUrl) {
       console.warn(`[Main] Blocked navigation of main window to: ${url}`)
       event.preventDefault()
+    }
+  }
+  mainWindow.webContents.on('will-navigate', blockNonAppNavigation)
+  mainWindow.webContents.on('did-start-navigation', (event, url, _isInPlace, isMainFrame) => {
+    if (isMainFrame) {
+      blockNonAppNavigation(event, url)
     }
   })
 

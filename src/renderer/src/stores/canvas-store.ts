@@ -566,15 +566,18 @@ function notifyAgentOfBrowserConnection(
     agentSessionApi.send(
       session.sessionId,
       `[System] A browser panel "${browserTitle}" has been connected to your task on the canvas. You now have access to control it.\n\n` +
+      `CRITICAL: You MUST include --cdp flag on EVERY agent-browser command. Without it, agent-browser targets the main app window and breaks the UI.\n\n` +
       `To connect:\n` +
-      `  agent-browser --cdp "${wsUrl}" open about:blank\n` +
-      `  # Direct connection to "${browserTitle}" webview\n` +
-      `  agent-browser snapshot -i      # get interactive elements\n\n` +
+      `  agent-browser --cdp "${wsUrl}" open about:blank\n\n` +
+      `For ALL subsequent commands, always include --cdp:\n` +
+      `  agent-browser --cdp "${wsUrl}" snapshot -i\n` +
+      `  agent-browser --cdp "${wsUrl}" click <ref>\n` +
+      `  agent-browser --cdp "${wsUrl}" type <ref> "text"\n` +
+      `  agent-browser --cdp "${wsUrl}" open <url>\n\n` +
       `If commands stop working, kill stale daemons first:\n` +
       `  pkill -f agent-browser; sleep 1\n` +
       `  agent-browser --cdp "${wsUrl}" open about:blank\n\n` +
-      `IMPORTANT: Do NOT use "agent-browser connect" or "agent-browser open" without --cdp flag — ` +
-      `that would navigate the main application window.\n\n` +
+      `NEVER use agent-browser without --cdp "${wsUrl}" — every single command needs it.\n\n` +
       `The user can see everything you do in the browser in real time on the canvas.`,
       taskPanel.refId!,
       session.agentId
