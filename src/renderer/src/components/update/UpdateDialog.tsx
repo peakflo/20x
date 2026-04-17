@@ -59,7 +59,16 @@ export function UpdateDialog({ open, onClose }: UpdateDialogProps) {
   useEffect(() => {
     if (open && state.status === 'idle') {
       setState((s) => ({ ...s, status: 'checking', error: null }))
-      updaterApi.check()
+      updaterApi.check().then((result) => {
+        // In dev mode (or if check fails synchronously), the main process
+        // won't fire updater:status events — handle the response directly.
+        if (result && !result.success) {
+          setState((s) => s.status === 'checking'
+            ? { ...s, status: 'error', error: result.error ?? 'Update check failed' }
+            : s
+          )
+        }
+      })
     }
   }, [open])
 
