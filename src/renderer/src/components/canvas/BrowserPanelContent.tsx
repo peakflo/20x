@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import {
   Globe,
   RefreshCw,
@@ -32,8 +32,6 @@ export function BrowserPanelContent({
   url: initialUrl,
 }: BrowserPanelContentProps) {
   const updatePanel = useCanvasStore((s) => s.updatePanel)
-  const edges = useCanvasStore((s) => s.edges)
-  const panels = useCanvasStore((s) => s.panels)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const webviewRef = useRef<any>(null)
 
@@ -45,23 +43,42 @@ export function BrowserPanelContent({
   const [isSetup, setIsSetup] = useState(!initialUrl)
 
   // ── Check if this browser is connected to a task via an edge ──
-  const connectedTaskName = useMemo(() => {
-    const browserEdges = edges.filter(
-      (e) =>
-        e.edgeType === 'browser' &&
-        (e.fromPanelId === panelId || e.toPanelId === panelId)
-    )
-    if (browserEdges.length === 0) return null
-    // Find the connected task panel
-    for (const edge of browserEdges) {
-      const otherId = edge.fromPanelId === panelId ? edge.toPanelId : edge.fromPanelId
-      const otherPanel = panels.find((p) => p.id === otherId)
-      if (otherPanel?.type === 'task') return otherPanel.title
+  // Uses imperative reads + subscribe to avoid re-rendering on every panel move
+  const [connectedTaskName, setConnectedTaskName] = useState<string | null>(null)
+
+  useEffect(() => {
+    function computeConnectedTask(): string | null {
+      const { edges, panels } = useCanvasStore.getState()
+      const browserEdges = edges.filter(
+        (e) =>
+          e.edgeType === 'browser' &&
+          (e.fromPanelId === panelId || e.toPanelId === panelId)
+      )
+      if (browserEdges.length === 0) return null
+      for (const edge of browserEdges) {
+        const otherId = edge.fromPanelId === panelId ? edge.toPanelId : edge.fromPanelId
+        const otherPanel = panels.find((p) => p.id === otherId)
+        if (otherPanel?.type === 'task') return otherPanel.title
+      }
+      return 'Agent'
     }
-    return 'Agent'
-  }, [edges, panels, panelId])
+
+    setConnectedTaskName(computeConnectedTask())
+
+    // Only re-compute when edges change, not on every panel position change
+    const unsub = useCanvasStore.subscribe((state, prevState) => {
+      if (state.edges !== prevState.edges) {
+        setConnectedTaskName(computeConnectedTask())
+      }
+    })
+    return unsub
+  }, [panelId])
 
   // ── Webview event wiring ──────────────────────────────────
+  // Debounce store updates to avoid re-render storms from SPA sites (e.g. Google Maps)
+  const pendingUrlUpdate = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const pendingTitleUpdate = useRef<ReturnType<typeof setTimeout> | null>(null)
+
   useEffect(() => {
     const wv = webviewRef.current
     if (!wv) return
@@ -73,12 +90,20 @@ export function BrowserPanelContent({
       setCanGoForward(wv.canGoForward())
     }
     const onNavigate = (e: { url: string }) => {
+      // Update local state immediately (fast UI)
       setCurrentUrl(e.url)
       setInputValue(e.url)
-      updatePanel(panelId, { url: e.url })
+      // Debounce store update to avoid flooding zustand on SPA navigations
+      if (pendingUrlUpdate.current) clearTimeout(pendingUrlUpdate.current)
+      pendingUrlUpdate.current = setTimeout(() => {
+        updatePanel(panelId, { url: e.url })
+      }, 500)
     }
     const onTitleUpdate = (e: { title: string }) => {
-      updatePanel(panelId, { title: e.title || 'Browser' })
+      if (pendingTitleUpdate.current) clearTimeout(pendingTitleUpdate.current)
+      pendingTitleUpdate.current = setTimeout(() => {
+        updatePanel(panelId, { title: e.title || 'Browser' })
+      }, 500)
     }
 
     wv.addEventListener('did-start-loading', onStartLoading)
@@ -93,6 +118,8 @@ export function BrowserPanelContent({
       wv.removeEventListener('did-navigate', onNavigate)
       wv.removeEventListener('did-navigate-in-page', onNavigate as any)
       wv.removeEventListener('page-title-updated', onTitleUpdate)
+      if (pendingUrlUpdate.current) clearTimeout(pendingUrlUpdate.current)
+      if (pendingTitleUpdate.current) clearTimeout(pendingTitleUpdate.current)
     }
   }, [panelId, updatePanel, isSetup])
 
