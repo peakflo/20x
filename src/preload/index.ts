@@ -334,6 +334,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('mobile:getInfo')
   },
   enterprise: {
+    signupInBrowser: (mode: 'register' | 'login'): Promise<{
+      userId: string
+      email: string
+      companies: { id: string; name: string; isPrimary: boolean }[]
+    }> => ipcRenderer.invoke('enterprise:signupInBrowser', mode),
     login: (email: string, password: string): Promise<{
       userId: string
       email: string

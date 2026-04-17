@@ -148,6 +148,40 @@ export class EnterpriseAuth {
     return this.getValidJwt()
   }
 
+  // ── Login with raw Supabase tokens (from browser signup/login callback) ───
+
+  async loginWithTokens(accessToken: string, refreshToken: string): Promise<EnterpriseLoginResult> {
+    // Set the session in Supabase client so it can be used for refresh later
+    const { data, error } = await this.supabase.auth.setSession({
+      access_token: accessToken,
+      refresh_token: refreshToken
+    })
+
+    if (error) {
+      throw new Error(error.message)
+    }
+
+    if (!data.session || !data.user) {
+      throw new Error('Authentication failed — invalid tokens')
+    }
+
+    // Store Supabase tokens (encrypted)
+    this.storeSupabaseSession(data.session)
+
+    // Store basic user info
+    this.db.setSetting(KEYS.USER_EMAIL, data.user.email || '')
+    this.db.setSetting(KEYS.USER_ID, data.user.id)
+
+    // Fetch user's companies from the workflow-api
+    const companies = await this.fetchCompanies(data.session.access_token)
+
+    return {
+      userId: data.user.id,
+      email: data.user.email || '',
+      companies
+    }
+  }
+
   // ── Login (email/password via Supabase) ───────────────────────────
 
   async login(email: string, password: string): Promise<EnterpriseLoginResult> {

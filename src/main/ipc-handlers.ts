@@ -754,6 +754,48 @@ export function registerIpcHandlers(
   })
 
   // Enterprise auth handlers
+
+  ipcMain.handle('enterprise:signupInBrowser', async (_, mode: 'register' | 'login') => {
+    if (!enterpriseAuth) throw new Error('Enterprise auth not available')
+
+    const { AuthCallbackServer } = await import('./oauth/auth-callback-server')
+    const callbackServer = new AuthCallbackServer()
+
+    try {
+      // Start localhost server and get the redirect URI
+      const redirectUri = await callbackServer.start()
+
+      // Derive the workflow-builder frontend URL from the API URL
+      const apiUrl = enterpriseAuth.getApiUrl()
+      const parsed = new URL(apiUrl)
+      let frontendOrigin: string
+      if (parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1') {
+        parsed.port = '4000'
+        frontendOrigin = parsed.origin
+      } else {
+        parsed.hostname = parsed.hostname.replace('-api.', '-app.').replace(/^api\./, 'app.')
+        frontendOrigin = parsed.origin
+      }
+
+      const path = mode === 'register' ? '/register' : '/login'
+      const signupUrl = `${frontendOrigin}${path}?redirect_uri=${encodeURIComponent(redirectUri)}`
+
+      // Open the URL in the user's default browser
+      await shell.openExternal(signupUrl)
+
+      // Wait for the callback with tokens
+      const tokens = await callbackServer.waitForCallback()
+
+      // Use the received tokens to log in
+      const result = await enterpriseAuth.loginWithTokens(tokens.access_token, tokens.refresh_token)
+
+      return result
+    } catch (err) {
+      callbackServer.stop()
+      throw err
+    }
+  })
+
   ipcMain.handle('enterprise:login', async (_, email: string, password: string) => {
     if (!enterpriseAuth) throw new Error('Enterprise auth not available')
     return await enterpriseAuth.login(email, password)

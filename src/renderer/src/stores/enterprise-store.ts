@@ -27,6 +27,7 @@ interface EnterpriseState {
 
   // Actions
   login: (email: string, password: string) => Promise<void>
+  signupInBrowser: (mode?: 'register' | 'login') => Promise<void>
   selectTenant: (tenantId: string) => Promise<void>
   switchOrg: () => Promise<void>
   logout: () => Promise<void>
@@ -84,6 +85,46 @@ export const useEnterpriseStore = create<EnterpriseState>((set) => ({
       set({
         isLoading: false,
         error: err instanceof Error ? err.message : 'Sign in failed'
+      })
+    }
+  },
+
+  signupInBrowser: async (mode: 'register' | 'login' = 'register') => {
+    set({ isLoading: true, error: null })
+    try {
+      const result = await enterpriseApi.signupInBrowser(mode)
+      set({
+        isLoading: false,
+        userEmail: result.email,
+        userId: result.userId,
+        availableTenants: result.companies,
+        isAuthenticated: false
+      })
+
+      // Auto-select if only one company
+      if (result.companies.length === 1) {
+        const tenant = result.companies[0]
+        set({ isLoading: true })
+        try {
+          await enterpriseApi.selectTenant(tenant.id)
+          set({
+            isLoading: false,
+            isAuthenticated: true,
+            isSyncing: true,
+            currentTenant: { id: tenant.id, name: tenant.name },
+            availableTenants: result.companies
+          })
+        } catch (err) {
+          set({
+            isLoading: false,
+            error: err instanceof Error ? err.message : 'Failed to select organization'
+          })
+        }
+      }
+    } catch (err) {
+      set({
+        isLoading: false,
+        error: err instanceof Error ? err.message : 'Browser sign up failed'
       })
     }
   },
