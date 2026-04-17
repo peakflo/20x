@@ -1380,7 +1380,7 @@ describe('AgentManager startAdapterPolling — IDLE grace period for follow-up m
   function buildAdapter() {
     return {
       pollMessages: vi.fn(async () => [] as any[]),
-      getStatus: vi.fn(async () => ({ type: 'idle' as const })),
+      getStatus: vi.fn(async () => ({ type: 'idle' as string })),
     }
   }
 
