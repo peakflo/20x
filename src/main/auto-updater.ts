@@ -105,6 +105,19 @@ export function initAutoUpdater(win: BrowserWindow): void {
       send('updater:status', { status: 'up-to-date', currentVersion: app.getVersion() })
       return
     }
+    // Network errors → user-friendly message; silently ignore from background checks
+    const isNetworkError = err.message?.includes('ERR_CONNECTION') ||
+      err.message?.includes('ENOTFOUND') ||
+      err.message?.includes('ETIMEDOUT') ||
+      err.message?.includes('ECONNREFUSED') ||
+      err.message?.includes('net::')
+    if (isNetworkError) {
+      send('updater:status', {
+        status: 'error',
+        error: 'Could not check for updates. Please check your internet connection and try again.'
+      })
+      return
+    }
     send('updater:status', {
       status: 'error',
       error: err.message
