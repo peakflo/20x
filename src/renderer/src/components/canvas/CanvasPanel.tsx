@@ -34,7 +34,8 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
   const focusPanel = useCanvasStore((s) => s.focusPanel)
   const setDraggingPanelId = useCanvasStore((s) => s.setDraggingPanelId)
   const setSnapGuides = useCanvasStore((s) => s.setSnapGuides)
-  const connectingFromId = useCanvasStore((s) => s.connectingFromId)
+  // Read connectingFromId imperatively to avoid re-rendering ALL panels when it changes.
+  // Only the connect button click handlers need it — not the render path.
   const setConnectingFromId = useCanvasStore((s) => s.setConnectingFromId)
   const addEdge = useCanvasStore((s) => s.addEdge)
 
@@ -141,39 +142,54 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
   }, [isResizing, panel.id, panel.minWidth, panel.minHeight, zoom, updatePanel])
 
   // ── Connect (edge drawing) ─────────────────────────────────
-  const isConnecting = connectingFromId === panel.id
-  const isConnectTarget = !!connectingFromId && connectingFromId !== panel.id
+  // Local state tracks whether THIS panel initiated connecting — avoids global subscription
+  const [isConnectingLocal, setIsConnectingLocal] = useState(false)
 
   const handleStartConnect = useCallback(
     (e: React.MouseEvent) => {
       e.stopPropagation()
       setConnectingFromId(panel.id)
+      setIsConnectingLocal(true)
     },
     [setConnectingFromId, panel.id]
   )
 
-  // When this panel is clicked while another panel is in "connecting" mode,
-  // complete the edge. Auto-detect browser edge type.
-  const handleClickWhileConnecting = useCallback(() => {
-    if (connectingFromId && connectingFromId !== panel.id) {
-      const fromPanel = useCanvasStore.getState().panels.find((p) => p.id === connectingFromId)
-      const isBrowserEdge =
-        panel.type === 'browser' || fromPanel?.type === 'browser'
-      addEdge(connectingFromId, panel.id, isBrowserEdge ? 'browser' : undefined)
+  const handleCancelConnect = useCallback(
+    (e: React.MouseEvent) => {
+      e.stopPropagation()
       setConnectingFromId(null)
-    }
-  }, [connectingFromId, panel.id, panel.type, addEdge, setConnectingFromId])
+      setIsConnectingLocal(false)
+    },
+    [setConnectingFromId]
+  )
+
+  // Sync local state when store clears connectingFromId (Escape, background click, or edge completed)
+  useEffect(() => {
+    if (!isConnectingLocal) return
+    const unsub = useCanvasStore.subscribe((s) => {
+      if (s.connectingFromId !== panel.id) {
+        setIsConnectingLocal(false)
+      }
+    })
+    return unsub
+  }, [isConnectingLocal, panel.id])
 
   // ── Click handling ────────────────────────────────────────
   const handleMouseDown = useCallback(
     () => {
-      if (isConnectTarget) {
-        handleClickWhileConnecting()
+      // Read connecting state imperatively — no subscription cost
+      const connectingFrom = useCanvasStore.getState().connectingFromId
+      if (connectingFrom && connectingFrom !== panel.id) {
+        // Complete the edge
+        const fromPanel = useCanvasStore.getState().panels.find((p) => p.id === connectingFrom)
+        const isBrowserEdge = panel.type === 'browser' || fromPanel?.type === 'browser'
+        addEdge(connectingFrom, panel.id, isBrowserEdge ? 'browser' : undefined)
+        setConnectingFromId(null)
         return
       }
       bringToFront(panel.id)
     },
-    [bringToFront, panel.id, isConnectTarget, handleClickWhileConnecting]
+    [bringToFront, panel.id, panel.type, addEdge, setConnectingFromId]
   )
 
   // ── Focus (zoom-to-fit this panel) ────────────────────────
@@ -223,11 +239,9 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
       ref={panelRef}
       data-canvas-panel="true"
       onMouseDown={handleMouseDown}
-      className={`absolute rounded-xl border bg-[#1a2030] shadow-2xl flex flex-col overflow-hidden select-none transition-all duration-150 ${cfg.border} ${
+      className={`absolute rounded-xl border bg-[#1a2030] shadow-2xl flex flex-col overflow-hidden select-none transition-shadow duration-150 ${cfg.border} ${
         isDragging ? 'shadow-indigo-500/10 ring-1 ring-indigo-500/30' : ''
-      } ${isConnecting ? 'ring-2 ring-orange-500/50 shadow-orange-500/10' : ''} ${
-        isConnectTarget ? 'ring-2 ring-indigo-400/50 shadow-indigo-500/10 cursor-crosshair' : ''
-      }`}
+      } ${isConnectingLocal ? 'ring-2 ring-orange-500/50' : ''}`}
       style={{
         left: panel.x,
         top: panel.y,
@@ -278,17 +292,17 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
         )}
 
         {/* Panel actions — visible on hover (or always when connecting) */}
-        <div className={`flex items-center gap-0.5 transition-opacity duration-150 ${isConnecting ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
+        <div className={`flex items-center gap-0.5 transition-opacity duration-150 ${isConnectingLocal ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
           {/* Connect / link to another panel */}
           <button
             onMouseDown={(e) => e.stopPropagation()}
-            onClick={isConnecting ? () => setConnectingFromId(null) : handleStartConnect}
+            onClick={isConnectingLocal ? handleCancelConnect : handleStartConnect}
             className={`h-5 w-5 rounded flex items-center justify-center transition-colors ${
-              isConnecting
+              isConnectingLocal
                 ? 'bg-orange-500/20 text-orange-400 ring-1 ring-orange-500/40'
                 : 'hover:bg-white/10 text-muted-foreground/50 hover:text-muted-foreground'
             }`}
-            title={isConnecting ? 'Cancel connecting (click another panel to connect)' : 'Connect to another panel'}
+            title={isConnectingLocal ? 'Cancel connecting (click another panel to connect)' : 'Connect to another panel'}
           >
             <Link2 className="h-3 w-3" />
           </button>
