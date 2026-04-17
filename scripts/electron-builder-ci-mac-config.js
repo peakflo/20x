@@ -1,12 +1,3 @@
-const packageJson = require('../package.json')
-
-function getCiMacBuildConfig(baseBuild = packageJson.build) {
-  return {
-    ...baseBuild,
-    // CI notarizes packaged artifacts explicitly in the workflow.
-    afterSign: undefined
-  }
-}
+const { getCiMacBuildConfig } = require('./electron-builder-ci-mac-config-helper')
 
 module.exports = getCiMacBuildConfig()
-module.exports.getCiMacBuildConfig = getCiMacBuildConfig

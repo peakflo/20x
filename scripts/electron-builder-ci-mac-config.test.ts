@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import packageJson from '../package.json'
-import { getCiMacBuildConfig } from './electron-builder-ci-mac-config'
+import { getCiMacBuildConfig } from './electron-builder-ci-mac-config-helper'
 
 describe('electron-builder-ci-mac-config', () => {
   it('removes afterSign from the base electron-builder config', () => {
