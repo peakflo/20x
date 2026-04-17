@@ -678,3 +678,80 @@ describe('ClaudeCodeAdapter task_progress handling', () => {
     expect(progressUpdate!.tool!.title).toContain('15s')
   })
 })
+
+describe('ClaudeCodeAdapter loadSessionHistory stable IDs (regression)', () => {
+  it('convertSDKMessageToParts generates stable IDs using message.id (not streaming UUID)', () => {
+    const adapter = new ClaudeCodeAdapter()
+    const seenPartIds = new Set<string>()
+    const partContentLengths = new Map<string, string>()
+
+    // Simulate an assistant message with stable API message ID
+    const chunk = {
+      type: 'assistant',
+      uuid: 'streaming-uuid-123', // unstable streaming UUID
+      message: {
+        id: 'msg_01ABC', // stable API message ID
+        content: [
+          { type: 'text', text: 'Hello from Claude' },
+          { type: 'tool_use', id: 'toolu_01XYZ', name: 'Read', input: { file_path: '/tmp/test' } }
+        ]
+      }
+    }
+
+    const parts = (adapter as any).convertSDKMessageToParts(chunk, seenPartIds, partContentLengths)
+
+    // Text part ID should use stable message ID: `${stableId}-text-${blockIdx}`
+    const textPart = parts.find((p: any) => p.type === 'text')
+    expect(textPart).toBeDefined()
+    expect(textPart!.id).toBe('msg_01ABC-text-0')
+
+    // Tool part ID should use tool_use_id: `tool-${tool_use_id}`
+    const toolPart = parts.find((p: any) => p.type === 'tool')
+    expect(toolPart).toBeDefined()
+    expect(toolPart!.id).toBe('tool-toolu_01XYZ')
+  })
+
+  it('emits update for streaming text parts with grown content', () => {
+    const adapter = new ClaudeCodeAdapter()
+    const seenPartIds = new Set<string>()
+    const partContentLengths = new Map<string, string>()
+
+    // First streaming chunk — empty text (partial)
+    const chunk1 = {
+      type: 'assistant',
+      uuid: 'uuid-1',
+      message: { id: 'msg_01DEF', content: [{ type: 'text', text: '' }] }
+    }
+    const parts1 = (adapter as any).convertSDKMessageToParts(chunk1, seenPartIds, partContentLengths)
+    expect(parts1).toHaveLength(1)
+    expect(parts1[0].text).toBe('')
+
+    // Second streaming chunk — same message, text has grown
+    const chunk2 = {
+      type: 'assistant',
+      uuid: 'uuid-2', // different UUID but same message.id
+      message: { id: 'msg_01DEF', content: [{ type: 'text', text: 'Full response text' }] }
+    }
+    const parts2 = (adapter as any).convertSDKMessageToParts(chunk2, seenPartIds, partContentLengths)
+    expect(parts2).toHaveLength(1)
+    expect(parts2[0].update).toBe(true)
+    expect(parts2[0].text).toBe('Full response text')
+  })
+
+  it('surfaces non-error result text when no assistant text was emitted', () => {
+    const adapter = new ClaudeCodeAdapter()
+    const seenPartIds = new Set<string>()
+    const partContentLengths = new Map<string, string>()
+
+    const resultMsg = {
+      type: 'result',
+      uuid: 'uuid-result',
+      is_error: false,
+      result: 'Final answer from the agent'
+    }
+
+    const parts = (adapter as any).convertSDKMessageToParts(resultMsg, seenPartIds, partContentLengths)
+    expect(parts).toHaveLength(1)
+    expect(parts[0].text).toBe('Final answer from the agent')
+  })
+})

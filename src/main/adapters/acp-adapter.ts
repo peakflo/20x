@@ -8,7 +8,9 @@
 
 import { spawn, ChildProcess } from 'child_process'
 import { randomUUID } from 'crypto'
-import { dirname } from 'path'
+import { mkdtempSync } from 'fs'
+import { tmpdir } from 'os'
+import { dirname, join } from 'path'
 import type {
   CodingAgentAdapter,
   SessionConfig,
@@ -264,20 +266,32 @@ export class AcpAdapter implements CodingAgentAdapter {
 
     if (authMethods.length > 0 && this.agentType !== 'claude-code') {
       const hasOpenAiKey = !!session.config.apiKeys?.openai || !!process.env.OPENAI_API_KEY || !!process.env.CODEX_API_KEY
-      const apiKeyMethod = authMethods.find((m) =>
+
+      // When an API key is provided, filter out "chatgpt" browser-based auth so
+      // codex-acp uses the key instead of opening an OAuth popup. When no key is
+      // provided, allow all methods including chatgpt (Codex CLI login).
+      const usableMethods = (this.agentType === 'codex' && hasOpenAiKey)
+        ? authMethods.filter((m) => m.id !== 'chatgpt')
+        : authMethods
+
+      const apiKeyMethod = usableMethods.find((m) =>
         m.id === 'openai-api-key' || m.id === 'codex-api-key'
       )
 
-      // Codex ACP can reuse existing Codex CLI login (for example ChatGPT subscription)
-      // via a non-key auth method. Only force API-key auth when a key is actually available.
+      // Select an API-key method when a key is available, otherwise fall back to
+      // any non-key auth method (e.g. existing Codex CLI login via chatgpt).
       const authMethod = hasOpenAiKey
-        ? (apiKeyMethod || authMethods[0])
-        : (authMethods.find((m) => m.id !== 'openai-api-key' && m.id !== 'codex-api-key') || null)
+        ? (apiKeyMethod || usableMethods[0])
+        : (usableMethods.find((m) => m.id !== 'openai-api-key' && m.id !== 'codex-api-key') || apiKeyMethod || null)
 
       if (!authMethod) {
-        console.log(`[AcpAdapter/${this.agentType}] No usable auth method found; skipping authenticate and relying on existing agent auth`)
+        console.log(`[AcpAdapter/${this.agentType}] No usable auth method found; skipping authenticate`)
         return
       }
+
+      // Note: we do NOT call `logout` before authenticate. When an API key is
+      // provided, CODEX_HOME points to a per-session temp directory so there are
+      // no stale disk credentials. This allows different API keys per session.
 
       console.log(`[AcpAdapter/${this.agentType}] Authenticating with method: ${authMethod.id}`)
 
@@ -304,6 +318,16 @@ export class AcpAdapter implements CodingAgentAdapter {
     if (config.apiKeys?.openai) {
       env.OPENAI_API_KEY = config.apiKeys.openai
       env.CODEX_API_KEY = config.apiKeys.openai
+    }
+
+    // For Codex with an API key: set NO_BROWSER=1 to prevent the OAuth browser
+    // popup, and CODEX_HOME to a per-session temp dir so stale disk credentials
+    // don't override the env var key. This also allows different keys per session.
+    // Without an API key: let codex-acp use the default CODEX_HOME (~/.codex/)
+    // so existing Codex CLI login credentials are available.
+    if (this.agentType === 'codex' && (env.OPENAI_API_KEY || env.CODEX_API_KEY)) {
+      env.NO_BROWSER = '1'
+      env.CODEX_HOME = mkdtempSync(join(tmpdir(), 'codex-session-'))
     }
 
     // Claude Code auth method handling
@@ -333,17 +357,13 @@ export class AcpAdapter implements CodingAgentAdapter {
       }
     }
 
-    // Log warnings if API keys are missing (agents may have their own auth)
-    if (this.agentType === 'codex') {
-      if (!env.OPENAI_API_KEY && !env.CODEX_API_KEY) {
-        console.warn('[AcpAdapter/codex] No OPENAI_API_KEY or CODEX_API_KEY in environment — relying on agent\'s own auth')
-      }
+    // Log warnings if API keys are missing
+    if (this.agentType === 'codex' && !env.OPENAI_API_KEY && !env.CODEX_API_KEY) {
+      console.log('[AcpAdapter/codex] No API key configured — will use Codex CLI login if available')
     } else if (this.agentType === 'claude-code') {
       const authMethod = config.authMethod || 'subscription'
       if (authMethod === 'api_key' && !env.ANTHROPIC_API_KEY) {
         console.warn('[AcpAdapter/claude-code] API key auth selected but no ANTHROPIC_API_KEY available')
-      } else if (authMethod === 'subscription') {
-        console.log('[AcpAdapter/claude-code] Using subscription auth (OAuth)')
       }
     }
 
@@ -472,6 +492,16 @@ export class AcpAdapter implements CodingAgentAdapter {
     if (config.apiKeys?.openai) {
       env.OPENAI_API_KEY = config.apiKeys.openai
       env.CODEX_API_KEY = config.apiKeys.openai
+    }
+
+    // For Codex with an API key: set NO_BROWSER=1 to prevent the OAuth browser
+    // popup, and CODEX_HOME to a per-session temp dir so stale disk credentials
+    // don't override the env var key. This also allows different keys per session.
+    // Without an API key: let codex-acp use the default CODEX_HOME (~/.codex/)
+    // so existing Codex CLI login credentials are available.
+    if (this.agentType === 'codex' && (env.OPENAI_API_KEY || env.CODEX_API_KEY)) {
+      env.NO_BROWSER = '1'
+      env.CODEX_HOME = mkdtempSync(join(tmpdir(), 'codex-session-'))
     }
 
     // Claude Code auth method handling
@@ -783,6 +813,36 @@ export class AcpAdapter implements CodingAgentAdapter {
     // Use a Map to keep only the latest version of each part (by ID)
     const partsByIdAndRole = new Map<string, MessagePart>()
 
+    // Snapshot turn-related session state before processing.
+    // convertAcpEventToMessageParts() mutates turn counters (currentTurnId,
+    // activeTurnId, pendingAssistantTurnSplit, etc.) as it processes events.
+    // When getAllMessages() is called from replayMissedTranscriptPartsBeforeIdle
+    // AFTER a follow-up response, the session state has already advanced.
+    // Re-processing all permanent messages from the beginning with that
+    // advanced state produces DIFFERENT turn-based IDs (e.g. agent-response-5
+    // instead of agent-response-1), which bypass the seenPartIds dedup and
+    // cause every historical message to appear again in the transcript.
+    // By resetting to zero and restoring afterward, we ensure getAllMessages()
+    // always generates deterministic, stable IDs from the permanent history.
+    const savedTurnState = {
+      currentTurnId: session.currentTurnId,
+      activeTurnId: session.activeTurnId,
+      currentUserTurnId: session.currentUserTurnId,
+      lastChunkTime: session.lastChunkTime,
+      lastSessionUpdateType: session.lastSessionUpdateType,
+      pendingAssistantTurnSplit: session.pendingAssistantTurnSplit,
+      toolCallMetadata: new Map(session.toolCallMetadata),
+    }
+
+    // Reset to initial state so turn IDs are computed deterministically
+    session.currentTurnId = 0
+    session.activeTurnId = null
+    session.currentUserTurnId = 0
+    session.lastChunkTime = null
+    session.lastSessionUpdateType = null
+    session.pendingAssistantTurnSplit = false
+    session.toolCallMetadata = new Map()
+
     // Process all permanent messages
     for (const event of session.permanentMessages) {
       const parts = this.convertAcpEventToMessageParts(
@@ -802,6 +862,17 @@ export class AcpAdapter implements CodingAgentAdapter {
         }
       }
     }
+
+    // Restore live session state so polling / follow-up prompts continue
+    // from where they left off. The turn IDs computed above are only used
+    // for the returned messages — they must not leak into the live session.
+    session.currentTurnId = savedTurnState.currentTurnId
+    session.activeTurnId = savedTurnState.activeTurnId
+    session.currentUserTurnId = savedTurnState.currentUserTurnId
+    session.lastChunkTime = savedTurnState.lastChunkTime
+    session.lastSessionUpdateType = savedTurnState.lastSessionUpdateType
+    session.pendingAssistantTurnSplit = savedTurnState.pendingAssistantTurnSplit
+    session.toolCallMetadata = savedTurnState.toolCallMetadata
 
     const allParts = Array.from(partsByIdAndRole.values())
 

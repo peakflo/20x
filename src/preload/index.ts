@@ -109,8 +109,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('agentSession:learnFromSession', sessionId, message)
   },
   agentConfig: {
-    getProviders: (serverUrl?: string): Promise<{ providers: { id: string; name: string; models: unknown }[]; default: Record<string, string> } | null> =>
-      ipcRenderer.invoke('agentConfig:getProviders', serverUrl)
+    getProviders: (serverUrl?: string, backendType?: string): Promise<{ providers: { id: string; name: string; models: unknown }[]; default: Record<string, string> } | null> =>
+      ipcRenderer.invoke('agentConfig:getProviders', serverUrl, backendType)
   },
   onOverdueCheck: (callback: () => void): (() => void) => {
     const handler = (): void => callback()
@@ -380,10 +380,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('updater:download'),
     install: (): Promise<void> =>
       ipcRenderer.invoke('updater:install'),
-    onStatus: (callback: (data: { status: string; version?: string; percent?: number; error?: string; releaseNotes?: string }) => void): (() => void) => {
-      const handler = (_: unknown, data: { status: string; version?: string; percent?: number; error?: string; releaseNotes?: string }): void => callback(data)
+    onStatus: (callback: (data: { status: string; version?: string; percent?: number; error?: string; releaseNotes?: string; releaseDate?: string; currentVersion?: string }) => void): (() => void) => {
+      const handler = (_: unknown, data: { status: string; version?: string; percent?: number; error?: string; releaseNotes?: string; releaseDate?: string; currentVersion?: string }): void => callback(data)
       ipcRenderer.on('updater:status', handler)
       return () => ipcRenderer.removeListener('updater:status', handler)
+    },
+    getVersion: (): Promise<string> =>
+      ipcRenderer.invoke('updater:getVersion'),
+    onMenuCheckForUpdates: (callback: () => void): (() => void) => {
+      const handler = (): void => callback()
+      ipcRenderer.on('menu:check-for-updates', handler)
+      return () => ipcRenderer.removeListener('menu:check-for-updates', handler)
     }
   },
   agentInstaller: {

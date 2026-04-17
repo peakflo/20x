@@ -193,7 +193,7 @@ interface ElectronAPI {
     learnFromSession: (sessionId: string, message: string) => Promise<SkillSyncResult>
   }
   agentConfig: {
-    getProviders: (serverUrl?: string) => Promise<{ providers: { id: string; name: string; models: unknown }[]; default: Record<string, string> } | null>
+    getProviders: (serverUrl?: string, backendType?: string) => Promise<{ providers: { id: string; name: string; models: unknown }[]; default: Record<string, string> } | null>
   }
   attachments: {
     pick: () => Promise<string[]>
@@ -348,7 +348,9 @@ interface ElectronAPI {
     check: () => Promise<{ success: boolean; version?: string; error?: string }>
     download: () => Promise<{ success: boolean; error?: string }>
     install: () => Promise<void>
-    onStatus: (callback: (data: { status: string; version?: string; percent?: number; error?: string; releaseNotes?: string }) => void) => () => void
+    getVersion: () => Promise<string>
+    onStatus: (callback: (data: { status: string; version?: string; percent?: number; error?: string; releaseNotes?: string; releaseDate?: string; currentVersion?: string }) => void) => () => void
+    onMenuCheckForUpdates: (callback: () => void) => () => void
   }
   agentInstaller: {
     detect: () => Promise<Record<string, { installed: boolean; version: string | null }>>

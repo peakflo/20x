@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
-import { Loader2, ChevronRight } from 'lucide-react'
+import { Loader2, ChevronRight, Plus, X } from 'lucide-react'
+import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
 import { Textarea } from '@/components/ui/Textarea'
@@ -7,7 +8,8 @@ import { Label } from '@/components/ui/Label'
 import { Checkbox } from '@/components/ui/Checkbox'
 import { agentConfigApi } from '@/lib/ipc-client'
 import { useMcpStore } from '@/stores/mcp-store'
-import { SkillSelector } from '@/components/skills/SkillSelector'
+import { useSkillStore } from '@/stores/skill-store'
+import { SkillSelectorDialog } from '@/components/skills/SkillSelectorDialog'
 import { SecretSelector } from '@/components/secrets/SecretSelector'
 import type { Agent, CreateAgentDTO, UpdateAgentDTO, AgentMcpServerEntry, ClaudeAuthMethod, AgentPermissionMode } from '@/types'
 import { CodingAgentType, CODING_AGENTS, CLAUDE_MODELS, CODEX_MODELS } from '@/types'
@@ -45,6 +47,7 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
   const [systemPrompt, setSystemPrompt] = useState(agent?.config.system_prompt ?? '')
   const [maxParallelSessions, setMaxParallelSessions] = useState(agent?.config.max_parallel_sessions ?? 1)
   const [skillIds, setSkillIds] = useState<string[] | undefined>(agent?.config.skill_ids)
+  const [showSkillSelector, setShowSkillSelector] = useState(false)
   const [secretIds, setSecretIds] = useState<string[]>(agent?.config.secret_ids ?? [])
   const [mcpSelection, setMcpSelection] = useState<Map<string, string[] | undefined>>(
     () => parseMcpSelection(agent?.config.mcp_servers)
@@ -68,9 +71,11 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
   const [hasAnthropicEnv, setHasAnthropicEnv] = useState(false)
 
   const { servers: globalMcpServers, fetchServers: fetchMcpServers } = useMcpStore()
+  const { skills, fetchSkills } = useSkillStore()
 
   useEffect(() => {
     fetchMcpServers()
+    fetchSkills()
 
     // Check for environment variables
     window.electronAPI.env.get('OPENAI_API_KEY').then(value => {
@@ -121,7 +126,7 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
         return
       }
 
-      const result = await agentConfigApi.getProviders(serverUrl)
+      const result = await agentConfigApi.getProviders(serverUrl, codingAgent)
 
       if (result && result.providers) {
         // Flatten all models from all providers
@@ -141,12 +146,15 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
                 })
               } else if (typeof provider.models === 'object') {
                 // Handle object format (model IDs as keys)
-                Object.values(provider.models as Record<string, unknown>).forEach((m: unknown) => {
+                // Use Object.entries so the map key serves as fallback model ID
+                // (custom providers like routerAI may not have id on the value)
+                Object.entries(provider.models as Record<string, unknown>).forEach(([key, m]) => {
                   const model = m as { id?: string; name?: string }
-                  if (model && model.id) {
+                  const modelId = model?.id || key
+                  if (modelId) {
                     models.push({
-                      id: `${provider.id}/${model.id}`,
-                      name: `${provider.name} - ${model.name || model.id}`
+                      id: `${provider.id}/${modelId}`,
+                      name: `${provider.name} - ${model?.name || modelId}`
                     })
                   }
                 })
@@ -419,8 +427,8 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
             </p>
           )}
           {!openaiApiKey && !hasOpenaiEnv && (
-            <p className="text-xs text-destructive">
-              Required: Enter your OpenAI API key or set OPENAI_API_KEY environment variable
+            <p className="text-xs text-muted-foreground">
+              Optional — leave empty to use Codex CLI login (requires a paid ChatGPT subscription)
             </p>
           )}
         </div>
@@ -582,7 +590,44 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
 
       <div className="space-y-2">
         <Label>Skills</Label>
-        <SkillSelector selectedIds={skillIds} onChange={setSkillIds} />
+        <div className="rounded-md border border-border p-3 space-y-2.5">
+          {skillIds === undefined ? (
+            <p className="text-sm text-muted-foreground">All skills enabled</p>
+          ) : (
+            <div className="flex flex-wrap items-center gap-1.5">
+              {skillIds.map((skillId) => {
+                const skill = skills.find((s) => s.id === skillId)
+                if (!skill) return null
+                return (
+                  <Badge key={skillId} className="gap-1 pr-1">
+                    {skill.name}
+                    <button
+                      type="button"
+                      onClick={() => setSkillIds(skillIds.filter((id) => id !== skillId))}
+                      className="rounded-full hover:bg-foreground/10 p-0.5"
+                    >
+                      <X className="h-2.5 w-2.5" />
+                    </button>
+                  </Badge>
+                )
+              })}
+              {skillIds.length === 0 && (
+                <span className="text-sm text-muted-foreground">No skills selected</span>
+              )}
+            </div>
+          )}
+          <div className="flex items-center gap-2">
+            <Button type="button" variant="ghost" size="sm" onClick={() => setShowSkillSelector(true)} className="h-6 gap-1 px-2 text-xs text-muted-foreground">
+              <Plus className="h-3 w-3" />
+              {!Array.isArray(skillIds) ? 'Customize' : 'Add'}
+            </Button>
+            {skillIds !== undefined && (
+              <Button type="button" variant="ghost" size="sm" onClick={() => setSkillIds(undefined)} className="h-6 text-xs text-muted-foreground">
+                Use all skills
+              </Button>
+            )}
+          </div>
+        </div>
       </div>
 
       <div className="space-y-2">
@@ -599,6 +644,13 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
           {agent ? 'Save' : 'Create'}
         </Button>
       </div>
+
+      <SkillSelectorDialog
+        open={showSkillSelector}
+        onOpenChange={setShowSkillSelector}
+        initialSkillIds={skillIds ?? []}
+        onConfirm={setSkillIds}
+      />
     </form>
   )
 }

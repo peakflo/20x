@@ -1,6 +1,6 @@
 import { execFile, execSync } from 'child_process'
 import { readdirSync } from 'fs'
-import { app, BrowserWindow, net, protocol, session, shell, Tray, Menu, nativeImage } from 'electron'
+import { app, BrowserWindow, dialog, net, protocol, session, shell, Tray, Menu, nativeImage } from 'electron'
 import { join } from 'path'
 import { pathToFileURL } from 'url'
 import { is } from '@electron-toolkit/utils'
@@ -29,7 +29,7 @@ import { EnterpriseStateSync } from './enterprise-state-sync'
 import { setTaskApiNotifier, setTranscriptProvider, stopTaskApiServer } from './task-api-server'
 import { startSecretBroker, stopSecretBroker, writeSecretShellWrapper } from './secret-broker'
 import { startMobileApiServer, stopMobileApiServer, broadcastToMobileClients, setMobileApiNotifier } from './mobile-api-server'
-import { initAutoUpdater } from './auto-updater'
+import { registerUpdaterIpc, initAutoUpdater, isUpdateDownloaded, getPendingVersion } from './auto-updater'
 import { initCrashLogger } from './crash-logger'
 
 let mainWindow: BrowserWindow | null = null
@@ -206,6 +206,95 @@ function createWindow(): void {
       mainWindow.webContents.send(channel, data)
     }
   })
+}
+
+/**
+ * Build and set the application menu.
+ * Adds "Check for Updates…" under the app menu (macOS) or Help menu (Win/Linux).
+ */
+function buildAppMenu(): void {
+  const isMac = process.platform === 'darwin'
+
+  const checkForUpdatesItem: Electron.MenuItemConstructorOptions = {
+    label: 'Check for Updates…',
+    click: () => {
+      mainWindow?.show()
+      mainWindow?.webContents.send('menu:check-for-updates')
+    }
+  }
+
+  const template: Electron.MenuItemConstructorOptions[] = [
+    ...(isMac
+      ? [
+          {
+            label: app.name,
+            submenu: [
+              { role: 'about' as const },
+              { type: 'separator' as const },
+              checkForUpdatesItem,
+              { type: 'separator' as const },
+              { role: 'services' as const },
+              { type: 'separator' as const },
+              { role: 'hide' as const },
+              { role: 'hideOthers' as const },
+              { role: 'unhide' as const },
+              { type: 'separator' as const },
+              { role: 'quit' as const }
+            ]
+          }
+        ]
+      : []),
+    {
+      label: 'Edit',
+      submenu: [
+        { role: 'undo' },
+        { role: 'redo' },
+        { type: 'separator' },
+        { role: 'cut' },
+        { role: 'copy' },
+        { role: 'paste' },
+        { role: 'selectAll' }
+      ]
+    },
+    {
+      label: 'View',
+      submenu: [
+        { role: 'reload' },
+        { role: 'forceReload' },
+        { role: 'toggleDevTools' },
+        { type: 'separator' },
+        { role: 'resetZoom' },
+        { role: 'zoomIn' },
+        { role: 'zoomOut' },
+        { type: 'separator' },
+        { role: 'togglefullscreen' }
+      ]
+    },
+    {
+      label: 'Window',
+      submenu: [
+        { role: 'minimize' },
+        { role: 'zoom' },
+        ...(isMac
+          ? [{ type: 'separator' as const }, { role: 'front' as const }]
+          : [{ role: 'close' as const }])
+      ]
+    },
+    {
+      label: 'Help',
+      submenu: [
+        ...(!isMac ? [checkForUpdatesItem, { type: 'separator' as const }] : []),
+        {
+          label: 'View on GitHub',
+          click: () => {
+            shell.openExternal('https://github.com/peakflo/20x')
+          }
+        }
+      ]
+    }
+  ]
+
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template))
 }
 
 function createTray(): void {
@@ -594,6 +683,12 @@ app.whenReady().then(async () => {
 
   registerIpcHandlers(db, agentManager, githubManager, worktreeManager, syncManager, pluginRegistry, mcpToolCaller, oauthManager, recurrenceScheduler, enterpriseAuth ?? undefined, claudePluginManager, heartbeatScheduler, enterpriseHeartbeatInstance ?? undefined, enterpriseStateSyncInstance ?? undefined, gitlabManager ?? undefined)
 
+  // Register updater IPC handlers (safe in dev mode — returns no-op results)
+  registerUpdaterIpc()
+
+  // Build the application menu (includes "Check for Updates…")
+  buildAppMenu()
+
   // Start secret broker and write shell wrapper (awaited so broker is ready before any sessions)
   try {
     const brokerPort = await startSecretBroker(db)
@@ -672,12 +767,35 @@ app.on('window-all-closed', () => {
   }
 })
 
-app.on('before-quit', (event) => {
+app.on('before-quit', async (event) => {
   if (isShuttingDown) {
     return
   }
 
   event.preventDefault()
+
+  // If a downloaded update is ready, offer to install before quitting
+  if (isUpdateDownloaded()) {
+    const version = getPendingVersion()
+    const { response } = await dialog.showMessageBox({
+      type: 'info',
+      title: 'Update Ready',
+      message: `A new version${version ? ` (v${version})` : ''} has been downloaded.`,
+      detail: 'Would you like to install the update and restart, or quit without updating?',
+      buttons: ['Install & Restart', 'Quit Without Updating'],
+      defaultId: 0,
+      cancelId: 1
+    })
+
+    if (response === 0) {
+      // Install & restart — set flag first to prevent before-quit loop
+      isShuttingDown = true
+      const { autoUpdater } = await import('electron-updater')
+      autoUpdater.quitAndInstall()
+      return
+    }
+  }
+
   isShuttingDown = true
   isQuitting = true
 

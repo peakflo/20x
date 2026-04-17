@@ -81,10 +81,15 @@ html, body, #root {
 .drag-region { -webkit-app-region: drag; }
 .no-drag { -webkit-app-region: no-drag; }
 
+/* ── macOS: push left-pinned elements past the traffic lights (≈ 70px) ── */
+[data-platform="darwin"] .macos-titlebar-pad { margin-left: 56px; }
+
 /* ── Windows: push content left of the title-bar overlay (min/max/close ≈ 140px) ── */
 [data-platform="win32"] .windows-titlebar-pad { padding-right: 150px; }
 /* ── Windows: any top-right header that sits behind the overlay needs right padding too ── */
 [data-platform="win32"] .windows-titlebar-safe { padding-right: 150px; }
+/* ── Windows: shift absolutely-positioned right-side buttons left of the overlay ── */
+[data-platform="win32"] .windows-titlebar-actions { right: 154px; }
 
 /* ── Scrollbar ────────────────────────────────── */
 ::-webkit-scrollbar { width: 5px; height: 5px; }
