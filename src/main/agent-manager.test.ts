@@ -2,7 +2,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { AgentManager } from './agent-manager'
 import { SessionStatus, TaskStatus } from '../shared/constants'
-import { MessagePartType, MessageRole } from './adapters/coding-agent-adapter'
+import { MessagePartType, MessageRole, SessionStatusType } from './adapters/coding-agent-adapter'
 
 // Mock filesystem operations
 vi.mock('fs', async (importOriginal) => {
@@ -1380,7 +1380,7 @@ describe('AgentManager startAdapterPolling — IDLE grace period for follow-up m
   function buildAdapter() {
     return {
       pollMessages: vi.fn(async () => [] as any[]),
-      getStatus: vi.fn(async () => ({ type: 'idle' as string })),
+      getStatus: vi.fn(async () => ({ type: SessionStatusType.IDLE })),
     }
   }
 
@@ -1476,7 +1476,7 @@ describe('AgentManager startAdapterPolling — IDLE grace period for follow-up m
       { id: 'tool-1', role: 'assistant', content: 'done', type: 'tool', update: true }
     ])
     // Backend still reports IDLE while ingesting the prompt
-    adapter.getStatus.mockResolvedValueOnce({ type: 'idle' as const })
+    adapter.getStatus.mockResolvedValueOnce({ type: SessionStatusType.IDLE })
 
     const session = {
       agentId: 'agent-1',
@@ -1515,7 +1515,7 @@ describe('AgentManager startAdapterPolling — IDLE grace period for follow-up m
     const adapter = buildAdapter()
 
     adapter.pollMessages.mockResolvedValueOnce([])
-    adapter.getStatus.mockResolvedValueOnce({ type: 'busy' as const })
+    adapter.getStatus.mockResolvedValueOnce({ type: SessionStatusType.BUSY })
 
     const session = {
       agentId: 'agent-1',
@@ -1552,7 +1552,7 @@ describe('AgentManager startAdapterPolling — IDLE grace period for follow-up m
     adapter.pollMessages.mockResolvedValueOnce([
       { id: 'resp-1', role: 'assistant', content: 'Working...', type: 'text' }
     ])
-    adapter.getStatus.mockResolvedValueOnce({ type: 'busy' as const })
+    adapter.getStatus.mockResolvedValueOnce({ type: SessionStatusType.BUSY })
 
     const session = {
       agentId: 'agent-1',
@@ -1585,7 +1585,7 @@ describe('AgentManager startAdapterPolling — IDLE grace period for follow-up m
 
     // Second poll: IDLE after real work → transition
     adapter.pollMessages.mockResolvedValueOnce([])
-    adapter.getStatus.mockResolvedValueOnce({ type: 'idle' as const })
+    adapter.getStatus.mockResolvedValueOnce({ type: SessionStatusType.IDLE })
     await (mgr as any).pollSingleSession(entry)
     expect(transitionSpy).toHaveBeenCalledOnce()
   })
