@@ -43,6 +43,8 @@ export class OpencodeAdapter implements CodingAgentAdapter {
   private clients: Map<string, OpencodeClient> = new Map() // sessionId -> ocClient
   private v2Client: V2OpencodeClient | null = null
   private promptAborts: Map<string, AbortController> = new Map()
+  /** Provider errors captured from prompt results (surfaced via getStatus) */
+  private promptErrors: Map<string, string> = new Map()
   /** Absolute path to the secret-injector plugin file (written before server start) */
   private pluginFilePath: string | null = null
   /** Absolute path to the secrets exports file (read dynamically by the plugin) */
@@ -579,6 +581,22 @@ export class OpencodeAdapter implements CodingAgentAdapter {
             content: part.text as string
           }
         })
+
+        // Surface provider errors stored in msg.info.error (e.g. "Payment
+        // Required", quota exceeded).  OpenCode records these on the message
+        // info but creates no parts for them, so without this they vanish on
+        // resume.
+        const msgError = (msg.info as Record<string, unknown>).error as { name?: string; data?: { message?: string } } | undefined
+        if (msgError && transformedParts.length === 0) {
+          const errorText = msgError.data?.message || msgError.name || 'Unknown provider error'
+          transformedParts.push({
+            id: `error-${msg.info.id}`,
+            type: 'text' as unknown as MessagePartType,
+            text: `⚠️ Provider error: ${errorText}`,
+            content: `⚠️ Provider error: ${errorText}`
+          })
+        }
+
         messages.push({
           id: msg.info.id,
           role: (msg.info.role || 'assistant') as unknown as MessageRole,
@@ -621,6 +639,21 @@ export class OpencodeAdapter implements CodingAgentAdapter {
       },
       ...(config.workspaceDir && { query: { directory: config.workspaceDir } }),
       signal: promptAbort.signal
+    }).then((result: unknown) => {
+      // Check for provider errors in the prompt response (e.g. quota exceeded,
+      // payment required, rate limit).  OpenCode wraps these in result.data.info.error
+      // but does NOT create a message with the error text, so pollMessages never
+      // picks them up and the user sees "idle" with no response.
+      const r = result as { data?: { info?: { error?: { name?: string; data?: { message?: string } } } } } | undefined
+      const promptError = r?.data?.info?.error
+      if (promptError) {
+        const errorMsg = promptError.data?.message || promptError.name || 'Unknown provider error'
+        console.error(`[OpencodeAdapter] Provider error for ${sessionId}: ${errorMsg}`)
+        this.promptErrors.set(sessionId, errorMsg)
+        if (this.onDataAvailable) {
+          this.onDataAvailable(sessionId)
+        }
+      }
     }).catch((err: unknown) => {
       if (!(err instanceof Error) || err.name !== 'AbortError') {
         console.error('[OpencodeAdapter] prompt error:', err)
@@ -641,12 +674,12 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     })
 
     if (!statusResult.data) {
-      return { type: SessionStatusType.IDLE }
+      return this.resolveIdleOrPromptError(sessionId)
     }
 
     const ocStatus = statusResult.data[sessionId]
     if (!ocStatus) {
-      return { type: SessionStatusType.IDLE }
+      return this.resolveIdleOrPromptError(sessionId)
     }
 
     const sdkType = (ocStatus.type || 'idle') as string
@@ -672,10 +705,29 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     }
 
     const statusType = sdkType.toUpperCase() as keyof typeof SessionStatusType
+    const resolvedType = SessionStatusType[statusType] ?? SessionStatusType.IDLE
+
+    if (resolvedType === SessionStatusType.IDLE) {
+      return this.resolveIdleOrPromptError(sessionId)
+    }
+
     return {
-      type: SessionStatusType[statusType] ?? SessionStatusType.IDLE,
+      type: resolvedType,
       message: 'message' in ocStatus ? (ocStatus as { message: string }).message : undefined
     }
+  }
+
+  /**
+   * Returns ERROR with captured prompt error if one exists, otherwise IDLE.
+   * Called from getStatus when the backend reports no active work.
+   */
+  private resolveIdleOrPromptError(sessionId: string): SessionStatus {
+    const promptError = this.promptErrors.get(sessionId)
+    if (promptError) {
+      this.promptErrors.delete(sessionId)
+      return { type: SessionStatusType.ERROR, message: promptError }
+    }
+    return { type: SessionStatusType.IDLE }
   }
 
   /**

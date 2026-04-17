@@ -1170,7 +1170,14 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       seenPartIds: existingSession?.seenPartIds ?? new Set<string>(),
       partContentLengths: existingSession?.partContentLengths ?? new Map<string, string>(),
       createdAt: Date.now(),
-      hasSeenWork: existingSession ? true : false,
+      // Always start fresh: each call to startAdapterPolling corresponds to a
+      // newly-sent (fire-and-forget) prompt.  The IDLE grace period must apply
+      // to every new prompt — not only to brand-new sessions — because the
+      // backend can briefly report IDLE after a follow-up prompt while it is
+      // still ingesting the request.  Pre-setting this to true when resuming
+      // with an existing session caused follow-up messages (especially on
+      // opencode) to transition to idle before any response was produced.
+      hasSeenWork: false,
       initialPromptSent: initialPromptSent || false
     }
 
@@ -1369,11 +1376,10 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
         }
       }
 
-      // Mark that the session has done real work once we receive any messages.
-      // This disables the IDLE grace period so future IDLE means truly done.
-      if (newParts.length > 0 && !entry.hasSeenWork) {
-        entry.hasSeenWork = true
-      }
+      // hasSeenWork is set exclusively in the BUSY / WAITING_APPROVAL status
+      // handler below — not here.  Message content is unreliable (user echoes,
+      // stale fingerprint updates from previous turns can produce non-user parts
+      // before the backend has started processing the new prompt).
 
       // Collect all parts into a batch instead of sending individually.
       // This avoids flooding the renderer with N separate IPC messages
@@ -1509,6 +1515,11 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
         this.stopAdapterPolling(sessionId)
         return
       } else if (status.type === SessionStatusType.WAITING_APPROVAL && session) {
+        // Backend is actively processing — disable the IDLE grace period.
+        const peWA = this.pollingEntries.get(sessionId)
+        if (peWA && !peWA.hasSeenWork) {
+          peWA.hasSeenWork = true
+        }
         if (session.status !== 'waiting_approval') {
           session.status = 'waiting_approval'
           this.sendToRenderer('agent:status', {
@@ -1520,6 +1531,11 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
         }
         return
       } else if (status.type === SessionStatusType.BUSY && session) {
+        // Backend is actively processing — disable the IDLE grace period.
+        const peBusy = this.pollingEntries.get(sessionId)
+        if (peBusy && !peBusy.hasSeenWork) {
+          peBusy.hasSeenWork = true
+        }
         if (session.status !== 'working') {
           session.status = 'working'
           this.sendToRenderer('agent:status', {
@@ -1540,7 +1556,6 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
         const IDLE_GRACE_PERIOD_MS = 15_000
 
         if (!pollingEntry?.hasSeenWork && sessionAge < IDLE_GRACE_PERIOD_MS) {
-          // Still within grace period and haven't seen any work yet — keep polling
           return
         }
 
