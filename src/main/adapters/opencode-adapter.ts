@@ -43,6 +43,8 @@ export class OpencodeAdapter implements CodingAgentAdapter {
   private clients: Map<string, OpencodeClient> = new Map() // sessionId -> ocClient
   private v2Client: V2OpencodeClient | null = null
   private promptAborts: Map<string, AbortController> = new Map()
+  /** Provider errors captured from prompt results (surfaced via getStatus) */
+  private promptErrors: Map<string, string> = new Map()
   /** Absolute path to the secret-injector plugin file (written before server start) */
   private pluginFilePath: string | null = null
   /** Absolute path to the secrets exports file (read dynamically by the plugin) */
@@ -624,6 +626,21 @@ export class OpencodeAdapter implements CodingAgentAdapter {
       signal: promptAbort.signal
     }).then((result: unknown) => {
       console.log(`[OpencodeAdapter] prompt resolved: sessionId=${sessionId}, result=${JSON.stringify(result).slice(0, 500)}`)
+      // Check for provider errors in the prompt response (e.g. quota exceeded,
+      // payment required, rate limit).  OpenCode wraps these in result.data.info.error
+      // but does NOT create a message with the error text, so pollMessages never
+      // picks them up and the user sees "idle" with no response.
+      const r = result as { data?: { info?: { error?: { name?: string; data?: { message?: string } } } } } | undefined
+      const promptError = r?.data?.info?.error
+      if (promptError) {
+        const errorMsg = promptError.data?.message || promptError.name || 'Unknown provider error'
+        console.error(`[OpencodeAdapter] prompt returned provider error: sessionId=${sessionId}, error=${errorMsg}`)
+        this.promptErrors.set(sessionId, errorMsg)
+        // Nudge the polling coordinator so the error is surfaced immediately
+        if (this.onDataAvailable) {
+          this.onDataAvailable(sessionId)
+        }
+      }
     }).catch((err: unknown) => {
       if (!(err instanceof Error) || err.name !== 'AbortError') {
         console.error('[OpencodeAdapter] prompt error:', err)
@@ -647,12 +664,26 @@ export class OpencodeAdapter implements CodingAgentAdapter {
 
     if (!statusResult.data) {
       console.log(`[OpencodeAdapter] getStatus: sessionId=${sessionId}, statusResult.data is empty → IDLE`)
+      // Check for captured prompt error before returning IDLE
+      const promptError = this.promptErrors.get(sessionId)
+      if (promptError) {
+        this.promptErrors.delete(sessionId)
+        console.log(`[OpencodeAdapter] getStatus: surfacing captured prompt error for ${sessionId}: ${promptError}`)
+        return { type: SessionStatusType.ERROR, message: promptError }
+      }
       return { type: SessionStatusType.IDLE }
     }
 
     const ocStatus = statusResult.data[sessionId]
     if (!ocStatus) {
       console.log(`[OpencodeAdapter] getStatus: sessionId=${sessionId}, no entry in statusResult.data (keys: ${Object.keys(statusResult.data).join(', ')}) → IDLE`)
+      // Check for captured prompt error before returning IDLE
+      const promptError = this.promptErrors.get(sessionId)
+      if (promptError) {
+        this.promptErrors.delete(sessionId)
+        console.log(`[OpencodeAdapter] getStatus: surfacing captured prompt error for ${sessionId}: ${promptError}`)
+        return { type: SessionStatusType.ERROR, message: promptError }
+      }
       return { type: SessionStatusType.IDLE }
     }
 
@@ -680,8 +711,21 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     }
 
     const statusType = sdkType.toUpperCase() as keyof typeof SessionStatusType
+    const resolvedType = SessionStatusType[statusType] ?? SessionStatusType.IDLE
+
+    // If the backend reports IDLE but we captured a provider error from the
+    // prompt result, surface it as ERROR so the agent-manager shows it in the UI.
+    if (resolvedType === SessionStatusType.IDLE) {
+      const promptError = this.promptErrors.get(sessionId)
+      if (promptError) {
+        this.promptErrors.delete(sessionId)
+        console.log(`[OpencodeAdapter] getStatus: surfacing captured prompt error for ${sessionId}: ${promptError}`)
+        return { type: SessionStatusType.ERROR, message: promptError }
+      }
+    }
+
     return {
-      type: SessionStatusType[statusType] ?? SessionStatusType.IDLE,
+      type: resolvedType,
       message: 'message' in ocStatus ? (ocStatus as { message: string }).message : undefined
     }
   }
@@ -823,6 +867,7 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     if (newParts.length > 0) {
       console.log(`[OpencodeAdapter] pollMessages: sessionId=${sessionId}, newParts=${newParts.length}, roles=[${newParts.map(p => p.role).join(',')}], types=[${newParts.map(p => p.type).join(',')}], updates=[${newParts.map(p => (p as Record<string, unknown>).update ?? false).join(',')}]`)
     }
+
     return newParts
   }
 
