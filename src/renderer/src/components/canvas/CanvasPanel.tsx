@@ -557,7 +557,7 @@ const MemoizedPanelContent = memo(function PanelContent({ type, id, refId, url, 
     return <WebPagePanelContent panelId={id} url={url} title={title} />
   }
   if (type === 'terminal') {
-    return <TerminalPanelContent terminalId={id} />
+    return <TerminalPanelContent terminalId={id} cwd={url} />
   }
   if (type === 'browser') {
     return <BrowserPanelContent panelId={id} url={url} sessionName={browserSessionId} streamPort={streamPort} />

@@ -1212,6 +1212,8 @@ export function registerIpcHandlers(
     write: (data: string) => void
     kill: () => void
     pid: number
+    /** The child shell PID (inside the Python PTY fork) — used for cwd lookup */
+    shellPid?: number
   }
 
   const terminals = new Map<string, TerminalHandle>()
@@ -1233,7 +1235,7 @@ export function registerIpcHandlers(
    */
   function createPythonPty(
     id: string, shellPath: string, cols: number, rows: number,
-    sender: Electron.WebContents
+    sender: Electron.WebContents, cwd?: string
   ): TerminalHandle {
     const { spawn } = childProcess
 
@@ -1315,9 +1317,10 @@ else:
         os.waitpid(pid, 0)
 `
 
+    const initialCwd = cwd || process.env.HOME || process.cwd()
     const child = spawn('python3', ['-u', '-c', pythonScript, shellPath, String(cols || 80), String(rows || 24)], {
       stdio: ['pipe', 'pipe', 'pipe'],
-      cwd: process.env.HOME || process.cwd(),
+      cwd: initialCwd,
       env: { ...process.env } as Record<string, string>,
     })
 
@@ -1352,11 +1355,11 @@ else:
     }
   }
 
-  ipcMain.handle('terminal:create', async (event, { id, cols, rows }: { id: string; cols: number; rows: number }) => {
+  ipcMain.handle('terminal:create', async (event, { id, cols, rows, cwd }: { id: string; cols: number; rows: number; cwd?: string }) => {
     const shellPath = resolveShell()
-    console.log(`[Terminal] Creating terminal id=${id} shell=${shellPath} cols=${cols} rows=${rows}`)
+    console.log(`[Terminal] Creating terminal id=${id} shell=${shellPath} cols=${cols} rows=${rows} cwd=${cwd || '(default)'}`)
 
-    const handle = createPythonPty(id, shellPath, cols, rows, event.sender)
+    const handle = createPythonPty(id, shellPath, cols, rows, event.sender, cwd)
     terminals.set(id, handle)
     return { pid: handle.pid }
   })
@@ -1375,6 +1378,76 @@ else:
     if (term) {
       term.kill()
       terminals.delete(id)
+    }
+  })
+
+  /**
+   * Get the current working directory of a terminal's shell process.
+   * The PTY is a Python process that forks a shell child. We need the shell's
+   * cwd, not Python's. Strategy:
+   *   1. Find child PIDs of the Python process via `pgrep -P <pid>`
+   *   2. Get the cwd of the deepest child (most recently forked = active shell)
+   *   3. Use `lsof -p <childPid> -a -d cwd -Fn` for the cwd lookup
+   */
+  ipcMain.handle('terminal:getCwd', async (_, { id }: { id: string }) => {
+    const term = terminals.get(id)
+    if (!term) return { cwd: null }
+
+    try {
+      const { execSync } = childProcess
+      const pythonPid = term.pid
+
+      // Find child PIDs of the Python process (the forked shell)
+      let targetPid = pythonPid
+      try {
+        const children = execSync(`pgrep -P ${pythonPid} 2>/dev/null || true`, {
+          encoding: 'utf-8',
+          timeout: 2000,
+        }).trim()
+        if (children) {
+          // Get the last child (deepest descendant = active process)
+          const childPids = children.split('\n').map((s) => parseInt(s.trim(), 10)).filter(Boolean)
+          if (childPids.length > 0) {
+            // Walk down — find children of children to get the deepest active shell
+            let deepest = childPids[childPids.length - 1]
+            for (let i = 0; i < 5; i++) { // max 5 levels deep
+              const grandchildren = execSync(`pgrep -P ${deepest} 2>/dev/null || true`, {
+                encoding: 'utf-8',
+                timeout: 1000,
+              }).trim()
+              if (!grandchildren) break
+              const gcPids = grandchildren.split('\n').map((s) => parseInt(s.trim(), 10)).filter(Boolean)
+              if (gcPids.length === 0) break
+              deepest = gcPids[gcPids.length - 1]
+            }
+            targetPid = deepest
+          }
+        }
+      } catch { /* ignore pgrep failures */ }
+
+      // Get cwd of the target process
+      const output = execSync(`lsof -p ${targetPid} -a -d cwd -Fn 2>/dev/null || true`, {
+        encoding: 'utf-8',
+        timeout: 2000,
+      })
+      const lines = output.split('\n')
+      const cwdLine = lines.find((l) => l.startsWith('n/'))
+      if (cwdLine) {
+        return { cwd: cwdLine.slice(1) }
+      }
+
+      // Fallback: try /proc on Linux
+      if (process.platform === 'linux') {
+        const linkTarget = execSync(`readlink /proc/${targetPid}/cwd 2>/dev/null || true`, {
+          encoding: 'utf-8',
+          timeout: 2000,
+        }).trim()
+        if (linkTarget) return { cwd: linkTarget }
+      }
+
+      return { cwd: null }
+    } catch {
+      return { cwd: null }
     }
   })
 

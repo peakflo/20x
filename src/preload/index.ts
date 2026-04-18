@@ -410,14 +410,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getPathForFile: (file: File): string => webUtils.getPathForFile(file)
   },
   terminal: {
-    create: (id: string, cols: number, rows: number): Promise<{ pid: number }> =>
-      ipcRenderer.invoke('terminal:create', { id, cols, rows }),
+    create: (id: string, cols: number, rows: number, cwd?: string): Promise<{ pid: number }> =>
+      ipcRenderer.invoke('terminal:create', { id, cols, rows, cwd }),
     write: (id: string, data: string): Promise<void> =>
       ipcRenderer.invoke('terminal:write', { id, data }),
     resize: (id: string, cols: number, rows: number): Promise<void> =>
       ipcRenderer.invoke('terminal:resize', { id, cols, rows }),
     kill: (id: string): Promise<void> =>
       ipcRenderer.invoke('terminal:kill', { id }),
+    getCwd: (id: string): Promise<{ cwd: string | null }> =>
+      ipcRenderer.invoke('terminal:getCwd', { id }),
     onData: (callback: (data: { id: string; data: string }) => void): (() => void) => {
       const handler = (_: unknown, d: { id: string; data: string }): void => callback(d)
       ipcRenderer.on('terminal:data', handler)

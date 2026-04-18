@@ -362,10 +362,11 @@ interface ElectronAPI {
     getPathForFile: (file: File) => string
   }
   terminal: {
-    create: (id: string, cols: number, rows: number) => Promise<{ pid: number }>
+    create: (id: string, cols: number, rows: number, cwd?: string) => Promise<{ pid: number }>
     write: (id: string, data: string) => Promise<void>
     resize: (id: string, cols: number, rows: number) => Promise<void>
     kill: (id: string) => Promise<void>
+    getCwd: (id: string) => Promise<{ cwd: string | null }>
     onData: (callback: (data: { id: string; data: string }) => void) => () => void
     onExit: (callback: (data: { id: string }) => void) => () => void
   }

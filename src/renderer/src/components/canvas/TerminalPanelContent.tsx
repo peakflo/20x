@@ -2,10 +2,13 @@ import { useEffect, useRef, useCallback, useState } from 'react'
 import { Terminal as XTerm } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
+import { useCanvasStore } from '@/stores/canvas-store'
 import '@xterm/xterm/css/xterm.css'
 
 interface TerminalPanelContentProps {
   terminalId: string
+  /** Initial working directory — restored from persisted panel state */
+  cwd?: string
 }
 
 /**
@@ -21,7 +24,7 @@ interface TerminalPanelContentProps {
  *      sees truly-zero values even during layout shifts.
  *   3. Every fit() call is wrapped in try-catch.
  */
-export function TerminalPanelContent({ terminalId }: TerminalPanelContentProps) {
+export function TerminalPanelContent({ terminalId, cwd }: TerminalPanelContentProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const xtermRef = useRef<XTerm | null>(null)
   const fitAddonRef = useRef<FitAddon | null>(null)
@@ -97,7 +100,8 @@ export function TerminalPanelContent({ terminalId }: TerminalPanelContentProps) 
       await window.electronAPI.terminal.create(
         terminalId,
         term.cols,
-        term.rows
+        term.rows,
+        cwd
       )
 
       const inputDispose = term.onData((data) => {
@@ -127,7 +131,7 @@ export function TerminalPanelContent({ terminalId }: TerminalPanelContentProps) 
       console.error('Failed to create terminal:', err)
       setError(err instanceof Error ? err.message : 'Failed to create terminal')
     }
-  }, [terminalId])
+  }, [terminalId, cwd])
 
   // Use ResizeObserver to detect when the container first gets real
   // dimensions, then initialize xterm. This is the primary guard
@@ -173,12 +177,19 @@ export function TerminalPanelContent({ terminalId }: TerminalPanelContentProps) 
     return () => {
       observer.disconnect()
 
+      // Capture cwd before killing the terminal — persists across restarts
+      window.electronAPI.terminal.getCwd(terminalId).then(({ cwd: currentCwd }) => {
+        if (currentCwd) {
+          useCanvasStore.getState().updatePanel(terminalId, { url: currentCwd })
+        }
+      }).catch(() => {}).finally(() => {
+        // Kill PTY after cwd capture attempt
+        window.electronAPI.terminal.kill(terminalId).catch(() => {})
+      })
+
       // Cleanup listeners
       for (const fn of cleanupRef.current) fn()
       cleanupRef.current = []
-
-      // Kill PTY
-      window.electronAPI.terminal.kill(terminalId).catch(() => {})
 
       // Dispose xterm
       xtermRef.current?.dispose()
@@ -187,6 +198,20 @@ export function TerminalPanelContent({ terminalId }: TerminalPanelContentProps) 
       initCalledRef.current = false
     }
   }, [initTerminal, terminalId, isReady])
+
+  // ── Periodically capture cwd so it persists on crash/force-quit ──
+  useEffect(() => {
+    if (!isReady) return
+    const interval = setInterval(async () => {
+      try {
+        const { cwd: currentCwd } = await window.electronAPI.terminal.getCwd(terminalId)
+        if (currentCwd) {
+          useCanvasStore.getState().updatePanel(terminalId, { url: currentCwd })
+        }
+      } catch { /* ignore */ }
+    }, 10_000) // every 10 seconds
+    return () => clearInterval(interval)
+  }, [isReady, terminalId])
 
   if (error) {
     return (
