@@ -117,14 +117,37 @@ export function TerminalPanelContent({ terminalId, cwd }: TerminalPanelContentPr
         }
       })
 
+      let processExited = false
+
       const removeExitListener = window.electronAPI.terminal.onExit(({ id }) => {
         if (id === terminalId) {
-          term.write('\r\n\x1b[90m[Process exited]\x1b[0m\r\n')
+          processExited = true
+          term.write('\r\n\x1b[90m[Process exited — press Enter to restart]\x1b[0m\r\n')
+        }
+      })
+
+      // Respawn the shell when the user presses Enter after exit
+      const respawnDispose = term.onKey(({ domEvent }) => {
+        if (processExited && domEvent.key === 'Enter') {
+          processExited = false
+          term.clear()
+          window.electronAPI.terminal.create(
+            terminalId,
+            term.cols,
+            term.rows,
+            cwdRef.current
+          ).then(() => {
+            term.focus()
+          }).catch(() => {
+            processExited = true
+            term.write('\r\n\x1b[90m[Failed to restart shell]\x1b[0m\r\n')
+          })
         }
       })
 
       cleanupRef.current = [
         () => inputDispose.dispose(),
+        () => respawnDispose.dispose(),
         removeDataListener,
         removeExitListener,
       ]

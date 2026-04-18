@@ -1381,6 +1381,13 @@ else:
   }
 
   ipcMain.handle('terminal:create', async (event, { id, cols, rows, cwd }: { id: string; cols: number; rows: number; cwd?: string }) => {
+    // Kill any existing terminal with the same ID (e.g. respawn after exit)
+    const existing = terminals.get(id)
+    if (existing) {
+      try { existing.kill() } catch { /* ignore */ }
+      terminals.delete(id)
+    }
+
     const shellPath = resolveShell()
     console.log(`[Terminal] Creating terminal id=${id} shell=${shellPath} cols=${cols} rows=${rows} cwd=${cwd || '(default)'}`)
 
