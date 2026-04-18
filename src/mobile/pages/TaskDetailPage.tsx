@@ -169,7 +169,12 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
     // 2. Build the same feedback prompt as desktop
     const commentPart = comment ? ` Comment: "${comment}".` : ''
     const today = new Date().toISOString().split('T')[0]
-    const prompt = `User rated this session ${rating}/5.${commentPart}\n\nReview the session and update skills in .agents/skills/:\n\n**For skills you used:**\nUpdate the YAML frontmatter:\n- confidence: ${rating >= 4 ? '+0.05 (was helpful)' : rating <= 2 ? '-0.10 (was wrong/outdated)' : 'no change'}\n- uses: increment by 1\n- lastUsed: ${today}\n- tags: add relevant keywords if missing\n\n**If you discovered a new reusable pattern:**\nCreate a new skill file.\n\nUpdate existing skills that were helpful or create new ones for patterns worth reusing.`
+    const feedbackAgent = agents.find((a) => a.id === task.agent_id)
+    const codingAgent = (feedbackAgent?.config as Record<string, unknown> | undefined)?.coding_agent
+    const skillsDir = (codingAgent === 'claude-code' || codingAgent === 'claude_code')
+      ? '.claude/skills'
+      : '.agents/skills'
+    const prompt = `User rated this session ${rating}/5.${commentPart}\n\nReview the session and update skills in ${skillsDir}/:\n\n**For skills you used:**\nUpdate the YAML frontmatter:\n- confidence: ${rating >= 4 ? '+0.05 (was helpful)' : rating <= 2 ? '-0.10 (was wrong/outdated)' : 'no change'}\n- uses: increment by 1\n- lastUsed: ${today}\n- tags: add relevant keywords if missing\n\n**If you discovered a new reusable pattern:**\nCreate a new skill file.\n\nUpdate existing skills that were helpful or create new ones for patterns worth reusing.`
 
     // 3. Resume the session (or start fresh if none) and send feedback prompt
     try {
@@ -193,7 +198,7 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
       // Fallback: complete the task even if learning session fails
       await updateTask(task.id, { status: TaskStatus.Completed })
     }
-  }, [task, session, updateTask, initSession])
+  }, [task, session, updateTask, initSession, agents])
 
   const handleFeedbackSkip = useCallback(async () => {
     if (!task) return
