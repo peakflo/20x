@@ -89,6 +89,7 @@ export function BrowserPanelContent({
       try {
         // First try via IPC (uses debugger API or CDP match in main process)
         const wcId = wv.getWebContentsId?.()
+        console.log(`[BrowserPanel:${panelId}] webContentsId=${wcId}, url=${wv.getURL?.()?.slice(0, 60)}`)
         if (wcId) {
           // Store webContentsId on panel for reliable CDP target resolution
           updatePanel(panelId, { webContentsId: wcId })
