@@ -365,8 +365,8 @@ export function InfiniteCanvas() {
       const tag = (e.target as HTMLElement)?.tagName?.toLowerCase()
       const isInputFocused = tag === 'input' || tag === 'textarea' || (e.target as HTMLElement)?.isContentEditable
 
-      // Track Ctrl/Cmd held state — shows panel index badges
-      if ((e.key === 'Control' || e.key === 'Meta') && !e.repeat) {
+      // Track Ctrl held state — shows panel index badges (Ctrl only, not Cmd)
+      if (e.key === 'Control' && !e.repeat) {
         setCtrlHeld(true)
       }
 
@@ -436,7 +436,7 @@ export function InfiniteCanvas() {
       if (e.code === 'Space') {
         setSpaceHeld(false)
       }
-      if (e.key === 'Control' || e.key === 'Meta') {
+      if (e.key === 'Control') {
         setCtrlHeld(false)
       }
     }
