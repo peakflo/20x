@@ -33,6 +33,9 @@ export function TerminalPanelContent({ terminalId, cwd }: TerminalPanelContentPr
   const cleanupRef = useRef<(() => void)[]>([])
   const initCalledRef = useRef(false)
 
+  // Store cwd in a ref — only used at init time, never triggers re-init
+  const cwdRef = useRef(cwd)
+
   const initTerminal = useCallback(async () => {
     if (!containerRef.current || xtermRef.current || initCalledRef.current) return
 
@@ -101,7 +104,7 @@ export function TerminalPanelContent({ terminalId, cwd }: TerminalPanelContentPr
         terminalId,
         term.cols,
         term.rows,
-        cwd
+        cwdRef.current // read from ref, not prop — stable reference
       )
 
       const inputDispose = term.onData((data) => {
@@ -131,7 +134,7 @@ export function TerminalPanelContent({ terminalId, cwd }: TerminalPanelContentPr
       console.error('Failed to create terminal:', err)
       setError(err instanceof Error ? err.message : 'Failed to create terminal')
     }
-  }, [terminalId, cwd])
+  }, [terminalId]) // cwd intentionally NOT a dep — read from cwdRef at init
 
   // Use ResizeObserver to detect when the container first gets real
   // dimensions, then initialize xterm. This is the primary guard
@@ -200,6 +203,8 @@ export function TerminalPanelContent({ terminalId, cwd }: TerminalPanelContentPr
   }, [initTerminal, terminalId, isReady])
 
   // ── Periodically capture cwd so it persists on crash/force-quit ──
+  // Uses direct IPC + store update — does NOT change any props that would
+  // trigger re-initialization of the terminal.
   useEffect(() => {
     if (!isReady) return
     const interval = setInterval(async () => {
@@ -209,7 +214,7 @@ export function TerminalPanelContent({ terminalId, cwd }: TerminalPanelContentPr
           useCanvasStore.getState().updatePanel(terminalId, { url: currentCwd })
         }
       } catch { /* ignore */ }
-    }, 10_000) // every 10 seconds
+    }, 30_000) // every 30 seconds (less aggressive)
     return () => clearInterval(interval)
   }, [isReady, terminalId])
 
