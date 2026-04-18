@@ -1361,7 +1361,8 @@ else:
       }
     })
 
-    child.on('exit', () => {
+    child.on('exit', (code, signal) => {
+      console.log(`[Terminal] PTY exited id=${id} code=${code} signal=${signal}`)
       terminals.delete(id)
       if (!sender.isDestroyed()) {
         sender.send('terminal:exit', { id })
@@ -1397,7 +1398,13 @@ else:
   })
 
   ipcMain.handle('terminal:write', (_, { id, data }: { id: string; data: string }) => {
-    terminals.get(id)?.write(data)
+    const term = terminals.get(id)
+    if (!term) {
+      console.log(`[Terminal] write to dead terminal id=${id}`)
+      return { alive: false }
+    }
+    term.write(data)
+    return { alive: true }
   })
 
   ipcMain.handle('terminal:resize', (_event, { id, cols, rows }: { id: string; cols: number; rows: number }) => {
