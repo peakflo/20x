@@ -26,6 +26,7 @@ import { enterpriseApi } from '@/lib/ipc-client'
 import { useEnterpriseStore } from '@/stores/enterprise-store'
 
 const mockApiRequest = vi.mocked(enterpriseApi.apiRequest)
+const mockEnableIframeAuth = vi.mocked(enterpriseApi.enableIframeAuth)
 
 const mockApplications: ApplicationItem[] = [
   {
@@ -172,6 +173,38 @@ describe('useDashboardStore', () => {
     expect(state.applicationsError).toBeNull()
     // Verify lowercase triggerType value matching NodeType.APPLICATION_TRIGGER enum
     expect(mockApiRequest).toHaveBeenCalledWith('GET', '/api/workflows?triggerType=application_trigger')
+  })
+
+  it('fetchApplications falls back to id/workspace tenant when workflow fields are missing', async () => {
+    useEnterpriseStore.setState({
+      isAuthenticated: true,
+      isLoading: false,
+      error: null,
+      userEmail: 'test@example.com',
+      userId: 'user-1',
+      currentTenant: { id: 'tenant-fallback', name: 'Fallback Tenant' },
+      availableTenants: null
+    })
+
+    mockApiRequest.mockResolvedValueOnce({
+      workflows: [{
+        id: 'wf-from-id',
+        name: 'Workflow with ID only',
+        description: null,
+        status: 'Active',
+        lastRun: null,
+        runCount: 0,
+        updatedAt: '2026-03-28T10:00:00Z',
+        version: 1
+      }]
+    })
+
+    await useDashboardStore.getState().fetchApplications()
+
+    const state = useDashboardStore.getState()
+    expect(state.applications).toHaveLength(1)
+    expect(state.applications[0].workflowId).toBe('wf-from-id')
+    expect(state.applications[0].tenantId).toBe('tenant-fallback')
   })
 
   it('fetchApplications handles errors', async () => {
@@ -486,6 +519,39 @@ describe('tab management', () => {
     expect(state.expandedView).toBe(true)
 
     await promise
+  })
+
+  it('openApplication does not execute when tenantId is missing', async () => {
+    useDashboardStore.setState({
+      applications: [{
+        workflowId: 'wf-no-tenant',
+        tenantId: '',
+        name: 'No tenant app',
+        description: null,
+        status: 'Active',
+        lastRun: null,
+        runCount: 0,
+        updatedAt: '2026-03-28T10:00:00Z',
+        version: 1
+      }]
+    })
+    useEnterpriseStore.setState({
+      isAuthenticated: true,
+      isLoading: false,
+      error: null,
+      userEmail: 'test@example.com',
+      userId: 'user-1',
+      currentTenant: null,
+      availableTenants: null
+    })
+
+    await useDashboardStore.getState().openApplication('wf-no-tenant')
+
+    expect(mockEnableIframeAuth).not.toHaveBeenCalled()
+    expect(mockApiRequest).not.toHaveBeenCalled()
+    const state = useDashboardStore.getState()
+    expect(state.openTabs).toHaveLength(1)
+    expect(state.openTabs[0].error).toContain('Tenant ID is required')
   })
 
   it('openApplication switches to existing tab by workflowId without creating a duplicate', async () => {
