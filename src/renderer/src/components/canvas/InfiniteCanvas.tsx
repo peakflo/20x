@@ -379,21 +379,21 @@ export function InfiniteCanvas() {
       if (e.code === 'Space' && !e.repeat && !isInputFocused) {
         setSpaceHeld(true)
       }
-      if (e.code === 'Equal' && (e.ctrlKey || e.metaKey)) {
+      if (e.code === 'Equal' && (e.ctrlKey || e.metaKey) && !isInputFocused) {
         e.preventDefault()
         zoomTo(viewport.zoom * 1.2)
       }
-      if (e.code === 'Minus' && (e.ctrlKey || e.metaKey)) {
+      if (e.code === 'Minus' && (e.ctrlKey || e.metaKey) && !isInputFocused) {
         e.preventDefault()
         zoomTo(viewport.zoom / 1.2)
       }
-      if (e.code === 'Digit0' && (e.ctrlKey || e.metaKey)) {
+      if (e.code === 'Digit0' && (e.ctrlKey || e.metaKey) && !isInputFocused) {
         e.preventDefault()
         resetViewport()
       }
 
       // Ctrl/Cmd + 1-9: focus panel by index
-      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey) {
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && !isInputFocused) {
         const digitMatch = e.code.match(/^Digit([1-9])$/)
         if (digitMatch) {
           const idx = parseInt(digitMatch[1], 10) - 1

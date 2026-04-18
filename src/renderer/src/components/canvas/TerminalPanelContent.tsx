@@ -237,20 +237,11 @@ export function TerminalPanelContent({ terminalId, cwd }: TerminalPanelContentPr
     xtermRef.current?.focus()
   }, [])
 
-  // Prevent keyboard events from bubbling up to InfiniteCanvas shortcuts
-  // xterm.js renders into a <canvas>, which isn't an input/textarea,
-  // so InfiniteCanvas's keyboard handler would intercept keystrokes.
-  const stopKeyboardPropagation = useCallback((e: React.KeyboardEvent) => {
-    e.stopPropagation()
-  }, [])
-
   return (
     <div
       ref={containerRef}
-      className="h-full w-full"
+      className="h-full w-full xterm-container"
       onClick={handleClick}
-      onKeyDown={stopKeyboardPropagation}
-      onKeyUp={stopKeyboardPropagation}
       style={{
         background: '#141a26',
         // Minimum dimensions prevent xterm's internal canvas renderer from
