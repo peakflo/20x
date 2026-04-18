@@ -651,6 +651,9 @@ app.whenReady().then(async () => {
         // Wire state sync into agent manager so agent run events are recorded
         agentManager.setEnterpriseStateSync(enterpriseStateSyncInstance)
 
+        // Wire enterprise auth into agent manager so it can inject JWT into MCP Dev Server requests
+        agentManager.setEnterpriseAuth(enterpriseAuth)
+
         syncManager.setEnterpriseConnection(apiClient, enterpriseSyncMgr, session.userId, enterpriseStateSyncInstance)
 
         console.log('[Main] Enterprise connection restored on startup (with heartbeat)')
