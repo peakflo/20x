@@ -585,9 +585,14 @@ async function routePost(pathname: string, params: Record<string, unknown>): Pro
   const sendMatch = pathname.match(/^\/api\/sessions\/([^/]+)\/send$/)
   if (sendMatch) {
     const sessionId = sendMatch[1]
-    const { message, taskId, agentId: aid } = params as { message: string; taskId?: string; agentId?: string }
+    const { message, taskId, agentId: aid, attachments } = params as {
+      message: string
+      taskId?: string
+      agentId?: string
+      attachments?: Array<{ id: string; filename: string; size: number; mime_type: string }>
+    }
     if (!message) throw Object.assign(new Error('message is required'), { status: 400 })
-    const result = await agent.sendMessage(sessionId, message, taskId, aid)
+    const result = await agent.sendMessage(sessionId, message, taskId, aid, attachments)
     return { success: true, ...result }
   }
 

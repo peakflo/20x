@@ -14,6 +14,15 @@ export interface AgentSessionState {
   systemStatus?: string | null
 }
 
+export interface SendMessageOptions {
+  attachments?: Array<{
+    id: string
+    filename: string
+    size: number
+    mime_type: string
+  }>
+}
+
 const EMPTY_SESSION: AgentSessionState = {
   sessionId: null,
   status: SessionStatus.IDLE,
@@ -85,11 +94,11 @@ export function useAgentSession(taskId: string | undefined) {
   }, [taskId, endSession])
 
   const sendMessage = useCallback(
-    async (message: string) => {
+    async (message: string, options?: SendMessageOptions) => {
       // Get latest session from store, not from closure
       const currentSession = useAgentStore.getState().sessions.get(taskId!)
       if (!currentSession?.sessionId) throw new Error('No active session')
-      const result = await agentSessionApi.send(currentSession.sessionId, message, taskId, currentSession.agentId)
+      const result = await agentSessionApi.send(currentSession.sessionId, message, taskId, currentSession.agentId, options?.attachments)
       // Session was recreated on the main process — update renderer store
       if (result.newSessionId && taskId) {
         initSession(taskId, result.newSessionId, currentSession.agentId)

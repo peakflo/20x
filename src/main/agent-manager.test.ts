@@ -12,6 +12,7 @@ vi.mock('fs', async (importOriginal) => {
     mkdirSync: vi.fn(),
     writeFileSync: vi.fn(),
     copyFileSync: vi.fn(),
+    readFileSync: vi.fn(() => ''),
     existsSync: vi.fn(() => false),
   }
 })
@@ -51,13 +52,14 @@ vi.mock('./secret-broker', () => ({
 }))
 
 import { mkdir as mkdirAsync, writeFile as writeFileAsync } from 'fs/promises'
-import { existsSync, copyFileSync, mkdirSync } from 'fs'
+import { existsSync, copyFileSync, mkdirSync, readFileSync } from 'fs'
 
 const mockedMkdirAsync = vi.mocked(mkdirAsync)
 const mockedWriteFileAsync = vi.mocked(writeFileAsync)
 const mockedExistsSync = vi.mocked(existsSync)
 const mockedCopyFileSync = vi.mocked(copyFileSync)
 const mockedMkdirSync = vi.mocked(mkdirSync)
+const mockedReadFileSync = vi.mocked(readFileSync)
 
 function makeSkillRecord(overrides: Partial<{
   id: string; name: string; description: string; content: string;
@@ -1355,6 +1357,49 @@ describe('syncAttachmentsToWorkspace', () => {
       '/tmp/ws/attachments/exists.txt'
     )
     expect(refs).toEqual(['- attachments/exists.txt'])
+  })
+})
+
+describe('buildMessageWithAttachmentContext', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('includes attachment references and a bounded preview for small text files', () => {
+    const mgr = new AgentManager(createMockDb({}))
+    const session = { workspaceDir: '/tmp/ws' } as { workspaceDir: string }
+
+    mockedExistsSync.mockImplementation((p: any) => String(p).includes('/tmp/ws/attachments/spec.md'))
+    mockedReadFileSync.mockImplementation(() => 'A'.repeat(1500))
+
+    const result = (mgr as any).buildMessageWithAttachmentContext(
+      session,
+      'Please use attached context',
+      [{ id: 'att-1', filename: 'spec.md', size: 1024, mime_type: 'text/markdown' }]
+    ) as string
+
+    expect(result).toContain('Please use attached context')
+    expect(result).toContain('- attachments/spec.md (text/markdown, 1.0 KB)')
+    expect(result).toContain('Small text previews')
+    expect(result).toContain('...[truncated]')
+    expect(result.length).toBeLessThan(2600)
+  })
+
+  it('caps attachment references and reports omitted items', () => {
+    const mgr = new AgentManager(createMockDb({}))
+    const session = { workspaceDir: '/tmp/ws' } as { workspaceDir: string }
+    const attachments = Array.from({ length: 12 }, (_, i) => ({
+      id: `att-${i + 1}`,
+      filename: `file-${i + 1}.txt`,
+      size: 100,
+      mime_type: 'text/plain'
+    }))
+
+    mockedExistsSync.mockReturnValue(false)
+    const result = (mgr as any).buildMessageWithAttachmentContext(session, 'Use files', attachments) as string
+
+    expect(result).toContain('... and 2 more attachment(s) omitted')
+    expect((result.match(/- attachments\/file-/g) || []).length).toBe(10)
   })
 })
 

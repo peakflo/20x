@@ -42,6 +42,13 @@ export interface AgentSessionSuccessResult {
   success: boolean
 }
 
+export interface AgentMessageAttachment {
+  id: string
+  filename: string
+  size: number
+  mime_type: string
+}
+
 export interface AgentOutputEvent {
   sessionId: string
   taskId?: string
@@ -186,7 +193,7 @@ interface ElectronAPI {
     resume: (agentId: string, taskId: string, ocSessionId: string) => Promise<AgentSessionStartResult>
     abort: (sessionId: string) => Promise<AgentSessionSuccessResult>
     stop: (sessionId: string) => Promise<AgentSessionSuccessResult>
-    send: (sessionId: string, message: string, taskId?: string, agentId?: string) => Promise<AgentSessionSuccessResult & { newSessionId?: string }>
+    send: (sessionId: string, message: string, taskId?: string, agentId?: string, attachments?: AgentMessageAttachment[]) => Promise<AgentSessionSuccessResult & { newSessionId?: string }>
     approve: (sessionId: string, approved: boolean, message?: string) => Promise<AgentSessionSuccessResult>
     syncSkills: (sessionId: string) => Promise<SkillSyncResult>
     syncSkillsForTask: (taskId: string) => Promise<SkillSyncResult>
