@@ -116,24 +116,8 @@ export function TerminalPanelContent({ terminalId, cwd }: TerminalPanelContentPr
 
       console.log(`[Terminal:${terminalId}] PTY created, setting up listeners`)
 
-      let respawning = false
-
       const inputDispose = term.onData((data) => {
-        window.electronAPI.terminal.write(terminalId, data).then((result: { alive?: boolean } | void) => {
-          if (result && 'alive' in result && !result.alive && !respawning) {
-            // PTY is dead but we didn't get an exit event — auto-respawn
-            console.log(`[Terminal:${terminalId}] PTY dead on write, auto-respawning`)
-            respawning = true
-            window.electronAPI.terminal.create(
-              terminalId, term.cols, term.rows, cwdRef.current
-            ).then(() => {
-              respawning = false
-              term.focus()
-            }).catch(() => {
-              respawning = false
-            })
-          }
-        })
+        window.electronAPI.terminal.write(terminalId, data)
       })
 
       const removeDataListener = window.electronAPI.terminal.onData(({ id, data }) => {

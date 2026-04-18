@@ -7,7 +7,7 @@ import {
   DEFAULT_PANEL_HEIGHT,
   type CanvasPanelData,
 } from '@/stores/canvas-store'
-import { X, Focus, Maximize2, Minimize2, PanelLeft, PanelRight, Columns2, Link2, Globe } from 'lucide-react'
+import { X, Focus, Maximize2, Minimize2, PanelLeft, PanelRight, Columns2, Globe } from 'lucide-react'
 import type { TaskWorkspaceLayout } from '@/components/tasks/TaskWorkspace'
 import { TaskPanelContent } from './TaskPanelContent'
 import { TranscriptPanelContent } from './TranscriptPanelContent'
@@ -178,24 +178,6 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
   // ── Connect (edge drawing) ─────────────────────────────────
   // Local state tracks whether THIS panel initiated connecting — avoids global subscription
   const [isConnectingLocal, setIsConnectingLocal] = useState(false)
-
-  const handleStartConnect = useCallback(
-    (e: React.MouseEvent) => {
-      e.stopPropagation()
-      setConnectingFromId(panel.id)
-      setIsConnectingLocal(true)
-    },
-    [setConnectingFromId, panel.id]
-  )
-
-  const handleCancelConnect = useCallback(
-    (e: React.MouseEvent) => {
-      e.stopPropagation()
-      setConnectingFromId(null)
-      setIsConnectingLocal(false)
-    },
-    [setConnectingFromId]
-  )
 
   // Sync local state when store clears connectingFromId (Escape, background click, or edge completed)
   useEffect(() => {
@@ -406,22 +388,8 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
           </div>
         )}
 
-        {/* Panel actions — visible on hover (or always when connecting) */}
-        <div className={`flex items-center gap-0.5 transition-opacity duration-150 ${isConnectingLocal ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
-          {/* Connect / link to another panel */}
-          <button
-            onMouseDown={(e) => e.stopPropagation()}
-            onClick={isConnectingLocal ? handleCancelConnect : handleStartConnect}
-            className={`h-5 w-5 rounded flex items-center justify-center transition-colors ${
-              isConnectingLocal
-                ? 'bg-orange-500/20 text-orange-400 ring-1 ring-orange-500/40'
-                : 'hover:bg-white/10 text-muted-foreground/50 hover:text-muted-foreground'
-            }`}
-            title={isConnectingLocal ? 'Cancel connecting (click another panel to connect)' : 'Connect to another panel'}
-          >
-            <Link2 className="h-3 w-3" />
-          </button>
-
+        {/* Panel actions — visible on hover */}
+        <div className={`flex items-center gap-0.5 transition-opacity duration-150 opacity-0 group-hover:opacity-100`}>
           {/* Focus / zoom-to-fit button */}
           <button
             onMouseDown={(e) => e.stopPropagation()}

@@ -1362,10 +1362,16 @@ else:
     })
 
     child.on('exit', (code, signal) => {
-      console.log(`[Terminal] PTY exited id=${id} code=${code} signal=${signal}`)
-      terminals.delete(id)
-      if (!sender.isDestroyed()) {
-        sender.send('terminal:exit', { id })
+      console.log(`[Terminal] PTY exited id=${id} code=${code} signal=${signal} pid=${child.pid}`)
+      // Only clean up if this handle is still the active one for this id.
+      // When terminal:create replaces an existing PTY, the old one's exit
+      // handler fires asynchronously and must NOT delete the new handle.
+      const current = terminals.get(id)
+      if (current && current.pid === (child.pid || 0)) {
+        terminals.delete(id)
+        if (!sender.isDestroyed()) {
+          sender.send('terminal:exit', { id })
+        }
       }
     })
 
