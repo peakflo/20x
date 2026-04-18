@@ -6,6 +6,7 @@ import { useTaskStore } from '@/stores/task-store'
 import { CanvasPanel } from './CanvasPanel'
 import { CanvasConnections } from './CanvasConnections'
 import { CanvasContextMenu } from './CanvasContextMenu'
+import { CanvasMinimap } from './CanvasMinimap'
 import { Move, ZoomIn, ZoomOut, RotateCcw, Plus } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 
@@ -351,10 +352,17 @@ export function InfiniteCanvas() {
     [viewport]
   )
 
+  // ── Focused panel tracking (for Tab cycling) ─────────────
+  const [focusedPanelIndex, setFocusedPanelIndex] = useState(-1)
+
   // ── Keyboard shortcuts ───────────────────────────────────
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.code === 'Space' && !e.repeat) {
+      // Ignore shortcuts when typing in an input/textarea
+      const tag = (e.target as HTMLElement)?.tagName?.toLowerCase()
+      const isInputFocused = tag === 'input' || tag === 'textarea' || (e.target as HTMLElement)?.isContentEditable
+
+      if (e.code === 'Space' && !e.repeat && !isInputFocused) {
         setSpaceHeld(true)
       }
       if (e.code === 'Equal' && (e.ctrlKey || e.metaKey)) {
@@ -369,6 +377,43 @@ export function InfiniteCanvas() {
         e.preventDefault()
         resetViewport()
       }
+
+      // Ctrl/Cmd + 1-9: focus panel by index
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey) {
+        const digitMatch = e.code.match(/^Digit([1-9])$/)
+        if (digitMatch) {
+          const idx = parseInt(digitMatch[1], 10) - 1
+          const currentPanels = useCanvasStore.getState().panels
+          if (idx < currentPanels.length) {
+            e.preventDefault()
+            const container = containerRef.current
+            if (container) {
+              const rect = container.getBoundingClientRect()
+              useCanvasStore.getState().focusPanel(currentPanels[idx].id, rect.width, rect.height)
+              setFocusedPanelIndex(idx)
+            }
+          }
+        }
+      }
+
+      // Tab / Shift+Tab: cycle through panels
+      if (e.code === 'Tab' && !isInputFocused && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault()
+        const currentPanels = useCanvasStore.getState().panels
+        if (currentPanels.length === 0) return
+
+        const next = e.shiftKey
+          ? (focusedPanelIndex <= 0 ? currentPanels.length - 1 : focusedPanelIndex - 1)
+          : (focusedPanelIndex >= currentPanels.length - 1 ? 0 : focusedPanelIndex + 1)
+
+        setFocusedPanelIndex(next)
+        const container = containerRef.current
+        if (container) {
+          const rect = container.getBoundingClientRect()
+          useCanvasStore.getState().focusPanel(currentPanels[next].id, rect.width, rect.height)
+        }
+      }
+
       // Escape: cancel connecting or close context menu
       if (e.code === 'Escape') {
         const { connectingFromId: cid } = useCanvasStore.getState()
@@ -390,7 +435,7 @@ export function InfiniteCanvas() {
       window.removeEventListener('keydown', handleKeyDown)
       window.removeEventListener('keyup', handleKeyUp)
     }
-  }, [viewport.zoom, zoomTo, resetViewport])
+  }, [viewport.zoom, zoomTo, resetViewport, focusedPanelIndex])
 
   const zoomPercent = Math.round(viewport.zoom * 100)
 
@@ -518,6 +563,12 @@ export function InfiniteCanvas() {
           {Math.round(-viewport.y / viewport.zoom)}
         </span>
       </div>
+
+      {/* ── Minimap (bottom-right) ── */}
+      <CanvasMinimap
+        containerWidth={containerSize.width}
+        containerHeight={containerSize.height}
+      />
 
       {/* ── Empty state ── */}
       {panels.length === 0 && (
