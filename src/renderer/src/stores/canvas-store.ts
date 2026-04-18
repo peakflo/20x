@@ -472,12 +472,19 @@ function notifyAgentOfBrowserConnection(
   const taskPanel = fromPanel?.type === 'task' ? fromPanel : toPanel?.type === 'task' ? toPanel : null
   const browserPanel = fromPanel?.type === 'browser' ? fromPanel : toPanel?.type === 'browser' ? toPanel : null
 
+  // Read fresh panel data from store — the `panels` parameter is a snapshot from
+  // edge creation and may have stale webContentsId from localStorage persistence.
+  const freshBrowserPanel = browserPanel
+    ? useCanvasStore.getState().panels.find((p) => p.id === browserPanel.id) || browserPanel
+    : browserPanel
+
   console.log('[BrowserEdge] notifyAgentOfBrowserConnection called', {
     fromPanelId, toPanelId,
     fromType: fromPanel?.type, toType: toPanel?.type,
-    taskRefId: taskPanel?.refId, browserPanelId: browserPanel?.id,
-    browserUrl: browserPanel?.url, browserTitle: browserPanel?.title,
-    browserCdpTargetId: browserPanel?.cdpTargetId,
+    taskRefId: taskPanel?.refId, browserPanelId: freshBrowserPanel?.id,
+    browserUrl: freshBrowserPanel?.url, browserTitle: freshBrowserPanel?.title,
+    browserCdpTargetId: freshBrowserPanel?.cdpTargetId,
+    browserWebContentsId: freshBrowserPanel?.webContentsId,
   })
 
   if (!taskPanel?.refId || !browserPanel) {
@@ -536,8 +543,10 @@ function notifyAgentOfBrowserConnection(
       return
     }
 
-    const browserTitle = browserPanel.title || 'Browser'
-    const browserUrl = browserPanel.url || ''
+    // Re-read fresh panel data — webContentsId may have been updated since edge creation
+    const bp = useCanvasStore.getState().panels.find((p) => p.id === browserPanel.id) || browserPanel
+    const browserTitle = bp.title || 'Browser'
+    const browserUrl = bp.url || ''
 
     // Resolve which agent-browser tab ID (t1, t2, t3...) corresponds to this
     // browser panel's webview. Uses webContentsId for reliable direct lookup.
@@ -549,16 +558,16 @@ function notifyAgentOfBrowserConnection(
         allTargets: allTargets.map((t) => ({ tabId: t.tabId, type: t.type, url: t.url?.slice(0, 60) })),
         webviewsCount: webviews.length,
         browserUrl,
-        webContentsId: browserPanel.webContentsId,
+        webContentsId: bp.webContentsId,
       })
       if (webviews.length === 0) return null
 
       let match: typeof webviews[0] | null = null
 
       // 1. Best: use webContentsId → getTargetId for exact CDP target, then find its tabId
-      if (!match && browserPanel.webContentsId) {
+      if (!match && bp.webContentsId) {
         try {
-          const result = await window.electronAPI.browser.getTargetId(browserPanel.webContentsId)
+          const result = await window.electronAPI.browser.getTargetId(bp.webContentsId)
           if (result.targetId) {
             match = allTargets.find((t) => t.id === result.targetId) || null
             if (match) console.log('[BrowserEdge] matched by webContentsId→getTargetId', match.tabId)
