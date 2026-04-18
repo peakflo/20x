@@ -522,6 +522,8 @@ describe('tab management', () => {
   })
 
   it('openApplication does not execute when tenantId is missing', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
     useDashboardStore.setState({
       applications: [{
         workflowId: 'wf-no-tenant',
@@ -549,9 +551,53 @@ describe('tab management', () => {
 
     expect(mockEnableIframeAuth).not.toHaveBeenCalled()
     expect(mockApiRequest).not.toHaveBeenCalled()
+    expect(errorSpy).toHaveBeenCalledWith(
+      '[dashboard] Cannot execute application: missing tenantId/workflowId',
+      expect.objectContaining({
+        workflowId: 'wf-no-tenant',
+        tenantId: '',
+        currentTenantId: null
+      })
+    )
     const state = useDashboardStore.getState()
     expect(state.openTabs).toHaveLength(1)
     expect(state.openTabs[0].error).toContain('Tenant ID is required')
+    errorSpy.mockRestore()
+  })
+
+  it('openApplication logs backend validation details when execute/ui rejects missing ids', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    useDashboardStore.setState({
+      applications: [{
+        workflowId: 'wf-backend-error',
+        tenantId: 'tenant-1',
+        name: 'Backend validation app',
+        description: null,
+        status: 'Active',
+        lastRun: null,
+        runCount: 0,
+        updatedAt: '2026-03-28T10:00:00Z',
+        version: 1
+      }]
+    })
+
+    mockApiRequest.mockRejectedValueOnce(new Error('tenantId and workflowId are required'))
+
+    await useDashboardStore.getState().openApplication('wf-backend-error')
+
+    expect(errorSpy).toHaveBeenCalledWith(
+      '[dashboard] Backend rejected execute/ui request: tenantId and workflowId are required',
+      expect.objectContaining({
+        workflowId: 'wf-backend-error',
+        tenantId: 'tenant-1',
+        currentTenantId: null
+      })
+    )
+    const state = useDashboardStore.getState()
+    expect(state.openTabs).toHaveLength(1)
+    expect(state.openTabs[0].error).toContain('tenantId and workflowId are required')
+    errorSpy.mockRestore()
   })
 
   it('openApplication switches to existing tab by workflowId without creating a duplicate', async () => {

@@ -427,7 +427,9 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
   openApplication: async (workflowId: string) => {
     const normalizedWorkflowId = workflowId.trim()
     if (!normalizedWorkflowId) {
-      console.error('Cannot open application without workflowId')
+      console.error('[dashboard] Cannot open application: missing workflowId', {
+        receivedWorkflowId: workflowId
+      })
       return
     }
 
@@ -441,7 +443,8 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     }
 
     const app = get().applications.find((a) => a.workflowId === normalizedWorkflowId)
-    const tenantId = app?.tenantId || useEnterpriseStore.getState().currentTenant?.id || ''
+    const currentTenantId = useEnterpriseStore.getState().currentTenant?.id || ''
+    const tenantId = app?.tenantId || currentTenantId || ''
 
     // Create new tab in executing state
     const newTab: ApplicationTab = {
@@ -456,6 +459,13 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
 
     try {
       if (!tenantId) {
+        console.error('[dashboard] Cannot execute application: missing tenantId/workflowId', {
+          workflowId: normalizedWorkflowId,
+          tenantId,
+          appWorkflowId: app?.workflowId ?? null,
+          appTenantId: app?.tenantId ?? null,
+          currentTenantId: currentTenantId || null
+        })
         throw new Error('Tenant ID is required to execute this application. Please select an organization and try again.')
       }
 
@@ -517,6 +527,16 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
 
       poll(result.executionId)
     } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      if (message.toLowerCase().includes('tenantid and workflowid are required')) {
+        console.error('[dashboard] Backend rejected execute/ui request: tenantId and workflowId are required', {
+          workflowId: normalizedWorkflowId,
+          tenantId,
+          appWorkflowId: app?.workflowId ?? null,
+          appTenantId: app?.tenantId ?? null,
+          currentTenantId: currentTenantId || null
+        })
+      }
       console.error('Failed to open application:', err)
       set({
         openTabs: updateTab(get().openTabs, normalizedWorkflowId, {
