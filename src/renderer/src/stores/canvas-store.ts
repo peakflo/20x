@@ -552,34 +552,33 @@ function notifyAgentOfBrowserConnection(
       agentSessionApi.send(
         session.sessionId,
         `[System] A browser panel "${browserTitle}" has been connected to your task on the canvas.\n\n` +
-        `The browser panel is not loaded yet — the user needs to navigate to a URL first.\n` +
-        `Once loaded, you will receive updated connection instructions.\n\n` +
-        `IMPORTANT: Do NOT use "agent-browser connect" or "agent-browser open" — ` +
-        `that would navigate the main application window. Wait for the direct WebSocket URL.`,
+        `The browser panel is loading. To connect once ready:\n` +
+        `  agent-browser connect ${CDP_PORT}\n` +
+        `  agent-browser tab    # find the [webview] target, NOT the [page]\n` +
+        `  agent-browser tab --url "<pattern>"   # switch to it\n\n` +
+        `Then use commands normally (open, snapshot, click, etc.).\n` +
+        `Do NOT interact with the [page] target — that is the main app window.`,
         taskPanel.refId!,
         session.agentId
       ).catch((err: unknown) => console.error('[Canvas] Failed to notify agent of browser connection:', err))
       return
     }
 
+    // Build a URL pattern for tab --url matching (use domain from browser URL)
+    const urlDomain = browserUrl ? new URL(browserUrl).hostname.replace('www.', '') : ''
+    const tabUrlPattern = urlDomain ? `"*${urlDomain}*"` : `"*google*"`
+
     agentSessionApi.send(
       session.sessionId,
       `[System] A browser panel "${browserTitle}" has been connected to your task on the canvas. You now have access to control it.\n\n` +
-      `CRITICAL SETUP — follow these steps exactly:\n\n` +
-      `Step 1: Connect to the Electron app's CDP port:\n` +
-      `  pkill -f agent-browser 2>/dev/null; sleep 1\n` +
-      `  agent-browser connect ${CDP_PORT}\n\n` +
-      `Step 2: List targets and find the webview (NOT the main "page" window):\n` +
-      `  agent-browser tab\n\n` +
-      `Step 3: Switch to the webview target that shows "${browserUrl || browserTitle}":\n` +
-      `  agent-browser tab <index>   # pick the [webview] entry, NOT [page]\n\n` +
-      `Step 4: Now use commands normally:\n` +
+      `To use the browser, run these commands:\n` +
+      `  agent-browser connect ${CDP_PORT}\n` +
+      `  agent-browser tab --url ${tabUrlPattern}\n\n` +
+      `Then use commands normally:\n` +
       `  agent-browser open <url>\n` +
       `  agent-browser snapshot -i\n` +
       `  agent-browser click <ref>\n\n` +
-      `DANGER: The [page] target at index 0 is the main Electron app window.\n` +
-      `NEVER interact with it — switching to it or navigating it will break the app UI.\n` +
-      `Always use a [webview] target.\n\n` +
+      `IMPORTANT: Do NOT use "agent-browser tab t1" or interact with the [page] target — that is the main app window.\n` +
       `The user can see everything you do in the browser in real time on the canvas.`,
       taskPanel.refId!,
       session.agentId

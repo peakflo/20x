@@ -416,7 +416,7 @@ const MemoizedPanelContent = memo(function PanelContent({ type, id, refId, url, 
     return <TerminalPanelContent terminalId={id} />
   }
   if (type === 'browser') {
-    return <BrowserPanelContent panelId={id} sessionName={browserSessionId} streamPort={streamPort} />
+    return <BrowserPanelContent panelId={id} url={url} sessionName={browserSessionId} streamPort={streamPort} />
   }
   return (
     <div className="flex items-center justify-center h-full text-muted-foreground/50 text-xs">
