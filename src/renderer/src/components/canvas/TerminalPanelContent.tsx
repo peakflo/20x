@@ -38,12 +38,18 @@ export function TerminalPanelContent({ terminalId, cwd }: TerminalPanelContentPr
   const cwdRef = useRef(cwd)
 
   const initTerminal = useCallback(async () => {
+    console.log(`[Terminal:${terminalId}] initTerminal called`, {
+      hasContainer: !!containerRef.current,
+      hasXterm: !!xtermRef.current,
+      initCalled: initCalledRef.current,
+    })
     if (!containerRef.current || xtermRef.current || initCalledRef.current) return
 
     // Wait until the container actually has dimensions.
     // During canvas viewport changes or panel open animations the container
     // may still be 0×0 when this runs.
     const rect = containerRef.current.getBoundingClientRect()
+    console.log(`[Terminal:${terminalId}] container rect`, { w: rect.width, h: rect.height })
     if (rect.width < 10 || rect.height < 10) return
 
     initCalledRef.current = true
@@ -108,7 +114,10 @@ export function TerminalPanelContent({ terminalId, cwd }: TerminalPanelContentPr
         cwdRef.current // read from ref, not prop — stable reference
       )
 
+      console.log(`[Terminal:${terminalId}] PTY created, setting up listeners`)
+
       const inputDispose = term.onData((data) => {
+        console.log(`[Terminal:${terminalId}] onData fired, sending to PTY`, { dataLen: data.length })
         window.electronAPI.terminal.write(terminalId, data)
       })
 
@@ -154,7 +163,12 @@ export function TerminalPanelContent({ terminalId, cwd }: TerminalPanelContentPr
       ]
 
       // Focus the terminal so it can receive keyboard input
+      console.log(`[Terminal:${terminalId}] calling term.focus(), textarea exists:`, !!term.textarea)
       term.focus()
+      // Verify focus actually took
+      setTimeout(() => {
+        console.log(`[Terminal:${terminalId}] after focus, activeElement:`, document.activeElement?.tagName, document.activeElement?.className)
+      }, 100)
 
       isReadyRef.current = true
       setIsReady(true)
@@ -260,8 +274,12 @@ export function TerminalPanelContent({ terminalId, cwd }: TerminalPanelContentPr
 
   // Focus the terminal when the container is clicked
   const handleClick = useCallback(() => {
+    console.log(`[Terminal:${terminalId}] container clicked, focusing. hasXterm:`, !!xtermRef.current, 'textarea:', !!xtermRef.current?.textarea)
     xtermRef.current?.focus()
-  }, [])
+    setTimeout(() => {
+      console.log(`[Terminal:${terminalId}] after click-focus, activeElement:`, document.activeElement?.tagName, document.activeElement?.className)
+    }, 50)
+  }, [terminalId])
 
   return (
     <div
