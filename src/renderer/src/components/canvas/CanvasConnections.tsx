@@ -83,7 +83,11 @@ export function CanvasConnections({
         const toAnchor = getAnchor(to, fromCenter.x, fromCenter.y)
         const path = makePath(fromAnchor, toAnchor)
 
-        return { id: edge.id, edge, fromAnchor, toAnchor, path }
+        // For browser edges, find the browser panel's title to show on the label
+        const browserPanel = from.type === 'browser' ? from : to.type === 'browser' ? to : null
+        const browserTitle = browserPanel?.title || ''
+
+        return { id: edge.id, edge, fromAnchor, toAnchor, path, browserTitle }
       })
       .filter(Boolean) as Array<{
       id: string
@@ -91,6 +95,7 @@ export function CanvasConnections({
       fromAnchor: { x: number; y: number; dir: string }
       toAnchor: { x: number; y: number; dir: string }
       path: string
+      browserTitle: string
     }>
   }, [edges, panelMap])
 
@@ -159,6 +164,7 @@ export function CanvasConnections({
             {isBrowser && (
               <EdgeLabel
                 path={edge.path}
+                label={edge.browserTitle || 'Browser'}
                 onDelete={() => removeEdge(edge.id)}
               />
             )}
@@ -212,9 +218,11 @@ export function CanvasConnections({
 
 function EdgeLabel({
   path,
+  label,
   onDelete,
 }: {
   path: string
+  label: string
   onDelete: () => void
 }) {
   // Approximate midpoint from the path's start and end
@@ -226,9 +234,10 @@ function EdgeLabel({
   const mx = (x1 + x2) / 2
   const my = (y1 + y2) / 2
 
-  // Show a ⚡ icon + "CDP :19222" label — indicates active agent-browser access
-  const label = '⚡ CDP :19222'
-  const pillW = 76
+  // Truncate long titles, show with lightning icon
+  const truncated = label.length > 16 ? label.slice(0, 15) + '\u2026' : label
+  const displayLabel = `\u26A1 ${truncated}`
+  const pillW = Math.max(60, displayLabel.length * 6 + 16)
   const pillH = 18
 
   return (
@@ -255,7 +264,7 @@ function EdgeLabel({
         fontFamily="system-ui, sans-serif"
         fontWeight="500"
       >
-        {label}
+        {displayLabel}
       </text>
     </g>
   )

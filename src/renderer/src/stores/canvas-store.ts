@@ -527,10 +527,12 @@ function notifyAgentOfBrowserConnection(
     // Resolve which agent-browser tab ID (t1, t2, t3...) corresponds to this
     // browser panel's webview. The IPC handler returns all page+webview targets
     // with pre-computed tabId matching agent-browser's `tab` command output.
+    // Retry a few times since the webview may not be registered in CDP yet.
     let tabId: string | null = null
-    try {
+    const resolveTab = async (): Promise<string | null> => {
       const allTargets = await window.electronAPI.browser.getCdpTargets()
       const webviews = allTargets.filter((t) => t.type === 'webview')
+      if (webviews.length === 0) return null
 
       // 1. Check if the stored target ID is still valid
       const storedId = browserPanel.cdpTargetId
@@ -547,8 +549,15 @@ function notifyAgentOfBrowserConnection(
         match = webviews[0] || null
       }
 
-      if (match) {
-        tabId = match.tabId
+      return match?.tabId || null
+    }
+
+    try {
+      // Try up to 3 times with 1s delay — webview may still be loading in CDP
+      for (let attempt = 0; attempt < 3; attempt++) {
+        tabId = await resolveTab()
+        if (tabId) break
+        await new Promise((r) => setTimeout(r, 1000))
       }
     } catch { /* IPC query failed */ }
 
