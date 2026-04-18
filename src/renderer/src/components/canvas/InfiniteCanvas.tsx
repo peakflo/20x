@@ -355,12 +355,20 @@ export function InfiniteCanvas() {
   // ── Focused panel tracking (for Tab cycling) ─────────────
   const [focusedPanelIndex, setFocusedPanelIndex] = useState(-1)
 
+  // ── Ctrl-held state (shows panel index badges) ──────────
+  const [ctrlHeld, setCtrlHeld] = useState(false)
+
   // ── Keyboard shortcuts ───────────────────────────────────
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       // Ignore shortcuts when typing in an input/textarea
       const tag = (e.target as HTMLElement)?.tagName?.toLowerCase()
       const isInputFocused = tag === 'input' || tag === 'textarea' || (e.target as HTMLElement)?.isContentEditable
+
+      // Track Ctrl/Cmd held state — shows panel index badges
+      if ((e.key === 'Control' || e.key === 'Meta') && !e.repeat) {
+        setCtrlHeld(true)
+      }
 
       if (e.code === 'Space' && !e.repeat && !isInputFocused) {
         setSpaceHeld(true)
@@ -428,12 +436,22 @@ export function InfiniteCanvas() {
       if (e.code === 'Space') {
         setSpaceHeld(false)
       }
+      if (e.key === 'Control' || e.key === 'Meta') {
+        setCtrlHeld(false)
+      }
+    }
+    // Also clear on window blur (Ctrl+Tab to another window)
+    const handleBlur = () => {
+      setCtrlHeld(false)
+      setSpaceHeld(false)
     }
     window.addEventListener('keydown', handleKeyDown)
     window.addEventListener('keyup', handleKeyUp)
+    window.addEventListener('blur', handleBlur)
     return () => {
       window.removeEventListener('keydown', handleKeyDown)
       window.removeEventListener('keyup', handleKeyUp)
+      window.removeEventListener('blur', handleBlur)
     }
   }, [viewport.zoom, zoomTo, resetViewport, focusedPanelIndex])
 
@@ -483,12 +501,14 @@ export function InfiniteCanvas() {
           <CanvasConnections mouseCanvasPos={mouseCanvasPos} />
 
           {/* Render panels — off-viewport panels are frozen (content hidden) */}
-          {panels.map((panel) => (
+          {panels.map((panel, index) => (
             <CanvasPanel
               key={panel.id}
               panel={panel}
               zoom={viewport.zoom}
               frozen={!visiblePanelIds.has(panel.id)}
+              panelIndex={index}
+              showIndex={ctrlHeld}
             />
           ))}
         </div>

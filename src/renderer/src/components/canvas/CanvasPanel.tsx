@@ -18,6 +18,10 @@ interface CanvasPanelProps {
   zoom: number
   /** When true, the panel is off-viewport — heavy content (iframes, terminals) is hidden */
   frozen?: boolean
+  /** 0-based index of this panel in the panels array */
+  panelIndex?: number
+  /** When true, show the panel index number as an overlay badge */
+  showIndex?: boolean
 }
 
 /**
@@ -27,7 +31,7 @@ interface CanvasPanelProps {
  * Memoized so that only the panel whose data changed re-renders — prevents
  * iframes/terminals from being remounted when a *different* panel moves.
  */
-export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = false }: CanvasPanelProps) {
+export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = false, panelIndex, showIndex = false }: CanvasPanelProps) {
   const bringToFront = useCanvasStore((s) => s.bringToFront)
   const updatePanel = useCanvasStore((s) => s.updatePanel)
   const removePanel = useCanvasStore((s) => s.removePanel)
@@ -378,6 +382,20 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
             <path d="M 3 3 L 8 3 L 8 5 L 5 5 L 5 8 L 3 8 Z" fill="currentColor" />
             <path d="M 0 6 L 2 6 L 2 8 L 0 8 Z" fill="currentColor" />
           </svg>
+        </div>
+      )}
+
+      {/* Panel index badge — shown when Ctrl/Cmd is held */}
+      {showIndex && panelIndex !== undefined && panelIndex < 9 && (
+        <div
+          className="absolute inset-0 flex items-center justify-center pointer-events-none z-50"
+          style={{ background: 'rgba(0,0,0,0.5)', borderRadius: 'inherit' }}
+        >
+          <div className="flex items-center justify-center w-16 h-16 rounded-2xl bg-indigo-500/90 shadow-2xl shadow-indigo-500/40 border border-indigo-400/50">
+            <span className="text-3xl font-bold text-white tabular-nums">
+              {panelIndex + 1}
+            </span>
+          </div>
         </div>
       )}
     </div>
