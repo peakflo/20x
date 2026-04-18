@@ -263,18 +263,20 @@ describe('EnterpriseAuth logging', () => {
       token: 'jwt-token',
       tenant: { id: 'tenant-1', name: 'Peakflo' }
     })
-    const virtualKeyCall = fetchFn.mock.calls.find(([input]) =>
-      String(input).includes('/api/20x/litellm/virtual-key')
-    )
-    expect(virtualKeyCall?.[1]).toMatchObject({
+    const virtualKeyCall = (
+      fetchFn.mock.calls as Array<[RequestInfo | URL, RequestInit?]>
+    ).find(([input]) => String(input).includes('/api/20x/litellm/virtual-key'))
+    const virtualKeyInit = virtualKeyCall?.[1]
+
+    expect(virtualKeyInit).toMatchObject({
       method: 'GET',
       headers: {
         Authorization: 'Bearer jwt-token'
       }
     })
-    expect(
-      (virtualKeyCall?.[1] as RequestInit | undefined)?.headers as Record<string, string>
-    ).not.toHaveProperty('Content-Type')
+    expect((virtualKeyInit?.headers ?? {}) as Record<string, string>).not.toHaveProperty(
+      'Content-Type'
+    )
     expect(readEnterpriseLiteLLMConfig(db as never)).toEqual({
       apiKey: 'sk-virtual-123',
       baseUrl: 'https://litellm.example.com',
