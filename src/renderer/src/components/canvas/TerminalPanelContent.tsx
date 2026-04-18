@@ -32,6 +32,7 @@ export function TerminalPanelContent({ terminalId, cwd }: TerminalPanelContentPr
   const [error, setError] = useState<string | null>(null)
   const cleanupRef = useRef<(() => void)[]>([])
   const initCalledRef = useRef(false)
+  const isReadyRef = useRef(false)
 
   // Store cwd in a ref — only used at init time, never triggers re-init
   const cwdRef = useRef(cwd)
@@ -155,6 +156,7 @@ export function TerminalPanelContent({ terminalId, cwd }: TerminalPanelContentPr
       // Focus the terminal so it can receive keyboard input
       term.focus()
 
+      isReadyRef.current = true
       setIsReady(true)
     } catch (err) {
       console.error('Failed to create terminal:', err)
@@ -185,7 +187,7 @@ export function TerminalPanelContent({ terminalId, cwd }: TerminalPanelContentPr
       if (width < 10 || height < 10) return // still too small — skip
       try {
         fitAddonRef.current.fit()
-        if (xtermRef.current && isReady) {
+        if (xtermRef.current && isReadyRef.current) {
           window.electronAPI.terminal.resize(
             terminalId,
             xtermRef.current.cols,
@@ -225,8 +227,9 @@ export function TerminalPanelContent({ terminalId, cwd }: TerminalPanelContentPr
       xtermRef.current = null
       fitAddonRef.current = null
       initCalledRef.current = false
+      isReadyRef.current = false
     }
-  }, [initTerminal, terminalId, isReady])
+  }, [initTerminal, terminalId])
 
   // ── Periodically capture cwd so it persists on crash/force-quit ──
   // Uses direct IPC + store update — does NOT change any props that would
