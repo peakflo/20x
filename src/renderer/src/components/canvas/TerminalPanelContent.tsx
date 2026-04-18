@@ -129,6 +129,9 @@ export function TerminalPanelContent({ terminalId, cwd }: TerminalPanelContentPr
         removeExitListener,
       ]
 
+      // Focus the terminal so it can receive keyboard input
+      term.focus()
+
       setIsReady(true)
     } catch (err) {
       console.error('Failed to create terminal:', err)
@@ -229,10 +232,25 @@ export function TerminalPanelContent({ terminalId, cwd }: TerminalPanelContentPr
     )
   }
 
+  // Focus the terminal when the container is clicked
+  const handleClick = useCallback(() => {
+    xtermRef.current?.focus()
+  }, [])
+
+  // Prevent keyboard events from bubbling up to InfiniteCanvas shortcuts
+  // xterm.js renders into a <canvas>, which isn't an input/textarea,
+  // so InfiniteCanvas's keyboard handler would intercept keystrokes.
+  const stopKeyboardPropagation = useCallback((e: React.KeyboardEvent) => {
+    e.stopPropagation()
+  }, [])
+
   return (
     <div
       ref={containerRef}
       className="h-full w-full"
+      onClick={handleClick}
+      onKeyDown={stopKeyboardPropagation}
+      onKeyUp={stopKeyboardPropagation}
       style={{
         background: '#141a26',
         // Minimum dimensions prevent xterm's internal canvas renderer from

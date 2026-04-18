@@ -361,13 +361,19 @@ export function InfiniteCanvas() {
   // ── Keyboard shortcuts ───────────────────────────────────
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Ignore shortcuts when typing in an input/textarea
+      // Ignore shortcuts when typing in an input/textarea or xterm terminal
       const tag = (e.target as HTMLElement)?.tagName?.toLowerCase()
-      const isInputFocused = tag === 'input' || tag === 'textarea' || (e.target as HTMLElement)?.isContentEditable
+      const isXtermFocused = !!(e.target as HTMLElement)?.closest('.xterm')
+      const isInputFocused = tag === 'input' || tag === 'textarea' || (e.target as HTMLElement)?.isContentEditable || isXtermFocused
 
       // Track Ctrl held state — shows panel index badges (Ctrl only, not Cmd)
       if (e.key === 'Control' && !e.repeat) {
         setCtrlHeld(true)
+      }
+      // Clear stale ctrlHeld if Ctrl was released while OS had focus
+      // (e.g. after Ctrl+Cmd+Shift+3 screenshot, OS swallows the keyup)
+      if (!e.ctrlKey && e.key !== 'Control') {
+        setCtrlHeld(false)
       }
 
       if (e.code === 'Space' && !e.repeat && !isInputFocused) {
