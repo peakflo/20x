@@ -1423,9 +1423,17 @@ else:
     try {
       const res = await fetch('http://localhost:19222/json/list')
       const targets = (await res.json()) as Array<{ id: string; url: string; type: string; title: string }>
-      return targets
-        .filter((t) => t.type === 'webview')
-        .map((t) => ({ id: t.id, url: t.url, title: t.title }))
+      // agent-browser's `tab` command shows only page + webview targets (not iframes,
+      // service workers, etc.) and assigns t1, t2, t3... indices in list order.
+      // We replicate that filtering so the renderer can compute the exact tab ID.
+      const tabTargets = targets.filter((t) => t.type === 'page' || t.type === 'webview')
+      return tabTargets.map((t, i) => ({
+        id: t.id,
+        url: t.url,
+        title: t.title,
+        type: t.type,
+        tabId: `t${i + 1}`,
+      }))
     } catch {
       return []
     }

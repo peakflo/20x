@@ -524,38 +524,42 @@ function notifyAgentOfBrowserConnection(
     const browserTitle = browserPanel.title || 'Browser'
     const browserUrl = browserPanel.url || ''
 
-    // ALWAYS resolve the CDP target ID fresh via IPC (main process queries
-    // localhost:19222/json/list — no CORS issues unlike renderer fetch).
-    // Stored cdpTargetId goes stale on every app restart (CDP reassigns IDs).
-    let cdpTargetId: string | null = null
+    // Resolve which agent-browser tab ID (t1, t2, t3...) corresponds to this
+    // browser panel's webview. The IPC handler returns all page+webview targets
+    // with pre-computed tabId matching agent-browser's `tab` command output.
+    let tabId: string | null = null
     try {
-      const webviews = await window.electronAPI.browser.getCdpTargets()
+      const allTargets = await window.electronAPI.browser.getCdpTargets()
+      const webviews = allTargets.filter((t) => t.type === 'webview')
 
       // 1. Check if the stored target ID is still valid
       const storedId = browserPanel.cdpTargetId
-      if (storedId && webviews.some((t) => t.id === storedId)) {
-        cdpTargetId = storedId
-      } else if (browserUrl) {
-        // 2. Match by URL
+      let match = storedId ? webviews.find((t) => t.id === storedId) : null
+
+      // 2. Match by URL
+      if (!match && browserUrl) {
         const urlBase = browserUrl.split('?')[0].split('#')[0]
-        const match = webviews.find((t) => t.url.startsWith(urlBase))
-        cdpTargetId = match?.id || webviews[0]?.id || null
-      } else {
-        // 3. No URL — pick first available webview
-        cdpTargetId = webviews[0]?.id || null
+        match = webviews.find((t) => t.url.startsWith(urlBase)) || webviews[0] || null
+      }
+
+      // 3. No URL — pick first available webview
+      if (!match) {
+        match = webviews[0] || null
+      }
+
+      if (match) {
+        tabId = match.tabId
       }
     } catch { /* IPC query failed */ }
 
-    // SAFETY: Only send connection instructions when we have a confirmed webview target.
-    // Without it, agent-browser would default to the main app window and break the UI.
-    if (!cdpTargetId) {
+    if (!tabId) {
       agentSessionApi.send(
         session.sessionId,
         `[System] A browser panel "${browserTitle}" has been connected to your task on the canvas.\n\n` +
         `The browser panel is loading. To connect once ready:\n` +
         `  agent-browser connect ${CDP_PORT}\n` +
-        `  agent-browser tab    # find the [webview] target, NOT the [page]\n` +
-        `  agent-browser tab --url "<pattern>"   # switch to it\n\n` +
+        `  agent-browser tab    # find the [webview] target\n` +
+        `  agent-browser tab <tN>   # switch to the webview\n\n` +
         `Then use commands normally (open, snapshot, click, etc.).\n` +
         `Do NOT interact with the [page] target — that is the main app window.`,
         taskPanel.refId!,
@@ -564,21 +568,17 @@ function notifyAgentOfBrowserConnection(
       return
     }
 
-    // Build a URL pattern for tab --url matching (use domain from browser URL)
-    const urlDomain = browserUrl ? new URL(browserUrl).hostname.replace('www.', '') : ''
-    const tabUrlPattern = urlDomain ? `"*${urlDomain}*"` : `"*google*"`
-
     agentSessionApi.send(
       session.sessionId,
       `[System] A browser panel "${browserTitle}" has been connected to your task on the canvas. You now have access to control it.\n\n` +
       `To use the browser, run these commands:\n` +
       `  agent-browser connect ${CDP_PORT}\n` +
-      `  agent-browser tab --url ${tabUrlPattern}\n\n` +
+      `  agent-browser tab ${tabId}\n\n` +
       `Then use commands normally:\n` +
       `  agent-browser open <url>\n` +
       `  agent-browser snapshot -i\n` +
       `  agent-browser click <ref>\n\n` +
-      `IMPORTANT: Do NOT use "agent-browser tab t1" or interact with the [page] target — that is the main app window.\n` +
+      `Do NOT use "agent-browser tab t1" — that is the main app window.\n` +
       `The user can see everything you do in the browser in real time on the canvas.`,
       taskPanel.refId!,
       session.agentId
