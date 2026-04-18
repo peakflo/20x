@@ -94,6 +94,9 @@ interface CanvasState {
   // Connection drawing state (transient)
   connectingFromId: string | null
 
+  // Auto-connect proximity state (transient, shown during drag)
+  proximityEdge: { fromId: string; toId: string } | null
+
   // Persistence
   isLoaded: boolean
   loadCanvas: () => Promise<void>
@@ -123,6 +126,7 @@ interface CanvasState {
   removeEdge: (id: string) => void
   removeEdgesForPanel: (panelId: string) => void
   setConnectingFromId: (id: string | null) => void
+  setProximityEdge: (edge: { fromId: string; toId: string } | null) => void
   clearEdges: () => void
 }
 
@@ -149,6 +153,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   draggingPanelId: null,
   snapGuides: [],
   connectingFromId: null,
+  proximityEdge: null,
   isLoaded: false,
 
   loadCanvas: async () => {
@@ -374,6 +379,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   },
 
   setConnectingFromId: (id) => set({ connectingFromId: id }),
+  setProximityEdge: (edge) => set({ proximityEdge: edge }),
 
   clearEdges: () => {
     set({ edges: [] })
@@ -457,6 +463,71 @@ export function calculateSnap(
   if (guideY) guides.push(guideY)
 
   return { x: bestDx < threshold ? snapX : x, y: bestDy < threshold ? snapY : y, guides }
+}
+
+// ── Auto-connect proximity detection ─────────────────────────
+
+/** Distance threshold (canvas px) for auto-connect proximity */
+export const PROXIMITY_THRESHOLD = 80
+
+/**
+ * Check if a dragged panel is close enough to a compatible panel for auto-connect.
+ * Returns { fromId, toId } of the browser↔task pair, or null.
+ * Only browser↔task pairings trigger proximity (not browser↔browser, etc.).
+ */
+export function detectProximityEdge(
+  draggedPanel: CanvasPanelData,
+  otherPanels: CanvasPanelData[],
+  existingEdges: CanvasEdge[]
+): { fromId: string; toId: string } | null {
+  // Only browser or task panels participate in auto-connect
+  if (draggedPanel.type !== 'browser' && draggedPanel.type !== 'task') return null
+
+  const compatibleType = draggedPanel.type === 'browser' ? 'task' : 'browser'
+  const dCx = draggedPanel.x + draggedPanel.width / 2
+  const dCy = draggedPanel.y + draggedPanel.height / 2
+
+  let bestDist = Infinity
+  let bestPanel: CanvasPanelData | null = null
+
+  for (const p of otherPanels) {
+    if (p.type !== compatibleType) continue
+    // Skip if already connected
+    const alreadyConnected = existingEdges.some(
+      (e) =>
+        (e.fromPanelId === draggedPanel.id && e.toPanelId === p.id) ||
+        (e.fromPanelId === p.id && e.toPanelId === draggedPanel.id)
+    )
+    if (alreadyConnected) continue
+
+    // Distance between panel edges (not centers) — more intuitive
+    const pRight = p.x + p.width
+    const pBottom = p.y + p.height
+    const dRight = draggedPanel.x + draggedPanel.width
+    const dBottom = draggedPanel.y + draggedPanel.height
+
+    // Gap between nearest edges
+    const gapX = Math.max(0, Math.max(p.x - dRight, draggedPanel.x - pRight))
+    const gapY = Math.max(0, Math.max(p.y - dBottom, draggedPanel.y - pBottom))
+    const dist = Math.sqrt(gapX * gapX + gapY * gapY)
+
+    // Also check overlapping panels (dist would be 0)
+    const effectiveDist = dist === 0
+      ? Math.hypot(dCx - (p.x + p.width / 2), dCy - (p.y + p.height / 2)) * 0.1
+      : dist
+
+    if (effectiveDist < PROXIMITY_THRESHOLD && effectiveDist < bestDist) {
+      bestDist = effectiveDist
+      bestPanel = p
+    }
+  }
+
+  if (!bestPanel) return null
+
+  // Always put task first, browser second for consistent edge direction
+  return draggedPanel.type === 'task'
+    ? { fromId: draggedPanel.id, toId: bestPanel.id }
+    : { fromId: bestPanel.id, toId: draggedPanel.id }
 }
 
 // ── Browser↔Task edge notification ──────────────────────────

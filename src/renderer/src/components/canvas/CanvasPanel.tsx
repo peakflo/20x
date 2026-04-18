@@ -2,9 +2,12 @@ import { useCallback, useRef, useState, useEffect, memo } from 'react'
 import {
   useCanvasStore,
   calculateSnap,
+  detectProximityEdge,
+  DEFAULT_PANEL_WIDTH,
+  DEFAULT_PANEL_HEIGHT,
   type CanvasPanelData,
 } from '@/stores/canvas-store'
-import { X, Focus, Maximize2, Minimize2, PanelLeft, PanelRight, Columns2, Link2 } from 'lucide-react'
+import { X, Focus, Maximize2, Minimize2, PanelLeft, PanelRight, Columns2, Link2, Globe } from 'lucide-react'
 import type { TaskWorkspaceLayout } from '@/components/tasks/TaskWorkspace'
 import { TaskPanelContent } from './TaskPanelContent'
 import { TranscriptPanelContent } from './TranscriptPanelContent'
@@ -80,7 +83,8 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
       const newY = dragStart.current.panelY + dy
 
       // Read panels imperatively — avoids reactive subscription that re-renders all panels
-      const otherPanels = useCanvasStore.getState().panels.filter((p) => p.id !== panel.id)
+      const { panels: allPanels, edges } = useCanvasStore.getState()
+      const otherPanels = allPanels.filter((p) => p.id !== panel.id)
       const { x: snappedX, y: snappedY, guides } = calculateSnap(
         { x: newX, y: newY, width: panel.width, height: panel.height },
         otherPanels
@@ -88,9 +92,29 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
 
       updatePanel(panel.id, { x: snappedX, y: snappedY })
       setSnapGuides(guides)
+
+      // Auto-connect proximity detection (browser ↔ task)
+      const draggedWithPos = { ...panel, x: snappedX, y: snappedY }
+      const prox = detectProximityEdge(draggedWithPos, otherPanels, edges)
+      useCanvasStore.getState().setProximityEdge(prox)
     }
 
     const handleUp = () => {
+      // If there's a proximity edge, auto-connect on drop
+      const prox = useCanvasStore.getState().proximityEdge
+      if (prox) {
+        const { edges } = useCanvasStore.getState()
+        const alreadyExists = edges.some(
+          (e) =>
+            (e.fromPanelId === prox.fromId && e.toPanelId === prox.toId) ||
+            (e.fromPanelId === prox.toId && e.toPanelId === prox.fromId)
+        )
+        if (!alreadyExists) {
+          addEdge(prox.fromId, prox.toId, 'browser')
+        }
+        useCanvasStore.getState().setProximityEdge(null)
+      }
+
       setIsDragging(false)
       setDraggingPanelId(null)
       setSnapGuides([])
@@ -227,6 +251,59 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
     []
   )
 
+  // ── Proximity glow — this panel is a target of auto-connect proximity ──
+  const [isProximityTarget, setIsProximityTarget] = useState(false)
+  useEffect(() => {
+    const unsub = useCanvasStore.subscribe((s, prev) => {
+      if (s.proximityEdge !== prev.proximityEdge) {
+        const isTarget = s.proximityEdge
+          ? (s.proximityEdge.fromId === panel.id || s.proximityEdge.toId === panel.id) &&
+            s.draggingPanelId !== panel.id
+          : false
+        setIsProximityTarget(isTarget)
+      }
+    })
+    return unsub
+  }, [panel.id])
+
+  // ── Create connected browser panel (from side handle click) ──
+  const handleCreateBrowser = useCallback(
+    (e: React.MouseEvent) => {
+      e.stopPropagation()
+      e.preventDefault()
+      // Place new browser panel to the right of this panel with a gap
+      const gap = 40
+      const newX = panel.x + panel.width + gap
+      const newY = panel.y
+      const addPanel = useCanvasStore.getState().addPanel
+      const newId = addPanel({
+        type: 'browser',
+        title: 'Browser',
+        x: newX,
+        y: newY,
+        width: DEFAULT_PANEL_WIDTH,
+        height: DEFAULT_PANEL_HEIGHT,
+      })
+      // Auto-connect with browser edge
+      if (newId) {
+        addEdge(panel.id, newId, 'browser')
+      }
+    },
+    [panel.id, panel.x, panel.y, panel.width, addEdge]
+  )
+
+  // ── Start connecting from side handle (drag) ──
+  const handleSideHandleDrag = useCallback(
+    (e: React.MouseEvent) => {
+      e.stopPropagation()
+      e.preventDefault()
+      // Enter connection mode — the user drags to an existing browser panel
+      setConnectingFromId(panel.id)
+      setIsConnectingLocal(true)
+    },
+    [setConnectingFromId, panel.id]
+  )
+
   // ── Panel type styling ────────────────────────────────────
   const TYPE_CONFIG: Record<string, { label: string; color: string; border: string }> = {
     task: { label: 'Task', color: 'bg-blue-500/20 text-blue-400', border: 'border-blue-500/40' },
@@ -243,9 +320,11 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
       ref={panelRef}
       data-canvas-panel="true"
       onMouseDown={handleMouseDown}
-      className={`absolute rounded-xl border bg-[#1a2030] shadow-2xl flex flex-col overflow-hidden select-none transition-shadow duration-150 ${cfg.border} ${
+      className={`absolute rounded-xl border bg-[#1a2030] shadow-2xl flex flex-col select-none transition-shadow duration-150 group/panel ${cfg.border} ${
         isDragging ? 'shadow-indigo-500/10 ring-1 ring-indigo-500/30' : ''
-      } ${isConnectingLocal ? 'ring-2 ring-orange-500/50' : ''}`}
+      } ${isConnectingLocal ? 'ring-2 ring-orange-500/50' : ''} ${
+        isProximityTarget ? 'ring-2 ring-orange-500/60 shadow-orange-500/20 shadow-2xl' : ''
+      }`}
       style={{
         left: panel.x,
         top: panel.y,
@@ -256,6 +335,8 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
         minHeight: isCollapsed ? undefined : (panel.minHeight ?? 150),
       }}
     >
+      {/* Inner wrapper — clips content within rounded corners */}
+      <div className="flex flex-col flex-1 min-h-0 overflow-hidden rounded-[11px]">
       {/* Title bar — drag handle */}
       <div
         className="flex items-center gap-2 px-3 py-2 border-b border-border/40 bg-[#141a26] flex-shrink-0 cursor-grab active:cursor-grabbing group"
@@ -366,6 +447,8 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
         </div>
       )}
 
+      </div>{/* end inner wrapper */}
+
       {/* Resize handle (bottom-right corner) */}
       {!isCollapsed && (
         <div
@@ -382,6 +465,49 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
             <path d="M 3 3 L 8 3 L 8 5 L 5 5 L 5 8 L 3 8 Z" fill="currentColor" />
             <path d="M 0 6 L 2 6 L 2 8 L 0 8 Z" fill="currentColor" />
           </svg>
+        </div>
+      )}
+
+      {/* Side handle — React Flow style, for task panels: click to create browser, drag to connect */}
+      {panel.type === 'task' && !isCollapsed && !isDragging && (
+        <div
+          className="absolute opacity-0 group-hover/panel:opacity-100 transition-opacity duration-200"
+          style={{
+            right: -18,
+            top: '50%',
+            transform: 'translateY(-50%)',
+            zIndex: 10,
+          }}
+        >
+          <button
+            onMouseDown={(e) => {
+              e.stopPropagation()
+              const startX = e.clientX
+              const startY = e.clientY
+              let moved = false
+
+              const onMove = (me: MouseEvent) => {
+                if (Math.abs(me.clientX - startX) > 5 || Math.abs(me.clientY - startY) > 5) {
+                  moved = true
+                  handleSideHandleDrag(e)
+                  window.removeEventListener('mousemove', onMove)
+                }
+              }
+              const onUp = () => {
+                window.removeEventListener('mousemove', onMove)
+                window.removeEventListener('mouseup', onUp)
+                if (!moved) {
+                  handleCreateBrowser(e)
+                }
+              }
+              window.addEventListener('mousemove', onMove)
+              window.addEventListener('mouseup', onUp)
+            }}
+            className="flex items-center justify-center w-8 h-8 rounded-full bg-orange-500/20 border border-orange-500/40 hover:bg-orange-500/30 hover:border-orange-500/60 hover:scale-110 transition-all duration-150 cursor-pointer shadow-lg shadow-orange-500/10"
+            title="Click to add browser · Drag to connect to existing browser"
+          >
+            <Globe className="h-3.5 w-3.5 text-orange-400" />
+          </button>
         </div>
       )}
 

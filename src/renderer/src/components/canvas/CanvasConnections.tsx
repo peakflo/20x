@@ -14,6 +14,7 @@ export function CanvasConnections({
   const panels = useCanvasStore((s) => s.panels)
   const edges = useCanvasStore((s) => s.edges)
   const connectingFromId = useCanvasStore((s) => s.connectingFromId)
+  const proximityEdge = useCanvasStore((s) => s.proximityEdge)
   const removeEdge = useCanvasStore((s) => s.removeEdge)
 
   const panelMap = useMemo(() => {
@@ -110,7 +111,22 @@ export function CanvasConnections({
     return { fromAnchor, path: makePath(fromAnchor, toAnchor) }
   }, [connectingFromId, mouseCanvasPos, panelMap])
 
-  if (edgeData.length === 0 && !pendingPath) return null
+  // Proximity edge preview (glowing edge during drag)
+  const proximityPath = useMemo(() => {
+    if (!proximityEdge) return null
+    const from = panelMap.get(proximityEdge.fromId)
+    const to = panelMap.get(proximityEdge.toId)
+    if (!from || !to) return null
+
+    const toCenter = { x: to.x + to.width / 2, y: to.y + to.height / 2 }
+    const fromCenter = { x: from.x + from.width / 2, y: from.y + from.height / 2 }
+    const fromAnchor = getAnchor(from, toCenter.x, toCenter.y)
+    const toAnchor = getAnchor(to, fromCenter.x, fromCenter.y)
+    const path = makePath(fromAnchor, toAnchor)
+    return { fromAnchor, toAnchor, path }
+  }, [proximityEdge, panelMap])
+
+  if (edgeData.length === 0 && !pendingPath && !proximityPath) return null
 
   return (
     <svg
@@ -208,6 +224,45 @@ export function CanvasConnections({
               strokeWidth="1.5"
             />
           )}
+        </>
+      )}
+
+      {/* Proximity edge preview — glowing orange dashed line during drag */}
+      {proximityPath && (
+        <>
+          {/* Glow layer */}
+          <path
+            d={proximityPath.path}
+            fill="none"
+            stroke="rgba(249,115,22,0.3)"
+            strokeWidth="8"
+            strokeLinecap="round"
+            className="animate-pulse"
+          />
+          {/* Main dashed line */}
+          <path
+            d={proximityPath.path}
+            fill="none"
+            stroke="rgba(249,115,22,0.7)"
+            strokeWidth="2"
+            strokeDasharray="8 4"
+            strokeLinecap="round"
+          />
+          {/* Anchor dots */}
+          <circle
+            cx={proximityPath.fromAnchor.x}
+            cy={proximityPath.fromAnchor.y}
+            r="4"
+            fill="rgba(249,115,22,0.8)"
+            className="animate-pulse"
+          />
+          <circle
+            cx={proximityPath.toAnchor.x}
+            cy={proximityPath.toAnchor.y}
+            r="4"
+            fill="rgba(249,115,22,0.8)"
+            className="animate-pulse"
+          />
         </>
       )}
     </svg>
