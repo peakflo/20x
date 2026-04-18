@@ -562,22 +562,24 @@ function notifyAgentOfBrowserConnection(
       return
     }
 
-    const wsUrl = `ws://localhost:${CDP_PORT}/devtools/page/${cdpTargetId}`
     agentSessionApi.send(
       session.sessionId,
       `[System] A browser panel "${browserTitle}" has been connected to your task on the canvas. You now have access to control it.\n\n` +
-      `CRITICAL: You MUST include --cdp flag on EVERY agent-browser command. Without it, agent-browser targets the main app window and breaks the UI.\n\n` +
-      `To connect:\n` +
-      `  agent-browser --cdp "${wsUrl}" open about:blank\n\n` +
-      `For ALL subsequent commands, always include --cdp:\n` +
-      `  agent-browser --cdp "${wsUrl}" snapshot -i\n` +
-      `  agent-browser --cdp "${wsUrl}" click <ref>\n` +
-      `  agent-browser --cdp "${wsUrl}" type <ref> "text"\n` +
-      `  agent-browser --cdp "${wsUrl}" open <url>\n\n` +
-      `If commands stop working, kill stale daemons first:\n` +
-      `  pkill -f agent-browser; sleep 1\n` +
-      `  agent-browser --cdp "${wsUrl}" open about:blank\n\n` +
-      `NEVER use agent-browser without --cdp "${wsUrl}" — every single command needs it.\n\n` +
+      `CRITICAL SETUP — follow these steps exactly:\n\n` +
+      `Step 1: Connect to the Electron app's CDP port:\n` +
+      `  pkill -f agent-browser 2>/dev/null; sleep 1\n` +
+      `  agent-browser connect ${CDP_PORT}\n\n` +
+      `Step 2: List targets and find the webview (NOT the main "page" window):\n` +
+      `  agent-browser tab\n\n` +
+      `Step 3: Switch to the webview target that shows "${browserUrl || browserTitle}":\n` +
+      `  agent-browser tab <index>   # pick the [webview] entry, NOT [page]\n\n` +
+      `Step 4: Now use commands normally:\n` +
+      `  agent-browser open <url>\n` +
+      `  agent-browser snapshot -i\n` +
+      `  agent-browser click <ref>\n\n` +
+      `DANGER: The [page] target at index 0 is the main Electron app window.\n` +
+      `NEVER interact with it — switching to it or navigating it will break the app UI.\n` +
+      `Always use a [webview] target.\n\n` +
       `The user can see everything you do in the browser in real time on the canvas.`,
       taskPanel.refId!,
       session.agentId

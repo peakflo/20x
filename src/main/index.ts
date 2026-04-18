@@ -161,10 +161,9 @@ function createWindow(): void {
 
   // SAFETY: Prevent the main window from ever navigating away from the app.
   // This guards against agent-browser or CDP accidentally targeting the main
-  // window instead of a webview panel — without this, the entire app UI gets
-  // replaced by whatever URL was opened.
+  // window instead of a webview panel.
   //
-  // Layer 1: will-navigate (catches user-initiated navigations)
+  // Layer 1: will-navigate (catches user-initiated navigations — NOT CDP)
   mainWindow.webContents.on('will-navigate', (event, url) => {
     const appOrigins = ['http://localhost:', 'file://']
     const isAppUrl = appOrigins.some((origin) => url.startsWith(origin))
@@ -174,47 +173,26 @@ function createWindow(): void {
     }
   })
 
-  // Layer 2: Network-level interception via webRequest API.
-  // This is the DEFINITIVE guard — CDP Page.navigate bypasses will-navigate
-  // and did-start-navigation events, but it CANNOT bypass network-level blocking.
-  //
-  // IMPORTANT: We use webContents.fromId() to verify the request comes from the
-  // main window specifically. We cannot rely on webContentsId alone because
-  // webviews share the same session and their requests also go through this handler.
-  // We must NOT block webview navigations — only the main BrowserWindow.
-  const mainWcId = mainWindow.webContents.id
-  mainWindow.webContents.session.webRequest.onBeforeRequest(
-    { urls: ['*://*/*'] },
-    (details, callback) => {
-      // Only block main-frame navigations of the main BrowserWindow to non-app URLs.
-      // Webview navigations must pass through — they are the browser panels.
-      if (details.resourceType === 'mainFrame') {
-        // Check if this request is from the main window (not a webview)
-        const isMainWindow = details.webContentsId === mainWcId
-        // Fallback: if webContentsId is missing/unreliable, check if the requesting
-        // webContents is a BrowserWindow (not a webview guest)
-        let isMainWindowFallback = false
-        if (details.webContentsId != null && details.webContentsId !== mainWcId) {
-          // Different webContentsId — this is a webview, let it through
-          isMainWindowFallback = false
-        } else if (details.webContentsId == null) {
-          // webContentsId missing — be safe, don't block (might be a webview)
-          isMainWindowFallback = false
-        }
-
-        if (isMainWindow || isMainWindowFallback) {
-          const isAppUrl =
-            details.url.startsWith('http://localhost:') || details.url.startsWith('file://')
-          if (!isAppUrl) {
-            console.warn(`[Main] Network-level block: main window navigation to: ${details.url} (wcId=${details.webContentsId}, mainWcId=${mainWcId})`)
-            callback({ cancel: true })
-            return
-          }
-        }
+  // Layer 2: Recovery — if CDP Page.navigate bypasses will-navigate and the main
+  // window ends up on a non-app URL, detect it and reload the app immediately.
+  // This is a safety net, not prevention — the window briefly shows the wrong page
+  // then snaps back to the app.
+  const appUrl = is.dev && process.env['ELECTRON_RENDERER_URL']
+    ? process.env['ELECTRON_RENDERER_URL']
+    : null // file:// URL set after loadFile
+  const mw = mainWindow // capture non-null reference for closure
+  mw.webContents.on('did-navigate', (_event, url) => {
+    const appOrigins = ['http://localhost:', 'file://']
+    const isAppUrl = appOrigins.some((origin) => url.startsWith(origin))
+    if (!isAppUrl) {
+      console.warn(`[Main] Main window navigated to non-app URL: ${url} — recovering...`)
+      if (appUrl) {
+        mw.loadURL(appUrl)
+      } else {
+        mw.loadFile(join(__dirname, '../renderer/index.html'))
       }
-      callback({})
     }
-  )
+  })
 
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
     mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
