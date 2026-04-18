@@ -90,10 +90,12 @@ export function BrowserPanelContent({
         // First try via IPC (uses debugger API or CDP match in main process)
         const wcId = wv.getWebContentsId?.()
         if (wcId) {
+          // Store webContentsId on panel for reliable CDP target resolution
+          updatePanel(panelId, { webContentsId: wcId })
           const result = await window.electronAPI.browser.getTargetId(wcId)
           if (result.targetId) {
             cdpTargetResolved.current = true
-            updatePanel(panelId, { cdpTargetId: result.targetId })
+            updatePanel(panelId, { cdpTargetId: result.targetId, webContentsId: wcId })
             return
           }
         }

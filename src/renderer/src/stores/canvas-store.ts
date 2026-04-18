@@ -23,6 +23,8 @@ export interface CanvasPanelData {
   streamPort?: number
   /** CDP target ID for this webview — used to connect agent-browser directly */
   cdpTargetId?: string
+  /** Electron webContentsId for this webview — used to resolve CDP target via IPC */
+  webContentsId?: number
   title: string
   x: number
   y: number
@@ -538,30 +540,40 @@ function notifyAgentOfBrowserConnection(
     const browserUrl = browserPanel.url || ''
 
     // Resolve which agent-browser tab ID (t1, t2, t3...) corresponds to this
-    // browser panel's webview. Retry a few times since webview may not be in CDP yet.
+    // browser panel's webview. Uses webContentsId for reliable direct lookup.
     let tabId: string | null = null
     const resolveTab = async (attempt: number): Promise<string | null> => {
       const allTargets = await window.electronAPI.browser.getCdpTargets()
       const webviews = allTargets.filter((t) => t.type === 'webview')
       console.log(`[BrowserEdge] resolveTab attempt=${attempt}`, {
-        allTargetsCount: allTargets.length,
         allTargets: allTargets.map((t) => ({ tabId: t.tabId, type: t.type, url: t.url?.slice(0, 60) })),
         webviewsCount: webviews.length,
         browserUrl,
-        storedCdpTargetId: browserPanel.cdpTargetId,
+        webContentsId: browserPanel.webContentsId,
       })
       if (webviews.length === 0) return null
 
-      const storedId = browserPanel.cdpTargetId
-      let match = storedId ? webviews.find((t) => t.id === storedId) : null
-      if (match) console.log('[BrowserEdge] matched by stored cdpTargetId', match.tabId)
+      let match: typeof webviews[0] | null = null
 
-      if (!match && browserUrl) {
-        const urlBase = browserUrl.split('?')[0].split('#')[0]
-        match = webviews.find((t) => t.url.startsWith(urlBase)) || webviews[0] || null
-        if (match) console.log('[BrowserEdge] matched by URL or fallback to first webview', { tabId: match.tabId, matchUrl: match.url?.slice(0, 60) })
+      // 1. Best: use webContentsId → getTargetId for exact CDP target, then find its tabId
+      if (!match && browserPanel.webContentsId) {
+        try {
+          const result = await window.electronAPI.browser.getTargetId(browserPanel.webContentsId)
+          if (result.targetId) {
+            match = allTargets.find((t) => t.id === result.targetId) || null
+            if (match) console.log('[BrowserEdge] matched by webContentsId→getTargetId', match.tabId)
+          }
+        } catch { /* debugger API failed */ }
       }
 
+      // 2. Match by URL
+      if (!match && browserUrl) {
+        const urlBase = browserUrl.split('?')[0].split('#')[0]
+        match = webviews.find((t) => t.url.startsWith(urlBase)) || null
+        if (match) console.log('[BrowserEdge] matched by URL', { tabId: match.tabId, matchUrl: match.url?.slice(0, 60) })
+      }
+
+      // 3. Last resort — first available webview
       if (!match) {
         match = webviews[0] || null
         if (match) console.log('[BrowserEdge] fallback to first webview', match.tabId)
