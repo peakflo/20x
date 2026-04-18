@@ -470,11 +470,19 @@ function notifyAgentOfBrowserConnection(
   const taskPanel = fromPanel?.type === 'task' ? fromPanel : toPanel?.type === 'task' ? toPanel : null
   const browserPanel = fromPanel?.type === 'browser' ? fromPanel : toPanel?.type === 'browser' ? toPanel : null
 
-  if (!taskPanel?.refId || !browserPanel) return
+  console.log('[BrowserEdge] notifyAgentOfBrowserConnection called', {
+    fromPanelId, toPanelId,
+    fromType: fromPanel?.type, toType: toPanel?.type,
+    taskRefId: taskPanel?.refId, browserPanelId: browserPanel?.id,
+    browserUrl: browserPanel?.url, browserTitle: browserPanel?.title,
+    browserCdpTargetId: browserPanel?.cdpTargetId,
+  })
 
-  // Resolve the CDP target ID for this webview by querying /json/list
-  // and matching the browser panel's URL. This is done at notification time
-  // so it always picks up the latest target, even if cdpTargetId wasn't stored yet.
+  if (!taskPanel?.refId || !browserPanel) {
+    console.log('[BrowserEdge] BAIL: no taskPanel.refId or no browserPanel')
+    return
+  }
+
   const resolveAndNotify = async () => {
     const [{ useAgentStore }, { agentSessionApi }, { useTaskStore }] = await Promise.all([
       import('./agent-store'),
@@ -484,21 +492,24 @@ function notifyAgentOfBrowserConnection(
 
     const taskId = taskPanel.refId!
     let session = useAgentStore.getState().getSession(taskId)
+    console.log('[BrowserEdge] session state', { taskId, sessionId: session?.sessionId, agentId: session?.agentId })
 
     // If no active session, auto-start or resume the task
     if (!session?.sessionId) {
       const task = useTaskStore.getState().tasks.find((t) => t.id === taskId)
-      if (!task?.agent_id) return // No agent assigned — can't start
+      console.log('[BrowserEdge] no session, looking up task', { taskId, agentId: task?.agent_id, sessionId: task?.session_id })
+      if (!task?.agent_id) {
+        console.log('[BrowserEdge] BAIL: no agent_id on task')
+        return
+      }
 
       const initSession = useAgentStore.getState().initSession
       try {
         if (task.session_id) {
-          // Resume existing session
           useAgentStore.getState().clearMessageDedup(taskId)
           initSession(taskId, '', task.agent_id)
           const result = await agentSessionApi.resume(task.agent_id, taskId, task.session_id)
           if (result.ended) {
-            // Session ended — start fresh
             initSession(taskId, '', task.agent_id)
             const { sessionId } = await agentSessionApi.start(task.agent_id, taskId)
             initSession(taskId, sessionId, task.agent_id)
@@ -506,60 +517,71 @@ function notifyAgentOfBrowserConnection(
             initSession(taskId, result.sessionId, task.agent_id)
           }
         } else {
-          // Start new session
           initSession(taskId, '', task.agent_id)
           const { sessionId } = await agentSessionApi.start(task.agent_id, taskId)
           initSession(taskId, sessionId, task.agent_id)
         }
-        // Re-fetch the session after start/resume
         session = useAgentStore.getState().getSession(taskId)
+        console.log('[BrowserEdge] session after auto-start', { sessionId: session?.sessionId })
       } catch (err) {
-        console.error('[Canvas] Failed to auto-start/resume task for browser connection:', err)
+        console.error('[BrowserEdge] Failed to auto-start/resume task:', err)
         return
       }
     }
 
-    if (!session?.sessionId) return
+    if (!session?.sessionId) {
+      console.log('[BrowserEdge] BAIL: still no sessionId after auto-start attempt')
+      return
+    }
 
     const browserTitle = browserPanel.title || 'Browser'
     const browserUrl = browserPanel.url || ''
 
     // Resolve which agent-browser tab ID (t1, t2, t3...) corresponds to this
-    // browser panel's webview. The IPC handler returns all page+webview targets
-    // with pre-computed tabId matching agent-browser's `tab` command output.
-    // Retry a few times since the webview may not be registered in CDP yet.
+    // browser panel's webview. Retry a few times since webview may not be in CDP yet.
     let tabId: string | null = null
-    const resolveTab = async (): Promise<string | null> => {
+    const resolveTab = async (attempt: number): Promise<string | null> => {
       const allTargets = await window.electronAPI.browser.getCdpTargets()
       const webviews = allTargets.filter((t) => t.type === 'webview')
+      console.log(`[BrowserEdge] resolveTab attempt=${attempt}`, {
+        allTargetsCount: allTargets.length,
+        allTargets: allTargets.map((t) => ({ tabId: t.tabId, type: t.type, url: t.url?.slice(0, 60) })),
+        webviewsCount: webviews.length,
+        browserUrl,
+        storedCdpTargetId: browserPanel.cdpTargetId,
+      })
       if (webviews.length === 0) return null
 
-      // 1. Check if the stored target ID is still valid
       const storedId = browserPanel.cdpTargetId
       let match = storedId ? webviews.find((t) => t.id === storedId) : null
+      if (match) console.log('[BrowserEdge] matched by stored cdpTargetId', match.tabId)
 
-      // 2. Match by URL
       if (!match && browserUrl) {
         const urlBase = browserUrl.split('?')[0].split('#')[0]
         match = webviews.find((t) => t.url.startsWith(urlBase)) || webviews[0] || null
+        if (match) console.log('[BrowserEdge] matched by URL or fallback to first webview', { tabId: match.tabId, matchUrl: match.url?.slice(0, 60) })
       }
 
-      // 3. No URL — pick first available webview
       if (!match) {
         match = webviews[0] || null
+        if (match) console.log('[BrowserEdge] fallback to first webview', match.tabId)
       }
 
       return match?.tabId || null
     }
 
     try {
-      // Try up to 3 times with 1s delay — webview may still be loading in CDP
       for (let attempt = 0; attempt < 3; attempt++) {
-        tabId = await resolveTab()
+        tabId = await resolveTab(attempt)
         if (tabId) break
+        console.log(`[BrowserEdge] no tab found, retrying in 1s (attempt ${attempt + 1}/3)`)
         await new Promise((r) => setTimeout(r, 1000))
       }
-    } catch { /* IPC query failed */ }
+    } catch (err) {
+      console.error('[BrowserEdge] resolveTab error:', err)
+    }
+
+    console.log('[BrowserEdge] final result', { tabId, browserTitle, browserUrl })
 
     if (!tabId) {
       agentSessionApi.send(
