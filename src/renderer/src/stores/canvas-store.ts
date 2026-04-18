@@ -37,7 +37,7 @@ export interface CanvasPanelData {
 
 // ── Connections / Edges ───────────────────────────────────
 
-export type CanvasEdgeType = 'default' | 'browser'
+export type CanvasEdgeType = 'default' | 'browser' | 'terminal'
 
 export interface CanvasEdge {
   id: string
@@ -356,9 +356,12 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     }))
     scheduleSave()
 
-    // ── Notify agent when a browser edge connects browser↔task ──
+    // ── Notify agent when a browser/terminal edge connects to a task ──
     if (edgeType === 'browser') {
       notifyAgentOfBrowserConnection(panels, fromPanelId, toPanelId)
+    }
+    if (edgeType === 'terminal') {
+      notifyAgentOfTerminalConnection(panels, fromPanelId, toPanelId)
     }
 
     return id
@@ -480,10 +483,12 @@ export function detectProximityEdge(
   otherPanels: CanvasPanelData[],
   existingEdges: CanvasEdge[]
 ): { fromId: string; toId: string } | null {
-  // Only browser or task panels participate in auto-connect
-  if (draggedPanel.type !== 'browser' && draggedPanel.type !== 'task') return null
+  // Only browser, terminal, or task panels participate in auto-connect
+  if (draggedPanel.type !== 'browser' && draggedPanel.type !== 'terminal' && draggedPanel.type !== 'task') return null
 
-  const compatibleType = draggedPanel.type === 'browser' ? 'task' : 'browser'
+  // Task connects to browser or terminal; browser/terminal connect to task
+  const compatibleTypes: CanvasPanelType[] =
+    draggedPanel.type === 'task' ? ['browser', 'terminal'] : ['task']
   const dCx = draggedPanel.x + draggedPanel.width / 2
   const dCy = draggedPanel.y + draggedPanel.height / 2
 
@@ -491,7 +496,7 @@ export function detectProximityEdge(
   let bestPanel: CanvasPanelData | null = null
 
   for (const p of otherPanels) {
-    if (p.type !== compatibleType) continue
+    if (!compatibleTypes.includes(p.type)) continue
     // Skip if already connected
     const alreadyConnected = existingEdges.some(
       (e) =>
@@ -706,6 +711,91 @@ function notifyAgentOfBrowserConnection(
       taskPanel.refId!,
       session.agentId
     ).catch((err: unknown) => console.error('[Canvas] Failed to notify agent of browser connection:', err))
+  }
+
+  resolveAndNotify().catch(() => {
+    // Silently ignore — can happen in test environments
+  })
+}
+
+// ── Terminal↔Task edge notification ──────────────────────────
+
+function notifyAgentOfTerminalConnection(
+  panels: CanvasPanelData[],
+  fromPanelId: string,
+  toPanelId: string
+) {
+  const fromPanel = panels.find((p) => p.id === fromPanelId)
+  const toPanel = panels.find((p) => p.id === toPanelId)
+  const taskPanel = fromPanel?.type === 'task' ? fromPanel : toPanel?.type === 'task' ? toPanel : null
+  const terminalPanel = fromPanel?.type === 'terminal' ? fromPanel : toPanel?.type === 'terminal' ? toPanel : null
+
+  if (!taskPanel?.refId || !terminalPanel) return
+
+  const resolveAndNotify = async () => {
+    const [{ useAgentStore }, { agentSessionApi }, { useTaskStore }] = await Promise.all([
+      import('./agent-store'),
+      import('@/lib/ipc-client'),
+      import('./task-store'),
+    ])
+
+    const taskId = taskPanel.refId!
+    let session = useAgentStore.getState().getSession(taskId)
+
+    // If no active session, auto-start or resume the task
+    if (!session?.sessionId) {
+      const task = useTaskStore.getState().tasks.find((t) => t.id === taskId)
+      if (!task?.agent_id) return
+
+      const initSession = useAgentStore.getState().initSession
+      try {
+        if (task.session_id) {
+          useAgentStore.getState().clearMessageDedup(taskId)
+          initSession(taskId, '', task.agent_id)
+          const result = await agentSessionApi.resume(task.agent_id, taskId, task.session_id)
+          if (result.ended) {
+            initSession(taskId, '', task.agent_id)
+            const { sessionId } = await agentSessionApi.start(task.agent_id, taskId)
+            initSession(taskId, sessionId, task.agent_id)
+          } else {
+            initSession(taskId, result.sessionId, task.agent_id)
+          }
+        } else {
+          initSession(taskId, '', task.agent_id)
+          const { sessionId } = await agentSessionApi.start(task.agent_id, taskId)
+          initSession(taskId, sessionId, task.agent_id)
+        }
+        session = useAgentStore.getState().getSession(taskId)
+      } catch (err) {
+        console.error('[TerminalEdge] Failed to auto-start/resume task:', err)
+        return
+      }
+    }
+
+    if (!session?.sessionId) return
+
+    // Get the current terminal buffer to include as initial context
+    const terminalId = terminalPanel.id
+    let bufferPreview = ''
+    try {
+      const { lines } = await window.electronAPI.terminal.getBuffer(terminalId, 50)
+      if (lines.length > 0) {
+        bufferPreview = `\n\nCurrent terminal output (last ${lines.length} lines):\n\`\`\`\n${lines.join('\n')}\n\`\`\``
+      }
+    } catch { /* ignore */ }
+
+    agentSessionApi.send(
+      session.sessionId,
+      `[System] A terminal panel "${terminalPanel.title}" has been connected to your task on the canvas.\n\n` +
+      `You can read the terminal's output log at any time by running:\n` +
+      `  read_terminal_log\n\n` +
+      `This is a read-only view — you cannot type into this terminal.\n` +
+      `The terminal panel ID is: ${terminalId}\n` +
+      `Use your own Bash tool for running commands. Use the terminal log to observe output from processes the user is running.` +
+      bufferPreview,
+      taskPanel.refId!,
+      session.agentId
+    ).catch((err: unknown) => console.error('[Canvas] Failed to notify agent of terminal connection:', err))
   }
 
   resolveAndNotify().catch(() => {

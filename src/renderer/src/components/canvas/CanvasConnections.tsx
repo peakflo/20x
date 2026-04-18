@@ -84,11 +84,7 @@ export function CanvasConnections({
         const toAnchor = getAnchor(to, fromCenter.x, fromCenter.y)
         const path = makePath(fromAnchor, toAnchor)
 
-        // For browser edges, find the browser panel's title to show on the label
-        const browserPanel = from.type === 'browser' ? from : to.type === 'browser' ? to : null
-        const browserTitle = browserPanel?.title || ''
-
-        return { id: edge.id, edge, fromAnchor, toAnchor, path, browserTitle }
+        return { id: edge.id, edge, fromAnchor, toAnchor, path }
       })
       .filter(Boolean) as Array<{
       id: string
@@ -96,7 +92,6 @@ export function CanvasConnections({
       fromAnchor: { x: number; y: number; dir: string }
       toAnchor: { x: number; y: number; dir: string }
       path: string
-      browserTitle: string
     }>
   }, [edges, panelMap])
 
@@ -135,9 +130,13 @@ export function CanvasConnections({
     >
       {/* Existing edges */}
       {edgeData.map((edge) => {
-        const isBrowser = edge.edge.edgeType === 'browser'
-        const colorFaded = isBrowser ? 'rgba(249,115,22,0.5)' : 'rgba(99,102,241,0.45)'
-        const colorDot = isBrowser ? 'rgba(249,115,22,0.8)' : 'rgba(99,102,241,0.7)'
+        const edgeType = edge.edge.edgeType
+        const colorFaded = edgeType === 'browser' ? 'rgba(249,115,22,0.5)'
+          : edgeType === 'terminal' ? 'rgba(34,197,94,0.5)'
+          : 'rgba(99,102,241,0.45)'
+        const colorDot = edgeType === 'browser' ? 'rgba(249,115,22,0.8)'
+          : edgeType === 'terminal' ? 'rgba(34,197,94,0.8)'
+          : 'rgba(99,102,241,0.7)'
 
         return (
           <g key={edge.id}>
@@ -176,23 +175,12 @@ export function CanvasConnections({
               fill={colorDot}
             />
 
-            {/* Midpoint label for browser edges */}
-            {isBrowser && (
-              <EdgeLabel
-                path={edge.path}
-                label={edge.browserTitle || 'Browser'}
-                onDelete={() => removeEdge(edge.id)}
-              />
-            )}
-
-            {/* Delete on hover for default edges */}
-            {!isBrowser && (
-              <EdgeDeleteDot
-                x={(edge.fromAnchor.x + edge.toAnchor.x) / 2}
-                y={(edge.fromAnchor.y + edge.toAnchor.y) / 2}
-                onDelete={() => removeEdge(edge.id)}
-              />
-            )}
+            {/* Delete dot on hover (midpoint) */}
+            <EdgeDeleteDot
+              x={(edge.fromAnchor.x + edge.toAnchor.x) / 2}
+              y={(edge.fromAnchor.y + edge.toAnchor.y) / 2}
+              onDelete={() => removeEdge(edge.id)}
+            />
           </g>
         )
       })}
@@ -269,63 +257,7 @@ export function CanvasConnections({
   )
 }
 
-// ── Browser edge label (small "Browser" pill at midpoint) ─────
-
-function EdgeLabel({
-  path,
-  label,
-  onDelete,
-}: {
-  path: string
-  label: string
-  onDelete: () => void
-}) {
-  // Approximate midpoint from the path's start and end
-  const match = path.match(/M ([\d.-]+) ([\d.-]+) C [\d.-]+[\s,]+[\d.-]+[\s,]+([\d.-]+)[\s,]+([\d.-]+)[\s,]+([\d.-]+)[\s,]+([\d.-]+)/)
-  if (!match) return null
-
-  const x1 = parseFloat(match[1]), y1 = parseFloat(match[2])
-  const x2 = parseFloat(match[5]), y2 = parseFloat(match[6])
-  const mx = (x1 + x2) / 2
-  const my = (y1 + y2) / 2
-
-  // Truncate long titles, show with lightning icon
-  const truncated = label.length > 16 ? label.slice(0, 15) + '\u2026' : label
-  const displayLabel = `\u26A1 ${truncated}`
-  const pillW = Math.max(60, displayLabel.length * 6 + 16)
-  const pillH = 18
-
-  return (
-    <g
-      className="pointer-events-auto cursor-pointer"
-      onClick={(e) => { e.stopPropagation(); onDelete() }}
-    >
-      <rect
-        x={mx - pillW / 2}
-        y={my - pillH / 2}
-        width={pillW}
-        height={pillH}
-        rx="9"
-        fill="#1c1208"
-        stroke="rgba(249,115,22,0.3)"
-        strokeWidth="1"
-      />
-      <text
-        x={mx}
-        y={my + 4}
-        textAnchor="middle"
-        fill="rgba(249,115,22,0.7)"
-        fontSize="9"
-        fontFamily="system-ui, sans-serif"
-        fontWeight="500"
-      >
-        {displayLabel}
-      </text>
-    </g>
-  )
-}
-
-// ── Delete dot for default edges (appears on hover) ───────────
+// ── Delete dot for edges (appears on hover) ─────────────────
 
 function EdgeDeleteDot({
   x,

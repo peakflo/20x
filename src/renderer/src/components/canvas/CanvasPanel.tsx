@@ -110,7 +110,13 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
             (e.fromPanelId === prox.toId && e.toPanelId === prox.fromId)
         )
         if (!alreadyExists) {
-          addEdge(prox.fromId, prox.toId, 'browser')
+          // Determine edge type from the panel types
+          const allPanels = useCanvasStore.getState().panels
+          const fromP = allPanels.find((p) => p.id === prox.fromId)
+          const toP = allPanels.find((p) => p.id === prox.toId)
+          const isBrowser = fromP?.type === 'browser' || toP?.type === 'browser'
+          const isTerminal = fromP?.type === 'terminal' || toP?.type === 'terminal'
+          addEdge(prox.fromId, prox.toId, isBrowser ? 'browser' : isTerminal ? 'terminal' : undefined)
         }
         useCanvasStore.getState().setProximityEdge(null)
       }
@@ -211,7 +217,9 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
         // Complete the edge
         const fromPanel = useCanvasStore.getState().panels.find((p) => p.id === connectingFrom)
         const isBrowserEdge = panel.type === 'browser' || fromPanel?.type === 'browser'
-        addEdge(connectingFrom, panel.id, isBrowserEdge ? 'browser' : undefined)
+        const isTerminalEdge = panel.type === 'terminal' || fromPanel?.type === 'terminal'
+        const edgeType = isBrowserEdge ? 'browser' : isTerminalEdge ? 'terminal' : undefined
+        addEdge(connectingFrom, panel.id, edgeType)
         setConnectingFromId(null)
         return
       }
@@ -250,6 +258,26 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
     },
     []
   )
+
+  // ── Side handle auto-hide after 20s of panel inactivity ──────
+  const [sideHandleVisible, setSideHandleVisible] = useState(false)
+  const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const handlePanelMouseEnter = useCallback(() => {
+    if (hideTimerRef.current) clearTimeout(hideTimerRef.current)
+    setSideHandleVisible(true)
+    hideTimerRef.current = setTimeout(() => setSideHandleVisible(false), 20_000)
+  }, [])
+
+  const handlePanelMouseLeave = useCallback(() => {
+    if (hideTimerRef.current) clearTimeout(hideTimerRef.current)
+    setSideHandleVisible(false)
+  }, [])
+
+  // Clean up timer on unmount
+  useEffect(() => {
+    return () => { if (hideTimerRef.current) clearTimeout(hideTimerRef.current) }
+  }, [])
 
   // ── Proximity glow — this panel is a target of auto-connect proximity ──
   const [isProximityTarget, setIsProximityTarget] = useState(false)
@@ -320,6 +348,8 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
       ref={panelRef}
       data-canvas-panel="true"
       onMouseDown={handleMouseDown}
+      onMouseEnter={handlePanelMouseEnter}
+      onMouseLeave={handlePanelMouseLeave}
       className={`absolute rounded-xl border bg-[#1a2030] shadow-2xl flex flex-col select-none transition-shadow duration-150 group/panel ${cfg.border} ${
         isDragging ? 'shadow-indigo-500/10 ring-1 ring-indigo-500/30' : ''
       } ${isConnectingLocal ? 'ring-2 ring-orange-500/50' : ''} ${
@@ -471,7 +501,7 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
       {/* Side handle — React Flow style, for task panels: click to create browser, drag to connect */}
       {panel.type === 'task' && !isCollapsed && !isDragging && (
         <div
-          className="absolute opacity-0 group-hover/panel:opacity-100 transition-opacity duration-200"
+          className={`absolute transition-opacity duration-200 ${sideHandleVisible ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
           style={{
             right: -18,
             top: '50%',

@@ -1208,12 +1208,15 @@ export function registerIpcHandlers(
   // (which requires native module rebuild for Electron) and avoids macOS
   // `script` command (which fails with piped stdio).
 
+  /** Max lines to keep in terminal output buffer for agent log queries */
+  const TERMINAL_BUFFER_MAX_LINES = 500
+
   interface TerminalHandle {
     write: (data: string) => void
     kill: () => void
     pid: number
-    /** The child shell PID (inside the Python PTY fork) — used for cwd lookup */
-    shellPid?: number
+    /** Circular buffer of recent terminal output lines */
+    outputBuffer: string[]
   }
 
   const terminals = new Map<string, TerminalHandle>()
@@ -1324,16 +1327,37 @@ else:
       env: { ...process.env } as Record<string, string>,
     })
 
+    const outputBuffer: string[] = []
+
+    /** Append raw PTY output to the line buffer, stripping ANSI escape codes */
+    const appendToBuffer = (raw: string) => {
+      // Strip ANSI escape sequences for clean log output
+      // eslint-disable-next-line no-control-regex
+      const clean = raw.replace(/\x1b\[[0-9;]*[a-zA-Z]|\x1b\].*?(\x07|\x1b\\)|\x1b[()][A-Z0-9]|\r/g, '')
+      const lines = clean.split('\n')
+      for (const line of lines) {
+        if (line.trim()) outputBuffer.push(line)
+      }
+      // Trim to max buffer size
+      while (outputBuffer.length > TERMINAL_BUFFER_MAX_LINES) {
+        outputBuffer.shift()
+      }
+    }
+
     child.stdout?.on('data', (data: Buffer) => {
+      const str = data.toString()
+      appendToBuffer(str)
       if (!sender.isDestroyed()) {
-        sender.send('terminal:data', { id, data: data.toString() })
+        sender.send('terminal:data', { id, data: str })
       }
     })
 
     child.stderr?.on('data', (data: Buffer) => {
+      const str = data.toString()
+      appendToBuffer(str)
       // Forward stderr too (e.g. shell startup errors)
       if (!sender.isDestroyed()) {
-        sender.send('terminal:data', { id, data: data.toString() })
+        sender.send('terminal:data', { id, data: str })
       }
     })
 
@@ -1352,6 +1376,7 @@ else:
         try { child.kill('SIGTERM') } catch { /* ignore */ }
       },
       pid: child.pid || 0,
+      outputBuffer,
     }
   }
 
@@ -1371,6 +1396,15 @@ else:
   ipcMain.handle('terminal:resize', (_event, { id, cols, rows }: { id: string; cols: number; rows: number }) => {
     // Resize not supported without node-pty — COLUMNS/LINES set at creation
     void id; void cols; void rows
+  })
+
+  /** Get the last N lines from a terminal's output buffer */
+  ipcMain.handle('terminal:getBuffer', (_, { id, lines }: { id: string; lines?: number }) => {
+    const term = terminals.get(id)
+    if (!term) return { lines: [] }
+    const maxLines = Math.min(lines || 200, TERMINAL_BUFFER_MAX_LINES)
+    const buf = term.outputBuffer.slice(-maxLines)
+    return { lines: buf }
   })
 
   ipcMain.handle('terminal:kill', (_, { id }: { id: string }) => {

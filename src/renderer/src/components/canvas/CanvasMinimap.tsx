@@ -199,7 +199,9 @@ export function CanvasMinimap({
               const from = panelMap.get(edge.fromPanelId)
               const to = panelMap.get(edge.toPanelId)
               if (!from || !to) return null
-              const isBrowser = edge.edgeType === 'browser'
+              const edgeColor = edge.edgeType === 'browser' ? 'rgba(249,115,22,0.4)'
+                : edge.edgeType === 'terminal' ? 'rgba(34,197,94,0.4)'
+                : 'rgba(99,102,241,0.3)'
               return (
                 <line
                   key={edge.id}
@@ -207,7 +209,7 @@ export function CanvasMinimap({
                   y1={toMiniY(from.y + from.height / 2)}
                   x2={toMiniX(to.x + to.width / 2)}
                   y2={toMiniY(to.y + to.height / 2)}
-                  stroke={isBrowser ? 'rgba(249,115,22,0.4)' : 'rgba(99,102,241,0.3)'}
+                  stroke={edgeColor}
                   strokeWidth="1"
                 />
               )

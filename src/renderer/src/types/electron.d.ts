@@ -367,6 +367,7 @@ interface ElectronAPI {
     resize: (id: string, cols: number, rows: number) => Promise<void>
     kill: (id: string) => Promise<void>
     getCwd: (id: string) => Promise<{ cwd: string | null }>
+    getBuffer: (id: string, lines?: number) => Promise<{ lines: string[] }>
     onData: (callback: (data: { id: string; data: string }) => void) => () => void
     onExit: (callback: (data: { id: string }) => void) => () => void
   }

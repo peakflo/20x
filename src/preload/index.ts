@@ -420,6 +420,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('terminal:kill', { id }),
     getCwd: (id: string): Promise<{ cwd: string | null }> =>
       ipcRenderer.invoke('terminal:getCwd', { id }),
+    getBuffer: (id: string, lines?: number): Promise<{ lines: string[] }> =>
+      ipcRenderer.invoke('terminal:getBuffer', { id, lines }),
     onData: (callback: (data: { id: string; data: string }) => void): (() => void) => {
       const handler = (_: unknown, d: { id: string; data: string }): void => callback(d)
       ipcRenderer.on('terminal:data', handler)
