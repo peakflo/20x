@@ -416,10 +416,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('terminal:write', { id, data }),
     resize: (id: string, cols: number, rows: number): Promise<void> =>
       ipcRenderer.invoke('terminal:resize', { id, cols, rows }),
-    kill: (id: string): Promise<void> =>
-      ipcRenderer.invoke('terminal:kill', { id }),
-    getCwd: (id: string): Promise<{ cwd: string | null }> =>
-      ipcRenderer.invoke('terminal:getCwd', { id }),
+    kill: (id: string, expectedPid?: number): Promise<void> =>
+      ipcRenderer.invoke('terminal:kill', { id, expectedPid }),
+    getCwd: (id: string, expectedPid?: number): Promise<{ cwd: string | null }> =>
+      ipcRenderer.invoke('terminal:getCwd', { id, expectedPid }),
     getBuffer: (id: string, lines?: number): Promise<{ lines: string[] }> =>
       ipcRenderer.invoke('terminal:getBuffer', { id, lines }),
     onData: (callback: (data: { id: string; data: string }) => void): (() => void) => {

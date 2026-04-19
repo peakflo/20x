@@ -33,6 +33,8 @@ export function TerminalPanelContent({ terminalId, cwd }: TerminalPanelContentPr
   const cleanupRef = useRef<(() => void)[]>([])
   const initCalledRef = useRef(false)
   const isReadyRef = useRef(false)
+  const activePidRef = useRef<number | null>(null)
+  const isMountedRef = useRef(true)
 
   // Store cwd in a ref — only used at init time, never triggers re-init
   const cwdRef = useRef(cwd)
@@ -107,12 +109,21 @@ export function TerminalPanelContent({ terminalId, cwd }: TerminalPanelContentPr
     if (!xtermRef.current) return
 
     try {
-      await window.electronAPI.terminal.create(
+      const { pid } = await window.electronAPI.terminal.create(
         terminalId,
         term.cols,
         term.rows,
         cwdRef.current // read from ref, not prop — stable reference
       )
+
+      // StrictMode / fast remount can unmount this instance before create() resolves.
+      // In that case, kill only the PTY we just created and let the live instance continue.
+      if (!isMountedRef.current || xtermRef.current !== term) {
+        await window.electronAPI.terminal.kill(terminalId, pid).catch(() => {})
+        return
+      }
+
+      activePidRef.current = pid
 
       console.log(`[Terminal:${terminalId}] PTY created, setting up listeners`)
 
@@ -145,7 +156,8 @@ export function TerminalPanelContent({ terminalId, cwd }: TerminalPanelContentPr
             term.cols,
             term.rows,
             cwdRef.current
-          ).then(() => {
+          ).then(({ pid }) => {
+            activePidRef.current = pid
             term.focus()
           }).catch(() => {
             processExited = true
@@ -183,6 +195,7 @@ export function TerminalPanelContent({ terminalId, cwd }: TerminalPanelContentPr
   // zero-size container.
   useEffect(() => {
     if (!containerRef.current) return
+    isMountedRef.current = true
 
     const observer = new ResizeObserver((entries) => {
       const entry = entries[0]
@@ -220,16 +233,20 @@ export function TerminalPanelContent({ terminalId, cwd }: TerminalPanelContentPr
 
     return () => {
       observer.disconnect()
+      const expectedPid = activePidRef.current ?? undefined
+      isMountedRef.current = false
 
-      // Capture cwd before killing the terminal — persists across restarts
-      window.electronAPI.terminal.getCwd(terminalId).then(({ cwd: currentCwd }) => {
-        if (currentCwd) {
-          useCanvasStore.getState().updatePanel(terminalId, { url: currentCwd })
-        }
-      }).catch(() => {}).finally(() => {
-        // Kill PTY after cwd capture attempt
-        window.electronAPI.terminal.kill(terminalId).catch(() => {})
-      })
+      if (expectedPid !== undefined) {
+        // Capture cwd before killing the terminal — persists across restarts.
+        // Skip ID-only cleanup when this instance never acquired a PTY pid.
+        window.electronAPI.terminal.getCwd(terminalId, expectedPid).then(({ cwd: currentCwd }) => {
+          if (currentCwd) {
+            useCanvasStore.getState().updatePanel(terminalId, { url: currentCwd })
+          }
+        }).catch(() => {}).finally(() => {
+          window.electronAPI.terminal.kill(terminalId, expectedPid).catch(() => {})
+        })
+      }
 
       // Cleanup listeners
       for (const fn of cleanupRef.current) fn()
@@ -241,6 +258,7 @@ export function TerminalPanelContent({ terminalId, cwd }: TerminalPanelContentPr
       fitAddonRef.current = null
       initCalledRef.current = false
       isReadyRef.current = false
+      activePidRef.current = null
     }
   }, [initTerminal, terminalId])
 
@@ -251,7 +269,8 @@ export function TerminalPanelContent({ terminalId, cwd }: TerminalPanelContentPr
     if (!isReady) return
     const interval = setInterval(async () => {
       try {
-        const { cwd: currentCwd } = await window.electronAPI.terminal.getCwd(terminalId)
+        const expectedPid = activePidRef.current ?? undefined
+        const { cwd: currentCwd } = await window.electronAPI.terminal.getCwd(terminalId, expectedPid)
         if (currentCwd) {
           useCanvasStore.getState().updatePanel(terminalId, { url: currentCwd })
         }
