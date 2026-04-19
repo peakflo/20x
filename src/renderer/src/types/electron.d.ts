@@ -366,6 +366,14 @@ interface ElectronAPI {
   webUtils: {
     getPathForFile: (file: File) => string
   }
+  terminal: {
+    create: (id: string, cols: number, rows: number) => Promise<{ pid: number }>
+    write: (id: string, data: string) => Promise<void>
+    resize: (id: string, cols: number, rows: number) => Promise<void>
+    kill: (id: string) => Promise<void>
+    onData: (callback: (data: { id: string; data: string }) => void) => () => void
+    onExit: (callback: (data: { id: string }) => void) => () => void
+  }
   onOverdueCheck: (callback: () => void) => () => void
   onTasksRefresh: (callback: () => void) => () => void
   onAgentOutput: (callback: (event: AgentOutputEvent) => void) => () => void

@@ -1,6 +1,6 @@
 import { execFile, execSync } from 'child_process'
 import { readdirSync } from 'fs'
-import { app, BrowserWindow, dialog, net, protocol, shell, Tray, Menu, nativeImage } from 'electron'
+import { app, BrowserWindow, dialog, net, protocol, session, shell, Tray, Menu, nativeImage } from 'electron'
 import { join } from 'path'
 import { pathToFileURL } from 'url'
 import { is } from '@electron-toolkit/utils'
@@ -651,6 +651,9 @@ app.whenReady().then(async () => {
         // Wire state sync into agent manager so agent run events are recorded
         agentManager.setEnterpriseStateSync(enterpriseStateSyncInstance)
 
+        // Wire enterprise auth into agent manager so it can inject JWT into MCP Dev Server requests
+        agentManager.setEnterpriseAuth(enterpriseAuth)
+
         syncManager.setEnterpriseConnection(apiClient, enterpriseSyncMgr, session.userId, enterpriseStateSyncInstance)
 
         console.log('[Main] Enterprise connection restored on startup (with heartbeat)')
@@ -711,6 +714,43 @@ app.whenReady().then(async () => {
   githubManager.checkGhCli().then((status) => {
     console.log('[GitHub] CLI status:', status)
   }).catch(() => {})
+
+  // ── Strip embedding-restriction headers ───────────────────────────────────
+  // Register on session.defaultSession so it intercepts ALL HTTP responses
+  // including those from iframes/subframes. Must be set before any window loads.
+  const BLOCKED_HEADERS_LC = [
+    'x-frame-options',
+    'cross-origin-opener-policy',
+    'cross-origin-embedder-policy',
+    'cross-origin-resource-policy',
+  ]
+
+  session.defaultSession.webRequest.onHeadersReceived(
+    { urls: ['http://*/*', 'https://*/*'] },
+    (details, callback) => {
+      const headers = { ...details.responseHeaders }
+      if (headers) {
+        for (const key of Object.keys(headers)) {
+          const lower = key.toLowerCase()
+          if (BLOCKED_HEADERS_LC.includes(lower)) {
+            delete headers[key]
+            continue
+          }
+          // Strip frame-ancestors from CSP
+          if (lower === 'content-security-policy') {
+            const values = headers[key]
+            if (Array.isArray(values)) {
+              headers[key] = values.map((v) =>
+                v.replace(/frame-ancestors\s+[^;]+(;|$)/gi, '').trim()
+              ).filter(Boolean)
+              if (headers[key]!.length === 0) delete headers[key]
+            }
+          }
+        }
+      }
+      callback({ cancel: false, responseHeaders: headers })
+    }
+  )
 
   createWindow()
 
