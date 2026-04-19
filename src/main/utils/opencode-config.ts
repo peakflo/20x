@@ -12,6 +12,12 @@ import { existsSync, readFileSync } from 'fs'
 import { join } from 'path'
 import { homedir } from 'os'
 
+import type { DatabaseManager } from '../database'
+import {
+  buildEnterpriseLiteLLMProviderConfig,
+  readEnterpriseLiteLLMConfig
+} from '../enterprise-litellm'
+
 /** Paths used by the OpenCode CLI to store config & auth. */
 const OPENCODE_CONFIG_PATH = join(homedir(), '.config', 'opencode', 'opencode.json')
 const OPENCODE_AUTH_PATH = join(homedir(), '.local', 'share', 'opencode', 'auth.json')
@@ -67,7 +73,8 @@ export function readOpencodeAuth(): Record<string, OpencodeAuthEntry> {
  * in auth.json — are included by the server in its `/config/providers` response.
  */
 export function buildMergedOpencodeConfig(
-  extraConfig?: Record<string, unknown>
+  extraConfig?: Record<string, unknown>,
+  db?: Pick<DatabaseManager, 'getSetting'>
 ): Record<string, unknown> {
   const config = readOpencodeConfig()
   const auth = readOpencodeAuth()
@@ -89,6 +96,18 @@ export function buildMergedOpencodeConfig(
         providerCfg.options = { ...options, apiKey: authEntry.key }
         console.log(`[opencode-config] Injected API key for provider "${providerId}" from auth.json`)
       }
+    }
+  }
+
+  const enterpriseLiteLLMConfig = db
+    ? readEnterpriseLiteLLMConfig(db)
+    : null
+  if (enterpriseLiteLLMConfig) {
+    const existingProviders =
+      (config.provider as Record<string, unknown> | undefined) ?? {}
+    config.provider = {
+      ...existingProviders,
+      ...buildEnterpriseLiteLLMProviderConfig(enterpriseLiteLLMConfig)
     }
   }
 
