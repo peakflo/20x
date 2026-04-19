@@ -471,6 +471,14 @@ export const onWorktreeProgress = (callback: (event: WorktreeProgressEvent) => v
 }
 
 export const enterpriseApi = {
+  signupInBrowser: (mode: 'register' | 'login' = 'register'): Promise<{
+    userId: string
+    email: string
+    companies: { id: string; name: string; isPrimary: boolean }[]
+  }> => {
+    return window.electronAPI.enterprise.signupInBrowser(mode)
+  },
+
   login: (email: string, password: string): Promise<{
     userId: string
     email: string
