@@ -1633,13 +1633,17 @@ else:
     const EXT_CDP_PORT = 19333 // temp port for external Chrome
     const TIMEOUT_MS = 300_000 // 5 min timeout
 
-    // ── Find system Chrome ──
+    // ── Find any Chromium-based browser (Chrome, Brave, Arc, Edge, Chromium) ──
     let chromePath: string | null = null
     if (process.platform === 'darwin') {
       const candidates = [
         '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
         '/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary',
+        '/Applications/Brave Browser.app/Contents/MacOS/Brave Browser',
+        '/Applications/Arc.app/Contents/MacOS/Arc',
+        '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
         '/Applications/Chromium.app/Contents/MacOS/Chromium',
+        '/Applications/Vivaldi.app/Contents/MacOS/Vivaldi',
       ]
       chromePath = candidates.find((p) => existsSync(p)) || null
     } else if (process.platform === 'win32') {
@@ -1647,17 +1651,21 @@ else:
         'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
         'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
         `${process.env.LOCALAPPDATA}\\Google\\Chrome\\Application\\chrome.exe`,
+        'C:\\Program Files\\BraveSoftware\\Brave-Browser\\Application\\brave.exe',
+        `${process.env.LOCALAPPDATA}\\BraveSoftware\\Brave-Browser\\Application\\brave.exe`,
+        'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
+        'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
       ]
       chromePath = candidates.find((p) => existsSync(p)) || null
     } else {
       // Linux
       try {
-        chromePath = childProcess.execSync('which google-chrome || which google-chrome-stable || which chromium-browser || which chromium', { encoding: 'utf8' }).trim() || null
+        chromePath = childProcess.execSync('which google-chrome || which google-chrome-stable || which brave-browser || which chromium-browser || which chromium || which microsoft-edge', { encoding: 'utf8' }).trim() || null
       } catch { chromePath = null }
     }
 
     if (!chromePath) {
-      throw new Error('Could not find Google Chrome. Please install Chrome and try again.')
+      throw new Error('Could not find a Chromium-based browser (Chrome, Brave, Arc, Edge). Please install one and try again.')
     }
 
     // ── Launch Chrome with temporary CDP port and a temporary profile ──
