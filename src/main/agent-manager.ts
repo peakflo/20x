@@ -60,6 +60,13 @@ interface PollingEntry {
   hasSeenWork?: boolean  // True once we've seen at least one non-IDLE status
 }
 
+interface MessageAttachmentRef {
+  id: string
+  filename: string
+  size: number
+  mime_type: string
+}
+
 export class AgentManager extends EventEmitter {
   private sessions: Map<string, AgentSession> = new Map()
   /** Maps old (temp) session IDs to their re-keyed (real) IDs so that
@@ -482,6 +489,103 @@ export class AgentManager extends EventEmitter {
     const agent = this.db.getAgent(agentId)
     const backendType = (agent?.config?.coding_agent as string) || CodingAgentType.OPENCODE
     return backendType === CodingAgentType.CLAUDE_CODE ? 'CLAUDE.md' : 'AGENTS.md'
+  }
+
+  private formatAttachmentSize(bytes: number): string {
+    if (!Number.isFinite(bytes) || bytes <= 0) return 'unknown size'
+    if (bytes < 1024) return `${bytes} B`
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+  }
+
+  private isTextAttachment(mimeType: string, filename: string): boolean {
+    if (mimeType.startsWith('text/')) return true
+    const lower = filename.toLowerCase()
+    return (
+      lower.endsWith('.md') ||
+      lower.endsWith('.txt') ||
+      lower.endsWith('.json') ||
+      lower.endsWith('.yaml') ||
+      lower.endsWith('.yml') ||
+      lower.endsWith('.xml') ||
+      lower.endsWith('.csv') ||
+      lower.endsWith('.ts') ||
+      lower.endsWith('.tsx') ||
+      lower.endsWith('.js') ||
+      lower.endsWith('.jsx') ||
+      lower.endsWith('.py') ||
+      lower.endsWith('.java') ||
+      lower.endsWith('.go') ||
+      lower.endsWith('.rb') ||
+      lower.endsWith('.rs') ||
+      lower.endsWith('.sql')
+    )
+  }
+
+  private buildMessageWithAttachmentContext(
+    session: AgentSession,
+    message: string,
+    attachments?: MessageAttachmentRef[]
+  ): string {
+    if (!attachments || attachments.length === 0) return message
+
+    const capped = attachments.slice(0, 10)
+    const omittedCount = attachments.length - capped.length
+    const refs = capped.map(
+      (att) => `- attachments/${att.filename} (${att.mime_type || 'application/octet-stream'}, ${this.formatAttachmentSize(att.size)})`
+    )
+
+    const previewBlocks: string[] = []
+    const MAX_PREVIEWS = 3
+    const MAX_PREVIEW_FILE_SIZE = 24 * 1024
+    const MAX_PREVIEW_CHARS = 1200
+    const workspaceDir = session.workspaceDir
+
+    if (workspaceDir) {
+      for (const att of capped) {
+        if (previewBlocks.length >= MAX_PREVIEWS) break
+        if (!this.isTextAttachment(att.mime_type || '', att.filename)) continue
+        if (att.size > MAX_PREVIEW_FILE_SIZE) continue
+
+        const absPath = join(workspaceDir, 'attachments', att.filename)
+        if (!existsSync(absPath)) continue
+
+        try {
+          const text = readFileSync(absPath, 'utf-8')
+          const truncated = text.slice(0, MAX_PREVIEW_CHARS)
+          const suffix = text.length > MAX_PREVIEW_CHARS ? '\n...[truncated]' : ''
+          previewBlocks.push(`### attachments/${att.filename}\n\`\`\`\n${truncated}${suffix}\n\`\`\``)
+        } catch {
+          continue
+        }
+      }
+    }
+
+    let attachmentContext = '\n\nMessage attachments (already available in your workspace):\n'
+    attachmentContext += refs.join('\n')
+    if (omittedCount > 0) {
+      attachmentContext += `\n- ... and ${omittedCount} more attachment(s) omitted to keep context focused`
+    }
+    attachmentContext += '\n\nContext loading guidance:'
+    attachmentContext += '\n- Start with only the listed files relevant to the user request.'
+    attachmentContext += '\n- Do not load full file contents unless necessary.'
+    attachmentContext += '\n- For large/binary files, inspect metadata or selective excerpts first.'
+
+    if (previewBlocks.length > 0) {
+      attachmentContext += '\n\nSmall text previews (use only if relevant):\n'
+      attachmentContext += previewBlocks.join('\n\n')
+    }
+
+    return `${message}${attachmentContext}`
+  }
+
+  private buildDisplayMessage(message: string, attachments?: MessageAttachmentRef[]): string {
+    if (!attachments || attachments.length === 0) return message
+    const capped = attachments.slice(0, 10)
+    const omittedCount = attachments.length - capped.length
+    const refs = capped.map((att) => `- ${att.filename}`)
+    const omitted = omittedCount > 0 ? `\n- ... and ${omittedCount} more` : ''
+    return `${message}\n\nAttached to this message:\n${refs.join('\n')}${omitted}`
   }
 
   /**
@@ -2355,7 +2459,13 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     })
   }
 
-  async sendMessage(sessionId: string, message: string, taskId?: string, agentId?: string): Promise<{ newSessionId?: string }> {
+  async sendMessage(
+    sessionId: string,
+    message: string,
+    taskId?: string,
+    agentId?: string,
+    attachments?: MessageAttachmentRef[]
+  ): Promise<{ newSessionId?: string }> {
     let session = this.sessions.get(sessionId)
 
     // Check redirect map: session ID may have been re-keyed (temp → real)
@@ -2413,7 +2523,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
         }
 
         // Send the user's message (fire-and-forget to avoid blocking IPC response)
-        this.doSendAdapterMessage(session, sessionId, message).catch((err) => {
+        this.doSendAdapterMessage(session, sessionId, message, attachments).catch((err) => {
           console.error(`[AgentManager] doSendAdapterMessage failed for session ${sessionId}:`, err)
           this.handleSessionError(sessionId, session!, err)
         })
@@ -2424,7 +2534,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     if (!session) throw new Error(`Session not found: ${sessionId}`)
 
     // Fire-and-forget to avoid blocking IPC response and freezing the renderer
-    this.doSendAdapterMessage(session, sessionId, message).catch((err) => {
+    this.doSendAdapterMessage(session, sessionId, message, attachments).catch((err) => {
       console.error(`[AgentManager] doSendAdapterMessage failed for session ${sessionId}:`, err)
       this.handleSessionError(sessionId, session!, err)
     })
@@ -2446,7 +2556,12 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     })
   }
 
-  private async doSendAdapterMessage(session: AgentSession, sessionId: string, message: string): Promise<void> {
+  private async doSendAdapterMessage(
+    session: AgentSession,
+    sessionId: string,
+    message: string,
+    attachments?: MessageAttachmentRef[]
+  ): Promise<void> {
     if (session.status === 'error') {
       // Check if this is an incompatible session error (non-recoverable)
       if (session.adapter) {
@@ -2490,6 +2605,8 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       this.enterpriseStateSync.recordAgentRunStarted(currentTask, agent?.name)
     }
 
+    const userFacingMessage = this.buildDisplayMessage(message, attachments)
+
     // Show user's message in UI
     this.sendToRenderer('agent:output', {
       sessionId,
@@ -2498,7 +2615,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       data: {
         id: `user-message-${Date.now()}`,
         role: 'user',
-        content: message,
+        content: userFacingMessage,
         partType: 'text'
       }
     })
@@ -2511,9 +2628,8 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     )
 
     // Send prompt via adapter
-    const parts: MessagePart[] = [
-      { type: MessagePartType.TEXT, text: message }
-    ]
+    const promptText = this.buildMessageWithAttachmentContext(session, message, attachments)
+    const parts: MessagePart[] = [{ type: MessagePartType.TEXT, text: promptText }]
     await session.adapter.sendPrompt(sessionId, parts, sessionConfig)
 
     // Start polling if not already started (for Claude Code after resume)

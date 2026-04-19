@@ -337,7 +337,7 @@ describe('TaskWorkspace – stale triage session cleanup', () => {
     })
 
     await waitFor(() => {
-      expect(window.electronAPI.agentSession.send).toHaveBeenCalledWith('resumed-session-1', 'approved', taskId, agentId)
+      expect(window.electronAPI.agentSession.send).toHaveBeenCalledWith('resumed-session-1', 'approved', taskId, agentId, undefined)
     })
   })
 })

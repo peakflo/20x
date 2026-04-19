@@ -330,10 +330,13 @@ export function registerIpcHandlers(
     return { success: true }
   })
 
-  ipcMain.handle('agentSession:send', async (_, sessionId: string, message: string, taskId?: string, agentId?: string) => {
-    const result = await agentManager.sendMessage(sessionId, message, taskId, agentId)
-    return { success: true, ...result }
-  })
+  ipcMain.handle(
+    'agentSession:send',
+    async (_, sessionId: string, message: string, taskId?: string, agentId?: string, attachments?: Array<{ id: string; filename: string; size: number; mime_type: string }>) => {
+      const result = await agentManager.sendMessage(sessionId, message, taskId, agentId, attachments)
+      return { success: true, ...result }
+    }
+  )
 
   ipcMain.handle('agentSession:approve', async (_, sessionId: string, approved: boolean, message?: string) => {
     await agentManager.respondToPermission(sessionId, approved, message)
