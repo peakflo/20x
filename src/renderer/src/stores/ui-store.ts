@@ -95,8 +95,8 @@ export const useUIStore = create<UIState>((set) => ({
   closeModal: () => set({ activeModal: null, editingTaskId: null, deletingTaskId: null }),
   openDashboardPreview: (taskId) => set({ dashboardPreviewTaskId: taskId }),
   closeDashboardPreview: () => set({ dashboardPreviewTaskId: null }),
-  openTaskOnCanvas: (taskId) => set({ sidebarView: 'canvas', canvasPendingTaskId: taskId }),
+  openTaskOnCanvas: (taskId) => set({ sidebarView: 'canvas', canvasPendingTaskId: taskId, dashboardPreviewTaskId: null }),
   clearCanvasPendingTask: () => set({ canvasPendingTaskId: null }),
-  openAppOnCanvas: (workflowId, name) => set({ sidebarView: 'canvas', canvasPendingApp: { workflowId, name } }),
+  openAppOnCanvas: (workflowId, name) => set({ sidebarView: 'canvas', canvasPendingApp: { workflowId, name }, dashboardPreviewTaskId: null }),
   clearCanvasPendingApp: () => set({ canvasPendingApp: null })
 }))
