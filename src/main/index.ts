@@ -584,6 +584,14 @@ initCrashLogger()
 const CDP_PORT = 19222
 app.commandLine.appendSwitch('remote-debugging-port', String(CDP_PORT))
 
+// Strip "Electron" and app name from the default user-agent so that embedded
+// webviews look like a standard Chrome browser.  Sites like Xero use Akamai's
+// bot-detection WAF which blocks requests whose UA contains "Electron".
+const defaultUA = app.userAgentFallback
+app.userAgentFallback = defaultUA
+  .replace(/\s*Electron\/[\w.]+/i, '')
+  .replace(/\s*20x\/[\w.]+/i, '')
+
 // Ignore EPIPE errors from broken stdout/stderr pipes (e.g. when piped through head/tail)
 process.stdout?.on?.('error', (err: NodeJS.ErrnoException) => { if (err.code !== 'EPIPE') throw err })
 process.stderr?.on?.('error', (err: NodeJS.ErrnoException) => { if (err.code !== 'EPIPE') throw err })
