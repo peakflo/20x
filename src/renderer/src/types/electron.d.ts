@@ -374,10 +374,12 @@ interface ElectronAPI {
     getPathForFile: (file: File) => string
   }
   terminal: {
-    create: (id: string, cols: number, rows: number) => Promise<{ pid: number }>
+    create: (id: string, cols: number, rows: number, cwd?: string) => Promise<{ pid: number }>
     write: (id: string, data: string) => Promise<void>
     resize: (id: string, cols: number, rows: number) => Promise<void>
-    kill: (id: string) => Promise<void>
+    kill: (id: string, expectedPid?: number) => Promise<void>
+    getCwd: (id: string, expectedPid?: number) => Promise<{ cwd: string | null }>
+    getBuffer: (id: string, lines?: number) => Promise<{ lines: string[] }>
     onData: (callback: (data: { id: string; data: string }) => void) => () => void
     onExit: (callback: (data: { id: string }) => void) => () => void
   }
@@ -394,6 +396,11 @@ interface ElectronAPI {
   onHeartbeatDisabled: (callback: (event: { taskId: string; reason: string }) => void) => () => void
   onWorktreeProgress: (callback: (event: WorktreeProgressEvent) => void) => () => void
   onGithubDeviceCode: (callback: (code: string) => void) => () => void
+  browser: {
+    getCdpPort: () => Promise<{ port: number }>
+    getTargetId: (webContentsId: number) => Promise<{ targetId: string | null }>
+    getCdpTargets: () => Promise<Array<{ id: string; url: string; title: string; type: string; tabId: string }>>
+  }
   onGitlabDeviceCode: (callback: (code: string) => void) => () => void
   onOAuthCallback: (callback: (event: { code: string; state: string }) => void) => () => void
 }

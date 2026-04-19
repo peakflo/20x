@@ -2,10 +2,13 @@ import { useEffect, useRef, useCallback, useState } from 'react'
 import { Terminal as XTerm } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
+import { useCanvasStore } from '@/stores/canvas-store'
 import '@xterm/xterm/css/xterm.css'
 
 interface TerminalPanelContentProps {
   terminalId: string
+  /** Initial working directory — restored from persisted panel state */
+  cwd?: string
 }
 
 /**
@@ -21,7 +24,7 @@ interface TerminalPanelContentProps {
  *      sees truly-zero values even during layout shifts.
  *   3. Every fit() call is wrapped in try-catch.
  */
-export function TerminalPanelContent({ terminalId }: TerminalPanelContentProps) {
+export function TerminalPanelContent({ terminalId, cwd }: TerminalPanelContentProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const xtermRef = useRef<XTerm | null>(null)
   const fitAddonRef = useRef<FitAddon | null>(null)
@@ -29,14 +32,26 @@ export function TerminalPanelContent({ terminalId }: TerminalPanelContentProps) 
   const [error, setError] = useState<string | null>(null)
   const cleanupRef = useRef<(() => void)[]>([])
   const initCalledRef = useRef(false)
+  const isReadyRef = useRef(false)
+  const activePidRef = useRef<number | null>(null)
+  const isMountedRef = useRef(true)
+
+  // Store cwd in a ref — only used at init time, never triggers re-init
+  const cwdRef = useRef(cwd)
 
   const initTerminal = useCallback(async () => {
+    console.log(`[Terminal:${terminalId}] initTerminal called`, {
+      hasContainer: !!containerRef.current,
+      hasXterm: !!xtermRef.current,
+      initCalled: initCalledRef.current,
+    })
     if (!containerRef.current || xtermRef.current || initCalledRef.current) return
 
     // Wait until the container actually has dimensions.
     // During canvas viewport changes or panel open animations the container
     // may still be 0×0 when this runs.
     const rect = containerRef.current.getBoundingClientRect()
+    console.log(`[Terminal:${terminalId}] container rect`, { w: rect.width, h: rect.height })
     if (rect.width < 10 || rect.height < 10) return
 
     initCalledRef.current = true
@@ -94,11 +109,23 @@ export function TerminalPanelContent({ terminalId }: TerminalPanelContentProps) 
     if (!xtermRef.current) return
 
     try {
-      await window.electronAPI.terminal.create(
+      const { pid } = await window.electronAPI.terminal.create(
         terminalId,
         term.cols,
-        term.rows
+        term.rows,
+        cwdRef.current // read from ref, not prop — stable reference
       )
+
+      // StrictMode / fast remount can unmount this instance before create() resolves.
+      // In that case, kill only the PTY we just created and let the live instance continue.
+      if (!isMountedRef.current || xtermRef.current !== term) {
+        await window.electronAPI.terminal.kill(terminalId, pid).catch(() => {})
+        return
+      }
+
+      activePidRef.current = pid
+
+      console.log(`[Terminal:${terminalId}] PTY created, setting up listeners`)
 
       const inputDispose = term.onData((data) => {
         window.electronAPI.terminal.write(terminalId, data)
@@ -110,24 +137,57 @@ export function TerminalPanelContent({ terminalId }: TerminalPanelContentProps) 
         }
       })
 
+      let processExited = false
+
       const removeExitListener = window.electronAPI.terminal.onExit(({ id }) => {
         if (id === terminalId) {
-          term.write('\r\n\x1b[90m[Process exited]\x1b[0m\r\n')
+          processExited = true
+          term.write('\r\n\x1b[90m[Process exited — press Enter to restart]\x1b[0m\r\n')
+        }
+      })
+
+      // Respawn the shell when the user presses Enter after exit
+      const respawnDispose = term.onKey(({ domEvent }) => {
+        if (processExited && domEvent.key === 'Enter') {
+          processExited = false
+          term.clear()
+          window.electronAPI.terminal.create(
+            terminalId,
+            term.cols,
+            term.rows,
+            cwdRef.current
+          ).then(({ pid }) => {
+            activePidRef.current = pid
+            term.focus()
+          }).catch(() => {
+            processExited = true
+            term.write('\r\n\x1b[90m[Failed to restart shell]\x1b[0m\r\n')
+          })
         }
       })
 
       cleanupRef.current = [
         () => inputDispose.dispose(),
+        () => respawnDispose.dispose(),
         removeDataListener,
         removeExitListener,
       ]
 
+      // Focus the terminal so it can receive keyboard input
+      console.log(`[Terminal:${terminalId}] calling term.focus(), textarea exists:`, !!term.textarea)
+      term.focus()
+      // Verify focus actually took
+      setTimeout(() => {
+        console.log(`[Terminal:${terminalId}] after focus, activeElement:`, document.activeElement?.tagName, document.activeElement?.className)
+      }, 100)
+
+      isReadyRef.current = true
       setIsReady(true)
     } catch (err) {
       console.error('Failed to create terminal:', err)
       setError(err instanceof Error ? err.message : 'Failed to create terminal')
     }
-  }, [terminalId])
+  }, [terminalId]) // cwd intentionally NOT a dep — read from cwdRef at init
 
   // Use ResizeObserver to detect when the container first gets real
   // dimensions, then initialize xterm. This is the primary guard
@@ -135,6 +195,7 @@ export function TerminalPanelContent({ terminalId }: TerminalPanelContentProps) 
   // zero-size container.
   useEffect(() => {
     if (!containerRef.current) return
+    isMountedRef.current = true
 
     const observer = new ResizeObserver((entries) => {
       const entry = entries[0]
@@ -152,7 +213,7 @@ export function TerminalPanelContent({ terminalId }: TerminalPanelContentProps) 
       if (width < 10 || height < 10) return // still too small — skip
       try {
         fitAddonRef.current.fit()
-        if (xtermRef.current && isReady) {
+        if (xtermRef.current && isReadyRef.current) {
           window.electronAPI.terminal.resize(
             terminalId,
             xtermRef.current.cols,
@@ -172,21 +233,51 @@ export function TerminalPanelContent({ terminalId }: TerminalPanelContentProps) 
 
     return () => {
       observer.disconnect()
+      const expectedPid = activePidRef.current ?? undefined
+      isMountedRef.current = false
+
+      if (expectedPid !== undefined) {
+        // Capture cwd before killing the terminal — persists across restarts.
+        // Skip ID-only cleanup when this instance never acquired a PTY pid.
+        window.electronAPI.terminal.getCwd(terminalId, expectedPid).then(({ cwd: currentCwd }) => {
+          if (currentCwd) {
+            useCanvasStore.getState().updatePanel(terminalId, { url: currentCwd })
+          }
+        }).catch(() => {}).finally(() => {
+          window.electronAPI.terminal.kill(terminalId, expectedPid).catch(() => {})
+        })
+      }
 
       // Cleanup listeners
       for (const fn of cleanupRef.current) fn()
       cleanupRef.current = []
-
-      // Kill PTY
-      window.electronAPI.terminal.kill(terminalId).catch(() => {})
 
       // Dispose xterm
       xtermRef.current?.dispose()
       xtermRef.current = null
       fitAddonRef.current = null
       initCalledRef.current = false
+      isReadyRef.current = false
+      activePidRef.current = null
     }
-  }, [initTerminal, terminalId, isReady])
+  }, [initTerminal, terminalId])
+
+  // ── Periodically capture cwd so it persists on crash/force-quit ──
+  // Uses direct IPC + store update — does NOT change any props that would
+  // trigger re-initialization of the terminal.
+  useEffect(() => {
+    if (!isReady) return
+    const interval = setInterval(async () => {
+      try {
+        const expectedPid = activePidRef.current ?? undefined
+        const { cwd: currentCwd } = await window.electronAPI.terminal.getCwd(terminalId, expectedPid)
+        if (currentCwd) {
+          useCanvasStore.getState().updatePanel(terminalId, { url: currentCwd })
+        }
+      } catch { /* ignore */ }
+    }, 30_000) // every 30 seconds (less aggressive)
+    return () => clearInterval(interval)
+  }, [isReady, terminalId])
 
   if (error) {
     return (
@@ -199,10 +290,20 @@ export function TerminalPanelContent({ terminalId }: TerminalPanelContentProps) 
     )
   }
 
+  // Focus the terminal when the container is clicked
+  const handleClick = useCallback(() => {
+    console.log(`[Terminal:${terminalId}] container clicked, focusing. hasXterm:`, !!xtermRef.current, 'textarea:', !!xtermRef.current?.textarea)
+    xtermRef.current?.focus()
+    setTimeout(() => {
+      console.log(`[Terminal:${terminalId}] after click-focus, activeElement:`, document.activeElement?.tagName, document.activeElement?.className)
+    }, 50)
+  }, [terminalId])
+
   return (
     <div
       ref={containerRef}
-      className="h-full w-full"
+      className="h-full w-full xterm-container"
+      onClick={handleClick}
       style={{
         background: '#141a26',
         // Minimum dimensions prevent xterm's internal canvas renderer from

@@ -6,7 +6,8 @@ import { useTaskStore } from '@/stores/task-store'
 import { CanvasPanel } from './CanvasPanel'
 import { CanvasConnections } from './CanvasConnections'
 import { CanvasContextMenu } from './CanvasContextMenu'
-import { Move, ZoomIn, ZoomOut, RotateCcw, Plus, Globe, TerminalSquare, X } from 'lucide-react'
+import { CanvasMinimap } from './CanvasMinimap'
+import { Move, ZoomIn, ZoomOut, RotateCcw, Plus } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 
 /**
@@ -102,9 +103,10 @@ export function InfiniteCanvas() {
     canvasY: number
   } | null>(null)
 
-  // Add panel dropdown state
-  const [showAddMenu, setShowAddMenu] = useState(false)
-  const addMenuRef = useRef<HTMLDivElement>(null)
+  // Connection drawing state
+  const connectingFromId = useCanvasStore((s) => s.connectingFromId)
+  const setConnectingFromId = useCanvasStore((s) => s.setConnectingFromId)
+  const [mouseCanvasPos, setMouseCanvasPos] = useState<{ x: number; y: number } | null>(null)
 
   // Track container size for viewport visibility culling
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 })
@@ -275,6 +277,18 @@ export function InfiniteCanvas() {
         return
       }
 
+      // Cancel connection drawing on background click
+      const { connectingFromId: cid } = useCanvasStore.getState()
+      if (cid && e.button === 0) {
+        const target = e.target as HTMLElement
+        const isBackground = target === containerRef.current || target.dataset?.canvasBg === 'true'
+        if (isBackground) {
+          setConnectingFromId(null)
+          setMouseCanvasPos(null)
+          return
+        }
+      }
+
       const isMiddle = e.button === 1
       const isLeftOnCanvas =
         e.button === 0 &&
@@ -293,6 +307,19 @@ export function InfiniteCanvas() {
 
   const handleMouseMove = useCallback(
     (e: React.MouseEvent) => {
+      // Track mouse position in canvas space for connection line rendering
+      if (connectingFromId) {
+        const container = containerRef.current
+        if (container) {
+          const rect = container.getBoundingClientRect()
+          const vp = useCanvasStore.getState().viewport
+          setMouseCanvasPos({
+            x: (e.clientX - rect.left - vp.x) / vp.zoom,
+            y: (e.clientY - rect.top - vp.y) / vp.zoom,
+          })
+        }
+      }
+
       if (!isPanning) return
       const dx = e.clientX - panStartRef.current.x
       const dy = e.clientY - panStartRef.current.y
@@ -325,68 +352,89 @@ export function InfiniteCanvas() {
     [viewport]
   )
 
-  // ── Add panel helpers ────────────────────────────────────
-  const addPanelAtCenter = useCallback(
-    (type: 'webpage' | 'terminal', title: string) => {
-      const container = containerRef.current
-      const rect = container?.getBoundingClientRect()
-      const vp = useCanvasStore.getState().viewport
-      const currentPanels = useCanvasStore.getState().panels
-      const centerX = rect
-        ? (rect.width / 2 - vp.x) / vp.zoom - DEFAULT_PANEL_WIDTH / 2
-        : 0
-      const centerY = rect
-        ? (rect.height / 2 - vp.y) / vp.zoom - DEFAULT_PANEL_HEIGHT / 2
-        : 0
-      const offset = (currentPanels.length % 5) * 30
-      addPanel({
-        type,
-        title,
-        x: centerX + offset,
-        y: centerY + offset,
-        width: DEFAULT_PANEL_WIDTH,
-        height: DEFAULT_PANEL_HEIGHT,
-      })
-      setShowAddMenu(false)
-    },
-    [addPanel]
-  )
+  // ── Focused panel tracking (for Tab cycling) ─────────────
+  const [focusedPanelIndex, setFocusedPanelIndex] = useState(-1)
 
-  // Close add menu on outside click
-  useEffect(() => {
-    if (!showAddMenu) return
-    const handleClick = (e: MouseEvent) => {
-      if (addMenuRef.current && !addMenuRef.current.contains(e.target as Node)) {
-        setShowAddMenu(false)
-      }
-    }
-    const timer = setTimeout(() => document.addEventListener('mousedown', handleClick), 0)
-    return () => {
-      clearTimeout(timer)
-      document.removeEventListener('mousedown', handleClick)
-    }
-  }, [showAddMenu])
+  // ── Ctrl-held state (shows panel index badges) ──────────
+  const [ctrlHeld, setCtrlHeld] = useState(false)
 
   // ── Keyboard shortcuts ───────────────────────────────────
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.code === 'Space' && !e.repeat) {
+      // Ignore shortcuts when typing in an input/textarea or xterm terminal
+      const tag = (e.target as HTMLElement)?.tagName?.toLowerCase()
+      const isXtermFocused = !!(e.target as HTMLElement)?.closest('.xterm')
+      const isInputFocused = tag === 'input' || tag === 'textarea' || (e.target as HTMLElement)?.isContentEditable || isXtermFocused
+
+      // Track Ctrl held state — shows panel index badges (Ctrl only, not Cmd)
+      if (e.key === 'Control' && !e.repeat) {
+        setCtrlHeld(true)
+      }
+      // Clear stale ctrlHeld if Ctrl was released while OS had focus
+      // (e.g. after Ctrl+Cmd+Shift+3 screenshot, OS swallows the keyup)
+      if (!e.ctrlKey && e.key !== 'Control') {
+        setCtrlHeld(false)
+      }
+
+      if (e.code === 'Space' && !e.repeat && !isInputFocused) {
         setSpaceHeld(true)
       }
-      if (e.code === 'Equal' && (e.ctrlKey || e.metaKey)) {
+      if (e.code === 'Equal' && (e.ctrlKey || e.metaKey) && !isInputFocused) {
         e.preventDefault()
         zoomTo(viewport.zoom * 1.2)
       }
-      if (e.code === 'Minus' && (e.ctrlKey || e.metaKey)) {
+      if (e.code === 'Minus' && (e.ctrlKey || e.metaKey) && !isInputFocused) {
         e.preventDefault()
         zoomTo(viewport.zoom / 1.2)
       }
-      if (e.code === 'Digit0' && (e.ctrlKey || e.metaKey)) {
+      if (e.code === 'Digit0' && (e.ctrlKey || e.metaKey) && !isInputFocused) {
         e.preventDefault()
         resetViewport()
       }
-      // Escape: close context menu
+
+      // Ctrl/Cmd + 1-9: focus panel by index
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && !isInputFocused) {
+        const digitMatch = e.code.match(/^Digit([1-9])$/)
+        if (digitMatch) {
+          const idx = parseInt(digitMatch[1], 10) - 1
+          const currentPanels = useCanvasStore.getState().panels
+          if (idx < currentPanels.length) {
+            e.preventDefault()
+            const container = containerRef.current
+            if (container) {
+              const rect = container.getBoundingClientRect()
+              useCanvasStore.getState().focusPanel(currentPanels[idx].id, rect.width, rect.height)
+              setFocusedPanelIndex(idx)
+            }
+          }
+        }
+      }
+
+      // Tab / Shift+Tab: cycle through panels
+      if (e.code === 'Tab' && !isInputFocused && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault()
+        const currentPanels = useCanvasStore.getState().panels
+        if (currentPanels.length === 0) return
+
+        const next = e.shiftKey
+          ? (focusedPanelIndex <= 0 ? currentPanels.length - 1 : focusedPanelIndex - 1)
+          : (focusedPanelIndex >= currentPanels.length - 1 ? 0 : focusedPanelIndex + 1)
+
+        setFocusedPanelIndex(next)
+        const container = containerRef.current
+        if (container) {
+          const rect = container.getBoundingClientRect()
+          useCanvasStore.getState().focusPanel(currentPanels[next].id, rect.width, rect.height)
+        }
+      }
+
+      // Escape: cancel connecting or close context menu
       if (e.code === 'Escape') {
+        const { connectingFromId: cid } = useCanvasStore.getState()
+        if (cid) {
+          setConnectingFromId(null)
+          setMouseCanvasPos(null)
+        }
         setContextMenu(null)
       }
     }
@@ -394,14 +442,24 @@ export function InfiniteCanvas() {
       if (e.code === 'Space') {
         setSpaceHeld(false)
       }
+      if (e.key === 'Control') {
+        setCtrlHeld(false)
+      }
+    }
+    // Also clear on window blur (Ctrl+Tab to another window)
+    const handleBlur = () => {
+      setCtrlHeld(false)
+      setSpaceHeld(false)
     }
     window.addEventListener('keydown', handleKeyDown)
     window.addEventListener('keyup', handleKeyUp)
+    window.addEventListener('blur', handleBlur)
     return () => {
       window.removeEventListener('keydown', handleKeyDown)
       window.removeEventListener('keyup', handleKeyUp)
+      window.removeEventListener('blur', handleBlur)
     }
-  }, [viewport.zoom, zoomTo, resetViewport])
+  }, [viewport.zoom, zoomTo, resetViewport, focusedPanelIndex])
 
   const zoomPercent = Math.round(viewport.zoom * 100)
 
@@ -446,15 +504,17 @@ export function InfiniteCanvas() {
           <SnapGuides guides={snapGuides} containerRef={containerRef} viewport={viewport} />
 
           {/* Connection lines */}
-          <CanvasConnections mouseCanvasPos={null} />
+          <CanvasConnections mouseCanvasPos={mouseCanvasPos} />
 
           {/* Render panels — off-viewport panels are frozen (content hidden) */}
-          {panels.map((panel) => (
+          {panels.map((panel, index) => (
             <CanvasPanel
               key={panel.id}
               panel={panel}
               zoom={viewport.zoom}
               frozen={!visiblePanelIds.has(panel.id)}
+              panelIndex={index}
+              showIndex={ctrlHeld}
             />
           ))}
         </div>
@@ -498,64 +558,30 @@ export function InfiniteCanvas() {
         </Button>
       </div>
 
-      {/* ── HUD: Add Panel button ── */}
-      <div ref={addMenuRef} className="absolute bottom-4 right-4 z-10">
-        {showAddMenu && (
-          <div className="absolute bottom-full right-0 mb-2 w-56 bg-[#1a2030]/95 backdrop-blur-sm border border-border/40 rounded-xl shadow-2xl overflow-hidden animate-in fade-in slide-in-from-bottom-2 duration-150">
-            <div className="flex items-center justify-between px-3 py-2 border-b border-border/20">
-              <span className="text-[11px] font-medium text-muted-foreground/70">Add Panel</span>
-              <button
-                onClick={() => setShowAddMenu(false)}
-                className="text-muted-foreground/40 hover:text-muted-foreground/80 transition-colors"
-              >
-                <X className="h-3 w-3" />
-              </button>
-            </div>
-            <div className="py-1">
-              <button
-                onClick={() => addPanelAtCenter('webpage', 'Web Page')}
-                className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-white/5 transition-colors group"
-              >
-                <Globe className="h-4 w-4 text-cyan-400 flex-shrink-0" />
-                <div>
-                  <div className="text-[12px] text-foreground/80 group-hover:text-foreground transition-colors">
-                    Web Page
-                  </div>
-                  <div className="text-[10px] text-muted-foreground/40">
-                    Embed any website
-                  </div>
-                </div>
-              </button>
-              <button
-                onClick={() => addPanelAtCenter('terminal', 'Terminal')}
-                className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-white/5 transition-colors group"
-              >
-                <TerminalSquare className="h-4 w-4 text-amber-400 flex-shrink-0" />
-                <div>
-                  <div className="text-[12px] text-foreground/80 group-hover:text-foreground transition-colors">
-                    Terminal
-                  </div>
-                  <div className="text-[10px] text-muted-foreground/40">
-                    Interactive shell session
-                  </div>
-                </div>
-              </button>
-            </div>
-          </div>
-        )}
+      {/* ── HUD: Add button (top-left, primary CTA) ── */}
+      <div className="absolute top-3 left-3 z-10">
         <Button
-          variant="ghost"
           size="sm"
-          className="h-8 px-3 bg-[#1a2030]/90 backdrop-blur-sm border border-border/40 hover:border-border/60 text-xs gap-1.5"
-          onClick={() => setShowAddMenu(!showAddMenu)}
-          title="Add panel"
+          className="h-8 px-3 bg-primary text-primary-foreground hover:bg-primary/90 shadow-sm text-xs gap-1.5"
+          onClick={(e) => {
+            const btn = e.currentTarget.getBoundingClientRect()
+            const rect = containerRef.current?.getBoundingClientRect()
+            if (!rect) return
+            setContextMenu({
+              clientX: btn.left,
+              clientY: btn.bottom + 4,
+              canvasX: (btn.left - rect.left - viewport.x) / viewport.zoom,
+              canvasY: (btn.bottom + 4 - rect.top - viewport.y) / viewport.zoom,
+            })
+          }}
+          title="Add to canvas"
         >
           <Plus className="h-3.5 w-3.5" />
-          <span>Add Panel</span>
+          <span>Add</span>
         </Button>
       </div>
 
-      {/* ── HUD: Viewport info ── */}
+      {/* ── HUD: Viewport info (top-right) ── */}
       <div className="absolute top-3 right-3 flex items-center gap-2 text-[10px] text-muted-foreground/40 z-10 select-none">
         <Move className="h-3 w-3" />
         <span className="tabular-nums">
@@ -563,6 +589,12 @@ export function InfiniteCanvas() {
           {Math.round(-viewport.y / viewport.zoom)}
         </span>
       </div>
+
+      {/* ── Minimap (bottom-right) ── */}
+      <CanvasMinimap
+        containerWidth={containerSize.width}
+        containerHeight={containerSize.height}
+      />
 
       {/* ── Empty state ── */}
       {panels.length === 0 && (
