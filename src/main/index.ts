@@ -589,21 +589,22 @@ app.commandLine.appendSwitch('remote-debugging-port', String(CDP_PORT))
 // multiple signals: user-agent, navigator.webdriver, automation-controlled
 // blink features, HTTP Client-Hints headers, and Chrome runtime checks.
 
-// 1. Strip "Electron" and app name from the user-agent so it looks like
-//    standard Chrome (e.g. "Mozilla/5.0 ... Chrome/128.0.0.0 Safari/537.36")
-const defaultUA = app.userAgentFallback
-const cleanUA = defaultUA
-  .replace(/\s*Electron\/[\w.-]+/i, '')
-  .replace(/\s*20x\/[\w.-]+/i, '')
+// 1. Replace the user-agent entirely with a real Chrome UA string.
+//    Stripping "Electron" alone still leaves subtle differences in the UA
+//    structure.  A hardcoded real-Chrome UA is the safest approach.
+const chromiumVersion = process.versions.chrome || '136.0.0.0'
+const chromiumMajor = chromiumVersion.split('.')[0]
+const isMacUA = process.platform === 'darwin'
+const cleanUA = isMacUA
+  ? `Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromiumVersion} Safari/537.36`
+  : process.platform === 'win32'
+    ? `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromiumVersion} Safari/537.36`
+    : `Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromiumVersion} Safari/537.36`
 app.userAgentFallback = cleanUA
 
 // 2. Disable the AutomationControlled blink feature flag — this prevents
 //    Chromium from setting navigator.webdriver = true when CDP is active.
 app.commandLine.appendSwitch('disable-blink-features', 'AutomationControlled')
-
-// 3. Extract the Chromium major version for crafting realistic Sec-CH-UA headers.
-const chromiumVersion = process.versions.chrome || '128.0.0.0'
-const chromiumMajor = chromiumVersion.split('.')[0]
 
 // Ignore EPIPE errors from broken stdout/stderr pipes (e.g. when piped through head/tail)
 process.stdout?.on?.('error', (err: NodeJS.ErrnoException) => { if (err.code !== 'EPIPE') throw err })

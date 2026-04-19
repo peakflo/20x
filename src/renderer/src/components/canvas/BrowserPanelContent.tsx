@@ -30,13 +30,23 @@ const CDP_PORT = 19222
 const BROWSER_PARTITION = 'persist:browser'
 
 /**
- * Build a clean Chrome user-agent by stripping Electron/app identifiers.
- * Sites like Xero use Akamai WAF which blocks UAs containing "Electron".
+ * Build a real Chrome user-agent.  We replace the entire UA rather than
+ * stripping tokens — a hardcoded real-Chrome string is the safest way to
+ * pass Akamai / Cloudflare / Datadome bot detection.
  */
-function getCleanUserAgent(): string {
-  return navigator.userAgent
-    .replace(/\s*Electron\/[\w.-]+/i, '')
-    .replace(/\s*20x\/[\w.-]+/i, '')
+function getChromeUserAgent(): string {
+  // Extract Chromium version embedded in this Electron build
+  const match = navigator.userAgent.match(/Chrome\/([\d.]+)/)
+  const chromeVer = match ? match[1] : '136.0.0.0'
+  const platform = navigator.platform || ''
+  if (platform.startsWith('Win')) {
+    return `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeVer} Safari/537.36`
+  }
+  if (platform.startsWith('Linux')) {
+    return `Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeVer} Safari/537.36`
+  }
+  // macOS (default)
+  return `Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeVer} Safari/537.36`
 }
 
 /**
@@ -242,7 +252,7 @@ export function BrowserPanelContent({
 
   // ── Live browser ──────────────────────────────────────────
   // Compute once — strips Electron/20x from the UA so WAFs (Akamai etc.) don't block us.
-  const cleanUA = useRef(getCleanUserAgent())
+  const cleanUA = useRef(getChromeUserAgent())
 
   return (
     <div className="flex flex-col h-full min-h-0">
