@@ -410,14 +410,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getPathForFile: (file: File): string => webUtils.getPathForFile(file)
   },
   terminal: {
-    create: (id: string, cols: number, rows: number): Promise<{ pid: number }> =>
-      ipcRenderer.invoke('terminal:create', { id, cols, rows }),
+    create: (id: string, cols: number, rows: number, cwd?: string): Promise<{ pid: number }> =>
+      ipcRenderer.invoke('terminal:create', { id, cols, rows, cwd }),
     write: (id: string, data: string): Promise<void> =>
       ipcRenderer.invoke('terminal:write', { id, data }),
     resize: (id: string, cols: number, rows: number): Promise<void> =>
       ipcRenderer.invoke('terminal:resize', { id, cols, rows }),
-    kill: (id: string): Promise<void> =>
-      ipcRenderer.invoke('terminal:kill', { id }),
+    kill: (id: string, expectedPid?: number): Promise<void> =>
+      ipcRenderer.invoke('terminal:kill', { id, expectedPid }),
+    getCwd: (id: string, expectedPid?: number): Promise<{ cwd: string | null }> =>
+      ipcRenderer.invoke('terminal:getCwd', { id, expectedPid }),
+    getBuffer: (id: string, lines?: number): Promise<{ lines: string[] }> =>
+      ipcRenderer.invoke('terminal:getBuffer', { id, lines }),
     onData: (callback: (data: { id: string; data: string }) => void): (() => void) => {
       const handler = (_: unknown, d: { id: string; data: string }): void => callback(d)
       ipcRenderer.on('terminal:data', handler)
@@ -428,5 +432,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.on('terminal:exit', handler)
       return () => ipcRenderer.removeListener('terminal:exit', handler)
     }
+  },
+  browser: {
+    getCdpPort: (): Promise<{ port: number }> =>
+      ipcRenderer.invoke('browser:getCdpPort'),
+    getTargetId: (webContentsId: number): Promise<{ targetId: string | null }> =>
+      ipcRenderer.invoke('browser:getTargetId', webContentsId),
+    getCdpTargets: (): Promise<Array<{ id: string; url: string; title: string }>> =>
+      ipcRenderer.invoke('browser:getCdpTargets')
   }
 })

@@ -1,4 +1,4 @@
-import { ipcMain, dialog, shell, Notification, app, session } from 'electron'
+import { ipcMain, dialog, shell, Notification, app, session, webContents } from 'electron'
 import * as childProcess from 'child_process'
 import { copyFileSync, existsSync, unlinkSync, readdirSync, statSync, readFileSync } from 'fs'
 import { join, basename, extname } from 'path'
@@ -1208,10 +1208,15 @@ export function registerIpcHandlers(
   // (which requires native module rebuild for Electron) and avoids macOS
   // `script` command (which fails with piped stdio).
 
+  /** Max lines to keep in terminal output buffer for agent log queries */
+  const TERMINAL_BUFFER_MAX_LINES = 500
+
   interface TerminalHandle {
     write: (data: string) => void
     kill: () => void
     pid: number
+    /** Circular buffer of recent terminal output lines */
+    outputBuffer: string[]
   }
 
   const terminals = new Map<string, TerminalHandle>()
@@ -1233,7 +1238,7 @@ export function registerIpcHandlers(
    */
   function createPythonPty(
     id: string, shellPath: string, cols: number, rows: number,
-    sender: Electron.WebContents
+    sender: Electron.WebContents, cwd?: string
   ): TerminalHandle {
     const { spawn } = childProcess
 
@@ -1315,29 +1320,58 @@ else:
         os.waitpid(pid, 0)
 `
 
+    const initialCwd = cwd || process.env.HOME || process.cwd()
     const child = spawn('python3', ['-u', '-c', pythonScript, shellPath, String(cols || 80), String(rows || 24)], {
       stdio: ['pipe', 'pipe', 'pipe'],
-      cwd: process.env.HOME || process.cwd(),
+      cwd: initialCwd,
       env: { ...process.env } as Record<string, string>,
     })
 
+    const outputBuffer: string[] = []
+
+    /** Append raw PTY output to the line buffer, stripping ANSI escape codes */
+    const appendToBuffer = (raw: string) => {
+      // Strip ANSI escape sequences for clean log output
+      // eslint-disable-next-line no-control-regex
+      const clean = raw.replace(/\x1b\[[0-9;]*[a-zA-Z]|\x1b\].*?(\x07|\x1b\\)|\x1b[()][A-Z0-9]|\r/g, '')
+      const lines = clean.split('\n')
+      for (const line of lines) {
+        if (line.trim()) outputBuffer.push(line)
+      }
+      // Trim to max buffer size
+      while (outputBuffer.length > TERMINAL_BUFFER_MAX_LINES) {
+        outputBuffer.shift()
+      }
+    }
+
     child.stdout?.on('data', (data: Buffer) => {
+      const str = data.toString()
+      appendToBuffer(str)
       if (!sender.isDestroyed()) {
-        sender.send('terminal:data', { id, data: data.toString() })
+        sender.send('terminal:data', { id, data: str })
       }
     })
 
     child.stderr?.on('data', (data: Buffer) => {
+      const str = data.toString()
+      appendToBuffer(str)
       // Forward stderr too (e.g. shell startup errors)
       if (!sender.isDestroyed()) {
-        sender.send('terminal:data', { id, data: data.toString() })
+        sender.send('terminal:data', { id, data: str })
       }
     })
 
-    child.on('exit', () => {
-      terminals.delete(id)
-      if (!sender.isDestroyed()) {
-        sender.send('terminal:exit', { id })
+    child.on('exit', (code, signal) => {
+      console.log(`[Terminal] PTY exited id=${id} code=${code} signal=${signal} pid=${child.pid}`)
+      // Only clean up if this handle is still the active one for this id.
+      // When terminal:create replaces an existing PTY, the old one's exit
+      // handler fires asynchronously and must NOT delete the new handle.
+      const current = terminals.get(id)
+      if (current && current.pid === (child.pid || 0)) {
+        terminals.delete(id)
+        if (!sender.isDestroyed()) {
+          sender.send('terminal:exit', { id })
+        }
       }
     })
 
@@ -1349,20 +1383,34 @@ else:
         try { child.kill('SIGTERM') } catch { /* ignore */ }
       },
       pid: child.pid || 0,
+      outputBuffer,
     }
   }
 
-  ipcMain.handle('terminal:create', async (event, { id, cols, rows }: { id: string; cols: number; rows: number }) => {
-    const shellPath = resolveShell()
-    console.log(`[Terminal] Creating terminal id=${id} shell=${shellPath} cols=${cols} rows=${rows}`)
+  ipcMain.handle('terminal:create', async (event, { id, cols, rows, cwd }: { id: string; cols: number; rows: number; cwd?: string }) => {
+    // Kill any existing terminal with the same ID (e.g. respawn after exit)
+    const existing = terminals.get(id)
+    if (existing) {
+      try { existing.kill() } catch { /* ignore */ }
+      terminals.delete(id)
+    }
 
-    const handle = createPythonPty(id, shellPath, cols, rows, event.sender)
+    const shellPath = resolveShell()
+    console.log(`[Terminal] Creating terminal id=${id} shell=${shellPath} cols=${cols} rows=${rows} cwd=${cwd || '(default)'}`)
+
+    const handle = createPythonPty(id, shellPath, cols, rows, event.sender, cwd)
     terminals.set(id, handle)
     return { pid: handle.pid }
   })
 
   ipcMain.handle('terminal:write', (_, { id, data }: { id: string; data: string }) => {
-    terminals.get(id)?.write(data)
+    const term = terminals.get(id)
+    if (!term) {
+      console.log(`[Terminal] write to dead terminal id=${id}`)
+      return { alive: false }
+    }
+    term.write(data)
+    return { alive: true }
   })
 
   ipcMain.handle('terminal:resize', (_event, { id, cols, rows }: { id: string; cols: number; rows: number }) => {
@@ -1370,11 +1418,161 @@ else:
     void id; void cols; void rows
   })
 
-  ipcMain.handle('terminal:kill', (_, { id }: { id: string }) => {
+  /** Get the last N lines from a terminal's output buffer */
+  ipcMain.handle('terminal:getBuffer', (_, { id, lines }: { id: string; lines?: number }) => {
+    const term = terminals.get(id)
+    if (!term) return { lines: [] }
+    const maxLines = Math.min(lines || 200, TERMINAL_BUFFER_MAX_LINES)
+    const buf = term.outputBuffer.slice(-maxLines)
+    return { lines: buf }
+  })
+
+  ipcMain.handle('terminal:kill', (_, { id, expectedPid }: { id: string; expectedPid?: number }) => {
     const term = terminals.get(id)
     if (term) {
+      // Ignore stale cleanup calls from an older terminal instance.
+      if (expectedPid !== undefined && term.pid !== expectedPid) return
       term.kill()
       terminals.delete(id)
+    }
+  })
+
+  /**
+   * Get the current working directory of a terminal's shell process.
+   * The PTY is a Python process that forks a shell child. We need the shell's
+   * cwd, not Python's. Strategy:
+   *   1. Find child PIDs of the Python process via `pgrep -P <pid>`
+   *   2. Get the cwd of the deepest child (most recently forked = active shell)
+   *   3. Use `lsof -p <childPid> -a -d cwd -Fn` for the cwd lookup
+   */
+  ipcMain.handle('terminal:getCwd', async (_, { id, expectedPid }: { id: string; expectedPid?: number }) => {
+    const term = terminals.get(id)
+    if (!term) return { cwd: null }
+    if (expectedPid !== undefined && term.pid !== expectedPid) return { cwd: null }
+
+    try {
+      const { execSync } = childProcess
+      const pythonPid = term.pid
+
+      // Find child PIDs of the Python process (the forked shell)
+      let targetPid = pythonPid
+      try {
+        const children = execSync(`pgrep -P ${pythonPid} 2>/dev/null || true`, {
+          encoding: 'utf-8',
+          timeout: 2000,
+        }).trim()
+        if (children) {
+          // Get the last child (deepest descendant = active process)
+          const childPids = children.split('\n').map((s) => parseInt(s.trim(), 10)).filter(Boolean)
+          if (childPids.length > 0) {
+            // Walk down — find children of children to get the deepest active shell
+            let deepest = childPids[childPids.length - 1]
+            for (let i = 0; i < 5; i++) { // max 5 levels deep
+              const grandchildren = execSync(`pgrep -P ${deepest} 2>/dev/null || true`, {
+                encoding: 'utf-8',
+                timeout: 1000,
+              }).trim()
+              if (!grandchildren) break
+              const gcPids = grandchildren.split('\n').map((s) => parseInt(s.trim(), 10)).filter(Boolean)
+              if (gcPids.length === 0) break
+              deepest = gcPids[gcPids.length - 1]
+            }
+            targetPid = deepest
+          }
+        }
+      } catch { /* ignore pgrep failures */ }
+
+      // Get cwd of the target process
+      const output = execSync(`lsof -p ${targetPid} -a -d cwd -Fn 2>/dev/null || true`, {
+        encoding: 'utf-8',
+        timeout: 2000,
+      })
+      const lines = output.split('\n')
+      const cwdLine = lines.find((l) => l.startsWith('n/'))
+      if (cwdLine) {
+        return { cwd: cwdLine.slice(1) }
+      }
+
+      // Fallback: try /proc on Linux
+      if (process.platform === 'linux') {
+        const linkTarget = execSync(`readlink /proc/${targetPid}/cwd 2>/dev/null || true`, {
+          encoding: 'utf-8',
+          timeout: 2000,
+        }).trim()
+        if (linkTarget) return { cwd: linkTarget }
+      }
+
+      return { cwd: null }
+    } catch {
+      return { cwd: null }
+    }
+  })
+
+  // ── Browser CDP ─────────────────────────────────────────
+  // Returns the CDP (Chrome DevTools Protocol) port that agent-browser
+  // can use to connect to webview tabs on the canvas.
+  ipcMain.handle('browser:getCdpPort', () => {
+    return { port: 19222 }
+  })
+
+  // Returns the CDP target ID for a webview given its webContentsId.
+  // This allows the renderer to store the target ID on the panel data,
+  // so agent-browser can connect directly via ws://localhost:19222/devtools/page/<targetId>
+  ipcMain.handle('browser:getTargetId', async (_event, webContentsId: number) => {
+    try {
+      const wc = webContents.fromId(webContentsId)
+      if (!wc) return { targetId: null }
+
+      // Use the debugger API to get the CDP target info
+      try {
+        wc.debugger.attach('1.3')
+        const { targetInfo } = await wc.debugger.sendCommand('Target.getTargetInfo')
+        const targetId = targetInfo?.targetId || null
+        wc.debugger.detach()
+        return { targetId }
+      } catch {
+        try { wc.debugger.detach() } catch { /* already detached */ }
+        // Fallback: query CDP /json/list and match by URL
+        const wcUrl = wc.getURL()
+        if (!wcUrl) return { targetId: null }
+        const res = await fetch(`http://localhost:19222/json/list`)
+        const targets = await res.json()
+        const match = targets.find((t: { url: string; type: string }) =>
+          t.type === 'webview' && t.url === wcUrl
+        )
+        return { targetId: match?.id || null }
+      }
+    } catch {
+      return { targetId: null }
+    }
+  })
+
+  // Returns all webview CDP targets. Called from the renderer to resolve
+  // CDP target IDs without CORS issues (renderer can't fetch localhost:19222).
+  ipcMain.handle('browser:getCdpTargets', async () => {
+    try {
+      const res = await fetch('http://localhost:19222/json/list')
+      const targets = (await res.json()) as Array<{ id: string; url: string; type: string; title: string }>
+      // agent-browser's `tab` command shows only page + webview targets (not iframes,
+      // service workers, etc.) and sorts them: pages first, then webviews.
+      // We replicate that ordering so the renderer can compute the exact tab ID.
+      const tabTargets = targets
+        .filter((t) => t.type === 'page' || t.type === 'webview')
+        .sort((a, b) => {
+          // page before webview (matches agent-browser ordering)
+          if (a.type === 'page' && b.type !== 'page') return -1
+          if (a.type !== 'page' && b.type === 'page') return 1
+          return 0
+        })
+      return tabTargets.map((t, i) => ({
+        id: t.id,
+        url: t.url,
+        title: t.title,
+        type: t.type,
+        tabId: `t${i + 1}`,
+      }))
+    } catch {
+      return []
     }
   })
 }
