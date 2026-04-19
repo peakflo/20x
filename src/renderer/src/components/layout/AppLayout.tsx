@@ -3,6 +3,7 @@ import { TaskWorkspace } from '@/components/tasks/TaskWorkspace'
 import { SkillWorkspace } from '@/components/skills/SkillWorkspace'
 import { SettingsWorkspace } from '@/components/settings/SettingsWorkspace'
 import { DashboardWorkspace } from '@/components/dashboard/DashboardWorkspace'
+import { InfiniteCanvas } from '@/components/canvas/InfiniteCanvas'
 import { TaskForm, type TaskFormSubmitData } from '@/components/tasks/TaskForm'
 import { DeleteConfirmDialog } from '@/components/tasks/DeleteConfirmDialog'
 import { UpdateDialog } from '@/components/update/UpdateDialog'
@@ -20,7 +21,7 @@ import { isOverdue, isSnoozed } from '@/lib/utils'
 import { useEffect, useState, useCallback } from 'react'
 import { TaskStatus, PluginActionId } from '@/types'
 import type { FileAttachment } from '@/types'
-import { MessageSquare, ExternalLink, LayoutDashboard, CheckSquare, Zap, Settings } from 'lucide-react'
+import { MessageSquare, ExternalLink, LayoutDashboard, CheckSquare, Zap, Settings, Layers } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import type { SidebarView } from '@/stores/ui-store'
 import logo20x from '@/assets/logos/20x.svg'
@@ -125,6 +126,7 @@ export function AppLayout() {
 
   const NAV_ITEMS: { key: SidebarView; label: string; icon: typeof LayoutDashboard }[] = [
     { key: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+    { key: 'canvas', label: 'Canvas', icon: Layers },
     { key: 'tasks', label: 'Tasks', icon: CheckSquare },
     { key: 'skills', label: 'Skills', icon: Zap }
   ]
@@ -195,7 +197,7 @@ export function AppLayout() {
       {/* ── Content area: optional sidebar + workspace ── */}
       <div className="flex flex-1 min-h-0 overflow-hidden">
         {/* Sidebar — only for tasks and skills views */}
-        {sidebarView !== 'dashboard' && (
+        {sidebarView !== 'dashboard' && sidebarView !== 'canvas' && (
           <Sidebar
             tasks={tasks}
             selectedTaskId={selectedTask?.id || null}
@@ -207,15 +209,23 @@ export function AppLayout() {
 
         {/* Workspace */}
         <main className="flex flex-col flex-1 min-w-0 overflow-hidden bg-background">
-          <div className="flex-1 overflow-hidden relative">
-            {/* Main workspace content */}
+          <div className="flex-1 h-0 overflow-hidden relative">
+            {/* Canvas — always mounted so iframes/terminals survive navigation */}
+            <div
+              className="absolute inset-0"
+              style={{ visibility: sidebarView === 'canvas' && activeModal !== 'settings' ? 'visible' : 'hidden' }}
+            >
+              <InfiniteCanvas />
+            </div>
+
+            {/* Other workspace content — conditionally rendered */}
             {activeModal === 'settings' ? (
               <SettingsWorkspace />
             ) : sidebarView === 'dashboard' ? (
               <DashboardWorkspace />
             ) : sidebarView === 'skills' ? (
               <SkillWorkspace />
-            ) : (
+            ) : sidebarView !== 'canvas' ? (
               <TaskWorkspace
               task={selectedTask}
               agents={agents}
@@ -267,7 +277,7 @@ export function AppLayout() {
               }}
               onNavigateToTask={(taskId) => selectTask(taskId)}
             />
-          )}
+          ) : null}
 
           {/* Orchestrator slide-in panel */}
           <div
