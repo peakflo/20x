@@ -1085,29 +1085,60 @@ export function registerIpcHandlers(
 
   // Inject Authorization header for iframe requests to the enterprise API.
   // The interceptor is scoped to the API URL so it only affects API-bound requests.
+  //
+  // IMPORTANT: session.defaultSession.webRequest.onBeforeSendHeaders can only
+  // have ONE handler.  index.ts already registers a global handler that rewrites
+  // Sec-CH-UA Client Hints for anti-bot-detection.  When we register here with
+  // a scoped filter, it REPLACES the global handler.  To avoid breaking the
+  // Client Hints fix, we re-apply the Sec-CH-UA rewriting inside this handler too.
   let iframeAuthEnabled = false
+  let enterpriseApiUrl: string | null = null
 
   ipcMain.handle('enterprise:enableIframeAuth', async () => {
     if (!enterpriseAuth) throw new Error('Enterprise auth not available')
     if (iframeAuthEnabled) return { apiUrl: enterpriseAuth.getApiUrl() }
 
-    const apiUrl = enterpriseAuth.getApiUrl()
-    const filter = { urls: [`${apiUrl}/*`] }
+    enterpriseApiUrl = enterpriseAuth.getApiUrl()
 
-    session.defaultSession.webRequest.onBeforeSendHeaders(filter, async (details, callback) => {
-      if (iframeAuthEnabled && enterpriseAuth) {
-        try {
-          const jwt = await enterpriseAuth.getJwt()
-          details.requestHeaders['Authorization'] = `Bearer ${jwt}`
-        } catch {
-          // If JWT retrieval fails, proceed without auth
+    // Re-register a GLOBAL handler (not scoped) that handles BOTH enterprise
+    // auth AND Client Hints rewriting.  This replaces the handler from index.ts.
+    const chromiumVersion = process.versions.chrome || '136.0.0.0'
+    const chromiumMajor = chromiumVersion.split('.')[0]
+
+    session.defaultSession.webRequest.onBeforeSendHeaders(
+      { urls: ['http://*/*', 'https://*/*'] },
+      async (details, callback) => {
+        const headers = { ...details.requestHeaders }
+
+        // ── Client Hints rewriting (anti-bot-detection) ──
+        for (const key of Object.keys(headers)) {
+          const lower = key.toLowerCase()
+          if (lower === 'sec-ch-ua') {
+            headers[key] = `"Chromium";v="${chromiumMajor}", "Google Chrome";v="${chromiumMajor}", "Not_A Brand";v="24"`
+          } else if (lower === 'sec-ch-ua-full-version-list') {
+            headers[key] = `"Chromium";v="${chromiumVersion}", "Google Chrome";v="${chromiumVersion}", "Not_A Brand";v="24.0.0.0"`
+          }
         }
+        if (!Object.keys(headers).some((k) => k.toLowerCase() === 'sec-ch-ua')) {
+          headers['Sec-CH-UA'] = `"Chromium";v="${chromiumMajor}", "Google Chrome";v="${chromiumMajor}", "Not_A Brand";v="24"`
+        }
+
+        // ── Enterprise auth injection (only for API URL) ──
+        if (iframeAuthEnabled && enterpriseAuth && enterpriseApiUrl && details.url.startsWith(enterpriseApiUrl)) {
+          try {
+            const jwt = await enterpriseAuth.getJwt()
+            headers['Authorization'] = `Bearer ${jwt}`
+          } catch {
+            // If JWT retrieval fails, proceed without auth
+          }
+        }
+
+        callback({ requestHeaders: headers })
       }
-      callback({ requestHeaders: details.requestHeaders })
-    })
+    )
 
     iframeAuthEnabled = true
-    return { apiUrl }
+    return { apiUrl: enterpriseApiUrl }
   })
 
   ipcMain.handle('enterprise:disableIframeAuth', () => {

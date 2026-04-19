@@ -586,16 +586,13 @@ app.commandLine.appendSwitch('remote-debugging-port', String(CDP_PORT))
 
 // ── Anti-bot-detection for embedded browser panels ─────────────────────────
 // Sites like Xero use Akamai's WAF which fingerprints automated browsers via
-// multiple signals: user-agent, navigator.webdriver, automation-controlled
-// blink features, HTTP Client-Hints headers, and Chrome runtime checks.
+// multiple signals: user-agent, TLS fingerprint (JA3/JA4), HTTP/2 settings,
+// Sec-CH-UA Client Hints, navigator.webdriver, and Chrome runtime checks.
 
 // 1. Replace the user-agent entirely with a real Chrome UA string.
-//    Stripping "Electron" alone still leaves subtle differences in the UA
-//    structure.  A hardcoded real-Chrome UA is the safest approach.
 const chromiumVersion = process.versions.chrome || '136.0.0.0'
 const chromiumMajor = chromiumVersion.split('.')[0]
-const isMacUA = process.platform === 'darwin'
-const cleanUA = isMacUA
+const cleanUA = process.platform === 'darwin'
   ? `Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromiumVersion} Safari/537.36`
   : process.platform === 'win32'
     ? `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromiumVersion} Safari/537.36`
@@ -605,6 +602,23 @@ app.userAgentFallback = cleanUA
 // 2. Disable the AutomationControlled blink feature flag — this prevents
 //    Chromium from setting navigator.webdriver = true when CDP is active.
 app.commandLine.appendSwitch('disable-blink-features', 'AutomationControlled')
+
+// 3. Randomise TLS extension order so the JA3/JA4 fingerprint doesn't match
+//    a known "Electron" signature.  Chrome 110+ ships this feature; Akamai
+//    cannot match randomised fingerprints against static bot signatures.
+//    Also enable PostQuantumKyber and other features Chrome enables by default
+//    so the TLS ClientHello looks identical to real Chrome.
+app.commandLine.appendSwitch('enable-features', [
+  'PermuteTLSExtensions',          // randomise TLS extension order → defeats JA3
+  'PostQuantumKyber',              // Chrome enables this by default
+  'UseDnsHttpsSvcb',               // Chrome default
+].join(','))
+
+// 4. Disable features that Electron enables but Chrome doesn't, making the
+//    HTTP fingerprint (ALPS, Client Hints) more Chrome-like.
+app.commandLine.appendSwitch('disable-features', [
+  'AcceptCHFrame',                 // Electron-specific ALPS extension not in Chrome
+].join(','))
 
 // Ignore EPIPE errors from broken stdout/stderr pipes (e.g. when piped through head/tail)
 process.stdout?.on?.('error', (err: NodeJS.ErrnoException) => { if (err.code !== 'EPIPE') throw err })
@@ -816,21 +830,17 @@ app.whenReady().then(async () => {
     }
   )
 
-  // ── 3. Patch webview sessions for anti-bot-detection ──────────────────────
-  // Override Sec-CH-UA Client Hints headers that Electron sends differently
-  // from real Chrome (Akamai/WAFs check these at the HTTP level before any JS
-  // runs).  We use a dedicated "persist:browser" partition for webview panels
-  // so this handler doesn't conflict with enterprise auth on defaultSession.
-  const BROWSER_PARTITION = 'persist:browser'
-  const browserSession = session.fromPartition(BROWSER_PARTITION)
-
-  // Set a clean user-agent on the browser partition
-  browserSession.setUserAgent(cleanUA)
-
-  // Override Client Hints headers: Electron sends Sec-CH-UA without the
-  // "Google Chrome" brand, which is a dead giveaway.  We rewrite them to
-  // match a standard Chrome browser.
-  browserSession.webRequest.onBeforeSendHeaders(
+  // ── Patch Sec-CH-UA on all outgoing requests ──────────────────────────────
+  // Electron's Sec-CH-UA omits the "Google Chrome" brand, which Akamai uses
+  // as a signal.  We intercept via will-attach-webview to configure each
+  // webview's session without conflicting with enterprise auth handlers.
+  //
+  // We modify the defaultSession headers directly.  The onBeforeSendHeaders
+  // handler merges with enterprise auth because enterprise auth only registers
+  // its handler AFTER enableIframeAuth is called (and with a narrow URL filter).
+  // Our handler runs first; if enterprise auth later overrides it with its
+  // scoped filter, that's fine — the scoped handler only affects API URLs.
+  session.defaultSession.webRequest.onBeforeSendHeaders(
     { urls: ['http://*/*', 'https://*/*'] },
     (details, callback) => {
       const headers = { ...details.requestHeaders }
@@ -845,7 +855,7 @@ app.whenReady().then(async () => {
         }
       }
 
-      // If Sec-CH-UA wasn't present at all, add it (some Chromium configs omit it)
+      // If Sec-CH-UA wasn't present at all, add it
       if (!Object.keys(headers).some((k) => k.toLowerCase() === 'sec-ch-ua')) {
         headers['Sec-CH-UA'] = `"Chromium";v="${chromiumMajor}", "Google Chrome";v="${chromiumMajor}", "Not_A Brand";v="24"`
       }
@@ -854,36 +864,8 @@ app.whenReady().then(async () => {
     }
   )
 
-  // Also strip embedding-restriction headers on the browser partition (same
-  // rules as defaultSession above) so webview can load pages that set X-Frame-Options
-  browserSession.webRequest.onHeadersReceived(
-    { urls: ['http://*/*', 'https://*/*'] },
-    (details, callback) => {
-      const headers = { ...details.responseHeaders }
-      if (headers) {
-        for (const key of Object.keys(headers)) {
-          const lower = key.toLowerCase()
-          if (BLOCKED_HEADERS_LC.includes(lower)) {
-            delete headers[key]
-            continue
-          }
-          if (lower === 'content-security-policy') {
-            const values = headers[key]
-            if (Array.isArray(values)) {
-              headers[key] = values.map((v) =>
-                v.replace(/frame-ancestors\s+[^;]+(;|$)/gi, '').trim()
-              ).filter(Boolean)
-              if (headers[key]!.length === 0) delete headers[key]
-            }
-          }
-        }
-      }
-      callback({ cancel: false, responseHeaders: headers })
-    }
-  )
-
-  // 4. Inject anti-bot JS patches into webview pages (handles client-side
-  //    fingerprinting that Akamai runs after the page loads).
+  // Inject anti-bot JS patches into webview pages (handles client-side
+  // fingerprinting that Akamai runs after the page loads).
   app.on('web-contents-created', (_event, contents) => {
     if (contents.getType() === 'webview') {
       contents.on('dom-ready', () => {

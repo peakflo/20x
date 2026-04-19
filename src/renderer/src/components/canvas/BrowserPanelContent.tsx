@@ -21,21 +21,11 @@ interface BrowserPanelContentProps {
 const CDP_PORT = 19222
 
 /**
- * Partition name for browser panel webviews.  Using a dedicated persistent
- * partition lets the main process register onBeforeSendHeaders (to fix
- * Sec-CH-UA Client-Hints headers) without conflicting with enterprise auth
- * on the default session. "persist:" prefix persists cookies/storage across
- * app restarts.
- */
-const BROWSER_PARTITION = 'persist:browser'
-
-/**
  * Build a real Chrome user-agent.  We replace the entire UA rather than
  * stripping tokens — a hardcoded real-Chrome string is the safest way to
  * pass Akamai / Cloudflare / Datadome bot detection.
  */
 function getChromeUserAgent(): string {
-  // Extract Chromium version embedded in this Electron build
   const match = navigator.userAgent.match(/Chrome\/([\d.]+)/)
   const chromeVer = match ? match[1] : '136.0.0.0'
   const platform = navigator.platform || ''
@@ -45,7 +35,6 @@ function getChromeUserAgent(): string {
   if (platform.startsWith('Linux')) {
     return `Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeVer} Safari/537.36`
   }
-  // macOS (default)
   return `Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeVer} Safari/537.36`
 }
 
@@ -277,7 +266,6 @@ export function BrowserPanelContent({
           className="w-full h-full"
           /* @ts-expect-error — Electron webview attributes not typed in JSX */
           allowpopups="true"
-          partition={BROWSER_PARTITION}
           useragent={cleanUA.current}
           style={{ display: 'flex', flex: 1, width: '100%', height: '100%' }}
         />
