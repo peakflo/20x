@@ -140,4 +140,41 @@ describe('TerminalPanelContent', () => {
       expect(terminalKill).toHaveBeenCalledWith('panel-1', 222)
     })
   })
+
+  it('kills a PTY that resolves after its component instance already unmounted', async () => {
+    const firstCreate = deferred<{ pid: number }>()
+    const secondCwd = deferred<{ cwd: string | null }>()
+
+    terminalCreate
+      .mockImplementationOnce(() => firstCreate.promise)
+      .mockResolvedValueOnce({ pid: 222 })
+    terminalGetCwd.mockImplementationOnce(() => secondCwd.promise)
+
+    const first = render(<TerminalPanelContent terminalId="panel-1" cwd="/tmp" />)
+    await waitFor(() => {
+      expect(terminalCreate).toHaveBeenCalledTimes(1)
+    })
+
+    first.unmount()
+
+    const second = render(<TerminalPanelContent terminalId="panel-1" cwd="/tmp" />)
+    await waitFor(() => {
+      expect(terminalCreate).toHaveBeenCalledTimes(2)
+    })
+
+    firstCreate.resolve({ pid: 111 })
+    await waitFor(() => {
+      expect(terminalKill).toHaveBeenCalledWith('panel-1', 111)
+    })
+
+    expect(terminalGetCwd).not.toHaveBeenCalled()
+
+    second.unmount()
+    expect(terminalGetCwd).toHaveBeenNthCalledWith(1, 'panel-1', 222)
+
+    secondCwd.resolve({ cwd: '/tmp/two' })
+    await waitFor(() => {
+      expect(terminalKill).toHaveBeenCalledWith('panel-1', 222)
+    })
+  })
 })
