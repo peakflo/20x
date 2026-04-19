@@ -424,11 +424,8 @@ export function TaskWorkspace({
     [approve, ensureChatSession, sendMessage, session.messages]
   )
 
-  const handlePickAttachments = useCallback(async () => {
-    if (!task?.id) return []
-    const filePaths = await attachmentApi.pick()
-    if (!filePaths.length) return []
-
+  const handleAddAttachmentPaths = useCallback(async (filePaths: string[]) => {
+    if (!task?.id || filePaths.length === 0) return []
     const saved = await Promise.all(filePaths.map((fp) => attachmentApi.save(task.id, fp)))
     const merged = [...task.attachments]
     const seen = new Set(merged.map((a) => a.id))
@@ -440,6 +437,13 @@ export function TaskWorkspace({
     onUpdateAttachments(merged)
     return saved
   }, [onUpdateAttachments, task?.attachments, task?.id])
+
+  const handlePickAttachments = useCallback(async () => {
+    if (!task?.id) return []
+    const filePaths = await attachmentApi.pick()
+    if (!filePaths.length) return []
+    return handleAddAttachmentPaths(filePaths)
+  }, [handleAddAttachmentPaths, task?.id])
 
   // ── Feedback orchestration ──────────────────────────────────
 
@@ -701,6 +705,7 @@ Update existing skills that were helpful or create new ones for patterns worth r
               onRestart={handleStartFreshSession}
               onSend={handleSend}
               onPickAttachments={handlePickAttachments}
+              onAddAttachmentPaths={handleAddAttachmentPaths}
               className="h-full"
             />
           </div>

@@ -91,6 +91,7 @@ interface AgentTranscriptPanelProps {
   onRestart?: () => void
   onSend?: (message: string, options?: { attachments?: ComposerAttachment[] }) => void
   onPickAttachments?: () => Promise<ComposerAttachment[]>
+  onAddAttachmentPaths?: (filePaths: string[]) => Promise<ComposerAttachment[]>
   className?: string
   /** Transient system status (e.g. 'Compacting conversation history…') */
   systemStatus?: string | null
@@ -515,11 +516,34 @@ function formatAttachmentSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
-export function AgentTranscriptPanel({ title = 'Agent transcript', messages, status, onStop, onRestart, onSend, onPickAttachments, className, systemStatus }: AgentTranscriptPanelProps) {
+function mergeAttachments(current: ComposerAttachment[], added: ComposerAttachment[]): ComposerAttachment[] {
+  const seen = new Set(current.map((attachment) => attachment.id))
+  const merged = [...current]
+  for (const item of added) {
+    if (seen.has(item.id)) continue
+    seen.add(item.id)
+    merged.push(item)
+  }
+  return merged
+}
+
+export function AgentTranscriptPanel({
+  title = 'Agent transcript',
+  messages,
+  status,
+  onStop,
+  onRestart,
+  onSend,
+  onPickAttachments,
+  onAddAttachmentPaths,
+  className,
+  systemStatus
+}: AgentTranscriptPanelProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const [viewMode, setViewMode] = useState<ViewMode>(ViewMode.MARKDOWN)
   const [pendingAttachments, setPendingAttachments] = useState<ComposerAttachment[]>([])
+  const [isDragOverComposer, setIsDragOverComposer] = useState(false)
 
   // Find the latest todowrite message to show as a pinned summary
   const latestTodos = useMemo(() => {
@@ -634,20 +658,47 @@ export function AgentTranscriptPanel({ title = 'Agent transcript', messages, sta
     if (!onPickAttachments) return
     const picked = await onPickAttachments()
     if (!picked.length) return
-    setPendingAttachments((prev) => {
-      const seen = new Set(prev.map((a) => a.id))
-      const merged = [...prev]
-      for (const item of picked) {
-        if (seen.has(item.id)) continue
-        seen.add(item.id)
-        merged.push(item)
-      }
-      return merged
-    })
+    setPendingAttachments((prev) => mergeAttachments(prev, picked))
+  }
+
+  const handleAddAttachmentPaths = async (filePaths: string[]) => {
+    if (!onAddAttachmentPaths || filePaths.length === 0) return
+    const added = await onAddAttachmentPaths(filePaths)
+    if (!added.length) return
+    setPendingAttachments((prev) => mergeAttachments(prev, added))
   }
 
   const handleRemoveAttachment = (id: string) => {
     setPendingAttachments((prev) => prev.filter((att) => att.id !== id))
+  }
+
+  const handleComposerDragOver = (e: React.DragEvent<HTMLDivElement>) => {
+    if (!onAddAttachmentPaths || !Array.from(e.dataTransfer.types).includes('Files')) return
+    e.preventDefault()
+    e.stopPropagation()
+    e.dataTransfer.dropEffect = 'copy'
+    setIsDragOverComposer(true)
+  }
+
+  const handleComposerDragLeave = (e: React.DragEvent<HTMLDivElement>) => {
+    if (!onAddAttachmentPaths) return
+    e.preventDefault()
+    e.stopPropagation()
+    if (e.currentTarget.contains(e.relatedTarget as Node | null)) return
+    setIsDragOverComposer(false)
+  }
+
+  const handleComposerDrop = async (e: React.DragEvent<HTMLDivElement>) => {
+    if (!onAddAttachmentPaths) return
+    e.preventDefault()
+    e.stopPropagation()
+    setIsDragOverComposer(false)
+
+    const filePaths = Array.from(e.dataTransfer.files)
+      .map((file) => window.electronAPI.webUtils.getPathForFile(file))
+      .filter(Boolean)
+
+    await handleAddAttachmentPaths(filePaths)
   }
 
   return (
@@ -791,7 +842,19 @@ export function AgentTranscriptPanel({ title = 'Agent transcript', messages, sta
       {/* Input + Footer */}
       <div className="border-t border-border shrink-0">
         {onSend && (
-          <div className="px-4 py-3 space-y-2.5">
+          <div
+            data-testid="transcript-composer"
+            className={`relative px-4 py-3 space-y-2.5 transition-colors ${isDragOverComposer ? 'bg-primary/5' : ''}`}
+            onDragOver={handleComposerDragOver}
+            onDragEnter={handleComposerDragOver}
+            onDragLeave={handleComposerDragLeave}
+            onDrop={handleComposerDrop}
+          >
+            {isDragOverComposer && (
+              <div className="pointer-events-none absolute inset-2 z-10 flex items-center justify-center rounded-xl border border-dashed border-primary/40 bg-background/90">
+                <span className="text-xs font-medium text-primary">Drop files to attach them to this message</span>
+              </div>
+            )}
             {pendingAttachments.length > 0 && (
               <div className="flex flex-wrap gap-1.5">
                 {pendingAttachments.map((attachment) => (
@@ -816,20 +879,20 @@ export function AgentTranscriptPanel({ title = 'Agent transcript', messages, sta
               </div>
             )}
             <div className="flex items-end gap-2">
-            <textarea
-              ref={inputRef}
-              rows={1}
-              placeholder="Send a message... (Shift+Enter for new line)"
-              className="flex-1 bg-muted/50 border border-border rounded-lg px-3 py-1.5 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/30 resize-none overflow-hidden max-h-32 min-h-[32px]"
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault()
-                  handleSend()
-                }
-              }}
-              onInput={autoResize}
-            />
-            {onPickAttachments && (
+              <textarea
+                ref={inputRef}
+                rows={1}
+                placeholder="Send a message... (Shift+Enter for new line)"
+                className="flex-1 bg-muted/50 border border-border rounded-lg px-3 py-1.5 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/30 resize-none overflow-hidden max-h-32 min-h-[32px]"
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault()
+                    handleSend()
+                  }
+                }}
+                onInput={autoResize}
+              />
+              {onPickAttachments && (
               <Button
                 type="button"
                 variant="ghost"
@@ -837,14 +900,15 @@ export function AgentTranscriptPanel({ title = 'Agent transcript', messages, sta
                 onClick={handleAddAttachments}
                 className="h-[32px] w-[32px] shrink-0 rounded-lg"
                 title="Attach files"
+                aria-label="Attach files"
               >
                 <Paperclip className="h-4 w-4" />
               </Button>
             )}
-            <Button variant="default" size="icon" onClick={handleSend} className="h-[32px] w-[32px] shrink-0 rounded-lg">
-              <Send className="h-4 w-4" />
-            </Button>
-          </div>
+              <Button variant="default" size="icon" onClick={handleSend} className="h-[32px] w-[32px] shrink-0 rounded-lg" aria-label="Send message">
+                <Send className="h-4 w-4" />
+              </Button>
+            </div>
           </div>
         )}
       </div>
