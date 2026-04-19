@@ -105,7 +105,8 @@ function createWindow(): void {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false
+      sandbox: false,
+      webviewTag: true
     }
   })
 
@@ -156,6 +157,41 @@ function createWindow(): void {
   mainWindow.webContents.setWindowOpenHandler((details) => {
     shell.openExternal(details.url)
     return { action: 'deny' }
+  })
+
+  // SAFETY: Prevent the main window from ever navigating away from the app.
+  // This guards against agent-browser or CDP accidentally targeting the main
+  // window instead of a webview panel.
+  //
+  // Layer 1: will-navigate (catches user-initiated navigations — NOT CDP)
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    const appOrigins = ['http://localhost:', 'file://']
+    const isAppUrl = appOrigins.some((origin) => url.startsWith(origin))
+    if (!isAppUrl) {
+      console.warn(`[Main] Blocked navigation of main window to: ${url}`)
+      event.preventDefault()
+    }
+  })
+
+  // Layer 2: Recovery — if CDP Page.navigate bypasses will-navigate and the main
+  // window ends up on a non-app URL, detect it and reload the app immediately.
+  // This is a safety net, not prevention — the window briefly shows the wrong page
+  // then snaps back to the app.
+  const appUrl = is.dev && process.env['ELECTRON_RENDERER_URL']
+    ? process.env['ELECTRON_RENDERER_URL']
+    : null // file:// URL set after loadFile
+  const mw = mainWindow // capture non-null reference for closure
+  mw.webContents.on('did-navigate', (_event, url) => {
+    const appOrigins = ['http://localhost:', 'file://']
+    const isAppUrl = appOrigins.some((origin) => url.startsWith(origin))
+    if (!isAppUrl) {
+      console.warn(`[Main] Main window navigated to non-app URL: ${url} — recovering...`)
+      if (appUrl) {
+        mw.loadURL(appUrl)
+      } else {
+        mw.loadFile(join(__dirname, '../renderer/index.html'))
+      }
+    }
   })
 
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
@@ -541,6 +577,12 @@ protocol.registerSchemesAsPrivileged([
 
 // Initialize crash logger as early as possible
 initCrashLogger()
+
+// Enable Chrome DevTools Protocol (CDP) on a fixed port so that agent-browser
+// (and other CDP clients) can connect to webview tabs embedded in the canvas.
+// Port 0 lets Chromium pick a free port; we read it back via the /json endpoint.
+const CDP_PORT = 19222
+app.commandLine.appendSwitch('remote-debugging-port', String(CDP_PORT))
 
 // Ignore EPIPE errors from broken stdout/stderr pipes (e.g. when piped through head/tail)
 process.stdout?.on?.('error', (err: NodeJS.ErrnoException) => { if (err.code !== 'EPIPE') throw err })

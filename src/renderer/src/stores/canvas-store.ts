@@ -2,12 +2,13 @@ import { create } from 'zustand'
 import { settingsApi } from '@/lib/ipc-client'
 
 const CANVAS_STORAGE_KEY = 'canvas_state'
+const CDP_PORT = 19222
 let saveTimer: ReturnType<typeof setTimeout> | null = null
 const SAVE_DEBOUNCE_MS = 1000
 
 // ── Panel types ────────────────────────────────────────────
 
-export type CanvasPanelType = 'task' | 'transcript' | 'app' | 'webpage' | 'terminal' | 'placeholder'
+export type CanvasPanelType = 'task' | 'transcript' | 'app' | 'webpage' | 'terminal' | 'browser' | 'placeholder'
 
 export interface CanvasPanelData {
   id: string
@@ -16,6 +17,14 @@ export interface CanvasPanelData {
   refId?: string
   /** URL for webpage panels */
   url?: string
+  /** Browser session name (for browser panels) */
+  browserSessionId?: string
+  /** WebSocket streaming port (for browser panels) */
+  streamPort?: number
+  /** CDP target ID for this webview — used to connect agent-browser directly */
+  cdpTargetId?: string
+  /** Electron webContentsId for this webview — used to resolve CDP target via IPC */
+  webContentsId?: number
   title: string
   x: number
   y: number
@@ -28,10 +37,14 @@ export interface CanvasPanelData {
 
 // ── Connections / Edges ───────────────────────────────────
 
+export type CanvasEdgeType = 'default' | 'browser' | 'terminal'
+
 export interface CanvasEdge {
   id: string
   fromPanelId: string
   toPanelId: string
+  /** Visual style for the edge — 'browser' gets animated pulsing style */
+  edgeType?: CanvasEdgeType
 }
 
 // ── Snapping helpers ──────────────────────────────────────
@@ -81,6 +94,9 @@ interface CanvasState {
   // Connection drawing state (transient)
   connectingFromId: string | null
 
+  // Auto-connect proximity state (transient, shown during drag)
+  proximityEdge: { fromId: string; toId: string } | null
+
   // Persistence
   isLoaded: boolean
   loadCanvas: () => Promise<void>
@@ -106,10 +122,11 @@ interface CanvasState {
   setSnapGuides: (guides: SnapGuide[]) => void
 
   // Edge / connection actions
-  addEdge: (fromPanelId: string, toPanelId: string) => string
+  addEdge: (fromPanelId: string, toPanelId: string, edgeType?: CanvasEdgeType) => string
   removeEdge: (id: string) => void
   removeEdgesForPanel: (panelId: string) => void
   setConnectingFromId: (id: string | null) => void
+  setProximityEdge: (edge: { fromId: string; toId: string } | null) => void
   clearEdges: () => void
 }
 
@@ -136,6 +153,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   draggingPanelId: null,
   snapGuides: [],
   connectingFromId: null,
+  proximityEdge: null,
   isLoaded: false,
 
   loadCanvas: async () => {
@@ -196,7 +214,11 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
 
   zoomAtPoint: (delta, clientX, clientY, containerRect) => {
     const { viewport } = get()
-    const factor = delta > 0 ? 0.9 : 1.1
+    // Scale zoom factor by delta magnitude for smooth trackpad pinch-to-zoom.
+    // Mac trackpads send small deltas (~2-4px) per event; mice send larger (~100px).
+    // Clamp the intensity so it never exceeds a ~15% step per event.
+    const intensity = Math.min(Math.abs(delta) / 100, 0.15)
+    const factor = delta > 0 ? 1 - intensity : 1 + intensity
     const newZoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, viewport.zoom * factor))
 
     const pointX = (clientX - containerRect.left - viewport.x) / viewport.zoom
@@ -320,8 +342,8 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   setSnapGuides: (guides) => set({ snapGuides: guides }),
 
   // Edges
-  addEdge: (fromPanelId, toPanelId) => {
-    const { edges } = get()
+  addEdge: (fromPanelId, toPanelId, edgeType) => {
+    const { edges, panels } = get()
     const exists = edges.some(
       (e) =>
         (e.fromPanelId === fromPanelId && e.toPanelId === toPanelId) ||
@@ -330,9 +352,18 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     if (exists) return ''
     const id = `edge-${++edgeCounter}-${Date.now()}`
     set((s) => ({
-      edges: [...s.edges, { id, fromPanelId, toPanelId }]
+      edges: [...s.edges, { id, fromPanelId, toPanelId, edgeType }]
     }))
     scheduleSave()
+
+    // ── Notify agent when a browser/terminal edge connects to a task ──
+    if (edgeType === 'browser') {
+      notifyAgentOfBrowserConnection(panels, fromPanelId, toPanelId)
+    }
+    if (edgeType === 'terminal') {
+      notifyAgentOfTerminalConnection(panels, fromPanelId, toPanelId)
+    }
+
     return id
   },
 
@@ -351,6 +382,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   },
 
   setConnectingFromId: (id) => set({ connectingFromId: id }),
+  setProximityEdge: (edge) => set({ proximityEdge: edge }),
 
   clearEdges: () => {
     set({ edges: [] })
@@ -434,4 +466,339 @@ export function calculateSnap(
   if (guideY) guides.push(guideY)
 
   return { x: bestDx < threshold ? snapX : x, y: bestDy < threshold ? snapY : y, guides }
+}
+
+// ── Auto-connect proximity detection ─────────────────────────
+
+/** Distance threshold (canvas px) for auto-connect proximity */
+export const PROXIMITY_THRESHOLD = 80
+
+/**
+ * Check if a dragged panel is close enough to a compatible panel for auto-connect.
+ * Returns { fromId, toId } of the browser↔task pair, or null.
+ * Only browser↔task pairings trigger proximity (not browser↔browser, etc.).
+ */
+export function detectProximityEdge(
+  draggedPanel: CanvasPanelData,
+  otherPanels: CanvasPanelData[],
+  existingEdges: CanvasEdge[]
+): { fromId: string; toId: string } | null {
+  // Only browser, terminal, or task panels participate in auto-connect
+  if (draggedPanel.type !== 'browser' && draggedPanel.type !== 'terminal' && draggedPanel.type !== 'task') return null
+
+  // Task connects to browser or terminal; browser/terminal connect to task
+  const compatibleTypes: CanvasPanelType[] =
+    draggedPanel.type === 'task' ? ['browser', 'terminal'] : ['task']
+  const dCx = draggedPanel.x + draggedPanel.width / 2
+  const dCy = draggedPanel.y + draggedPanel.height / 2
+
+  let bestDist = Infinity
+  let bestPanel: CanvasPanelData | null = null
+
+  for (const p of otherPanels) {
+    if (!compatibleTypes.includes(p.type)) continue
+    // Skip if already connected
+    const alreadyConnected = existingEdges.some(
+      (e) =>
+        (e.fromPanelId === draggedPanel.id && e.toPanelId === p.id) ||
+        (e.fromPanelId === p.id && e.toPanelId === draggedPanel.id)
+    )
+    if (alreadyConnected) continue
+
+    // Distance between panel edges (not centers) — more intuitive
+    const pRight = p.x + p.width
+    const pBottom = p.y + p.height
+    const dRight = draggedPanel.x + draggedPanel.width
+    const dBottom = draggedPanel.y + draggedPanel.height
+
+    // Gap between nearest edges
+    const gapX = Math.max(0, Math.max(p.x - dRight, draggedPanel.x - pRight))
+    const gapY = Math.max(0, Math.max(p.y - dBottom, draggedPanel.y - pBottom))
+    const dist = Math.sqrt(gapX * gapX + gapY * gapY)
+
+    // Also check overlapping panels (dist would be 0)
+    const effectiveDist = dist === 0
+      ? Math.hypot(dCx - (p.x + p.width / 2), dCy - (p.y + p.height / 2)) * 0.1
+      : dist
+
+    if (effectiveDist < PROXIMITY_THRESHOLD && effectiveDist < bestDist) {
+      bestDist = effectiveDist
+      bestPanel = p
+    }
+  }
+
+  if (!bestPanel) return null
+
+  // Always put task first, browser second for consistent edge direction
+  return draggedPanel.type === 'task'
+    ? { fromId: draggedPanel.id, toId: bestPanel.id }
+    : { fromId: bestPanel.id, toId: draggedPanel.id }
+}
+
+// ── Browser↔Task edge notification ──────────────────────────
+// Lazy-imports agent-store and ipc-client to avoid circular deps in tests.
+
+function notifyAgentOfBrowserConnection(
+  panels: CanvasPanelData[],
+  fromPanelId: string,
+  toPanelId: string
+) {
+  const fromPanel = panels.find((p) => p.id === fromPanelId)
+  const toPanel = panels.find((p) => p.id === toPanelId)
+  const taskPanel = fromPanel?.type === 'task' ? fromPanel : toPanel?.type === 'task' ? toPanel : null
+  const browserPanel = fromPanel?.type === 'browser' ? fromPanel : toPanel?.type === 'browser' ? toPanel : null
+
+  // Read fresh panel data from store — the `panels` parameter is a snapshot from
+  // edge creation and may have stale webContentsId from localStorage persistence.
+  const freshBrowserPanel = browserPanel
+    ? useCanvasStore.getState().panels.find((p) => p.id === browserPanel.id) || browserPanel
+    : browserPanel
+
+  console.log('[BrowserEdge] notifyAgentOfBrowserConnection called', {
+    fromPanelId, toPanelId,
+    fromType: fromPanel?.type, toType: toPanel?.type,
+    taskRefId: taskPanel?.refId, browserPanelId: freshBrowserPanel?.id,
+    browserUrl: freshBrowserPanel?.url, browserTitle: freshBrowserPanel?.title,
+    browserCdpTargetId: freshBrowserPanel?.cdpTargetId,
+    browserWebContentsId: freshBrowserPanel?.webContentsId,
+  })
+
+  if (!taskPanel?.refId || !browserPanel) {
+    console.log('[BrowserEdge] BAIL: no taskPanel.refId or no browserPanel')
+    return
+  }
+
+  const resolveAndNotify = async () => {
+    const [{ useAgentStore }, { agentSessionApi }, { useTaskStore }] = await Promise.all([
+      import('./agent-store'),
+      import('@/lib/ipc-client'),
+      import('./task-store'),
+    ])
+
+    const taskId = taskPanel.refId!
+    let session = useAgentStore.getState().getSession(taskId)
+    console.log('[BrowserEdge] session state', { taskId, sessionId: session?.sessionId, agentId: session?.agentId })
+
+    // If no active session, auto-start or resume the task
+    if (!session?.sessionId) {
+      const task = useTaskStore.getState().tasks.find((t) => t.id === taskId)
+      console.log('[BrowserEdge] no session, looking up task', { taskId, agentId: task?.agent_id, sessionId: task?.session_id })
+      if (!task?.agent_id) {
+        console.log('[BrowserEdge] BAIL: no agent_id on task')
+        return
+      }
+
+      const initSession = useAgentStore.getState().initSession
+      try {
+        if (task.session_id) {
+          useAgentStore.getState().clearMessageDedup(taskId)
+          initSession(taskId, '', task.agent_id)
+          const result = await agentSessionApi.resume(task.agent_id, taskId, task.session_id)
+          if (result.ended) {
+            initSession(taskId, '', task.agent_id)
+            const { sessionId } = await agentSessionApi.start(task.agent_id, taskId)
+            initSession(taskId, sessionId, task.agent_id)
+          } else {
+            initSession(taskId, result.sessionId, task.agent_id)
+          }
+        } else {
+          initSession(taskId, '', task.agent_id)
+          const { sessionId } = await agentSessionApi.start(task.agent_id, taskId)
+          initSession(taskId, sessionId, task.agent_id)
+        }
+        session = useAgentStore.getState().getSession(taskId)
+        console.log('[BrowserEdge] session after auto-start', { sessionId: session?.sessionId })
+      } catch (err) {
+        console.error('[BrowserEdge] Failed to auto-start/resume task:', err)
+        return
+      }
+    }
+
+    if (!session?.sessionId) {
+      console.log('[BrowserEdge] BAIL: still no sessionId after auto-start attempt')
+      return
+    }
+
+    // Re-read fresh panel data — webContentsId may have been updated since edge creation
+    const bp = useCanvasStore.getState().panels.find((p) => p.id === browserPanel.id) || browserPanel
+    const browserTitle = bp.title || 'Browser'
+    const browserUrl = bp.url || ''
+
+    // Resolve which agent-browser tab ID (t1, t2, t3...) corresponds to this
+    // browser panel's webview. Uses webContentsId for reliable direct lookup.
+    let tabId: string | null = null
+    const resolveTab = async (attempt: number): Promise<string | null> => {
+      const allTargets = await window.electronAPI.browser.getCdpTargets()
+      const webviews = allTargets.filter((t) => t.type === 'webview')
+      console.log(`[BrowserEdge] resolveTab attempt=${attempt}`, {
+        allTargets: allTargets.map((t) => ({ tabId: t.tabId, type: t.type, url: t.url?.slice(0, 60) })),
+        webviewsCount: webviews.length,
+        browserUrl,
+        webContentsId: bp.webContentsId,
+      })
+      if (webviews.length === 0) return null
+
+      let match: typeof webviews[0] | null = null
+
+      // 1. Best: use webContentsId → getTargetId for exact CDP target, then find its tabId
+      if (!match && bp.webContentsId) {
+        try {
+          const result = await window.electronAPI.browser.getTargetId(bp.webContentsId)
+          if (result.targetId) {
+            match = allTargets.find((t) => t.id === result.targetId) || null
+            if (match) console.log('[BrowserEdge] matched by webContentsId→getTargetId', match.tabId)
+          }
+        } catch { /* debugger API failed */ }
+      }
+
+      // 2. Match by URL
+      if (!match && browserUrl) {
+        const urlBase = browserUrl.split('?')[0].split('#')[0]
+        match = webviews.find((t) => t.url.startsWith(urlBase)) || null
+        if (match) console.log('[BrowserEdge] matched by URL', { tabId: match.tabId, matchUrl: match.url?.slice(0, 60) })
+      }
+
+      // 3. Last resort — first available webview
+      if (!match) {
+        match = webviews[0] || null
+        if (match) console.log('[BrowserEdge] fallback to first webview', match.tabId)
+      }
+
+      return match?.tabId || null
+    }
+
+    try {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        tabId = await resolveTab(attempt)
+        if (tabId) break
+        console.log(`[BrowserEdge] no tab found, retrying in 1s (attempt ${attempt + 1}/3)`)
+        await new Promise((r) => setTimeout(r, 1000))
+      }
+    } catch (err) {
+      console.error('[BrowserEdge] resolveTab error:', err)
+    }
+
+    console.log('[BrowserEdge] final result', { tabId, browserTitle, browserUrl })
+
+    if (!tabId) {
+      agentSessionApi.send(
+        session.sessionId,
+        `[System] A browser panel "${browserTitle}" has been connected to your task on the canvas.\n\n` +
+        `The browser panel is loading. To connect once ready:\n` +
+        `  agent-browser connect ${CDP_PORT}\n` +
+        `  agent-browser tab    # find the [webview] target\n` +
+        `  agent-browser tab <tN>   # switch to the webview\n\n` +
+        `Then use commands normally (open, snapshot, click, etc.).\n` +
+        `Do NOT interact with the [page] target — that is the main app window.`,
+        taskPanel.refId!,
+        session.agentId
+      ).catch((err: unknown) => console.error('[Canvas] Failed to notify agent of browser connection:', err))
+      return
+    }
+
+    agentSessionApi.send(
+      session.sessionId,
+      `[System] A browser panel "${browserTitle}" has been connected to your task on the canvas. You now have access to control it.\n\n` +
+      `To use the browser, run these commands:\n` +
+      `  agent-browser connect ${CDP_PORT}\n` +
+      `  agent-browser tab ${tabId}\n\n` +
+      `Then use commands normally:\n` +
+      `  agent-browser open <url>\n` +
+      `  agent-browser snapshot -i\n` +
+      `  agent-browser click <ref>\n\n` +
+      `Do NOT use "agent-browser tab t1" — that is the main app window.\n` +
+      `The user can see everything you do in the browser in real time on the canvas.`,
+      taskPanel.refId!,
+      session.agentId
+    ).catch((err: unknown) => console.error('[Canvas] Failed to notify agent of browser connection:', err))
+  }
+
+  resolveAndNotify().catch(() => {
+    // Silently ignore — can happen in test environments
+  })
+}
+
+// ── Terminal↔Task edge notification ──────────────────────────
+
+function notifyAgentOfTerminalConnection(
+  panels: CanvasPanelData[],
+  fromPanelId: string,
+  toPanelId: string
+) {
+  const fromPanel = panels.find((p) => p.id === fromPanelId)
+  const toPanel = panels.find((p) => p.id === toPanelId)
+  const taskPanel = fromPanel?.type === 'task' ? fromPanel : toPanel?.type === 'task' ? toPanel : null
+  const terminalPanel = fromPanel?.type === 'terminal' ? fromPanel : toPanel?.type === 'terminal' ? toPanel : null
+
+  if (!taskPanel?.refId || !terminalPanel) return
+
+  const resolveAndNotify = async () => {
+    const [{ useAgentStore }, { agentSessionApi }, { useTaskStore }] = await Promise.all([
+      import('./agent-store'),
+      import('@/lib/ipc-client'),
+      import('./task-store'),
+    ])
+
+    const taskId = taskPanel.refId!
+    let session = useAgentStore.getState().getSession(taskId)
+
+    // If no active session, auto-start or resume the task
+    if (!session?.sessionId) {
+      const task = useTaskStore.getState().tasks.find((t) => t.id === taskId)
+      if (!task?.agent_id) return
+
+      const initSession = useAgentStore.getState().initSession
+      try {
+        if (task.session_id) {
+          useAgentStore.getState().clearMessageDedup(taskId)
+          initSession(taskId, '', task.agent_id)
+          const result = await agentSessionApi.resume(task.agent_id, taskId, task.session_id)
+          if (result.ended) {
+            initSession(taskId, '', task.agent_id)
+            const { sessionId } = await agentSessionApi.start(task.agent_id, taskId)
+            initSession(taskId, sessionId, task.agent_id)
+          } else {
+            initSession(taskId, result.sessionId, task.agent_id)
+          }
+        } else {
+          initSession(taskId, '', task.agent_id)
+          const { sessionId } = await agentSessionApi.start(task.agent_id, taskId)
+          initSession(taskId, sessionId, task.agent_id)
+        }
+        session = useAgentStore.getState().getSession(taskId)
+      } catch (err) {
+        console.error('[TerminalEdge] Failed to auto-start/resume task:', err)
+        return
+      }
+    }
+
+    if (!session?.sessionId) return
+
+    // Get the current terminal buffer to include as initial context
+    const terminalId = terminalPanel.id
+    let bufferPreview = ''
+    try {
+      const { lines } = await window.electronAPI.terminal.getBuffer(terminalId, 50)
+      if (lines.length > 0) {
+        bufferPreview = `\n\nCurrent terminal output (last ${lines.length} lines):\n\`\`\`\n${lines.join('\n')}\n\`\`\``
+      }
+    } catch { /* ignore */ }
+
+    agentSessionApi.send(
+      session.sessionId,
+      `[System] A terminal panel "${terminalPanel.title}" has been connected to your task on the canvas.\n\n` +
+      `You can read the terminal's output log at any time by running:\n` +
+      `  read_terminal_log\n\n` +
+      `This is a read-only view — you cannot type into this terminal.\n` +
+      `The terminal panel ID is: ${terminalId}\n` +
+      `Use your own Bash tool for running commands. Use the terminal log to observe output from processes the user is running.` +
+      bufferPreview,
+      taskPanel.refId!,
+      session.agentId
+    ).catch((err: unknown) => console.error('[Canvas] Failed to notify agent of terminal connection:', err))
+  }
+
+  resolveAndNotify().catch(() => {
+    // Silently ignore — can happen in test environments
+  })
 }

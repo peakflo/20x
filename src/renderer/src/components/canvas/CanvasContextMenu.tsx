@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef } from 'react'
-import { CheckSquare, MessageSquare, Monitor, AppWindow, X } from 'lucide-react'
+import { CheckSquare, MessageSquare, Monitor, AppWindow, Globe, TerminalSquare, X } from 'lucide-react'
 import { useTaskStore } from '@/stores/task-store'
 import { useAgentStore } from '@/stores/agent-store'
 import { useDashboardStore } from '@/stores/dashboard-store'
@@ -50,7 +50,7 @@ export function CanvasContextMenu({ position, onClose }: CanvasContextMenuProps)
   }, [onClose])
 
   const handleAddPanel = useCallback(
-    (type: CanvasPanelType, title: string, refId?: string) => {
+    (type: CanvasPanelType, title: string, refId?: string, url?: string) => {
       // Don't add duplicate task/transcript/app panels for the same refId
       if (refId && (type === 'task' || type === 'transcript' || type === 'app')) {
         const exists = panels.some((p) => p.type === type && p.refId === refId)
@@ -66,6 +66,7 @@ export function CanvasContextMenu({ position, onClose }: CanvasContextMenuProps)
         type,
         title,
         refId,
+        url,
         x: position.canvasX + offset,
         y: position.canvasY + offset,
         width: DEFAULT_PANEL_WIDTH,
@@ -106,6 +107,22 @@ export function CanvasContextMenu({ position, onClose }: CanvasContextMenuProps)
       </div>
 
       <div className="py-1 max-h-[400px] overflow-y-auto custom-scrollbar">
+        {/* Browser & Terminal — always available */}
+        <MenuSection title="Tools">
+          <MenuItem
+            icon={<Globe className="h-3.5 w-3.5 text-orange-400" />}
+            label="Agent Browser"
+            sublabel="Browser controlled by agent via CDP"
+            onClick={() => handleAddPanel('browser', 'Agent Browser', undefined, 'https://www.google.com')}
+          />
+          <MenuItem
+            icon={<TerminalSquare className="h-3.5 w-3.5 text-amber-400" />}
+            label="Terminal"
+            sublabel="Interactive shell session"
+            onClick={() => handleAddPanel('terminal', 'Terminal')}
+          />
+        </MenuSection>
+
         {/* Applications section */}
         {applications.length > 0 && (
           <MenuSection title="Applications">
