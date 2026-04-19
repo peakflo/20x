@@ -68,6 +68,8 @@ export function BrowserPanelContent({
   // When a site (e.g. Xero via Akamai) blocks the embedded webview, we show
   // a banner offering to open the URL in the system browser instead.
   const [blockedUrl, setBlockedUrl] = useState<string | null>(null)
+  const [authInProgress, setAuthInProgress] = useState(false)
+  const [authStatus, setAuthStatus] = useState<string | null>(null)
 
   // ── Check if this browser is connected to a task via an edge ──
   // Uses imperative reads + subscribe to avoid re-rendering on every panel move
@@ -282,9 +284,34 @@ export function BrowserPanelContent({
     webviewRef.current?.reload()
   }, [])
 
-  const handleOpenInBrowser = useCallback(() => {
-    if (blockedUrl) {
-      window.electronAPI?.shell?.openExternal(blockedUrl)
+  const handleOpenInBrowser = useCallback(async () => {
+    if (!blockedUrl) return
+
+    setAuthInProgress(true)
+    setAuthStatus('Launching Chrome…')
+
+    try {
+      const result = await window.electronAPI.browser.openExternalAuth(blockedUrl)
+
+      if (result.success) {
+        setAuthStatus(`Imported ${result.cookieCount} cookies — reloading…`)
+        // Reload the webview with the injected cookies
+        setBlockedUrl(null)
+        const wv = webviewRef.current
+        if (wv) {
+          // Navigate to the final URL (post-login destination) or the original URL
+          wv.loadURL(result.finalUrl || blockedUrl)
+        }
+        setTimeout(() => setAuthStatus(null), 2000)
+      } else {
+        setAuthStatus('No cookies captured — Chrome may have been closed before login')
+        setTimeout(() => setAuthStatus(null), 4000)
+      }
+    } catch (err) {
+      setAuthStatus(`Error: ${err instanceof Error ? err.message : 'Failed to launch Chrome'}`)
+      setTimeout(() => setAuthStatus(null), 5000)
+    } finally {
+      setAuthInProgress(false)
     }
   }, [blockedUrl])
 
@@ -307,20 +334,27 @@ export function BrowserPanelContent({
       />
 
       {/* Bot-detection block banner */}
-      {blockedUrl && (
+      {(blockedUrl || authStatus) && (
         <div className="flex items-center gap-2 px-3 py-2 bg-amber-500/10 border-b border-amber-500/20 flex-shrink-0">
           <div className="flex-1 min-w-0">
             <p className="text-[11px] text-amber-300/90">
-              This site blocked the embedded browser. Open in your system browser instead.
+              {authStatus
+                ? authStatus
+                : 'This site blocked the embedded browser. Log in via Chrome — cookies will be imported back automatically.'}
             </p>
           </div>
-          <button
-            onClick={handleOpenInBrowser}
-            className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/30 text-amber-300 text-[11px] font-medium whitespace-nowrap transition-colors"
-          >
-            <ExternalLink className="h-3 w-3" />
-            Open in Chrome
-          </button>
+          {blockedUrl && !authInProgress && (
+            <button
+              onClick={handleOpenInBrowser}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/30 text-amber-300 text-[11px] font-medium whitespace-nowrap transition-colors"
+            >
+              <ExternalLink className="h-3 w-3" />
+              Open in Chrome
+            </button>
+          )}
+          {authInProgress && (
+            <Loader2 className="h-3.5 w-3.5 text-amber-400 animate-spin flex-shrink-0" />
+          )}
         </div>
       )}
 
