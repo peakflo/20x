@@ -10,6 +10,7 @@ import { StatsSection } from './StatsSection'
 import { PresetupSection } from './PresetupSection'
 import { ApplicationsList } from './ApplicationsList'
 import { TaskBoard } from './TaskBoard'
+import { EnterpriseLoginModal } from '@/components/settings/tabs/EnterpriseLoginModal'
 
 const TIME_WINDOW_LABELS: Record<TimeWindow, string> = {
   '24h': '24h',
@@ -19,8 +20,18 @@ const TIME_WINDOW_LABELS: Record<TimeWindow, string> = {
 }
 
 export function DashboardWorkspace() {
-  const { isAuthenticated, isLoading: enterpriseLoading, signupInBrowser, loadSession } = useEnterpriseStore()
+  const {
+    isAuthenticated,
+    isLoading: enterpriseLoading,
+    error: enterpriseError,
+    availableTenants,
+    signupInBrowser,
+    loadSession,
+    clearError,
+    setSyncing
+  } = useEnterpriseStore()
   const [signupPending, setSignupPending] = useState(false)
+  const [showLoginModal, setShowLoginModal] = useState(false)
 
   const handleSignupInBrowser = useCallback(async () => {
     setSignupPending(true)
@@ -30,6 +41,27 @@ export function DashboardWorkspace() {
       setSignupPending(false)
     }
   }, [signupInBrowser])
+
+  // After browser signup returns companies that need tenant selection, open the modal
+  useEffect(() => {
+    if (availableTenants && availableTenants.length > 1 && !isAuthenticated) {
+      setShowLoginModal(true)
+    }
+  }, [availableTenants, isAuthenticated])
+
+  // Listen for sync completion from main process (also needed when connecting from dashboard)
+  useEffect(() => {
+    const unsubscribe = window.electronAPI?.enterprise?.onSyncComplete?.((data) => {
+      setSyncing(false)
+      if (data.success) {
+        console.log(`[enterprise] Sync completed in ${data.syncMs}ms`)
+      } else {
+        console.warn('[enterprise] Sync failed:', data.error)
+      }
+    })
+    return () => unsubscribe?.()
+  }, [setSyncing])
+
   const { tasks } = useTaskStore()
   const { openSettings, setSettingsTab, openCreateModal } = useUIStore()
   const {
@@ -134,6 +166,7 @@ export function DashboardWorkspace() {
             <ApplicationsList />
           </>
         ) : (
+          <>
           <div className="rounded-lg border border-border/50 bg-card p-4 space-y-3">
             <div className="flex items-center justify-between gap-4">
               <div className="flex items-center gap-3">
@@ -174,6 +207,17 @@ export function DashboardWorkspace() {
                 Complete sign up in your browser, then you'll be connected automatically.
               </p>
             )}
+            {enterpriseError && (
+              <div className="rounded-md bg-destructive/10 border border-destructive/20 px-3 py-2 flex items-center justify-between">
+                <p className="text-xs text-destructive">{enterpriseError}</p>
+                <button
+                  onClick={clearError}
+                  className="text-xs text-destructive/70 hover:text-destructive underline ml-2 shrink-0 cursor-pointer"
+                >
+                  Dismiss
+                </button>
+              </div>
+            )}
             <div className="flex items-center gap-2">
               <span className="text-xs text-muted-foreground">Already have an account?</span>
               <button
@@ -187,6 +231,16 @@ export function DashboardWorkspace() {
               </button>
             </div>
           </div>
+
+          {/* Tenant selection modal — shown after browser signup when multiple orgs exist */}
+          <EnterpriseLoginModal
+            open={showLoginModal}
+            onClose={() => {
+              setShowLoginModal(false)
+              loadSession()
+            }}
+          />
+          </>
         )}
 
         {/* Task Kanban Board — always available (local data) */}
