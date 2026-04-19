@@ -33,6 +33,7 @@ export function TerminalPanelContent({ terminalId, cwd }: TerminalPanelContentPr
   const cleanupRef = useRef<(() => void)[]>([])
   const initCalledRef = useRef(false)
   const isReadyRef = useRef(false)
+  const activePidRef = useRef<number | null>(null)
 
   // Store cwd in a ref — only used at init time, never triggers re-init
   const cwdRef = useRef(cwd)
@@ -107,12 +108,13 @@ export function TerminalPanelContent({ terminalId, cwd }: TerminalPanelContentPr
     if (!xtermRef.current) return
 
     try {
-      await window.electronAPI.terminal.create(
+      const { pid } = await window.electronAPI.terminal.create(
         terminalId,
         term.cols,
         term.rows,
         cwdRef.current // read from ref, not prop — stable reference
       )
+      activePidRef.current = pid
 
       console.log(`[Terminal:${terminalId}] PTY created, setting up listeners`)
 
@@ -145,7 +147,8 @@ export function TerminalPanelContent({ terminalId, cwd }: TerminalPanelContentPr
             term.cols,
             term.rows,
             cwdRef.current
-          ).then(() => {
+          ).then(({ pid }) => {
+            activePidRef.current = pid
             term.focus()
           }).catch(() => {
             processExited = true
@@ -220,15 +223,16 @@ export function TerminalPanelContent({ terminalId, cwd }: TerminalPanelContentPr
 
     return () => {
       observer.disconnect()
+      const expectedPid = activePidRef.current ?? undefined
 
       // Capture cwd before killing the terminal — persists across restarts
-      window.electronAPI.terminal.getCwd(terminalId).then(({ cwd: currentCwd }) => {
+      window.electronAPI.terminal.getCwd(terminalId, expectedPid).then(({ cwd: currentCwd }) => {
         if (currentCwd) {
           useCanvasStore.getState().updatePanel(terminalId, { url: currentCwd })
         }
       }).catch(() => {}).finally(() => {
         // Kill PTY after cwd capture attempt
-        window.electronAPI.terminal.kill(terminalId).catch(() => {})
+        window.electronAPI.terminal.kill(terminalId, expectedPid).catch(() => {})
       })
 
       // Cleanup listeners
@@ -241,6 +245,7 @@ export function TerminalPanelContent({ terminalId, cwd }: TerminalPanelContentPr
       fitAddonRef.current = null
       initCalledRef.current = false
       isReadyRef.current = false
+      activePidRef.current = null
     }
   }, [initTerminal, terminalId])
 
@@ -251,7 +256,8 @@ export function TerminalPanelContent({ terminalId, cwd }: TerminalPanelContentPr
     if (!isReady) return
     const interval = setInterval(async () => {
       try {
-        const { cwd: currentCwd } = await window.electronAPI.terminal.getCwd(terminalId)
+        const expectedPid = activePidRef.current ?? undefined
+        const { cwd: currentCwd } = await window.electronAPI.terminal.getCwd(terminalId, expectedPid)
         if (currentCwd) {
           useCanvasStore.getState().updatePanel(terminalId, { url: currentCwd })
         }

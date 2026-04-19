@@ -1427,9 +1427,11 @@ else:
     return { lines: buf }
   })
 
-  ipcMain.handle('terminal:kill', (_, { id }: { id: string }) => {
+  ipcMain.handle('terminal:kill', (_, { id, expectedPid }: { id: string; expectedPid?: number }) => {
     const term = terminals.get(id)
     if (term) {
+      // Ignore stale cleanup calls from an older terminal instance.
+      if (expectedPid !== undefined && term.pid !== expectedPid) return
       term.kill()
       terminals.delete(id)
     }
@@ -1443,9 +1445,10 @@ else:
    *   2. Get the cwd of the deepest child (most recently forked = active shell)
    *   3. Use `lsof -p <childPid> -a -d cwd -Fn` for the cwd lookup
    */
-  ipcMain.handle('terminal:getCwd', async (_, { id }: { id: string }) => {
+  ipcMain.handle('terminal:getCwd', async (_, { id, expectedPid }: { id: string; expectedPid?: number }) => {
     const term = terminals.get(id)
     if (!term) return { cwd: null }
+    if (expectedPid !== undefined && term.pid !== expectedPid) return { cwd: null }
 
     try {
       const { execSync } = childProcess
