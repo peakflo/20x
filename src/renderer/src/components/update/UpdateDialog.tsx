@@ -91,6 +91,18 @@ export function UpdateDialog({ open, onClose }: UpdateDialogProps) {
     })
   }
 
+  const handleCheckForUpdates = () => {
+    setState((s) => ({ ...s, status: 'checking', error: null }))
+    updaterApi.check().then((result) => {
+      if (result && !result.success) {
+        setState((s) => s.status === 'checking'
+          ? { ...s, status: 'error', error: result.error ?? 'Update check failed' }
+          : s
+        )
+      }
+    })
+  }
+
   const hasUpdate = state.status === 'available' || state.status === 'downloading' || state.status === 'downloaded'
 
   return (
@@ -216,6 +228,11 @@ export function UpdateDialog({ open, onClose }: UpdateDialogProps) {
                 <Button onClick={handleRetry} className="flex-1">
                   <RefreshCw className="h-4 w-4 mr-2" />
                   Retry
+                </Button>
+              ) : (state.status === 'idle' || state.status === 'up-to-date') ? (
+                <Button onClick={handleCheckForUpdates} variant="outline" className="flex-1">
+                  <RefreshCw className="h-4 w-4 mr-2" />
+                  Check for Updates
                 </Button>
               ) : null}
               <Button variant="outline" onClick={onClose}>

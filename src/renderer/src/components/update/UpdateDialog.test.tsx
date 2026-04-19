@@ -113,4 +113,49 @@ describe('UpdateDialog', () => {
     fireEvent.click(closeButtons[closeButtons.length - 1])
     expect(onClose).toHaveBeenCalled()
   })
+
+  it('should show Check for Updates button when up-to-date', async () => {
+    let statusCallback: ((data: Record<string, unknown>) => void) | null = null
+    mockUpdater.onStatus.mockImplementation((cb: (data: Record<string, unknown>) => void) => {
+      statusCallback = cb
+      return vi.fn()
+    })
+
+    render(<UpdateDialog open={true} onClose={vi.fn()} />)
+
+    // Simulate main process sending 'up-to-date'
+    statusCallback!({ status: 'up-to-date', currentVersion: '0.0.31' })
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /check for updates/i })).toBeInTheDocument()
+    })
+  })
+
+  it('should re-trigger check when Check for Updates button is clicked from up-to-date state', async () => {
+    let statusCallback: ((data: Record<string, unknown>) => void) | null = null
+    mockUpdater.onStatus.mockImplementation((cb: (data: Record<string, unknown>) => void) => {
+      statusCallback = cb
+      return vi.fn()
+    })
+
+    render(<UpdateDialog open={true} onClose={vi.fn()} />)
+
+    // Simulate reaching up-to-date state
+    statusCallback!({ status: 'up-to-date', currentVersion: '0.0.31' })
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /check for updates/i })).toBeInTheDocument()
+    })
+
+    // Click the Check for Updates button
+    fireEvent.click(screen.getByRole('button', { name: /check for updates/i }))
+
+    // Should transition to checking state and call updater.check again
+    // Radix Dialog may render duplicate nodes, so we check at least one exists
+    await waitFor(() => {
+      expect(screen.getAllByText('Checking for updates...').length).toBeGreaterThan(0)
+    })
+    // check is called once on open (idle→checking) and once on button click
+    expect(mockUpdater.check).toHaveBeenCalledTimes(2)
+  })
 })
