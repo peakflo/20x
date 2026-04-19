@@ -585,11 +585,13 @@ const CDP_PORT = 19222
 app.commandLine.appendSwitch('remote-debugging-port', String(CDP_PORT))
 
 // ── Anti-bot-detection for embedded browser panels ─────────────────────────
-// Sites like Xero use Akamai's WAF which fingerprints automated browsers via
-// multiple signals: user-agent, TLS fingerprint (JA3/JA4), HTTP/2 settings,
-// Sec-CH-UA Client Hints, navigator.webdriver, and Chrome runtime checks.
+// Some sites (Xero, banking portals) use Akamai's WAF which fingerprints
+// the TLS ClientHello and HTTP/2 SETTINGS frames — baked into the compiled
+// Electron binary and impossible to change at runtime.  We apply best-effort
+// mitigations here; sites that still block are handled gracefully in the
+// browser panel UI with an "Open in Chrome" fallback.
 
-// 1. Replace the user-agent entirely with a real Chrome UA string.
+// 1. Replace user-agent with a real Chrome UA string.
 const chromiumVersion = process.versions.chrome || '136.0.0.0'
 const chromiumMajor = chromiumVersion.split('.')[0]
 const cleanUA = process.platform === 'darwin'
@@ -599,25 +601,17 @@ const cleanUA = process.platform === 'darwin'
     : `Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromiumVersion} Safari/537.36`
 app.userAgentFallback = cleanUA
 
-// 2. Disable the AutomationControlled blink feature flag — this prevents
-//    Chromium from setting navigator.webdriver = true when CDP is active.
+// 2. Disable AutomationControlled so navigator.webdriver = false when CDP is active.
 app.commandLine.appendSwitch('disable-blink-features', 'AutomationControlled')
 
-// 3. Randomise TLS extension order so the JA3/JA4 fingerprint doesn't match
-//    a known "Electron" signature.  Chrome 110+ ships this feature; Akamai
-//    cannot match randomised fingerprints against static bot signatures.
-//    Also enable PostQuantumKyber and other features Chrome enables by default
-//    so the TLS ClientHello looks identical to real Chrome.
+// 3. Best-effort TLS/HTTP2 mitigations — these help with less aggressive WAFs
+//    but cannot fully defeat Akamai's binary-level TLS fingerprinting.
 app.commandLine.appendSwitch('enable-features', [
-  'PermuteTLSExtensions',          // randomise TLS extension order → defeats JA3
+  'PermuteTLSExtensions',          // randomise TLS extension order
   'PostQuantumKyber',              // Chrome enables this by default
-  'UseDnsHttpsSvcb',               // Chrome default
 ].join(','))
-
-// 4. Disable features that Electron enables but Chrome doesn't, making the
-//    HTTP fingerprint (ALPS, Client Hints) more Chrome-like.
 app.commandLine.appendSwitch('disable-features', [
-  'AcceptCHFrame',                 // Electron-specific ALPS extension not in Chrome
+  'AcceptCHFrame',                 // Electron-only ALPS extension not in Chrome
 ].join(','))
 
 // Ignore EPIPE errors from broken stdout/stderr pipes (e.g. when piped through head/tail)

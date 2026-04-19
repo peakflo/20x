@@ -6,6 +6,7 @@ import {
   ArrowRight,
   Loader2,
   Zap,
+  ExternalLink,
 } from 'lucide-react'
 import { useCanvasStore } from '@/stores/canvas-store'
 
@@ -62,6 +63,11 @@ export function BrowserPanelContent({
   const [isLoading, setIsLoading] = useState(false)
   const [canGoBack, setCanGoBack] = useState(false)
   const [canGoForward, setCanGoForward] = useState(false)
+
+  // ── Bot-detection block state ───────────────────────────────
+  // When a site (e.g. Xero via Akamai) blocks the embedded webview, we show
+  // a banner offering to open the URL in the system browser instead.
+  const [blockedUrl, setBlockedUrl] = useState<string | null>(null)
 
   // ── Check if this browser is connected to a task via an edge ──
   // Uses imperative reads + subscribe to avoid re-rendering on every panel move
@@ -161,6 +167,8 @@ export function BrowserPanelContent({
     const onNavigate = (e: { url: string }) => {
       // Only update the URL bar text — never feed back into <webview src>
       setInputValue(e.url)
+      // Clear blocked state when navigating to a new URL
+      setBlockedUrl(null)
       // Debounce store update to avoid flooding zustand on SPA navigations
       if (pendingUrlUpdate.current) clearTimeout(pendingUrlUpdate.current)
       pendingUrlUpdate.current = setTimeout(() => {
@@ -180,12 +188,45 @@ export function BrowserPanelContent({
       wv.executeJavaScript('document.exitFullscreen?.().catch(()=>{})').catch(() => {})
     }
 
+    // ── Detect bot-detection blocks (Akamai, Cloudflare, etc.) ────
+    // After the page finishes loading, check if the page body contains
+    // known WAF block signatures.  If so, show a banner with the option
+    // to open the URL in the system browser.
+    const onDomReady = () => {
+      wv.executeJavaScript(`
+        (() => {
+          const text = document.body?.innerText || '';
+          const title = document.title || '';
+          // Akamai: "Access Denied" + edgesuite.net reference
+          if (text.includes('Access Denied') && (text.includes('edgesuite.net') || text.includes('Reference #'))) {
+            return 'akamai';
+          }
+          // Cloudflare: "Attention Required!" challenge
+          if (title.includes('Attention Required') || (text.includes('Cloudflare') && text.includes('Ray ID'))) {
+            return 'cloudflare';
+          }
+          // PerimeterX / HUMAN: "Access to this page has been denied"
+          if (text.includes('Access to this page has been denied') && text.includes('Request ID')) {
+            return 'perimeterx';
+          }
+          return null;
+        })()
+      `).then((blockType: string | null) => {
+        if (blockType) {
+          const currentUrl = wv.getURL?.() || ''
+          console.warn(`[BrowserPanel:${panelId}] Detected ${blockType} bot block on ${currentUrl}`)
+          setBlockedUrl(currentUrl)
+        }
+      }).catch(() => {})
+    }
+
     wv.addEventListener('did-start-loading', onStartLoading)
     wv.addEventListener('did-stop-loading', onStopLoading)
     wv.addEventListener('did-navigate', onNavigate)
     wv.addEventListener('did-navigate-in-page', onNavigate as any)
     wv.addEventListener('page-title-updated', onTitleUpdate)
     wv.addEventListener('enter-html-full-screen', onEnterFullScreen)
+    wv.addEventListener('dom-ready', onDomReady)
 
     return () => {
       wv.removeEventListener('did-start-loading', onStartLoading)
@@ -194,6 +235,7 @@ export function BrowserPanelContent({
       wv.removeEventListener('did-navigate-in-page', onNavigate as any)
       wv.removeEventListener('page-title-updated', onTitleUpdate)
       wv.removeEventListener('enter-html-full-screen', onEnterFullScreen)
+      wv.removeEventListener('dom-ready', onDomReady)
       if (pendingUrlUpdate.current) clearTimeout(pendingUrlUpdate.current)
       if (pendingTitleUpdate.current) clearTimeout(pendingTitleUpdate.current)
     }
@@ -212,6 +254,7 @@ export function BrowserPanelContent({
       }
     }
     setInputValue(finalUrl)
+    setBlockedUrl(null)
     // Navigate via loadURL — never set the src attribute reactively
     const wv = webviewRef.current
     if (wv) {
@@ -239,8 +282,13 @@ export function BrowserPanelContent({
     webviewRef.current?.reload()
   }, [])
 
+  const handleOpenInBrowser = useCallback(() => {
+    if (blockedUrl) {
+      window.electronAPI?.shell?.openExternal(blockedUrl)
+    }
+  }, [blockedUrl])
+
   // ── Live browser ──────────────────────────────────────────
-  // Compute once — strips Electron/20x from the UA so WAFs (Akamai etc.) don't block us.
   const cleanUA = useRef(getChromeUserAgent())
 
   return (
@@ -257,6 +305,24 @@ export function BrowserPanelContent({
         onRefresh={handleRefresh}
         connectedTaskName={connectedTaskName}
       />
+
+      {/* Bot-detection block banner */}
+      {blockedUrl && (
+        <div className="flex items-center gap-2 px-3 py-2 bg-amber-500/10 border-b border-amber-500/20 flex-shrink-0">
+          <div className="flex-1 min-w-0">
+            <p className="text-[11px] text-amber-300/90">
+              This site blocked the embedded browser. Open in your system browser instead.
+            </p>
+          </div>
+          <button
+            onClick={handleOpenInBrowser}
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/30 text-amber-300 text-[11px] font-medium whitespace-nowrap transition-colors"
+          >
+            <ExternalLink className="h-3 w-3" />
+            Open in Chrome
+          </button>
+        </div>
+      )}
 
       {/* Webview — real browser */}
       <div className="flex-1 min-h-0">
