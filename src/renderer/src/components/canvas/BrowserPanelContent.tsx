@@ -21,13 +21,22 @@ interface BrowserPanelContentProps {
 const CDP_PORT = 19222
 
 /**
+ * Partition name for browser panel webviews.  Using a dedicated persistent
+ * partition lets the main process register onBeforeSendHeaders (to fix
+ * Sec-CH-UA Client-Hints headers) without conflicting with enterprise auth
+ * on the default session. "persist:" prefix persists cookies/storage across
+ * app restarts.
+ */
+const BROWSER_PARTITION = 'persist:browser'
+
+/**
  * Build a clean Chrome user-agent by stripping Electron/app identifiers.
  * Sites like Xero use Akamai WAF which blocks UAs containing "Electron".
  */
 function getCleanUserAgent(): string {
   return navigator.userAgent
-    .replace(/\s*Electron\/[\w.]+/i, '')
-    .replace(/\s*20x\/[\w.]+/i, '')
+    .replace(/\s*Electron\/[\w.-]+/i, '')
+    .replace(/\s*20x\/[\w.-]+/i, '')
 }
 
 /**
@@ -258,6 +267,7 @@ export function BrowserPanelContent({
           className="w-full h-full"
           /* @ts-expect-error — Electron webview attributes not typed in JSX */
           allowpopups="true"
+          partition={BROWSER_PARTITION}
           useragent={cleanUA.current}
           style={{ display: 'flex', flex: 1, width: '100%', height: '100%' }}
         />

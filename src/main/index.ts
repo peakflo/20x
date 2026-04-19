@@ -584,13 +584,26 @@ initCrashLogger()
 const CDP_PORT = 19222
 app.commandLine.appendSwitch('remote-debugging-port', String(CDP_PORT))
 
-// Strip "Electron" and app name from the default user-agent so that embedded
-// webviews look like a standard Chrome browser.  Sites like Xero use Akamai's
-// bot-detection WAF which blocks requests whose UA contains "Electron".
+// ── Anti-bot-detection for embedded browser panels ─────────────────────────
+// Sites like Xero use Akamai's WAF which fingerprints automated browsers via
+// multiple signals: user-agent, navigator.webdriver, automation-controlled
+// blink features, HTTP Client-Hints headers, and Chrome runtime checks.
+
+// 1. Strip "Electron" and app name from the user-agent so it looks like
+//    standard Chrome (e.g. "Mozilla/5.0 ... Chrome/128.0.0.0 Safari/537.36")
 const defaultUA = app.userAgentFallback
-app.userAgentFallback = defaultUA
-  .replace(/\s*Electron\/[\w.]+/i, '')
-  .replace(/\s*20x\/[\w.]+/i, '')
+const cleanUA = defaultUA
+  .replace(/\s*Electron\/[\w.-]+/i, '')
+  .replace(/\s*20x\/[\w.-]+/i, '')
+app.userAgentFallback = cleanUA
+
+// 2. Disable the AutomationControlled blink feature flag — this prevents
+//    Chromium from setting navigator.webdriver = true when CDP is active.
+app.commandLine.appendSwitch('disable-blink-features', 'AutomationControlled')
+
+// 3. Extract the Chromium major version for crafting realistic Sec-CH-UA headers.
+const chromiumVersion = process.versions.chrome || '128.0.0.0'
+const chromiumMajor = chromiumVersion.split('.')[0]
 
 // Ignore EPIPE errors from broken stdout/stderr pipes (e.g. when piped through head/tail)
 process.stdout?.on?.('error', (err: NodeJS.ErrnoException) => { if (err.code !== 'EPIPE') throw err })
@@ -801,6 +814,109 @@ app.whenReady().then(async () => {
       callback({ cancel: false, responseHeaders: headers })
     }
   )
+
+  // ── 3. Patch webview sessions for anti-bot-detection ──────────────────────
+  // Override Sec-CH-UA Client Hints headers that Electron sends differently
+  // from real Chrome (Akamai/WAFs check these at the HTTP level before any JS
+  // runs).  We use a dedicated "persist:browser" partition for webview panels
+  // so this handler doesn't conflict with enterprise auth on defaultSession.
+  const BROWSER_PARTITION = 'persist:browser'
+  const browserSession = session.fromPartition(BROWSER_PARTITION)
+
+  // Set a clean user-agent on the browser partition
+  browserSession.setUserAgent(cleanUA)
+
+  // Override Client Hints headers: Electron sends Sec-CH-UA without the
+  // "Google Chrome" brand, which is a dead giveaway.  We rewrite them to
+  // match a standard Chrome browser.
+  browserSession.webRequest.onBeforeSendHeaders(
+    { urls: ['http://*/*', 'https://*/*'] },
+    (details, callback) => {
+      const headers = { ...details.requestHeaders }
+
+      // Rewrite Sec-CH-UA to include "Google Chrome" brand like real Chrome
+      for (const key of Object.keys(headers)) {
+        const lower = key.toLowerCase()
+        if (lower === 'sec-ch-ua') {
+          headers[key] = `"Chromium";v="${chromiumMajor}", "Google Chrome";v="${chromiumMajor}", "Not_A Brand";v="24"`
+        } else if (lower === 'sec-ch-ua-full-version-list') {
+          headers[key] = `"Chromium";v="${chromiumVersion}", "Google Chrome";v="${chromiumVersion}", "Not_A Brand";v="24.0.0.0"`
+        }
+      }
+
+      // If Sec-CH-UA wasn't present at all, add it (some Chromium configs omit it)
+      if (!Object.keys(headers).some((k) => k.toLowerCase() === 'sec-ch-ua')) {
+        headers['Sec-CH-UA'] = `"Chromium";v="${chromiumMajor}", "Google Chrome";v="${chromiumMajor}", "Not_A Brand";v="24"`
+      }
+
+      callback({ requestHeaders: headers })
+    }
+  )
+
+  // Also strip embedding-restriction headers on the browser partition (same
+  // rules as defaultSession above) so webview can load pages that set X-Frame-Options
+  browserSession.webRequest.onHeadersReceived(
+    { urls: ['http://*/*', 'https://*/*'] },
+    (details, callback) => {
+      const headers = { ...details.responseHeaders }
+      if (headers) {
+        for (const key of Object.keys(headers)) {
+          const lower = key.toLowerCase()
+          if (BLOCKED_HEADERS_LC.includes(lower)) {
+            delete headers[key]
+            continue
+          }
+          if (lower === 'content-security-policy') {
+            const values = headers[key]
+            if (Array.isArray(values)) {
+              headers[key] = values.map((v) =>
+                v.replace(/frame-ancestors\s+[^;]+(;|$)/gi, '').trim()
+              ).filter(Boolean)
+              if (headers[key]!.length === 0) delete headers[key]
+            }
+          }
+        }
+      }
+      callback({ cancel: false, responseHeaders: headers })
+    }
+  )
+
+  // 4. Inject anti-bot JS patches into webview pages (handles client-side
+  //    fingerprinting that Akamai runs after the page loads).
+  app.on('web-contents-created', (_event, contents) => {
+    if (contents.getType() === 'webview') {
+      contents.on('dom-ready', () => {
+        contents.executeJavaScript(`
+          try {
+            Object.defineProperty(navigator, 'webdriver', {
+              get: () => false, configurable: true,
+            });
+          } catch(e) {}
+          try {
+            if (!window.chrome) { window.chrome = {}; }
+            if (!window.chrome.runtime) {
+              window.chrome.runtime = { id: undefined };
+            }
+          } catch(e) {}
+          try {
+            Object.defineProperty(navigator, 'plugins', {
+              get: () => [
+                { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer' },
+                { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai' },
+                { name: 'Native Client', filename: 'internal-nacl-plugin' },
+              ],
+              configurable: true,
+            });
+          } catch(e) {}
+          try {
+            Object.defineProperty(navigator, 'languages', {
+              get: () => ['en-US', 'en'], configurable: true,
+            });
+          } catch(e) {}
+        `).catch(() => {})
+      })
+    }
+  })
 
   createWindow()
 
