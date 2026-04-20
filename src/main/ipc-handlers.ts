@@ -1,7 +1,8 @@
 import { ipcMain, dialog, shell, Notification, app, session, webContents } from 'electron'
 import * as childProcess from 'child_process'
-import { copyFileSync, existsSync, unlinkSync, readdirSync, statSync, readFileSync } from 'fs'
+import { copyFileSync, existsSync, unlinkSync, readdirSync, statSync, readFileSync, rmSync } from 'fs'
 import { join, basename, extname } from 'path'
+import WebSocket from 'ws'
 import type {
   DatabaseManager,
   CreateTaskData,
@@ -1747,8 +1748,8 @@ else:
               // Use a simple HTTP-based CDP call via fetch to the /json endpoint
               // Actually, we need to use WebSocket for CDP commands.
               // Instead, use a simpler approach: send CDP command via the debugging API
-              const ws = new (require('ws'))(wsUrl)
-              let msgId = 1
+              const ws = new WebSocket(wsUrl)
+              const msgId = 1
 
               ws.on('open', () => {
                 ws.send(JSON.stringify({ id: msgId, method: 'Network.getAllCookies' }))
@@ -1823,7 +1824,6 @@ else:
       // Cleanup temp profile (best effort, async)
       setTimeout(() => {
         try {
-          const { rmSync } = require('fs')
           rmSync(tmpProfile, { recursive: true, force: true })
         } catch { /* ignore */ }
       }, 5000)
