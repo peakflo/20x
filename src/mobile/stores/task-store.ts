@@ -6,6 +6,14 @@ import type { TaskStatus } from '@shared/constants'
 // Re-export for convenience
 export type { TaskStatus }
 
+export interface TaskAttachment {
+  id: string
+  filename: string
+  size: number
+  mime_type: string
+  added_at: string
+}
+
 export interface Task {
   id: string
   title: string
@@ -16,7 +24,7 @@ export interface Task {
   assignee: string
   due_date: string | null
   labels: string[]
-  attachments: unknown[]
+  attachments: TaskAttachment[]
   repos: string[]
   output_fields: unknown[]
   agent_id: string | null

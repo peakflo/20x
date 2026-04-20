@@ -1,6 +1,8 @@
-import { ipcMain, dialog, shell, Notification, app, session } from 'electron'
-import { copyFileSync, existsSync, unlinkSync, readdirSync, statSync, readFileSync } from 'fs'
+import { ipcMain, dialog, shell, Notification, app, session, webContents } from 'electron'
+import * as childProcess from 'child_process'
+import { copyFileSync, existsSync, unlinkSync, readdirSync, statSync, readFileSync, rmSync } from 'fs'
 import { join, basename, extname } from 'path'
+import WebSocket from 'ws'
 import type {
   DatabaseManager,
   CreateTaskData,
@@ -329,10 +331,13 @@ export function registerIpcHandlers(
     return { success: true }
   })
 
-  ipcMain.handle('agentSession:send', async (_, sessionId: string, message: string, taskId?: string, agentId?: string) => {
-    const result = await agentManager.sendMessage(sessionId, message, taskId, agentId)
-    return { success: true, ...result }
-  })
+  ipcMain.handle(
+    'agentSession:send',
+    async (_, sessionId: string, message: string, taskId?: string, agentId?: string, attachments?: Array<{ id: string; filename: string; size: number; mime_type: string }>) => {
+      const result = await agentManager.sendMessage(sessionId, message, taskId, agentId, attachments)
+      return { success: true, ...result }
+    }
+  )
 
   ipcMain.handle('agentSession:approve', async (_, sessionId: string, approved: boolean, message?: string) => {
     await agentManager.respondToPermission(sessionId, approved, message)
@@ -754,6 +759,48 @@ export function registerIpcHandlers(
   })
 
   // Enterprise auth handlers
+
+  ipcMain.handle('enterprise:signupInBrowser', async (_, mode: 'register' | 'login') => {
+    if (!enterpriseAuth) throw new Error('Enterprise auth not available')
+
+    const { AuthCallbackServer } = await import('./oauth/auth-callback-server')
+    const callbackServer = new AuthCallbackServer()
+
+    try {
+      // Start localhost server and get the redirect URI
+      const redirectUri = await callbackServer.start()
+
+      // Derive the workflow-builder frontend URL from the API URL
+      const apiUrl = enterpriseAuth.getApiUrl()
+      const parsed = new URL(apiUrl)
+      let frontendOrigin: string
+      if (parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1') {
+        parsed.port = '4000'
+        frontendOrigin = parsed.origin
+      } else {
+        parsed.hostname = parsed.hostname.replace('-api.', '-app.').replace(/^api\./, 'app.')
+        frontendOrigin = parsed.origin
+      }
+
+      const path = mode === 'register' ? '/register' : '/login'
+      const signupUrl = `${frontendOrigin}${path}?redirect_uri=${encodeURIComponent(redirectUri)}`
+
+      // Open the URL in the user's default browser
+      await shell.openExternal(signupUrl)
+
+      // Wait for the callback with tokens
+      const tokens = await callbackServer.waitForCallback()
+
+      // Use the received tokens to log in
+      const result = await enterpriseAuth.loginWithTokens(tokens.access_token, tokens.refresh_token)
+
+      return result
+    } catch (err) {
+      callbackServer.stop()
+      throw err
+    }
+  })
+
   ipcMain.handle('enterprise:login', async (_, email: string, password: string) => {
     if (!enterpriseAuth) throw new Error('Enterprise auth not available')
     return await enterpriseAuth.login(email, password)
@@ -1039,29 +1086,60 @@ export function registerIpcHandlers(
 
   // Inject Authorization header for iframe requests to the enterprise API.
   // The interceptor is scoped to the API URL so it only affects API-bound requests.
+  //
+  // IMPORTANT: session.defaultSession.webRequest.onBeforeSendHeaders can only
+  // have ONE handler.  index.ts already registers a global handler that rewrites
+  // Sec-CH-UA Client Hints for anti-bot-detection.  When we register here with
+  // a scoped filter, it REPLACES the global handler.  To avoid breaking the
+  // Client Hints fix, we re-apply the Sec-CH-UA rewriting inside this handler too.
   let iframeAuthEnabled = false
+  let enterpriseApiUrl: string | null = null
 
   ipcMain.handle('enterprise:enableIframeAuth', async () => {
     if (!enterpriseAuth) throw new Error('Enterprise auth not available')
     if (iframeAuthEnabled) return { apiUrl: enterpriseAuth.getApiUrl() }
 
-    const apiUrl = enterpriseAuth.getApiUrl()
-    const filter = { urls: [`${apiUrl}/*`] }
+    enterpriseApiUrl = enterpriseAuth.getApiUrl()
 
-    session.defaultSession.webRequest.onBeforeSendHeaders(filter, async (details, callback) => {
-      if (iframeAuthEnabled && enterpriseAuth) {
-        try {
-          const jwt = await enterpriseAuth.getJwt()
-          details.requestHeaders['Authorization'] = `Bearer ${jwt}`
-        } catch {
-          // If JWT retrieval fails, proceed without auth
+    // Re-register a GLOBAL handler (not scoped) that handles BOTH enterprise
+    // auth AND Client Hints rewriting.  This replaces the handler from index.ts.
+    const chromiumVersion = process.versions.chrome || '136.0.0.0'
+    const chromiumMajor = chromiumVersion.split('.')[0]
+
+    session.defaultSession.webRequest.onBeforeSendHeaders(
+      { urls: ['http://*/*', 'https://*/*'] },
+      async (details, callback) => {
+        const headers = { ...details.requestHeaders }
+
+        // ── Client Hints rewriting (anti-bot-detection) ──
+        for (const key of Object.keys(headers)) {
+          const lower = key.toLowerCase()
+          if (lower === 'sec-ch-ua') {
+            headers[key] = `"Chromium";v="${chromiumMajor}", "Google Chrome";v="${chromiumMajor}", "Not_A Brand";v="24"`
+          } else if (lower === 'sec-ch-ua-full-version-list') {
+            headers[key] = `"Chromium";v="${chromiumVersion}", "Google Chrome";v="${chromiumVersion}", "Not_A Brand";v="24.0.0.0"`
+          }
         }
+        if (!Object.keys(headers).some((k) => k.toLowerCase() === 'sec-ch-ua')) {
+          headers['Sec-CH-UA'] = `"Chromium";v="${chromiumMajor}", "Google Chrome";v="${chromiumMajor}", "Not_A Brand";v="24"`
+        }
+
+        // ── Enterprise auth injection (only for API URL) ──
+        if (iframeAuthEnabled && enterpriseAuth && enterpriseApiUrl && details.url.startsWith(enterpriseApiUrl)) {
+          try {
+            const jwt = await enterpriseAuth.getJwt()
+            headers['Authorization'] = `Bearer ${jwt}`
+          } catch {
+            // If JWT retrieval fails, proceed without auth
+          }
+        }
+
+        callback({ requestHeaders: headers })
       }
-      callback({ requestHeaders: details.requestHeaders })
-    })
+    )
 
     iframeAuthEnabled = true
-    return { apiUrl }
+    return { apiUrl: enterpriseApiUrl }
   })
 
   ipcMain.handle('enterprise:disableIframeAuth', () => {
@@ -1197,5 +1275,594 @@ export function registerIpcHandlers(
   ipcMain.handle('agent-installer:get-install-command', async (_, { agentName }: { agentName: string }) => {
     const { getInstallCommand } = await import('./agent-installer/install.js')
     return getInstallCommand(agentName)
+  })
+
+  // ── Terminal (PTY) handlers ─────────────────────────────────
+  // Each terminal is identified by a unique ID. The renderer creates/writes/resizes
+  // terminals via IPC, and receives output via 'terminal:data' events.
+  //
+  // Uses Python's pty module to allocate a real PTY. This avoids node-pty
+  // (which requires native module rebuild for Electron) and avoids macOS
+  // `script` command (which fails with piped stdio).
+
+  /** Max lines to keep in terminal output buffer for agent log queries */
+  const TERMINAL_BUFFER_MAX_LINES = 500
+
+  interface TerminalHandle {
+    write: (data: string) => void
+    kill: () => void
+    pid: number
+    /** Circular buffer of recent terminal output lines */
+    outputBuffer: string[]
+  }
+
+  const terminals = new Map<string, TerminalHandle>()
+
+  /** Resolve the user's preferred shell */
+  function resolveShell(): string {
+    if (process.platform === 'win32') return 'powershell.exe'
+    const candidates = [process.env.SHELL, '/bin/zsh', '/bin/bash', '/bin/sh'].filter(Boolean) as string[]
+    return candidates.find((s) => existsSync(s)) || '/bin/sh'
+  }
+
+  /**
+   * Create a terminal using Python's pty module.
+   * Python's pty.openpty() creates a real PTY master/slave pair, then we
+   * fork and exec the shell on the slave side. The master fd is read/written
+   * via the Python process's stdin/stdout which ARE regular pipes — no
+   * tcgetattr issues. This gives a fully interactive terminal with colors,
+   * cursor control, and ANSI codes — without any native Node modules.
+   */
+  function createPythonPty(
+    id: string, shellPath: string, cols: number, rows: number,
+    sender: Electron.WebContents, cwd?: string
+  ): TerminalHandle {
+    const { spawn } = childProcess
+
+    // Inline Python script that:
+    // 1. Creates a PTY pair via pty.openpty()
+    // 2. Forks, sets up the slave as the child's controlling terminal
+    // 3. Execs the shell in the child
+    // 4. In the parent, bridges stdin→master and master→stdout using select()
+    const pythonScript = `
+import pty, os, sys, select, signal, struct, fcntl, termios
+
+shell = sys.argv[1]
+cols = int(sys.argv[2])
+rows = int(sys.argv[3])
+
+master, slave = pty.openpty()
+
+# Set initial window size on the PTY
+winsize = struct.pack('HHHH', rows, cols, 0, 0)
+fcntl.ioctl(slave, termios.TIOCSWINSZ, winsize)
+
+pid = os.fork()
+if pid == 0:
+    # Child: set up slave as controlling terminal
+    os.close(master)
+    os.setsid()
+    fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
+    os.dup2(slave, 0)
+    os.dup2(slave, 1)
+    os.dup2(slave, 2)
+    if slave > 2:
+        os.close(slave)
+    env = dict(os.environ)
+    env['TERM'] = 'xterm-256color'
+    env['COLUMNS'] = str(cols)
+    env['LINES'] = str(rows)
+    os.execvpe(shell, [shell], env)
+else:
+    # Parent: bridge stdin <-> master fd
+    os.close(slave)
+    # Make stdin non-blocking
+    import errno
+    stdin_fd = sys.stdin.fileno()
+    fl = fcntl.fcntl(stdin_fd, fcntl.F_GETFL)
+    fcntl.fcntl(stdin_fd, fcntl.F_SETFL, fl | os.O_NONBLOCK)
+
+    try:
+        while True:
+            try:
+                rlist, _, _ = select.select([master, stdin_fd], [], [], 0.05)
+            except (select.error, ValueError):
+                break
+            if master in rlist:
+                try:
+                    data = os.read(master, 4096)
+                    if not data:
+                        break
+                    sys.stdout.buffer.write(data)
+                    sys.stdout.buffer.flush()
+                except OSError:
+                    break
+            if stdin_fd in rlist:
+                try:
+                    data = os.read(stdin_fd, 4096)
+                    if not data:
+                        break
+                    os.write(master, data)
+                except OSError as e:
+                    if e.errno != errno.EAGAIN:
+                        break
+    except KeyboardInterrupt:
+        pass
+    finally:
+        os.close(master)
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError:
+            pass
+        os.waitpid(pid, 0)
+`
+
+    const initialCwd = cwd || process.env.HOME || process.cwd()
+    const child = spawn('python3', ['-u', '-c', pythonScript, shellPath, String(cols || 80), String(rows || 24)], {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      cwd: initialCwd,
+      env: { ...process.env } as Record<string, string>,
+    })
+
+    const outputBuffer: string[] = []
+
+    /** Append raw PTY output to the line buffer, stripping ANSI escape codes */
+    const appendToBuffer = (raw: string) => {
+      // Strip ANSI escape sequences for clean log output
+      // eslint-disable-next-line no-control-regex
+      const clean = raw.replace(/\x1b\[[0-9;]*[a-zA-Z]|\x1b\].*?(\x07|\x1b\\)|\x1b[()][A-Z0-9]|\r/g, '')
+      const lines = clean.split('\n')
+      for (const line of lines) {
+        if (line.trim()) outputBuffer.push(line)
+      }
+      // Trim to max buffer size
+      while (outputBuffer.length > TERMINAL_BUFFER_MAX_LINES) {
+        outputBuffer.shift()
+      }
+    }
+
+    child.stdout?.on('data', (data: Buffer) => {
+      const str = data.toString()
+      appendToBuffer(str)
+      if (!sender.isDestroyed()) {
+        sender.send('terminal:data', { id, data: str })
+      }
+    })
+
+    child.stderr?.on('data', (data: Buffer) => {
+      const str = data.toString()
+      appendToBuffer(str)
+      // Forward stderr too (e.g. shell startup errors)
+      if (!sender.isDestroyed()) {
+        sender.send('terminal:data', { id, data: str })
+      }
+    })
+
+    child.on('exit', (code, signal) => {
+      console.log(`[Terminal] PTY exited id=${id} code=${code} signal=${signal} pid=${child.pid}`)
+      // Only clean up if this handle is still the active one for this id.
+      // When terminal:create replaces an existing PTY, the old one's exit
+      // handler fires asynchronously and must NOT delete the new handle.
+      const current = terminals.get(id)
+      if (current && current.pid === (child.pid || 0)) {
+        terminals.delete(id)
+        if (!sender.isDestroyed()) {
+          sender.send('terminal:exit', { id })
+        }
+      }
+    })
+
+    return {
+      write: (data: string) => {
+        if (child.stdin?.writable) child.stdin.write(data)
+      },
+      kill: () => {
+        try { child.kill('SIGTERM') } catch { /* ignore */ }
+      },
+      pid: child.pid || 0,
+      outputBuffer,
+    }
+  }
+
+  ipcMain.handle('terminal:create', async (event, { id, cols, rows, cwd }: { id: string; cols: number; rows: number; cwd?: string }) => {
+    // Kill any existing terminal with the same ID (e.g. respawn after exit)
+    const existing = terminals.get(id)
+    if (existing) {
+      try { existing.kill() } catch { /* ignore */ }
+      terminals.delete(id)
+    }
+
+    const shellPath = resolveShell()
+    console.log(`[Terminal] Creating terminal id=${id} shell=${shellPath} cols=${cols} rows=${rows} cwd=${cwd || '(default)'}`)
+
+    const handle = createPythonPty(id, shellPath, cols, rows, event.sender, cwd)
+    terminals.set(id, handle)
+    return { pid: handle.pid }
+  })
+
+  ipcMain.handle('terminal:write', (_, { id, data }: { id: string; data: string }) => {
+    const term = terminals.get(id)
+    if (!term) {
+      console.log(`[Terminal] write to dead terminal id=${id}`)
+      return { alive: false }
+    }
+    term.write(data)
+    return { alive: true }
+  })
+
+  ipcMain.handle('terminal:resize', (_event, { id, cols, rows }: { id: string; cols: number; rows: number }) => {
+    // Resize not supported without node-pty — COLUMNS/LINES set at creation
+    void id; void cols; void rows
+  })
+
+  /** Get the last N lines from a terminal's output buffer */
+  ipcMain.handle('terminal:getBuffer', (_, { id, lines }: { id: string; lines?: number }) => {
+    const term = terminals.get(id)
+    if (!term) return { lines: [] }
+    const maxLines = Math.min(lines || 200, TERMINAL_BUFFER_MAX_LINES)
+    const buf = term.outputBuffer.slice(-maxLines)
+    return { lines: buf }
+  })
+
+  ipcMain.handle('terminal:kill', (_, { id, expectedPid }: { id: string; expectedPid?: number }) => {
+    const term = terminals.get(id)
+    if (term) {
+      // Ignore stale cleanup calls from an older terminal instance.
+      if (expectedPid !== undefined && term.pid !== expectedPid) return
+      term.kill()
+      terminals.delete(id)
+    }
+  })
+
+  /**
+   * Get the current working directory of a terminal's shell process.
+   * The PTY is a Python process that forks a shell child. We need the shell's
+   * cwd, not Python's. Strategy:
+   *   1. Find child PIDs of the Python process via `pgrep -P <pid>`
+   *   2. Get the cwd of the deepest child (most recently forked = active shell)
+   *   3. Use `lsof -p <childPid> -a -d cwd -Fn` for the cwd lookup
+   */
+  ipcMain.handle('terminal:getCwd', async (_, { id, expectedPid }: { id: string; expectedPid?: number }) => {
+    const term = terminals.get(id)
+    if (!term) return { cwd: null }
+    if (expectedPid !== undefined && term.pid !== expectedPid) return { cwd: null }
+
+    try {
+      const { execSync } = childProcess
+      const pythonPid = term.pid
+
+      // Find child PIDs of the Python process (the forked shell)
+      let targetPid = pythonPid
+      try {
+        const children = execSync(`pgrep -P ${pythonPid} 2>/dev/null || true`, {
+          encoding: 'utf-8',
+          timeout: 2000,
+        }).trim()
+        if (children) {
+          // Get the last child (deepest descendant = active process)
+          const childPids = children.split('\n').map((s) => parseInt(s.trim(), 10)).filter(Boolean)
+          if (childPids.length > 0) {
+            // Walk down — find children of children to get the deepest active shell
+            let deepest = childPids[childPids.length - 1]
+            for (let i = 0; i < 5; i++) { // max 5 levels deep
+              const grandchildren = execSync(`pgrep -P ${deepest} 2>/dev/null || true`, {
+                encoding: 'utf-8',
+                timeout: 1000,
+              }).trim()
+              if (!grandchildren) break
+              const gcPids = grandchildren.split('\n').map((s) => parseInt(s.trim(), 10)).filter(Boolean)
+              if (gcPids.length === 0) break
+              deepest = gcPids[gcPids.length - 1]
+            }
+            targetPid = deepest
+          }
+        }
+      } catch { /* ignore pgrep failures */ }
+
+      // Get cwd of the target process
+      const output = execSync(`lsof -p ${targetPid} -a -d cwd -Fn 2>/dev/null || true`, {
+        encoding: 'utf-8',
+        timeout: 2000,
+      })
+      const lines = output.split('\n')
+      const cwdLine = lines.find((l) => l.startsWith('n/'))
+      if (cwdLine) {
+        return { cwd: cwdLine.slice(1) }
+      }
+
+      // Fallback: try /proc on Linux
+      if (process.platform === 'linux') {
+        const linkTarget = execSync(`readlink /proc/${targetPid}/cwd 2>/dev/null || true`, {
+          encoding: 'utf-8',
+          timeout: 2000,
+        }).trim()
+        if (linkTarget) return { cwd: linkTarget }
+      }
+
+      return { cwd: null }
+    } catch {
+      return { cwd: null }
+    }
+  })
+
+  // ── Browser CDP ─────────────────────────────────────────
+  // Returns the CDP (Chrome DevTools Protocol) port that agent-browser
+  // can use to connect to webview tabs on the canvas.
+  ipcMain.handle('browser:getCdpPort', () => {
+    return { port: 19222 }
+  })
+
+  // Returns the CDP target ID for a webview given its webContentsId.
+  // This allows the renderer to store the target ID on the panel data,
+  // so agent-browser can connect directly via ws://localhost:19222/devtools/page/<targetId>
+  ipcMain.handle('browser:getTargetId', async (_event, webContentsId: number) => {
+    try {
+      const wc = webContents.fromId(webContentsId)
+      if (!wc) return { targetId: null }
+
+      // Use the debugger API to get the CDP target info
+      try {
+        wc.debugger.attach('1.3')
+        const { targetInfo } = await wc.debugger.sendCommand('Target.getTargetInfo')
+        const targetId = targetInfo?.targetId || null
+        wc.debugger.detach()
+        return { targetId }
+      } catch {
+        try { wc.debugger.detach() } catch { /* already detached */ }
+        // Fallback: query CDP /json/list and match by URL
+        const wcUrl = wc.getURL()
+        if (!wcUrl) return { targetId: null }
+        const res = await fetch(`http://localhost:19222/json/list`)
+        const targets = await res.json()
+        const match = targets.find((t: { url: string; type: string }) =>
+          t.type === 'webview' && t.url === wcUrl
+        )
+        return { targetId: match?.id || null }
+      }
+    } catch {
+      return { targetId: null }
+    }
+  })
+
+  // ── External Chrome auth flow ──────────────────────────────────────────
+  // Launches the user's system Chrome with a temporary debugging port,
+  // navigates to the given URL, waits for the user to log in (URL changes
+  // away from the login page), captures all cookies via CDP, injects them
+  // into the Electron session, and returns the final URL so the webview
+  // can reload with valid cookies.
+  ipcMain.handle('browser:openExternalAuth', async (_event, loginUrl: string) => {
+    const EXT_CDP_PORT = 19333 // temp port for external Chrome
+    const TIMEOUT_MS = 300_000 // 5 min timeout
+
+    // ── Find any Chromium-based browser (Chrome, Brave, Arc, Edge, Chromium) ──
+    let chromePath: string | null = null
+    if (process.platform === 'darwin') {
+      const candidates = [
+        '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+        '/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary',
+        '/Applications/Brave Browser.app/Contents/MacOS/Brave Browser',
+        '/Applications/Arc.app/Contents/MacOS/Arc',
+        '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
+        '/Applications/Chromium.app/Contents/MacOS/Chromium',
+        '/Applications/Vivaldi.app/Contents/MacOS/Vivaldi',
+      ]
+      chromePath = candidates.find((p) => existsSync(p)) || null
+    } else if (process.platform === 'win32') {
+      const candidates = [
+        'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+        'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+        `${process.env.LOCALAPPDATA}\\Google\\Chrome\\Application\\chrome.exe`,
+        'C:\\Program Files\\BraveSoftware\\Brave-Browser\\Application\\brave.exe',
+        `${process.env.LOCALAPPDATA}\\BraveSoftware\\Brave-Browser\\Application\\brave.exe`,
+        'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
+        'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
+      ]
+      chromePath = candidates.find((p) => existsSync(p)) || null
+    } else {
+      // Linux
+      try {
+        chromePath = childProcess.execSync('which google-chrome || which google-chrome-stable || which brave-browser || which chromium-browser || which chromium || which microsoft-edge', { encoding: 'utf8' }).trim() || null
+      } catch { chromePath = null }
+    }
+
+    if (!chromePath) {
+      throw new Error('Could not find a Chromium-based browser (Chrome, Brave, Arc, Edge). Please install one and try again.')
+    }
+
+    // ── Launch Chrome with temporary CDP port and a temporary profile ──
+    const tmpProfile = join(app.getPath('temp'), '20x-chrome-auth-' + Date.now())
+    const chromeProc = childProcess.spawn(chromePath, [
+      `--remote-debugging-port=${EXT_CDP_PORT}`,
+      `--user-data-dir=${tmpProfile}`,
+      '--no-first-run',
+      '--no-default-browser-check',
+      `--window-size=1024,768`,
+      loginUrl,
+    ], {
+      detached: false,
+      stdio: 'ignore',
+    })
+
+    // Wait for Chrome's CDP to become available
+    const waitForCdp = async (): Promise<void> => {
+      for (let i = 0; i < 30; i++) {
+        try {
+          const res = await fetch(`http://127.0.0.1:${EXT_CDP_PORT}/json/version`)
+          if (res.ok) return
+        } catch { /* not ready yet */ }
+        await new Promise((r) => setTimeout(r, 500))
+      }
+      throw new Error('Chrome CDP did not start in time')
+    }
+
+    try {
+      await waitForCdp()
+
+      // ── Poll for login completion ──
+      // The login is "done" when the URL navigates away from the login domain
+      // or when Chrome is closed by the user.
+      const loginDomain = new URL(loginUrl).hostname
+      let finalUrl = loginUrl
+
+      const startTime = Date.now()
+      let chromeExited = false
+
+      chromeProc.on('exit', () => { chromeExited = true })
+
+      while (!chromeExited && Date.now() - startTime < TIMEOUT_MS) {
+        await new Promise((r) => setTimeout(r, 1500))
+
+        if (chromeExited) break
+
+        try {
+          const res = await fetch(`http://127.0.0.1:${EXT_CDP_PORT}/json/list`)
+          const targets = (await res.json()) as Array<{ url: string; type: string; webSocketDebuggerUrl?: string }>
+          const page = targets.find((t) => t.type === 'page')
+          if (page) {
+            const currentDomain = new URL(page.url).hostname
+            // Login is complete when user navigated away from the login page
+            if (currentDomain !== loginDomain && !page.url.includes('/login') && !page.url.includes('/identity')) {
+              finalUrl = page.url
+              break
+            }
+          }
+        } catch {
+          // Chrome may have closed
+          if (chromeExited) break
+        }
+      }
+
+      // ── Capture cookies from Chrome via CDP ──
+      let cookies: Array<{ name: string; value: string; domain: string; path: string; secure: boolean; httpOnly: boolean; sameSite?: string; expirationDate?: number }> = []
+
+      if (!chromeExited) {
+        try {
+          const res = await fetch(`http://127.0.0.1:${EXT_CDP_PORT}/json/list`)
+          const targets = (await res.json()) as Array<{ webSocketDebuggerUrl?: string; type: string }>
+          const page = targets.find((t) => t.type === 'page' && t.webSocketDebuggerUrl)
+
+          if (page?.webSocketDebuggerUrl) {
+            // Connect via WebSocket to get cookies
+            const wsUrl = page.webSocketDebuggerUrl
+            const cdpCookies = await new Promise<typeof cookies>((resolve, reject) => {
+              // Use a simple HTTP-based CDP call via fetch to the /json endpoint
+              // Actually, we need to use WebSocket for CDP commands.
+              // Instead, use a simpler approach: send CDP command via the debugging API
+              const ws = new WebSocket(wsUrl)
+              const msgId = 1
+
+              ws.on('open', () => {
+                ws.send(JSON.stringify({ id: msgId, method: 'Network.getAllCookies' }))
+              })
+
+              ws.on('message', (data: Buffer) => {
+                try {
+                  const msg = JSON.parse(data.toString())
+                  if (msg.id === msgId && msg.result?.cookies) {
+                    ws.close()
+                    resolve(msg.result.cookies.map((c: Record<string, unknown>) => ({
+                      name: c.name as string,
+                      value: c.value as string,
+                      domain: c.domain as string,
+                      path: (c.path as string) || '/',
+                      secure: !!c.secure,
+                      httpOnly: !!c.httpOnly,
+                      sameSite: c.sameSite as string | undefined,
+                      expirationDate: c.expires as number | undefined,
+                    })))
+                  }
+                } catch { /* ignore parse errors */ }
+              })
+
+              ws.on('error', reject)
+              setTimeout(() => { ws.close(); reject(new Error('CDP cookie fetch timeout')) }, 10_000)
+            })
+
+            cookies = cdpCookies
+          }
+        } catch (err) {
+          console.warn('[BrowserAuth] Failed to capture cookies from Chrome:', err)
+        }
+      }
+
+      // ── Kill Chrome ──
+      if (!chromeExited) {
+        try { chromeProc.kill() } catch { /* already dead */ }
+      }
+
+      // ── Inject cookies into Electron session ──
+      if (cookies.length > 0) {
+        const ses = session.defaultSession
+        let injected = 0
+        for (const cookie of cookies) {
+          try {
+            const url = `http${cookie.secure ? 's' : ''}://${cookie.domain.replace(/^\./, '')}${cookie.path}`
+            await ses.cookies.set({
+              url,
+              name: cookie.name,
+              value: cookie.value,
+              domain: cookie.domain,
+              path: cookie.path,
+              secure: cookie.secure,
+              httpOnly: cookie.httpOnly,
+              sameSite: cookie.sameSite === 'None' ? 'no_restriction' as const
+                : cookie.sameSite === 'Lax' ? 'lax' as const
+                : cookie.sameSite === 'Strict' ? 'strict' as const
+                : 'lax' as const,
+              expirationDate: cookie.expirationDate && cookie.expirationDate > 0
+                ? cookie.expirationDate
+                : undefined,
+            })
+            injected++
+          } catch {
+            // Some cookies may fail (e.g., __Host- prefixed cookies with domain set)
+          }
+        }
+        console.log(`[BrowserAuth] Injected ${injected}/${cookies.length} cookies into Electron session`)
+      }
+
+      // Cleanup temp profile (best effort, async)
+      setTimeout(() => {
+        try {
+          rmSync(tmpProfile, { recursive: true, force: true })
+        } catch { /* ignore */ }
+      }, 5000)
+
+      return { success: cookies.length > 0, finalUrl, cookieCount: cookies.length }
+
+    } catch (err) {
+      // Kill Chrome if still running
+      try { chromeProc.kill() } catch { /* */ }
+      throw err
+    }
+  })
+
+  // Returns all webview CDP targets. Called from the renderer to resolve
+  // CDP target IDs without CORS issues (renderer can't fetch localhost:19222).
+  ipcMain.handle('browser:getCdpTargets', async () => {
+    try {
+      const res = await fetch('http://localhost:19222/json/list')
+      const targets = (await res.json()) as Array<{ id: string; url: string; type: string; title: string }>
+      // agent-browser's `tab` command shows only page + webview targets (not iframes,
+      // service workers, etc.) and sorts them: pages first, then webviews.
+      // We replicate that ordering so the renderer can compute the exact tab ID.
+      const tabTargets = targets
+        .filter((t) => t.type === 'page' || t.type === 'webview')
+        .sort((a, b) => {
+          // page before webview (matches agent-browser ordering)
+          if (a.type === 'page' && b.type !== 'page') return -1
+          if (a.type !== 'page' && b.type === 'page') return 1
+          return 0
+        })
+      return tabTargets.map((t, i) => ({
+        id: t.id,
+        url: t.url,
+        title: t.title,
+        type: t.type,
+        tabId: `t${i + 1}`,
+      }))
+    } catch {
+      return []
+    }
   })
 }

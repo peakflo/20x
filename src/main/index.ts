@@ -1,6 +1,6 @@
 import { execFile, execSync } from 'child_process'
 import { readdirSync } from 'fs'
-import { app, BrowserWindow, net, protocol, shell, Tray, Menu, nativeImage } from 'electron'
+import { app, BrowserWindow, dialog, net, protocol, session, shell, Tray, Menu, nativeImage } from 'electron'
 import { join } from 'path'
 import { pathToFileURL } from 'url'
 import { is } from '@electron-toolkit/utils'
@@ -29,7 +29,7 @@ import { EnterpriseStateSync } from './enterprise-state-sync'
 import { setTaskApiNotifier, setTranscriptProvider, stopTaskApiServer } from './task-api-server'
 import { startSecretBroker, stopSecretBroker, writeSecretShellWrapper } from './secret-broker'
 import { startMobileApiServer, stopMobileApiServer, broadcastToMobileClients, setMobileApiNotifier } from './mobile-api-server'
-import { initAutoUpdater } from './auto-updater'
+import { registerUpdaterIpc, initAutoUpdater, isUpdateDownloaded, getPendingVersion } from './auto-updater'
 import { initCrashLogger } from './crash-logger'
 
 let mainWindow: BrowserWindow | null = null
@@ -105,7 +105,8 @@ function createWindow(): void {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false
+      sandbox: false,
+      webviewTag: true
     }
   })
 
@@ -158,6 +159,41 @@ function createWindow(): void {
     return { action: 'deny' }
   })
 
+  // SAFETY: Prevent the main window from ever navigating away from the app.
+  // This guards against agent-browser or CDP accidentally targeting the main
+  // window instead of a webview panel.
+  //
+  // Layer 1: will-navigate (catches user-initiated navigations — NOT CDP)
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    const appOrigins = ['http://localhost:', 'file://']
+    const isAppUrl = appOrigins.some((origin) => url.startsWith(origin))
+    if (!isAppUrl) {
+      console.warn(`[Main] Blocked navigation of main window to: ${url}`)
+      event.preventDefault()
+    }
+  })
+
+  // Layer 2: Recovery — if CDP Page.navigate bypasses will-navigate and the main
+  // window ends up on a non-app URL, detect it and reload the app immediately.
+  // This is a safety net, not prevention — the window briefly shows the wrong page
+  // then snaps back to the app.
+  const appUrl = is.dev && process.env['ELECTRON_RENDERER_URL']
+    ? process.env['ELECTRON_RENDERER_URL']
+    : null // file:// URL set after loadFile
+  const mw = mainWindow // capture non-null reference for closure
+  mw.webContents.on('did-navigate', (_event, url) => {
+    const appOrigins = ['http://localhost:', 'file://']
+    const isAppUrl = appOrigins.some((origin) => url.startsWith(origin))
+    if (!isAppUrl) {
+      console.warn(`[Main] Main window navigated to non-app URL: ${url} — recovering...`)
+      if (appUrl) {
+        mw.loadURL(appUrl)
+      } else {
+        mw.loadFile(join(__dirname, '../renderer/index.html'))
+      }
+    }
+  })
+
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
     mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
   } else {
@@ -206,6 +242,95 @@ function createWindow(): void {
       mainWindow.webContents.send(channel, data)
     }
   })
+}
+
+/**
+ * Build and set the application menu.
+ * Adds "Check for Updates…" under the app menu (macOS) or Help menu (Win/Linux).
+ */
+function buildAppMenu(): void {
+  const isMac = process.platform === 'darwin'
+
+  const checkForUpdatesItem: Electron.MenuItemConstructorOptions = {
+    label: 'Check for Updates…',
+    click: () => {
+      mainWindow?.show()
+      mainWindow?.webContents.send('menu:check-for-updates')
+    }
+  }
+
+  const template: Electron.MenuItemConstructorOptions[] = [
+    ...(isMac
+      ? [
+          {
+            label: app.name,
+            submenu: [
+              { role: 'about' as const },
+              { type: 'separator' as const },
+              checkForUpdatesItem,
+              { type: 'separator' as const },
+              { role: 'services' as const },
+              { type: 'separator' as const },
+              { role: 'hide' as const },
+              { role: 'hideOthers' as const },
+              { role: 'unhide' as const },
+              { type: 'separator' as const },
+              { role: 'quit' as const }
+            ]
+          }
+        ]
+      : []),
+    {
+      label: 'Edit',
+      submenu: [
+        { role: 'undo' },
+        { role: 'redo' },
+        { type: 'separator' },
+        { role: 'cut' },
+        { role: 'copy' },
+        { role: 'paste' },
+        { role: 'selectAll' }
+      ]
+    },
+    {
+      label: 'View',
+      submenu: [
+        { role: 'reload' },
+        { role: 'forceReload' },
+        { role: 'toggleDevTools' },
+        { type: 'separator' },
+        { role: 'resetZoom' },
+        { role: 'zoomIn' },
+        { role: 'zoomOut' },
+        { type: 'separator' },
+        { role: 'togglefullscreen' }
+      ]
+    },
+    {
+      label: 'Window',
+      submenu: [
+        { role: 'minimize' },
+        { role: 'zoom' },
+        ...(isMac
+          ? [{ type: 'separator' as const }, { role: 'front' as const }]
+          : [{ role: 'close' as const }])
+      ]
+    },
+    {
+      label: 'Help',
+      submenu: [
+        ...(!isMac ? [checkForUpdatesItem, { type: 'separator' as const }] : []),
+        {
+          label: 'View on GitHub',
+          click: () => {
+            shell.openExternal('https://github.com/peakflo/20x')
+          }
+        }
+      ]
+    }
+  ]
+
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template))
 }
 
 function createTray(): void {
@@ -453,6 +578,42 @@ protocol.registerSchemesAsPrivileged([
 // Initialize crash logger as early as possible
 initCrashLogger()
 
+// Enable Chrome DevTools Protocol (CDP) on a fixed port so that agent-browser
+// (and other CDP clients) can connect to webview tabs embedded in the canvas.
+// Port 0 lets Chromium pick a free port; we read it back via the /json endpoint.
+const CDP_PORT = 19222
+app.commandLine.appendSwitch('remote-debugging-port', String(CDP_PORT))
+
+// ── Anti-bot-detection for embedded browser panels ─────────────────────────
+// Some sites (Xero, banking portals) use Akamai's WAF which fingerprints
+// the TLS ClientHello and HTTP/2 SETTINGS frames — baked into the compiled
+// Electron binary and impossible to change at runtime.  We apply best-effort
+// mitigations here; sites that still block are handled gracefully in the
+// browser panel UI with an "Open in Chrome" fallback.
+
+// 1. Replace user-agent with a real Chrome UA string.
+const chromiumVersion = process.versions.chrome || '136.0.0.0'
+const chromiumMajor = chromiumVersion.split('.')[0]
+const cleanUA = process.platform === 'darwin'
+  ? `Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromiumVersion} Safari/537.36`
+  : process.platform === 'win32'
+    ? `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromiumVersion} Safari/537.36`
+    : `Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromiumVersion} Safari/537.36`
+app.userAgentFallback = cleanUA
+
+// 2. Disable AutomationControlled so navigator.webdriver = false when CDP is active.
+app.commandLine.appendSwitch('disable-blink-features', 'AutomationControlled')
+
+// 3. Best-effort TLS/HTTP2 mitigations — these help with less aggressive WAFs
+//    but cannot fully defeat Akamai's binary-level TLS fingerprinting.
+app.commandLine.appendSwitch('enable-features', [
+  'PermuteTLSExtensions',          // randomise TLS extension order
+  'PostQuantumKyber',              // Chrome enables this by default
+].join(','))
+app.commandLine.appendSwitch('disable-features', [
+  'AcceptCHFrame',                 // Electron-only ALPS extension not in Chrome
+].join(','))
+
 // Ignore EPIPE errors from broken stdout/stderr pipes (e.g. when piped through head/tail)
 process.stdout?.on?.('error', (err: NodeJS.ErrnoException) => { if (err.code !== 'EPIPE') throw err })
 process.stderr?.on?.('error', (err: NodeJS.ErrnoException) => { if (err.code !== 'EPIPE') throw err })
@@ -562,6 +723,9 @@ app.whenReady().then(async () => {
         // Wire state sync into agent manager so agent run events are recorded
         agentManager.setEnterpriseStateSync(enterpriseStateSyncInstance)
 
+        // Wire enterprise auth into agent manager so it can inject JWT into MCP Dev Server requests
+        agentManager.setEnterpriseAuth(enterpriseAuth)
+
         syncManager.setEnterpriseConnection(apiClient, enterpriseSyncMgr, session.userId, enterpriseStateSyncInstance)
 
         console.log('[Main] Enterprise connection restored on startup (with heartbeat)')
@@ -594,6 +758,12 @@ app.whenReady().then(async () => {
 
   registerIpcHandlers(db, agentManager, githubManager, worktreeManager, syncManager, pluginRegistry, mcpToolCaller, oauthManager, recurrenceScheduler, enterpriseAuth ?? undefined, claudePluginManager, heartbeatScheduler, enterpriseHeartbeatInstance ?? undefined, enterpriseStateSyncInstance ?? undefined, gitlabManager ?? undefined)
 
+  // Register updater IPC handlers (safe in dev mode — returns no-op results)
+  registerUpdaterIpc()
+
+  // Build the application menu (includes "Check for Updates…")
+  buildAppMenu()
+
   // Start secret broker and write shell wrapper (awaited so broker is ready before any sessions)
   try {
     const brokerPort = await startSecretBroker(db)
@@ -617,6 +787,114 @@ app.whenReady().then(async () => {
     console.log('[GitHub] CLI status:', status)
   }).catch(() => {})
 
+  // ── Strip embedding-restriction headers ───────────────────────────────────
+  // Register on session.defaultSession so it intercepts ALL HTTP responses
+  // including those from iframes/subframes. Must be set before any window loads.
+  const BLOCKED_HEADERS_LC = [
+    'x-frame-options',
+    'cross-origin-opener-policy',
+    'cross-origin-embedder-policy',
+    'cross-origin-resource-policy',
+  ]
+
+  session.defaultSession.webRequest.onHeadersReceived(
+    { urls: ['http://*/*', 'https://*/*'] },
+    (details, callback) => {
+      const headers = { ...details.responseHeaders }
+      if (headers) {
+        for (const key of Object.keys(headers)) {
+          const lower = key.toLowerCase()
+          if (BLOCKED_HEADERS_LC.includes(lower)) {
+            delete headers[key]
+            continue
+          }
+          // Strip frame-ancestors from CSP
+          if (lower === 'content-security-policy') {
+            const values = headers[key]
+            if (Array.isArray(values)) {
+              headers[key] = values.map((v) =>
+                v.replace(/frame-ancestors\s+[^;]+(;|$)/gi, '').trim()
+              ).filter(Boolean)
+              if (headers[key]!.length === 0) delete headers[key]
+            }
+          }
+        }
+      }
+      callback({ cancel: false, responseHeaders: headers })
+    }
+  )
+
+  // ── Patch Sec-CH-UA on all outgoing requests ──────────────────────────────
+  // Electron's Sec-CH-UA omits the "Google Chrome" brand, which Akamai uses
+  // as a signal.  We intercept via will-attach-webview to configure each
+  // webview's session without conflicting with enterprise auth handlers.
+  //
+  // We modify the defaultSession headers directly.  The onBeforeSendHeaders
+  // handler merges with enterprise auth because enterprise auth only registers
+  // its handler AFTER enableIframeAuth is called (and with a narrow URL filter).
+  // Our handler runs first; if enterprise auth later overrides it with its
+  // scoped filter, that's fine — the scoped handler only affects API URLs.
+  session.defaultSession.webRequest.onBeforeSendHeaders(
+    { urls: ['http://*/*', 'https://*/*'] },
+    (details, callback) => {
+      const headers = { ...details.requestHeaders }
+
+      // Rewrite Sec-CH-UA to include "Google Chrome" brand like real Chrome
+      for (const key of Object.keys(headers)) {
+        const lower = key.toLowerCase()
+        if (lower === 'sec-ch-ua') {
+          headers[key] = `"Chromium";v="${chromiumMajor}", "Google Chrome";v="${chromiumMajor}", "Not_A Brand";v="24"`
+        } else if (lower === 'sec-ch-ua-full-version-list') {
+          headers[key] = `"Chromium";v="${chromiumVersion}", "Google Chrome";v="${chromiumVersion}", "Not_A Brand";v="24.0.0.0"`
+        }
+      }
+
+      // If Sec-CH-UA wasn't present at all, add it
+      if (!Object.keys(headers).some((k) => k.toLowerCase() === 'sec-ch-ua')) {
+        headers['Sec-CH-UA'] = `"Chromium";v="${chromiumMajor}", "Google Chrome";v="${chromiumMajor}", "Not_A Brand";v="24"`
+      }
+
+      callback({ requestHeaders: headers })
+    }
+  )
+
+  // Inject anti-bot JS patches into webview pages (handles client-side
+  // fingerprinting that Akamai runs after the page loads).
+  app.on('web-contents-created', (_event, contents) => {
+    if (contents.getType() === 'webview') {
+      contents.on('dom-ready', () => {
+        contents.executeJavaScript(`
+          try {
+            Object.defineProperty(navigator, 'webdriver', {
+              get: () => false, configurable: true,
+            });
+          } catch(e) {}
+          try {
+            if (!window.chrome) { window.chrome = {}; }
+            if (!window.chrome.runtime) {
+              window.chrome.runtime = { id: undefined };
+            }
+          } catch(e) {}
+          try {
+            Object.defineProperty(navigator, 'plugins', {
+              get: () => [
+                { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer' },
+                { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai' },
+                { name: 'Native Client', filename: 'internal-nacl-plugin' },
+              ],
+              configurable: true,
+            });
+          } catch(e) {}
+          try {
+            Object.defineProperty(navigator, 'languages', {
+              get: () => ['en-US', 'en'], configurable: true,
+            });
+          } catch(e) {}
+        `).catch(() => {})
+      })
+    }
+  })
+
   createWindow()
 
   // OpenCode server starts lazily on first agent session (avoids macOS permission
@@ -635,12 +913,35 @@ app.on('window-all-closed', () => {
   }
 })
 
-app.on('before-quit', (event) => {
+app.on('before-quit', async (event) => {
   if (isShuttingDown) {
     return
   }
 
   event.preventDefault()
+
+  // If a downloaded update is ready, offer to install before quitting
+  if (isUpdateDownloaded()) {
+    const version = getPendingVersion()
+    const { response } = await dialog.showMessageBox({
+      type: 'info',
+      title: 'Update Ready',
+      message: `A new version${version ? ` (v${version})` : ''} has been downloaded.`,
+      detail: 'Would you like to install the update and restart, or quit without updating?',
+      buttons: ['Install & Restart', 'Quit Without Updating'],
+      defaultId: 0,
+      cancelId: 1
+    })
+
+    if (response === 0) {
+      // Install & restart — set flag first to prevent before-quit loop
+      isShuttingDown = true
+      const { autoUpdater } = await import('electron-updater')
+      autoUpdater.quitAndInstall()
+      return
+    }
+  }
+
   isShuttingDown = true
   isQuitting = true
 

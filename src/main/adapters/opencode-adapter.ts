@@ -27,6 +27,11 @@ let OpenCodeV2Client: V2ClientModule | null = null
 const noTimeoutAgent = new UndiciAgent({ headersTimeout: 0, bodyTimeout: 0 })
 const noTimeoutFetch = (req: unknown) => (globalThis as unknown as Record<string, (...args: unknown[]) => unknown>).fetch(req, { dispatcher: noTimeoutAgent })
 
+// Fetch with reasonable timeout for quick operations (health checks, config queries, provider listing)
+const QUICK_OP_TIMEOUT_MS = 15_000
+const quickTimeoutAgent = new UndiciAgent({ headersTimeout: QUICK_OP_TIMEOUT_MS, bodyTimeout: QUICK_OP_TIMEOUT_MS })
+const quickTimeoutFetch = (req: unknown) => (globalThis as unknown as Record<string, (...args: unknown[]) => unknown>).fetch(req, { dispatcher: quickTimeoutAgent })
+
 const DEFAULT_SERVER_URL = 'http://localhost:4096'
 
 /**
@@ -41,9 +46,13 @@ export class OpencodeAdapter implements CodingAgentAdapter {
   private serverStarting: Promise<void> | null = null
   /** The shared V2 SDK client created alongside the server via createOpencode */
   private sharedClient: V2OpencodeClient | null = null
+  /** A separate V2 client with a reasonable timeout for quick operations (config, providers, health) */
+  private quickClient: V2OpencodeClient | null = null
   private clients: Map<string, OpencodeClient> = new Map() // sessionId -> ocClient
   private v2Client: V2OpencodeClient | null = null
   private promptAborts: Map<string, AbortController> = new Map()
+  /** Provider errors captured from prompt results (surfaced via getStatus) */
+  private promptErrors: Map<string, string> = new Map()
   /** Absolute path to the secret-injector plugin file (written before server start) */
   private pluginFilePath: string | null = null
   /** Absolute path to the secrets exports file (read dynamically by the plugin) */
@@ -207,10 +216,18 @@ export class OpencodeAdapter implements CodingAgentAdapter {
 
   /**
    * Returns the shared SDK client, ensuring the server is running first.
+   * Pass `quick: true` to get a client with a bounded timeout (for config queries, health checks).
    */
-  private async getClient(serverUrl?: string): Promise<V2OpencodeClient> {
+  private async getClient(serverUrl?: string, opts?: { quick?: boolean }): Promise<V2OpencodeClient> {
     const baseUrl = serverUrl || this.serverUrl || DEFAULT_SERVER_URL
     await this.ensureServerRunning(baseUrl)
+
+    if (opts?.quick) {
+      if (!this.quickClient) {
+        throw new Error('OpenCode quick client not available after server startup')
+      }
+      return this.quickClient
+    }
 
     if (!this.sharedClient) {
       throw new Error('OpenCode client not available after server startup')
@@ -243,7 +260,7 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     default: Record<string, string>
   } | null> {
     try {
-      const client = await this.getClient(serverUrl)
+      const client = await this.getClient(serverUrl, { quick: true })
 
       const result = await client.config.providers({
         ...(directory && { directory })
@@ -268,7 +285,7 @@ export class OpencodeAdapter implements CodingAgentAdapter {
 
   async checkHealth(): Promise<{ available: boolean; reason?: string }> {
     try {
-      const client = await this.getClient()
+      const client = await this.getClient(undefined, { quick: true })
       const result = await client.global.health()
 
       if (result.error) {
@@ -357,11 +374,17 @@ export class OpencodeAdapter implements CodingAgentAdapter {
             baseUrl: accessibleUrl,
             fetch: noTimeoutFetch as unknown as typeof fetch
           })
+          // Create a separate client with bounded timeout for quick operations
+          this.quickClient = OpenCodeV2Client!.createOpencodeClient({
+            baseUrl: accessibleUrl,
+            fetch: quickTimeoutFetch as unknown as typeof fetch
+          })
 
           // Push merged config (with auth.json keys injected) to the running server
           // so custom providers like routerAI are properly authenticated.
           try {
-            await this.pushMergedConfigToClient(this.sharedClient)
+            // Use quickClient to avoid hanging indefinitely when the existing server is slow.
+            await this.pushMergedConfigToClient(this.quickClient!)
           } catch {
             // pushMergedConfigToClient already logs details
           }
@@ -399,6 +422,11 @@ export class OpencodeAdapter implements CodingAgentAdapter {
         this.serverInstance = server
         this.serverUrl = server.url
         this.sharedClient = client
+        // Create a separate client with bounded timeout for quick operations
+        this.quickClient = OpenCodeV2Client!.createOpencodeClient({
+          baseUrl: server.url,
+          fetch: quickTimeoutFetch as unknown as typeof fetch
+        })
         console.log(`[OpencodeAdapter] OpenCode instance created at ${server.url}`)
       } finally {
         this.serverStarting = null
@@ -586,6 +614,22 @@ export class OpencodeAdapter implements CodingAgentAdapter {
             content: part.text as string
           }
         })
+
+        // Surface provider errors stored in msg.info.error (e.g. "Payment
+        // Required", quota exceeded).  OpenCode records these on the message
+        // info but creates no parts for them, so without this they vanish on
+        // resume.
+        const msgError = (msg.info as Record<string, unknown>).error as { name?: string; data?: { message?: string } } | undefined
+        if (msgError && transformedParts.length === 0) {
+          const errorText = msgError.data?.message || msgError.name || 'Unknown provider error'
+          transformedParts.push({
+            id: `error-${msg.info.id}`,
+            type: 'text' as unknown as MessagePartType,
+            text: `⚠️ Provider error: ${errorText}`,
+            content: `⚠️ Provider error: ${errorText}`
+          })
+        }
+
         messages.push({
           id: msg.info.id,
           role: (msg.info.role || 'assistant') as unknown as MessageRole,
@@ -628,6 +672,21 @@ export class OpencodeAdapter implements CodingAgentAdapter {
       },
       ...(config.workspaceDir && { query: { directory: config.workspaceDir } }),
       signal: promptAbort.signal
+    }).then((result: unknown) => {
+      // Check for provider errors in the prompt response (e.g. quota exceeded,
+      // payment required, rate limit).  OpenCode wraps these in result.data.info.error
+      // but does NOT create a message with the error text, so pollMessages never
+      // picks them up and the user sees "idle" with no response.
+      const r = result as { data?: { info?: { error?: { name?: string; data?: { message?: string } } } } } | undefined
+      const promptError = r?.data?.info?.error
+      if (promptError) {
+        const errorMsg = promptError.data?.message || promptError.name || 'Unknown provider error'
+        console.error(`[OpencodeAdapter] Provider error for ${sessionId}: ${errorMsg}`)
+        this.promptErrors.set(sessionId, errorMsg)
+        if (this.onDataAvailable) {
+          this.onDataAvailable(sessionId)
+        }
+      }
     }).catch((err: unknown) => {
       if (!(err instanceof Error) || err.name !== 'AbortError') {
         console.error('[OpencodeAdapter] prompt error:', err)
@@ -648,12 +707,12 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     })
 
     if (!statusResult.data) {
-      return { type: SessionStatusType.IDLE }
+      return this.resolveIdleOrPromptError(sessionId)
     }
 
     const ocStatus = statusResult.data[sessionId]
     if (!ocStatus) {
-      return { type: SessionStatusType.IDLE }
+      return this.resolveIdleOrPromptError(sessionId)
     }
 
     const sdkType = (ocStatus.type || 'idle') as string
@@ -679,10 +738,29 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     }
 
     const statusType = sdkType.toUpperCase() as keyof typeof SessionStatusType
+    const resolvedType = SessionStatusType[statusType] ?? SessionStatusType.IDLE
+
+    if (resolvedType === SessionStatusType.IDLE) {
+      return this.resolveIdleOrPromptError(sessionId)
+    }
+
     return {
-      type: SessionStatusType[statusType] ?? SessionStatusType.IDLE,
+      type: resolvedType,
       message: 'message' in ocStatus ? (ocStatus as { message: string }).message : undefined
     }
+  }
+
+  /**
+   * Returns ERROR with captured prompt error if one exists, otherwise IDLE.
+   * Called from getStatus when the backend reports no active work.
+   */
+  private resolveIdleOrPromptError(sessionId: string): SessionStatus {
+    const promptError = this.promptErrors.get(sessionId)
+    if (promptError) {
+      this.promptErrors.delete(sessionId)
+      return { type: SessionStatusType.ERROR, message: promptError }
+    }
+    return { type: SessionStatusType.IDLE }
   }
 
   /**
@@ -1055,6 +1133,7 @@ export class OpencodeAdapter implements CodingAgentAdapter {
       this.serverInstance = null
       this.serverUrl = null
       this.sharedClient = null
+      this.quickClient = null
       this.v2Client = null
     }
   }

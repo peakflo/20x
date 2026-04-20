@@ -1,5 +1,5 @@
 import type { WorkfloTask, CreateTaskDTO, UpdateTaskDTO, FileAttachment, Agent, CreateAgentDTO, UpdateAgentDTO, McpServer, CreateMcpServerDTO, UpdateMcpServerDTO, Skill, CreateSkillDTO, UpdateSkillDTO, Secret, CreateSecretDTO, UpdateSecretDTO, TaskSource, CreateTaskSourceDTO, UpdateTaskSourceDTO, SyncResult, PluginMeta, ConfigFieldSchema, ConfigFieldOption, PluginAction, ActionResult, SourceUser, ReassignResult, MarketplaceSource, InstalledPlugin, DiscoverablePlugin, MarketplaceCatalog, PluginResources } from '@/types'
-import type { AgentOutputEvent, AgentOutputBatchEvent, AgentStatusEvent, AgentApprovalRequest, GhCliStatus, GlabCliStatus, GitHubRepo, GitHubCollaborator, WorktreeProgressEvent, McpTestResult, SkillSyncResult, DepsStatus } from '@/types/electron'
+import type { AgentOutputEvent, AgentOutputBatchEvent, AgentStatusEvent, AgentApprovalRequest, GhCliStatus, GlabCliStatus, GitHubRepo, GitHubCollaborator, WorktreeProgressEvent, McpTestResult, SkillSyncResult, DepsStatus, AgentMessageAttachment } from '@/types/electron'
 
 export const taskApi = {
   getAll: (): Promise<WorkfloTask[]> => {
@@ -116,8 +116,8 @@ export const agentSessionApi = {
     return window.electronAPI.agentSession.stop(sessionId)
   },
 
-  send: (sessionId: string, message: string, taskId?: string, agentId?: string): Promise<{ success: boolean; newSessionId?: string }> => {
-    return window.electronAPI.agentSession.send(sessionId, message, taskId, agentId)
+  send: (sessionId: string, message: string, taskId?: string, agentId?: string, attachments?: AgentMessageAttachment[]): Promise<{ success: boolean; newSessionId?: string }> => {
+    return window.electronAPI.agentSession.send(sessionId, message, taskId, agentId, attachments)
   },
 
   approve: (sessionId: string, approved: boolean, message?: string): Promise<{ success: boolean }> => {
@@ -241,8 +241,14 @@ export const updaterApi = {
   install: (): Promise<void> => {
     return window.electronAPI?.updater?.install() ?? Promise.resolve()
   },
-  onStatus: (callback: (data: { status: string; version?: string; percent?: number; error?: string }) => void): (() => void) => {
+  getVersion: (): Promise<string> => {
+    return window.electronAPI?.updater?.getVersion() ?? Promise.resolve('?.?.?')
+  },
+  onStatus: (callback: (data: { status: string; version?: string; percent?: number; error?: string; releaseNotes?: string; releaseDate?: string; currentVersion?: string }) => void): (() => void) => {
     return window.electronAPI?.updater?.onStatus(callback) ?? (() => {})
+  },
+  onMenuCheckForUpdates: (callback: () => void): (() => void) => {
+    return window.electronAPI?.updater?.onMenuCheckForUpdates(callback) ?? (() => {})
   }
 }
 
@@ -465,6 +471,14 @@ export const onWorktreeProgress = (callback: (event: WorktreeProgressEvent) => v
 }
 
 export const enterpriseApi = {
+  signupInBrowser: (mode: 'register' | 'login' = 'register'): Promise<{
+    userId: string
+    email: string
+    companies: { id: string; name: string; isPrimary: boolean }[]
+  }> => {
+    return window.electronAPI.enterprise.signupInBrowser(mode)
+  },
+
   login: (email: string, password: string): Promise<{
     userId: string
     email: string

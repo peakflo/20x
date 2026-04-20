@@ -16,12 +16,15 @@ import { useAgentSession } from '@/hooks/use-agent-session'
 import { useAgentStore, SessionStatus } from '@/stores/agent-store'
 import { useSettingsStore, type GitProvider } from '@/stores/settings-store'
 import { useTaskStore } from '@/stores/task-store'
-import { taskApi, worktreeApi, taskSourceApi, onAgentIncompatibleSession, onWorktreeProgress } from '@/lib/ipc-client'
+import { taskApi, worktreeApi, taskSourceApi, onAgentIncompatibleSession, onWorktreeProgress, attachmentApi } from '@/lib/ipc-client'
 import { useEffect, useCallback, useRef, useState, useMemo } from 'react'
 import { TaskStatus } from '@/types'
 import type { WorkfloTask, FileAttachment, OutputField, Agent, UpdateAgentDTO, CreateAgentDTO } from '@/types'
 import type { GitHubRepo } from '@/types/electron'
 import { isAgentConfigured } from '@shared/agent-utils'
+
+/** Controls which columns are visible in the TaskWorkspace grid */
+export type TaskWorkspaceLayout = 'both' | 'task-only' | 'transcript-only'
 
 interface TaskWorkspaceProps {
   task?: WorkfloTask
@@ -34,6 +37,8 @@ interface TaskWorkspaceProps {
   onAssignAgent: (taskId: string, agentId: string | null) => void
   onUpdateTask?: (taskId: string, data: Partial<WorkfloTask>) => Promise<void>
   onNavigateToTask?: (taskId: string) => void
+  /** Override the layout — which panels to show. Default: 'both' */
+  panelLayout?: TaskWorkspaceLayout
 }
 
 export function TaskWorkspace({
@@ -46,7 +51,8 @@ export function TaskWorkspace({
   onCompleteTask,
   onAssignAgent,
   onUpdateTask,
-  onNavigateToTask
+  onNavigateToTask,
+  panelLayout = 'both'
 }: TaskWorkspaceProps) {
   const { session, start, resume, abort, stop, sendMessage, approve } = useAgentSession(task?.id)
   const { removeSession, updateAgent } = useAgentStore()
@@ -401,7 +407,7 @@ export function TaskWorkspace({
   }, [fetchTasks, resume, start, task?.agent_id, task?.id, task?.session_id])
 
   const handleSend = useCallback(
-    async (message: string) => {
+    async (message: string, options?: { attachments?: Array<{ id: string; filename: string; size: number; mime_type: string }> }) => {
       // Route unresolved question responses through approve(), even if status lags.
       let questionIndex = -1
       for (let i = session.messages.length - 1; i >= 0; i--) {
@@ -419,10 +425,31 @@ export function TaskWorkspace({
 
       const readySessionId = await ensureChatSession()
       if (!readySessionId) return
-      await sendMessage(message)
+      await sendMessage(message, options)
     },
     [approve, ensureChatSession, sendMessage, session.messages]
   )
+
+  const handleAddAttachmentPaths = useCallback(async (filePaths: string[]) => {
+    if (!task?.id || filePaths.length === 0) return []
+    const saved = await Promise.all(filePaths.map((fp) => attachmentApi.save(task.id, fp)))
+    const merged = [...task.attachments]
+    const seen = new Set(merged.map((a) => a.id))
+    for (const attachment of saved) {
+      if (seen.has(attachment.id)) continue
+      seen.add(attachment.id)
+      merged.push(attachment)
+    }
+    onUpdateAttachments(merged)
+    return saved
+  }, [onUpdateAttachments, task?.attachments, task?.id])
+
+  const handlePickAttachments = useCallback(async () => {
+    if (!task?.id) return []
+    const filePaths = await attachmentApi.pick()
+    if (!filePaths.length) return []
+    return handleAddAttachmentPaths(filePaths)
+  }, [handleAddAttachmentPaths, task?.id])
 
   // ── Feedback orchestration ──────────────────────────────────
 
@@ -622,7 +649,8 @@ Update existing skills that were helpful or create new ones for patterns worth r
 
   return (
     <>
-      <div className={`grid ${showPanel ? 'grid-cols-2' : 'grid-cols-1'} relative`} style={{ height: '100%' }}>
+      <div className={`grid ${showPanel && panelLayout !== 'task-only' && panelLayout !== 'transcript-only' ? 'grid-cols-2' : 'grid-cols-1'} relative`} style={{ height: '100%' }}>
+        {panelLayout !== 'transcript-only' && (
         <div className="min-h-0 min-w-0 flex flex-col">
           <AgentApprovalBanner
             request={session.pendingApproval}
@@ -644,6 +672,15 @@ Update existing skills that were helpful or create new ones for patterns worth r
             onUpdateSkillIds={async (skillIds) => {
               if (onUpdateTask) await onUpdateTask(task.id, { skill_ids: skillIds })
             }}
+            onUpdateDescription={onUpdateTask
+              ? async (description) => {
+                await onUpdateTask(task.id, { description })
+              }
+              : async (description) => {
+                await taskApi.update(task.id, { description })
+                updateTaskInStore(task.id, { description })
+              }
+            }
             onAddSkills={() => setShowSkillSelector(true)}
             onStartAgent={handleStartSession}
             canStartAgent={!!canStart}
@@ -664,8 +701,9 @@ Update existing skills that were helpful or create new ones for patterns worth r
             onReorderSubtasks={handleReorderSubtasks}
           />
         </div>
+        )}
 
-        {showPanel && (
+        {showPanel && panelLayout !== 'task-only' && (
           <div className="min-h-0 min-w-0 h-full">
             <AgentTranscriptPanel
               messages={session.messages}
@@ -674,6 +712,8 @@ Update existing skills that were helpful or create new ones for patterns worth r
               onStop={handleAbort}
               onRestart={handleStartFreshSession}
               onSend={handleSend}
+              onPickAttachments={handlePickAttachments}
+              onAddAttachmentPaths={handleAddAttachmentPaths}
               className="h-full"
             />
           </div>

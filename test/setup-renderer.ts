@@ -164,7 +164,15 @@ const mockElectronAPI = {
   }),
   onTasksRefresh: vi.fn((_cb: () => void) => {
     return vi.fn()
-  })
+  }),
+  updater: {
+    check: vi.fn().mockResolvedValue({ success: true }),
+    download: vi.fn().mockResolvedValue({ success: true }),
+    install: vi.fn().mockResolvedValue(undefined),
+    getVersion: vi.fn().mockResolvedValue('0.0.31'),
+    onStatus: vi.fn((_cb: (data: unknown) => void) => vi.fn()),
+    onMenuCheckForUpdates: vi.fn((_cb: () => void) => vi.fn())
+  }
 }
 
 Object.defineProperty(window, 'electronAPI', {

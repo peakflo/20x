@@ -42,6 +42,13 @@ export interface AgentSessionSuccessResult {
   success: boolean
 }
 
+export interface AgentMessageAttachment {
+  id: string
+  filename: string
+  size: number
+  mime_type: string
+}
+
 export interface AgentOutputEvent {
   sessionId: string
   taskId?: string
@@ -186,7 +193,7 @@ interface ElectronAPI {
     resume: (agentId: string, taskId: string, ocSessionId: string) => Promise<AgentSessionStartResult>
     abort: (sessionId: string) => Promise<AgentSessionSuccessResult>
     stop: (sessionId: string) => Promise<AgentSessionSuccessResult>
-    send: (sessionId: string, message: string, taskId?: string, agentId?: string) => Promise<AgentSessionSuccessResult & { newSessionId?: string }>
+    send: (sessionId: string, message: string, taskId?: string, agentId?: string, attachments?: AgentMessageAttachment[]) => Promise<AgentSessionSuccessResult & { newSessionId?: string }>
     approve: (sessionId: string, approved: boolean, message?: string) => Promise<AgentSessionSuccessResult>
     syncSkills: (sessionId: string) => Promise<SkillSyncResult>
     syncSkillsForTask: (taskId: string) => Promise<SkillSyncResult>
@@ -318,6 +325,11 @@ interface ElectronAPI {
     getInfo: () => Promise<{ url: string; port: number }>
   }
   enterprise: {
+    signupInBrowser: (mode: 'register' | 'login') => Promise<{
+      userId: string
+      email: string
+      companies: { id: string; name: string; isPrimary: boolean }[]
+    }>
     login: (email: string, password: string) => Promise<{
       userId: string
       email: string
@@ -348,7 +360,9 @@ interface ElectronAPI {
     check: () => Promise<{ success: boolean; version?: string; error?: string }>
     download: () => Promise<{ success: boolean; error?: string }>
     install: () => Promise<void>
-    onStatus: (callback: (data: { status: string; version?: string; percent?: number; error?: string; releaseNotes?: string }) => void) => () => void
+    getVersion: () => Promise<string>
+    onStatus: (callback: (data: { status: string; version?: string; percent?: number; error?: string; releaseNotes?: string; releaseDate?: string; currentVersion?: string }) => void) => () => void
+    onMenuCheckForUpdates: (callback: () => void) => () => void
   }
   agentInstaller: {
     detect: () => Promise<Record<string, { installed: boolean; version: string | null }>>
@@ -358,6 +372,16 @@ interface ElectronAPI {
   }
   webUtils: {
     getPathForFile: (file: File) => string
+  }
+  terminal: {
+    create: (id: string, cols: number, rows: number, cwd?: string) => Promise<{ pid: number }>
+    write: (id: string, data: string) => Promise<void>
+    resize: (id: string, cols: number, rows: number) => Promise<void>
+    kill: (id: string, expectedPid?: number) => Promise<void>
+    getCwd: (id: string, expectedPid?: number) => Promise<{ cwd: string | null }>
+    getBuffer: (id: string, lines?: number) => Promise<{ lines: string[] }>
+    onData: (callback: (data: { id: string; data: string }) => void) => () => void
+    onExit: (callback: (data: { id: string }) => void) => () => void
   }
   onOverdueCheck: (callback: () => void) => () => void
   onTasksRefresh: (callback: () => void) => () => void
@@ -372,6 +396,12 @@ interface ElectronAPI {
   onHeartbeatDisabled: (callback: (event: { taskId: string; reason: string }) => void) => () => void
   onWorktreeProgress: (callback: (event: WorktreeProgressEvent) => void) => () => void
   onGithubDeviceCode: (callback: (code: string) => void) => () => void
+  browser: {
+    getCdpPort: () => Promise<{ port: number }>
+    getTargetId: (webContentsId: number) => Promise<{ targetId: string | null }>
+    getCdpTargets: () => Promise<Array<{ id: string; url: string; title: string; type: string; tabId: string }>>
+    openExternalAuth: (loginUrl: string) => Promise<{ success: boolean; finalUrl: string; cookieCount: number }>
+  }
   onGitlabDeviceCode: (callback: (code: string) => void) => () => void
   onOAuthCallback: (callback: (event: { code: string; state: string }) => void) => () => void
 }

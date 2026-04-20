@@ -302,16 +302,18 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
           )}
         </div>
 
-        {/* Description — matches desktop max-w-2xl content area */}
-        {task.description && (
-          <div className="px-4 py-4 border-b border-border">
-            <CollapsibleDescription
-              taskId={task.id}
-              description={task.description}
-              size="sm"
-            />
-          </div>
-        )}
+        {/* Description — matches desktop max-w-2xl content area. Always render
+            when we can edit, so users can add a description inline. */}
+        <div className="px-4 py-4 border-b border-border">
+          <CollapsibleDescription
+            taskId={task.id}
+            description={task.description || ''}
+            size="sm"
+            onSave={async (description) => {
+              await updateTask(task.id, { description })
+            }}
+          />
+        </div>
 
         {/* Metadata grid — matches desktop grid-cols-[auto_1fr], always visible */}
         <div className="px-4 py-4 border-b border-border">
@@ -332,8 +334,14 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
                   <option key={a.id} value={a.id}>{a.name}</option>
                 ))}
               </select>
+              {/* Per-row action buttons are outline/secondary — the big
+                  state-aware primary CTA lives in the main CTA section below
+                  (see the Main CTA block). Keeping these inline for quick
+                  access but visually secondary so there's only one primary-
+                  colored button on screen at a time. Stop stays destructive
+                  since it's a conceptually distinct "halt" action. */}
               {canTriage && (
-                <button onClick={handleTriage} className="inline-flex items-center gap-1.5 bg-primary text-primary-foreground hover:bg-primary/90 h-7 rounded-md px-3 text-xs font-medium shrink-0">
+                <button onClick={handleTriage} className="inline-flex items-center gap-1.5 border border-border bg-transparent text-foreground hover:bg-accent h-7 rounded-md px-3 text-xs font-medium shrink-0">
                   <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/>
                   </svg>
@@ -341,26 +349,18 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
                 </button>
               )}
               {canStart && (
-                <button onClick={handleStart} className="inline-flex items-center gap-1.5 bg-primary text-primary-foreground hover:bg-primary/90 h-7 rounded-md px-3 text-xs font-medium shrink-0">
+                <button onClick={handleStart} className="inline-flex items-center gap-1.5 border border-border bg-transparent text-foreground hover:bg-accent h-7 rounded-md px-3 text-xs font-medium shrink-0">
                   Start
                 </button>
               )}
               {canResume && (
-                <button onClick={handleResume} className="inline-flex items-center gap-1.5 bg-primary text-primary-foreground hover:bg-primary/90 h-7 rounded-md px-3 text-xs font-medium shrink-0">
+                <button onClick={handleResume} className="inline-flex items-center gap-1.5 border border-border bg-transparent text-foreground hover:bg-accent h-7 rounded-md px-3 text-xs font-medium shrink-0">
                   Resume
                 </button>
               )}
               {canStop && (
                 <button onClick={handleStop} className="inline-flex items-center gap-1.5 bg-destructive text-destructive-foreground hover:bg-destructive/90 h-7 rounded-md px-3 text-xs font-medium shrink-0">
                   Stop
-                </button>
-              )}
-              {canComplete && (
-                <button onClick={handleCompleteTask} className="inline-flex items-center gap-1.5 bg-green-600 text-white hover:bg-green-700 h-7 rounded-md px-3 text-xs font-medium shrink-0">
-                  <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <polyline points="20 6 9 17 4 12"/>
-                  </svg>
-                  Complete
                 </button>
               )}
               {session && (
@@ -563,6 +563,80 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
             onReorderSubtasks={handleReorderSubtasks}
           />
         )}
+
+        {/* Main CTA — state-aware primary.
+            In most states the happy path is to move the task forward with an
+            agent action, so Start > Resume > Triage wins over the always-
+            available Complete escape hatch. In ReadyForReview the happy path
+            flips: the agent has finished, the user is reviewing the result,
+            and the expected next step is to accept (Complete). Resume stays
+            visible as a secondary "needs another pass" affordance. */}
+        {(canStart || canResume || canTriage || canComplete) && (() => {
+          type AgentAction = { label: string; onClick: () => void; testId: string }
+          let agentAction: AgentAction | null = null
+          if (canStart) {
+            agentAction = { label: 'Start Task', onClick: handleStart, testId: 'main-cta-start' }
+          } else if (canResume) {
+            agentAction = { label: 'Resume Session', onClick: handleResume, testId: 'main-cta-resume' }
+          } else if (canTriage) {
+            agentAction = { label: 'Triage', onClick: handleTriage, testId: 'main-cta-triage' }
+          }
+
+          const isReadyForReview = task.status === TaskStatus.ReadyForReview
+
+          // In ReadyForReview the happy path is acceptance — the agent action
+          // stays visible for "needs another pass" but always as secondary,
+          // even when canComplete is false (e.g. output fields not yet filled).
+          const agentActionIsPrimary = !!agentAction && !isReadyForReview
+          const completeIsPrimary =
+            canComplete && (!agentAction || isReadyForReview)
+
+          const primaryBtnClass =
+            'w-full inline-flex items-center justify-center gap-2 bg-primary text-primary-foreground hover:bg-primary/90 active:opacity-60 rounded-md px-4 py-2.5 text-sm font-medium'
+          const secondaryBtnClass =
+            'w-full inline-flex items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-medium active:opacity-60 border border-border bg-transparent text-foreground hover:bg-accent'
+
+          return (
+            <div className="px-4 py-4 flex flex-col gap-2 border-b border-border">
+              {agentAction && agentActionIsPrimary && (
+                <button
+                  onClick={agentAction.onClick}
+                  data-testid={agentAction.testId}
+                  className={primaryBtnClass}
+                >
+                  <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <polygon points="6 3 20 12 6 21 6 3" />
+                  </svg>
+                  {agentAction.label}
+                </button>
+              )}
+              {canComplete && (
+                <button
+                  onClick={handleCompleteTask}
+                  data-testid="main-cta-complete"
+                  className={completeIsPrimary ? primaryBtnClass : secondaryBtnClass}
+                >
+                  <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="20 6 9 17 4 12" />
+                  </svg>
+                  Complete Task
+                </button>
+              )}
+              {agentAction && !agentActionIsPrimary && (
+                <button
+                  onClick={agentAction.onClick}
+                  data-testid={agentAction.testId}
+                  className={secondaryBtnClass}
+                >
+                  <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <polygon points="6 3 20 12 6 21 6 3" />
+                  </svg>
+                  {agentAction.label}
+                </button>
+              )}
+            </div>
+          )
+        })()}
 
         {/* Transcript — always show link when agent is assigned */}
         {task.agent_id && (

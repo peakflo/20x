@@ -97,8 +97,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('agentSession:abort', sessionId),
     stop: (sessionId: string): Promise<{ success: boolean }> =>
       ipcRenderer.invoke('agentSession:stop', sessionId),
-    send: (sessionId: string, message: string, taskId?: string, agentId?: string): Promise<{ success: boolean; newSessionId?: string }> =>
-      ipcRenderer.invoke('agentSession:send', sessionId, message, taskId, agentId),
+    send: (sessionId: string, message: string, taskId?: string, agentId?: string, attachments?: Array<{ id: string; filename: string; size: number; mime_type: string }>): Promise<{ success: boolean; newSessionId?: string }> =>
+      ipcRenderer.invoke('agentSession:send', sessionId, message, taskId, agentId, attachments),
     approve: (sessionId: string, approved: boolean, message?: string): Promise<{ success: boolean }> =>
       ipcRenderer.invoke('agentSession:approve', sessionId, approved, message),
     syncSkills: (sessionId: string): Promise<{ created: string[]; updated: string[]; unchanged: string[] }> =>
@@ -334,6 +334,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('mobile:getInfo')
   },
   enterprise: {
+    signupInBrowser: (mode: 'register' | 'login'): Promise<{
+      userId: string
+      email: string
+      companies: { id: string; name: string; isPrimary: boolean }[]
+    }> => ipcRenderer.invoke('enterprise:signupInBrowser', mode),
     login: (email: string, password: string): Promise<{
       userId: string
       email: string
@@ -380,10 +385,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('updater:download'),
     install: (): Promise<void> =>
       ipcRenderer.invoke('updater:install'),
-    onStatus: (callback: (data: { status: string; version?: string; percent?: number; error?: string; releaseNotes?: string }) => void): (() => void) => {
-      const handler = (_: unknown, data: { status: string; version?: string; percent?: number; error?: string; releaseNotes?: string }): void => callback(data)
+    onStatus: (callback: (data: { status: string; version?: string; percent?: number; error?: string; releaseNotes?: string; releaseDate?: string; currentVersion?: string }) => void): (() => void) => {
+      const handler = (_: unknown, data: { status: string; version?: string; percent?: number; error?: string; releaseNotes?: string; releaseDate?: string; currentVersion?: string }): void => callback(data)
       ipcRenderer.on('updater:status', handler)
       return () => ipcRenderer.removeListener('updater:status', handler)
+    },
+    getVersion: (): Promise<string> =>
+      ipcRenderer.invoke('updater:getVersion'),
+    onMenuCheckForUpdates: (callback: () => void): (() => void) => {
+      const handler = (): void => callback()
+      ipcRenderer.on('menu:check-for-updates', handler)
+      return () => ipcRenderer.removeListener('menu:check-for-updates', handler)
     }
   },
   agentInstaller: {
@@ -401,5 +413,39 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   webUtils: {
     getPathForFile: (file: File): string => webUtils.getPathForFile(file)
+  },
+  terminal: {
+    create: (id: string, cols: number, rows: number, cwd?: string): Promise<{ pid: number }> =>
+      ipcRenderer.invoke('terminal:create', { id, cols, rows, cwd }),
+    write: (id: string, data: string): Promise<void> =>
+      ipcRenderer.invoke('terminal:write', { id, data }),
+    resize: (id: string, cols: number, rows: number): Promise<void> =>
+      ipcRenderer.invoke('terminal:resize', { id, cols, rows }),
+    kill: (id: string, expectedPid?: number): Promise<void> =>
+      ipcRenderer.invoke('terminal:kill', { id, expectedPid }),
+    getCwd: (id: string, expectedPid?: number): Promise<{ cwd: string | null }> =>
+      ipcRenderer.invoke('terminal:getCwd', { id, expectedPid }),
+    getBuffer: (id: string, lines?: number): Promise<{ lines: string[] }> =>
+      ipcRenderer.invoke('terminal:getBuffer', { id, lines }),
+    onData: (callback: (data: { id: string; data: string }) => void): (() => void) => {
+      const handler = (_: unknown, d: { id: string; data: string }): void => callback(d)
+      ipcRenderer.on('terminal:data', handler)
+      return () => ipcRenderer.removeListener('terminal:data', handler)
+    },
+    onExit: (callback: (data: { id: string }) => void): (() => void) => {
+      const handler = (_: unknown, d: { id: string }): void => callback(d)
+      ipcRenderer.on('terminal:exit', handler)
+      return () => ipcRenderer.removeListener('terminal:exit', handler)
+    }
+  },
+  browser: {
+    getCdpPort: (): Promise<{ port: number }> =>
+      ipcRenderer.invoke('browser:getCdpPort'),
+    getTargetId: (webContentsId: number): Promise<{ targetId: string | null }> =>
+      ipcRenderer.invoke('browser:getTargetId', webContentsId),
+    getCdpTargets: (): Promise<Array<{ id: string; url: string; title: string }>> =>
+      ipcRenderer.invoke('browser:getCdpTargets'),
+    openExternalAuth: (loginUrl: string): Promise<{ success: boolean; finalUrl: string; cookieCount: number }> =>
+      ipcRenderer.invoke('browser:openExternalAuth', loginUrl)
   }
 })

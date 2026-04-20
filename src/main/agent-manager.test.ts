@@ -2,7 +2,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { AgentManager } from './agent-manager'
 import { SessionStatus, TaskStatus } from '../shared/constants'
-import { MessagePartType, MessageRole } from './adapters/coding-agent-adapter'
+import { MessagePartType, MessageRole, SessionStatusType } from './adapters/coding-agent-adapter'
 
 // Mock filesystem operations
 vi.mock('fs', async (importOriginal) => {
@@ -12,6 +12,7 @@ vi.mock('fs', async (importOriginal) => {
     mkdirSync: vi.fn(),
     writeFileSync: vi.fn(),
     copyFileSync: vi.fn(),
+    readFileSync: vi.fn(() => ''),
     existsSync: vi.fn(() => false),
   }
 })
@@ -51,13 +52,14 @@ vi.mock('./secret-broker', () => ({
 }))
 
 import { mkdir as mkdirAsync, writeFile as writeFileAsync } from 'fs/promises'
-import { existsSync, copyFileSync, mkdirSync } from 'fs'
+import { existsSync, copyFileSync, mkdirSync, readFileSync } from 'fs'
 
 const mockedMkdirAsync = vi.mocked(mkdirAsync)
 const mockedWriteFileAsync = vi.mocked(writeFileAsync)
 const mockedExistsSync = vi.mocked(existsSync)
 const mockedCopyFileSync = vi.mocked(copyFileSync)
 const mockedMkdirSync = vi.mocked(mkdirSync)
+const mockedReadFileSync = vi.mocked(readFileSync)
 
 function makeSkillRecord(overrides: Partial<{
   id: string; name: string; description: string; content: string;
@@ -1355,5 +1357,314 @@ describe('syncAttachmentsToWorkspace', () => {
       '/tmp/ws/attachments/exists.txt'
     )
     expect(refs).toEqual(['- attachments/exists.txt'])
+  })
+})
+
+describe('buildMessageWithAttachmentContext', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('includes attachment references and a bounded preview for small text files', () => {
+    const mgr = new AgentManager(createMockDb({}))
+    const session = { workspaceDir: '/tmp/ws' } as { workspaceDir: string }
+
+    mockedExistsSync.mockImplementation((p: any) => String(p).includes('/tmp/ws/attachments/spec.md'))
+    mockedReadFileSync.mockImplementation(() => 'A'.repeat(1500))
+
+    const result = (mgr as any).buildMessageWithAttachmentContext(
+      session,
+      'Please use attached context',
+      [{ id: 'att-1', filename: 'spec.md', size: 1024, mime_type: 'text/markdown' }]
+    ) as string
+
+    expect(result).toContain('Please use attached context')
+    expect(result).toContain('- attachments/spec.md (text/markdown, 1.0 KB)')
+    expect(result).toContain('Small text previews')
+    expect(result).toContain('...[truncated]')
+    expect(result.length).toBeLessThan(2600)
+  })
+
+  it('caps attachment references and reports omitted items', () => {
+    const mgr = new AgentManager(createMockDb({}))
+    const session = { workspaceDir: '/tmp/ws' } as { workspaceDir: string }
+    const attachments = Array.from({ length: 12 }, (_, i) => ({
+      id: `att-${i + 1}`,
+      filename: `file-${i + 1}.txt`,
+      size: 100,
+      mime_type: 'text/plain'
+    }))
+
+    mockedExistsSync.mockReturnValue(false)
+    const result = (mgr as any).buildMessageWithAttachmentContext(session, 'Use files', attachments) as string
+
+    expect(result).toContain('... and 2 more attachment(s) omitted')
+    expect((result.match(/- attachments\/file-/g) || []).length).toBe(10)
+  })
+})
+
+describe('AgentManager startAdapterPolling — IDLE grace period for follow-up messages', () => {
+  // Regression test for: "opencode transitions to idle without any response".
+  // When a follow-up message is sent, startAdapterPolling is invoked with an
+  // existingSession so that dedup state (seenMessageIds / seenPartIds) is
+  // preserved. Previously `hasSeenWork` was pre-set to true whenever an
+  // existingSession was passed, which caused the IDLE grace period to be
+  // skipped. Because opencode's sendPrompt is fire-and-forget, the first poll
+  // after a follow-up can briefly observe IDLE while the server is still
+  // ingesting the request. Skipping the grace period meant transitionToIdle
+  // ran immediately and the session flipped to idle without any response.
+
+  function buildManager() {
+    const mockDb = createMockDb({})
+    const mgr = new AgentManager(mockDb)
+    vi.spyOn(mgr as any, 'sendToRenderer').mockImplementation(() => undefined)
+    vi.spyOn(mgr as any, 'ensurePollingCoordinator').mockImplementation(() => undefined)
+    return mgr
+  }
+
+  function buildAdapter() {
+    return {
+      pollMessages: vi.fn(async () => [] as any[]),
+      getStatus: vi.fn(async () => ({ type: SessionStatusType.IDLE })),
+    }
+  }
+
+  it('creates a PollingEntry with hasSeenWork=false when existingSession is provided', () => {
+    const mgr = buildManager()
+    const adapter = buildAdapter()
+
+    const existingSession = {
+      seenMessageIds: new Set(['msg-1']),
+      seenPartIds: new Set(['part-1']),
+      partContentLengths: new Map([['part-1', '10']]),
+    } as any
+
+    ;(mgr as any).startAdapterPolling(
+      'session-1',
+      adapter,
+      { agentId: 'agent-1', taskId: 'task-1', workspaceDir: '/tmp/ws' },
+      undefined,
+      existingSession
+    )
+
+    const entry = (mgr as any).pollingEntries.get('session-1')
+    expect(entry).toBeDefined()
+    // hasSeenWork MUST start false so the IDLE grace period applies to every
+    // new prompt — not just brand-new sessions.
+    expect(entry.hasSeenWork).toBe(false)
+    // Dedup state from the existing session should still be preserved so
+    // historical messages aren't re-sent to the renderer.
+    expect(entry.seenMessageIds.has('msg-1')).toBe(true)
+    expect(entry.seenPartIds.has('part-1')).toBe(true)
+    expect(entry.partContentLengths.get('part-1')).toBe('10')
+  })
+
+  it('pollSingleSession skips transitionToIdle during grace period on follow-up (regression: premature idle)', async () => {
+    const mgr = buildManager()
+    const adapter = buildAdapter()
+
+    // Simulate a real session in memory
+    const session = {
+      agentId: 'agent-1',
+      taskId: 'task-1',
+      status: 'working',
+      createdAt: new Date(),
+      seenMessageIds: new Set<string>(['msg-1']),
+      seenPartIds: new Set<string>(['part-1']),
+      partContentLengths: new Map<string, string>(),
+      adapter,
+    }
+    ;(mgr as any).sessions.set('session-1', session)
+
+    // Start polling as if a follow-up message was just sent. Pre-fix this
+    // would set hasSeenWork=true and skip the grace period.
+    ;(mgr as any).startAdapterPolling(
+      'session-1',
+      adapter,
+      { agentId: 'agent-1', taskId: 'task-1', workspaceDir: '/tmp/ws' },
+      undefined,
+      session
+    )
+
+    const entry = (mgr as any).pollingEntries.get('session-1')
+    expect(entry).toBeDefined()
+    // Keep it fresh so sessionAge stays under the 15s grace window
+    entry.createdAt = Date.now()
+
+    // Fail loudly if the regression returns and transitionToIdle fires before
+    // any work has been observed.
+    const transitionSpy = vi.spyOn(mgr as any, 'transitionToIdle').mockResolvedValue(undefined)
+
+    // Run one poll cycle — adapter reports IDLE (prompt not yet ingested)
+    await (mgr as any).pollSingleSession(entry)
+
+    expect(transitionSpy).not.toHaveBeenCalled()
+    // Entry must still be registered so subsequent polls can observe BUSY
+    // once the backend actually picks up the prompt.
+    expect((mgr as any).pollingEntries.has('session-1')).toBe(true)
+  })
+
+  it('pollSingleSession does NOT set hasSeenWork from message content — only from BUSY status (root cause: stale parts)', async () => {
+    // ROOT CAUSE regression test: pollMessages can return stale assistant tool
+    // parts (fingerprint updates from the previous turn) or user echoes.  The
+    // old code set hasSeenWork=true on any non-user part, which disabled the
+    // grace period.  On the same poll cycle getStatus returned IDLE (backend
+    // still ingesting the prompt), so transitionToIdle fired with no response.
+    //
+    // Fix: hasSeenWork is set ONLY when getStatus returns BUSY/WAITING_APPROVAL.
+    const mgr = buildManager()
+    const adapter = buildAdapter()
+
+    // pollMessages returns stale assistant parts (fingerprint update from
+    // a previous tool call) — NOT new work from the current prompt
+    adapter.pollMessages.mockResolvedValueOnce([
+      { id: 'tool-1', role: 'assistant', content: 'done', type: 'tool', update: true }
+    ])
+    // Backend still reports IDLE while ingesting the prompt
+    adapter.getStatus.mockResolvedValueOnce({ type: SessionStatusType.IDLE })
+
+    const session = {
+      agentId: 'agent-1',
+      taskId: 'task-1',
+      status: 'working',
+      createdAt: new Date(),
+      seenMessageIds: new Set<string>(),
+      seenPartIds: new Set<string>(),
+      partContentLengths: new Map<string, string>(),
+      adapter,
+    }
+    ;(mgr as any).sessions.set('session-1', session)
+
+    ;(mgr as any).startAdapterPolling(
+      'session-1',
+      adapter,
+      { agentId: 'agent-1', taskId: 'task-1', workspaceDir: '/tmp/ws' }
+    )
+
+    const entry = (mgr as any).pollingEntries.get('session-1')
+    entry.createdAt = Date.now()
+
+    const transitionSpy = vi.spyOn(mgr as any, 'transitionToIdle').mockResolvedValue(undefined)
+
+    await (mgr as any).pollSingleSession(entry)
+
+    // hasSeenWork must stay false — message content never sets it
+    expect(entry.hasSeenWork).toBe(false)
+    // Grace period should prevent transition
+    expect(transitionSpy).not.toHaveBeenCalled()
+    expect((mgr as any).pollingEntries.has('session-1')).toBe(true)
+  })
+
+  it('pollSingleSession sets hasSeenWork=true when getStatus returns BUSY', async () => {
+    const mgr = buildManager()
+    const adapter = buildAdapter()
+
+    adapter.pollMessages.mockResolvedValueOnce([])
+    adapter.getStatus.mockResolvedValueOnce({ type: SessionStatusType.BUSY })
+
+    const session = {
+      agentId: 'agent-1',
+      taskId: 'task-1',
+      status: 'working',
+      createdAt: new Date(),
+      seenMessageIds: new Set<string>(),
+      seenPartIds: new Set<string>(),
+      partContentLengths: new Map<string, string>(),
+      adapter,
+    }
+    ;(mgr as any).sessions.set('session-1', session)
+
+    ;(mgr as any).startAdapterPolling(
+      'session-1',
+      adapter,
+      { agentId: 'agent-1', taskId: 'task-1', workspaceDir: '/tmp/ws' }
+    )
+
+    const entry = (mgr as any).pollingEntries.get('session-1')
+    entry.createdAt = Date.now()
+
+    await (mgr as any).pollSingleSession(entry)
+
+    // BUSY status is the authoritative signal → hasSeenWork must be true
+    expect(entry.hasSeenWork).toBe(true)
+  })
+
+  it('pollSingleSession transitions to idle after BUSY then IDLE (work completed)', async () => {
+    const mgr = buildManager()
+    const adapter = buildAdapter()
+
+    // First poll: BUSY
+    adapter.pollMessages.mockResolvedValueOnce([
+      { id: 'resp-1', role: 'assistant', content: 'Working...', type: 'text' }
+    ])
+    adapter.getStatus.mockResolvedValueOnce({ type: SessionStatusType.BUSY })
+
+    const session = {
+      agentId: 'agent-1',
+      taskId: 'task-1',
+      status: 'working',
+      createdAt: new Date(),
+      seenMessageIds: new Set<string>(),
+      seenPartIds: new Set<string>(),
+      partContentLengths: new Map<string, string>(),
+      adapter,
+      lastAssistantText: '',
+    }
+    ;(mgr as any).sessions.set('session-1', session)
+
+    ;(mgr as any).startAdapterPolling(
+      'session-1',
+      adapter,
+      { agentId: 'agent-1', taskId: 'task-1', workspaceDir: '/tmp/ws' }
+    )
+
+    const entry = (mgr as any).pollingEntries.get('session-1')
+    entry.createdAt = Date.now()
+
+    const transitionSpy = vi.spyOn(mgr as any, 'transitionToIdle').mockResolvedValue(undefined)
+
+    // First poll: BUSY → hasSeenWork=true, no transition
+    await (mgr as any).pollSingleSession(entry)
+    expect(entry.hasSeenWork).toBe(true)
+    expect(transitionSpy).not.toHaveBeenCalled()
+
+    // Second poll: IDLE after real work → transition
+    adapter.pollMessages.mockResolvedValueOnce([])
+    adapter.getStatus.mockResolvedValueOnce({ type: SessionStatusType.IDLE })
+    await (mgr as any).pollSingleSession(entry)
+    expect(transitionSpy).toHaveBeenCalledOnce()
+  })
+
+  it('pollSingleSession transitions to idle after grace period expires without work (new session stuck)', async () => {
+    const mgr = buildManager()
+    const adapter = buildAdapter()
+
+    const session = {
+      agentId: 'agent-1',
+      taskId: 'task-1',
+      status: 'working',
+      createdAt: new Date(),
+      seenMessageIds: new Set<string>(),
+      seenPartIds: new Set<string>(),
+      partContentLengths: new Map<string, string>(),
+      adapter,
+    }
+    ;(mgr as any).sessions.set('session-1', session)
+
+    ;(mgr as any).startAdapterPolling(
+      'session-1',
+      adapter,
+      { agentId: 'agent-1', taskId: 'task-1', workspaceDir: '/tmp/ws' }
+    )
+
+    // Backdate the entry so the 15s grace period has elapsed.
+    const entry = (mgr as any).pollingEntries.get('session-1')
+    entry.createdAt = Date.now() - 30_000
+
+    const transitionSpy = vi.spyOn(mgr as any, 'transitionToIdle').mockResolvedValue(undefined)
+
+    await (mgr as any).pollSingleSession(entry)
+
+    expect(transitionSpy).toHaveBeenCalledOnce()
   })
 })
