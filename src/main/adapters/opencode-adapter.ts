@@ -451,16 +451,18 @@ export class OpencodeAdapter implements CodingAgentAdapter {
 
     // Register secret-injector plugin via config.update() so the running server loads it
     // for this workspace directory — no server restart needed.
+    // Fire-and-forget: config.update triggers InstanceState lazy init on the server
+    // (network calls to models.dev, plugin auth loaders) and can block for minutes.
+    // The plugin will be picked up before the first prompt is processed.
     if (this.pluginFilePath && config.workspaceDir) {
-      try {
-        await ocClient.config.update({
-          body: { plugin: [this.pluginFilePath] } as Record<string, unknown>,
-          ...(config.workspaceDir && { query: { directory: config.workspaceDir } })
-        })
+      ocClient.config.update({
+        body: { plugin: [this.pluginFilePath] } as Record<string, unknown>,
+        ...(config.workspaceDir && { query: { directory: config.workspaceDir } })
+      }).then(() => {
         console.log(`[OpencodeAdapter] Registered plugin via config.update: ${this.pluginFilePath}`)
-      } catch (err) {
+      }).catch((err: unknown) => {
         console.warn(`[OpencodeAdapter] config.update for plugin failed (will rely on startup loading):`, err)
-      }
+      })
     }
 
     // Register MCP servers BEFORE creating session so the session picks them up
@@ -565,17 +567,18 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     const baseUrl = this.serverUrl || config.serverUrl || DEFAULT_SERVER_URL
     const ocClient = OpenCodeSDK!.createOpencodeClient({ baseUrl, fetch: noTimeoutFetch as unknown as (request: Request) => ReturnType<typeof fetch> })
 
-    // Register secret-injector plugin for this workspace
+    // Register secret-injector plugin for this workspace.
+    // Fire-and-forget: config.update triggers InstanceState lazy init on the server
+    // and can block for minutes. Plugin will be picked up before the next prompt.
     if (this.pluginFilePath && config.workspaceDir) {
-      try {
-        await ocClient.config.update({
-          body: { plugin: [this.pluginFilePath] } as Record<string, unknown>,
-          ...(config.workspaceDir && { query: { directory: config.workspaceDir } })
-        })
+      ocClient.config.update({
+        body: { plugin: [this.pluginFilePath] } as Record<string, unknown>,
+        ...(config.workspaceDir && { query: { directory: config.workspaceDir } })
+      }).then(() => {
         console.log(`[OpencodeAdapter] Registered plugin via config.update: ${this.pluginFilePath}`)
-      } catch (err) {
+      }).catch((err: unknown) => {
         console.warn(`[OpencodeAdapter] config.update for plugin failed:`, err)
-      }
+      })
     }
 
     // Validate session exists
