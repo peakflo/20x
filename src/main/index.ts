@@ -23,6 +23,7 @@ import { registerIpcHandlers } from './ipc-handlers'
 import { EnterpriseAuth } from './enterprise-auth'
 import { RecurrenceScheduler } from './recurrence-scheduler'
 import { HeartbeatScheduler } from './heartbeat-scheduler'
+import { WorkspaceCleanupScheduler } from './workspace-cleanup-scheduler'
 import { ClaudePluginManager } from './claude-plugin-manager'
 import { EnterpriseHeartbeat } from './enterprise-heartbeat'
 import { EnterpriseStateSync } from './enterprise-state-sync'
@@ -47,6 +48,7 @@ let oauthManager: OAuthManager | null = null
 let enterpriseAuth: EnterpriseAuth | null = null
 let recurrenceScheduler: RecurrenceScheduler | null = null
 let heartbeatScheduler: HeartbeatScheduler | null = null
+let workspaceCleanupScheduler: WorkspaceCleanupScheduler | null = null
 let claudePluginManager: ClaudePluginManager | null = null
 let enterpriseHeartbeatInstance: EnterpriseHeartbeat | null = null
 let enterpriseStateSyncInstance: EnterpriseStateSync | null = null
@@ -55,6 +57,7 @@ let isShuttingDown = false
 async function shutdownAppServices(): Promise<void> {
   enterpriseHeartbeatInstance?.stop()
   heartbeatScheduler?.stop()
+  workspaceCleanupScheduler?.stop()
 
   await agentManager?.stopAllSessions()
   await agentManager?.stopServer()
@@ -126,6 +129,11 @@ function createWindow(): void {
     // Start heartbeat scheduler
     if (heartbeatScheduler && mainWindow) {
       heartbeatScheduler.start(mainWindow)
+    }
+
+    // Start workspace cleanup scheduler
+    if (workspaceCleanupScheduler && mainWindow) {
+      workspaceCleanupScheduler.start(mainWindow)
     }
 
     // Periodic overdue check — nudges renderer every 60s
@@ -681,6 +689,7 @@ app.whenReady().then(async () => {
 
   recurrenceScheduler = new RecurrenceScheduler(db)
   heartbeatScheduler = new HeartbeatScheduler(db, agentManager)
+  workspaceCleanupScheduler = new WorkspaceCleanupScheduler(db, worktreeManager)
 
   // Initialize enterprise auth (gracefully — missing env vars just disable the feature)
   try {
@@ -756,7 +765,7 @@ app.whenReady().then(async () => {
     console.log('[EnterpriseAuth] auth_session_restore_result {"status":"skipped","reason":"enterprise_auth_not_initialized"}')
   }
 
-  registerIpcHandlers(db, agentManager, githubManager, worktreeManager, syncManager, pluginRegistry, mcpToolCaller, oauthManager, recurrenceScheduler, enterpriseAuth ?? undefined, claudePluginManager, heartbeatScheduler, enterpriseHeartbeatInstance ?? undefined, enterpriseStateSyncInstance ?? undefined, gitlabManager ?? undefined)
+  registerIpcHandlers(db, agentManager, githubManager, worktreeManager, syncManager, pluginRegistry, mcpToolCaller, oauthManager, recurrenceScheduler, enterpriseAuth ?? undefined, claudePluginManager, heartbeatScheduler, enterpriseHeartbeatInstance ?? undefined, enterpriseStateSyncInstance ?? undefined, gitlabManager ?? undefined, workspaceCleanupScheduler ?? undefined)
 
   // Register updater IPC handlers (safe in dev mode — returns no-op results)
   registerUpdaterIpc()

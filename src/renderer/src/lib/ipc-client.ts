@@ -463,6 +463,9 @@ export const worktreeApi = {
   },
   cleanup: (taskId: string, repos: { fullName: string }[], org: string, removeTaskDir?: boolean): Promise<void> => {
     return window.electronAPI.worktree.cleanup(taskId, repos, org, removeTaskDir)
+  },
+  runCleanupNow: (): Promise<{ cleaned: number; errors: string[] }> => {
+    return window.electronAPI.worktree.runCleanupNow()
   }
 }
 

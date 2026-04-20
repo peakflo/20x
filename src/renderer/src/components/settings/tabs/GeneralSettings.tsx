@@ -1,11 +1,11 @@
 import { useState, useEffect } from 'react'
-import { Wrench, RefreshCw, Download, Check, Loader2 } from 'lucide-react'
+import { Wrench, RefreshCw, Download, Check, Loader2, Trash2 } from 'lucide-react'
 import { SettingsSection } from '../SettingsSection'
 import { Label } from '@/components/ui/Label'
 import { Switch } from '@/components/ui/Switch'
 import { Button } from '@/components/ui/Button'
 import { ToolSetupDialog } from '@/components/AgentSetupWizard'
-import { settingsApi, mobileApi, updaterApi } from '@/lib/ipc-client'
+import { settingsApi, mobileApi, updaterApi, worktreeApi } from '@/lib/ipc-client'
 
 export function GeneralSettings() {
   const [setupDialogOpen, setSetupDialogOpen] = useState(false)
@@ -30,6 +30,12 @@ export function GeneralSettings() {
     })
     return cleanup
   }, [])
+
+  // Workspace cleanup settings
+  const [autocleanEnabled, setAutocleanEnabled] = useState(false)
+  const [autocleanDays, setAutocleanDays] = useState('7')
+  const [cleanupRunning, setCleanupRunning] = useState(false)
+  const [cleanupResult, setCleanupResult] = useState<string | null>(null)
 
   // Heartbeat settings
   const [heartbeatEnabled, setHeartbeatEnabled] = useState(true)
@@ -58,6 +64,17 @@ export function GeneralSettings() {
         console.error('Failed to load app preferences:', error)
       } finally {
         setLoading(false)
+      }
+
+      // Load workspace cleanup settings
+      try {
+        const cleanupEnabled = await settingsApi.get('workspace_autocleanup_enabled')
+        if (cleanupEnabled !== null) setAutocleanEnabled(cleanupEnabled === 'true')
+
+        const cleanupDays = await settingsApi.get('workspace_autocleanup_days')
+        if (cleanupDays) setAutocleanDays(cleanupDays)
+      } catch (error) {
+        console.error('Failed to load workspace cleanup settings:', error)
       }
 
       // Load heartbeat settings
@@ -211,6 +228,101 @@ export function GeneralSettings() {
           ) : (
             <span className="text-sm text-muted-foreground">Unavailable</span>
           )}
+        </div>
+      </div>
+    </SettingsSection>
+
+    <SettingsSection
+      title="Workspace Auto-Cleanup"
+      description="Automatically clean up workspace files for completed tasks after a configurable retention period"
+    >
+      <div className="space-y-4">
+        <div className="flex items-center justify-between py-2 border-b border-border">
+          <div className="space-y-0.5">
+            <Label htmlFor="autoclean-enabled">Enable auto-cleanup</Label>
+            <p className="text-xs text-muted-foreground">
+              Automatically remove workspace files for tasks completed more than the configured number of days ago
+            </p>
+          </div>
+          <Switch
+            id="autoclean-enabled"
+            checked={autocleanEnabled}
+            onCheckedChange={async (checked) => {
+              setAutocleanEnabled(checked)
+              await settingsApi.set('workspace_autocleanup_enabled', checked ? 'true' : 'false')
+            }}
+            disabled={loading}
+          />
+        </div>
+
+        <div className="flex items-center justify-between py-2 border-b border-border">
+          <div className="space-y-0.5">
+            <Label htmlFor="autoclean-days">Retention period</Label>
+            <p className="text-xs text-muted-foreground">
+              Days to keep workspace files after task completion
+            </p>
+          </div>
+          <select
+            id="autoclean-days"
+            value={autocleanDays}
+            onChange={async (e) => {
+              setAutocleanDays(e.target.value)
+              await settingsApi.set('workspace_autocleanup_days', e.target.value)
+            }}
+            disabled={loading || !autocleanEnabled}
+            className="bg-transparent border rounded px-2 py-1 text-sm disabled:opacity-50"
+          >
+            <option value="1">1 day</option>
+            <option value="3">3 days</option>
+            <option value="7">7 days</option>
+            <option value="14">14 days</option>
+            <option value="30">30 days</option>
+            <option value="60">60 days</option>
+            <option value="90">90 days</option>
+          </select>
+        </div>
+
+        <div className="flex items-center justify-between py-2">
+          <div className="space-y-0.5">
+            <Label>Manual cleanup</Label>
+            <p className="text-xs text-muted-foreground">
+              Run workspace cleanup now for all eligible completed tasks
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            {cleanupResult && (
+              <span className="text-xs text-muted-foreground">{cleanupResult}</span>
+            )}
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={cleanupRunning}
+              onClick={async () => {
+                setCleanupRunning(true)
+                setCleanupResult(null)
+                try {
+                  const result = await worktreeApi.runCleanupNow()
+                  if (result.cleaned > 0) {
+                    setCleanupResult(`Cleaned ${result.cleaned} workspace${result.cleaned !== 1 ? 's' : ''}`)
+                  } else {
+                    setCleanupResult('No workspaces to clean')
+                  }
+                } catch (error) {
+                  setCleanupResult('Cleanup failed')
+                  console.error('Workspace cleanup error:', error)
+                } finally {
+                  setCleanupRunning(false)
+                }
+              }}
+            >
+              {cleanupRunning ? (
+                <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+              ) : (
+                <Trash2 className="size-3.5 mr-1.5" />
+              )}
+              {cleanupRunning ? 'Cleaning...' : 'Clean Now'}
+            </Button>
+          </div>
         </div>
       </div>
     </SettingsSection>
