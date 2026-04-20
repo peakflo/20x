@@ -241,29 +241,57 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     providers: { id: string; name: string; models: unknown; [key: string]: unknown }[]
     default: Record<string, string>
   } | null> {
-    try {
-      const client = await this.getClient(serverUrl, { quick: true })
+    const client = await this.getClient(serverUrl, { quick: true })
 
-      const result = await client.config.providers({
-        ...(directory && { directory })
-      })
+    // The OpenCode Go server may still be loading providers after reporting
+    // healthy. Retry a few times with a short delay to avoid racing against
+    // provider initialization.
+    const MAX_ATTEMPTS = 4
+    const RETRY_DELAY_MS = 2000
 
-      if (result.error) {
-        console.log('[OpencodeAdapter] No providers configured on server')
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      try {
+        const result = await client.config.providers({
+          ...(directory && { directory })
+        })
+
+        if (result.error) {
+          console.log(`[OpencodeAdapter] config.providers attempt ${attempt}/${MAX_ATTEMPTS}: error response`)
+          if (attempt < MAX_ATTEMPTS) {
+            await new Promise(resolve => setTimeout(resolve, RETRY_DELAY_MS))
+            continue
+          }
+          return null
+        }
+
+        const data = result.data as {
+          providers?: { id: string; name: string; models: unknown; [key: string]: unknown }[]
+          default?: Record<string, string>
+        } | undefined
+
+        const providers = data?.providers || []
+
+        // If the server returned an empty provider list, it may still be loading.
+        // Retry unless we've exhausted attempts.
+        if (providers.length === 0 && attempt < MAX_ATTEMPTS) {
+          console.log(`[OpencodeAdapter] config.providers attempt ${attempt}/${MAX_ATTEMPTS}: empty providers, retrying in ${RETRY_DELAY_MS}ms`)
+          await new Promise(resolve => setTimeout(resolve, RETRY_DELAY_MS))
+          continue
+        }
+
+        console.log('[OpencodeAdapter] Found providers:', providers.map((p) => p.id))
+        return data ? { providers, default: data.default || {} } : null
+      } catch (error: unknown) {
+        console.log(`[OpencodeAdapter] config.providers attempt ${attempt}/${MAX_ATTEMPTS} failed:`, error instanceof Error ? error.message : error)
+        if (attempt < MAX_ATTEMPTS) {
+          await new Promise(resolve => setTimeout(resolve, RETRY_DELAY_MS))
+          continue
+        }
         return null
       }
-
-      const data = result.data as {
-        providers?: { id: string; name: string; models: unknown; [key: string]: unknown }[]
-        default?: Record<string, string>
-      } | undefined
-
-      console.log('[OpencodeAdapter] Found providers:', data?.providers?.map((p) => p.id))
-      return data ? { providers: data.providers || [], default: data.default || {} } : null
-    } catch (error: unknown) {
-      console.log('[OpencodeAdapter] Could not get providers:', error instanceof Error ? error.message : error)
-      return null
     }
+
+    return null
   }
 
   async checkHealth(): Promise<{ available: boolean; reason?: string }> {

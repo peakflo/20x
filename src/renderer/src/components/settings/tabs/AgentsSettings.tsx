@@ -61,10 +61,12 @@ export function AgentsSettings() {
       return
     }
 
-    // Test OpenCode server connection
+    // Test OpenCode server connection.
+    // The Go server may report healthy before providers finish loading,
+    // so treat a successful response (even with 0 providers) as connected.
     try {
       const result = await agentConfigApi.getProviders(agent.server_url, agent.config.coding_agent)
-      if (result && result.providers) {
+      if (result) {
         let modelCount = 0
         const providers = Array.isArray(result.providers) ? result.providers : []
         for (const p of providers) {
