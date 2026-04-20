@@ -6,6 +6,7 @@ import {
   ArrowRight,
   Loader2,
   Zap,
+  ExternalLink,
 } from 'lucide-react'
 import { useCanvasStore } from '@/stores/canvas-store'
 
@@ -19,6 +20,24 @@ interface BrowserPanelContentProps {
 
 /** CDP port exposed by the Electron app for agent-browser to connect to */
 const CDP_PORT = 19222
+
+/**
+ * Build a real Chrome user-agent.  We replace the entire UA rather than
+ * stripping tokens — a hardcoded real-Chrome string is the safest way to
+ * pass Akamai / Cloudflare / Datadome bot detection.
+ */
+function getChromeUserAgent(): string {
+  const match = navigator.userAgent.match(/Chrome\/([\d.]+)/)
+  const chromeVer = match ? match[1] : '136.0.0.0'
+  const platform = navigator.platform || ''
+  if (platform.startsWith('Win')) {
+    return `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeVer} Safari/537.36`
+  }
+  if (platform.startsWith('Linux')) {
+    return `Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeVer} Safari/537.36`
+  }
+  return `Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeVer} Safari/537.36`
+}
 
 /**
  * Canvas panel with a real Electron <webview> — a fully interactive browser.
@@ -44,6 +63,13 @@ export function BrowserPanelContent({
   const [isLoading, setIsLoading] = useState(false)
   const [canGoBack, setCanGoBack] = useState(false)
   const [canGoForward, setCanGoForward] = useState(false)
+
+  // ── Bot-detection block state ───────────────────────────────
+  // When a site (e.g. Xero via Akamai) blocks the embedded webview, we show
+  // a banner offering to open the URL in the system browser instead.
+  const [blockedUrl, setBlockedUrl] = useState<string | null>(null)
+  const [authInProgress, setAuthInProgress] = useState(false)
+  const [authStatus, setAuthStatus] = useState<string | null>(null)
 
   // ── Check if this browser is connected to a task via an edge ──
   // Uses imperative reads + subscribe to avoid re-rendering on every panel move
@@ -143,6 +169,8 @@ export function BrowserPanelContent({
     const onNavigate = (e: { url: string }) => {
       // Only update the URL bar text — never feed back into <webview src>
       setInputValue(e.url)
+      // Clear blocked state when navigating to a new URL
+      setBlockedUrl(null)
       // Debounce store update to avoid flooding zustand on SPA navigations
       if (pendingUrlUpdate.current) clearTimeout(pendingUrlUpdate.current)
       pendingUrlUpdate.current = setTimeout(() => {
@@ -162,12 +190,45 @@ export function BrowserPanelContent({
       wv.executeJavaScript('document.exitFullscreen?.().catch(()=>{})').catch(() => {})
     }
 
+    // ── Detect bot-detection blocks (Akamai, Cloudflare, etc.) ────
+    // After the page finishes loading, check if the page body contains
+    // known WAF block signatures.  If so, show a banner with the option
+    // to open the URL in the system browser.
+    const onDomReady = () => {
+      wv.executeJavaScript(`
+        (() => {
+          const text = document.body?.innerText || '';
+          const title = document.title || '';
+          // Akamai: "Access Denied" + edgesuite.net reference
+          if (text.includes('Access Denied') && (text.includes('edgesuite.net') || text.includes('Reference #'))) {
+            return 'akamai';
+          }
+          // Cloudflare: "Attention Required!" challenge
+          if (title.includes('Attention Required') || (text.includes('Cloudflare') && text.includes('Ray ID'))) {
+            return 'cloudflare';
+          }
+          // PerimeterX / HUMAN: "Access to this page has been denied"
+          if (text.includes('Access to this page has been denied') && text.includes('Request ID')) {
+            return 'perimeterx';
+          }
+          return null;
+        })()
+      `).then((blockType: string | null) => {
+        if (blockType) {
+          const currentUrl = wv.getURL?.() || ''
+          console.warn(`[BrowserPanel:${panelId}] Detected ${blockType} bot block on ${currentUrl}`)
+          setBlockedUrl(currentUrl)
+        }
+      }).catch(() => {})
+    }
+
     wv.addEventListener('did-start-loading', onStartLoading)
     wv.addEventListener('did-stop-loading', onStopLoading)
     wv.addEventListener('did-navigate', onNavigate)
     wv.addEventListener('did-navigate-in-page', onNavigate as any)
     wv.addEventListener('page-title-updated', onTitleUpdate)
     wv.addEventListener('enter-html-full-screen', onEnterFullScreen)
+    wv.addEventListener('dom-ready', onDomReady)
 
     return () => {
       wv.removeEventListener('did-start-loading', onStartLoading)
@@ -176,6 +237,7 @@ export function BrowserPanelContent({
       wv.removeEventListener('did-navigate-in-page', onNavigate as any)
       wv.removeEventListener('page-title-updated', onTitleUpdate)
       wv.removeEventListener('enter-html-full-screen', onEnterFullScreen)
+      wv.removeEventListener('dom-ready', onDomReady)
       if (pendingUrlUpdate.current) clearTimeout(pendingUrlUpdate.current)
       if (pendingTitleUpdate.current) clearTimeout(pendingTitleUpdate.current)
     }
@@ -194,6 +256,7 @@ export function BrowserPanelContent({
       }
     }
     setInputValue(finalUrl)
+    setBlockedUrl(null)
     // Navigate via loadURL — never set the src attribute reactively
     const wv = webviewRef.current
     if (wv) {
@@ -221,7 +284,40 @@ export function BrowserPanelContent({
     webviewRef.current?.reload()
   }, [])
 
+  const handleOpenInBrowser = useCallback(async () => {
+    if (!blockedUrl) return
+
+    setAuthInProgress(true)
+    setAuthStatus('Launching Chrome…')
+
+    try {
+      const result = await window.electronAPI.browser.openExternalAuth(blockedUrl)
+
+      if (result.success) {
+        setAuthStatus(`Imported ${result.cookieCount} cookies — reloading…`)
+        // Reload the webview with the injected cookies
+        setBlockedUrl(null)
+        const wv = webviewRef.current
+        if (wv) {
+          // Navigate to the final URL (post-login destination) or the original URL
+          wv.loadURL(result.finalUrl || blockedUrl)
+        }
+        setTimeout(() => setAuthStatus(null), 2000)
+      } else {
+        setAuthStatus('No cookies captured — Chrome may have been closed before login')
+        setTimeout(() => setAuthStatus(null), 4000)
+      }
+    } catch (err) {
+      setAuthStatus(`Error: ${err instanceof Error ? err.message : 'Failed to launch Chrome'}`)
+      setTimeout(() => setAuthStatus(null), 5000)
+    } finally {
+      setAuthInProgress(false)
+    }
+  }, [blockedUrl])
+
   // ── Live browser ──────────────────────────────────────────
+  const cleanUA = useRef(getChromeUserAgent())
+
   return (
     <div className="flex flex-col h-full min-h-0">
       <BrowserUrlBar
@@ -237,6 +333,31 @@ export function BrowserPanelContent({
         connectedTaskName={connectedTaskName}
       />
 
+      {/* Bot-detection block banner */}
+      {(blockedUrl || authStatus) && (
+        <div className="flex items-center gap-2 px-3 py-2 bg-amber-500/10 border-b border-amber-500/20 flex-shrink-0">
+          <div className="flex-1 min-w-0">
+            <p className="text-[11px] text-amber-300/90">
+              {authStatus
+                ? authStatus
+                : 'This site blocked the embedded browser. Log in via Chrome — cookies will be imported back automatically.'}
+            </p>
+          </div>
+          {blockedUrl && !authInProgress && (
+            <button
+              onClick={handleOpenInBrowser}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/30 text-amber-300 text-[11px] font-medium whitespace-nowrap transition-colors"
+            >
+              <ExternalLink className="h-3 w-3" />
+              Open in Chrome
+            </button>
+          )}
+          {authInProgress && (
+            <Loader2 className="h-3.5 w-3.5 text-amber-400 animate-spin flex-shrink-0" />
+          )}
+        </div>
+      )}
+
       {/* Webview — real browser */}
       <div className="flex-1 min-h-0">
         <webview
@@ -245,6 +366,7 @@ export function BrowserPanelContent({
           className="w-full h-full"
           /* @ts-expect-error — Electron webview attributes not typed in JSX */
           allowpopups="true"
+          useragent={cleanUA.current}
           style={{ display: 'flex', flex: 1, width: '100%', height: '100%' }}
         />
       </div>

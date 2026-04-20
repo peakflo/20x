@@ -1,7 +1,8 @@
 import { ipcMain, dialog, shell, Notification, app, session, webContents } from 'electron'
 import * as childProcess from 'child_process'
-import { copyFileSync, existsSync, unlinkSync, readdirSync, statSync, readFileSync } from 'fs'
+import { copyFileSync, existsSync, unlinkSync, readdirSync, statSync, readFileSync, rmSync } from 'fs'
 import { join, basename, extname } from 'path'
+import WebSocket from 'ws'
 import type {
   DatabaseManager,
   CreateTaskData,
@@ -1085,29 +1086,60 @@ export function registerIpcHandlers(
 
   // Inject Authorization header for iframe requests to the enterprise API.
   // The interceptor is scoped to the API URL so it only affects API-bound requests.
+  //
+  // IMPORTANT: session.defaultSession.webRequest.onBeforeSendHeaders can only
+  // have ONE handler.  index.ts already registers a global handler that rewrites
+  // Sec-CH-UA Client Hints for anti-bot-detection.  When we register here with
+  // a scoped filter, it REPLACES the global handler.  To avoid breaking the
+  // Client Hints fix, we re-apply the Sec-CH-UA rewriting inside this handler too.
   let iframeAuthEnabled = false
+  let enterpriseApiUrl: string | null = null
 
   ipcMain.handle('enterprise:enableIframeAuth', async () => {
     if (!enterpriseAuth) throw new Error('Enterprise auth not available')
     if (iframeAuthEnabled) return { apiUrl: enterpriseAuth.getApiUrl() }
 
-    const apiUrl = enterpriseAuth.getApiUrl()
-    const filter = { urls: [`${apiUrl}/*`] }
+    enterpriseApiUrl = enterpriseAuth.getApiUrl()
 
-    session.defaultSession.webRequest.onBeforeSendHeaders(filter, async (details, callback) => {
-      if (iframeAuthEnabled && enterpriseAuth) {
-        try {
-          const jwt = await enterpriseAuth.getJwt()
-          details.requestHeaders['Authorization'] = `Bearer ${jwt}`
-        } catch {
-          // If JWT retrieval fails, proceed without auth
+    // Re-register a GLOBAL handler (not scoped) that handles BOTH enterprise
+    // auth AND Client Hints rewriting.  This replaces the handler from index.ts.
+    const chromiumVersion = process.versions.chrome || '136.0.0.0'
+    const chromiumMajor = chromiumVersion.split('.')[0]
+
+    session.defaultSession.webRequest.onBeforeSendHeaders(
+      { urls: ['http://*/*', 'https://*/*'] },
+      async (details, callback) => {
+        const headers = { ...details.requestHeaders }
+
+        // ── Client Hints rewriting (anti-bot-detection) ──
+        for (const key of Object.keys(headers)) {
+          const lower = key.toLowerCase()
+          if (lower === 'sec-ch-ua') {
+            headers[key] = `"Chromium";v="${chromiumMajor}", "Google Chrome";v="${chromiumMajor}", "Not_A Brand";v="24"`
+          } else if (lower === 'sec-ch-ua-full-version-list') {
+            headers[key] = `"Chromium";v="${chromiumVersion}", "Google Chrome";v="${chromiumVersion}", "Not_A Brand";v="24.0.0.0"`
+          }
         }
+        if (!Object.keys(headers).some((k) => k.toLowerCase() === 'sec-ch-ua')) {
+          headers['Sec-CH-UA'] = `"Chromium";v="${chromiumMajor}", "Google Chrome";v="${chromiumMajor}", "Not_A Brand";v="24"`
+        }
+
+        // ── Enterprise auth injection (only for API URL) ──
+        if (iframeAuthEnabled && enterpriseAuth && enterpriseApiUrl && details.url.startsWith(enterpriseApiUrl)) {
+          try {
+            const jwt = await enterpriseAuth.getJwt()
+            headers['Authorization'] = `Bearer ${jwt}`
+          } catch {
+            // If JWT retrieval fails, proceed without auth
+          }
+        }
+
+        callback({ requestHeaders: headers })
       }
-      callback({ requestHeaders: details.requestHeaders })
-    })
+    )
 
     iframeAuthEnabled = true
-    return { apiUrl }
+    return { apiUrl: enterpriseApiUrl }
   })
 
   ipcMain.handle('enterprise:disableIframeAuth', () => {
@@ -1589,6 +1621,219 @@ else:
       }
     } catch {
       return { targetId: null }
+    }
+  })
+
+  // ── External Chrome auth flow ──────────────────────────────────────────
+  // Launches the user's system Chrome with a temporary debugging port,
+  // navigates to the given URL, waits for the user to log in (URL changes
+  // away from the login page), captures all cookies via CDP, injects them
+  // into the Electron session, and returns the final URL so the webview
+  // can reload with valid cookies.
+  ipcMain.handle('browser:openExternalAuth', async (_event, loginUrl: string) => {
+    const EXT_CDP_PORT = 19333 // temp port for external Chrome
+    const TIMEOUT_MS = 300_000 // 5 min timeout
+
+    // ── Find any Chromium-based browser (Chrome, Brave, Arc, Edge, Chromium) ──
+    let chromePath: string | null = null
+    if (process.platform === 'darwin') {
+      const candidates = [
+        '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+        '/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary',
+        '/Applications/Brave Browser.app/Contents/MacOS/Brave Browser',
+        '/Applications/Arc.app/Contents/MacOS/Arc',
+        '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
+        '/Applications/Chromium.app/Contents/MacOS/Chromium',
+        '/Applications/Vivaldi.app/Contents/MacOS/Vivaldi',
+      ]
+      chromePath = candidates.find((p) => existsSync(p)) || null
+    } else if (process.platform === 'win32') {
+      const candidates = [
+        'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+        'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+        `${process.env.LOCALAPPDATA}\\Google\\Chrome\\Application\\chrome.exe`,
+        'C:\\Program Files\\BraveSoftware\\Brave-Browser\\Application\\brave.exe',
+        `${process.env.LOCALAPPDATA}\\BraveSoftware\\Brave-Browser\\Application\\brave.exe`,
+        'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
+        'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
+      ]
+      chromePath = candidates.find((p) => existsSync(p)) || null
+    } else {
+      // Linux
+      try {
+        chromePath = childProcess.execSync('which google-chrome || which google-chrome-stable || which brave-browser || which chromium-browser || which chromium || which microsoft-edge', { encoding: 'utf8' }).trim() || null
+      } catch { chromePath = null }
+    }
+
+    if (!chromePath) {
+      throw new Error('Could not find a Chromium-based browser (Chrome, Brave, Arc, Edge). Please install one and try again.')
+    }
+
+    // ── Launch Chrome with temporary CDP port and a temporary profile ──
+    const tmpProfile = join(app.getPath('temp'), '20x-chrome-auth-' + Date.now())
+    const chromeProc = childProcess.spawn(chromePath, [
+      `--remote-debugging-port=${EXT_CDP_PORT}`,
+      `--user-data-dir=${tmpProfile}`,
+      '--no-first-run',
+      '--no-default-browser-check',
+      `--window-size=1024,768`,
+      loginUrl,
+    ], {
+      detached: false,
+      stdio: 'ignore',
+    })
+
+    // Wait for Chrome's CDP to become available
+    const waitForCdp = async (): Promise<void> => {
+      for (let i = 0; i < 30; i++) {
+        try {
+          const res = await fetch(`http://127.0.0.1:${EXT_CDP_PORT}/json/version`)
+          if (res.ok) return
+        } catch { /* not ready yet */ }
+        await new Promise((r) => setTimeout(r, 500))
+      }
+      throw new Error('Chrome CDP did not start in time')
+    }
+
+    try {
+      await waitForCdp()
+
+      // ── Poll for login completion ──
+      // The login is "done" when the URL navigates away from the login domain
+      // or when Chrome is closed by the user.
+      const loginDomain = new URL(loginUrl).hostname
+      let finalUrl = loginUrl
+
+      const startTime = Date.now()
+      let chromeExited = false
+
+      chromeProc.on('exit', () => { chromeExited = true })
+
+      while (!chromeExited && Date.now() - startTime < TIMEOUT_MS) {
+        await new Promise((r) => setTimeout(r, 1500))
+
+        if (chromeExited) break
+
+        try {
+          const res = await fetch(`http://127.0.0.1:${EXT_CDP_PORT}/json/list`)
+          const targets = (await res.json()) as Array<{ url: string; type: string; webSocketDebuggerUrl?: string }>
+          const page = targets.find((t) => t.type === 'page')
+          if (page) {
+            const currentDomain = new URL(page.url).hostname
+            // Login is complete when user navigated away from the login page
+            if (currentDomain !== loginDomain && !page.url.includes('/login') && !page.url.includes('/identity')) {
+              finalUrl = page.url
+              break
+            }
+          }
+        } catch {
+          // Chrome may have closed
+          if (chromeExited) break
+        }
+      }
+
+      // ── Capture cookies from Chrome via CDP ──
+      let cookies: Array<{ name: string; value: string; domain: string; path: string; secure: boolean; httpOnly: boolean; sameSite?: string; expirationDate?: number }> = []
+
+      if (!chromeExited) {
+        try {
+          const res = await fetch(`http://127.0.0.1:${EXT_CDP_PORT}/json/list`)
+          const targets = (await res.json()) as Array<{ webSocketDebuggerUrl?: string; type: string }>
+          const page = targets.find((t) => t.type === 'page' && t.webSocketDebuggerUrl)
+
+          if (page?.webSocketDebuggerUrl) {
+            // Connect via WebSocket to get cookies
+            const wsUrl = page.webSocketDebuggerUrl
+            const cdpCookies = await new Promise<typeof cookies>((resolve, reject) => {
+              // Use a simple HTTP-based CDP call via fetch to the /json endpoint
+              // Actually, we need to use WebSocket for CDP commands.
+              // Instead, use a simpler approach: send CDP command via the debugging API
+              const ws = new WebSocket(wsUrl)
+              const msgId = 1
+
+              ws.on('open', () => {
+                ws.send(JSON.stringify({ id: msgId, method: 'Network.getAllCookies' }))
+              })
+
+              ws.on('message', (data: Buffer) => {
+                try {
+                  const msg = JSON.parse(data.toString())
+                  if (msg.id === msgId && msg.result?.cookies) {
+                    ws.close()
+                    resolve(msg.result.cookies.map((c: Record<string, unknown>) => ({
+                      name: c.name as string,
+                      value: c.value as string,
+                      domain: c.domain as string,
+                      path: (c.path as string) || '/',
+                      secure: !!c.secure,
+                      httpOnly: !!c.httpOnly,
+                      sameSite: c.sameSite as string | undefined,
+                      expirationDate: c.expires as number | undefined,
+                    })))
+                  }
+                } catch { /* ignore parse errors */ }
+              })
+
+              ws.on('error', reject)
+              setTimeout(() => { ws.close(); reject(new Error('CDP cookie fetch timeout')) }, 10_000)
+            })
+
+            cookies = cdpCookies
+          }
+        } catch (err) {
+          console.warn('[BrowserAuth] Failed to capture cookies from Chrome:', err)
+        }
+      }
+
+      // ── Kill Chrome ──
+      if (!chromeExited) {
+        try { chromeProc.kill() } catch { /* already dead */ }
+      }
+
+      // ── Inject cookies into Electron session ──
+      if (cookies.length > 0) {
+        const ses = session.defaultSession
+        let injected = 0
+        for (const cookie of cookies) {
+          try {
+            const url = `http${cookie.secure ? 's' : ''}://${cookie.domain.replace(/^\./, '')}${cookie.path}`
+            await ses.cookies.set({
+              url,
+              name: cookie.name,
+              value: cookie.value,
+              domain: cookie.domain,
+              path: cookie.path,
+              secure: cookie.secure,
+              httpOnly: cookie.httpOnly,
+              sameSite: cookie.sameSite === 'None' ? 'no_restriction' as const
+                : cookie.sameSite === 'Lax' ? 'lax' as const
+                : cookie.sameSite === 'Strict' ? 'strict' as const
+                : 'lax' as const,
+              expirationDate: cookie.expirationDate && cookie.expirationDate > 0
+                ? cookie.expirationDate
+                : undefined,
+            })
+            injected++
+          } catch {
+            // Some cookies may fail (e.g., __Host- prefixed cookies with domain set)
+          }
+        }
+        console.log(`[BrowserAuth] Injected ${injected}/${cookies.length} cookies into Electron session`)
+      }
+
+      // Cleanup temp profile (best effort, async)
+      setTimeout(() => {
+        try {
+          rmSync(tmpProfile, { recursive: true, force: true })
+        } catch { /* ignore */ }
+      }, 5000)
+
+      return { success: cookies.length > 0, finalUrl, cookieCount: cookies.length }
+
+    } catch (err) {
+      // Kill Chrome if still running
+      try { chromeProc.kill() } catch { /* */ }
+      throw err
     }
   })
 

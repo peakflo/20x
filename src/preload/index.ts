@@ -444,6 +444,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getTargetId: (webContentsId: number): Promise<{ targetId: string | null }> =>
       ipcRenderer.invoke('browser:getTargetId', webContentsId),
     getCdpTargets: (): Promise<Array<{ id: string; url: string; title: string }>> =>
-      ipcRenderer.invoke('browser:getCdpTargets')
+      ipcRenderer.invoke('browser:getCdpTargets'),
+    openExternalAuth: (loginUrl: string): Promise<{ success: boolean; finalUrl: string; cookieCount: number }> =>
+      ipcRenderer.invoke('browser:openExternalAuth', loginUrl)
   }
 })

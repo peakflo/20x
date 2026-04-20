@@ -584,6 +584,36 @@ initCrashLogger()
 const CDP_PORT = 19222
 app.commandLine.appendSwitch('remote-debugging-port', String(CDP_PORT))
 
+// ── Anti-bot-detection for embedded browser panels ─────────────────────────
+// Some sites (Xero, banking portals) use Akamai's WAF which fingerprints
+// the TLS ClientHello and HTTP/2 SETTINGS frames — baked into the compiled
+// Electron binary and impossible to change at runtime.  We apply best-effort
+// mitigations here; sites that still block are handled gracefully in the
+// browser panel UI with an "Open in Chrome" fallback.
+
+// 1. Replace user-agent with a real Chrome UA string.
+const chromiumVersion = process.versions.chrome || '136.0.0.0'
+const chromiumMajor = chromiumVersion.split('.')[0]
+const cleanUA = process.platform === 'darwin'
+  ? `Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromiumVersion} Safari/537.36`
+  : process.platform === 'win32'
+    ? `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromiumVersion} Safari/537.36`
+    : `Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromiumVersion} Safari/537.36`
+app.userAgentFallback = cleanUA
+
+// 2. Disable AutomationControlled so navigator.webdriver = false when CDP is active.
+app.commandLine.appendSwitch('disable-blink-features', 'AutomationControlled')
+
+// 3. Best-effort TLS/HTTP2 mitigations — these help with less aggressive WAFs
+//    but cannot fully defeat Akamai's binary-level TLS fingerprinting.
+app.commandLine.appendSwitch('enable-features', [
+  'PermuteTLSExtensions',          // randomise TLS extension order
+  'PostQuantumKyber',              // Chrome enables this by default
+].join(','))
+app.commandLine.appendSwitch('disable-features', [
+  'AcceptCHFrame',                 // Electron-only ALPS extension not in Chrome
+].join(','))
+
 // Ignore EPIPE errors from broken stdout/stderr pipes (e.g. when piped through head/tail)
 process.stdout?.on?.('error', (err: NodeJS.ErrnoException) => { if (err.code !== 'EPIPE') throw err })
 process.stderr?.on?.('error', (err: NodeJS.ErrnoException) => { if (err.code !== 'EPIPE') throw err })
@@ -793,6 +823,77 @@ app.whenReady().then(async () => {
       callback({ cancel: false, responseHeaders: headers })
     }
   )
+
+  // ── Patch Sec-CH-UA on all outgoing requests ──────────────────────────────
+  // Electron's Sec-CH-UA omits the "Google Chrome" brand, which Akamai uses
+  // as a signal.  We intercept via will-attach-webview to configure each
+  // webview's session without conflicting with enterprise auth handlers.
+  //
+  // We modify the defaultSession headers directly.  The onBeforeSendHeaders
+  // handler merges with enterprise auth because enterprise auth only registers
+  // its handler AFTER enableIframeAuth is called (and with a narrow URL filter).
+  // Our handler runs first; if enterprise auth later overrides it with its
+  // scoped filter, that's fine — the scoped handler only affects API URLs.
+  session.defaultSession.webRequest.onBeforeSendHeaders(
+    { urls: ['http://*/*', 'https://*/*'] },
+    (details, callback) => {
+      const headers = { ...details.requestHeaders }
+
+      // Rewrite Sec-CH-UA to include "Google Chrome" brand like real Chrome
+      for (const key of Object.keys(headers)) {
+        const lower = key.toLowerCase()
+        if (lower === 'sec-ch-ua') {
+          headers[key] = `"Chromium";v="${chromiumMajor}", "Google Chrome";v="${chromiumMajor}", "Not_A Brand";v="24"`
+        } else if (lower === 'sec-ch-ua-full-version-list') {
+          headers[key] = `"Chromium";v="${chromiumVersion}", "Google Chrome";v="${chromiumVersion}", "Not_A Brand";v="24.0.0.0"`
+        }
+      }
+
+      // If Sec-CH-UA wasn't present at all, add it
+      if (!Object.keys(headers).some((k) => k.toLowerCase() === 'sec-ch-ua')) {
+        headers['Sec-CH-UA'] = `"Chromium";v="${chromiumMajor}", "Google Chrome";v="${chromiumMajor}", "Not_A Brand";v="24"`
+      }
+
+      callback({ requestHeaders: headers })
+    }
+  )
+
+  // Inject anti-bot JS patches into webview pages (handles client-side
+  // fingerprinting that Akamai runs after the page loads).
+  app.on('web-contents-created', (_event, contents) => {
+    if (contents.getType() === 'webview') {
+      contents.on('dom-ready', () => {
+        contents.executeJavaScript(`
+          try {
+            Object.defineProperty(navigator, 'webdriver', {
+              get: () => false, configurable: true,
+            });
+          } catch(e) {}
+          try {
+            if (!window.chrome) { window.chrome = {}; }
+            if (!window.chrome.runtime) {
+              window.chrome.runtime = { id: undefined };
+            }
+          } catch(e) {}
+          try {
+            Object.defineProperty(navigator, 'plugins', {
+              get: () => [
+                { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer' },
+                { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai' },
+                { name: 'Native Client', filename: 'internal-nacl-plugin' },
+              ],
+              configurable: true,
+            });
+          } catch(e) {}
+          try {
+            Object.defineProperty(navigator, 'languages', {
+              get: () => ['en-US', 'en'], configurable: true,
+            });
+          } catch(e) {}
+        `).catch(() => {})
+      })
+    }
+  })
 
   createWindow()
 
