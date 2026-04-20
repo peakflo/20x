@@ -26,6 +26,11 @@ let OpenCodeV2Client: V2ClientModule | null = null
 const noTimeoutAgent = new UndiciAgent({ headersTimeout: 0, bodyTimeout: 0 })
 const noTimeoutFetch = (req: unknown) => (globalThis as unknown as Record<string, (...args: unknown[]) => unknown>).fetch(req, { dispatcher: noTimeoutAgent })
 
+// Fetch with reasonable timeout for quick operations (health checks, config queries, provider listing)
+const QUICK_OP_TIMEOUT_MS = 15_000
+const quickTimeoutAgent = new UndiciAgent({ headersTimeout: QUICK_OP_TIMEOUT_MS, bodyTimeout: QUICK_OP_TIMEOUT_MS })
+const quickTimeoutFetch = (req: unknown) => (globalThis as unknown as Record<string, (...args: unknown[]) => unknown>).fetch(req, { dispatcher: quickTimeoutAgent })
+
 const DEFAULT_SERVER_URL = 'http://localhost:4096'
 
 /**
@@ -40,6 +45,8 @@ export class OpencodeAdapter implements CodingAgentAdapter {
   private serverStarting: Promise<void> | null = null
   /** The shared V2 SDK client created alongside the server via createOpencode */
   private sharedClient: V2OpencodeClient | null = null
+  /** A separate V2 client with a reasonable timeout for quick operations (config, providers, health) */
+  private quickClient: V2OpencodeClient | null = null
   private clients: Map<string, OpencodeClient> = new Map() // sessionId -> ocClient
   private v2Client: V2OpencodeClient | null = null
   private promptAborts: Map<string, AbortController> = new Map()
@@ -208,10 +215,18 @@ export class OpencodeAdapter implements CodingAgentAdapter {
 
   /**
    * Returns the shared SDK client, ensuring the server is running first.
+   * Pass `quick: true` to get a client with a bounded timeout (for config queries, health checks).
    */
-  private async getClient(serverUrl?: string): Promise<V2OpencodeClient> {
+  private async getClient(serverUrl?: string, opts?: { quick?: boolean }): Promise<V2OpencodeClient> {
     const baseUrl = serverUrl || this.serverUrl || DEFAULT_SERVER_URL
     await this.ensureServerRunning(baseUrl)
+
+    if (opts?.quick) {
+      if (!this.quickClient) {
+        throw new Error('OpenCode quick client not available after server startup')
+      }
+      return this.quickClient
+    }
 
     if (!this.sharedClient) {
       throw new Error('OpenCode client not available after server startup')
@@ -227,7 +242,7 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     default: Record<string, string>
   } | null> {
     try {
-      const client = await this.getClient(serverUrl)
+      const client = await this.getClient(serverUrl, { quick: true })
 
       const result = await client.config.providers({
         ...(directory && { directory })
@@ -253,7 +268,7 @@ export class OpencodeAdapter implements CodingAgentAdapter {
 
   async checkHealth(): Promise<{ available: boolean; reason?: string }> {
     try {
-      const client = await this.getClient()
+      const client = await this.getClient(undefined, { quick: true })
       const result = await client.global.health()
 
       if (result.error) {
@@ -342,6 +357,11 @@ export class OpencodeAdapter implements CodingAgentAdapter {
             baseUrl: accessibleUrl,
             fetch: noTimeoutFetch as unknown as typeof fetch
           })
+          // Create a separate client with bounded timeout for quick operations
+          this.quickClient = OpenCodeV2Client!.createOpencodeClient({
+            baseUrl: accessibleUrl,
+            fetch: quickTimeoutFetch as unknown as typeof fetch
+          })
 
           // Push merged config (with auth.json keys injected) to the running server
           // so custom providers like routerAI are properly authenticated.
@@ -350,10 +370,11 @@ export class OpencodeAdapter implements CodingAgentAdapter {
             if (mergedConfig.provider) {
               const castConfig = mergedConfig as import('@opencode-ai/sdk/v2/client').Config
               // Try global config first, then per-directory config as fallback
+              // Use quickClient with bounded timeout to avoid hanging indefinitely
               try {
-                await this.sharedClient.global.config.update({ config: castConfig })
+                await this.quickClient!.global.config.update({ config: castConfig })
               } catch {
-                await this.sharedClient.config.update({ config: castConfig })
+                await this.quickClient!.config.update({ config: castConfig })
               }
               console.log('[OpencodeAdapter] Pushed merged provider config to existing server')
             }
@@ -394,6 +415,11 @@ export class OpencodeAdapter implements CodingAgentAdapter {
         this.serverInstance = server
         this.serverUrl = server.url
         this.sharedClient = client
+        // Create a separate client with bounded timeout for quick operations
+        this.quickClient = OpenCodeV2Client!.createOpencodeClient({
+          baseUrl: server.url,
+          fetch: quickTimeoutFetch as unknown as typeof fetch
+        })
         console.log(`[OpencodeAdapter] OpenCode instance created at ${server.url}`)
       } finally {
         this.serverStarting = null
@@ -1100,6 +1126,7 @@ export class OpencodeAdapter implements CodingAgentAdapter {
       this.serverInstance = null
       this.serverUrl = null
       this.sharedClient = null
+      this.quickClient = null
       this.v2Client = null
     }
   }
