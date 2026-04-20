@@ -241,57 +241,34 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     providers: { id: string; name: string; models: unknown; [key: string]: unknown }[]
     default: Record<string, string>
   } | null> {
-    const client = await this.getClient(serverUrl, { quick: true })
+    try {
+      const client = await this.getClient(serverUrl, { quick: true })
 
-    // The OpenCode Go server may still be loading providers after reporting
-    // healthy. Retry a few times with a short delay to avoid racing against
-    // provider initialization.
-    const MAX_ATTEMPTS = 4
-    const RETRY_DELAY_MS = 2000
+      // The OpenCode server lazily initializes InstanceState on the first
+      // request that touches providers.  This initialization involves network
+      // calls (models.dev catalog, plugin auth loaders, discovery) and the
+      // server BLOCKS the HTTP response until it completes.  The quickClient
+      // has a bounded timeout so we won't hang indefinitely.
+      const result = await client.config.providers({
+        ...(directory && { directory })
+      })
 
-    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-      try {
-        const result = await client.config.providers({
-          ...(directory && { directory })
-        })
-
-        if (result.error) {
-          console.log(`[OpencodeAdapter] config.providers attempt ${attempt}/${MAX_ATTEMPTS}: error response`)
-          if (attempt < MAX_ATTEMPTS) {
-            await new Promise(resolve => setTimeout(resolve, RETRY_DELAY_MS))
-            continue
-          }
-          return null
-        }
-
-        const data = result.data as {
-          providers?: { id: string; name: string; models: unknown; [key: string]: unknown }[]
-          default?: Record<string, string>
-        } | undefined
-
-        const providers = data?.providers || []
-
-        // If the server returned an empty provider list, it may still be loading.
-        // Retry unless we've exhausted attempts.
-        if (providers.length === 0 && attempt < MAX_ATTEMPTS) {
-          console.log(`[OpencodeAdapter] config.providers attempt ${attempt}/${MAX_ATTEMPTS}: empty providers, retrying in ${RETRY_DELAY_MS}ms`)
-          await new Promise(resolve => setTimeout(resolve, RETRY_DELAY_MS))
-          continue
-        }
-
-        console.log('[OpencodeAdapter] Found providers:', providers.map((p) => p.id))
-        return data ? { providers, default: data.default || {} } : null
-      } catch (error: unknown) {
-        console.log(`[OpencodeAdapter] config.providers attempt ${attempt}/${MAX_ATTEMPTS} failed:`, error instanceof Error ? error.message : error)
-        if (attempt < MAX_ATTEMPTS) {
-          await new Promise(resolve => setTimeout(resolve, RETRY_DELAY_MS))
-          continue
-        }
+      if (result.error) {
+        console.log('[OpencodeAdapter] No providers configured on server')
         return null
       }
-    }
 
-    return null
+      const data = result.data as {
+        providers?: { id: string; name: string; models: unknown; [key: string]: unknown }[]
+        default?: Record<string, string>
+      } | undefined
+
+      console.log('[OpencodeAdapter] Found providers:', data?.providers?.map((p) => p.id))
+      return data ? { providers: data.providers || [], default: data.default || {} } : null
+    } catch (error: unknown) {
+      console.log('[OpencodeAdapter] Could not get providers:', error instanceof Error ? error.message : error)
+      return null
+    }
   }
 
   async checkHealth(): Promise<{ available: boolean; reason?: string }> {
@@ -393,21 +370,25 @@ export class OpencodeAdapter implements CodingAgentAdapter {
 
           // Push merged config (with auth.json keys injected) to the running server
           // so custom providers like routerAI are properly authenticated.
+          // Fire-and-forget: config.update triggers InstanceState lazy init on
+          // the server which involves network calls (models.dev, plugin auth
+          // loaders) and can block for a long time.  Don't await — the server
+          // will pick up the config before the next prompt.
           try {
             const mergedConfig = buildMergedOpencodeConfig()
             if (mergedConfig.provider) {
               const castConfig = mergedConfig as import('@opencode-ai/sdk/v2/client').Config
+              const qc = this.quickClient!
               // Try global config first, then per-directory config as fallback
-              // Use quickClient with bounded timeout to avoid hanging indefinitely
-              try {
-                await this.quickClient!.global.config.update({ config: castConfig })
-              } catch {
-                await this.quickClient!.config.update({ config: castConfig })
-              }
-              console.log('[OpencodeAdapter] Pushed merged provider config to existing server')
+              qc.global.config.update({ config: castConfig }).catch(() =>
+                qc.config.update({ config: castConfig }).catch((err: unknown) =>
+                  console.warn('[OpencodeAdapter] Failed to push config to existing server:', err)
+                )
+              )
+              console.log('[OpencodeAdapter] Queued merged provider config push to existing server')
             }
           } catch (err) {
-            console.warn('[OpencodeAdapter] Failed to push config to existing server:', err)
+            console.warn('[OpencodeAdapter] Failed to build merged config:', err)
           }
 
           return

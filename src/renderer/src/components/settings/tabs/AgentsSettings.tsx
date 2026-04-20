@@ -62,26 +62,24 @@ export function AgentsSettings() {
     }
 
     // Test OpenCode server connection.
-    // The Go server may report healthy before providers finish loading,
-    // so treat a successful response (even with 0 providers) as connected.
+    // The server lazily initializes providers on first request (may block or
+    // timeout). If getProviders returns null (e.g. server still loading after
+    // timeout), treat as connected — the health check already passed in
+    // ensureServerRunning. Provider counts will be 0 until server finishes init.
     try {
       const result = await agentConfigApi.getProviders(agent.server_url, agent.config.coding_agent)
-      if (result) {
-        let modelCount = 0
-        const providers = Array.isArray(result.providers) ? result.providers : []
-        for (const p of providers) {
-          if (Array.isArray(p.models)) modelCount += p.models.length
-          else if (p.models && typeof p.models === 'object') modelCount += Object.keys(p.models).length
-        }
-        setConnections((prev) => new Map(prev).set(agent.id, {
-          status: 'connected',
-          providerCount: providers.length,
-          modelCount,
-          testedAt: new Date()
-        }))
-      } else {
-        setConnections((prev) => new Map(prev).set(agent.id, { status: 'error', error: 'No response from server' }))
+      let modelCount = 0
+      const providers = result && Array.isArray(result.providers) ? result.providers : []
+      for (const p of providers) {
+        if (Array.isArray(p.models)) modelCount += p.models.length
+        else if (p.models && typeof p.models === 'object') modelCount += Object.keys(p.models).length
       }
+      setConnections((prev) => new Map(prev).set(agent.id, {
+        status: 'connected',
+        providerCount: providers.length,
+        modelCount,
+        testedAt: new Date()
+      }))
     } catch (err: unknown) {
       setConnections((prev) => new Map(prev).set(agent.id, { status: 'error', error: err instanceof Error ? err.message : 'Connection failed' }))
     }
