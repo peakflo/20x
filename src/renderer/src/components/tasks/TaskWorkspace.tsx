@@ -489,9 +489,14 @@ export function TaskWorkspace({
     // Build feedback prompt
     const commentPart = comment ? ` Comment: "${comment}".` : ''
     const today = new Date().toISOString().split('T')[0]
+    const feedbackAgent = agents.find((a) => a.id === task.agent_id)
+    const codingAgent = feedbackAgent?.config?.coding_agent
+    const skillsDir = (codingAgent === 'claude-code' || codingAgent === 'claude_code')
+      ? '.claude/skills'
+      : '.agents/skills'
     const prompt = `User rated this session ${rating}/5.${commentPart}
 
-Review the session and update skills in .agents/skills/:
+Review the session and update skills in ${skillsDir}/:
 
 **For skills you used:**
 Update the YAML frontmatter:
@@ -548,7 +553,7 @@ Update existing skills that were helpful or create new ones for patterns worth r
       console.error('Failed to send feedback:', error)
       await taskApi.update(task.id, { status: TaskStatus.ReadyForReview })
     }
-  }, [ensureChatSession, sendMessage, session.sessionId, task?.id])
+  }, [agents, ensureChatSession, sendMessage, session.sessionId, task?.agent_id, task?.id])
 
   const handleFeedbackSkip = useCallback(async () => {
     if (!task?.id) return
