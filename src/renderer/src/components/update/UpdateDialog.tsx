@@ -72,7 +72,11 @@ export function UpdateDialog({ open, onClose }: UpdateDialogProps) {
   }, [open])
 
   const handleDownload = async () => {
-    await updaterApi.download()
+    setState((s) => ({ ...s, status: 'downloading', percent: 0, error: null }))
+    const result = await updaterApi.download()
+    if (result && !result.success) {
+      setState((s) => ({ ...s, status: 'error', error: result.error ?? 'Update download failed' }))
+    }
   }
 
   const handleInstall = () => {

@@ -1,4 +1,4 @@
-import { autoUpdater, type UpdateInfo } from 'electron-updater'
+import { autoUpdater, type UpdateCheckResult, type UpdateInfo } from 'electron-updater'
 import { app, BrowserWindow, ipcMain } from 'electron'
 
 let mainWin: BrowserWindow | null = null
@@ -9,6 +9,9 @@ let pendingVersion: string | null = null
 
 /** Whether an update has been downloaded and is ready to install */
 let updateDownloaded = false
+
+/** Whether a user-initiated update download is currently running */
+let updateDownloading = false
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000
 
@@ -32,10 +35,23 @@ export function registerUpdaterIpc(): void {
   ipcMain.handle('updater:download', async () => {
     if (!updaterActive) return { success: false, error: 'Updater not available in dev mode' }
     try {
+      if (updateDownloaded) return { success: true }
+
+      if (!pendingVersion) {
+        const result = await autoUpdater.checkForUpdates()
+        if (!isUpdateAvailable(result)) {
+          return { success: false, error: 'No update is currently available' }
+        }
+      }
+
+      updateDownloading = true
+      send('updater:status', { status: 'downloading', version: pendingVersion, percent: 0 })
       await autoUpdater.downloadUpdate()
       return { success: true }
     } catch (err) {
       return { success: false, error: (err as Error).message }
+    } finally {
+      updateDownloading = false
     }
   })
 
@@ -69,6 +85,7 @@ export function initAutoUpdater(win: BrowserWindow): void {
 
   autoUpdater.on('update-available', (info: UpdateInfo) => {
     pendingVersion = info.version
+    updateDownloaded = false
     send('updater:status', {
       status: 'available',
       version: info.version,
@@ -83,6 +100,7 @@ export function initAutoUpdater(win: BrowserWindow): void {
   })
 
   autoUpdater.on('update-not-available', () => {
+    if (pendingVersion || updateDownloaded || updateDownloading) return
     send('updater:status', { status: 'up-to-date', currentVersion: app.getVersion() })
   })
 
@@ -95,6 +113,7 @@ export function initAutoUpdater(win: BrowserWindow): void {
 
   autoUpdater.on('update-downloaded', (info: UpdateInfo) => {
     updateDownloaded = true
+    updateDownloading = false
     send('updater:status', {
       status: 'downloaded',
       version: info.version
@@ -156,4 +175,8 @@ export function getPendingVersion(): string | null {
 
 function send(channel: string, data: unknown): void {
   mainWin?.webContents?.send(channel, data)
+}
+
+function isUpdateAvailable(result: UpdateCheckResult | null): boolean {
+  return result?.isUpdateAvailable === true
 }

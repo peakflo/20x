@@ -125,6 +125,62 @@ describe('auto-updater', () => {
         currentVersion: '0.0.31'
       }))
     })
+
+    it('should not overwrite a pending update with up-to-date status', async () => {
+      const { initAutoUpdater } = await import('./auto-updater')
+      const sendMock = vi.fn()
+      const mockWindow = { isDestroyed: vi.fn(() => false), webContents: { send: sendMock } } as any
+
+      initAutoUpdater(mockWindow)
+
+      const updateAvailableHandler = mockAutoUpdater.on.mock.calls.find(
+        (c: any[]) => c[0] === 'update-available'
+      )?.[1]
+      const updateNotAvailableHandler = mockAutoUpdater.on.mock.calls.find(
+        (c: any[]) => c[0] === 'update-not-available'
+      )?.[1]
+
+      updateAvailableHandler({ version: '1.0.0' })
+      updateNotAvailableHandler({ version: '0.0.31' })
+
+      expect(sendMock).toHaveBeenCalledWith('updater:status', expect.objectContaining({
+        status: 'available',
+        version: '1.0.0'
+      }))
+      expect(sendMock).not.toHaveBeenCalledWith('updater:status', expect.objectContaining({
+        status: 'up-to-date'
+      }))
+    })
+
+    it('should send downloading status for user-initiated download when an update is pending', async () => {
+      const { ipcMain } = await import('electron')
+      const { initAutoUpdater, registerUpdaterIpc } = await import('./auto-updater')
+      const sendMock = vi.fn()
+      const mockWindow = { isDestroyed: vi.fn(() => false), webContents: { send: sendMock } } as any
+
+      initAutoUpdater(mockWindow)
+      registerUpdaterIpc()
+
+      const updateAvailableHandler = mockAutoUpdater.on.mock.calls.find(
+        (c: any[]) => c[0] === 'update-available'
+      )?.[1]
+      updateAvailableHandler({ version: '1.0.0' })
+
+      mockAutoUpdater.downloadUpdate.mockResolvedValue(['/tmp/update.exe'])
+      const downloadHandler = [...(ipcMain.handle as any).mock.calls].reverse().find(
+        (c: any[]) => c[0] === 'updater:download'
+      )?.[1]
+
+      const result = await downloadHandler()
+
+      expect(result).toEqual({ success: true })
+      expect(mockAutoUpdater.downloadUpdate).toHaveBeenCalled()
+      expect(sendMock).toHaveBeenCalledWith('updater:status', expect.objectContaining({
+        status: 'downloading',
+        version: '1.0.0',
+        percent: 0
+      }))
+    })
   })
 
   describe('isUpdateDownloaded', () => {

@@ -409,6 +409,9 @@ function spawnInstall(cmd, args, agentName, onProgress) {
       if (code === 0) {
         onProgress({ stage: 'complete', output: 'Installation complete.\n', percent: 100 })
         resolve({ success: true, error: null, newStatus })
+      } else if (newStatus[agentName]?.installed) {
+        onProgress({ stage: 'complete', output: `${agentName} is already installed.\n`, percent: 100 })
+        resolve({ success: true, error: null, newStatus })
       } else {
         onProgress({ stage: 'error', output: `Process exited with code ${code}\n`, percent: 100 })
         resolve({
