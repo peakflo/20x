@@ -132,6 +132,15 @@ export interface WorktreeProgressEvent {
   error?: string
 }
 
+export interface WorkspaceCleanupProgressEvent {
+  phase: 'starting' | 'scanning' | 'cleaning' | 'done'
+  current: number
+  total: number
+  message?: string
+  cleaned?: number
+  errors?: string[]
+}
+
 export interface ToolStatus {
   installed: boolean
   version: string | null
@@ -396,6 +405,7 @@ interface ElectronAPI {
   onHeartbeatAlert: (callback: (event: HeartbeatAlertEvent) => void) => () => void
   onHeartbeatDisabled: (callback: (event: { taskId: string; reason: string }) => void) => () => void
   onWorktreeProgress: (callback: (event: WorktreeProgressEvent) => void) => () => void
+  onWorkspaceCleanupProgress: (callback: (event: WorkspaceCleanupProgressEvent) => void) => () => void
   onGithubDeviceCode: (callback: (code: string) => void) => () => void
   browser: {
     getCdpPort: () => Promise<{ port: number }>

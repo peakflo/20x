@@ -255,6 +255,44 @@ describe('WorkspaceCleanupScheduler', () => {
     })
   })
 
+  describe('concurrent run guard', () => {
+    it('rejects concurrent runNow calls', async () => {
+      const oldDate = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
+      const task = makeTask({
+        id: 'task-slow',
+        status: TaskStatus.Completed,
+        updated_at: oldDate,
+        repos: ['org/repo']
+      })
+      ;(db.getTasks as ReturnType<typeof vi.fn>).mockReturnValue([task])
+      ;(db.getSetting as ReturnType<typeof vi.fn>).mockImplementation((key: string) => {
+        if (key === 'github_org') return 'test-org'
+        if (key === 'workspace_autocleanup_days') return '7'
+        return undefined
+      })
+      mockedExistsSync.mockReturnValue(true)
+
+      // Make cleanup take time by returning a deferred promise
+      let resolveCleanup!: () => void
+      ;(worktree.cleanupTaskWorkspace as ReturnType<typeof vi.fn>).mockReturnValue(
+        new Promise<void>((resolve) => { resolveCleanup = resolve })
+      )
+
+      // Start first cleanup (will hang on the slow cleanupTaskWorkspace)
+      const first = scheduler.runNow()
+
+      // Second call should be rejected immediately because first is still running
+      const second = await scheduler.runNow()
+      expect(second.cleaned).toBe(0)
+      expect(second.errors).toEqual(['Cleanup is already in progress'])
+
+      // Resolve the first one to avoid hanging
+      resolveCleanup()
+      const firstResult = await first
+      expect(firstResult.cleaned).toBe(1)
+    })
+  })
+
   describe('getRetentionDays (via runNow behavior)', () => {
     it('uses default 7 days when invalid setting', async () => {
       const sixDaysAgo = new Date(Date.now() - 6 * 24 * 60 * 60 * 1000).toISOString()

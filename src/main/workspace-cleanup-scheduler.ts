@@ -61,9 +61,27 @@ export class WorkspaceCleanupScheduler {
 
   /**
    * Manually trigger a cleanup run. Returns the number of workspaces cleaned.
+   * Rejects if a cleanup is already in progress (prevents concurrent runs).
    */
   async runNow(): Promise<{ cleaned: number; errors: string[] }> {
-    return this.doCleanup()
+    if (this.isRunning) {
+      return { cleaned: 0, errors: ['Cleanup is already in progress'] }
+    }
+    this.isRunning = true
+    this.sendToRenderer('workspace:cleanup-progress', { phase: 'starting', current: 0, total: 0 })
+    try {
+      const result = await this.doCleanup(true)
+      this.sendToRenderer('workspace:cleanup-progress', {
+        phase: 'done',
+        current: result.cleaned,
+        total: result.cleaned,
+        cleaned: result.cleaned,
+        errors: result.errors
+      })
+      return result
+    } finally {
+      this.isRunning = false
+    }
   }
 
   // ── Core Logic ──────────────────────────────────────────────
@@ -86,7 +104,7 @@ export class WorkspaceCleanupScheduler {
       }
 
       this.isRunning = true
-      const result = await this.doCleanup()
+      const result = await this.doCleanup(false)
 
       // Record last run time
       this.dbManager.setSetting('workspace_autocleanup_last_run', new Date().toISOString())
@@ -105,7 +123,7 @@ export class WorkspaceCleanupScheduler {
     }
   }
 
-  private async doCleanup(): Promise<{ cleaned: number; errors: string[] }> {
+  private async doCleanup(reportProgress: boolean): Promise<{ cleaned: number; errors: string[] }> {
     const retentionDays = this.getRetentionDays()
     const cutoffDate = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000)
     const org = this.dbManager.getSetting('github_org') || ''
@@ -121,9 +139,55 @@ export class WorkspaceCleanupScheduler {
         new Date(t.updated_at) < cutoffDate
     )
 
-    for (const task of completedTasks) {
+    // Count eligible workspaces (ones that actually exist on disk)
+    const eligibleTasks = completedTasks.filter((t) =>
+      existsSync(join(WORKSPACES_DIR, t.id))
+    )
+
+    // Count orphaned directories
+    let orphanDirs: string[] = []
+    try {
+      if (existsSync(WORKSPACES_DIR)) {
+        const taskIds = new Set(allTasks.map((t) => t.id))
+        const dirs = readdirSync(WORKSPACES_DIR, { withFileTypes: true })
+        orphanDirs = dirs
+          .filter((d) => d.isDirectory() && !taskIds.has(d.name))
+          .map((d) => d.name)
+          .filter((name) => {
+            try {
+              return statSync(join(WORKSPACES_DIR, name)).mtime < cutoffDate
+            } catch {
+              return false
+            }
+          })
+      }
+    } catch {
+      // ignore scan errors for counting
+    }
+
+    const total = eligibleTasks.length + orphanDirs.length
+    let processed = 0
+
+    if (reportProgress) {
+      this.sendToRenderer('workspace:cleanup-progress', {
+        phase: 'scanning',
+        current: 0,
+        total,
+        message: `Found ${total} workspace${total !== 1 ? 's' : ''} to clean`
+      })
+    }
+
+    for (const task of eligibleTasks) {
       const taskDir = join(WORKSPACES_DIR, task.id)
-      if (!existsSync(taskDir)) continue
+
+      if (reportProgress) {
+        this.sendToRenderer('workspace:cleanup-progress', {
+          phase: 'cleaning',
+          current: processed,
+          total,
+          message: `Cleaning "${task.title}"...`
+        })
+      }
 
       try {
         if (task.repos.length > 0 && org) {
@@ -144,36 +208,32 @@ export class WorkspaceCleanupScheduler {
         console.error(`[WorkspaceCleanup] ${message}`)
         errors.push(message)
       }
+      processed++
     }
 
     // Phase 2: Clean orphaned workspace directories (no matching task in DB)
-    try {
-      if (existsSync(WORKSPACES_DIR)) {
-        const taskIds = new Set(allTasks.map((t) => t.id))
-        const dirs = readdirSync(WORKSPACES_DIR, { withFileTypes: true })
+    for (const name of orphanDirs) {
+      const dirPath = join(WORKSPACES_DIR, name)
 
-        for (const dir of dirs) {
-          if (!dir.isDirectory()) continue
-          if (taskIds.has(dir.name)) continue
-
-          // Orphan detected — check if it's old enough
-          const dirPath = join(WORKSPACES_DIR, dir.name)
-          try {
-            const stat = statSync(dirPath)
-            if (stat.mtime < cutoffDate) {
-              rmSync(dirPath, { recursive: true, force: true })
-              cleaned++
-              console.log(`[WorkspaceCleanup] Cleaned orphaned workspace directory: ${dir.name}`)
-            }
-          } catch (err) {
-            const message = `Failed to clean orphaned directory ${dir.name}: ${err instanceof Error ? err.message : String(err)}`
-            console.error(`[WorkspaceCleanup] ${message}`)
-            errors.push(message)
-          }
-        }
+      if (reportProgress) {
+        this.sendToRenderer('workspace:cleanup-progress', {
+          phase: 'cleaning',
+          current: processed,
+          total,
+          message: `Cleaning orphaned workspace ${name.substring(0, 12)}...`
+        })
       }
-    } catch (err) {
-      console.error('[WorkspaceCleanup] Error scanning workspace directory:', err)
+
+      try {
+        rmSync(dirPath, { recursive: true, force: true })
+        cleaned++
+        console.log(`[WorkspaceCleanup] Cleaned orphaned workspace directory: ${name}`)
+      } catch (err) {
+        const message = `Failed to clean orphaned directory ${name}: ${err instanceof Error ? err.message : String(err)}`
+        console.error(`[WorkspaceCleanup] ${message}`)
+        errors.push(message)
+      }
+      processed++
     }
 
     return { cleaned, errors }

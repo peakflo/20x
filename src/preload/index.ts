@@ -305,6 +305,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('worktree:progress', handler)
     return () => ipcRenderer.removeListener('worktree:progress', handler)
   },
+  onWorkspaceCleanupProgress: (callback: (event: { phase: string; current: number; total: number; message?: string; cleaned?: number; errors?: string[] }) => void): (() => void) => {
+    const handler = (_: unknown, data: { phase: string; current: number; total: number; message?: string; cleaned?: number; errors?: string[] }): void => callback(data)
+    ipcRenderer.on('workspace:cleanup-progress', handler)
+    return () => ipcRenderer.removeListener('workspace:cleanup-progress', handler)
+  },
   onGithubDeviceCode: (callback: (code: string) => void): (() => void) => {
     const handler = (_: unknown, code: string): void => callback(code)
     ipcRenderer.on('github:deviceCode', handler)
