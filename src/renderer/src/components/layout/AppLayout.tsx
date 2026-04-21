@@ -26,6 +26,9 @@ import { Button } from '@/components/ui/Button'
 import type { SidebarView } from '@/stores/ui-store'
 import logo20x from '@/assets/logos/20x.svg'
 
+const isWindows = navigator.platform.toLowerCase().startsWith('win') || navigator.userAgent.includes('Windows')
+const WINDOWS_TITLEBAR_ACTION_RIGHT = 168
+
 export function AppLayout() {
   const { tasks, allTasks, selectedTask, createTask, updateTask, deleteTask, selectTask } = useTasks()
   const { agents, sessions, fetchAgents, stopAndRemoveSessionForTask } = useAgentStore()
@@ -56,6 +59,8 @@ export function AppLayout() {
     const cleanupStatus = updaterApi.onStatus((data) => {
       if (data.status === 'available' || data.status === 'downloading' || data.status === 'downloaded') {
         setUpdateAvailableVersion(data.version ?? null)
+      } else if (data.status === 'up-to-date') {
+        setUpdateAvailableVersion(null)
       }
     })
 
@@ -171,8 +176,11 @@ export function AppLayout() {
           ))}
         </div>
 
-        {/* Global actions — pinned right; windows-titlebar-actions offsets on Windows to avoid title bar overlay */}
-        <div className="no-drag absolute right-4 flex items-center gap-1 windows-titlebar-actions">
+        {/* Global actions — pinned right; offset on Windows to avoid native window controls. */}
+        <div
+          className="no-drag absolute right-4 flex items-center gap-1 windows-titlebar-actions"
+          style={isWindows ? { right: WINDOWS_TITLEBAR_ACTION_RIGHT } : undefined}
+        >
           <Button
             variant="ghost"
             size="sm"
