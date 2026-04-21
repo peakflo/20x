@@ -39,6 +39,16 @@ describe('useSettingsStore', () => {
       expect(useSettingsStore.getState().gitProvider).toBeNull()
     })
 
+    it('sets gitProvider to null when saved provider is not github or gitlab', async () => {
+      ;(mockElectronAPI.settings.getAll as unknown as Mock).mockResolvedValue({
+        git_provider: 'none'
+      })
+
+      await useSettingsStore.getState().fetchSettings()
+
+      expect(useSettingsStore.getState().gitProvider).toBeNull()
+    })
+
     it('handles errors gracefully', async () => {
       ;(mockElectronAPI.settings.getAll as unknown as Mock).mockRejectedValue(new Error('fail'))
 
@@ -95,6 +105,13 @@ describe('useSettingsStore', () => {
 
       expect(mockElectronAPI.settings.set).toHaveBeenCalledWith('git_provider', 'github')
       expect(useSettingsStore.getState().gitProvider).toBe('github')
+    })
+
+    it('clears provider choice for users without repo tools', async () => {
+      await useSettingsStore.getState().setGitProvider(null)
+
+      expect(mockElectronAPI.settings.set).toHaveBeenCalledWith('git_provider', '')
+      expect(useSettingsStore.getState().gitProvider).toBeNull()
     })
   })
 

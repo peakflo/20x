@@ -13,7 +13,7 @@ interface SettingsState {
 
   fetchSettings: () => Promise<void>
   setGithubOrg: (org: string) => Promise<void>
-  setGitProvider: (provider: GitProvider) => Promise<void>
+  setGitProvider: (provider: GitProvider | null) => Promise<void>
   checkGhCli: () => Promise<GhCliStatus>
   startGhAuth: () => Promise<void>
   checkGlabCli: () => Promise<GlabCliStatus>
@@ -33,7 +33,9 @@ export const useSettingsStore = create<SettingsState>((set) => ({
       const all = await settingsApi.getAll()
       set({
         githubOrg: all.github_org || null,
-        gitProvider: (all.git_provider as GitProvider) || null,
+        gitProvider: all.git_provider === 'github' || all.git_provider === 'gitlab'
+          ? all.git_provider
+          : null,
         isLoading: false
       })
     } catch {
@@ -46,8 +48,8 @@ export const useSettingsStore = create<SettingsState>((set) => ({
     set({ githubOrg: org })
   },
 
-  setGitProvider: async (provider: GitProvider) => {
-    await settingsApi.set('git_provider', provider)
+  setGitProvider: async (provider: GitProvider | null) => {
+    await settingsApi.set('git_provider', provider ?? '')
     set({ gitProvider: provider })
   },
 

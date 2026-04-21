@@ -32,6 +32,7 @@ import type { ToolStatus } from '@/types/electron'
 /* ─── Types ─── */
 
 type OnboardingStep = 'welcome' | 'provider' | 'tools' | 'agent'
+type OnboardingProviderChoice = GitProvider | 'none'
 
 interface ProgressEvent {
   agentName: string
@@ -137,6 +138,20 @@ const TOOL_META: Record<
 const INSTALLABLE = ['nodejs', 'npm', 'git', 'gh', 'glab', 'claudeCode', 'opencode', 'codex', 'pnpm']
 const INSTALL_ORDER = ['nodejs', 'git', 'gh', 'glab', 'claudeCode', 'opencode', 'codex']
 
+function isVisibleToolForProvider(key: string, provider: OnboardingProviderChoice | null): boolean {
+  if (key === 'gh') return provider === 'github'
+  if (key === 'glab') return provider === 'gitlab'
+  return true
+}
+
+function getVisibleInstallOrder(provider: OnboardingProviderChoice | null): string[] {
+  return INSTALL_ORDER.filter((key) => isVisibleToolForProvider(key, provider))
+}
+
+function getVisibleToolKeys(provider: OnboardingProviderChoice | null): string[] {
+  return Object.keys(TOOL_META).filter((key) => isVisibleToolForProvider(key, provider))
+}
+
 /* ─── Step 1: Welcome ─── */
 
 function WelcomeStep({ onNext }: { onNext: () => void }) {
@@ -179,25 +194,24 @@ function ProviderChoiceStep({
   onSelectProvider
 }: {
   onNext: () => void
-  selectedProvider: GitProvider | null
-  onSelectProvider: (provider: GitProvider) => void
+  selectedProvider: OnboardingProviderChoice | null
+  onSelectProvider: (provider: OnboardingProviderChoice) => void
 }) {
   const { setGitProvider } = useSettingsStore()
 
-  const handleSelect = async (provider: GitProvider) => {
+  const handleSelect = async (provider: OnboardingProviderChoice) => {
     onSelectProvider(provider)
-    await setGitProvider(provider)
+    await setGitProvider(provider === 'none' ? null : provider)
   }
 
   return (
     <div className="flex flex-col items-center text-center py-4">
-      <h2 className="text-2xl font-bold text-foreground mb-2">Choose your Git provider</h2>
+      <h2 className="text-2xl font-bold text-foreground mb-2">Choose your workspace</h2>
       <p className="text-sm text-muted-foreground mb-6 leading-relaxed max-w-sm">
-        Select the platform where your repositories are hosted. This determines which CLI tool
-        will be used for repo management.
+        Select the platform where your repositories are hosted, or continue without repo tools.
       </p>
 
-      <div className="grid grid-cols-2 gap-4 w-full max-w-md mb-8">
+      <div className="grid grid-cols-3 gap-3 w-full max-w-xl mb-8">
         {/* GitHub option */}
         <button
           type="button"
@@ -241,6 +255,28 @@ function ProviderChoiceStep({
             <Check className="size-5 text-primary" />
           )}
         </button>
+
+        {/* No repo tools option */}
+        <button
+          type="button"
+          onClick={() => handleSelect('none')}
+          className={`flex flex-col items-center gap-3 rounded-xl border-2 p-6 transition-all ${
+            selectedProvider === 'none'
+              ? 'border-primary bg-primary/5 shadow-md'
+              : 'border-border hover:border-muted-foreground/50 hover:bg-muted/30'
+          }`}
+        >
+          <div className="bg-muted rounded-full size-12 flex items-center justify-center text-muted-foreground text-sm font-bold">
+            <X className="size-5" />
+          </div>
+          <div>
+            <p className="text-sm font-semibold text-foreground">I don&apos;t use them</p>
+            <p className="text-xs text-muted-foreground mt-0.5">Skip repo tools</p>
+          </div>
+          {selectedProvider === 'none' && (
+            <Check className="size-5 text-primary" />
+          )}
+        </button>
       </div>
 
       <Button onClick={onNext} disabled={!selectedProvider} className="w-full max-w-xs">
@@ -260,7 +296,7 @@ function ToolsAndAgentsStep({
 }: {
   onNext: () => void
   onSkip: () => void
-  selectedProvider: GitProvider | null
+  selectedProvider: OnboardingProviderChoice | null
 }) {
   const [status, setStatus] = useState<Record<string, ToolStatus> | null>(null)
   const [installing, setInstalling] = useState<string | null>(null)
@@ -328,7 +364,7 @@ function ToolsAndAgentsStep({
 
   const handleInstallAll = async () => {
     if (!status) return
-    const missing = INSTALL_ORDER.filter((key) => {
+    const missing = getVisibleInstallOrder(selectedProvider).filter((key) => {
       const s = status[key]
       return s && !s.installed
     })
@@ -379,14 +415,17 @@ function ToolsAndAgentsStep({
     }
   }
 
+  const visibleInstallOrder = getVisibleInstallOrder(selectedProvider)
+  const visibleToolKeys = getVisibleToolKeys(selectedProvider)
+
   const missingCount = status
-    ? INSTALL_ORDER.filter((key) => status[key] && !status[key].installed).length
+    ? visibleInstallOrder.filter((key) => status[key] && !status[key].installed).length
     : 0
 
   const installedCount = status
-    ? Object.values(status).filter((v) => v?.installed).length
+    ? visibleToolKeys.filter((key) => status[key]?.installed).length
     : 0
-  const totalCount = status ? Object.keys(status).length : 0
+  const totalCount = status ? visibleToolKeys.filter((key) => status[key]).length : 0
 
   const hasPrerequisites = status?.nodejs?.installed && status?.npm?.installed
 
@@ -396,10 +435,7 @@ function ToolsAndAgentsStep({
   ) => {
     const items = Object.entries(TOOL_META).filter(([key, meta]) => {
       if (meta.category !== category) return false
-      // Only show the relevant CLI tool based on provider choice
-      if (key === 'gh' && selectedProvider === 'gitlab') return false
-      if (key === 'glab' && selectedProvider === 'github') return false
-      return true
+      return isVisibleToolForProvider(key, selectedProvider)
     })
     if (items.length === 0) return null
 
@@ -833,7 +869,7 @@ export function OnboardingWizard({ open, onOpenChange }: OnboardingWizardProps) 
   const [currentStep, setCurrentStep] = useState(0)
   const [steps, setSteps] = useState<OnboardingStep[]>([])
   const [error, setError] = useState<string | null>(null)
-  const [selectedProvider, setSelectedProvider] = useState<GitProvider | null>(null)
+  const [selectedProvider, setSelectedProvider] = useState<OnboardingProviderChoice | null>(null)
   const { fetchAgents } = useAgentStore()
   const { fetchSettings, gitProvider } = useSettingsStore()
 
