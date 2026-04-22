@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest'
 
 import {
-  buildEnterpriseLiteLLMProviderConfig,
-  ENTERPRISE_LITELLM_PROVIDER_ID,
-  readEnterpriseLiteLLMConfig,
-  storeEnterpriseLiteLLMConfig
-} from './enterprise-litellm'
+  buildEnterpriseAiGatewayProviderConfig,
+  ENTERPRISE_AI_GATEWAY_PROVIDER_ID,
+  readEnterpriseAiGatewayConfig,
+  storeEnterpriseAiGatewayConfig
+} from './enterprise-ai-gateway'
 
 class MockDb {
   private settings = new Map<string, string>()
@@ -23,18 +23,18 @@ class MockDb {
   }
 }
 
-describe('enterprise LiteLLM helpers', () => {
-  it('stores and reads LiteLLM credentials from the database', () => {
+describe('enterprise AI gateway helpers', () => {
+  it('stores and reads AI gateway credentials from the database', () => {
     const db = new MockDb()
 
-    storeEnterpriseLiteLLMConfig(db as never, {
+    storeEnterpriseAiGatewayConfig(db as never, {
       apiKey: 'sk-virtual-123',
       baseUrl: 'https://litellm.example.com',
       keyName: 'peakflo-key',
       expiresAt: '2026-05-01T00:00:00.000Z'
     })
 
-    expect(readEnterpriseLiteLLMConfig(db as never)).toEqual({
+    expect(readEnterpriseAiGatewayConfig(db as never)).toEqual({
       apiKey: 'sk-virtual-123',
       baseUrl: 'https://litellm.example.com',
       keyName: 'peakflo-key',
@@ -44,7 +44,7 @@ describe('enterprise LiteLLM helpers', () => {
   })
 
   it('builds an OpenCode custom provider config for Peakflo', () => {
-    const providerConfig = buildEnterpriseLiteLLMProviderConfig({
+    const providerConfig = buildEnterpriseAiGatewayProviderConfig({
       apiKey: 'sk-virtual-123',
       baseUrl: 'https://litellm.example.com',
       models: [
@@ -54,7 +54,7 @@ describe('enterprise LiteLLM helpers', () => {
     })
 
     expect(providerConfig).toEqual({
-      [ENTERPRISE_LITELLM_PROVIDER_ID]: {
+      [ENTERPRISE_AI_GATEWAY_PROVIDER_ID]: {
         npm: '@ai-sdk/openai-compatible',
         name: 'Peakflo',
         options: {

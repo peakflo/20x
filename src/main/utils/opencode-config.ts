@@ -14,9 +14,9 @@ import { homedir } from 'os'
 
 import type { DatabaseManager } from '../database'
 import {
-  buildEnterpriseLiteLLMProviderConfig,
-  readEnterpriseLiteLLMConfig
-} from '../enterprise-litellm'
+  buildEnterpriseAiGatewayProviderConfig,
+  readEnterpriseAiGatewayConfig
+} from '../enterprise-ai-gateway'
 
 /** Paths used by the OpenCode CLI to store config & auth. */
 const OPENCODE_CONFIG_PATH = join(homedir(), '.config', 'opencode', 'opencode.json')
@@ -99,15 +99,15 @@ export function buildMergedOpencodeConfig(
     }
   }
 
-  const enterpriseLiteLLMConfig = db
-    ? readEnterpriseLiteLLMConfig(db)
+  const enterpriseAiGatewayConfig = db
+    ? readEnterpriseAiGatewayConfig(db)
     : null
-  if (enterpriseLiteLLMConfig) {
+  if (enterpriseAiGatewayConfig) {
     const existingProviders =
       (config.provider as Record<string, unknown> | undefined) ?? {}
     config.provider = {
       ...existingProviders,
-      ...buildEnterpriseLiteLLMProviderConfig(enterpriseLiteLLMConfig)
+      ...buildEnterpriseAiGatewayProviderConfig(enterpriseAiGatewayConfig)
     }
   }
 
