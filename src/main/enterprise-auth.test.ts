@@ -1,6 +1,6 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
 import { EnterpriseAuth } from './enterprise-auth'
-import { readEnterpriseLiteLLMConfig, storeEnterpriseLiteLLMConfig } from './enterprise-litellm'
+import { readEnterpriseAiGatewayConfig, storeEnterpriseAiGatewayConfig } from './enterprise-ai-gateway'
 
 const authMock = {
   signOut: vi.fn(async () => ({})),
@@ -209,7 +209,7 @@ describe('EnterpriseAuth logging', () => {
     }
   })
 
-  it('fetches and stores LiteLLM virtual key after tenant selection', async () => {
+  it('fetches and stores AI gateway virtual key after tenant selection', async () => {
     db.setSetting('enterprise_supabase_access_token', Buffer.from('supabase-access', 'utf8').toString('base64'))
 
     const fetchFn = vi.fn(async (input: RequestInfo | URL) => {
@@ -226,7 +226,7 @@ describe('EnterpriseAuth logging', () => {
         }
       }
 
-      if (url.includes('/api/20x/litellm/virtual-key')) {
+      if (url.includes('/api/20x/ai-gateway/virtual-key')) {
         return {
           ok: true,
           status: 200,
@@ -265,7 +265,7 @@ describe('EnterpriseAuth logging', () => {
     })
     const virtualKeyCall = (
       fetchFn.mock.calls as Array<[RequestInfo | URL, RequestInit?]>
-    ).find(([input]) => String(input).includes('/api/20x/litellm/virtual-key'))
+    ).find(([input]) => String(input).includes('/api/20x/ai-gateway/virtual-key'))
     const virtualKeyInit = virtualKeyCall?.[1]
 
     expect(virtualKeyInit).toMatchObject({
@@ -277,7 +277,7 @@ describe('EnterpriseAuth logging', () => {
     expect((virtualKeyInit?.headers ?? {}) as Record<string, string>).not.toHaveProperty(
       'Content-Type'
     )
-    expect(readEnterpriseLiteLLMConfig(db as never)).toEqual({
+    expect(readEnterpriseAiGatewayConfig(db as never)).toEqual({
       apiKey: 'sk-virtual-123',
       baseUrl: 'https://litellm.example.com',
       keyName: 'peakflo-key',
@@ -289,9 +289,9 @@ describe('EnterpriseAuth logging', () => {
     })
   })
 
-  it('does not fail tenant selection when LiteLLM fetch fails', async () => {
+  it('does not fail tenant selection when AI gateway fetch fails', async () => {
     db.setSetting('enterprise_supabase_access_token', Buffer.from('supabase-access', 'utf8').toString('base64'))
-    storeEnterpriseLiteLLMConfig(db as never, {
+    storeEnterpriseAiGatewayConfig(db as never, {
       apiKey: 'existing-key',
       baseUrl: 'https://existing-litellm.example.com',
       keyName: 'existing-config',
@@ -313,8 +313,8 @@ describe('EnterpriseAuth logging', () => {
         }
       }
 
-      if (url.includes('/api/20x/litellm/virtual-key')) {
-        throw new Error('LiteLLM unavailable')
+      if (url.includes('/api/20x/ai-gateway/virtual-key')) {
+        throw new Error('AI gateway unavailable')
       }
 
       throw new Error(`Unexpected fetch URL: ${url}`)
@@ -328,7 +328,7 @@ describe('EnterpriseAuth logging', () => {
       token: 'jwt-token',
       tenant: { id: 'tenant-1', name: 'Peakflo' }
     })
-    expect(readEnterpriseLiteLLMConfig(db as never)).toEqual({
+    expect(readEnterpriseAiGatewayConfig(db as never)).toEqual({
       apiKey: 'existing-key',
       baseUrl: 'https://existing-litellm.example.com',
       keyName: 'existing-config',

@@ -2,9 +2,9 @@ import { app, safeStorage } from 'electron'
 import { createClient, SupabaseClient, Session } from '@supabase/supabase-js'
 import type { DatabaseManager } from './database'
 import {
-  clearEnterpriseLiteLLMConfig,
-  storeEnterpriseLiteLLMConfig
-} from './enterprise-litellm'
+  clearEnterpriseAiGatewayConfig,
+  storeEnterpriseAiGatewayConfig
+} from './enterprise-ai-gateway'
 
 // ── Enterprise environment configs ────────────────────────────────
 // Supabase anon keys are public (designed for client-side use).
@@ -83,14 +83,14 @@ export interface EnterpriseSession {
   currentTenant: { id: string; name: string } | null
 }
 
-interface EnterpriseLiteLLMVirtualKeyResponse {
+interface EnterpriseAiGatewayVirtualKeyResponse {
   apiKey: string
   baseUrl: string
   keyName?: string | null
   expiresAt?: string | null
 }
 
-interface EnterpriseLiteLLMModelsResponse {
+interface EnterpriseAiGatewayModelsResponse {
   data?: Array<{
     id?: string
     model_name?: string
@@ -271,7 +271,7 @@ export class EnterpriseAuth {
     this.db.setSetting(KEYS.TENANT_ID, result.tenant.id)
     this.db.setSetting(KEYS.TENANT_NAME, result.tenant.name)
     try {
-      await this.fetchAndStoreLiteLLMVirtualKey()
+      await this.fetchAndStoreAiGatewayVirtualKey()
     } catch {}
 
     return {
@@ -651,16 +651,16 @@ export class EnterpriseAuth {
     return jwt
   }
 
-  private async fetchAndStoreLiteLLMVirtualKey(): Promise<void> {
-    const result = await this.apiRequest('GET', '/api/20x/litellm/virtual-key') as EnterpriseLiteLLMVirtualKeyResponse
+  private async fetchAndStoreAiGatewayVirtualKey(): Promise<void> {
+    const result = await this.apiRequest('GET', '/api/20x/ai-gateway/virtual-key') as EnterpriseAiGatewayVirtualKeyResponse
 
     if (!result?.apiKey || !result?.baseUrl) {
-      throw new Error('Failed to fetch LiteLLM virtual key')
+      throw new Error('Failed to fetch AI gateway virtual key')
     }
 
-    const models = await this.fetchLiteLLMModels(result)
+    const models = await this.fetchAiGatewayModels(result)
 
-    storeEnterpriseLiteLLMConfig(this.db, {
+    storeEnterpriseAiGatewayConfig(this.db, {
       apiKey: result.apiKey,
       baseUrl: result.baseUrl,
       keyName: result.keyName ?? null,
@@ -669,8 +669,8 @@ export class EnterpriseAuth {
     })
   }
 
-  private async fetchLiteLLMModels(
-    config: EnterpriseLiteLLMVirtualKeyResponse
+  private async fetchAiGatewayModels(
+    config: EnterpriseAiGatewayVirtualKeyResponse
   ): Promise<Array<{ id: string; name: string }>> {
     const response = await fetch(`${config.baseUrl}/models`, {
       method: 'GET',
@@ -680,10 +680,10 @@ export class EnterpriseAuth {
     })
 
     if (!response.ok) {
-      throw new Error(`Failed to fetch LiteLLM models (${response.status})`)
+      throw new Error(`Failed to fetch AI gateway models (${response.status})`)
     }
 
-    const result = await response.json() as EnterpriseLiteLLMModelsResponse
+    const result = await response.json() as EnterpriseAiGatewayModelsResponse
     const models = Array.isArray(result.data) ? result.data : []
 
     return models
@@ -702,7 +702,7 @@ export class EnterpriseAuth {
     this.logAuthEvent('auth_state_cleared')
     this.cachedJwt = null
     this.cachedJwtExpiresAt = 0
-    clearEnterpriseLiteLLMConfig(this.db)
+    clearEnterpriseAiGatewayConfig(this.db)
 
     for (const key of Object.values(KEYS)) {
       this.db.deleteSetting(key)
