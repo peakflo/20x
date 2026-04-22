@@ -1,5 +1,6 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
 import { EnterpriseAuth } from './enterprise-auth'
+import { readEnterpriseAiGatewayConfig, storeEnterpriseAiGatewayConfig } from './enterprise-ai-gateway'
 
 const authMock = {
   signOut: vi.fn(async () => ({})),
@@ -206,6 +207,134 @@ describe('EnterpriseAuth logging', () => {
         expect(call[0]).toMatch(/\(domain: .+\)/)
       }
     }
+  })
+
+  it('fetches and stores AI gateway virtual key after tenant selection', async () => {
+    db.setSetting('enterprise_supabase_access_token', Buffer.from('supabase-access', 'utf8').toString('base64'))
+
+    const fetchFn = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('/api/20x/auth/select-tenant')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            token: 'jwt-token',
+            expiresIn: 3600,
+            tenant: { id: 'tenant-1', name: 'Peakflo' }
+          })
+        }
+      }
+
+      if (url.includes('/api/20x/ai-gateway/virtual-key')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            apiKey: 'sk-virtual-123',
+            baseUrl: 'https://litellm.example.com',
+            keyName: 'peakflo-key',
+            expiresAt: '2026-05-01T00:00:00.000Z'
+          })
+        }
+      }
+
+      if (url.endsWith('/models')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            data: [
+              { id: 'gpt-4.1-mini', model_name: 'GPT 4.1 Mini' },
+              { id: 'claude-3-7-sonnet', model_name: 'Claude 3.7 Sonnet' }
+            ]
+          })
+        }
+      }
+
+      throw new Error(`Unexpected fetch URL: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchFn)
+
+    const auth = new EnterpriseAuth(db as never)
+    const result = await auth.selectTenant('tenant-1')
+
+    expect(result).toEqual({
+      token: 'jwt-token',
+      tenant: { id: 'tenant-1', name: 'Peakflo' }
+    })
+    const virtualKeyCall = (
+      fetchFn.mock.calls as Array<[RequestInfo | URL, RequestInit?]>
+    ).find(([input]) => String(input).includes('/api/20x/ai-gateway/virtual-key'))
+    const virtualKeyInit = virtualKeyCall?.[1]
+
+    expect(virtualKeyInit).toMatchObject({
+      method: 'GET',
+      headers: {
+        Authorization: 'Bearer jwt-token'
+      }
+    })
+    expect((virtualKeyInit?.headers ?? {}) as Record<string, string>).not.toHaveProperty(
+      'Content-Type'
+    )
+    expect(readEnterpriseAiGatewayConfig(db as never)).toEqual({
+      apiKey: 'sk-virtual-123',
+      baseUrl: 'https://litellm.example.com',
+      keyName: 'peakflo-key',
+      expiresAt: '2026-05-01T00:00:00.000Z',
+      models: [
+        { id: 'gpt-4.1-mini', name: 'GPT 4.1 Mini' },
+        { id: 'claude-3-7-sonnet', name: 'Claude 3.7 Sonnet' }
+      ]
+    })
+  })
+
+  it('does not fail tenant selection when AI gateway fetch fails', async () => {
+    db.setSetting('enterprise_supabase_access_token', Buffer.from('supabase-access', 'utf8').toString('base64'))
+    storeEnterpriseAiGatewayConfig(db as never, {
+      apiKey: 'existing-key',
+      baseUrl: 'https://existing-litellm.example.com',
+      keyName: 'existing-config',
+      expiresAt: '2026-06-01T00:00:00.000Z',
+      models: [{ id: 'existing-model', name: 'Existing Model' }]
+    })
+
+    const fetchFn = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('/api/20x/auth/select-tenant')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            token: 'jwt-token',
+            expiresIn: 3600,
+            tenant: { id: 'tenant-1', name: 'Peakflo' }
+          })
+        }
+      }
+
+      if (url.includes('/api/20x/ai-gateway/virtual-key')) {
+        throw new Error('AI gateway unavailable')
+      }
+
+      throw new Error(`Unexpected fetch URL: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchFn)
+
+    const auth = new EnterpriseAuth(db as never)
+    const result = await auth.selectTenant('tenant-1')
+
+    expect(result).toEqual({
+      token: 'jwt-token',
+      tenant: { id: 'tenant-1', name: 'Peakflo' }
+    })
+    expect(readEnterpriseAiGatewayConfig(db as never)).toEqual({
+      apiKey: 'existing-key',
+      baseUrl: 'https://existing-litellm.example.com',
+      keyName: 'existing-config',
+      expiresAt: '2026-06-01T00:00:00.000Z',
+      models: [{ id: 'existing-model', name: 'Existing Model' }]
+    })
   })
 
   it('logs reason when API request 401 retry path ends in auth clear', async () => {

@@ -3,6 +3,7 @@ import { mkdirSync, writeFileSync, rmSync, existsSync } from 'fs'
 import { join, delimiter } from 'path'
 import { homedir } from 'os'
 import { buildMergedOpencodeConfig } from '../utils/opencode-config'
+import type { DatabaseManager } from '../database'
 import type {
   CodingAgentAdapter,
   SessionConfig,
@@ -57,7 +58,7 @@ export class OpencodeAdapter implements CodingAgentAdapter {
   /** Absolute path to the secrets exports file (read dynamically by the plugin) */
   private secretsExportsPath: string | null = null
 
-  constructor() {
+  constructor(private db?: Pick<DatabaseManager, 'getSetting'>) {
     this.sdkLoading = this.loadSDK()
   }
 
@@ -231,7 +232,24 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     if (!this.sharedClient) {
       throw new Error('OpenCode client not available after server startup')
     }
+    await this.pushMergedConfigToClient(this.sharedClient)
     return this.sharedClient
+  }
+
+  private async pushMergedConfigToClient(client: V2OpencodeClient): Promise<void> {
+    try {
+      const mergedConfig = buildMergedOpencodeConfig(undefined, this.db)
+      if (!mergedConfig.provider) {
+        return
+      }
+
+      const castConfig = mergedConfig as import('@opencode-ai/sdk/v2/client').Config
+      try {
+        await client.global.config.update({ config: castConfig })
+      } catch {
+        await client.config.update({ config: castConfig })
+      }
+    } catch {}
   }
 
   async getProviders(
@@ -258,7 +276,6 @@ export class OpencodeAdapter implements CodingAgentAdapter {
         default?: Record<string, string>
       } | undefined
 
-      console.log('[OpencodeAdapter] Found providers:', data?.providers?.map((p) => p.id))
       return data ? { providers: data.providers || [], default: data.default || {} } : null
     } catch (error: unknown) {
       console.log('[OpencodeAdapter] Could not get providers:', error instanceof Error ? error.message : error)
@@ -366,20 +383,10 @@ export class OpencodeAdapter implements CodingAgentAdapter {
           // Push merged config (with auth.json keys injected) to the running server
           // so custom providers like routerAI are properly authenticated.
           try {
-            const mergedConfig = buildMergedOpencodeConfig()
-            if (mergedConfig.provider) {
-              const castConfig = mergedConfig as import('@opencode-ai/sdk/v2/client').Config
-              // Try global config first, then per-directory config as fallback
-              // Use quickClient with bounded timeout to avoid hanging indefinitely
-              try {
-                await this.quickClient!.global.config.update({ config: castConfig })
-              } catch {
-                await this.quickClient!.config.update({ config: castConfig })
-              }
-              console.log('[OpencodeAdapter] Pushed merged provider config to existing server')
-            }
-          } catch (err) {
-            console.warn('[OpencodeAdapter] Failed to push config to existing server:', err)
+            // Use quickClient to avoid hanging indefinitely when the existing server is slow.
+            await this.pushMergedConfigToClient(this.quickClient!)
+          } catch {
+            // pushMergedConfigToClient already logs details
           }
 
           return
@@ -402,7 +409,7 @@ export class OpencodeAdapter implements CodingAgentAdapter {
           extraConfig.plugin = [this.pluginFilePath]
           console.log(`[OpencodeAdapter] Passing plugin to server config: ${this.pluginFilePath}`)
         }
-        const mergedConfig = buildMergedOpencodeConfig(extraConfig)
+        const mergedConfig = buildMergedOpencodeConfig(extraConfig, this.db)
 
         console.log(`[OpencodeAdapter] Creating opencode instance at ${hostname}:${port} via SDK v2 createOpencode`)
         const { client, server } = await OpenCodeV2!.createOpencode({
