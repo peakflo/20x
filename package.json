@@ -1,6 +1,6 @@
 {
   "name": "20x",
-  "version": "0.0.70",
+  "version": "0.0.71",
   "packageManager": "pnpm@9.15.2",
   "description": "20x — AI-powered desktop task manager",
   "main": "./out/main/index.js",
