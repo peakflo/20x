@@ -271,8 +271,11 @@ export class EnterpriseAuth {
     this.db.setSetting(KEYS.TENANT_ID, result.tenant.id)
     this.db.setSetting(KEYS.TENANT_NAME, result.tenant.name)
     try {
+      this.logAuthEvent('ai_gateway_virtual_key_fetch_start')
       await this.fetchAndStoreAiGatewayVirtualKey()
-    } catch {}
+    } catch (err) {
+      this.logAuthEvent('ai_gateway_virtual_key_fetch_error', this.describeError(err))
+    }
 
     return {
       token: result.token,
