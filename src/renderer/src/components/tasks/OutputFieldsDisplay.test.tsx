@@ -122,4 +122,24 @@ describe('OutputFieldsDisplay', () => {
 
     expect(screen.getByText('Complete Task')).toBeInTheDocument()
   })
+
+  it('renders malformed legacy output fields without crashing', () => {
+    render(
+      <OutputFieldsDisplay
+        fields={[
+          {
+            id: 'pr_url',
+            type: undefined as never,
+            name: undefined as never,
+            value: 'https://example.com/pr/123'
+          }
+        ]}
+        onChange={vi.fn()}
+      />
+    )
+
+    expect(screen.getByDisplayValue('https://example.com/pr/123')).toBeInTheDocument()
+    expect(screen.getByText('pr url')).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('Enter pr url...')).toBeInTheDocument()
+  })
 })

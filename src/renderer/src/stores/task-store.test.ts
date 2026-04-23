@@ -175,8 +175,37 @@ describe('useTaskStore', () => {
       expect(task.skill_ids).toEqual(['s1', 's2'])
     })
 
+    it('sanitizes malformed output fields from external task updates', async () => {
+      const taskWithMalformedOutputs = {
+        id: 't3',
+        title: 'Agent-updated task',
+        output_fields: [
+          { id: 'pr_url', value: 'https://example.com/pr/123' },
+          { name: 'Approval', type: 'toggle', value: true, options: ['yes', 1, null] }
+        ]
+      }
+      ;(mockElectronAPI.db.getTasks as unknown as Mock).mockResolvedValue([taskWithMalformedOutputs])
+
+      await useTaskStore.getState().fetchTasks()
+
+      const [firstField, secondField] = useTaskStore.getState().tasks[0].output_fields
+      expect(firstField).toMatchObject({
+        id: 'pr_url',
+        name: 'pr url',
+        type: 'text',
+        value: 'https://example.com/pr/123'
+      })
+      expect(secondField).toMatchObject({
+        id: 'output_field_2',
+        name: 'Approval',
+        type: 'text',
+        value: true,
+        options: ['yes']
+      })
+    })
+
     it('preserves skill_ids null (agent defaults)', async () => {
-      const taskWithNullSkills = { id: 't3', title: 'Task', skill_ids: null }
+      const taskWithNullSkills = { id: 't4', title: 'Task', skill_ids: null }
       ;(mockElectronAPI.db.getTasks as unknown as Mock).mockResolvedValue([taskWithNullSkills])
 
       await useTaskStore.getState().fetchTasks()

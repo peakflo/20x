@@ -1,6 +1,38 @@
 import { create } from 'zustand'
-import type { WorkfloTask, CreateTaskDTO, UpdateTaskDTO } from '@/types'
+import type { WorkfloTask, CreateTaskDTO, UpdateTaskDTO, OutputField, OutputFieldType } from '@/types'
 import { taskApi, taskSourceApi, onTaskUpdated, onTaskCreated, onTasksRefresh } from '@/lib/ipc-client'
+
+const VALID_OUTPUT_FIELD_TYPES = new Set<OutputFieldType>([
+  'text',
+  'number',
+  'email',
+  'textarea',
+  'list',
+  'date',
+  'file',
+  'boolean',
+  'country',
+  'currency',
+  'url'
+])
+
+function normalizeOutputField(field: unknown, index: number): OutputField | null {
+  if (!field || typeof field !== 'object') return null
+
+  const raw = field as Partial<OutputField>
+  const id = typeof raw.id === 'string' && raw.id.trim() ? raw.id : `output_field_${index + 1}`
+  const name = typeof raw.name === 'string' && raw.name.trim() ? raw.name : id.replace(/_/g, ' ')
+  const rawType = typeof raw.type === 'string' ? raw.type : ''
+  const type = VALID_OUTPUT_FIELD_TYPES.has(rawType as OutputFieldType) ? (rawType as OutputFieldType) : 'text'
+
+  return {
+    ...raw,
+    id,
+    name,
+    type,
+    options: Array.isArray(raw.options) ? raw.options.filter((option): option is string => typeof option === 'string') : undefined
+  }
+}
 
 /** Ensure array fields on a task are always proper arrays (guards against undefined/null from external sources) */
 function normalizeTask(task: WorkfloTask): WorkfloTask {
@@ -9,7 +41,11 @@ function normalizeTask(task: WorkfloTask): WorkfloTask {
     labels: Array.isArray(task.labels) ? task.labels : [],
     repos: Array.isArray(task.repos) ? task.repos : [],
     attachments: Array.isArray(task.attachments) ? task.attachments : [],
-    output_fields: Array.isArray(task.output_fields) ? task.output_fields : [],
+    output_fields: Array.isArray(task.output_fields)
+      ? task.output_fields
+          .map((field, index) => normalizeOutputField(field, index))
+          .filter((field): field is OutputField => field !== null)
+      : [],
     skill_ids: task.skill_ids == null ? null : Array.isArray(task.skill_ids) ? task.skill_ids : []
   }
 }
