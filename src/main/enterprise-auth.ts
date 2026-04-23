@@ -271,8 +271,11 @@ export class EnterpriseAuth {
     this.db.setSetting(KEYS.TENANT_ID, result.tenant.id)
     this.db.setSetting(KEYS.TENANT_NAME, result.tenant.name)
     try {
+      this.logAuthEvent('ai_gateway_virtual_key_fetch_start')
       await this.fetchAndStoreAiGatewayVirtualKey()
-    } catch {}
+    } catch (err) {
+      this.logAuthEvent('ai_gateway_virtual_key_fetch_error', this.describeError(err))
+    }
 
     return {
       token: result.token,
@@ -658,7 +661,19 @@ export class EnterpriseAuth {
       throw new Error('Failed to fetch AI gateway virtual key')
     }
 
+    this.logAuthEvent('ai_gateway_virtual_key_received', {
+      baseUrl: result.baseUrl,
+      keyName: result.keyName ?? null,
+      expiresAt: result.expiresAt ?? null,
+      hasApiKey: !!result.apiKey
+    })
+
     const models = await this.fetchAiGatewayModels(result)
+
+    this.logAuthEvent('ai_gateway_models_stored', {
+      modelCount: models.length,
+      modelIds: models.map((m) => m.id)
+    })
 
     storeEnterpriseAiGatewayConfig(this.db, {
       apiKey: result.apiKey,
@@ -672,7 +687,10 @@ export class EnterpriseAuth {
   private async fetchAiGatewayModels(
     config: EnterpriseAiGatewayVirtualKeyResponse
   ): Promise<Array<{ id: string; name: string }>> {
-    const response = await fetch(`${config.baseUrl}/models`, {
+    const url = `${config.baseUrl}/models`
+    this.logAuthEvent('ai_gateway_models_fetch_start', { url })
+
+    const response = await fetch(url, {
       method: 'GET',
       headers: {
         Authorization: `Bearer ${config.apiKey}`
@@ -680,10 +698,24 @@ export class EnterpriseAuth {
     })
 
     if (!response.ok) {
+      const errorText = await response.text().catch(() => '<unreadable>')
+      this.logAuthEvent('ai_gateway_models_fetch_failed', {
+        status: response.status,
+        body: errorText.slice(0, 500)
+      })
       throw new Error(`Failed to fetch AI gateway models (${response.status})`)
     }
 
     const result = await response.json() as EnterpriseAiGatewayModelsResponse
+
+    this.logAuthEvent('ai_gateway_models_raw_response', {
+      dataLength: Array.isArray(result.data) ? result.data.length : 0,
+      rawModels: (Array.isArray(result.data) ? result.data : []).map((m) => ({
+        id: m.id,
+        model_name: m.model_name
+      }))
+    })
+
     const models = Array.isArray(result.data) ? result.data : []
 
     return models
