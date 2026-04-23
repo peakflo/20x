@@ -31,6 +31,7 @@ import { startSecretBroker, stopSecretBroker, writeSecretShellWrapper } from './
 import { startMobileApiServer, stopMobileApiServer, broadcastToMobileClients, setMobileApiNotifier } from './mobile-api-server'
 import { registerUpdaterIpc, initAutoUpdater, isUpdateDownloaded, getPendingVersion } from './auto-updater'
 import { initCrashLogger } from './crash-logger'
+import { installProcessStreamErrorHandlers } from './process-stream-errors'
 
 let mainWindow: BrowserWindow | null = null
 let tray: Tray | null = null
@@ -614,9 +615,7 @@ app.commandLine.appendSwitch('disable-features', [
   'AcceptCHFrame',                 // Electron-only ALPS extension not in Chrome
 ].join(','))
 
-// Ignore EPIPE errors from broken stdout/stderr pipes (e.g. when piped through head/tail)
-process.stdout?.on?.('error', (err: NodeJS.ErrnoException) => { if (err.code !== 'EPIPE') throw err })
-process.stderr?.on?.('error', (err: NodeJS.ErrnoException) => { if (err.code !== 'EPIPE') throw err })
+installProcessStreamErrorHandlers()
 
 app.whenReady().then(async () => {
   // Register protocol handler: app-attachment://taskId/attachmentId
