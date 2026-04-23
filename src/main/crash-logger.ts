@@ -26,10 +26,18 @@ function logCrash(error: Error | string): void {
   try {
     const entry = formatError(error)
     appendFileSync(getLogPath(), entry, 'utf-8')
-    console.error('[CrashLogger]', entry)
+    try {
+      console.error('[CrashLogger]', entry)
+    } catch {
+      // Console streams may be unavailable during crash handling.
+    }
   } catch {
     // Last resort — can't even write to disk
-    console.error('[CrashLogger] Failed to write crash log:', error)
+    try {
+      console.error('[CrashLogger] Failed to write crash log:', error)
+    } catch {
+      // Nothing else can be reported safely.
+    }
   }
 }
 
