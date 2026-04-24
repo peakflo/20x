@@ -1,11 +1,11 @@
 import { useState, useEffect } from 'react'
-import { Wrench, RefreshCw, Download, Check, Loader2 } from 'lucide-react'
+import { Wrench, RefreshCw, Download, Check, Loader2, Trash2 } from 'lucide-react'
 import { SettingsSection } from '../SettingsSection'
 import { Label } from '@/components/ui/Label'
 import { Switch } from '@/components/ui/Switch'
 import { Button } from '@/components/ui/Button'
 import { ToolSetupDialog } from '@/components/AgentSetupWizard'
-import { settingsApi, mobileApi, updaterApi } from '@/lib/ipc-client'
+import { settingsApi, mobileApi, updaterApi, worktreeApi, onWorkspaceCleanupProgress } from '@/lib/ipc-client'
 
 export function GeneralSettings() {
   const [setupDialogOpen, setSetupDialogOpen] = useState(false)
@@ -30,6 +30,34 @@ export function GeneralSettings() {
     })
     return cleanup
   }, [])
+
+  // Workspace cleanup progress listener
+  useEffect(() => {
+    const cleanup = onWorkspaceCleanupProgress((event) => {
+      if (event.phase === 'done') {
+        setCleanupRunning(false)
+        setCleanupProgress(null)
+        if (event.cleaned !== undefined && event.cleaned > 0) {
+          setCleanupResult(`Cleaned ${event.cleaned} workspace${event.cleaned !== 1 ? 's' : ''}`)
+        } else if (event.errors && event.errors.length > 0) {
+          setCleanupResult(`Cleanup finished with ${event.errors.length} error${event.errors.length !== 1 ? 's' : ''}`)
+        } else {
+          setCleanupResult('No workspaces to clean')
+        }
+      } else {
+        setCleanupRunning(true)
+        setCleanupProgress({ current: event.current, total: event.total, message: event.message })
+      }
+    })
+    return cleanup
+  }, [])
+
+  // Workspace cleanup settings
+  const [autocleanEnabled, setAutocleanEnabled] = useState(false)
+  const [autocleanDays, setAutocleanDays] = useState('7')
+  const [cleanupRunning, setCleanupRunning] = useState(false)
+  const [cleanupResult, setCleanupResult] = useState<string | null>(null)
+  const [cleanupProgress, setCleanupProgress] = useState<{ current: number; total: number; message?: string } | null>(null)
 
   // Heartbeat settings
   const [heartbeatEnabled, setHeartbeatEnabled] = useState(true)
@@ -58,6 +86,17 @@ export function GeneralSettings() {
         console.error('Failed to load app preferences:', error)
       } finally {
         setLoading(false)
+      }
+
+      // Load workspace cleanup settings
+      try {
+        const cleanupEnabled = await settingsApi.get('workspace_autocleanup_enabled')
+        if (cleanupEnabled !== null) setAutocleanEnabled(cleanupEnabled === 'true')
+
+        const cleanupDays = await settingsApi.get('workspace_autocleanup_days')
+        if (cleanupDays) setAutocleanDays(cleanupDays)
+      } catch (error) {
+        console.error('Failed to load workspace cleanup settings:', error)
       }
 
       // Load heartbeat settings
@@ -210,6 +249,132 @@ export function GeneralSettings() {
             <span className="text-sm text-muted-foreground">Loading...</span>
           ) : (
             <span className="text-sm text-muted-foreground">Unavailable</span>
+          )}
+        </div>
+      </div>
+    </SettingsSection>
+
+    <SettingsSection
+      title="Workspace Auto-Cleanup"
+      description="Automatically clean up workspace files for completed tasks after a configurable retention period"
+    >
+      <div className="space-y-4">
+        <div className="flex items-center justify-between py-2 border-b border-border">
+          <div className="space-y-0.5">
+            <Label htmlFor="autoclean-enabled">Enable auto-cleanup</Label>
+            <p className="text-xs text-muted-foreground">
+              Automatically remove workspace files for tasks completed more than the configured number of days ago
+            </p>
+          </div>
+          <Switch
+            id="autoclean-enabled"
+            checked={autocleanEnabled}
+            onCheckedChange={async (checked) => {
+              setAutocleanEnabled(checked)
+              await settingsApi.set('workspace_autocleanup_enabled', checked ? 'true' : 'false')
+            }}
+            disabled={loading}
+          />
+        </div>
+
+        <div className="flex items-center justify-between py-2 border-b border-border">
+          <div className="space-y-0.5">
+            <Label htmlFor="autoclean-days">Retention period</Label>
+            <p className="text-xs text-muted-foreground">
+              Days to keep workspace files after task completion
+            </p>
+          </div>
+          <select
+            id="autoclean-days"
+            value={autocleanDays}
+            onChange={async (e) => {
+              setAutocleanDays(e.target.value)
+              await settingsApi.set('workspace_autocleanup_days', e.target.value)
+            }}
+            disabled={loading || !autocleanEnabled}
+            className="bg-transparent border rounded px-2 py-1 text-sm disabled:opacity-50"
+          >
+            <option value="1">1 day</option>
+            <option value="3">3 days</option>
+            <option value="7">7 days</option>
+            <option value="14">14 days</option>
+            <option value="30">30 days</option>
+            <option value="60">60 days</option>
+            <option value="90">90 days</option>
+          </select>
+        </div>
+
+        <div className="py-2">
+          <div className="flex items-center justify-between">
+            <div className="space-y-0.5">
+              <Label>Manual cleanup</Label>
+              <p className="text-xs text-muted-foreground">
+                Run workspace cleanup now for all eligible completed tasks
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              {!cleanupRunning && cleanupResult && (
+                <span className="text-xs text-muted-foreground">{cleanupResult}</span>
+              )}
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={cleanupRunning}
+                onClick={async () => {
+                  setCleanupRunning(true)
+                  setCleanupResult(null)
+                  setCleanupProgress(null)
+                  try {
+                    const result = await worktreeApi.runCleanupNow()
+                    // The progress listener handles the final state via the 'done' event,
+                    // but also handle the IPC response as a fallback
+                    if (!cleanupProgress) {
+                      if (result.cleaned > 0) {
+                        setCleanupResult(`Cleaned ${result.cleaned} workspace${result.cleaned !== 1 ? 's' : ''}`)
+                      } else if (result.errors.length > 0 && result.errors[0] === 'Cleanup is already in progress') {
+                        setCleanupResult('Cleanup already in progress')
+                      } else {
+                        setCleanupResult('No workspaces to clean')
+                      }
+                      setCleanupRunning(false)
+                    }
+                  } catch (error) {
+                    setCleanupResult('Cleanup failed')
+                    setCleanupRunning(false)
+                    console.error('Workspace cleanup error:', error)
+                  }
+                }}
+              >
+                {cleanupRunning ? (
+                  <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+                ) : (
+                  <Trash2 className="size-3.5 mr-1.5" />
+                )}
+                {cleanupRunning ? 'Cleaning...' : 'Clean Now'}
+              </Button>
+            </div>
+          </div>
+
+          {/* Progress bar */}
+          {cleanupRunning && cleanupProgress && (
+            <div className="mt-3 space-y-1.5">
+              <div className="flex items-center justify-between text-xs text-muted-foreground">
+                <span>{cleanupProgress.message || 'Preparing...'}</span>
+                {cleanupProgress.total > 0 && (
+                  <span>{cleanupProgress.current}/{cleanupProgress.total}</span>
+                )}
+              </div>
+              <div className="h-1.5 w-full bg-accent/50 rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-primary rounded-full transition-all duration-300"
+                  style={{
+                    width: cleanupProgress.total > 0
+                      ? `${Math.round((cleanupProgress.current / cleanupProgress.total) * 100)}%`
+                      : '0%'
+                  }}
+                />
+              </div>
+            </div>
           )}
         </div>
       </div>

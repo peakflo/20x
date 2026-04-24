@@ -76,7 +76,8 @@ export function registerIpcHandlers(
   heartbeatScheduler?: import('./heartbeat-scheduler').HeartbeatScheduler,
   initialEnterpriseHeartbeat?: EnterpriseHeartbeat,
   initialEnterpriseStateSync?: EnterpriseStateSync,
-  gitlabManager?: GitLabManager
+  gitlabManager?: GitLabManager,
+  workspaceCleanupScheduler?: import('./workspace-cleanup-scheduler').WorkspaceCleanupScheduler
 ): void {
   // Mutable references — created on selectTenant, cleared on logout
   let enterpriseHeartbeat = initialEnterpriseHeartbeat
@@ -475,6 +476,11 @@ export function registerIpcHandlers(
 
   ipcMain.handle('worktree:cleanup', async (_, taskId: string, repos: { fullName: string }[], org: string, removeTaskDir?: boolean) => {
     await worktreeManager.cleanupTaskWorkspace(taskId, repos, org, removeTaskDir ?? true)
+  })
+
+  ipcMain.handle('workspace:runCleanupNow', async () => {
+    if (!workspaceCleanupScheduler) return { cleaned: 0, errors: ['Cleanup scheduler not initialized'] }
+    return await workspaceCleanupScheduler.runNow()
   })
 
   // Task Source handlers
