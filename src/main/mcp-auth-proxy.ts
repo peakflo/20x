@@ -130,7 +130,10 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
     const pathParts = reqUrl.pathname.split('/').filter(Boolean)
     const id = pathParts[0]
 
+    console.log(`[McpAuthProxy] ${req.method} ${req.url} → target ${id || '(none)'}`)
+
     if (!id || !targets.has(id)) {
+      console.warn(`[McpAuthProxy] 404 — unknown target ID "${id}", registered: [${[...targets.keys()].join(', ')}]`)
       res.writeHead(404, { 'Content-Type': 'text/plain' })
       res.end('Unknown proxy target')
       return
@@ -180,7 +183,10 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
     const targetString = targetUrl.toString()
     const reqOptions = { method: req.method, headers: forwardHeaders }
 
+    console.log(`[McpAuthProxy] → ${req.method} ${targetString}`)
+
     const callback = (proxyRes: IncomingMessage) => {
+      console.log(`[McpAuthProxy] ← ${proxyRes.statusCode} ${proxyRes.headers['content-type'] || '(no content-type)'}`)
       // Forward status + headers back to MCP client
       const responseHeaders = { ...proxyRes.headers }
       // Remove transfer-encoding — Node handles chunking on the proxy→client leg.
