@@ -136,16 +136,15 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
       return
     }
 
-    // Build the target URL: base + remaining path + query string
+    // Build the target URL: base + remaining sub-path + query string
     const targetBase = targets.get(id)!
-    const remainingPath = '/' + pathParts.slice(1).join('/')
-    const targetUrl = new URL(remainingPath, targetBase)
-    // Preserve any sub-path from the original target URL
-    if (targetBase.includes('/', 8)) {
-      // targetBase has a path component (e.g. https://host/mcp)
-      const baseUrl = new URL(targetBase)
-      targetUrl.pathname = baseUrl.pathname.replace(/\/$/, '') + remainingPath
+    const subPathParts = pathParts.slice(1)
+    const targetUrl = new URL(targetBase)
+    if (subPathParts.length > 0) {
+      // Append sub-path: /<id>/sse → targetBase + /sse
+      targetUrl.pathname = targetUrl.pathname.replace(/\/$/, '') + '/' + subPathParts.join('/')
     }
+    // else: no sub-path — use targetBase as-is (no trailing slash added)
     targetUrl.search = reqUrl.search
 
     // Get fresh JWT
@@ -184,11 +183,26 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
     const callback = (proxyRes: IncomingMessage) => {
       // Forward status + headers back to MCP client
       const responseHeaders = { ...proxyRes.headers }
-      // Remove transfer-encoding if we're piping (Node handles chunking)
-      delete responseHeaders['transfer-encoding']
+      // Remove transfer-encoding — Node handles chunking on the proxy→client leg.
+      // But preserve it for SSE (text/event-stream) responses so events flush immediately.
+      const contentType = String(proxyRes.headers['content-type'] || '')
+      const isSSE = contentType.includes('text/event-stream')
+      if (!isSSE) {
+        delete responseHeaders['transfer-encoding']
+      }
 
       res.writeHead(proxyRes.statusCode || 502, responseHeaders)
-      proxyRes.pipe(res)
+
+      if (isSSE) {
+        // For SSE, flush each chunk immediately so events aren't buffered
+        proxyRes.on('data', (chunk: Buffer) => {
+          res.write(chunk)
+        })
+        proxyRes.on('end', () => res.end())
+        proxyRes.on('error', () => res.end())
+      } else {
+        proxyRes.pipe(res)
+      }
     }
 
     const proxyReq = isHttps
