@@ -34,6 +34,21 @@ import { registerUpdaterIpc, initAutoUpdater, isUpdateDownloaded, getPendingVers
 import { initCrashLogger } from './crash-logger'
 import { installProcessStreamErrorHandlers } from './process-stream-errors'
 
+/**
+ * Validate that a URL is safe to open via shell.openExternal.
+ * Rejects about:blank, empty strings, and non-http(s)/mailto URLs
+ * to avoid the macOS "no application set to open the URL" popup.
+ */
+function isExternalUrl(url: string): boolean {
+  if (!url || url === 'about:blank' || url === 'about:srcdoc') return false
+  try {
+    const parsed = new URL(url)
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:' || parsed.protocol === 'mailto:'
+  } catch {
+    return false
+  }
+}
+
 let mainWindow: BrowserWindow | null = null
 let tray: Tray | null = null
 let isQuitting = false
@@ -164,7 +179,9 @@ function createWindow(): void {
   })
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
-    shell.openExternal(details.url)
+    if (isExternalUrl(details.url)) {
+      shell.openExternal(details.url)
+    }
     return { action: 'deny' }
   })
 
@@ -870,6 +887,16 @@ app.whenReady().then(async () => {
   // fingerprinting that Akamai runs after the page loads).
   app.on('web-contents-created', (_event, contents) => {
     if (contents.getType() === 'webview') {
+      // Intercept window.open calls from webviews — open valid URLs externally,
+      // silently ignore about:blank and other invalid URLs to prevent the macOS
+      // "no application set to open the URL" popup.
+      contents.setWindowOpenHandler((details) => {
+        if (isExternalUrl(details.url)) {
+          shell.openExternal(details.url)
+        }
+        return { action: 'deny' }
+      })
+
       contents.on('dom-ready', () => {
         contents.executeJavaScript(`
           try {

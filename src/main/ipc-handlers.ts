@@ -277,7 +277,17 @@ export function registerIpcHandlers(
   })
 
   ipcMain.handle('shell:openExternal', async (_, url: string) => {
-    await shell.openExternal(url)
+    // Validate URL before opening — skip about:blank and non-http(s)/mailto URLs
+    // to avoid macOS "no application set to open the URL" popup
+    if (!url || url === 'about:blank' || url === 'about:srcdoc') return
+    try {
+      const parsed = new URL(url)
+      if (parsed.protocol === 'http:' || parsed.protocol === 'https:' || parsed.protocol === 'mailto:') {
+        await shell.openExternal(url)
+      }
+    } catch {
+      // Invalid URL — silently ignore
+    }
   })
 
   // Notification handler
