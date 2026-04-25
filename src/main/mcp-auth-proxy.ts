@@ -31,6 +31,9 @@ let authRef: EnterpriseAuth | null = null
 // Registration ID → target URL
 const targets = new Map<string, string>()
 
+// Reverse lookup: target URL → ID (deduplicates repeated registrations)
+const targetsByUrl = new Map<string, string>()
+
 // Monotonic counter for short, collision-free IDs
 let nextId = 1
 
@@ -42,13 +45,24 @@ export function getMcpAuthProxyPort(): number | null {
  * Register a remote MCP server URL and return a localhost proxy URL
  * that transparently injects fresh enterprise JWT on every request.
  *
+ * If the same targetUrl was already registered, returns the existing
+ * proxy URL (prevents leaking IDs when buildMcpServersForAdapter is
+ * called on every prompt for Claude Code adapter).
+ *
  * Returns null if the proxy is not running.
  */
 export function registerMcpProxyTarget(targetUrl: string): string | null {
   if (!port) return null
 
+  // Reuse existing registration for the same target URL
+  const existingId = targetsByUrl.get(targetUrl)
+  if (existingId) {
+    return `http://127.0.0.1:${port}/${existingId}`
+  }
+
   const id = String(nextId++)
   targets.set(id, targetUrl)
+  targetsByUrl.set(targetUrl, id)
   console.log(`[McpAuthProxy] Registered target ${id} → ${targetUrl}`)
   return `http://127.0.0.1:${port}/${id}`
 }
@@ -62,7 +76,9 @@ export function unregisterMcpProxyTarget(proxyUrl: string): void {
     const url = new URL(proxyUrl)
     const id = url.pathname.split('/')[1]
     if (id && targets.has(id)) {
+      const targetUrl = targets.get(id)!
       targets.delete(id)
+      targetsByUrl.delete(targetUrl)
       console.log(`[McpAuthProxy] Unregistered target ${id}`)
     }
   } catch {
@@ -100,6 +116,7 @@ export function stopMcpAuthProxy(): void {
     port = null
   }
   targets.clear()
+  targetsByUrl.clear()
   authRef = null
   nextId = 1
 }

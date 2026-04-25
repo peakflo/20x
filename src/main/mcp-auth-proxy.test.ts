@@ -113,6 +113,24 @@ describe('MCP Auth Proxy', () => {
     expect(proxyUrl).toBe(`http://127.0.0.1:${port}/1`)
   })
 
+  it('deduplicates repeated registrations for the same target URL', async () => {
+    const port = await startMcpAuthProxy(mockAuth as never)
+    const targetUrl = `http://127.0.0.1:${upstream.port}`
+
+    const url1 = registerMcpProxyTarget(targetUrl)
+    const url2 = registerMcpProxyTarget(targetUrl)
+    const url3 = registerMcpProxyTarget(targetUrl)
+
+    // All calls should return the same proxy URL (same ID)
+    expect(url1).toBe(`http://127.0.0.1:${port}/1`)
+    expect(url2).toBe(url1)
+    expect(url3).toBe(url1)
+
+    // A different target URL should get a new ID
+    const url4 = registerMcpProxyTarget('http://example.com:9999')
+    expect(url4).toBe(`http://127.0.0.1:${port}/2`)
+  })
+
   it('returns null from registerMcpProxyTarget when proxy is not running', () => {
     const result = registerMcpProxyTarget('http://example.com')
     expect(result).toBeNull()
