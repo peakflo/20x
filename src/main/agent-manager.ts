@@ -18,7 +18,8 @@ import { SessionStatusType, MessagePartType, MessageRole } from './adapters/codi
 import { getTaskApiPort, waitForTaskApiServer } from './task-api-server'
 import { randomUUID } from 'crypto'
 import { registerSecretSession, unregisterSecretSession, getSecretBrokerPort, writeSecretShellWrapper } from './secret-broker'
-import { registerMcpProxyTarget, getMcpAuthProxyPort } from './mcp-auth-proxy'
+// Proxy available but not wired in yet — SDK doesn't connect to proxy URLs (under investigation)
+// import { registerMcpProxyTarget, getMcpAuthProxyPort } from './mcp-auth-proxy'
 
 // Coding agent backend type enum
 enum CodingAgentType {
@@ -338,31 +339,18 @@ export class AgentManager extends EventEmitter {
         }
 
         // Inject enterprise JWT for Workflo MCP Dev Server
-        // Prefer auth proxy (auto-refreshes JWT on every request) over static header injection
-        let finalUrl = mcpServer.url
         if (mcpServer.name === '[Workflo] MCP Dev Server' && this.enterpriseAuth) {
-          const proxyUrl = getMcpAuthProxyPort() ? registerMcpProxyTarget(mcpServer.url) : null
-          if (proxyUrl) {
-            // Route through auth proxy — JWT is injected on every forwarded request
-            finalUrl = proxyUrl
-            // Remove any stale Authorization header — proxy handles auth
-            delete finalHeaders['Authorization']
-            console.log(`[AgentManager] MCP Dev Server routed through auth proxy: ${proxyUrl}`)
-          } else {
-            // Fallback: inject static JWT (original behavior — expires after ~55 min)
-            try {
-              const jwt = await this.enterpriseAuth.getJwt()
-              finalHeaders = { ...finalHeaders, Authorization: `Bearer ${jwt}` }
-              console.warn('[AgentManager] MCP auth proxy not available, using static JWT (will expire in long sessions)')
-            } catch (err) {
-              console.warn('[AgentManager] Failed to inject enterprise JWT for MCP Dev Server:', err)
-            }
+          try {
+            const jwt = await this.enterpriseAuth.getJwt()
+            finalHeaders = { ...finalHeaders, Authorization: `Bearer ${jwt}` }
+          } catch (err) {
+            console.warn('[AgentManager] Failed to inject enterprise JWT for MCP Dev Server:', err)
           }
         }
 
         result[mcpServer.name] = {
           type: 'http',
-          url: finalUrl,
+          url: mcpServer.url,
           headers: finalHeaders
         }
       }
