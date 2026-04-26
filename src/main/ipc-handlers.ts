@@ -885,6 +885,15 @@ export function registerIpcHandlers(
         // Pass enterprise auth to agent manager so it can inject JWT into MCP Dev Server requests
         agentManager.setEnterpriseAuth(enterpriseAuth!)
 
+        // Start MCP auth proxy so agent sessions get auto-refreshing JWT
+        try {
+          const { startMcpAuthProxy } = await import('./mcp-auth-proxy')
+          const proxyPort = await startMcpAuthProxy(enterpriseAuth!)
+          console.log(`[enterprise] MCP auth proxy started on port ${proxyPort}`)
+        } catch (proxyErr) {
+          console.warn('[enterprise] MCP auth proxy failed to start:', proxyErr)
+        }
+
         // Run initial sync (agents, skills, MCP servers)
         const syncStart = Date.now()
         console.log('[enterprise] Running initial resource sync...')

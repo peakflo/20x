@@ -29,6 +29,7 @@ import { EnterpriseHeartbeat } from './enterprise-heartbeat'
 import { EnterpriseStateSync } from './enterprise-state-sync'
 import { setTaskApiNotifier, setTranscriptProvider, stopTaskApiServer } from './task-api-server'
 import { startSecretBroker, stopSecretBroker, writeSecretShellWrapper } from './secret-broker'
+import { startMcpAuthProxy, stopMcpAuthProxy } from './mcp-auth-proxy'
 import { startMobileApiServer, stopMobileApiServer, broadcastToMobileClients, setMobileApiNotifier } from './mobile-api-server'
 import { registerUpdaterIpc, initAutoUpdater, isUpdateDownloaded, getPendingVersion } from './auto-updater'
 import { initCrashLogger } from './crash-logger'
@@ -81,6 +82,7 @@ async function shutdownAppServices(): Promise<void> {
   mcpToolCaller?.destroy()
   oauthManager?.destroy()
   stopSecretBroker()
+  stopMcpAuthProxy()
   stopMobileApiServer()
   stopTaskApiServer()
 
@@ -750,6 +752,16 @@ app.whenReady().then(async () => {
 
         // Wire enterprise auth into agent manager so it can inject JWT into MCP Dev Server requests
         agentManager.setEnterpriseAuth(enterpriseAuth)
+
+        // Start MCP auth proxy so agent sessions get auto-refreshing JWT
+        // on every MCP tool call (ACP/OpenCode/Claude Code never refresh
+        // MCP headers mid-session — the proxy solves this transparently).
+        try {
+          const proxyPort = await startMcpAuthProxy(enterpriseAuth)
+          console.log(`[Main] MCP auth proxy started on port ${proxyPort}`)
+        } catch (proxyErr) {
+          console.warn('[Main] MCP auth proxy failed to start (MCP JWT will use static headers):', proxyErr)
+        }
 
         syncManager.setEnterpriseConnection(apiClient, enterpriseSyncMgr, session.userId, enterpriseStateSyncInstance)
 

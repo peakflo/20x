@@ -18,6 +18,7 @@ import { SessionStatusType, MessagePartType, MessageRole } from './adapters/codi
 import { getTaskApiPort, waitForTaskApiServer } from './task-api-server'
 import { randomUUID } from 'crypto'
 import { registerSecretSession, unregisterSecretSession, getSecretBrokerPort, writeSecretShellWrapper } from './secret-broker'
+import { registerMcpProxyTarget, getMcpAuthProxyPort } from './mcp-auth-proxy'
 
 // Coding agent backend type enum
 enum CodingAgentType {
@@ -336,19 +337,31 @@ export class AgentManager extends EventEmitter {
           }
         }
 
-        // Inject enterprise JWT for Workflo MCP Dev Server
+        // Inject enterprise JWT for Workflo MCP Dev Server — route through auth proxy
+        let finalUrl = mcpServer.url
         if (mcpServer.name === '[Workflo] MCP Dev Server' && this.enterpriseAuth) {
-          try {
-            const jwt = await this.enterpriseAuth.getJwt()
-            finalHeaders = { ...finalHeaders, Authorization: `Bearer ${jwt}` }
-          } catch (err) {
-            console.warn('[AgentManager] Failed to inject enterprise JWT for MCP Dev Server:', err)
+          const proxyPort = getMcpAuthProxyPort()
+          const proxyUrl = proxyPort ? registerMcpProxyTarget(mcpServer.url) : null
+          if (proxyUrl) {
+            finalUrl = proxyUrl
+            // Don't send static Authorization — proxy injects fresh JWT per request
+            delete finalHeaders['Authorization']
+            console.log(`[AgentManager] MCP Dev Server routed through auth proxy: ${proxyUrl}`)
+          } else {
+            // Fallback: static JWT (proxy not running)
+            try {
+              const jwt = await this.enterpriseAuth.getJwt()
+              finalHeaders = { ...finalHeaders, Authorization: `Bearer ${jwt}` }
+              console.log('[AgentManager] MCP Dev Server using static JWT (proxy not available)')
+            } catch (err) {
+              console.warn('[AgentManager] Failed to inject enterprise JWT for MCP Dev Server:', err)
+            }
           }
         }
 
         result[mcpServer.name] = {
           type: 'http',
-          url: mcpServer.url,
+          url: finalUrl,
           headers: finalHeaders
         }
       }
@@ -380,7 +393,6 @@ export class AgentManager extends EventEmitter {
       }
     }
 
-    // result keys logged at debug level only
     return result
   }
 
