@@ -393,11 +393,6 @@ export class AgentManager extends EventEmitter {
       }
     }
 
-    // Log the exact MCP config that will be passed to the agent binary via --mcp-config
-    for (const [name, cfg] of Object.entries(result)) {
-      const c = cfg as unknown as Record<string, unknown>
-      console.log(`[AgentManager] MCP config for "${name}": type=${c.type}, url=${c.url || '(stdio)'}, headers=${c.headers ? Object.keys(c.headers as object).join(',') : 'none'}`)
-    }
     return result
   }
 
