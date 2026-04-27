@@ -1073,6 +1073,17 @@ export class AgentManager extends EventEmitter {
     }
     await yieldEL()
 
+    // Refresh the AI gateway virtual key before building the provider config
+    // so the adapter gets the latest key from the backend (handles key rotation,
+    // admin plan changes, etc.). Best-effort — fall back to the cached key.
+    if (this.enterpriseAuth) {
+      try {
+        await this.enterpriseAuth.refreshAiGatewayVirtualKey()
+      } catch (err) {
+        console.warn('[AgentManager] AI gateway key refresh failed (will use cached key):', err)
+      }
+    }
+
     // Initialize adapter
     console.log(`[AgentManager] startAdapterSession: agent=${agent.name}, coding_agent=${agent.config?.coding_agent || 'opencode'}, model=${agent.config?.model}, adapter=${adapter.constructor.name}`)
     await adapter.initialize()

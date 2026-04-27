@@ -444,6 +444,18 @@ export class OpencodeAdapter implements CodingAgentAdapter {
 
     await this.ensureServerRunning(config.serverUrl || DEFAULT_SERVER_URL)
 
+    // Always push the latest merged config (incl. refreshed AI gateway key)
+    // to the running server. ensureServerRunning skips the config push when
+    // the server is already running at the same URL, but provider credentials
+    // may have been rotated since the server was started.
+    if (this.sharedClient) {
+      try {
+        await this.pushMergedConfigToClient(this.sharedClient)
+      } catch {
+        // pushMergedConfigToClient already logs details; proceed with cached config
+      }
+    }
+
     const baseUrl = this.serverUrl || config.serverUrl || DEFAULT_SERVER_URL
     const ocClient = OpenCodeSDK!.createOpencodeClient({ baseUrl, fetch: noTimeoutFetch as unknown as (request: Request) => ReturnType<typeof fetch> })
 
