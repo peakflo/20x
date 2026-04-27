@@ -654,6 +654,15 @@ export class EnterpriseAuth {
     return jwt
   }
 
+  /**
+   * Re-fetch and store the AI gateway virtual key from the backend.
+   * Exposed publicly so callers (e.g. IPC handlers, adapter error recovery)
+   * can trigger a key refresh when LiteLLM returns "Invalid proxy server token".
+   */
+  async refreshAiGatewayVirtualKey(): Promise<void> {
+    return this.fetchAndStoreAiGatewayVirtualKey()
+  }
+
   private async fetchAndStoreAiGatewayVirtualKey(): Promise<void> {
     const result = await this.apiRequest('GET', '/api/20x/ai-gateway/virtual-key') as EnterpriseAiGatewayVirtualKeyResponse
 
