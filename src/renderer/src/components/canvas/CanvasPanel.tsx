@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState, useEffect, memo } from 'react'
+import { useCallback, useRef, useState, useEffect, memo, useMemo } from 'react'
 import {
   useCanvasStore,
   calculateSnap,
@@ -9,6 +9,8 @@ import {
 } from '@/stores/canvas-store'
 import { X, Focus, Maximize2, Minimize2, PanelLeft, PanelRight, Columns2, Globe } from 'lucide-react'
 import type { TaskWorkspaceLayout } from '@/components/tasks/TaskWorkspace'
+import { useTaskStore } from '@/stores/task-store'
+import { TaskStatus } from '@/types'
 import { TaskPanelContent } from './TaskPanelContent'
 import { TranscriptPanelContent } from './TranscriptPanelContent'
 import { AppPanelContent } from './AppPanelContent'
@@ -276,6 +278,12 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
     return unsub
   }, [panel.id])
 
+  // ── Task status for dynamic color coding ─────────────────
+  const taskStatus = useTaskStore(useCallback((s) =>
+    panel.type === 'task' ? s.tasks.find(t => t.id === panel.refId)?.status : undefined,
+    [panel.type, panel.refId])
+  )
+
   // ── Create connected browser panel (from side handle click) ──
   const handleCreateBrowser = useCallback(
     (e: React.MouseEvent) => {
@@ -315,15 +323,35 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
   )
 
   // ── Panel type styling ────────────────────────────────────
-  const TYPE_CONFIG: Record<string, { label: string; color: string; border: string }> = {
-    task: { label: 'Task', color: 'bg-blue-500/20 text-blue-400', border: 'border-blue-500/40' },
-    transcript: { label: 'Transcript', color: 'bg-purple-500/20 text-purple-400', border: 'border-purple-500/40' },
-    app: { label: 'App', color: 'bg-green-500/20 text-green-400', border: 'border-green-500/40' },
-    webpage: { label: 'Web', color: 'bg-cyan-500/20 text-cyan-400', border: 'border-cyan-500/40' },
-    terminal: { label: 'Terminal', color: 'bg-amber-500/20 text-amber-400', border: 'border-amber-500/50' },
-    browser: { label: 'Browser', color: 'bg-orange-500/20 text-orange-400', border: 'border-orange-500/40' },
-  }
-  const cfg = TYPE_CONFIG[panel.type] ?? { label: 'Panel', color: 'bg-muted/30 text-muted-foreground', border: 'border-border/50' }
+  const cfg = useMemo(() => {
+    const TYPE_CONFIG: Record<string, { label: string; color: string; border: string }> = {
+      task: { label: 'Task', color: 'bg-blue-500/20 text-blue-400', border: 'border-blue-500/40' },
+      transcript: { label: 'Transcript', color: 'bg-purple-500/20 text-purple-400', border: 'border-purple-500/40' },
+      app: { label: 'App', color: 'bg-green-500/20 text-green-400', border: 'border-green-500/40' },
+      webpage: { label: 'Web', color: 'bg-cyan-500/20 text-cyan-400', border: 'border-cyan-500/40' },
+      terminal: { label: 'Terminal', color: 'bg-amber-500/20 text-amber-400', border: 'border-amber-500/50' },
+      browser: { label: 'Browser', color: 'bg-orange-500/20 text-orange-400', border: 'border-orange-500/40' },
+    }
+
+    if (panel.type === 'task' && taskStatus) {
+      switch (taskStatus) {
+        case TaskStatus.AgentLearning:
+          return { label: 'Learning', color: 'bg-blue-500/20 text-blue-400', border: 'border-blue-500/50' }
+        case TaskStatus.AgentWorking:
+          return { label: 'Working', color: 'bg-amber-500/20 text-amber-400', border: 'border-amber-500/50' }
+        case TaskStatus.Completed:
+          return { label: 'Completed', color: 'bg-green-500/20 text-green-400', border: 'border-green-500/50' }
+        case TaskStatus.Triaging:
+          return { label: 'Triaging', color: 'bg-orange-500/20 text-orange-400', border: 'border-orange-500/50' }
+        case TaskStatus.ReadyForReview:
+          return { label: 'Review', color: 'bg-purple-500/20 text-purple-400', border: 'border-purple-500/50' }
+        default:
+          return TYPE_CONFIG.task
+      }
+    }
+
+    return TYPE_CONFIG[panel.type] ?? { label: 'Panel', color: 'bg-muted/30 text-muted-foreground', border: 'border-border/50' }
+  }, [panel.type, taskStatus])
 
   return (
     <div
