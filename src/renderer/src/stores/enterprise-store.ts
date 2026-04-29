@@ -65,7 +65,7 @@ export const useEnterpriseStore = create<EnterpriseState>((set) => ({
         const tenant = result.companies[0]
         set({ isLoading: true })
         try {
-          await enterpriseApi.selectTenant(tenant.id)
+          const tenantResult = await enterpriseApi.selectTenant(tenant.id)
           // Show "Connected" immediately — sync runs in background
           set({
             isLoading: false,
@@ -74,6 +74,11 @@ export const useEnterpriseStore = create<EnterpriseState>((set) => ({
             currentTenant: { id: tenant.id, name: tenant.name },
             availableTenants: result.companies
           })
+          if (tenantResult.warnings?.length) {
+            for (const w of tenantResult.warnings) {
+              console.warn('[enterprise]', w)
+            }
+          }
         } catch (err) {
           set({
             isLoading: false,
@@ -106,7 +111,7 @@ export const useEnterpriseStore = create<EnterpriseState>((set) => ({
         const tenant = result.companies[0]
         set({ isLoading: true })
         try {
-          await enterpriseApi.selectTenant(tenant.id)
+          const tenantResult = await enterpriseApi.selectTenant(tenant.id)
           set({
             isLoading: false,
             isAuthenticated: true,
@@ -114,6 +119,11 @@ export const useEnterpriseStore = create<EnterpriseState>((set) => ({
             currentTenant: { id: tenant.id, name: tenant.name },
             availableTenants: result.companies
           })
+          if (tenantResult.warnings?.length) {
+            for (const w of tenantResult.warnings) {
+              console.warn('[enterprise]', w)
+            }
+          }
         } catch (err) {
           set({
             isLoading: false,
@@ -140,6 +150,12 @@ export const useEnterpriseStore = create<EnterpriseState>((set) => ({
         isSyncing: true,
         currentTenant: result.tenant
       })
+      // Surface non-fatal warnings (e.g. AI gateway key fetch failure)
+      if (result.warnings?.length) {
+        for (const w of result.warnings) {
+          console.warn('[enterprise]', w)
+        }
+      }
     } catch (err) {
       set({
         isLoading: false,

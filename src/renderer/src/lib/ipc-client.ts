@@ -501,6 +501,7 @@ export const enterpriseApi = {
   selectTenant: (tenantId: string): Promise<{
     token: string
     tenant: { id: string; name: string }
+    warnings?: string[]
   }> => {
     return window.electronAPI.enterprise.selectTenant(tenantId)
   },

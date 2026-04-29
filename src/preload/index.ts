@@ -356,6 +356,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     selectTenant: (tenantId: string): Promise<{
       token: string
       tenant: { id: string; name: string }
+      warnings?: string[]
     }> => ipcRenderer.invoke('enterprise:selectTenant', tenantId),
     logout: (): Promise<void> =>
       ipcRenderer.invoke('enterprise:logout'),

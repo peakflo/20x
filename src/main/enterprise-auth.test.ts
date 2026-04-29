@@ -326,7 +326,8 @@ describe('EnterpriseAuth logging', () => {
 
     expect(result).toEqual({
       token: 'jwt-token',
-      tenant: { id: 'tenant-1', name: 'Peakflo' }
+      tenant: { id: 'tenant-1', name: 'Peakflo' },
+      warnings: ['AI Gateway models unavailable: AI gateway unavailable']
     })
     expect(readEnterpriseAiGatewayConfig(db as never)).toEqual({
       apiKey: 'existing-key',

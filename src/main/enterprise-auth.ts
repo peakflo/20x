@@ -74,6 +74,8 @@ export interface EnterpriseLoginResult {
 export interface EnterpriseSelectTenantResult {
   token: string
   tenant: { id: string; name: string }
+  /** Non-fatal warnings from post-auth setup (e.g. AI gateway key fetch failure). */
+  warnings?: string[]
 }
 
 export interface EnterpriseSession {
@@ -270,16 +272,20 @@ export class EnterpriseAuth {
     this.storeJwt(result.token, result.expiresIn)
     this.db.setSetting(KEYS.TENANT_ID, result.tenant.id)
     this.db.setSetting(KEYS.TENANT_NAME, result.tenant.name)
+    const warnings: string[] = []
     try {
       this.logAuthEvent('ai_gateway_virtual_key_fetch_start')
       await this.fetchAndStoreAiGatewayVirtualKey()
     } catch (err) {
       this.logAuthEvent('ai_gateway_virtual_key_fetch_error', this.describeError(err))
+      const msg = err instanceof Error ? err.message : String(err)
+      warnings.push(`AI Gateway models unavailable: ${msg}`)
     }
 
     return {
       token: result.token,
-      tenant: result.tenant
+      tenant: result.tenant,
+      ...(warnings.length > 0 ? { warnings } : {})
     }
   }
 

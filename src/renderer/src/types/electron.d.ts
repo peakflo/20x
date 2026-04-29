@@ -349,6 +349,7 @@ interface ElectronAPI {
     selectTenant: (tenantId: string) => Promise<{
       token: string
       tenant: { id: string; name: string }
+      warnings?: string[]
     }>
     logout: () => Promise<void>
     getSession: () => Promise<{
