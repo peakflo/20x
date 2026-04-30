@@ -547,6 +547,15 @@ export const enterpriseApi = {
     return window.electronAPI.enterprise.disableIframeAuth()
   },
 
+  getAiGatewayStatus: (): Promise<{
+    configured: boolean
+    modelCount: number
+    keyName: string | null
+    expiresAt: string | null
+  }> => {
+    return window.electronAPI.enterprise.getAiGatewayStatus()
+  },
+
   onSyncComplete: (callback: (data: { success: boolean; syncMs?: number; error?: string }) => void): (() => void) => {
     return window.electronAPI.enterprise.onSyncComplete(callback)
   }

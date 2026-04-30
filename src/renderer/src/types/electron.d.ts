@@ -365,6 +365,12 @@ interface ElectronAPI {
     getAuthTokens: () => Promise<{ accessToken: string; refreshToken: string; tenantId: string | null }>
     enableIframeAuth: () => Promise<{ apiUrl: string }>
     disableIframeAuth: () => Promise<void>
+    getAiGatewayStatus: () => Promise<{
+      configured: boolean
+      modelCount: number
+      keyName: string | null
+      expiresAt: string | null
+    }>
     onSyncComplete: (callback: (data: { success: boolean; syncMs?: number; error?: string }) => void) => () => void
   }
   updater: {

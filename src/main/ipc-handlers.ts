@@ -1084,6 +1084,25 @@ export function registerIpcHandlers(
     return session
   })
 
+  ipcMain.handle('enterprise:getAiGatewayStatus', async () => {
+    try {
+      const { readEnterpriseAiGatewayConfig } = await import('./enterprise-ai-gateway')
+      const config = readEnterpriseAiGatewayConfig(db)
+      if (!config) {
+        return { configured: false, modelCount: 0, keyName: null, expiresAt: null }
+      }
+      return {
+        configured: true,
+        modelCount: config.models?.length ?? 0,
+        keyName: config.keyName ?? null,
+        expiresAt: config.expiresAt ?? null
+      }
+    } catch (err) {
+      console.error('[enterprise] Failed to read AI gateway status:', err)
+      return { configured: false, modelCount: 0, keyName: null, expiresAt: null }
+    }
+  })
+
   ipcMain.handle('enterprise:refreshToken', async () => {
     if (!enterpriseAuth) throw new Error('Enterprise auth not available')
     return await enterpriseAuth.refreshToken()

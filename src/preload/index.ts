@@ -380,6 +380,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('enterprise:enableIframeAuth'),
     disableIframeAuth: (): Promise<void> =>
       ipcRenderer.invoke('enterprise:disableIframeAuth'),
+    getAiGatewayStatus: (): Promise<{
+      configured: boolean
+      modelCount: number
+      keyName: string | null
+      expiresAt: string | null
+    }> => ipcRenderer.invoke('enterprise:getAiGatewayStatus'),
     onSyncComplete: (callback: (data: { success: boolean; syncMs?: number; error?: string }) => void): (() => void) => {
       const handler = (_: unknown, data: { success: boolean; syncMs?: number; error?: string }): void => callback(data)
       ipcRenderer.on('enterprise:syncComplete', handler)

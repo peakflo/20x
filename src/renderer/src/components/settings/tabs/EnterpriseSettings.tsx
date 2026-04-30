@@ -4,6 +4,14 @@ import { Label } from '@/components/ui/Label'
 import { Button } from '@/components/ui/Button'
 import { useEnterpriseStore } from '@/stores/enterprise-store'
 import { EnterpriseLoginModal } from './EnterpriseLoginModal'
+import { enterpriseApi } from '@/lib/ipc-client'
+
+interface AiGatewayStatus {
+  configured: boolean
+  modelCount: number
+  keyName: string | null
+  expiresAt: string | null
+}
 
 export function EnterpriseSettings() {
   const {
@@ -19,10 +27,22 @@ export function EnterpriseSettings() {
   } = useEnterpriseStore()
 
   const [showLoginModal, setShowLoginModal] = useState(false)
+  const [aiGatewayStatus, setAiGatewayStatus] = useState<AiGatewayStatus | null>(null)
 
   useEffect(() => {
     loadSession()
   }, [loadSession])
+
+  // Fetch AI gateway status when authenticated
+  useEffect(() => {
+    if (isAuthenticated && currentTenant) {
+      enterpriseApi.getAiGatewayStatus().then(setAiGatewayStatus).catch(() => {
+        setAiGatewayStatus(null)
+      })
+    } else {
+      setAiGatewayStatus(null)
+    }
+  }, [isAuthenticated, currentTenant])
 
   // Listen for background sync completion from main process
   useEffect(() => {
@@ -33,6 +53,8 @@ export function EnterpriseSettings() {
       } else {
         console.warn('[enterprise] Sync failed:', data.error)
       }
+      // Refresh AI gateway status after sync
+      enterpriseApi.getAiGatewayStatus().then(setAiGatewayStatus).catch(() => {})
     })
     return () => unsubscribe?.()
   }, [setSyncing])
@@ -99,6 +121,40 @@ export function EnterpriseSettings() {
             <span className="text-sm text-foreground font-medium">
               {currentTenant.name}
             </span>
+          </div>
+
+          {/* AI Gateway status */}
+          <div className="flex items-center justify-between py-2 border-b border-border">
+            <div className="space-y-0.5">
+              <Label>AI Gateway</Label>
+              <p className="text-xs text-muted-foreground">
+                Peakflo AI model access
+              </p>
+            </div>
+            <div className="text-right">
+              {aiGatewayStatus === null ? (
+                <span className="text-sm text-muted-foreground">Loading...</span>
+              ) : aiGatewayStatus.configured ? (
+                <div className="space-y-0.5">
+                  <div className="flex items-center gap-1.5 justify-end">
+                    <div className="h-1.5 w-1.5 rounded-full bg-green-500" />
+                    <span className="text-sm text-foreground">
+                      {aiGatewayStatus.modelCount} model{aiGatewayStatus.modelCount !== 1 ? 's' : ''} available
+                    </span>
+                  </div>
+                  {aiGatewayStatus.expiresAt && (
+                    <p className="text-xs text-muted-foreground">
+                      Key expires {new Date(aiGatewayStatus.expiresAt).toLocaleDateString()}
+                    </p>
+                  )}
+                </div>
+              ) : (
+                <div className="flex items-center gap-1.5">
+                  <div className="h-1.5 w-1.5 rounded-full bg-muted-foreground/40" />
+                  <span className="text-sm text-muted-foreground">Not configured</span>
+                </div>
+              )}
+            </div>
           </div>
 
           {/* Actions */}
