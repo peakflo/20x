@@ -16,14 +16,26 @@ export function SkillSelectorDialog({ open, onOpenChange, initialSkillIds, onCon
   const { skills, fetchSkills } = useSkillStore()
   const [selected, setSelected] = useState<Set<string>>(new Set(initialSkillIds))
   const [search, setSearch] = useState('')
+  const initialSkillIdsKey = useMemo(() => [...initialSkillIds].sort().join('\0'), [initialSkillIds])
 
   useEffect(() => {
-    if (open) {
-      fetchSkills()
-      setSelected(new Set(initialSkillIds))
-      setSearch('')
-    }
-  }, [open, initialSkillIds])
+    if (!open) return
+
+    fetchSkills()
+    setSearch('')
+  }, [open, fetchSkills])
+
+  useEffect(() => {
+    if (!open) return
+
+    setSelected((prev) => {
+      const next = new Set(initialSkillIds)
+      if (prev.size === next.size && Array.from(next).every((id) => prev.has(id))) {
+        return prev
+      }
+      return next
+    })
+  }, [open, initialSkillIds, initialSkillIdsKey])
 
   const filtered = useMemo(() => {
     if (!search) return skills
