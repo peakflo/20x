@@ -552,6 +552,12 @@ export const enterpriseApi = {
     modelCount: number
     keyName: string | null
     expiresAt: string | null
+    subscription: {
+      planName: string
+      status: string
+      planId: string
+      currentPeriodEnd: string | null
+    } | null
   }> => {
     return window.electronAPI.enterprise.getAiGatewayStatus()
   },

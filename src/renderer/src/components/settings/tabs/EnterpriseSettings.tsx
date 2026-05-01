@@ -11,6 +11,12 @@ interface AiGatewayStatus {
   modelCount: number
   keyName: string | null
   expiresAt: string | null
+  subscription: {
+    planName: string
+    status: string
+    planId: string
+    currentPeriodEnd: string | null
+  } | null
 }
 
 export function EnterpriseSettings() {
@@ -156,6 +162,55 @@ export function EnterpriseSettings() {
               )}
             </div>
           </div>
+
+          {/* AI Gateway subscription */}
+          {aiGatewayStatus && (
+            <div className="flex items-center justify-between py-2 border-b border-border">
+              <div className="space-y-0.5">
+                <Label>AI Subscription</Label>
+                <p className="text-xs text-muted-foreground">
+                  Current plan and billing status
+                </p>
+              </div>
+              <div className="text-right">
+                {aiGatewayStatus.subscription ? (
+                  <div className="space-y-0.5">
+                    <div className="flex items-center gap-1.5 justify-end">
+                      <div className={`h-1.5 w-1.5 rounded-full ${
+                        aiGatewayStatus.subscription.status === 'active'
+                          ? 'bg-green-500'
+                          : aiGatewayStatus.subscription.status === 'suspended'
+                            ? 'bg-yellow-500'
+                            : 'bg-red-500'
+                      }`} />
+                      <span className="text-sm text-foreground">
+                        {aiGatewayStatus.subscription.planName}
+                      </span>
+                      <span className={`text-xs px-1.5 py-0.5 rounded-full ${
+                        aiGatewayStatus.subscription.status === 'active'
+                          ? 'bg-green-500/10 text-green-500'
+                          : aiGatewayStatus.subscription.status === 'suspended'
+                            ? 'bg-yellow-500/10 text-yellow-500'
+                            : 'bg-red-500/10 text-red-500'
+                      }`}>
+                        {aiGatewayStatus.subscription.status}
+                      </span>
+                    </div>
+                    {aiGatewayStatus.subscription.currentPeriodEnd && (
+                      <p className="text-xs text-muted-foreground">
+                        Period ends {new Date(aiGatewayStatus.subscription.currentPeriodEnd).toLocaleDateString()}
+                      </p>
+                    )}
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-1.5">
+                    <div className="h-1.5 w-1.5 rounded-full bg-muted-foreground/40" />
+                    <span className="text-sm text-muted-foreground">No plan selected</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
 
           {/* Actions */}
           <div className="flex items-center gap-3 pt-2">

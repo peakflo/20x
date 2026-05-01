@@ -370,6 +370,12 @@ interface ElectronAPI {
       modelCount: number
       keyName: string | null
       expiresAt: string | null
+      subscription: {
+        planName: string
+        status: string
+        planId: string
+        currentPeriodEnd: string | null
+      } | null
     }>
     onSyncComplete: (callback: (data: { success: boolean; syncMs?: number; error?: string }) => void) => () => void
   }

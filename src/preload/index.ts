@@ -385,6 +385,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
       modelCount: number
       keyName: string | null
       expiresAt: string | null
+      subscription: {
+        planName: string
+        status: string
+        planId: string
+        currentPeriodEnd: string | null
+      } | null
     }> => ipcRenderer.invoke('enterprise:getAiGatewayStatus'),
     onSyncComplete: (callback: (data: { success: boolean; syncMs?: number; error?: string }) => void): (() => void) => {
       const handler = (_: unknown, data: { success: boolean; syncMs?: number; error?: string }): void => callback(data)
