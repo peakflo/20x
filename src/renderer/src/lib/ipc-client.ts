@@ -501,6 +501,7 @@ export const enterpriseApi = {
   selectTenant: (tenantId: string): Promise<{
     token: string
     tenant: { id: string; name: string }
+    warnings?: string[]
   }> => {
     return window.electronAPI.enterprise.selectTenant(tenantId)
   },
@@ -544,6 +545,21 @@ export const enterpriseApi = {
 
   disableIframeAuth: (): Promise<void> => {
     return window.electronAPI.enterprise.disableIframeAuth()
+  },
+
+  getAiGatewayStatus: (): Promise<{
+    configured: boolean
+    modelCount: number
+    keyName: string | null
+    expiresAt: string | null
+    subscription: {
+      planName: string
+      status: string
+      planId: string
+      currentPeriodEnd: string | null
+    } | null
+  }> => {
+    return window.electronAPI.enterprise.getAiGatewayStatus()
   },
 
   onSyncComplete: (callback: (data: { success: boolean; syncMs?: number; error?: string }) => void): (() => void) => {

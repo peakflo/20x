@@ -1084,6 +1084,54 @@ export function registerIpcHandlers(
     return session
   })
 
+  ipcMain.handle('enterprise:getAiGatewayStatus', async () => {
+    const base = { configured: false, modelCount: 0, keyName: null as string | null, expiresAt: null as string | null, subscription: null as { planName: string; status: string; planId: string; currentPeriodEnd: string | null } | null }
+    try {
+      const { readEnterpriseAiGatewayConfig } = await import('./enterprise-ai-gateway')
+      const config = readEnterpriseAiGatewayConfig(db)
+      if (config) {
+        base.configured = true
+        base.modelCount = config.models?.length ?? 0
+        base.keyName = config.keyName ?? null
+        base.expiresAt = config.expiresAt ?? null
+      }
+
+      // Fetch subscription/plan info from the server API
+      if (enterpriseAuth) {
+        try {
+          const planResponse = await enterpriseAuth.apiRequest('GET', '/api/20x/ai-gateway/plan') as {
+            currentSubscription?: {
+              planId: string
+              status: string
+              currentPeriodEnd?: string | null
+            } | null
+            plans?: Array<{ id: string; name: string }>
+          }
+          if (planResponse?.currentSubscription) {
+            const sub = planResponse.currentSubscription
+            const plans = planResponse.plans ?? []
+            const matchedPlan = plans.find(p => p.id === sub.planId)
+            base.subscription = {
+              planId: sub.planId,
+              planName: matchedPlan?.name ?? sub.planId,
+              status: sub.status,
+              currentPeriodEnd: sub.currentPeriodEnd ?? null
+            }
+          }
+        } catch (apiErr) {
+          // Server API may be unavailable (e.g. AI gateway disabled) — that's fine,
+          // we still return the local config status.
+          console.warn('[enterprise] Failed to fetch AI gateway plan from server:', apiErr)
+        }
+      }
+
+      return base
+    } catch (err) {
+      console.error('[enterprise] Failed to read AI gateway status:', err)
+      return base
+    }
+  })
+
   ipcMain.handle('enterprise:refreshToken', async () => {
     if (!enterpriseAuth) throw new Error('Enterprise auth not available')
     return await enterpriseAuth.refreshToken()

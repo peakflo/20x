@@ -356,6 +356,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     selectTenant: (tenantId: string): Promise<{
       token: string
       tenant: { id: string; name: string }
+      warnings?: string[]
     }> => ipcRenderer.invoke('enterprise:selectTenant', tenantId),
     logout: (): Promise<void> =>
       ipcRenderer.invoke('enterprise:logout'),
@@ -379,6 +380,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('enterprise:enableIframeAuth'),
     disableIframeAuth: (): Promise<void> =>
       ipcRenderer.invoke('enterprise:disableIframeAuth'),
+    getAiGatewayStatus: (): Promise<{
+      configured: boolean
+      modelCount: number
+      keyName: string | null
+      expiresAt: string | null
+      subscription: {
+        planName: string
+        status: string
+        planId: string
+        currentPeriodEnd: string | null
+      } | null
+    }> => ipcRenderer.invoke('enterprise:getAiGatewayStatus'),
     onSyncComplete: (callback: (data: { success: boolean; syncMs?: number; error?: string }) => void): (() => void) => {
       const handler = (_: unknown, data: { success: boolean; syncMs?: number; error?: string }): void => callback(data)
       ipcRenderer.on('enterprise:syncComplete', handler)
