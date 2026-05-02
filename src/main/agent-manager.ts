@@ -2019,13 +2019,13 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
    * Remove a heartbeat session from memory after the check completes.
    * Prevents heartbeat-{taskId} sessions from accumulating indefinitely.
    */
-  cleanupHeartbeatSession(taskId: string): void {
+  async cleanupHeartbeatSession(taskId: string): Promise<void> {
     const heartbeatTaskId = `heartbeat-${taskId}`
     for (const [id, session] of this.sessions.entries()) {
       if (session.taskId === heartbeatTaskId) {
-        this.sessions.delete(id)
+        await this.stopSession(id, false)
         console.log(`[AgentManager] Cleaned up heartbeat session ${id} for task ${taskId}`)
-        break
+        return
       }
     }
   }

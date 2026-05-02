@@ -42,6 +42,7 @@ function mockDbManager(overrides: Record<string, unknown> = {}): DatabaseManager
 function mockAgentManager(overrides: Record<string, unknown> = {}): AgentManager {
   return {
     startHeartbeatSession: vi.fn().mockResolvedValue('session-1'),
+    cleanupHeartbeatSession: vi.fn().mockResolvedValue(undefined),
     getSession: vi.fn().mockReturnValue({ status: 'idle' }),
     getLastAssistantMessage: vi.fn().mockReturnValue(HEARTBEAT_OK_TOKEN),
     hasActiveSessionForTask: vi.fn().mockReturnValue(false),
