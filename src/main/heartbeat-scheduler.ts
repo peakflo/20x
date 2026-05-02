@@ -345,7 +345,7 @@ export class HeartbeatScheduler {
       this.advanceNextCheck(task)
     } finally {
       this.inProgress.delete(task.id)
-      this.agentManager.cleanupHeartbeatSession(task.id)
+      await this.agentManager.cleanupHeartbeatSession(task.id)
     }
   }
 
@@ -367,7 +367,7 @@ export class HeartbeatScheduler {
         this.logResult(task.id, logStatus, this.extractSummary(mastermindResult, logStatus), mastermindSessionId)
       }
     } finally {
-      this.agentManager.cleanupHeartbeatSession(task.id)
+      await this.agentManager.cleanupHeartbeatSession(task.id)
     }
   }
 

@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { AgentManager } from './agent-manager'
 import { SessionStatus, TaskStatus } from '../shared/constants'
 import { MessagePartType, MessageRole, SessionStatusType } from './adapters/coding-agent-adapter'
+import { unregisterSecretSession } from './secret-broker'
 
 // Mock filesystem operations
 vi.mock('fs', async (importOriginal) => {
@@ -102,6 +103,7 @@ function createMockDb(agentConfig: Record<string, unknown> = {}) {
     getMcpServer: vi.fn(() => null),
     getSecretsByIds: vi.fn(() => []),
     getSetting: vi.fn(() => null),
+    updateTask: vi.fn(),
   } as unknown as ConstructorParameters<typeof AgentManager>[0]
 }
 
@@ -1166,6 +1168,41 @@ describe('AgentManager session ID re-keying redirect', () => {
     // Redirect should be cleaned up
     expect((mgr as any).sessionIdRedirects.has('temp-id')).toBe(false)
     expect((mgr as any).sessions.has('real-id')).toBe(false)
+  })
+
+  it('cleanupHeartbeatSession fully tears down heartbeat sessions without resetting task status', async () => {
+    const mockDb = createMockDb()
+    const mgr = new AgentManager(mockDb)
+    const destroySession = vi.fn(async () => undefined)
+    const heartbeatSession = {
+      id: 'real-id',
+      agentId: 'agent-1',
+      taskId: 'heartbeat-task-1',
+      status: 'idle',
+      workspaceDir: '/tmp/workspace/task-1',
+      adapter: { destroySession },
+      pollingStarted: true,
+      createdAt: new Date(),
+      seenMessageIds: new Set<string>(),
+      seenPartIds: new Set<string>(),
+      partContentLengths: new Map<string, string>(),
+      secretSessionToken: 'secret-token',
+    }
+
+    ;(mgr as any).sessions.set('real-id', heartbeatSession)
+    ;(mgr as any).sessionIdRedirects.set('temp-id', 'real-id')
+
+    vi.spyOn(mgr as any, 'stopAdapterPolling').mockImplementation(() => undefined)
+    vi.spyOn(mgr as any, 'getAdapter').mockReturnValue({ destroySession })
+    vi.spyOn(mgr as any, 'buildSessionConfig').mockResolvedValue({})
+
+    await mgr.cleanupHeartbeatSession('task-1')
+
+    expect(destroySession).toHaveBeenCalledWith('real-id', {})
+    expect(unregisterSecretSession).toHaveBeenCalledWith('secret-token')
+    expect((mgr as any).sessionIdRedirects.has('temp-id')).toBe(false)
+    expect((mgr as any).sessions.has('real-id')).toBe(false)
+    expect(mockDb.updateTask).not.toHaveBeenCalled()
   })
 })
 
