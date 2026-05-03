@@ -3,7 +3,56 @@ import { Terminal as XTerm } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { useCanvasStore } from '@/stores/canvas-store'
+import { useUIStore } from '@/stores/ui-store'
 import '@xterm/xterm/css/xterm.css'
+
+/** Terminal theme palettes keyed by light/dark mode */
+const TERMINAL_THEMES = {
+  dark: {
+    background: '#141a26',
+    foreground: '#c9d1d9',
+    cursor: '#58a6ff',
+    selectionBackground: '#264f78',
+    black: '#141a26',
+    red: '#ff7b72',
+    green: '#3fb950',
+    yellow: '#d29922',
+    blue: '#58a6ff',
+    magenta: '#bc8cff',
+    cyan: '#39c5cf',
+    white: '#c9d1d9',
+    brightBlack: '#484f58',
+    brightRed: '#ffa198',
+    brightGreen: '#56d364',
+    brightYellow: '#e3b341',
+    brightBlue: '#79c0ff',
+    brightMagenta: '#d2a8ff',
+    brightCyan: '#56d4dd',
+    brightWhite: '#f0f6fc',
+  },
+  light: {
+    background: '#FFFFFF',
+    foreground: '#1A1C1F',
+    cursor: '#0969DA',
+    selectionBackground: '#B6D5F7',
+    black: '#24292F',
+    red: '#CF222E',
+    green: '#116329',
+    yellow: '#9A6700',
+    blue: '#0969DA',
+    magenta: '#8250DF',
+    cyan: '#1B7C83',
+    white: '#6E7781',
+    brightBlack: '#57606A',
+    brightRed: '#A40E26',
+    brightGreen: '#1A7F37',
+    brightYellow: '#7D4E00',
+    brightBlue: '#218BFF',
+    brightMagenta: '#A475F9',
+    brightCyan: '#3192AA',
+    brightWhite: '#8C959F',
+  },
+} as const
 
 interface TerminalPanelContentProps {
   terminalId: string
@@ -39,6 +88,16 @@ export function TerminalPanelContent({ terminalId, cwd }: TerminalPanelContentPr
   // Store cwd in a ref — only used at init time, never triggers re-init
   const cwdRef = useRef(cwd)
 
+  // Resolve terminal theme from current app theme
+  const resolvedTheme = useUIStore((s) => {
+    const t = s.theme
+    if (t === 'system') {
+      return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+    }
+    return t
+  })
+  const termTheme = TERMINAL_THEMES[resolvedTheme]
+
   const initTerminal = useCallback(async () => {
     console.log(`[Terminal:${terminalId}] initTerminal called`, {
       hasContainer: !!containerRef.current,
@@ -61,28 +120,7 @@ export function TerminalPanelContent({ terminalId, cwd }: TerminalPanelContentPr
       fontSize: 13,
       fontFamily: 'Menlo, Monaco, "Courier New", monospace',
       lineHeight: 1.2,
-      theme: {
-        background: '#141a26',
-        foreground: '#c9d1d9',
-        cursor: '#58a6ff',
-        selectionBackground: '#264f78',
-        black: '#141a26',
-        red: '#ff7b72',
-        green: '#3fb950',
-        yellow: '#d29922',
-        blue: '#58a6ff',
-        magenta: '#bc8cff',
-        cyan: '#39c5cf',
-        white: '#c9d1d9',
-        brightBlack: '#484f58',
-        brightRed: '#ffa198',
-        brightGreen: '#56d364',
-        brightYellow: '#e3b341',
-        brightBlue: '#79c0ff',
-        brightMagenta: '#d2a8ff',
-        brightCyan: '#56d4dd',
-        brightWhite: '#f0f6fc',
-      },
+      theme: termTheme,
       allowProposedApi: true,
     })
 
@@ -279,6 +317,17 @@ export function TerminalPanelContent({ terminalId, cwd }: TerminalPanelContentPr
     return () => clearInterval(interval)
   }, [isReady, terminalId])
 
+  // ── Update xterm colors when the app theme changes ──
+  useEffect(() => {
+    const term = xtermRef.current
+    if (!term?.options) return
+    term.options.theme = termTheme
+    // Update container background to match
+    if (containerRef.current) {
+      containerRef.current.style.background = termTheme.background
+    }
+  }, [termTheme])
+
   if (error) {
     return (
       <div className="flex items-center justify-center h-full text-red-400/60 text-xs">
@@ -305,7 +354,7 @@ export function TerminalPanelContent({ terminalId, cwd }: TerminalPanelContentPr
       className="h-full w-full xterm-container"
       onClick={handleClick}
       style={{
-        background: '#141a26',
+        background: termTheme.background,
         // Minimum dimensions prevent xterm's internal canvas renderer from
         // computing NaN cell sizes (which causes the toFixed crash).
         minWidth: 100,
