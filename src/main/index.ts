@@ -113,12 +113,12 @@ function createWindow(): void {
     height: 900,
     minWidth: 900,
     minHeight: 600,
-    backgroundColor: '#1E2127',
+    backgroundColor: '#181818',
     ...(isMac
       ? { titleBarStyle: 'hiddenInset' as const, trafficLightPosition: { x: 16, y: 16 } }
       : {
           titleBarStyle: 'hidden' as const,
-          titleBarOverlay: { color: '#1E2127', symbolColor: '#535D71', height: 36 },
+          titleBarOverlay: { color: '#181818', symbolColor: '#888888', height: 36 },
           icon: is.dev ? join(__dirname, '../../resources/icon.ico') : join(process.resourcesPath, 'icon.ico')
         }),
     show: false,

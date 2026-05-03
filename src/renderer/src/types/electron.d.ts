@@ -330,6 +330,7 @@ interface ElectronAPI {
     requestNotificationPermission: () => Promise<'granted' | 'denied'>
     getMinimizeToTray: () => Promise<boolean>
     setMinimizeToTray: (enabled: boolean) => Promise<boolean>
+    setTheme: (theme: 'light' | 'dark') => Promise<void>
   }
   mobile: {
     getInfo: () => Promise<{ url: string; port: number }>
