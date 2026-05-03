@@ -59,6 +59,9 @@ importers:
       cron-parser:
         specifier: ^5.5.0
         version: 5.5.0
+      electron-liquid-glass:
+        specifier: ^1.1.1
+        version: 1.1.1
       electron-updater:
         specifier: ^6.8.3
         version: 6.8.3
@@ -2820,6 +2823,11 @@ packages:
     engines: {node: '>=14.0.0'}
     hasBin: true
 
+  electron-liquid-glass@1.1.1:
+    resolution: {integrity: sha512-AfPxcu6RJYxlsW2sjgjDEON0rVOjhh5QYM6ur5hsfILQmfY5ewHCWJZJZoDsQxhjeW1DAhbRbvB79IvgW4ansA==}
+    engines: {node: '>=18'}
+    os: [darwin]
+
   electron-publish@25.1.7:
     resolution: {integrity: sha512-+jbTkR9m39eDBMP4gfbqglDd6UvBC7RLh5Y0MhFSsc6UkGHj9Vj9TWobxevHYMMqmoujL11ZLjfPpMX+Pt6YEg==}
 
@@ -4020,8 +4028,16 @@ packages:
   node-addon-api@7.1.1:
     resolution: {integrity: sha512-5m3bsyrjFWE1xf7nz7YXdN4udnVtXK6/Yfgn5qnahL6bCkf2yKt4k3nuTKAtT4r3IG8JNR2ncsIMdZuAzJjHQQ==}
 
+  node-addon-api@8.7.0:
+    resolution: {integrity: sha512-9MdFxmkKaOYVTV+XVRG8ArDwwQ77XIgIPyKASB1k3JPq3M8fGQQQE3YpMOrKm6g//Ktx8ivZr8xo1Qmtqub+GA==}
+    engines: {node: ^18 || ^20 || >= 21}
+
   node-api-version@0.2.1:
     resolution: {integrity: sha512-2xP/IGGMmmSQpI1+O/k72jF/ykvZ89JeuKX3TLJAYPDVLUalrshrLHkeVcCCZqG/eEa635cr8IBYzgnDvM2O8Q==}
+
+  node-gyp-build@4.8.4:
+    resolution: {integrity: sha512-LA4ZjwlnUblHVgq0oBF3Jl/6h/Nvs5fzBLwdEF4nuxnFdsfajde4WfxtJr3CaiH+F6ewcIB/q4jQ4UzPyid+CQ==}
+    hasBin: true
 
   node-gyp@11.5.0:
     resolution: {integrity: sha512-ra7Kvlhxn5V9Slyus0ygMa2h+UqExPqUIkfk7Pc8QTLT956JLSy51uWFwHtIYy0vI8cB4BDhc/S03+880My/LQ==}
@@ -7872,6 +7888,13 @@ snapshots:
       - electron-builder-squirrel-windows
       - supports-color
 
+  electron-liquid-glass@1.1.1:
+    dependencies:
+      bindings: 1.5.0
+      node-addon-api: 8.7.0
+    optionalDependencies:
+      node-gyp-build: 4.8.4
+
   electron-publish@25.1.7:
     dependencies:
       '@types/fs-extra': 9.0.13
@@ -9363,9 +9386,14 @@ snapshots:
 
   node-addon-api@7.1.1: {}
 
+  node-addon-api@8.7.0: {}
+
   node-api-version@0.2.1:
     dependencies:
       semver: 7.7.4
+
+  node-gyp-build@4.8.4:
+    optional: true
 
   node-gyp@11.5.0:
     dependencies:

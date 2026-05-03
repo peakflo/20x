@@ -404,14 +404,14 @@ function BrowserUrlBar({
   return (
     <form
       onSubmit={onSubmit}
-      className="flex items-center gap-1.5 px-2 py-1.5 bg-[#0d1117]/60 border-b border-border/20 flex-shrink-0"
+      className="flex items-center gap-1.5 px-2 py-1.5 bg-[var(--color-canvas-panel-bg)]/80 border-b border-border/20 flex-shrink-0"
     >
       {/* Nav buttons */}
       <button
         type="button"
         onClick={onBack}
         disabled={!canGoBack}
-        className="h-5 w-5 rounded flex items-center justify-center text-muted-foreground/40 hover:text-muted-foreground hover:bg-white/5 disabled:opacity-20 disabled:hover:bg-transparent transition-colors"
+        className="h-5 w-5 rounded flex items-center justify-center text-muted-foreground/40 hover:text-muted-foreground hover:bg-[var(--color-hover-overlay)] disabled:opacity-20 disabled:hover:bg-transparent transition-colors"
         title="Back"
       >
         <ArrowLeft className="h-3 w-3" />
@@ -420,7 +420,7 @@ function BrowserUrlBar({
         type="button"
         onClick={onForward}
         disabled={!canGoForward}
-        className="h-5 w-5 rounded flex items-center justify-center text-muted-foreground/40 hover:text-muted-foreground hover:bg-white/5 disabled:opacity-20 disabled:hover:bg-transparent transition-colors"
+        className="h-5 w-5 rounded flex items-center justify-center text-muted-foreground/40 hover:text-muted-foreground hover:bg-[var(--color-hover-overlay)] disabled:opacity-20 disabled:hover:bg-transparent transition-colors"
         title="Forward"
       >
         <ArrowRight className="h-3 w-3" />
@@ -428,7 +428,7 @@ function BrowserUrlBar({
       <button
         type="button"
         onClick={onRefresh}
-        className="h-5 w-5 rounded flex items-center justify-center text-muted-foreground/40 hover:text-muted-foreground hover:bg-white/5 transition-colors"
+        className="h-5 w-5 rounded flex items-center justify-center text-muted-foreground/40 hover:text-muted-foreground hover:bg-[var(--color-hover-overlay)] transition-colors"
         title="Refresh"
       >
         {isLoading ? (
@@ -439,7 +439,7 @@ function BrowserUrlBar({
       </button>
 
       {/* URL input */}
-      <div className="flex-1 flex items-center gap-1.5 bg-[#1a2030] rounded-md px-2 py-1 border border-border/20 focus-within:border-orange-500/30 transition-colors">
+      <div className="flex-1 flex items-center gap-1.5 bg-[var(--color-canvas-panel-bg)] rounded-md px-2 py-1 border border-border/20 focus-within:border-orange-500/30 transition-colors">
         <Globe className="h-3 w-3 text-muted-foreground/30 flex-shrink-0" />
         <input
           type="text"

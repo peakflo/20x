@@ -23,6 +23,17 @@ if (navigator.userAgent.includes('Windows')) {
   document.documentElement.setAttribute('data-platform', 'linux')
 }
 
+// Apply theme early to prevent flash of wrong theme
+// The ui-store module also does this, but this runs before React hydration
+const savedTheme = localStorage.getItem('20x-theme') || 'dark'
+if (savedTheme === 'system') {
+  document.documentElement.setAttribute('data-theme',
+    window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+  )
+} else {
+  document.documentElement.setAttribute('data-theme', savedTheme)
+}
+
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <App />

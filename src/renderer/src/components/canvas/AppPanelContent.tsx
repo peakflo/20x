@@ -101,7 +101,7 @@ export function AppPanelContent({ appId, title }: AppPanelContentProps) {
             onClick={() => {
               setLaunched(false)
             }}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs bg-white/5 hover:bg-white/10 text-foreground/70 hover:text-foreground transition-colors"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs bg-[var(--color-hover-overlay)] hover:bg-[var(--color-hover-overlay-strong)] text-foreground/70 hover:text-foreground transition-colors"
           >
             <RefreshCw className="h-3 w-3" />
             Retry
@@ -117,7 +117,7 @@ export function AppPanelContent({ appId, title }: AppPanelContentProps) {
     return (
       <div className="flex flex-col h-full min-h-0">
         {/* URL bar */}
-        <div className="flex items-center gap-2 px-2 py-1.5 bg-[#0d1117]/40 border-b border-border/20 flex-shrink-0">
+        <div className="flex items-center gap-2 px-2 py-1.5 bg-[var(--color-canvas-panel-bg)]/80 border-b border-border/20 flex-shrink-0">
           <Globe className="h-3 w-3 text-green-400/60 flex-shrink-0" />
           <span className="text-[10px] text-muted-foreground/50 truncate flex-1 font-mono">
             {tab.url}
