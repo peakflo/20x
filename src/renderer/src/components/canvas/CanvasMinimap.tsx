@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState, useMemo } from 'react'
 import { useCanvasStore, type CanvasPanelData, MIN_ZOOM, MAX_ZOOM } from '@/stores/canvas-store'
+import { useUIStore } from '@/stores/ui-store'
 import { Minus, Plus, Maximize2, ChevronDown, ChevronUp } from 'lucide-react'
 
 // ── Constants ─────────────────────────────────────────────
@@ -42,6 +43,13 @@ export function CanvasMinimap({
   const setViewport = useCanvasStore((s) => s.setViewport)
   const zoomTo = useCanvasStore((s) => s.zoomTo)
   const fitToContent = useCanvasStore((s) => s.fitToContent)
+
+  // Resolve current theme for conditional minimap colors
+  const isDark = useUIStore((s) => {
+    const t = s.theme
+    if (t === 'system') return window.matchMedia('(prefers-color-scheme: dark)').matches
+    return t === 'dark'
+  })
 
   const [collapsed, setCollapsed] = useState(false)
   const [isDragging, setIsDragging] = useState(false)
@@ -231,7 +239,7 @@ export function CanvasMinimap({
                   height={ph}
                   rx="1"
                   fill={color}
-                  stroke="rgba(255,255,255,0.1)"
+                  stroke={isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)'}
                   strokeWidth="0.5"
                 />
               )
@@ -244,8 +252,8 @@ export function CanvasMinimap({
               width={Math.max(4, vpRect.w)}
               height={Math.max(3, vpRect.h)}
               rx="1"
-              fill="rgba(255,255,255,0.06)"
-              stroke="rgba(255,255,255,0.3)"
+              fill={isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)'}
+              stroke={isDark ? 'rgba(255,255,255,0.3)' : 'rgba(0,0,0,0.2)'}
               strokeWidth="1"
               className="pointer-events-none"
             />
