@@ -139,7 +139,7 @@ export function AppLayout() {
   return (
     <>
       {/* ── Top bar: drag region with logo (left) + nav switcher (center) + actions (right) ── */}
-      <div className="drag-region h-12 flex-shrink-0 flex items-center justify-center px-4 border-b border-border/50 windows-titlebar-pad">
+      <div className="drag-region h-12 flex-shrink-0 flex items-center justify-center px-4 border-b border-border/50 windows-titlebar-pad bg-background/80 backdrop-blur-xl">
         {/* Logo + update indicator — pinned left */}
         <div className="no-drag absolute left-4 flex items-center gap-2 macos-titlebar-pad">
           <div className="relative">
