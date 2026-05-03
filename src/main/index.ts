@@ -34,6 +34,7 @@ import { startMobileApiServer, stopMobileApiServer, broadcastToMobileClients, se
 import { registerUpdaterIpc, initAutoUpdater, isUpdateDownloaded, getPendingVersion } from './auto-updater'
 import { initCrashLogger } from './crash-logger'
 import { installProcessStreamErrorHandlers } from './process-stream-errors'
+import liquidGlass from 'electron-liquid-glass'
 
 /**
  * Validate that a URL is safe to open via shell.openExternal.
@@ -113,14 +114,13 @@ function createWindow(): void {
     height: 900,
     minWidth: 900,
     minHeight: 600,
-    // macOS: transparent window + vibrancy lets the sidebar show the desktop through
+    // macOS: transparent window + electron-liquid-glass for native glass effect.
+    // NOTE: Do NOT set `vibrancy` — it conflicts with the glass view and makes it blurry.
     ...(isMac
       ? {
           titleBarStyle: 'hiddenInset' as const,
           trafficLightPosition: { x: 16, y: 16 },
           transparent: true,
-          vibrancy: 'under-window' as const,
-          visualEffectState: 'active' as const,
           backgroundColor: '#00000000',
         }
       : {
@@ -138,6 +138,25 @@ function createWindow(): void {
       webviewTag: true
     }
   })
+
+  // macOS: apply native glass effect after web content has loaded.
+  // On macOS 26+ this uses NSGlassEffectView (Liquid Glass);
+  // on older macOS it falls back to NSVisualEffectView.
+  // The glass sits behind ALL web content — CSS semi-transparent areas
+  // (sidebar, top bar) let it through; opaque areas (main content) block it.
+  if (isMac) {
+    mainWindow.webContents.once('did-finish-load', () => {
+      if (!mainWindow || mainWindow.isDestroyed()) return
+      try {
+        liquidGlass.addView(mainWindow.getNativeWindowHandle(), {
+          cornerRadius: 10,
+        })
+        console.log('[Main] Liquid glass view applied')
+      } catch (err) {
+        console.warn('[Main] Failed to apply liquid glass:', err)
+      }
+    })
+  }
 
   mainWindow.on('ready-to-show', () => {
     mainWindow?.show()
