@@ -1,27 +1,84 @@
 @import "tailwindcss";
 
+/* ── Theme tokens: Tailwind CSS 4 compatible ──────────────── */
 @theme {
-  /* Cursor Dark Midnight palette */
-  --color-background: #1E2127;
-  --color-foreground: #EBEEF4;
-  --color-card: #191D23;
-  --color-card-foreground: #EBEEF4;
-  --color-primary: #85A4C3;
-  --color-primary-foreground: #1E2127;
-  --color-secondary: #30353F;
-  --color-secondary-foreground: #EBEEF4;
-  --color-muted: #30353F;
-  --color-muted-foreground: #535D71;
-  --color-accent: #313C47;
-  --color-accent-foreground: #EBEEF4;
-  --color-destructive: #C06771;
-  --color-destructive-foreground: #EBEEF4;
-  --color-border: #30353F;
-  --color-input: #30353F;
-  --color-ring: #85A4C3;
+  --color-background: #FFFFFF;
+  --color-foreground: #1A1C1F;
+  --color-card: #FFFFFF;
+  --color-card-foreground: #1A1C1F;
+  --color-primary: #339CFF;
+  --color-primary-foreground: #FFFFFF;
+  --color-secondary: #F3F4F6;
+  --color-secondary-foreground: #1A1C1F;
+  --color-muted: #F3F4F6;
+  --color-muted-foreground: #6B7280;
+  --color-accent: #E5E7EB;
+  --color-accent-foreground: #1A1C1F;
+  --color-destructive: #DC2626;
+  --color-destructive-foreground: #FFFFFF;
+  --color-border: #E5E7EB;
+  --color-input: #E5E7EB;
+  --color-ring: #339CFF;
   --radius-sm: 6px;
   --radius-md: 8px;
   --radius-lg: 12px;
+}
+
+@custom-variant dark (&:where([data-theme="dark"] *));
+
+/* ── Light mode (default) ────────────────────────────────── */
+:root,
+[data-theme="light"] {
+  --color-background: #FFFFFF;
+  --color-foreground: #1A1C1F;
+  --color-card: #FFFFFF;
+  --color-card-foreground: #1A1C1F;
+  --color-primary: #339CFF;
+  --color-primary-foreground: #FFFFFF;
+  --color-secondary: #F3F4F6;
+  --color-secondary-foreground: #1A1C1F;
+  --color-muted: #F3F4F6;
+  --color-muted-foreground: #6B7280;
+  --color-accent: #E5E7EB;
+  --color-accent-foreground: #1A1C1F;
+  --color-destructive: #DC2626;
+  --color-destructive-foreground: #FFFFFF;
+  --color-border: #E5E7EB;
+  --color-input: #E5E7EB;
+  --color-ring: #339CFF;
+
+  --color-overlay: rgba(0, 0, 0, 0.50);
+  --color-hover-overlay: rgba(0, 0, 0, 0.04);
+  --color-hover-overlay-strong: rgba(0, 0, 0, 0.08);
+  --color-scrollbar-thumb: #D1D5DB;
+  --color-scrollbar-thumb-hover: #9CA3AF;
+}
+
+/* ── Dark mode ───────────────────────────────────────────── */
+[data-theme="dark"] {
+  --color-background: #181818;
+  --color-foreground: #FFFFFF;
+  --color-card: #1E1E1E;
+  --color-card-foreground: #FFFFFF;
+  --color-primary: #339CFF;
+  --color-primary-foreground: #FFFFFF;
+  --color-secondary: #2A2A2A;
+  --color-secondary-foreground: #FFFFFF;
+  --color-muted: #2A2A2A;
+  --color-muted-foreground: #888888;
+  --color-accent: #333333;
+  --color-accent-foreground: #FFFFFF;
+  --color-destructive: #C06771;
+  --color-destructive-foreground: #FFFFFF;
+  --color-border: #333333;
+  --color-input: #333333;
+  --color-ring: #339CFF;
+
+  --color-overlay: rgba(0, 0, 0, 0.70);
+  --color-hover-overlay: rgba(255, 255, 255, 0.05);
+  --color-hover-overlay-strong: rgba(255, 255, 255, 0.10);
+  --color-scrollbar-thumb: #333333;
+  --color-scrollbar-thumb-hover: #535D71;
 }
 
 @font-face {
@@ -81,5 +138,5 @@ body {
 /* ── Scrollbar ────────────────────────────────── */
 ::-webkit-scrollbar { width: 5px; height: 5px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: 99px; }
-::-webkit-scrollbar-thumb:hover { background: #535D71; }
+::-webkit-scrollbar-thumb { background: var(--color-scrollbar-thumb); border-radius: 99px; }
+::-webkit-scrollbar-thumb:hover { background: var(--color-scrollbar-thumb-hover); }

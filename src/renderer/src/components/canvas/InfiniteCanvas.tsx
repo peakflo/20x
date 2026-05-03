@@ -468,7 +468,7 @@ export function InfiniteCanvas() {
       : 'default'
 
   return (
-    <div data-canvas-root="true" className="overflow-hidden bg-[#131820]" style={{ position: 'relative', width: '100%', height: '100%' }}>
+    <div data-canvas-root="true" className="overflow-hidden bg-[var(--color-canvas-bg)]" style={{ position: 'relative', width: '100%', height: '100%' }}>
       {/* Canvas container */}
       <div
         ref={containerRef}
@@ -524,7 +524,7 @@ export function InfiniteCanvas() {
       </div>
 
       {/* ── HUD: zoom controls ── */}
-      <div className="absolute bottom-4 left-4 flex items-center gap-1 bg-[#1a2030]/90 backdrop-blur-sm border border-border/40 rounded-lg p-1 z-10">
+      <div className="absolute bottom-4 left-4 flex items-center gap-1 bg-[var(--color-canvas-hud-bg)] backdrop-blur-sm border border-border/40 rounded-lg p-1 z-10">
         <Button
           variant="ghost"
           size="sm"
@@ -662,7 +662,7 @@ function CanvasGrid({
         top: gridTop,
         width: gridWidth,
         height: gridHeight,
-        backgroundImage: `radial-gradient(circle, rgba(255,255,255,0.08) ${dotSize}px, transparent ${dotSize}px)`,
+        backgroundImage: `radial-gradient(circle, var(--color-canvas-grid-dot) ${dotSize}px, transparent ${dotSize}px)`,
         backgroundSize: `${GRID_SIZE}px ${GRID_SIZE}px`,
         backgroundPosition: `${GRID_SIZE / 2}px ${GRID_SIZE / 2}px`,
         pointerEvents: 'none',

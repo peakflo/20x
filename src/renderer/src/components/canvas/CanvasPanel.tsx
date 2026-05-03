@@ -325,12 +325,12 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
   // ── Panel type styling ────────────────────────────────────
   const cfg = useMemo(() => {
     const TYPE_CONFIG: Record<string, { label: string; color: string; border: string; bg: string }> = {
-      task: { label: 'Task', color: 'bg-blue-500/20 text-blue-400', border: 'border-blue-500/40', bg: 'bg-[#141a26]' },
-      transcript: { label: 'Transcript', color: 'bg-purple-500/20 text-purple-400', border: 'border-purple-500/40', bg: 'bg-[#141a26]' },
-      app: { label: 'App', color: 'bg-green-500/20 text-green-400', border: 'border-green-500/40', bg: 'bg-[#141a26]' },
-      webpage: { label: 'Web', color: 'bg-cyan-500/20 text-cyan-400', border: 'border-cyan-500/40', bg: 'bg-[#141a26]' },
-      terminal: { label: 'Terminal', color: 'bg-amber-500/20 text-amber-400', border: 'border-amber-500/50', bg: 'bg-[#141a26]' },
-      browser: { label: 'Browser', color: 'bg-orange-500/20 text-orange-400', border: 'border-orange-500/40', bg: 'bg-[#141a26]' },
+      task: { label: 'Task', color: 'bg-blue-500/20 text-blue-400', border: 'border-blue-500/40', bg: 'bg-[var(--color-canvas-panel-bg)]' },
+      transcript: { label: 'Transcript', color: 'bg-purple-500/20 text-purple-400', border: 'border-purple-500/40', bg: 'bg-[var(--color-canvas-panel-bg)]' },
+      app: { label: 'App', color: 'bg-green-500/20 text-green-400', border: 'border-green-500/40', bg: 'bg-[var(--color-canvas-panel-bg)]' },
+      webpage: { label: 'Web', color: 'bg-cyan-500/20 text-cyan-400', border: 'border-cyan-500/40', bg: 'bg-[var(--color-canvas-panel-bg)]' },
+      terminal: { label: 'Terminal', color: 'bg-amber-500/20 text-amber-400', border: 'border-amber-500/50', bg: 'bg-[var(--color-canvas-panel-bg)]' },
+      browser: { label: 'Browser', color: 'bg-orange-500/20 text-orange-400', border: 'border-orange-500/40', bg: 'bg-[var(--color-canvas-panel-bg)]' },
     }
 
     if (panel.type === 'task' && taskStatus) {
@@ -350,7 +350,7 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
       }
     }
 
-    return TYPE_CONFIG[panel.type] ?? { label: 'Panel', color: 'bg-muted/30 text-muted-foreground', border: 'border-border/50', bg: 'bg-[#141a26]' }
+    return TYPE_CONFIG[panel.type] ?? { label: 'Panel', color: 'bg-muted/30 text-muted-foreground', border: 'border-border/50', bg: 'bg-[var(--color-canvas-panel-bg)]' }
   }, [panel.type, taskStatus])
 
   return (
@@ -360,7 +360,7 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
       onMouseDown={handleMouseDown}
       onMouseEnter={handlePanelMouseEnter}
       onMouseLeave={handlePanelMouseLeave}
-      className={`absolute rounded-xl border bg-[#1a2030] shadow-2xl flex flex-col select-none transition-shadow duration-150 group/panel ${cfg.border} ${
+      className={`absolute rounded-xl border bg-[var(--color-canvas-panel-bg)] shadow-2xl flex flex-col select-none transition-shadow duration-150 group/panel ${cfg.border} ${
         isDragging ? 'shadow-indigo-500/10 ring-1 ring-indigo-500/30' : ''
       } ${isConnectingLocal ? 'ring-2 ring-orange-500/50' : ''} ${
         isProximityTarget ? 'ring-2 ring-orange-500/60 shadow-orange-500/20 shadow-2xl' : ''
@@ -405,8 +405,8 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
                 onClick={() => setTaskLayout(key)}
                 className={`h-5 w-5 rounded flex items-center justify-center transition-colors ${
                   taskLayout === key
-                    ? 'bg-white/15 text-foreground'
-                    : 'text-muted-foreground/40 hover:text-muted-foreground hover:bg-white/10'
+                    ? 'bg-[var(--color-active-overlay)] text-foreground'
+                    : 'text-muted-foreground/40 hover:text-muted-foreground hover:bg-[var(--color-hover-overlay-strong)]'
                 }`}
                 title={label}
               >
@@ -422,7 +422,7 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
           <button
             onMouseDown={(e) => e.stopPropagation()}
             onClick={handleFocus}
-            className="h-5 w-5 rounded flex items-center justify-center hover:bg-white/10 text-muted-foreground/50 hover:text-muted-foreground transition-colors"
+            className="h-5 w-5 rounded flex items-center justify-center hover:bg-[var(--color-hover-overlay-strong)] text-muted-foreground/50 hover:text-muted-foreground transition-colors"
             title="Focus panel (zoom to fit)"
           >
             <Focus className="h-3 w-3" />
@@ -432,7 +432,7 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
           <button
             onMouseDown={(e) => e.stopPropagation()}
             onClick={handleToggleCollapse}
-            className="h-5 w-5 rounded flex items-center justify-center hover:bg-white/10 text-muted-foreground/50 hover:text-muted-foreground transition-colors"
+            className="h-5 w-5 rounded flex items-center justify-center hover:bg-[var(--color-hover-overlay-strong)] text-muted-foreground/50 hover:text-muted-foreground transition-colors"
             title={isCollapsed ? 'Expand' : 'Collapse'}
           >
             {isCollapsed ? (

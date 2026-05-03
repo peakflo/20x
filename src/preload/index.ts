@@ -334,7 +334,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getMinimizeToTray: (): Promise<boolean> =>
       ipcRenderer.invoke('app:getMinimizeToTray'),
     setMinimizeToTray: (enabled: boolean): Promise<boolean> =>
-      ipcRenderer.invoke('app:setMinimizeToTray', enabled)
+      ipcRenderer.invoke('app:setMinimizeToTray', enabled),
+    setTheme: (theme: 'light' | 'dark'): Promise<void> =>
+      ipcRenderer.invoke('app:setTheme', theme)
   },
   mobile: {
     getInfo: (): Promise<{ url: string; port: number }> =>
