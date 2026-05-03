@@ -113,10 +113,18 @@ function createWindow(): void {
     height: 900,
     minWidth: 900,
     minHeight: 600,
-    backgroundColor: '#181818',
+    // macOS: transparent window + vibrancy lets the sidebar show the desktop through
     ...(isMac
-      ? { titleBarStyle: 'hiddenInset' as const, trafficLightPosition: { x: 16, y: 16 } }
+      ? {
+          titleBarStyle: 'hiddenInset' as const,
+          trafficLightPosition: { x: 16, y: 16 },
+          transparent: true,
+          vibrancy: 'under-window' as const,
+          visualEffectState: 'active' as const,
+          backgroundColor: '#00000000',
+        }
       : {
+          backgroundColor: '#181818',
           titleBarStyle: 'hidden' as const,
           titleBarOverlay: { color: '#181818', symbolColor: '#888888', height: 36 },
           icon: is.dev ? join(__dirname, '../../resources/icon.ico') : join(process.resourcesPath, 'icon.ico')

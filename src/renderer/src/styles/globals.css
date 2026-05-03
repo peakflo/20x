@@ -176,6 +176,14 @@ html, body, #root {
   font-size: 14px;
 }
 
+/* ── macOS vibrancy: make html/body transparent so native blur shows
+   through the sidebar. The <main> content area keeps bg-background. ── */
+html[data-platform="darwin"],
+html[data-platform="darwin"] body,
+html[data-platform="darwin"] #root {
+  background: transparent !important;
+}
+
 /* ── App Shell ────────────────────────────────── */
 #root {
   display: flex;

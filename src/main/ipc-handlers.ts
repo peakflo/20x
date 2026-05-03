@@ -766,12 +766,17 @@ export function registerIpcHandlers(
     return enabled
   })
 
-  // Theme change — update window titlebar overlay colors on Windows
+  // Theme change — update window chrome to match theme
   ipcMain.handle('app:setTheme', (event, theme: 'light' | 'dark') => {
     const win = BrowserWindow.fromWebContents(event.sender)
     if (!win) return
     const isLight = theme === 'light'
-    if (process.platform === 'win32') {
+
+    if (process.platform === 'darwin') {
+      // macOS: update vibrancy appearance to match theme
+      // The window is transparent with vibrancy; the CSS handles the rest
+      win.setBackgroundColor('#00000000')
+    } else if (process.platform === 'win32') {
       try {
         win.setTitleBarOverlay({
           color: isLight ? '#FFFFFF' : '#181818',
@@ -780,8 +785,10 @@ export function registerIpcHandlers(
       } catch {
         // setTitleBarOverlay may not be available on all Windows versions
       }
+      win.setBackgroundColor(isLight ? '#FFFFFF' : '#181818')
+    } else {
+      win.setBackgroundColor(isLight ? '#FFFFFF' : '#181818')
     }
-    win.setBackgroundColor(isLight ? '#FFFFFF' : '#181818')
   })
 
   // Mobile web UI info — include auth token in URL hash so mobile SPA can authenticate
