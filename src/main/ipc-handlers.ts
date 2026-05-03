@@ -773,8 +773,8 @@ export function registerIpcHandlers(
     const isLight = theme === 'light'
 
     if (process.platform === 'darwin') {
-      // macOS: update vibrancy appearance to match theme
-      // The window is transparent with vibrancy; the CSS handles the rest
+      // macOS: keep transparent background — the liquid glass view behind
+      // the web content adapts automatically via system appearance.
       win.setBackgroundColor('#00000000')
     } else if (process.platform === 'win32') {
       try {
