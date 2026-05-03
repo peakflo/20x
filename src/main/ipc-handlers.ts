@@ -773,9 +773,10 @@ export function registerIpcHandlers(
     const isLight = theme === 'light'
 
     if (process.platform === 'darwin') {
-      // macOS: update vibrancy appearance to match theme
-      // The window is transparent with vibrancy; the CSS handles the rest
+      // macOS: re-apply vibrancy on theme switch so the translucent
+      // sidebar keeps showing the desktop through.
       win.setBackgroundColor('#00000000')
+      win.setVibrancy('under-window')
     } else if (process.platform === 'win32') {
       try {
         win.setTitleBarOverlay({

@@ -91,7 +91,7 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
   const hasActiveFilters = statusFilter !== 'all' || priorityFilter !== 'all' || sourceFilter !== 'all'
 
   return (
-    <aside className="flex flex-col h-full w-[260px] shrink-0 border-r bg-sidebar backdrop-blur-xl overflow-hidden">
+    <aside className="flex flex-col h-full w-[260px] shrink-0 border-r bg-sidebar backdrop-blur-xl vibrancy-sidebar overflow-hidden">
       {sidebarView === 'tasks' ? (
         <>
           <div className="no-drag flex items-center justify-between px-4 py-3">

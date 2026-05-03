@@ -184,6 +184,17 @@ html[data-platform="darwin"] #root {
   background: transparent !important;
 }
 
+/* On macOS, native vibrancy handles the blur — remove CSS backdrop-filter
+   to avoid creating a compositing layer that blocks native transparency. */
+html[data-platform="darwin"] .vibrancy-sidebar {
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+html[data-platform="darwin"] .vibrancy-topbar {
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
 /* ── App Shell ────────────────────────────────── */
 #root {
   display: flex;
