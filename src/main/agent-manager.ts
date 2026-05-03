@@ -669,6 +669,15 @@ export class AgentManager extends EventEmitter {
       const task = this.db.getTask(taskId)
       const agent = this.db.getAgent(agentId)
       const agentConfig = agent?.config
+      const backendType = (agentConfig?.coding_agent as string) || CodingAgentType.OPENCODE
+      const isClaudeCode = backendType === CodingAgentType.CLAUDE_CODE
+      const skillsDir = isClaudeCode
+        ? join(workspaceDir, '.claude', 'skills')
+        : join(workspaceDir, '.agents', 'skills')
+
+      // Ensure the backend-specific skill root exists even when no DB skills are
+      // pre-assigned. Learning-mode sessions can then create/update skills there.
+      await mkdir(skillsDir, { recursive: true })
 
       // Resolve which skill IDs to use
       let skillIds: string[] | undefined
@@ -688,11 +697,6 @@ export class AgentManager extends EventEmitter {
       // Claude Code agent: .claude/skills/<name>/SKILL.md
       // Other agents: .agents/skills/<name>/SKILL.md
       if (skills.length > 0) {
-        const backendType = (agentConfig?.coding_agent as string) || CodingAgentType.OPENCODE
-        const isClaudeCode = backendType === CodingAgentType.CLAUDE_CODE
-        const skillsDir = isClaudeCode
-          ? join(workspaceDir, '.claude', 'skills')
-          : join(workspaceDir, '.agents', 'skills')
         for (const skill of skills) {
           const dir = join(skillsDir, skill.name)
           await mkdir(dir, { recursive: true })
