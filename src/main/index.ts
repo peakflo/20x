@@ -113,17 +113,15 @@ function createWindow(): void {
     height: 900,
     minWidth: 900,
     minHeight: 600,
-    // macOS: vibrancy lets the sidebar show the desktop through.
-    // NOTE: Do NOT use transparent:true — it conflicts with vibrancy on Electron 34+.
-    // Instead, vibrancy alone makes the window translucent where CSS backgrounds are transparent.
+    // macOS: transparent window + vibrancy lets the sidebar show the desktop through
     ...(isMac
       ? {
           titleBarStyle: 'hiddenInset' as const,
           trafficLightPosition: { x: 16, y: 16 },
+          transparent: true,
           vibrancy: 'under-window' as const,
           visualEffectState: 'active' as const,
           backgroundColor: '#00000000',
-          hasShadow: true,
         }
       : {
           backgroundColor: '#181818',
@@ -142,12 +140,6 @@ function createWindow(): void {
   })
 
   mainWindow.on('ready-to-show', () => {
-    // Re-apply vibrancy after the window is ready — Electron 34 sometimes
-    // drops the constructor vibrancy before first paint.
-    if (isMac && mainWindow) {
-      mainWindow.setVibrancy('under-window')
-    }
-
     mainWindow?.show()
 
     // Initialize auto-updater (only in production)
