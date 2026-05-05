@@ -51,8 +51,8 @@ importers:
         specifier: ^0.16.1
         version: 0.16.1(zod@4.3.6)
       '@zed-industries/codex-acp':
-        specifier: ^0.11.1
-        version: 0.11.1
+        specifier: ^0.13.0
+        version: 0.13.0
       better-sqlite3:
         specifier: ^12.6.2
         version: 12.6.2
@@ -335,6 +335,10 @@ packages:
 
   '@babel/runtime@7.28.6':
     resolution: {integrity: sha512-05WQkdpL9COIMz4LjTxGpPNCdlpyimKppYNoJ5Di5EUObifl8t4tuLuUBBZEpoLYOmfvIWrsp9fCl0HoPRVTdA==}
+    engines: {node: '>=6.9.0'}
+
+  '@babel/runtime@7.29.2':
+    resolution: {integrity: sha512-JiDShH45zKHWyGe4ZNVRrCjBz8Nh9TMmZG1kh4QTK8hCBTWBi8Da+i7s1fJw7/lYpM4ccepSNfqzZ/QvABBi5g==}
     engines: {node: '>=6.9.0'}
 
   '@babel/template@7.28.6':
@@ -2183,44 +2187,44 @@ packages:
     resolution: {integrity: sha512-/fKDYLCtiKthYUeOu4vPHSE79arh0ciYnBd5uSTY8OWMURJoelBwkK5QGZZSmxjAwG9tHkvjxUjxhMDgC071VA==}
     hasBin: true
 
-  '@zed-industries/codex-acp-darwin-arm64@0.11.1':
-    resolution: {integrity: sha512-zJ/CsOSH1NniKGF/liBtWokdkFtymTWeELV4lDlgMgzVSqMHQTB+t6fFSrxhwOcXHK86TErxAT81Z61e+bq5gg==}
+  '@zed-industries/codex-acp-darwin-arm64@0.13.0':
+    resolution: {integrity: sha512-SNJbpxOD1b98pK1Qw2pZjFJbfYBICheRs3mYvLMgHABehdypaeYKnEmEGp3Bu/gUT6JFAtOPRtaU+sfxKzgCvw==}
     cpu: [arm64]
     os: [darwin]
     hasBin: true
 
-  '@zed-industries/codex-acp-darwin-x64@0.11.1':
-    resolution: {integrity: sha512-UZjIsEZPLeYMk+fj2ot1oT+tWuJpw+iZS9awnbmJYxTEEXMpY8BE6xQXMy7iyyxJ346We5MEpAdxg730vcem5Q==}
+  '@zed-industries/codex-acp-darwin-x64@0.13.0':
+    resolution: {integrity: sha512-R5CQi2mmi9Nk2P6t48T5JoOQx0jWnP9DzLf5jcTnCLqk1tsg9XtASpLBtsedll9MesBax6aflDvz+0dyWW+3Mw==}
     cpu: [x64]
     os: [darwin]
     hasBin: true
 
-  '@zed-industries/codex-acp-linux-arm64@0.11.1':
-    resolution: {integrity: sha512-I1f6WoSLbLlsWq4zH+vtwdoc4Y41mqRXPpSkfgIifxBw34QmWJmi37etZ7lKTYp6R+J/Z4PUN0rsmnsmKpBZTw==}
+  '@zed-industries/codex-acp-linux-arm64@0.13.0':
+    resolution: {integrity: sha512-Z3f2D94SOgy+BVFEIWxoR64IQB+d4/zgjHB1oeBS5yAYKaX7Wv3W6x+XGktDx+KnfD7c9vSSdFdknI6cZ8hO7g==}
     cpu: [arm64]
     os: [linux]
     hasBin: true
 
-  '@zed-industries/codex-acp-linux-x64@0.11.1':
-    resolution: {integrity: sha512-30vSoZuW1DP6Nuz24Gg3jgVC37IYe0bZ/Fgc5+372gc0h72NN4zHYAbu5bRd/gUJ9GdwABKrrEPCoFPlOTVTnQ==}
+  '@zed-industries/codex-acp-linux-x64@0.13.0':
+    resolution: {integrity: sha512-sWNfyeuwEHPo6DSbcjklnBr7M8+MWd2b9oVbIqgwxryTPpm0ZPF3U28PWR3/vGxS5UmhGiZIShe9tqx8FsvvBg==}
     cpu: [x64]
     os: [linux]
     hasBin: true
 
-  '@zed-industries/codex-acp-win32-arm64@0.11.1':
-    resolution: {integrity: sha512-yisGPG7JMJBtOTOB6qwzroOLfiQebDrBnybzvjOfWiSIHeha25Jf1nTlWrlZcEiV/eeX3/lERuU1MxftjK3Vgg==}
+  '@zed-industries/codex-acp-win32-arm64@0.13.0':
+    resolution: {integrity: sha512-oxd6IF5dVHsa7zLnK1VAClzGADqn4N9TVSPb+3X4CqnOs4y4M9JPHSEEPiRYF44ibDJTWR+9EZ673djRYEGraw==}
     cpu: [arm64]
     os: [win32]
     hasBin: true
 
-  '@zed-industries/codex-acp-win32-x64@0.11.1':
-    resolution: {integrity: sha512-nOdlp/xHQGzqt+GnB2rrpk0sT7pPJVKkL9M+UhmoFPSFwjWrkzAOJukbT4P59wU1mVBTe84dEW6UnzydWIrGJw==}
+  '@zed-industries/codex-acp-win32-x64@0.13.0':
+    resolution: {integrity: sha512-675+tZlhzDMBJUrgiTnbcCMB15MQ8B0Ih/GmzB9MqW/FDFJqOFjXe4P+M7joePzQqa7QYwf36le50sDokXDrew==}
     cpu: [x64]
     os: [win32]
     hasBin: true
 
-  '@zed-industries/codex-acp@0.11.1':
-    resolution: {integrity: sha512-My2VSlBtvJipJhImHjFDej2ut/p00QqOISRnZgLgLrSIzjgvdcQvAhaZviWj7XPhk4UIdIb0OoA+Lrls824uiQ==}
+  '@zed-industries/codex-acp@0.13.0':
+    resolution: {integrity: sha512-Ep3gINMVB8qQL3kozJxEzG4YP7NmWUb5s+8yu8tQ7YSPfaIPXBIQQmO5sQk2Uu2av+gIC2EchbwaSSG3Mo17YQ==}
     hasBin: true
 
   abbrev@1.1.1:
@@ -5283,6 +5287,8 @@ snapshots:
 
   '@babel/runtime@7.28.6': {}
 
+  '@babel/runtime@7.29.2': {}
+
   '@babel/template@7.28.6':
     dependencies:
       '@babel/code-frame': 7.29.0
@@ -6291,14 +6297,14 @@ snapshots:
       '@remotion/studio-shared': 4.0.434(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       '@rspack/core': 1.7.6
       '@rspack/plugin-react-refresh': 1.6.1(react-refresh@0.18.0)
-      css-loader: 5.2.7(webpack@5.105.0)
+      css-loader: 5.2.7(webpack@5.105.0(esbuild@0.25.0))
       esbuild: 0.25.0
       react: 19.2.4
       react-dom: 19.2.4(react@19.2.4)
       react-refresh: 0.18.0
       remotion: 4.0.434(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       source-map: 0.7.3
-      style-loader: 4.0.0(webpack@5.105.0)
+      style-loader: 4.0.0(webpack@5.105.0(esbuild@0.25.0))
       webpack: 5.105.0(esbuild@0.25.0)
     transitivePeerDependencies:
       - '@swc/core'
@@ -6739,7 +6745,7 @@ snapshots:
   '@testing-library/dom@10.4.1':
     dependencies:
       '@babel/code-frame': 7.29.0
-      '@babel/runtime': 7.28.6
+      '@babel/runtime': 7.29.2
       '@types/aria-query': 5.0.4
       aria-query: 5.3.0
       dom-accessibility-api: 0.5.16
@@ -7164,32 +7170,32 @@ snapshots:
       - supports-color
       - zod
 
-  '@zed-industries/codex-acp-darwin-arm64@0.11.1':
+  '@zed-industries/codex-acp-darwin-arm64@0.13.0':
     optional: true
 
-  '@zed-industries/codex-acp-darwin-x64@0.11.1':
+  '@zed-industries/codex-acp-darwin-x64@0.13.0':
     optional: true
 
-  '@zed-industries/codex-acp-linux-arm64@0.11.1':
+  '@zed-industries/codex-acp-linux-arm64@0.13.0':
     optional: true
 
-  '@zed-industries/codex-acp-linux-x64@0.11.1':
+  '@zed-industries/codex-acp-linux-x64@0.13.0':
     optional: true
 
-  '@zed-industries/codex-acp-win32-arm64@0.11.1':
+  '@zed-industries/codex-acp-win32-arm64@0.13.0':
     optional: true
 
-  '@zed-industries/codex-acp-win32-x64@0.11.1':
+  '@zed-industries/codex-acp-win32-x64@0.13.0':
     optional: true
 
-  '@zed-industries/codex-acp@0.11.1':
+  '@zed-industries/codex-acp@0.13.0':
     optionalDependencies:
-      '@zed-industries/codex-acp-darwin-arm64': 0.11.1
-      '@zed-industries/codex-acp-darwin-x64': 0.11.1
-      '@zed-industries/codex-acp-linux-arm64': 0.11.1
-      '@zed-industries/codex-acp-linux-x64': 0.11.1
-      '@zed-industries/codex-acp-win32-arm64': 0.11.1
-      '@zed-industries/codex-acp-win32-x64': 0.11.1
+      '@zed-industries/codex-acp-darwin-arm64': 0.13.0
+      '@zed-industries/codex-acp-darwin-x64': 0.13.0
+      '@zed-industries/codex-acp-linux-arm64': 0.13.0
+      '@zed-industries/codex-acp-linux-x64': 0.13.0
+      '@zed-industries/codex-acp-win32-arm64': 0.13.0
+      '@zed-industries/codex-acp-win32-x64': 0.13.0
 
   abbrev@1.1.1: {}
 
@@ -7707,7 +7713,7 @@ snapshots:
       shebang-command: 2.0.0
       which: 2.0.2
 
-  css-loader@5.2.7(webpack@5.105.0):
+  css-loader@5.2.7(webpack@5.105.0(esbuild@0.25.0)):
     dependencies:
       icss-utils: 5.1.0(postcss@8.5.6)
       loader-utils: 2.0.4
@@ -10105,7 +10111,7 @@ snapshots:
 
   strip-json-comments@2.0.1: {}
 
-  style-loader@4.0.0(webpack@5.105.0):
+  style-loader@4.0.0(webpack@5.105.0(esbuild@0.25.0)):
     dependencies:
       webpack: 5.105.0(esbuild@0.25.0)
 
