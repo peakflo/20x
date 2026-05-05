@@ -11,10 +11,17 @@ describe('CLAUDE_MODELS', () => {
 })
 
 describe('CODEX_MODELS', () => {
-  it('lists GPT-5.4 first as the recommended model', () => {
+  it('lists GPT-5.5 first as the recommended model', () => {
     expect(CODEX_MODELS[0]).toEqual({
+      id: CodexModel.GPT_5_5,
+      name: 'GPT-5.5 (Recommended)'
+    })
+  })
+
+  it('still includes GPT-5.4 as a selectable fallback model', () => {
+    expect(CODEX_MODELS).toContainEqual({
       id: CodexModel.GPT_5_4,
-      name: 'GPT-5.4 (Recommended)'
+      name: 'GPT-5.4'
     })
   })
 
