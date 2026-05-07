@@ -29,10 +29,14 @@ afterEach(() => {
 })
 
 describe('Default Marketplaces', () => {
-  it('seeds two default Anthropic marketplaces on first run', () => {
+  it('seeds three default Anthropic marketplaces on first run', () => {
     const sources = manager.getMarketplaceSources()
-    expect(sources).toHaveLength(2)
-    expect(sources.map((s) => s.name).sort()).toEqual(['anthropic-official', 'claude-code-plugins'])
+    expect(sources).toHaveLength(3)
+    expect(sources.map((s) => s.name).sort()).toEqual([
+      'anthropic-official',
+      'claude-code-plugins',
+      'financial-services'
+    ])
 
     const official = sources.find((s) => s.name === 'anthropic-official')!
     expect(official.source_type).toBe('github')
@@ -41,15 +45,34 @@ describe('Default Marketplaces', () => {
     const bundled = sources.find((s) => s.name === 'claude-code-plugins')!
     expect(bundled.source_type).toBe('github')
     expect(bundled.source_url).toBe('anthropics/claude-code')
+
+    const financial = sources.find((s) => s.name === 'financial-services')!
+    expect(financial.source_type).toBe('github')
+    expect(financial.source_url).toBe('anthropics/financial-services')
   })
 
   it('does not re-seed defaults when sources already exist', () => {
-    // manager already seeded 2 defaults
-    expect(manager.getMarketplaceSources()).toHaveLength(2)
+    // manager already seeded 3 defaults
+    expect(manager.getMarketplaceSources()).toHaveLength(3)
 
     // Creating a new manager instance should not duplicate
     const manager2 = new ClaudePluginManager(db, tempPluginsDir)
-    expect(manager2.getMarketplaceSources()).toHaveLength(2)
+    expect(manager2.getMarketplaceSources()).toHaveLength(3)
+  })
+
+  it('incrementally adds missing default marketplaces', () => {
+    // Remove one default marketplace
+    const sources = manager.getMarketplaceSources()
+    const financial = sources.find((s) => s.name === 'financial-services')!
+    manager.removeMarketplaceSource(financial.id)
+    expect(manager.getMarketplaceSources()).toHaveLength(2)
+
+    // Creating a new manager instance should add back the missing default
+    const manager2 = new ClaudePluginManager(db, tempPluginsDir)
+    expect(manager2.getMarketplaceSources()).toHaveLength(3)
+    const restored = manager2.getMarketplaceSources().find((s) => s.name === 'financial-services')
+    expect(restored).toBeDefined()
+    expect(restored!.source_url).toBe('anthropics/financial-services')
   })
 })
 
@@ -83,8 +106,8 @@ describe('Marketplace Sources CRUD', () => {
     manager.addMarketplaceSource({ name: 'mp1', source_url: 'owner/repo1' })
     manager.addMarketplaceSource({ name: 'mp2', source_url: 'owner/repo2' })
     const sources = manager.getMarketplaceSources()
-    // 2 defaults + 2 new
-    expect(sources).toHaveLength(4)
+    // 3 defaults + 2 new
+    expect(sources).toHaveLength(5)
   })
 
   it('removes a marketplace source', () => {

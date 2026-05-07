@@ -106,6 +106,11 @@ const DEFAULT_MARKETPLACES: CreateMarketplaceSourceData[] = [
     name: 'claude-code-plugins',
     source_type: 'github',
     source_url: 'anthropics/claude-code'
+  },
+  {
+    name: 'financial-services',
+    source_type: 'github',
+    source_url: 'anthropics/financial-services'
   }
 ]
 
@@ -139,15 +144,17 @@ export class ClaudePluginManager {
   }
 
   /**
-   * Seeds the default Anthropic marketplace sources if none exist yet.
+   * Seeds the default Anthropic marketplace sources, adding any that are missing.
    * - anthropic-official: curated directory of popular Claude Code extensions (LSPs, tools, integrations)
    * - claude-code-plugins: bundled plugins from the claude-code repo (code-review, feature-dev, commit-commands, etc.)
+   * - financial-services: financial services plugins from Anthropic (banking, payments, accounting integrations)
    */
   private ensureDefaultMarketplaces(): void {
     const existing = this.db.getMarketplaceSources()
-    if (existing.length > 0) return // user already has marketplace sources configured
+    const existingNames = new Set(existing.map((s) => s.name))
 
     for (const marketplace of DEFAULT_MARKETPLACES) {
+      if (existingNames.has(marketplace.name)) continue
       try {
         this.db.createMarketplaceSource(marketplace)
       } catch (err) {
