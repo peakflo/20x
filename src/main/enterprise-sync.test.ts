@@ -151,32 +151,25 @@ describe('EnterpriseSyncManager — Skills 2-Way Sync (Batch)', () => {
         enterprise_skill_id: null
       })
       mockDb.getSkills.mockReturnValue([localSkill])
-      mockApiClient.batchSyncSkills.mockResolvedValue({
-        created: 0,
-        updated: 0,
-        skills: []
-      })
+      // When no local skills to push, falls back to listSkills
+      mockApiClient.listSkills.mockResolvedValue([])
 
       await syncManager.syncAll('user-1')
 
-      // batch-sync should be called with empty array (the skill was filtered)
-      const batchCall = mockApiClient.batchSyncSkills.mock.calls[0]
-      expect(batchCall[0]).toEqual([])
+      // batch-sync should NOT be called (no valid skills to push)
+      expect(mockApiClient.batchSyncSkills).not.toHaveBeenCalled()
     })
 
     it('skips built-in Mastermind skill from batch sync', async () => {
       const mastermind = makeLocalSkill({ name: 'Mastermind' })
       mockDb.getSkills.mockReturnValue([mastermind])
-      mockApiClient.batchSyncSkills.mockResolvedValue({
-        created: 0,
-        updated: 0,
-        skills: []
-      })
+      // When no local skills to push, falls back to listSkills
+      mockApiClient.listSkills.mockResolvedValue([])
 
       const result = await syncManager.syncAll('user-1')
 
-      const batchCall = mockApiClient.batchSyncSkills.mock.calls[0]
-      expect(batchCall[0]).toEqual([])
+      // batch-sync should NOT be called (no valid skills to push)
+      expect(mockApiClient.batchSyncSkills).not.toHaveBeenCalled()
       expect(result.skills.pushed).toBe(0)
     })
 
@@ -223,26 +216,47 @@ describe('EnterpriseSyncManager — Skills 2-Way Sync (Batch)', () => {
       expect(result.errors).toHaveLength(0)
     })
 
-    it('does not retry on 400 validation error', async () => {
-      const localSkill = makeLocalSkill({ enterprise_skill_id: null })
-      mockDb.getSkills.mockReturnValue([localSkill])
-      mockApiClient.batchSyncSkills.mockRejectedValue(new Error('400 Bad Request: validation failed'))
+    it('on batch validation error, retries skills one-by-one', async () => {
+      const skills = [
+        makeLocalSkill({ id: 'local-1', name: 'Valid Skill', enterprise_skill_id: null }),
+        makeLocalSkill({ id: 'local-2', name: 'Bad Skill!', enterprise_skill_id: null })
+      ]
+      mockDb.getSkills.mockReturnValue(skills)
 
+      // Batch call fails (validation error — e.g. "Bad Skill!" has invalid chars)
+      mockApiClient.batchSyncSkills
+        .mockRejectedValueOnce(new Error('400 Bad Request: validation failed'))
+        // Individual call for "Valid Skill" succeeds
+        .mockResolvedValueOnce({
+          created: 1, updated: 0,
+          skills: [makeServerSkill({ id: 'server-valid', name: 'Valid Skill' })]
+        })
+        // Individual call for "Bad Skill!" fails
+        .mockRejectedValueOnce(new Error('400 Bad Request: validation failed'))
+
+      // listSkills fallback should NOT be needed since individual calls returned skills
       const result = await syncManager.syncAll('user-1')
 
-      expect(mockApiClient.batchSyncSkills).toHaveBeenCalledTimes(1)
-      expect(result.errors).toContainEqual(expect.stringContaining('Batch sync chunk'))
+      // 1 batch call + 2 individual calls
+      expect(mockApiClient.batchSyncSkills).toHaveBeenCalledTimes(3)
+      // Only 1 error (the bad skill)
+      expect(result.errors).toContainEqual(expect.stringContaining('1 skill(s) failed to upload'))
+      // Valid skill was still pushed
+      expect(result.skills.pushed).toBe(1)
     })
 
     it('records error but does not crash on batch sync failure', async () => {
       const localSkill = makeLocalSkill({ enterprise_skill_id: null })
       mockDb.getSkills.mockReturnValue([localSkill])
+      // Both batch and individual calls fail (e.g. network down)
       mockApiClient.batchSyncSkills.mockRejectedValue(new Error('Network error'))
+      // listSkills fallback also fails
+      mockApiClient.listSkills.mockRejectedValue(new Error('Network error'))
 
       const result = await syncManager.syncAll('user-1')
 
       expect(result.errors.length).toBeGreaterThan(0)
-      expect(result.errors).toContainEqual(expect.stringContaining('Batch sync chunk'))
+      expect(result.errors).toContainEqual(expect.stringContaining('skill(s) failed to upload'))
     })
 
     it('uses batch-sync response for pull phase (no extra listSkills call)', async () => {
@@ -323,11 +337,8 @@ describe('EnterpriseSyncManager — Skills 2-Way Sync (Batch)', () => {
   describe('pullServerSkills', () => {
     it('creates new local skill from server skill not seen before', async () => {
       const serverSkill = makeServerSkill({ id: 'server-new', name: 'Remote Skill' })
-      mockApiClient.batchSyncSkills.mockResolvedValue({
-        created: 0,
-        updated: 0,
-        skills: [serverSkill]
-      })
+      // No local skills → batch is skipped, falls back to listSkills
+      mockApiClient.listSkills.mockResolvedValue([serverSkill])
       mockDb.getSkillByEnterpriseId.mockReturnValue(undefined)
       mockDb.getSkillByName.mockReturnValue(undefined)
 
@@ -348,11 +359,8 @@ describe('EnterpriseSyncManager — Skills 2-Way Sync (Batch)', () => {
         content: '# Updated',
         updatedAt: '2026-03-15T00:00:00Z'
       })
-      mockApiClient.batchSyncSkills.mockResolvedValue({
-        created: 0,
-        updated: 0,
-        skills: [serverSkill]
-      })
+      // No local skills → batch is skipped, falls back to listSkills
+      mockApiClient.listSkills.mockResolvedValue([serverSkill])
 
       const linkedLocal = makeLocalSkill({
         enterprise_skill_id: 'server-1',
@@ -374,11 +382,8 @@ describe('EnterpriseSyncManager — Skills 2-Way Sync (Batch)', () => {
         id: 'server-1',
         updatedAt: '2026-03-05T00:00:00Z'
       })
-      mockApiClient.batchSyncSkills.mockResolvedValue({
-        created: 0,
-        updated: 0,
-        skills: [serverSkill]
-      })
+      // No local skills → batch is skipped, falls back to listSkills
+      mockApiClient.listSkills.mockResolvedValue([serverSkill])
 
       const linkedLocal = makeLocalSkill({
         enterprise_skill_id: 'server-1',
@@ -393,11 +398,8 @@ describe('EnterpriseSyncManager — Skills 2-Way Sync (Batch)', () => {
 
     it('links existing [Workflo]-prefixed skill by name', async () => {
       const serverSkill = makeServerSkill({ id: 'server-x', name: 'My Skill' })
-      mockApiClient.batchSyncSkills.mockResolvedValue({
-        created: 0,
-        updated: 0,
-        skills: [serverSkill]
-      })
+      // No local skills → batch is skipped, falls back to listSkills
+      mockApiClient.listSkills.mockResolvedValue([serverSkill])
       mockDb.getSkillByEnterpriseId.mockReturnValue(undefined)
 
       const existingByName = makeLocalSkill({
@@ -419,11 +421,8 @@ describe('EnterpriseSyncManager — Skills 2-Way Sync (Batch)', () => {
 
     it('links existing skill by exact name (no prefix)', async () => {
       const serverSkill = makeServerSkill({ id: 'server-y', name: 'Exact Name' })
-      mockApiClient.batchSyncSkills.mockResolvedValue({
-        created: 0,
-        updated: 0,
-        skills: [serverSkill]
-      })
+      // No local skills → batch is skipped, falls back to listSkills
+      mockApiClient.listSkills.mockResolvedValue([serverSkill])
       mockDb.getSkillByEnterpriseId.mockReturnValue(undefined)
 
       const existingByExactName = makeLocalSkill({
@@ -544,17 +543,12 @@ describe('EnterpriseSyncManager — Skills 2-Way Sync (Batch)', () => {
         enterprise_skill_id: 'mastermind-server-id'
       })
       mockDb.getSkills.mockReturnValue([mastermind])
-      mockApiClient.batchSyncSkills.mockResolvedValue({
-        created: 0,
-        updated: 0,
-        skills: []
-      })
+      mockApiClient.listSkills.mockResolvedValue([])
 
       await syncManager.syncAll('user-1')
 
-      // Batch sync should have empty payload (Mastermind filtered out)
-      const batchPayload = mockApiClient.batchSyncSkills.mock.calls[0][0]
-      expect(batchPayload).toEqual([])
+      // Batch sync should NOT be called (Mastermind filtered out, 0 skills to push)
+      expect(mockApiClient.batchSyncSkills).not.toHaveBeenCalled()
       // Should assign empty skillIds
       expect(mockApiClient.updateOrgNode).toHaveBeenCalledWith(
         'node-1',
@@ -568,16 +562,12 @@ describe('EnterpriseSyncManager — Skills 2-Way Sync (Batch)', () => {
         enterprise_skill_id: 'other-team-id'
       })
       mockDb.getSkills.mockReturnValue([pulledSkill])
-      mockApiClient.batchSyncSkills.mockResolvedValue({
-        created: 0,
-        updated: 0,
-        skills: []
-      })
+      mockApiClient.listSkills.mockResolvedValue([])
 
       await syncManager.syncAll('user-1')
 
-      const batchPayload = mockApiClient.batchSyncSkills.mock.calls[0][0]
-      expect(batchPayload).toEqual([])
+      // Batch sync should NOT be called (all skills filtered out)
+      expect(mockApiClient.batchSyncSkills).not.toHaveBeenCalled()
       expect(mockApiClient.updateOrgNode).toHaveBeenCalledWith(
         'node-1',
         { skillIds: [] }
@@ -750,6 +740,116 @@ describe('EnterpriseSyncManager — Skills 2-Way Sync (Batch)', () => {
 
       // No separate listSkills call for pull phase
       expect(mockApiClient.listSkills).not.toHaveBeenCalled()
+    })
+
+    it('falls back to listSkills for pull when all uploads fail', async () => {
+      const localSkill = makeLocalSkill({ enterprise_skill_id: null })
+      mockDb.getSkills.mockReturnValue([localSkill])
+
+      // Both batch and individual calls fail
+      mockApiClient.batchSyncSkills.mockRejectedValue(new Error('400 validation failed'))
+
+      // But listSkills returns server skills for pull
+      const serverSkill = makeServerSkill({ id: 'cloud-skill-1', name: 'Cloud Skill' })
+      mockApiClient.listSkills.mockResolvedValue([serverSkill])
+      mockDb.getSkillByEnterpriseId.mockReturnValue(undefined)
+      mockDb.getSkillByName.mockReturnValue(undefined)
+
+      const result = await syncManager.syncAll('user-1')
+
+      // Upload failed — error recorded
+      expect(result.errors.length).toBeGreaterThan(0)
+      // But pull still happened via listSkills fallback
+      expect(mockApiClient.listSkills).toHaveBeenCalled()
+      expect(mockDb.createSkill).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: '[Workflo] Cloud Skill',
+          enterprise_skill_id: 'cloud-skill-1'
+        })
+      )
+      expect(result.skills.created).toBe(1)
+    })
+
+    it('skips skills with empty description', async () => {
+      const skill = makeLocalSkill({ description: '', enterprise_skill_id: null })
+      mockDb.getSkills.mockReturnValue([skill])
+      mockApiClient.listSkills.mockResolvedValue([])
+
+      await syncManager.syncAll('user-1')
+
+      expect(mockApiClient.batchSyncSkills).not.toHaveBeenCalled()
+    })
+
+    it('skips skills with empty content', async () => {
+      const skill = makeLocalSkill({ content: '', enterprise_skill_id: null })
+      mockDb.getSkills.mockReturnValue([skill])
+      mockApiClient.listSkills.mockResolvedValue([])
+
+      await syncManager.syncAll('user-1')
+
+      expect(mockApiClient.batchSyncSkills).not.toHaveBeenCalled()
+    })
+
+    it('uploads valid skills even when some are invalid', async () => {
+      const skills = [
+        makeLocalSkill({ id: 'valid', name: 'good-skill', enterprise_skill_id: null }),
+        makeLocalSkill({ id: 'bad', name: 'empty-content', content: '', enterprise_skill_id: null })
+      ]
+      mockDb.getSkills.mockReturnValue(skills)
+      mockApiClient.batchSyncSkills.mockResolvedValue({
+        created: 1, updated: 0,
+        skills: [makeServerSkill({ id: 'server-good', name: 'good-skill' })]
+      })
+
+      const result = await syncManager.syncAll('user-1')
+
+      // Only 1 skill in the batch (the valid one)
+      expect(mockApiClient.batchSyncSkills).toHaveBeenCalledTimes(1)
+      const payload = mockApiClient.batchSyncSkills.mock.calls[0][0]
+      expect(payload).toHaveLength(1)
+      expect(payload[0].name).toBe('good-skill')
+      expect(result.skills.pushed).toBe(1)
+    })
+
+    it('on batch failure, valid skills succeed individually and server skills still pulled', async () => {
+      const skills = [
+        makeLocalSkill({ id: 'local-ok', name: 'ok-skill', enterprise_skill_id: null }),
+        makeLocalSkill({ id: 'local-bad', name: 'Bad Name!', enterprise_skill_id: null })
+      ]
+      mockDb.getSkills.mockReturnValue(skills)
+
+      const cloudSkill = makeServerSkill({ id: 'cloud-1', name: 'team-skill' })
+
+      // Batch fails
+      mockApiClient.batchSyncSkills
+        .mockRejectedValueOnce(new Error('validation failed'))
+        // Individual: ok-skill succeeds and returns all server skills
+        .mockResolvedValueOnce({
+          created: 1, updated: 0,
+          skills: [makeServerSkill({ id: 'server-ok', name: 'ok-skill' }), cloudSkill]
+        })
+        // Individual: Bad Name! fails
+        .mockRejectedValueOnce(new Error('validation failed'))
+
+      mockDb.getSkillByEnterpriseId.mockImplementation((id: string) => {
+        if (id === 'server-ok') return makeLocalSkill({ enterprise_skill_id: 'server-ok' })
+        return undefined
+      })
+      mockDb.getSkillByName.mockReturnValue(undefined)
+
+      const result = await syncManager.syncAll('user-1')
+
+      // ok-skill uploaded, bad one reported
+      expect(result.skills.pushed).toBe(1)
+      expect(result.errors).toContainEqual(expect.stringContaining('1 skill(s) failed to upload'))
+
+      // team-skill from server was still pulled into local DB
+      expect(mockDb.createSkill).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: '[Workflo] team-skill',
+          enterprise_skill_id: 'cloud-1'
+        })
+      )
     })
   })
 })

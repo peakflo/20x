@@ -394,17 +394,37 @@ export class EnterpriseSyncManager {
 
       const localName = this.stripWorkfloPrefix(skill.name)
 
+      // Skip skills with empty name, description, or content (server requires min 1 char)
+      if (!localName || localName.trim().length === 0) {
+        console.warn(`[EnterpriseSyncManager] Skipping skill with empty name: "${skill.name}"`)
+        continue
+      }
+      if (!skill.description || skill.description.trim().length === 0) {
+        console.warn(`[EnterpriseSyncManager] Skipping skill with empty description: "${skill.name}"`)
+        continue
+      }
+      if (!skill.content || skill.content.trim().length === 0) {
+        console.warn(`[EnterpriseSyncManager] Skipping skill with empty content: "${skill.name}"`)
+        continue
+      }
+
       // Include the skill in the batch — server does upsert by name
       skillsToSync.push({
         localId: skill.id,
         payload: {
           name: localName,
-          description: skill.description,
-          content: skill.content,
-          confidence: skill.confidence,
-          uses: skill.uses,
+          // Truncate description to server max (1024 chars)
+          description: skill.description.slice(0, 1024),
+          // Truncate content to server max (500KB)
+          content: skill.content.slice(0, 500_000),
+          confidence: typeof skill.confidence === 'number'
+            ? Math.max(0, Math.min(1, skill.confidence))
+            : undefined,
+          uses: typeof skill.uses === 'number' && skill.uses >= 0
+            ? Math.floor(skill.uses)
+            : undefined,
           lastUsed: this.normalizeDateTime(skill.last_used),
-          tags: skill.tags
+          tags: Array.isArray(skill.tags) ? skill.tags : undefined
         }
       })
     }
@@ -417,47 +437,68 @@ export class EnterpriseSyncManager {
     let allServerSkills: WorkfloSkill[] = []
     let totalCreated = 0
     let totalUpdated = 0
+    let batchFailed = false
 
-    const chunks = this.chunkArray(
-      skillsToSync,
-      EnterpriseSyncManager.BATCH_SYNC_MAX_SKILLS
-    )
+    if (skillsToSync.length > 0) {
+      const chunks = this.chunkArray(
+        skillsToSync,
+        EnterpriseSyncManager.BATCH_SYNC_MAX_SKILLS
+      )
 
-    for (let i = 0; i < chunks.length; i++) {
-      const chunk = chunks[i]
-      const payloads = chunk.map((s) => s.payload)
+      for (let i = 0; i < chunks.length; i++) {
+        const chunk = chunks[i]
+        const payloads = chunk.map((s) => s.payload)
 
-      try {
-        const batchResult = await this.batchSyncWithRetry(payloads)
-        totalCreated += batchResult.created
-        totalUpdated += batchResult.updated
-        // Last chunk's response has the full tenant skill set
-        allServerSkills = batchResult.skills
-        console.log(
-          `[EnterpriseSyncManager] Batch chunk ${i + 1}/${chunks.length}: created=${batchResult.created}, updated=${batchResult.updated}, total_skills=${batchResult.skills.length}`
-        )
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err)
-        result.errors.push(`Batch sync chunk ${i + 1}/${chunks.length} failed (domain: ${this.domain}): ${msg}`)
-        console.error(`[EnterpriseSyncManager] Batch sync chunk ${i + 1} failed after retries (domain: ${this.domain}):`, msg)
+        try {
+          const batchResult = await this.batchSyncWithRetry(payloads)
+          totalCreated += batchResult.created
+          totalUpdated += batchResult.updated
+          // Last chunk's response has the full tenant skill set
+          allServerSkills = batchResult.skills
+          console.log(
+            `[EnterpriseSyncManager] Batch chunk ${i + 1}/${chunks.length}: created=${batchResult.created}, updated=${batchResult.updated}, total_skills=${batchResult.skills.length}`
+          )
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err)
+          console.warn(`[EnterpriseSyncManager] Batch chunk ${i + 1} failed (${msg}), falling back to one-by-one upload`)
+
+          // Batch failed (likely validation) — try each skill individually
+          // so valid ones still get uploaded and only truly invalid ones are skipped
+          let individualErrors = 0
+          for (const singlePayload of payloads) {
+            try {
+              const singleResult = await this.apiClient.batchSyncSkills([singlePayload])
+              totalCreated += singleResult.created
+              totalUpdated += singleResult.updated
+              allServerSkills = singleResult.skills
+            } catch (singleErr) {
+              individualErrors++
+              const singleMsg = singleErr instanceof Error ? singleErr.message : String(singleErr)
+              console.warn(`[EnterpriseSyncManager] Skill "${singlePayload.name}" upload failed: ${singleMsg}`)
+            }
+          }
+          if (individualErrors > 0) {
+            batchFailed = true
+            result.errors.push(`${individualErrors} skill(s) failed to upload (domain: ${this.domain})`)
+          }
+        }
       }
     }
 
-    // If no skills to sync but we still need the server skill list (for pull),
-    // do a single empty batch or fall back to listSkills
-    if (skillsToSync.length === 0) {
+    // If we have no server skills yet (either no local skills to push, or batch
+    // sync failed), fall back to listSkills so the pull phase still works.
+    if (allServerSkills.length === 0) {
+      console.log(
+        `[EnterpriseSyncManager] No server skills from batch sync (batchFailed=${batchFailed}, localCount=${skillsToSync.length}), falling back to listSkills`
+      )
       try {
-        // Send empty batch — server returns all tenant skills
-        const batchResult = await this.batchSyncWithRetry([])
-        allServerSkills = batchResult.skills
-      } catch {
-        // Fall back to listSkills if batch-sync with empty payload fails
-        try {
-          allServerSkills = await this.apiClient.listSkills() ?? []
-        } catch (listErr) {
-          const msg = listErr instanceof Error ? listErr.message : String(listErr)
-          result.errors.push(`Fallback listSkills failed (domain: ${this.domain}): ${msg}`)
-        }
+        allServerSkills = await this.apiClient.listSkills() ?? []
+        console.log(
+          `[EnterpriseSyncManager] listSkills fallback returned ${allServerSkills.length} skills`
+        )
+      } catch (listErr) {
+        const msg = listErr instanceof Error ? listErr.message : String(listErr)
+        result.errors.push(`Fallback listSkills failed (domain: ${this.domain}): ${msg}`)
       }
     }
 

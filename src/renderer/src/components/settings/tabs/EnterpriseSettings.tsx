@@ -244,9 +244,11 @@ export function EnterpriseSettings() {
                 </p>
               )}
               {lastSyncStats && lastSyncStats.errors.length > 0 && (
-                <p className="text-xs text-red-400" title={lastSyncStats.errors.join('\n')}>
-                  {lastSyncStats.errors.length} error{lastSyncStats.errors.length !== 1 ? 's' : ''}
-                </p>
+                <div className="text-xs text-red-400">
+                  {lastSyncStats.errors.map((err, i) => (
+                    <p key={i} className="truncate max-w-[350px]" title={err}>{err}</p>
+                  ))}
+                </div>
               )}
             </div>
           </div>
