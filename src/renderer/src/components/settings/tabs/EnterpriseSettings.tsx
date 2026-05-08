@@ -4,7 +4,7 @@ import { Label } from '@/components/ui/Label'
 import { Button } from '@/components/ui/Button'
 import { useEnterpriseStore } from '@/stores/enterprise-store'
 import { EnterpriseLoginModal } from './EnterpriseLoginModal'
-import { enterpriseApi } from '@/lib/ipc-client'
+import { enterpriseApi, skillApi } from '@/lib/ipc-client'
 
 interface AiGatewayStatus {
   configured: boolean
@@ -37,19 +37,23 @@ export function EnterpriseSettings() {
 
   const [showLoginModal, setShowLoginModal] = useState(false)
   const [aiGatewayStatus, setAiGatewayStatus] = useState<AiGatewayStatus | null>(null)
+  const [skillCount, setSkillCount] = useState<number | null>(null)
+  const [isSyncingResources, setIsSyncingResources] = useState(false)
 
   useEffect(() => {
     loadSession()
   }, [loadSession])
 
-  // Fetch AI gateway status when authenticated
+  // Fetch AI gateway status and skill count when authenticated
   useEffect(() => {
     if (isAuthenticated && currentTenant) {
       enterpriseApi.getAiGatewayStatus().then(setAiGatewayStatus).catch(() => {
         setAiGatewayStatus(null)
       })
+      skillApi.getAll().then((skills) => setSkillCount(skills.length)).catch(() => {})
     } else {
       setAiGatewayStatus(null)
+      setSkillCount(null)
     }
   }, [isAuthenticated, currentTenant])
 
@@ -63,8 +67,9 @@ export function EnterpriseSettings() {
       } else {
         console.warn('[enterprise] Sync failed:', data.error)
       }
-      // Refresh AI gateway status after sync
+      // Refresh AI gateway status and skill count after sync
       enterpriseApi.getAiGatewayStatus().then(setAiGatewayStatus).catch(() => {})
+      skillApi.getAll().then((skills) => setSkillCount(skills.length)).catch(() => {})
     })
     return () => unsubscribe?.()
   }, [setSyncing, setSyncResult])
@@ -216,45 +221,60 @@ export function EnterpriseSettings() {
             </div>
           )}
 
-          {/* Sync stats */}
-          {lastSyncStats && (
-            <div className="flex items-center justify-between py-2 border-b border-border">
-              <div className="space-y-0.5">
-                <Label>Last Sync</Label>
-                <p className="text-xs text-muted-foreground">
-                  Resources synced from cloud{lastSyncMs ? ` (${(lastSyncMs / 1000).toFixed(1)}s)` : ''}
-                </p>
-              </div>
-              <div className="text-right space-y-0.5">
-                <div className="flex items-center gap-3 justify-end text-sm text-foreground">
-                  <span title="Skills synced from cloud">
-                    {lastSyncStats.skills.created + lastSyncStats.skills.updated} skill{lastSyncStats.skills.created + lastSyncStats.skills.updated !== 1 ? 's' : ''} synced
-                  </span>
-                  {lastSyncStats.skills.pushed > 0 && (
-                    <span className="text-xs text-muted-foreground" title="Skills pushed to cloud">
-                      ({lastSyncStats.skills.pushed} pushed)
-                    </span>
-                  )}
-                </div>
-                <div className="flex items-center gap-3 justify-end text-xs text-muted-foreground">
-                  {(lastSyncStats.agents.created + lastSyncStats.agents.updated) > 0 && (
-                    <span>{lastSyncStats.agents.created + lastSyncStats.agents.updated} agent{lastSyncStats.agents.created + lastSyncStats.agents.updated !== 1 ? 's' : ''}</span>
-                  )}
-                  {(lastSyncStats.mcpServers.created + lastSyncStats.mcpServers.updated) > 0 && (
-                    <span>{lastSyncStats.mcpServers.created + lastSyncStats.mcpServers.updated} MCP server{lastSyncStats.mcpServers.created + lastSyncStats.mcpServers.updated !== 1 ? 's' : ''}</span>
-                  )}
-                </div>
-                {lastSyncStats.errors.length > 0 && (
-                  <p className="text-xs text-red-400" title={lastSyncStats.errors.join('\n')}>
-                    {lastSyncStats.errors.length} error{lastSyncStats.errors.length !== 1 ? 's' : ''}
-                  </p>
-                )}
-              </div>
+          {/* Skills synced from cloud */}
+          <div className="flex items-center justify-between py-2 border-b border-border">
+            <div className="space-y-0.5">
+              <Label>Skills</Label>
+              <p className="text-xs text-muted-foreground">
+                Skills synced from cloud
+              </p>
             </div>
-          )}
+            <div className="text-right space-y-0.5">
+              {skillCount !== null ? (
+                <span className="text-sm text-foreground">
+                  {skillCount} skill{skillCount !== 1 ? 's' : ''}
+                </span>
+              ) : (
+                <span className="text-sm text-muted-foreground">Loading...</span>
+              )}
+              {lastSyncStats && (
+                <p className="text-xs text-muted-foreground">
+                  Last sync: {lastSyncStats.skills.created} new, {lastSyncStats.skills.updated} updated{lastSyncStats.skills.pushed > 0 ? `, ${lastSyncStats.skills.pushed} pushed` : ''}
+                  {lastSyncMs ? ` (${(lastSyncMs / 1000).toFixed(1)}s)` : ''}
+                </p>
+              )}
+              {lastSyncStats && lastSyncStats.errors.length > 0 && (
+                <p className="text-xs text-red-400" title={lastSyncStats.errors.join('\n')}>
+                  {lastSyncStats.errors.length} error{lastSyncStats.errors.length !== 1 ? 's' : ''}
+                </p>
+              )}
+            </div>
+          </div>
 
           {/* Actions */}
           <div className="flex items-center gap-3 pt-2">
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={async () => {
+                setIsSyncingResources(true)
+                try {
+                  const result = await enterpriseApi.syncResources()
+                  if (result) {
+                    setSyncResult(result, null)
+                    // Refresh skill count after sync
+                    skillApi.getAll().then((skills) => setSkillCount(skills.length)).catch(() => {})
+                  }
+                } catch (err) {
+                  console.error('[enterprise] Resource sync failed:', err)
+                } finally {
+                  setIsSyncingResources(false)
+                }
+              }}
+              disabled={isLoading || isSyncingResources}
+            >
+              {isSyncingResources ? 'Syncing...' : 'Sync resources'}
+            </Button>
             <Button
               variant="secondary"
               size="sm"

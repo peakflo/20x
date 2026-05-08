@@ -1142,6 +1142,18 @@ export function registerIpcHandlers(
     }
   })
 
+  ipcMain.handle('enterprise:syncResources', async () => {
+    const syncResult = await syncManager.syncEnterpriseResources()
+    if (!syncResult) return null
+    return {
+      agents: syncResult.agents,
+      skills: syncResult.skills,
+      mcpServers: syncResult.mcpServers,
+      taskSources: syncResult.taskSources,
+      errors: syncResult.errors
+    }
+  })
+
   ipcMain.handle('enterprise:refreshToken', async () => {
     if (!enterpriseAuth) throw new Error('Enterprise auth not available')
     return await enterpriseAuth.refreshToken()

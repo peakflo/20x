@@ -368,6 +368,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     }> => ipcRenderer.invoke('enterprise:getSession'),
     refreshToken: (): Promise<{ token: string }> =>
       ipcRenderer.invoke('enterprise:refreshToken'),
+    syncResources: (): Promise<{ agents: { created: number; updated: number }; skills: { created: number; updated: number; pushed: number }; mcpServers: { created: number; updated: number }; taskSources: { created: number; updated: number }; errors: string[] } | null> =>
+      ipcRenderer.invoke('enterprise:syncResources'),
     apiRequest: (method: string, path: string, body?: unknown): Promise<unknown> =>
       ipcRenderer.invoke('enterprise:apiRequest', method, path, body),
     getApiUrl: (): Promise<string> =>

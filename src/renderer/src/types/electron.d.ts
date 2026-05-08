@@ -359,6 +359,7 @@ interface ElectronAPI {
       currentTenant: { id: string; name: string } | null
     }>
     refreshToken: () => Promise<{ token: string }>
+    syncResources: () => Promise<{ agents: { created: number; updated: number }; skills: { created: number; updated: number; pushed: number }; mcpServers: { created: number; updated: number }; taskSources: { created: number; updated: number }; errors: string[] } | null>
     apiRequest: (method: string, path: string, body?: unknown) => Promise<unknown>
     getApiUrl: () => Promise<string>
     getJwt: () => Promise<string>

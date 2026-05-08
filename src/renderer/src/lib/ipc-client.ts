@@ -523,6 +523,10 @@ export const enterpriseApi = {
     return window.electronAPI.enterprise.refreshToken()
   },
 
+  syncResources: (): Promise<{ agents: { created: number; updated: number }; skills: { created: number; updated: number; pushed: number }; mcpServers: { created: number; updated: number }; taskSources: { created: number; updated: number }; errors: string[] } | null> => {
+    return window.electronAPI.enterprise.syncResources()
+  },
+
   apiRequest: (method: string, path: string, body?: unknown): Promise<unknown> => {
     return window.electronAPI.enterprise.apiRequest(method, path, body)
   },

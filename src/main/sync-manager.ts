@@ -51,6 +51,15 @@ export class SyncManager {
     this.enterpriseUserId = undefined
   }
 
+  /**
+   * Trigger enterprise resource sync (agents, skills, MCP servers) on demand.
+   * Returns the sync result or null if enterprise is not connected.
+   */
+  async syncEnterpriseResources(): Promise<import('./enterprise-sync').EnterpriseSyncResult | null> {
+    if (!this.enterpriseSyncManager || !this.enterpriseUserId) return null
+    return this.enterpriseSyncManager.syncAll(this.enterpriseUserId)
+  }
+
   private buildContext(mcpServerId?: string, sourceId?: string): PluginContext {
     const mcpServer = mcpServerId ? this.db.getMcpServer(mcpServerId) : undefined
     return {
