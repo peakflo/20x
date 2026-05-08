@@ -464,7 +464,6 @@ export class EnterpriseSyncManager {
 
           // Batch failed (likely validation) — try each skill individually
           // so valid ones still get uploaded and only truly invalid ones are skipped
-          let individualErrors = 0
           for (const singlePayload of payloads) {
             try {
               const singleResult = await this.apiClient.batchSyncSkills([singlePayload])
@@ -472,14 +471,11 @@ export class EnterpriseSyncManager {
               totalUpdated += singleResult.updated
               allServerSkills = singleResult.skills
             } catch (singleErr) {
-              individualErrors++
+              batchFailed = true
               const singleMsg = singleErr instanceof Error ? singleErr.message : String(singleErr)
+              result.errors.push(`Skill "${singlePayload.name}" failed to upload: ${singleMsg}`)
               console.warn(`[EnterpriseSyncManager] Skill "${singlePayload.name}" upload failed: ${singleMsg}`)
             }
-          }
-          if (individualErrors > 0) {
-            batchFailed = true
-            result.errors.push(`${individualErrors} skill(s) failed to upload (domain: ${this.domain})`)
           }
         }
       }

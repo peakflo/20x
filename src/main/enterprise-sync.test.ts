@@ -240,7 +240,7 @@ describe('EnterpriseSyncManager — Skills 2-Way Sync (Batch)', () => {
       // 1 batch call + 2 individual calls
       expect(mockApiClient.batchSyncSkills).toHaveBeenCalledTimes(3)
       // Only 1 error (the bad skill)
-      expect(result.errors).toContainEqual(expect.stringContaining('1 skill(s) failed to upload'))
+      expect(result.errors).toContainEqual(expect.stringContaining('failed to upload'))
       // Valid skill was still pushed
       expect(result.skills.pushed).toBe(1)
     })
@@ -256,7 +256,8 @@ describe('EnterpriseSyncManager — Skills 2-Way Sync (Batch)', () => {
       const result = await syncManager.syncAll('user-1')
 
       expect(result.errors.length).toBeGreaterThan(0)
-      expect(result.errors).toContainEqual(expect.stringContaining('skill(s) failed to upload'))
+      // Error includes the skill name
+      expect(result.errors).toContainEqual(expect.stringContaining('Skill "Test Skill" failed to upload'))
     })
 
     it('uses batch-sync response for pull phase (no extra listSkills call)', async () => {
@@ -841,7 +842,7 @@ describe('EnterpriseSyncManager — Skills 2-Way Sync (Batch)', () => {
 
       // ok-skill uploaded, bad one reported
       expect(result.skills.pushed).toBe(1)
-      expect(result.errors).toContainEqual(expect.stringContaining('1 skill(s) failed to upload'))
+      expect(result.errors).toContainEqual(expect.stringContaining('failed to upload'))
 
       // team-skill from server was still pulled into local DB
       expect(mockDb.createSkill).toHaveBeenCalledWith(
