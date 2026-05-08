@@ -26,10 +26,13 @@ export function EnterpriseSettings() {
     isSyncing,
     userEmail,
     currentTenant,
+    lastSyncStats,
+    lastSyncMs,
     switchOrg,
     logout,
     loadSession,
-    setSyncing
+    setSyncing,
+    setSyncResult
   } = useEnterpriseStore()
 
   const [showLoginModal, setShowLoginModal] = useState(false)
@@ -56,6 +59,7 @@ export function EnterpriseSettings() {
       setSyncing(false)
       if (data.success) {
         console.log(`[enterprise] Sync completed in ${data.syncMs}ms`)
+        setSyncResult(data.syncStats ?? null, data.syncMs ?? null)
       } else {
         console.warn('[enterprise] Sync failed:', data.error)
       }
@@ -63,7 +67,7 @@ export function EnterpriseSettings() {
       enterpriseApi.getAiGatewayStatus().then(setAiGatewayStatus).catch(() => {})
     })
     return () => unsubscribe?.()
-  }, [setSyncing])
+  }, [setSyncing, setSyncResult])
 
   const handleLogout = useCallback(async () => {
     await logout()
@@ -207,6 +211,43 @@ export function EnterpriseSettings() {
                     <div className="h-1.5 w-1.5 rounded-full bg-muted-foreground/40" />
                     <span className="text-sm text-muted-foreground">No plan selected</span>
                   </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Sync stats */}
+          {lastSyncStats && (
+            <div className="flex items-center justify-between py-2 border-b border-border">
+              <div className="space-y-0.5">
+                <Label>Last Sync</Label>
+                <p className="text-xs text-muted-foreground">
+                  Resources synced from cloud{lastSyncMs ? ` (${(lastSyncMs / 1000).toFixed(1)}s)` : ''}
+                </p>
+              </div>
+              <div className="text-right space-y-0.5">
+                <div className="flex items-center gap-3 justify-end text-sm text-foreground">
+                  <span title="Skills synced from cloud">
+                    {lastSyncStats.skills.created + lastSyncStats.skills.updated} skill{lastSyncStats.skills.created + lastSyncStats.skills.updated !== 1 ? 's' : ''} synced
+                  </span>
+                  {lastSyncStats.skills.pushed > 0 && (
+                    <span className="text-xs text-muted-foreground" title="Skills pushed to cloud">
+                      ({lastSyncStats.skills.pushed} pushed)
+                    </span>
+                  )}
+                </div>
+                <div className="flex items-center gap-3 justify-end text-xs text-muted-foreground">
+                  {(lastSyncStats.agents.created + lastSyncStats.agents.updated) > 0 && (
+                    <span>{lastSyncStats.agents.created + lastSyncStats.agents.updated} agent{lastSyncStats.agents.created + lastSyncStats.agents.updated !== 1 ? 's' : ''}</span>
+                  )}
+                  {(lastSyncStats.mcpServers.created + lastSyncStats.mcpServers.updated) > 0 && (
+                    <span>{lastSyncStats.mcpServers.created + lastSyncStats.mcpServers.updated} MCP server{lastSyncStats.mcpServers.created + lastSyncStats.mcpServers.updated !== 1 ? 's' : ''}</span>
+                  )}
+                </div>
+                {lastSyncStats.errors.length > 0 && (
+                  <p className="text-xs text-red-400" title={lastSyncStats.errors.join('\n')}>
+                    {lastSyncStats.errors.length} error{lastSyncStats.errors.length !== 1 ? 's' : ''}
+                  </p>
                 )}
               </div>
             </div>

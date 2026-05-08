@@ -12,6 +12,14 @@ interface EnterpriseCompany {
   isPrimary: boolean
 }
 
+export interface EnterpriseSyncStats {
+  agents: { created: number; updated: number }
+  skills: { created: number; updated: number; pushed: number }
+  mcpServers: { created: number; updated: number }
+  taskSources: { created: number; updated: number }
+  errors: string[]
+}
+
 interface EnterpriseState {
   // Auth state
   isAuthenticated: boolean
@@ -25,6 +33,10 @@ interface EnterpriseState {
   currentTenant: EnterpriseTenant | null
   availableTenants: EnterpriseCompany[] | null
 
+  // Sync stats
+  lastSyncStats: EnterpriseSyncStats | null
+  lastSyncMs: number | null
+
   // Actions
   login: (email: string, password: string) => Promise<void>
   signupInBrowser: (mode?: 'register' | 'login') => Promise<void>
@@ -34,6 +46,7 @@ interface EnterpriseState {
   loadSession: () => Promise<void>
   clearError: () => void
   setSyncing: (syncing: boolean) => void
+  setSyncResult: (stats: EnterpriseSyncStats | null, syncMs: number | null) => void
 }
 
 export const useEnterpriseStore = create<EnterpriseState>((set) => ({
@@ -45,6 +58,8 @@ export const useEnterpriseStore = create<EnterpriseState>((set) => ({
   userId: null,
   currentTenant: null,
   availableTenants: null,
+  lastSyncStats: null,
+  lastSyncMs: null,
 
   login: async (email: string, password: string) => {
     set({ isLoading: true, error: null })
@@ -197,7 +212,9 @@ export const useEnterpriseStore = create<EnterpriseState>((set) => ({
       userId: null,
       currentTenant: null,
       availableTenants: null,
-      error: null
+      error: null,
+      lastSyncStats: null,
+      lastSyncMs: null
     })
   },
 
@@ -225,5 +242,8 @@ export const useEnterpriseStore = create<EnterpriseState>((set) => ({
 
   clearError: () => set({ error: null }),
 
-  setSyncing: (syncing: boolean) => set({ isSyncing: syncing })
+  setSyncing: (syncing: boolean) => set({ isSyncing: syncing }),
+
+  setSyncResult: (stats: EnterpriseSyncStats | null, syncMs: number | null) =>
+    set({ lastSyncStats: stats, lastSyncMs: syncMs })
 }))

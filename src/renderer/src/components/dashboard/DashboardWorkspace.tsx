@@ -28,7 +28,8 @@ export function DashboardWorkspace() {
     signupInBrowser,
     loadSession,
     clearError,
-    setSyncing
+    setSyncing,
+    setSyncResult
   } = useEnterpriseStore()
   const [signupPending, setSignupPending] = useState(false)
   const [showLoginModal, setShowLoginModal] = useState(false)
@@ -55,12 +56,13 @@ export function DashboardWorkspace() {
       setSyncing(false)
       if (data.success) {
         console.log(`[enterprise] Sync completed in ${data.syncMs}ms`)
+        setSyncResult(data.syncStats ?? null, data.syncMs ?? null)
       } else {
         console.warn('[enterprise] Sync failed:', data.error)
       }
     })
     return () => unsubscribe?.()
-  }, [setSyncing])
+  }, [setSyncing, setSyncResult])
 
   const { tasks } = useTaskStore()
   const { openSettings, setSettingsTab, openCreateModal } = useUIStore()

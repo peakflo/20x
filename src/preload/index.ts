@@ -392,8 +392,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
         currentPeriodEnd: string | null
       } | null
     }> => ipcRenderer.invoke('enterprise:getAiGatewayStatus'),
-    onSyncComplete: (callback: (data: { success: boolean; syncMs?: number; error?: string }) => void): (() => void) => {
-      const handler = (_: unknown, data: { success: boolean; syncMs?: number; error?: string }): void => callback(data)
+    onSyncComplete: (callback: (data: { success: boolean; syncMs?: number; error?: string; syncStats?: { agents: { created: number; updated: number }; skills: { created: number; updated: number; pushed: number }; mcpServers: { created: number; updated: number }; taskSources: { created: number; updated: number }; errors: string[] } }) => void): (() => void) => {
+      const handler = (_: unknown, data: { success: boolean; syncMs?: number; error?: string; syncStats?: { agents: { created: number; updated: number }; skills: { created: number; updated: number; pushed: number }; mcpServers: { created: number; updated: number }; taskSources: { created: number; updated: number }; errors: string[] } }): void => callback(data)
       ipcRenderer.on('enterprise:syncComplete', handler)
       return () => ipcRenderer.removeListener('enterprise:syncComplete', handler)
     }

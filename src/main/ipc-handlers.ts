@@ -989,9 +989,19 @@ export function registerIpcHandlers(
           })
         }
 
-        // Notify renderer that background sync is complete
+        // Notify renderer that background sync is complete (include sync stats)
         if (!sender.isDestroyed()) {
-          sender.send('enterprise:syncComplete', { success: true, syncMs })
+          sender.send('enterprise:syncComplete', {
+            success: true,
+            syncMs,
+            syncStats: {
+              agents: syncResult.agents,
+              skills: syncResult.skills,
+              mcpServers: syncResult.mcpServers,
+              taskSources: syncResult.taskSources,
+              errors: syncResult.errors
+            }
+          })
         }
       } catch (err) {
         console.error('[enterprise] Post-connect setup error (non-fatal):', err)
