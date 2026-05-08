@@ -92,6 +92,11 @@ export class AgentManager extends EventEmitter {
   private pollingEntries: Map<string, PollingEntry> = new Map()
   private pollingTimer: ReturnType<typeof setTimeout> | null = null
   private static readonly POLL_INTERVAL_MS = 2000
+  // Maximum number of entries in dedup structures (seenMessageIds, seenPartIds,
+  // partContentLengths) before pruning.  These grow by 1-4+ entries per poll
+  // cycle per session and are never cleaned during a session's lifetime, leading
+  // to OOM crashes (heap exhaustion at ~2.9 GB) after extended sessions.
+  private static readonly MAX_DEDUP_ENTRIES = 10_000
 
   // ── Event-driven nudge ──
   // When an adapter buffers new stream data it calls onDataAvailable().
@@ -1272,6 +1277,45 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     return adapterSessionId
   }
 
+  /**
+   * Prunes dedup structures (seenMessageIds, seenPartIds, partContentLengths)
+   * when they exceed MAX_DEDUP_ENTRIES.  Keeps only the most recent half of
+   * entries to avoid immediate re-growth.  Sets preserve insertion order so
+   * deleting from the front discards the oldest entries first.
+   */
+  private pruneDedup(
+    seenMessageIds: Set<string>,
+    seenPartIds: Set<string>,
+    partContentLengths: Map<string, string>
+  ): void {
+    const max = AgentManager.MAX_DEDUP_ENTRIES
+    const pruneToSize = Math.floor(max / 2)
+
+    if (seenMessageIds.size > max) {
+      let toDelete = seenMessageIds.size - pruneToSize
+      for (const id of seenMessageIds) {
+        if (toDelete-- <= 0) break
+        seenMessageIds.delete(id)
+      }
+    }
+
+    if (seenPartIds.size > max) {
+      let toDelete = seenPartIds.size - pruneToSize
+      for (const id of seenPartIds) {
+        if (toDelete-- <= 0) break
+        seenPartIds.delete(id)
+      }
+    }
+
+    if (partContentLengths.size > max) {
+      let toDelete = partContentLengths.size - pruneToSize
+      for (const key of partContentLengths.keys()) {
+        if (toDelete-- <= 0) break
+        partContentLengths.delete(key)
+      }
+    }
+  }
+
   // ── Centralized Polling Coordinator ──────────────────────────────
   //
   // Instead of N independent setTimeout loops (one per session that can fire
@@ -1427,9 +1471,11 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
         this.pollingTimer = null
       }
 
-      // Run a poll cycle immediately
+      // Run a poll cycle immediately (catch to avoid unhandled rejection on OOM)
       if (this.pollTickFn) {
-        this.pollTickFn()
+        this.pollTickFn().catch((err) => {
+          console.error('[AgentManager] Nudge tick error:', err)
+        })
       }
     }, AgentManager.NUDGE_DELAY_MS)
   }
@@ -1475,6 +1521,9 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
         entry.partContentLengths,
         config
       )
+
+      // Prune dedup structures to prevent unbounded memory growth (OOM)
+      this.pruneDedup(entry.seenMessageIds, entry.seenPartIds, entry.partContentLengths)
 
       // Check if the real session ID has been provided by the adapter
       const realSessionId = newParts.find(p => p.realSessionId)?.realSessionId
@@ -1567,7 +1616,11 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
           }
         }
         if (assistantTexts.length > 0) {
-          currentSession.lastAssistantText = assistantTexts.join('\n')
+          // Replace (not append) and cap at 50 KB to prevent unbounded string growth
+          const joined = assistantTexts.join('\n')
+          currentSession.lastAssistantText = joined.length > 50_000
+            ? joined.slice(-50_000)
+            : joined
         }
       }
 
@@ -1693,6 +1746,8 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
           for (const id of pollingEntry.seenMessageIds) session.seenMessageIds.add(id)
           for (const id of pollingEntry.seenPartIds) session.seenPartIds.add(id)
           for (const [k, v] of pollingEntry.partContentLengths) session.partContentLengths.set(k, v)
+          // Prune after merging to keep session-level structures bounded
+          this.pruneDedup(session.seenMessageIds, session.seenPartIds, session.partContentLengths)
         }
         session.pollingStarted = false
         // Remove from polling FIRST so other sessions aren't starved while
