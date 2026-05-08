@@ -5,6 +5,20 @@ import { tmpdir, homedir } from 'os'
 import { detectInstalledAgents } from './detect.js'
 
 /**
+ * Ensure a directory is on the running process's PATH so subsequently
+ * spawned child processes can find binaries placed there.
+ * Returns true if PATH was modified.
+ */
+function ensureOnPath(dir) {
+  const sep = process.platform === 'win32' ? ';' : ':'
+  const pathEnv = process.env.PATH || ''
+  const segments = pathEnv.split(sep)
+  if (segments.includes(dir) || segments.includes(`${dir}/`)) return false
+  process.env.PATH = `${dir}${sep}${pathEnv}`
+  return true
+}
+
+/**
  * Install commands per agent (npm-based tools).
  * @type {Record<string, { cmd: string, args: string[] } | null>}
  */
@@ -308,13 +322,16 @@ async function installNodejsLinux(onProgress) {
 
     try { unlinkSync(tarPath) } catch { /* ignore */ }
 
-    // Warn if ~/.local/bin not on PATH
-    const pathEnv = process.env.PATH || ''
-    const onPath = pathEnv.split(':').some((p) => p === binDir || p === `${binDir}/`)
-    if (!onPath) {
+    // Inject binDir into this process's PATH so subsequent installs in the
+    // same 20x session (npm-based: claudeCode, opencode, codex, pnpm) can
+    // find npm without requiring a 20x restart. Returns true if PATH was
+    // missing — implies user's shell rc probably also lacks it.
+    const pathWasMissing = ensureOnPath(binDir)
+
+    if (pathWasMissing) {
       onProgress({
         stage: 'complete',
-        output: `Node.js ${version} installed.\nNOTE: ${binDir} is not on your PATH. Add this to ~/.bashrc or ~/.zshrc:\n  export PATH="$HOME/.local/bin:$PATH"\nThen reopen your terminal.\n`,
+        output: `Node.js ${version} installed.\nNOTE: ${binDir} is not on your shell PATH. Add this to ~/.bashrc or ~/.zshrc:\n  export PATH="$HOME/.local/bin:$PATH"\nThen reopen your terminal. (20x has injected it for this session so subsequent installs will work.)\n`,
         percent: 100
       })
     } else {
@@ -494,7 +511,7 @@ async function installGitLinux(onProgress) {
     elevator = 'sudo'
   }
 
-  return new Promise(async (resolve) => {
+  return new Promise((resolve) => {
     onProgress({ stage: 'starting', output: `$ ${elevator} ${chosen.cmd.join(' ')}\n`, percent: 5 })
     onProgress({ stage: 'installing', output: `Detected ${chosen.bin}. ${elevator === 'pkexec' ? 'A GUI prompt will appear for your password.' : 'You may be prompted for your sudo password in the terminal.'}\n`, percent: 20 })
 
@@ -878,9 +895,12 @@ async function installLinuxBinaryFromTarball({ tarUrl, archiveName, binName, onP
     try { unlinkSync(tarPath) } catch { /* ignore */ }
     try { rmSync(extractDir, { recursive: true, force: true }) } catch { /* ignore */ }
 
-    const pathEnv = process.env.PATH || ''
-    const onPath = pathEnv.split(':').some((p) => p === binDir || p === `${binDir}/`)
-    const pathHint = onPath ? '' : `\nNOTE: ${binDir} is not on your PATH. Add to ~/.bashrc:\n  export PATH="$HOME/.local/bin:$PATH"\n`
+    // Inject binDir into this process's PATH so subsequent spawn() calls in
+    // the same 20x session can find the new binary.
+    const pathWasMissing = ensureOnPath(binDir)
+    const pathHint = pathWasMissing
+      ? `\nNOTE: ${binDir} is not on your shell PATH. Add to ~/.bashrc or ~/.zshrc:\n  export PATH="$HOME/.local/bin:$PATH"\n`
+      : ''
     onProgress({ stage: 'complete', output: `${binName} installed successfully!${pathHint}`, percent: 100 })
 
     return { success: true, error: null, newStatus: await detectInstalledAgents() }
