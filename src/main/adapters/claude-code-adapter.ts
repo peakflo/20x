@@ -363,19 +363,36 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
           continue
         }
 
-        // Check if message has content with empty text blocks
-        if (entry.message?.content) {
-          let hasEmptyText = false
-          for (const contentPart of entry.message.content) {
-            if (contentPart.type === 'text' && (!contentPart.text || contentPart.text.trim() === '')) {
-              hasEmptyText = true
-              break
+        // Filter out empty text blocks from message content.
+        // IMPORTANT: Only remove the empty text blocks themselves, NOT the entire message.
+        // Assistant messages often have both an empty text block AND tool_use blocks.
+        // Removing the entire message would orphan the corresponding tool_result in the
+        // next user message, causing the Claude CLI to crash with
+        // "undefined is not an object (evaluating 'A.type')" when it tries to look up
+        // the missing tool_use.
+        if (entry.message?.content && Array.isArray(entry.message.content)) {
+          const originalLength = entry.message.content.length
+          const filteredContent = entry.message.content.filter(
+            (contentPart: { type?: string; text?: string }) => {
+              // Remove undefined/null content parts
+              if (!contentPart || typeof contentPart !== 'object') return false
+              // Remove empty text blocks
+              if (contentPart.type === 'text' && (!contentPart.text || contentPart.text.trim() === '')) return false
+              return true
             }
+          )
+
+          // If all content blocks were removed, skip the entire message
+          if (filteredContent.length === 0) {
+            console.log(`[ClaudeCodeAdapter] Removing fully empty message: ${entry.uuid}`)
+            continue
           }
 
-          // Skip messages with empty text blocks
-          if (hasEmptyText) {
-            console.log(`[ClaudeCodeAdapter] Removing message with empty text block: ${entry.uuid}`)
+          // If some blocks were filtered, re-serialize the message with the filtered content
+          if (filteredContent.length !== originalLength) {
+            entry.message.content = filteredContent
+            console.log(`[ClaudeCodeAdapter] Filtered ${originalLength - filteredContent.length} empty text block(s) from message: ${entry.uuid} (kept ${filteredContent.length} block(s))`)
+            cleanedLines.push(JSON.stringify(entry))
             continue
           }
         }
@@ -438,6 +455,8 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
         if (entry.message?.content) {
           for (let blockIdx = 0; blockIdx < entry.message.content.length; blockIdx++) {
             const contentPart = entry.message.content[blockIdx]
+            // Guard against undefined/null content parts (can happen with corrupted session files)
+            if (!contentPart || typeof contentPart !== 'object') continue
             if (contentPart.type === 'text') {
               // Skip empty text blocks (corrupt messages)
               if (!contentPart.text || contentPart.text.trim() === '') continue
@@ -1211,6 +1230,9 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
 
       for (let blockIdx = 0; blockIdx < content.length; blockIdx++) {
         const block = content[blockIdx]
+        // Guard against undefined/null content blocks (can happen during stream
+        // processing, lock acquisition failures, or SDK bugs)
+        if (!block || typeof block !== 'object') continue
         const blockWithProps = block as { type?: string; text?: string; name?: string; input?: unknown; id?: string }
         // For text blocks (no id), use stable message ID + block index for consistent dedup.
         // For tool_use blocks, blockWithProps.id is the tool_use_id which is already stable.
@@ -1329,6 +1351,8 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
       const content = msgWithProps.message?.content || (Array.isArray(msgWithProps.content) ? msgWithProps.content : [])
 
       for (const block of content) {
+        // Guard against undefined/null content blocks
+        if (!block || typeof block !== 'object') continue
         const blockWithProps = block as {
           type?: string
           tool_use_id?: string

@@ -476,6 +476,171 @@ describe('ClaudeCodeAdapter error result handling', () => {
   })
 })
 
+describe('ClaudeCodeAdapter cleanSessionFile', () => {
+  // Test the core logic of cleanSessionFile: filtering empty text blocks
+  // without removing entire messages that also contain tool_use blocks.
+  //
+  // We test the filtering logic directly with the same algorithm as the
+  // production code, since the method is private and uses filesystem I/O.
+
+  function simulateCleanSessionFile(lines: string[]): string[] {
+    const cleanedLines: string[] = []
+    for (const line of lines) {
+      const entry = JSON.parse(line)
+
+      // Keep non-message entries as-is
+      if (entry.type !== 'user' && entry.type !== 'assistant') {
+        cleanedLines.push(line)
+        continue
+      }
+
+      if (entry.message?.content && Array.isArray(entry.message.content)) {
+        const originalLength = entry.message.content.length
+        const filteredContent = entry.message.content.filter(
+          (contentPart: { type?: string; text?: string }) => {
+            if (!contentPart || typeof contentPart !== 'object') return false
+            if (contentPart.type === 'text' && (!contentPart.text || contentPart.text.trim() === '')) return false
+            return true
+          }
+        )
+
+        if (filteredContent.length === 0) {
+          continue
+        }
+
+        if (filteredContent.length !== originalLength) {
+          entry.message.content = filteredContent
+          cleanedLines.push(JSON.stringify(entry))
+          continue
+        }
+      }
+
+      cleanedLines.push(line)
+    }
+    return cleanedLines
+  }
+
+  it('keeps messages with non-empty text blocks unchanged', () => {
+    const lines = [
+      JSON.stringify({ type: 'assistant', uuid: 'a1', message: { content: [{ type: 'text', text: 'Hello' }] } }),
+    ]
+    const result = simulateCleanSessionFile(lines)
+    expect(result).toHaveLength(1)
+    expect(JSON.parse(result[0]).message.content[0].text).toBe('Hello')
+  })
+
+  it('removes messages where ALL content blocks are empty text', () => {
+    const lines = [
+      JSON.stringify({ type: 'assistant', uuid: 'a1', message: { content: [{ type: 'text', text: '' }] } }),
+    ]
+    const result = simulateCleanSessionFile(lines)
+    expect(result).toHaveLength(0)
+  })
+
+  it('preserves tool_use blocks when filtering out empty text from same message (THE BUG FIX)', () => {
+    // This is the core regression: an assistant message has both an empty text block
+    // AND a tool_use block. The old code removed the ENTIRE message, orphaning the
+    // tool_result in the next user message and causing the Claude CLI to crash.
+    const assistantMsg = {
+      type: 'assistant',
+      uuid: 'a1',
+      message: {
+        id: 'msg_01ABC',
+        content: [
+          { type: 'text', text: '' },
+          { type: 'tool_use', id: 'toolu_01XYZ', name: 'Read', input: { file_path: '/tmp/test' } },
+        ],
+      },
+    }
+    const userMsg = {
+      type: 'user',
+      uuid: 'u1',
+      message: {
+        content: [
+          { type: 'tool_result', tool_use_id: 'toolu_01XYZ', content: 'file contents' },
+        ],
+      },
+    }
+    const lines = [JSON.stringify(assistantMsg), JSON.stringify(userMsg)]
+    const result = simulateCleanSessionFile(lines)
+
+    // Both messages should be kept
+    expect(result).toHaveLength(2)
+
+    // The assistant message should have the empty text filtered out but tool_use preserved
+    const cleaned = JSON.parse(result[0])
+    expect(cleaned.message.content).toHaveLength(1)
+    expect(cleaned.message.content[0].type).toBe('tool_use')
+    expect(cleaned.message.content[0].id).toBe('toolu_01XYZ')
+
+    // The user message should be unchanged (tool_result still has matching tool_use)
+    const userResult = JSON.parse(result[1])
+    expect(userResult.message.content[0].tool_use_id).toBe('toolu_01XYZ')
+  })
+
+  it('handles messages with multiple empty text blocks and one valid block', () => {
+    const msg = {
+      type: 'assistant',
+      uuid: 'a1',
+      message: {
+        content: [
+          { type: 'text', text: '' },
+          { type: 'text', text: '   ' },
+          { type: 'text', text: 'Valid text' },
+        ],
+      },
+    }
+    const lines = [JSON.stringify(msg)]
+    const result = simulateCleanSessionFile(lines)
+
+    expect(result).toHaveLength(1)
+    const cleaned = JSON.parse(result[0])
+    expect(cleaned.message.content).toHaveLength(1)
+    expect(cleaned.message.content[0].text).toBe('Valid text')
+  })
+
+  it('filters out null/undefined content parts', () => {
+    const msg = {
+      type: 'assistant',
+      uuid: 'a1',
+      message: {
+        content: [
+          null,
+          undefined,
+          { type: 'text', text: 'Valid text' },
+        ],
+      },
+    }
+    const lines = [JSON.stringify(msg)]
+    const result = simulateCleanSessionFile(lines)
+
+    expect(result).toHaveLength(1)
+    const cleaned = JSON.parse(result[0])
+    // null serializes to null in JSON, undefined is omitted from arrays (becomes null)
+    // The filter should remove them
+    expect(cleaned.message.content).toHaveLength(1)
+    expect(cleaned.message.content[0].text).toBe('Valid text')
+  })
+
+  it('preserves non-message entries (queue-operation, etc.)', () => {
+    const lines = [
+      JSON.stringify({ type: 'queue-operation', data: 'something' }),
+      JSON.stringify({ type: 'assistant', uuid: 'a1', message: { content: [{ type: 'text', text: '' }] } }),
+    ]
+    const result = simulateCleanSessionFile(lines)
+    expect(result).toHaveLength(1) // Only the queue-operation survives
+    expect(JSON.parse(result[0]).type).toBe('queue-operation')
+  })
+
+  it('preserves messages without content (no filtering needed)', () => {
+    const lines = [
+      JSON.stringify({ type: 'assistant', uuid: 'a1', message: {} }),
+    ]
+    const result = simulateCleanSessionFile(lines)
+    expect(result).toHaveLength(1)
+  })
+})
+
 describe('Workspace path encoding', () => {
   // The adapter encodes workspace paths the same way Claude Code CLI does:
   // all non-alphanumeric, non-hyphen characters are replaced with hyphens.
@@ -676,6 +841,98 @@ describe('ClaudeCodeAdapter task_progress handling', () => {
     expect(progressUpdate).toBeDefined()
     expect(progressUpdate!.tool!.status).toBe('running')
     expect(progressUpdate!.tool!.title).toContain('15s')
+  })
+})
+
+describe('convertSDKMessageToParts handles undefined/null content blocks', () => {
+  it('skips undefined content blocks in assistant messages without crashing', () => {
+    const adapter = new ClaudeCodeAdapter()
+    const seenPartIds = new Set<string>()
+    const partContentLengths = new Map<string, string>()
+
+    // Simulate an assistant message with undefined/null content blocks
+    const msg = {
+      type: 'assistant',
+      uuid: 'msg-1',
+      message: {
+        id: 'msg_01ABC',
+        content: [
+          undefined,
+          null,
+          { type: 'text', text: 'Hello' },
+          undefined,
+          { type: 'tool_use', id: 'toolu_01XYZ', name: 'Read', input: { file_path: '/tmp/test' } },
+        ],
+      },
+    }
+
+    // Should NOT throw — undefined/null blocks are skipped
+    const parts = (adapter as any).convertSDKMessageToParts(msg, seenPartIds, partContentLengths)
+
+    // Only the valid text and tool blocks should be processed
+    const textPart = parts.find((p: any) => p.type === 'text')
+    expect(textPart).toBeDefined()
+    expect(textPart!.text).toBe('Hello')
+
+    const toolPart = parts.find((p: any) => p.type === 'tool')
+    expect(toolPart).toBeDefined()
+    expect(toolPart!.id).toBe('tool-toolu_01XYZ')
+  })
+
+  it('skips undefined content blocks in user messages without crashing', () => {
+    const adapter = new ClaudeCodeAdapter()
+    const seenPartIds = new Set<string>()
+    const partContentLengths = new Map<string, string>()
+
+    // First emit a tool_use so the tool_result has something to match
+    const toolUseMsg = {
+      type: 'assistant',
+      uuid: 'msg-1',
+      message: {
+        id: 'msg_01ABC',
+        content: [
+          { type: 'tool_use', id: 'toolu_01XYZ', name: 'Read', input: { file_path: '/tmp/test' } },
+        ],
+      },
+    }
+    ;(adapter as any).convertSDKMessageToParts(toolUseMsg, seenPartIds, partContentLengths)
+
+    const userMsg = {
+      type: 'user',
+      uuid: 'msg-2',
+      message: {
+        content: [
+          undefined,
+          null,
+          { type: 'tool_result', tool_use_id: 'toolu_01XYZ', content: 'file contents here' },
+        ],
+      },
+    }
+
+    // Should NOT throw — undefined/null blocks are skipped
+    const parts = (adapter as any).convertSDKMessageToParts(userMsg, seenPartIds, partContentLengths)
+
+    const toolResultPart = parts.find((p: any) => p.type === 'tool')
+    expect(toolResultPart).toBeDefined()
+    expect(toolResultPart!.tool!.status).toBe('success')
+  })
+
+  it('handles content array with all undefined/null entries', () => {
+    const adapter = new ClaudeCodeAdapter()
+    const seenPartIds = new Set<string>()
+    const partContentLengths = new Map<string, string>()
+
+    const msg = {
+      type: 'assistant',
+      uuid: 'msg-1',
+      message: {
+        id: 'msg_01ALL_NULL',
+        content: [undefined, null, undefined],
+      },
+    }
+
+    const parts = (adapter as any).convertSDKMessageToParts(msg, seenPartIds, partContentLengths)
+    expect(parts).toHaveLength(0)
   })
 })
 
