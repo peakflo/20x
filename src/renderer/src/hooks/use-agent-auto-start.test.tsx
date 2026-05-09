@@ -518,6 +518,9 @@ describe('useAgentAutoStart', () => {
     })
     const agent = makeAgent({ id: 'agent-next', is_default: true })
 
+    // When startNextSubtask fetches parent task, return it with NotStarted status
+    ;(mockElectronAPI.db.getTask as unknown as Mock).mockResolvedValue(parentTask)
+
     // When startNextSubtask fetches subtasks, return them with sub1 now completed
     ;(mockElectronAPI.db.getSubtasks as unknown as Mock).mockResolvedValue([
       { ...subtask1, status: TaskStatus.Completed },
@@ -591,6 +594,9 @@ describe('useAgentAutoStart', () => {
     })
     const agent = makeAgent({ id: 'agent-1', is_default: true })
 
+    // When startNextSubtask fetches parent task, return it with NotStarted status
+    ;(mockElectronAPI.db.getTask as unknown as Mock).mockResolvedValue(parentTask)
+
     // All subtasks completed
     ;(mockElectronAPI.db.getSubtasks as unknown as Mock).mockResolvedValue([subtask1, subtask2])
 
@@ -626,5 +632,192 @@ describe('useAgentAutoStart', () => {
 
     // Should mark parent as ReadyForReview
     expect(mockElectronAPI.db.updateTask).toHaveBeenCalledWith('parent-1', { status: TaskStatus.ReadyForReview })
+  })
+
+  // ── Parent status guard tests ──
+
+  it('does not start subtasks when parent is in ReadyForReview status', async () => {
+    const parentTask = makeTask({
+      id: 'parent-rfr',
+      title: 'Parent in review',
+      agent_id: 'agent-1',
+      status: TaskStatus.ReadyForReview
+    })
+    const subtask = makeTask({
+      id: 'sub-rfr',
+      title: 'Subtask 1',
+      parent_task_id: 'parent-rfr',
+      agent_id: 'agent-1',
+      sort_order: 0,
+      status: TaskStatus.NotStarted
+    })
+    const agent = makeAgent({ id: 'agent-1', is_default: true })
+
+    renderHook(() =>
+      useAgentAutoStart({
+        tasks: [parentTask, subtask],
+        agents: [agent],
+        sessions: new Map(),
+        showToast: vi.fn()
+      })
+    )
+
+    await act(async () => {
+      vi.advanceTimersByTime(350)
+      await Promise.resolve()
+    })
+
+    // Subtask should NOT be started — parent is in ReadyForReview
+    const startCalls = (mockElectronAPI.agentSession.start as unknown as Mock).mock.calls
+    const startedTaskIds = startCalls.map((call: unknown[]) => call[1])
+    expect(startedTaskIds).not.toContain('sub-rfr')
+  })
+
+  it('does not start subtasks when parent is in Completed status', async () => {
+    const parentTask = makeTask({
+      id: 'parent-done',
+      title: 'Parent completed',
+      agent_id: 'agent-1',
+      status: TaskStatus.Completed
+    })
+    const subtask = makeTask({
+      id: 'sub-done',
+      title: 'Subtask 1',
+      parent_task_id: 'parent-done',
+      agent_id: 'agent-1',
+      sort_order: 0,
+      status: TaskStatus.NotStarted
+    })
+    const agent = makeAgent({ id: 'agent-1', is_default: true })
+
+    renderHook(() =>
+      useAgentAutoStart({
+        tasks: [parentTask, subtask],
+        agents: [agent],
+        sessions: new Map(),
+        showToast: vi.fn()
+      })
+    )
+
+    await act(async () => {
+      vi.advanceTimersByTime(350)
+      await Promise.resolve()
+    })
+
+    // Subtask should NOT be started — parent is Completed
+    const startCalls = (mockElectronAPI.agentSession.start as unknown as Mock).mock.calls
+    const startedTaskIds = startCalls.map((call: unknown[]) => call[1])
+    expect(startedTaskIds).not.toContain('sub-done')
+  })
+
+  it('does not start subtasks when parent is in AgentWorking status', async () => {
+    const parentTask = makeTask({
+      id: 'parent-working',
+      title: 'Parent working',
+      agent_id: 'agent-1',
+      status: TaskStatus.AgentWorking
+    })
+    const subtask = makeTask({
+      id: 'sub-working',
+      title: 'Subtask 1',
+      parent_task_id: 'parent-working',
+      agent_id: 'agent-1',
+      sort_order: 0,
+      status: TaskStatus.NotStarted
+    })
+    const agent = makeAgent({ id: 'agent-1', is_default: true })
+
+    renderHook(() =>
+      useAgentAutoStart({
+        tasks: [parentTask, subtask],
+        agents: [agent],
+        sessions: new Map(),
+        showToast: vi.fn()
+      })
+    )
+
+    await act(async () => {
+      vi.advanceTimersByTime(350)
+      await Promise.resolve()
+    })
+
+    // Subtask should NOT be started — parent is AgentWorking
+    const startCalls = (mockElectronAPI.agentSession.start as unknown as Mock).mock.calls
+    const startedTaskIds = startCalls.map((call: unknown[]) => call[1])
+    expect(startedTaskIds).not.toContain('sub-working')
+  })
+
+  it('does not start next subtask via startNextSubtask when parent is no longer NotStarted', async () => {
+    const parentTask = makeTask({
+      id: 'parent-changed',
+      title: 'Parent changed status',
+      agent_id: 'agent-1',
+      status: TaskStatus.NotStarted
+    })
+    const subtask1 = makeTask({
+      id: 'sub-changed-1',
+      title: 'Subtask 1',
+      parent_task_id: 'parent-changed',
+      agent_id: 'agent-1',
+      sort_order: 0,
+      status: TaskStatus.ReadyForReview
+    })
+    const subtask2 = makeTask({
+      id: 'sub-changed-2',
+      title: 'Subtask 2',
+      parent_task_id: 'parent-changed',
+      agent_id: 'agent-1',
+      sort_order: 1,
+      status: TaskStatus.NotStarted
+    })
+    const agent = makeAgent({ id: 'agent-1', is_default: true })
+
+    // Parent has been moved to Completed in the DB (e.g. manually by user)
+    ;(mockElectronAPI.db.getTask as unknown as Mock).mockResolvedValue({
+      ...parentTask,
+      status: TaskStatus.Completed
+    })
+
+    ;(mockElectronAPI.db.getSubtasks as unknown as Mock).mockResolvedValue([
+      { ...subtask1, status: TaskStatus.Completed },
+      subtask2
+    ])
+
+    renderHook(() =>
+      useAgentAutoStart({
+        tasks: [parentTask, subtask1, subtask2],
+        agents: [agent],
+        sessions: new Map(),
+        showToast: vi.fn()
+      })
+    )
+
+    await act(async () => {
+      vi.advanceTimersByTime(350)
+      await Promise.resolve()
+    })
+
+    ;(mockElectronAPI.agentSession.start as unknown as Mock).mockClear()
+
+    // Get the onTaskUpdated callback
+    const taskUpdatedCalls = (mockElectronAPI.onTaskUpdated as unknown as Mock).mock.calls
+    const latestTaskUpdatedCb = taskUpdatedCalls[taskUpdatedCalls.length - 1]?.[0]
+
+    // Simulate subtask 1 being completed → triggers startNextSubtask
+    await act(async () => {
+      latestTaskUpdatedCb?.({
+        taskId: 'sub-changed-1',
+        updates: { status: TaskStatus.Completed }
+      })
+      await vi.advanceTimersByTimeAsync(400)
+    })
+
+    // startNextSubtask should NOT start subtask 2 — parent is Completed in DB
+    const startCalls = (mockElectronAPI.agentSession.start as unknown as Mock).mock.calls
+    const startedTaskIds = startCalls.map((call: unknown[]) => call[1])
+    expect(startedTaskIds).not.toContain('sub-changed-2')
+
+    // Should also NOT mark parent as ReadyForReview
+    expect(mockElectronAPI.db.updateTask).not.toHaveBeenCalledWith('parent-changed', { status: TaskStatus.ReadyForReview })
   })
 })

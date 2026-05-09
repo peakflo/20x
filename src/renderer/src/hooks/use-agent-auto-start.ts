@@ -74,6 +74,13 @@ export function useAgentAutoStart({ tasks, agents, sessions, showToast }: UseAge
       launchingSubtaskForRef.current.add(parentId)
 
       try {
+        // Check parent task status — only start subtasks if parent is NotStarted
+        const parentTask = await taskApi.getById(parentId)
+        if (!parentTask || parentTask.status !== TaskStatus.NotStarted) {
+          console.log(`[AutoStart] Parent ${parentId} status is ${parentTask?.status ?? 'unknown'}, not starting subtasks`)
+          return
+        }
+
         const subtasks = await taskApi.getSubtasks(parentId)
         const sorted = subtasks.sort(
           (a: WorkfloTask, b: WorkfloTask) => (a.sort_order ?? 0) - (b.sort_order ?? 0)
@@ -230,6 +237,13 @@ export function useAgentAutoStart({ tasks, agents, sessions, showToast }: UseAge
 
         // For subtasks, enforce sequential execution within parent
         if (task.parent_task_id) {
+          // Check parent task status — only start subtasks if parent is NotStarted
+          const parentTask = allTasks.find((t) => t.id === task.parent_task_id)
+          if (!parentTask || parentTask.status !== TaskStatus.NotStarted) {
+            console.log(`[AutoStart] Subtask "${task.title}" skipped: parent status is ${parentTask?.status ?? 'unknown'}`)
+            return
+          }
+
           const siblings = allTasks
             .filter((t) => t.parent_task_id === task.parent_task_id)
             .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
@@ -372,6 +386,13 @@ export function useAgentAutoStart({ tasks, agents, sessions, showToast }: UseAge
 
       // For subtasks, enforce sequential execution within parent
       if (task.parent_task_id) {
+        // Check parent task status — only start subtasks if parent is NotStarted
+        const parentTask = tasks.find((t) => t.id === task.parent_task_id)
+        if (!parentTask || parentTask.status !== TaskStatus.NotStarted) {
+          removeFromQueue(agentId, nextTaskId)
+          return
+        }
+
         const siblings = tasks.filter((t) => t.parent_task_id === task.parent_task_id)
         const hasActiveSibling = siblings.some(
           (s) =>
