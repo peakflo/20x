@@ -1,15 +1,18 @@
 import { Sidebar } from './Sidebar'
 import { TaskWorkspace } from '@/components/tasks/TaskWorkspace'
-import { SkillWorkspace } from '@/components/skills/SkillWorkspace'
-import { SettingsWorkspace } from '@/components/settings/SettingsWorkspace'
-import { DashboardWorkspace } from '@/components/dashboard/DashboardWorkspace'
 import { InfiniteCanvas } from '@/components/canvas/InfiniteCanvas'
 import { TaskForm, type TaskFormSubmitData } from '@/components/tasks/TaskForm'
 import { DeleteConfirmDialog } from '@/components/tasks/DeleteConfirmDialog'
 import { UpdateDialog } from '@/components/update/UpdateDialog'
 import { Dialog, DialogContent, DialogHeader, DialogBody, DialogTitle } from '@/components/ui/Dialog'
-import { OrchestratorPanel } from '@/components/orchestrator/OrchestratorPanel'
 import { OnboardingWizard, shouldShowOnboarding } from '@/components/onboarding/OnboardingWizard'
+
+// Lazy-load heavy workspace components — only imported when their view is active.
+// This reduces the initial bundle size and speeds up first render significantly.
+const SkillWorkspace = lazy(() => import('@/components/skills/SkillWorkspace').then(m => ({ default: m.SkillWorkspace })))
+const SettingsWorkspace = lazy(() => import('@/components/settings/SettingsWorkspace').then(m => ({ default: m.SettingsWorkspace })))
+const DashboardWorkspace = lazy(() => import('@/components/dashboard/DashboardWorkspace').then(m => ({ default: m.DashboardWorkspace })))
+const OrchestratorPanel = lazy(() => import('@/components/orchestrator/OrchestratorPanel').then(m => ({ default: m.OrchestratorPanel })))
 import { useTasks } from '@/hooks/use-tasks'
 import { useUIStore } from '@/stores/ui-store'
 import { useAgentStore } from '@/stores/agent-store'
@@ -18,7 +21,7 @@ import { useOverdueNotifications } from '@/hooks/use-overdue-notifications'
 import { attachmentApi, worktreeApi, settingsApi, updaterApi } from '@/lib/ipc-client'
 import { useTaskSourceStore } from '@/stores/task-source-store'
 import { isOverdue, isSnoozed } from '@/lib/utils'
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useMemo, lazy, Suspense } from 'react'
 import { TaskStatus, PluginActionId } from '@/types'
 import type { FileAttachment } from '@/types'
 import { MessageSquare, ExternalLink, LayoutDashboard, CheckSquare, Zap, Settings, Layers } from 'lucide-react'
@@ -31,22 +34,24 @@ const WINDOWS_TITLEBAR_ACTION_RIGHT = 168
 
 export function AppLayout() {
   const { tasks, allTasks, selectedTask, createTask, updateTask, deleteTask, selectTask } = useTasks()
-  const { agents, sessions, fetchAgents, stopAndRemoveSessionForTask } = useAgentStore()
-  const { executeAction } = useTaskSourceStore()
-  const {
-    sidebarView,
-    setSidebarView,
-    activeModal,
-    editingTaskId,
-    deletingTaskId,
-    openCreateModal,
-    openEditModal,
-    openDeleteModal,
-    openSettings,
-    closeModal,
-    dashboardPreviewTaskId,
-    closeDashboardPreview
-  } = useUIStore()
+  // Use individual selectors to prevent re-renders from unrelated agent store changes (e.g. session messages)
+  const agents = useAgentStore((s) => s.agents)
+  const fetchAgents = useAgentStore((s) => s.fetchAgents)
+  const stopAndRemoveSessionForTask = useAgentStore((s) => s.stopAndRemoveSessionForTask)
+  const executeAction = useTaskSourceStore((s) => s.executeAction)
+  // Use individual selectors for UI store to prevent full-tree re-renders
+  const sidebarView = useUIStore((s) => s.sidebarView)
+  const setSidebarView = useUIStore((s) => s.setSidebarView)
+  const activeModal = useUIStore((s) => s.activeModal)
+  const editingTaskId = useUIStore((s) => s.editingTaskId)
+  const deletingTaskId = useUIStore((s) => s.deletingTaskId)
+  const openCreateModal = useUIStore((s) => s.openCreateModal)
+  const openEditModal = useUIStore((s) => s.openEditModal)
+  const openDeleteModal = useUIStore((s) => s.openDeleteModal)
+  const openSettings = useUIStore((s) => s.openSettings)
+  const closeModal = useUIStore((s) => s.closeModal)
+  const dashboardPreviewTaskId = useUIStore((s) => s.dashboardPreviewTaskId)
+  const closeDashboardPreview = useUIStore((s) => s.closeDashboardPreview)
 
   // ── Update indicator state ──
   const [updateAvailableVersion, setUpdateAvailableVersion] = useState<string | null>(null)
@@ -75,9 +80,18 @@ export function AppLayout() {
     }
   }, [])
 
-  const editingTask = editingTaskId ? tasks.find((t) => t.id === editingTaskId) || selectedTask : undefined
-  const deletingTask = deletingTaskId ? tasks.find((t) => t.id === deletingTaskId) : undefined
-  const dashboardPreviewTask = dashboardPreviewTaskId ? allTasks.find((t) => t.id === dashboardPreviewTaskId) : undefined
+  const editingTask = useMemo(
+    () => editingTaskId ? tasks.find((t) => t.id === editingTaskId) || selectedTask : undefined,
+    [editingTaskId, tasks, selectedTask]
+  )
+  const deletingTask = useMemo(
+    () => deletingTaskId ? tasks.find((t) => t.id === deletingTaskId) : undefined,
+    [deletingTaskId, tasks]
+  )
+  const dashboardPreviewTask = useMemo(
+    () => dashboardPreviewTaskId ? allTasks.find((t) => t.id === dashboardPreviewTaskId) : undefined,
+    [dashboardPreviewTaskId, allTasks]
+  )
 
   const handleGoToFullView = useCallback((taskId: string) => {
     closeDashboardPreview()
@@ -85,9 +99,12 @@ export function AppLayout() {
     setSidebarView('tasks')
   }, [closeDashboardPreview, selectTask, setSidebarView])
 
-  const overdueCount = tasks.filter(
-    (t) => isOverdue(t.due_date) && t.status !== TaskStatus.Completed && !isSnoozed(t.snoozed_until)
-  ).length
+  const overdueCount = useMemo(
+    () => tasks.filter(
+      (t) => isOverdue(t.due_date) && t.status !== TaskStatus.Completed && !isSnoozed(t.snoozed_until)
+    ).length,
+    [tasks]
+  )
 
   useOverdueNotifications(tasks)
 
@@ -121,11 +138,10 @@ export function AppLayout() {
     }
   }
 
-  // Initialize auto-start feature
+  // Initialize auto-start feature (sessions read non-reactively via getState() inside the hook)
   useAgentAutoStart({
     tasks: allTasks,
     agents,
-    sessions,
     showToast
   })
 
@@ -228,11 +244,17 @@ export function AppLayout() {
 
             {/* Other workspace content — conditionally rendered */}
             {activeModal === 'settings' ? (
-              <SettingsWorkspace />
+              <Suspense fallback={<div className="flex-1 flex items-center justify-center text-muted-foreground text-sm">Loading...</div>}>
+                <SettingsWorkspace />
+              </Suspense>
             ) : sidebarView === 'dashboard' ? (
-              <DashboardWorkspace />
+              <Suspense fallback={<div className="flex-1 flex items-center justify-center text-muted-foreground text-sm">Loading...</div>}>
+                <DashboardWorkspace />
+              </Suspense>
             ) : sidebarView === 'skills' ? (
-              <SkillWorkspace />
+              <Suspense fallback={<div className="flex-1 flex items-center justify-center text-muted-foreground text-sm">Loading...</div>}>
+                <SkillWorkspace />
+              </Suspense>
             ) : sidebarView !== 'canvas' ? (
               <TaskWorkspace
               task={selectedTask}
@@ -294,7 +316,9 @@ export function AppLayout() {
             }`}
             style={{ zIndex: 10 }}
           >
-            <OrchestratorPanel onClose={() => setShowOrchestrator(false)} />
+            <Suspense fallback={null}>
+              <OrchestratorPanel onClose={() => setShowOrchestrator(false)} />
+            </Suspense>
           </div>
           </div>
         </main>

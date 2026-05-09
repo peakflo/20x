@@ -1,3 +1,4 @@
+import { memo, useMemo } from 'react'
 import { Calendar, AlarmClockOff, Repeat, HeartPulse, ListTree, ChevronRight } from 'lucide-react'
 import { cn, formatDate, isOverdue, isDueSoon, isSnoozed } from '@/lib/utils'
 import { TaskPriorityBadge } from './TaskPriorityBadge'
@@ -80,21 +81,21 @@ interface TaskListItemProps {
   onToggleExpand?: () => void
 }
 
-export function TaskListItem({ task, isSelected, onSelect, subtaskCount, isSubtask, isExpanded, onToggleExpand }: TaskListItemProps) {
+export const TaskListItem = memo(function TaskListItem({ task, isSelected, onSelect, subtaskCount, isSubtask, isExpanded, onToggleExpand }: TaskListItemProps) {
   const isActive = task.status !== TaskStatus.Completed
   const overdue = isActive && isOverdue(task.due_date)
   const dueSoon = isActive && !overdue && isDueSoon(task.due_date)
-  const session = useAgentStore((s) => s.sessions.get(task.id))
-  const hasActiveAgent = session && session.status !== SessionStatus.IDLE
-  const hasPendingQuestion = Boolean(
-    session?.pendingApproval &&
-    session.status !== SessionStatus.IDLE &&
-    session.pendingApproval.action
-  )
+  // Use a stable selector that only triggers re-renders when this task's session status/approval changes
+  const sessionStatus = useAgentStore((s) => s.sessions.get(task.id)?.status)
+  const hasPendingApproval = useAgentStore((s) => {
+    const sess = s.sessions.get(task.id)
+    return Boolean(sess?.pendingApproval && sess.status !== SessionStatus.IDLE && sess.pendingApproval.action)
+  })
+  const hasActiveAgent = sessionStatus != null && sessionStatus !== SessionStatus.IDLE
 
-  // Determine status indicator color
-  const getStatusColor = () => {
-    if (hasPendingQuestion) {
+  // Determine status indicator color — memoized to avoid recalculation on every render
+  const statusColor = useMemo(() => {
+    if (hasPendingApproval) {
       return 'bg-blue-400 animate-pulse' // Waiting for user input
     }
     // Check task status first - AgentLearning/Triaging takes priority over session status
@@ -108,7 +109,7 @@ export function TaskListItem({ task, isSelected, onSelect, subtaskCount, isSubta
       return 'bg-amber-400 animate-pulse' // Agent working
     }
     return statusDotColor[task.status] // Task status
-  }
+  }, [hasPendingApproval, task.status, hasActiveAgent])
 
   return (
     <button
@@ -124,7 +125,7 @@ export function TaskListItem({ task, isSelected, onSelect, subtaskCount, isSubta
         <div className={cn(
           'mt-[7px] h-2 w-2 rounded-full shrink-0',
           isSubtask && 'mt-[5px] h-1.5 w-1.5',
-          getStatusColor()
+          statusColor
         )} />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
@@ -184,4 +185,4 @@ export function TaskListItem({ task, isSelected, onSelect, subtaskCount, isSubta
       </div>
     </button>
   )
-}
+})

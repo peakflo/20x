@@ -64,18 +64,19 @@ export function DashboardWorkspace() {
     return () => unsubscribe?.()
   }, [setSyncing, setSyncResult])
 
-  const { tasks } = useTaskStore()
-  const { openSettings, setSettingsTab, openCreateModal } = useUIStore()
-  const {
-    timeWindow,
-    setTimeWindow,
-    fetchAll,
-    fetchAllIfNeeded,
-    startPeriodicRefresh,
-    stopPeriodicRefresh,
-    updateLocalStats,
-    isRefreshing
-  } = useDashboardStore()
+  // Use individual selectors to prevent re-renders from unrelated store changes
+  const tasks = useTaskStore((s) => s.tasks)
+  const openSettings = useUIStore((s) => s.openSettings)
+  const setSettingsTab = useUIStore((s) => s.setSettingsTab)
+  const openCreateModal = useUIStore((s) => s.openCreateModal)
+  const timeWindow = useDashboardStore((s) => s.timeWindow)
+  const setTimeWindow = useDashboardStore((s) => s.setTimeWindow)
+  const fetchAll = useDashboardStore((s) => s.fetchAll)
+  const fetchAllIfNeeded = useDashboardStore((s) => s.fetchAllIfNeeded)
+  const startPeriodicRefresh = useDashboardStore((s) => s.startPeriodicRefresh)
+  const stopPeriodicRefresh = useDashboardStore((s) => s.stopPeriodicRefresh)
+  const updateLocalStats = useDashboardStore((s) => s.updateLocalStats)
+  const isRefreshing = useDashboardStore((s) => s.isRefreshing)
 
   // Restore saved enterprise session on mount
   useEffect(() => {

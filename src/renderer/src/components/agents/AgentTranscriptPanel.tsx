@@ -598,8 +598,11 @@ export function AgentTranscriptPanel({
   const virtualizer = useVirtualizer({
     count: messages.length,
     getScrollElement: () => scrollRef.current,
-    estimateSize: () => 60,
-    overscan: 5,
+    // Realistic estimate for average message height (tool calls, markdown blocks, etc.)
+    // — reduces layout thrash and improves scroll smoothness vs the previous 60px default
+    estimateSize: () => 120,
+    // Increased overscan to reduce blank flashes during fast scrolling
+    overscan: 8,
   })
 
   const handleScroll = useCallback(() => {

@@ -20,11 +20,15 @@ const MAX_TRIAGE_ATTEMPTS = 2
 interface UseAgentAutoStartProps {
   tasks: WorkfloTask[]
   agents: Agent[]
-  sessions: Map<string, TaskSession>
+  /** @deprecated sessions are now read via getState() to avoid reactive re-renders in AppLayout */
+  sessions?: Map<string, TaskSession>
   showToast: (message: string, isError?: boolean) => void
 }
 
-export function useAgentAutoStart({ tasks, agents, sessions, showToast }: UseAgentAutoStartProps) {
+export function useAgentAutoStart({ tasks, agents, showToast }: UseAgentAutoStartProps) {
+  // Read sessions non-reactively to avoid re-rendering the entire AppLayout on every agent message.
+  // Effects that need current session state call getSessionsSnapshot() at execution time.
+  const getSessionsSnapshot = useCallback(() => useAgentStore.getState().sessions, [])
   const {
     isEnabled,
     incrementRunningCount,
@@ -378,7 +382,7 @@ export function useAgentAutoStart({ tasks, agents, sessions, showToast }: UseAge
         task.status !== TaskStatus.NotStarted ||
         task.agent_id !== agentId ||
         isSnoozed(task.snoozed_until) ||
-        sessions.has(task.id)
+        getSessionsSnapshot().has(task.id)
       ) {
         removeFromQueue(agentId, nextTaskId)
         return
@@ -432,7 +436,7 @@ export function useAgentAutoStart({ tasks, agents, sessions, showToast }: UseAge
     [
       agents,
       tasks,
-      sessions,
+      getSessionsSnapshot,
       getRunningCount,
       getNextQueuedTask,
       removeFromQueue,
@@ -448,14 +452,16 @@ export function useAgentAutoStart({ tasks, agents, sessions, showToast }: UseAge
   useEffect(() => {
     if (!isEnabled) return
 
+    const currentSessions = getSessionsSnapshot()
     console.log('[AutoStart] Checking for eligible tasks...', {
       totalTasks: tasks.length,
       totalAgents: agents.length,
-      activeSessions: sessions.size
+      activeSessions: currentSessions.size
     })
 
     // Debounce to avoid rapid-fire starts when multiple tasks/agents change
     const timeoutId = setTimeout(() => {
+      const sessions = getSessionsSnapshot()
       // Check for triage candidates (tasks with no agent_id)
       const triageCandidates = selectTriageCandidates(tasks, sessions)
       if (triageCandidates.length > 0) {
@@ -488,7 +494,7 @@ export function useAgentAutoStart({ tasks, agents, sessions, showToast }: UseAge
     }, 300) // 300ms debounce
 
     return () => clearTimeout(timeoutId)
-  }, [isEnabled, tasks, agents, sessions, selectEligibleTasks, selectTriageCandidates, startTasksForAgent, startTriage])
+  }, [isEnabled, tasks, agents, getSessionsSnapshot, selectEligibleTasks, selectTriageCandidates, startTasksForAgent, startTriage])
 
   // Listen to agent status changes (task completions)
   useEffect(() => {
@@ -635,7 +641,7 @@ export function useAgentAutoStart({ tasks, agents, sessions, showToast }: UseAge
         task.status === TaskStatus.NotStarted &&
         task.agent_id &&
         !isSnoozed(task.snoozed_until) &&
-        !sessions.has(task.id)
+        !getSessionsSnapshot().has(task.id)
       ) {
         // Skip if task is being handled by triage completion (avoids race condition)
         if (triagingRef.current.has(task.id)) return
@@ -673,7 +679,7 @@ export function useAgentAutoStart({ tasks, agents, sessions, showToast }: UseAge
         task.status === TaskStatus.NotStarted &&
         !task.agent_id &&
         !isSnoozed(task.snoozed_until) &&
-        !sessions.has(task.id) &&
+        !getSessionsSnapshot().has(task.id) &&
         !triagingRef.current.has(task.id) &&
         (triageAttemptsRef.current.get(task.id) || 0) < MAX_TRIAGE_ATTEMPTS
       ) {
@@ -688,7 +694,7 @@ export function useAgentAutoStart({ tasks, agents, sessions, showToast }: UseAge
     isEnabled,
     tasks,
     agents,
-    sessions,
+    getSessionsSnapshot,
     isSnoozed,
     getRunningCount,
     addToQueue,
@@ -714,6 +720,7 @@ export function useAgentAutoStart({ tasks, agents, sessions, showToast }: UseAge
       console.log('[AutoStart] Periodic check: scanning for eligible tasks...')
 
       // Check triage candidates
+      const sessions = getSessionsSnapshot()
       const triageCandidates = selectTriageCandidates(tasks, sessions)
       if (triageCandidates.length > 0) {
         console.log(`[AutoStart] Periodic check: found ${triageCandidates.length} triage candidate(s)`)
@@ -753,5 +760,5 @@ export function useAgentAutoStart({ tasks, agents, sessions, showToast }: UseAge
       console.log('[AutoStart] Stopping periodic check')
       clearInterval(intervalId)
     }
-  }, [isEnabled, tasks, agents, sessions, selectEligibleTasks, selectTriageCandidates, getRunningCount, startTasksForAgent, startTriage])
+  }, [isEnabled, tasks, agents, getSessionsSnapshot, selectEligibleTasks, selectTriageCandidates, getRunningCount, startTasksForAgent, startTriage])
 }

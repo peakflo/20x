@@ -173,7 +173,9 @@ interface DashboardState {
   applicationsError: string | null
   statsError: string | null
 
-  // Periodic refresh
+  // Periodic refresh — stored as Zustand state for idempotent start/stop only.
+  // Moved to module-level variable below to avoid triggering re-renders.
+  /** @deprecated Use module-level _refreshTimerRef instead */
   _refreshTimer: ReturnType<typeof setInterval> | null
 
   // Actions
@@ -252,6 +254,10 @@ function updateTab(
 ): ApplicationTab[] {
   return tabs.map((t) => (t.workflowId === workflowId ? { ...t, ...patch } : t))
 }
+
+// Module-level refresh timer — stored outside Zustand state to avoid triggering
+// subscriber re-renders when the timer handle value changes.
+let _refreshTimerRef: ReturnType<typeof setInterval> | null = null
 
 export const useDashboardStore = create<DashboardState>((set, get) => ({
   applications: [],
@@ -399,8 +405,8 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
 
   startPeriodicRefresh: () => {
     // Idempotent — don't start multiple timers
-    if (get()._refreshTimer) return
-    const timer = setInterval(() => {
+    if (_refreshTimerRef) return
+    _refreshTimerRef = setInterval(() => {
       // Only refresh if authenticated
       const isAuth = useEnterpriseStore.getState().isAuthenticated
       if (isAuth) {
@@ -413,14 +419,12 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
         ])
       }
     }, REFRESH_INTERVAL_MS)
-    set({ _refreshTimer: timer })
   },
 
   stopPeriodicRefresh: () => {
-    const timer = get()._refreshTimer
-    if (timer) {
-      clearInterval(timer)
-      set({ _refreshTimer: null })
+    if (_refreshTimerRef) {
+      clearInterval(_refreshTimerRef)
+      _refreshTimerRef = null
     }
   },
 

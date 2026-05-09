@@ -73,9 +73,21 @@ const seenIds = new Map<string, Set<string>>()
 // Track last step-start timestamp per task for duration calculation
 const stepStartTimes = new Map<string, number>()
 
+// Maximum dedup IDs per task before eviction (prevents memory leak during long sessions)
+const MAX_SEEN_IDS_PER_TASK = 10_000
+
 function getSeen(taskId: string): Set<string> {
   if (!seenIds.has(taskId)) seenIds.set(taskId, new Set())
-  return seenIds.get(taskId)!
+  const seen = seenIds.get(taskId)!
+  // Evict oldest entries when exceeding limit
+  if (seen.size > MAX_SEEN_IDS_PER_TASK) {
+    const iterator = seen.values()
+    const toRemove = seen.size - MAX_SEEN_IDS_PER_TASK
+    for (let i = 0; i < toRemove; i++) {
+      seen.delete(iterator.next().value!)
+    }
+  }
+  return seen
 }
 
 function findBySessionId(sessions: Map<string, TaskSession>, sid: string): TaskSession | undefined {
@@ -511,6 +523,10 @@ export const useAgentStore = create<AgentState>((set, get) => {
     },
 
     endSession: (taskId) => {
+      // Clean up module-level dedup tracking to prevent memory leaks
+      seenIds.delete(taskId)
+      stepStartTimes.delete(taskId)
+
       set((state) => {
         const session = state.sessions.get(taskId)
         if (!session) return state

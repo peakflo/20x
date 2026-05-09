@@ -21,9 +21,23 @@ const STATUS_ORDER: Record<TaskStatus, number> = {
 }
 
 export function useTasks() {
-  const { tasks, selectedTaskId, isLoading, error, fetchTasks, createTask, updateTask, deleteTask, selectTask } =
-    useTaskStore()
-  const { statusFilter, priorityFilter, sourceFilter, sortField, sortDirection, searchQuery } = useUIStore()
+  // Use individual selectors to avoid re-renders from unrelated store changes
+  const tasks = useTaskStore((s) => s.tasks)
+  const selectedTaskId = useTaskStore((s) => s.selectedTaskId)
+  const isLoading = useTaskStore((s) => s.isLoading)
+  const error = useTaskStore((s) => s.error)
+  const fetchTasks = useTaskStore((s) => s.fetchTasks)
+  const createTask = useTaskStore((s) => s.createTask)
+  const updateTask = useTaskStore((s) => s.updateTask)
+  const deleteTask = useTaskStore((s) => s.deleteTask)
+  const selectTask = useTaskStore((s) => s.selectTask)
+
+  const statusFilter = useUIStore((s) => s.statusFilter)
+  const priorityFilter = useUIStore((s) => s.priorityFilter)
+  const sourceFilter = useUIStore((s) => s.sourceFilter)
+  const sortField = useUIStore((s) => s.sortField)
+  const sortDirection = useUIStore((s) => s.sortDirection)
+  const searchQuery = useUIStore((s) => s.searchQuery)
 
   useEffect(() => {
     fetchTasks()

@@ -1,4 +1,4 @@
-import { useMemo, useCallback } from 'react'
+import { useMemo, useCallback, memo } from 'react'
 import { Clock, AlertCircle, CheckCircle2, ExternalLink, Bot } from 'lucide-react'
 import { Badge } from '@/components/ui/Badge'
 import { OpenCodeLogo, AnthropicLogo, OpenAILogo } from '@/components/icons/AgentLogos'
@@ -167,7 +167,7 @@ function getAgentDisplay(agent: Agent | undefined): { name: string; Logo: React.
 
 // ── Task Card ──────────────────────────────────────────────
 
-function TaskCard({ task, onSelect, agent }: { task: WorkfloTask; onSelect: (id: string) => void; agent?: Agent }) {
+const TaskCard = memo(function TaskCard({ task, onSelect, agent }: { task: WorkfloTask; onSelect: (id: string) => void; agent?: Agent }) {
   const overdue = task.due_date && task.status !== TaskStatus.Completed && isOverdue(task.due_date)
   const sourceConfig = task.source && task.source !== 'local' ? getSourceConfig(task.source) : null
 
@@ -250,11 +250,11 @@ function TaskCard({ task, onSelect, agent }: { task: WorkfloTask; onSelect: (id:
       </div>
     </div>
   )
-}
+})
 
 // ── Column header ────────────────────────────────────────────
 
-function ColumnHeader({ column, count }: { column: StatusColumn; count: number }) {
+const ColumnHeader = memo(function ColumnHeader({ column, count }: { column: StatusColumn; count: number }) {
   return (
     <div className="flex items-center gap-2 px-3 py-2.5">
       <div className={`h-2.5 w-2.5 rounded-full ${column.dotColor} ring-2 ring-black/20`} />
@@ -264,11 +264,11 @@ function ColumnHeader({ column, count }: { column: StatusColumn; count: number }
       </span>
     </div>
   )
-}
+})
 
 // ── Column wrapper ───────────────────────────────────────────
 
-function BoardColumn({ column, tasks, onSelect, agentMap }: { column: StatusColumn; tasks: WorkfloTask[]; onSelect: (id: string) => void; agentMap: Map<string, Agent> }) {
+const BoardColumn = memo(function BoardColumn({ column, tasks, onSelect, agentMap }: { column: StatusColumn; tasks: WorkfloTask[]; onSelect: (id: string) => void; agentMap: Map<string, Agent> }) {
   return (
     <div className={`min-w-[230px] max-w-[280px] flex-1 flex flex-col rounded-xl ${column.columnBg} border border-border/15`}>
       {/* Sticky header within column */}
@@ -288,14 +288,16 @@ function BoardColumn({ column, tasks, onSelect, agentMap }: { column: StatusColu
       </div>
     </div>
   )
-}
+})
 
 // ── TaskBoard ──────────────────────────────────────────────
 
 export function TaskBoard() {
-  const { tasks, isLoading } = useTaskStore()
-  const { agents } = useAgentStore()
-  const { openDashboardPreview } = useUIStore()
+  // Use individual selectors to prevent re-renders from unrelated store changes
+  const tasks = useTaskStore((s) => s.tasks)
+  const isLoading = useTaskStore((s) => s.isLoading)
+  const agents = useAgentStore((s) => s.agents)
+  const openDashboardPreview = useUIStore((s) => s.openDashboardPreview)
   const snoozeTick = useSnoozeTick(tasks)
 
   // Build agent lookup map by id
@@ -333,6 +335,11 @@ export function TaskBoard() {
       } else {
         grouped[TaskStatus.NotStarted].push(task)
       }
+    }
+    // Sort each column's tasks by priority within the same useMemo to avoid
+    // creating new arrays on every render via inline sortByPriority() calls
+    for (const col of COLUMNS) {
+      grouped[col.key] = sortByPriority(grouped[col.key])
     }
     return { grouped, completedCount }
   }, [topLevelTasks])
@@ -391,7 +398,7 @@ export function TaskBoard() {
             <BoardColumn
               key={col.key}
               column={col}
-              tasks={sortByPriority(tasksByStatus.grouped[col.key] || [])}
+              tasks={tasksByStatus.grouped[col.key] || []}
               onSelect={handleSelectTask}
               agentMap={agentMap}
             />

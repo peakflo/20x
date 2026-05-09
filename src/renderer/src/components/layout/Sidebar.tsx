@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useCallback } from 'react'
 import { Plus, Search, ChevronDown, X, FileText, RefreshCw, Loader2, Play, Pause } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { TaskList } from '@/components/tasks/TaskList'
@@ -34,17 +34,35 @@ const sortOptions: { value: SortField; label: string }[] = [
 
 export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onCreateTask }: SidebarProps) {
   const [filtersOpen, setFiltersOpen] = useState(false)
-  const {
-    sidebarView,
-    activeModal, closeModal,
-    statusFilter, priorityFilter, sourceFilter, sortField, searchQuery,
-    setStatusFilter, setPriorityFilter, setSourceFilter, setSortField, setSearchQuery,
-    skillSearchQuery, setSkillSearchQuery
-  } = useUIStore()
-  const { sources, syncingIds, fetchSources, syncAllEnabled } = useTaskSourceStore()
-  const { fetchTasks } = useTaskStore()
-  const { skills, selectedSkillId, fetchSkills, selectSkill, createSkill } = useSkillStore()
-  const { isEnabled: isAutoStartEnabled, toggle: toggleAutoStart } = useAgentSchedulerStore()
+  // Use individual selectors to prevent re-renders from unrelated store changes
+  const sidebarView = useUIStore((s) => s.sidebarView)
+  const activeModal = useUIStore((s) => s.activeModal)
+  const closeModal = useUIStore((s) => s.closeModal)
+  const statusFilter = useUIStore((s) => s.statusFilter)
+  const priorityFilter = useUIStore((s) => s.priorityFilter)
+  const sourceFilter = useUIStore((s) => s.sourceFilter)
+  const sortField = useUIStore((s) => s.sortField)
+  const searchQuery = useUIStore((s) => s.searchQuery)
+  const setStatusFilter = useUIStore((s) => s.setStatusFilter)
+  const setPriorityFilter = useUIStore((s) => s.setPriorityFilter)
+  const setSourceFilter = useUIStore((s) => s.setSourceFilter)
+  const setSortField = useUIStore((s) => s.setSortField)
+  const setSearchQuery = useUIStore((s) => s.setSearchQuery)
+  const skillSearchQuery = useUIStore((s) => s.skillSearchQuery)
+  const setSkillSearchQuery = useUIStore((s) => s.setSkillSearchQuery)
+
+  const sources = useTaskSourceStore((s) => s.sources)
+  const syncingIds = useTaskSourceStore((s) => s.syncingIds)
+  const fetchSources = useTaskSourceStore((s) => s.fetchSources)
+  const syncAllEnabled = useTaskSourceStore((s) => s.syncAllEnabled)
+  const fetchTasks = useTaskStore((s) => s.fetchTasks)
+  const skills = useSkillStore((s) => s.skills)
+  const selectedSkillId = useSkillStore((s) => s.selectedSkillId)
+  const fetchSkills = useSkillStore((s) => s.fetchSkills)
+  const selectSkill = useSkillStore((s) => s.selectSkill)
+  const createSkill = useSkillStore((s) => s.createSkill)
+  const isAutoStartEnabled = useAgentSchedulerStore((s) => s.isEnabled)
+  const toggleAutoStart = useAgentSchedulerStore((s) => s.toggle)
   const [isSyncingAll, setIsSyncingAll] = useState(false)
 
   useEffect(() => {
@@ -89,6 +107,31 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
   }, [skills, skillSearchQuery])
 
   const hasActiveFilters = statusFilter !== 'all' || priorityFilter !== 'all' || sourceFilter !== 'all'
+
+  // Memoize sidebar footer stats to avoid 4x redundant .filter() calls inline in JSX
+  const { activeCount, hiddenCount, totalCount } = useMemo(() => {
+    let active = 0
+    let hidden = 0
+    let total = 0
+    for (const t of tasks) {
+      if (!t.parent_task_id) {
+        total++
+        if (t.status !== TaskStatus.Completed) {
+          if (isSnoozed(t.snoozed_until)) {
+            hidden++
+          } else {
+            active++
+          }
+        }
+      }
+    }
+    return { activeCount: active, hiddenCount: hidden, totalCount: total }
+  }, [tasks])
+
+  const handleSelectTask = useCallback((id: string) => {
+    if (activeModal === 'settings') closeModal()
+    onSelectTask(id)
+  }, [activeModal, closeModal, onSelectTask])
 
   return (
     <aside className="flex flex-col h-full w-[260px] shrink-0 border-r bg-sidebar overflow-hidden">
@@ -228,18 +271,15 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
           <div className="mx-3 border-t" />
 
           <div className="flex-1 overflow-y-auto pt-1">
-            <TaskList tasks={tasks} selectedTaskId={selectedTaskId} onSelectTask={(id) => {
-              if (activeModal === 'settings') closeModal()
-              onSelectTask(id)
-            }} />
+            <TaskList tasks={tasks} selectedTaskId={selectedTaskId} onSelectTask={handleSelectTask} />
           </div>
 
           <div className="px-4 py-2.5 border-t text-xs text-muted-foreground tabular-nums">
-            {tasks.filter((t) => t.status !== TaskStatus.Completed && !isSnoozed(t.snoozed_until) && !t.parent_task_id).length} active
-            {tasks.filter((t) => t.status !== TaskStatus.Completed && isSnoozed(t.snoozed_until) && !t.parent_task_id).length > 0 && (
-              <> · {tasks.filter((t) => t.status !== TaskStatus.Completed && isSnoozed(t.snoozed_until) && !t.parent_task_id).length} hidden</>
+            {activeCount} active
+            {hiddenCount > 0 && (
+              <> · {hiddenCount} hidden</>
             )}
-            {' '}· {tasks.filter(t => !t.parent_task_id).length} total
+            {' '}· {totalCount} total
           </div>
         </>
       ) : (
