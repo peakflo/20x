@@ -47,6 +47,9 @@ export function useAgentAutoStart({ tasks, agents, sessions, showToast }: UseAge
   // Track triage attempts per task to prevent infinite retry
   const triageAttemptsRef = useRef<Map<string, number>>(new Map())
 
+  // Track parent tasks currently launching a subtask to prevent duplicate launches
+  const launchingSubtaskForRef = useRef<Set<string>>(new Set())
+
   // Helper: Check if task is snoozed
   const isSnoozed = useCallback((snoozedUntil: string | null): boolean => {
     if (!snoozedUntil) return false
@@ -58,6 +61,86 @@ export function useAgentAutoStart({ tasks, agents, sessions, showToast }: UseAge
     return task.is_recurring && !task.recurrence_parent_id
   }, [])
 
+  // Helper: Start the next eligible subtask for a parent task.
+  // Fetches fresh subtask data from DB, enforces sequential execution,
+  // and marks parent as ReadyForReview when all subtasks are completed.
+  const startNextSubtask = useCallback(
+    async (parentId: string) => {
+      // Prevent concurrent launches for the same parent
+      if (launchingSubtaskForRef.current.has(parentId)) {
+        console.log(`[AutoStart] Already launching subtask for parent ${parentId}, skipping`)
+        return
+      }
+      launchingSubtaskForRef.current.add(parentId)
+
+      try {
+        const subtasks = await taskApi.getSubtasks(parentId)
+        const sorted = subtasks.sort(
+          (a: WorkfloTask, b: WorkfloTask) => (a.sort_order ?? 0) - (b.sort_order ?? 0)
+        )
+
+        if (sorted.length === 0) return
+
+        // Check if all subtasks are completed → mark parent as ready for review
+        if (sorted.every((s: WorkfloTask) => s.status === TaskStatus.Completed)) {
+          console.log(`[AutoStart] All subtasks completed for parent ${parentId}, marking parent as ready for review`)
+          await taskApi.update(parentId, { status: TaskStatus.ReadyForReview })
+          return
+        }
+
+        // If any subtask is currently active (working/review/triaging/learning), wait
+        const hasActive = sorted.some(
+          (s: WorkfloTask) =>
+            s.status === TaskStatus.AgentWorking ||
+            s.status === TaskStatus.ReadyForReview ||
+            s.status === TaskStatus.Triaging ||
+            s.status === TaskStatus.AgentLearning
+        )
+        if (hasActive) {
+          console.log(`[AutoStart] A subtask is still active for parent ${parentId}, waiting`)
+          return
+        }
+
+        // Find next not_started subtask with an assigned agent
+        const nextSubtask = sorted.find(
+          (s: WorkfloTask) => s.status === TaskStatus.NotStarted && !!s.agent_id
+        )
+        if (!nextSubtask || !nextSubtask.agent_id) {
+          console.log(`[AutoStart] No eligible next subtask for parent ${parentId}`)
+          return
+        }
+
+        const subtaskAgent = agents.find((a) => a.id === nextSubtask.agent_id)
+        if (!subtaskAgent) {
+          console.log(`[AutoStart] Agent ${nextSubtask.agent_id} not found for subtask ${nextSubtask.id}`)
+          return
+        }
+
+        console.log(`[AutoStart] Starting next subtask "${nextSubtask.title}" (${nextSubtask.id}) for parent ${parentId}`)
+        const maxParallel = subtaskAgent.config.max_parallel_sessions || 1
+        const currentRunning = getRunningCount(nextSubtask.agent_id)
+        if (currentRunning < maxParallel) {
+          incrementRunningCount(nextSubtask.agent_id)
+          try {
+            await start(nextSubtask.agent_id, nextSubtask.id)
+            showToast(`Started subtask "${nextSubtask.title}" with ${subtaskAgent.name}`)
+          } catch (error) {
+            console.error(`[AutoStart] Failed to start subtask ${nextSubtask.id}:`, error)
+            decrementRunningCount(nextSubtask.agent_id)
+          }
+        } else {
+          addToQueue(nextSubtask.agent_id, nextSubtask.id)
+        }
+      } catch (error) {
+        console.error(`[AutoStart] startNextSubtask error for parent ${parentId}:`, error)
+      } finally {
+        // Remove lock after a delay to allow status propagation
+        setTimeout(() => launchingSubtaskForRef.current.delete(parentId), 2000)
+      }
+    },
+    [agents, getRunningCount, incrementRunningCount, start, showToast, decrementRunningCount, addToQueue]
+  )
+
   // Helper: Select triage candidates (tasks with no agent_id that need triage)
   const selectTriageCandidates = useCallback(
     (allTasks: WorkfloTask[], allSessions: Map<string, TaskSession>): string[] => {
@@ -65,6 +148,9 @@ export function useAgentAutoStart({ tasks, agents, sessions, showToast }: UseAge
         .filter((task) => {
           // Skip recurring parent template tasks — they are templates, not actionable tasks
           if (isRecurringTemplate(task)) return false
+
+          // Skip subtasks — they are managed by sequential subtask orchestration
+          if (task.parent_task_id) return false
 
           const isNotStarted = task.status === TaskStatus.NotStarted
           const hasNoAgent = !task.agent_id
@@ -134,6 +220,41 @@ export function useAgentAutoStart({ tasks, agents, sessions, showToast }: UseAge
       allTasks.forEach((task) => {
         // Skip recurring parent template tasks — they are templates, not actionable tasks
         if (isRecurringTemplate(task)) return
+
+        // Skip parent tasks that have subtasks — subtasks will run sequentially instead
+        const hasChildren = allTasks.some((t) => t.parent_task_id === task.id)
+        if (hasChildren) {
+          console.log(`[AutoStart] Task "${task.title}" skipped: has subtasks (will run sequentially)`)
+          return
+        }
+
+        // For subtasks, enforce sequential execution within parent
+        if (task.parent_task_id) {
+          const siblings = allTasks
+            .filter((t) => t.parent_task_id === task.parent_task_id)
+            .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
+
+          // Don't start if any sibling is actively being worked on or awaiting review
+          const hasActiveSibling = siblings.some(
+            (s) =>
+              s.id !== task.id &&
+              (s.status === TaskStatus.AgentWorking ||
+                s.status === TaskStatus.ReadyForReview ||
+                s.status === TaskStatus.Triaging ||
+                s.status === TaskStatus.AgentLearning)
+          )
+          if (hasActiveSibling) {
+            console.log(`[AutoStart] Subtask "${task.title}" skipped: sibling is still active`)
+            return
+          }
+
+          // Only start if this is the first not-started subtask (by sort_order)
+          const firstNotStarted = siblings.find((s) => s.status === TaskStatus.NotStarted)
+          if (firstNotStarted && firstNotStarted.id !== task.id) {
+            console.log(`[AutoStart] Subtask "${task.title}" skipped: not next in sequence`)
+            return
+          }
+        }
 
         // Log why tasks are excluded
         const isNotStarted = task.status === TaskStatus.NotStarted
@@ -249,6 +370,31 @@ export function useAgentAutoStart({ tasks, agents, sessions, showToast }: UseAge
         return
       }
 
+      // For subtasks, enforce sequential execution within parent
+      if (task.parent_task_id) {
+        const siblings = tasks.filter((t) => t.parent_task_id === task.parent_task_id)
+        const hasActiveSibling = siblings.some(
+          (s) =>
+            s.id !== task.id &&
+            (s.status === TaskStatus.AgentWorking ||
+              s.status === TaskStatus.ReadyForReview ||
+              s.status === TaskStatus.Triaging ||
+              s.status === TaskStatus.AgentLearning)
+        )
+        if (hasActiveSibling) {
+          // Keep in queue — will be started when sibling completes
+          console.log(`[AutoStart] Subtask "${task.title}" deferred: sibling still active`)
+          return
+        }
+
+        const sortedSiblings = siblings.sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
+        const firstNotStarted = sortedSiblings.find((s) => s.status === TaskStatus.NotStarted)
+        if (firstNotStarted && firstNotStarted.id !== task.id) {
+          removeFromQueue(agentId, nextTaskId)
+          return
+        }
+      }
+
       // Start the task
       try {
         removeFromQueue(agentId, nextTaskId)
@@ -360,6 +506,14 @@ export function useAgentAutoStart({ tasks, agents, sessions, showToast }: UseAge
             // Clean up attempts on success
             triageAttemptsRef.current.delete(taskId)
 
+            // Check if triage created subtasks — if so, start first subtask instead of parent
+            const subtasks = await taskApi.getSubtasks(taskId)
+            if (subtasks.length > 0) {
+              console.log(`[AutoStart] Triage created ${subtasks.length} subtask(s) for "${updatedTask.title}", starting first subtask`)
+              await startNextSubtask(taskId)
+              return
+            }
+
             const assignedAgentId = updatedTask.agent_id
             const assignedAgent = agents.find((a) => a.id === assignedAgentId)
             if (!assignedAgent) {
@@ -401,7 +555,7 @@ export function useAgentAutoStart({ tasks, agents, sessions, showToast }: UseAge
     })
 
     return unsubscribe
-  }, [isEnabled, tasks, agents, decrementRunningCount, showToast, processNextTask, getRunningCount, addToQueue, startTasksForAgent])
+  }, [isEnabled, tasks, agents, decrementRunningCount, showToast, processNextTask, getRunningCount, addToQueue, startTasksForAgent, startNextSubtask])
 
   // Listen to new task creation — trigger triage for tasks with no agent_id
   useEffect(() => {
@@ -411,6 +565,8 @@ export function useAgentAutoStart({ tasks, agents, sessions, showToast }: UseAge
       const task = event.task as WorkfloTask
       // Skip recurring parent template tasks
       if (task.is_recurring && !task.recurrence_parent_id) return
+      // Skip subtasks — they are managed by sequential subtask orchestration
+      if (task.parent_task_id) return
       if (
         task.status === TaskStatus.NotStarted &&
         !task.agent_id &&
@@ -446,6 +602,13 @@ export function useAgentAutoStart({ tasks, agents, sessions, showToast }: UseAge
       // Skip recurring parent template tasks
       if (task.is_recurring && !task.recurrence_parent_id) return
 
+      // Handle subtask completion — trigger next subtask or mark parent as done
+      if (task.parent_task_id && task.status === TaskStatus.Completed) {
+        console.log(`[AutoStart] Subtask "${task.title}" completed, checking for next subtask`)
+        setTimeout(() => startNextSubtask(task.parent_task_id!), 300)
+        return
+      }
+
       // Check if task is eligible for auto-start (has agent_id)
       if (
         task.status === TaskStatus.NotStarted &&
@@ -453,22 +616,35 @@ export function useAgentAutoStart({ tasks, agents, sessions, showToast }: UseAge
         !isSnoozed(task.snoozed_until) &&
         !sessions.has(task.id)
       ) {
+        // Skip if task is being handled by triage completion (avoids race condition)
+        if (triagingRef.current.has(task.id)) return
+
         const agentId = task.agent_id
         const agent = agents.find((a) => a.id === agentId)
         if (!agent) return
 
-        const maxParallel = agent.config.max_parallel_sessions || 1
-        const currentRunning = getRunningCount(agentId)
+        // Check if this parent task has subtasks — start first subtask instead
+        setTimeout(async () => {
+          try {
+            const subtasks = await taskApi.getSubtasks(task.id)
+            if (subtasks.length > 0) {
+              console.log(`[AutoStart] Task "${task.title}" has ${subtasks.length} subtask(s), starting first subtask instead`)
+              await startNextSubtask(task.id)
+              return
+            }
+          } catch {
+            // If subtask check fails, proceed with normal start
+          }
 
-        if (currentRunning < maxParallel) {
-          // Start immediately
-          setTimeout(() => {
+          const maxParallel = agent.config.max_parallel_sessions || 1
+          const currentRunning = getRunningCount(agentId)
+
+          if (currentRunning < maxParallel) {
             startTasksForAgent(agentId, [task.id], agent)
-          }, 100)
-        } else {
-          // Add to queue
-          addToQueue(agentId, task.id)
-        }
+          } else {
+            addToQueue(agentId, task.id)
+          }
+        }, 100)
       }
 
       // Check if task needs triage (no agent_id, not_started)
@@ -480,6 +656,8 @@ export function useAgentAutoStart({ tasks, agents, sessions, showToast }: UseAge
         !triagingRef.current.has(task.id) &&
         (triageAttemptsRef.current.get(task.id) || 0) < MAX_TRIAGE_ATTEMPTS
       ) {
+        // Skip subtasks — they don't need independent triage
+        if (task.parent_task_id) return
         setTimeout(() => startTriage(task.id), 200)
       }
     })
@@ -494,7 +672,8 @@ export function useAgentAutoStart({ tasks, agents, sessions, showToast }: UseAge
     getRunningCount,
     addToQueue,
     startTasksForAgent,
-    startTriage
+    startTriage,
+    startNextSubtask
   ])
 
   // Clear queues when disabled
