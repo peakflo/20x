@@ -2,34 +2,35 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen } from '@testing-library/react'
 import { TaskPanelContent } from './TaskPanelContent'
 
-const updatePanelMock = vi.fn()
-const selectTaskMock = vi.fn()
-const updateTaskMock = vi.fn()
-
-const taskList = [
-  {
-    id: 'task-1',
-    title: 'Current Task',
-    parent_task_id: null,
-    output_fields: [],
-    source_id: null,
-    repos: [],
-    priority: 'medium',
-    type: 'general',
-    attachments: [],
-  },
-  {
-    id: 'child-1',
-    title: 'Child Task',
-    parent_task_id: 'task-1',
-    output_fields: [],
-    source_id: null,
-    repos: [],
-    priority: 'medium',
-    type: 'general',
-    attachments: [],
-  },
-]
+const { updatePanelMock, selectTaskMock, updateTaskMock, taskList } = vi.hoisted(() => ({
+  updatePanelMock: vi.fn(),
+  selectTaskMock: vi.fn(),
+  updateTaskMock: vi.fn(),
+  taskList: [
+    {
+      id: 'task-1',
+      title: 'Current Task',
+      parent_task_id: null,
+      output_fields: [],
+      source_id: null,
+      repos: [],
+      priority: 'medium',
+      type: 'general',
+      attachments: [],
+    },
+    {
+      id: 'child-1',
+      title: 'Child Task',
+      parent_task_id: 'task-1',
+      output_fields: [],
+      source_id: null,
+      repos: [],
+      priority: 'medium',
+      type: 'general',
+      attachments: [],
+    },
+  ],
+}))
 
 vi.mock('@/components/tasks/TaskWorkspace', () => ({
   TaskWorkspace: ({ onNavigateToTask }: { onNavigateToTask?: (taskId: string) => void }) => (
