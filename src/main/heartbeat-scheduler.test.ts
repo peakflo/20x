@@ -834,29 +834,41 @@ describe('HeartbeatScheduler', () => {
       expect(agent.startHeartbeatSession).not.toHaveBeenCalled()
     })
 
-    it('silently skips tasks already in progress without logging', async () => {
+    it('logs "already in progress" once per heartbeat run, not on every tick', async () => {
       const dueTask = makeTask()
       ;(db.getHeartbeatDueTasks as ReturnType<typeof vi.fn>).mockReturnValue([dueTask])
 
-      // Simulate a heartbeat already in progress by adding to the inProgress set
+      // Simulate a heartbeat already in progress
       const inProgress = (scheduler as unknown as { inProgress: Set<string> }).inProgress
+      const loggedInProgress = (scheduler as unknown as { loggedInProgress: Set<string> }).loggedInProgress
       inProgress.add('task-1')
 
       const consoleSpy = vi.spyOn(console, 'log')
 
+      // First tick: should log the skip message once
       await check(scheduler).call(scheduler)
 
-      // Should NOT log "Found N due heartbeat(s)" or "Skipping" messages
-      const heartbeatLogs = consoleSpy.mock.calls.filter(
-        (call) => typeof call[0] === 'string' && call[0].includes('[HeartbeatScheduler]')
+      const firstTickLogs = consoleSpy.mock.calls.filter(
+        (call) => typeof call[0] === 'string' && call[0].includes('heartbeat already in progress')
       )
-      expect(heartbeatLogs).toHaveLength(0)
+      expect(firstTickLogs).toHaveLength(1)
 
-      // Should not have tried to start a heartbeat session
+      consoleSpy.mockClear()
+
+      // Second tick: should NOT log again (already logged for this run)
+      await check(scheduler).call(scheduler)
+
+      const secondTickLogs = consoleSpy.mock.calls.filter(
+        (call) => typeof call[0] === 'string' && call[0].includes('heartbeat already in progress')
+      )
+      expect(secondTickLogs).toHaveLength(0)
+
+      // Should not have tried to start a heartbeat session on either tick
       expect(agent.startHeartbeatSession).not.toHaveBeenCalled()
 
       consoleSpy.mockRestore()
       inProgress.delete('task-1')
+      loggedInProgress.delete('task-1')
     })
   })
 

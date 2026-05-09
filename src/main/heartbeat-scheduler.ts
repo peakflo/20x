@@ -39,6 +39,8 @@ export class HeartbeatScheduler {
 
   /** Track in-progress heartbeat sessions to avoid duplicates */
   private inProgress: Set<string> = new Set()
+  /** Track which in-progress skips have already been logged (log once, not every tick) */
+  private loggedInProgress: Set<string> = new Set()
 
   constructor(dbManager: DatabaseManager, agentManager: AgentManager) {
     this.dbManager = dbManager
@@ -235,8 +237,15 @@ export class HeartbeatScheduler {
 
       if (dueTasks.length === 0) return
 
-      // Filter out tasks already being processed — avoids log spam when a
-      // heartbeat takes longer than the scheduler tick interval (60s)
+      // Log in-progress skips once per heartbeat run (not every tick)
+      for (const task of dueTasks) {
+        if (this.inProgress.has(task.id) && !this.loggedInProgress.has(task.id)) {
+          console.log(`[HeartbeatScheduler] Skipping task ${task.id} — heartbeat already in progress`)
+          this.loggedInProgress.add(task.id)
+        }
+      }
+
+      // Filter out tasks already being processed
       const actionableTasks = dueTasks.filter(t => !this.inProgress.has(t.id))
 
       if (actionableTasks.length === 0) return
@@ -346,6 +355,7 @@ export class HeartbeatScheduler {
       this.advanceNextCheck(task)
     } finally {
       this.inProgress.delete(task.id)
+      this.loggedInProgress.delete(task.id)
       await this.agentManager.cleanupHeartbeatSession(task.id)
     }
   }
