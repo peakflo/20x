@@ -781,6 +781,21 @@ describe('HeartbeatScheduler', () => {
       // Should not have been called more than once (initial call only)
       expect(db.getHeartbeatDueTasks).toHaveBeenCalledTimes(1)
     })
+
+    it('is idempotent — calling start() again clears previous interval', () => {
+      const mockWindow = { webContents: { send: vi.fn() }, isDestroyed: vi.fn().mockReturnValue(false) }
+
+      // Start the scheduler twice
+      scheduler.start(mockWindow as unknown as import('electron').BrowserWindow)
+      scheduler.start(mockWindow as unknown as import('electron').BrowserWindow)
+
+      // Two immediate calls from two start() invocations
+      expect(db.getHeartbeatDueTasks).toHaveBeenCalledTimes(2)
+
+      // Advance by one tick — should only fire ONCE (old interval was cleared)
+      vi.advanceTimersByTime(HEARTBEAT_DEFAULTS.checkIntervalMs)
+      expect(db.getHeartbeatDueTasks).toHaveBeenCalledTimes(3) // 2 + 1, not 2 + 2
+    })
   })
 
   // ── checkHeartbeats (private integration-style) ────────
@@ -817,6 +832,43 @@ describe('HeartbeatScheduler', () => {
       expect(agent.hasActiveSessionForTask).toHaveBeenCalledWith('task-1')
       // Should not have tried to start a heartbeat session
       expect(agent.startHeartbeatSession).not.toHaveBeenCalled()
+    })
+
+    it('logs "already in progress" once per heartbeat run, not on every tick', async () => {
+      const dueTask = makeTask()
+      ;(db.getHeartbeatDueTasks as ReturnType<typeof vi.fn>).mockReturnValue([dueTask])
+
+      // Simulate a heartbeat already in progress
+      const inProgress = (scheduler as unknown as { inProgress: Set<string> }).inProgress
+      const loggedInProgress = (scheduler as unknown as { loggedInProgress: Set<string> }).loggedInProgress
+      inProgress.add('task-1')
+
+      const consoleSpy = vi.spyOn(console, 'log')
+
+      // First tick: should log the skip message once
+      await check(scheduler).call(scheduler)
+
+      const firstTickLogs = consoleSpy.mock.calls.filter(
+        (call) => typeof call[0] === 'string' && call[0].includes('heartbeat already in progress')
+      )
+      expect(firstTickLogs).toHaveLength(1)
+
+      consoleSpy.mockClear()
+
+      // Second tick: should NOT log again (already logged for this run)
+      await check(scheduler).call(scheduler)
+
+      const secondTickLogs = consoleSpy.mock.calls.filter(
+        (call) => typeof call[0] === 'string' && call[0].includes('heartbeat already in progress')
+      )
+      expect(secondTickLogs).toHaveLength(0)
+
+      // Should not have tried to start a heartbeat session on either tick
+      expect(agent.startHeartbeatSession).not.toHaveBeenCalled()
+
+      consoleSpy.mockRestore()
+      inProgress.delete('task-1')
+      loggedInProgress.delete('task-1')
     })
   })
 

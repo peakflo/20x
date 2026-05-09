@@ -39,6 +39,8 @@ export class HeartbeatScheduler {
 
   /** Track in-progress heartbeat sessions to avoid duplicates */
   private inProgress: Set<string> = new Set()
+  /** Track which in-progress skips have already been logged (log once, not every tick) */
+  private loggedInProgress: Set<string> = new Set()
 
   constructor(dbManager: DatabaseManager, agentManager: AgentManager) {
     this.dbManager = dbManager
@@ -46,6 +48,7 @@ export class HeartbeatScheduler {
   }
 
   start(mainWindow: BrowserWindow): void {
+    this.stop() // clear any previous timer to prevent interval leaks
     this.mainWindow = mainWindow
     console.log('[HeartbeatScheduler] Starting scheduler...')
 
@@ -234,16 +237,23 @@ export class HeartbeatScheduler {
 
       if (dueTasks.length === 0) return
 
-      console.log(`[HeartbeatScheduler] Found ${dueTasks.length} due heartbeat(s)`)
+      // Log in-progress skips once per heartbeat run (not every tick)
+      for (const task of dueTasks) {
+        if (this.inProgress.has(task.id) && !this.loggedInProgress.has(task.id)) {
+          console.log(`[HeartbeatScheduler] Skipping task ${task.id} — heartbeat already in progress`)
+          this.loggedInProgress.add(task.id)
+        }
+      }
+
+      // Filter out tasks already being processed
+      const actionableTasks = dueTasks.filter(t => !this.inProgress.has(t.id))
+
+      if (actionableTasks.length === 0) return
+
+      console.log(`[HeartbeatScheduler] Found ${actionableTasks.length} due heartbeat(s)`)
 
       // Process sequentially to avoid overloading agent quotas
-      for (const task of dueTasks) {
-        // Skip if already in progress
-        if (this.inProgress.has(task.id)) {
-          console.log(`[HeartbeatScheduler] Skipping task ${task.id} — heartbeat already in progress`)
-          continue
-        }
-
+      for (const task of actionableTasks) {
         // Skip if task has a live agent session (user is actively working)
         if (this.agentManager.hasActiveSessionForTask(task.id)) {
           console.log(`[HeartbeatScheduler] Skipping task ${task.id} — active agent session in progress`)
@@ -345,6 +355,7 @@ export class HeartbeatScheduler {
       this.advanceNextCheck(task)
     } finally {
       this.inProgress.delete(task.id)
+      this.loggedInProgress.delete(task.id)
       await this.agentManager.cleanupHeartbeatSession(task.id)
     }
   }
