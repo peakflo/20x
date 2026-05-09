@@ -178,4 +178,21 @@ describe('InfiniteCanvas', () => {
     expect(screen.getByTitle('Collapse')).toBeTruthy()
     expect(screen.getByTitle('Close panel')).toBeTruthy()
   })
+
+  it('keeps canvas content selectable inside panels', () => {
+    useCanvasStore.getState().addPanel({
+      type: 'task',
+      title: 'Selectable Panel',
+      x: 0,
+      y: 0,
+      width: 400,
+      height: 300,
+    })
+
+    const { container } = render(<InfiniteCanvas />)
+    const panel = container.querySelector('[data-canvas-panel="true"]')
+
+    expect(panel).toBeTruthy()
+    expect(panel?.className).not.toContain('select-none')
+  })
 })

@@ -360,7 +360,7 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
       onMouseDown={handleMouseDown}
       onMouseEnter={handlePanelMouseEnter}
       onMouseLeave={handlePanelMouseLeave}
-      className={`absolute rounded-xl border bg-[#1a2030] shadow-2xl flex flex-col select-none transition-shadow duration-150 group/panel ${cfg.border} ${
+      className={`absolute rounded-xl border bg-[#1a2030] shadow-2xl flex flex-col transition-shadow duration-150 group/panel ${cfg.border} ${
         isDragging ? 'shadow-indigo-500/10 ring-1 ring-indigo-500/30' : ''
       } ${isConnectingLocal ? 'ring-2 ring-orange-500/50' : ''} ${
         isProximityTarget ? 'ring-2 ring-orange-500/60 shadow-orange-500/20 shadow-2xl' : ''
@@ -379,7 +379,7 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
       <div className="flex flex-col flex-1 min-h-0 overflow-hidden rounded-[11px]">
       {/* Title bar — drag handle */}
       <div
-        className={`flex items-center gap-2 px-3 py-2 border-b border-border/40 flex-shrink-0 cursor-grab active:cursor-grabbing group ${cfg.bg}`}
+        className={`flex items-center gap-2 px-3 py-2 border-b border-border/40 flex-shrink-0 cursor-grab active:cursor-grabbing group select-none ${cfg.bg}`}
         onMouseDown={handleDragStart}
       >
         <span
@@ -571,7 +571,7 @@ interface PanelContentProps {
 
 const MemoizedPanelContent = memo(function PanelContent({ type, id, refId, url, title, taskLayout, browserSessionId, streamPort }: PanelContentProps) {
   if (type === 'task' && refId) {
-    return <TaskPanelContent taskId={refId} panelLayout={taskLayout} />
+    return <TaskPanelContent panelId={id} taskId={refId} panelLayout={taskLayout} />
   }
   if (type === 'transcript' && refId) {
     return <TranscriptPanelContent taskId={refId} />

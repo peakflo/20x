@@ -86,7 +86,7 @@ export function TranscriptPanelContent({ taskId }: TranscriptPanelContentProps) 
       onStop={handleStop}
       onRestart={handleRestart}
       onSend={handleSend}
-      className="h-full"
+      className="h-full select-text"
     />
   )
 }

@@ -1,5 +1,6 @@
 import { useCallback } from 'react'
 import { TaskWorkspace, type TaskWorkspaceLayout } from '@/components/tasks/TaskWorkspace'
+import { useCanvasStore } from '@/stores/canvas-store'
 import { useTaskStore } from '@/stores/task-store'
 import { useAgentStore } from '@/stores/agent-store'
 import { useUIStore } from '@/stores/ui-store'
@@ -8,6 +9,7 @@ import { TaskStatus, PluginActionId } from '@/types'
 import type { FileAttachment } from '@/types'
 
 interface TaskPanelContentProps {
+  panelId: string
   taskId: string
   /** Controlled layout from CanvasPanel title bar */
   panelLayout?: TaskWorkspaceLayout
@@ -17,10 +19,11 @@ interface TaskPanelContentProps {
  * Embeds the full TaskWorkspace inside a canvas panel.
  * Self-contained: fetches its own task from the store and provides all callbacks.
  */
-export function TaskPanelContent({ taskId, panelLayout = 'both' }: TaskPanelContentProps) {
+export function TaskPanelContent({ panelId, taskId, panelLayout = 'both' }: TaskPanelContentProps) {
   const task = useTaskStore((s) => s.tasks.find((t) => t.id === taskId))
   const agents = useAgentStore((s) => s.agents)
   const updateTask = useTaskStore((s) => s.updateTask)
+  const updatePanel = useCanvasStore((s) => s.updatePanel)
   const { executeAction } = useTaskSourceStore()
   const { openEditModal, openDeleteModal } = useUIStore()
 
@@ -77,10 +80,16 @@ export function TaskPanelContent({ taskId, panelLayout = 'both' }: TaskPanelCont
 
   const handleNavigateToTask = useCallback(
     (tid: string) => {
-      // In canvas context, selecting a task just updates the sidebar selection
-      useTaskStore.getState().selectTask(tid)
+      const targetTask = useTaskStore.getState().tasks.find((candidate) => candidate.id === tid)
+      if (!targetTask) return
+
+      updatePanel(panelId, {
+        refId: targetTask.id,
+        title: targetTask.title,
+      })
+      useTaskStore.getState().selectTask(targetTask.id)
     },
-    []
+    [panelId, updatePanel]
   )
 
   if (!task) {
@@ -92,18 +101,20 @@ export function TaskPanelContent({ taskId, panelLayout = 'both' }: TaskPanelCont
   }
 
   return (
-    <TaskWorkspace
-      task={task}
-      agents={agents}
-      onEdit={handleEdit}
-      onDelete={handleDelete}
-      onUpdateAttachments={handleUpdateAttachments}
-      onUpdateOutputFields={handleUpdateOutputFields}
-      onCompleteTask={handleCompleteTask}
-      onAssignAgent={handleAssignAgent}
-      onUpdateTask={handleUpdateTask}
-      onNavigateToTask={handleNavigateToTask}
-      panelLayout={panelLayout}
-    />
+    <div className="h-full select-text">
+      <TaskWorkspace
+        task={task}
+        agents={agents}
+        onEdit={handleEdit}
+        onDelete={handleDelete}
+        onUpdateAttachments={handleUpdateAttachments}
+        onUpdateOutputFields={handleUpdateOutputFields}
+        onCompleteTask={handleCompleteTask}
+        onAssignAgent={handleAssignAgent}
+        onUpdateTask={handleUpdateTask}
+        onNavigateToTask={handleNavigateToTask}
+        panelLayout={panelLayout}
+      />
+    </div>
   )
 }
