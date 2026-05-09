@@ -360,7 +360,7 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
       onMouseDown={handleMouseDown}
       onMouseEnter={handlePanelMouseEnter}
       onMouseLeave={handlePanelMouseLeave}
-      className={`absolute rounded-xl border bg-[var(--color-canvas-panel-bg)] shadow-2xl flex flex-col select-none transition-shadow duration-150 group/panel ${cfg.border} ${
+      className={`absolute rounded-xl border bg-[var(--color-canvas-panel-bg)] shadow-2xl flex flex-col transition-shadow duration-150 group/panel ${cfg.border} ${
         isDragging ? 'shadow-indigo-500/10 ring-1 ring-indigo-500/30' : ''
       } ${isConnectingLocal ? 'ring-2 ring-orange-500/50' : ''} ${
         isProximityTarget ? 'ring-2 ring-orange-500/60 shadow-orange-500/20 shadow-2xl' : ''
