@@ -781,6 +781,21 @@ describe('HeartbeatScheduler', () => {
       // Should not have been called more than once (initial call only)
       expect(db.getHeartbeatDueTasks).toHaveBeenCalledTimes(1)
     })
+
+    it('is idempotent — calling start() again clears previous interval', () => {
+      const mockWindow = { webContents: { send: vi.fn() }, isDestroyed: vi.fn().mockReturnValue(false) }
+
+      // Start the scheduler twice
+      scheduler.start(mockWindow as unknown as import('electron').BrowserWindow)
+      scheduler.start(mockWindow as unknown as import('electron').BrowserWindow)
+
+      // Two immediate calls from two start() invocations
+      expect(db.getHeartbeatDueTasks).toHaveBeenCalledTimes(2)
+
+      // Advance by one tick — should only fire ONCE (old interval was cleared)
+      vi.advanceTimersByTime(HEARTBEAT_DEFAULTS.checkIntervalMs)
+      expect(db.getHeartbeatDueTasks).toHaveBeenCalledTimes(3) // 2 + 1, not 2 + 2
+    })
   })
 
   // ── checkHeartbeats (private integration-style) ────────
@@ -817,6 +832,31 @@ describe('HeartbeatScheduler', () => {
       expect(agent.hasActiveSessionForTask).toHaveBeenCalledWith('task-1')
       // Should not have tried to start a heartbeat session
       expect(agent.startHeartbeatSession).not.toHaveBeenCalled()
+    })
+
+    it('silently skips tasks already in progress without logging', async () => {
+      const dueTask = makeTask()
+      ;(db.getHeartbeatDueTasks as ReturnType<typeof vi.fn>).mockReturnValue([dueTask])
+
+      // Simulate a heartbeat already in progress by adding to the inProgress set
+      const inProgress = (scheduler as unknown as { inProgress: Set<string> }).inProgress
+      inProgress.add('task-1')
+
+      const consoleSpy = vi.spyOn(console, 'log')
+
+      await check(scheduler).call(scheduler)
+
+      // Should NOT log "Found N due heartbeat(s)" or "Skipping" messages
+      const heartbeatLogs = consoleSpy.mock.calls.filter(
+        (call) => typeof call[0] === 'string' && call[0].includes('[HeartbeatScheduler]')
+      )
+      expect(heartbeatLogs).toHaveLength(0)
+
+      // Should not have tried to start a heartbeat session
+      expect(agent.startHeartbeatSession).not.toHaveBeenCalled()
+
+      consoleSpy.mockRestore()
+      inProgress.delete('task-1')
     })
   })
 

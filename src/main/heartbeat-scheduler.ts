@@ -46,6 +46,7 @@ export class HeartbeatScheduler {
   }
 
   start(mainWindow: BrowserWindow): void {
+    this.stop() // clear any previous timer to prevent interval leaks
     this.mainWindow = mainWindow
     console.log('[HeartbeatScheduler] Starting scheduler...')
 
@@ -234,16 +235,16 @@ export class HeartbeatScheduler {
 
       if (dueTasks.length === 0) return
 
-      console.log(`[HeartbeatScheduler] Found ${dueTasks.length} due heartbeat(s)`)
+      // Filter out tasks already being processed — avoids log spam when a
+      // heartbeat takes longer than the scheduler tick interval (60s)
+      const actionableTasks = dueTasks.filter(t => !this.inProgress.has(t.id))
+
+      if (actionableTasks.length === 0) return
+
+      console.log(`[HeartbeatScheduler] Found ${actionableTasks.length} due heartbeat(s)`)
 
       // Process sequentially to avoid overloading agent quotas
-      for (const task of dueTasks) {
-        // Skip if already in progress
-        if (this.inProgress.has(task.id)) {
-          console.log(`[HeartbeatScheduler] Skipping task ${task.id} — heartbeat already in progress`)
-          continue
-        }
-
+      for (const task of actionableTasks) {
         // Skip if task has a live agent session (user is actively working)
         if (this.agentManager.hasActiveSessionForTask(task.id)) {
           console.log(`[HeartbeatScheduler] Skipping task ${task.id} — active agent session in progress`)
