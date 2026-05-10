@@ -45,7 +45,7 @@ export function getInstallCommand(agentName) {
 
   if (agentName === 'gh') {
     if (isWin) return 'winget install --id GitHub.cli -e'
-    if (isMac) return 'Downloads gh .pkg from GitHub releases'
+    if (isMac) return 'Downloads gh from GitHub releases'
     if (isLinux) return 'Downloads gh tarball → ~/.local/bin'
     return 'See https://cli.github.com/manual/installation'
   }
@@ -69,6 +69,43 @@ export function getInstallCommand(agentName) {
   const info = INSTALL_COMMANDS[agentName]
   if (!info) return `Unknown agent: ${agentName}`
   return `${info.cmd} ${info.args.join(' ')}`
+}
+
+/**
+ * Build the expected Node.js archive name for a platform/arch/version tuple.
+ * macOS publishes a universal .pkg without an arch suffix.
+ * @param {string} platform
+ * @param {string} arch
+ * @param {string} version
+ * @returns {string}
+ */
+export function getNodejsAssetName(platform, arch, version) {
+  const normalizedArch = arch === 'arm64' ? 'arm64' : 'x64'
+  if (platform === 'darwin') return `node-${version}.pkg`
+  if (platform === 'win32') return `node-${version}-${normalizedArch}.msi`
+  if (platform === 'linux') return `node-${version}-linux-${normalizedArch}.tar.xz`
+  return `node-${version}-${normalizedArch}.msi`
+}
+
+/**
+ * Pick the preferred GitHub CLI macOS asset from a release payload.
+ * GitHub CLI publishes macOS zip archives consistently; some releases may
+ * also include pkg installers, so we support both.
+ * @param {{ assets?: Array<{ name?: string, browser_download_url?: string }> }} release
+ * @param {string} arch
+ * @returns {{ name: string, browser_download_url: string } | null}
+ */
+export function selectGhMacAsset(release, arch = process.arch) {
+  const releaseAssets = release?.assets || []
+  const normalizedArch = arch === 'arm64' ? 'arm64' : 'amd64'
+  const suffixes = [`macOS_${normalizedArch}.zip`, `macOS_${normalizedArch}.pkg`]
+
+  for (const suffix of suffixes) {
+    const asset = releaseAssets.find((entry) => entry?.name?.startsWith('gh_') && entry.name.endsWith(suffix))
+    if (asset?.browser_download_url) return asset
+  }
+
+  return null
 }
 
 /**
@@ -246,13 +283,6 @@ async function resolveNodejsUrl() {
   const isLinux = process.platform === 'linux'
   const arch = process.arch === 'arm64' ? 'arm64' : 'x64'
 
-  const buildAsset = (ver) => {
-    if (isMac) return `node-${ver}-${arch}.pkg`
-    if (isWin) return `node-${ver}-${arch}.msi`
-    if (isLinux) return `node-${ver}-linux-${arch}.tar.xz`
-    return `node-${ver}-${arch}.msi`
-  }
-
   try {
     const resp = await (await import('electron')).net.fetch('https://nodejs.org/dist/index.json', { signal: AbortSignal.timeout(8000) })
     if (resp.ok) {
@@ -260,13 +290,13 @@ async function resolveNodejsUrl() {
       const lts = releases.find(r => r.lts)
       if (lts) {
         const ver = lts.version // e.g. "v22.16.0"
-        return { url: `https://nodejs.org/dist/${ver}/${buildAsset(ver)}`, version: ver }
+        return { url: `https://nodejs.org/dist/${ver}/${getNodejsAssetName(process.platform, arch, ver)}`, version: ver }
       }
     }
   } catch { /* fall through to fallback */ }
   // Fallback: known-recent LTS
   const fallback = 'v22.20.0'
-  return { url: `https://nodejs.org/dist/${fallback}/${buildAsset(fallback)}`, version: fallback }
+  return { url: `https://nodejs.org/dist/${fallback}/${getNodejsAssetName(process.platform, arch, fallback)}`, version: fallback }
 }
 
 /**
@@ -696,17 +726,17 @@ export async function installAgent(agentName, onProgress) {
  * Install GitHub CLI on macOS by downloading the .pkg from GitHub releases.
  */
 async function installGhMac(onProgress) {
-  const arch = process.arch === 'arm64' ? 'arm64' : 'amd64'
   onProgress({ stage: 'starting', output: 'Resolving latest gh release...\n', percent: 5 })
 
   const downloadDir = join(tmpdir(), '20x-installers')
   if (!existsSync(downloadDir)) mkdirSync(downloadDir, { recursive: true })
-  const pkgPath = join(downloadDir, 'gh-install.pkg')
+  const archivePath = join(downloadDir, 'gh-install')
+  const extractDir = join(downloadDir, 'gh-extracted')
 
   try {
-    // Resolve latest .pkg URL from GitHub releases API
+    // Resolve latest macOS asset URL from GitHub releases API
     const { net } = await import('electron')
-    let pkgUrl = null
+    let asset = null
     try {
       const resp = await net.fetch('https://api.github.com/repos/cli/cli/releases/latest', {
         signal: AbortSignal.timeout(8000),
@@ -714,20 +744,70 @@ async function installGhMac(onProgress) {
       })
       if (resp.ok) {
         const release = await resp.json()
-        const asset = release.assets?.find(a => a.name.startsWith('gh_') && a.name.endsWith(`macOS_${arch}.pkg`))
-        if (asset?.browser_download_url) pkgUrl = asset.browser_download_url
+        asset = selectGhMacAsset(release)
       }
     } catch { /* fall through */ }
 
-    if (!pkgUrl) {
+    if (!asset?.browser_download_url || !asset?.name) {
       throw new Error('Could not resolve gh download URL. Install manually from https://cli.github.com/')
     }
 
     onProgress({ stage: 'installing', output: `Downloading gh from github.com...\n`, percent: 10 })
-    await downloadFile(pkgUrl, pkgPath, onProgress)
+    const assetPath = `${archivePath}${asset.name.endsWith('.pkg') ? '.pkg' : '.zip'}`
+    await downloadFile(asset.browser_download_url, assetPath, onProgress)
 
-    const result = await runMacPkgInstaller(pkgPath, onProgress)
-    try { unlinkSync(pkgPath) } catch { /* ignore */ }
+    let result
+    if (asset.name.endsWith('.pkg')) {
+      result = await runMacPkgInstaller(assetPath, onProgress)
+    } else {
+      onProgress({ stage: 'installing', output: 'Extracting gh archive...\n', percent: 70 })
+      if (!existsSync(extractDir)) mkdirSync(extractDir, { recursive: true })
+      await new Promise((resolve, reject) => {
+        const unzip = spawn('unzip', ['-q', assetPath, '-d', extractDir], { stdio: ['ignore', 'pipe', 'pipe'] })
+        let err = ''
+        unzip.stderr?.on('data', (chunk) => { err += chunk.toString() })
+        unzip.on('error', reject)
+        unzip.on('close', (code) => code === 0 ? resolve() : reject(new Error(`unzip exited with ${code}: ${err.trim()}`)))
+      })
+
+      const { readdirSync } = await import('fs')
+      const findGh = (dir) => {
+        for (const entry of readdirSync(dir, { withFileTypes: true })) {
+          const full = join(dir, entry.name)
+          if (entry.isDirectory()) {
+            const found = findGh(full)
+            if (found) return found
+          } else if (entry.name === 'gh') {
+            return full
+          }
+        }
+        return null
+      }
+
+      const ghBin = findGh(extractDir)
+      if (!ghBin) throw new Error('gh binary not found in extracted archive')
+
+      onProgress({ stage: 'installing', output: 'Installing gh to /usr/local/bin (admin prompt)...\n', percent: 85 })
+      const safeBin = ghBin.replace(/"/g, '\\"')
+      const installScript = `do shell script "mkdir -p /usr/local/bin && cp \\"${safeBin}\\" /usr/local/bin/gh && chmod +x /usr/local/bin/gh" with administrator privileges`
+
+      result = await new Promise((resolve) => {
+        const proc = spawn('osascript', ['-e', installScript], { stdio: ['ignore', 'pipe', 'pipe'] })
+        let stderr = ''
+        proc.stderr?.on('data', (c) => { stderr += c.toString() })
+        proc.on('error', (err) => resolve({ success: false, error: err.message }))
+        proc.on('close', (code) => {
+          if (code === 0) resolve({ success: true, error: null })
+          else resolve({
+            success: false,
+            error: stderr.includes('User canceled') ? 'Installation cancelled' : `Install failed: ${stderr.trim()}`
+          })
+        })
+      })
+    }
+
+    try { unlinkSync(assetPath) } catch { /* ignore */ }
+    try { rmSync(extractDir, { recursive: true, force: true }) } catch { /* ignore */ }
 
     if (result.success) {
       onProgress({ stage: 'complete', output: 'GitHub CLI installed successfully!\n', percent: 100 })
@@ -736,7 +816,9 @@ async function installGhMac(onProgress) {
     }
     return { success: result.success, error: result.error, newStatus: await detectInstalledAgents() }
   } catch (err) {
-    try { unlinkSync(pkgPath) } catch { /* ignore */ }
+    try { unlinkSync(`${archivePath}.pkg`) } catch { /* ignore */ }
+    try { unlinkSync(`${archivePath}.zip`) } catch { /* ignore */ }
+    try { rmSync(extractDir, { recursive: true, force: true }) } catch { /* ignore */ }
     onProgress({ stage: 'error', output: `Error: ${err.message}\n`, percent: 100 })
     return { success: false, error: err.message, newStatus: await detectInstalledAgents() }
   }
