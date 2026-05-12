@@ -9,6 +9,8 @@ jobs:
   build-mac:
     runs-on: ${{ matrix.runner }}
     environment: release
+    permissions:
+      contents: write
 
     strategy:
       fail-fast: false
@@ -124,18 +126,24 @@ jobs:
       - name: Rename arch-specific update manifest
         run: cp dist/latest-mac.yml dist/latest-mac-${{ matrix.arch }}.yml
 
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+      - name: Upload release assets directly
+        uses: softprops/action-gh-release@v2
         with:
-          name: mac-${{ matrix.arch }}
-          path: |
+          files: |
             dist/*.dmg
             dist/*.zip
             dist/*.blockmap
-            dist/latest-mac-${{ matrix.arch }}.yml
+
+      - name: Upload manifest artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: manifest-mac-${{ matrix.arch }}
+          path: dist/latest-mac-${{ matrix.arch }}.yml
 
   build-windows:
     runs-on: windows-latest
+    permissions:
+      contents: write
 
     steps:
       - uses: actions/checkout@v4
@@ -159,17 +167,23 @@ jobs:
       - name: Package for Windows
         run: pnpm exec electron-builder --win --x64 --publish never
 
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+      - name: Upload release assets directly
+        uses: softprops/action-gh-release@v2
         with:
-          name: windows-x64
-          path: |
+          files: |
             dist/*.exe
             dist/*.blockmap
-            dist/latest.yml
+
+      - name: Upload manifest artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: manifest-windows-x64
+          path: dist/latest.yml
 
   build-linux:
     runs-on: ubicloud-standard-2
+    permissions:
+      contents: write
 
     steps:
       - uses: actions/checkout@v4
@@ -193,29 +207,33 @@ jobs:
       - name: Package for Linux
         run: pnpm exec electron-builder --linux --x64 --publish never
 
-      - name: Upload artifacts
+      - name: Upload release assets directly
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.AppImage
+
+      - name: Upload manifest artifact
         uses: actions/upload-artifact@v4
         with:
-          name: linux-x64
-          path: |
-            dist/*.AppImage
-            dist/latest-linux.yml
+          name: manifest-linux-x64
+          path: dist/latest-linux.yml
 
-  release:
+  publish-manifests:
     needs: [build-mac, build-windows, build-linux]
-    runs-on: ubicloud-standard-2
+    runs-on: ubuntu-latest
     permissions:
       contents: write
 
     steps:
-      - name: Download all artifacts
+      - name: Download manifest artifacts
         uses: actions/download-artifact@v4
         with:
-          path: artifacts
+          pattern: manifest-*
+          path: manifests
           merge-multiple: true
 
       - name: Merge mac update manifests
-        working-directory: artifacts
+        working-directory: manifests
         run: |
           # Combine arm64 + x64 latest-mac manifests into one latest-mac.yml
           if [ -f latest-mac-arm64.yml ] && [ -f latest-mac-x64.yml ]; then
@@ -249,8 +267,8 @@ jobs:
           echo "--- latest-mac.yml ---"
           cat latest-mac.yml
 
-      - name: Create GitHub Release
+      - name: Upload manifests to release
         uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/*
+          files: manifests/*.yml
           generate_release_notes: true
