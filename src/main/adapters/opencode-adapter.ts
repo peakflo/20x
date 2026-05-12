@@ -240,16 +240,30 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     try {
       const mergedConfig = buildMergedOpencodeConfig(undefined, this.db)
       if (!mergedConfig.provider) {
+        console.log('[OpencodeAdapter] pushMergedConfigToClient: no providers in merged config, skipping')
         return
       }
 
+      const providerIds = Object.keys(mergedConfig.provider as Record<string, unknown>)
+      console.log('[OpencodeAdapter] pushMergedConfigToClient: pushing providers:', providerIds.join(', '))
+
       const castConfig = mergedConfig as import('@opencode-ai/sdk/v2/client').Config
       try {
-        await client.global.config.update({ config: castConfig })
+        const result = await client.global.config.update({ config: castConfig })
+        if (result.error) {
+          console.warn('[OpencodeAdapter] global.config.update returned error:', JSON.stringify(result.error))
+          // Fall through to try directory-scoped endpoint
+          throw new Error('global.config.update returned error')
+        }
       } catch {
-        await client.config.update({ config: castConfig })
+        const result = await client.config.update({ config: castConfig })
+        if (result.error) {
+          console.warn('[OpencodeAdapter] config.update returned error:', JSON.stringify(result.error))
+        }
       }
-    } catch {}
+    } catch (err) {
+      console.warn('[OpencodeAdapter] pushMergedConfigToClient failed:', err instanceof Error ? err.message : err)
+    }
   }
 
   async getProviders(
@@ -262,12 +276,18 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     try {
       const client = await this.getClient(serverUrl, { quick: true })
 
+      // Push the latest merged config (incl. enterprise AI gateway provider)
+      // before querying providers. The quick-path in getClient() skips this,
+      // and ensureServerRunning() skips it when the server is already running,
+      // so the server may still have stale provider config from an earlier start.
+      await this.pushMergedConfigToClient(client)
+
       const result = await client.config.providers({
         ...(directory && { directory })
       })
 
       if (result.error) {
-        console.log('[OpencodeAdapter] No providers configured on server')
+        console.log('[OpencodeAdapter] No providers configured on server:', JSON.stringify(result.error))
         return null
       }
 
@@ -331,7 +351,14 @@ export class OpencodeAdapter implements CodingAgentAdapter {
    */
   private ensureBinaryPaths(): void {
     const currentPath = process.env.PATH || ''
+
+    // Include user-configured custom binary path (set via deps:setOpencodePath
+    // in onboarding). Without this the installer finds opencode but the adapter
+    // cannot, because the custom path is only added to PATH during deps:check.
+    const customPath = this.db?.getSetting('OPENCODE_BINARY_PATH') ?? null
+
     const extraPaths = [
+      ...(customPath ? [customPath] : []),
       join(homedir(), '.opencode', 'bin'),
       ...(process.platform === 'win32'
         ? [join(homedir(), 'AppData', 'Roaming', 'npm')]
