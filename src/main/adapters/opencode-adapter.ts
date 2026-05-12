@@ -282,8 +282,14 @@ export class OpencodeAdapter implements CodingAgentAdapter {
       // so the server may still have stale provider config from an earlier start.
       await this.pushMergedConfigToClient(client)
 
+      // Always pass a writable directory so the OpenCode server doesn't fall
+      // back to its CWD (which is read-only on macOS when launched from
+      // /Applications). Without this, fromDirectory() in the server tries to
+      // create an SQLite DB at the CWD and fails with "disk I/O error".
+      const safeDirectory = directory || homedir()
+
       const result = await client.config.providers({
-        ...(directory && { directory })
+        directory: safeDirectory
       })
 
       if (result.error) {
