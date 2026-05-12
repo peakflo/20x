@@ -3,10 +3,6 @@ import { mkdirSync, writeFileSync, rmSync, existsSync } from 'fs'
 import { join, delimiter } from 'path'
 import { homedir } from 'os'
 import { buildMergedOpencodeConfig } from '../utils/opencode-config'
-import {
-  readEnterpriseAiGatewayConfig,
-  ENTERPRISE_AI_GATEWAY_PROVIDER_ID
-} from '../enterprise-ai-gateway'
 import type { DatabaseManager } from '../database'
 import type {
   CodingAgentAdapter,
@@ -244,14 +240,26 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     try {
       const mergedConfig = buildMergedOpencodeConfig(undefined, this.db)
       if (!mergedConfig.provider) {
+        console.log('[OpencodeAdapter] pushMergedConfigToClient: no providers in merged config, skipping')
         return
       }
 
+      const providerIds = Object.keys(mergedConfig.provider as Record<string, unknown>)
+      console.log('[OpencodeAdapter] pushMergedConfigToClient: pushing providers:', providerIds.join(', '))
+
       const castConfig = mergedConfig as import('@opencode-ai/sdk/v2/client').Config
       try {
-        await client.global.config.update({ config: castConfig })
+        const result = await client.global.config.update({ config: castConfig })
+        if (result.error) {
+          console.warn('[OpencodeAdapter] global.config.update returned error:', JSON.stringify(result.error))
+          // Fall through to try directory-scoped endpoint
+          throw new Error('global.config.update returned error')
+        }
       } catch {
-        await client.config.update({ config: castConfig })
+        const result = await client.config.update({ config: castConfig })
+        if (result.error) {
+          console.warn('[OpencodeAdapter] config.update returned error:', JSON.stringify(result.error))
+        }
       }
     } catch (err) {
       console.warn('[OpencodeAdapter] pushMergedConfigToClient failed:', err instanceof Error ? err.message : err)
@@ -274,43 +282,13 @@ export class OpencodeAdapter implements CodingAgentAdapter {
       // so the server may still have stale provider config from an earlier start.
       await this.pushMergedConfigToClient(client)
 
-      let result = await client.config.providers({
+      const result = await client.config.providers({
         ...(directory && { directory })
       })
 
       if (result.error) {
-        console.log('[OpencodeAdapter] No providers configured on server')
+        console.log('[OpencodeAdapter] No providers configured on server:', JSON.stringify(result.error))
         return null
-      }
-
-      // Check: if the enterprise AI gateway is configured in the DB but the
-      // Peakflo provider is missing from the server, the server was started
-      // before the gateway key was stored.  config.update() cannot add new
-      // providers to a running server, so we must restart it.
-      const enterpriseConfig = this.db ? readEnterpriseAiGatewayConfig(this.db) : null
-      if (enterpriseConfig && this.serverInstance) {
-        const data = result.data as {
-          providers?: { id: string }[]
-        } | undefined
-        const hasPeakflo = data?.providers?.some(
-          p => p.id === ENTERPRISE_AI_GATEWAY_PROVIDER_ID
-        )
-
-        if (!hasPeakflo) {
-          console.log(
-            '[OpencodeAdapter] Peakflo provider expected but missing — restarting server with updated config'
-          )
-          await this.stopServer()
-          const freshClient = await this.getClient(serverUrl, { quick: true })
-          result = await freshClient.config.providers({
-            ...(directory && { directory })
-          })
-
-          if (result.error) {
-            console.log('[OpencodeAdapter] No providers configured after server restart')
-            return null
-          }
-        }
       }
 
       const data = result.data as {
