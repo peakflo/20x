@@ -3138,6 +3138,18 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
         return null
       }
 
+      // Refresh the AI gateway virtual key before querying providers so the
+      // OpenCode server config includes the Peakflo provider. This handles
+      // plans activated after the initial tenant selection (same pattern as
+      // startAdapterSession). Best-effort — fall back to the cached key.
+      if (this.enterpriseAuth) {
+        try {
+          await this.enterpriseAuth.refreshAiGatewayVirtualKey()
+        } catch (err) {
+          console.warn('[AgentManager] AI gateway key refresh before getProviders failed (will use cached key):', err)
+        }
+      }
+
       const adapter = this.getAdapterByType(resolvedBackend)
       if (!adapter?.getProviders) {
         console.log(`[AgentManager] Adapter for "${resolvedBackend}" does not support getProviders`)

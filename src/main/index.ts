@@ -765,6 +765,15 @@ app.whenReady().then(async () => {
 
         syncManager.setEnterpriseConnection(apiClient, enterpriseSyncMgr, session.userId, enterpriseStateSyncInstance)
 
+        // Eagerly refresh AI gateway virtual key so the Peakflo provider is
+        // available in the DB before the OpenCode adapter starts its server.
+        // Handles plans activated after the initial tenant selection.
+        try {
+          await enterpriseAuth.refreshAiGatewayVirtualKey()
+        } catch (err) {
+          console.warn('[Main] AI gateway key refresh on startup failed (non-fatal):', err)
+        }
+
         console.log('[Main] Enterprise connection restored on startup (with heartbeat)')
         console.log('[EnterpriseAuth] auth_session_restore_result {"status":"restored"}')
       } else {
