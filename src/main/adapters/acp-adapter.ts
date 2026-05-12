@@ -135,6 +135,22 @@ export class AcpAdapter implements CodingAgentAdapter {
   private sessions = new Map<string, AcpSession>()
   private debugRpcLogs: boolean
 
+  /**
+   * Maximum number of raw JSON-RPC messages to keep in permanent history.
+   * This is used for replaying transcripts upon session resume.
+   * 1,000 events is enough for ~50-100 turns.  Lowered from 2,000 to reduce
+   * memory footprint — each event can be multi-KB (tool outputs).
+   */
+  private static readonly MAX_PERMANENT_MESSAGES = 1000
+
+  /**
+   * Maximum number of entries in toolCallMetadata before pruning.
+   * This map caches tool_call metadata for in-progress tool calls and should
+   * be pruned if it grows beyond what's reasonable (e.g. due to un-cleaned
+   * entries from tool calls that never completed).
+   */
+  private static readonly MAX_TOOL_CALL_METADATA = 500
+
   /** Callback set by agent-manager to trigger an immediate poll cycle */
   onDataAvailable?: (sessionId: string) => void
 
@@ -690,7 +706,7 @@ export class AcpAdapter implements CodingAgentAdapter {
     // the ACP agent may not echo user_message_chunk events, which means
     // getAllMessages() would return no user parts and the transcript would
     // show only agent responses.
-    session.permanentMessages.push({
+    this.addToPermanentMessages(session, {
       jsonrpc: '2.0',
       method: 'session/update',
       params: {
@@ -794,6 +810,12 @@ export class AcpAdapter implements CodingAgentAdapter {
         session.process.kill('SIGKILL')
       }
     }, 1000)
+
+    // Eagerly clear large data structures to free memory immediately
+    session.permanentMessages.length = 0
+    session.messageBuffer.length = 0
+    session.toolCallMetadata.clear()
+    session.pendingRequests.clear()
 
     // Remove session
     this.sessions.delete(sessionId)
@@ -1084,7 +1106,7 @@ export class AcpAdapter implements CodingAgentAdapter {
           data: response.error.data
         }
         session.messageBuffer.push(errorEvent)
-        session.permanentMessages.push(errorEvent)
+        this.addToPermanentMessages(session, errorEvent)
         this.onDataAvailable?.(session.sessionId)
         return
       }
@@ -1138,8 +1160,10 @@ export class AcpAdapter implements CodingAgentAdapter {
       // Turn detection happens automatically based on time gaps and tool calls
       // Buffer notification for polling (gets cleared after each poll)
       session.messageBuffer.push(notification)
-      // Also store permanently for getAllMessages (never cleared)
-      session.permanentMessages.push(notification)
+
+      // Also store permanently for getAllMessages (replayed on resume).
+      this.addToPermanentMessages(session, notification)
+
       this.onDataAvailable?.(session.sessionId)
 
       // Update session status based on notification
@@ -1202,7 +1226,7 @@ export class AcpAdapter implements CodingAgentAdapter {
       data: null  // Don't expose raw error data for known error types
     }
     session.messageBuffer.push(errorEvent)
-    session.permanentMessages.push(errorEvent)
+    this.addToPermanentMessages(session, errorEvent)
     this.onDataAvailable?.(session.sessionId)
   }
 
@@ -1236,6 +1260,60 @@ export class AcpAdapter implements CodingAgentAdapter {
       session.status = SessionStatusType.ERROR
     } else if (notification.method.includes('started') || notification.method.includes('working')) {
       session.status = SessionStatusType.BUSY
+    }
+  }
+
+  /**
+   * Adds a notification or event to the permanent message history, with
+   * consolidation and size-based pruning to prevent OOM.
+   */
+  private addToPermanentMessages(session: AcpSession, event: unknown): void {
+    const notification = event as JsonRpcNotification
+    const lastMsg = session.permanentMessages[session.permanentMessages.length - 1] as JsonRpcNotification | undefined
+    let consolidated = false
+
+    if (lastMsg?.method === 'session/update' && notification.method === 'session/update') {
+      const lastParams = lastMsg.params as { update?: SessionUpdate } | undefined
+      const nextParams = notification.params as { update?: SessionUpdate } | undefined
+      const lastUpdate = lastParams?.update
+      const nextUpdate = nextParams?.update
+
+      if (lastUpdate && nextUpdate && lastUpdate.sessionUpdate === nextUpdate.sessionUpdate && this.isAssistantChunkUpdateType(nextUpdate.sessionUpdate)) {
+        // Merge consecutive assistant/thought chunks
+        const lastText = this.extractTextFromUpdateContent(lastUpdate.content)
+        const nextText = this.extractTextFromUpdateContent(nextUpdate.content)
+        if (typeof lastUpdate.content === 'object' && lastUpdate.content !== null) {
+          (lastUpdate.content as Record<string, unknown>).text = lastText + nextText
+          consolidated = true
+        }
+      }
+    }
+
+    if (!consolidated) {
+      // Capping tool output size in permanent messages (replayed on resume).
+      // The full output is still delivered to the UI during the live session,
+      // but truncated here to keep the history bounded.
+      if (notification.method === 'session/update') {
+        const update = (notification.params as { update?: SessionUpdate })?.update
+        if (update?.rawOutput && typeof update.rawOutput === 'object') {
+          const ro = update.rawOutput as Record<string, unknown>
+          const MAX_HISTORY_OUTPUT_CHARS = 100_000 // 100KB per tool output in history
+          if (typeof ro.stdout === 'string' && ro.stdout.length > MAX_HISTORY_OUTPUT_CHARS) {
+            ro.stdout = ro.stdout.slice(0, MAX_HISTORY_OUTPUT_CHARS) + '\n... (truncated in history)'
+          }
+          if (typeof ro.formatted_output === 'string' && ro.formatted_output.length > MAX_HISTORY_OUTPUT_CHARS) {
+            ro.formatted_output = ro.formatted_output.slice(0, MAX_HISTORY_OUTPUT_CHARS) + '\n... (truncated in history)'
+          }
+        }
+      }
+
+      session.permanentMessages.push(notification)
+    }
+
+    // Enforce absolute limit on permanent history to prevent OOM.
+    // Discard oldest 25% to amortise pruning cost (was 10% which caused frequent re-pruning).
+    if (session.permanentMessages.length > AcpAdapter.MAX_PERMANENT_MESSAGES) {
+      session.permanentMessages.splice(0, Math.ceil(AcpAdapter.MAX_PERMANENT_MESSAGES * 0.25))
     }
   }
 
@@ -1681,6 +1759,17 @@ export class AcpAdapter implements CodingAgentAdapter {
           const cachedName = update.kind || toolFromRawInput || toolFromTitle || ''
           const cachedTitle = this.buildToolTitle(cachedName || update.title, rawInput as Record<string, unknown>, cachedInput)
           if (cachedName || cachedInput || cachedTitle) {
+            // Cap toolCallMetadata to prevent unbounded growth from orphaned entries
+            if (session.toolCallMetadata.size >= AcpAdapter.MAX_TOOL_CALL_METADATA) {
+              // Evict oldest half (Maps preserve insertion order)
+              const toEvict = Math.ceil(AcpAdapter.MAX_TOOL_CALL_METADATA * 0.5)
+              let evicted = 0
+              for (const key of session.toolCallMetadata.keys()) {
+                if (evicted >= toEvict) break
+                session.toolCallMetadata.delete(key)
+                evicted++
+              }
+            }
             session.toolCallMetadata.set(partId, { name: cachedName, input: cachedInput, title: cachedTitle })
           }
 

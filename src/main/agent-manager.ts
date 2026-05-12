@@ -97,7 +97,10 @@ export class AgentManager extends EventEmitter {
   // partContentLengths) before pruning.  These grow by 1-4+ entries per poll
   // cycle per session and are never cleaned during a session's lifetime, leading
   // to OOM crashes (heap exhaustion at ~2.9 GB) after extended sessions.
-  private static readonly MAX_DEDUP_ENTRIES = 10_000
+  private static readonly MAX_DEDUP_ENTRIES = 5_000
+  // Maximum number of session ID redirects to keep (old temp IDs → real IDs).
+  // Without a cap these grow forever across many session start/stop cycles.
+  private static readonly MAX_SESSION_REDIRECTS = 200
 
   // ── Event-driven nudge ──
   // When an adapter buffers new stream data it calls onDataAvailable().
@@ -110,6 +113,15 @@ export class AgentManager extends EventEmitter {
 
   // Track last sent status per session to detect transitions for OS notifications
   private lastSentStatus: Map<string, string> = new Map()
+
+  /**
+   * Maximum total characters allowed in partContentLengths values per session.
+   * Exceeding this triggers pruning of the oldest entries, even if the number of
+   * entries is below MAX_DEDUP_ENTRIES. This prevents OOM when message parts (e.g.
+   * tool outputs) are very large.  Limit is ~10MB per session (was 100MB which
+   * allowed a single session to consume most of the V8 heap).
+   */
+  private static readonly MAX_VALUE_CHARS_PER_SESSION = 10_000_000
 
   constructor(db: DatabaseManager) {
     super()
@@ -1308,11 +1320,24 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       }
     }
 
-    if (partContentLengths.size > max) {
-      let toDelete = partContentLengths.size - pruneToSize
+    // Prune partContentLengths based on entry count AND total value size.
+    // When the size limit is hit, prune 50% (was 10% which was too conservative —
+    // with large tool outputs re-growth is fast and 10% barely frees memory).
+    let totalChars = 0
+    for (const val of partContentLengths.values()) {
+      totalChars += val.length
+    }
+
+    if (partContentLengths.size > max || totalChars > AgentManager.MAX_VALUE_CHARS_PER_SESSION) {
+      const toDelete = partContentLengths.size > max
+        ? partContentLengths.size - pruneToSize
+        : Math.ceil(partContentLengths.size * 0.5) // Delete 50% when size limit hit
+
+      let deleted = 0
       for (const key of partContentLengths.keys()) {
-        if (toDelete-- <= 0) break
+        if (deleted >= toDelete) break
         partContentLengths.delete(key)
+        deleted++
       }
     }
   }
@@ -1541,7 +1566,18 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
           this.sessions.delete(sessionId)
           this.sessions.set(realSessionId, session)
 
-          // Record redirect so stale IDs from the renderer still resolve
+          // Record redirect so stale IDs from the renderer still resolve.
+          // Cap the redirects map to prevent unbounded growth across many sessions.
+          if (this.sessionIdRedirects.size >= AgentManager.MAX_SESSION_REDIRECTS) {
+            // Evict oldest entries (Maps preserve insertion order)
+            const toEvict = Math.ceil(AgentManager.MAX_SESSION_REDIRECTS * 0.5)
+            let evicted = 0
+            for (const oldKey of this.sessionIdRedirects.keys()) {
+              if (evicted >= toEvict) break
+              this.sessionIdRedirects.delete(oldKey)
+              evicted++
+            }
+          }
           this.sessionIdRedirects.set(sessionId, realSessionId)
 
           // Re-key the polling entry
@@ -2530,7 +2566,13 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       console.log(`[AgentManager] Unregistered secret session for ${sessionId}`)
     }
 
+    // Eagerly clear dedup structures to free memory immediately (don't wait for GC)
+    session.seenMessageIds.clear()
+    session.seenPartIds.clear()
+    session.partContentLengths.clear()
+
     this.sessions.delete(sessionId)
+    this.lastSentStatus.delete(sessionId)
     console.log(`[SessionTracker] DESTROYED session=${sessionId} task=${session.taskId} resetStatus=${resetTaskStatus} reason=stop_session`)
 
     // Clean up any redirect entries pointing to this session
