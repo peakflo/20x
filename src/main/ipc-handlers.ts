@@ -1097,7 +1097,7 @@ export function registerIpcHandlers(
   ipcMain.handle('enterprise:getAiGatewayStatus', async () => {
     const base = { configured: false, modelCount: 0, keyName: null as string | null, expiresAt: null as string | null, subscription: null as { planName: string; status: string; planId: string; currentPeriodEnd: string | null } | null }
     try {
-      const { readEnterpriseAiGatewayConfig } = await import('./enterprise-ai-gateway')
+      const { readEnterpriseAiGatewayConfig, AI_GATEWAY_SUBSCRIPTION_STATUS } = await import('./enterprise-ai-gateway')
       const config = readEnterpriseAiGatewayConfig(db)
       if (config) {
         base.configured = true
@@ -1131,7 +1131,7 @@ export function registerIpcHandlers(
             // Auto-fetch AI gateway key when subscription is active but not yet configured locally.
             // This handles the case where a plan was activated after the initial tenant selection
             // (e.g. by an enterprise admin), so the first fetch attempt failed silently.
-            if (sub.status === 'active' && !base.configured) {
+            if (sub.status === AI_GATEWAY_SUBSCRIPTION_STATUS.ACTIVE && !base.configured) {
               try {
                 await enterpriseAuth.refreshAiGatewayVirtualKey()
                 const updatedConfig = readEnterpriseAiGatewayConfig(db)

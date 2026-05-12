@@ -5,6 +5,13 @@ import type { DatabaseManager } from './database'
 export const ENTERPRISE_AI_GATEWAY_PROVIDER_ID = 'peakflo'
 export const ENTERPRISE_AI_GATEWAY_PROVIDER_NAME = 'Peakflo'
 
+/** Mirrors AI_GATEWAY_SUBSCRIPTION_STATUS from workflow-builder core */
+export const AI_GATEWAY_SUBSCRIPTION_STATUS = {
+  ACTIVE: 'active',
+  SUSPENDED: 'suspended',
+  CANCELLED: 'cancelled'
+} as const
+
 // DB setting keys kept as 'enterprise_litellm_*' for migration safety
 export const ENTERPRISE_AI_GATEWAY_KEYS = {
   API_KEY: 'enterprise_litellm_api_key',
