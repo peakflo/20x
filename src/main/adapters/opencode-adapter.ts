@@ -351,7 +351,14 @@ export class OpencodeAdapter implements CodingAgentAdapter {
    */
   private ensureBinaryPaths(): void {
     const currentPath = process.env.PATH || ''
+
+    // Include user-configured custom binary path (set via deps:setOpencodePath
+    // in onboarding). Without this the installer finds opencode but the adapter
+    // cannot, because the custom path is only added to PATH during deps:check.
+    const customPath = this.db?.getSetting('OPENCODE_BINARY_PATH') ?? null
+
     const extraPaths = [
+      ...(customPath ? [customPath] : []),
       join(homedir(), '.opencode', 'bin'),
       ...(process.platform === 'win32'
         ? [join(homedir(), 'AppData', 'Roaming', 'npm')]
