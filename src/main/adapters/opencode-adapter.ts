@@ -262,6 +262,12 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     try {
       const client = await this.getClient(serverUrl, { quick: true })
 
+      // Push the latest merged config (incl. enterprise AI gateway provider)
+      // before querying providers. The quick-path in getClient() skips this,
+      // and ensureServerRunning() skips it when the server is already running,
+      // so the server may still have stale provider config from an earlier start.
+      await this.pushMergedConfigToClient(client)
+
       const result = await client.config.providers({
         ...(directory && { directory })
       })
