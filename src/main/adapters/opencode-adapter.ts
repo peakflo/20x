@@ -3,6 +3,10 @@ import { mkdirSync, writeFileSync, rmSync, existsSync } from 'fs'
 import { join, delimiter } from 'path'
 import { homedir } from 'os'
 import { buildMergedOpencodeConfig } from '../utils/opencode-config'
+import {
+  readEnterpriseAiGatewayConfig,
+  ENTERPRISE_AI_GATEWAY_PROVIDER_ID
+} from '../enterprise-ai-gateway'
 import type { DatabaseManager } from '../database'
 import type {
   CodingAgentAdapter,
@@ -249,7 +253,9 @@ export class OpencodeAdapter implements CodingAgentAdapter {
       } catch {
         await client.config.update({ config: castConfig })
       }
-    } catch {}
+    } catch (err) {
+      console.warn('[OpencodeAdapter] pushMergedConfigToClient failed:', err instanceof Error ? err.message : err)
+    }
   }
 
   async getProviders(
@@ -268,13 +274,43 @@ export class OpencodeAdapter implements CodingAgentAdapter {
       // so the server may still have stale provider config from an earlier start.
       await this.pushMergedConfigToClient(client)
 
-      const result = await client.config.providers({
+      let result = await client.config.providers({
         ...(directory && { directory })
       })
 
       if (result.error) {
         console.log('[OpencodeAdapter] No providers configured on server')
         return null
+      }
+
+      // Check: if the enterprise AI gateway is configured in the DB but the
+      // Peakflo provider is missing from the server, the server was started
+      // before the gateway key was stored.  config.update() cannot add new
+      // providers to a running server, so we must restart it.
+      const enterpriseConfig = this.db ? readEnterpriseAiGatewayConfig(this.db) : null
+      if (enterpriseConfig && this.serverInstance) {
+        const data = result.data as {
+          providers?: { id: string }[]
+        } | undefined
+        const hasPeakflo = data?.providers?.some(
+          p => p.id === ENTERPRISE_AI_GATEWAY_PROVIDER_ID
+        )
+
+        if (!hasPeakflo) {
+          console.log(
+            '[OpencodeAdapter] Peakflo provider expected but missing — restarting server with updated config'
+          )
+          await this.stopServer()
+          const freshClient = await this.getClient(serverUrl, { quick: true })
+          result = await freshClient.config.providers({
+            ...(directory && { directory })
+          })
+
+          if (result.error) {
+            console.log('[OpencodeAdapter] No providers configured after server restart')
+            return null
+          }
+        }
       }
 
       const data = result.data as {
