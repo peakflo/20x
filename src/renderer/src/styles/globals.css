@@ -1,34 +1,139 @@
 @import "tailwindcss";
 
+/* ── Theme tokens: Tailwind CSS 4 compatible ──────────────── */
+/* @theme registers design tokens so Tailwind generates utility classes
+   (bg-background, text-foreground, etc.). Light mode values are the defaults.
+   :root / [data-theme] selectors below override them at runtime. */
 @theme {
-  /* Cursor Dark Midnight palette */
-  --color-background: #1E2127;
-  --color-foreground: #EBEEF4;
-  --color-card: #191D23;
-  --color-card-foreground: #EBEEF4;
-  --color-popover: #191D23;
-  --color-popover-foreground: #EBEEF4;
-  --color-primary: #85A4C3;
-  --color-primary-foreground: #1E2127;
-  --color-secondary: #30353F;
-  --color-secondary-foreground: #EBEEF4;
-  --color-muted: #30353F;
-  --color-muted-foreground: #535D71;
-  --color-accent: #313C47;
-  --color-accent-foreground: #EBEEF4;
-  --color-destructive: #C06771;
-  --color-destructive-foreground: #EBEEF4;
-  --color-border: #30353F;
-  --color-input: #30353F;
-  --color-ring: #85A4C3;
-  --color-sidebar: #191D23;
-  --color-sidebar-foreground: #E4E8F0;
-  --color-sidebar-border: #30353F;
-  --color-sidebar-accent: #313C47;
-  --color-sidebar-muted: #30353F;
+  --color-background: #FFFFFF;
+  --color-foreground: #1A1C1F;
+  --color-card: #FFFFFF;
+  --color-card-foreground: #1A1C1F;
+  --color-popover: #FFFFFF;
+  --color-popover-foreground: #1A1C1F;
+  --color-primary: #339CFF;
+  --color-primary-foreground: #FFFFFF;
+  --color-secondary: #F3F4F6;
+  --color-secondary-foreground: #1A1C1F;
+  --color-muted: #F3F4F6;
+  --color-muted-foreground: #6B7280;
+  --color-accent: #E5E7EB;
+  --color-accent-foreground: #1A1C1F;
+  --color-destructive: #DC2626;
+  --color-destructive-foreground: #FFFFFF;
+  --color-border: #E5E7EB;
+  --color-input: #E5E7EB;
+  --color-ring: #339CFF;
+  --color-sidebar: #FFFFFF;
+  --color-sidebar-foreground: #1A1C1F;
+  --color-sidebar-border: #E5E7EB;
+  --color-sidebar-accent: #F3F4F6;
+  --color-sidebar-muted: #F3F4F6;
   --radius-sm: 6px;
   --radius-md: 8px;
   --radius-lg: 12px;
+}
+
+/* Use @custom-variant for Tailwind dark: prefix support with data-theme */
+@custom-variant dark (&:where([data-theme="dark"] *));
+
+/* ── Light mode (default) ────────────────────────────────── */
+:root,
+[data-theme="light"] {
+  --color-background: #FFFFFF;
+  --color-foreground: #1A1C1F;
+  --color-card: #FFFFFF;
+  --color-card-foreground: #1A1C1F;
+  --color-popover: #FFFFFF;
+  --color-popover-foreground: #1A1C1F;
+  --color-primary: #339CFF;
+  --color-primary-foreground: #FFFFFF;
+  --color-secondary: #F3F4F6;
+  --color-secondary-foreground: #1A1C1F;
+  --color-muted: #F3F4F6;
+  --color-muted-foreground: #6B7280;
+  --color-accent: #E5E7EB;
+  --color-accent-foreground: #1A1C1F;
+  --color-destructive: #DC2626;
+  --color-destructive-foreground: #FFFFFF;
+  --color-border: #E5E7EB;
+  --color-input: #E5E7EB;
+  --color-ring: #339CFF;
+
+  /* Sidebar — translucent */
+  --color-sidebar: rgba(255, 255, 255, 0.70);
+  --color-sidebar-foreground: #1A1C1F;
+  --color-sidebar-border: #E5E7EB;
+  --color-sidebar-accent: #F3F4F6;
+  --color-sidebar-muted: #F3F4F6;
+
+  /* Canvas-specific tokens */
+  --color-canvas-bg: #F5F5F5;
+  --color-canvas-panel-bg: #FFFFFF;
+  --color-canvas-panel-border: #E5E7EB;
+  --color-canvas-grid-dot: rgba(0, 0, 0, 0.06);
+  --color-canvas-hud-bg: rgba(255, 255, 255, 0.85);
+  --color-canvas-minimap-bg: rgba(255, 255, 255, 0.92);
+  --color-canvas-minimap-header: rgba(255, 255, 255, 0.95);
+  --color-canvas-context-menu: #FFFFFF;
+
+  /* Overlay / UI */
+  --color-overlay: rgba(0, 0, 0, 0.50);
+  --color-hover-overlay: rgba(0, 0, 0, 0.04);
+  --color-hover-overlay-strong: rgba(0, 0, 0, 0.08);
+  --color-active-overlay: rgba(0, 0, 0, 0.12);
+  --color-scrollbar-thumb: #D1D5DB;
+  --color-scrollbar-thumb-hover: #9CA3AF;
+  --color-edge-delete-bg: #FFFFFF;
+}
+
+/* ── Dark mode ───────────────────────────────────────────── */
+[data-theme="dark"] {
+  --color-background: #181818;
+  --color-foreground: #FFFFFF;
+  --color-card: #1E1E1E;
+  --color-card-foreground: #FFFFFF;
+  --color-popover: #1E1E1E;
+  --color-popover-foreground: #FFFFFF;
+  --color-primary: #339CFF;
+  --color-primary-foreground: #FFFFFF;
+  --color-secondary: #2A2A2A;
+  --color-secondary-foreground: #FFFFFF;
+  --color-muted: #2A2A2A;
+  --color-muted-foreground: #888888;
+  --color-accent: #333333;
+  --color-accent-foreground: #FFFFFF;
+  --color-destructive: #C06771;
+  --color-destructive-foreground: #FFFFFF;
+  --color-border: #333333;
+  --color-input: #333333;
+  --color-ring: #339CFF;
+
+  /* Sidebar — translucent */
+  --color-sidebar: rgba(24, 24, 24, 0.70);
+  --color-sidebar-foreground: #E4E8F0;
+  --color-sidebar-border: #333333;
+  --color-sidebar-accent: #333333;
+  --color-sidebar-muted: #2A2A2A;
+
+  /* Canvas-specific tokens */
+  --color-canvas-bg: #131820;
+  --color-canvas-panel-bg: #1a2030;
+  --color-canvas-panel-border: #333333;
+  --color-canvas-grid-dot: rgba(255, 255, 255, 0.08);
+  --color-canvas-hud-bg: rgba(26, 32, 48, 0.90);
+  --color-canvas-minimap-bg: rgba(13, 17, 23, 0.95);
+  --color-canvas-minimap-header: rgba(26, 32, 48, 0.95);
+  --color-canvas-context-menu: #161b22;
+
+  /* Overlay / UI */
+  --color-overlay: rgba(0, 0, 0, 0.70);
+  --color-hover-overlay: rgba(255, 255, 255, 0.05);
+  --color-hover-overlay-strong: rgba(255, 255, 255, 0.10);
+  --color-active-overlay: rgba(255, 255, 255, 0.15);
+  --color-scrollbar-thumb: #333333;
+  --color-scrollbar-thumb-hover: #535D71;
+  --color-edge-delete-bg: #161b22;
 }
 
 @font-face {
@@ -71,6 +176,14 @@ html, body, #root {
   font-size: 14px;
 }
 
+/* ── macOS vibrancy: make html/body transparent so native blur shows
+   through the sidebar. The <main> content area keeps bg-background. ── */
+html[data-platform="darwin"],
+html[data-platform="darwin"] body,
+html[data-platform="darwin"] #root {
+  background: transparent !important;
+}
+
 /* ── App Shell ────────────────────────────────── */
 #root {
   display: flex;
@@ -94,8 +207,8 @@ html, body, #root {
 /* ── Scrollbar ────────────────────────────────── */
 ::-webkit-scrollbar { width: 5px; height: 5px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: 99px; }
-::-webkit-scrollbar-thumb:hover { background: #535D71; }
+::-webkit-scrollbar-thumb { background: var(--color-scrollbar-thumb); border-radius: 99px; }
+::-webkit-scrollbar-thumb:hover { background: var(--color-scrollbar-thumb-hover); }
 
 /* ── Native form elements ─────────────────────── */
 select {
@@ -114,8 +227,12 @@ select option {
 }
 
 input[type="date"]::-webkit-calendar-picker-indicator {
-  filter: invert(0.5);
   cursor: pointer;
+}
+
+/* In dark mode, invert the date picker indicator to keep it visible */
+[data-theme="dark"] input[type="date"]::-webkit-calendar-picker-indicator {
+  filter: invert(0.5);
 }
 
 input[type="search"]::-webkit-search-cancel-button {

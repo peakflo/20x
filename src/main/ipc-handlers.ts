@@ -1,4 +1,4 @@
-import { ipcMain, dialog, shell, Notification, app, session, webContents } from 'electron'
+import { ipcMain, dialog, shell, Notification, app, session, webContents, BrowserWindow } from 'electron'
 import * as childProcess from 'child_process'
 import { copyFileSync, existsSync, unlinkSync, readdirSync, statSync, readFileSync, rmSync } from 'fs'
 import { join, basename, extname } from 'path'
@@ -764,6 +764,31 @@ export function registerIpcHandlers(
   ipcMain.handle('app:setMinimizeToTray', async (_, enabled: boolean) => {
     await db.setSetting('minimize_to_tray', enabled.toString())
     return enabled
+  })
+
+  // Theme change — update window chrome to match theme
+  ipcMain.handle('app:setTheme', (event, theme: 'light' | 'dark') => {
+    const win = BrowserWindow.fromWebContents(event.sender)
+    if (!win) return
+    const isLight = theme === 'light'
+
+    if (process.platform === 'darwin') {
+      // macOS: keep transparent background — the liquid glass view behind
+      // the web content adapts automatically via system appearance.
+      win.setBackgroundColor('#00000000')
+    } else if (process.platform === 'win32') {
+      try {
+        win.setTitleBarOverlay({
+          color: isLight ? '#FFFFFF' : '#181818',
+          symbolColor: isLight ? '#6B7280' : '#888888',
+        })
+      } catch {
+        // setTitleBarOverlay may not be available on all Windows versions
+      }
+      win.setBackgroundColor(isLight ? '#FFFFFF' : '#181818')
+    } else {
+      win.setBackgroundColor(isLight ? '#FFFFFF' : '#181818')
+    }
   })
 
   // Mobile web UI info — include auth token in URL hash so mobile SPA can authenticate

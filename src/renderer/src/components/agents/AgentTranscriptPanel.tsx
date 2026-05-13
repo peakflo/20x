@@ -158,7 +158,7 @@ function QuestionMessage({ message, onAnswer, canAnswer }: { message: AgentMessa
                           ? 'bg-primary/20 border-primary/50 text-foreground'
                           : isLocked
                             ? 'border-border/30 text-muted-foreground opacity-50 cursor-default'
-                            : 'border-border/50 hover:bg-white/5 hover:border-border text-foreground/80 cursor-pointer'
+                            : 'border-border/50 hover:bg-[var(--color-hover-overlay)] hover:border-border text-foreground/80 cursor-pointer'
                       }`}
                     >
                       <span className="font-medium">{opt.label}</span>
@@ -289,7 +289,7 @@ function TaskProgressMessage({ message }: { message: AgentMessage }) {
     }`}>
       <button
         onClick={() => setExpanded(!expanded)}
-        className="w-full flex items-center gap-2 px-3 py-2 text-xs font-mono hover:bg-white/5 transition-colors"
+        className="w-full flex items-center gap-2 px-3 py-2 text-xs font-mono hover:bg-[var(--color-hover-overlay)] transition-colors"
       >
         <ChevronRight className={`h-3 w-3 text-muted-foreground shrink-0 transition-transform ${expanded ? 'rotate-90' : ''}`} />
         <Terminal className="h-3 w-3 text-blue-400 shrink-0" />
@@ -342,7 +342,7 @@ function ToolCallMessage({ message }: { message: AgentMessage }) {
     <div className="rounded-md bg-card border border-border/50 overflow-hidden">
       <button
         onClick={() => setExpanded(!expanded)}
-        className="w-full flex items-center gap-2 px-3 py-2 text-xs font-mono hover:bg-white/5 transition-colors"
+        className="w-full flex items-center gap-2 px-3 py-2 text-xs font-mono hover:bg-[var(--color-hover-overlay)] transition-colors"
       >
         <ChevronRight className={`h-3 w-3 text-muted-foreground shrink-0 transition-transform ${expanded ? 'rotate-90' : ''}`} />
         <Wrench className="h-3 w-3 text-muted-foreground shrink-0" />
@@ -475,7 +475,7 @@ function TodoSummary({ todos }: { todos: NonNullable<AgentMessage['tool']>['todo
     <div className="border-b border-border/50 shrink-0">
       <button
         onClick={() => setExpanded(!expanded)}
-        className="w-full flex items-center gap-2 px-4 py-2 text-xs hover:bg-white/5 transition-colors"
+        className="w-full flex items-center gap-2 px-4 py-2 text-xs hover:bg-[var(--color-hover-overlay)] transition-colors"
       >
         {expanded
           ? <ChevronDown className="h-3 w-3 text-muted-foreground shrink-0" />

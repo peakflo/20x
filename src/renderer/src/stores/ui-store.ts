@@ -6,6 +6,21 @@ export type SortField = 'created_at' | 'updated_at' | 'priority' | 'due_date' | 
 export type SortDirection = 'asc' | 'desc'
 export type ActiveModal = 'create' | 'edit' | 'delete' | 'settings' | 'repo-selector' | 'gh-setup' | null
 export type SidebarView = 'tasks' | 'skills' | 'dashboard' | 'canvas'
+export type ThemeMode = 'light' | 'dark' | 'system'
+
+/** Resolve the effective theme (light or dark) from the ThemeMode preference */
+function resolveTheme(mode: ThemeMode): 'light' | 'dark' {
+  if (mode === 'system') {
+    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+  }
+  return mode
+}
+
+/** Apply the data-theme attribute to the document root */
+function applyThemeToDOM(mode: ThemeMode): void {
+  const resolved = resolveTheme(mode)
+  document.documentElement.setAttribute('data-theme', resolved)
+}
 
 interface UIState {
   sidebarView: SidebarView
@@ -25,6 +40,8 @@ interface UIState {
   canvasPendingTaskId: string | null
   /** App to add to canvas when switching to canvas view */
   canvasPendingApp: { workflowId: string; name: string } | null
+  /** Theme mode preference: light, dark, or system (auto) */
+  theme: ThemeMode
 
   setSidebarView: (view: SidebarView) => void
   setStatusFilter: (filter: TaskStatus | 'all') => void
@@ -35,6 +52,7 @@ interface UIState {
   setSearchQuery: (query: string) => void
   setSkillSearchQuery: (query: string) => void
   setSettingsTab: (tab: SettingsTab) => void
+  setTheme: (mode: ThemeMode) => void
   openCreateModal: () => void
   openEditModal: (taskId: string) => void
   openDeleteModal: (taskId: string) => void
@@ -66,6 +84,7 @@ export const useUIStore = create<UIState>((set) => ({
   dashboardPreviewTaskId: null,
   canvasPendingTaskId: null,
   canvasPendingApp: null,
+  theme: (localStorage.getItem('20x-theme') as ThemeMode) || 'dark',
 
   setSidebarView: (sidebarView) => set({ sidebarView }),
   setStatusFilter: (statusFilter) => set({ statusFilter }),
@@ -87,6 +106,14 @@ export const useUIStore = create<UIState>((set) => ({
   setSearchQuery: (searchQuery) => set({ searchQuery }),
   setSkillSearchQuery: (skillSearchQuery) => set({ skillSearchQuery }),
   setSettingsTab: (settingsTab) => set({ settingsTab }),
+  setTheme: (theme) => {
+    localStorage.setItem('20x-theme', theme)
+    applyThemeToDOM(theme)
+    // Sync native window chrome (titlebar, background color) with the theme
+    const resolved = resolveTheme(theme)
+    window.electronAPI?.app?.setTheme?.(resolved)
+    set({ theme })
+  },
 
   openCreateModal: () => set({ activeModal: 'create', editingTaskId: null }),
   openEditModal: (taskId) => set({ activeModal: 'edit', editingTaskId: taskId }),
@@ -100,3 +127,15 @@ export const useUIStore = create<UIState>((set) => ({
   openAppOnCanvas: (workflowId, name) => set({ sidebarView: 'canvas', canvasPendingApp: { workflowId, name }, dashboardPreviewTaskId: null }),
   clearCanvasPendingApp: () => set({ canvasPendingApp: null })
 }))
+
+// ── Initialize theme on load ───────────────────────────────
+const initialTheme = useUIStore.getState().theme
+applyThemeToDOM(initialTheme)
+
+// Listen for system theme changes when in 'system' mode
+window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+  const { theme } = useUIStore.getState()
+  if (theme === 'system') {
+    applyThemeToDOM('system')
+  }
+})
