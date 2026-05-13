@@ -188,7 +188,7 @@ export function CanvasMinimap({
       {/* Minimap body */}
       {!collapsed && (
         <div
-          className="bg-[var(--color-canvas-minimap-bg)] backdrop-blur-sm border border-border/40 border-t-0 rounded-b-lg overflow-hidden"
+          className="bg-[var(--color-canvas-minimap-bg)] backdrop-blur-xl border border-border/40 border-t-0 rounded-b-lg overflow-hidden"
           style={{ width: MINIMAP_W }}
         >
           {/* SVG minimap */}

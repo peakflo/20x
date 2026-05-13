@@ -141,7 +141,7 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
             <div className="flex items-center gap-2">
               <h2 className="text-sm font-semibold">Tasks</h2>
               {overdueCount > 0 && (
-                <span className="flex items-center justify-center min-w-5 h-5 rounded-full bg-red-500/15 text-red-400 text-[11px] font-medium px-1.5">
+                <span className="flex items-center justify-center min-w-5 h-5 rounded-full bg-[var(--color-status-red-bg)] text-[var(--color-status-red-text)] text-[11px] font-medium px-1.5">
                   {overdueCount}
                 </span>
               )}
@@ -196,7 +196,7 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
               <ChevronDown className={`h-3 w-3 transition-transform ${filtersOpen ? 'rotate-180' : ''}`} />
               Filters
               {hasActiveFilters && (
-                <span className="bg-primary/20 text-primary rounded-full px-1.5 text-[10px]">
+                <span className="bg-[var(--color-status-blue-bg)] text-[var(--color-status-blue-text)] rounded-full px-1.5 text-[10px]">
                   {(statusFilter !== 'all' ? 1 : 0) + (priorityFilter !== 'all' ? 1 : 0) + (sourceFilter !== 'all' ? 1 : 0)}
                 </span>
               )}

@@ -191,7 +191,8 @@ export function CanvasConnections({
           <path
             d={pendingPath.path}
             fill="none"
-            stroke="rgba(99,102,241,0.3)"
+            stroke="var(--color-status-blue-text)"
+            strokeOpacity="0.4"
             strokeWidth="2"
             strokeDasharray="6 4"
             strokeLinecap="round"
@@ -200,7 +201,8 @@ export function CanvasConnections({
             cx={pendingPath.fromAnchor.x}
             cy={pendingPath.fromAnchor.y}
             r="3"
-            fill="rgba(99,102,241,0.5)"
+            fill="var(--color-status-blue-text)"
+            fillOpacity="0.6"
           />
           {mouseCanvasPos && (
             <circle
@@ -208,7 +210,8 @@ export function CanvasConnections({
               cy={mouseCanvasPos.y}
               r="4"
               fill="none"
-              stroke="rgba(99,102,241,0.4)"
+              stroke="var(--color-status-blue-text)"
+              strokeOpacity="0.5"
               strokeWidth="1.5"
             />
           )}
@@ -222,7 +225,8 @@ export function CanvasConnections({
           <path
             d={proximityPath.path}
             fill="none"
-            stroke="rgba(249,115,22,0.3)"
+            stroke="var(--color-status-orange-text)"
+            strokeOpacity="0.3"
             strokeWidth="8"
             strokeLinecap="round"
             className="animate-pulse"
@@ -231,7 +235,8 @@ export function CanvasConnections({
           <path
             d={proximityPath.path}
             fill="none"
-            stroke="rgba(249,115,22,0.7)"
+            stroke="var(--color-status-orange-text)"
+            strokeOpacity="0.8"
             strokeWidth="2"
             strokeDasharray="8 4"
             strokeLinecap="round"
@@ -241,14 +246,14 @@ export function CanvasConnections({
             cx={proximityPath.fromAnchor.x}
             cy={proximityPath.fromAnchor.y}
             r="4"
-            fill="rgba(249,115,22,0.8)"
+            fill="var(--color-status-orange-text)"
             className="animate-pulse"
           />
           <circle
             cx={proximityPath.toAnchor.x}
             cy={proximityPath.toAnchor.y}
             r="4"
-            fill="rgba(249,115,22,0.8)"
+            fill="var(--color-status-orange-text)"
             className="animate-pulse"
           />
         </>

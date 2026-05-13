@@ -232,7 +232,7 @@ export function AppLayout() {
         )}
 
         {/* Workspace */}
-        <main className="flex flex-col flex-1 min-w-0 overflow-hidden bg-background">
+        <main className={`flex flex-col flex-1 min-w-0 overflow-hidden transition-colors duration-300 ${sidebarView === 'canvas' ? 'bg-transparent' : 'bg-background'}`}>
           <div className="flex-1 h-0 overflow-hidden relative">
             {/* Canvas — always mounted so iframes/terminals survive navigation */}
             <div

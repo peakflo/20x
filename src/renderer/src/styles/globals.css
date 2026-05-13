@@ -117,14 +117,30 @@
   --color-sidebar-muted: #2A2A2A;
 
   /* Canvas-specific tokens */
-  --color-canvas-bg: #131820;
-  --color-canvas-panel-bg: #1a2030;
+  --color-canvas-bg: rgba(19, 24, 32, 0.60);
+  --color-canvas-panel-bg: rgba(26, 32, 48, 0.85);
   --color-canvas-panel-border: #333333;
-  --color-canvas-grid-dot: rgba(255, 255, 255, 0.08);
-  --color-canvas-hud-bg: rgba(26, 32, 48, 0.90);
-  --color-canvas-minimap-bg: rgba(13, 17, 23, 0.95);
-  --color-canvas-minimap-header: rgba(26, 32, 48, 0.95);
-  --color-canvas-context-menu: #161b22;
+  --color-canvas-grid-dot: rgba(255, 255, 255, 0.10);
+  --color-canvas-hud-bg: rgba(26, 32, 48, 0.75);
+  --color-canvas-minimap-bg: rgba(13, 17, 23, 0.85);
+  --color-canvas-minimap-header: rgba(26, 32, 48, 0.90);
+  --color-canvas-context-menu: rgba(22, 27, 34, 0.95);
+
+  /* Status Colors (Subtle) */
+  --color-status-blue-bg: rgba(51, 156, 255, 0.20);
+  --color-status-blue-text: #79c0ff;
+  --color-status-green-bg: rgba(34, 197, 94, 0.20);
+  --color-status-green-text: #4ade80;
+  --color-status-red-bg: rgba(239, 68, 68, 0.20);
+  --color-status-red-text: #f87171;
+  --color-status-amber-bg: rgba(245, 158, 11, 0.20);
+  --color-status-amber-text: #fbbf24;
+  --color-status-purple-bg: rgba(168, 85, 247, 0.20);
+  --color-status-purple-text: #c084fc;
+  --color-status-cyan-bg: rgba(6, 182, 212, 0.20);
+  --color-status-cyan-text: #22d3ee;
+  --color-status-orange-bg: rgba(249, 115, 22, 0.20);
+  --color-status-orange-text: #fb923c;
 
   /* Overlay / UI */
   --color-overlay: rgba(0, 0, 0, 0.70);

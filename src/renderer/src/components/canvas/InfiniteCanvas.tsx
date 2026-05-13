@@ -524,7 +524,7 @@ export function InfiniteCanvas() {
       </div>
 
       {/* ── HUD: zoom controls ── */}
-      <div className="absolute bottom-4 left-4 flex items-center gap-1 bg-[var(--color-canvas-hud-bg)] backdrop-blur-sm border border-border/40 rounded-lg p-1 z-10">
+      <div className="absolute bottom-4 left-4 flex items-center gap-1 bg-[var(--color-canvas-hud-bg)] backdrop-blur-xl border border-border/40 rounded-lg p-1 z-10">
         <Button
           variant="ghost"
           size="sm"
