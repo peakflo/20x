@@ -355,7 +355,9 @@ export class WorkfloApiClient {
   // ── Org Nodes (update) ──────────────────────────────────────────────
 
   /**
-   * Update an org node (e.g. to assign skillIds)
+   * Update an org node (e.g. to assign skillIds).
+   * Requires org-nodes:update permission — use assignNodeSkills() for
+   * skill-only updates from User-role accounts.
    */
   async updateOrgNode(
     nodeId: string,
@@ -370,6 +372,32 @@ export class WorkfloApiClient {
       data
     )) as { node: WorkfloOrgNode }
     return result.node
+  }
+
+  /**
+   * Assign skills to an org node using the dedicated skill-assignment endpoint.
+   * Only requires the user to be a member of the node (no org-nodes:update needed).
+   * Falls back to the general updateOrgNode() if the server returns 404 (older server).
+   */
+  async assignNodeSkills(
+    nodeId: string,
+    skillIds: string[]
+  ): Promise<WorkfloOrgNode> {
+    try {
+      const result = (await this.auth.apiRequest(
+        'PUT',
+        `/api/org-nodes/${nodeId}/skills`,
+        { skillIds }
+      )) as { node: WorkfloOrgNode }
+      return result.node
+    } catch (err) {
+      // Fallback for older servers that don't have the dedicated endpoint
+      const msg = err instanceof Error ? err.message : String(err)
+      if (msg.includes('404') || msg.includes('Not Found')) {
+        return this.updateOrgNode(nodeId, { skillIds })
+      }
+      throw err
+    }
   }
 
   // ── File download ───────────────────────────────────────────────────

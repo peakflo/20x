@@ -100,6 +100,7 @@ describe('EnterpriseSyncManager — Skills 2-Way Sync (Batch)', () => {
       updateSkill: vi.fn().mockResolvedValue(makeServerSkill()),
       deleteSkill: vi.fn().mockResolvedValue(undefined),
       updateOrgNode: vi.fn().mockResolvedValue(makeOrgNode()),
+      assignNodeSkills: vi.fn().mockResolvedValue(makeOrgNode()),
       cleanupDuplicateSkills: vi.fn().mockResolvedValue({ deleted: 0, kept: 0 }),
       getDomain: vi.fn().mockReturnValue('api.peakflo.ai')
     }
@@ -310,9 +311,7 @@ describe('EnterpriseSyncManager — Skills 2-Way Sync (Batch)', () => {
 
       await syncManager.syncAll('user-1')
 
-      expect(mockApiClient.updateOrgNode).toHaveBeenCalledWith('node-1', {
-        skillIds: ['pushed-1']
-      })
+      expect(mockApiClient.assignNodeSkills).toHaveBeenCalledWith('node-1', ['pushed-1'])
     })
 
     it('deduplicates skill IDs', async () => {
@@ -326,8 +325,8 @@ describe('EnterpriseSyncManager — Skills 2-Way Sync (Batch)', () => {
 
       await syncManager.syncAll('user-1')
 
-      const updateCall = mockApiClient.updateOrgNode.mock.calls[0]
-      const skillIds = updateCall[1].skillIds as string[]
+      const assignCall = mockApiClient.assignNodeSkills.mock.calls[0]
+      const skillIds = assignCall[1] as string[]
       const uniqueIds = new Set(skillIds)
       expect(skillIds.length).toBe(uniqueIds.size)
     })
@@ -471,7 +470,7 @@ describe('EnterpriseSyncManager — Skills 2-Way Sync (Batch)', () => {
       expect(mockApiClient.batchSyncSkills).toHaveBeenCalledTimes(1)
       expect(result.skills.pushed).toBe(1)
       // Node assignment happened
-      expect(mockApiClient.updateOrgNode).toHaveBeenCalled()
+      expect(mockApiClient.assignNodeSkills).toHaveBeenCalled()
       // Pull created the new skill from other team
       expect(result.skills.created).toBe(1) // "Other Team Skill"
     })
@@ -532,10 +531,10 @@ describe('EnterpriseSyncManager — Skills 2-Way Sync (Batch)', () => {
 
       await syncManager.syncAll('user-1')
 
-      // Should call updateOrgNode for each user node
-      expect(mockApiClient.updateOrgNode).toHaveBeenCalledTimes(2)
-      expect(mockApiClient.updateOrgNode).toHaveBeenCalledWith('node-a', expect.objectContaining({ skillIds: expect.any(Array) }))
-      expect(mockApiClient.updateOrgNode).toHaveBeenCalledWith('node-b', expect.objectContaining({ skillIds: expect.any(Array) }))
+      // Should call assignNodeSkills for each user node
+      expect(mockApiClient.assignNodeSkills).toHaveBeenCalledTimes(2)
+      expect(mockApiClient.assignNodeSkills).toHaveBeenCalledWith('node-a', expect.any(Array))
+      expect(mockApiClient.assignNodeSkills).toHaveBeenCalledWith('node-b', expect.any(Array))
     })
 
     it('skips Mastermind from batch sync and node assignment', async () => {
@@ -551,10 +550,7 @@ describe('EnterpriseSyncManager — Skills 2-Way Sync (Batch)', () => {
       // Batch sync should NOT be called (Mastermind filtered out, 0 skills to push)
       expect(mockApiClient.batchSyncSkills).not.toHaveBeenCalled()
       // Should assign empty skillIds
-      expect(mockApiClient.updateOrgNode).toHaveBeenCalledWith(
-        'node-1',
-        { skillIds: [] }
-      )
+      expect(mockApiClient.assignNodeSkills).toHaveBeenCalledWith('node-1', [])
     })
 
     it('skips [Workflo]-prefixed skills from batch sync and node assignment', async () => {
@@ -569,10 +565,7 @@ describe('EnterpriseSyncManager — Skills 2-Way Sync (Batch)', () => {
 
       // Batch sync should NOT be called (all skills filtered out)
       expect(mockApiClient.batchSyncSkills).not.toHaveBeenCalled()
-      expect(mockApiClient.updateOrgNode).toHaveBeenCalledWith(
-        'node-1',
-        { skillIds: [] }
-      )
+      expect(mockApiClient.assignNodeSkills).toHaveBeenCalledWith('node-1', [])
     })
 
     it('handles assign skills failure gracefully with domain in error', async () => {
@@ -583,7 +576,7 @@ describe('EnterpriseSyncManager — Skills 2-Way Sync (Batch)', () => {
         updated: 0,
         skills: [makeServerSkill({ id: 'pushed-1', name: 'Test Skill' })]
       })
-      mockApiClient.updateOrgNode.mockRejectedValue(new Error('Permission denied'))
+      mockApiClient.assignNodeSkills.mockRejectedValue(new Error('Permission denied'))
       mockApiClient.getOrgNode.mockResolvedValue({
         node: makeOrgNode(),
         mcpServers: [],
@@ -638,7 +631,7 @@ describe('EnterpriseSyncManager — Skills 2-Way Sync (Batch)', () => {
       expect(result.skills.pushed).toBe(1)
 
       // Node assignment is skipped — no nodes to assign to
-      expect(mockApiClient.updateOrgNode).not.toHaveBeenCalled()
+      expect(mockApiClient.assignNodeSkills).not.toHaveBeenCalled()
 
       // Remote skill pulled locally
       expect(mockDb.createSkill).toHaveBeenCalledWith(
@@ -671,7 +664,7 @@ describe('EnterpriseSyncManager — Skills 2-Way Sync (Batch)', () => {
       expect(result.errors).toContainEqual(expect.stringContaining('Org node sync failed'))
       expect(mockApiClient.batchSyncSkills).toHaveBeenCalled()
       expect(result.skills.pushed).toBe(1)
-      expect(mockApiClient.updateOrgNode).not.toHaveBeenCalled()
+      expect(mockApiClient.assignNodeSkills).not.toHaveBeenCalled()
     })
 
     it('handles multiple skills with mixed states', async () => {
@@ -705,10 +698,10 @@ describe('EnterpriseSyncManager — Skills 2-Way Sync (Batch)', () => {
       expect(result.skills.pushed).toBe(2)
 
       // Node should only have local skills, not pulled [Workflo] ones
-      expect(mockApiClient.updateOrgNode).toHaveBeenCalledWith('node-1', {
-        skillIds: expect.arrayContaining(['server-new', 'server-existing'])
-      })
-      const assignedIds = mockApiClient.updateOrgNode.mock.calls[0][1].skillIds
+      expect(mockApiClient.assignNodeSkills).toHaveBeenCalledWith('node-1',
+        expect.arrayContaining(['server-new', 'server-existing'])
+      )
+      const assignedIds = mockApiClient.assignNodeSkills.mock.calls[0][1] as string[]
       expect(assignedIds).not.toContain('server-pulled')
     })
 

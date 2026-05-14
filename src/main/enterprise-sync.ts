@@ -607,9 +607,7 @@ export class EnterpriseSyncManager {
         `[EnterpriseSyncManager] assignSkillsToNode: node=${nodeId}, skills=${finalIds.length}, removed=${removedSkillIds.size}`
       )
 
-      await this.apiClient.updateOrgNode(nodeId, {
-        skillIds: finalIds
-      })
+      await this.apiClient.assignNodeSkills(nodeId, finalIds)
 
       console.log(
         `[EnterpriseSyncManager] Assigned ${finalIds.length} skills to node ${nodeId}`
