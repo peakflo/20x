@@ -1,7 +1,8 @@
 import { Agent as UndiciAgent } from 'undici'
-import { mkdirSync, writeFileSync, rmSync, existsSync } from 'fs'
+import { mkdirSync, writeFileSync, rmSync, existsSync, unlinkSync } from 'fs'
 import { join, delimiter } from 'path'
 import { homedir } from 'os'
+import { execSync } from 'child_process'
 import { buildMergedOpencodeConfig } from '../utils/opencode-config'
 import type { DatabaseManager } from '../database'
 import type {
@@ -273,6 +274,17 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     providers: { id: string; name: string; models: unknown; [key: string]: unknown }[]
     default: Record<string, string>
   } | null> {
+    return this.getProvidersInner(serverUrl, directory, true)
+  }
+
+  private async getProvidersInner(
+    serverUrl?: string,
+    directory?: string,
+    allowRecovery = true
+  ): Promise<{
+    providers: { id: string; name: string; models: unknown; [key: string]: unknown }[]
+    default: Record<string, string>
+  } | null> {
     try {
       const client = await this.getClient(serverUrl, { quick: true })
 
@@ -293,7 +305,18 @@ export class OpencodeAdapter implements CodingAgentAdapter {
       })
 
       if (result.error) {
-        console.log('[OpencodeAdapter] No providers configured on server:', JSON.stringify(result.error))
+        const errorStr = JSON.stringify(result.error)
+
+        // Detect SQLite database errors from the server (corrupted DB, stale WAL
+        // files, migration failures from opencode version upgrades).
+        // Recovery: kill the stale server, clear its DB, reset state, retry once.
+        if (allowRecovery && errorStr.includes('SQLiteError')) {
+          console.warn('[OpencodeAdapter] SQLite error from server, attempting recovery:', errorStr)
+          await this.recoverFromBrokenServer()
+          return this.getProvidersInner(serverUrl, directory, false)
+        }
+
+        console.log('[OpencodeAdapter] No providers configured on server:', errorStr)
         return null
       }
 
@@ -307,6 +330,65 @@ export class OpencodeAdapter implements CodingAgentAdapter {
       console.log('[OpencodeAdapter] Could not get providers:', error instanceof Error ? error.message : error)
       return null
     }
+  }
+
+  /**
+   * Recover from a broken opencode server by killing it, clearing its
+   * corrupted database, and resetting adapter state so the next call
+   * spawns a fresh server.
+   */
+  private async recoverFromBrokenServer(): Promise<void> {
+    console.log('[OpencodeAdapter] Starting recovery: stopping broken server and clearing database')
+
+    // 1. Stop the server if we spawned it
+    try {
+      await this.stopServer()
+    } catch {
+      // Already logged in stopServer
+    }
+
+    // 2. Kill any opencode process on the default port (may be a leftover
+    //    from a previous app launch or terminal session).
+    try {
+      if (process.platform === 'win32') {
+        execSync('taskkill /F /IM opencode.exe 2>nul', { stdio: 'ignore' })
+      } else {
+        // Kill processes listening on port 4096 specifically
+        execSync("lsof -ti :4096 | xargs kill -9 2>/dev/null || true", { stdio: 'ignore' })
+      }
+      console.log('[OpencodeAdapter] Killed opencode process on port 4096')
+    } catch {
+      // Process may already be gone
+    }
+
+    // 3. Clear the global database and WAL/SHM sidecar files.
+    //    These can get corrupted after a crash or during opencode version upgrades.
+    const dbDir = join(homedir(), '.local', 'share', 'opencode')
+    const dbFiles = ['opencode.db', 'opencode.db-shm', 'opencode.db-wal']
+    for (const file of dbFiles) {
+      const filePath = join(dbDir, file)
+      try {
+        if (existsSync(filePath)) {
+          unlinkSync(filePath)
+          console.log(`[OpencodeAdapter] Deleted corrupted DB file: ${filePath}`)
+        }
+      } catch (err) {
+        console.warn(`[OpencodeAdapter] Could not delete ${filePath}:`, err)
+      }
+    }
+
+    // 4. Reset adapter state so the next getClient() call spawns a fresh server
+    this.serverUrl = null
+    this.serverInstance = null
+    this.sharedClient = null
+    this.quickClient = null
+    this.v2Client = null
+    this.serverStarting = null
+
+    // Brief pause to let the OS release the port
+    await new Promise(resolve => setTimeout(resolve, 500))
+
+    console.log('[OpencodeAdapter] Recovery complete, will spawn fresh server on next call')
   }
 
   async checkHealth(): Promise<{ available: boolean; reason?: string }> {
