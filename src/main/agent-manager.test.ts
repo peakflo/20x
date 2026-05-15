@@ -1665,7 +1665,10 @@ describe('AgentManager startAdapterPolling — IDLE grace period for follow-up m
     expect(entry.hasSeenWork).toBe(true)
     expect(transitionSpy).not.toHaveBeenCalled()
 
-    // Second poll: IDLE after real work → transition
+    // Second poll: IDLE after real work → transition.
+    // Move lastPartReceivedAt into the past so the POST_DATA_GRACE_MS
+    // (5 s) check doesn't block the transition.
+    entry.lastPartReceivedAt = Date.now() - 10_000
     adapter.pollMessages.mockResolvedValueOnce([])
     adapter.getStatus.mockResolvedValueOnce({ type: SessionStatusType.IDLE })
     await (mgr as any).pollSingleSession(entry)
