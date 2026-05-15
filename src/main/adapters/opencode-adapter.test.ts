@@ -1,7 +1,9 @@
-import { describe, it, expect, vi } from 'vitest'
+import { afterEach, describe, it, expect, vi } from 'vitest'
 import { OpencodeAdapter } from './opencode-adapter'
 import { SessionStatusType } from './coding-agent-adapter'
 import { ENTERPRISE_AI_GATEWAY_PROVIDER_ID } from '../enterprise-ai-gateway'
+
+import * as enterpriseAiGateway from '../enterprise-ai-gateway'
 
 describe('OpencodeAdapter', () => {
   describe('waitForMcpServersReady', () => {
@@ -363,187 +365,113 @@ describe('OpencodeAdapter', () => {
     })
   })
 
-  describe('getProvidersInner filters stale models', () => {
-    it('filters out stale models from peakflo provider using fresh SQLite config', async () => {
-      const mockDb = {
-        getSetting: vi.fn((key: string): string | undefined => {
-          // Return encrypted values for API key and base URL so readEnterpriseAiGatewayConfig works
-          if (key === 'enterprise_litellm_api_key') return Buffer.from('sk-test', 'utf8').toString('base64')
-          if (key === 'enterprise_litellm_base_url') return Buffer.from('https://litellm.example.com', 'utf8').toString('base64')
-          if (key === 'enterprise_litellm_models') return JSON.stringify([
-            { id: 'kept-model', name: 'Kept Model' },
-            { id: 'new-model', name: 'New Model' }
-          ])
-          return undefined
-        })
-      }
+  describe('filterStaleProviderModels', () => {
+    afterEach(() => vi.restoreAllMocks())
 
+    it('removes models not present in fresh SQLite config', () => {
+      const mockDb = { getSetting: vi.fn() }
       const adapter = new OpencodeAdapter(mockDb)
 
-      // Mock getClient to return a client whose config.providers returns stale data
-      const mockClient = {
-        config: {
-          providers: vi.fn().mockResolvedValue({
-            data: {
-              providers: [
-                {
-                  id: ENTERPRISE_AI_GATEWAY_PROVIDER_ID,
-                  name: 'Peakflo',
-                  models: {
-                    'old-model-1': { name: 'Old Model 1' },
-                    'old-model-2': { name: 'Old Model 2' },
-                    'kept-model': { name: 'Kept Model' }
-                  }
-                },
-                {
-                  id: 'anthropic',
-                  name: 'Anthropic',
-                  models: { 'claude-4': { name: 'Claude 4' } }
-                }
-              ],
-              default: {}
-            }
-          })
+      vi.spyOn(enterpriseAiGateway, 'readEnterpriseAiGatewayConfig').mockReturnValue({
+        apiKey: 'sk-test',
+        baseUrl: 'https://litellm.example.com',
+        models: [
+          { id: 'kept-model', name: 'Kept Model' },
+          { id: 'new-model', name: 'New Model' }
+        ]
+      })
+
+      const providers = [
+        {
+          id: ENTERPRISE_AI_GATEWAY_PROVIDER_ID,
+          name: 'Peakflo',
+          models: {
+            'old-model-1': { name: 'Old Model 1' },
+            'old-model-2': { name: 'Old Model 2' },
+            'kept-model': { name: 'Kept Model' }
+          } as unknown
+        },
+        {
+          id: 'anthropic',
+          name: 'Anthropic',
+          models: { 'claude-4': { name: 'Claude 4' } } as unknown
         }
-      }
+      ]
 
-      vi.spyOn(adapter as any, 'getClient').mockResolvedValue(mockClient)
-      vi.spyOn(adapter as any, 'pushMergedConfigToClient').mockResolvedValue(undefined)
+      ;(adapter as any).filterStaleProviderModels(providers)
 
-      const result = await (adapter as any).getProvidersInner(undefined, '/tmp/ws', false)
-
-      expect(result).not.toBeNull()
-      const peakfloProvider = result.providers.find((p: { id: string }) => p.id === ENTERPRISE_AI_GATEWAY_PROVIDER_ID)
-      const models = peakfloProvider.models as Record<string, unknown>
-
-      // Stale models should be filtered out
+      const peakflo = providers.find(p => p.id === ENTERPRISE_AI_GATEWAY_PROVIDER_ID)!
+      const models = peakflo.models as Record<string, unknown>
       expect(models['old-model-1']).toBeUndefined()
       expect(models['old-model-2']).toBeUndefined()
-      // Kept model should be preserved
       expect(models['kept-model']).toEqual({ name: 'Kept Model' })
-      // Other providers should be unaffected
-      const anthropic = result.providers.find((p: { id: string }) => p.id === 'anthropic')
+
+      // Other providers untouched
+      const anthropic = providers.find(p => p.id === 'anthropic')!
       expect(anthropic.models).toEqual({ 'claude-4': { name: 'Claude 4' } })
     })
 
-    it('does not filter when no db is available', async () => {
+    it('does not filter when no db is available', () => {
       const adapter = new OpencodeAdapter() // no db
+      const readSpy = vi.spyOn(enterpriseAiGateway, 'readEnterpriseAiGatewayConfig')
 
-      const mockClient = {
-        config: {
-          providers: vi.fn().mockResolvedValue({
-            data: {
-              providers: [
-                {
-                  id: ENTERPRISE_AI_GATEWAY_PROVIDER_ID,
-                  name: 'Peakflo',
-                  models: {
-                    'model-a': { name: 'Model A' },
-                    'model-b': { name: 'Model B' }
-                  }
-                }
-              ],
-              default: {}
-            }
-          })
+      const providers = [
+        {
+          id: ENTERPRISE_AI_GATEWAY_PROVIDER_ID,
+          name: 'Peakflo',
+          models: { 'model-a': { name: 'A' }, 'model-b': { name: 'B' } } as unknown
         }
-      }
+      ]
 
-      vi.spyOn(adapter as any, 'getClient').mockResolvedValue(mockClient)
-      vi.spyOn(adapter as any, 'pushMergedConfigToClient').mockResolvedValue(undefined)
+      ;(adapter as any).filterStaleProviderModels(providers)
 
-      const result = await (adapter as any).getProvidersInner(undefined, '/tmp/ws', false)
-
-      const peakfloProvider = result.providers.find((p: { id: string }) => p.id === ENTERPRISE_AI_GATEWAY_PROVIDER_ID)
-      const models = peakfloProvider.models as Record<string, unknown>
-
-      // All models preserved — no filtering without db
-      expect(Object.keys(models)).toEqual(['model-a', 'model-b'])
+      expect(readSpy).not.toHaveBeenCalled()
+      expect(Object.keys(providers[0].models as Record<string, unknown>)).toEqual(['model-a', 'model-b'])
     })
 
-    it('does not filter when enterprise AI gateway config is not stored', async () => {
-      const mockDb = {
-        getSetting: vi.fn((): string | undefined => undefined)
-      }
-
+    it('does not filter when gateway config returns null', () => {
+      const mockDb = { getSetting: vi.fn() }
       const adapter = new OpencodeAdapter(mockDb)
 
-      const mockClient = {
-        config: {
-          providers: vi.fn().mockResolvedValue({
-            data: {
-              providers: [
-                {
-                  id: ENTERPRISE_AI_GATEWAY_PROVIDER_ID,
-                  name: 'Peakflo',
-                  models: {
-                    'model-a': { name: 'Model A' }
-                  }
-                }
-              ],
-              default: {}
-            }
-          })
+      vi.spyOn(enterpriseAiGateway, 'readEnterpriseAiGatewayConfig').mockReturnValue(null)
+
+      const providers = [
+        {
+          id: ENTERPRISE_AI_GATEWAY_PROVIDER_ID,
+          name: 'Peakflo',
+          models: { 'model-a': { name: 'A' } } as unknown
         }
-      }
+      ]
 
-      vi.spyOn(adapter as any, 'getClient').mockResolvedValue(mockClient)
-      vi.spyOn(adapter as any, 'pushMergedConfigToClient').mockResolvedValue(undefined)
+      ;(adapter as any).filterStaleProviderModels(providers)
 
-      const result = await (adapter as any).getProvidersInner(undefined, '/tmp/ws', false)
-
-      const peakfloProvider = result.providers.find((p: { id: string }) => p.id === ENTERPRISE_AI_GATEWAY_PROVIDER_ID)
-      const models = peakfloProvider.models as Record<string, unknown>
-
-      // All models preserved — no filtering without stored config
-      expect(Object.keys(models)).toEqual(['model-a'])
+      expect(Object.keys(providers[0].models as Record<string, unknown>)).toEqual(['model-a'])
     })
 
-    it('keeps all models when all server models are in fresh config', async () => {
-      const mockDb = {
-        getSetting: vi.fn((key: string): string | undefined => {
-          if (key === 'enterprise_litellm_api_key') return Buffer.from('sk-test', 'utf8').toString('base64')
-          if (key === 'enterprise_litellm_base_url') return Buffer.from('https://litellm.example.com', 'utf8').toString('base64')
-          if (key === 'enterprise_litellm_models') return JSON.stringify([
-            { id: 'model-a', name: 'Model A' },
-            { id: 'model-b', name: 'Model B' }
-          ])
-          return undefined
-        })
-      }
-
+    it('is a no-op when all server models match fresh config', () => {
+      const mockDb = { getSetting: vi.fn() }
       const adapter = new OpencodeAdapter(mockDb)
 
-      const mockClient = {
-        config: {
-          providers: vi.fn().mockResolvedValue({
-            data: {
-              providers: [
-                {
-                  id: ENTERPRISE_AI_GATEWAY_PROVIDER_ID,
-                  name: 'Peakflo',
-                  models: {
-                    'model-a': { name: 'Model A' },
-                    'model-b': { name: 'Model B' }
-                  }
-                }
-              ],
-              default: {}
-            }
-          })
+      vi.spyOn(enterpriseAiGateway, 'readEnterpriseAiGatewayConfig').mockReturnValue({
+        apiKey: 'sk-test',
+        baseUrl: 'https://litellm.example.com',
+        models: [
+          { id: 'model-a', name: 'A' },
+          { id: 'model-b', name: 'B' }
+        ]
+      })
+
+      const providers = [
+        {
+          id: ENTERPRISE_AI_GATEWAY_PROVIDER_ID,
+          name: 'Peakflo',
+          models: { 'model-a': { name: 'A' }, 'model-b': { name: 'B' } } as unknown
         }
-      }
+      ]
 
-      vi.spyOn(adapter as any, 'getClient').mockResolvedValue(mockClient)
-      vi.spyOn(adapter as any, 'pushMergedConfigToClient').mockResolvedValue(undefined)
+      ;(adapter as any).filterStaleProviderModels(providers)
 
-      const result = await (adapter as any).getProvidersInner(undefined, '/tmp/ws', false)
-
-      const peakfloProvider = result.providers.find((p: { id: string }) => p.id === ENTERPRISE_AI_GATEWAY_PROVIDER_ID)
-      const models = peakfloProvider.models as Record<string, unknown>
-
-      expect(models['model-a']).toEqual({ name: 'Model A' })
-      expect(models['model-b']).toEqual({ name: 'Model B' })
+      const models = providers[0].models as Record<string, unknown>
       expect(Object.keys(models)).toEqual(['model-a', 'model-b'])
     })
   })
