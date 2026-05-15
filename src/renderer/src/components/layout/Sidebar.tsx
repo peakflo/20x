@@ -134,7 +134,7 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
   }, [activeModal, closeModal, onSelectTask])
 
   return (
-    <aside className="flex flex-col h-full w-[260px] shrink-0 border-r bg-sidebar overflow-hidden">
+    <aside className="flex flex-col h-full w-[260px] shrink-0 border-r bg-sidebar backdrop-blur-xl overflow-hidden">
       {sidebarView === 'tasks' ? (
         <>
           <div className="no-drag flex items-center justify-between px-4 py-3">

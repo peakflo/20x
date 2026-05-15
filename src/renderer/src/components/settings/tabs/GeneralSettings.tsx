@@ -1,13 +1,22 @@
 import { useState, useEffect } from 'react'
-import { Wrench, RefreshCw, Download, Check, Loader2, Trash2 } from 'lucide-react'
+import { Wrench, RefreshCw, Download, Check, Loader2, Trash2, Sun, Moon, Monitor } from 'lucide-react'
 import { SettingsSection } from '../SettingsSection'
 import { Label } from '@/components/ui/Label'
 import { Switch } from '@/components/ui/Switch'
 import { Button } from '@/components/ui/Button'
 import { ToolSetupDialog } from '@/components/AgentSetupWizard'
 import { settingsApi, mobileApi, updaterApi, worktreeApi, onWorkspaceCleanupProgress } from '@/lib/ipc-client'
+import { useUIStore, type ThemeMode } from '@/stores/ui-store'
+
+const THEME_OPTIONS: { value: ThemeMode; label: string; icon: typeof Sun }[] = [
+  { value: 'light', label: 'Light', icon: Sun },
+  { value: 'dark', label: 'Dark', icon: Moon },
+  { value: 'system', label: 'System', icon: Monitor },
+]
 
 export function GeneralSettings() {
+  const theme = useUIStore((s) => s.theme)
+  const setTheme = useUIStore((s) => s.setTheme)
   const [setupDialogOpen, setSetupDialogOpen] = useState(false)
   const [launchAtStartup, setLaunchAtStartup] = useState(false)
   const [notificationsEnabled, setNotificationsEnabled] = useState(false)
@@ -214,6 +223,31 @@ export function GeneralSettings() {
             onCheckedChange={handleMinimizeToTrayChange}
             disabled={loading}
           />
+        </div>
+
+        <div className="flex items-center justify-between py-2 border-b border-border">
+          <div className="space-y-0.5">
+            <Label>Appearance</Label>
+            <p className="text-xs text-muted-foreground">
+              Choose between light and dark mode
+            </p>
+          </div>
+          <div className="flex items-center rounded-lg border border-border bg-muted/30 p-0.5">
+            {THEME_OPTIONS.map(({ value, label, icon: Icon }) => (
+              <button
+                key={value}
+                onClick={() => setTheme(value)}
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
+                  theme === value
+                    ? 'bg-background text-foreground shadow-sm'
+                    : 'text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                <Icon className="h-3.5 w-3.5" />
+                {label}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
     </SettingsSection>

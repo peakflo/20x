@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState, useMemo } from 'react'
 import { useCanvasStore, type CanvasPanelData, MIN_ZOOM, MAX_ZOOM } from '@/stores/canvas-store'
+import { useUIStore } from '@/stores/ui-store'
 import { Minus, Plus, Maximize2, ChevronDown, ChevronUp } from 'lucide-react'
 
 // ── Constants ─────────────────────────────────────────────
@@ -42,6 +43,13 @@ export function CanvasMinimap({
   const setViewport = useCanvasStore((s) => s.setViewport)
   const zoomTo = useCanvasStore((s) => s.zoomTo)
   const fitToContent = useCanvasStore((s) => s.fitToContent)
+
+  // Resolve current theme for conditional minimap colors
+  const isDark = useUIStore((s) => {
+    const t = s.theme
+    if (t === 'system') return window.matchMedia('(prefers-color-scheme: dark)').matches
+    return t === 'dark'
+  })
 
   const [collapsed, setCollapsed] = useState(false)
   const [isDragging, setIsDragging] = useState(false)
@@ -158,7 +166,7 @@ export function CanvasMinimap({
     >
       {/* Header bar — always visible */}
       <div
-        className="flex items-center justify-between px-2 py-1 bg-[#1a2030]/95 backdrop-blur-sm border border-border/40 rounded-t-lg cursor-pointer"
+        className="flex items-center justify-between px-2 py-1 bg-[var(--color-canvas-minimap-header)] backdrop-blur-sm border border-border/40 rounded-t-lg cursor-pointer"
         style={{ width: MINIMAP_W, borderBottom: collapsed ? undefined : 'none', borderRadius: collapsed ? '8px' : undefined }}
         onClick={() => setCollapsed((c) => !c)}
       >
@@ -180,7 +188,7 @@ export function CanvasMinimap({
       {/* Minimap body */}
       {!collapsed && (
         <div
-          className="bg-[#0d1117]/95 backdrop-blur-sm border border-border/40 border-t-0 rounded-b-lg overflow-hidden"
+          className="bg-[var(--color-canvas-minimap-bg)] backdrop-blur-sm border border-border/40 border-t-0 rounded-b-lg overflow-hidden"
           style={{ width: MINIMAP_W }}
         >
           {/* SVG minimap */}
@@ -231,7 +239,7 @@ export function CanvasMinimap({
                   height={ph}
                   rx="1"
                   fill={color}
-                  stroke="rgba(255,255,255,0.1)"
+                  stroke={isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)'}
                   strokeWidth="0.5"
                 />
               )
@@ -244,8 +252,8 @@ export function CanvasMinimap({
               width={Math.max(4, vpRect.w)}
               height={Math.max(3, vpRect.h)}
               rx="1"
-              fill="rgba(255,255,255,0.06)"
-              stroke="rgba(255,255,255,0.3)"
+              fill={isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)'}
+              stroke={isDark ? 'rgba(255,255,255,0.3)' : 'rgba(0,0,0,0.2)'}
               strokeWidth="1"
               className="pointer-events-none"
             />
@@ -254,7 +262,7 @@ export function CanvasMinimap({
           {/* Zoom controls bar */}
           <div className="flex items-center justify-between px-1.5 py-1 border-t border-border/20">
             <button
-              className="h-5 w-5 rounded flex items-center justify-center text-muted-foreground/40 hover:text-muted-foreground hover:bg-white/5 transition-colors"
+              className="h-5 w-5 rounded flex items-center justify-center text-muted-foreground/40 hover:text-muted-foreground hover:bg-[var(--color-hover-overlay)] transition-colors"
               onClick={(e) => { e.stopPropagation(); zoomTo(viewport.zoom / 1.2) }}
               title="Zoom out (Ctrl+-)"
             >
@@ -277,7 +285,7 @@ export function CanvasMinimap({
             />
 
             <button
-              className="h-5 w-5 rounded flex items-center justify-center text-muted-foreground/40 hover:text-muted-foreground hover:bg-white/5 transition-colors"
+              className="h-5 w-5 rounded flex items-center justify-center text-muted-foreground/40 hover:text-muted-foreground hover:bg-[var(--color-hover-overlay)] transition-colors"
               onClick={(e) => { e.stopPropagation(); zoomTo(viewport.zoom * 1.2) }}
               title="Zoom in (Ctrl+=)"
             >
@@ -287,7 +295,7 @@ export function CanvasMinimap({
             <div className="w-px h-3 bg-border/20 mx-0.5" />
 
             <button
-              className="h-5 w-5 rounded flex items-center justify-center text-muted-foreground/40 hover:text-muted-foreground hover:bg-white/5 transition-colors"
+              className="h-5 w-5 rounded flex items-center justify-center text-muted-foreground/40 hover:text-muted-foreground hover:bg-[var(--color-hover-overlay)] transition-colors"
               onClick={(e) => { e.stopPropagation(); fitToContent(containerWidth, containerHeight) }}
               title="Fit all panels"
             >

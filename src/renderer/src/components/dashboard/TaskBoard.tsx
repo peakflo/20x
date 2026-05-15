@@ -23,11 +23,11 @@ interface StatusColumn {
 }
 
 const COLUMNS: StatusColumn[] = [
-  { key: TaskStatus.NotStarted, label: 'Not Started', color: 'text-gray-400', dotColor: 'bg-gray-400', headerBg: 'bg-gray-500/8', columnBg: 'bg-gray-500/[0.03]' },
-  { key: TaskStatus.Triaging, label: 'Triaging', color: 'text-slate-300', dotColor: 'bg-slate-400', headerBg: 'bg-slate-500/8', columnBg: 'bg-slate-500/[0.03]' },
-  { key: TaskStatus.AgentWorking, label: 'Agent Working', color: 'text-amber-400', dotColor: 'bg-amber-400', headerBg: 'bg-amber-500/8', columnBg: 'bg-amber-500/[0.03]' },
-  { key: TaskStatus.ReadyForReview, label: 'Ready for Review', color: 'text-purple-400', dotColor: 'bg-purple-400', headerBg: 'bg-purple-500/8', columnBg: 'bg-purple-500/[0.03]' },
-  { key: TaskStatus.AgentLearning, label: 'Agent Learning', color: 'text-blue-400', dotColor: 'bg-blue-400', headerBg: 'bg-blue-500/8', columnBg: 'bg-blue-500/[0.03]' }
+  { key: TaskStatus.NotStarted, label: 'Not Started', color: 'text-gray-500 dark:text-gray-400', dotColor: 'bg-gray-400', headerBg: 'bg-gray-500/8', columnBg: 'bg-gray-500/[0.03]' },
+  { key: TaskStatus.Triaging, label: 'Triaging', color: 'text-slate-500 dark:text-slate-300', dotColor: 'bg-slate-400', headerBg: 'bg-slate-500/8', columnBg: 'bg-slate-500/[0.03]' },
+  { key: TaskStatus.AgentWorking, label: 'Agent Working', color: 'text-amber-600 dark:text-amber-400', dotColor: 'bg-amber-400', headerBg: 'bg-amber-500/8', columnBg: 'bg-amber-500/[0.03]' },
+  { key: TaskStatus.ReadyForReview, label: 'Ready for Review', color: 'text-purple-600 dark:text-purple-400', dotColor: 'bg-purple-400', headerBg: 'bg-purple-500/8', columnBg: 'bg-purple-500/[0.03]' },
+  { key: TaskStatus.AgentLearning, label: 'Agent Learning', color: 'text-blue-600 dark:text-blue-400', dotColor: 'bg-blue-400', headerBg: 'bg-blue-500/8', columnBg: 'bg-blue-500/[0.03]' }
 ]
 
 const PRIORITY_ORDER: Record<string, number> = {
@@ -126,7 +126,7 @@ function getInitials(name: string): string {
 function AssigneeAvatar({ name }: { name: string }) {
   return (
     <div
-      className={`h-5 w-5 rounded-full flex items-center justify-center text-[8px] font-bold text-white shrink-0 ring-1 ring-white/10 ${getAvatarColor(name)}`}
+      className={`h-5 w-5 rounded-full flex items-center justify-center text-[8px] font-bold text-white shrink-0 ring-1 ring-black/5 dark:ring-white/10 ${getAvatarColor(name)}`}
       title={name}
     >
       {getInitials(name)}
@@ -138,12 +138,12 @@ function AssigneeAvatar({ name }: { name: string }) {
 
 function getSourceConfig(source: string): { label: string; color: string } {
   const s = source.toLowerCase()
-  if (s.includes('trello')) return { label: 'Trello', color: 'text-blue-400 bg-blue-500/10 border-blue-500/20' }
-  if (s.includes('jira')) return { label: 'Jira', color: 'text-blue-300 bg-blue-400/10 border-blue-400/20' }
-  if (s.includes('linear')) return { label: 'Linear', color: 'text-indigo-400 bg-indigo-500/10 border-indigo-500/20' }
-  if (s.includes('asana')) return { label: 'Asana', color: 'text-rose-400 bg-rose-500/10 border-rose-500/20' }
-  if (s.includes('github')) return { label: 'GitHub', color: 'text-gray-300 bg-gray-500/10 border-gray-500/20' }
-  if (s.includes('notion')) return { label: 'Notion', color: 'text-gray-300 bg-gray-400/10 border-gray-400/20' }
+  if (s.includes('trello')) return { label: 'Trello', color: 'text-blue-600 dark:text-blue-400 bg-blue-500/10 border-blue-500/20' }
+  if (s.includes('jira')) return { label: 'Jira', color: 'text-blue-500 dark:text-blue-300 bg-blue-400/10 border-blue-400/20' }
+  if (s.includes('linear')) return { label: 'Linear', color: 'text-indigo-600 dark:text-indigo-400 bg-indigo-500/10 border-indigo-500/20' }
+  if (s.includes('asana')) return { label: 'Asana', color: 'text-rose-600 dark:text-rose-400 bg-rose-500/10 border-rose-500/20' }
+  if (s.includes('github')) return { label: 'GitHub', color: 'text-gray-600 dark:text-gray-300 bg-gray-500/10 border-gray-500/20' }
+  if (s.includes('notion')) return { label: 'Notion', color: 'text-gray-600 dark:text-gray-300 bg-gray-400/10 border-gray-400/20' }
   return { label: source, color: 'text-muted-foreground bg-muted/20 border-border/30' }
 }
 
@@ -173,7 +173,7 @@ const TaskCard = memo(function TaskCard({ task, onSelect, agent }: { task: Workf
 
   return (
     <div
-      className={`group rounded-lg border border-border/30 bg-card/80 backdrop-blur-sm p-3.5 hover:border-border/60 hover:bg-card hover:shadow-md hover:shadow-black/10 transition-all duration-200 cursor-pointer border-l-2 ${getPriorityAccent(task.priority)}`}
+      className={`group rounded-lg border border-border/30 bg-card/80 backdrop-blur-sm p-3.5 hover:border-border/60 hover:bg-card hover:shadow-md hover:shadow-black/5 dark:hover:shadow-black/10 transition-all duration-200 cursor-pointer border-l-2 ${getPriorityAccent(task.priority)}`}
       onClick={() => onSelect(task.id)}
       role="button"
       tabIndex={0}
@@ -257,7 +257,7 @@ const TaskCard = memo(function TaskCard({ task, onSelect, agent }: { task: Workf
 const ColumnHeader = memo(function ColumnHeader({ column, count }: { column: StatusColumn; count: number }) {
   return (
     <div className="flex items-center gap-2 px-3 py-2.5">
-      <div className={`h-2.5 w-2.5 rounded-full ${column.dotColor} ring-2 ring-black/20`} />
+      <div className={`h-2.5 w-2.5 rounded-full ${column.dotColor} ring-2 ring-black/10 dark:ring-black/20`} />
       <span className={`text-xs font-semibold tracking-wide ${column.color}`}>{column.label}</span>
       <span className={`text-[10px] font-medium rounded-full px-2 py-0.5 min-w-[22px] text-center ${column.headerBg} ${column.color}`}>
         {count}
