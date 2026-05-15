@@ -1,6 +1,10 @@
 import { app, safeStorage } from 'electron'
 import { createClient, SupabaseClient, Session } from '@supabase/supabase-js'
 import type { DatabaseManager } from './database'
+import {
+  clearEnterpriseAiGatewayConfig,
+  storeEnterpriseAiGatewayConfig
+} from './enterprise-ai-gateway'
 
 // ── Enterprise environment configs ────────────────────────────────
 // Supabase anon keys are public (designed for client-side use).
@@ -79,6 +83,20 @@ export interface EnterpriseSession {
   currentTenant: { id: string; name: string } | null
 }
 
+interface EnterpriseAiGatewayVirtualKeyResponse {
+  apiKey: string
+  baseUrl: string
+  keyName?: string | null
+  expiresAt?: string | null
+}
+
+interface EnterpriseAiGatewayModelsResponse {
+  data?: Array<{
+    id?: string
+    model_name?: string
+  }>
+}
+
 // ── Helpers for encrypted storage ──────────────────────────────────
 
 function encryptValue(value: string): string {
@@ -146,6 +164,40 @@ export class EnterpriseAuth {
 
   async getJwt(): Promise<string> {
     return this.getValidJwt()
+  }
+
+  // ── Login with raw Supabase tokens (from browser signup/login callback) ───
+
+  async loginWithTokens(accessToken: string, refreshToken: string): Promise<EnterpriseLoginResult> {
+    // Set the session in Supabase client so it can be used for refresh later
+    const { data, error } = await this.supabase.auth.setSession({
+      access_token: accessToken,
+      refresh_token: refreshToken
+    })
+
+    if (error) {
+      throw new Error(error.message)
+    }
+
+    if (!data.session || !data.user) {
+      throw new Error('Authentication failed — invalid tokens')
+    }
+
+    // Store Supabase tokens (encrypted)
+    this.storeSupabaseSession(data.session)
+
+    // Store basic user info
+    this.db.setSetting(KEYS.USER_EMAIL, data.user.email || '')
+    this.db.setSetting(KEYS.USER_ID, data.user.id)
+
+    // Fetch user's companies from the workflow-api
+    const companies = await this.fetchCompanies(data.session.access_token)
+
+    return {
+      userId: data.user.id,
+      email: data.user.email || '',
+      companies
+    }
   }
 
   // ── Login (email/password via Supabase) ───────────────────────────
@@ -218,6 +270,12 @@ export class EnterpriseAuth {
     this.storeJwt(result.token, result.expiresIn)
     this.db.setSetting(KEYS.TENANT_ID, result.tenant.id)
     this.db.setSetting(KEYS.TENANT_NAME, result.tenant.name)
+    try {
+      this.logAuthEvent('ai_gateway_virtual_key_fetch_start')
+      await this.fetchAndStoreAiGatewayVirtualKey()
+    } catch (err) {
+      this.logAuthEvent('ai_gateway_virtual_key_fetch_error', this.describeError(err))
+    }
 
     return {
       token: result.token,
@@ -358,18 +416,19 @@ export class EnterpriseAuth {
     const jwt = await this.getValidJwt()
 
     const url = `${this.apiUrl}${path.startsWith('/') ? path : `/${path}`}`
+    const normalizedMethod = method.toUpperCase()
 
     const headers: Record<string, string> = {
-      'Authorization': `Bearer ${jwt}`,
-      'Content-Type': 'application/json'
+      'Authorization': `Bearer ${jwt}`
     }
 
     const fetchOptions: RequestInit = {
-      method: method.toUpperCase(),
+      method: normalizedMethod,
       headers
     }
 
-    if (body !== undefined && method.toUpperCase() !== 'GET') {
+    if (body !== undefined && normalizedMethod !== 'GET') {
+      headers['Content-Type'] = 'application/json'
       fetchOptions.body = JSON.stringify(body)
     }
 
@@ -595,10 +654,87 @@ export class EnterpriseAuth {
     return jwt
   }
 
+  private async fetchAndStoreAiGatewayVirtualKey(): Promise<void> {
+    const result = await this.apiRequest('GET', '/api/20x/ai-gateway/virtual-key') as EnterpriseAiGatewayVirtualKeyResponse
+
+    if (!result?.apiKey || !result?.baseUrl) {
+      throw new Error('Failed to fetch AI gateway virtual key')
+    }
+
+    this.logAuthEvent('ai_gateway_virtual_key_received', {
+      baseUrl: result.baseUrl,
+      keyName: result.keyName ?? null,
+      expiresAt: result.expiresAt ?? null,
+      hasApiKey: !!result.apiKey
+    })
+
+    const models = await this.fetchAiGatewayModels(result)
+
+    this.logAuthEvent('ai_gateway_models_stored', {
+      modelCount: models.length,
+      modelIds: models.map((m) => m.id)
+    })
+
+    storeEnterpriseAiGatewayConfig(this.db, {
+      apiKey: result.apiKey,
+      baseUrl: result.baseUrl,
+      keyName: result.keyName ?? null,
+      expiresAt: result.expiresAt ?? null,
+      models
+    })
+  }
+
+  private async fetchAiGatewayModels(
+    config: EnterpriseAiGatewayVirtualKeyResponse
+  ): Promise<Array<{ id: string; name: string }>> {
+    const url = `${config.baseUrl}/models`
+    this.logAuthEvent('ai_gateway_models_fetch_start', { url })
+
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${config.apiKey}`
+      }
+    })
+
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => '<unreadable>')
+      this.logAuthEvent('ai_gateway_models_fetch_failed', {
+        status: response.status,
+        body: errorText.slice(0, 500)
+      })
+      throw new Error(`Failed to fetch AI gateway models (${response.status})`)
+    }
+
+    const result = await response.json() as EnterpriseAiGatewayModelsResponse
+
+    this.logAuthEvent('ai_gateway_models_raw_response', {
+      dataLength: Array.isArray(result.data) ? result.data.length : 0,
+      rawModels: (Array.isArray(result.data) ? result.data : []).map((m) => ({
+        id: m.id,
+        model_name: m.model_name
+      }))
+    })
+
+    const models = Array.isArray(result.data) ? result.data : []
+
+    return models
+      .map((model) => {
+        const id = model.id || model.model_name
+        if (!id) return null
+        return {
+          id,
+          name: model.model_name || id
+        }
+      })
+      .filter((model): model is { id: string; name: string } => model !== null)
+  }
+
   private clearStoredData(): void {
     this.logAuthEvent('auth_state_cleared')
     this.cachedJwt = null
     this.cachedJwtExpiresAt = 0
+    clearEnterpriseAiGatewayConfig(this.db)
 
     for (const key of Object.values(KEYS)) {
       this.db.deleteSetting(key)

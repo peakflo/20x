@@ -4,7 +4,7 @@ import { useAgentStore, SessionStatus } from '../stores/agent-store'
 import { api } from '../api/client'
 import { useSessionControls } from '../hooks/useSessionControls'
 import { MessageBubble } from '../components/MessageBubble'
-import { ChatInput } from '../components/ChatInput'
+import { ChatInput, type ChatInputAttachment } from '../components/ChatInput'
 import { cn } from '../lib/utils'
 import type { Route } from '../App'
 
@@ -17,6 +17,8 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
   const isAtBottomRef = useRef(true)
   const [todosExpanded, setTodosExpanded] = useState(false)
   const [showScrollToBottom, setShowScrollToBottom] = useState(false)
+  const [showAttachmentPicker, setShowAttachmentPicker] = useState(false)
+  const [messageAttachments, setMessageAttachments] = useState<ChatInputAttachment[]>([])
 
   const messages = session?.messages || []
   const lastMessage = messages[messages.length - 1]
@@ -47,6 +49,10 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
 
   // Can the user send input?
   const canSendInput = hasSession && (isWorking || isWaitingApproval || session?.status === SessionStatus.IDLE)
+  const taskAttachments = useMemo(
+    () => (Array.isArray(task?.attachments) ? task.attachments : []) as ChatInputAttachment[],
+    [task?.attachments]
+  )
 
   // Extract latest todos from messages — matches desktop TodoSummary logic
   const latestTodos = useMemo(() => {
@@ -68,7 +74,7 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
 
   // Smart send handler — mirrors desktop TaskWorkspace.handleSend logic
   const handleSend = useCallback(
-    async (message: string) => {
+    async (message: string, options?: { attachments?: ChatInputAttachment[] }) => {
       // Get latest session from store, not from closure, to avoid stale closure bug
       const currentSession = useAgentStore.getState().sessions.get(taskId)
       if (!currentSession?.sessionId) return
@@ -76,11 +82,19 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
         if (isQuestion) {
           await api.sessions.approve(currentSession.sessionId, true, message)
         } else {
-          const result = await api.sessions.send(currentSession.sessionId, message, taskId, currentSession.agentId)
+          const result = await api.sessions.send(
+            currentSession.sessionId,
+            message,
+            taskId,
+            currentSession.agentId,
+            options?.attachments
+          )
           if (result.newSessionId && taskId) {
             initSession(taskId, result.newSessionId, currentSession.agentId)
           }
         }
+        setMessageAttachments([])
+        setShowAttachmentPicker(false)
       } catch (e) {
         console.error('Failed to send message:', e)
       }
@@ -102,6 +116,24 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
     },
     [taskId, activeQuestionId]
   )
+
+  const toggleAttachment = useCallback((attachment: ChatInputAttachment) => {
+    setMessageAttachments((prev) => {
+      const exists = prev.some((att) => att.id === attachment.id)
+      if (exists) return prev.filter((att) => att.id !== attachment.id)
+      return [...prev, attachment]
+    })
+  }, [])
+
+  const removeAttachment = useCallback((attachmentId: string) => {
+    setMessageAttachments((prev) => prev.filter((att) => att.id !== attachmentId))
+  }, [])
+
+  useEffect(() => {
+    // Prune selections when task attachments change
+    const validIds = new Set(taskAttachments.map((att) => att.id))
+    setMessageAttachments((prev) => prev.filter((att) => validIds.has(att.id)))
+  }, [taskAttachments])
 
   // Session controls (shared hook provides double-click protection and rollback)
   const { handleStart: _startSession, handleResume: _resumeSession, handleStop: _stopSession, handleRestart: _restartSession } = useSessionControls(taskId)
@@ -398,10 +430,47 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
 
       {/* Input area — matches desktop transcript panel input */}
       <div className="shrink-0 border-t border-border/50">
+        {showAttachmentPicker && taskAttachments.length > 0 && (
+          <div className="border-b border-border/50 px-3 py-2 max-h-40 overflow-y-auto bg-muted/20">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-xs text-muted-foreground">Attach files to this message</span>
+              <button
+                type="button"
+                onClick={() => setShowAttachmentPicker(false)}
+                className="text-xs text-muted-foreground hover:text-foreground"
+              >
+                Done
+              </button>
+            </div>
+            <div className="space-y-1">
+              {taskAttachments.map((attachment) => {
+                const checked = messageAttachments.some((att) => att.id === attachment.id)
+                return (
+                  <button
+                    key={attachment.id}
+                    type="button"
+                    onClick={() => toggleAttachment(attachment)}
+                    className={cn(
+                      'w-full text-left rounded-md px-2 py-1.5 border text-xs transition-colors',
+                      checked
+                        ? 'border-primary/40 bg-primary/10 text-foreground'
+                        : 'border-border/50 text-muted-foreground hover:text-foreground hover:bg-white/5'
+                    )}
+                  >
+                    {attachment.filename}
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+        )}
         <ChatInput
           onSend={handleSend}
           disabled={!canSendInput}
           placeholder={placeholder}
+          attachments={messageAttachments}
+          onRemoveAttachment={removeAttachment}
+          onOpenAttachmentPicker={taskAttachments.length > 0 ? () => setShowAttachmentPicker((prev) => !prev) : undefined}
         />
       </div>
     </div>

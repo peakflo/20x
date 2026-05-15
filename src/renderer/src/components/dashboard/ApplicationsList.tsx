@@ -1,5 +1,6 @@
-import { Loader2, AlertTriangle, Monitor, Play, Minimize2, X, AppWindow } from 'lucide-react'
+import { Loader2, AlertTriangle, Monitor, Play, Minimize2, X, AppWindow, Layers } from 'lucide-react'
 import { useDashboardStore } from '@/stores/dashboard-store'
+import { useUIStore } from '@/stores/ui-store'
 import type { ApplicationTab, ApplicationItem } from '@/stores/dashboard-store'
 
 function TabContent({ tab }: { tab: ApplicationTab }) {
@@ -69,6 +70,7 @@ function ApplicationCard({
   tab: ApplicationTab | undefined
   onClick: () => void
 }) {
+  const openAppOnCanvas = useUIStore((s) => s.openAppOnCanvas)
   const isLoading = tab?.executing || tab?.polling
   const hasError = !!tab?.error
   const isReady = !!tab?.url && !isLoading && !hasError
@@ -92,9 +94,22 @@ function ApplicationCard({
           {app.description && (
             <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{app.description}</p>
           )}
-          <div className="flex items-center gap-3 mt-2 text-[11px] text-muted-foreground">
-            <span className="capitalize">{app.status}</span>
-            {app.runCount > 0 && <span>{app.runCount} runs</span>}
+          <div className="flex items-center justify-between mt-2">
+            <div className="flex items-center gap-3 text-[11px] text-muted-foreground">
+              <span className="capitalize">{app.status}</span>
+              {app.runCount > 0 && <span>{app.runCount} runs</span>}
+            </div>
+            <button
+              onClick={(e) => {
+                e.stopPropagation()
+                openAppOnCanvas(app.workflowId, app.name)
+              }}
+              className="flex items-center gap-1 text-[11px] text-muted-foreground/50 hover:text-primary transition-colors px-1.5 py-0.5 rounded border border-border/40 hover:border-primary/40 hover:bg-primary/10"
+              title="Open in Canvas"
+            >
+              <Layers className="h-3 w-3" />
+              <span>Canvas</span>
+            </button>
           </div>
         </div>
       </div>
@@ -135,6 +150,7 @@ function ExpandedView() {
     closeTab,
     minimizeToCards
   } = useDashboardStore()
+  const openAppOnCanvas = useUIStore((s) => s.openAppOnCanvas)
 
   const activeTab = openTabs.find((t) => t.workflowId === activeTabId)
 
@@ -207,6 +223,21 @@ function ExpandedView() {
             </div>
           ))}
         </div>
+
+        {/* Open active app in Canvas */}
+        {activeTabId && (
+          <button
+            className="flex items-center gap-1.5 px-3 py-2.5 text-xs text-muted-foreground hover:text-primary transition-colors shrink-0 border-l border-border/50 cursor-pointer"
+            onClick={() => {
+              const name = appNameByWorkflowId.get(activeTabId) || 'Application'
+              openAppOnCanvas(activeTabId, name)
+            }}
+            title="Open in Canvas"
+          >
+            <Layers className="h-3.5 w-3.5" />
+            <span className="hidden sm:inline">Canvas</span>
+          </button>
+        )}
 
         {/* Minimize back to cards */}
         <button

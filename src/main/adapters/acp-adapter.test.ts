@@ -202,7 +202,7 @@ describe('AcpAdapter - Turn Detection', () => {
   })
 
   describe('Authentication selection', () => {
-    it('prefers non-key Codex auth when no API key is available', async () => {
+    it('uses chatgpt (Codex CLI login) when no API key is available', async () => {
       const priv = adapterPrivate(adapter)
       const session = createMockSession('auth-session')
       const sendRpcRequestSpy = vi.spyOn(priv, 'sendRpcRequest').mockResolvedValue({})
@@ -217,6 +217,7 @@ describe('AcpAdapter - Turn Detection', () => {
         ]
       })
 
+      // Without an API key, should fall back to chatgpt (Codex CLI login)
       expect(sendRpcRequestSpy).toHaveBeenCalledWith(session, 'authenticate', {
         methodId: 'chatgpt'
       })
@@ -2658,6 +2659,125 @@ describe('AcpAdapter - Codex Quota/Error Handling', () => {
 
       const loggedLines = logSpy.mock.calls.map((call) => String(call[0]))
       expect(loggedLines.some((line) => line.includes('agent_message_chunk: turnId='))).toBe(false)
+    })
+  })
+
+  describe('getAllMessages turn state isolation', () => {
+    /**
+     * Regression test for codex message duplication.
+     *
+     * When getAllMessages() is called from replayMissedTranscriptPartsBeforeIdle
+     * after a follow-up response, the session's turn counters have already
+     * advanced. If getAllMessages() processes permanent messages with that
+     * advanced state, historical events get different turn-based IDs
+     * (e.g. agent-response-5 instead of agent-response-1), bypassing
+     * seenPartIds dedup and causing every old message to reappear.
+     *
+     * The fix: getAllMessages() snapshots and resets turn state before
+     * processing, then restores it afterward.
+     */
+    it('getAllMessages produces stable IDs regardless of current session turn state', async () => {
+      const session = createMockSession('test-session')
+      adapterPrivate(adapter).sessions.set('test-session', session)
+
+      // Simulate permanent messages from a session with one assistant response
+      const historyEvents = [
+        {
+          method: 'session/update',
+          params: {
+            update: {
+              sessionUpdate: 'agent_message_chunk',
+              content: { type: 'text', text: 'Hello from history' }
+            }
+          }
+        },
+        {
+          method: 'session/update',
+          params: {
+            update: {
+              sessionUpdate: 'tool_call',
+              toolCallId: 'tool-1',
+              kind: 'exec_command',
+              status: 'in_progress',
+              rawInput: { command: 'ls' }
+            }
+          }
+        },
+        {
+          method: 'session/update',
+          params: {
+            update: {
+              sessionUpdate: 'tool_call_update',
+              toolCallId: 'tool-1',
+              kind: 'exec_command',
+              status: 'completed',
+              rawOutput: { stdout: 'file.txt' }
+            }
+          }
+        },
+        {
+          method: 'session/update',
+          params: {
+            update: {
+              sessionUpdate: 'agent_message_chunk',
+              content: { type: 'text', text: 'After tool call' }
+            }
+          }
+        }
+      ]
+
+      session.permanentMessages.push(...historyEvents)
+
+      // First call: session is fresh (like during resumeSession)
+      const firstResult = await adapter.getAllMessages('test-session', {} as any)
+      const firstPartIds = firstResult.flatMap(m => m.parts.map(p => p.id))
+
+      // Now simulate what happens after a follow-up: advance turn state
+      // as if the agent had already responded to a second prompt
+      session.currentTurnId = 5
+      session.activeTurnId = 5
+      session.currentUserTurnId = 2
+      session.lastChunkTime = Date.now()
+      session.lastSessionUpdateType = 'agent_message_chunk'
+      session.pendingAssistantTurnSplit = true
+
+      // Second call: session state is advanced (like during replayMissedTranscriptPartsBeforeIdle)
+      const secondResult = await adapter.getAllMessages('test-session', {} as any)
+      const secondPartIds = secondResult.flatMap(m => m.parts.map(p => p.id))
+
+      // Part IDs should be identical regardless of session turn state
+      expect(secondPartIds).toEqual(firstPartIds)
+    })
+
+    it('getAllMessages restores session turn state after processing', async () => {
+      const session = createMockSession('test-session')
+      adapterPrivate(adapter).sessions.set('test-session', session)
+
+      session.permanentMessages.push({
+        method: 'session/update',
+        params: {
+          update: {
+            sessionUpdate: 'agent_message_chunk',
+            content: { type: 'text', text: 'Test message' }
+          }
+        }
+      })
+
+      // Set specific turn state
+      session.currentTurnId = 7
+      session.activeTurnId = 7
+      session.currentUserTurnId = 3
+      session.pendingAssistantTurnSplit = true
+      session.lastSessionUpdateType = 'tool_call'
+
+      await adapter.getAllMessages('test-session', {} as any)
+
+      // Turn state should be restored to pre-call values
+      expect(session.currentTurnId).toBe(7)
+      expect(session.activeTurnId).toBe(7)
+      expect(session.currentUserTurnId).toBe(3)
+      expect(session.pendingAssistantTurnSplit).toBe(true)
+      expect(session.lastSessionUpdateType).toBe('tool_call')
     })
   })
 })

@@ -9,6 +9,12 @@ import { Label } from '@/components/ui/Label'
 import { shellApi } from '@/lib/ipc-client'
 import type { OutputField } from '@/types'
 
+function getFieldLabel(field: OutputField): string {
+  if (typeof field.name === 'string' && field.name.trim()) return field.name
+  if (typeof field.id === 'string' && field.id.trim()) return field.id.replace(/_/g, ' ')
+  return 'Output'
+}
+
 function isFieldFilled(field: OutputField): boolean {
   const v = field.value
   if (v === null || v === undefined) return false
@@ -68,6 +74,7 @@ export function OutputFieldsDisplay({ fields, onChange, isActive, onComplete, ta
 
 function OutputFieldInput({ field, onValueChange, taskUpdatedAt }: { field: OutputField; onValueChange: (value: unknown) => void; taskUpdatedAt?: string }) {
   const [localValue, setLocalValue] = useState<string>(String(field.value ?? ''))
+  const fieldLabel = getFieldLabel(field)
 
   // Sync local state when field.value changes externally (e.g. agent extraction)
   useEffect(() => {
@@ -84,13 +91,13 @@ function OutputFieldInput({ field, onValueChange, taskUpdatedAt }: { field: Outp
       return (
         <div className="space-y-1.5">
           <Label className="text-xs">
-            {field.name}
+            {fieldLabel}
             {field.required && <span className="text-destructive ml-0.5">*</span>}
           </Label>
           <Textarea
             value={localValue}
             onChange={(e) => handleChange(e.target.value)}
-            placeholder={`Enter ${field.name.toLowerCase()}...`}
+            placeholder={`Enter ${fieldLabel.toLowerCase()}...`}
             rows={3}
           />
         </div>
@@ -104,7 +111,7 @@ function OutputFieldInput({ field, onValueChange, taskUpdatedAt }: { field: Outp
             onCheckedChange={(checked) => onValueChange(!!checked)}
           />
           <Label className="text-xs">
-            {field.name}
+            {fieldLabel}
             {field.required && <span className="text-destructive ml-0.5">*</span>}
           </Label>
         </div>
@@ -114,7 +121,7 @@ function OutputFieldInput({ field, onValueChange, taskUpdatedAt }: { field: Outp
       return (
         <div className="space-y-1.5">
           <Label className="text-xs">
-            {field.name}
+            {fieldLabel}
             {field.required && <span className="text-destructive ml-0.5">*</span>}
           </Label>
           {field.options && field.options.length > 0 ? (
@@ -122,7 +129,7 @@ function OutputFieldInput({ field, onValueChange, taskUpdatedAt }: { field: Outp
               value={String(field.value ?? '')}
               onChange={(e) => onValueChange(e.target.value)}
               options={[
-                { value: '', label: `Select ${field.name.toLowerCase()}...` },
+                { value: '', label: `Select ${fieldLabel.toLowerCase()}...` },
                 ...field.options.map((opt) => ({ value: opt, label: opt }))
               ]}
             />
@@ -130,7 +137,7 @@ function OutputFieldInput({ field, onValueChange, taskUpdatedAt }: { field: Outp
             <Input
               value={localValue}
               onChange={(e) => handleChange(e.target.value)}
-              placeholder={`Enter ${field.name.toLowerCase()}...`}
+              placeholder={`Enter ${fieldLabel.toLowerCase()}...`}
             />
           )}
         </div>
@@ -143,7 +150,7 @@ function OutputFieldInput({ field, onValueChange, taskUpdatedAt }: { field: Outp
       return (
         <div className="space-y-1.5">
           <Label className="text-xs">
-            {field.name}
+            {fieldLabel}
             {field.required && <span className="text-destructive ml-0.5">*</span>}
           </Label>
           {filePaths.length > 0 ? (
@@ -165,14 +172,14 @@ function OutputFieldInput({ field, onValueChange, taskUpdatedAt }: { field: Outp
       return (
         <div className="space-y-1.5">
           <Label className="text-xs">
-            {field.name}
+            {fieldLabel}
             {field.required && <span className="text-destructive ml-0.5">*</span>}
           </Label>
           <Input
             type="number"
             value={localValue}
             onChange={(e) => handleChange(e.target.value)}
-            placeholder={`Enter ${field.name.toLowerCase()}...`}
+            placeholder={`Enter ${fieldLabel.toLowerCase()}...`}
           />
         </div>
       )
@@ -181,7 +188,7 @@ function OutputFieldInput({ field, onValueChange, taskUpdatedAt }: { field: Outp
       return (
         <div className="space-y-1.5">
           <Label className="text-xs">
-            {field.name}
+            {fieldLabel}
             {field.required && <span className="text-destructive ml-0.5">*</span>}
           </Label>
           <Input
@@ -197,14 +204,14 @@ function OutputFieldInput({ field, onValueChange, taskUpdatedAt }: { field: Outp
       return (
         <div className="space-y-1.5">
           <Label className="text-xs">
-            {field.name}
+            {fieldLabel}
             {field.required && <span className="text-destructive ml-0.5">*</span>}
           </Label>
           <Input
             type={field.type === 'email' ? 'email' : field.type === 'url' ? 'url' : 'text'}
             value={localValue}
             onChange={(e) => handleChange(e.target.value)}
-            placeholder={`Enter ${field.name.toLowerCase()}...`}
+            placeholder={`Enter ${fieldLabel.toLowerCase()}...`}
           />
         </div>
       )

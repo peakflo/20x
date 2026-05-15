@@ -5,7 +5,7 @@ import type { TaskPriority } from '@/types'
 export type SortField = 'created_at' | 'updated_at' | 'priority' | 'due_date' | 'title' | 'status'
 export type SortDirection = 'asc' | 'desc'
 export type ActiveModal = 'create' | 'edit' | 'delete' | 'settings' | 'repo-selector' | 'gh-setup' | null
-export type SidebarView = 'tasks' | 'skills' | 'dashboard'
+export type SidebarView = 'tasks' | 'skills' | 'dashboard' | 'canvas'
 
 interface UIState {
   sidebarView: SidebarView
@@ -21,6 +21,10 @@ interface UIState {
   deletingTaskId: string | null
   settingsTab: SettingsTab
   dashboardPreviewTaskId: string | null
+  /** Task ID to add to canvas when switching to canvas view */
+  canvasPendingTaskId: string | null
+  /** App to add to canvas when switching to canvas view */
+  canvasPendingApp: { workflowId: string; name: string } | null
 
   setSidebarView: (view: SidebarView) => void
   setStatusFilter: (filter: TaskStatus | 'all') => void
@@ -38,6 +42,12 @@ interface UIState {
   closeModal: () => void
   openDashboardPreview: (taskId: string) => void
   closeDashboardPreview: () => void
+  /** Switch to canvas view and queue a task to be added as a panel */
+  openTaskOnCanvas: (taskId: string) => void
+  clearCanvasPendingTask: () => void
+  /** Switch to canvas view and queue an app to be added as a panel */
+  openAppOnCanvas: (workflowId: string, name: string) => void
+  clearCanvasPendingApp: () => void
 }
 
 export const useUIStore = create<UIState>((set) => ({
@@ -54,6 +64,8 @@ export const useUIStore = create<UIState>((set) => ({
   deletingTaskId: null,
   settingsTab: SettingsTab.GENERAL,
   dashboardPreviewTaskId: null,
+  canvasPendingTaskId: null,
+  canvasPendingApp: null,
 
   setSidebarView: (sidebarView) => set({ sidebarView }),
   setStatusFilter: (statusFilter) => set({ statusFilter }),
@@ -82,5 +94,9 @@ export const useUIStore = create<UIState>((set) => ({
   openSettings: () => set({ activeModal: 'settings' }),
   closeModal: () => set({ activeModal: null, editingTaskId: null, deletingTaskId: null }),
   openDashboardPreview: (taskId) => set({ dashboardPreviewTaskId: taskId }),
-  closeDashboardPreview: () => set({ dashboardPreviewTaskId: null })
+  closeDashboardPreview: () => set({ dashboardPreviewTaskId: null }),
+  openTaskOnCanvas: (taskId) => set({ sidebarView: 'canvas', canvasPendingTaskId: taskId, dashboardPreviewTaskId: null }),
+  clearCanvasPendingTask: () => set({ canvasPendingTaskId: null }),
+  openAppOnCanvas: (workflowId, name) => set({ sidebarView: 'canvas', canvasPendingApp: { workflowId, name }, dashboardPreviewTaskId: null }),
+  clearCanvasPendingApp: () => set({ canvasPendingApp: null })
 }))

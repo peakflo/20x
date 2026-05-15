@@ -135,7 +135,9 @@ describe('TaskWorkspace – stale triage session cleanup', () => {
 
     renderWorkspace(task)
 
-    fireEvent.click(screen.getAllByRole('button', { name: /add/i })[0])
+    // Use exact-match regex — loose /add/i would also match the
+    // CollapsibleDescription's "Add description..." inline-edit placeholder.
+    fireEvent.click(screen.getAllByRole('button', { name: /^add$/i })[0])
     fireEvent.click(await screen.findByTestId('mock-confirm-repo'))
 
     await waitFor(() => {
@@ -335,7 +337,7 @@ describe('TaskWorkspace – stale triage session cleanup', () => {
     })
 
     await waitFor(() => {
-      expect(window.electronAPI.agentSession.send).toHaveBeenCalledWith('resumed-session-1', 'approved', taskId, agentId)
+      expect(window.electronAPI.agentSession.send).toHaveBeenCalledWith('resumed-session-1', 'approved', taskId, agentId, undefined)
     })
   })
 })

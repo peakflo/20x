@@ -1,10 +1,8 @@
 import { EventEmitter } from 'events'
 import { spawn } from 'child_process'
-import { homedir } from 'os'
-import { join, delimiter } from 'path'
+import { join } from 'path'
 import { existsSync, copyFileSync, mkdirSync, readFileSync, readdirSync, statSync } from 'fs'
 import { mkdir, writeFile } from 'fs/promises'
-import { Agent as UndiciAgent } from 'undici'
 import { Notification } from 'electron'
 import type { BrowserWindow } from 'electron'
 import type { DatabaseManager, AgentMcpServerEntry, OutputFieldRecord, SecretRecord, SkillRecord, TaskRecord } from './database'
@@ -21,19 +19,12 @@ import { getTaskApiPort, waitForTaskApiServer } from './task-api-server'
 import { randomUUID } from 'crypto'
 import { registerSecretSession, unregisterSecretSession, getSecretBrokerPort, writeSecretShellWrapper } from './secret-broker'
 
-let OpenCodeSDK: typeof import('@opencode-ai/sdk') | null = null
-
 // Coding agent backend type enum
 enum CodingAgentType {
   OPENCODE = 'opencode',
   CLAUDE_CODE = 'claude-code',
   CODEX = 'codex'
 }
-
-// Custom fetch with no timeout — agent prompts can run indefinitely
-const noTimeoutAgent = new UndiciAgent({ headersTimeout: 0, bodyTimeout: 0 })
-const noTimeoutFetch = (req: Request): ReturnType<typeof fetch> =>
-  (globalThis.fetch as (input: Request, init: Record<string, unknown>) => ReturnType<typeof fetch>)(req, { dispatcher: noTimeoutAgent })
 
 // Default OpenCode server URL (matches database default)
 const DEFAULT_SERVER_URL = 'http://localhost:4096'
@@ -70,15 +61,18 @@ interface PollingEntry {
   lastPartReceivedAt?: number  // Timestamp of last received data — used for secondary grace period
 }
 
+interface MessageAttachmentRef {
+  id: string
+  filename: string
+  size: number
+  mime_type: string
+}
+
 export class AgentManager extends EventEmitter {
   private sessions: Map<string, AgentSession> = new Map()
   /** Maps old (temp) session IDs to their re-keyed (real) IDs so that
    *  stale IDs from the renderer still resolve after pollSingleSession re-keys. */
   private sessionIdRedirects: Map<string, string> = new Map()
-  private serverInstance: { close(): void } | null = null  // OpenCode SDK server instance
-  private serverUrl: string | null = null
-  private serverStarting: Promise<void> | null = null  // Track server startup
-  private sdkLoading: Promise<void> | null = null  // Track SDK loading
   private db: DatabaseManager
   private mainWindow: BrowserWindow | null = null
   private adapters: Map<string, CodingAgentAdapter> = new Map()  // Adapter instances
@@ -138,29 +132,6 @@ export class AgentManager extends EventEmitter {
    */
   setSyncManager(syncManager: import('./sync-manager').SyncManager): void {
     this.syncManager = syncManager
-  }
-
-  private async loadSDK(): Promise<void> {
-    try {
-      OpenCodeSDK = await import('@opencode-ai/sdk')
-      console.log('[AgentManager] OpenCode SDK loaded successfully')
-    } catch (error) {
-      console.error('[AgentManager] Failed to load OpenCode SDK:', error)
-    } finally {
-      this.sdkLoading = null
-    }
-  }
-
-  /**
-   * Ensures the SDK is loaded before proceeding with any operations.
-   * Lazily triggers loading on first call.
-   */
-  private async ensureSDKLoaded(): Promise<void> {
-    if (OpenCodeSDK) return
-    if (!this.sdkLoading) {
-      this.sdkLoading = this.loadSDK()
-    }
-    await this.sdkLoading
   }
 
   setMainWindow(window: BrowserWindow): void {
@@ -293,7 +264,7 @@ export class AgentManager extends EventEmitter {
     switch (backendType) {
       case CodingAgentType.OPENCODE:
         console.log('[AgentManager] Creating new OpencodeAdapter')
-        adapter = new OpencodeAdapter()
+        adapter = new OpencodeAdapter(this.db)
         break
       case CodingAgentType.CLAUDE_CODE:
         console.log('[AgentManager] Creating new ClaudeCodeAdapter')
@@ -521,6 +492,103 @@ export class AgentManager extends EventEmitter {
     return backendType === CodingAgentType.CLAUDE_CODE ? 'CLAUDE.md' : 'AGENTS.md'
   }
 
+  private formatAttachmentSize(bytes: number): string {
+    if (!Number.isFinite(bytes) || bytes <= 0) return 'unknown size'
+    if (bytes < 1024) return `${bytes} B`
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+  }
+
+  private isTextAttachment(mimeType: string, filename: string): boolean {
+    if (mimeType.startsWith('text/')) return true
+    const lower = filename.toLowerCase()
+    return (
+      lower.endsWith('.md') ||
+      lower.endsWith('.txt') ||
+      lower.endsWith('.json') ||
+      lower.endsWith('.yaml') ||
+      lower.endsWith('.yml') ||
+      lower.endsWith('.xml') ||
+      lower.endsWith('.csv') ||
+      lower.endsWith('.ts') ||
+      lower.endsWith('.tsx') ||
+      lower.endsWith('.js') ||
+      lower.endsWith('.jsx') ||
+      lower.endsWith('.py') ||
+      lower.endsWith('.java') ||
+      lower.endsWith('.go') ||
+      lower.endsWith('.rb') ||
+      lower.endsWith('.rs') ||
+      lower.endsWith('.sql')
+    )
+  }
+
+  private buildMessageWithAttachmentContext(
+    session: AgentSession,
+    message: string,
+    attachments?: MessageAttachmentRef[]
+  ): string {
+    if (!attachments || attachments.length === 0) return message
+
+    const capped = attachments.slice(0, 10)
+    const omittedCount = attachments.length - capped.length
+    const refs = capped.map(
+      (att) => `- attachments/${att.filename} (${att.mime_type || 'application/octet-stream'}, ${this.formatAttachmentSize(att.size)})`
+    )
+
+    const previewBlocks: string[] = []
+    const MAX_PREVIEWS = 3
+    const MAX_PREVIEW_FILE_SIZE = 24 * 1024
+    const MAX_PREVIEW_CHARS = 1200
+    const workspaceDir = session.workspaceDir
+
+    if (workspaceDir) {
+      for (const att of capped) {
+        if (previewBlocks.length >= MAX_PREVIEWS) break
+        if (!this.isTextAttachment(att.mime_type || '', att.filename)) continue
+        if (att.size > MAX_PREVIEW_FILE_SIZE) continue
+
+        const absPath = join(workspaceDir, 'attachments', att.filename)
+        if (!existsSync(absPath)) continue
+
+        try {
+          const text = readFileSync(absPath, 'utf-8')
+          const truncated = text.slice(0, MAX_PREVIEW_CHARS)
+          const suffix = text.length > MAX_PREVIEW_CHARS ? '\n...[truncated]' : ''
+          previewBlocks.push(`### attachments/${att.filename}\n\`\`\`\n${truncated}${suffix}\n\`\`\``)
+        } catch {
+          continue
+        }
+      }
+    }
+
+    let attachmentContext = '\n\nMessage attachments (already available in your workspace):\n'
+    attachmentContext += refs.join('\n')
+    if (omittedCount > 0) {
+      attachmentContext += `\n- ... and ${omittedCount} more attachment(s) omitted to keep context focused`
+    }
+    attachmentContext += '\n\nContext loading guidance:'
+    attachmentContext += '\n- Start with only the listed files relevant to the user request.'
+    attachmentContext += '\n- Do not load full file contents unless necessary.'
+    attachmentContext += '\n- For large/binary files, inspect metadata or selective excerpts first.'
+
+    if (previewBlocks.length > 0) {
+      attachmentContext += '\n\nSmall text previews (use only if relevant):\n'
+      attachmentContext += previewBlocks.join('\n\n')
+    }
+
+    return `${message}${attachmentContext}`
+  }
+
+  private buildDisplayMessage(message: string, attachments?: MessageAttachmentRef[]): string {
+    if (!attachments || attachments.length === 0) return message
+    const capped = attachments.slice(0, 10)
+    const omittedCount = attachments.length - capped.length
+    const refs = capped.map((att) => `- ${att.filename}`)
+    const omitted = omittedCount > 0 ? `\n- ... and ${omittedCount} more` : ''
+    return `${message}\n\nAttached to this message:\n${refs.join('\n')}${omitted}`
+  }
+
   /**
    * Builds a system prompt snippet describing available secrets.
    * Tells the agent which env vars exist and how to use them in bash commands.
@@ -569,6 +637,18 @@ export class AgentManager extends EventEmitter {
   }
 
   /**
+   * Strips characters that would break YAML scalar parsing when the value is
+   * written unquoted.  Square/curly brackets are YAML flow-sequence/mapping
+   * indicators; colons followed by a space are key separators; hash signs
+   * introduce comments.  Removing them keeps the frontmatter valid without
+   * requiring a full YAML library.
+   */
+  private static sanitizeYamlValue(value: string): string {
+    // eslint-disable-next-line no-control-regex
+    return value.replace(/[\[\]{}"'#]/g, '').trim()
+  }
+
+  /**
    * Resolves and writes SKILL.md files to the workspace directory.
    * Priority: task.skill_ids > agent.config.skill_ids > all skills.
    * Also generates AGENTS.md and CLAUDE.md with skill directory.
@@ -605,8 +685,10 @@ export class AgentManager extends EventEmitter {
         for (const skill of skills) {
           const dir = join(skillsDir, skill.name)
           await mkdir(dir, { recursive: true })
+          const safeName = AgentManager.sanitizeYamlValue(skill.name)
           const desc = skill.description || skill.name
-          const content = `---\nname: ${skill.name}\ndescription: ${desc}\n---\n\n${skill.content}`
+          const safeDesc = AgentManager.sanitizeYamlValue(desc)
+          const content = `---\nname: ${safeName}\ndescription: ${safeDesc}\n---\n\n${skill.content}`
           await writeFile(join(dir, 'SKILL.md'), content, 'utf-8')
         }
         console.log(`[AgentManager] Wrote ${skills.length} SKILL.md file(s) to ${skillsDir}`)
@@ -894,269 +976,12 @@ export class AgentManager extends EventEmitter {
     return md
   }
 
-  /**
-   * Ensures API keys are loaded from settings into process.env
-   */
-  private loadApiKeysToEnv(): void {
-    const providers = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'GOOGLE_API_KEY']
-    const envVars: Record<string, string> = {}
-
-    for (const key of providers) {
-      const value = this.db.getSetting(key)
-      if (value) {
-        if (!process.env[key]) {
-          envVars[key] = value
-          process.env[key] = value
-        } else {
-          console.log(`[AgentManager] ${key} already set in environment, skipping`)
-        }
-      }
-    }
-
-    if (Object.keys(envVars).length > 0) {
-      console.log(`[AgentManager] Loaded ${Object.keys(envVars).length} API key(s) from settings:`, Object.keys(envVars))
-    } else {
-      console.log('[AgentManager] No new API keys loaded (may already be in environment)')
-    }
-  }
-
-  /**
-   * Spawns the opencode server process with platform-aware settings.
-   * On Windows, uses shell: true so .cmd wrappers are resolved.
-   */
-  private spawnOpencodeServer(hostname: string, port: number, isWin: boolean): Promise<{ close: () => void }> {
-    const args = ['serve', `--hostname=${hostname}`, `--port=${port}`]
-    const cmd = isWin ? 'opencode.cmd' : 'opencode'
-    const timeout = 10000
-
-    console.log(`[AgentManager] Spawning: ${cmd} ${args.join(' ')} (shell=${isWin})`)
-
-    // Read OpenCode auth.json to inject API keys as env vars
-    // OpenCode stores credentials in auth.json but expects env vars at runtime
-    const serverEnv: Record<string, string> = { ...process.env } as Record<string, string>
-    try {
-      const authPath = join(homedir(), '.local', 'share', 'opencode', 'auth.json')
-      if (existsSync(authPath)) {
-        const auth = JSON.parse(readFileSync(authPath, 'utf-8'))
-        if (auth.google?.key && !serverEnv.GOOGLE_GENERATIVE_AI_API_KEY) {
-          serverEnv.GOOGLE_GENERATIVE_AI_API_KEY = auth.google.key
-          console.log('[AgentManager] Injected GOOGLE_GENERATIVE_AI_API_KEY from OpenCode auth.json')
-        }
-        if (auth.openai?.key && !serverEnv.OPENAI_API_KEY) {
-          serverEnv.OPENAI_API_KEY = auth.openai.key
-          console.log('[AgentManager] Injected OPENAI_API_KEY from OpenCode auth.json')
-        }
-      }
-    } catch (e) {
-      console.log('[AgentManager] Could not read OpenCode auth.json:', e)
-    }
-
-    const proc = spawn(cmd, args, {
-      shell: isWin,
-      windowsHide: true,
-      env: serverEnv
-    })
-
-    return new Promise((resolve, reject) => {
-      const id = setTimeout(() => {
-        reject(new Error(`Timeout waiting for opencode server after ${timeout}ms`))
-      }, timeout)
-
-      let output = ''
-
-      proc.stdout?.on('data', (chunk: Buffer) => {
-        output += chunk.toString()
-        const lines = output.split('\n')
-        for (const line of lines) {
-          if (line.startsWith('opencode server listening')) {
-            clearTimeout(id)
-            console.log(`[AgentManager] OpenCode server started: ${line.trim()}`)
-            resolve({ close: () => proc.kill() })
-            return
-          }
-        }
-      })
-
-      proc.stderr?.on('data', (chunk: Buffer) => {
-        output += chunk.toString()
-      })
-
-      proc.on('exit', (code) => {
-        clearTimeout(id)
-        let msg = `opencode server exited with code ${code}`
-        if (output.trim()) msg += `\nOutput: ${output.slice(0, 500)}`
-        reject(new Error(msg))
-      })
-
-      proc.on('error', (error) => {
-        clearTimeout(id)
-        reject(error)
-      })
-    })
-  }
-
-  /**
-   * Ensures common binary install paths (e.g. ~/.opencode/bin) are in PATH
-   * so the OpenCode SDK can find the `opencode` binary via spawn().
-   */
-  private ensureBinaryPaths(): void {
-    const currentPath = process.env.PATH || ''
-    const customPath = this.db.getSetting('OPENCODE_BINARY_PATH')
-    const extraPaths = [
-      ...(customPath ? [customPath] : []),
-      join(homedir(), '.opencode', 'bin'),
-      ...(process.platform === 'win32'
-        ? [join(homedir(), 'AppData', 'Roaming', 'npm')]
-        : ['/usr/local/bin']),
-      join(homedir(), '.local', 'bin')
-    ].filter(p => !currentPath.includes(p))
-
-    if (extraPaths.length > 0) {
-      process.env.PATH = [...extraPaths, currentPath].join(delimiter)
-      console.log('[AgentManager] Added binary paths to PATH:', extraPaths)
-    }
-  }
-
-  /**
-   * Checks if a server is accessible at the given URL
-   * Tries both the given URL and its localhost/127.0.0.1 variant
-   * Returns the working URL if found, null otherwise
-   */
-  private async findAccessibleServer(url: string): Promise<string | null> {
-    const urls = [url]
-
-    // Add localhost variant if URL uses 127.0.0.1 (and vice versa)
-    // This handles macOS DNS resolution issues when launched from UI
-    if (url.includes('localhost')) {
-      urls.push(url.replace('localhost', '127.0.0.1'))
-    } else if (url.includes('127.0.0.1')) {
-      urls.push(url.replace('127.0.0.1', 'localhost'))
-    }
-
-    for (const testUrl of urls) {
-      try {
-        console.log('[AgentManager] Checking server at', testUrl)
-        // Use the correct OpenCode health endpoint: /global/health
-        const response = await fetch(`${testUrl}/global/health`, {
-          signal: AbortSignal.timeout(2000)
-        })
-        if (response.ok) {
-          const health = await response.json()
-          console.log('[AgentManager] Server accessible at', testUrl, 'version:', health.version)
-          return testUrl
-        }
-      } catch (error: unknown) {
-        console.log('[AgentManager] Server not accessible at', testUrl, ':', error instanceof Error ? error.message : error)
-      }
-    }
-
-    return null
-  }
-
-  /**
-   * Starts or detects an OpenCode server.
-   * Only creates embedded server if targetUrl is the default and no server is running.
-   * For custom URLs, just validates they're accessible.
-   */
-  async startServer(targetUrl: string = DEFAULT_SERVER_URL): Promise<void> {
-    // Always load API keys first (for both embedded and external servers)
-    this.loadApiKeysToEnv()
-
-    // Ensure common binary install paths are in PATH so the SDK can find `opencode`
-    this.ensureBinaryPaths()
-
-    // If we already have a server running, check if it matches the target
-    if (this.serverUrl) {
-      if (this.serverUrl === targetUrl) {
-        console.log('[AgentManager] Server already available at', this.serverUrl)
-        return
-      }
-      // Different URL requested, will need to start/detect a different server
-      console.log('[AgentManager] Different server URL requested:', targetUrl)
-    }
-
-    // If server is starting, wait for it
-    if (this.serverStarting) {
-      console.log('[AgentManager] Server startup in progress, waiting...')
-      return this.serverStarting
-    }
-
-    // Ensure SDK is loaded
-    await this.ensureSDKLoaded()
-    if (!OpenCodeSDK) {
-      throw new Error('OpenCode SDK not loaded')
-    }
-
-    const isDefaultUrl = targetUrl === DEFAULT_SERVER_URL ||
-                         targetUrl === 'http://127.0.0.1:4096' // Also accept 127.0.0.1 variant
-
-    // Create startup promise to prevent race conditions
-    this.serverStarting = (async () => {
-      try {
-        console.log('[AgentManager] Checking for server at', targetUrl)
-
-        // Check if server is already accessible (tries localhost and 127.0.0.1 variants)
-        const accessibleUrl = await this.findAccessibleServer(targetUrl)
-        if (accessibleUrl) {
-          console.log('[AgentManager] Found existing server at', accessibleUrl)
-          this.serverUrl = accessibleUrl
-          this.serverInstance = null // External server
-          return
-        }
-
-        // Server not accessible
-        if (!isDefaultUrl) {
-          // Custom URL but not accessible - fail
-          throw new Error(`OpenCode server not accessible at ${targetUrl}`)
-        }
-
-        // Default URL and not accessible - create embedded server
-        console.log('[AgentManager] Creating embedded OpenCode server...')
-
-        // Parse hostname and port from URL
-        const url = new URL(targetUrl)
-        const hostname = url.hostname
-        const port = parseInt(url.port || '4096', 10)
-
-        // On Windows, the SDK's createOpencodeServer uses spawn('opencode', ...)
-        // which can't find .cmd wrappers. Use a platform-aware spawn instead.
-        const isWin = process.platform === 'win32'
-        const serverResult = await this.spawnOpencodeServer(hostname, port, isWin)
-
-        this.serverInstance = serverResult
-        this.serverUrl = targetUrl
-
-        console.log(`[AgentManager] Embedded server created at ${this.serverUrl}`)
-      } catch (error) {
-        console.error('[AgentManager] Failed to start server:', error)
-        this.serverInstance = null
-        this.serverUrl = null
-        this.serverStarting = null
-        throw error
-      } finally {
-        this.serverStarting = null
-      }
-    })()
-
-    return this.serverStarting
-  }
-
   async stopServer(): Promise<void> {
-    if (this.serverInstance) {
-      // Only stop if we created the server (embedded server)
-      console.log('[AgentManager] Stopping embedded OpenCode server...')
-      try {
-        await this.serverInstance.close()
-        console.log('[AgentManager] Embedded OpenCode server stopped')
-      } catch (error) {
-        console.error('[AgentManager] Error stopping server:', error)
-      }
-      this.serverInstance = null
-      this.serverUrl = null
-    } else if (this.serverUrl) {
-      // We're using an external server, just clear the URL
-      console.log('[AgentManager] Disconnecting from external OpenCode server')
-      this.serverUrl = null
+    // Delegate to the OpenCode adapter if it exists
+    const adapter = this.adapters.get(CodingAgentType.OPENCODE)
+    if (adapter && 'stopServer' in adapter && typeof (adapter as { stopServer: () => Promise<void> }).stopServer === 'function') {
+      console.log('[AgentManager] Delegating server stop to OpencodeAdapter')
+      await (adapter as { stopServer: () => Promise<void> }).stopServer()
     }
   }
 
@@ -1450,7 +1275,14 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       seenPartIds: existingSession?.seenPartIds ?? new Set<string>(),
       partContentLengths: existingSession?.partContentLengths ?? new Map<string, string>(),
       createdAt: Date.now(),
-      hasSeenWork: existingSession ? true : false,
+      // Always start fresh: each call to startAdapterPolling corresponds to a
+      // newly-sent (fire-and-forget) prompt.  The IDLE grace period must apply
+      // to every new prompt — not only to brand-new sessions — because the
+      // backend can briefly report IDLE after a follow-up prompt while it is
+      // still ingesting the request.  Pre-setting this to true when resuming
+      // with an existing session caused follow-up messages (especially on
+      // opencode) to transition to idle before any response was produced.
+      hasSeenWork: false,
       initialPromptSent: initialPromptSent || false
     }
 
@@ -1649,14 +1481,16 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
         }
       }
 
-      // Mark that the session has done real work once we receive any messages.
-      // This disables the IDLE grace period so future IDLE means truly done.
+      // Update last activity timestamp when new parts arrive. This supports
+      // the secondary grace period for models with brief idle gaps.
       if (newParts.length > 0) {
-        if (!entry.hasSeenWork) {
-          entry.hasSeenWork = true
-        }
         entry.lastPartReceivedAt = Date.now()
       }
+
+      // hasSeenWork is set exclusively in the BUSY / WAITING_APPROVAL status
+      // handler below — not here.  Message content is unreliable (user echoes,
+      // stale fingerprint updates from previous turns can produce non-user parts
+      // before the backend has started processing the new prompt).
 
       // Collect all parts into a batch instead of sending individually.
       // This avoids flooding the renderer with N separate IPC messages
@@ -1792,6 +1626,11 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
         this.stopAdapterPolling(sessionId)
         return
       } else if (status.type === SessionStatusType.WAITING_APPROVAL && session) {
+        // Backend is actively processing — disable the IDLE grace period.
+        const peWA = this.pollingEntries.get(sessionId)
+        if (peWA && !peWA.hasSeenWork) {
+          peWA.hasSeenWork = true
+        }
         if (session.status !== 'waiting_approval') {
           session.status = 'waiting_approval'
           this.sendToRenderer('agent:status', {
@@ -1803,6 +1642,11 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
         }
         return
       } else if (status.type === SessionStatusType.BUSY && session) {
+        // Backend is actively processing — disable the IDLE grace period.
+        const peBusy = this.pollingEntries.get(sessionId)
+        if (peBusy && !peBusy.hasSeenWork) {
+          peBusy.hasSeenWork = true
+        }
         if (session.status !== 'working') {
           session.status = 'working'
           this.sendToRenderer('agent:status', {
@@ -1823,7 +1667,6 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
         const IDLE_GRACE_PERIOD_MS = 15_000
 
         if (!pollingEntry?.hasSeenWork && sessionAge < IDLE_GRACE_PERIOD_MS) {
-          // Still within grace period and haven't seen any work yet — keep polling
           return
         }
 
@@ -2017,13 +1860,33 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
 
     const shouldReplayToRenderer = options?.replayToRenderer !== false
 
-    // Replay messages to renderer in a single batch to avoid UI freeze
-    if (shouldReplayToRenderer) {
-      const batchMessages: Array<{ id: string; role: string; content: string; partType?: string; tool?: unknown; taskProgress?: unknown }> = []
-      for (const message of messages) {
-        for (const part of message.parts) {
+    // Build replay batch AND dedup state in a SINGLE pass so that both use
+    // the same generated IDs.  Previously two separate loops each called
+    // `Date.now() + Math.random()` for parts without an id, producing
+    // different IDs.  The frontend's `seen` set then held the batch IDs while
+    // the session's seenPartIds held different IDs, so when polling started
+    // on a follow-up message the streaming replay (with yet another set of
+    // stableId-based IDs) was not deduped by either — causing every
+    // historical message to appear twice.
+    const batchMessages: Array<{ id: string; role: string; content: string; partType?: string; tool?: unknown; taskProgress?: unknown }> = []
+    const resumedSeenMessageIds = new Set<string>()
+    const resumedSeenPartIds = new Set<string>()
+    const resumedPartContentLengths = new Map<string, string>()
+    for (const message of messages) {
+      // Track message-level IDs so adapters that dedup by message ID
+      // (e.g. Codex pollMessages) won't re-send historical messages.
+      if (message.id) resumedSeenMessageIds.add(message.id)
+      for (const part of message.parts) {
+        const partId = part.id || `${message.role}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+        // Dedup state
+        resumedSeenPartIds.add(partId)
+        if (part.content || part.text) {
+          resumedPartContentLengths.set(partId, String((part.content || part.text || '').length))
+        }
+        // Batch message (only if we're replaying to the renderer)
+        if (shouldReplayToRenderer) {
           batchMessages.push({
-            id: part.id || `${message.role}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+            id: partId,
             role: message.role,
             content: part.content || part.text || '',
             partType: part.type,
@@ -2032,28 +1895,13 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
           })
         }
       }
-      if (batchMessages.length > 0) {
-        this.sendToRenderer('agent:output-batch', {
-          sessionId: adapterSessionId,
-          taskId,
-          messages: batchMessages
-        })
-      }
     }
-
-    // Build dedup state from replayed messages so that when polling starts
-    // (on follow-up message), it won't re-send messages already shown in the UI.
-    const resumedSeenMessageIds = new Set<string>()
-    const resumedSeenPartIds = new Set<string>()
-    const resumedPartContentLengths = new Map<string, string>()
-    for (const message of messages) {
-      for (const part of message.parts) {
-        const partId = part.id || `${message.role}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-        resumedSeenPartIds.add(partId)
-        if (part.content || part.text) {
-          resumedPartContentLengths.set(partId, String((part.content || part.text || '').length))
-        }
-      }
+    if (shouldReplayToRenderer && batchMessages.length > 0) {
+      this.sendToRenderer('agent:output-batch', {
+        sessionId: adapterSessionId,
+        taskId,
+        messages: batchMessages
+      })
     }
 
     // Store session in sessions map — idle until user sends a message
@@ -2631,7 +2479,13 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     })
   }
 
-  async sendMessage(sessionId: string, message: string, taskId?: string, agentId?: string): Promise<{ newSessionId?: string }> {
+  async sendMessage(
+    sessionId: string,
+    message: string,
+    taskId?: string,
+    agentId?: string,
+    attachments?: MessageAttachmentRef[]
+  ): Promise<{ newSessionId?: string }> {
     let session = this.sessions.get(sessionId)
 
     // Check redirect map: session ID may have been re-keyed (temp → real)
@@ -2689,7 +2543,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
         }
 
         // Send the user's message (fire-and-forget to avoid blocking IPC response)
-        this.doSendAdapterMessage(session, sessionId, message).catch((err) => {
+        this.doSendAdapterMessage(session, sessionId, message, attachments).catch((err) => {
           console.error(`[AgentManager] doSendAdapterMessage failed for session ${sessionId}:`, err)
           this.handleSessionError(sessionId, session!, err)
         })
@@ -2700,7 +2554,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     if (!session) throw new Error(`Session not found: ${sessionId}`)
 
     // Fire-and-forget to avoid blocking IPC response and freezing the renderer
-    this.doSendAdapterMessage(session, sessionId, message).catch((err) => {
+    this.doSendAdapterMessage(session, sessionId, message, attachments).catch((err) => {
       console.error(`[AgentManager] doSendAdapterMessage failed for session ${sessionId}:`, err)
       this.handleSessionError(sessionId, session!, err)
     })
@@ -2722,7 +2576,12 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     })
   }
 
-  private async doSendAdapterMessage(session: AgentSession, sessionId: string, message: string): Promise<void> {
+  private async doSendAdapterMessage(
+    session: AgentSession,
+    sessionId: string,
+    message: string,
+    attachments?: MessageAttachmentRef[]
+  ): Promise<void> {
     if (session.status === 'error') {
       // Check if this is an incompatible session error (non-recoverable)
       if (session.adapter) {
@@ -2766,6 +2625,8 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       this.enterpriseStateSync.recordAgentRunStarted(currentTask, agent?.name)
     }
 
+    const userFacingMessage = this.buildDisplayMessage(message, attachments)
+
     // Show user's message in UI
     this.sendToRenderer('agent:output', {
       sessionId,
@@ -2774,7 +2635,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       data: {
         id: `user-message-${Date.now()}`,
         role: 'user',
-        content: message,
+        content: userFacingMessage,
         partType: 'text'
       }
     })
@@ -2787,9 +2648,8 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     )
 
     // Send prompt via adapter
-    const parts: MessagePart[] = [
-      { type: MessagePartType.TEXT, text: message }
-    ]
+    const promptText = this.buildMessageWithAttachmentContext(session, message, attachments)
+    const parts: MessagePart[] = [{ type: MessagePartType.TEXT, text: promptText }]
     await session.adapter.sendPrompt(sessionId, parts, sessionConfig)
 
     // Start polling if not already started (for Claude Code after resume)
@@ -3197,55 +3057,64 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
   }
 
 
-  async getProviders(serverUrl?: string, directory?: string): Promise<{ providers: { id: string; name: string; [key: string]: unknown }[]; default: Record<string, string> } | null> {
-    await this.ensureSDKLoaded()
-    if (!OpenCodeSDK) return null
-
+  async getProviders(serverUrl?: string, directory?: string, backendType?: string): Promise<{ providers: { id: string; name: string; [key: string]: unknown }[]; default: Record<string, string> } | null> {
     try {
       // Determine which server URL to use
-      let baseUrl = serverUrl
-      if (!baseUrl) {
-        // Try to get from existing server or agent config
-        if (this.serverUrl) {
-          baseUrl = this.serverUrl
-        } else {
-          const agents = this.db.getAgents()
-          const defaultAgent = agents.find((a) => a.is_default) || agents[0]
-          baseUrl = defaultAgent?.server_url || DEFAULT_SERVER_URL
-        }
-      }
+      const baseUrl = serverUrl || (() => {
+        const agents = this.db.getAgents()
+        const defaultAgent = agents.find((a) => a.is_default) || agents[0]
+        return defaultAgent?.server_url || DEFAULT_SERVER_URL
+      })()
 
-      // Try to detect/start server - if it fails, return null gracefully
-      try {
-        if (!this.serverUrl || this.serverUrl !== baseUrl) {
-          console.log('[AgentManager] Checking for OpenCode server to fetch providers...')
-          await this.startServer(baseUrl)
-        }
-      } catch (serverError: unknown) {
-        console.log('[AgentManager] No OpenCode server available:', serverError instanceof Error ? serverError.message : serverError)
-        return null // No server, no providers - this is OK during onboarding
-      }
+      // Identify the backend type: use the explicit parameter, fall back to default agent config
+      const resolvedBackend = backendType || (() => {
+        const agents = this.db.getAgents()
+        const defaultAgent = agents.find((a) => a.is_default) || agents[0]
+        return (defaultAgent?.config?.coding_agent as string) || CodingAgentType.OPENCODE
+      })()
 
-      // Default to home directory so project-scoped OpenCode configs are picked up
-      const dir = directory || homedir()
-
-      const ocClient = OpenCodeSDK.createOpencodeClient({ baseUrl, fetch: noTimeoutFetch })
-      const result = await ocClient.config.providers({
-        query: { directory: dir }
-      })
-
-      if (result.error) {
-        console.log('[AgentManager] No providers configured on server')
+      // Only the OpenCode adapter exposes configurable providers/models.
+      // For other backends (claude-code, codex), provider listing isn't supported.
+      if (resolvedBackend !== CodingAgentType.OPENCODE) {
+        console.log(`[AgentManager] Backend "${resolvedBackend}" does not support provider listing, skipping`)
         return null
       }
 
-      const data = result.data as { providers?: { id: string; name: string; [key: string]: unknown }[]; default?: Record<string, string> } | undefined
-      console.log('[AgentManager] Found providers:', data?.providers?.map((p) => p.id))
-      return data ? { providers: data.providers || [], default: data.default || {} } : null
+      const adapter = this.getAdapterByType(resolvedBackend)
+      if (!adapter?.getProviders) {
+        console.log(`[AgentManager] Adapter for "${resolvedBackend}" does not support getProviders`)
+        return null
+      }
+
+      return await adapter.getProviders(baseUrl, directory)
     } catch (error: unknown) {
       console.log('[AgentManager] Could not get providers:', error instanceof Error ? error.message : error)
-      return null // Gracefully return null - no providers available
+      return null
     }
+  }
+
+  /**
+   * Gets or creates an adapter by backend type (without requiring an agent ID).
+   */
+  private getAdapterByType(backendType: string): CodingAgentAdapter | null {
+    if (this.adapters.has(backendType)) {
+      return this.adapters.get(backendType)!
+    }
+
+    let adapter: CodingAgentAdapter | null = null
+    switch (backendType) {
+      case CodingAgentType.OPENCODE:
+        adapter = new OpencodeAdapter(this.db)
+        break
+      case CodingAgentType.CLAUDE_CODE:
+        adapter = new ClaudeCodeAdapter()
+        break
+    }
+
+    if (adapter) {
+      this.adapters.set(backendType, adapter)
+    }
+    return adapter
   }
 
   /**

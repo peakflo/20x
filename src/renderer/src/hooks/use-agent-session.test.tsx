@@ -137,7 +137,20 @@ describe('useAgentSession', () => {
         await result.current.sendMessage('Hello agent')
       })
 
-      expect(mockElectronAPI.agentSession.send).toHaveBeenCalledWith('sess-1', 'Hello agent', 'task-1', 'agent-1')
+      expect(mockElectronAPI.agentSession.send).toHaveBeenCalledWith('sess-1', 'Hello agent', 'task-1', 'agent-1', undefined)
+    })
+
+    it('sends message attachments when provided', async () => {
+      useAgentStore.getState().initSession('task-1', 'sess-1', 'agent-1')
+
+      const { result } = renderHook(() => useAgentSession('task-1'))
+      const attachments = [{ id: 'a-1', filename: 'notes.md', size: 128, mime_type: 'text/markdown' }]
+
+      await act(async () => {
+        await result.current.sendMessage('Use this file', { attachments })
+      })
+
+      expect(mockElectronAPI.agentSession.send).toHaveBeenCalledWith('sess-1', 'Use this file', 'task-1', 'agent-1', attachments)
     })
 
     it('throws when no active session', async () => {
@@ -171,7 +184,7 @@ describe('useAgentSession', () => {
       })
 
       // Should use the NEW sessionId from store, not the old one from closure
-      expect(mockElectronAPI.agentSession.send).toHaveBeenCalledWith('sess-2-new', 'After resume', 'task-1', 'agent-1')
+      expect(mockElectronAPI.agentSession.send).toHaveBeenCalledWith('sess-2-new', 'After resume', 'task-1', 'agent-1', undefined)
     })
   })
 

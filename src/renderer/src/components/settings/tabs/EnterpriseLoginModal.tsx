@@ -11,6 +11,7 @@ import { Label } from '@/components/ui/Label'
 import { Input } from '@/components/ui/Input'
 import { Button } from '@/components/ui/Button'
 import { useEnterpriseStore } from '@/stores/enterprise-store'
+import { ExternalLink } from 'lucide-react'
 
 interface EnterpriseLoginModalProps {
   open: boolean
@@ -25,6 +26,7 @@ export function EnterpriseLoginModal({ open, onClose }: EnterpriseLoginModalProp
     userEmail,
     availableTenants,
     login,
+    signupInBrowser,
     selectTenant,
     clearError
   } = useEnterpriseStore()
@@ -41,6 +43,10 @@ export function EnterpriseLoginModal({ open, onClose }: EnterpriseLoginModalProp
     await login(email.trim(), password)
     setPassword('') // Never keep password in memory after submission
   }, [email, password, login])
+
+  const handleBrowserSignup = useCallback(async (mode: 'register' | 'login') => {
+    await signupInBrowser(mode)
+  }, [signupInBrowser])
 
   const handleSelectTenant = useCallback(async (tenantId: string) => {
     // Close modal immediately — sync runs in the background via IPC
@@ -200,6 +206,38 @@ export function EnterpriseLoginModal({ open, onClose }: EnterpriseLoginModalProp
                   disabled={isLoading}
                 >
                   Cancel
+                </Button>
+              </div>
+
+              {/* Divider */}
+              <div className="relative flex items-center pt-4">
+                <div className="flex-grow border-t border-border" />
+                <span className="flex-shrink px-3 text-xs text-muted-foreground">or</span>
+                <div className="flex-grow border-t border-border" />
+              </div>
+
+              {/* Browser signup/login */}
+              <div className="flex flex-col gap-2 pt-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => handleBrowserSignup('register')}
+                  disabled={isLoading}
+                  className="w-full"
+                >
+                  <ExternalLink className="mr-2 h-4 w-4" />
+                  Sign up in browser
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => handleBrowserSignup('login')}
+                  disabled={isLoading}
+                  className="w-full text-muted-foreground"
+                >
+                  <ExternalLink className="mr-2 h-3.5 w-3.5" />
+                  Sign in via browser instead
                 </Button>
               </div>
             </form>

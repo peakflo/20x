@@ -7,7 +7,7 @@ import {
 import { useDashboardStore } from '@/stores/dashboard-store'
 
 function formatPercent(value: number | null): string {
-  if (value === null || value === undefined) return '--'
+  if (value === null || value === undefined || typeof value !== 'number' || isNaN(value)) return '--'
   return `${value.toFixed(1)}%`
 }
 

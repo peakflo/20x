@@ -219,6 +219,18 @@ export interface CodingAgentAdapter {
   ): Promise<void>
 
   /**
+   * List available providers and their models from the backend.
+   * Returns null if the backend doesn't support provider listing.
+   */
+  getProviders?(
+    serverUrl?: string,
+    directory?: string
+  ): Promise<{
+    providers: { id: string; name: string; models: unknown; [key: string]: unknown }[]
+    default: Record<string, string>
+  } | null>
+
+  /**
    * Check if this adapter's backend is available and healthy
    */
   checkHealth(): Promise<{ available: boolean; reason?: string }>

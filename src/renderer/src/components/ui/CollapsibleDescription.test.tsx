@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, fireEvent, cleanup } from '@testing-library/react'
+import { render, fireEvent, cleanup, screen, waitFor } from '@testing-library/react'
 import { CollapsibleDescription } from './CollapsibleDescription'
 
 // Mock Markdown to render plain text, making it easy to measure
@@ -121,5 +121,112 @@ describe('CollapsibleDescription', () => {
     // Expand - maxHeight should be removed
     fireEvent.click(getByText('Show more'))
     expect((contentDiv as HTMLElement).style.maxHeight).toBe('')
+  })
+
+  describe('inline editing', () => {
+    it('does not render any edit affordance when onSave is not provided', () => {
+      render(
+        <CollapsibleDescription taskId="task-edit-none" description={SHORT_DESCRIPTION} />
+      )
+      expect(screen.queryByTestId('description-edit-trigger')).toBeNull()
+      expect(screen.queryByTestId('description-add-placeholder')).toBeNull()
+    })
+
+    it('renders an "Add description" placeholder when empty and onSave is provided', () => {
+      const onSave = vi.fn()
+      render(
+        <CollapsibleDescription taskId="task-edit-empty" description="" onSave={onSave} />
+      )
+      const placeholder = screen.getByTestId('description-add-placeholder')
+      expect(placeholder).toBeTruthy()
+      expect(placeholder.textContent).toMatch(/add description/i)
+    })
+
+    it('enters edit mode when the user clicks the description content', () => {
+      const onSave = vi.fn()
+      render(
+        <CollapsibleDescription taskId="task-edit-click" description={SHORT_DESCRIPTION} onSave={onSave} />
+      )
+      fireEvent.click(screen.getByTestId('description-editable-content'))
+      expect(screen.getByTestId('description-edit-textarea')).toBeTruthy()
+      expect((screen.getByTestId('description-edit-textarea') as HTMLTextAreaElement).value).toBe(SHORT_DESCRIPTION)
+    })
+
+    it('enters edit mode when user clicks the pencil trigger', () => {
+      const onSave = vi.fn()
+      render(
+        <CollapsibleDescription taskId="task-edit-pencil" description={SHORT_DESCRIPTION} onSave={onSave} />
+      )
+      fireEvent.click(screen.getByTestId('description-edit-trigger'))
+      expect(screen.getByTestId('description-edit-textarea')).toBeTruthy()
+    })
+
+    it('calls onSave with the new description on save and exits edit mode', async () => {
+      const onSave = vi.fn().mockResolvedValue(undefined)
+      render(
+        <CollapsibleDescription taskId="task-edit-save" description="old" onSave={onSave} />
+      )
+      fireEvent.click(screen.getByTestId('description-edit-trigger'))
+      const textarea = screen.getByTestId('description-edit-textarea') as HTMLTextAreaElement
+      fireEvent.change(textarea, { target: { value: 'new description' } })
+      fireEvent.click(screen.getByTestId('description-edit-save'))
+      await waitFor(() => {
+        expect(onSave).toHaveBeenCalledWith('new description')
+      })
+      await waitFor(() => {
+        expect(screen.queryByTestId('description-edit-textarea')).toBeNull()
+      })
+    })
+
+    it('cancels edit mode and restores original value on Cancel', () => {
+      const onSave = vi.fn()
+      render(
+        <CollapsibleDescription taskId="task-edit-cancel" description="original" onSave={onSave} />
+      )
+      fireEvent.click(screen.getByTestId('description-edit-trigger'))
+      const textarea = screen.getByTestId('description-edit-textarea') as HTMLTextAreaElement
+      fireEvent.change(textarea, { target: { value: 'dirty edit' } })
+      fireEvent.click(screen.getByTestId('description-edit-cancel'))
+      expect(screen.queryByTestId('description-edit-textarea')).toBeNull()
+      expect(onSave).not.toHaveBeenCalled()
+      // Re-entering edit should show the original value, not the dirty draft
+      fireEvent.click(screen.getByTestId('description-edit-trigger'))
+      expect((screen.getByTestId('description-edit-textarea') as HTMLTextAreaElement).value).toBe('original')
+    })
+
+    it('escape key cancels editing', () => {
+      const onSave = vi.fn()
+      render(
+        <CollapsibleDescription taskId="task-edit-esc" description="val" onSave={onSave} />
+      )
+      fireEvent.click(screen.getByTestId('description-edit-trigger'))
+      const textarea = screen.getByTestId('description-edit-textarea') as HTMLTextAreaElement
+      fireEvent.change(textarea, { target: { value: 'changed' } })
+      fireEvent.keyDown(textarea, { key: 'Escape' })
+      expect(screen.queryByTestId('description-edit-textarea')).toBeNull()
+      expect(onSave).not.toHaveBeenCalled()
+    })
+
+    it('does not call onSave when value is unchanged', async () => {
+      const onSave = vi.fn().mockResolvedValue(undefined)
+      render(
+        <CollapsibleDescription taskId="task-edit-nochange" description="same" onSave={onSave} />
+      )
+      fireEvent.click(screen.getByTestId('description-edit-trigger'))
+      fireEvent.click(screen.getByTestId('description-edit-save'))
+      await waitFor(() => {
+        expect(screen.queryByTestId('description-edit-textarea')).toBeNull()
+      })
+      expect(onSave).not.toHaveBeenCalled()
+    })
+
+    it('clicking the add-description placeholder opens the edit form', () => {
+      const onSave = vi.fn()
+      render(
+        <CollapsibleDescription taskId="task-edit-placeholder-click" description="" onSave={onSave} />
+      )
+      fireEvent.click(screen.getByTestId('description-add-placeholder'))
+      expect(screen.getByTestId('description-edit-textarea')).toBeTruthy()
+    })
   })
 })

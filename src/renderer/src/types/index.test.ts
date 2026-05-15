@@ -1,5 +1,14 @@
 import { describe, it, expect } from 'vitest'
-import { CODEX_MODELS, CodexModel } from './index'
+import { CLAUDE_MODELS, ClaudeModel, CODEX_MODELS, CodexModel } from './index'
+
+describe('CLAUDE_MODELS', () => {
+  it('includes Claude Opus 4.7', () => {
+    expect(CLAUDE_MODELS).toContainEqual({
+      id: ClaudeModel.OPUS_4_7,
+      name: 'Claude Opus 4.7'
+    })
+  })
+})
 
 describe('CODEX_MODELS', () => {
   it('lists GPT-5.4 first as the recommended model', () => {

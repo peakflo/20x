@@ -123,19 +123,11 @@ cd 20x
 pnpm install
 ```
 
-### macOS: Opening the App (Release Build)
+### macOS: Signed & Notarized Releases
 
-macOS may block the app since it's not signed with an Apple Developer certificate. To open it, use one of these methods:
+Release artifacts are signed with an Apple Developer ID certificate and notarized to avoid Gatekeeper install/open warnings.
 
-**Option A:** Right-click the app in `/Applications` and select **Open**, then confirm in the dialog.
-
-**Option B:** Run in Terminal:
-```bash
-sudo xattr -cr /Applications/20x.app
-```
-Then open the app normally.
-
-> This is not required if you build from source and run with `pnpm dev`.
+For maintainers, setup details are in [docs/macos-signing-notarization.md](./docs/macos-signing-notarization.md).
 
 ### Configuration
 
