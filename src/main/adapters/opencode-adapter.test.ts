@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { OpencodeAdapter } from './opencode-adapter'
 import { SessionStatusType } from './coding-agent-adapter'
+import { ENTERPRISE_AI_GATEWAY_PROVIDER_ID } from '../enterprise-ai-gateway'
 
 describe('OpencodeAdapter', () => {
   describe('waitForMcpServersReady', () => {
@@ -337,7 +338,7 @@ describe('OpencodeAdapter', () => {
       expect(status.type).toBe(SessionStatusType.IDLE)
     })
 
-    it('returns WAITING_APPROVAL if underlying status is waiting_user', async () => {
+    it('returns WAITING_APPROVAL if underlying status is waiting_user (question)', async () => {
       const adapter = new OpencodeAdapter()
       const mockClient = {
         session: {
@@ -359,6 +360,191 @@ describe('OpencodeAdapter', () => {
 
       const status = await adapter.getStatus('session-2', { agentId: 'agent-1', taskId: 'task-1', workspaceDir: '/tmp/ws' })
       expect(status.type).toBe(SessionStatusType.WAITING_APPROVAL)
+    })
+  })
+
+  describe('getProvidersInner filters stale models', () => {
+    it('filters out stale models from peakflo provider using fresh SQLite config', async () => {
+      const mockDb = {
+        getSetting: vi.fn((key: string): string | undefined => {
+          // Return encrypted values for API key and base URL so readEnterpriseAiGatewayConfig works
+          if (key === 'enterprise_litellm_api_key') return Buffer.from('sk-test', 'utf8').toString('base64')
+          if (key === 'enterprise_litellm_base_url') return Buffer.from('https://litellm.example.com', 'utf8').toString('base64')
+          if (key === 'enterprise_litellm_models') return JSON.stringify([
+            { id: 'kept-model', name: 'Kept Model' },
+            { id: 'new-model', name: 'New Model' }
+          ])
+          return undefined
+        })
+      }
+
+      const adapter = new OpencodeAdapter(mockDb)
+
+      // Mock getClient to return a client whose config.providers returns stale data
+      const mockClient = {
+        config: {
+          providers: vi.fn().mockResolvedValue({
+            data: {
+              providers: [
+                {
+                  id: ENTERPRISE_AI_GATEWAY_PROVIDER_ID,
+                  name: 'Peakflo',
+                  models: {
+                    'old-model-1': { name: 'Old Model 1' },
+                    'old-model-2': { name: 'Old Model 2' },
+                    'kept-model': { name: 'Kept Model' }
+                  }
+                },
+                {
+                  id: 'anthropic',
+                  name: 'Anthropic',
+                  models: { 'claude-4': { name: 'Claude 4' } }
+                }
+              ],
+              default: {}
+            }
+          })
+        }
+      }
+
+      vi.spyOn(adapter as any, 'getClient').mockResolvedValue(mockClient)
+      vi.spyOn(adapter as any, 'pushMergedConfigToClient').mockResolvedValue(undefined)
+
+      const result = await (adapter as any).getProvidersInner(undefined, '/tmp/ws', false)
+
+      expect(result).not.toBeNull()
+      const peakfloProvider = result.providers.find((p: { id: string }) => p.id === ENTERPRISE_AI_GATEWAY_PROVIDER_ID)
+      const models = peakfloProvider.models as Record<string, unknown>
+
+      // Stale models should be filtered out
+      expect(models['old-model-1']).toBeUndefined()
+      expect(models['old-model-2']).toBeUndefined()
+      // Kept model should be preserved
+      expect(models['kept-model']).toEqual({ name: 'Kept Model' })
+      // Other providers should be unaffected
+      const anthropic = result.providers.find((p: { id: string }) => p.id === 'anthropic')
+      expect(anthropic.models).toEqual({ 'claude-4': { name: 'Claude 4' } })
+    })
+
+    it('does not filter when no db is available', async () => {
+      const adapter = new OpencodeAdapter() // no db
+
+      const mockClient = {
+        config: {
+          providers: vi.fn().mockResolvedValue({
+            data: {
+              providers: [
+                {
+                  id: ENTERPRISE_AI_GATEWAY_PROVIDER_ID,
+                  name: 'Peakflo',
+                  models: {
+                    'model-a': { name: 'Model A' },
+                    'model-b': { name: 'Model B' }
+                  }
+                }
+              ],
+              default: {}
+            }
+          })
+        }
+      }
+
+      vi.spyOn(adapter as any, 'getClient').mockResolvedValue(mockClient)
+      vi.spyOn(adapter as any, 'pushMergedConfigToClient').mockResolvedValue(undefined)
+
+      const result = await (adapter as any).getProvidersInner(undefined, '/tmp/ws', false)
+
+      const peakfloProvider = result.providers.find((p: { id: string }) => p.id === ENTERPRISE_AI_GATEWAY_PROVIDER_ID)
+      const models = peakfloProvider.models as Record<string, unknown>
+
+      // All models preserved — no filtering without db
+      expect(Object.keys(models)).toEqual(['model-a', 'model-b'])
+    })
+
+    it('does not filter when enterprise AI gateway config is not stored', async () => {
+      const mockDb = {
+        getSetting: vi.fn((): string | undefined => undefined)
+      }
+
+      const adapter = new OpencodeAdapter(mockDb)
+
+      const mockClient = {
+        config: {
+          providers: vi.fn().mockResolvedValue({
+            data: {
+              providers: [
+                {
+                  id: ENTERPRISE_AI_GATEWAY_PROVIDER_ID,
+                  name: 'Peakflo',
+                  models: {
+                    'model-a': { name: 'Model A' }
+                  }
+                }
+              ],
+              default: {}
+            }
+          })
+        }
+      }
+
+      vi.spyOn(adapter as any, 'getClient').mockResolvedValue(mockClient)
+      vi.spyOn(adapter as any, 'pushMergedConfigToClient').mockResolvedValue(undefined)
+
+      const result = await (adapter as any).getProvidersInner(undefined, '/tmp/ws', false)
+
+      const peakfloProvider = result.providers.find((p: { id: string }) => p.id === ENTERPRISE_AI_GATEWAY_PROVIDER_ID)
+      const models = peakfloProvider.models as Record<string, unknown>
+
+      // All models preserved — no filtering without stored config
+      expect(Object.keys(models)).toEqual(['model-a'])
+    })
+
+    it('keeps all models when all server models are in fresh config', async () => {
+      const mockDb = {
+        getSetting: vi.fn((key: string): string | undefined => {
+          if (key === 'enterprise_litellm_api_key') return Buffer.from('sk-test', 'utf8').toString('base64')
+          if (key === 'enterprise_litellm_base_url') return Buffer.from('https://litellm.example.com', 'utf8').toString('base64')
+          if (key === 'enterprise_litellm_models') return JSON.stringify([
+            { id: 'model-a', name: 'Model A' },
+            { id: 'model-b', name: 'Model B' }
+          ])
+          return undefined
+        })
+      }
+
+      const adapter = new OpencodeAdapter(mockDb)
+
+      const mockClient = {
+        config: {
+          providers: vi.fn().mockResolvedValue({
+            data: {
+              providers: [
+                {
+                  id: ENTERPRISE_AI_GATEWAY_PROVIDER_ID,
+                  name: 'Peakflo',
+                  models: {
+                    'model-a': { name: 'Model A' },
+                    'model-b': { name: 'Model B' }
+                  }
+                }
+              ],
+              default: {}
+            }
+          })
+        }
+      }
+
+      vi.spyOn(adapter as any, 'getClient').mockResolvedValue(mockClient)
+      vi.spyOn(adapter as any, 'pushMergedConfigToClient').mockResolvedValue(undefined)
+
+      const result = await (adapter as any).getProvidersInner(undefined, '/tmp/ws', false)
+
+      const peakfloProvider = result.providers.find((p: { id: string }) => p.id === ENTERPRISE_AI_GATEWAY_PROVIDER_ID)
+      const models = peakfloProvider.models as Record<string, unknown>
+
+      expect(models['model-a']).toEqual({ name: 'Model A' })
+      expect(models['model-b']).toEqual({ name: 'Model B' })
+      expect(Object.keys(models)).toEqual(['model-a', 'model-b'])
     })
   })
 })

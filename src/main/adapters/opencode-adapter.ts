@@ -4,6 +4,7 @@ import { join, delimiter } from 'path'
 import { homedir } from 'os'
 import { execSync } from 'child_process'
 import { buildMergedOpencodeConfig } from '../utils/opencode-config'
+import { ENTERPRISE_AI_GATEWAY_PROVIDER_ID, readEnterpriseAiGatewayConfig } from '../enterprise-ai-gateway'
 import type { DatabaseManager } from '../database'
 import type {
   CodingAgentAdapter,
@@ -324,6 +325,33 @@ export class OpencodeAdapter implements CodingAgentAdapter {
         providers?: { id: string; name: string; models: unknown; [key: string]: unknown }[]
         default?: Record<string, string>
       } | undefined
+
+      // Filter stale models from the enterprise AI gateway provider.
+      // The OpenCode server uses PATCH (merge semantics) for config updates,
+      // so models removed from LiteLLM persist in the server's config.
+      // We apply a client-side filter using the fresh model list from SQLite
+      // (which was just refreshed from LiteLLM by the caller in agent-manager).
+      if (data?.providers && this.db) {
+        const freshConfig = readEnterpriseAiGatewayConfig(this.db)
+        if (freshConfig?.models) {
+          const freshModelIds = new Set(freshConfig.models.map(m => m.id))
+          const provider = data.providers.find(p => p.id === ENTERPRISE_AI_GATEWAY_PROVIDER_ID)
+          if (provider?.models && typeof provider.models === 'object') {
+            const serverModels = provider.models as Record<string, unknown>
+            const filtered: Record<string, unknown> = {}
+            for (const [modelId, modelConfig] of Object.entries(serverModels)) {
+              if (freshModelIds.has(modelId)) {
+                filtered[modelId] = modelConfig
+              }
+            }
+            provider.models = filtered
+            const removed = Object.keys(serverModels).length - Object.keys(filtered).length
+            if (removed > 0) {
+              console.log(`[OpencodeAdapter] Filtered out ${removed} stale model(s) from ${ENTERPRISE_AI_GATEWAY_PROVIDER_ID} provider`)
+            }
+          }
+        }
+      }
 
       return data ? { providers: data.providers || [], default: data.default || {} } : null
     } catch (error: unknown) {
