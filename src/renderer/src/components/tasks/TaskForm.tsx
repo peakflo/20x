@@ -180,31 +180,30 @@ export function TaskForm({ task, onSubmit, onCancel }: TaskFormProps) {
 
       <div className="rounded-md border p-4">
         <RecurrenceEditor value={recurrencePattern} onChange={setRecurrencePattern} />
+        {recurrencePattern && (
+          <div className="space-y-3 pt-4 mt-4 border-t border-border" data-testid="auto-flags-section">
+            <p className="text-sm font-medium text-muted-foreground">Automation</p>
+            <label className="flex items-center gap-2 cursor-pointer" data-testid="form-auto-start-toggle">
+              <input
+                type="checkbox"
+                checked={autoStartAgent}
+                onChange={(e) => setAutoStartAgent(e.target.checked)}
+                className="h-4 w-4 rounded border-border bg-background text-primary cursor-pointer"
+              />
+              <span className="text-sm">Auto-start agent on new instances</span>
+            </label>
+            <label className="flex items-center gap-2 cursor-pointer" data-testid="form-auto-complete-toggle">
+              <input
+                type="checkbox"
+                checked={autoCompleteWithoutReview}
+                onChange={(e) => setAutoCompleteWithoutReview(e.target.checked)}
+                className="h-4 w-4 rounded border-border bg-background text-primary cursor-pointer"
+              />
+              <span className="text-sm">Auto-complete without review</span>
+            </label>
+          </div>
+        )}
       </div>
-
-      {recurrencePattern && (
-        <div className="rounded-md border p-4 space-y-3" data-testid="auto-flags-section">
-          <p className="text-sm font-medium text-muted-foreground">Automation</p>
-          <label className="flex items-center gap-2 cursor-pointer" data-testid="form-auto-start-toggle">
-            <input
-              type="checkbox"
-              checked={autoStartAgent}
-              onChange={(e) => setAutoStartAgent(e.target.checked)}
-              className="h-4 w-4 rounded border-border bg-background text-primary cursor-pointer"
-            />
-            <span className="text-sm">Auto-start agent on new instances</span>
-          </label>
-          <label className="flex items-center gap-2 cursor-pointer" data-testid="form-auto-complete-toggle">
-            <input
-              type="checkbox"
-              checked={autoCompleteWithoutReview}
-              onChange={(e) => setAutoCompleteWithoutReview(e.target.checked)}
-              className="h-4 w-4 rounded border-border bg-background text-primary cursor-pointer"
-            />
-            <span className="text-sm">Auto-complete without review</span>
-          </label>
-        </div>
-      )}
 
       {submitError && (
         <p className="text-sm text-destructive">{submitError}</p>

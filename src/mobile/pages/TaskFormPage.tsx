@@ -556,32 +556,32 @@ export function TaskFormPage({ taskId, onNavigate }: { taskId?: string; onNaviga
                     </p>
                   </div>
                 )}
-              </div>
 
-              {/* ── Auto-start / Auto-complete (visible when recurring) ── */}
-              {recurringEnabled && (
-                <div className="space-y-3 rounded-md border border-border/50 p-3" data-testid="auto-flags-section">
-                  <label className="text-xs font-medium text-muted-foreground">Automation</label>
-                  <label className="flex items-center gap-2 cursor-pointer" data-testid="form-auto-start-toggle">
-                    <input
-                      type="checkbox"
-                      checked={autoStartAgent}
-                      onChange={(e) => setAutoStartAgent(e.target.checked)}
-                      className="h-4 w-4 rounded"
-                    />
-                    <span className="text-xs">Auto-start agent on new instances</span>
-                  </label>
-                  <label className="flex items-center gap-2 cursor-pointer" data-testid="form-auto-complete-toggle">
-                    <input
-                      type="checkbox"
-                      checked={autoCompleteWithoutReview}
-                      onChange={(e) => setAutoCompleteWithoutReview(e.target.checked)}
-                      className="h-4 w-4 rounded"
-                    />
-                    <span className="text-xs">Auto-complete without review</span>
-                  </label>
-                </div>
-              )}
+                {/* ── Auto-start / Auto-complete (inside recurrence block) ── */}
+                {recurringEnabled && (
+                  <div className="space-y-3 pt-3 mt-3 border-t border-border/50" data-testid="auto-flags-section">
+                    <label className="text-xs font-medium text-muted-foreground">Automation</label>
+                    <label className="flex items-center gap-2 cursor-pointer" data-testid="form-auto-start-toggle">
+                      <input
+                        type="checkbox"
+                        checked={autoStartAgent}
+                        onChange={(e) => setAutoStartAgent(e.target.checked)}
+                        className="h-4 w-4 rounded"
+                      />
+                      <span className="text-xs">Auto-start agent on new instances</span>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer" data-testid="form-auto-complete-toggle">
+                      <input
+                        type="checkbox"
+                        checked={autoCompleteWithoutReview}
+                        onChange={(e) => setAutoCompleteWithoutReview(e.target.checked)}
+                        className="h-4 w-4 rounded"
+                      />
+                      <span className="text-xs">Auto-complete without review</span>
+                    </label>
+                  </div>
+                )}
+              </div>
             </div>
           )}
 
