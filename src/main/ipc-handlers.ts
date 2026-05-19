@@ -706,7 +706,22 @@ export function registerIpcHandlers(
     return await oauthManager.startMcpServerOAuthFlow(mcpServerId)
   })
 
-  ipcMain.handle('mcp:getOAuthStatus', (_, mcpServerId: string) => {
+  ipcMain.handle('mcp:getOAuthStatus', async (_, mcpServerId: string) => {
+    // Enterprise-auth servers use JWT from 20x Cloud login (via MCP auth proxy),
+    // not separate OAuth tokens. Report connected when enterprise session is active.
+    if (enterpriseAuth) {
+      const server = db.getMcpServer(mcpServerId)
+      if (server) {
+        try {
+          const apiUrl = enterpriseAuth.getApiUrl()
+          if (server.url && server.url.startsWith(apiUrl)) {
+            const session = await enterpriseAuth.getSession()
+            return { connected: session.isAuthenticated }
+          }
+        } catch { /* fall through to OAuth check */ }
+      }
+    }
+
     if (!oauthManager) return { connected: false }
     return oauthManager.getMcpServerOAuthStatus(mcpServerId)
   })
