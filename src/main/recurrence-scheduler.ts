@@ -273,6 +273,14 @@ export class RecurrenceScheduler {
     )
 
     console.log(`[RecurrenceScheduler] Created instance ${id} from template ${template.id}`)
+
+    // Emit task:created so the renderer auto-start hook can pick it up
+    if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+      const task = this.dbManager.getTask(id)
+      if (task) {
+        this.mainWindow.webContents.send('task:created', { task })
+      }
+    }
   }
 
   /**
