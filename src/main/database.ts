@@ -867,7 +867,7 @@ function deserializeInstalledPlugin(row: InstalledPluginRow): InstalledPluginRec
 
 // Bump this whenever new migrations are added so returning users skip
 // the full migration check on startup.
-const SCHEMA_VERSION = 6
+const SCHEMA_VERSION = 7
 
 export class DatabaseManager {
   public db!: Database.Database
