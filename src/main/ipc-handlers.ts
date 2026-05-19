@@ -732,6 +732,18 @@ export function registerIpcHandlers(
   })
 
   ipcMain.handle('mcp:probeForAuth', async (_, serverUrl: string) => {
+    // Enterprise-auth servers authenticate via JWT proxy, not OAuth.
+    // Don't flag them as needing OAuth — the 401 is expected (unauthenticated probe)
+    // but is handled by the MCP auth proxy at request time.
+    if (enterpriseAuth) {
+      try {
+        const apiUrl = enterpriseAuth.getApiUrl()
+        if (serverUrl.startsWith(apiUrl)) {
+          return { requiresAuth: false }
+        }
+      } catch { /* fall through to normal probe */ }
+    }
+
     const { OAuthManager: OAuthMgr } = await import('./oauth/oauth-manager')
     return await OAuthMgr.probeForAuth(serverUrl)
   })
