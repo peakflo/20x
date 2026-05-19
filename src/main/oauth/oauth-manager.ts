@@ -7,7 +7,7 @@
 
 import { createId } from '@paralleldrive/cuid2'
 import { randomBytes, createHash } from 'crypto'
-import { shell } from 'electron'
+import { Notification, shell } from 'electron'
 import type { DatabaseManager } from '../database'
 import { LocalOAuthServer } from './local-oauth-server'
 import type { OAuthProvider } from './oauth-provider'
@@ -25,6 +25,7 @@ export class OAuthManager {
   private providers: Map<string, OAuthProvider>
   private pendingFlows: Map<string, PendingFlow>
   private refreshScheduler?: NodeJS.Timeout
+  private notifiedOAuthFailures = new Set<string>()
 
   constructor(db: DatabaseManager) {
     this.db = db
@@ -469,6 +470,26 @@ export class OAuthManager {
       } catch (error) {
         const serverName = this.db.getMcpServer(mcpServerId)?.name || mcpServerId
         console.error(`[OAuthManager] Failed to refresh MCP server token for "${serverName}" (${mcpServerId}):`, error)
+
+        // If the refresh token is permanently invalid, clean up the stale record
+        // so UI correctly shows "disconnected" instead of a false "connected" badge
+        const errMsg = String(error)
+        if (errMsg.includes('invalid_grant') || errMsg.includes('Invalid refresh token')) {
+          this.db.deleteOAuthTokenByMcpServer(mcpServerId)
+          console.warn(`[OAuthManager] Deleted stale OAuth token for "${serverName}" — re-authentication required`)
+        }
+
+        // Notify user once per server per app run
+        if (!this.notifiedOAuthFailures.has(mcpServerId)) {
+          this.notifiedOAuthFailures.add(mcpServerId)
+          try {
+            new Notification({
+              title: 'MCP OAuth Expired',
+              body: `"${serverName}" OAuth token is invalid — please re-authenticate in Settings → Tools.`
+            }).show()
+          } catch { /* ignore in headless / test */ }
+        }
+
         return null
       }
     }
