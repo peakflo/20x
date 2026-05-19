@@ -359,7 +359,7 @@ export class AgentManager extends EventEmitter {
         let finalUrl = mcpServer.url
         if (mcpServer.name === '[Workflo] MCP Dev Server' && this.enterpriseAuth) {
           const proxyPort = getMcpAuthProxyPort()
-          const proxyUrl = proxyPort ? registerMcpProxyTarget(mcpServer.url) : null
+          const proxyUrl = proxyPort ? registerMcpProxyTarget(mcpServer.url, mcpServer.name) : null
           if (proxyUrl) {
             finalUrl = proxyUrl
             // Don't send static Authorization — proxy injects fresh JWT per request

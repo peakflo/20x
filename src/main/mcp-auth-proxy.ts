@@ -22,6 +22,7 @@
 
 import { createServer, request as httpRequest, type Server as HttpServer, type IncomingMessage, type ServerResponse } from 'http'
 import { request as httpsRequest } from 'https'
+import { Notification } from 'electron'
 import type { EnterpriseAuth } from './enterprise-auth'
 
 let server: HttpServer | null = null
@@ -31,8 +32,15 @@ let authRef: EnterpriseAuth | null = null
 // Registration ID → target URL
 const targets = new Map<string, string>()
 
+// Registration ID → human-readable integration label (e.g. "[Workflo] MCP Dev Server")
+const targetLabels = new Map<string, string>()
+
 // Reverse lookup: target URL → ID (deduplicates repeated registrations)
 const targetsByUrl = new Map<string, string>()
+
+// Track integrations that have already shown a JWT-failure notification this app run.
+// Prevents spamming the user with repeated notifications for the same integration.
+const notifiedJwtFailures = new Set<string>()
 
 // Monotonic counter for short, collision-free IDs
 let nextId = 1
@@ -51,19 +59,22 @@ export function getMcpAuthProxyPort(): number | null {
  *
  * Returns null if the proxy is not running.
  */
-export function registerMcpProxyTarget(targetUrl: string): string | null {
+export function registerMcpProxyTarget(targetUrl: string, label?: string): string | null {
   if (!port) return null
 
   // Reuse existing registration for the same target URL
   const existingId = targetsByUrl.get(targetUrl)
   if (existingId) {
+    // Update label if a new one is provided
+    if (label) targetLabels.set(existingId, label)
     return `http://127.0.0.1:${port}/${existingId}`
   }
 
   const id = String(nextId++)
   targets.set(id, targetUrl)
   targetsByUrl.set(targetUrl, id)
-  console.log(`[McpAuthProxy] Registered target ${id} → ${targetUrl}`)
+  if (label) targetLabels.set(id, label)
+  console.log(`[McpAuthProxy] Registered target ${id} (${label || 'unnamed'}) → ${targetUrl}`)
   return `http://127.0.0.1:${port}/${id}`
 }
 
@@ -79,6 +90,7 @@ export function unregisterMcpProxyTarget(proxyUrl: string): void {
       const targetUrl = targets.get(id)!
       targets.delete(id)
       targetsByUrl.delete(targetUrl)
+      targetLabels.delete(id)
       console.log(`[McpAuthProxy] Unregistered target ${id}`)
     }
   } catch {
@@ -117,6 +129,8 @@ export function stopMcpAuthProxy(): void {
   }
   targets.clear()
   targetsByUrl.clear()
+  targetLabels.clear()
+  notifiedJwtFailures.clear()
   authRef = null
   nextId = 1
 }
@@ -156,13 +170,29 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
       return
     }
 
+    const integrationLabel = targetLabels.get(id) || `target ${id}`
+
     let jwt: string
     try {
       jwt = await authRef.getJwt()
     } catch (err) {
-      console.error('[McpAuthProxy] Failed to get JWT:', err)
+      console.error(`[McpAuthProxy] Failed to get JWT for "${integrationLabel}":`, err)
+
+      // Notify the user once per integration per app run
+      if (!notifiedJwtFailures.has(integrationLabel)) {
+        notifiedJwtFailures.add(integrationLabel)
+        try {
+          new Notification({
+            title: 'MCP Auth Failed',
+            body: `Could not authenticate "${integrationLabel}" — please sign in again.`
+          }).show()
+        } catch {
+          // Notification may fail in headless / test environments — ignore
+        }
+      }
+
       res.writeHead(502, { 'Content-Type': 'application/json' })
-      res.end(JSON.stringify({ error: 'Failed to obtain auth token' }))
+      res.end(JSON.stringify({ error: `Failed to obtain auth token for "${integrationLabel}"` }))
       return
     }
 
@@ -212,7 +242,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
       : httpRequest(targetString, reqOptions, callback)
 
     proxyReq.on('error', (err) => {
-      console.error(`[McpAuthProxy] Upstream error for target ${id}:`, err.message)
+      console.error(`[McpAuthProxy] Upstream error for "${integrationLabel}":`, err.message)
       if (!res.headersSent) {
         res.writeHead(502, { 'Content-Type': 'application/json' })
         res.end(JSON.stringify({ error: `Upstream error: ${err.message}` }))
