@@ -1035,7 +1035,16 @@ export function registerIpcHandlers(
     // Clear enterprise state sync from agent manager
     agentManager.setEnterpriseStateSync(null)
 
-    return await enterpriseAuth.logout()
+    await enterpriseAuth.logout()
+
+    try {
+      new Notification({
+        title: '20x Cloud Disconnected',
+        body: 'You have been signed out of 20x Cloud.'
+      }).show()
+    } catch {
+      // Notification may fail in headless / test environments — ignore
+    }
   })
 
   ipcMain.handle('enterprise:getSession', async () => {

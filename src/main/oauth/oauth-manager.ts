@@ -467,7 +467,8 @@ export class OAuthManager {
         const refreshed = this.db.getOAuthTokenByMcpServer(mcpServerId)
         return refreshed?.access_token || null
       } catch (error) {
-        console.error(`[OAuthManager] Failed to refresh MCP server token for ${mcpServerId}:`, error)
+        const serverName = this.db.getMcpServer(mcpServerId)?.name || mcpServerId
+        console.error(`[OAuthManager] Failed to refresh MCP server token for "${serverName}" (${mcpServerId}):`, error)
         return null
       }
     }
