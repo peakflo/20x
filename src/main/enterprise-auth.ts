@@ -1,4 +1,4 @@
-import { app, safeStorage } from 'electron'
+import { app, safeStorage, Notification } from 'electron'
 import { createClient, SupabaseClient, Session } from '@supabase/supabase-js'
 import type { DatabaseManager } from './database'
 import {
@@ -130,6 +130,9 @@ export class EnterpriseAuth {
 
   // Mutex: in-flight refresh promise to prevent concurrent refresh races
   private refreshInFlight: Promise<{ token: string }> | null = null
+
+  // Dedup: only notify user once per app run when session expires involuntarily
+  private notifiedSessionExpired = false
 
   constructor(db: DatabaseManager) {
     this.db = db
@@ -371,6 +374,7 @@ export class EnterpriseAuth {
     if (!refreshToken) {
       this.logAuthEvent('auth_clear_missing_refresh_token')
       this.clearStoredData()
+      this.notifySessionExpired('No refresh token — please sign in to 20x Cloud again.')
       throw new Error('No refresh token available — please sign in again')
     }
 
@@ -384,6 +388,7 @@ export class EnterpriseAuth {
         status: (error as { status?: number } | null)?.status
       })
       this.clearStoredData()
+      this.notifySessionExpired('Session expired — please sign in to 20x Cloud again.')
       throw new Error('Session expired — please sign in again')
     }
 
@@ -753,6 +758,23 @@ export class EnterpriseAuth {
 
     for (const key of Object.values(KEYS)) {
       this.db.deleteSetting(key)
+    }
+  }
+
+  /**
+   * Show an OS notification when enterprise auth is involuntarily invalidated.
+   * Fires at most once per app run to avoid spamming.
+   */
+  private notifySessionExpired(body: string): void {
+    if (this.notifiedSessionExpired) return
+    this.notifiedSessionExpired = true
+    try {
+      new Notification({
+        title: '20x Cloud Disconnected',
+        body
+      }).show()
+    } catch {
+      // Notification may fail in headless / test environments — ignore
     }
   }
 

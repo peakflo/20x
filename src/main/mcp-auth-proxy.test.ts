@@ -1,9 +1,17 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
 import { createServer, type Server as HttpServer, type IncomingMessage, type ServerResponse } from 'http'
 
+// Track Notification calls
+const mockNotificationShow = vi.fn()
+const mockNotificationConstructor = vi.fn()
+
 // Mock electron before importing the module
 vi.mock('electron', () => ({
-  app: { isPackaged: false }
+  app: { isPackaged: false },
+  Notification: function MockNotification(opts: { title: string; body: string }) {
+    mockNotificationConstructor(opts)
+    return { show: mockNotificationShow }
+  }
 }))
 
 // We test the proxy by starting both it and a mock upstream server
@@ -88,6 +96,8 @@ describe('MCP Auth Proxy', () => {
   beforeEach(async () => {
     mockAuth = new MockAuth()
     upstream = await createMockUpstream()
+    mockNotificationShow.mockClear()
+    mockNotificationConstructor.mockClear()
   })
 
   afterEach(async () => {
@@ -110,6 +120,12 @@ describe('MCP Auth Proxy', () => {
   it('registers a target and returns a proxy URL', async () => {
     const port = await startMcpAuthProxy(mockAuth as never)
     const proxyUrl = registerMcpProxyTarget(`http://127.0.0.1:${upstream.port}`)
+    expect(proxyUrl).toBe(`http://127.0.0.1:${port}/1`)
+  })
+
+  it('registers a target with a label', async () => {
+    const port = await startMcpAuthProxy(mockAuth as never)
+    const proxyUrl = registerMcpProxyTarget(`http://127.0.0.1:${upstream.port}`, 'My Integration')
     expect(proxyUrl).toBe(`http://127.0.0.1:${port}/1`)
   })
 
@@ -193,7 +209,20 @@ describe('MCP Auth Proxy', () => {
     expect(response.status).toBe(404)
   })
 
-  it('returns 502 when auth fails', async () => {
+  it('returns 502 when auth fails and includes integration name in error', async () => {
+    await startMcpAuthProxy(mockAuth as never)
+    const proxyUrl = registerMcpProxyTarget(`http://127.0.0.1:${upstream.port}`, '[Workflo] MCP Dev Server')!
+
+    mockAuth.setFail(true)
+
+    const response = await fetch(proxyUrl, { method: 'POST', body: '{}' })
+    expect(response.status).toBe(502)
+    const data = await response.json()
+    expect(data.error).toContain('Failed to obtain auth token')
+    expect(data.error).toContain('[Workflo] MCP Dev Server')
+  })
+
+  it('returns 502 with fallback label when no label was set', async () => {
     await startMcpAuthProxy(mockAuth as never)
     const proxyUrl = registerMcpProxyTarget(`http://127.0.0.1:${upstream.port}`)!
 
@@ -202,7 +231,87 @@ describe('MCP Auth Proxy', () => {
     const response = await fetch(proxyUrl, { method: 'POST', body: '{}' })
     expect(response.status).toBe(502)
     const data = await response.json()
-    expect(data.error).toContain('Failed to obtain auth token')
+    expect(data.error).toContain('target 1')
+  })
+
+  it('shows a notification on first JWT failure per integration', async () => {
+    await startMcpAuthProxy(mockAuth as never)
+    const proxyUrl = registerMcpProxyTarget(`http://127.0.0.1:${upstream.port}`, 'HubSpot')!
+
+    mockAuth.setFail(true)
+
+    await fetch(proxyUrl, { method: 'POST', body: '{}' })
+
+    expect(mockNotificationConstructor).toHaveBeenCalledTimes(1)
+    expect(mockNotificationConstructor).toHaveBeenCalledWith({
+      title: 'MCP Auth Failed',
+      body: 'Could not authenticate "HubSpot" — please sign in again.'
+    })
+    expect(mockNotificationShow).toHaveBeenCalledTimes(1)
+  })
+
+  it('deduplicates notifications — only one per integration per app run', async () => {
+    await startMcpAuthProxy(mockAuth as never)
+    const proxyUrl = registerMcpProxyTarget(`http://127.0.0.1:${upstream.port}`, 'Linear')!
+
+    mockAuth.setFail(true)
+
+    // Fire 3 requests — all fail
+    await fetch(proxyUrl, { method: 'POST', body: '{}' })
+    await fetch(proxyUrl, { method: 'POST', body: '{}' })
+    await fetch(proxyUrl, { method: 'POST', body: '{}' })
+
+    // Notification should only fire once for "Linear"
+    expect(mockNotificationConstructor).toHaveBeenCalledTimes(1)
+    expect(mockNotificationShow).toHaveBeenCalledTimes(1)
+  })
+
+  it('shows separate notifications for different integrations', async () => {
+    await startMcpAuthProxy(mockAuth as never)
+
+    // Create a second upstream to get a different target URL
+    const upstream2 = await createMockUpstream()
+
+    const proxyUrl1 = registerMcpProxyTarget(`http://127.0.0.1:${upstream.port}`, 'Integration A')!
+    const proxyUrl2 = registerMcpProxyTarget(`http://127.0.0.1:${upstream2.port}`, 'Integration B')!
+
+    mockAuth.setFail(true)
+
+    await fetch(proxyUrl1, { method: 'POST', body: '{}' })
+    await fetch(proxyUrl2, { method: 'POST', body: '{}' })
+
+    // Two different integrations → two notifications
+    expect(mockNotificationConstructor).toHaveBeenCalledTimes(2)
+    expect(mockNotificationShow).toHaveBeenCalledTimes(2)
+
+    const calls = mockNotificationConstructor.mock.calls
+    expect(calls[0][0].body).toContain('Integration A')
+    expect(calls[1][0].body).toContain('Integration B')
+
+    await new Promise<void>((resolve) => upstream2.server.close(() => resolve()))
+  })
+
+  it('resets notification dedup state on stop/restart', async () => {
+    await startMcpAuthProxy(mockAuth as never)
+    const proxyUrl = registerMcpProxyTarget(`http://127.0.0.1:${upstream.port}`, 'Notion')!
+
+    mockAuth.setFail(true)
+    await fetch(proxyUrl, { method: 'POST', body: '{}' })
+    expect(mockNotificationShow).toHaveBeenCalledTimes(1)
+
+    // Stop clears dedup state
+    stopMcpAuthProxy()
+    mockNotificationShow.mockClear()
+    mockNotificationConstructor.mockClear()
+
+    // Restart and re-register
+    await startMcpAuthProxy(mockAuth as never)
+    const proxyUrl2 = registerMcpProxyTarget(`http://127.0.0.1:${upstream.port}`, 'Notion')!
+
+    await fetch(proxyUrl2, { method: 'POST', body: '{}' })
+
+    // Should notify again after restart (new "app run")
+    expect(mockNotificationShow).toHaveBeenCalledTimes(1)
   })
 
   it('unregisters targets correctly', async () => {

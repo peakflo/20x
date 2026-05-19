@@ -359,7 +359,7 @@ export class AgentManager extends EventEmitter {
         let finalUrl = mcpServer.url
         if (mcpServer.name === '[Workflo] MCP Dev Server' && this.enterpriseAuth) {
           const proxyPort = getMcpAuthProxyPort()
-          const proxyUrl = proxyPort ? registerMcpProxyTarget(mcpServer.url) : null
+          const proxyUrl = proxyPort ? registerMcpProxyTarget(mcpServer.url, mcpServer.name) : null
           if (proxyUrl) {
             finalUrl = proxyUrl
             // Don't send static Authorization — proxy injects fresh JWT per request
@@ -3127,6 +3127,17 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
 
     try {
       const headers: Record<string, string> = { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream', ...serverData.headers }
+
+      // Inject enterprise JWT for servers hosted on the enterprise API
+      if (this.enterpriseAuth) {
+        try {
+          const apiUrl = this.enterpriseAuth.getApiUrl()
+          if (serverData.url.startsWith(apiUrl)) {
+            const jwt = await this.enterpriseAuth.getJwt()
+            headers['Authorization'] = `Bearer ${jwt}`
+          }
+        } catch { /* proceed without JWT — will likely get 401/403 */ }
+      }
 
       // Try streamable HTTP — POST initialize directly
       const initRes = await fetch(serverData.url, {
