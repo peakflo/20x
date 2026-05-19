@@ -43,6 +43,8 @@ interface RawTaskRow {
   heartbeat_interval_minutes: number
   heartbeat_last_check_at: string | null
   heartbeat_next_check_at: string | null
+  auto_start_agent: number
+  auto_complete_without_review: number
   parent_task_id: string | null
   sort_order: number
   created_at: string
@@ -241,9 +243,10 @@ export class RecurrenceScheduler {
         id, title, description, type, priority, status, assignee, due_date,
         labels, attachments, repos, output_fields, agent_id, source, skill_ids,
         is_recurring, recurrence_pattern, recurrence_parent_id,
+        auto_start_agent, auto_complete_without_review,
         created_at, updated_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id,
       template.title,
@@ -263,6 +266,8 @@ export class RecurrenceScheduler {
       0, // Not recurring
       null, // No recurrence pattern
       template.id, // Link back to template
+      template.auto_start_agent ? 1 : 0,
+      template.auto_complete_without_review ? 1 : 0,
       occurrenceTime, // Use occurrence time as created_at
       now
     )
@@ -404,6 +409,8 @@ export class RecurrenceScheduler {
       heartbeat_interval_minutes: row.heartbeat_interval_minutes ?? 30,
       heartbeat_last_check_at: row.heartbeat_last_check_at ?? null,
       heartbeat_next_check_at: row.heartbeat_next_check_at ?? null,
+      auto_start_agent: (row.auto_start_agent ?? 0) === 1,
+      auto_complete_without_review: (row.auto_complete_without_review ?? 0) === 1,
       parent_task_id: row.parent_task_id ?? null,
       sort_order: row.sort_order ?? 0,
     }

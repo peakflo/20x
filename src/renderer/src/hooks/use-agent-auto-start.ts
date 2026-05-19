@@ -608,6 +608,62 @@ export function useAgentAutoStart({ tasks, agents, showToast }: UseAgentAutoStar
     return unsubscribe
   }, [isEnabled, isSnoozed, startTriage])
 
+  // Auto-start recurring instances with auto_start_agent flag (works independently of global scheduler)
+  useEffect(() => {
+    const unsubscribe = onTaskCreated((event) => {
+      const task = event.task as WorkfloTask
+      // Only handle recurring instances (not templates) with auto_start_agent enabled
+      if (!task.auto_start_agent || !task.recurrence_parent_id) return
+      if (task.status !== TaskStatus.NotStarted || !task.agent_id) return
+      if (isSnoozed(task.snoozed_until)) return
+      if (getSessionsSnapshot().has(task.id)) return
+
+      // If global scheduler is enabled, it will already handle this task — skip to avoid double starts
+      if (isEnabled) return
+
+      const agentId = task.agent_id
+      const agent = agents.find((a) => a.id === agentId)
+      if (!agent) return
+
+      console.log(`[AutoStart] Recurring instance "${task.title}" has auto_start_agent, starting agent`)
+      const maxParallel = agent.config.max_parallel_sessions || 1
+      const currentRunning = getRunningCount(agentId)
+      if (currentRunning < maxParallel) {
+        setTimeout(() => startTasksForAgent(agentId, [task.id], agent), 200)
+      } else {
+        addToQueue(agentId, task.id)
+      }
+    })
+
+    return unsubscribe
+  }, [agents, isEnabled, isSnoozed, getSessionsSnapshot, getRunningCount, startTasksForAgent, addToQueue])
+
+  // Auto-complete tasks with auto_complete_without_review flag when they reach ReadyForReview
+  useEffect(() => {
+    const unsubscribe = onTaskUpdated((event) => {
+      if (event.updates?.status !== TaskStatus.ReadyForReview) return
+
+      const task = tasks.find((t) => t.id === event.taskId)
+      if (!task) return
+
+      // Merge event updates with stale task to get current state
+      const updatedTask = { ...task, ...event.updates } as WorkfloTask
+      if (!updatedTask.auto_complete_without_review) return
+
+      console.log(`[AutoStart] Task "${updatedTask.title}" has auto_complete_without_review, auto-completing`)
+      setTimeout(async () => {
+        try {
+          await taskApi.update(event.taskId, { status: TaskStatus.Completed })
+          showToast(`Auto-completed "${updatedTask.title}"`)
+        } catch (error) {
+          console.error(`[AutoStart] Failed to auto-complete task ${event.taskId}:`, error)
+        }
+      }, 500)
+    })
+
+    return unsubscribe
+  }, [tasks, showToast])
+
   // Listen to task updates (new tasks or reassignments)
   useEffect(() => {
     if (!isEnabled) return

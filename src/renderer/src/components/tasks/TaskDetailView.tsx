@@ -367,6 +367,8 @@ interface TaskDetailViewProps {
   onEditAgent?: (agentId: string) => void
   /** Save an inline description edit. When provided, the description becomes editable. */
   onUpdateDescription?: (description: string) => void | Promise<void>
+  /** Update auto-start / auto-complete flags for recurring templates */
+  onUpdateAutoFlags?: (updates: { auto_start_agent?: boolean; auto_complete_without_review?: boolean }) => void
   subtasks?: WorkfloTask[]
   parentTask?: WorkfloTask | null
   onNavigateToTask?: (taskId: string) => void
@@ -374,7 +376,7 @@ interface TaskDetailViewProps {
   onReorderSubtasks?: (orderedIds: string[]) => void
 }
 
-export function TaskDetailView({ task, agents, onEdit, onDelete, onUpdateAttachments, onUpdateOutputFields, onCompleteTask, onAssignAgent, onUpdateRepos, onAddRepos, onUpdateSkillIds, onAddSkills, onStartAgent, canStartAgent, onResumeAgent, canResumeAgent, onRestartAgent, canRestartAgent, onSnooze, onUnsnooze, onReassign, onTriage, canTriage, onEditAgent, onUpdateDescription, subtasks, parentTask, onNavigateToTask, onAddSubtask, onReorderSubtasks }: TaskDetailViewProps) {
+export function TaskDetailView({ task, agents, onEdit, onDelete, onUpdateAttachments, onUpdateOutputFields, onCompleteTask, onAssignAgent, onUpdateRepos, onAddRepos, onUpdateSkillIds, onAddSkills, onStartAgent, canStartAgent, onResumeAgent, canResumeAgent, onRestartAgent, canRestartAgent, onSnooze, onUnsnooze, onReassign, onTriage, canTriage, onEditAgent, onUpdateDescription, onUpdateAutoFlags, subtasks, parentTask, onNavigateToTask, onAddSubtask, onReorderSubtasks }: TaskDetailViewProps) {
   const { skills, fetchSkills } = useSkillStore()
   const openTaskOnCanvas = useUIStore((s) => s.openTaskOnCanvas)
   const isActive = task.status !== TaskStatus.Completed
@@ -642,6 +644,30 @@ export function TaskDetailView({ task, agents, onEdit, onDelete, onUpdateAttachm
                     </span>
                   )}
                 </div>
+              </>
+            )}
+            {task.is_recurring && !task.recurrence_parent_id && task.agent_id && onUpdateAutoFlags && (
+              <>
+                <span className="text-muted-foreground flex items-center gap-2"><Play className="h-3.5 w-3.5" /> Auto-start</span>
+                <label className="flex items-center gap-2 cursor-pointer" data-testid="auto-start-agent-toggle">
+                  <input
+                    type="checkbox"
+                    checked={task.auto_start_agent}
+                    onChange={(e) => onUpdateAutoFlags({ auto_start_agent: e.target.checked })}
+                    className="h-4 w-4 rounded border-border bg-background text-primary cursor-pointer"
+                  />
+                  <span className="text-sm">Auto-start agent on new instances</span>
+                </label>
+                <span className="text-muted-foreground flex items-center gap-2"><Sparkles className="h-3.5 w-3.5" /> Auto-complete</span>
+                <label className="flex items-center gap-2 cursor-pointer" data-testid="auto-complete-toggle">
+                  <input
+                    type="checkbox"
+                    checked={task.auto_complete_without_review}
+                    onChange={(e) => onUpdateAutoFlags({ auto_complete_without_review: e.target.checked })}
+                    className="h-4 w-4 rounded border-border bg-background text-primary cursor-pointer"
+                  />
+                  <span className="text-sm">Auto-complete without review</span>
+                </label>
               </>
             )}
             {task.recurrence_parent_id && (

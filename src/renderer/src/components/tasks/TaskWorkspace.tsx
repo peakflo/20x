@@ -694,6 +694,14 @@ Update existing skills that were helpful or create new ones for patterns worth r
             onTriage={handleTriage}
             canTriage={!!canTriage}
             onEditAgent={handleEditAgent}
+            onUpdateAutoFlags={async (updates) => {
+              if (onUpdateTask) {
+                await onUpdateTask(task.id, updates)
+              } else {
+                await taskApi.update(task.id, updates)
+                updateTaskInStore(task.id, updates)
+              }
+            }}
             subtasks={subtasks}
             parentTask={parentTask}
             onNavigateToTask={onNavigateToTask}

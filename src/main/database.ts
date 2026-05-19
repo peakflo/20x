@@ -244,6 +244,8 @@ export interface TaskRow {
   heartbeat_interval_minutes: number | null
   heartbeat_last_check_at: string | null
   heartbeat_next_check_at: string | null
+  auto_start_agent: number
+  auto_complete_without_review: number
   parent_task_id: string | null
   sort_order: number
   created_at: string
@@ -304,6 +306,8 @@ export interface TaskRecord {
   heartbeat_interval_minutes: number | null
   heartbeat_last_check_at: string | null
   heartbeat_next_check_at: string | null
+  auto_start_agent: boolean
+  auto_complete_without_review: boolean
   parent_task_id: string | null
   sort_order: number
   created_at: string
@@ -341,6 +345,8 @@ export interface CreateTaskData {
   is_recurring?: boolean
   recurrence_pattern?: RecurrencePatternRecord | null
   recurrence_parent_id?: string | null
+  auto_start_agent?: boolean
+  auto_complete_without_review?: boolean
   parent_task_id?: string | null
   /** Cron expression — if provided, sets is_recurring=true and stores as recurrence_pattern */
   cron?: string
@@ -372,6 +378,8 @@ export interface UpdateTaskData {
   heartbeat_interval_minutes?: number | null
   heartbeat_last_check_at?: string | null
   heartbeat_next_check_at?: string | null
+  auto_start_agent?: boolean
+  auto_complete_without_review?: boolean
   parent_task_id?: string | null
   sort_order?: number
 }
@@ -403,6 +411,8 @@ const UPDATABLE_COLUMNS = new Set([
   'heartbeat_interval_minutes',
   'heartbeat_last_check_at',
   'heartbeat_next_check_at',
+  'auto_start_agent',
+  'auto_complete_without_review',
   'parent_task_id',
   'sort_order'
 ])
@@ -450,7 +460,9 @@ function deserializeTask(row: TaskRow): TaskRecord {
     heartbeat_enabled: row.heartbeat_enabled === 1,
     heartbeat_interval_minutes: row.heartbeat_interval_minutes ?? null,
     heartbeat_last_check_at: row.heartbeat_last_check_at ?? null,
-    heartbeat_next_check_at: row.heartbeat_next_check_at ?? null
+    heartbeat_next_check_at: row.heartbeat_next_check_at ?? null,
+    auto_start_agent: (row.auto_start_agent ?? 0) === 1,
+    auto_complete_without_review: (row.auto_complete_without_review ?? 0) === 1
   }
 }
 
@@ -933,6 +945,8 @@ export class DatabaseManager {
         heartbeat_interval_minutes INTEGER DEFAULT 30,
         heartbeat_last_check_at TEXT DEFAULT NULL,
         heartbeat_next_check_at TEXT DEFAULT NULL,
+        auto_start_agent INTEGER NOT NULL DEFAULT 0,
+        auto_complete_without_review INTEGER NOT NULL DEFAULT 0,
         parent_task_id TEXT REFERENCES tasks(id) ON DELETE CASCADE,
         sort_order INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL,
@@ -1121,6 +1135,8 @@ export class DatabaseManager {
         heartbeat_interval_minutes INTEGER DEFAULT 30,
         heartbeat_last_check_at TEXT DEFAULT NULL,
         heartbeat_next_check_at TEXT DEFAULT NULL,
+        auto_start_agent INTEGER NOT NULL DEFAULT 0,
+        auto_complete_without_review INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       )
@@ -1452,6 +1468,14 @@ export class DatabaseManager {
     // Add sort_order column for explicit subtask ordering (supports drag-and-drop)
     if (!columnNames.has('sort_order')) {
       this.db.exec(`ALTER TABLE tasks ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0`)
+    }
+
+    // Add auto_start_agent and auto_complete_without_review columns for recurring tasks
+    if (!columnNames.has('auto_start_agent')) {
+      this.db.exec(`ALTER TABLE tasks ADD COLUMN auto_start_agent INTEGER NOT NULL DEFAULT 0`)
+    }
+    if (!columnNames.has('auto_complete_without_review')) {
+      this.db.exec(`ALTER TABLE tasks ADD COLUMN auto_complete_without_review INTEGER NOT NULL DEFAULT 0`)
     }
 
     // Create heartbeat_logs table
@@ -1937,10 +1961,11 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
         id, title, description, type, priority, status, assignee, due_date,
         labels, attachments, repos, output_fields, external_id, source_id, source,
         is_recurring, recurrence_pattern, recurrence_parent_id,
+        auto_start_agent, auto_complete_without_review,
         parent_task_id, sort_order,
         created_at, updated_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id,
       data.title,
@@ -1960,6 +1985,8 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
       isRecurring ? 1 : 0,
       recurrencePattern,
       data.recurrence_parent_id ?? null,
+      data.auto_start_agent ? 1 : 0,
+      data.auto_complete_without_review ? 1 : 0,
       data.parent_task_id ?? null,
       sortOrder,
       now,
