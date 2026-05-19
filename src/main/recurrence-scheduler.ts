@@ -275,12 +275,22 @@ export class RecurrenceScheduler {
       now
     )
 
-    console.log(`[RecurrenceScheduler] Created instance ${id} from template ${template.id}`)
+    console.log(`[RecurrenceScheduler] Created instance ${id} from template ${template.id}`, {
+      auto_start_agent: template.auto_start_agent,
+      auto_complete_without_review: template.auto_complete_without_review,
+      agent_id: template.agent_id
+    })
 
     // Emit task:created so the renderer auto-start hook can pick it up
     if (this.mainWindow && !this.mainWindow.isDestroyed()) {
       const task = this.dbManager.getTask(id)
       if (task) {
+        console.log(`[RecurrenceScheduler] Emitting task:created for instance ${id}`, {
+          auto_start_agent: task.auto_start_agent,
+          auto_complete_without_review: task.auto_complete_without_review,
+          agent_id: task.agent_id,
+          recurrence_parent_id: task.recurrence_parent_id
+        })
         this.mainWindow.webContents.send('task:created', { task })
       }
     }

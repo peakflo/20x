@@ -613,6 +613,17 @@ export function useAgentAutoStart({ tasks, agents, showToast }: UseAgentAutoStar
   useEffect(() => {
     const unsubscribe = onTaskCreated((event) => {
       const task = event.task as WorkfloTask
+
+      // Log all recurring instances for debugging
+      if (task.recurrence_parent_id) {
+        console.log(`[AutoStart] Received task:created for recurring instance "${task.title}"`, {
+          auto_start_agent: task.auto_start_agent,
+          agent_id: task.agent_id,
+          status: task.status,
+          recurrence_parent_id: task.recurrence_parent_id
+        })
+      }
+
       // Only handle recurring instances (not templates) with auto_start_agent enabled
       if (!task.auto_start_agent || !task.recurrence_parent_id) return
       if (task.status !== TaskStatus.NotStarted || !task.agent_id) return
@@ -623,40 +634,60 @@ export function useAgentAutoStart({ tasks, agents, showToast }: UseAgentAutoStar
       const agent = agents.find((a) => a.id === agentId)
       if (!agent) return
 
-      console.log(`[AutoStart] Recurring instance "${task.title}" has auto_start_agent, starting agent`)
+      console.log(`[AutoStart] Recurring instance "${task.title}" passed all checks, starting agent ${agent.name}`)
       const maxParallel = agent.config.max_parallel_sessions || 1
       const currentRunning = getRunningCount(agentId)
       if (currentRunning < maxParallel) {
-        setTimeout(() => startTasksForAgent(agentId, [task.id], agent), 200)
+        // Start directly — don't use startTasksForAgent because it looks up the
+        // task in the (stale) tasks array which doesn't include this new instance yet.
+        setTimeout(async () => {
+          try {
+            incrementRunningCount(agentId)
+            await start(agentId, task.id)
+            showToast(`Auto-started "${task.title}" with ${agent.name}`)
+          } catch (error) {
+            console.error(`[AutoStart] Failed to auto-start recurring instance ${task.id}:`, error)
+            decrementRunningCount(agentId)
+          }
+        }, 500)
       } else {
         addToQueue(agentId, task.id)
       }
     })
 
     return unsubscribe
-  }, [agents, isEnabled, isSnoozed, getSessionsSnapshot, getRunningCount, startTasksForAgent, addToQueue])
+  }, [agents, isSnoozed, getSessionsSnapshot, getRunningCount, incrementRunningCount, decrementRunningCount, start, showToast, addToQueue])
 
   // Auto-complete tasks with auto_complete_without_review flag when they reach ReadyForReview
   useEffect(() => {
     const unsubscribe = onTaskUpdated((event) => {
       if (event.updates?.status !== TaskStatus.ReadyForReview) return
 
-      const task = tasks.find((t) => t.id === event.taskId)
-      if (!task) return
+      // Try local tasks first, fall back to DB fetch for recently-created recurring instances
+      const localTask = tasks.find((t) => t.id === event.taskId)
 
-      // Merge event updates with stale task to get current state
-      const updatedTask = { ...task, ...event.updates } as WorkfloTask
-      if (!updatedTask.auto_complete_without_review) return
+      const doAutoComplete = async (baseTask: WorkfloTask) => {
+        const merged = { ...baseTask, ...event.updates } as WorkfloTask
+        if (!merged.auto_complete_without_review) return
 
-      console.log(`[AutoStart] Task "${updatedTask.title}" has auto_complete_without_review, auto-completing`)
-      setTimeout(async () => {
+        console.log(`[AutoStart] Task "${merged.title}" has auto_complete_without_review, auto-completing`)
         try {
           await taskApi.update(event.taskId, { status: TaskStatus.Completed })
-          showToast(`Auto-completed "${updatedTask.title}"`)
+          showToast(`Auto-completed "${merged.title}"`)
         } catch (error) {
           console.error(`[AutoStart] Failed to auto-complete task ${event.taskId}:`, error)
         }
-      }, 500)
+      }
+
+      if (localTask) {
+        setTimeout(() => doAutoComplete(localTask), 500)
+      } else {
+        // Task not in renderer yet — fetch from DB
+        setTimeout(async () => {
+          const freshTask = await taskApi.getById(event.taskId)
+          if (freshTask) doAutoComplete(freshTask)
+        }, 500)
+      }
     })
 
     return unsubscribe
