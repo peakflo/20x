@@ -608,7 +608,8 @@ export function useAgentAutoStart({ tasks, agents, showToast }: UseAgentAutoStar
     return unsubscribe
   }, [isEnabled, isSnoozed, startTriage])
 
-  // Auto-start recurring instances with auto_start_agent flag (works independently of global scheduler)
+  // Auto-start recurring instances with auto_start_agent flag
+  // Runs regardless of global scheduler state — the session check prevents double-starts
   useEffect(() => {
     const unsubscribe = onTaskCreated((event) => {
       const task = event.task as WorkfloTask
@@ -617,9 +618,6 @@ export function useAgentAutoStart({ tasks, agents, showToast }: UseAgentAutoStar
       if (task.status !== TaskStatus.NotStarted || !task.agent_id) return
       if (isSnoozed(task.snoozed_until)) return
       if (getSessionsSnapshot().has(task.id)) return
-
-      // If global scheduler is enabled, it will already handle this task — skip to avoid double starts
-      if (isEnabled) return
 
       const agentId = task.agent_id
       const agent = agents.find((a) => a.id === agentId)
