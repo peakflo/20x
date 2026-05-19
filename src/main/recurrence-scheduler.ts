@@ -141,6 +141,9 @@ export class RecurrenceScheduler {
 
   private async checkAndCreateDueInstances(): Promise<void> {
     try {
+      // Repair any templates missing next_occurrence_at (e.g. recurrence added via update)
+      this.repairMissingNextOccurrence()
+
       const now = new Date().toISOString()
 
       // Query templates where next_occurrence_at <= NOW()
@@ -424,22 +427,26 @@ export class RecurrenceScheduler {
     }
   }
 
-  // Public method to initialize next_occurrence_at for a newly created recurring task
+  // Public method to initialize next_occurrence_at for a newly created recurring task.
+  // Calculates from 1 minute ago so that a cron matching the current minute fires
+  // on the very next scheduler tick instead of waiting until the next day/cycle.
   initializeRecurringTask(taskId: string): void {
     const task = this.dbManager.getTask(taskId)
     if (!task || !task.is_recurring || !task.recurrence_pattern) {
       return
     }
 
-    const now = new Date().toISOString()
-    const nextOccurrence = this.calculateNextOccurrence(task.recurrence_pattern, now)
+    const now = new Date()
+    // Look back 1 minute so the current minute's cron match is included
+    const lookback = new Date(now.getTime() - 60_000).toISOString()
+    const nextOccurrence = this.calculateNextOccurrence(task.recurrence_pattern, lookback)
 
     if (nextOccurrence) {
       this.dbManager.db.prepare(`
         UPDATE tasks
         SET next_occurrence_at = ?, updated_at = ?
         WHERE id = ?
-      `).run(nextOccurrence, now, taskId)
+      `).run(nextOccurrence, now.toISOString(), taskId)
 
       console.log(`[RecurrenceScheduler] Initialized recurring task ${taskId} with next occurrence: ${nextOccurrence}`)
     }

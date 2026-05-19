@@ -111,6 +111,11 @@ export function registerIpcHandlers(
 
     const updated = db.updateTask(id, data)
 
+    // Initialize recurring task schedule when recurrence is added or changed
+    if (recurrenceScheduler && updated && updated.is_recurring && updated.recurrence_pattern) {
+      recurrenceScheduler.initializeRecurringTask(id)
+    }
+
     // Auto-disable heartbeat when task is completed
     if (heartbeatScheduler && data.status === TaskStatus.Completed && updated?.heartbeat_enabled) {
       heartbeatScheduler.disableHeartbeat(id)
