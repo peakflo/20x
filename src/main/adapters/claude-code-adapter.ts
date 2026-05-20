@@ -87,7 +87,7 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
 
       // Try to find claude in PATH
       const whichCmd = isWin ? 'where' : 'which'
-      const binaryName = isWin ? 'claude.cmd' : 'claude'
+      const binaryName = 'claude'
       const { stdout } = await execFileAsync(whichCmd, [binaryName])
       let found = stdout.trim().split(/\r?\n/)[0]
 
@@ -111,7 +111,9 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
         ? [
             `${home}\\AppData\\Roaming\\npm\\node_modules\\@anthropic-ai\\claude-code\\cli.js`,
             `${home}\\AppData\\Roaming\\npm\\claude.cmd`,
-            `${home}\\.local\\bin\\claude.cmd`
+            `${home}\\AppData\\Roaming\\npm\\claude.exe`,
+            `${home}\\.local\\bin\\claude.cmd`,
+            `${home}\\.local\\bin\\claude.exe`
           ]
         : [
             '/usr/local/bin/claude',
