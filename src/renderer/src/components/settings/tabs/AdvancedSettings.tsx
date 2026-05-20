@@ -11,11 +11,19 @@ export function AdvancedSettings() {
   const { githubOrg, ghCliStatus, setGithubOrg, checkGhCli, startGhAuth } = useSettingsStore()
   const [orgInput, setOrgInput] = useState(githubOrg || '')
   const [isAuthenticating, setIsAuthenticating] = useState(false)
+  const [deviceCode, setDeviceCode] = useState('')
 
   // API Keys
   const [anthropicKey, setAnthropicKey] = useState('')
   const [openaiKey, setOpenaiKey] = useState('')
   const [googleKey, setGoogleKey] = useState('')
+
+  useEffect(() => {
+    const unsubscribe = window.electronAPI.onGithubDeviceCode((code) => {
+      setDeviceCode(code)
+    })
+    return unsubscribe
+  }, [])
 
   useEffect(() => {
     checkGhCli()
@@ -61,12 +69,14 @@ export function AdvancedSettings() {
                   variant="outline"
                   onClick={async () => {
                     setIsAuthenticating(true)
+                    setDeviceCode('')
                     try {
                       await startGhAuth()
                     } catch (error) {
                       console.error('GitHub auth failed:', error)
                     } finally {
                       setIsAuthenticating(false)
+                      setDeviceCode('')
                     }
                   }}
                   disabled={isAuthenticating}
@@ -74,6 +84,19 @@ export function AdvancedSettings() {
                   {isAuthenticating && <Loader2 className="h-3 w-3 animate-spin mr-1" />}
                   Authenticate
                 </Button>
+
+                {deviceCode && (
+                  <div className="mt-2 space-y-1">
+                    <p className="text-xs text-muted-foreground">Enter this code in your browser:</p>
+                    <code className="block text-lg font-mono font-bold bg-muted px-3 py-2 rounded text-center">
+                      {deviceCode}
+                    </code>
+                    <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                      Waiting for authorization...
+                    </div>
+                  </div>
+                )}
               </div>
             ) : (
               <span className="text-muted-foreground">gh CLI not installed</span>

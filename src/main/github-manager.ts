@@ -119,7 +119,7 @@ export class GitHubManager {
         output += data.toString()
 
         if (!codeEmitted && onDeviceCode) {
-          const codeMatch = output.match(/code:\s*([A-Z0-9]{4}-[A-Z0-9]{4})/)
+          const codeMatch = output.match(/\b([A-Z0-9]{4}-[A-Z0-9]{4})\b/)
           if (codeMatch) {
             codeEmitted = true
             onDeviceCode(codeMatch[1])
