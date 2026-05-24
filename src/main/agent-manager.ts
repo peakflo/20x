@@ -29,6 +29,8 @@ enum CodingAgentType {
 
 // Default OpenCode server URL (matches database default)
 const DEFAULT_SERVER_URL = 'http://localhost:4096'
+const WORKFLO_MCP_DEV_SERVER_NAME = '[Workflo] MCP Dev Server'
+const WORKFLO_MCP_DEV_PATH = '/api/mcp/dev/mcp'
 
 interface AgentSession {
   id: string
@@ -46,6 +48,41 @@ interface AgentSession {
   adapter?: CodingAgentAdapter
   secretSessionToken?: string
   pollingStarted?: boolean
+}
+
+function normalizeUrlPath(pathname: string): string {
+  return pathname.replace(/\/+$/, '') || '/'
+}
+
+function isWorkfloMcpDevServerUrl(serverUrl?: string): boolean {
+  if (!serverUrl) return false
+
+  try {
+    return normalizeUrlPath(new URL(serverUrl).pathname) === WORKFLO_MCP_DEV_PATH
+  } catch {
+    return false
+  }
+}
+
+function isEnterpriseWorkfloMcpServer(name: string, serverUrl?: string): boolean {
+  return name === WORKFLO_MCP_DEV_SERVER_NAME ||
+    (name.toLowerCase().includes('workflo') && isWorkfloMcpDevServerUrl(serverUrl))
+}
+
+function resolveEnterpriseMcpDevUrl(currentUrl: string | undefined, enterpriseApiUrl: string): string {
+  if (!currentUrl) return `${enterpriseApiUrl}${WORKFLO_MCP_DEV_PATH}`
+
+  try {
+    const current = new URL(currentUrl)
+    const enterprise = new URL(enterpriseApiUrl)
+    if (normalizeUrlPath(current.pathname) === WORKFLO_MCP_DEV_PATH && current.origin !== enterprise.origin) {
+      return `${enterpriseApiUrl}${WORKFLO_MCP_DEV_PATH}`
+    }
+  } catch {
+    return currentUrl
+  }
+
+  return currentUrl
 }
 
 /** Entry tracked by the centralized polling coordinator */
@@ -357,14 +394,18 @@ export class AgentManager extends EventEmitter {
 
         // Inject enterprise JWT for Workflo MCP Dev Server — route through auth proxy
         let finalUrl = mcpServer.url
-        if (mcpServer.name === '[Workflo] MCP Dev Server' && this.enterpriseAuth) {
+        if (
+          this.enterpriseAuth &&
+          isEnterpriseWorkfloMcpServer(mcpServer.name, mcpServer.url)
+        ) {
+          finalUrl = resolveEnterpriseMcpDevUrl(mcpServer.url, this.enterpriseAuth.getApiUrl())
           const proxyPort = getMcpAuthProxyPort()
-          const proxyUrl = proxyPort ? registerMcpProxyTarget(mcpServer.url, mcpServer.name) : null
+          const proxyUrl = proxyPort ? registerMcpProxyTarget(finalUrl, mcpServer.name) : null
           if (proxyUrl) {
             finalUrl = proxyUrl
             // Don't send static Authorization — proxy injects fresh JWT per request
             delete finalHeaders['Authorization']
-            console.log(`[AgentManager] MCP Dev Server routed through auth proxy: ${proxyUrl}`)
+            console.log(`[AgentManager] MCP Dev Server routed through auth proxy: ${proxyUrl} -> ${resolveEnterpriseMcpDevUrl(mcpServer.url, this.enterpriseAuth.getApiUrl())}`)
           } else {
             // Fallback: static JWT (proxy not running)
             try {
