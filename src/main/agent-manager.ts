@@ -260,7 +260,7 @@ export class AgentManager extends EventEmitter {
       let resolvedWorkspaceDir: string | undefined
 
       for (const [org, repoNames] of reposByOrg.entries()) {
-        let orgRepos: Array<{ fullName: string; defaultBranch: string }> = []
+        let orgRepos: Array<{ fullName: string; defaultBranch: string; cloneUrl?: string }> = []
 
         try {
           if (gitProvider === 'gitlab' && this.gitlabManager) {
@@ -273,9 +273,11 @@ export class AgentManager extends EventEmitter {
         }
 
         const branchByRepo = new Map(orgRepos.map((repo) => [repo.fullName, repo.defaultBranch]))
+        const cloneUrlByRepo = new Map(orgRepos.map((repo) => [repo.fullName, repo.cloneUrl]))
         const reposForSetup = repoNames.map((fullName) => ({
           fullName,
-          defaultBranch: branchByRepo.get(fullName) || 'main'
+          defaultBranch: branchByRepo.get(fullName) || 'main',
+          cloneUrl: cloneUrlByRepo.get(fullName)
         }))
 
         console.log(`[AgentManager] Setting up ${reposForSetup.length} repo(s) for org "${org}": ${reposForSetup.map((repo) => repo.fullName).join(', ')}`)

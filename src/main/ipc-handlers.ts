@@ -484,7 +484,7 @@ export function registerIpcHandlers(
   })
 
   // Worktree handlers
-  ipcMain.handle('worktree:setup', async (_, taskId: string, repos: { fullName: string; defaultBranch: string }[], org: string, provider?: 'github' | 'gitlab') => {
+  ipcMain.handle('worktree:setup', async (_, taskId: string, repos: { fullName: string; defaultBranch: string; cloneUrl?: string }[], org: string, provider?: 'github' | 'gitlab') => {
     const resolvedProvider = provider || (db.getSetting('git_provider') as 'github' | 'gitlab' | null) || 'github'
     return await worktreeManager.setupWorkspaceForTask(taskId, repos, org, resolvedProvider)
   })
