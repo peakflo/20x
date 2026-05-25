@@ -1080,8 +1080,8 @@ export class OpencodeAdapter implements CodingAgentAdapter {
       }
 
       const parts = msg.parts && Array.isArray(msg.parts) ? msg.parts : []
-      for (const part of parts) {
-        const partId = this.getScopedPartId(String(msgId), part.id as string | undefined)
+      for (const [partIndex, part] of parts.entries()) {
+        const partId = this.getScopedPartId(String(msgId), part.id as string | undefined, partIndex)
         if (!partId) continue
         // Cast part to a loose record for uniform property access across SDK Part union members
         const p = part as unknown as Record<string, unknown>
