@@ -20,6 +20,11 @@ import { TaskStatus } from '../shared/constants'
 // ── Event queue ─────────────────────────────────────────────────────────
 
 export class EnterpriseStateSync {
+  /**
+   * Maximum number of events per sync request (server Zod schema uses .max(100)).
+   */
+  private static readonly SYNC_EVENTS_MAX_BATCH_SIZE = 100
+
   private pendingEvents: WorkfloSyncEvent[] = []
   private apiClient: WorkfloApiClient
   private userName: string | null = null
@@ -196,10 +201,22 @@ export class EnterpriseStateSync {
         this.pendingEvents = []
 
         try {
-          const result = await this.apiClient.sendSyncEvents(events)
-          console.log(`[EnterpriseStateSync] Sent ${result.inserted} events`)
+          let totalInserted = 0
+          for (
+            let i = 0;
+            i < events.length;
+            i += EnterpriseStateSync.SYNC_EVENTS_MAX_BATCH_SIZE
+          ) {
+            const chunk = events.slice(
+              i,
+              i + EnterpriseStateSync.SYNC_EVENTS_MAX_BATCH_SIZE
+            )
+            const result = await this.apiClient.sendSyncEvents(chunk)
+            totalInserted += result.inserted
+          }
+          console.log(`[EnterpriseStateSync] Sent ${totalInserted} events`)
         } catch (err) {
-          // Re-queue events on failure (they'll be sent next flush)
+          // Re-queue ALL events on any batch failure to preserve order
           this.pendingEvents.unshift(...events)
           const msg = err instanceof Error ? err.message : String(err)
           console.warn(`[EnterpriseStateSync] Failed to send events (domain: ${this.domain}): ${msg}`)

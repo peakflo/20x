@@ -46,6 +46,8 @@ export interface Task {
   heartbeat_interval_minutes?: number | null
   heartbeat_last_check_at?: string | null
   heartbeat_next_check_at?: string | null
+  auto_start_agent: boolean
+  auto_complete_without_review: boolean
   parent_task_id: string | null
   sort_order: number
   created_at: string

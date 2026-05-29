@@ -52,6 +52,8 @@ function makeTask(overrides: Partial<WorkfloTask> = {}): WorkfloTask {
     recurrence_parent_id: null,
     last_occurrence_at: null,
     next_occurrence_at: null,
+    auto_start_agent: false,
+    auto_complete_without_review: false,
     created_at: '2026-01-01T00:00:00Z',
     updated_at: '2026-01-01T00:00:00Z',
     parent_task_id: null,
@@ -94,6 +96,7 @@ function renderDetailView(overrides: {
   canRestartAgent?: boolean
   onCompleteTask?: () => void
   onUpdateDescription?: (description: string) => void | Promise<void>
+  onUpdateAutoFlags?: (updates: { auto_start_agent?: boolean; auto_complete_without_review?: boolean }) => void
 } = {}) {
   const task = makeTask(overrides.task)
   return render(
@@ -120,6 +123,7 @@ function renderDetailView(overrides: {
       onRestartAgent={overrides.onRestartAgent}
       canRestartAgent={overrides.canRestartAgent}
       onUpdateDescription={overrides.onUpdateDescription}
+      onUpdateAutoFlags={overrides.onUpdateAutoFlags}
     />
   )
 }
@@ -473,5 +477,149 @@ describe('TaskDetailView – inline description editing', () => {
       task: { description: '' }
     })
     expect(container.querySelector('[data-testid="collapsible-description"]')).toBeNull()
+  })
+})
+
+describe('TaskDetailView – recurring task auto-start/auto-complete toggles', () => {
+  it('shows auto-start and auto-complete toggles for recurring templates with agent', () => {
+    const onUpdateAutoFlags = vi.fn()
+    renderDetailView({
+      task: {
+        is_recurring: true,
+        recurrence_parent_id: null,
+        recurrence_pattern: '0 9 * * 1-5',
+        agent_id: 'agent-1',
+        auto_start_agent: false,
+        auto_complete_without_review: false
+      },
+      agents: [makeAgent()],
+      onUpdateAutoFlags
+    })
+
+    expect(screen.getByTestId('auto-start-agent-toggle')).toBeDefined()
+    expect(screen.getByTestId('auto-complete-toggle')).toBeDefined()
+  })
+
+  it('does not show toggles for non-recurring tasks', () => {
+    renderDetailView({
+      task: {
+        is_recurring: false,
+        agent_id: 'agent-1'
+      },
+      agents: [makeAgent()],
+      onUpdateAutoFlags: vi.fn()
+    })
+
+    expect(screen.queryByTestId('auto-start-agent-toggle')).toBeNull()
+    expect(screen.queryByTestId('auto-complete-toggle')).toBeNull()
+  })
+
+  it('does not show toggles for recurring instances (with recurrence_parent_id)', () => {
+    renderDetailView({
+      task: {
+        is_recurring: false,
+        recurrence_parent_id: 'parent-template-id',
+        agent_id: 'agent-1'
+      },
+      agents: [makeAgent()],
+      onUpdateAutoFlags: vi.fn()
+    })
+
+    expect(screen.queryByTestId('auto-start-agent-toggle')).toBeNull()
+    expect(screen.queryByTestId('auto-complete-toggle')).toBeNull()
+  })
+
+  it('does not show toggles when no agent is assigned', () => {
+    renderDetailView({
+      task: {
+        is_recurring: true,
+        recurrence_parent_id: null,
+        recurrence_pattern: '0 9 * * 1-5',
+        agent_id: null
+      },
+      agents: [makeAgent()],
+      onUpdateAutoFlags: vi.fn()
+    })
+
+    expect(screen.queryByTestId('auto-start-agent-toggle')).toBeNull()
+    expect(screen.queryByTestId('auto-complete-toggle')).toBeNull()
+  })
+
+  it('does not show toggles when onUpdateAutoFlags is not provided', () => {
+    renderDetailView({
+      task: {
+        is_recurring: true,
+        recurrence_parent_id: null,
+        recurrence_pattern: '0 9 * * 1-5',
+        agent_id: 'agent-1'
+      },
+      agents: [makeAgent()]
+    })
+
+    expect(screen.queryByTestId('auto-start-agent-toggle')).toBeNull()
+    expect(screen.queryByTestId('auto-complete-toggle')).toBeNull()
+  })
+
+  it('calls onUpdateAutoFlags when auto-start toggle is clicked', () => {
+    const onUpdateAutoFlags = vi.fn()
+    renderDetailView({
+      task: {
+        is_recurring: true,
+        recurrence_parent_id: null,
+        recurrence_pattern: '0 9 * * 1-5',
+        agent_id: 'agent-1',
+        auto_start_agent: false,
+        auto_complete_without_review: false
+      },
+      agents: [makeAgent()],
+      onUpdateAutoFlags
+    })
+
+    const checkbox = screen.getByTestId('auto-start-agent-toggle').querySelector('input[type="checkbox"]')!
+    fireEvent.click(checkbox)
+
+    expect(onUpdateAutoFlags).toHaveBeenCalledWith({ auto_start_agent: true })
+  })
+
+  it('calls onUpdateAutoFlags when auto-complete toggle is clicked', () => {
+    const onUpdateAutoFlags = vi.fn()
+    renderDetailView({
+      task: {
+        is_recurring: true,
+        recurrence_parent_id: null,
+        recurrence_pattern: '0 9 * * 1-5',
+        agent_id: 'agent-1',
+        auto_start_agent: false,
+        auto_complete_without_review: false
+      },
+      agents: [makeAgent()],
+      onUpdateAutoFlags
+    })
+
+    const checkbox = screen.getByTestId('auto-complete-toggle').querySelector('input[type="checkbox"]')!
+    fireEvent.click(checkbox)
+
+    expect(onUpdateAutoFlags).toHaveBeenCalledWith({ auto_complete_without_review: true })
+  })
+
+  it('renders checkboxes as checked when flags are true', () => {
+    renderDetailView({
+      task: {
+        is_recurring: true,
+        recurrence_parent_id: null,
+        recurrence_pattern: '0 9 * * 1-5',
+        agent_id: 'agent-1',
+        auto_start_agent: true,
+        auto_complete_without_review: true
+      },
+      agents: [makeAgent()],
+      onUpdateAutoFlags: vi.fn()
+    })
+
+    const autoStartCheckbox = screen.getByTestId('auto-start-agent-toggle').querySelector('input[type="checkbox"]') as HTMLInputElement
+    const autoCompleteCheckbox = screen.getByTestId('auto-complete-toggle').querySelector('input[type="checkbox"]') as HTMLInputElement
+
+    expect(autoStartCheckbox.checked).toBe(true)
+    expect(autoCompleteCheckbox.checked).toBe(true)
   })
 })

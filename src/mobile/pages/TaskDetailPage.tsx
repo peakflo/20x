@@ -485,6 +485,38 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
               </>
             )}
 
+            {/* Auto-start / Auto-complete toggles for recurring templates with agent */}
+            {task.is_recurring && !task.recurrence_parent_id && task.agent_id && (
+              <>
+                <span className="text-muted-foreground flex items-center gap-1.5">
+                  <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                  Auto-start
+                </span>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={task.auto_start_agent}
+                    onChange={(e) => updateTask(task.id, { auto_start_agent: e.target.checked })}
+                    className="h-4 w-4 rounded"
+                  />
+                  <span className="text-sm">Auto-start agent on new instances</span>
+                </label>
+                <span className="text-muted-foreground flex items-center gap-1.5">
+                  <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/></svg>
+                  Auto-complete
+                </span>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={task.auto_complete_without_review}
+                    onChange={(e) => updateTask(task.id, { auto_complete_without_review: e.target.checked })}
+                    className="h-4 w-4 rounded"
+                  />
+                  <span className="text-sm">Auto-complete without review</span>
+                </label>
+              </>
+            )}
+
             {/* Due date */}
             {task.due_date && (
               <>

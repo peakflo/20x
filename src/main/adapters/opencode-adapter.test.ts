@@ -124,6 +124,39 @@ describe('OpencodeAdapter', () => {
     expect(replayed.flatMap((message) => message.parts.map((part) => part.id))).toEqual(['msg-1:part-1', 'msg-2:part-1'])
   })
 
+  it('falls back to message-scoped part indexes during polling when part ids are missing', async () => {
+    const adapter = new OpencodeAdapter()
+    const mockClient = {
+      session: {
+        messages: async () => ({
+          data: [
+            {
+              info: { id: 'msg-1', role: 'assistant' },
+              parts: [
+                { type: 'text', text: 'First chunk' },
+                { type: 'tool', tool: 'bash', state: { status: 'completed', input: { command: 'pwd' }, output: '/tmp' } }
+              ]
+            }
+          ]
+        })
+      }
+    }
+
+    ;(adapter as any).clients.set('session-1', mockClient)
+
+    const polled = await adapter.pollMessages(
+      'session-1',
+      new Set<string>(),
+      new Set<string>(),
+      new Map<string, string>(),
+      { agentId: 'agent-1', taskId: 'task-1', workspaceDir: '/tmp/ws' }
+    )
+
+    expect(polled).toHaveLength(2)
+    expect(polled.map((part) => part.id)).toEqual(['msg-1:part-0', 'msg-1:part-1'])
+    expect(polled.map((part) => part.type)).toEqual(['text', 'tool'])
+  })
+
   describe('getStatus', () => {
     it('returns BUSY when prompt is still in-flight', async () => {
       const adapter = new OpencodeAdapter()

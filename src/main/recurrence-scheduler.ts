@@ -43,6 +43,8 @@ interface RawTaskRow {
   heartbeat_interval_minutes: number
   heartbeat_last_check_at: string | null
   heartbeat_next_check_at: string | null
+  auto_start_agent: number
+  auto_complete_without_review: number
   parent_task_id: string | null
   sort_order: number
   created_at: string
@@ -139,6 +141,9 @@ export class RecurrenceScheduler {
 
   private async checkAndCreateDueInstances(): Promise<void> {
     try {
+      // Repair any templates missing next_occurrence_at (e.g. recurrence added via update)
+      this.repairMissingNextOccurrence()
+
       const now = new Date().toISOString()
 
       // Query templates where next_occurrence_at <= NOW()
@@ -241,9 +246,10 @@ export class RecurrenceScheduler {
         id, title, description, type, priority, status, assignee, due_date,
         labels, attachments, repos, output_fields, agent_id, source, skill_ids,
         is_recurring, recurrence_pattern, recurrence_parent_id,
+        auto_start_agent, auto_complete_without_review,
         created_at, updated_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id,
       template.title,
@@ -263,11 +269,31 @@ export class RecurrenceScheduler {
       0, // Not recurring
       null, // No recurrence pattern
       template.id, // Link back to template
+      template.auto_start_agent ? 1 : 0,
+      template.auto_complete_without_review ? 1 : 0,
       occurrenceTime, // Use occurrence time as created_at
       now
     )
 
-    console.log(`[RecurrenceScheduler] Created instance ${id} from template ${template.id}`)
+    console.log(`[RecurrenceScheduler] Created instance ${id} from template ${template.id}`, {
+      auto_start_agent: template.auto_start_agent,
+      auto_complete_without_review: template.auto_complete_without_review,
+      agent_id: template.agent_id
+    })
+
+    // Emit task:created so the renderer auto-start hook can pick it up
+    if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+      const task = this.dbManager.getTask(id)
+      if (task) {
+        console.log(`[RecurrenceScheduler] Emitting task:created for instance ${id}`, {
+          auto_start_agent: task.auto_start_agent,
+          auto_complete_without_review: task.auto_complete_without_review,
+          agent_id: task.agent_id,
+          recurrence_parent_id: task.recurrence_parent_id
+        })
+        this.mainWindow.webContents.send('task:created', { task })
+      }
+    }
   }
 
   /**
@@ -404,27 +430,33 @@ export class RecurrenceScheduler {
       heartbeat_interval_minutes: row.heartbeat_interval_minutes ?? 30,
       heartbeat_last_check_at: row.heartbeat_last_check_at ?? null,
       heartbeat_next_check_at: row.heartbeat_next_check_at ?? null,
+      auto_start_agent: (row.auto_start_agent ?? 0) === 1,
+      auto_complete_without_review: (row.auto_complete_without_review ?? 0) === 1,
       parent_task_id: row.parent_task_id ?? null,
       sort_order: row.sort_order ?? 0,
     }
   }
 
-  // Public method to initialize next_occurrence_at for a newly created recurring task
+  // Public method to initialize next_occurrence_at for a newly created recurring task.
+  // Calculates from 1 minute ago so that a cron matching the current minute fires
+  // on the very next scheduler tick instead of waiting until the next day/cycle.
   initializeRecurringTask(taskId: string): void {
     const task = this.dbManager.getTask(taskId)
     if (!task || !task.is_recurring || !task.recurrence_pattern) {
       return
     }
 
-    const now = new Date().toISOString()
-    const nextOccurrence = this.calculateNextOccurrence(task.recurrence_pattern, now)
+    const now = new Date()
+    // Look back 1 minute so the current minute's cron match is included
+    const lookback = new Date(now.getTime() - 60_000).toISOString()
+    const nextOccurrence = this.calculateNextOccurrence(task.recurrence_pattern, lookback)
 
     if (nextOccurrence) {
       this.dbManager.db.prepare(`
         UPDATE tasks
         SET next_occurrence_at = ?, updated_at = ?
         WHERE id = ?
-      `).run(nextOccurrence, now, taskId)
+      `).run(nextOccurrence, now.toISOString(), taskId)
 
       console.log(`[RecurrenceScheduler] Initialized recurring task ${taskId} with next occurrence: ${nextOccurrence}`)
     }

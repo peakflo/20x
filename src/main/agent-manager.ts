@@ -29,6 +29,8 @@ enum CodingAgentType {
 
 // Default OpenCode server URL (matches database default)
 const DEFAULT_SERVER_URL = 'http://localhost:4096'
+const WORKFLO_MCP_DEV_SERVER_NAME = '[Workflo] MCP Dev Server'
+const WORKFLO_MCP_DEV_PATH = '/api/mcp/dev/mcp'
 
 interface AgentSession {
   id: string
@@ -46,6 +48,41 @@ interface AgentSession {
   adapter?: CodingAgentAdapter
   secretSessionToken?: string
   pollingStarted?: boolean
+}
+
+function normalizeUrlPath(pathname: string): string {
+  return pathname.replace(/\/+$/, '') || '/'
+}
+
+function isWorkfloMcpDevServerUrl(serverUrl?: string): boolean {
+  if (!serverUrl) return false
+
+  try {
+    return normalizeUrlPath(new URL(serverUrl).pathname) === WORKFLO_MCP_DEV_PATH
+  } catch {
+    return false
+  }
+}
+
+function isEnterpriseWorkfloMcpServer(name: string, serverUrl?: string): boolean {
+  return name === WORKFLO_MCP_DEV_SERVER_NAME ||
+    (name.toLowerCase().includes('workflo') && isWorkfloMcpDevServerUrl(serverUrl))
+}
+
+function resolveEnterpriseMcpDevUrl(currentUrl: string | undefined, enterpriseApiUrl: string): string {
+  if (!currentUrl) return `${enterpriseApiUrl}${WORKFLO_MCP_DEV_PATH}`
+
+  try {
+    const current = new URL(currentUrl)
+    const enterprise = new URL(enterpriseApiUrl)
+    if (normalizeUrlPath(current.pathname) === WORKFLO_MCP_DEV_PATH && current.origin !== enterprise.origin) {
+      return `${enterpriseApiUrl}${WORKFLO_MCP_DEV_PATH}`
+    }
+  } catch {
+    return currentUrl
+  }
+
+  return currentUrl
 }
 
 /** Entry tracked by the centralized polling coordinator */
@@ -97,7 +134,10 @@ export class AgentManager extends EventEmitter {
   // partContentLengths) before pruning.  These grow by 1-4+ entries per poll
   // cycle per session and are never cleaned during a session's lifetime, leading
   // to OOM crashes (heap exhaustion at ~2.9 GB) after extended sessions.
-  private static readonly MAX_DEDUP_ENTRIES = 10_000
+  private static readonly MAX_DEDUP_ENTRIES = 5_000
+  // Maximum number of session ID redirects to keep (old temp IDs → real IDs).
+  // Without a cap these grow forever across many session start/stop cycles.
+  private static readonly MAX_SESSION_REDIRECTS = 200
 
   // ── Event-driven nudge ──
   // When an adapter buffers new stream data it calls onDataAvailable().
@@ -110,6 +150,15 @@ export class AgentManager extends EventEmitter {
 
   // Track last sent status per session to detect transitions for OS notifications
   private lastSentStatus: Map<string, string> = new Map()
+
+  /**
+   * Maximum total characters allowed in partContentLengths values per session.
+   * Exceeding this triggers pruning of the oldest entries, even if the number of
+   * entries is below MAX_DEDUP_ENTRIES. This prevents OOM when message parts (e.g.
+   * tool outputs) are very large.  Limit is ~10MB per session (was 100MB which
+   * allowed a single session to consume most of the V8 heap).
+   */
+  private static readonly MAX_VALUE_CHARS_PER_SESSION = 10_000_000
 
   constructor(db: DatabaseManager) {
     super()
@@ -211,7 +260,7 @@ export class AgentManager extends EventEmitter {
       let resolvedWorkspaceDir: string | undefined
 
       for (const [org, repoNames] of reposByOrg.entries()) {
-        let orgRepos: Array<{ fullName: string; defaultBranch: string }> = []
+        let orgRepos: Array<{ fullName: string; defaultBranch: string; cloneUrl?: string }> = []
 
         try {
           if (gitProvider === 'gitlab' && this.gitlabManager) {
@@ -224,9 +273,11 @@ export class AgentManager extends EventEmitter {
         }
 
         const branchByRepo = new Map(orgRepos.map((repo) => [repo.fullName, repo.defaultBranch]))
+        const cloneUrlByRepo = new Map(orgRepos.map((repo) => [repo.fullName, repo.cloneUrl]))
         const reposForSetup = repoNames.map((fullName) => ({
           fullName,
-          defaultBranch: branchByRepo.get(fullName) || 'main'
+          defaultBranch: branchByRepo.get(fullName) || 'main',
+          cloneUrl: cloneUrlByRepo.get(fullName)
         }))
 
         console.log(`[AgentManager] Setting up ${reposForSetup.length} repo(s) for org "${org}": ${reposForSetup.map((repo) => repo.fullName).join(', ')}`)
@@ -345,14 +396,18 @@ export class AgentManager extends EventEmitter {
 
         // Inject enterprise JWT for Workflo MCP Dev Server — route through auth proxy
         let finalUrl = mcpServer.url
-        if (mcpServer.name === '[Workflo] MCP Dev Server' && this.enterpriseAuth) {
+        if (
+          this.enterpriseAuth &&
+          isEnterpriseWorkfloMcpServer(mcpServer.name, mcpServer.url)
+        ) {
+          finalUrl = resolveEnterpriseMcpDevUrl(mcpServer.url, this.enterpriseAuth.getApiUrl())
           const proxyPort = getMcpAuthProxyPort()
-          const proxyUrl = proxyPort ? registerMcpProxyTarget(mcpServer.url) : null
+          const proxyUrl = proxyPort ? registerMcpProxyTarget(finalUrl, mcpServer.name) : null
           if (proxyUrl) {
             finalUrl = proxyUrl
             // Don't send static Authorization — proxy injects fresh JWT per request
             delete finalHeaders['Authorization']
-            console.log(`[AgentManager] MCP Dev Server routed through auth proxy: ${proxyUrl}`)
+            console.log(`[AgentManager] MCP Dev Server routed through auth proxy: ${proxyUrl} -> ${resolveEnterpriseMcpDevUrl(mcpServer.url, this.enterpriseAuth.getApiUrl())}`)
           } else {
             // Fallback: static JWT (proxy not running)
             try {
@@ -1308,11 +1363,24 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       }
     }
 
-    if (partContentLengths.size > max) {
-      let toDelete = partContentLengths.size - pruneToSize
+    // Prune partContentLengths based on entry count AND total value size.
+    // When the size limit is hit, prune 50% (was 10% which was too conservative —
+    // with large tool outputs re-growth is fast and 10% barely frees memory).
+    let totalChars = 0
+    for (const val of partContentLengths.values()) {
+      totalChars += val.length
+    }
+
+    if (partContentLengths.size > max || totalChars > AgentManager.MAX_VALUE_CHARS_PER_SESSION) {
+      const toDelete = partContentLengths.size > max
+        ? partContentLengths.size - pruneToSize
+        : Math.ceil(partContentLengths.size * 0.5) // Delete 50% when size limit hit
+
+      let deleted = 0
       for (const key of partContentLengths.keys()) {
-        if (toDelete-- <= 0) break
+        if (deleted >= toDelete) break
         partContentLengths.delete(key)
+        deleted++
       }
     }
   }
@@ -1541,7 +1609,18 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
           this.sessions.delete(sessionId)
           this.sessions.set(realSessionId, session)
 
-          // Record redirect so stale IDs from the renderer still resolve
+          // Record redirect so stale IDs from the renderer still resolve.
+          // Cap the redirects map to prevent unbounded growth across many sessions.
+          if (this.sessionIdRedirects.size >= AgentManager.MAX_SESSION_REDIRECTS) {
+            // Evict oldest entries (Maps preserve insertion order)
+            const toEvict = Math.ceil(AgentManager.MAX_SESSION_REDIRECTS * 0.5)
+            let evicted = 0
+            for (const oldKey of this.sessionIdRedirects.keys()) {
+              if (evicted >= toEvict) break
+              this.sessionIdRedirects.delete(oldKey)
+              evicted++
+            }
+          }
           this.sessionIdRedirects.set(sessionId, realSessionId)
 
           // Re-key the polling entry
@@ -2530,7 +2609,13 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       console.log(`[AgentManager] Unregistered secret session for ${sessionId}`)
     }
 
+    // Eagerly clear dedup structures to free memory immediately (don't wait for GC)
+    session.seenMessageIds.clear()
+    session.seenPartIds.clear()
+    session.partContentLengths.clear()
+
     this.sessions.delete(sessionId)
+    this.lastSentStatus.delete(sessionId)
     console.log(`[SessionTracker] DESTROYED session=${sessionId} task=${session.taskId} resetStatus=${resetTaskStatus} reason=stop_session`)
 
     // Clean up any redirect entries pointing to this session
@@ -3085,6 +3170,17 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
 
     try {
       const headers: Record<string, string> = { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream', ...serverData.headers }
+
+      // Inject enterprise JWT for servers hosted on the enterprise API
+      if (this.enterpriseAuth) {
+        try {
+          const apiUrl = this.enterpriseAuth.getApiUrl()
+          if (serverData.url.startsWith(apiUrl)) {
+            const jwt = await this.enterpriseAuth.getJwt()
+            headers['Authorization'] = `Bearer ${jwt}`
+          }
+        } catch { /* proceed without JWT — will likely get 401/403 */ }
+      }
 
       // Try streamable HTTP — POST initialize directly
       const initRes = await fetch(serverData.url, {

@@ -111,6 +111,11 @@ export function registerIpcHandlers(
 
     const updated = db.updateTask(id, data)
 
+    // Initialize recurring task schedule when recurrence is added or changed
+    if (recurrenceScheduler && updated && updated.is_recurring && updated.recurrence_pattern) {
+      recurrenceScheduler.initializeRecurringTask(id)
+    }
+
     // Auto-disable heartbeat when task is completed
     if (heartbeatScheduler && data.status === TaskStatus.Completed && updated?.heartbeat_enabled) {
       heartbeatScheduler.disableHeartbeat(id)
@@ -479,7 +484,7 @@ export function registerIpcHandlers(
   })
 
   // Worktree handlers
-  ipcMain.handle('worktree:setup', async (_, taskId: string, repos: { fullName: string; defaultBranch: string }[], org: string, provider?: 'github' | 'gitlab') => {
+  ipcMain.handle('worktree:setup', async (_, taskId: string, repos: { fullName: string; defaultBranch: string; cloneUrl?: string }[], org: string, provider?: 'github' | 'gitlab') => {
     const resolvedProvider = provider || (db.getSetting('git_provider') as 'github' | 'gitlab' | null) || 'github'
     return await worktreeManager.setupWorkspaceForTask(taskId, repos, org, resolvedProvider)
   })
@@ -701,7 +706,22 @@ export function registerIpcHandlers(
     return await oauthManager.startMcpServerOAuthFlow(mcpServerId)
   })
 
-  ipcMain.handle('mcp:getOAuthStatus', (_, mcpServerId: string) => {
+  ipcMain.handle('mcp:getOAuthStatus', async (_, mcpServerId: string) => {
+    // Enterprise-auth servers use JWT from 20x Cloud login (via MCP auth proxy),
+    // not separate OAuth tokens. Report connected when enterprise session is active.
+    if (enterpriseAuth) {
+      const server = db.getMcpServer(mcpServerId)
+      if (server) {
+        try {
+          const apiUrl = enterpriseAuth.getApiUrl()
+          if (server.url && server.url.startsWith(apiUrl)) {
+            const session = await enterpriseAuth.getSession()
+            return { connected: session.isAuthenticated }
+          }
+        } catch { /* fall through to OAuth check */ }
+      }
+    }
+
     if (!oauthManager) return { connected: false }
     return oauthManager.getMcpServerOAuthStatus(mcpServerId)
   })
@@ -712,6 +732,18 @@ export function registerIpcHandlers(
   })
 
   ipcMain.handle('mcp:probeForAuth', async (_, serverUrl: string) => {
+    // Enterprise-auth servers authenticate via JWT proxy, not OAuth.
+    // Don't flag them as needing OAuth — the 401 is expected (unauthenticated probe)
+    // but is handled by the MCP auth proxy at request time.
+    if (enterpriseAuth) {
+      try {
+        const apiUrl = enterpriseAuth.getApiUrl()
+        if (serverUrl.startsWith(apiUrl)) {
+          return { requiresAuth: false }
+        }
+      } catch { /* fall through to normal probe */ }
+    }
+
     const { OAuthManager: OAuthMgr } = await import('./oauth/oauth-manager')
     return await OAuthMgr.probeForAuth(serverUrl)
   })
@@ -1030,7 +1062,16 @@ export function registerIpcHandlers(
     // Clear enterprise state sync from agent manager
     agentManager.setEnterpriseStateSync(null)
 
-    return await enterpriseAuth.logout()
+    await enterpriseAuth.logout()
+
+    try {
+      new Notification({
+        title: '20x Cloud Disconnected',
+        body: 'You have been signed out of 20x Cloud.'
+      }).show()
+    } catch {
+      // Notification may fail in headless / test environments — ignore
+    }
   })
 
   ipcMain.handle('enterprise:getSession', async () => {

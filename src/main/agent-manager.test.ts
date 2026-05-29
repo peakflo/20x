@@ -766,6 +766,46 @@ describe('AgentManager implicit resume behavior', () => {
   })
 })
 
+describe('AgentManager MCP server routing', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('canonicalizes Workflo MCP dev server URLs to the active enterprise API URL', async () => {
+    const mockDb = {
+      getAgent: vi.fn(() => ({
+        id: 'agent-1',
+        name: 'OPS L2',
+        config: {
+          mcp_servers: ['workflo-stage-server']
+        }
+      })),
+      getMcpServer: vi.fn(() => ({
+        id: 'workflo-stage-server',
+        name: 'pf-workflo-integrations',
+        type: 'remote',
+        url: 'https://stage-api.peakflo.ai/api/mcp/dev/mcp',
+        headers: { Authorization: 'Bearer stale-stage-key' },
+        oauth_metadata: {},
+      })),
+    } as unknown as ConstructorParameters<typeof AgentManager>[0]
+
+    const manager = new AgentManager(mockDb)
+    manager.setEnterpriseAuth({
+      getApiUrl: vi.fn(() => 'https://api.peakflo.ai'),
+      getJwt: vi.fn(async () => 'fresh-prod-jwt'),
+    } as any)
+
+    const mcpServers = await (manager as any).buildMcpServersForAdapter('agent-1')
+
+    expect(mcpServers['pf-workflo-integrations']).toMatchObject({
+      type: 'http',
+      url: 'https://api.peakflo.ai/api/mcp/dev/mcp',
+      headers: { Authorization: 'Bearer fresh-prod-jwt' },
+    })
+  })
+})
+
 describe('AgentManager transitionToIdle — enterprise task completion after feedback', () => {
   function createEnterpriseTaskDb(taskOverrides: Record<string, unknown> = {}) {
     const task = {

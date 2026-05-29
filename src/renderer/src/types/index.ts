@@ -43,6 +43,7 @@ export const CODING_AGENTS: { value: CodingAgentType; label: string }[] = [
 ]
 
 export enum ClaudeModel {
+  OPUS_4_8 = 'claude-opus-4-8',
   OPUS_4_7 = 'claude-opus-4-7',
   SONNET_4_6 = 'claude-sonnet-4-6',
   SONNET_4_5 = 'claude-sonnet-4-5',
@@ -54,6 +55,7 @@ export enum ClaudeModel {
 }
 
 export const CLAUDE_MODELS: { id: ClaudeModel; name: string }[] = [
+  { id: ClaudeModel.OPUS_4_8, name: 'claude-opus-4-8' },
   { id: ClaudeModel.OPUS_4_7, name: 'Claude Opus 4.7' },
   { id: ClaudeModel.SONNET_4_6, name: 'Claude Sonnet 4.6' },
   { id: ClaudeModel.SONNET_4_5, name: 'Claude Sonnet 4.5' },
@@ -299,6 +301,8 @@ export interface WorkfloTask {
   heartbeat_interval_minutes?: number | null
   heartbeat_last_check_at?: string | null
   heartbeat_next_check_at?: string | null
+  auto_start_agent: boolean
+  auto_complete_without_review: boolean
   parent_task_id: string | null
   sort_order: number
   created_at: string
@@ -320,6 +324,8 @@ export interface CreateTaskDTO {
   is_recurring?: boolean
   recurrence_pattern?: RecurrencePattern | null
   recurrence_parent_id?: string | null
+  auto_start_agent?: boolean
+  auto_complete_without_review?: boolean
   parent_task_id?: string | null
 }
 
@@ -349,6 +355,8 @@ export interface UpdateTaskDTO {
   heartbeat_interval_minutes?: number | null
   heartbeat_last_check_at?: string | null
   heartbeat_next_check_at?: string | null
+  auto_start_agent?: boolean
+  auto_complete_without_review?: boolean
   parent_task_id?: string | null
   sort_order?: number
 }

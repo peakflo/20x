@@ -42,6 +42,8 @@ export function TaskForm({ task, onSubmit, onCancel }: TaskFormProps) {
   const [outputFields, setOutputFields] = useState<OutputField[]>([])
   const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([])
   const [recurrencePattern, setRecurrencePattern] = useState<RecurrencePattern | null>(null)
+  const [autoStartAgent, setAutoStartAgent] = useState(false)
+  const [autoCompleteWithoutReview, setAutoCompleteWithoutReview] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState<string | null>(null)
 
@@ -58,6 +60,8 @@ export function TaskForm({ task, onSubmit, onCancel }: TaskFormProps) {
       setAttachments(task.attachments)
       setOutputFields(task.output_fields)
       setRecurrencePattern(task.recurrence_pattern)
+      setAutoStartAgent(task.auto_start_agent)
+      setAutoCompleteWithoutReview(task.auto_complete_without_review)
     }
   }, [task])
 
@@ -85,7 +89,9 @@ export function TaskForm({ task, onSubmit, onCancel }: TaskFormProps) {
         attachments,
         output_fields: outputFields,
         is_recurring: !!recurrencePattern,
-        recurrence_pattern: recurrencePattern
+        recurrence_pattern: recurrencePattern,
+        auto_start_agent: !!recurrencePattern && autoStartAgent,
+        auto_complete_without_review: !!recurrencePattern && autoCompleteWithoutReview
       }
 
       if (!task && pendingFiles.length > 0) {
@@ -174,6 +180,29 @@ export function TaskForm({ task, onSubmit, onCancel }: TaskFormProps) {
 
       <div className="rounded-md border p-4">
         <RecurrenceEditor value={recurrencePattern} onChange={setRecurrencePattern} />
+        {recurrencePattern && (
+          <div className="space-y-3 pt-4 mt-4 border-t border-border" data-testid="auto-flags-section">
+            <p className="text-sm font-medium text-muted-foreground">Automation</p>
+            <label className="flex items-center gap-2 cursor-pointer" data-testid="form-auto-start-toggle">
+              <input
+                type="checkbox"
+                checked={autoStartAgent}
+                onChange={(e) => setAutoStartAgent(e.target.checked)}
+                className="h-4 w-4 rounded border-border bg-background text-primary cursor-pointer"
+              />
+              <span className="text-sm">Auto-start agent on new instances</span>
+            </label>
+            <label className="flex items-center gap-2 cursor-pointer" data-testid="form-auto-complete-toggle">
+              <input
+                type="checkbox"
+                checked={autoCompleteWithoutReview}
+                onChange={(e) => setAutoCompleteWithoutReview(e.target.checked)}
+                className="h-4 w-4 rounded border-border bg-background text-primary cursor-pointer"
+              />
+              <span className="text-sm">Auto-complete without review</span>
+            </label>
+          </div>
+        )}
       </div>
 
       {submitError && (

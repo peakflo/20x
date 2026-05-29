@@ -190,6 +190,70 @@ describe('EnterpriseStateSync', () => {
 
       expect(stateSync.pendingCount).toBe(0)
     })
+
+    it('sends events in batches of at most 100', async () => {
+      const task = makeTask()
+      // Record 250 events
+      for (let i = 0; i < 250; i++) {
+        stateSync.recordTaskStatusChange(
+          task,
+          'not_started',
+          'agent_working'
+        )
+      }
+
+      mockApiClient.sendSyncEvents.mockImplementation((events: unknown[]) =>
+        Promise.resolve({ ok: true, inserted: events.length })
+      )
+
+      await stateSync.flush()
+
+      // Should have been called 3 times (100 + 100 + 50)
+      expect(mockApiClient.sendSyncEvents).toHaveBeenCalledTimes(3)
+      const calls = mockApiClient.sendSyncEvents.mock.calls
+      expect(calls[0][0]).toHaveLength(100)
+      expect(calls[1][0]).toHaveLength(100)
+      expect(calls[2][0]).toHaveLength(50)
+    })
+
+    it('sends single batch when <= 100 events pending', async () => {
+      const task = makeTask()
+      for (let i = 0; i < 50; i++) {
+        stateSync.recordTaskCreated(task)
+      }
+
+      mockApiClient.sendSyncEvents.mockImplementation((events: unknown[]) =>
+        Promise.resolve({ ok: true, inserted: events.length })
+      )
+
+      await stateSync.flush()
+
+      expect(mockApiClient.sendSyncEvents).toHaveBeenCalledTimes(1)
+      expect(mockApiClient.sendSyncEvents.mock.calls[0][0]).toHaveLength(50)
+    })
+
+    it('re-queues all events when a batch fails', async () => {
+      const task = makeTask()
+      for (let i = 0; i < 150; i++) {
+        stateSync.recordTaskCreated(task)
+      }
+
+      let callCount = 0
+      mockApiClient.sendSyncEvents.mockImplementation(() => {
+        callCount++
+        if (callCount === 2) {
+          return Promise.reject(new Error('network error'))
+        }
+        return Promise.resolve({ ok: true, inserted: 100 })
+      })
+
+      await stateSync.flush()
+
+      // All 150 events should be re-queued
+      expect(stateSync.pendingCount).toBe(150)
+      // First batch succeeded, second failed
+      expect(mockApiClient.sendSyncEvents).toHaveBeenCalledTimes(2)
+    })
   })
 
   describe('entity ID resolution', () => {

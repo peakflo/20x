@@ -172,7 +172,7 @@ export function RecurrenceEditor({ value, onChange }: RecurrenceEditorProps) {
   }
 
   return (
-    <div className="space-y-4 border-t border-border pt-4">
+    <div className="space-y-4">
       <div className="flex items-center gap-2">
         <input
           type="checkbox"

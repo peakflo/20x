@@ -608,6 +608,91 @@ export function useAgentAutoStart({ tasks, agents, showToast }: UseAgentAutoStar
     return unsubscribe
   }, [isEnabled, isSnoozed, startTriage])
 
+  // Auto-start recurring instances with auto_start_agent flag
+  // Runs regardless of global scheduler state — the session check prevents double-starts
+  useEffect(() => {
+    const unsubscribe = onTaskCreated((event) => {
+      const task = event.task as WorkfloTask
+
+      // Log all recurring instances for debugging
+      if (task.recurrence_parent_id) {
+        console.log(`[AutoStart] Received task:created for recurring instance "${task.title}"`, {
+          auto_start_agent: task.auto_start_agent,
+          agent_id: task.agent_id,
+          status: task.status,
+          recurrence_parent_id: task.recurrence_parent_id
+        })
+      }
+
+      // Only handle recurring instances (not templates) with auto_start_agent enabled
+      if (!task.auto_start_agent || !task.recurrence_parent_id) return
+      if (task.status !== TaskStatus.NotStarted || !task.agent_id) return
+      if (isSnoozed(task.snoozed_until)) return
+      if (getSessionsSnapshot().has(task.id)) return
+
+      const agentId = task.agent_id
+      const agent = agents.find((a) => a.id === agentId)
+      if (!agent) return
+
+      console.log(`[AutoStart] Recurring instance "${task.title}" passed all checks, starting agent ${agent.name}`)
+      const maxParallel = agent.config.max_parallel_sessions || 1
+      const currentRunning = getRunningCount(agentId)
+      if (currentRunning < maxParallel) {
+        // Start directly — don't use startTasksForAgent because it looks up the
+        // task in the (stale) tasks array which doesn't include this new instance yet.
+        setTimeout(async () => {
+          try {
+            incrementRunningCount(agentId)
+            await start(agentId, task.id)
+            showToast(`Auto-started "${task.title}" with ${agent.name}`)
+          } catch (error) {
+            console.error(`[AutoStart] Failed to auto-start recurring instance ${task.id}:`, error)
+            decrementRunningCount(agentId)
+          }
+        }, 500)
+      } else {
+        addToQueue(agentId, task.id)
+      }
+    })
+
+    return unsubscribe
+  }, [agents, isSnoozed, getSessionsSnapshot, getRunningCount, incrementRunningCount, decrementRunningCount, start, showToast, addToQueue])
+
+  // Auto-complete tasks with auto_complete_without_review flag when they reach ReadyForReview
+  useEffect(() => {
+    const unsubscribe = onTaskUpdated((event) => {
+      if (event.updates?.status !== TaskStatus.ReadyForReview) return
+
+      // Try local tasks first, fall back to DB fetch for recently-created recurring instances
+      const localTask = tasks.find((t) => t.id === event.taskId)
+
+      const doAutoComplete = async (baseTask: WorkfloTask) => {
+        const merged = { ...baseTask, ...event.updates } as WorkfloTask
+        if (!merged.auto_complete_without_review) return
+
+        console.log(`[AutoStart] Task "${merged.title}" has auto_complete_without_review, auto-completing`)
+        try {
+          await taskApi.update(event.taskId, { status: TaskStatus.Completed })
+          showToast(`Auto-completed "${merged.title}"`)
+        } catch (error) {
+          console.error(`[AutoStart] Failed to auto-complete task ${event.taskId}:`, error)
+        }
+      }
+
+      if (localTask) {
+        setTimeout(() => doAutoComplete(localTask), 500)
+      } else {
+        // Task not in renderer yet — fetch from DB
+        setTimeout(async () => {
+          const freshTask = await taskApi.getById(event.taskId)
+          if (freshTask) doAutoComplete(freshTask)
+        }, 500)
+      }
+    })
+
+    return unsubscribe
+  }, [tasks, showToast])
+
   // Listen to task updates (new tasks or reassignments)
   useEffect(() => {
     if (!isEnabled) return

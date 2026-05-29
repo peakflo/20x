@@ -92,6 +92,8 @@ export function createTestDb(): { db: DatabaseManager; rawDb: InstanceType<typeo
       recurrence_parent_id TEXT REFERENCES tasks(id) ON DELETE CASCADE,
       last_occurrence_at TEXT DEFAULT NULL,
       next_occurrence_at TEXT DEFAULT NULL,
+      auto_start_agent INTEGER NOT NULL DEFAULT 0,
+      auto_complete_without_review INTEGER NOT NULL DEFAULT 0,
       parent_task_id TEXT REFERENCES tasks(id) ON DELETE CASCADE,
       sort_order INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,

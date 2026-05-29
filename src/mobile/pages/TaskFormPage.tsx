@@ -125,6 +125,10 @@ export function TaskFormPage({ taskId, onNavigate }: { taskId?: string; onNaviga
   const [cronMode, setCronMode] = useState(false)
   const [rawCron, setRawCron] = useState('')
 
+  // ── Auto-start / auto-complete flags ───────────────────
+  const [autoStartAgent, setAutoStartAgent] = useState(false)
+  const [autoCompleteWithoutReview, setAutoCompleteWithoutReview] = useState(false)
+
   // ── Submit state ────────────────────────────────────────
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState<string | null>(null)
@@ -147,6 +151,10 @@ export function TaskFormPage({ taskId, onNavigate }: { taskId?: string; onNaviga
     setDueDate(existingTask.due_date ? existingTask.due_date.slice(0, 10) : '')
     setLabels(existingTask.labels.join(', '))
     setOutputFields((existingTask.output_fields || []) as OutputField[])
+
+    // Auto flags
+    setAutoStartAgent(existingTask.auto_start_agent)
+    setAutoCompleteWithoutReview(existingTask.auto_complete_without_review)
 
     // Recurrence
     if (existingTask.is_recurring && existingTask.recurrence_pattern) {
@@ -201,7 +209,9 @@ export function TaskFormPage({ taskId, onNavigate }: { taskId?: string; onNaviga
       labels: parsedLabels,
       output_fields: outputFields,
       is_recurring: recurringEnabled,
-      recurrence_pattern: recurrencePattern
+      recurrence_pattern: recurrencePattern,
+      auto_start_agent: recurringEnabled && autoStartAgent,
+      auto_complete_without_review: recurringEnabled && autoCompleteWithoutReview
     }
 
     try {
@@ -544,6 +554,31 @@ export function TaskFormPage({ taskId, onNavigate }: { taskId?: string; onNaviga
                     <p className="text-[10px] text-muted-foreground">
                       Cron: <code className="bg-accent px-1 rounded font-mono">{buildCronExpression(freqType, freqInterval, freqTime, freqWeekdays, freqMonthDay)}</code>
                     </p>
+                  </div>
+                )}
+
+                {/* ── Auto-start / Auto-complete (inside recurrence block) ── */}
+                {recurringEnabled && (
+                  <div className="space-y-3 pt-3 mt-3 border-t border-border/50" data-testid="auto-flags-section">
+                    <label className="text-xs font-medium text-muted-foreground">Automation</label>
+                    <label className="flex items-center gap-2 cursor-pointer" data-testid="form-auto-start-toggle">
+                      <input
+                        type="checkbox"
+                        checked={autoStartAgent}
+                        onChange={(e) => setAutoStartAgent(e.target.checked)}
+                        className="h-4 w-4 rounded"
+                      />
+                      <span className="text-xs">Auto-start agent on new instances</span>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer" data-testid="form-auto-complete-toggle">
+                      <input
+                        type="checkbox"
+                        checked={autoCompleteWithoutReview}
+                        onChange={(e) => setAutoCompleteWithoutReview(e.target.checked)}
+                        className="h-4 w-4 rounded"
+                      />
+                      <span className="text-xs">Auto-complete without review</span>
+                    </label>
                   </div>
                 )}
               </div>
