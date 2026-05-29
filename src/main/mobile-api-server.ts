@@ -65,7 +65,7 @@ export function startMobileApiServer(
   if (!authToken) {
     authToken = randomUUID()
     db.setSetting('mobile_auth_token', authToken)
-    console.log(`[MobileAPI] No auth token configured — generated new token: ${authToken}`)
+    console.log('[MobileAPI] No auth token configured — generated new token')
   }
 
   return new Promise((resolve, reject) => {
