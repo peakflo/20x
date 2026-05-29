@@ -2,6 +2,13 @@ import { describe, it, expect } from 'vitest'
 import { CLAUDE_MODELS, ClaudeModel, CODEX_MODELS, CodexModel } from './index'
 
 describe('CLAUDE_MODELS', () => {
+  it('includes Claude Opus 4.8', () => {
+    expect(CLAUDE_MODELS).toContainEqual({
+      id: ClaudeModel.OPUS_4_8,
+      name: 'claude-opus-4-8'
+    })
+  })
+
   it('includes Claude Opus 4.7', () => {
     expect(CLAUDE_MODELS).toContainEqual({
       id: ClaudeModel.OPUS_4_7,
