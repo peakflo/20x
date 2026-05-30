@@ -90,7 +90,7 @@ export function CanvasContextMenu({ position, onClose }: CanvasContextMenuProps)
   return (
     <div
       ref={menuRef}
-      className="fixed z-[9999] min-w-[220px] max-w-[280px] bg-[#161b22] border border-border/50 rounded-xl shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-100"
+      className="fixed z-[9999] min-w-[220px] max-w-[280px] bg-[var(--color-canvas-context-menu)] border border-border/50 rounded-xl shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-100"
       style={{ left: position.clientX, top: position.clientY }}
     >
       {/* Header */}
@@ -234,7 +234,7 @@ function MenuItem({
   return (
     <button
       onClick={onClick}
-      className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-white/5 transition-colors group"
+      className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-[var(--color-hover-overlay)] transition-colors group"
     >
       <span className="flex-shrink-0">{icon}</span>
       <div className="flex-1 min-w-0">

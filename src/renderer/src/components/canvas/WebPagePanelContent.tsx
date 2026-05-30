@@ -52,7 +52,7 @@ export function WebPagePanelContent({ panelId, url, title }: WebPagePanelContent
         {/* Editable URL bar */}
         <form
           onSubmit={(e) => { e.preventDefault(); handleNavigate() }}
-          className="flex items-center gap-2 px-2 py-1.5 bg-[#0d1117]/40 border-b border-border/20 flex-shrink-0"
+          className="flex items-center gap-2 px-2 py-1.5 bg-[var(--color-canvas-panel-bg)]/80 border-b border-border/20 flex-shrink-0"
         >
           <Globe className="h-3 w-3 text-cyan-400/60 flex-shrink-0" />
           <input
@@ -104,7 +104,7 @@ export function WebPagePanelContent({ panelId, url, title }: WebPagePanelContent
   return (
     <div className="flex flex-col h-full min-h-0">
       {/* URL bar — click to edit */}
-      <div className="flex items-center gap-2 px-2 py-1.5 bg-[#0d1117]/40 border-b border-border/20 flex-shrink-0">
+      <div className="flex items-center gap-2 px-2 py-1.5 bg-[var(--color-canvas-panel-bg)]/80 border-b border-border/20 flex-shrink-0">
         <Globe className="h-3 w-3 text-cyan-400/60 flex-shrink-0" />
         <button
           onClick={() => { setIsEditing(true); setInputValue(url) }}

@@ -273,7 +273,7 @@ function EdgeDeleteDot({
       className="pointer-events-auto cursor-pointer opacity-0 hover:opacity-100 transition-opacity"
       onClick={(e) => { e.stopPropagation(); onDelete() }}
     >
-      <circle cx={x} cy={y} r="7" fill="#161b22" stroke="rgba(99,102,241,0.3)" strokeWidth="1" />
+      <circle cx={x} cy={y} r="7" fill="var(--color-edge-delete-bg)" stroke="rgba(99,102,241,0.3)" strokeWidth="1" />
       <line x1={x - 2.5} y1={y - 2.5} x2={x + 2.5} y2={y + 2.5} stroke="rgba(239,68,68,0.7)" strokeWidth="1.5" strokeLinecap="round" />
       <line x1={x + 2.5} y1={y - 2.5} x2={x - 2.5} y2={y + 2.5} stroke="rgba(239,68,68,0.7)" strokeWidth="1.5" strokeLinecap="round" />
     </g>
