@@ -13,4 +13,15 @@ describe('installer script', () => {
     expect(promptIndex).toBeGreaterThan(-1)
     expect(upgradeGuardIndex).toBeLessThan(promptIndex)
   })
+
+  it('bootstraps Python during Windows install when it is missing', () => {
+    const script = readFileSync(join(__dirname, '..', 'resources', 'installer.nsh'), 'utf8')
+
+    expect(script).toContain('Function InstallPythonIfMissing')
+    expect(script).toContain('where.exe" python.exe')
+    expect(script).toContain('where.exe" py.exe')
+    expect(script).toContain('https://www.python.org/ftp/python/${PYTHON_VERSION}/python-${PYTHON_VERSION}-amd64.exe')
+    expect(script).toContain('/quiet InstallAllUsers=0 PrependPath=1 Include_launcher=1 Include_pip=1')
+    expect(script).toContain('Call BroadcastEnvironmentChange')
+  })
 })

@@ -34,6 +34,7 @@ import { startMobileApiServer, stopMobileApiServer, broadcastToMobileClients, se
 import { registerUpdaterIpc, initAutoUpdater, isUpdateDownloaded, getPendingVersion } from './auto-updater'
 import { initCrashLogger } from './crash-logger'
 import { installProcessStreamErrorHandlers } from './process-stream-errors'
+import { getWindowsPathEntries, prependMissingWindowsPaths } from './windows-runtime-paths'
 
 /**
  * Validate that a URL is safe to open via shell.openExternal.
@@ -463,18 +464,13 @@ app.on('open-url', (event, url) => {
 // missing. We read the values from a login shell and apply them to process.env.
 function loadPlatformShellEnv(): Promise<void> {
   if (process.platform === 'win32') {
-    // On Windows, ensure common Node/npm/git paths are available
-    const home = process.env.USERPROFILE || process.env.HOME || ''
-    const winPaths = [
-      join(home, 'AppData', 'Roaming', 'npm'),
-      'C:\\Program Files\\nodejs',
-      'C:\\Program Files\\Git\\cmd'
-    ]
-    const existingPath = process.env.PATH || ''
-    const missing = winPaths.filter(p => !existingPath.includes(p))
-    if (missing.length > 0) {
-      process.env.PATH = [...missing, existingPath].join(';')
-    }
+    // On Windows, GUI apps can miss PATH updates from installers. Rehydrate the
+    // usual runtime locations, including the python.org user install path used
+    // by the NSIS bootstrap.
+    process.env.PATH = prependMissingWindowsPaths(
+      process.env.PATH || '',
+      getWindowsPathEntries(process.env)
+    )
     return Promise.resolve()
   }
   if (process.platform !== 'darwin') return Promise.resolve()
