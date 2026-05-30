@@ -368,6 +368,7 @@ export interface UpdateTaskData {
   skill_ids?: string[] | null
   session_id?: string | null
   snoozed_until?: string | null
+  resolution?: string | null
   feedback_rating?: number | null
   feedback_comment?: string | null
   is_recurring?: boolean
@@ -401,6 +402,7 @@ const UPDATABLE_COLUMNS = new Set([
   'skill_ids',
   'session_id',
   'snoozed_until',
+  'resolution',
   'feedback_rating',
   'feedback_comment',
   'is_recurring',
