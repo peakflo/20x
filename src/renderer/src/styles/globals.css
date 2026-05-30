@@ -81,9 +81,12 @@ html, body, #root {
 .drag-region { -webkit-app-region: drag; }
 .no-drag { -webkit-app-region: no-drag; }
 
-/* ── macOS: push left-pinned elements past the traffic lights (≈ 78px physical).
-   Use a generous value so moderate zoom-out (≥ 80%) still clears them. ── */
-[data-platform="darwin"] .macos-titlebar-pad { margin-left: 76px; }
+/* ── macOS: push left-pinned elements past the traffic lights (≈ 70px physical).
+   Divides by --zoom-factor (set by AppLayout) so the gap stays constant
+   regardless of Cmd+/Cmd- page zoom.  Fallback: 80px at zoom 1×. ── */
+[data-platform="darwin"] .macos-titlebar-pad {
+  margin-left: calc(80px / var(--zoom-factor, 1));
+}
 
 /* ── Windows: push content left of the title-bar overlay (min/max/close ≈ 140px) ── */
 [data-platform="win32"] .windows-titlebar-pad { padding-right: 150px; }

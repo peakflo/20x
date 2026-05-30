@@ -149,6 +149,22 @@ export function AppLayout() {
     showToast
   })
 
+  // ── Track zoom factor so macOS traffic-light margin stays constant in physical pixels ──
+  useEffect(() => {
+    const update = () => {
+      // outerWidth is in device-independent screen px (stable); innerWidth shrinks/grows with zoom
+      const factor = window.outerWidth && window.innerWidth
+        ? window.outerWidth / window.innerWidth
+        : 1
+      if (factor > 0) {
+        document.documentElement.style.setProperty('--zoom-factor', String(factor))
+      }
+    }
+    update()
+    window.addEventListener('resize', update)
+    return () => window.removeEventListener('resize', update)
+  }, [])
+
   const NAV_ITEMS: { key: SidebarView; label: string; icon: typeof LayoutDashboard }[] = [
     { key: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
     { key: 'canvas', label: 'Canvas', icon: Layers },

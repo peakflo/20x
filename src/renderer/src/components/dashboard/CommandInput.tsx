@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
-import { Paperclip, AtSign, Plus, ArrowUp, ChevronDown, Settings } from 'lucide-react'
+import { Paperclip, Plus, ArrowUp, ChevronDown, Settings } from 'lucide-react'
 import { agentApi } from '@/lib/ipc-client'
 import type { Agent } from '@/types'
 
@@ -131,14 +131,6 @@ export function CommandInput({ onSendToMastermind, onCreateTask }: CommandInputP
           title="Attach file"
         >
           <Paperclip className="h-4 w-4" />
-        </button>
-
-        {/* Mention */}
-        <button
-          className="p-1.5 rounded-md text-foreground/60 hover:text-foreground hover:bg-accent transition-colors cursor-pointer"
-          title="Mention"
-        >
-          <AtSign className="h-4 w-4" />
         </button>
 
         {/* Spacer */}
