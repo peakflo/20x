@@ -50,6 +50,7 @@ export function AppLayout() {
   const openDeleteModal = useUIStore((s) => s.openDeleteModal)
   const openSettings = useUIStore((s) => s.openSettings)
   const closeModal = useUIStore((s) => s.closeModal)
+  const setCanvasPendingTaskId = useUIStore((s) => s.setCanvasPendingTaskId)
   const dashboardPreviewTaskId = useUIStore((s) => s.dashboardPreviewTaskId)
   const closeDashboardPreview = useUIStore((s) => s.closeDashboardPreview)
   const showOrchestrator = useUIStore((s) => s.showOrchestrator)
@@ -371,9 +372,13 @@ export function AppLayout() {
                 closeModal()
                 clearCreateTaskPrefill()
                 if (newTask) {
-                  selectTask(newTask.id)
-                  // Navigate to tasks view to show the newly created task
-                  setSidebarView('tasks')
+                  if (sidebarView === 'canvas') {
+                    setCanvasPendingTaskId(newTask.id)
+                  } else {
+                    selectTask(newTask.id)
+                    // Navigate to tasks view to show the newly created task
+                    setSidebarView('tasks')
+                  }
                 }
               }}
               onCancel={() => { closeModal(); clearCreateTaskPrefill() }}

@@ -48,6 +48,8 @@ interface UIState {
   closeDashboardPreview: () => void
   /** Switch to canvas view and queue a task to be added as a panel */
   openTaskOnCanvas: (taskId: string) => void
+  /** Set a pending task ID to be added as a panel on the canvas (without switching views) */
+  setCanvasPendingTaskId: (taskId: string) => void
   clearCanvasPendingTask: () => void
   /** Switch to canvas view and queue an app to be added as a panel */
   openAppOnCanvas: (workflowId: string, name: string) => void
@@ -109,6 +111,7 @@ export const useUIStore = create<UIState>((set) => ({
   openDashboardPreview: (taskId) => set({ dashboardPreviewTaskId: taskId }),
   closeDashboardPreview: () => set({ dashboardPreviewTaskId: null }),
   openTaskOnCanvas: (taskId) => set({ sidebarView: 'canvas', canvasPendingTaskId: taskId, dashboardPreviewTaskId: null }),
+  setCanvasPendingTaskId: (taskId) => set({ canvasPendingTaskId: taskId, dashboardPreviewTaskId: null }),
   clearCanvasPendingTask: () => set({ canvasPendingTaskId: null }),
   openAppOnCanvas: (workflowId, name) => set({ sidebarView: 'canvas', canvasPendingApp: { workflowId, name }, dashboardPreviewTaskId: null }),
   clearCanvasPendingApp: () => set({ canvasPendingApp: null }),

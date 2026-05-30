@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef } from 'react'
-import { CheckSquare, MessageSquare, Monitor, AppWindow, Globe, TerminalSquare, X } from 'lucide-react'
+import { CheckSquare, MessageSquare, Monitor, AppWindow, Globe, TerminalSquare, Plus, X } from 'lucide-react'
 import { useTaskStore } from '@/stores/task-store'
 import { useAgentStore } from '@/stores/agent-store'
 import { useDashboardStore } from '@/stores/dashboard-store'
 import { useCanvasStore, DEFAULT_PANEL_WIDTH, DEFAULT_PANEL_HEIGHT } from '@/stores/canvas-store'
+import { useUIStore } from '@/stores/ui-store'
 import { TaskStatus } from '@/types'
 import type { CanvasPanelType } from '@/stores/canvas-store'
 
@@ -26,6 +27,7 @@ export function CanvasContextMenu({ position, onClose }: CanvasContextMenuProps)
   const applications = useDashboardStore((s) => s.applications)
   const addPanel = useCanvasStore((s) => s.addPanel)
   const panels = useCanvasStore((s) => s.panels)
+  const openCreateModal = useUIStore((s) => s.openCreateModal)
 
   // Close on click outside
   useEffect(() => {
@@ -107,6 +109,18 @@ export function CanvasContextMenu({ position, onClose }: CanvasContextMenuProps)
       </div>
 
       <div className="py-1 max-h-[400px] overflow-y-auto custom-scrollbar">
+        {/* Create Task — always at top */}
+        <MenuItem
+          icon={<Plus className="h-3.5 w-3.5 text-green-400" />}
+          label="Create Task"
+          sublabel="New task placed at center of canvas"
+          onClick={() => {
+            openCreateModal()
+            onClose()
+          }}
+        />
+        <div className="mx-3 my-1 border-t border-border/20" />
+
         {/* Browser & Terminal — always available */}
         <MenuSection title="Tools">
           <MenuItem
