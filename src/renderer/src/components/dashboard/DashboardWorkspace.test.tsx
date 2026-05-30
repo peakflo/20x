@@ -134,6 +134,10 @@ beforeEach(() => {
     isLoading: false,
     error: null
   })
+  useUIStore.setState({
+    showOrchestrator: false,
+    createTaskPrefill: null
+  })
 })
 
 describe('DashboardWorkspace', () => {
@@ -143,77 +147,33 @@ describe('DashboardWorkspace', () => {
     expect(screen.getByText('Connect')).toBeDefined() // CTA button
   })
 
-  it('always shows stats section even when not authenticated', () => {
-    useDashboardStore.setState({
-      localStats: {
-        totalTasks: 5,
-        tasksByStatus: { not_started: 3, completed: 2 },
-        tasksCreatedInWindow: 5,
-        tasksCompletedInWindow: 2,
-        avgTaskCompletionTimeHours: null,
-        p50CompletionTimeHours: null,
-        p90CompletionTimeHours: null,
-        totalAgentRuns: 0,
-        agentSuccessRate: null,
-        autonomousTasksCompleted: 0,
-        humanReviewedTasksCompleted: 2,
-        aiAutonomyRate: 0,
-        activeUsers: 1,
-        totalUsers: 1,
-        adoptionRate: null
-      }
+  it('renders hero section with rotating title', () => {
+    render(<DashboardWorkspace />)
+    // One of the rotating titles should be visible
+    expect(screen.getByText('What do you want to finish today?')).toBeDefined()
+  })
+
+  it('renders command input', () => {
+    render(<DashboardWorkspace />)
+    expect(screen.getByPlaceholderText('Ask Mastermind or describe a task...')).toBeDefined()
+  })
+
+  it('renders quick chips', () => {
+    render(<DashboardWorkspace />)
+    expect(screen.getByText('Summarize this week')).toBeDefined()
+    expect(screen.getByText('Draft outreach email')).toBeDefined()
+  })
+
+  it('renders task board with status columns', () => {
+    useTaskStore.setState({
+      tasks: [
+        makeTask({ id: 'task-1', title: 'Some task', status: TaskStatus.NotStarted })
+      ]
     })
-
     render(<DashboardWorkspace />)
-    expect(screen.getByText('Stats Overview')).toBeDefined()
-    expect(screen.getByText('5')).toBeDefined() // tasksCreatedInWindow
     expect(screen.getByText('Task Board')).toBeDefined()
-  })
-
-  it('always shows time window selector', () => {
-    render(<DashboardWorkspace />)
-    expect(screen.getByText('24h')).toBeDefined()
-    expect(screen.getByText('7d')).toBeDefined()
-    expect(screen.getByText('30d')).toBeDefined()
-    expect(screen.getByText('All')).toBeDefined()
-  })
-
-  it('renders dashboard sections when authenticated', () => {
-    useEnterpriseStore.setState({ isAuthenticated: true })
-
-    render(<DashboardWorkspace />)
-    expect(screen.getByText('Dashboard')).toBeDefined()
-    expect(screen.getByText('Stats Overview')).toBeDefined()
-    expect(screen.getByText('Task Board')).toBeDefined()
-  })
-
-  it('shows stats values when cloud data is loaded', () => {
-    useEnterpriseStore.setState({ isAuthenticated: true })
-    useDashboardStore.setState({
-      stats: {
-        totalTasks: 150,
-        tasksByStatus: { pending: 30, completed: 80 },
-        tasksCreatedInWindow: 25,
-        tasksCompletedInWindow: 18,
-        avgTaskCompletionTimeHours: 4.5,
-        p50CompletionTimeHours: 3.0,
-        p90CompletionTimeHours: 8.2,
-        totalAgentRuns: 200,
-        agentSuccessRate: 92.5,
-        autonomousTasksCompleted: 60,
-        humanReviewedTasksCompleted: 20,
-        aiAutonomyRate: 75.0,
-        activeUsers: 5,
-        totalUsers: 12,
-        adoptionRate: 41.7
-      }
-    })
-
-    render(<DashboardWorkspace />)
-    expect(screen.getByText('75.0%')).toBeDefined() // AI Autonomy
-    expect(screen.getByText('92.5%')).toBeDefined() // Agent Success
-    expect(screen.getByText('25')).toBeDefined() // Tasks Created (tasksCreatedInWindow)
-    expect(screen.getByText('18')).toBeDefined() // Completed (tasksCompletedInWindow)
+    expect(screen.getByText('Not Started')).toBeDefined()
+    expect(screen.getByText('Agent Working')).toBeDefined()
   })
 
   it('hides applications section when no data', () => {
@@ -366,15 +326,6 @@ describe('DashboardWorkspace', () => {
     expect(screen.getByText('Expired snooze task')).toBeDefined()
   })
 
-  it('shows "New Task" button that opens create modal', () => {
-    render(<DashboardWorkspace />)
-    const newTaskBtn = screen.getByText('New Task')
-    expect(newTaskBtn).toBeDefined()
-
-    fireEvent.click(newTaskBtn)
-    expect(useUIStore.getState().activeModal).toBe('create')
-  })
-
   it('resets hasFetchedOnce and errors when isAuthenticated goes false (re-login scenario)', () => {
     // Simulate: previous fetch failed and set hasFetchedOnce + errors
     useDashboardStore.setState({
@@ -412,5 +363,15 @@ describe('DashboardWorkspace', () => {
 
     // Should set the preview task ID in the UI store (dialog rendered by AppLayout)
     expect(useUIStore.getState().dashboardPreviewTaskId).toBe('task-abc')
+  })
+
+  it('quick chip click for task opens create modal with prefill', () => {
+    render(<DashboardWorkspace />)
+    fireEvent.click(screen.getByText('Draft outreach email'))
+
+    const state = useUIStore.getState()
+    expect(state.activeModal).toBe('create')
+    expect(state.createTaskPrefill).toBeDefined()
+    expect(state.createTaskPrefill?.title).toBe('Draft outreach email')
   })
 })

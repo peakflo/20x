@@ -33,6 +33,21 @@ export function OrchestratorPanel({ onClose }: OrchestratorPanelProps) {
     })
   }, [])
 
+  // Listen for pre-fill messages from the dashboard command input
+  useEffect(() => {
+    const handlePrefill = (e: Event) => {
+      const detail = (e as CustomEvent).detail
+      if (detail?.message && typeof detail.message === 'string') {
+        // Small delay to ensure the panel is mounted and agent is selected
+        setTimeout(() => {
+          handleSendMessage(detail.message)
+        }, 200)
+      }
+    }
+    window.addEventListener('mastermind-prefill', handlePrefill)
+    return () => window.removeEventListener('mastermind-prefill', handlePrefill)
+  }, [handleSendMessage])
+
   // Switch agent
   const handleAgentChange = async (newAgentId: string) => {
     if (currentSession?.sessionId) {

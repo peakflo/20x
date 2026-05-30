@@ -17,7 +17,9 @@ describe('useUIStore', () => {
       activeModal: null,
       editingTaskId: null,
       deletingTaskId: null,
-      settingsTab: SettingsTab.GENERAL
+      settingsTab: SettingsTab.GENERAL,
+      createTaskPrefill: null,
+      showOrchestrator: false
     })
   })
 

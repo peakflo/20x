@@ -52,6 +52,11 @@ export function AppLayout() {
   const closeModal = useUIStore((s) => s.closeModal)
   const dashboardPreviewTaskId = useUIStore((s) => s.dashboardPreviewTaskId)
   const closeDashboardPreview = useUIStore((s) => s.closeDashboardPreview)
+  const showOrchestrator = useUIStore((s) => s.showOrchestrator)
+  const setShowOrchestrator = useUIStore((s) => s.setShowOrchestrator)
+  const toggleOrchestrator = useUIStore((s) => s.toggleOrchestrator)
+  const createTaskPrefill = useUIStore((s) => s.createTaskPrefill)
+  const clearCreateTaskPrefill = useUIStore((s) => s.clearCreateTaskPrefill)
 
   // ── Update indicator state ──
   const [updateAvailableVersion, setUpdateAvailableVersion] = useState<string | null>(null)
@@ -114,7 +119,6 @@ export function AppLayout() {
     setTimeout(() => setToast(null), isError ? 5000 : 3000)
   }, [])
 
-  const [showOrchestrator, setShowOrchestrator] = useState(false)
   const [onboardingOpen, setOnboardingOpen] = useState(false)
 
   // Auto-open onboarding on first launch or major/minor version bumps
@@ -209,7 +213,7 @@ export function AppLayout() {
           <Button
             variant={showOrchestrator ? 'default' : 'ghost'}
             size="sm"
-            onClick={() => setShowOrchestrator(!showOrchestrator)}
+            onClick={toggleOrchestrator}
             className="h-7 px-2"
           >
             <MessageSquare className="h-3.5 w-3.5 mr-1" />
@@ -218,7 +222,7 @@ export function AppLayout() {
         </div>
       </div>
 
-      {/* ── Content area: optional sidebar + workspace ── */}
+      {/* ── Content area: optional sidebar + workspace + orchestrator ── */}
       <div className="flex flex-1 min-h-0 overflow-hidden">
         {/* Sidebar — only for tasks and skills views */}
         {sidebarView !== 'dashboard' && sidebarView !== 'canvas' && (
@@ -231,8 +235,8 @@ export function AppLayout() {
           />
         )}
 
-        {/* Workspace */}
-        <main className="flex flex-col flex-1 min-w-0 overflow-hidden bg-background">
+        {/* Workspace — shrinks when orchestrator is open */}
+        <main className="flex flex-col flex-1 min-w-0 overflow-hidden bg-background transition-all duration-200">
           <div className="flex-1 h-0 overflow-hidden relative">
             {/* Canvas — always mounted so iframes/terminals survive navigation */}
             <div
@@ -308,30 +312,33 @@ export function AppLayout() {
               onNavigateToTask={(taskId) => selectTask(taskId)}
             />
           ) : null}
+          </div>
+        </main>
 
-          {/* Orchestrator slide-in panel */}
-          <div
-            className={`absolute top-0 right-0 bottom-0 w-96 transition-transform duration-200 ${
-              showOrchestrator ? 'translate-x-0' : 'translate-x-full'
-            }`}
-            style={{ zIndex: 10 }}
-          >
+        {/* Mastermind drawer — sits beside the workspace, shifts main content left */}
+        <div
+          className={`flex-shrink-0 transition-all duration-200 ease-in-out overflow-hidden ${
+            showOrchestrator ? 'w-[340px]' : 'w-0'
+          }`}
+        >
+          <div className="w-[340px] h-full">
             <Suspense fallback={null}>
               <OrchestratorPanel onClose={() => setShowOrchestrator(false)} />
             </Suspense>
           </div>
-          </div>
-        </main>
+        </div>
       </div>
 
-      {/* Create Task Dialog */}
-      <Dialog open={activeModal === 'create'} onOpenChange={(open) => !open && closeModal()}>
+      {/* Create Task Dialog — dismiss on outside click */}
+      <Dialog open={activeModal === 'create'} onOpenChange={(open) => { if (!open) { closeModal(); clearCreateTaskPrefill() } }}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Create Task</DialogTitle>
           </DialogHeader>
           <DialogBody>
             <TaskForm
+              prefill={createTaskPrefill}
+              compact={!!createTaskPrefill}
               onSubmit={async (data) => {
                 const formData = data as TaskFormSubmitData
                 const pendingFiles = formData._pendingFiles
@@ -347,9 +354,10 @@ export function AppLayout() {
                   await updateTask(newTask.id, { attachments })
                 }
                 closeModal()
+                clearCreateTaskPrefill()
                 if (newTask) selectTask(newTask.id)
               }}
-              onCancel={closeModal}
+              onCancel={() => { closeModal(); clearCreateTaskPrefill() }}
             />
           </DialogBody>
         </DialogContent>
