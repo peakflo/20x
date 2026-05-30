@@ -52,7 +52,7 @@ const INTEGRATION_KEY_TO_TYPE: Record<string, string> = {
   email: 'google-mail',
   gmail: 'google-mail',
   outlook: 'outlook',
-  slack: 'slack',
+  slack: 'slack-user',
   hubspot: 'hubspot',
   salesforce: 'salesforce',
   xero: 'xero',
