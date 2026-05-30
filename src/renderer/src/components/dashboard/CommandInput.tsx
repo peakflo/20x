@@ -73,7 +73,7 @@ export function CommandInput({ onSendToMastermind, onCreateTask }: CommandInputP
   const selectedAgent = agents.find((a) => a.id === selectedAgentId)
 
   return (
-    <div className="rounded-lg border border-border bg-muted/50 overflow-hidden transition-all duration-200 focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/30">
+    <div className="rounded-lg border border-border/80 bg-muted overflow-hidden shadow-sm transition-all duration-200 focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/30">
       {/* Text area */}
       <div className="px-4 pt-3 pb-2">
         <textarea
