@@ -27,15 +27,14 @@ export function CommandInput({ onSendToMastermind, onCreateTask }: CommandInputP
 
   // Close dropdown when clicking outside
   useEffect(() => {
+    if (!showAgentDropdown) return undefined
     const handleClickOutside = (e: MouseEvent) => {
       if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
         setShowAgentDropdown(false)
       }
     }
-    if (showAgentDropdown) {
-      document.addEventListener('mousedown', handleClickOutside)
-      return () => document.removeEventListener('mousedown', handleClickOutside)
-    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [showAgentDropdown])
 
   // Auto-resize textarea
