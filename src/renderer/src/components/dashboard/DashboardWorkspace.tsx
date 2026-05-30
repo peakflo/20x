@@ -119,7 +119,8 @@ export function DashboardWorkspace() {
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="px-6 py-8 space-y-6">
+      {/* Command center — centered narrow column */}
+      <div className="max-w-2xl mx-auto px-6 pt-8 pb-6 space-y-5">
         {/* 1. Hero — Recent Mastermind Messages */}
         <HeroSection onSeeFullConversation={handleSeeFullConversation} />
 
@@ -134,11 +135,14 @@ export function DashboardWorkspace() {
           onAskMastermind={handleSendToMastermind}
           onCreateTask={(text) => openCreateWithPrefill(text)}
         />
+      </div>
 
+      {/* Full-width sections below */}
+      <div className="px-6 space-y-6 pb-8">
         {/* Cloud connect prompt — when not authenticated */}
         {!isAuthenticated && (
           <>
-            <div className="rounded-lg border border-border/50 bg-card p-4 space-y-3">
+            <div className="max-w-2xl mx-auto rounded-lg border border-border/50 bg-card p-4 space-y-3">
               <div className="flex items-center justify-between gap-4">
                 <div className="flex items-center gap-3">
                   <Cloud className="h-5 w-5 text-muted-foreground shrink-0" />
@@ -213,13 +217,13 @@ export function DashboardWorkspace() {
           </>
         )}
 
-        {/* 4. Launch an Application — cloud only */}
+        {/* 4. Launch an Application — cloud only, full width */}
         {isAuthenticated && <ApplicationsList />}
 
-        {/* 5. Start with a Template — cloud only */}
+        {/* 5. Start with a Template — cloud only, full width */}
         {isAuthenticated && <PresetupSection />}
 
-        {/* 6. Task Board (Kanban) */}
+        {/* 6. Task Board (Kanban) — full width */}
         <TaskBoard />
       </div>
     </div>
