@@ -90,11 +90,15 @@ export function registerIpcHandlers(
     return db.getTask(id)
   })
 
-  ipcMain.handle('db:createTask', (_, data: CreateTaskData) => {
+  ipcMain.handle('db:createTask', (event, data: CreateTaskData) => {
     const task = db.createTask(data)
     // Initialize recurring task if it has a recurrence pattern
     if (task && task.is_recurring && recurrenceScheduler) {
       recurrenceScheduler.initializeRecurringTask(task.id)
+    }
+    // Notify renderer so auto-start hook can trigger triage for UI-created tasks
+    if (task) {
+      event.sender.send('task:created', { task })
     }
     return task
   })
