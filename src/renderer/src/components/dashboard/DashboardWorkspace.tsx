@@ -119,7 +119,7 @@ export function DashboardWorkspace() {
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="max-w-3xl mx-auto px-6 py-8 space-y-6">
+      <div className="px-6 py-8 space-y-6">
         {/* 1. Hero — Recent Mastermind Messages */}
         <HeroSection onSeeFullConversation={handleSeeFullConversation} />
 

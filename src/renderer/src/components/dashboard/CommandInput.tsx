@@ -73,7 +73,7 @@ export function CommandInput({ onSendToMastermind, onCreateTask }: CommandInputP
   const selectedAgent = agents.find((a) => a.id === selectedAgentId)
 
   return (
-    <div className="rounded-xl border border-border/50 bg-card/80 backdrop-blur-sm overflow-hidden transition-all duration-200 focus-within:border-border focus-within:shadow-lg focus-within:shadow-black/5">
+    <div className="rounded-lg border border-border bg-muted/50 overflow-hidden transition-all duration-200 focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/30">
       {/* Text area */}
       <div className="px-4 pt-3 pb-2">
         <textarea
@@ -83,17 +83,17 @@ export function CommandInput({ onSendToMastermind, onCreateTask }: CommandInputP
           onKeyDown={handleKeyDown}
           placeholder="Ask Mastermind or describe a task..."
           rows={1}
-          className="w-full bg-transparent text-sm text-foreground placeholder:text-muted-foreground/60 resize-none outline-none leading-relaxed"
+          className="w-full bg-transparent text-sm text-foreground placeholder:text-muted-foreground resize-none outline-none leading-relaxed max-h-32 min-h-[32px]"
         />
       </div>
 
       {/* Toolbar */}
-      <div className="flex items-center gap-1 px-3 pb-2.5 pt-0.5">
+      <div className="flex items-center gap-1 px-3 pb-2.5 pt-0.5 border-t border-border/40">
         {/* Agent selector pill */}
         <div className="relative" ref={dropdownRef}>
           <button
             onClick={() => setShowAgentDropdown(!showAgentDropdown)}
-            className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors cursor-pointer"
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs text-muted-foreground hover:text-foreground hover:bg-background/60 transition-colors cursor-pointer"
           >
             <Settings className="h-3 w-3" />
             <span className="max-w-[120px] truncate">{selectedAgent?.name || 'Select agent'}</span>
@@ -123,11 +123,11 @@ export function CommandInput({ onSendToMastermind, onCreateTask }: CommandInputP
         </div>
 
         {/* Separator */}
-        <div className="w-px h-4 bg-border/50 mx-1" />
+        <div className="w-px h-4 bg-border mx-1" />
 
         {/* Attach file */}
         <button
-          className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors cursor-pointer"
+          className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-background/60 transition-colors cursor-pointer"
           title="Attach file"
         >
           <Paperclip className="h-3.5 w-3.5" />
@@ -135,7 +135,7 @@ export function CommandInput({ onSendToMastermind, onCreateTask }: CommandInputP
 
         {/* Mention */}
         <button
-          className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors cursor-pointer"
+          className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-background/60 transition-colors cursor-pointer"
           title="Mention"
         >
           <AtSign className="h-3.5 w-3.5" />
@@ -147,7 +147,7 @@ export function CommandInput({ onSendToMastermind, onCreateTask }: CommandInputP
         {/* Create task button */}
         <button
           onClick={handleCreateTask}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors cursor-pointer"
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-background/60 border border-border/60 transition-colors cursor-pointer"
         >
           <Plus className="h-3.5 w-3.5" />
           Create task
@@ -157,10 +157,10 @@ export function CommandInput({ onSendToMastermind, onCreateTask }: CommandInputP
         <button
           onClick={handleSend}
           disabled={!text.trim()}
-          className={`p-1.5 rounded-md transition-all duration-150 cursor-pointer ${
+          className={`p-1.5 rounded-lg transition-all duration-150 cursor-pointer ${
             text.trim()
               ? 'bg-primary text-primary-foreground hover:bg-primary/90 shadow-sm'
-              : 'text-muted-foreground/40 cursor-not-allowed'
+              : 'bg-muted text-muted-foreground/40 cursor-not-allowed'
           }`}
           title="Send to Mastermind"
         >
