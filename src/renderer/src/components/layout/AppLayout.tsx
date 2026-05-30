@@ -338,7 +338,6 @@ export function AppLayout() {
           <DialogBody>
             <TaskForm
               prefill={createTaskPrefill}
-              compact={!!createTaskPrefill}
               onSubmit={async (data) => {
                 const formData = data as TaskFormSubmitData
                 const pendingFiles = formData._pendingFiles

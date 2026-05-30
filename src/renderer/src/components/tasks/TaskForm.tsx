@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { ChevronRight } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
 import { Select } from '@/components/ui/Select'
@@ -26,13 +27,13 @@ export interface TaskFormSubmitData extends CreateTaskDTO {
 interface TaskFormProps {
   task?: WorkfloTask
   prefill?: { title: string; description: string } | null
-  /** When true, hide non-essential fields (labels, output fields, recurrence, etc.) */
+  /** @deprecated Use collapsible section instead — kept for backward compat, ignored */
   compact?: boolean
   onSubmit: (data: TaskFormSubmitData | UpdateTaskDTO) => Promise<void>
   onCancel: () => void
 }
 
-export function TaskForm({ task, prefill, compact, onSubmit, onCancel }: TaskFormProps) {
+export function TaskForm({ task, prefill, onSubmit, onCancel }: TaskFormProps) {
   const [title, setTitle] = useState(prefill?.title || '')
   const [description, setDescription] = useState(prefill?.description || '')
   const [type, setType] = useState<TaskType>('general')
@@ -50,6 +51,9 @@ export function TaskForm({ task, prefill, compact, onSubmit, onCancel }: TaskFor
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState<string | null>(null)
 
+  // Collapsible "Additional fields" — collapsed by default, auto-expands on edit with values
+  const [showMore, setShowMore] = useState(false)
+
   useEffect(() => {
     if (task) {
       setTitle(task.title)
@@ -65,8 +69,22 @@ export function TaskForm({ task, prefill, compact, onSubmit, onCancel }: TaskFor
       setRecurrencePattern(task.recurrence_pattern)
       setAutoStartAgent(task.auto_start_agent)
       setAutoCompleteWithoutReview(task.auto_complete_without_review)
+
+      // Auto-expand if task has non-default values in optional fields
+      if (
+        task.type !== 'general' ||
+        task.priority !== 'medium' ||
+        task.due_date ||
+        task.labels.length > 0 ||
+        task.output_fields.length > 0 ||
+        task.recurrence_pattern
+      ) {
+        setShowMore(true)
+      }
     }
   }, [task])
+
+  const hasOptionalValues = type !== 'general' || priority !== 'medium' || dueDate || labels || outputFields.length > 0 || !!recurrencePattern
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -135,42 +153,6 @@ export function TaskForm({ task, prefill, compact, onSubmit, onCancel }: TaskFor
         />
       </div>
 
-      <div className="grid grid-cols-2 gap-4">
-        <div className="space-y-2">
-          <Label htmlFor="type">Type</Label>
-          <Select id="type" value={type} onChange={(e) => setType(e.target.value as TaskType)} options={TASK_TYPES} />
-        </div>
-        <div className="space-y-2">
-          <Label htmlFor="priority">Priority</Label>
-          <Select id="priority" value={priority} onChange={(e) => setPriority(e.target.value as TaskPriority)} options={TASK_PRIORITIES} />
-        </div>
-        {!compact && (
-          <div className="space-y-2">
-            <Label htmlFor="status">Status</Label>
-            <Select id="status" value={status} onChange={(e) => setStatus(e.target.value as TaskStatus)} options={TASK_STATUSES} />
-          </div>
-        )}
-        {!compact && task?.source_id && (
-          <div className="space-y-2">
-            <Label htmlFor="assignee">Assignee</Label>
-            <p className="text-sm text-muted-foreground py-1">{assignee || 'Unassigned'}</p>
-          </div>
-        )}
-      </div>
-
-      {!compact && (
-        <div className="grid grid-cols-2 gap-4">
-          <div className="space-y-2">
-            <Label htmlFor="dueDate">Due Date</Label>
-            <Input id="dueDate" type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="labels">Labels</Label>
-            <Input id="labels" value={labels} onChange={(e) => setLabels(e.target.value)} placeholder="bug, feature..." />
-          </div>
-        </div>
-      )}
-
       <div className="rounded-md border p-4">
         <TaskAttachments
           items={attachments}
@@ -181,38 +163,83 @@ export function TaskForm({ task, prefill, compact, onSubmit, onCancel }: TaskFor
         />
       </div>
 
-      {!compact && (
-        <div className="rounded-md border p-4">
-          <OutputFieldsEditor fields={outputFields} onChange={setOutputFields} />
-        </div>
-      )}
+      {/* Collapsible additional fields — same pattern as mobile */}
+      <button
+        type="button"
+        onClick={() => setShowMore(!showMore)}
+        className="flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground transition-colors py-1 cursor-pointer"
+      >
+        <ChevronRight className={`h-3 w-3 transition-transform ${showMore ? 'rotate-90' : ''}`} />
+        Additional fields
+        {!showMore && hasOptionalValues && (
+          <span className="text-primary text-[10px]">(has values)</span>
+        )}
+      </button>
 
-      {!compact && (
-        <div className="rounded-md border p-4">
-          <RecurrenceEditor value={recurrencePattern} onChange={setRecurrencePattern} />
-          {recurrencePattern && (
-            <div className="space-y-3 pt-4 mt-4 border-t border-border" data-testid="auto-flags-section">
-              <p className="text-sm font-medium text-muted-foreground">Automation</p>
-              <label className="flex items-center gap-2 cursor-pointer" data-testid="form-auto-start-toggle">
-                <input
-                  type="checkbox"
-                  checked={autoStartAgent}
-                  onChange={(e) => setAutoStartAgent(e.target.checked)}
-                  className="h-4 w-4 rounded border-border bg-background text-primary cursor-pointer"
-                />
-                <span className="text-sm">Auto-start agent on new instances</span>
-              </label>
-              <label className="flex items-center gap-2 cursor-pointer" data-testid="form-auto-complete-toggle">
-                <input
-                  type="checkbox"
-                  checked={autoCompleteWithoutReview}
-                  onChange={(e) => setAutoCompleteWithoutReview(e.target.checked)}
-                  className="h-4 w-4 rounded border-border bg-background text-primary cursor-pointer"
-                />
-                <span className="text-sm">Auto-complete without review</span>
-              </label>
+      {showMore && (
+        <div className="space-y-5 pl-1">
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label htmlFor="type">Type</Label>
+              <Select id="type" value={type} onChange={(e) => setType(e.target.value as TaskType)} options={TASK_TYPES} />
             </div>
-          )}
+            <div className="space-y-2">
+              <Label htmlFor="priority">Priority</Label>
+              <Select id="priority" value={priority} onChange={(e) => setPriority(e.target.value as TaskPriority)} options={TASK_PRIORITIES} />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="status">Status</Label>
+              <Select id="status" value={status} onChange={(e) => setStatus(e.target.value as TaskStatus)} options={TASK_STATUSES} />
+            </div>
+            {task?.source_id && (
+              <div className="space-y-2">
+                <Label htmlFor="assignee">Assignee</Label>
+                <p className="text-sm text-muted-foreground py-1">{assignee || 'Unassigned'}</p>
+              </div>
+            )}
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label htmlFor="dueDate">Due Date</Label>
+              <Input id="dueDate" type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="labels">Labels</Label>
+              <Input id="labels" value={labels} onChange={(e) => setLabels(e.target.value)} placeholder="bug, feature..." />
+            </div>
+          </div>
+
+          <div className="rounded-md border p-4">
+            <OutputFieldsEditor fields={outputFields} onChange={setOutputFields} />
+          </div>
+
+          <div className="rounded-md border p-4">
+            <RecurrenceEditor value={recurrencePattern} onChange={setRecurrencePattern} />
+            {recurrencePattern && (
+              <div className="space-y-3 pt-4 mt-4 border-t border-border" data-testid="auto-flags-section">
+                <p className="text-sm font-medium text-muted-foreground">Automation</p>
+                <label className="flex items-center gap-2 cursor-pointer" data-testid="form-auto-start-toggle">
+                  <input
+                    type="checkbox"
+                    checked={autoStartAgent}
+                    onChange={(e) => setAutoStartAgent(e.target.checked)}
+                    className="h-4 w-4 rounded border-border bg-background text-primary cursor-pointer"
+                  />
+                  <span className="text-sm">Auto-start agent on new instances</span>
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer" data-testid="form-auto-complete-toggle">
+                  <input
+                    type="checkbox"
+                    checked={autoCompleteWithoutReview}
+                    onChange={(e) => setAutoCompleteWithoutReview(e.target.checked)}
+                    className="h-4 w-4 rounded border-border bg-background text-primary cursor-pointer"
+                  />
+                  <span className="text-sm">Auto-complete without review</span>
+                </label>
+              </div>
+            )}
+          </div>
         </div>
       )}
 
