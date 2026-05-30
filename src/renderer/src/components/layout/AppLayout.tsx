@@ -370,7 +370,11 @@ export function AppLayout() {
                 }
                 closeModal()
                 clearCreateTaskPrefill()
-                if (newTask) selectTask(newTask.id)
+                if (newTask) {
+                  selectTask(newTask.id)
+                  // Navigate to tasks view to show the newly created task
+                  setSidebarView('tasks')
+                }
               }}
               onCancel={() => { closeModal(); clearCreateTaskPrefill() }}
             />
