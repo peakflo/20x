@@ -1,7 +1,8 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { createTestDb } from '../../test/helpers/db-test-helper'
 import { makeTask } from '../../test/helpers/task-fixtures'
 import type { DatabaseManager } from './database'
+import { startMobileApiServer, stopMobileApiServer } from './mobile-api-server'
 
 // We test the database-level route logic for the create task feature,
 // which is the new functionality we're testing.
@@ -97,5 +98,34 @@ describe('mobile-api-server: route matching', () => {
     expect(updateRegex.test('/api/tasks')).toBe(false)
     expect(updateRegex.test('/api/tasks/')).toBe(false)
     expect(updateRegex.test('/api/tasks/some-id')).toBe(true)
+  })
+})
+
+describe('mobile-api-server: auth token logging', () => {
+  afterEach(() => {
+    stopMobileApiServer()
+    vi.restoreAllMocks()
+  })
+
+  it('does not log the generated mobile auth token', async () => {
+    const { db } = createTestDb()
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+
+    await startMobileApiServer(
+      db,
+      {} as never,
+      {} as never,
+      0
+    )
+
+    const token = db.getSetting('mobile_auth_token')
+    expect(token).toBeTruthy()
+
+    const logs = logSpy.mock.calls
+      .map((call) => call.map(String).join(' '))
+      .join('\n')
+
+    expect(logs).toContain('generated new token')
+    expect(logs).not.toContain(token)
   })
 })
