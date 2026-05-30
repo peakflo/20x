@@ -70,15 +70,15 @@ export function HeroSection({ onSeeFullConversation }: HeroSectionProps) {
 
       {/* Recent messages */}
       {recentMessages.length > 0 && (
-        <div className="rounded-lg border border-border/30 bg-card/50 px-4 py-3">
-          <div className="space-y-0 divide-y divide-border/20">
+        <div className="rounded-lg border border-border/60 bg-card/80 px-4 py-3">
+          <div className="space-y-0 divide-y divide-border/30">
             {recentMessages.map((msg: AgentMessage) => (
               <MessageRow key={msg.id} message={msg} />
             ))}
           </div>
           <button
             onClick={onSeeFullConversation}
-            className="mt-3 flex items-center gap-1.5 text-xs text-muted-foreground hover:text-primary transition-colors cursor-pointer"
+            className="mt-3 flex items-center gap-1.5 text-xs text-foreground/60 hover:text-primary transition-colors cursor-pointer"
           >
             <span className="tracking-wider">&middot; &middot; &middot;</span>
             <span>See full conversation</span>

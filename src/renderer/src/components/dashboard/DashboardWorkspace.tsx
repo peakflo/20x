@@ -137,8 +137,8 @@ export function DashboardWorkspace() {
         />
       </div>
 
-      {/* Full-width sections below */}
-      <div className="px-6 space-y-6 pb-8">
+      {/* Full-width sections below — constrained + centered to align with kanban */}
+      <div className="max-w-screen-xl mx-auto px-6 space-y-6 pb-8">
         {/* Cloud connect prompt — when not authenticated */}
         {!isAuthenticated && (
           <>

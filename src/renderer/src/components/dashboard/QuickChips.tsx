@@ -38,12 +38,12 @@ export function QuickChips({ onAskMastermind, onCreateTask }: QuickChipsProps) {
                 onCreateTask(chip.label)
               }
             }}
-            className="group flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs text-muted-foreground border border-border/30 bg-card/30 hover:border-border/60 hover:text-foreground hover:bg-card/80 transition-all duration-150 cursor-pointer"
+            className="group flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs text-foreground/70 border border-border bg-card/50 hover:border-border hover:text-foreground hover:bg-card transition-all duration-150 cursor-pointer"
           >
             {isMastermind ? (
-              <MessageSquare className="h-3 w-3 opacity-50 group-hover:opacity-80 transition-opacity" />
+              <MessageSquare className="h-3 w-3 opacity-70 group-hover:opacity-100 transition-opacity" />
             ) : (
-              <ListPlus className="h-3 w-3 opacity-50 group-hover:opacity-80 transition-opacity" />
+              <ListPlus className="h-3 w-3 opacity-70 group-hover:opacity-100 transition-opacity" />
             )}
             {chip.label}
           </button>
