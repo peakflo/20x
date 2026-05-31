@@ -20,6 +20,7 @@ export function GeneralSettings() {
   const [updateVersion, setUpdateVersion] = useState<string | null>(null)
   const [updatePercent, setUpdatePercent] = useState(0)
   const [updateError, setUpdateError] = useState<string | null>(null)
+const [currentVersion, setCurrentVersion] = useState<string | null>(null)
 
   useEffect(() => {
     const cleanup = updaterApi.onStatus((data) => {
@@ -126,6 +127,14 @@ export function GeneralSettings() {
       } catch (error) {
         console.error('Failed to load mobile URL:', error)
         setMobileUrl('')
+      }
+
+      // Load current app version
+      try {
+        const version = await updaterApi.getVersion()
+        setCurrentVersion(version)
+      } catch (error) {
+        console.error('Failed to load app version:', error)
       }
     }
     loadSettings()
@@ -490,6 +499,11 @@ export function GeneralSettings() {
       description="Check for new versions and install updates"
     >
       <div className="flex items-center gap-3">
+        {currentVersion && (
+          <span className="text-xs text-muted-foreground flex items-center gap-1.5 mr-2">
+            Current version: v{currentVersion}
+          </span>
+        )}
         {updateStatus === 'idle' || updateStatus === 'up-to-date' || updateStatus === 'error' ? (
           <Button
             variant="outline"
