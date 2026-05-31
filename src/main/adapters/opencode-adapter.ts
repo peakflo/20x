@@ -657,13 +657,15 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     const baseUrl = this.serverUrl || config.serverUrl || DEFAULT_SERVER_URL
     const ocClient = OpenCodeSDK!.createOpencodeClient({ baseUrl, fetch: noTimeoutFetch as unknown as (request: Request) => ReturnType<typeof fetch> })
 
-    // Register runtime plugins via config.update() so the running server loads them
-    // for this workspace directory — no server restart needed.
-    if (this.pluginFilePaths.length > 0 && config.workspaceDir) {
+    // Register runtime plugins via config.update() so the running server loads them.
+    // Plugins are registered globally (no directory scope) because the OpenCode server
+    // resolves session directories to the actual git repo root, which differs from the
+    // workspace directory where plugin files are written. Each plugin uses absolute paths
+    // for its state/config files so different workspaces don't conflict.
+    if (this.pluginFilePaths.length > 0) {
       try {
         await ocClient.config.update({
-          body: { plugin: [...this.pluginFilePaths] } as Record<string, unknown>,
-          ...(config.workspaceDir && { query: { directory: config.workspaceDir } })
+          body: { plugin: [...this.pluginFilePaths] } as Record<string, unknown>
         })
         console.log('[OpencodeAdapter] Registered runtime plugins via config.update:', this.pluginFilePaths)
       } catch (err) {
@@ -773,12 +775,11 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     const baseUrl = this.serverUrl || config.serverUrl || DEFAULT_SERVER_URL
     const ocClient = OpenCodeSDK!.createOpencodeClient({ baseUrl, fetch: noTimeoutFetch as unknown as (request: Request) => ReturnType<typeof fetch> })
 
-    // Register runtime plugins for this workspace
-    if (this.pluginFilePaths.length > 0 && config.workspaceDir) {
+    // Register runtime plugins globally (see createSession comment for rationale)
+    if (this.pluginFilePaths.length > 0) {
       try {
         await ocClient.config.update({
-          body: { plugin: [...this.pluginFilePaths] } as Record<string, unknown>,
-          ...(config.workspaceDir && { query: { directory: config.workspaceDir } })
+          body: { plugin: [...this.pluginFilePaths] } as Record<string, unknown>
         })
         console.log('[OpencodeAdapter] Registered runtime plugins via config.update:', this.pluginFilePaths)
       } catch (err) {
