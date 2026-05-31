@@ -34,6 +34,24 @@ describe('Task CRUD', () => {
     expect(updated!.priority).toBe('high')
   })
 
+  it('updates task resolution', () => {
+    const task = db.createTask(makeTask())!
+    const updated = db.updateTask(task.id, { resolution: 'Fixed by adding a regression test.' })
+
+    expect(updated!.resolution).toBe('Fixed by adding a regression test.')
+    expect(db.getTask(task.id)!.resolution).toBe('Fixed by adding a regression test.')
+  })
+
+  it('clears task resolution', () => {
+    const task = db.createTask(makeTask())!
+    db.updateTask(task.id, { resolution: 'No longer needed.' })
+
+    const updated = db.updateTask(task.id, { resolution: null })
+
+    expect(updated!.resolution).toBeNull()
+    expect(db.getTask(task.id)!.resolution).toBeNull()
+  })
+
   it('does not update non-updatable fields', () => {
     const task = db.createTask(makeTask())!
     const updated = db.updateTask(task.id, { title: 'New' } as unknown as Parameters<typeof db.updateTask>[1])
