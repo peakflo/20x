@@ -231,6 +231,16 @@ export interface CodingAgentAdapter {
   } | null>
 
   /**
+   * Notify the adapter that provider/auth config has changed (e.g. user edited
+   * agent settings, AI gateway key was rotated).  Adapters that manage a shared
+   * backend server (like OpenCode) should push the updated config.
+   *
+   * Only call this on actual config changes — NOT on every session creation,
+   * as some backends (OpenCode) tear down all running sessions on config update.
+   */
+  notifyConfigChanged?(): Promise<void>
+
+  /**
    * Check if this adapter's backend is available and healthy
    */
   checkHealth(): Promise<{ available: boolean; reason?: string }>

@@ -59,14 +59,11 @@ export class OpencodeAdapter implements CodingAgentAdapter {
   private pluginFilePath: string | null = null
   /** Absolute path to the secrets exports file (read dynamically by the plugin) */
   private secretsExportsPath: string | null = null
-  /** Timestamp of last successful config push — used to throttle PATCH /global/config
-   *  which aborts all running session processors in the OpenCode server. */
-  private lastConfigPushAt = 0
-  /** Minimum interval between config pushes (ms).  The OpenCode server tears down
-   *  its internal event bus on every PATCH /global/config, which cancels the Go context
-   *  of any running session.processor and produces `error=Aborted`.  Throttling avoids
-   *  the storm of pushes that occurs when multiple parallel sessions start. */
-  private static readonly CONFIG_PUSH_MIN_INTERVAL_MS = 30_000
+  /** Whether the merged config has been pushed at least once to the running server.
+   *  Config is pushed once on first server connection; subsequent pushes happen only
+   *  via explicit `notifyConfigChanged()` calls (e.g. after settings edit or key rotation).
+   *  This avoids PATCH /global/config storms that abort all running sessions. */
+  private configPushed = false
   /** Maximum number of automatic retries for transient prompt errors (e.g. "Aborted") */
   private static readonly PROMPT_MAX_RETRIES = 3
   /** Base delay (ms) for exponential backoff between prompt retries */
@@ -246,29 +243,22 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     if (!this.sharedClient) {
       throw new Error('OpenCode client not available after server startup')
     }
-    await this.pushMergedConfigToClient(this.sharedClient)
     return this.sharedClient
   }
 
-  private async pushMergedConfigToClient(client: V2OpencodeClient, opts?: { force?: boolean }): Promise<void> {
-    // Throttle config pushes: PATCH /global/config causes the OpenCode server to
-    // tear down its internal event bus and abort ALL running session processors.
-    // When multiple parallel tasks start, each createSession() pushes config,
-    // creating a storm of PATCH calls that abort in-flight prompts.
-    const now = Date.now()
-    const elapsed = now - this.lastConfigPushAt
+  /**
+   * Push the merged provider/auth config to the running OpenCode server.
+   *
+   * ⚠️  PATCH /global/config causes the server to call disposeAllInstancesAndEmitGlobalDisposed(),
+   * which aborts every running session processor.  This must ONLY be called:
+   *   1. Once on first server connection (ensureServerRunning)
+   *   2. Explicitly via notifyConfigChanged() when the user edits settings or a key rotates
+   *   3. From getProvidersInner() which is a user-initiated settings UI query
+   *
+   * NEVER call this in hot paths like getClient() or createSession().
+   */
+  private async pushMergedConfigToClient(client: V2OpencodeClient): Promise<void> {
     const hasActivePrompts = this.promptAborts.size > 0
-
-    if (!opts?.force && elapsed < OpencodeAdapter.CONFIG_PUSH_MIN_INTERVAL_MS) {
-      if (hasActivePrompts) {
-        console.log(`[OpencodeAdapter] pushMergedConfigToClient: skipped — ${this.promptAborts.size} prompt(s) in flight, last push ${elapsed}ms ago`)
-        return
-      }
-      // No active prompts but pushed recently — still skip to avoid redundant calls
-      console.log(`[OpencodeAdapter] pushMergedConfigToClient: skipped — last push ${elapsed}ms ago (< ${OpencodeAdapter.CONFIG_PUSH_MIN_INTERVAL_MS}ms)`)
-      return
-    }
-
     if (hasActivePrompts) {
       console.warn(`[OpencodeAdapter] pushMergedConfigToClient: ${this.promptAborts.size} prompt(s) in flight — config push may abort them`)
     }
@@ -297,10 +287,26 @@ export class OpencodeAdapter implements CodingAgentAdapter {
           console.warn('[OpencodeAdapter] config.update returned error:', JSON.stringify(result.error))
         }
       }
-      this.lastConfigPushAt = Date.now()
+      this.configPushed = true
     } catch (err) {
       console.warn('[OpencodeAdapter] pushMergedConfigToClient failed:', err instanceof Error ? err.message : err)
     }
+  }
+
+  /**
+   * Notify the adapter that provider config has changed (e.g. user edited agent settings,
+   * AI gateway key was rotated).  Pushes the updated config to the running server.
+   *
+   * Call this from the agent-manager when settings change — do NOT call it on every
+   * createSession or getClient, since PATCH /global/config aborts all running sessions.
+   */
+  async notifyConfigChanged(): Promise<void> {
+    if (!this.sharedClient) {
+      console.log('[OpencodeAdapter] notifyConfigChanged: no server connection yet, skipping')
+      return
+    }
+    console.log('[OpencodeAdapter] notifyConfigChanged: pushing updated config to server')
+    await this.pushMergedConfigToClient(this.sharedClient)
   }
 
   async getProviders(
@@ -324,11 +330,14 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     try {
       const client = await this.getClient(serverUrl, { quick: true })
 
-      // Push the latest merged config (incl. enterprise AI gateway provider)
-      // before querying providers. The quick-path in getClient() skips this,
-      // and ensureServerRunning() skips it when the server is already running,
-      // so the server may still have stale provider config from an earlier start.
-      await this.pushMergedConfigToClient(client)
+      // Push the merged config if it hasn't been pushed yet. This handles the
+      // edge case where getProviders is called before any session has started
+      // (e.g. the user opens settings immediately after app launch). Once config
+      // has been pushed via ensureServerRunning, this is a no-op. Subsequent
+      // config changes go through notifyConfigChanged().
+      if (!this.configPushed) {
+        await this.pushMergedConfigToClient(client)
+      }
 
       // Always pass a writable directory so the OpenCode server doesn't fall
       // back to its CWD (which is read-only on macOS when launched from
@@ -461,6 +470,7 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     this.quickClient = null
     this.v2Client = null
     this.serverStarting = null
+    this.configPushed = false
 
     // Brief pause to let the OS release the port
     await new Promise(resolve => setTimeout(resolve, 500))
@@ -572,13 +582,13 @@ export class OpencodeAdapter implements CodingAgentAdapter {
             fetch: quickTimeoutFetch as unknown as typeof fetch
           })
 
-          // Push merged config (with auth.json keys injected) to the running server
+          // Push merged config (with auth.json keys injected) once on first connection
           // so custom providers like routerAI are properly authenticated.
-          // Force on first connection — subsequent calls are throttled to avoid
-          // aborting running sessions (PATCH /global/config tears down the bus).
+          // This is the ONLY automatic config push; subsequent pushes happen only via
+          // explicit notifyConfigChanged() calls to avoid aborting running sessions.
           try {
             // Use quickClient to avoid hanging indefinitely when the existing server is slow.
-            await this.pushMergedConfigToClient(this.quickClient!, { force: true })
+            await this.pushMergedConfigToClient(this.quickClient!)
           } catch {
             // pushMergedConfigToClient already logs details
           }
@@ -638,17 +648,11 @@ export class OpencodeAdapter implements CodingAgentAdapter {
 
     await this.ensureServerRunning(config.serverUrl || DEFAULT_SERVER_URL)
 
-    // Always push the latest merged config (incl. refreshed AI gateway key)
-    // to the running server. ensureServerRunning skips the config push when
-    // the server is already running at the same URL, but provider credentials
-    // may have been rotated since the server was started.
-    if (this.sharedClient) {
-      try {
-        await this.pushMergedConfigToClient(this.sharedClient)
-      } catch {
-        // pushMergedConfigToClient already logs details; proceed with cached config
-      }
-    }
+    // Config is pushed once on first server connection (ensureServerRunning).
+    // Subsequent config changes (key rotation, settings edit) go through
+    // notifyConfigChanged() called by the agent-manager — NOT here.
+    // Pushing config on every createSession caused a storm of PATCH /global/config
+    // calls that aborted all running sessions when parallel tasks started.
 
     const baseUrl = this.serverUrl || config.serverUrl || DEFAULT_SERVER_URL
     const ocClient = OpenCodeSDK!.createOpencodeClient({ baseUrl, fetch: noTimeoutFetch as unknown as (request: Request) => ReturnType<typeof fetch> })
@@ -1478,6 +1482,7 @@ export class OpencodeAdapter implements CodingAgentAdapter {
       this.sharedClient = null
       this.quickClient = null
       this.v2Client = null
+      this.configPushed = false
     }
   }
 }

@@ -1137,6 +1137,11 @@ export class AgentManager extends EventEmitter {
     // Refresh the AI gateway virtual key before building the provider config
     // so the adapter gets the latest key from the backend (handles key rotation,
     // admin plan changes, etc.). Best-effort — fall back to the cached key.
+    // Note: we do NOT call adapter.notifyConfigChanged() here because that would
+    // push config to the OpenCode server and abort all running sessions. The config
+    // is already pushed once on first server connection (ensureServerRunning), and
+    // the key rarely rotates mid-session. If it does, the retry mechanism handles
+    // transient auth errors, and the next server reconnection picks up the new key.
     if (this.enterpriseAuth) {
       try {
         await this.enterpriseAuth.refreshAiGatewayVirtualKey()
@@ -3258,6 +3263,9 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       // OpenCode server config includes the Peakflo provider. This handles
       // plans activated after the initial tenant selection (same pattern as
       // startAdapterSession). Best-effort — fall back to the cached key.
+      // Since this is user-initiated (settings UI), notify the adapter so it
+      // pushes the updated config — this is safe because the user is in settings,
+      // not actively running parallel tasks.
       if (this.enterpriseAuth) {
         try {
           await this.enterpriseAuth.refreshAiGatewayVirtualKey()
@@ -3270,6 +3278,17 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       if (!adapter?.getProviders) {
         console.log(`[AgentManager] Adapter for "${resolvedBackend}" does not support getProviders`)
         return null
+      }
+
+      // Push updated config to the server before querying providers. This is
+      // user-initiated (settings UI) so it's safe to push even if sessions are
+      // running — the user explicitly opened settings to change config.
+      if (adapter.notifyConfigChanged) {
+        try {
+          await adapter.notifyConfigChanged()
+        } catch {
+          // notifyConfigChanged already logs; proceed with cached config
+        }
       }
 
       return await adapter.getProviders(baseUrl, directory)
