@@ -4,9 +4,6 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
-overrides:
-  '@zed-industries/claude-code-acp>@anthropic-ai/claude-agent-sdk': ^0.2.42
-
 importers:
 
   .:
