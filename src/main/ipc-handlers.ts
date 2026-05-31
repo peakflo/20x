@@ -1458,6 +1458,7 @@ export function registerIpcHandlers(
 
   interface TerminalHandle {
     write: (data: string) => void
+    resize?: (cols: number, rows: number) => void
     kill: () => void
     pid: number
     /** Circular buffer of recent terminal output lines */
@@ -1471,6 +1472,72 @@ export function registerIpcHandlers(
     if (process.platform === 'win32') return 'powershell.exe'
     const candidates = [process.env.SHELL, '/bin/zsh', '/bin/bash', '/bin/sh'].filter(Boolean) as string[]
     return candidates.find((s) => existsSync(s)) || '/bin/sh'
+  }
+
+  /**
+   * Create a terminal using node-pty (used on Windows / ConPTY).
+   */
+  function createNodePty(
+    id: string, shellPath: string, cols: number, rows: number,
+    sender: Electron.WebContents, cwd?: string
+  ): TerminalHandle {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const pty = require('node-pty')
+    const initialCwd = cwd || process.env.HOME || process.cwd()
+
+    const ptyProcess = pty.spawn(shellPath, [], {
+      name: 'xterm-256color',
+      cols: cols || 80,
+      rows: rows || 24,
+      cwd: initialCwd,
+      env: { ...process.env, TERM: 'xterm-256color' } as Record<string, string>,
+    })
+
+    const outputBuffer: string[] = []
+    const appendToBuffer = (raw: string) => {
+      // Strip ANSI escape sequences for clean log output
+      // eslint-disable-next-line no-control-regex
+      const clean = raw.replace(/\x1b\[[0-9;]*[a-zA-Z]|\x1b\].*?(\x07|\x1b\\)|\x1b[()][A-Z0-9]|\r/g, '')
+      const lines = clean.split('\n')
+      for (const line of lines) {
+        if (line.trim()) outputBuffer.push(line)
+      }
+      while (outputBuffer.length > TERMINAL_BUFFER_MAX_LINES) {
+        outputBuffer.shift()
+      }
+    }
+
+    ptyProcess.onData((data: string) => {
+      appendToBuffer(data)
+      if (!sender.isDestroyed()) {
+        sender.send('terminal:data', { id, data })
+      }
+    })
+
+    ptyProcess.onExit(({ exitCode, signal }) => {
+      console.log(`[Terminal] node-pty exited id=${id} code=${exitCode} signal=${signal} pid=${ptyProcess.pid}`)
+      const current = terminals.get(id)
+      if (current && current.pid === ptyProcess.pid) {
+        terminals.delete(id)
+        if (!sender.isDestroyed()) {
+          sender.send('terminal:exit', { id })
+        }
+      }
+    })
+
+    return {
+      write: (data: string) => {
+        ptyProcess.write(data)
+      },
+      resize: (cols: number, rows: number) => {
+        ptyProcess.resize(cols, rows)
+      },
+      kill: () => {
+        try { ptyProcess.kill() } catch { /* ignore */ }
+      },
+      pid: ptyProcess.pid,
+      outputBuffer,
+    }
   }
 
   /**
@@ -1643,7 +1710,9 @@ else:
     const shellPath = resolveShell()
     console.log(`[Terminal] Creating terminal id=${id} shell=${shellPath} cols=${cols} rows=${rows} cwd=${cwd || '(default)'}`)
 
-    const handle = createPythonPty(id, shellPath, cols, rows, event.sender, cwd)
+    const handle = process.platform === 'win32'
+      ? createNodePty(id, shellPath, cols, rows, event.sender, cwd)
+      : createPythonPty(id, shellPath, cols, rows, event.sender, cwd)
     terminals.set(id, handle)
     return { pid: handle.pid }
   })
@@ -1659,8 +1728,10 @@ else:
   })
 
   ipcMain.handle('terminal:resize', (_event, { id, cols, rows }: { id: string; cols: number; rows: number }) => {
-    // Resize not supported without node-pty — COLUMNS/LINES set at creation
-    void id; void cols; void rows
+    const term = terminals.get(id)
+    if (term?.resize) {
+      term.resize(cols, rows)
+    }
   })
 
   /** Get the last N lines from a terminal's output buffer */
