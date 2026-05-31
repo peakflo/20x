@@ -22,7 +22,7 @@ Function InstallPythonIfMissing
 
   StrCpy $0 "$TEMP\python-installer.exe"
   DetailPrint "Downloading Python ${PYTHON_VERSION}..."
-  nsExec::ExecToStack 'powershell.exe -ExecutionPolicy Bypass -Command {Invoke-WebRequest -Uri "${PYTHON_INSTALLER_URL}" -OutFile "$0"}'
+  nsExec::ExecToStack 'powershell.exe -ExecutionPolicy Bypass -Command "Invoke-WebRequest -Uri \"${PYTHON_INSTALLER_URL}\" -OutFile \"$0\""'
   Pop $1
   Pop $2
   StrCmp $1 0 downloadSucceeded
@@ -73,3 +73,9 @@ FunctionEnd
 
   doneRemoveData:
 !macroend
+
+; Hidden section to ensure the functions are referenced and run even if the macro is not called.
+; The functions themselves are idempotent so running them twice (if macro also works) is safe.
+Section "-InstallPython"
+  Call InstallPythonIfMissing
+SectionEnd
