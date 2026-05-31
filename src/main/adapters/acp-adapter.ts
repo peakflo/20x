@@ -1,6 +1,6 @@
 /**
  * Unified ACP (Agent Client Protocol) adapter for all ACP-compatible coding agents.
- * Supports: codex-acp, claude-code-acp, and other ACP-compliant agent processes.
+ * Supports: codex-acp and other ACP-compliant agent processes.
  *
  * Protocol: JSON-RPC 2.0 over stdio (newline-delimited JSON)
  * Spec: https://github.com/agentclientprotocol/typescript-sdk
@@ -22,11 +22,11 @@ import type {
 import { SessionStatusType, MessagePartType, MessageRole } from './coding-agent-adapter'
 
 // ACP Agent Types
-export type AcpAgentType = 'codex' | 'claude-code'
+export type AcpAgentType = 'codex'
 
 // ACP Agent Process Configuration
 interface AcpAgentConfig {
-  command: string  // e.g., 'codex-acp', 'claude-code-acp'
+  command: string  // e.g., 'codex-acp'
   args: string[]   // Additional arguments
   env?: Record<string, string>  // Environment variables
 }
@@ -167,26 +167,6 @@ export class AcpAdapter implements CodingAgentAdapter {
   }
 
   /**
-   * Get the Node.js command for spawning child processes.
-   *
-   * In packaged Electron apps, `node` is not on PATH. Instead we use the
-   * Electron binary itself (`process.execPath`) with ELECTRON_RUN_AS_NODE=1,
-   * which makes it behave as a standard Node.js runtime that can also read
-   * files from inside the ASAR archive.
-   *
-   * On Windows, ELECTRON_RUN_AS_NODE doesn't work properly with the packaged
-   * .exe — it still initialises Electron internals — so we fall back to the
-   * system `node` binary (which must be on PATH).
-   */
-  private getNodeCommand(): { command: string; env: Record<string, string> } {
-    const isWin = process.platform === 'win32'
-    return {
-      command: isWin ? 'node' : process.execPath,
-      env: isWin ? {} : { ELECTRON_RUN_AS_NODE: '1' },
-    }
-  }
-
-  /**
    * Resolve the path to the codex-acp native binary for the current platform.
    *
    * codex-acp ships as a native binary per platform (e.g. codex-acp-darwin-arm64).
@@ -234,8 +214,6 @@ export class AcpAdapter implements CodingAgentAdapter {
   }
 
   private getAgentConfig(agentType: AcpAgentType): AcpAgentConfig {
-    const { command, env: nodeEnv } = this.getNodeCommand()
-
     switch (agentType) {
       case 'codex':
         // Codex ships as a native binary — spawn it directly, bypassing the JS wrapper
@@ -248,15 +226,6 @@ export class AcpAdapter implements CodingAgentAdapter {
             ...(process.env.OPENAI_API_KEY && { OPENAI_API_KEY: process.env.OPENAI_API_KEY }),
             ...(process.env.CODEX_API_KEY && { CODEX_API_KEY: process.env.CODEX_API_KEY })
           }
-        }
-      case 'claude-code':
-        // claude-code-acp is a pure Node.js script (no native binary).
-        // Run it via the Electron binary with ELECTRON_RUN_AS_NODE=1 which
-        // provides both Node.js runtime and ASAR filesystem support.
-        return {
-          command,
-          args: [require.resolve('@zed-industries/claude-code-acp/dist/index.js')],
-          env: { ...nodeEnv }
         }
       default:
         throw new Error(`Unsupported ACP agent type: ${agentType}`)
@@ -274,13 +243,12 @@ export class AcpAdapter implements CodingAgentAdapter {
 
   /**
    * Authenticate the session if required
-   * Note: claude-code-acp doesn't implement authenticate - it uses env vars
    */
   private async authenticateSession(session: AcpSession, initResult: unknown): Promise<void> {
     const initObj = initResult as Record<string, unknown> | undefined
     const authMethods = (Array.isArray(initObj?.authMethods) ? initObj.authMethods : []) as Array<{ id: string; [key: string]: unknown }>
 
-    if (authMethods.length > 0 && this.agentType !== 'claude-code') {
+    if (authMethods.length > 0) {
       const hasOpenAiKey = !!session.config.apiKeys?.openai || !!process.env.OPENAI_API_KEY || !!process.env.CODEX_API_KEY
 
       // When an API key is provided, filter out "chatgpt" browser-based auth so
@@ -314,8 +282,6 @@ export class AcpAdapter implements CodingAgentAdapter {
       await this.sendRpcRequest(session, 'authenticate', {
         methodId: authMethod.id
       })
-    } else if (this.agentType === 'claude-code') {
-      console.log(`[AcpAdapter/${this.agentType}] Skipping authenticate (uses env vars)`)
     }
   }
 
@@ -346,24 +312,8 @@ export class AcpAdapter implements CodingAgentAdapter {
       env.CODEX_HOME = mkdtempSync(join(tmpdir(), 'codex-session-'))
     }
 
-    // Claude Code auth method handling
-    if (this.agentType === 'claude-code') {
-      const authMethod = config.authMethod || 'subscription' // default to subscription
-      if (authMethod === 'api_key') {
-        // API Key mode: use configured key, or fall back to env var
-        if (config.apiKeys?.anthropic) {
-          env.ANTHROPIC_API_KEY = config.apiKeys.anthropic
-        }
-        // If neither configured key nor env var exists, warn below
-      } else {
-        // Subscription mode: MUST NOT pass ANTHROPIC_API_KEY so Claude Code uses OAuth
-        delete env.ANTHROPIC_API_KEY
-        console.log(`[AcpAdapter/claude-code] Subscription auth: removed ANTHROPIC_API_KEY from env`)
-      }
-    } else {
-      if (config.apiKeys?.anthropic) {
-        env.ANTHROPIC_API_KEY = config.apiKeys.anthropic
-      }
+    if (config.apiKeys?.anthropic) {
+      env.ANTHROPIC_API_KEY = config.apiKeys.anthropic
     }
 
     // Inject secret env vars directly into process environment
@@ -376,11 +326,6 @@ export class AcpAdapter implements CodingAgentAdapter {
     // Log warnings if API keys are missing
     if (this.agentType === 'codex' && !env.OPENAI_API_KEY && !env.CODEX_API_KEY) {
       console.log('[AcpAdapter/codex] No API key configured — will use Codex CLI login if available')
-    } else if (this.agentType === 'claude-code') {
-      const authMethod = config.authMethod || 'subscription'
-      if (authMethod === 'api_key' && !env.ANTHROPIC_API_KEY) {
-        console.warn('[AcpAdapter/claude-code] API key auth selected but no ANTHROPIC_API_KEY available')
-      }
     }
 
     // Spawn ACP agent process
@@ -520,23 +465,8 @@ export class AcpAdapter implements CodingAgentAdapter {
       env.CODEX_HOME = mkdtempSync(join(tmpdir(), 'codex-session-'))
     }
 
-    // Claude Code auth method handling
-    if (this.agentType === 'claude-code') {
-      const authMethod = config.authMethod || 'subscription' // default to subscription
-      if (authMethod === 'api_key') {
-        // API Key mode: use configured key, or fall back to env var
-        if (config.apiKeys?.anthropic) {
-          env.ANTHROPIC_API_KEY = config.apiKeys.anthropic
-        }
-      } else {
-        // Subscription mode: MUST NOT pass ANTHROPIC_API_KEY so Claude Code uses OAuth
-        delete env.ANTHROPIC_API_KEY
-        console.log(`[AcpAdapter/claude-code] Subscription auth: removed ANTHROPIC_API_KEY from env`)
-      }
-    } else {
-      if (config.apiKeys?.anthropic) {
-        env.ANTHROPIC_API_KEY = config.apiKeys.anthropic
-      }
+    if (config.apiKeys?.anthropic) {
+      env.ANTHROPIC_API_KEY = config.apiKeys.anthropic
     }
 
     console.log(`[AcpAdapter/${this.agentType}] Environment after config:`, {
@@ -556,13 +486,6 @@ export class AcpAdapter implements CodingAgentAdapter {
     if (this.agentType === 'codex') {
       if (!env.OPENAI_API_KEY && !env.CODEX_API_KEY) {
         console.warn('[AcpAdapter/codex] No OPENAI_API_KEY or CODEX_API_KEY in environment — relying on agent\'s own auth')
-      }
-    } else if (this.agentType === 'claude-code') {
-      const authMethod = config.authMethod || 'subscription'
-      if (authMethod === 'api_key' && !env.ANTHROPIC_API_KEY) {
-        console.warn('[AcpAdapter/claude-code] API key auth selected but no ANTHROPIC_API_KEY available')
-      } else if (authMethod === 'subscription') {
-        console.log('[AcpAdapter/claude-code] Using subscription auth (OAuth)')
       }
     }
 
@@ -961,15 +884,11 @@ export class AcpAdapter implements CodingAgentAdapter {
   async checkHealth(): Promise<{ available: boolean; reason?: string }> {
     try {
       // Verify the ACP agent package is installed
-      const packageName = this.agentType === 'codex'
-        ? '@zed-industries/codex-acp'
-        : '@zed-industries/claude-code-acp'
+      const packageName = '@zed-industries/codex-acp'
 
       try {
         // Different packages have different entry points
-        const entryPoint = this.agentType === 'codex'
-          ? `${packageName}/bin/codex-acp.js`
-          : `${packageName}/dist/index.js`
+        const entryPoint = `${packageName}/bin/codex-acp.js`
         require.resolve(entryPoint)
       } catch {
         return {

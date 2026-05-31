@@ -46,7 +46,7 @@ describe('PresetupSection', () => {
   it('renders templates when expanded (default)', async () => {
     render(<PresetupSection />)
     await waitFor(() => {
-      expect(screen.getByText('Get Started')).toBeDefined()
+      expect(screen.getByText('Start with a template')).toBeDefined()
       expect(screen.getByText('Test Template')).toBeDefined()
     })
   })
@@ -55,7 +55,7 @@ describe('PresetupSection', () => {
     render(<PresetupSection />)
     await waitFor(() => expect(screen.getByText('Test Template')).toBeDefined())
 
-    fireEvent.click(screen.getByText('Get Started'))
+    fireEvent.click(screen.getByText('Start with a template'))
 
     expect(screen.queryByText('Test Template')).toBeNull()
     expect(mockSettingsSet).toHaveBeenCalledWith('dashboard_presetup_collapsed', 'true')
@@ -66,11 +66,11 @@ describe('PresetupSection', () => {
     await waitFor(() => expect(screen.getByText('Test Template')).toBeDefined())
 
     // Collapse
-    fireEvent.click(screen.getByText('Get Started'))
+    fireEvent.click(screen.getByText('Start with a template'))
     expect(screen.queryByText('Test Template')).toBeNull()
 
     // Expand
-    fireEvent.click(screen.getByText('Get Started'))
+    fireEvent.click(screen.getByText('Start with a template'))
     expect(screen.getByText('Test Template')).toBeDefined()
     expect(mockSettingsSet).toHaveBeenCalledWith('dashboard_presetup_collapsed', 'false')
   })
@@ -81,7 +81,7 @@ describe('PresetupSection', () => {
     render(<PresetupSection />)
 
     await waitFor(() => {
-      expect(screen.getByText('Get Started')).toBeDefined()
+      expect(screen.getByText('Start with a template')).toBeDefined()
       expect(screen.queryByText('Test Template')).toBeNull()
     })
   })
@@ -129,7 +129,7 @@ describe('PresetupSection', () => {
     useDashboardStore.setState({ presetupLoading: true })
 
     render(<PresetupSection />)
-    expect(screen.getByText('Get Started')).toBeDefined()
+    expect(screen.getByText('Start with a template')).toBeDefined()
     // Template cards should not be rendered during loading
     expect(screen.queryByText('Test Template')).toBeNull()
   })

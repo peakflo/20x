@@ -25,6 +25,10 @@ interface UIState {
   canvasPendingTaskId: string | null
   /** App to add to canvas when switching to canvas view */
   canvasPendingApp: { workflowId: string; name: string } | null
+  /** Pre-fill text for the create task modal (from dashboard command input / quick chips) */
+  createTaskPrefill: { title: string; description: string } | null
+  /** Whether the Mastermind drawer is open (global) */
+  showOrchestrator: boolean
 
   setSidebarView: (view: SidebarView) => void
   setStatusFilter: (filter: TaskStatus | 'all') => void
@@ -44,10 +48,19 @@ interface UIState {
   closeDashboardPreview: () => void
   /** Switch to canvas view and queue a task to be added as a panel */
   openTaskOnCanvas: (taskId: string) => void
+  /** Set a pending task ID to be added as a panel on the canvas (without switching views) */
+  setCanvasPendingTaskId: (taskId: string) => void
   clearCanvasPendingTask: () => void
   /** Switch to canvas view and queue an app to be added as a panel */
   openAppOnCanvas: (workflowId: string, name: string) => void
   clearCanvasPendingApp: () => void
+  /** Open create modal with pre-filled text from command input */
+  openCreateWithPrefill: (text: string) => void
+  /** Clear prefill data after the form has consumed it */
+  clearCreateTaskPrefill: () => void
+  /** Toggle the Mastermind orchestrator drawer */
+  setShowOrchestrator: (show: boolean) => void
+  toggleOrchestrator: () => void
 }
 
 export const useUIStore = create<UIState>((set) => ({
@@ -66,6 +79,8 @@ export const useUIStore = create<UIState>((set) => ({
   dashboardPreviewTaskId: null,
   canvasPendingTaskId: null,
   canvasPendingApp: null,
+  createTaskPrefill: null,
+  showOrchestrator: false,
 
   setSidebarView: (sidebarView) => set({ sidebarView }),
   setStatusFilter: (statusFilter) => set({ statusFilter }),
@@ -96,7 +111,31 @@ export const useUIStore = create<UIState>((set) => ({
   openDashboardPreview: (taskId) => set({ dashboardPreviewTaskId: taskId }),
   closeDashboardPreview: () => set({ dashboardPreviewTaskId: null }),
   openTaskOnCanvas: (taskId) => set({ sidebarView: 'canvas', canvasPendingTaskId: taskId, dashboardPreviewTaskId: null }),
+  setCanvasPendingTaskId: (taskId) => set({ canvasPendingTaskId: taskId, dashboardPreviewTaskId: null }),
   clearCanvasPendingTask: () => set({ canvasPendingTaskId: null }),
   openAppOnCanvas: (workflowId, name) => set({ sidebarView: 'canvas', canvasPendingApp: { workflowId, name }, dashboardPreviewTaskId: null }),
-  clearCanvasPendingApp: () => set({ canvasPendingApp: null })
+  clearCanvasPendingApp: () => set({ canvasPendingApp: null }),
+  openCreateWithPrefill: (text: string) => {
+    // Split text: first sentence becomes title, rest becomes description
+    const firstSentenceMatch = text.match(/^(.+?[.!?])\s+([\s\S]+)$/)
+    if (firstSentenceMatch) {
+      set({
+        activeModal: 'create',
+        editingTaskId: null,
+        createTaskPrefill: {
+          title: firstSentenceMatch[1].trim(),
+          description: firstSentenceMatch[2].trim()
+        }
+      })
+    } else {
+      set({
+        activeModal: 'create',
+        editingTaskId: null,
+        createTaskPrefill: { title: text.trim(), description: '' }
+      })
+    }
+  },
+  clearCreateTaskPrefill: () => set({ createTaskPrefill: null }),
+  setShowOrchestrator: (showOrchestrator) => set({ showOrchestrator }),
+  toggleOrchestrator: () => set((s) => ({ showOrchestrator: !s.showOrchestrator }))
 }))

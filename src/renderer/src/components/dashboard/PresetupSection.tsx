@@ -123,7 +123,7 @@ export function PresetupSection() {
   if ((presetupLoading && presetupTemplates.length === 0) || !loaded) {
     return (
       <section>
-        <h2 className="text-sm font-semibold mb-3">Get Started</h2>
+        <h2 className="text-sm font-semibold mb-3">Start with a template</h2>
         <div className="grid grid-cols-2 gap-3">
           {[1, 2].map((i) => (
             <div
@@ -154,7 +154,7 @@ export function PresetupSection() {
           ) : (
             <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
           )}
-          <h2 className="text-sm font-semibold">Get Started</h2>
+          <h2 className="text-sm font-semibold">Start with a template</h2>
           {collapsed && provisionedCount > 0 && (
             <span className="text-[11px] text-muted-foreground font-normal">
               {provisionedCount}/{presetupTemplates.length} set up

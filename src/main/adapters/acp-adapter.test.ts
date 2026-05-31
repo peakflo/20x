@@ -2297,17 +2297,6 @@ describe('AcpAdapter process spawning for packaged Electron apps', () => {
     expect(source).toContain("app.asar.unpacked")
     expect(source).toContain("binaryPath.replace('app.asar', 'app.asar.unpacked')")
   })
-
-  it('claude-code should use process.execPath with ELECTRON_RUN_AS_NODE on non-Windows', () => {
-    const adapter = new AcpAdapter('claude-code')
-    const config = (adapter as any).agentConfig
-
-    // claude-code-acp is a pure JS script, needs Node.js runtime
-    if (process.platform !== 'win32') {
-      expect(config.command).toBe(process.execPath)
-      expect(config.env).toHaveProperty('ELECTRON_RUN_AS_NODE', '1')
-    }
-  })
 })
 
 describe('AcpAdapter - Codex Quota/Error Handling', () => {
