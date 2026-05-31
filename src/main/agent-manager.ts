@@ -2103,9 +2103,19 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       throw new Error(`Agent not found: ${agentId}`)
     }
 
+    // Subtasks should run in the same workspace as their parent task
+    // so they share worktrees, skill files, and other filesystem context.
+    const task = this.db.getTask(taskId)
+    const effectiveTaskId = task?.parent_task_id ? task.parent_task_id : taskId
+
     // Auto-setup worktrees if caller didn't provide a workspaceDir
     if (!workspaceDir) {
-      workspaceDir = await this.setupWorktreeIfNeeded(taskId)
+      workspaceDir = await this.setupWorktreeIfNeeded(effectiveTaskId)
+    }
+
+    // Always use a dedicated workspace directory
+    if (!workspaceDir) {
+      workspaceDir = this.db.getWorkspaceDir(effectiveTaskId)
     }
 
     const adapter = this.getAdapter(agentId)
