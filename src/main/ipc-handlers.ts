@@ -1481,6 +1481,26 @@ export function registerIpcHandlers(
     id: string, shellPath: string, cols: number, rows: number,
     sender: Electron.WebContents, cwd?: string
   ): TerminalHandle {
+    if (process.platform === 'win32') {
+      const errorMsg = '\r\n\x1b[31m[Error] The built-in terminal is not yet supported on Windows.\x1b[0m\r\n' +
+        '\x1b[90mThe current PTY backend relies on POSIX APIs (pty, termios) not available on Windows.\x1b[0m\r\n\r\n'
+
+      // Delay sending the error to ensure the renderer has registered its listeners
+      setTimeout(() => {
+        if (!sender.isDestroyed()) {
+          sender.send('terminal:data', { id, data: errorMsg })
+          sender.send('terminal:exit', { id })
+        }
+      }, 100)
+
+      return {
+        write: () => {},
+        kill: () => {},
+        pid: 0,
+        outputBuffer: [errorMsg],
+      }
+    }
+
     const { spawn } = childProcess
 
     // Inline Python script that:
