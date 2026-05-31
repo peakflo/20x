@@ -1481,7 +1481,7 @@ export function registerIpcHandlers(
     id: string, shellPath: string, cols: number, rows: number,
     sender: Electron.WebContents, cwd?: string
   ): TerminalHandle {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const pty = require('node-pty')
     const initialCwd = cwd || process.env.HOME || process.cwd()
 
@@ -1496,7 +1496,6 @@ export function registerIpcHandlers(
     const outputBuffer: string[] = []
     const appendToBuffer = (raw: string) => {
       // Strip ANSI escape sequences for clean log output
-      // eslint-disable-next-line no-control-regex
       const clean = raw.replace(/\x1b\[[0-9;]*[a-zA-Z]|\x1b\].*?(\x07|\x1b\\)|\x1b[()][A-Z0-9]|\r/g, '')
       const lines = clean.split('\n')
       for (const line of lines) {
@@ -1644,7 +1643,6 @@ else:
     /** Append raw PTY output to the line buffer, stripping ANSI escape codes */
     const appendToBuffer = (raw: string) => {
       // Strip ANSI escape sequences for clean log output
-      // eslint-disable-next-line no-control-regex
       const clean = raw.replace(/\x1b\[[0-9;]*[a-zA-Z]|\x1b\].*?(\x07|\x1b\\)|\x1b[()][A-Z0-9]|\r/g, '')
       const lines = clean.split('\n')
       for (const line of lines) {
