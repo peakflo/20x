@@ -41,6 +41,7 @@ describe('OpencodeAdapter', () => {
         const tillDonePath = pluginPaths.find(path => path.endsWith('20x-tilldone.js'))!
         const tillDoneCode = readFileSync(tillDonePath, 'utf-8')
         expect(tillDoneCode).toContain('"tool.execute.before"')
+        expect(tillDoneCode).toContain('"todo.updated": async function(event)')
         expect(tillDoneCode).toContain('event: async function(event)')
         expect(tillDoneCode).toContain('client.session.prompt')
         expect(tillDoneCode).toContain('isTillDoneEnabled()')
