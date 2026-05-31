@@ -62,6 +62,8 @@ export interface SessionConfig {
   /** Decrypted secret env vars to inject directly into the agent process env.
    *  Used when the agent runtime doesn't respect $SHELL (e.g. Claude Code). */
   secretEnvVars?: Record<string, string>
+  /** Whether the OpenCode tillDone runtime plugin should enforce todo completion for this session. */
+  tillDone?: boolean
 }
 
 export interface SessionStatus {

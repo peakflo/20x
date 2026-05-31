@@ -55,10 +55,10 @@ export class OpencodeAdapter implements CodingAgentAdapter {
   private promptAborts: Map<string, AbortController> = new Map()
   /** Provider errors captured from prompt results (surfaced via getStatus) */
   private promptErrors: Map<string, string> = new Map()
-  /** Absolute path to the secret-injector plugin file (written before server start) */
-  private pluginFilePath: string | null = null
-  /** Absolute path to the secrets exports file (read dynamically by the plugin) */
-  private secretsExportsPath: string | null = null
+  /** Absolute paths to generated OpenCode plugin files registered for this session/workspace */
+  private pluginFilePaths: string[] = []
+  /** Absolute paths to generated support files used by runtime plugins */
+  private runtimeSupportFilePaths: string[] = []
   /** Whether the merged config has been pushed at least once to the running server.
    *  Config is pushed once on first server connection; subsequent pushes happen only
    *  via explicit `notifyConfigChanged()` calls (e.g. after settings edit or key rotation).
@@ -609,9 +609,9 @@ export class OpencodeAdapter implements CodingAgentAdapter {
         const port = parseInt(url.port || '4096', 10)
 
         const extraConfig: Record<string, unknown> = {}
-        if (this.pluginFilePath) {
-          extraConfig.plugin = [this.pluginFilePath]
-          console.log(`[OpencodeAdapter] Passing plugin to server config: ${this.pluginFilePath}`)
+        if (this.pluginFilePaths.length > 0) {
+          extraConfig.plugin = [...this.pluginFilePaths]
+          console.log('[OpencodeAdapter] Passing plugins to server config:', this.pluginFilePaths)
         }
         const mergedConfig = buildMergedOpencodeConfig(extraConfig, this.db)
 
@@ -641,10 +641,10 @@ export class OpencodeAdapter implements CodingAgentAdapter {
   }
 
   async createSession(config: SessionConfig): Promise<string> {
-    // Write secret files BEFORE server starts so the plugin is discovered at startup.
-    // The plugin reads secrets dynamically from a file, so subsequent updates work
-    // even when the server is already running.
-    this.writeSecretFiles(config)
+    // Write runtime plugin files BEFORE server starts so they are discovered at startup.
+    // Plugins that depend on support files read them dynamically, so updates can take
+    // effect without restarting the server.
+    this.writeRuntimePluginFiles(config)
 
     await this.ensureServerRunning(config.serverUrl || DEFAULT_SERVER_URL)
 
@@ -657,17 +657,17 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     const baseUrl = this.serverUrl || config.serverUrl || DEFAULT_SERVER_URL
     const ocClient = OpenCodeSDK!.createOpencodeClient({ baseUrl, fetch: noTimeoutFetch as unknown as (request: Request) => ReturnType<typeof fetch> })
 
-    // Register secret-injector plugin via config.update() so the running server loads it
+    // Register runtime plugins via config.update() so the running server loads them
     // for this workspace directory — no server restart needed.
-    if (this.pluginFilePath && config.workspaceDir) {
+    if (this.pluginFilePaths.length > 0 && config.workspaceDir) {
       try {
         await ocClient.config.update({
-          body: { plugin: [this.pluginFilePath] } as Record<string, unknown>,
+          body: { plugin: [...this.pluginFilePaths] } as Record<string, unknown>,
           ...(config.workspaceDir && { query: { directory: config.workspaceDir } })
         })
-        console.log(`[OpencodeAdapter] Registered plugin via config.update: ${this.pluginFilePath}`)
+        console.log('[OpencodeAdapter] Registered runtime plugins via config.update:', this.pluginFilePaths)
       } catch (err) {
-        console.warn(`[OpencodeAdapter] config.update for plugin failed (will rely on startup loading):`, err)
+        console.warn('[OpencodeAdapter] config.update for runtime plugins failed (will rely on startup loading):', err)
       }
     }
 
@@ -765,24 +765,24 @@ export class OpencodeAdapter implements CodingAgentAdapter {
   }
 
   async resumeSession(sessionId: string, config: SessionConfig): Promise<SessionMessage[]> {
-    // Update secrets file before resuming (plugin reads dynamically)
-    this.writeSecretFiles(config)
+    // Update runtime plugin files before resuming (plugins read support files dynamically)
+    this.writeRuntimePluginFiles(config)
 
     await this.ensureServerRunning(config.serverUrl || DEFAULT_SERVER_URL)
 
     const baseUrl = this.serverUrl || config.serverUrl || DEFAULT_SERVER_URL
     const ocClient = OpenCodeSDK!.createOpencodeClient({ baseUrl, fetch: noTimeoutFetch as unknown as (request: Request) => ReturnType<typeof fetch> })
 
-    // Register secret-injector plugin for this workspace
-    if (this.pluginFilePath && config.workspaceDir) {
+    // Register runtime plugins for this workspace
+    if (this.pluginFilePaths.length > 0 && config.workspaceDir) {
       try {
         await ocClient.config.update({
-          body: { plugin: [this.pluginFilePath] } as Record<string, unknown>,
+          body: { plugin: [...this.pluginFilePaths] } as Record<string, unknown>,
           ...(config.workspaceDir && { query: { directory: config.workspaceDir } })
         })
-        console.log(`[OpencodeAdapter] Registered plugin via config.update: ${this.pluginFilePath}`)
+        console.log('[OpencodeAdapter] Registered runtime plugins via config.update:', this.pluginFilePaths)
       } catch (err) {
-        console.warn(`[OpencodeAdapter] config.update for plugin failed:`, err)
+        console.warn('[OpencodeAdapter] config.update for runtime plugins failed:', err)
       }
     }
 
@@ -1257,44 +1257,50 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     await this.abortPrompt(sessionId, _config)
     this.clients.delete(sessionId)
 
-    // Clean up secret files (plugin + exports)
-    for (const filePath of [this.pluginFilePath, this.secretsExportsPath]) {
+    // Clean up generated runtime plugins and any support files they use.
+    for (const filePath of [...this.pluginFilePaths, ...this.runtimeSupportFilePaths]) {
       if (filePath) {
         try {
           if (existsSync(filePath)) {
             rmSync(filePath)
-            console.log(`[OpencodeAdapter] Removed secret file: ${filePath}`)
+            console.log(`[OpencodeAdapter] Removed runtime plugin file: ${filePath}`)
           }
         } catch (err) {
-          console.warn(`[OpencodeAdapter] Failed to remove secret file: ${err}`)
+          console.warn(`[OpencodeAdapter] Failed to remove runtime plugin file: ${err}`)
         }
       }
     }
-    this.pluginFilePath = null
-    this.secretsExportsPath = null
+    this.pluginFilePaths = []
+    this.runtimeSupportFilePaths = []
   }
 
   /**
-   * Writes two files for secret injection:
-   * 1. `.opencode/.20x-secrets` — pre-formatted export commands (read dynamically by the plugin)
-   * 2. `.opencode/plugins/20x-secret-injector.js` — plugin using `tool.execute.before`
-   *
-   * The plugin reads the exports file on every bash command, so secrets can be
-   * updated without restarting the server. Both files are cleaned up on session destroy.
-   *
-   * MUST be called BEFORE ensureServerRunning() so the plugin is discovered at startup.
+   * Writes all generated runtime plugin files needed for this session.
+   * MUST be called BEFORE ensureServerRunning() so plugins are discovered at startup.
    */
-  private writeSecretFiles(config: SessionConfig): void {
-    const secretCount = config.secretEnvVars ? Object.keys(config.secretEnvVars).length : 0
-    console.log(`[OpencodeAdapter] writeSecretFiles: workspaceDir=${config.workspaceDir}, secretCount=${secretCount}`)
-    if (!config.secretEnvVars || secretCount === 0 || !config.workspaceDir) {
-      console.log(`[OpencodeAdapter] writeSecretFiles: skipping — no secrets or no workspaceDir`)
+  private writeRuntimePluginFiles(config: SessionConfig): void {
+    this.pluginFilePaths = []
+    this.runtimeSupportFilePaths = []
+
+    if (!config.workspaceDir) {
       return
     }
 
     const openCodeDir = join(config.workspaceDir, '.opencode')
     const pluginsDir = join(openCodeDir, 'plugins')
     mkdirSync(pluginsDir, { recursive: true })
+
+    this.writeTillDonePlugin(openCodeDir, pluginsDir, config.tillDone !== false)
+    this.writeSecretPlugin(config, openCodeDir, pluginsDir)
+  }
+
+  private writeSecretPlugin(config: SessionConfig, openCodeDir: string, pluginsDir: string): void {
+    const secretCount = config.secretEnvVars ? Object.keys(config.secretEnvVars).length : 0
+    console.log(`[OpencodeAdapter] writeSecretFiles: workspaceDir=${config.workspaceDir}, secretCount=${secretCount}`)
+    if (!config.secretEnvVars || secretCount === 0) {
+      console.log(`[OpencodeAdapter] writeSecretFiles: skipping — no secrets or no workspaceDir`)
+      return
+    }
 
     // 1. Write pre-formatted export commands to a secrets file.
     //    The plugin reads this file on every bash invocation so updates take effect immediately.
@@ -1304,34 +1310,186 @@ export class OpencodeAdapter implements CodingAgentAdapter {
 
     const secretsPath = join(openCodeDir, '.20x-secrets')
     writeFileSync(secretsPath, exportLines, 'utf-8')
-    this.secretsExportsPath = secretsPath
+    this.runtimeSupportFilePaths.push(secretsPath)
 
     // 2. Write the plugin JS that reads the secrets file and prepends exports to bash commands.
     //    Uses tool.execute.before hook (same pattern as Claude Code PreToolUse).
     const pluginPath = join(pluginsDir, '20x-secret-injector.js')
-    const pluginCode =
-      '// Auto-generated by 20x — do not edit. Removed on session destroy.\n' +
-      'import { readFileSync } from "fs";\n' +
-      '\n' +
-      'var SECRETS_PATH = ' + JSON.stringify(secretsPath) + ';\n' +
-      '\n' +
-      'export var SecretInjector = async function() {\n' +
-      '  return {\n' +
-      '    "tool.execute.before": async function(input, output) {\n' +
-      '      if (input.tool === "bash") {\n' +
-      '        try {\n' +
-      '          var exports = readFileSync(SECRETS_PATH, "utf-8").trim();\n' +
-      '          if (exports) output.args.command = exports + "\\n" + output.args.command;\n' +
-      '        } catch(e) {}\n' +
-      '      }\n' +
-      '    }\n' +
-      '  };\n' +
-      '};\n'
+    const pluginCode = this.buildSecretInjectorPluginCode(secretsPath)
 
     writeFileSync(pluginPath, pluginCode, 'utf-8')
-    this.pluginFilePath = pluginPath
+    this.pluginFilePaths.push(pluginPath)
 
     console.log(`[OpencodeAdapter] Wrote secret files: plugin=${pluginPath}, secrets=${secretsPath} (${Object.keys(config.secretEnvVars).length} secret(s))`)
+  }
+
+  private writeTillDonePlugin(openCodeDir: string, pluginsDir: string, enabled: boolean): void {
+    const statePath = join(openCodeDir, '.20x-tilldone-state.json')
+    writeFileSync(statePath, '{}\n', 'utf-8')
+    this.runtimeSupportFilePaths.push(statePath)
+
+    const configPath = join(openCodeDir, '.20x-tilldone-config.json')
+    writeFileSync(configPath, JSON.stringify({ enabled }), 'utf-8')
+    this.runtimeSupportFilePaths.push(configPath)
+
+    const pluginPath = join(pluginsDir, '20x-tilldone.js')
+    const pluginCode = this.buildTillDonePluginCode(statePath, configPath)
+    writeFileSync(pluginPath, pluginCode, 'utf-8')
+    this.pluginFilePaths.push(pluginPath)
+
+    console.log(`[OpencodeAdapter] Wrote tilldone plugin: plugin=${pluginPath}, state=${statePath}, enabled=${enabled}`)
+  }
+
+  private buildSecretInjectorPluginCode(secretsPath: string): string {
+    return [
+      '// Auto-generated by 20x — do not edit. Removed on session destroy.',
+      'import { readFileSync } from "fs";',
+      '',
+      'var SECRETS_PATH = ' + JSON.stringify(secretsPath) + ';',
+      '',
+      'export var SecretInjector = async function() {',
+      '  return {',
+      '    "tool.execute.before": async function(input, output) {',
+      '      if (input.tool === "bash") {',
+      '        try {',
+      '          var exports = readFileSync(SECRETS_PATH, "utf-8").trim();',
+      '          if (exports) output.args.command = exports + "\\n" + output.args.command;',
+      '        } catch(e) {}',
+      '      }',
+      '    }',
+      '  };',
+      '};',
+      ''
+    ].join('\n')
+  }
+
+  private buildTillDonePluginCode(statePath: string, configPath: string): string {
+    const initialTodoPrompt = 'TillDone: before using other tools, call the built-in todowrite tool to create a concise task list for this task. Keep the list current as you work.'
+    const continuePrompt = 'TillDone: continue working until every todo is completed or explicitly removed. Update todowrite as you progress, keep exactly one task in_progress when actively working, and only stop once the list is fully done.'
+
+    return [
+      '// Auto-generated by 20x — do not edit. Removed on session destroy.',
+      'import { readFileSync, writeFileSync } from "fs";',
+      '',
+      'var STATE_PATH = ' + JSON.stringify(statePath) + ';',
+      'var CONFIG_PATH = ' + JSON.stringify(configPath) + ';',
+      'var INITIAL_TODO_PROMPT = ' + JSON.stringify(initialTodoPrompt) + ';',
+      'var CONTINUE_PROMPT = ' + JSON.stringify(continuePrompt) + ';',
+      '',
+      'function isTillDoneEnabled() {',
+      '  try {',
+      '    var raw = readFileSync(CONFIG_PATH, "utf-8");',
+      '    var parsed = JSON.parse(raw || "{}");',
+      '    return parsed?.enabled !== false;',
+      '  } catch (e) {',
+      '    return true;',
+      '  }',
+      '}',
+      '',
+      'function readState() {',
+      '  try {',
+      '    var raw = readFileSync(STATE_PATH, "utf-8");',
+      '    var parsed = JSON.parse(raw || "{}");',
+      '    return parsed && typeof parsed === "object" ? parsed : {};',
+      '  } catch (e) {',
+      '    return {};',
+      '  }',
+      '}',
+      '',
+      'function writeState(state) {',
+      '  try {',
+      '    writeFileSync(STATE_PATH, JSON.stringify(state), "utf-8");',
+      '  } catch (e) {}',
+      '  return state;',
+      '}',      
+      '',
+      'function getSessionId(input) {',
+      '  return input?.sessionID || input?.sessionId || input?.session?.id || input?.event?.sessionID || input?.event?.sessionId;',
+      '}',
+      '',
+      'function getEventSessionId(event) {',
+      '  return event?.properties?.sessionID || event?.properties?.sessionId || event?.properties?.session?.id || event?.properties?.info?.sessionID || event?.properties?.info?.sessionId || event?.properties?.info?.id;',
+      '}',
+      '',
+      'function normalizeTodos(rawTodos) {',
+      '  if (!Array.isArray(rawTodos)) return [];',
+      '  return rawTodos.filter(Boolean).map(function(todo, index) {',
+      '    return {',
+      '      id: todo.id || String(index),',
+      '      content: todo.content || todo.text || todo.title || "",',
+      '      status: todo.status || "pending"',
+      '    };',
+      '  });',
+      '}',
+      '',
+      'function hasIncompleteTodos(todos) {',
+      '  return todos.some(function(todo) {',
+      '    return todo.status !== "completed" && todo.status !== "cancelled" && todo.status !== "done" && todo.status !== "removed";',
+      '  });',
+      '}',
+      '',
+      'export var TillDone = async function({ client }) {',
+      '  return {',
+      '    "tool.execute.before": async function(input) {',
+      '      if (!isTillDoneEnabled()) return;',
+      '      if (input.tool === "todowrite") return;',
+      '      var sessionId = getSessionId(input);',
+      '      if (!sessionId) return;',
+      '      var state = readState();',
+      '      var sessionState = state[sessionId] || {};',
+      '      var todos = normalizeTodos(sessionState.todos);',
+      '      if (todos.length === 0) {',
+      '        throw new Error(INITIAL_TODO_PROMPT);',
+      '      }',
+      '    },',
+      '    event: async function(event) {',
+      '      if (!isTillDoneEnabled()) return;',
+      '      var sessionId = getEventSessionId(event);',
+      '      if (!sessionId) return;',
+      '      var state = readState();',
+      '      var sessionState = state[sessionId] || { todos: [], continuing: false };',
+      '',
+      '      if (event.type === "todo.updated") {',
+      '        sessionState.todos = normalizeTodos(event.properties?.todos || event.properties?.items || event.properties?.state?.todos || []);',
+      '        state[sessionId] = sessionState;',
+      '        writeState(state);',
+      '        return;',
+      '      }',
+      '',
+      '      if (event.type === "session.deleted") {',
+      '        delete state[sessionId];',
+      '        writeState(state);',
+      '        return;',
+      '      }',
+      '',
+      '      if (event.type !== "session.idle") return;',
+      '      sessionState.todos = normalizeTodos(sessionState.todos);',
+      '      if (sessionState.continuing) return;',
+      '',
+      '      if (sessionState.todos.length === 0 || hasIncompleteTodos(sessionState.todos)) {',
+      '        sessionState.continuing = true;',
+      '        state[sessionId] = sessionState;',
+      '        writeState(state);',
+      '        try {',
+      '          await client.session.prompt({',
+      '            path: { id: sessionId },',
+      '            body: {',
+      '              parts: [{ type: "text", text: sessionState.todos.length === 0 ? INITIAL_TODO_PROMPT : CONTINUE_PROMPT }]',
+      '            }',
+      '          });',
+      '        } finally {',
+      '          var nextState = readState();',
+      '          var currentSessionState = nextState[sessionId] || sessionState;',
+      '          currentSessionState.continuing = false;',
+      '          nextState[sessionId] = currentSessionState;',
+      '          writeState(nextState);',
+      '        }',
+      '      }',
+      '    }',
+      '  };',
+      '};',
+      ''
+    ].join('\n')
   }
 
   async getAllMessages(sessionId: string, config: SessionConfig): Promise<SessionMessage[]> {
