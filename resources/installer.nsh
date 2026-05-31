@@ -22,9 +22,10 @@ Function InstallPythonIfMissing
 
   StrCpy $0 "$TEMP\python-installer.exe"
   DetailPrint "Downloading Python ${PYTHON_VERSION}..."
-  inetc::get /SILENT "${PYTHON_INSTALLER_URL}" "$0"
+  nsExec::ExecToStack 'powershell.exe -ExecutionPolicy Bypass -Command {Invoke-WebRequest -Uri "${PYTHON_INSTALLER_URL}" -OutFile "$0"}'
   Pop $1
-  StrCmp $1 "OK" downloadSucceeded
+  Pop $2
+  StrCmp $1 0 downloadSucceeded
 
   MessageBox MB_ICONEXCLAMATION|MB_OK "20x could not download Python automatically ($1). Installation will continue, but Python may need to be installed later from python.org."
   Delete "$0"

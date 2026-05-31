@@ -21,6 +21,8 @@ describe('installer script', () => {
     expect(script).toContain('where.exe" python.exe')
     expect(script).toContain('where.exe" py.exe')
     expect(script).toContain('https://www.python.org/ftp/python/${PYTHON_VERSION}/python-${PYTHON_VERSION}-amd64.exe')
+    expect(script).toContain('Invoke-WebRequest')
+    expect(script).toContain('-ExecutionPolicy Bypass')
     expect(script).toContain('/quiet InstallAllUsers=0 PrependPath=1 Include_launcher=1 Include_pip=1')
     expect(script).toContain('Call BroadcastEnvironmentChange')
   })
