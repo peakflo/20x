@@ -48,6 +48,7 @@ interface AgentSession {
   adapter?: CodingAgentAdapter
   secretSessionToken?: string
   pollingStarted?: boolean
+  tillDoneReminderCount?: number
 }
 
 function normalizeUrlPath(pathname: string): string {
@@ -138,6 +139,7 @@ export class AgentManager extends EventEmitter {
   // Maximum number of session ID redirects to keep (old temp IDs → real IDs).
   // Without a cap these grow forever across many session start/stop cycles.
   private static readonly MAX_SESSION_REDIRECTS = 200
+  private static readonly TILL_DONE_MAX_REMINDERS = 2
 
   // ── Event-driven nudge ──
   // When an adapter buffers new stream data it calls onDataAvailable().
@@ -1089,9 +1091,12 @@ export class AgentManager extends EventEmitter {
     await yieldEL()
 
     // Build MCP servers config for adapter
-    // Mastermind, triage, and subtask sessions always get task-management access
+    // Real task sessions always get task-management access so they can triage,
+    // orchestrate subtasks, and inspect live task state without depending on
+    // per-agent MCP configuration.
     const isMastermind = taskId === 'mastermind-session'
-    const mcpServers = await this.buildMcpServersForAdapter(agentId, { ensureTaskManagement: isMastermind || isTriageSession || isSubtask, taskScope })
+    const ensureTaskManagement = isMastermind || isTriageSession || isSubtask || !!task
+    const mcpServers = await this.buildMcpServersForAdapter(agentId, { ensureTaskManagement, taskScope })
 
     // Build session config
     const sessionConfig: SessionConfig = {
@@ -1267,6 +1272,11 @@ export class AgentManager extends EventEmitter {
             promptText += '\n\nThis task has subtasks. Each subtask has its own agent. Focus on coordination and any work not covered by subtasks.'
             promptText += '\nUse `list_subtasks` or `get_task` via MCP tools to check live subtask status and outputs.'
           }
+
+          promptText += '\n\nYou can use the `task-management` MCP server to orchestrate execution instead of doing everything yourself.'
+          promptText += '\n- Use `create_subtask` to break work down.'
+          promptText += '\n- Use `start_task` to triage+start an unassigned task, start an assigned task, or start a specific subtask by ID.'
+          promptText += '\n- Use `wait_for_subtasks` to block until subtasks reach `ready_for_review` or `completed` before continuing coordination.'
         }
 
         // Append output field instructions
@@ -2115,6 +2125,94 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     return this.startAdapterSession(adapter, agentId, taskId, workspaceDir, skipInitialPrompt)
   }
 
+  async startTask(taskId: string, opts?: { preferSubtasks?: boolean; allowTriage?: boolean }): Promise<{
+    action: 'task_started' | 'subtask_started' | 'triage_started' | 'already_running' | 'no_action'
+    sessionId?: string
+    startedTaskId?: string
+    agentId?: string
+  }> {
+    const task = this.db.getTask(taskId)
+    if (!task) {
+      throw new Error(`Task not found: ${taskId}`)
+    }
+
+    const preferSubtasks = opts?.preferSubtasks !== false
+    const allowTriage = opts?.allowTriage !== false
+
+    if (preferSubtasks) {
+      const subtasks = this.db.getSubtasks(taskId)
+        .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
+
+      const activeSubtask = subtasks.find((subtask) =>
+        subtask.status === TaskStatus.AgentWorking ||
+        subtask.status === TaskStatus.ReadyForReview ||
+        subtask.status === TaskStatus.Triaging ||
+        subtask.status === TaskStatus.AgentLearning
+      )
+      if (activeSubtask) {
+        return {
+          action: 'already_running',
+          startedTaskId: activeSubtask.id,
+          agentId: activeSubtask.agent_id ?? undefined
+        }
+      }
+
+      const nextSubtask = subtasks.find((subtask) => subtask.status === TaskStatus.NotStarted && !!subtask.agent_id)
+      if (nextSubtask?.agent_id) {
+        const sessionId = await this.startSession(nextSubtask.agent_id, nextSubtask.id)
+        return {
+          action: 'subtask_started',
+          sessionId,
+          startedTaskId: nextSubtask.id,
+          agentId: nextSubtask.agent_id
+        }
+      }
+    }
+
+    const runningSession = this.findSessionByTaskId(taskId)
+    if (runningSession && runningSession.session.status !== 'idle' && runningSession.session.status !== 'error') {
+      return {
+        action: 'already_running',
+        sessionId: runningSession.sessionId,
+        startedTaskId: taskId,
+        agentId: runningSession.session.agentId
+      }
+    }
+
+    if (!task.agent_id) {
+      if (!allowTriage || task.parent_task_id) {
+        return { action: 'no_action', startedTaskId: taskId }
+      }
+
+      const defaultAgentId = this.resolveDefaultAgentId()
+      if (!defaultAgentId) {
+        return { action: 'no_action', startedTaskId: taskId }
+      }
+
+      this.db.updateTask(taskId, { status: TaskStatus.Triaging })
+      this.sendToRenderer('task:updated', {
+        taskId,
+        updates: { status: TaskStatus.Triaging }
+      })
+
+      const sessionId = await this.startSession(defaultAgentId, taskId)
+      return {
+        action: 'triage_started',
+        sessionId,
+        startedTaskId: taskId,
+        agentId: defaultAgentId
+      }
+    }
+
+    const sessionId = await this.startSession(task.agent_id, taskId)
+    return {
+      action: 'task_started',
+      sessionId,
+      startedTaskId: taskId,
+      agentId: task.agent_id
+    }
+  }
+
   /**
    * Send a heartbeat check via a dedicated heartbeat session for this task.
    * Uses a separate session (heartbeat-{taskId}) to keep checks out of the task's working session.
@@ -2493,6 +2591,24 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
         sessionId, agentId: session.agentId, taskId: session.taskId, status: 'idle'
       })
       return
+    }
+
+    if (
+      taskAfterExtract?.output_fields?.length &&
+      !this.hasAnyOutputValues(taskAfterExtract.output_fields) &&
+      (session.tillDoneReminderCount || 0) < AgentManager.TILL_DONE_MAX_REMINDERS
+    ) {
+      if (this.looksLikeAgentQuestion(session.lastAssistantText)) {
+        console.log(`[AgentManager] Task ${taskAfterExtract.id} went idle with a question and empty outputs; skipping till-done reminder`)
+      } else {
+        const judgedFinished = await this.judgeTaskFinishedWithoutOutputs(taskAfterExtract, session)
+        if (judgedFinished) {
+          session.tillDoneReminderCount = (session.tillDoneReminderCount || 0) + 1
+          console.log(`[AgentManager] Task ${taskAfterExtract.id} appears finished without outputs; sending till-done reminder (${session.tillDoneReminderCount}/${AgentManager.TILL_DONE_MAX_REMINDERS})`)
+          await this.doSendAdapterMessage(session, sessionId, this.buildTillDoneReminder(taskAfterExtract))
+          return
+        }
+      }
     }
 
     // Update task status to ready_for_review (only if task exists)
@@ -3356,6 +3472,130 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     lines.push('```')
 
     return lines.join('\n')
+  }
+
+  private hasOutputValue(value: unknown): boolean {
+    if (value === null || value === undefined) return false
+    if (typeof value === 'string') return value.trim().length > 0
+    if (Array.isArray(value)) return value.some((item) => this.hasOutputValue(item))
+    return true
+  }
+
+  private hasAnyOutputValues(fields: OutputFieldRecord[] | null | undefined): boolean {
+    return !!fields?.some((field) => this.hasOutputValue(field.value))
+  }
+
+  private looksLikeAgentQuestion(text: string | null | undefined): boolean {
+    const trimmed = text?.trim()
+    if (!trimmed) return false
+
+    const tail = trimmed.split('\n').slice(-3).join(' ').trim()
+    if (/\?\s*$/.test(tail)) return true
+
+    return /\b(can|could|would|should|do|does|did|is|are|will|may|might|what|which|who|where|when|why|how)\b[\s\S]{0,120}\?\s*$/i.test(tail)
+  }
+
+  private resolveDefaultAgentId(): string | null {
+    const agents = this.db.getAgents()
+    const defaultAgent = agents.find((agent) => agent.is_default)
+    return defaultAgent?.id ?? agents[0]?.id ?? null
+  }
+
+  private buildTillDoneReminder(task: TaskRecord): string {
+    const requiredNames = task.output_fields
+      .filter((field) => field.required)
+      .map((field) => field.name)
+
+    const requiredNote = requiredNames.length > 0
+      ? `Required outputs still missing: ${requiredNames.join(', ')}.`
+      : 'The task has output fields, but they are still empty.'
+
+    return [
+      `You went idle on "${task.title}" without filling the task output fields.`,
+      requiredNote,
+      'Finish the task before stopping.',
+      'If you are blocked by a real question for the user, ask it explicitly.',
+      'Otherwise continue the work and end with the required JSON output block populated.'
+    ].join('\n')
+  }
+
+  private async waitForTransientSessionResult(sessionId: string, taskId: string, timeoutMs: number = 90_000): Promise<string | null> {
+    const pollMs = 2_000
+    const startedAt = Date.now()
+    let currentSessionId = sessionId
+
+    while (Date.now() - startedAt < timeoutMs) {
+      let session = this.getSession(currentSessionId)
+      if (!session) {
+        const found = this.findSessionByTaskId(taskId)
+        if (found) {
+          currentSessionId = found.sessionId
+          session = found.session
+        }
+      }
+
+      if (!session) {
+        await new Promise((resolve) => setTimeout(resolve, pollMs))
+        continue
+      }
+
+      if (session.status === 'error') return null
+
+      if (session.status === 'idle') {
+        const lastMessage = this.getLastAssistantMessage(currentSessionId)
+        if (lastMessage) return lastMessage
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, pollMs))
+    }
+
+    return null
+  }
+
+  private async judgeTaskFinishedWithoutOutputs(task: TaskRecord, session: AgentSession): Promise<boolean> {
+    const defaultAgentId = this.resolveDefaultAgentId()
+    if (!defaultAgentId) return false
+
+    const sessionTaskId = `idle-judge-${task.id}`
+    const workspaceDir = session.workspaceDir || this.db.getWorkspaceDir(task.id)
+    const prompt = [
+      'Judge whether the coding agent finished the task but failed to provide the required output fields.',
+      'Reply with JSON only.',
+      'Use this schema:',
+      '```json',
+      '{',
+      '  "finished": true',
+      '}',
+      '```',
+      `Task title: ${task.title}`,
+      `Task description: ${task.description || '(none)'}`,
+      `Expected output fields: ${JSON.stringify(task.output_fields || [])}`,
+      'Last assistant message:',
+      session.lastAssistantText || '(none)',
+      'Mark "finished" true only if the agent appears to have completed the requested work and merely omitted the structured outputs.'
+    ].join('\n')
+
+    let judgeSessionId: string | null = null
+    try {
+      judgeSessionId = await this.startSession(defaultAgentId, sessionTaskId, workspaceDir, true)
+      const sendResult = await this.sendMessage(judgeSessionId, prompt, sessionTaskId, defaultAgentId)
+      if (sendResult.newSessionId) judgeSessionId = sendResult.newSessionId
+
+      const resultText = await this.waitForTransientSessionResult(judgeSessionId, sessionTaskId)
+      if (!resultText) return false
+
+      const match = resultText.match(/```json\s*([\s\S]*?)```/i) || resultText.match(/```([\s\S]*?)```/i)
+      const rawJson = match ? match[1].trim() : resultText.trim()
+      const parsed = JSON.parse(rawJson) as { finished?: unknown }
+      return parsed.finished === true
+    } catch (err) {
+      console.warn(`[AgentManager] Failed to judge idle completion for task ${task.id}:`, err)
+      return false
+    } finally {
+      if (judgeSessionId) {
+        await this.stopSession(judgeSessionId, false)
+      }
+    }
   }
 
   private buildTriagePrompt(task: TaskRecord): string {

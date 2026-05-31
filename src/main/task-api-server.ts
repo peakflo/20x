@@ -7,12 +7,15 @@
 import { createServer, type Server as HttpServer } from 'http'
 import { CronExpressionParser } from 'cron-parser'
 import type { DatabaseManager } from './database'
+import { TaskStatus } from '../shared/constants'
+import type { AgentManager } from './agent-manager'
 
 let server: HttpServer | null = null
 let port: number | null = null
 let startupPromise: Promise<number> | null = null
 let notifyRenderer: ((channel: string, data: unknown) => void) | null = null
 let transcriptProvider: ((taskId: string) => Promise<Array<{ role: string; text: string }>>) | null = null
+let agentController: Pick<AgentManager, 'startTask'> | null = null
 
 export function getTaskApiPort(): number | null {
   return port
@@ -42,6 +45,10 @@ export function setTaskApiNotifier(fn: (channel: string, data: unknown) => void)
 
 export function setTranscriptProvider(fn: (taskId: string) => Promise<Array<{ role: string; text: string }>>): void {
   transcriptProvider = fn
+}
+
+export function setTaskApiAgentController(controller: Pick<AgentManager, 'startTask'> | null): void {
+  agentController = controller
 }
 
 export function startTaskApiServer(db: DatabaseManager): Promise<number> {
@@ -107,6 +114,7 @@ export function stopTaskApiServer(): void {
     server = null
     port = null
   }
+  startupPromise = null
 }
 
 // ── Route handler ──────────────────────────────────────────────
@@ -475,6 +483,23 @@ async function handleRoute(db: DatabaseManager, route: string, params: Record<st
       return subtasks
     }
 
+    case '/start_task': {
+      if (!params.task_id) return { error: 'task_id is required' }
+      if (!agentController) return { error: 'Agent controller not available' }
+
+      const result = await agentController.startTask(String(params.task_id), {
+        preferSubtasks: params.prefer_subtasks !== false,
+        allowTriage: params.allow_triage !== false
+      })
+
+      const startedTask = result.startedTaskId ? db.getTask(result.startedTaskId) : null
+      return {
+        success: result.action !== 'no_action',
+        ...result,
+        task: startedTask
+      }
+    }
+
     case '/create_subtask': {
       if (!params.parent_task_id) return { error: 'parent_task_id is required' }
       if (!params.title) return { error: 'title is required' }
@@ -529,6 +554,60 @@ async function handleRoute(db: DatabaseManager, route: string, params: Record<st
       }
 
       return { success: true, task: parsedSubtask }
+    }
+
+    case '/wait_for_subtasks': {
+      if (!params.parent_task_id) return { error: 'parent_task_id is required' }
+
+      const timeoutMs = typeof params.timeout_ms === 'number' ? Math.max(1_000, params.timeout_ms) : 300_000
+      const pollMs = 2_000
+      const returnWhen = params.return_when === 'any_terminal' ? 'any_terminal' : 'all_terminal'
+      const terminalStatuses = Array.isArray(params.terminal_statuses) && params.terminal_statuses.length > 0
+        ? (params.terminal_statuses as string[])
+        : [TaskStatus.ReadyForReview, TaskStatus.Completed]
+      const targetIds = Array.isArray(params.subtask_ids) && params.subtask_ids.length > 0
+        ? new Set((params.subtask_ids as string[]).map(String))
+        : null
+
+      const readSubtasks = () => {
+        const subtasks = rawDb.prepare(
+          'SELECT * FROM tasks WHERE parent_task_id = ? ORDER BY sort_order ASC, created_at ASC'
+        ).all(params.parent_task_id) as Record<string, unknown>[]
+        subtasks.forEach(parseTask)
+        return targetIds ? subtasks.filter((task) => targetIds.has(String(task.id))) : subtasks
+      }
+
+      const startedAt = Date.now()
+      while (Date.now() - startedAt < timeoutMs) {
+        const subtasks = readSubtasks()
+        const matches = subtasks.filter((task) => terminalStatuses.includes(String(task.status)))
+
+        if (subtasks.length > 0) {
+          const done = returnWhen === 'any_terminal'
+            ? matches.length > 0
+            : matches.length === subtasks.length
+
+          if (done) {
+            return {
+              success: true,
+              timed_out: false,
+              return_when: returnWhen,
+              terminal_statuses: terminalStatuses,
+              subtasks
+            }
+          }
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, pollMs))
+      }
+
+      return {
+        success: false,
+        timed_out: true,
+        return_when: returnWhen,
+        terminal_statuses: terminalStatuses,
+        subtasks: readSubtasks()
+      }
     }
 
     case '/reorder_subtasks': {

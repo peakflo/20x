@@ -27,7 +27,7 @@ import { WorkspaceCleanupScheduler } from './workspace-cleanup-scheduler'
 import { ClaudePluginManager } from './claude-plugin-manager'
 import { EnterpriseHeartbeat } from './enterprise-heartbeat'
 import { EnterpriseStateSync } from './enterprise-state-sync'
-import { setTaskApiNotifier, setTranscriptProvider, stopTaskApiServer } from './task-api-server'
+import { setTaskApiAgentController, setTaskApiNotifier, setTranscriptProvider, stopTaskApiServer } from './task-api-server'
 import { startSecretBroker, stopSecretBroker, writeSecretShellWrapper } from './secret-broker'
 import { startMcpAuthProxy, stopMcpAuthProxy } from './mcp-auth-proxy'
 import { startMobileApiServer, stopMobileApiServer, broadcastToMobileClients, setMobileApiNotifier } from './mobile-api-server'
@@ -263,6 +263,7 @@ function createWindow(): void {
   // Wire up transcript provider for subtask MCP agents to access sibling transcripts
   if (agentManager) {
     setTranscriptProvider((taskId) => agentManager!.getTranscriptForTask(taskId))
+    setTaskApiAgentController(agentManager)
   }
 
   // Wire up mobile-api-server notifications to the renderer

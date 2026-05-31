@@ -92,17 +92,26 @@ function createMockDb(agentConfig: Record<string, unknown> = {}) {
       repos: ['org/repo'],
       skill_ids: ['skill-1'],
     })),
+    getTasks: vi.fn(() => []),
+    getSubtasks: vi.fn(() => []),
     getAgent: vi.fn(() => ({
       id: 'agent-1',
       name: 'Test Agent',
       config: agentConfig,
     })),
+    getAgents: vi.fn(() => ([{
+      id: 'agent-1',
+      name: 'Test Agent',
+      is_default: true,
+      config: agentConfig,
+    }])),
     getSkills: vi.fn(() => [makeSkillRecord()]),
     getSkillsByIds: vi.fn(() => [makeSkillRecord()]),
     getSkillByName: vi.fn(() => null),
     getMcpServer: vi.fn(() => null),
     getSecretsByIds: vi.fn(() => []),
     getSetting: vi.fn(() => null),
+    getWorkspaceDir: vi.fn(() => '/tmp/test-workspace'),
     updateTask: vi.fn(),
   } as unknown as ConstructorParameters<typeof AgentManager>[0]
 }
@@ -1010,6 +1019,110 @@ describe('AgentManager transitionToIdle — enterprise task completion after fee
     expect(adapter.getAllMessages).toHaveBeenCalledOnce()
     expect(replayCall).toBeDefined()
     expect(sessionWithAdapter.seenPartIds.has('final-part')).toBe(true)
+  })
+
+  it('nudges the agent instead of finishing when outputs are still empty but the work appears done', async () => {
+    const task = {
+      id: 'task-1',
+      title: 'Task with outputs',
+      description: 'Implement the feature',
+      repos: [],
+      skill_ids: [],
+      status: TaskStatus.AgentWorking,
+      source_id: null,
+      output_fields: [{ id: 'pr_url', name: 'Pull Request URL', type: 'url', required: true }]
+    }
+    const mockDb = {
+      getTask: vi.fn(() => task),
+      getAgent: vi.fn(() => ({ id: 'agent-1', name: 'Test Agent', config: {} })),
+      getAgents: vi.fn(() => ([{ id: 'agent-1', name: 'Test Agent', is_default: true, config: {} }])),
+      getSubtasks: vi.fn(() => []),
+      getWorkspaceDir: vi.fn(() => '/tmp/test-workspace'),
+      getSkills: vi.fn(() => []),
+      getSkillsByIds: vi.fn(() => []),
+      getSkillByName: vi.fn(() => null),
+      getMcpServer: vi.fn(() => null),
+      getSecretsByIds: vi.fn(() => []),
+      getSetting: vi.fn(() => null),
+      updateTask: vi.fn(),
+    } as unknown as ConstructorParameters<typeof AgentManager>[0]
+
+    const mgr = new AgentManager(mockDb)
+    vi.spyOn(mgr as any, 'sendToRenderer').mockImplementation(() => undefined)
+    vi.spyOn(mgr as any, 'extractOutputValues').mockResolvedValue(undefined)
+    vi.spyOn(mgr as any, 'judgeTaskFinishedWithoutOutputs').mockResolvedValue(true)
+    const sendAdapterSpy = vi.spyOn(mgr as any, 'doSendAdapterMessage').mockResolvedValue(undefined)
+
+    const session = {
+      id: 'session-1',
+      agentId: 'agent-1',
+      taskId: 'task-1',
+      status: 'working',
+      createdAt: new Date(),
+      lastAssistantText: 'Implemented the feature and tests are passing.',
+      seenMessageIds: new Set<string>(),
+      seenPartIds: new Set<string>(),
+      partContentLengths: new Map<string, string>(),
+    }
+    ;(mgr as any).sessions.set('session-1', session)
+
+    await (mgr as any).transitionToIdle('session-1', session)
+
+    expect(sendAdapterSpy).toHaveBeenCalledOnce()
+    expect(mockDb.updateTask).not.toHaveBeenCalledWith('task-1', { status: TaskStatus.ReadyForReview })
+    expect(session.tillDoneReminderCount).toBe(1)
+  })
+
+  it('does not nudge the agent when the last assistant message is a question', async () => {
+    const task = {
+      id: 'task-1',
+      title: 'Task with outputs',
+      description: 'Implement the feature',
+      repos: [],
+      skill_ids: [],
+      status: TaskStatus.AgentWorking,
+      source_id: null,
+      output_fields: [{ id: 'pr_url', name: 'Pull Request URL', type: 'url', required: true }]
+    }
+    const mockDb = {
+      getTask: vi.fn(() => task),
+      getAgent: vi.fn(() => ({ id: 'agent-1', name: 'Test Agent', config: {} })),
+      getAgents: vi.fn(() => ([{ id: 'agent-1', name: 'Test Agent', is_default: true, config: {} }])),
+      getSubtasks: vi.fn(() => []),
+      getWorkspaceDir: vi.fn(() => '/tmp/test-workspace'),
+      getSkills: vi.fn(() => []),
+      getSkillsByIds: vi.fn(() => []),
+      getSkillByName: vi.fn(() => null),
+      getMcpServer: vi.fn(() => null),
+      getSecretsByIds: vi.fn(() => []),
+      getSetting: vi.fn(() => null),
+      updateTask: vi.fn(),
+    } as unknown as ConstructorParameters<typeof AgentManager>[0]
+
+    const mgr = new AgentManager(mockDb)
+    vi.spyOn(mgr as any, 'sendToRenderer').mockImplementation(() => undefined)
+    vi.spyOn(mgr as any, 'extractOutputValues').mockResolvedValue(undefined)
+    const judgeSpy = vi.spyOn(mgr as any, 'judgeTaskFinishedWithoutOutputs').mockResolvedValue(true)
+    const sendAdapterSpy = vi.spyOn(mgr as any, 'doSendAdapterMessage').mockResolvedValue(undefined)
+
+    const session = {
+      id: 'session-1',
+      agentId: 'agent-1',
+      taskId: 'task-1',
+      status: 'working',
+      createdAt: new Date(),
+      lastAssistantText: 'I am blocked on credentials. Can you provide the repo token?',
+      seenMessageIds: new Set<string>(),
+      seenPartIds: new Set<string>(),
+      partContentLengths: new Map<string, string>(),
+    }
+    ;(mgr as any).sessions.set('session-1', session)
+
+    await (mgr as any).transitionToIdle('session-1', session)
+
+    expect(judgeSpy).not.toHaveBeenCalled()
+    expect(sendAdapterSpy).not.toHaveBeenCalled()
+    expect(mockDb.updateTask).toHaveBeenCalledWith('task-1', { status: TaskStatus.ReadyForReview })
   })
 
   it('resumeAdapterSession uses same IDs for batch replay and dedup state (regression: dual-loop bug)', async () => {

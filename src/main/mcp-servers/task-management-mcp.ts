@@ -240,6 +240,34 @@ const mastermindTools = [
     }
   },
   {
+    name: 'start_task',
+    description: 'Start an assigned task, triage+start an unassigned top-level task with the default agent, or start the next eligible subtask for a parent task.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        task_id: { type: 'string', description: 'Task or subtask ID to start' },
+        prefer_subtasks: { type: 'boolean', description: 'When task_id is a parent task, prefer starting the next eligible subtask first. Defaults to true.' },
+        allow_triage: { type: 'boolean', description: 'When task_id has no assigned agent, allow the default agent to triage+start it. Defaults to true.' }
+      },
+      required: ['task_id']
+    }
+  },
+  {
+    name: 'wait_for_subtasks',
+    description: 'Wait until subtasks under a parent task reach ready_for_review or completed. Useful for orchestration loops.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        parent_task_id: { type: 'string', description: 'Parent task ID whose subtasks should be monitored' },
+        subtask_ids: { type: 'array', items: { type: 'string' }, description: 'Optional subset of subtask IDs to wait for' },
+        timeout_ms: { type: 'number', description: 'Maximum time to wait before returning the current subtask state' },
+        return_when: { type: 'string', enum: ['all_terminal', 'any_terminal'], description: 'Return when all selected subtasks are terminal, or as soon as any selected subtask is terminal. Defaults to all_terminal.' },
+        terminal_statuses: { type: 'array', items: { type: 'string' }, description: 'Optional terminal statuses to treat as done. Defaults to ready_for_review + completed.' }
+      },
+      required: ['parent_task_id']
+    }
+  },
+  {
     name: 'list_subtasks',
     description: 'List all subtasks for a given parent task. Returns subtask details including status, agent assignment, and outputs.',
     inputSchema: {
@@ -352,6 +380,30 @@ const subtaskTools = [
     }
   },
   {
+    name: 'start_sibling_subtask',
+    description: 'Start a sibling subtask by ID. Uses the sibling task\'s assigned agent, or triages it with the default agent if it is unassigned.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        task_id: { type: 'string', description: 'Sibling subtask ID to start' }
+      },
+      required: ['task_id']
+    }
+  },
+  {
+    name: 'wait_for_sibling_subtasks',
+    description: 'Wait until sibling subtasks under the same parent reach ready_for_review or completed.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        task_ids: { type: 'array', items: { type: 'string' }, description: 'Optional subset of sibling subtask IDs to wait for' },
+        timeout_ms: { type: 'number', description: 'Maximum time to wait before returning the current sibling state' },
+        return_when: { type: 'string', enum: ['all_terminal', 'any_terminal'], description: 'Return when all selected siblings are terminal, or as soon as any selected sibling is terminal. Defaults to all_terminal.' },
+        terminal_statuses: { type: 'array', items: { type: 'string' }, description: 'Optional terminal statuses to treat as done. Defaults to ready_for_review + completed.' }
+      }
+    }
+  },
+  {
     name: 'get_sibling_transcript',
     description: 'Get the conversation transcript (agent dialog) of a sibling subtask. Only works for tasks under the same parent. Returns the role and text of each message in the session. Useful for understanding what a sibling agent discussed, decided, or proposed.',
     inputSchema: {
@@ -449,6 +501,33 @@ async function handleScopedCall(name: string, args: Record<string, unknown>): Pr
 
     case 'create_sibling_subtask':
       return callApi('/create_subtask', { ...args, parent_task_id: scopeParentId })
+
+    case 'start_sibling_subtask': {
+      const sibsForStart = await callApi('/list_subtasks', { parent_task_id: scopeParentId }) as Record<string, unknown>[]
+      const sibIdsForStart = Array.isArray(sibsForStart) ? sibsForStart.map((s) => s.id) : []
+      if (!sibIdsForStart.includes(args.task_id)) {
+        return { error: 'Access denied: task is not a sibling subtask' }
+      }
+      return callApi('/start_task', { task_id: args.task_id, prefer_subtasks: false })
+    }
+
+    case 'wait_for_sibling_subtasks': {
+      if (Array.isArray(args.task_ids) && args.task_ids.length > 0) {
+        const sibsForWait = await callApi('/list_subtasks', { parent_task_id: scopeParentId }) as Record<string, unknown>[]
+        const sibIdsForWait = new Set(Array.isArray(sibsForWait) ? sibsForWait.map((s) => s.id) : [])
+        const invalidId = (args.task_ids as unknown[]).find((id) => !sibIdsForWait.has(id))
+        if (invalidId) {
+          return { error: 'Access denied: one or more task_ids are not sibling subtasks' }
+        }
+      }
+      return callApi('/wait_for_subtasks', {
+        parent_task_id: scopeParentId,
+        subtask_ids: args.task_ids,
+        timeout_ms: args.timeout_ms,
+        return_when: args.return_when,
+        terminal_statuses: args.terminal_statuses
+      })
+    }
 
     case 'get_sibling_transcript': {
       // Verify the requested task is actually a sibling

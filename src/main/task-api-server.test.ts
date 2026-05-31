@@ -1,7 +1,9 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { createTestDb } from '../../test/helpers/db-test-helper'
 import { makeTask, makeAgent } from '../../test/helpers/task-fixtures'
 import type { DatabaseManager } from './database'
+import { setTaskApiAgentController, startTaskApiServer, stopTaskApiServer } from './task-api-server'
+import { TaskStatus } from '../shared/constants'
 
 /**
  * The handleRoute function is not exported, so we test the triage-related
@@ -14,6 +16,11 @@ let rawDb: import('better-sqlite3').Database
 
 beforeEach(() => {
   ;({ db, rawDb } = createTestDb())
+})
+
+afterEach(() => {
+  setTaskApiAgentController(null)
+  stopTaskApiServer()
 })
 
 describe('/update_task - triage status guard', () => {
@@ -298,6 +305,63 @@ describe('/list_subtasks', () => {
     const parent = db.createTask(makeTask({ title: 'No subtasks parent' }))!
     const subtasks = rawDb.prepare('SELECT * FROM tasks WHERE parent_task_id = ?').all(parent.id)
     expect(subtasks).toHaveLength(0)
+  })
+})
+
+describe('/start_task', () => {
+  it('delegates to the agent controller and returns the started task', async () => {
+    const task = db.createTask(makeTask({ title: 'Parent task', agent_id: 'agent-1' }))!
+    const controller = {
+      startTask: vi.fn(async () => ({
+        action: 'task_started' as const,
+        sessionId: 'session-123',
+        startedTaskId: task.id,
+        agentId: 'agent-1'
+      }))
+    }
+    setTaskApiAgentController(controller as any)
+
+    const port = await startTaskApiServer(db)
+    const response = await fetch(`http://127.0.0.1:${port}/start_task`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ task_id: task.id })
+    })
+    const result = await response.json() as Record<string, unknown>
+
+    expect(controller.startTask).toHaveBeenCalledWith(task.id, {
+      preferSubtasks: true,
+      allowTriage: true
+    })
+    expect(result.success).toBe(true)
+    expect(result.action).toBe('task_started')
+    expect(result.sessionId).toBe('session-123')
+    expect((result.task as Record<string, unknown>).id).toBe(task.id)
+  })
+})
+
+describe('/wait_for_subtasks', () => {
+  it('returns immediately when selected subtasks are already terminal', async () => {
+    const parent = db.createTask(makeTask({ title: 'Parent' }))!
+    const subtask = db.createTask(makeTask({
+      title: 'Review-ready subtask',
+      parent_task_id: parent.id,
+      status: TaskStatus.ReadyForReview,
+      agent_id: 'agent-1'
+    }))!
+
+    const port = await startTaskApiServer(db)
+    const response = await fetch(`http://127.0.0.1:${port}/wait_for_subtasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ parent_task_id: parent.id, subtask_ids: [subtask.id], timeout_ms: 5_000 })
+    })
+    const result = await response.json() as Record<string, unknown>
+
+    expect(result.success).toBe(true)
+    expect(result.timed_out).toBe(false)
+    expect((result.subtasks as Array<Record<string, unknown>>)[0].id).toBe(subtask.id)
+    expect((result.subtasks as Array<Record<string, unknown>>)[0].status).toBe(TaskStatus.ReadyForReview)
   })
 })
 
