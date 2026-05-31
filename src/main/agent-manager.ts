@@ -15,7 +15,7 @@ import { ClaudeCodeAdapter } from './adapters/claude-code-adapter'
 import { AcpAdapter } from './adapters/acp-adapter'
 import type { CodingAgentAdapter, SessionConfig, MessagePart, SessionMessage, McpServerConfig } from './adapters/coding-agent-adapter'
 import { SessionStatusType, MessagePartType, MessageRole } from './adapters/coding-agent-adapter'
-import { getTaskApiPort, waitForTaskApiServer } from './task-api-server'
+import { getTaskApiAuthToken, getTaskApiPort, waitForTaskApiServer } from './task-api-server'
 import { randomUUID } from 'crypto'
 import { registerSecretSession, unregisterSecretSession, getSecretBrokerPort, writeSecretShellWrapper } from './secret-broker'
 import { registerMcpProxyTarget, getMcpAuthProxyPort } from './mcp-auth-proxy'
@@ -357,21 +357,33 @@ export class AgentManager extends EventEmitter {
     // loop can process rendering before we enter the MCP server loop.
     await new Promise<void>((r) => setImmediate(r))
 
+    const getTaskApiEnv = (): Record<string, string> => {
+      const apiPort = getTaskApiPort()
+      const apiToken = getTaskApiAuthToken()
+      const env: Record<string, string> = {}
+      if (apiPort) {
+        env.TASK_API_URL = `http://127.0.0.1:${apiPort}`
+      } else {
+        console.warn('[AgentManager] buildMcpServersForAdapter - task API port is null for task-management server')
+      }
+      if (apiToken) {
+        env.TASK_API_TOKEN = apiToken
+      } else {
+        console.warn('[AgentManager] buildMcpServersForAdapter - task API token is null for task-management server')
+      }
+      return env
+    }
+
     for (const entry of mcpEntries) {
       const serverId = typeof entry === 'string' ? entry : (entry as AgentMcpServerEntry).serverId
       const mcpServer = this.db.getMcpServer(serverId)
       if (!mcpServer) continue
 
       if (mcpServer.type === 'local') {
-        // Inject TASK_API_URL for the task-management MCP server
+        // Inject task API connection details for the task-management MCP server.
         let env = { ...mcpServer.environment }
         if (mcpServer.name === 'task-management') {
-          const apiPort = getTaskApiPort()
-          if (apiPort) {
-            env = { ...env, TASK_API_URL: `http://127.0.0.1:${apiPort}` }
-          } else {
-            console.warn(`[AgentManager] buildMcpServersForAdapter - task API port is null for task-management server`)
-          }
+          env = { ...env, ...getTaskApiEnv() }
           // Inject task scope for subtask agents (restricts access to parent + siblings only)
           if (opts?.taskScope) {
             env = { ...env, TASK_SCOPE_PARENT_ID: opts.taskScope.parentTaskId, TASK_SCOPE_TASK_ID: opts.taskScope.taskId }
@@ -433,11 +445,7 @@ export class AgentManager extends EventEmitter {
       const allServers = this.db.getMcpServers()
       const tmServer = allServers.find(s => s.name === 'task-management')
       if (tmServer && tmServer.type === 'local') {
-        const apiPort = getTaskApiPort()
-        if (!apiPort) {
-          console.warn('[AgentManager] buildMcpServersForAdapter - task API port is null! MCP server may fail to start')
-        }
-        const env: Record<string, string> = { ...tmServer.environment, ...(apiPort ? { TASK_API_URL: `http://127.0.0.1:${apiPort}` } : {}) }
+        const env: Record<string, string> = { ...tmServer.environment, ...getTaskApiEnv() }
         if (opts?.taskScope) {
           env.TASK_SCOPE_PARENT_ID = opts.taskScope.parentTaskId
           env.TASK_SCOPE_TASK_ID = opts.taskScope.taskId
@@ -3166,9 +3174,19 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     return this.testLocalMcpServer(serverData)
   }
 
-  private testLocalMcpServer(serverData: { name: string; command?: string; args?: string[]; environment?: Record<string, string> }): Promise<{ status: 'connected' | 'failed'; error?: string; errorDetail?: string; toolCount?: number; tools?: { name: string; description: string }[] }> {
+  private async testLocalMcpServer(serverData: { name: string; command?: string; args?: string[]; environment?: Record<string, string> }): Promise<{ status: 'connected' | 'failed'; error?: string; errorDetail?: string; toolCount?: number; tools?: { name: string; description: string }[] }> {
     if (!serverData.command) {
       return Promise.resolve({ status: 'failed', error: 'No command specified' })
+    }
+
+    // Inject TASK_API_URL and TASK_API_TOKEN for the built-in task-management server.
+    const extraEnv: Record<string, string> = {}
+    if (serverData.name === 'task-management') {
+      await waitForTaskApiServer()
+      const apiPort = getTaskApiPort()
+      const apiToken = getTaskApiAuthToken()
+      if (apiPort) extraEnv.TASK_API_URL = `http://127.0.0.1:${apiPort}`
+      if (apiToken) extraEnv.TASK_API_TOKEN = apiToken
     }
 
     return new Promise((resolve) => {
@@ -3184,13 +3202,6 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       const timer = setTimeout(() => {
         finish({ status: 'failed', error: 'Connection timeout (30s)' })
       }, 30000)
-
-      // Inject TASK_API_URL for the built-in task-management server
-      const extraEnv: Record<string, string> = {}
-      if (serverData.name === 'task-management') {
-        const apiPort = getTaskApiPort()
-        if (apiPort) extraEnv.TASK_API_URL = `http://127.0.0.1:${apiPort}`
-      }
 
       // Spawn directly with args array (no shell quoting) to avoid Windows single-quote issues.
       // Only use shell mode for commands that need it (npx, .cmd/.bat wrappers).

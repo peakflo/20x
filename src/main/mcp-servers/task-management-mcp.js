@@ -10,6 +10,10 @@ const apiUrl = process.env.TASK_API_URL
 if (!apiUrl) {
   throw new Error('TASK_API_URL environment variable is required')
 }
+const apiToken = process.env.TASK_API_TOKEN
+if (!apiToken) {
+  throw new Error('TASK_API_TOKEN environment variable is required')
+}
 
 // Scope: if set, this MCP server is running for a subtask agent
 // and can only access the parent task + its subtasks
@@ -22,7 +26,10 @@ async function callApi(route, params = {}) {
   try {
     const res = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiToken}`
+      },
       body: JSON.stringify(params)
     })
     return res.json()

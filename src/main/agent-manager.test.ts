@@ -44,7 +44,11 @@ vi.mock('electron', () => {
 vi.mock('./adapters/opencode-adapter', () => ({ OpencodeAdapter: vi.fn() }))
 vi.mock('./adapters/claude-code-adapter', () => ({ ClaudeCodeAdapter: vi.fn() }))
 vi.mock('./adapters/acp-adapter', () => ({ AcpAdapter: vi.fn() }))
-vi.mock('./task-api-server', () => ({ getTaskApiPort: vi.fn(), waitForTaskApiServer: vi.fn() }))
+vi.mock('./task-api-server', () => ({
+  getTaskApiAuthToken: vi.fn(),
+  getTaskApiPort: vi.fn(),
+  waitForTaskApiServer: vi.fn()
+}))
 vi.mock('./secret-broker', () => ({
   registerSecretSession: vi.fn(),
   unregisterSecretSession: vi.fn(),
@@ -54,6 +58,7 @@ vi.mock('./secret-broker', () => ({
 
 import { mkdir as mkdirAsync, writeFile as writeFileAsync } from 'fs/promises'
 import { existsSync, copyFileSync, mkdirSync, readFileSync } from 'fs'
+import { getTaskApiAuthToken, getTaskApiPort, waitForTaskApiServer } from './task-api-server'
 
 const mockedMkdirAsync = vi.mocked(mkdirAsync)
 const mockedWriteFileAsync = vi.mocked(writeFileAsync)
@@ -802,6 +807,45 @@ describe('AgentManager implicit resume behavior', () => {
 describe('AgentManager MCP server routing', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+  })
+
+  it('injects task API URL and bearer token into the task-management MCP server', async () => {
+    vi.mocked(waitForTaskApiServer).mockResolvedValue(43210)
+    vi.mocked(getTaskApiPort).mockReturnValue(43210)
+    vi.mocked(getTaskApiAuthToken).mockReturnValue('task-api-token')
+
+    const mockDb = {
+      getAgent: vi.fn(() => ({
+        id: 'agent-1',
+        name: 'Local Agent',
+        config: {
+          mcp_servers: ['task-management-server']
+        }
+      })),
+      getMcpServer: vi.fn(() => ({
+        id: 'task-management-server',
+        name: 'task-management',
+        type: 'local',
+        command: 'node',
+        args: ['task-management-mcp.js'],
+        environment: { EXISTING_ENV: 'kept' },
+      })),
+    } as unknown as ConstructorParameters<typeof AgentManager>[0]
+
+    const manager = new AgentManager(mockDb)
+
+    const mcpServers = await (manager as any).buildMcpServersForAdapter('agent-1')
+
+    expect(mcpServers['task-management']).toMatchObject({
+      type: 'stdio',
+      command: 'node',
+      args: ['task-management-mcp.js'],
+      env: {
+        EXISTING_ENV: 'kept',
+        TASK_API_URL: 'http://127.0.0.1:43210',
+        TASK_API_TOKEN: 'task-api-token',
+      },
+    })
   })
 
   it('canonicalizes Workflo MCP dev server URLs to the active enterprise API URL', async () => {
