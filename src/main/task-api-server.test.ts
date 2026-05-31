@@ -310,14 +310,15 @@ describe('/list_subtasks', () => {
 
 describe('/start_task', () => {
   it('delegates to the agent controller and returns the started task', async () => {
+    const agent = db.createAgent(makeAgent({ name: 'Test Agent' }))!
     const task = db.createTask(makeTask({ title: 'Parent task' }))!
-    db.updateTask(task.id, { agent_id: 'agent-1' })
+    db.updateTask(task.id, { agent_id: agent.id })
     const controller = {
       startTask: vi.fn(async () => ({
         action: 'task_started' as const,
         sessionId: 'session-123',
         startedTaskId: task.id,
-        agentId: 'agent-1'
+        agentId: agent.id
       }))
     }
     setTaskApiAgentController(controller as any)
@@ -343,13 +344,14 @@ describe('/start_task', () => {
 
 describe('/wait_for_subtasks', () => {
   it('returns immediately when selected subtasks are already terminal', async () => {
+    const agent = db.createAgent(makeAgent({ name: 'Subtask Agent' }))!
     const parent = db.createTask(makeTask({ title: 'Parent' }))!
     const subtask = db.createTask(makeTask({
       title: 'Review-ready subtask',
       parent_task_id: parent.id,
       status: TaskStatus.ReadyForReview
     }))!
-    db.updateTask(subtask.id, { agent_id: 'agent-1' })
+    db.updateTask(subtask.id, { agent_id: agent.id })
 
     const port = await startTaskApiServer(db)
     const response = await fetch(`http://127.0.0.1:${port}/wait_for_subtasks`, {
