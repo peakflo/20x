@@ -1063,6 +1063,7 @@ describe('AgentManager transitionToIdle — enterprise task completion after fee
       seenMessageIds: new Set<string>(),
       seenPartIds: new Set<string>(),
       partContentLengths: new Map<string, string>(),
+      tillDoneReminderCount: 0,
     }
     ;(mgr as any).sessions.set('session-1', session)
 
@@ -1115,6 +1116,7 @@ describe('AgentManager transitionToIdle — enterprise task completion after fee
       seenMessageIds: new Set<string>(),
       seenPartIds: new Set<string>(),
       partContentLengths: new Map<string, string>(),
+      tillDoneReminderCount: 0,
     }
     ;(mgr as any).sessions.set('session-1', session)
 

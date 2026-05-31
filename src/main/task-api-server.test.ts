@@ -310,7 +310,8 @@ describe('/list_subtasks', () => {
 
 describe('/start_task', () => {
   it('delegates to the agent controller and returns the started task', async () => {
-    const task = db.createTask(makeTask({ title: 'Parent task', agent_id: 'agent-1' }))!
+    const task = db.createTask(makeTask({ title: 'Parent task' }))!
+    db.updateTask(task.id, { agent_id: 'agent-1' })
     const controller = {
       startTask: vi.fn(async () => ({
         action: 'task_started' as const,
@@ -346,9 +347,9 @@ describe('/wait_for_subtasks', () => {
     const subtask = db.createTask(makeTask({
       title: 'Review-ready subtask',
       parent_task_id: parent.id,
-      status: TaskStatus.ReadyForReview,
-      agent_id: 'agent-1'
+      status: TaskStatus.ReadyForReview
     }))!
+    db.updateTask(subtask.id, { agent_id: 'agent-1' })
 
     const port = await startTaskApiServer(db)
     const response = await fetch(`http://127.0.0.1:${port}/wait_for_subtasks`, {
