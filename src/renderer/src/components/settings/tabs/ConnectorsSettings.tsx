@@ -40,7 +40,7 @@ const CONNECTOR_CATALOG: ConnectorType[] = [
   { id: 'postgres', name: 'PostgreSQL', description: 'Connect to PostgreSQL database', iconName: 'Database', category: 'Database' },
   { id: 'mysql', name: 'MySQL', description: 'Connect to MySQL database', iconName: 'Database', category: 'Database' },
   { id: 'mongodb', name: 'MongoDB', description: 'Connect to MongoDB database', iconName: 'Database', category: 'Database' },
-  { id: 'firestore', name: 'Firestore', description: 'Connect to Google Firestore for NoSQL database operations', iconName: 'Database', category: 'Database' },
+  { id: 'google-firestore', name: 'Firestore', description: 'Connect to Google Firestore for NoSQL database operations', iconName: 'Database', category: 'Database' },
   // Payment
   { id: 'stripe', name: 'Stripe', description: 'Connect to Stripe payments', iconName: 'CreditCard', category: 'Payment' },
   // AI
@@ -48,12 +48,13 @@ const CONNECTOR_CATALOG: ConnectorType[] = [
   // Storage
   { id: 'google-drive', name: 'Google Drive', description: 'Connect to Google Drive for file storage and sharing', iconName: 'FileText', category: 'Storage' },
   // Productivity
-  { id: 'google-sheets', name: 'Google Sheets', description: 'Connect to Google Sheets', iconName: 'Table', category: 'Productivity' },
+  { id: 'google-sheet', name: 'Google Sheets', description: 'Connect to Google Sheets', iconName: 'Table', category: 'Productivity' },
   { id: 'google-calendar', name: 'Google Calendar', description: 'Connect to Google Calendar for scheduling and events', iconName: 'Calendar', category: 'Productivity' },
   { id: 'notion-mcp', name: 'Notion MCP', description: 'Connect to Notion via MCP for AI-powered workspace access', iconName: 'FileText', category: 'Productivity' },
   { id: 'notion', name: 'Notion', description: 'Connect to Notion REST API for database queries and task sync', iconName: 'FileText', category: 'Productivity' },
   // Communication
-  { id: 'gmail', name: 'Gmail', description: 'Connect to Gmail for email and calendar', iconName: 'Mail', category: 'Communication' },
+  { id: 'google-mail', name: 'Gmail', description: 'Connect to Gmail for email and calendar', iconName: 'Mail', category: 'Communication' },
+  { id: 'slack', name: 'Slack (Bot)', description: 'Connect to Slack with a bot token for automated messaging and channel management', iconName: 'MessageSquare', category: 'Communication' },
   { id: 'slack-user', name: 'Slack', description: 'Connect to Slack with user-level OAuth to post messages as yourself', iconName: 'MessageSquare', category: 'Communication' },
   { id: 'outlook', name: 'Outlook', description: 'Connect to Outlook for email and calendar', iconName: 'Mail', category: 'Communication' },
   { id: 'tldv', name: 'TLDV', description: 'Connect to TLDV for meeting recording and transcription', iconName: 'MessageSquare', category: 'Communication' },
@@ -66,13 +67,13 @@ const CONNECTOR_CATALOG: ConnectorType[] = [
   // Sales
   { id: 'apollo', name: 'Apollo', description: 'Connect to Apollo for sales intelligence and prospecting', iconName: 'Globe', category: 'Sales' },
   // ERP
-  { id: 'netsuite', name: 'NetSuite', description: 'Connect to NetSuite ERP via pfMCP (OAuth with Nango)', iconName: 'Globe', category: 'ERP' },
+  { id: 'netsuite-tba', name: 'NetSuite', description: 'Connect to NetSuite ERP via pfMCP (OAuth with Nango)', iconName: 'Globe', category: 'ERP' },
   // Accounting
   { id: 'peakflo', name: 'Peakflo', description: 'Connect to Peakflo APIs', iconName: 'CreditCard', category: 'Accounting' },
   { id: 'xero', name: 'Xero', description: 'Connect to Xero for accounting, invoicing, and payroll management', iconName: 'CreditCard', category: 'Accounting' },
   // Analytics
   { id: 'google-search-console', name: 'Google Search Console', description: 'Connect to Google Search Console for search performance insights', iconName: 'BarChart3', category: 'Analytics' },
-  { id: 'google-analytics-4', name: 'Google Analytics 4', description: 'Connect to Google Analytics 4 for traffic and user behavior data', iconName: 'BarChart3', category: 'Analytics' },
+  { id: 'google-analytics', name: 'Google Analytics 4', description: 'Connect to Google Analytics 4 for traffic and user behavior data', iconName: 'BarChart3', category: 'Analytics' },
   // Phone
   { id: 'peakflo-phone', name: 'Phone Number by Peakflo', description: 'Get a Peakflo phone number', iconName: 'Phone', category: 'Phone' },
   { id: 'twilio-phone', name: 'Import Twilio Number', description: 'Import an existing Twilio phone number', iconName: 'MessageSquare', category: 'Phone' },
