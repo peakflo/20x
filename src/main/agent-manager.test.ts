@@ -1050,7 +1050,7 @@ describe('AgentManager transitionToIdle — enterprise task completion after fee
     const mgr = new AgentManager(mockDb)
     vi.spyOn(mgr as any, 'sendToRenderer').mockImplementation(() => undefined)
     vi.spyOn(mgr as any, 'extractOutputValues').mockResolvedValue(undefined)
-    vi.spyOn(mgr as any, 'judgeTaskFinishedWithoutOutputs').mockResolvedValue(true)
+    vi.spyOn(mgr as any, 'judgeTaskFinishedWithoutOutputs').mockResolvedValue('finished')
     const sendAdapterSpy = vi.spyOn(mgr as any, 'doSendAdapterMessage').mockResolvedValue(undefined)
 
     const session = {
@@ -1074,7 +1074,7 @@ describe('AgentManager transitionToIdle — enterprise task completion after fee
     expect(session.tillDoneReminderCount).toBe(1)
   })
 
-  it('does not nudge the agent when the last assistant message is a question', async () => {
+  it('nudges the agent to ask the user when the default judge sees pending user input', async () => {
     const task = {
       id: 'task-1',
       title: 'Task with outputs',
@@ -1103,7 +1103,7 @@ describe('AgentManager transitionToIdle — enterprise task completion after fee
     const mgr = new AgentManager(mockDb)
     vi.spyOn(mgr as any, 'sendToRenderer').mockImplementation(() => undefined)
     vi.spyOn(mgr as any, 'extractOutputValues').mockResolvedValue(undefined)
-    const judgeSpy = vi.spyOn(mgr as any, 'judgeTaskFinishedWithoutOutputs').mockResolvedValue(true)
+    const judgeSpy = vi.spyOn(mgr as any, 'judgeTaskFinishedWithoutOutputs').mockResolvedValue('pending_user_input')
     const sendAdapterSpy = vi.spyOn(mgr as any, 'doSendAdapterMessage').mockResolvedValue(undefined)
 
     const session = {
@@ -1122,9 +1122,10 @@ describe('AgentManager transitionToIdle — enterprise task completion after fee
 
     await (mgr as any).transitionToIdle('session-1', session)
 
-    expect(judgeSpy).not.toHaveBeenCalled()
-    expect(sendAdapterSpy).not.toHaveBeenCalled()
-    expect(mockDb.updateTask).toHaveBeenCalledWith('task-1', { status: TaskStatus.ReadyForReview })
+    expect(judgeSpy).toHaveBeenCalledOnce()
+    expect(sendAdapterSpy).toHaveBeenCalledOnce()
+    expect(sendAdapterSpy.mock.calls[0]?.[2]).toContain('pending user input')
+    expect(mockDb.updateTask).not.toHaveBeenCalledWith('task-1', { status: TaskStatus.ReadyForReview })
   })
 
   it('resumeAdapterSession uses same IDs for batch replay and dedup state (regression: dual-loop bug)', async () => {

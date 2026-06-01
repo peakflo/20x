@@ -107,6 +107,8 @@ interface MessageAttachmentRef {
   mime_type: string
 }
 
+type IdleOutputJudgeResult = 'finished' | 'pending_user_input' | 'not_finished'
+
 export class AgentManager extends EventEmitter {
   private sessions: Map<string, AgentSession> = new Map()
   /** Maps old (temp) session IDs to their re-keyed (real) IDs so that
@@ -2598,16 +2600,15 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       !this.hasAnyOutputValues(taskAfterExtract.output_fields) &&
       (session.tillDoneReminderCount || 0) < AgentManager.TILL_DONE_MAX_REMINDERS
     ) {
-      if (this.looksLikeAgentQuestion(session.lastAssistantText)) {
-        console.log(`[AgentManager] Task ${taskAfterExtract.id} went idle with a question and empty outputs; skipping till-done reminder`)
-      } else {
-        const judgedFinished = await this.judgeTaskFinishedWithoutOutputs(taskAfterExtract, session)
-        if (judgedFinished) {
-          session.tillDoneReminderCount = (session.tillDoneReminderCount || 0) + 1
-          console.log(`[AgentManager] Task ${taskAfterExtract.id} appears finished without outputs; sending till-done reminder (${session.tillDoneReminderCount}/${AgentManager.TILL_DONE_MAX_REMINDERS})`)
-          await this.doSendAdapterMessage(session, sessionId, this.buildTillDoneReminder(taskAfterExtract))
-          return
-        }
+      const judgeResult = await this.judgeTaskFinishedWithoutOutputs(taskAfterExtract, session)
+      if (judgeResult === 'finished' || judgeResult === 'pending_user_input') {
+        session.tillDoneReminderCount = (session.tillDoneReminderCount || 0) + 1
+        const reminder = judgeResult === 'pending_user_input'
+          ? this.buildPendingUserInputReminder(taskAfterExtract)
+          : this.buildTillDoneReminder(taskAfterExtract)
+        console.log(`[AgentManager] Task ${taskAfterExtract.id} idle judge result=${judgeResult}; sending reminder (${session.tillDoneReminderCount}/${AgentManager.TILL_DONE_MAX_REMINDERS})`)
+        await this.doSendAdapterMessage(session, sessionId, reminder)
+        return
       }
     }
 
@@ -3485,16 +3486,6 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     return !!fields?.some((field) => this.hasOutputValue(field.value))
   }
 
-  private looksLikeAgentQuestion(text: string | null | undefined): boolean {
-    const trimmed = text?.trim()
-    if (!trimmed) return false
-
-    const tail = trimmed.split('\n').slice(-3).join(' ').trim()
-    if (/\?\s*$/.test(tail)) return true
-
-    return /\b(can|could|would|should|do|does|did|is|are|will|may|might|what|which|who|where|when|why|how)\b[\s\S]{0,120}\?\s*$/i.test(tail)
-  }
-
   private resolveDefaultAgentId(): string | null {
     const agents = this.db.getAgents()
     const defaultAgent = agents.find((agent) => agent.is_default)
@@ -3516,6 +3507,23 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       'Finish the task before stopping.',
       'If you are blocked by a real question for the user, ask it explicitly.',
       'Otherwise continue the work and end with the required JSON output block populated.'
+    ].join('\n')
+  }
+
+  private buildPendingUserInputReminder(task: TaskRecord): string {
+    const requiredNames = task.output_fields
+      .filter((field) => field.required)
+      .map((field) => field.name)
+
+    const requiredNote = requiredNames.length > 0
+      ? `Required outputs still missing: ${requiredNames.join(', ')}.`
+      : 'The task has output fields, but they are still empty.'
+
+    return [
+      `You went idle on "${task.title}" while the task appears to be pending user input.`,
+      requiredNote,
+      'Ask the user the specific blocking question now.',
+      'Do not stop silently. If the user already answered, continue the work and end with the required JSON output block populated.'
     ].join('\n')
   }
 
@@ -3552,27 +3560,31 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     return null
   }
 
-  private async judgeTaskFinishedWithoutOutputs(task: TaskRecord, session: AgentSession): Promise<boolean> {
+  private async judgeTaskFinishedWithoutOutputs(task: TaskRecord, session: AgentSession): Promise<IdleOutputJudgeResult> {
     const defaultAgentId = this.resolveDefaultAgentId()
-    if (!defaultAgentId) return false
+    if (!defaultAgentId) return 'not_finished'
 
     const sessionTaskId = `idle-judge-${task.id}`
     const workspaceDir = session.workspaceDir || this.db.getWorkspaceDir(task.id)
     const prompt = [
-      'Judge whether the coding agent finished the task but failed to provide the required output fields.',
+      'Judge why the coding agent went idle while the task output fields are still empty.',
       'Reply with JSON only.',
       'Use this schema:',
       '```json',
       '{',
-      '  "finished": true',
+      '  "status": "finished"',
       '}',
       '```',
+      'Allowed status values:',
+      '- "finished": the agent appears to have completed the requested work and merely omitted the structured outputs.',
+      '- "pending_user_input": the agent is asking for input, approval, credentials, clarification, or another user response before it can continue.',
+      '- "not_finished": the agent does not appear finished and is not clearly waiting for user input.',
       `Task title: ${task.title}`,
       `Task description: ${task.description || '(none)'}`,
       `Expected output fields: ${JSON.stringify(task.output_fields || [])}`,
       'Last assistant message:',
       session.lastAssistantText || '(none)',
-      'Mark "finished" true only if the agent appears to have completed the requested work and merely omitted the structured outputs.'
+      'Choose exactly one status. Do not include prose outside JSON.'
     ].join('\n')
 
     let judgeSessionId: string | null = null
@@ -3582,15 +3594,20 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       if (sendResult.newSessionId) judgeSessionId = sendResult.newSessionId
 
       const resultText = await this.waitForTransientSessionResult(judgeSessionId, sessionTaskId)
-      if (!resultText) return false
+      if (!resultText) return 'not_finished'
 
       const match = resultText.match(/```json\s*([\s\S]*?)```/i) || resultText.match(/```([\s\S]*?)```/i)
       const rawJson = match ? match[1].trim() : resultText.trim()
-      const parsed = JSON.parse(rawJson) as { finished?: unknown }
-      return parsed.finished === true
+      const parsed = JSON.parse(rawJson) as { status?: unknown, finished?: unknown }
+      if (parsed.status === 'finished' || parsed.status === 'pending_user_input' || parsed.status === 'not_finished') {
+        return parsed.status
+      }
+
+      // Backward-compatible with older judge responses while the prompt settles.
+      return parsed.finished === true ? 'finished' : 'not_finished'
     } catch (err) {
       console.warn(`[AgentManager] Failed to judge idle completion for task ${task.id}:`, err)
-      return false
+      return 'not_finished'
     } finally {
       if (judgeSessionId) {
         await this.stopSession(judgeSessionId, false)
