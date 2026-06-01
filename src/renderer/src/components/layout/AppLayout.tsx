@@ -89,12 +89,12 @@ export function AppLayout() {
   }, [])
 
   const editingTask = useMemo(
-    () => editingTaskId ? tasks.find((t) => t.id === editingTaskId) || selectedTask : undefined,
-    [editingTaskId, tasks, selectedTask]
+    () => editingTaskId ? allTasks.find((t) => t.id === editingTaskId) : undefined,
+    [editingTaskId, allTasks]
   )
   const deletingTask = useMemo(
-    () => deletingTaskId ? tasks.find((t) => t.id === deletingTaskId) : undefined,
-    [deletingTaskId, tasks]
+    () => deletingTaskId ? allTasks.find((t) => t.id === deletingTaskId) : undefined,
+    [deletingTaskId, allTasks]
   )
   const dashboardPreviewTask = useMemo(
     () => dashboardPreviewTaskId ? allTasks.find((t) => t.id === dashboardPreviewTaskId) : undefined,
