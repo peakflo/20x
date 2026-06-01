@@ -123,6 +123,30 @@ describe('AgentManager skill file paths', () => {
     vi.clearAllMocks()
   })
 
+  describe('shouldEnableTillDone', () => {
+    it('disables tillDone for Mastermind sessions', () => {
+      const mockDb = createMockDb({ coding_agent: 'opencode' })
+      manager = new AgentManager(mockDb)
+
+      expect((manager as any).shouldEnableTillDone('mastermind-session', null)).toBe(false)
+    })
+
+    it('disables tillDone for non-work orchestration sessions', () => {
+      const mockDb = createMockDb({ coding_agent: 'opencode' })
+      manager = new AgentManager(mockDb)
+
+      expect((manager as any).shouldEnableTillDone('heartbeat-task-1', null)).toBe(false)
+      expect((manager as any).shouldEnableTillDone('task-1', { status: TaskStatus.Triaging })).toBe(false)
+    })
+
+    it('enables tillDone for regular task sessions', () => {
+      const mockDb = createMockDb({ coding_agent: 'opencode' })
+      manager = new AgentManager(mockDb)
+
+      expect((manager as any).shouldEnableTillDone('task-1', { status: TaskStatus.NotStarted })).toBe(true)
+    })
+  })
+
   describe('writeSkillFiles', () => {
     it('writes SKILL.md files to .claude/skills/ for Claude Code agents', async () => {
       const mockDb = createMockDb({ coding_agent: 'claude-code' })

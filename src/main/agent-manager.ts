@@ -487,7 +487,8 @@ export class AgentManager extends EventEmitter {
       mcpServers,
       authMethod: agent.config?.auth_method,
       permissionMode: agent.config?.permission_mode,
-      apiKeys: agent.config?.api_keys
+      apiKeys: agent.config?.api_keys,
+      tillDone: this.shouldEnableTillDone(taskId, task)
     }
 
     // Attach secret broker info if agent session has an active secret token
@@ -523,6 +524,13 @@ export class AgentManager extends EventEmitter {
     }
 
     return config
+  }
+
+  private shouldEnableTillDone(taskId: string, task?: TaskRecord | null): boolean {
+    if (taskId === 'mastermind-session') return false
+    if (taskId.startsWith('heartbeat-')) return false
+    if (task?.status === TaskStatus.Triaging) return false
+    return true
   }
 
   /**
@@ -1106,7 +1114,8 @@ export class AgentManager extends EventEmitter {
       mcpServers,
       authMethod: agent.config?.auth_method,
       permissionMode: agent.config?.permission_mode,
-      apiKeys: agent.config?.api_keys
+      apiKeys: agent.config?.api_keys,
+      tillDone: this.shouldEnableTillDone(taskId, task)
     }
 
     // Setup secret broker session if agent has secrets
@@ -1932,7 +1941,8 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       mcpServers,
       authMethod: agent.config?.auth_method,
       permissionMode: agent.config?.permission_mode,
-      apiKeys: agent.config?.api_keys
+      apiKeys: agent.config?.api_keys,
+      tillDone: this.shouldEnableTillDone(taskId, task)
     }
 
     // Setup secret broker session if agent has secrets

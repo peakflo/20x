@@ -2,10 +2,123 @@ import { afterEach, describe, it, expect, vi } from 'vitest'
 import { OpencodeAdapter } from './opencode-adapter'
 import { SessionStatusType } from './coding-agent-adapter'
 import { ENTERPRISE_AI_GATEWAY_PROVIDER_ID } from '../enterprise-ai-gateway'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'fs'
+import { join } from 'path'
+import { tmpdir } from 'os'
 
 import * as enterpriseAiGateway from '../enterprise-ai-gateway'
 
 describe('OpencodeAdapter', () => {
+  describe('runtime plugin generation', () => {
+    afterEach(() => {
+      vi.restoreAllMocks()
+    })
+
+    it('writes tilldone and secret injector runtime plugins before session startup', () => {
+      const adapter = new OpencodeAdapter()
+      const workspaceDir = mkdtempSync(join(tmpdir(), 'opencode-adapter-test-'))
+
+      try {
+        ;(adapter as any).writeRuntimePluginFiles({
+          agentId: 'agent-1',
+          taskId: 'task-1',
+          workspaceDir,
+          secretEnvVars: {
+            API_KEY: 'secret-value'
+          }
+        })
+
+        const pluginPaths = (adapter as any).pluginFilePaths as string[]
+        const supportPaths = (adapter as any).runtimeSupportFilePaths as string[]
+
+        expect(pluginPaths).toHaveLength(2)
+        expect(pluginPaths.some(path => path.endsWith('20x-tilldone.js'))).toBe(true)
+        expect(pluginPaths.some(path => path.endsWith('20x-secret-injector.js'))).toBe(true)
+        expect(supportPaths.some(path => path.endsWith('.20x-secrets'))).toBe(true)
+        expect(supportPaths.some(path => path.endsWith('.20x-tilldone-state.json'))).toBe(true)
+        expect(supportPaths.some(path => path.endsWith('.20x-tilldone-config.json'))).toBe(true)
+
+        const tillDonePath = pluginPaths.find(path => path.endsWith('20x-tilldone.js'))!
+        const tillDoneCode = readFileSync(tillDonePath, 'utf-8')
+        expect(tillDoneCode).toContain('"tool.execute.before"')
+        expect(tillDoneCode).toContain('event: async function(input)')
+        expect(tillDoneCode).toContain('var ev = input.event')
+        expect(tillDoneCode).toContain('ev.type === "todo.updated"')
+        expect(tillDoneCode).toContain('ev.properties?.sessionID')
+        expect(tillDoneCode).toContain('client.session.prompt')
+        expect(tillDoneCode).toContain('isTillDoneEnabled()')
+        expect(tillDoneCode).toContain('INITIAL_TODO_PROMPT')
+
+        const tillDoneConfigPath = supportPaths.find(path => path.endsWith('.20x-tilldone-config.json'))!
+        expect(JSON.parse(readFileSync(tillDoneConfigPath, 'utf-8'))).toEqual({ enabled: true })
+
+        const secretPluginPath = pluginPaths.find(path => path.endsWith('20x-secret-injector.js'))!
+        const secretPluginCode = readFileSync(secretPluginPath, 'utf-8')
+        expect(secretPluginCode).toContain('input.tool === "bash"')
+        expect(secretPluginCode).toContain('readFileSync(SECRETS_PATH, "utf-8").trim()')
+      } finally {
+        rmSync(workspaceDir, { recursive: true, force: true })
+      }
+    })
+
+    it('passes disabled tilldone config through to the generated extension', () => {
+      const adapter = new OpencodeAdapter()
+      const workspaceDir = mkdtempSync(join(tmpdir(), 'opencode-adapter-test-'))
+
+      try {
+        ;(adapter as any).writeRuntimePluginFiles({
+          agentId: 'agent-1',
+          taskId: 'mastermind-session',
+          workspaceDir,
+          tillDone: false
+        })
+
+        const pluginPaths = (adapter as any).pluginFilePaths as string[]
+        const supportPaths = (adapter as any).runtimeSupportFilePaths as string[]
+        const tillDoneConfigPath = supportPaths.find(path => path.endsWith('.20x-tilldone-config.json'))!
+
+        expect(pluginPaths.some(path => path.endsWith('20x-tilldone.js'))).toBe(true)
+        expect(JSON.parse(readFileSync(tillDoneConfigPath, 'utf-8'))).toEqual({ enabled: false })
+      } finally {
+        rmSync(workspaceDir, { recursive: true, force: true })
+      }
+    })
+
+    it('cleans up generated runtime plugin files on destroySession', async () => {
+      const adapter = new OpencodeAdapter()
+      const workspaceDir = mkdtempSync(join(tmpdir(), 'opencode-adapter-test-'))
+
+      try {
+        ;(adapter as any).writeRuntimePluginFiles({
+          agentId: 'agent-1',
+          taskId: 'task-1',
+          workspaceDir,
+          secretEnvVars: {
+            API_KEY: 'secret-value'
+          }
+        })
+
+        const generatedPaths = [
+          ...((adapter as any).pluginFilePaths as string[]),
+          ...((adapter as any).runtimeSupportFilePaths as string[])
+        ]
+        expect(generatedPaths.every(path => existsSync(path))).toBe(true)
+
+        await adapter.destroySession('session-1', {
+          agentId: 'agent-1',
+          taskId: 'task-1',
+          workspaceDir
+        })
+
+        expect(generatedPaths.every(path => !existsSync(path))).toBe(true)
+        expect((adapter as any).pluginFilePaths).toEqual([])
+        expect((adapter as any).runtimeSupportFilePaths).toEqual([])
+      } finally {
+        rmSync(workspaceDir, { recursive: true, force: true })
+      }
+    })
+  })
+
   describe('waitForMcpServersReady', () => {
     it('prefers SDK mcp.list when available', async () => {
       const adapter = new OpencodeAdapter()
