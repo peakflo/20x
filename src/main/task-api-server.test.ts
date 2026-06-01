@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { createTestDb } from '../../test/helpers/db-test-helper'
 import { makeTask, makeAgent } from '../../test/helpers/task-fixtures'
 import type { DatabaseManager } from './database'
-import { setTaskApiAgentController, startTaskApiServer, stopTaskApiServer } from './task-api-server'
+import { getTaskApiAuthToken, setTaskApiAgentController, startTaskApiServer, stopTaskApiServer } from './task-api-server'
 import { TaskStatus } from '../shared/constants'
 
 /**
@@ -21,6 +21,65 @@ beforeEach(() => {
 afterEach(() => {
   setTaskApiAgentController(null)
   stopTaskApiServer()
+})
+
+function authorizedJsonHeaders(): Record<string, string> {
+  const token = getTaskApiAuthToken()
+  expect(token).toEqual(expect.any(String))
+  return {
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${token}`
+  }
+}
+
+describe('Task API authentication', () => {
+  it('rejects requests without a bearer token', async () => {
+    const task = db.createTask(makeTask({ title: 'Auth protected task' }))!
+    const port = await startTaskApiServer(db)
+
+    const res = await fetch(`http://127.0.0.1:${port}/get_task`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ task_id: task.id })
+    })
+
+    expect(res.status).toBe(401)
+    await expect(res.json()).resolves.toEqual({ error: 'Unauthorized' })
+  })
+
+  it('rejects requests with an invalid bearer token', async () => {
+    const task = db.createTask(makeTask({ title: 'Invalid auth task' }))!
+    const port = await startTaskApiServer(db)
+
+    const res = await fetch(`http://127.0.0.1:${port}/get_task`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer wrong-token'
+      },
+      body: JSON.stringify({ task_id: task.id })
+    })
+
+    expect(res.status).toBe(401)
+    await expect(res.json()).resolves.toEqual({ error: 'Unauthorized' })
+  })
+
+  it('accepts requests with the generated bearer token', async () => {
+    const task = db.createTask(makeTask({ title: 'Valid auth task' }))!
+    const port = await startTaskApiServer(db)
+
+    const res = await fetch(`http://127.0.0.1:${port}/get_task`, {
+      method: 'POST',
+      headers: authorizedJsonHeaders(),
+      body: JSON.stringify({ task_id: task.id })
+    })
+
+    expect(res.status).toBe(200)
+    await expect(res.json()).resolves.toMatchObject({
+      id: task.id,
+      title: 'Valid auth task'
+    })
+  })
 })
 
 describe('/update_task - triage status guard', () => {
@@ -326,7 +385,7 @@ describe('/start_task', () => {
     const port = await startTaskApiServer(db)
     const response = await fetch(`http://127.0.0.1:${port}/start_task`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authorizedJsonHeaders(),
       body: JSON.stringify({ task_id: task.id })
     })
     const result = await response.json() as Record<string, unknown>
@@ -356,7 +415,7 @@ describe('/wait_for_subtasks', () => {
     const port = await startTaskApiServer(db)
     const response = await fetch(`http://127.0.0.1:${port}/wait_for_subtasks`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authorizedJsonHeaders(),
       body: JSON.stringify({ parent_task_id: parent.id, subtask_ids: [subtask.id], timeout_ms: 5_000 })
     })
     const result = await response.json() as Record<string, unknown>

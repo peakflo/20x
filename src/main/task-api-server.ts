@@ -5,6 +5,7 @@
  * endpoints via fetch, avoiding the native module version mismatch.
  */
 import { createServer, type Server as HttpServer } from 'http'
+import { randomBytes, timingSafeEqual } from 'crypto'
 import { CronExpressionParser } from 'cron-parser'
 import type { DatabaseManager } from './database'
 import { TaskStatus } from '../shared/constants'
@@ -12,6 +13,7 @@ import type { AgentManager } from './agent-manager'
 
 let server: HttpServer | null = null
 let port: number | null = null
+let authToken: string | null = null
 let startupPromise: Promise<number> | null = null
 let notifyRenderer: ((channel: string, data: unknown) => void) | null = null
 let transcriptProvider: ((taskId: string) => Promise<Array<{ role: string; text: string }>>) | null = null
@@ -19,6 +21,29 @@ let agentController: Pick<AgentManager, 'startTask'> | null = null
 
 export function getTaskApiPort(): number | null {
   return port
+}
+
+export function getTaskApiAuthToken(): string | null {
+  return authToken
+}
+
+function ensureAuthToken(): string {
+  if (!authToken) {
+    authToken = randomBytes(32).toString('base64url')
+  }
+  return authToken
+}
+
+function isAuthorized(authorizationHeader: string | string[] | undefined, expectedToken: string): boolean {
+  const header = Array.isArray(authorizationHeader) ? authorizationHeader[0] : authorizationHeader
+  const match = header?.match(/^Bearer\s+(.+)$/i)
+  if (!match) return false
+
+  const actual = Buffer.from(match[1])
+  const expected = Buffer.from(expectedToken)
+  if (actual.length !== expected.length) return false
+
+  return timingSafeEqual(actual, expected)
 }
 
 /**
@@ -55,10 +80,19 @@ export function startTaskApiServer(db: DatabaseManager): Promise<number> {
   if (server && port) return Promise.resolve(port)
   if (startupPromise) return startupPromise
 
+  const expectedToken = ensureAuthToken()
+
   startupPromise = new Promise((resolve, reject) => {
     server = createServer((req, res) => {
       // CORS not needed — local only
       res.setHeader('Content-Type', 'application/json')
+
+      if (!isAuthorized(req.headers.authorization, expectedToken)) {
+        res.writeHead(401)
+        res.end(JSON.stringify({ error: 'Unauthorized' }))
+        req.resume()
+        return
+      }
 
       let body = ''
       req.on('data', (chunk) => { body += chunk })
@@ -111,9 +145,10 @@ export function startTaskApiServer(db: DatabaseManager): Promise<number> {
 export function stopTaskApiServer(): void {
   if (server) {
     server.close()
-    server = null
-    port = null
   }
+  server = null
+  port = null
+  authToken = null
   startupPromise = null
 }
 
