@@ -137,13 +137,15 @@ describe('AgentManager skill file paths', () => {
 
       expect((manager as any).shouldEnableTillDone('heartbeat-task-1', null)).toBe(false)
       expect((manager as any).shouldEnableTillDone('task-1', { status: TaskStatus.Triaging })).toBe(false)
+      expect((manager as any).shouldEnableTillDone('task-1', { status: TaskStatus.NotStarted, agent_id: null })).toBe(false)
+      expect((manager as any).shouldEnableTillDone('task-1', { status: TaskStatus.AgentLearning })).toBe(false)
     })
 
     it('enables tillDone for regular task sessions', () => {
       const mockDb = createMockDb({ coding_agent: 'opencode' })
       manager = new AgentManager(mockDb)
 
-      expect((manager as any).shouldEnableTillDone('task-1', { status: TaskStatus.NotStarted })).toBe(true)
+      expect((manager as any).shouldEnableTillDone('task-1', { status: TaskStatus.NotStarted, agent_id: 'agent-1' })).toBe(true)
     })
   })
 
