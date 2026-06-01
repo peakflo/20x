@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import path from 'path'
 
 const { execFileMock, existsSyncMock, mkdirSyncMock } = vi.hoisted(() => {
   const execFileMock = vi.fn()
@@ -84,6 +85,7 @@ describe('WorktreeManager', () => {
 
   it('uses an explicit https clone URL for GitHub repos', async () => {
     const manager = new WorktreeManager()
+    const bareRepoPath = path.join('/tmp/20x-user-data', 'repos', 'peakflo', '20x.git')
 
     await manager.setupWorkspaceForTask(
       'task-1',
@@ -94,7 +96,7 @@ describe('WorktreeManager', () => {
 
     expect(execFileMock).toHaveBeenCalledWith(
       'gh',
-      ['repo', 'clone', 'https://github.com/peakflo/20x.git', '/tmp/20x-user-data/repos/peakflo/20x.git', '--', '--bare'],
+      ['repo', 'clone', 'https://github.com/peakflo/20x.git', bareRepoPath, '--', '--bare'],
       expect.objectContaining({ timeout: 300000 }),
       expect.any(Function)
     )
@@ -102,6 +104,7 @@ describe('WorktreeManager', () => {
 
   it('falls back to a derived https clone URL when repo metadata omits one', async () => {
     const manager = new WorktreeManager()
+    const bareRepoPath = path.join('/tmp/20x-user-data', 'repos', 'peakflo', 'upload-functions.git')
 
     await manager.setupWorkspaceForTask(
       'task-2',
@@ -112,7 +115,7 @@ describe('WorktreeManager', () => {
 
     expect(execFileMock).toHaveBeenCalledWith(
       'gh',
-      ['repo', 'clone', 'https://github.com/peakflo/upload-functions.git', '/tmp/20x-user-data/repos/peakflo/upload-functions.git', '--', '--bare'],
+      ['repo', 'clone', 'https://github.com/peakflo/upload-functions.git', bareRepoPath, '--', '--bare'],
       expect.objectContaining({ timeout: 300000 }),
       expect.any(Function)
     )
