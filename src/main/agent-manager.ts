@@ -64,7 +64,26 @@ function isWorkfloMcpDevServerUrl(serverUrl?: string): boolean {
   }
 }
 
-function isEnterpriseWorkfloMcpServer(name: string, serverUrl?: string): boolean {
+function hasUserSuppliedAuthHeader(headers?: Record<string, string>): boolean {
+  if (!headers) return false
+  for (const key of Object.keys(headers)) {
+    if (key.toLowerCase() === 'authorization' && headers[key]) return true
+  }
+  return false
+}
+
+function isEnterpriseWorkfloMcpServer(
+  name: string,
+  serverUrl?: string,
+  headers?: Record<string, string>
+): boolean {
+  // If the user supplied their own Authorization header (e.g. a pfwf_ API key
+  // bound to a specific tenant), respect it — do NOT treat this as the
+  // auto-managed enterprise MCP server. Otherwise 20x would clobber the
+  // header with a fresh JWT for whichever tenant 20x is currently logged
+  // into, silently leaking the request to the wrong tenant.
+  if (hasUserSuppliedAuthHeader(headers)) return false
+
   return name === WORKFLO_MCP_DEV_SERVER_NAME ||
     (name.toLowerCase().includes('workflo') && isWorkfloMcpDevServerUrl(serverUrl))
 }
@@ -398,7 +417,7 @@ export class AgentManager extends EventEmitter {
         let finalUrl = mcpServer.url
         if (
           this.enterpriseAuth &&
-          isEnterpriseWorkfloMcpServer(mcpServer.name, mcpServer.url)
+          isEnterpriseWorkfloMcpServer(mcpServer.name, mcpServer.url, finalHeaders)
         ) {
           finalUrl = resolveEnterpriseMcpDevUrl(mcpServer.url, this.enterpriseAuth.getApiUrl())
           const proxyPort = getMcpAuthProxyPort()
