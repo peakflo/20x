@@ -1723,7 +1723,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
         })
       }
 
-      // Check for pending approval (ACP adapters only) — include in same batch
+      // Check for pending approval (ACP + OpenCode adapters) — include in same batch
       if ('getPendingApproval' in adapter && typeof adapter.getPendingApproval === 'function') {
         const approval = (adapter as unknown as AcpAdapter).getPendingApproval(sessionId)
         if (approval && !entry.seenPartIds.has(`approval-${approval.toolCallId}`)) {

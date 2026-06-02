@@ -111,16 +111,10 @@ export function buildMergedOpencodeConfig(
     }
   }
 
-  // Auto-allow all tool permissions so agents can access files outside the
-  // workspace directory without manual approval.  Without this, OpenCode's
-  // `external_directory` permission defaults to "ask", which blocks tool
-  // calls and causes sessions to hang indefinitely when running headless
-  // (the 20x adapter has no mechanism to respond to permission prompts).
-  if (!config.permission) {
-    config.permission = [
-      { permission: '*', action: 'allow', pattern: '*' }
-    ]
-  }
+  // NOTE: OpenCode's `external_directory` permission defaults to "ask".
+  // Permissions are now surfaced in the 20x UI via the OpenCode adapter's
+  // SSE event subscription and getPendingApproval()/respondToApproval()
+  // methods — no need to auto-allow here.
 
   // Merge extra config (e.g. plugin paths) on top
   if (extraConfig) {
