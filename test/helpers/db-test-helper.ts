@@ -42,6 +42,7 @@ export function createTestDb(): { db: DatabaseManager; rawDb: InstanceType<typeo
       environment TEXT NOT NULL DEFAULT '{}',
       tools TEXT NOT NULL DEFAULT '[]',
       oauth_metadata TEXT NOT NULL DEFAULT '{}',
+      source TEXT NOT NULL DEFAULT 'user',
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );

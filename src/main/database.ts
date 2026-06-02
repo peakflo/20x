@@ -80,6 +80,18 @@ export interface McpOAuthRegistration {
 /** @deprecated Use McpOAuthRegistration instead */
 export type McpOAuthMetadata = McpOAuthRegistration
 
+/**
+ * Provenance of an MCP server row:
+ * - 'user'       — added by the user through the 20x UI / IPC.
+ * - 'enterprise' — synced from a Workflo org node by EnterpriseSyncManager.
+ * - 'plugin'     — materialised from a Claude plugin (.mcp.json or manifest).
+ *
+ * This is the authoritative signal for "is this an enterprise-managed MCP?"
+ * Do NOT rely on name prefixes or URL heuristics — those are display details
+ * that the user can edit. `source` is set at create time and never changes.
+ */
+export type McpServerSource = 'user' | 'enterprise' | 'plugin'
+
 export interface McpServerRow {
   id: string
   name: string
@@ -91,6 +103,7 @@ export interface McpServerRow {
   environment: string
   tools: string
   oauth_metadata: string
+  source: string
   created_at: string
   updated_at: string
 }
@@ -106,6 +119,7 @@ export interface McpServerRecord {
   environment: Record<string, string>
   tools: McpServerToolRecord[]
   oauth_metadata: McpOAuthRegistration | Record<string, never>
+  source: McpServerSource
   created_at: string
   updated_at: string
 }
@@ -119,6 +133,8 @@ export interface CreateMcpServerData {
   headers?: Record<string, string>
   environment?: Record<string, string>
   oauth_metadata?: McpOAuthRegistration
+  /** Defaults to 'user' when omitted — see McpServerSource. */
+  source?: McpServerSource
 }
 
 export interface UpdateMcpServerData {
@@ -130,6 +146,11 @@ export interface UpdateMcpServerData {
   headers?: Record<string, string>
   environment?: Record<string, string>
   oauth_metadata?: McpOAuthRegistration
+  /**
+   * Provenance is set at create time and generally immutable. This field is
+   * exposed for migrations and tests only — UI/IPC paths should never write it.
+   */
+  source?: McpServerSource
 }
 
 export interface CreateAgentData {
@@ -492,6 +513,9 @@ function deserializeTaskSource(row: TaskSourceRow): TaskSourceRecord {
 }
 
 function deserializeMcpServer(row: McpServerRow): McpServerRecord {
+  const source: McpServerSource = row.source === 'enterprise' || row.source === 'plugin'
+    ? row.source
+    : 'user'
   return {
     ...row,
     type: (row.type as 'local' | 'remote') || 'local',
@@ -500,7 +524,8 @@ function deserializeMcpServer(row: McpServerRow): McpServerRecord {
     headers: JSON.parse(row.headers || '{}') as Record<string, string>,
     environment: JSON.parse(row.environment || '{}') as Record<string, string>,
     tools: JSON.parse(row.tools || '[]') as McpServerToolRecord[],
-    oauth_metadata: JSON.parse(row.oauth_metadata || '{}') as McpOAuthRegistration | Record<string, never>
+    oauth_metadata: JSON.parse(row.oauth_metadata || '{}') as McpOAuthRegistration | Record<string, never>,
+    source
   }
 }
 
@@ -984,6 +1009,7 @@ export class DatabaseManager {
         url TEXT,
         headers TEXT NOT NULL DEFAULT '{}',
         environment TEXT NOT NULL DEFAULT '{}',
+        source TEXT NOT NULL DEFAULT 'user',
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
@@ -1250,6 +1276,20 @@ export class DatabaseManager {
     }
     if (!mcpColumnNames.has('oauth_metadata')) {
       this.db.exec(`ALTER TABLE mcp_servers ADD COLUMN oauth_metadata TEXT NOT NULL DEFAULT '{}'`)
+    }
+    if (!mcpColumnNames.has('source')) {
+      // Provenance column. Defaults to 'user'.
+      this.db.exec(`ALTER TABLE mcp_servers ADD COLUMN source TEXT NOT NULL DEFAULT 'user'`)
+      // One-time backfill for rows seeded by EnterpriseSyncManager before this
+      // column existed. Those rows have a hardcoded "[Workflo] " name prefix
+      // (see mapMcpServer in enterprise-sync.ts). This is the ONLY place that
+      // prefix is treated as a signal — going forward `source` is the truth.
+      //
+      // Plugin-materialised rows are intentionally NOT backfilled by name
+      // heuristic — "<plugin>:<server>" could collide with a user-chosen
+      // name. They'll be tagged correctly on the next plugin reload (every
+      // app start re-materialises plugin MCPs).
+      this.db.exec(`UPDATE mcp_servers SET source = 'enterprise' WHERE name LIKE '[Workflo] %'`)
     }
 
     // Migrate oauth_tokens: make source_id nullable and add mcp_server_id
@@ -2204,8 +2244,9 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
     const id = createId()
     const now = new Date().toISOString()
     const type = data.type ?? 'local'
+    const source: McpServerSource = data.source ?? 'user'
     this.db.prepare(
-      'INSERT INTO mcp_servers (id, name, type, command, args, url, headers, environment, oauth_metadata, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+      'INSERT INTO mcp_servers (id, name, type, command, args, url, headers, environment, oauth_metadata, source, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
     ).run(
       id,
       data.name,
@@ -2216,6 +2257,7 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
       JSON.stringify(data.headers ?? {}),
       JSON.stringify(data.environment ?? {}),
       JSON.stringify(data.oauth_metadata ?? {}),
+      source,
       now,
       now
     )
@@ -2234,6 +2276,7 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
     if (data.headers !== undefined) { setClauses.push('headers = ?'); values.push(JSON.stringify(data.headers)) }
     if (data.environment !== undefined) { setClauses.push('environment = ?'); values.push(JSON.stringify(data.environment)) }
     if (data.oauth_metadata !== undefined) { setClauses.push('oauth_metadata = ?'); values.push(JSON.stringify(data.oauth_metadata)) }
+    if (data.source !== undefined) { setClauses.push('source = ?'); values.push(data.source) }
 
     if (setClauses.length === 0) return this.getMcpServer(id)
 

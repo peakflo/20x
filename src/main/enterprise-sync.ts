@@ -806,6 +806,7 @@ export class EnterpriseSyncManager {
     url: string
     headers: Record<string, string>
     environment: Record<string, string>
+    source: 'enterprise'
   } {
     if (server.type === 'remote') {
       const config = server.config as { url?: string; headers?: Record<string, string> }
@@ -816,7 +817,8 @@ export class EnterpriseSyncManager {
         args: [],
         url: config.url || '',
         headers: config.headers || {},
-        environment: {}
+        environment: {},
+        source: 'enterprise'
       }
     } else {
       const config = server.config as {
@@ -831,7 +833,8 @@ export class EnterpriseSyncManager {
         args: config.args || [],
         url: '',
         headers: {},
-        environment: config.environment || {}
+        environment: config.environment || {},
+        source: 'enterprise'
       }
     }
   }
