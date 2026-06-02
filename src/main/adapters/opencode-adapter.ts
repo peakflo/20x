@@ -73,6 +73,8 @@ export class OpencodeAdapter implements CodingAgentAdapter {
   private pendingPermissions: Map<string, Array<{ permissionId: string; permission: string; patterns: string[] }>> = new Map()
   /** Abort controller for the SSE event subscription */
   private sseAbort: AbortController | null = null
+  /** Per-session permission mode ('ask' = surface in UI, 'allow' = auto-approve) */
+  private sessionPermissionModes: Map<string, 'ask' | 'allow'> = new Map()
 
   constructor(private db?: Pick<DatabaseManager, 'getSetting'>) {
     this.sdkLoading = this.loadSDK()
@@ -771,6 +773,7 @@ export class OpencodeAdapter implements CodingAgentAdapter {
 
     const ocSessionId = result.data.id
     this.clients.set(ocSessionId, ocClient)
+    this.sessionPermissionModes.set(ocSessionId, config.permissionMode || 'ask')
 
     return ocSessionId
   }
@@ -807,6 +810,7 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     }
 
     this.clients.set(sessionId, ocClient)
+    this.sessionPermissionModes.set(sessionId, config.permissionMode || 'ask')
 
     // Fetch existing messages
     const messagesResult = await ocClient.session.messages({
@@ -1275,6 +1279,7 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     await this.abortPrompt(sessionId, _config)
     this.clients.delete(sessionId)
     this.pendingPermissions.delete(sessionId)
+    this.sessionPermissionModes.delete(sessionId)
 
     // Clean up generated runtime plugins and any support files they use.
     for (const filePath of [...this.pluginFilePaths, ...this.runtimeSupportFilePaths]) {
@@ -1806,7 +1811,17 @@ export class OpencodeAdapter implements CodingAgentAdapter {
 
     console.log(`[OpencodeAdapter] Permission requested: ${permission} for session ${sessionID} (${permissionId}) patterns=${patterns.join(', ')}`)
 
-    // Append to the session's permission queue
+    // Auto-approve if the agent's permission mode is 'allow'
+    const mode = this.sessionPermissionModes.get(sessionID) || 'ask'
+    if (mode === 'allow') {
+      console.log(`[OpencodeAdapter] Auto-approving permission ${permissionId} (permissionMode=allow)`)
+      this.autoApprovePermission(sessionID, permissionId).catch(err => {
+        console.error(`[OpencodeAdapter] Auto-approve failed for ${permissionId}:`, err)
+      })
+      return
+    }
+
+    // Append to the session's permission queue for UI handling
     let queue = this.pendingPermissions.get(sessionID)
     if (!queue) {
       queue = []
@@ -1820,6 +1835,26 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     // Trigger immediate poll so agent-manager renders the approval prompt
     if (this.onDataAvailable) {
       this.onDataAvailable(sessionID)
+    }
+  }
+
+  /**
+   * Silently approve a permission request (used when permissionMode is 'allow').
+   */
+  private async autoApprovePermission(sessionId: string, permissionId: string): Promise<void> {
+    try {
+      const baseUrl = this.serverUrl || DEFAULT_SERVER_URL
+      const url = `${baseUrl}/session/${encodeURIComponent(sessionId)}/permissions/${encodeURIComponent(permissionId)}`
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ response: 'allow', remember: true })
+      })
+      if (!res.ok) {
+        console.warn(`[OpencodeAdapter] Auto-approve HTTP ${res.status}: ${await res.text().catch(() => '')}`)
+      }
+    } catch (err) {
+      console.error(`[OpencodeAdapter] Auto-approve failed for ${permissionId}:`, err)
     }
   }
 
