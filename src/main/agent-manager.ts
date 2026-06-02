@@ -5,7 +5,7 @@ import { existsSync, copyFileSync, mkdirSync, readFileSync, readdirSync, statSyn
 import { mkdir, writeFile } from 'fs/promises'
 import { Notification } from 'electron'
 import type { BrowserWindow } from 'electron'
-import type { DatabaseManager, AgentMcpServerEntry, OutputFieldRecord, SecretRecord, SkillRecord, TaskRecord } from './database'
+import type { DatabaseManager, AgentMcpServerEntry, McpServerSource, OutputFieldRecord, SecretRecord, SkillRecord, TaskRecord } from './database'
 import { TaskStatus, SessionStatus, PluginActionId } from '../shared/constants'
 import type { WorktreeManager } from './worktree-manager'
 import type { GitHubManager } from './github-manager'
@@ -29,7 +29,6 @@ enum CodingAgentType {
 
 // Default OpenCode server URL (matches database default)
 const DEFAULT_SERVER_URL = 'http://localhost:4096'
-const WORKFLO_MCP_DEV_SERVER_NAME = '[Workflo] MCP Dev Server'
 const WORKFLO_MCP_DEV_PATH = '/api/mcp/dev/mcp'
 
 interface AgentSession {
@@ -72,20 +71,29 @@ function hasUserSuppliedAuthHeader(headers?: Record<string, string>): boolean {
   return false
 }
 
-function isEnterpriseWorkfloMcpServer(
-  name: string,
-  serverUrl?: string,
+/**
+ * The MCP server that 20x should auto-manage (URL canonicalisation + JWT
+ * injection via mcp-auth-proxy) is exactly: an enterprise-sourced row whose
+ * URL points at the Workflo MCP Dev endpoint.
+ *
+ * Identification is by the `source` column (set by EnterpriseSyncManager
+ * when the row is created — see enterprise-sync.ts and database.ts). This
+ * is deterministic and immune to user-chosen names, name collisions, or
+ * future renames of the canonical entry.
+ *
+ * The header-based defence-in-depth (`hasUserSuppliedAuthHeader`) is kept
+ * for the unusual case where a row gets mislabelled as 'enterprise' but
+ * the user has manually pasted in their own credential — we still honour
+ * their explicit intent.
+ */
+function isEnterpriseMcpDevServer(mcpServer: {
+  source?: McpServerSource
+  url?: string | null
   headers?: Record<string, string>
-): boolean {
-  // If the user supplied their own Authorization header (e.g. a pfwf_ API key
-  // bound to a specific tenant), respect it — do NOT treat this as the
-  // auto-managed enterprise MCP server. Otherwise 20x would clobber the
-  // header with a fresh JWT for whichever tenant 20x is currently logged
-  // into, silently leaking the request to the wrong tenant.
-  if (hasUserSuppliedAuthHeader(headers)) return false
-
-  return name === WORKFLO_MCP_DEV_SERVER_NAME ||
-    (name.toLowerCase().includes('workflo') && isWorkfloMcpDevServerUrl(serverUrl))
+}): boolean {
+  if (mcpServer.source !== 'enterprise') return false
+  if (hasUserSuppliedAuthHeader(mcpServer.headers)) return false
+  return isWorkfloMcpDevServerUrl(mcpServer.url ?? undefined)
 }
 
 function resolveEnterpriseMcpDevUrl(currentUrl: string | undefined, enterpriseApiUrl: string): string {
@@ -417,7 +425,7 @@ export class AgentManager extends EventEmitter {
         let finalUrl = mcpServer.url
         if (
           this.enterpriseAuth &&
-          isEnterpriseWorkfloMcpServer(mcpServer.name, mcpServer.url, finalHeaders)
+          isEnterpriseMcpDevServer({ source: mcpServer.source, url: mcpServer.url, headers: finalHeaders })
         ) {
           finalUrl = resolveEnterpriseMcpDevUrl(mcpServer.url, this.enterpriseAuth.getApiUrl())
           const proxyPort = getMcpAuthProxyPort()

@@ -14,6 +14,7 @@ function makeServer(overrides: Partial<McpServerRecord> = {}): McpServerRecord {
     environment: {},
     tools: [],
     oauth_metadata: {},
+    source: 'user',
     created_at: '',
     updated_at: '',
     ...overrides

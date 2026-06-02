@@ -805,7 +805,7 @@ describe('AgentManager MCP server routing', () => {
     vi.clearAllMocks()
   })
 
-  it('canonicalizes Workflo MCP dev server URLs to the active enterprise API URL when no Authorization header is provided', async () => {
+  it('canonicalizes Workflo MCP dev server URLs to the active enterprise API URL for enterprise-sourced servers', async () => {
     const mockDb = {
       getAgent: vi.fn(() => ({
         id: 'agent-1',
@@ -816,11 +816,12 @@ describe('AgentManager MCP server routing', () => {
       })),
       getMcpServer: vi.fn(() => ({
         id: 'workflo-stage-server',
-        name: 'pf-workflo-integrations',
+        name: '[Workflo] MCP Dev Server',
         type: 'remote',
         url: 'https://stage-api.peakflo.ai/api/mcp/dev/mcp',
         headers: {},
         oauth_metadata: {},
+        source: 'enterprise',
       })),
     } as unknown as ConstructorParameters<typeof AgentManager>[0]
 
@@ -832,17 +833,59 @@ describe('AgentManager MCP server routing', () => {
 
     const mcpServers = await (manager as any).buildMcpServersForAdapter('agent-1')
 
-    expect(mcpServers['pf-workflo-integrations']).toMatchObject({
+    expect(mcpServers['[Workflo] MCP Dev Server']).toMatchObject({
       type: 'http',
       url: 'https://api.peakflo.ai/api/mcp/dev/mcp',
       headers: { Authorization: 'Bearer fresh-prod-jwt' },
     })
   })
 
-  it('respects a user-supplied Authorization header on a Workflo-shaped MCP URL — does not rewrite URL or substitute JWT', async () => {
-    // Regression: a developer API key (pfwf_...) created in tenant A and added
-    // as an MCP server in 20x must NOT be replaced by 20x's enterprise JWT
-    // (which would resolve to whichever tenant 20x is currently logged into).
+  it('does NOT auto-manage a user-sourced MCP, even when name and URL look like the enterprise one (provenance check)', async () => {
+    // Regression — the primary tenant-leak fix.
+    // A user-added MCP whose `source` is 'user' must never be hijacked, no
+    // matter what its name or URL looks like. Before Phase 1 this was a
+    // name/path heuristic and any "*workflo*" name + /api/mcp/dev/mcp path
+    // got auto-managed → tenant leak. Now identification is provenance-only.
+    const mockDb = {
+      getAgent: vi.fn(() => ({
+        id: 'agent-1',
+        name: 'OPS L2',
+        config: {
+          mcp_servers: ['tan-insurance-workflo'],
+        },
+      })),
+      getMcpServer: vi.fn(() => ({
+        id: 'tan-insurance-workflo',
+        name: '[Workflo] MCP Dev Server',  // user copied the canonical name
+        type: 'remote',
+        url: 'https://stage-api.peakflo.ai/api/mcp/dev/mcp',  // and the canonical URL
+        headers: {},
+        oauth_metadata: {},
+        source: 'user',  // but it was added by the user, not by enterprise sync
+      })),
+    } as unknown as ConstructorParameters<typeof AgentManager>[0]
+
+    const manager = new AgentManager(mockDb)
+    manager.setEnterpriseAuth({
+      getApiUrl: vi.fn(() => 'https://api.peakflo.ai'),
+      getJwt: vi.fn(async () => 'fresh-prod-jwt-for-tenant-b'),
+    } as any)
+
+    const mcpServers = await (manager as any).buildMcpServersForAdapter('agent-1')
+
+    expect(mcpServers['[Workflo] MCP Dev Server']).toMatchObject({
+      type: 'http',
+      // URL is NOT rewritten — user pointed at stage, request goes to stage
+      url: 'https://stage-api.peakflo.ai/api/mcp/dev/mcp',
+    })
+    // No Authorization injected — user didn't set one and the proxy is not invoked
+    expect(mcpServers['[Workflo] MCP Dev Server'].headers).not.toHaveProperty('Authorization')
+  })
+
+  it('respects a user-supplied Authorization header even when an enterprise-sourced row carries one (defence-in-depth)', async () => {
+    // Defence-in-depth: even if a row is somehow mislabelled as 'enterprise'
+    // but the user/sync wrote an Authorization header, honour their explicit
+    // credential and skip the auto-manage path.
     const mockDb = {
       getAgent: vi.fn(() => ({
         id: 'agent-1',
@@ -858,6 +901,7 @@ describe('AgentManager MCP server routing', () => {
         url: 'https://stage-api.peakflo.ai/api/mcp/dev/mcp',
         headers: { Authorization: 'Bearer pfwf_tenant_a_key' },
         oauth_metadata: {},
+        source: 'enterprise',
       })),
     } as unknown as ConstructorParameters<typeof AgentManager>[0]
 

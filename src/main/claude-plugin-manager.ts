@@ -848,7 +848,8 @@ export class ClaudePluginManager {
                 command: config.command || '',
                 args: config.args || [],
                 url: config.url,
-                environment: config.env || config.environment || {}
+                environment: config.env || config.environment || {},
+                source: 'plugin'
               })
             } catch (err) {
               console.warn(`[ClaudePluginManager] Failed to create MCP server "${serverName}" from plugin:`, err)
@@ -899,7 +900,8 @@ export class ClaudePluginManager {
             name: `${plugin.name}:${serverName}`,
             command: serverConfig.command || '',
             args: serverConfig.args || [],
-            environment: serverConfig.env || {}
+            environment: serverConfig.env || {},
+            source: 'plugin'
           })
         } catch (err) {
           console.warn(`[ClaudePluginManager] Failed to create MCP server from manifest:`, err)

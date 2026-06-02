@@ -243,6 +243,32 @@ describe('MCP Server CRUD', () => {
     expect(db.deleteMcpServer(server.id)).toBe(true)
     expect(db.getMcpServer(server.id)).toBeUndefined()
   })
+
+  it("defaults `source` to 'user' when not specified", () => {
+    const server = db.createMcpServer({ name: 'User-added MCP' })!
+    expect(server.source).toBe('user')
+  })
+
+  it("persists `source: 'enterprise'` when set explicitly (used by EnterpriseSyncManager)", () => {
+    const server = db.createMcpServer({
+      name: '[Workflo] MCP Dev Server',
+      type: 'remote',
+      url: 'https://api.peakflo.ai/api/mcp/dev/mcp',
+      source: 'enterprise'
+    })!
+    expect(server.source).toBe('enterprise')
+
+    const refetched = db.getMcpServer(server.id)!
+    expect(refetched.source).toBe('enterprise')
+  })
+
+  it("persists `source: 'plugin'` when set explicitly (used by ClaudePluginManager)", () => {
+    const server = db.createMcpServer({
+      name: 'my-plugin:some-server',
+      source: 'plugin'
+    })!
+    expect(server.source).toBe('plugin')
+  })
 })
 
 describe('TaskSource CRUD', () => {
