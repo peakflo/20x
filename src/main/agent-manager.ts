@@ -492,7 +492,7 @@ export class AgentManager extends EventEmitter {
 
     const isMastermind = taskId === 'mastermind-session'
     const task = this.db.getTask(taskId)
-    const isTriageSession = task?.status === TaskStatus.Triaging
+    const isTriageSession = this.isTriageSessionTask(taskId, task)
     const isSubtask = !!task?.parent_task_id
     const taskScope = isSubtask && task?.parent_task_id ? { taskId, parentTaskId: task.parent_task_id } : undefined
     const mcpServers = await this.buildMcpServersForAdapter(agentId, { ensureTaskManagement: isMastermind || isTriageSession || isSubtask, taskScope })
@@ -556,9 +556,17 @@ export class AgentManager extends EventEmitter {
   private shouldEnableTillDone(taskId: string, task?: TaskRecord | null): boolean {
     if (taskId === 'mastermind-session') return false
     if (taskId.startsWith('heartbeat-')) return false
-    if (task?.status === TaskStatus.Triaging) return false
+    if (this.isTriageSessionTask(taskId, task)) return false
     if (task?.status === TaskStatus.AgentLearning) return false
     return true
+  }
+
+  private isTriageSessionTask(taskId: string, task?: TaskRecord | null): boolean {
+    if (!task) return false
+    if (taskId === 'mastermind-session') return false
+    if (taskId.startsWith('heartbeat-')) return false
+    return task.status === TaskStatus.Triaging ||
+      (Object.prototype.hasOwnProperty.call(task, 'agent_id') && !task.agent_id)
   }
 
   /**
@@ -1119,7 +1127,7 @@ export class AgentManager extends EventEmitter {
 
     // Check if this is a triage session or subtask
     const task = this.db.getTask(taskId)
-    const isTriageSession = task?.status === TaskStatus.Triaging
+    const isTriageSession = this.isTriageSessionTask(taskId, task)
     const isSubtask = !!task?.parent_task_id
     const taskScope = isSubtask && task?.parent_task_id ? { taskId, parentTaskId: task.parent_task_id } : undefined
     await yieldEL()
@@ -1946,7 +1954,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     // Build MCP servers config
     const isMastermind = taskId === 'mastermind-session'
     const task = this.db.getTask(taskId)
-    const isTriageSession = task?.status === TaskStatus.Triaging
+    const isTriageSession = this.isTriageSessionTask(taskId, task)
     const isSubtask = !!task?.parent_task_id
     const taskScope = isSubtask && task?.parent_task_id ? { taskId, parentTaskId: task.parent_task_id } : undefined
     await yieldEL()
