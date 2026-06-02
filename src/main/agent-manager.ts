@@ -753,15 +753,15 @@ export class AgentManager extends EventEmitter {
   }
 
   /**
-   * Strips characters that would break YAML scalar parsing when the value is
-   * written unquoted.  Square/curly brackets are YAML flow-sequence/mapping
-   * indicators; colons followed by a space are key separators; hash signs
-   * introduce comments.  Removing them keeps the frontmatter valid without
-   * requiring a full YAML library.
+   * Sanitizes a string for safe use as a YAML double-quoted scalar.
+   * Escapes backslashes and double quotes so the value can be wrapped in
+   * double quotes in the frontmatter template.  This avoids the class of
+   * bugs where colons, brackets, or other YAML-special characters in skill
+   * names/descriptions cause "mapping values are not allowed" parse errors
+   * (e.g. a description containing "latest: true" or a name like "[Workflo] foo").
    */
   private static sanitizeYamlValue(value: string): string {
-    // eslint-disable-next-line no-control-regex
-    return value.replace(/[\[\]{}"'#]/g, '').trim()
+    return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').trim()
   }
 
   /**
@@ -804,7 +804,7 @@ export class AgentManager extends EventEmitter {
           const safeName = AgentManager.sanitizeYamlValue(skill.name)
           const desc = skill.description || skill.name
           const safeDesc = AgentManager.sanitizeYamlValue(desc)
-          const content = `---\nname: ${safeName}\ndescription: ${safeDesc}\n---\n\n${skill.content}`
+          const content = `---\nname: "${safeName}"\ndescription: "${safeDesc}"\n---\n\n${skill.content}`
           await writeFile(join(dir, 'SKILL.md'), content, 'utf-8')
         }
         console.log(`[AgentManager] Wrote ${skills.length} SKILL.md file(s) to ${skillsDir}`)
@@ -3722,8 +3722,15 @@ Important:
     const descMatch = frontmatter.match(/^description:\s*(.+)$/m)
     if (!nameMatch) return null
 
-    const name = nameMatch[1].trim()
-    const description = descMatch ? descMatch[1].trim() : ''
+    // Strip surrounding double quotes — writeSkillFiles now wraps values in
+    // double quotes to prevent YAML parsing errors from colons/brackets.
+    const stripQuotes = (v: string): string => {
+      const t = v.trim()
+      if (t.startsWith('"') && t.endsWith('"')) return t.slice(1, -1).replace(/\\"/g, '"').replace(/\\\\/g, '\\')
+      return t
+    }
+    const name = stripQuotes(nameMatch[1])
+    const description = descMatch ? stripQuotes(descMatch[1]) : ''
 
     // Validate name pattern
     if (!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(name)) return null
