@@ -519,7 +519,8 @@ describe('ClaudeCodeAdapter task_progress handling', () => {
     const msg = {
       type: 'system',
       subtype: ClaudeSystemSubtype.THINKING_TOKENS,
-      text: 'Considering the next edit',
+      estimated_tokens: 128,
+      estimated_tokens_delta: 32,
       uuid: 'tt-1',
       session_id: 's1',
     }
@@ -531,9 +532,43 @@ describe('ClaudeCodeAdapter task_progress handling', () => {
 
     expect(parts).toHaveLength(1)
     expect(parts[0].type).toBe(MessagePartType.REASONING)
-    expect(parts[0].id).toBe('thinking-tokens-tt-1')
-    expect(parts[0].text).toBe('Considering the next edit')
+    expect(parts[0].id).toBe('thinking-tokens-s1')
+    expect(parts[0].text).toBe('Estimated thinking tokens: 128')
     expect(parts[0].role).toBe('assistant')
+  })
+
+  it('updates one thinking_tokens reasoning part instead of appending messages', async () => {
+    const messages = [
+      {
+        type: 'system',
+        subtype: ClaudeSystemSubtype.THINKING_TOKENS,
+        estimated_tokens: 128,
+        estimated_tokens_delta: 32,
+        uuid: 'tt-1',
+        session_id: 's1',
+      },
+      {
+        type: 'system',
+        subtype: ClaudeSystemSubtype.THINKING_TOKENS,
+        estimated_tokens: 256,
+        estimated_tokens_delta: 128,
+        uuid: 'tt-2',
+        session_id: 's1',
+      },
+    ]
+
+    const { adapter } = createAdapterWithSession('s1', messages)
+    const seenPartIds = new Set<string>()
+    const partContentLengths = new Map<string, string>()
+    const parts = await adapter.pollMessages('s1', new Set(), seenPartIds, partContentLengths, {} as any)
+
+    expect(parts).toHaveLength(2)
+    expect(parts[0].id).toBe('thinking-tokens-s1')
+    expect(parts[0].update).toBe(false)
+    expect(parts[0].text).toBe('Estimated thinking tokens: 128')
+    expect(parts[1].id).toBe('thinking-tokens-s1')
+    expect(parts[1].update).toBe(true)
+    expect(parts[1].text).toBe('Estimated thinking tokens: 256')
   })
 
   it('converts task_started to TASK_PROGRESS part', async () => {
@@ -758,6 +793,32 @@ describe('ClaudeCodeAdapter loadSessionHistory stable IDs (regression)', () => {
     expect(parts2).toHaveLength(1)
     expect(parts2[0].update).toBe(true)
     expect(parts2[0].text).toBe('Full response text')
+  })
+
+  it('converts assistant thinking content blocks to reasoning parts', () => {
+    const adapter = new ClaudeCodeAdapter()
+    const seenPartIds = new Set<string>()
+    const partContentLengths = new Map<string, string>()
+
+    const msg = {
+      type: 'assistant',
+      uuid: 'uuid-thinking',
+      message: {
+        id: 'msg_01THINK',
+        content: [
+          { type: 'thinking', thinking: 'I should inspect the adapter mapping first.', signature: 'sig' },
+          { type: 'text', text: 'I found the issue.' },
+        ]
+      }
+    }
+
+    const parts = (adapter as any).convertSDKMessageToParts(msg, seenPartIds, partContentLengths)
+    const thinkingPart = parts.find((p: any) => p.type === MessagePartType.REASONING)
+
+    expect(thinkingPart).toBeDefined()
+    expect(thinkingPart!.id).toBe('msg_01THINK-thinking-0')
+    expect(thinkingPart!.text).toBe('I should inspect the adapter mapping first.')
+    expect(thinkingPart!.role).toBe('assistant')
   })
 
   it('surfaces non-error result text when no assistant text was emitted', () => {

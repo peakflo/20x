@@ -459,6 +459,15 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
                 text: contentPart.text,
                 content: contentPart.text
               })
+            } else if (contentPart.type === 'thinking') {
+              if (!contentPart.thinking || contentPart.thinking.trim() === '') continue
+
+              message.parts.push({
+                id: `${stableId}-thinking-${blockIdx}`,
+                type: MessagePartType.REASONING,
+                text: contentPart.thinking,
+                content: contentPart.thinking
+              })
             } else if (contentPart.type === 'tool_use') {
               const rawInput = contentPart.input as Record<string, unknown> | undefined
               const toolName = contentPart.name || 'unknown'
@@ -1188,6 +1197,10 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
       // SDKToolProgressMessage fields
       elapsed_time_seconds?: number
       parent_tool_use_id?: string | null
+      // SDKThinkingTokensMessage fields
+      estimated_tokens?: number
+      estimated_tokens_delta?: number
+      session_id?: string
       // SDKTaskNotificationMessage / SDKTaskProgressMessage / SDKTaskStartedMessage fields
       task_id?: string
       summary?: string
@@ -1222,7 +1235,7 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
 
       for (let blockIdx = 0; blockIdx < content.length; blockIdx++) {
         const block = content[blockIdx]
-        const blockWithProps = block as { type?: string; text?: string; name?: string; input?: unknown; id?: string }
+        const blockWithProps = block as { type?: string; text?: string; thinking?: string; name?: string; input?: unknown; id?: string }
         // For text blocks (no id), use stable message ID + block index for consistent dedup.
         // For tool_use blocks, blockWithProps.id is the tool_use_id which is already stable.
         const partId = `${stableId}-${blockWithProps.type}-${blockWithProps.id || blockIdx}`
@@ -1252,6 +1265,30 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
             id: partId,
             type: MessagePartType.TEXT,
             text,
+          })
+        } else if (blockWithProps.type === 'thinking') {
+          const thinking = blockWithProps.thinking || ''
+          if (seenPartIds.has(partId)) {
+            const previousLength = partContentLengths.get(partId)
+            if (previousLength !== undefined && String(thinking.length) !== previousLength && thinking.length > 0) {
+              partContentLengths.set(partId, String(thinking.length))
+              parts.push({
+                id: partId,
+                type: MessagePartType.REASONING,
+                text: thinking,
+                role: 'assistant',
+                update: true,
+              })
+            }
+            continue
+          }
+          seenPartIds.add(partId)
+          partContentLengths.set(partId, String(thinking.length))
+          parts.push({
+            id: partId,
+            type: MessagePartType.REASONING,
+            text: thinking,
+            role: 'assistant',
           })
         } else if (seenPartIds.has(partId)) {
           continue
@@ -1645,18 +1682,26 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
 
       // SDKThinkingTokensMessage — reasoning/thinking token updates from Claude Code
       if (msgWithProps.subtype === ClaudeSystemSubtype.THINKING_TOKENS) {
-        const partId = `thinking-tokens-${msgWithProps.uuid || Date.now()}`
-        if (!seenPartIds.has(partId)) {
+        const partId = `thinking-tokens-${msgWithProps.session_id || 'session'}`
+        const alreadySeen = seenPartIds.has(partId)
+        const estimatedTokens = typeof msgWithProps.estimated_tokens === 'number'
+          ? msgWithProps.estimated_tokens
+          : undefined
+        const content = estimatedTokens !== undefined
+          ? `Estimated thinking tokens: ${estimatedTokens}`
+          : 'Estimating thinking tokens...'
+
+        if (!alreadySeen) {
           seenPartIds.add(partId)
-          const content = msgWithProps.text || msgWithProps.summary || 'Thinking'
-          partContentLengths.set(partId, String(content.length))
-          parts.push({
-            id: partId,
-            type: MessagePartType.REASONING,
-            text: content,
-            role: 'assistant',
-          })
         }
+        partContentLengths.set(partId, String(content.length))
+        parts.push({
+          id: partId,
+          type: MessagePartType.REASONING,
+          text: content,
+          role: 'assistant',
+          update: alreadySeen,
+        })
         return parts
       }
 
