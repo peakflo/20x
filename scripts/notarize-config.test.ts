@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import path from 'path'
 import { getMissingNotarizeEnv, shouldNotarize, getNotarizeOptions } from './notarize-config'
 
 function createContext(platform: string) {
@@ -71,7 +72,7 @@ describe('notarize-config', () => {
     expect(options).toEqual({
       tool: 'notarytool',
       appBundleId: 'com.20x.app',
-      appPath: '/tmp/out/20x.app',
+      appPath: path.join('/tmp/out', '20x.app'),
       appleId: 'dev@company.com',
       appleIdPassword: 'xxxx-xxxx-xxxx-xxxx',
       teamId: 'ABCD123456'
