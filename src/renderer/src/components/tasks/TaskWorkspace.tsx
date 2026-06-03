@@ -17,6 +17,7 @@ import { useAgentStore, SessionStatus } from '@/stores/agent-store'
 import { useSettingsStore, type GitProvider } from '@/stores/settings-store'
 import { useTaskStore } from '@/stores/task-store'
 import { taskApi, worktreeApi, taskSourceApi, onAgentIncompatibleSession, onWorktreeProgress, attachmentApi } from '@/lib/ipc-client'
+import { subscribe } from '@/lib/shared-ipc-listeners'
 import { useEffect, useCallback, useRef, useState, useMemo } from 'react'
 import { TaskStatus } from '@/types'
 import type { WorkfloTask, FileAttachment, OutputField, Agent, UpdateAgentDTO, CreateAgentDTO } from '@/types'
@@ -131,41 +132,34 @@ export function TaskWorkspace({
     }
   }, [task, fetchTasks])
 
-  // Listen for incompatible session events
+  // Listen for incompatible session events (shared listener to avoid MaxListeners warning)
   useEffect(() => {
     if (!task?.id) return
 
-    const handleIncompatibleSession = (data: { taskId: string; error: string }) => {
-      if (data.taskId === task.id) {
-        setIncompatibleSessionError(data.error)
-        setShowIncompatibleSession(true)
+    return subscribe<{ taskId: string; agentId: string; error: string }>(
+      'agent:incompatible-session',
+      (cb) => onAgentIncompatibleSession(cb),
+      (data) => {
+        if (data.taskId === task.id) {
+          setIncompatibleSessionError(data.error)
+          setShowIncompatibleSession(true)
+        }
       }
-    }
-
-    const unsubscribe = onAgentIncompatibleSession(handleIncompatibleSession)
-
-    return () => {
-      unsubscribe()
-    }
+    )
   }, [task?.id])
 
-  // Drive worktree progress overlay from IPC events
+  // Drive worktree progress overlay from IPC events (shared listener)
   useEffect(() => {
     if (!task?.id) return
 
-    const unsubscribe = onWorktreeProgress((event) => {
-      if (event.taskId !== task.id) return
-      if (event.done) {
-        // Check if all repos are done — hide overlay
-        setIsSettingUpWorktree(false)
-      } else {
-        setIsSettingUpWorktree(true)
+    return subscribe(
+      'worktree:progress',
+      (cb) => onWorktreeProgress(cb),
+      (event: { taskId?: string; done?: boolean }) => {
+        if (event.taskId !== task.id) return
+        setIsSettingUpWorktree(!event.done)
       }
-    })
-
-    return () => {
-      unsubscribe()
-    }
+    )
   }, [task?.id])
 
   // Re-fetch tasks when agent status changes (status is updated in DB by agent-manager).

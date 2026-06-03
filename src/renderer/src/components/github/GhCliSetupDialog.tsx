@@ -3,6 +3,7 @@ import { CheckCircle, Loader2, ExternalLink } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogBody } from '@/components/ui/Dialog'
 import { useSettingsStore } from '@/stores/settings-store'
+import { subscribe } from '@/lib/shared-ipc-listeners'
 
 interface GhCliSetupDialogProps {
   open: boolean
@@ -25,9 +26,11 @@ export function GhCliSetupDialog({ open, onOpenChange, onComplete }: GhCliSetupD
   }, [open])
 
   useEffect(() => {
-    return window.electronAPI.onGithubDeviceCode((code) => {
-      setDeviceCode(code)
-    })
+    return subscribe<string>(
+      'github:deviceCode',
+      (cb) => window.electronAPI.onGithubDeviceCode(cb),
+      (code) => setDeviceCode(code)
+    )
   }, [])
 
   const handleAuth = async () => {
