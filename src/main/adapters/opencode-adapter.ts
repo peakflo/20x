@@ -1701,10 +1701,17 @@ export class OpencodeAdapter implements CodingAgentAdapter {
       this.pendingPermissions.delete(sessionId)
     }
 
-    const response = approved ? 'allow' : 'deny'
-    const remember = optionId === 'allow-always' || optionId === 'approved-for-session'
+    // OpenCode expects: "once" (allow this time), "always" (remember), or "reject" (deny)
+    let response: string
+    if (!approved) {
+      response = 'reject'
+    } else if (optionId === 'allow-always' || optionId === 'approved-for-session') {
+      response = 'always'
+    } else {
+      response = 'once'
+    }
 
-    console.log(`[OpencodeAdapter] Responding to permission ${pending.permissionId}: ${response} (remember: ${remember})`)
+    console.log(`[OpencodeAdapter] Responding to permission ${pending.permissionId}: ${response}`)
 
     try {
       const baseUrl = this.serverUrl || DEFAULT_SERVER_URL
@@ -1712,7 +1719,7 @@ export class OpencodeAdapter implements CodingAgentAdapter {
       const res = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ response, remember })
+        body: JSON.stringify({ response })
       })
       if (!res.ok) {
         console.warn(`[OpencodeAdapter] Permission response HTTP ${res.status}: ${await res.text().catch(() => '')}`)
@@ -1793,12 +1800,20 @@ export class OpencodeAdapter implements CodingAgentAdapter {
   /**
    * Handle a single SSE event from the OpenCode server.
    * We only care about `permission.asked` events.
+   *
+   * The /global/event endpoint wraps events in a `payload` envelope:
+   *   { payload: { id, type, properties } }
+   * The /event endpoint returns events directly:
+   *   { id, type, properties }
+   * We handle both formats.
    */
   private handleServerEvent(event: Record<string, unknown>): void {
-    const type = event.type as string | undefined
+    // Unwrap /global/event payload envelope if present
+    const inner = (event.payload || event) as Record<string, unknown>
+    const type = inner.type as string | undefined
     if (type !== 'permission.asked') return
 
-    const props = (event.properties || event) as Record<string, unknown>
+    const props = (inner.properties || inner) as Record<string, unknown>
     const permissionId = (props.id || props.permissionID) as string | undefined
     const sessionID = (props.sessionID || props.sessionId) as string | undefined
     const permission = (props.permission || props.name || 'unknown') as string
@@ -1845,10 +1860,11 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     try {
       const baseUrl = this.serverUrl || DEFAULT_SERVER_URL
       const url = `${baseUrl}/session/${encodeURIComponent(sessionId)}/permissions/${encodeURIComponent(permissionId)}`
+      // OpenCode accepts "once", "always", or "reject"
       const res = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ response: 'allow', remember: true })
+        body: JSON.stringify({ response: 'always' })
       })
       if (!res.ok) {
         console.warn(`[OpencodeAdapter] Auto-approve HTTP ${res.status}: ${await res.text().catch(() => '')}`)
