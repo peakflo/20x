@@ -9,6 +9,7 @@
  * config via `OPENCODE_CONFIG_CONTENT` so every provider has its key.
  */
 import { existsSync, readFileSync } from 'fs'
+import { fileURLToPath } from 'url'
 import { join } from 'path'
 import { homedir } from 'os'
 
@@ -60,6 +61,35 @@ export function readOpencodeAuth(): Record<string, OpencodeAuthEntry> {
   return {}
 }
 
+function is20xRuntimePluginPath(value: unknown): value is string {
+  return typeof value === 'string' &&
+    (value.endsWith('/.opencode/plugins/20x-tilldone.js') ||
+      value.endsWith('/.opencode/plugins/20x-secret-injector.js'))
+}
+
+function pluginPathExists(pluginPath: string): boolean {
+  try {
+    return existsSync(pluginPath.startsWith('file://') ? fileURLToPath(pluginPath) : pluginPath)
+  } catch {
+    return false
+  }
+}
+
+function removeMissing20xRuntimePlugins(config: Record<string, unknown>): void {
+  if (!Array.isArray(config.plugin)) return
+
+  const plugins = config.plugin.filter((pluginPath) => {
+    if (!is20xRuntimePluginPath(pluginPath)) return true
+    return pluginPathExists(pluginPath)
+  })
+
+  if (plugins.length > 0) {
+    config.plugin = plugins
+  } else {
+    delete config.plugin
+  }
+}
+
 /**
  * Builds a complete config object suitable for `OPENCODE_CONFIG_CONTENT`.
  *
@@ -78,6 +108,7 @@ export function buildMergedOpencodeConfig(
 ): Record<string, unknown> {
   const config = readOpencodeConfig()
   const auth = readOpencodeAuth()
+  removeMissing20xRuntimePlugins(config)
 
   // Inject auth keys into providers that lack an inline apiKey
   const providers = config.provider as Record<string, Record<string, unknown>> | undefined

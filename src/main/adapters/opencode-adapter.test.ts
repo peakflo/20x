@@ -49,6 +49,13 @@ describe('OpencodeAdapter', () => {
         expect(tillDoneCode).toContain('isTillDoneEnabled(sessionId)')
         expect(tillDoneCode).toContain('parsed.sessions[sessionId]')
         expect(tillDoneCode).toContain('return false;')
+        expect(tillDoneCode).toContain([
+          '  } catch (e) {',
+          '    return false;',
+          '  }',
+          '}',
+          ''
+        ].join('\n'))
         expect(tillDoneCode).toContain('INITIAL_TODO_PROMPT')
 
         const tillDoneConfigPath = supportPaths.find(path => path.endsWith('.20x-tilldone-config.json'))!

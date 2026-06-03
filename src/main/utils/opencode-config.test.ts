@@ -114,6 +114,41 @@ describe('buildMergedOpencodeConfig', () => {
     expect(config.plugin).toEqual(['/path/to/plugin.js'])
   })
 
+  it('removes missing generated 20x runtime plugins from stored config', () => {
+    const existingPlugin = '/home/testuser/workspace/.opencode/plugins/20x-tilldone.js'
+    const missingPlugin = 'file:///home/testuser/missing/.opencode/plugins/20x-secret-injector.js'
+    const userPlugin = '/home/testuser/custom-plugin.js'
+
+    mockExistsSync.mockImplementation((path) => {
+      if (path === '/home/testuser/.config/opencode/opencode.json') return true
+      if (path === '/home/testuser/.local/share/opencode/auth.json') return true
+      return path === existingPlugin
+    })
+    mockReadFileSync
+      .mockReturnValueOnce(JSON.stringify({
+        plugin: [existingPlugin, missingPlugin, userPlugin]
+      }))
+      .mockReturnValueOnce(JSON.stringify({}))
+
+    const config = buildMergedOpencodeConfig()
+    expect(config.plugin).toEqual([existingPlugin, userPlugin])
+  })
+
+  it('keeps extra plugin config even when stored generated plugins are stale', () => {
+    mockExistsSync.mockImplementation((path) => {
+      return path === '/home/testuser/.config/opencode/opencode.json' ||
+        path === '/home/testuser/.local/share/opencode/auth.json'
+    })
+    mockReadFileSync
+      .mockReturnValueOnce(JSON.stringify({
+        plugin: ['/home/testuser/missing/.opencode/plugins/20x-tilldone.js']
+      }))
+      .mockReturnValueOnce(JSON.stringify({}))
+
+    const config = buildMergedOpencodeConfig({ plugin: ['/home/testuser/current/.opencode/plugins/20x-tilldone.js'] })
+    expect(config.plugin).toEqual(['/home/testuser/current/.opencode/plugins/20x-tilldone.js'])
+  })
+
   it('handles missing config and auth files gracefully', () => {
     mockExistsSync.mockReturnValue(false)
     const config = buildMergedOpencodeConfig({ plugin: ['/path/to/plugin.js'] })

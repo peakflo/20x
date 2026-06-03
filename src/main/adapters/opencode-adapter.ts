@@ -1470,7 +1470,7 @@ export class OpencodeAdapter implements CodingAgentAdapter {
       '    }',
       '    return parsed?.enabled !== false;',
       '  } catch (e) {',
-      '    return true;',
+      '    return false;',
       '  }',
       '}',
       '',
