@@ -16,7 +16,7 @@ import { useAgentSession } from '@/hooks/use-agent-session'
 import { useAgentStore, SessionStatus } from '@/stores/agent-store'
 import { useSettingsStore, type GitProvider } from '@/stores/settings-store'
 import { useTaskStore } from '@/stores/task-store'
-import { taskApi, worktreeApi, taskSourceApi, onAgentIncompatibleSession, onWorktreeProgress, attachmentApi } from '@/lib/ipc-client'
+import { taskApi, worktreeApi, taskSourceApi, onAgentIncompatibleSession, attachmentApi } from '@/lib/ipc-client'
 import { useEffect, useCallback, useRef, useState, useMemo } from 'react'
 import { TaskStatus } from '@/types'
 import type { WorkfloTask, FileAttachment, OutputField, Agent, UpdateAgentDTO, CreateAgentDTO } from '@/types'
@@ -149,24 +149,14 @@ export function TaskWorkspace({
     }
   }, [task?.id])
 
-  // Drive worktree progress overlay from IPC events
-  useEffect(() => {
-    if (!task?.id) return
-
-    const unsubscribe = onWorktreeProgress((event) => {
-      if (event.taskId !== task.id) return
-      if (event.done) {
-        // Check if all repos are done — hide overlay
-        setIsSettingUpWorktree(false)
-      } else {
-        setIsSettingUpWorktree(true)
-      }
-    })
-
-    return () => {
-      unsubscribe()
-    }
-  }, [task?.id])
+  // Worktree progress IPC events are now handled by WorktreeProgressOverlay
+  // (single listener per task) which calls back via onVisibilityChange to
+  // update isSettingUpWorktree — avoids the MaxListenersExceededWarning that
+  // occurred when each TaskWorkspace + its child WorktreeProgressOverlay both
+  // registered their own worktree:progress listener.
+  const handleWorktreeVisibility = useCallback((isActive: boolean) => {
+    setIsSettingUpWorktree(isActive)
+  }, [])
 
   // Re-fetch tasks when agent status changes (status is updated in DB by agent-manager).
   // Debounced to 500ms to prevent cascading re-fetches when multiple canvas panels
@@ -739,7 +729,7 @@ Update existing skills that were helpful or create new ones for patterns worth r
           </div>
         )}
 
-        <WorktreeProgressOverlay taskId={task.id} visible={isSettingUpWorktree} />
+        <WorktreeProgressOverlay taskId={task.id} visible={isSettingUpWorktree} onVisibilityChange={handleWorktreeVisibility} />
       </div>
 
       <GhCliSetupDialog
