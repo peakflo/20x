@@ -1,5 +1,5 @@
 import { Agent as UndiciAgent } from 'undici'
-import { mkdirSync, writeFileSync, rmSync, existsSync, unlinkSync } from 'fs'
+import { mkdirSync, writeFileSync, rmSync, existsSync, unlinkSync, readFileSync } from 'fs'
 import { join, delimiter } from 'path'
 import { homedir } from 'os'
 import { execSync } from 'child_process'
@@ -59,6 +59,8 @@ export class OpencodeAdapter implements CodingAgentAdapter {
   private pluginFilePaths: string[] = []
   /** Absolute paths to generated support files used by runtime plugins */
   private runtimeSupportFilePaths: string[] = []
+  /** Absolute path to the generated tillDone config support file */
+  private tillDoneConfigPath: string | null = null
   /** Whether the merged config has been pushed at least once to the running server.
    *  Config is pushed once on first server connection; subsequent pushes happen only
    *  via explicit `notifyConfigChanged()` calls (e.g. after settings edit or key rotation).
@@ -761,6 +763,7 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     }
 
     const ocSessionId = result.data.id
+    this.writeTillDoneSessionConfig(ocSessionId, config.tillDone !== false)
     this.clients.set(ocSessionId, ocClient)
 
     return ocSessionId
@@ -798,6 +801,7 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     }
 
     this.clients.set(sessionId, ocClient)
+    this.writeTillDoneSessionConfig(sessionId, config.tillDone !== false)
 
     // Fetch existing messages
     const messagesResult = await ocClient.session.messages({
@@ -1257,6 +1261,11 @@ export class OpencodeAdapter implements CodingAgentAdapter {
   async destroySession(sessionId: string, _config: SessionConfig): Promise<void> {
     await this.abortPrompt(sessionId, _config)
     this.clients.delete(sessionId)
+    this.removeTillDoneSessionConfig(sessionId)
+
+    if (this.clients.size > 0) {
+      return
+    }
 
     // Clean up generated runtime plugins and any support files they use.
     for (const filePath of [...this.pluginFilePaths, ...this.runtimeSupportFilePaths]) {
@@ -1273,6 +1282,7 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     }
     this.pluginFilePaths = []
     this.runtimeSupportFilePaths = []
+    this.tillDoneConfigPath = null
   }
 
   /**
@@ -1282,6 +1292,7 @@ export class OpencodeAdapter implements CodingAgentAdapter {
   private writeRuntimePluginFiles(config: SessionConfig): void {
     this.pluginFilePaths = []
     this.runtimeSupportFilePaths = []
+    this.tillDoneConfigPath = null
 
     if (!config.workspaceDir) {
       return
@@ -1326,12 +1337,16 @@ export class OpencodeAdapter implements CodingAgentAdapter {
 
   private writeTillDonePlugin(openCodeDir: string, pluginsDir: string, enabled: boolean): void {
     const statePath = join(openCodeDir, '.20x-tilldone-state.json')
-    writeFileSync(statePath, '{}\n', 'utf-8')
+    if (!existsSync(statePath)) {
+      writeFileSync(statePath, '{}\n', 'utf-8')
+    }
     this.runtimeSupportFilePaths.push(statePath)
 
     const configPath = join(openCodeDir, '.20x-tilldone-config.json')
-    writeFileSync(configPath, JSON.stringify({ enabled }), 'utf-8')
+    const existingConfig = this.readTillDoneConfigFile(configPath)
+    writeFileSync(configPath, JSON.stringify({ defaultEnabled: enabled, sessions: existingConfig.sessions }), 'utf-8')
     this.runtimeSupportFilePaths.push(configPath)
+    this.tillDoneConfigPath = configPath
 
     const pluginPath = join(pluginsDir, '20x-tilldone.js')
     const pluginCode = this.buildTillDonePluginCode(statePath, configPath)
@@ -1339,6 +1354,68 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     this.pluginFilePaths.push(pluginPath)
 
     console.log(`[OpencodeAdapter] Wrote tilldone plugin: plugin=${pluginPath}, state=${statePath}, enabled=${enabled}`)
+  }
+
+  private readTillDoneConfig(): { defaultEnabled: boolean; sessions: Record<string, boolean> } {
+    if (!this.tillDoneConfigPath) {
+      return { defaultEnabled: true, sessions: {} }
+    }
+
+    return this.readTillDoneConfigFile(this.tillDoneConfigPath)
+  }
+
+  private readTillDoneConfigFile(configPath: string): { defaultEnabled: boolean; sessions: Record<string, boolean> } {
+    if (!existsSync(configPath)) {
+      return { defaultEnabled: true, sessions: {} }
+    }
+
+    try {
+      const parsed = JSON.parse(readFileSync(configPath, 'utf-8') || '{}') as {
+        defaultEnabled?: unknown
+        enabled?: unknown
+        sessions?: unknown
+      }
+      const sessions = parsed.sessions && typeof parsed.sessions === 'object' && !Array.isArray(parsed.sessions)
+        ? Object.fromEntries(
+          Object.entries(parsed.sessions as Record<string, unknown>)
+            .filter(([, value]) => typeof value === 'boolean')
+        ) as Record<string, boolean>
+        : {}
+
+      return {
+        defaultEnabled: parsed.defaultEnabled !== undefined
+          ? parsed.defaultEnabled !== false
+          : parsed.enabled !== false,
+        sessions
+      }
+    } catch {
+      return { defaultEnabled: true, sessions: {} }
+    }
+  }
+
+  private writeTillDoneConfig(config: { defaultEnabled: boolean; sessions: Record<string, boolean> }): void {
+    if (!this.tillDoneConfigPath) return
+    writeFileSync(this.tillDoneConfigPath, JSON.stringify(config), 'utf-8')
+  }
+
+  private writeTillDoneSessionConfig(sessionId: string, enabled: boolean): void {
+    const config = this.readTillDoneConfig()
+    this.writeTillDoneConfig({
+      ...config,
+      sessions: {
+        ...config.sessions,
+        [sessionId]: enabled
+      }
+    })
+  }
+
+  private removeTillDoneSessionConfig(sessionId: string): void {
+    if (!this.tillDoneConfigPath || !existsSync(this.tillDoneConfigPath)) return
+    const config = this.readTillDoneConfig()
+    if (!(sessionId in config.sessions)) return
+    const sessions = { ...config.sessions }
+    delete sessions[sessionId]
+    this.writeTillDoneConfig({ ...config, sessions })
   }
 
   private buildSecretInjectorPluginCode(secretsPath: string): string {
@@ -1377,13 +1454,23 @@ export class OpencodeAdapter implements CodingAgentAdapter {
       'var INITIAL_TODO_PROMPT = ' + JSON.stringify(initialTodoPrompt) + ';',
       'var CONTINUE_PROMPT = ' + JSON.stringify(continuePrompt) + ';',
       '',
-      'function isTillDoneEnabled() {',
+      'function isTillDoneEnabled(sessionId) {',
+      '  if (!sessionId) return false;',
       '  try {',
       '    var raw = readFileSync(CONFIG_PATH, "utf-8");',
       '    var parsed = JSON.parse(raw || "{}");',
+      '    if (parsed?.sessions && typeof parsed.sessions === "object") {',
+      '      if (Object.prototype.hasOwnProperty.call(parsed.sessions, sessionId)) {',
+      '        return parsed.sessions[sessionId] !== false;',
+      '      }',
+      '      return false;',
+      '    }',
+      '    if (Object.prototype.hasOwnProperty.call(parsed || {}, "defaultEnabled")) {',
+      '      return parsed.defaultEnabled !== false;',
+      '    }',
       '    return parsed?.enabled !== false;',
       '  } catch (e) {',
-      '    return true;',
+      '    return false;',
       '  }',
       '}',
       '',
@@ -1427,10 +1514,10 @@ export class OpencodeAdapter implements CodingAgentAdapter {
       'export var TillDone = async function({ client }) {',
       '  return {',
       '    "tool.execute.before": async function(input) {',
-      '      if (!isTillDoneEnabled()) return;',
       '      if (input.tool === "todowrite") return;',
       '      var sessionId = input.sessionID;',
       '      if (!sessionId) return;',
+      '      if (!isTillDoneEnabled(sessionId)) return;',
       '      var state = readState();',
       '      var todos = normalizeTodos((state[sessionId] || {}).todos);',
       '      if (todos.length === 0) {',
@@ -1438,11 +1525,11 @@ export class OpencodeAdapter implements CodingAgentAdapter {
       '      }',
       '    },',
       '    event: async function(input) {',
-      '      if (!isTillDoneEnabled()) return;',
       '      var ev = input.event;',
       '      if (!ev) return;',
       '      var sessionId = ev.properties?.sessionID;',
       '      if (!sessionId) return;',
+      '      if (!isTillDoneEnabled(sessionId)) return;',
       '      var state = readState();',
       '      var sessionState = state[sessionId] || { todos: [], continuing: false };',
       '',

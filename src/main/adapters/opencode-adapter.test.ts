@@ -46,11 +46,20 @@ describe('OpencodeAdapter', () => {
         expect(tillDoneCode).toContain('ev.type === "todo.updated"')
         expect(tillDoneCode).toContain('ev.properties?.sessionID')
         expect(tillDoneCode).toContain('client.session.prompt')
-        expect(tillDoneCode).toContain('isTillDoneEnabled()')
+        expect(tillDoneCode).toContain('isTillDoneEnabled(sessionId)')
+        expect(tillDoneCode).toContain('parsed.sessions[sessionId]')
+        expect(tillDoneCode).toContain('return false;')
+        expect(tillDoneCode).toContain([
+          '  } catch (e) {',
+          '    return false;',
+          '  }',
+          '}',
+          ''
+        ].join('\n'))
         expect(tillDoneCode).toContain('INITIAL_TODO_PROMPT')
 
         const tillDoneConfigPath = supportPaths.find(path => path.endsWith('.20x-tilldone-config.json'))!
-        expect(JSON.parse(readFileSync(tillDoneConfigPath, 'utf-8'))).toEqual({ enabled: true })
+        expect(JSON.parse(readFileSync(tillDoneConfigPath, 'utf-8'))).toEqual({ defaultEnabled: true, sessions: {} })
 
         const secretPluginPath = pluginPaths.find(path => path.endsWith('20x-secret-injector.js'))!
         const secretPluginCode = readFileSync(secretPluginPath, 'utf-8')
@@ -78,7 +87,73 @@ describe('OpencodeAdapter', () => {
         const tillDoneConfigPath = supportPaths.find(path => path.endsWith('.20x-tilldone-config.json'))!
 
         expect(pluginPaths.some(path => path.endsWith('20x-tilldone.js'))).toBe(true)
-        expect(JSON.parse(readFileSync(tillDoneConfigPath, 'utf-8'))).toEqual({ enabled: false })
+        expect(JSON.parse(readFileSync(tillDoneConfigPath, 'utf-8'))).toEqual({ defaultEnabled: false, sessions: {} })
+      } finally {
+        rmSync(workspaceDir, { recursive: true, force: true })
+      }
+    })
+
+    it('persists tilldone enablement per OpenCode session', () => {
+      const adapter = new OpencodeAdapter()
+      const workspaceDir = mkdtempSync(join(tmpdir(), 'opencode-adapter-test-'))
+
+      try {
+        ;(adapter as any).writeRuntimePluginFiles({
+          agentId: 'agent-1',
+          taskId: 'task-1',
+          workspaceDir,
+          tillDone: true
+        })
+
+        ;(adapter as any).writeTillDoneSessionConfig('regular-session', true)
+        ;(adapter as any).writeTillDoneSessionConfig('triage-session', false)
+
+        const supportPaths = (adapter as any).runtimeSupportFilePaths as string[]
+        const tillDoneConfigPath = supportPaths.find(path => path.endsWith('.20x-tilldone-config.json'))!
+
+        expect(JSON.parse(readFileSync(tillDoneConfigPath, 'utf-8'))).toEqual({
+          defaultEnabled: true,
+          sessions: {
+            'regular-session': true,
+            'triage-session': false
+          }
+        })
+      } finally {
+        rmSync(workspaceDir, { recursive: true, force: true })
+      }
+    })
+
+    it('preserves per-session tilldone config when another session starts in the same workspace', () => {
+      const adapter = new OpencodeAdapter()
+      const workspaceDir = mkdtempSync(join(tmpdir(), 'opencode-adapter-test-'))
+
+      try {
+        ;(adapter as any).writeRuntimePluginFiles({
+          agentId: 'agent-1',
+          taskId: 'triage-task',
+          workspaceDir,
+          tillDone: false
+        })
+        ;(adapter as any).writeTillDoneSessionConfig('triage-session', false)
+
+        ;(adapter as any).writeRuntimePluginFiles({
+          agentId: 'agent-1',
+          taskId: 'regular-task',
+          workspaceDir,
+          tillDone: true
+        })
+        ;(adapter as any).writeTillDoneSessionConfig('regular-session', true)
+
+        const supportPaths = (adapter as any).runtimeSupportFilePaths as string[]
+        const tillDoneConfigPath = supportPaths.find(path => path.endsWith('.20x-tilldone-config.json'))!
+
+        expect(JSON.parse(readFileSync(tillDoneConfigPath, 'utf-8'))).toEqual({
+          defaultEnabled: true,
+          sessions: {
+            'triage-session': false,
+            'regular-session': true
+          }
+        })
       } finally {
         rmSync(workspaceDir, { recursive: true, force: true })
       }
