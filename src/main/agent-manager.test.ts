@@ -218,7 +218,7 @@ describe('AgentManager skill file paths', () => {
       )
     })
 
-    it('strips YAML-breaking characters from skill name and description in SKILL.md frontmatter', async () => {
+    it('wraps YAML frontmatter values in double quotes to handle special characters', async () => {
       const mockDb = {
         ...createMockDb({ coding_agent: 'codex' }),
         getSkillsByIds: vi.fn(() => [
@@ -237,12 +237,10 @@ describe('AgentManager skill file paths', () => {
       )
       expect(writeFileCall).toBeDefined()
       const writtenContent = writeFileCall![1] as string
-      // Square brackets, curly braces and hash must not appear in the frontmatter name/description lines
-      const frontmatterLines = writtenContent.split('---')[1]
-      expect(frontmatterLines).not.toMatch(/[\[\]{}"'#]/)
-      // The sanitised values should still be readable
-      expect(frontmatterLines).toContain('Workflo gh-pr-base-branch-check')
-      expect(frontmatterLines).toContain('Check base branch details: see docs')
+      // Values are wrapped in double quotes so special chars (brackets, colons, hashes)
+      // are treated as literal YAML string content instead of breaking the parser.
+      expect(writtenContent).toContain('name: "[Workflo] gh-pr-base-branch-check"')
+      expect(writtenContent).toContain('description: "Check base branch {details}: see #docs"')
     })
   })
 

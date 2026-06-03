@@ -70,6 +70,13 @@ export class OpencodeAdapter implements CodingAgentAdapter {
   private static readonly PROMPT_MAX_RETRIES = 3
   /** Base delay (ms) for exponential backoff between prompt retries */
   private static readonly PROMPT_RETRY_BASE_DELAY_MS = 2_000
+  /** Pending permission requests per session (captured from SSE events).
+   *  Each session may have multiple pending permissions (parallel tool calls). */
+  private pendingPermissions: Map<string, Array<{ permissionId: string; permission: string; patterns: string[] }>> = new Map()
+  /** Abort controller for the SSE event subscription */
+  private sseAbort: AbortController | null = null
+  /** Per-session permission mode ('ask' = surface in UI, 'allow' = auto-approve) */
+  private sessionPermissionModes: Map<string, 'ask' | 'allow'> = new Map()
 
   constructor(private db?: Pick<DatabaseManager, 'getSetting'>) {
     this.sdkLoading = this.loadSDK()
@@ -595,6 +602,8 @@ export class OpencodeAdapter implements CodingAgentAdapter {
             // pushMergedConfigToClient already logs details
           }
 
+          // Start SSE subscription for permission events
+          this.startEventSubscription()
           return
         }
 
@@ -636,6 +645,8 @@ export class OpencodeAdapter implements CodingAgentAdapter {
         console.log(`[OpencodeAdapter] OpenCode instance created at ${server.url}`)
       } finally {
         this.serverStarting = null
+        // Start SSE subscription for permission events once the server is up
+        this.startEventSubscription()
       }
     })()
 
@@ -765,6 +776,7 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     const ocSessionId = result.data.id
     this.writeTillDoneSessionConfig(ocSessionId, config.tillDone !== false)
     this.clients.set(ocSessionId, ocClient)
+    this.sessionPermissionModes.set(ocSessionId, config.permissionMode || 'ask')
 
     return ocSessionId
   }
@@ -801,6 +813,7 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     }
 
     this.clients.set(sessionId, ocClient)
+    this.sessionPermissionModes.set(sessionId, config.permissionMode || 'ask')
     this.writeTillDoneSessionConfig(sessionId, config.tillDone !== false)
 
     // Fetch existing messages
@@ -1008,6 +1021,14 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     const ocClient = this.clients.get(sessionId)
     if (!ocClient) {
       return { type: SessionStatusType.ERROR, message: 'Client not found' }
+    }
+
+    // Check for pending permissions BEFORE the promptAborts check.
+    // Permissions block tool execution while the prompt HTTP call is still
+    // in-flight.  If we don't surface them here, the session appears busy
+    // forever because the prompt never completes.
+    if (this.pendingPermissions.has(sessionId) && (this.pendingPermissions.get(sessionId)?.length ?? 0) > 0) {
+      return { type: SessionStatusType.WAITING_APPROVAL }
     }
 
     // If the session.prompt() HTTP call is still in-flight, the agent is
@@ -1261,6 +1282,8 @@ export class OpencodeAdapter implements CodingAgentAdapter {
   async destroySession(sessionId: string, _config: SessionConfig): Promise<void> {
     await this.abortPrompt(sessionId, _config)
     this.clients.delete(sessionId)
+    this.pendingPermissions.delete(sessionId)
+    this.sessionPermissionModes.delete(sessionId)
     this.removeTillDoneSessionConfig(sessionId)
 
     if (this.clients.size > 0) {
@@ -1712,7 +1735,242 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     }
   }
 
+  // ========================================================================
+  // Permission handling — OpenCode file-permission prompts surfaced in 20x UI
+  // ========================================================================
+
+  /**
+   * Returns the first pending permission for a session, formatted as an
+   * approval request the agent-manager can render.  The agent-manager
+   * duck-types for this method on any adapter during polling.
+   */
+  getPendingApproval(sessionId: string): {
+    toolCallId: string
+    question: string
+    options: Array<{ optionId: string; name: string; kind: string }>
+  } | null {
+    const queue = this.pendingPermissions.get(sessionId)
+    if (!queue || queue.length === 0) return null
+
+    const pending = queue[0]
+    const pathList = pending.patterns.length > 0
+      ? pending.patterns.join(', ')
+      : 'requested path'
+
+    return {
+      toolCallId: pending.permissionId,
+      question: `Allow ${pending.permission} access to: ${pathList}`,
+      options: [
+        { optionId: 'allow', name: 'Yes', kind: 'option' },
+        { optionId: 'allow-always', name: 'Always', kind: 'option' },
+        { optionId: 'deny', name: 'No', kind: 'option' }
+      ]
+    }
+  }
+
+  /**
+   * Responds to a pending permission via the OpenCode HTTP API.
+   * Called by agent-manager when the user approves/denies in the UI.
+   */
+  async respondToApproval(
+    sessionId: string,
+    approved: boolean,
+    optionId?: string
+  ): Promise<void> {
+    const queue = this.pendingPermissions.get(sessionId)
+    if (!queue || queue.length === 0) {
+      console.warn(`[OpencodeAdapter] No pending permission for session ${sessionId}`)
+      return
+    }
+
+    const pending = queue.shift()!
+    if (queue.length === 0) {
+      this.pendingPermissions.delete(sessionId)
+    }
+
+    // OpenCode expects: "once" (allow this time), "always" (remember), or "reject" (deny)
+    let response: string
+    if (!approved) {
+      response = 'reject'
+    } else if (optionId === 'allow-always' || optionId === 'approved-for-session') {
+      response = 'always'
+    } else {
+      response = 'once'
+    }
+
+    console.log(`[OpencodeAdapter] Responding to permission ${pending.permissionId}: ${response}`)
+
+    try {
+      const baseUrl = this.serverUrl || DEFAULT_SERVER_URL
+      const url = `${baseUrl}/session/${encodeURIComponent(sessionId)}/permissions/${encodeURIComponent(pending.permissionId)}`
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ response })
+      })
+      if (!res.ok) {
+        console.warn(`[OpencodeAdapter] Permission response HTTP ${res.status}: ${await res.text().catch(() => '')}`)
+      }
+    } catch (err) {
+      console.error(`[OpencodeAdapter] Failed to respond to permission ${pending.permissionId}:`, err)
+    }
+
+    // Trigger immediate poll so agent-manager sees next pending permission (if any)
+    if (this.onDataAvailable) {
+      this.onDataAvailable(sessionId)
+    }
+  }
+
+  /**
+   * Subscribes to the OpenCode server's SSE event stream to capture
+   * `permission.asked` events.  Must be called after the server is running.
+   * Runs in the background; reconnects automatically on disconnect.
+   */
+  private startEventSubscription(): void {
+    if (this.sseAbort || !this.serverUrl) return
+    this.sseAbort = new AbortController()
+
+    // Fire-and-forget — reconnection loop runs in the background
+    this.processEventStream(this.sseAbort.signal).catch(() => {})
+  }
+
+  private async processEventStream(signal: AbortSignal): Promise<void> {
+    const baseUrl = this.serverUrl || DEFAULT_SERVER_URL
+    const url = `${baseUrl}/global/event`
+
+    while (!signal.aborted) {
+      try {
+        const response = await (globalThis as unknown as { fetch: typeof fetch }).fetch(url, {
+          signal,
+          headers: { 'Accept': 'text/event-stream' }
+        })
+
+        const reader = response.body?.getReader()
+        if (!reader) return
+
+        const decoder = new TextDecoder()
+        let buffer = ''
+
+        while (!signal.aborted) {
+          const { done, value } = await reader.read()
+          if (done) break
+
+          buffer += decoder.decode(value, { stream: true })
+
+          // Parse newline-delimited SSE data lines
+          let nlIdx: number
+          while ((nlIdx = buffer.indexOf('\n')) !== -1) {
+            const line = buffer.slice(0, nlIdx).trim()
+            buffer = buffer.slice(nlIdx + 1)
+
+            if (line.startsWith('data: ') || line.startsWith('data:')) {
+              const json = line.startsWith('data: ') ? line.slice(6) : line.slice(5)
+              if (!json) continue
+              try {
+                const event = JSON.parse(json) as Record<string, unknown>
+                this.handleServerEvent(event)
+              } catch {
+                // Not valid JSON — skip
+              }
+            }
+          }
+        }
+      } catch (err: unknown) {
+        if (signal.aborted) return
+        if (err instanceof Error && err.name === 'AbortError') return
+        console.warn('[OpencodeAdapter] SSE connection error, reconnecting in 3s:', err instanceof Error ? err.message : err)
+        await new Promise(resolve => setTimeout(resolve, 3_000))
+      }
+    }
+  }
+
+  /**
+   * Handle a single SSE event from the OpenCode server.
+   * We only care about `permission.asked` events.
+   *
+   * The /global/event endpoint wraps events in a `payload` envelope:
+   *   { payload: { id, type, properties } }
+   * The /event endpoint returns events directly:
+   *   { id, type, properties }
+   * We handle both formats.
+   */
+  private handleServerEvent(event: Record<string, unknown>): void {
+    // Unwrap /global/event payload envelope if present
+    const inner = (event.payload || event) as Record<string, unknown>
+    const type = inner.type as string | undefined
+    if (type !== 'permission.asked') return
+
+    const props = (inner.properties || inner) as Record<string, unknown>
+    const permissionId = (props.id || props.permissionID) as string | undefined
+    const sessionID = (props.sessionID || props.sessionId) as string | undefined
+    const permission = (props.permission || props.name || 'unknown') as string
+    const patterns = (props.patterns || []) as string[]
+
+    if (!permissionId || !sessionID) {
+      console.warn('[OpencodeAdapter] permission.asked event missing id or sessionID:', JSON.stringify(event).slice(0, 300))
+      return
+    }
+
+    console.log(`[OpencodeAdapter] Permission requested: ${permission} for session ${sessionID} (${permissionId}) patterns=${patterns.join(', ')}`)
+
+    // Auto-approve if the agent's permission mode is 'allow'
+    const mode = this.sessionPermissionModes.get(sessionID) || 'ask'
+    if (mode === 'allow') {
+      console.log(`[OpencodeAdapter] Auto-approving permission ${permissionId} (permissionMode=allow)`)
+      this.autoApprovePermission(sessionID, permissionId).catch(err => {
+        console.error(`[OpencodeAdapter] Auto-approve failed for ${permissionId}:`, err)
+      })
+      return
+    }
+
+    // Append to the session's permission queue for UI handling
+    let queue = this.pendingPermissions.get(sessionID)
+    if (!queue) {
+      queue = []
+      this.pendingPermissions.set(sessionID, queue)
+    }
+    // Deduplicate by permissionId
+    if (!queue.some(p => p.permissionId === permissionId)) {
+      queue.push({ permissionId, permission, patterns })
+    }
+
+    // Trigger immediate poll so agent-manager renders the approval prompt
+    if (this.onDataAvailable) {
+      this.onDataAvailable(sessionID)
+    }
+  }
+
+  /**
+   * Silently approve a permission request (used when permissionMode is 'allow').
+   */
+  private async autoApprovePermission(sessionId: string, permissionId: string): Promise<void> {
+    try {
+      const baseUrl = this.serverUrl || DEFAULT_SERVER_URL
+      const url = `${baseUrl}/session/${encodeURIComponent(sessionId)}/permissions/${encodeURIComponent(permissionId)}`
+      // OpenCode accepts "once", "always", or "reject"
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ response: 'always' })
+      })
+      if (!res.ok) {
+        console.warn(`[OpencodeAdapter] Auto-approve HTTP ${res.status}: ${await res.text().catch(() => '')}`)
+      }
+    } catch (err) {
+      console.error(`[OpencodeAdapter] Auto-approve failed for ${permissionId}:`, err)
+    }
+  }
+
+  private stopEventSubscription(): void {
+    if (this.sseAbort) {
+      this.sseAbort.abort()
+      this.sseAbort = null
+    }
+  }
+
   async stopServer(): Promise<void> {
+    this.stopEventSubscription()
+    this.pendingPermissions.clear()
     if (this.serverInstance) {
       try {
         await (this.serverInstance as { close: () => Promise<void> }).close()

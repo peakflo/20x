@@ -142,6 +142,11 @@ export function buildMergedOpencodeConfig(
     }
   }
 
+  // NOTE: OpenCode's `external_directory` permission defaults to "ask".
+  // Permissions are now surfaced in the 20x UI via the OpenCode adapter's
+  // SSE event subscription and getPendingApproval()/respondToApproval()
+  // methods — no need to auto-allow here.
+
   // Merge extra config (e.g. plugin paths) on top
   if (extraConfig) {
     for (const [key, value] of Object.entries(extraConfig)) {
