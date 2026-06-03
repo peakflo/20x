@@ -168,13 +168,25 @@ export function TaskWorkspace({
     }
   }, [task?.id])
 
-  // Re-fetch tasks when agent status changes (status is updated in DB by agent-manager)
+  // Re-fetch tasks when agent status changes (status is updated in DB by agent-manager).
+  // Debounced to 500ms to prevent cascading re-fetches when multiple canvas panels
+  // observe simultaneous status transitions — each would otherwise trigger an
+  // independent fetchTasks() call that replaces the entire tasks array and causes
+  // a cascade of re-renders through AppLayout → all child components.
   const prevStatusRef = useRef(session.status)
+  const fetchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(() => {
     const prev = prevStatusRef.current
     prevStatusRef.current = session.status
     if (prev !== session.status) {
-      fetchTasks()
+      if (fetchDebounceRef.current) clearTimeout(fetchDebounceRef.current)
+      fetchDebounceRef.current = setTimeout(() => {
+        fetchDebounceRef.current = null
+        fetchTasks()
+      }, 500)
+    }
+    return () => {
+      if (fetchDebounceRef.current) clearTimeout(fetchDebounceRef.current)
     }
   }, [session.status, fetchTasks])
 

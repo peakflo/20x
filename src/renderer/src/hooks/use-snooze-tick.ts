@@ -15,7 +15,11 @@ export function useSnoozeTick(tasks: WorkfloTask[]): number {
   const [tick, setTick] = useState(0)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  // Schedule a timer for the next snoozed task to wake up
+  // Schedule a timer for the next snoozed task to wake up.
+  // Note: `tick` is intentionally NOT in the dependency array to avoid a
+  // circular re-fire (tick changes → effect runs → sets tick → effect runs …).
+  // Instead, the timer's callback re-schedules by bumping tick, which triggers
+  // a fresh render where this effect picks up the latest `tasks` value.
   useEffect(() => {
     if (timerRef.current) {
       clearTimeout(timerRef.current)
@@ -56,7 +60,7 @@ export function useSnoozeTick(tasks: WorkfloTask[]): number {
         timerRef.current = null
       }
     }
-  }, [tasks, tick])
+  }, [tasks])
 
   // Also bump tick on every overdue:check event (every 60s from main process)
   // This ensures snooze state is re-evaluated even if the timer drifts

@@ -40,6 +40,19 @@ export function useAgentAutoStart({ tasks, agents, showToast }: UseAgentAutoStar
     clearQueues
   } = useAgentSchedulerStore()
 
+  // ── Refs for stable callback references ──────────────────────────
+  // Store tasks/agents/showToast in refs so callbacks and IPC listeners
+  // don't need them as useCallback dependencies. This prevents the O(N)
+  // callback recreation and IPC listener un-/re-subscription that
+  // previously occurred on every task:updated event — the primary cause
+  // of the renderer's 100% CPU usage when multiple agents are active.
+  const tasksRef = useRef(tasks)
+  tasksRef.current = tasks
+  const agentsRef = useRef(agents)
+  agentsRef.current = agents
+  const showToastRef = useRef(showToast)
+  showToastRef.current = showToast
+
   const { start } = useAgentSession(undefined)
 
   // Track processed task updates to avoid duplicates
@@ -121,7 +134,7 @@ export function useAgentAutoStart({ tasks, agents, showToast }: UseAgentAutoStar
           return
         }
 
-        const subtaskAgent = agents.find((a) => a.id === nextSubtask.agent_id)
+        const subtaskAgent = agentsRef.current.find((a) => a.id === nextSubtask.agent_id)
         if (!subtaskAgent) {
           console.log(`[AutoStart] Agent ${nextSubtask.agent_id} not found for subtask ${nextSubtask.id}`)
           return
@@ -134,7 +147,7 @@ export function useAgentAutoStart({ tasks, agents, showToast }: UseAgentAutoStar
           incrementRunningCount(nextSubtask.agent_id)
           try {
             await start(nextSubtask.agent_id, nextSubtask.id)
-            showToast(`Started subtask "${nextSubtask.title}" with ${subtaskAgent.name}`)
+            showToastRef.current(`Started subtask "${nextSubtask.title}" with ${subtaskAgent.name}`)
           } catch (error) {
             console.error(`[AutoStart] Failed to start subtask ${nextSubtask.id}:`, error)
             decrementRunningCount(nextSubtask.agent_id)
@@ -149,7 +162,7 @@ export function useAgentAutoStart({ tasks, agents, showToast }: UseAgentAutoStar
         setTimeout(() => launchingSubtaskForRef.current.delete(parentId), 2000)
       }
     },
-    [agents, getRunningCount, incrementRunningCount, start, showToast, decrementRunningCount, addToQueue]
+    [getRunningCount, incrementRunningCount, start, decrementRunningCount, addToQueue]
   )
 
   // Helper: Select triage candidates (tasks with no agent_id that need triage)
@@ -181,14 +194,15 @@ export function useAgentAutoStart({ tasks, agents, showToast }: UseAgentAutoStar
   // Helper: Start triage for a task
   const startTriage = useCallback(
     async (taskId: string) => {
-      // Find default agent
-      const defaultAgent = agents.find((a) => a.is_default) || agents[0]
+      // Find default agent (read from ref for stability)
+      const currentAgents = agentsRef.current
+      const defaultAgent = currentAgents.find((a) => a.is_default) || currentAgents[0]
       if (!defaultAgent) {
         console.log('[AutoStart] No agents available for triage')
         return
       }
 
-      const task = tasks.find((t) => t.id === taskId)
+      const task = tasksRef.current.find((t) => t.id === taskId)
       if (!task) return
 
       console.log(`[AutoStart] Starting triage for task "${task.title}" with default agent ${defaultAgent.name}`)
@@ -217,7 +231,7 @@ export function useAgentAutoStart({ tasks, agents, showToast }: UseAgentAutoStar
         decrementRunningCount(defaultAgent.id)
       }
     },
-    [agents, tasks, incrementRunningCount, start, decrementRunningCount]
+    [incrementRunningCount, start, decrementRunningCount]
   )
 
   // Helper: Select eligible tasks grouped by agent
@@ -339,27 +353,27 @@ export function useAgentAutoStart({ tasks, agents, showToast }: UseAgentAutoStar
       // Start tasks
       for (const taskId of tasksToStart) {
         try {
-          const task = tasks.find((t) => t.id === taskId)
+          const task = tasksRef.current.find((t) => t.id === taskId)
           if (!task) continue
 
           incrementRunningCount(agentId)
           await start(agentId, taskId)
 
-          showToast(`Started "${task.title}" with ${agent.name}`)
+          showToastRef.current(`Started "${task.title}" with ${agent.name}`)
         } catch (error) {
           console.error(`Failed to start task ${taskId}:`, error)
           decrementRunningCount(agentId)
-          showToast(`Failed to start task: ${error}`, true)
+          showToastRef.current(`Failed to start task: ${error}`, true)
         }
       }
     },
-    [tasks, getRunningCount, addToQueue, incrementRunningCount, start, showToast, decrementRunningCount]
+    [getRunningCount, addToQueue, incrementRunningCount, start, decrementRunningCount]
   )
 
   // Helper: Process next task in queue for an agent
   const processNextTask = useCallback(
     async (agentId: string) => {
-      const agent = agents.find((a) => a.id === agentId)
+      const agent = agentsRef.current.find((a) => a.id === agentId)
       if (!agent) return
 
       const maxParallel = agent.config.max_parallel_sessions || 1
@@ -370,7 +384,7 @@ export function useAgentAutoStart({ tasks, agents, showToast }: UseAgentAutoStar
       const nextTaskId = getNextQueuedTask(agentId)
       if (!nextTaskId) return
 
-      const task = tasks.find((t) => t.id === nextTaskId)
+      const task = tasksRef.current.find((t) => t.id === nextTaskId)
       if (!task) {
         removeFromQueue(agentId, nextTaskId)
         return
@@ -391,13 +405,14 @@ export function useAgentAutoStart({ tasks, agents, showToast }: UseAgentAutoStar
       // For subtasks, enforce sequential execution within parent
       if (task.parent_task_id) {
         // Check parent task status — only start subtasks if parent is NotStarted
-        const parentTask = tasks.find((t) => t.id === task.parent_task_id)
+        const currentTasks = tasksRef.current
+        const parentTask = currentTasks.find((t) => t.id === task.parent_task_id)
         if (!parentTask || parentTask.status !== TaskStatus.NotStarted) {
           removeFromQueue(agentId, nextTaskId)
           return
         }
 
-        const siblings = tasks.filter((t) => t.parent_task_id === task.parent_task_id)
+        const siblings = currentTasks.filter((t) => t.parent_task_id === task.parent_task_id)
         const hasActiveSibling = siblings.some(
           (s) =>
             s.id !== task.id &&
@@ -426,51 +441,62 @@ export function useAgentAutoStart({ tasks, agents, showToast }: UseAgentAutoStar
         incrementRunningCount(agentId)
         await start(agentId, nextTaskId)
 
-        showToast(`Started "${task.title}" with ${agent.name}`)
+        showToastRef.current(`Started "${task.title}" with ${agent.name}`)
       } catch (error) {
         console.error(`Failed to start task ${nextTaskId}:`, error)
         decrementRunningCount(agentId)
-        showToast(`Failed to start task: ${error}`, true)
+        showToastRef.current(`Failed to start task: ${error}`, true)
       }
     },
     [
-      agents,
-      tasks,
       getSessionsSnapshot,
       getRunningCount,
       getNextQueuedTask,
       removeFromQueue,
       incrementRunningCount,
       isSnoozed,
+      isRecurringTemplate,
       start,
-      showToast,
       decrementRunningCount
     ]
   )
 
-  // Auto-start eligible tasks when scheduler is enabled or when tasks/agents change
+  // Auto-start eligible tasks when scheduler is enabled or when tasks/agents change.
+  // Uses a debounced trigger via a counter ref to avoid reinstalling the effect on
+  // every task mutation (the heavy computation runs inside a setTimeout anyway).
+  const autoStartTriggerRef = useRef(0)
+  useEffect(() => {
+    // Bump trigger counter whenever tasks or agents change
+    autoStartTriggerRef.current += 1
+  }, [tasks, agents])
+
   useEffect(() => {
     if (!isEnabled) return
 
     const currentSessions = getSessionsSnapshot()
+    const currentTasks = tasksRef.current
+    const currentAgents = agentsRef.current
     console.log('[AutoStart] Checking for eligible tasks...', {
-      totalTasks: tasks.length,
-      totalAgents: agents.length,
+      totalTasks: currentTasks.length,
+      totalAgents: currentAgents.length,
       activeSessions: currentSessions.size
     })
 
     // Debounce to avoid rapid-fire starts when multiple tasks/agents change
     const timeoutId = setTimeout(() => {
       const sessions = getSessionsSnapshot()
+      const latestTasks = tasksRef.current
+      const latestAgents = agentsRef.current
+
       // Check for triage candidates (tasks with no agent_id)
-      const triageCandidates = selectTriageCandidates(tasks, sessions)
+      const triageCandidates = selectTriageCandidates(latestTasks, sessions)
       if (triageCandidates.length > 0) {
         console.log(`[AutoStart] Found ${triageCandidates.length} triage candidate(s)`)
         triageCandidates.forEach((taskId) => startTriage(taskId))
       }
 
       // Check for regular auto-start eligible tasks (with agent_id)
-      const tasksByAgent = selectEligibleTasks(tasks, sessions)
+      const tasksByAgent = selectEligibleTasks(latestTasks, sessions)
 
       console.log('[AutoStart] Eligible tasks by agent:',
         Array.from(tasksByAgent.entries()).map(([agentId, taskIds]) => ({
@@ -485,7 +511,7 @@ export function useAgentAutoStart({ tasks, agents, showToast }: UseAgentAutoStar
       }
 
       tasksByAgent.forEach((taskIds, agentId) => {
-        const agent = agents.find((a) => a.id === agentId)
+        const agent = latestAgents.find((a) => a.id === agentId)
         if (agent && taskIds.length > 0) {
           console.log(`[AutoStart] Starting tasks for agent ${agent.name}:`, taskIds)
           startTasksForAgent(agentId, taskIds, agent)
@@ -496,7 +522,8 @@ export function useAgentAutoStart({ tasks, agents, showToast }: UseAgentAutoStar
     return () => clearTimeout(timeoutId)
   }, [isEnabled, tasks, agents, getSessionsSnapshot, selectEligibleTasks, selectTriageCandidates, startTasksForAgent, startTriage])
 
-  // Listen to agent status changes (task completions)
+  // Listen to agent status changes (task completions).
+  // IPC listener is installed ONCE (deps are stable thanks to ref pattern).
   useEffect(() => {
     if (!isEnabled) return
 
@@ -525,7 +552,7 @@ export function useAgentAutoStart({ tasks, agents, showToast }: UseAgentAutoStar
             const attempts = (triageAttemptsRef.current.get(taskId) || 0) + 1
             triageAttemptsRef.current.set(taskId, attempts)
             if (attempts >= MAX_TRIAGE_ATTEMPTS) {
-              showToast(`Triage failed for "${updatedTask.title}" — please assign an agent manually`, true)
+              showToastRef.current(`Triage failed for "${updatedTask.title}" — please assign an agent manually`, true)
             } else {
               console.log(`[AutoStart] Triage attempt ${attempts} did not assign agent for task ${taskId}, will retry`)
             }
@@ -542,9 +569,9 @@ export function useAgentAutoStart({ tasks, agents, showToast }: UseAgentAutoStar
             }
 
             const assignedAgentId = updatedTask.agent_id
-            const assignedAgent = agents.find((a) => a.id === assignedAgentId)
+            const assignedAgent = agentsRef.current.find((a) => a.id === assignedAgentId)
             if (!assignedAgent) {
-              showToast(`Triage assigned an unavailable agent for "${updatedTask.title}"`, true)
+              showToastRef.current(`Triage assigned an unavailable agent for "${updatedTask.title}"`, true)
               return
             }
 
@@ -567,11 +594,11 @@ export function useAgentAutoStart({ tasks, agents, showToast }: UseAgentAutoStar
       decrementRunningCount(agentId)
 
       // Check if task was completed
-      const task = tasks.find((t) => t.id === event.taskId)
+      const task = tasksRef.current.find((t) => t.id === event.taskId)
       if (task?.status === TaskStatus.Completed) {
-        const agent = agents.find((a) => a.id === agentId)
+        const agent = agentsRef.current.find((a) => a.id === agentId)
         if (agent) {
-          showToast(`"${task.title}" completed by ${agent.name}`)
+          showToastRef.current(`"${task.title}" completed by ${agent.name}`)
         }
       }
 
@@ -582,7 +609,7 @@ export function useAgentAutoStart({ tasks, agents, showToast }: UseAgentAutoStar
     })
 
     return unsubscribe
-  }, [isEnabled, tasks, agents, decrementRunningCount, showToast, processNextTask, getRunningCount, addToQueue, startTasksForAgent, startNextSubtask])
+  }, [isEnabled, decrementRunningCount, processNextTask, getRunningCount, addToQueue, startTasksForAgent, startNextSubtask])
 
   // Listen to new task creation — trigger triage for tasks with no agent_id
   useEffect(() => {
@@ -631,7 +658,7 @@ export function useAgentAutoStart({ tasks, agents, showToast }: UseAgentAutoStar
       if (getSessionsSnapshot().has(task.id)) return
 
       const agentId = task.agent_id
-      const agent = agents.find((a) => a.id === agentId)
+      const agent = agentsRef.current.find((a) => a.id === agentId)
       if (!agent) return
 
       console.log(`[AutoStart] Recurring instance "${task.title}" passed all checks, starting agent ${agent.name}`)
@@ -644,7 +671,7 @@ export function useAgentAutoStart({ tasks, agents, showToast }: UseAgentAutoStar
           try {
             incrementRunningCount(agentId)
             await start(agentId, task.id)
-            showToast(`Auto-started "${task.title}" with ${agent.name}`)
+            showToastRef.current(`Auto-started "${task.title}" with ${agent.name}`)
           } catch (error) {
             console.error(`[AutoStart] Failed to auto-start recurring instance ${task.id}:`, error)
             decrementRunningCount(agentId)
@@ -656,7 +683,7 @@ export function useAgentAutoStart({ tasks, agents, showToast }: UseAgentAutoStar
     })
 
     return unsubscribe
-  }, [agents, isSnoozed, getSessionsSnapshot, getRunningCount, incrementRunningCount, decrementRunningCount, start, showToast, addToQueue])
+  }, [isSnoozed, getSessionsSnapshot, getRunningCount, incrementRunningCount, decrementRunningCount, start, addToQueue])
 
   // Auto-complete tasks with auto_complete_without_review flag when they reach ReadyForReview
   useEffect(() => {
@@ -664,7 +691,7 @@ export function useAgentAutoStart({ tasks, agents, showToast }: UseAgentAutoStar
       if (event.updates?.status !== TaskStatus.ReadyForReview) return
 
       // Try local tasks first, fall back to DB fetch for recently-created recurring instances
-      const localTask = tasks.find((t) => t.id === event.taskId)
+      const localTask = tasksRef.current.find((t) => t.id === event.taskId)
 
       const doAutoComplete = async (baseTask: WorkfloTask) => {
         const merged = { ...baseTask, ...event.updates } as WorkfloTask
@@ -673,7 +700,7 @@ export function useAgentAutoStart({ tasks, agents, showToast }: UseAgentAutoStar
         console.log(`[AutoStart] Task "${merged.title}" has auto_complete_without_review, auto-completing`)
         try {
           await taskApi.update(event.taskId, { status: TaskStatus.Completed })
-          showToast(`Auto-completed "${merged.title}"`)
+          showToastRef.current(`Auto-completed "${merged.title}"`)
         } catch (error) {
           console.error(`[AutoStart] Failed to auto-complete task ${event.taskId}:`, error)
         }
@@ -691,9 +718,10 @@ export function useAgentAutoStart({ tasks, agents, showToast }: UseAgentAutoStar
     })
 
     return unsubscribe
-  }, [tasks, showToast])
+  }, [])
 
-  // Listen to task updates (new tasks or reassignments)
+  // Listen to task updates (new tasks or reassignments).
+  // IPC listener is installed ONCE (deps are stable thanks to ref pattern).
   useEffect(() => {
     if (!isEnabled) return
 
@@ -705,7 +733,7 @@ export function useAgentAutoStart({ tasks, agents, showToast }: UseAgentAutoStar
       processedUpdatesRef.current.add(updateKey)
       setTimeout(() => processedUpdatesRef.current.delete(updateKey), 1000)
 
-      const staleTask = tasks.find((t) => t.id === event.taskId)
+      const staleTask = tasksRef.current.find((t) => t.id === event.taskId)
       if (!staleTask) return
 
       // Merge event updates with stale task to get current state
@@ -732,7 +760,7 @@ export function useAgentAutoStart({ tasks, agents, showToast }: UseAgentAutoStar
         if (triagingRef.current.has(task.id)) return
 
         const agentId = task.agent_id
-        const agent = agents.find((a) => a.id === agentId)
+        const agent = agentsRef.current.find((a) => a.id === agentId)
         if (!agent) return
 
         // Check if this parent task has subtasks — start first subtask instead
@@ -777,8 +805,6 @@ export function useAgentAutoStart({ tasks, agents, showToast }: UseAgentAutoStar
     return unsubscribe
   }, [
     isEnabled,
-    tasks,
-    agents,
     getSessionsSnapshot,
     isSnoozed,
     getRunningCount,
@@ -795,7 +821,9 @@ export function useAgentAutoStart({ tasks, agents, showToast }: UseAgentAutoStar
     }
   }, [isEnabled, clearQueues])
 
-  // Periodic check every minute to ensure no tasks are stuck
+  // Periodic check every minute to ensure no tasks are stuck.
+  // Reads tasks/agents from refs so the interval is never cleared/recreated
+  // due to task updates — it runs for the full 60s as intended.
   useEffect(() => {
     if (!isEnabled) return
 
@@ -804,15 +832,19 @@ export function useAgentAutoStart({ tasks, agents, showToast }: UseAgentAutoStar
     const intervalId = setInterval(() => {
       console.log('[AutoStart] Periodic check: scanning for eligible tasks...')
 
+      // Read latest from refs
+      const latestTasks = tasksRef.current
+      const latestAgents = agentsRef.current
+
       // Check triage candidates
       const sessions = getSessionsSnapshot()
-      const triageCandidates = selectTriageCandidates(tasks, sessions)
+      const triageCandidates = selectTriageCandidates(latestTasks, sessions)
       if (triageCandidates.length > 0) {
         console.log(`[AutoStart] Periodic check: found ${triageCandidates.length} triage candidate(s)`)
         triageCandidates.forEach((taskId) => startTriage(taskId))
       }
 
-      const tasksByAgent = selectEligibleTasks(tasks, sessions)
+      const tasksByAgent = selectEligibleTasks(latestTasks, sessions)
 
       if (tasksByAgent.size === 0) {
         console.log('[AutoStart] Periodic check: no eligible tasks found')
@@ -823,7 +855,7 @@ export function useAgentAutoStart({ tasks, agents, showToast }: UseAgentAutoStar
         tasksByAgent.size, 'agent(s)')
 
       tasksByAgent.forEach((taskIds, agentId) => {
-        const agent = agents.find((a) => a.id === agentId)
+        const agent = latestAgents.find((a) => a.id === agentId)
         if (!agent) return
 
         const maxParallel = agent.config.max_parallel_sessions || 1
@@ -845,5 +877,5 @@ export function useAgentAutoStart({ tasks, agents, showToast }: UseAgentAutoStar
       console.log('[AutoStart] Stopping periodic check')
       clearInterval(intervalId)
     }
-  }, [isEnabled, tasks, agents, getSessionsSnapshot, selectEligibleTasks, selectTriageCandidates, getRunningCount, startTasksForAgent, startTriage])
+  }, [isEnabled, getSessionsSnapshot, selectEligibleTasks, selectTriageCandidates, getRunningCount, startTasksForAgent, startTriage])
 }
