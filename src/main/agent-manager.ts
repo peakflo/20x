@@ -124,6 +124,9 @@ interface PollingEntry {
   createdAt: number  // Timestamp to enforce grace period before IDLE transition
   hasSeenWork?: boolean  // True once we've seen at least one non-IDLE status
   lastPartReceivedAt?: number  // Timestamp of last received data — used for secondary grace period
+  /** How many times the tillDone nudge has been sent for this polling cycle.
+   *  Capped at MAX_TILLDONE_NUDGES to prevent infinite nudge loops. */
+  tillDoneNudgeCount?: number
 }
 
 interface MessageAttachmentRef {
@@ -165,6 +168,8 @@ export class AgentManager extends EventEmitter {
   // Maximum number of session ID redirects to keep (old temp IDs → real IDs).
   // Without a cap these grow forever across many session start/stop cycles.
   private static readonly MAX_SESSION_REDIRECTS = 200
+  /** Maximum number of tillDone idle nudges per session before giving up. */
+  private static readonly MAX_TILLDONE_NUDGES = 5
 
   // ── Event-driven nudge ──
   // When an adapter buffers new stream data it calls onDataAvailable().
@@ -1857,8 +1862,11 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       } else if (status.type === SessionStatusType.BUSY && session) {
         // Backend is actively processing — disable the IDLE grace period.
         const peBusy = this.pollingEntries.get(sessionId)
-        if (peBusy && !peBusy.hasSeenWork) {
-          peBusy.hasSeenWork = true
+        if (peBusy) {
+          if (!peBusy.hasSeenWork) peBusy.hasSeenWork = true
+          // Agent resumed work (possibly after a tillDone nudge) — reset the
+          // nudge counter so the next idle cycle gets a fresh allowance.
+          if (peBusy.tillDoneNudgeCount) peBusy.tillDoneNudgeCount = 0
         }
         if (session.status !== 'working') {
           session.status = 'working'
@@ -1893,6 +1901,48 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
           const timeSinceLastData = Date.now() - pollingEntry.lastPartReceivedAt
           if (timeSinceLastData < POST_DATA_GRACE_MS) {
             return
+          }
+        }
+
+        // ── TillDone nudge: if there are incomplete todos, prompt the agent to
+        // continue instead of transitioning to idle. The OpenCode plugin fires
+        // session.idle internally but the adapter races it — by the time the
+        // plugin calls client.session.prompt(), we've already stopped polling.
+        // Handle the nudge here so the session stays alive.
+        if (pollingEntry && session.adapter?.getIncompleteTodos) {
+          const nudgeCount = pollingEntry.tillDoneNudgeCount || 0
+          if (nudgeCount < AgentManager.MAX_TILLDONE_NUDGES) {
+            try {
+              const incompleteTodos = await session.adapter.getIncompleteTodos(sessionId, config)
+              if (incompleteTodos !== null) {
+                // Build a specific nudge listing the remaining items
+                let nudgeText: string
+                if (incompleteTodos.length === 0) {
+                  nudgeText = 'TillDone: before using other tools, call the built-in todowrite tool to create a concise task list for this task. Keep the list current as you work.'
+                } else {
+                  const lines = [`TillDone: you went idle but your to-do list is NOT finished. Remaining items:`]
+                  for (const t of incompleteTodos) {
+                    lines.push(`- [${t.status}] ${t.content}`)
+                  }
+                  lines.push('')
+                  lines.push('Continue working on the remaining items above. Update todowrite as you progress and only stop once every item is completed or explicitly removed.')
+                  nudgeText = lines.join('\n')
+                }
+
+                pollingEntry.tillDoneNudgeCount = nudgeCount + 1
+                console.log(`[AgentManager] TillDone nudge #${nudgeCount + 1} for ${sessionId}: ${incompleteTodos.length} incomplete todo(s)`)
+                // Send nudge via the standard message path which resets status
+                // to 'working' and keeps polling alive.
+                this.doSendAdapterMessage(session, sessionId, nudgeText).catch((err) => {
+                  console.error(`[AgentManager] TillDone nudge failed for ${sessionId}:`, err)
+                })
+                return
+              }
+            } catch (err) {
+              console.warn(`[AgentManager] getIncompleteTodos failed for ${sessionId}, proceeding to idle:`, err)
+            }
+          } else {
+            console.log(`[AgentManager] TillDone nudge limit (${AgentManager.MAX_TILLDONE_NUDGES}) reached for ${sessionId}, transitioning to idle`)
           }
         }
 

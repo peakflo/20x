@@ -248,6 +248,17 @@ export interface CodingAgentAdapter {
   checkHealth(): Promise<{ available: boolean; reason?: string }>
 
   /**
+   * Return incomplete todo items for a tillDone-enabled session.
+   * Used by the agent-manager to decide whether to nudge the agent on idle
+   * instead of transitioning to idle.  Returns null if tillDone is not active
+   * or no state is available.
+   */
+  getIncompleteTodos?(
+    sessionId: string,
+    config: SessionConfig
+  ): Promise<Array<{ content: string; status: string }> | null>
+
+  /**
    * Optional callback invoked by the adapter when new data is buffered and
    * ready for consumption.  The polling coordinator uses this to trigger an
    * immediate poll cycle instead of waiting for the next 2-second heartbeat,

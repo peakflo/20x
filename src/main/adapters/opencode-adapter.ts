@@ -61,6 +61,8 @@ export class OpencodeAdapter implements CodingAgentAdapter {
   private runtimeSupportFilePaths: string[] = []
   /** Absolute path to the generated tillDone config support file */
   private tillDoneConfigPath: string | null = null
+  /** Absolute path to the generated tillDone state file (tracks todo lists per session) */
+  private tillDoneStatePath: string | null = null
   /** Whether the merged config has been pushed at least once to the running server.
    *  Config is pushed once on first server connection; subsequent pushes happen only
    *  via explicit `notifyConfigChanged()` calls (e.g. after settings edit or key rotation).
@@ -1316,6 +1318,7 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     this.pluginFilePaths = []
     this.runtimeSupportFilePaths = []
     this.tillDoneConfigPath = null
+    this.tillDoneStatePath = null
 
     if (!config.workspaceDir) {
       return
@@ -1364,6 +1367,7 @@ export class OpencodeAdapter implements CodingAgentAdapter {
       writeFileSync(statePath, '{}\n', 'utf-8')
     }
     this.runtimeSupportFilePaths.push(statePath)
+    this.tillDoneStatePath = statePath
 
     const configPath = join(openCodeDir, '.20x-tilldone-config.json')
     const existingConfig = this.readTillDoneConfigFile(configPath)
@@ -1439,6 +1443,50 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     const sessions = { ...config.sessions }
     delete sessions[sessionId]
     this.writeTillDoneConfig({ ...config, sessions })
+  }
+
+  /**
+   * Read the tillDone state file and return incomplete todos for the given session.
+   * Called by agent-manager before transitioning to idle — if incomplete todos exist,
+   * the manager sends a nudge prompt instead of stopping the session.
+   */
+  async getIncompleteTodos(
+    sessionId: string,
+    _config: SessionConfig
+  ): Promise<Array<{ content: string; status: string }> | null> {
+    if (!this.tillDoneStatePath || !existsSync(this.tillDoneStatePath)) return null
+
+    // Verify tillDone is enabled for this session
+    const tdConfig = this.readTillDoneConfig()
+    if (sessionId in tdConfig.sessions) {
+      if (!tdConfig.sessions[sessionId]) return null
+    } else {
+      // Session not explicitly tracked — tillDone is not active for it
+      return null
+    }
+
+    try {
+      const raw = readFileSync(this.tillDoneStatePath, 'utf-8')
+      const state = JSON.parse(raw || '{}') as Record<string, { todos?: unknown[] }>
+      const sessionState = state[sessionId]
+      if (!sessionState?.todos || !Array.isArray(sessionState.todos) || sessionState.todos.length === 0) {
+        // No todos yet — agent still needs to create them
+        return []
+      }
+
+      const DONE_STATUSES = ['completed', 'cancelled', 'done', 'removed']
+      const incomplete = sessionState.todos
+        .filter(Boolean)
+        .map((t: Record<string, unknown>) => ({
+          content: String(t.content || t.text || t.title || ''),
+          status: String(t.status || 'pending')
+        }))
+        .filter(t => !DONE_STATUSES.includes(t.status))
+
+      return incomplete.length > 0 ? incomplete : null
+    } catch {
+      return null
+    }
   }
 
   private buildSecretInjectorPluginCode(secretsPath: string): string {

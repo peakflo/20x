@@ -241,6 +241,71 @@ describe('OpencodeAdapter', () => {
       }
     })
 
+    it('getIncompleteTodos returns remaining items from the state file', async () => {
+      const adapter = new OpencodeAdapter()
+      const workspaceDir = mkdtempSync(join(tmpdir(), 'opencode-adapter-test-'))
+
+      try {
+        ;(adapter as any).writeRuntimePluginFiles({
+          agentId: 'agent-1',
+          taskId: 'task-1',
+          workspaceDir,
+          tillDone: true
+        })
+        ;(adapter as any).writeTillDoneSessionConfig('ses-1', true)
+
+        const config = { agentId: 'agent-1', taskId: 'task-1', workspaceDir }
+
+        // No state for session → empty array (no todos created yet)
+        const noState = await adapter.getIncompleteTodos('ses-1', config)
+        expect(noState).toEqual([])
+
+        // Write state with mixed todos
+        const statePath = (adapter as any).tillDoneStatePath as string
+        const state = {
+          'ses-1': {
+            todos: [
+              { content: 'write tests', status: 'completed' },
+              { content: 'fix bug', status: 'in_progress' },
+              { content: 'deploy', status: 'pending' }
+            ]
+          }
+        }
+        const { writeFileSync: wfs } = await import('fs')
+        wfs(statePath, JSON.stringify(state), 'utf-8')
+
+        const incomplete = await adapter.getIncompleteTodos('ses-1', config)
+        expect(incomplete).toEqual([
+          { content: 'fix bug', status: 'in_progress' },
+          { content: 'deploy', status: 'pending' }
+        ])
+
+        // All completed → null (no nudge needed)
+        const doneState = {
+          'ses-1': {
+            todos: [
+              { content: 'write tests', status: 'completed' },
+              { content: 'fix bug', status: 'done' }
+            ]
+          }
+        }
+        wfs(statePath, JSON.stringify(doneState), 'utf-8')
+        const allDone = await adapter.getIncompleteTodos('ses-1', config)
+        expect(allDone).toBeNull()
+
+        // Disabled session → null
+        ;(adapter as any).writeTillDoneSessionConfig('ses-disabled', false)
+        const disabled = await adapter.getIncompleteTodos('ses-disabled', config)
+        expect(disabled).toBeNull()
+
+        // Unknown session (not tracked) → null
+        const unknown = await adapter.getIncompleteTodos('ses-unknown', config)
+        expect(unknown).toBeNull()
+      } finally {
+        rmSync(workspaceDir, { recursive: true, force: true })
+      }
+    })
+
     it('cleans up generated runtime plugin files on destroySession', async () => {
       const adapter = new OpencodeAdapter()
       const workspaceDir = mkdtempSync(join(tmpdir(), 'opencode-adapter-test-'))
