@@ -13,19 +13,24 @@ interface RepoProgress {
 interface WorktreeProgressOverlayProps {
   taskId: string | null
   visible: boolean
+  /** Called when worktree IPC events indicate setup started or finished for this task.
+   *  Lets the parent track visibility without a separate IPC listener (avoids exceeding
+   *  the 10-listener limit on the worktree:progress channel when many panels are open). */
+  onVisibilityChange?: (isActive: boolean) => void
 }
 
-export function WorktreeProgressOverlay({ taskId, visible }: WorktreeProgressOverlayProps) {
+export function WorktreeProgressOverlay({ taskId, visible, onVisibilityChange }: WorktreeProgressOverlayProps) {
   const [progress, setProgress] = useState<Map<string, RepoProgress>>(new Map())
 
   useEffect(() => {
-    if (!visible) {
-      setProgress(new Map())
-      return
-    }
+    if (!taskId) return
 
+    // Always listen — this is the SINGLE worktree:progress listener for this
+    // task (the parent no longer installs its own, preventing the
+    // MaxListenersExceededWarning when many task panels are open).
     const cleanup = onWorktreeProgress((event: WorktreeProgressEvent) => {
-      if (taskId && event.taskId && event.taskId !== taskId) return
+      if (event.taskId && event.taskId !== taskId) return
+
       setProgress((prev) => {
         const next = new Map(prev)
         next.set(event.repo, {
@@ -36,10 +41,27 @@ export function WorktreeProgressOverlay({ taskId, visible }: WorktreeProgressOve
         })
         return next
       })
+
+      // Notify parent of visibility changes
+      if (event.done) {
+        // Check if ALL repos are done before hiding
+        setProgress((current) => {
+          const updated = new Map(current)
+          updated.set(event.repo, { repo: event.repo, step: event.step, done: true, error: event.error })
+          const allDone = [...updated.values()].every((r) => r.done)
+          if (allDone) onVisibilityChange?.(false)
+          return updated
+        })
+      } else {
+        onVisibilityChange?.(true)
+      }
     })
 
-    return cleanup
-  }, [visible, taskId])
+    return () => {
+      cleanup()
+      setProgress(new Map())
+    }
+  }, [taskId, onVisibilityChange])
 
   if (!visible || progress.size === 0) return null
 
