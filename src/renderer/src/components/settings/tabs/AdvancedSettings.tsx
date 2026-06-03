@@ -6,6 +6,7 @@ import { Label } from '@/components/ui/Label'
 import { SettingsSection } from '../SettingsSection'
 import { useSettingsStore } from '@/stores/settings-store'
 import { settingsApi } from '@/lib/ipc-client'
+import { subscribe } from '@/lib/shared-ipc-listeners'
 
 export function AdvancedSettings() {
   const { githubOrg, ghCliStatus, setGithubOrg, checkGhCli, startGhAuth } = useSettingsStore()
@@ -19,10 +20,11 @@ export function AdvancedSettings() {
   const [googleKey, setGoogleKey] = useState('')
 
   useEffect(() => {
-    const unsubscribe = window.electronAPI.onGithubDeviceCode((code) => {
-      setDeviceCode(code)
-    })
-    return unsubscribe
+    return subscribe<string>(
+      'github:deviceCode',
+      (cb) => window.electronAPI.onGithubDeviceCode(cb),
+      (code) => setDeviceCode(code)
+    )
   }, [])
 
   useEffect(() => {

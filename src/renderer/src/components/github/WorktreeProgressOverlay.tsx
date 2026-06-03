@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Loader2, CheckCircle, XCircle } from 'lucide-react'
 import { onWorktreeProgress } from '@/lib/ipc-client'
+import { subscribe } from '@/lib/shared-ipc-listeners'
 import type { WorktreeProgressEvent } from '@/types/electron'
 
 interface RepoProgress {
@@ -24,21 +25,23 @@ export function WorktreeProgressOverlay({ taskId, visible }: WorktreeProgressOve
       return
     }
 
-    const cleanup = onWorktreeProgress((event: WorktreeProgressEvent) => {
-      if (taskId && event.taskId && event.taskId !== taskId) return
-      setProgress((prev) => {
-        const next = new Map(prev)
-        next.set(event.repo, {
-          repo: event.repo,
-          step: event.step,
-          done: event.done,
-          error: event.error
+    return subscribe<WorktreeProgressEvent>(
+      'worktree:progress',
+      (cb) => onWorktreeProgress(cb),
+      (event) => {
+        if (taskId && event.taskId && event.taskId !== taskId) return
+        setProgress((prev) => {
+          const next = new Map(prev)
+          next.set(event.repo, {
+            repo: event.repo,
+            step: event.step,
+            done: event.done,
+            error: event.error
+          })
+          return next
         })
-        return next
-      })
-    })
-
-    return cleanup
+      }
+    )
   }, [visible, taskId])
 
   if (!visible || progress.size === 0) return null
