@@ -1,4 +1,8 @@
 import tseslint from 'typescript-eslint'
+import path from 'path'
+import { fileURLToPath } from 'url'
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 export default tseslint.config(
   {
@@ -12,7 +16,7 @@ export default tseslint.config(
     files: ['**/*.{ts,tsx}'],
     languageOptions: {
       parserOptions: {
-        tsconfigRootDir: import.meta.dirname
+        tsconfigRootDir: __dirname
       }
     },
     rules: {
