@@ -1872,15 +1872,11 @@ describe('AgentManager tillDone nudge on idle', () => {
     return mgr
   }
 
-  it('sends a nudge instead of transitioning to idle when tillDone has incomplete todos', async () => {
+  it('sends a nudge instead of transitioning to idle when session has incomplete todos', async () => {
     const mgr = buildManager()
     const adapter = {
       pollMessages: vi.fn(async () => []),
       getStatus: vi.fn(async () => ({ type: SessionStatusType.IDLE })),
-      getIncompleteTodos: vi.fn(async () => [
-        { content: 'fix bug', status: 'in_progress' },
-        { content: 'write tests', status: 'pending' }
-      ])
     }
 
     const session = {
@@ -1893,6 +1889,12 @@ describe('AgentManager tillDone nudge on idle', () => {
       partContentLengths: new Map<string, string>(),
       adapter,
       pollingStarted: true,
+      // Todos captured from todowrite tool calls during polling
+      todos: [
+        { content: 'fix bug', status: 'in_progress' },
+        { content: 'write tests', status: 'pending' },
+        { content: 'setup CI', status: 'completed' }
+      ]
     }
     ;(mgr as any).sessions.set('session-1', session)
 
@@ -1922,16 +1924,18 @@ describe('AgentManager tillDone nudge on idle', () => {
     expect(nudgeText).toContain('fix bug')
     expect(nudgeText).toContain('write tests')
     expect(nudgeText).toContain('Remaining items')
+    expect(nudgeText).toContain('1/3 completed')
+    // Completed items should not appear in remaining
+    expect(nudgeText).not.toContain('setup CI')
     // Nudge count should be incremented
     expect(entry.tillDoneNudgeCount).toBe(1)
   })
 
-  it('transitions to idle normally when all todos are completed (getIncompleteTodos returns null)', async () => {
+  it('transitions to idle normally when all todos are completed', async () => {
     const mgr = buildManager()
     const adapter = {
       pollMessages: vi.fn(async () => []),
       getStatus: vi.fn(async () => ({ type: SessionStatusType.IDLE })),
-      getIncompleteTodos: vi.fn(async () => null)  // All done
     }
 
     const session = {
@@ -1944,6 +1948,10 @@ describe('AgentManager tillDone nudge on idle', () => {
       partContentLengths: new Map<string, string>(),
       adapter,
       pollingStarted: true,
+      todos: [
+        { content: 'fix bug', status: 'completed' },
+        { content: 'write tests', status: 'done' }
+      ]
     }
     ;(mgr as any).sessions.set('session-1', session)
 
@@ -1974,9 +1982,6 @@ describe('AgentManager tillDone nudge on idle', () => {
     const adapter = {
       pollMessages: vi.fn(async () => []),
       getStatus: vi.fn(async () => ({ type: SessionStatusType.IDLE })),
-      getIncompleteTodos: vi.fn(async () => [
-        { content: 'stuck task', status: 'pending' }
-      ])
     }
 
     const session = {
@@ -1989,6 +1994,7 @@ describe('AgentManager tillDone nudge on idle', () => {
       partContentLengths: new Map<string, string>(),
       adapter,
       pollingStarted: true,
+      todos: [{ content: 'stuck task', status: 'pending' }]
     }
     ;(mgr as any).sessions.set('session-1', session)
 
@@ -2022,7 +2028,6 @@ describe('AgentManager tillDone nudge on idle', () => {
     const adapter = {
       pollMessages: vi.fn(async () => []),
       getStatus: vi.fn(async () => ({ type: SessionStatusType.BUSY })),
-      getIncompleteTodos: vi.fn(async () => null)
     }
 
     const session = {
@@ -2035,6 +2040,7 @@ describe('AgentManager tillDone nudge on idle', () => {
       partContentLengths: new Map<string, string>(),
       adapter,
       pollingStarted: true,
+      todos: [{ content: 'some task', status: 'pending' }]
     }
     ;(mgr as any).sessions.set('session-1', session)
 

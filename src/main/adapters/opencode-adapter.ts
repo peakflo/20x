@@ -61,8 +61,6 @@ export class OpencodeAdapter implements CodingAgentAdapter {
   private runtimeSupportFilePaths: string[] = []
   /** Absolute path to the generated tillDone config support file */
   private tillDoneConfigPath: string | null = null
-  /** Absolute path to the generated tillDone state file (tracks todo lists per session) */
-  private tillDoneStatePath: string | null = null
   /** Whether the merged config has been pushed at least once to the running server.
    *  Config is pushed once on first server connection; subsequent pushes happen only
    *  via explicit `notifyConfigChanged()` calls (e.g. after settings edit or key rotation).
@@ -1318,7 +1316,6 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     this.pluginFilePaths = []
     this.runtimeSupportFilePaths = []
     this.tillDoneConfigPath = null
-    this.tillDoneStatePath = null
 
     if (!config.workspaceDir) {
       return
@@ -1367,7 +1364,6 @@ export class OpencodeAdapter implements CodingAgentAdapter {
       writeFileSync(statePath, '{}\n', 'utf-8')
     }
     this.runtimeSupportFilePaths.push(statePath)
-    this.tillDoneStatePath = statePath
 
     const configPath = join(openCodeDir, '.20x-tilldone-config.json')
     const existingConfig = this.readTillDoneConfigFile(configPath)
@@ -1443,50 +1439,6 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     const sessions = { ...config.sessions }
     delete sessions[sessionId]
     this.writeTillDoneConfig({ ...config, sessions })
-  }
-
-  /**
-   * Read the tillDone state file and return incomplete todos for the given session.
-   * Called by agent-manager before transitioning to idle — if incomplete todos exist,
-   * the manager sends a nudge prompt instead of stopping the session.
-   */
-  async getIncompleteTodos(
-    sessionId: string,
-    _config: SessionConfig
-  ): Promise<Array<{ content: string; status: string }> | null> {
-    if (!this.tillDoneStatePath || !existsSync(this.tillDoneStatePath)) return null
-
-    // Verify tillDone is enabled for this session
-    const tdConfig = this.readTillDoneConfig()
-    if (sessionId in tdConfig.sessions) {
-      if (!tdConfig.sessions[sessionId]) return null
-    } else {
-      // Session not explicitly tracked — tillDone is not active for it
-      return null
-    }
-
-    try {
-      const raw = readFileSync(this.tillDoneStatePath, 'utf-8')
-      const state = JSON.parse(raw || '{}') as Record<string, { todos?: unknown[] }>
-      const sessionState = state[sessionId]
-      if (!sessionState?.todos || !Array.isArray(sessionState.todos) || sessionState.todos.length === 0) {
-        // No todos yet — agent still needs to create them
-        return []
-      }
-
-      const DONE_STATUSES = ['completed', 'cancelled', 'done', 'removed']
-      const incomplete = sessionState.todos
-        .filter(Boolean)
-        .map((t: Record<string, unknown>) => ({
-          content: String(t.content || t.text || t.title || ''),
-          status: String(t.status || 'pending')
-        }))
-        .filter(t => !DONE_STATUSES.includes(t.status))
-
-      return incomplete.length > 0 ? incomplete : null
-    } catch {
-      return null
-    }
   }
 
   private buildSecretInjectorPluginCode(secretsPath: string): string {
@@ -1574,34 +1526,6 @@ export class OpencodeAdapter implements CodingAgentAdapter {
       '  });',
       '}',
       '',
-      'var DONE_STATUSES = ["completed", "cancelled", "done", "removed"];',
-      '',
-      'function isTodoComplete(todo) {',
-      '  return DONE_STATUSES.indexOf(todo.status) !== -1;',
-      '}',
-      '',
-      'function hasIncompleteTodos(todos) {',
-      '  return todos.some(function(todo) {',
-      '    return !isTodoComplete(todo);',
-      '  });',
-      '}',
-      '',
-      'function buildIdlePrompt(todos) {',
-      '  if (todos.length === 0) return INITIAL_TODO_PROMPT;',
-      '  var completed = todos.filter(isTodoComplete);',
-      '  var remaining = todos.filter(function(t) { return !isTodoComplete(t); });',
-      '  if (remaining.length === 0) return null;',
-      '  var lines = ["TillDone: you went idle but your to-do list is NOT finished (" + completed.length + "/" + todos.length + " completed)."];',
-      '  lines.push("");',
-      '  lines.push("Remaining items:");',
-      '  remaining.forEach(function(todo) {',
-      '    lines.push("- [" + todo.status + "] " + todo.content);',
-      '  });',
-      '  lines.push("");',
-      '  lines.push("Continue working on the remaining items above. Update todowrite as you progress, keep exactly one task in_progress when actively working, and only stop once every item is completed or explicitly removed.");',
-      '  return lines.join("\\n");',
-      '}',
-      '',
       'export var TillDone = async function({ client }) {',
       '  return {',
       '    "tool.execute.before": async function(input) {',
@@ -1622,7 +1546,7 @@ export class OpencodeAdapter implements CodingAgentAdapter {
       '      if (!sessionId) return;',
       '      if (!isTillDoneEnabled(sessionId)) return;',
       '      var state = readState();',
-      '      var sessionState = state[sessionId] || { todos: [], continuing: false };',
+      '      var sessionState = state[sessionId] || { todos: [] };',
       '',
       '      if (ev.type === "todo.updated") {',
       '        sessionState.todos = normalizeTodos(ev.properties?.todos || []);',
@@ -1635,31 +1559,6 @@ export class OpencodeAdapter implements CodingAgentAdapter {
       '        delete state[sessionId];',
       '        writeState(state);',
       '        return;',
-      '      }',
-      '',
-      '      if (ev.type !== "session.idle") return;',
-      '      sessionState.todos = normalizeTodos(sessionState.todos);',
-      '      if (sessionState.continuing) return;',
-      '',
-      '      var nudge = buildIdlePrompt(sessionState.todos);',
-      '      if (nudge) {',
-      '        sessionState.continuing = true;',
-      '        state[sessionId] = sessionState;',
-      '        writeState(state);',
-      '        try {',
-      '          await client.session.prompt({',
-      '            path: { id: sessionId },',
-      '            body: {',
-      '              parts: [{ type: "text", text: nudge }]',
-      '            }',
-      '          });',
-      '        } finally {',
-      '          var nextState = readState();',
-      '          var currentSessionState = nextState[sessionId] || sessionState;',
-      '          currentSessionState.continuing = false;',
-      '          nextState[sessionId] = currentSessionState;',
-      '          writeState(nextState);',
-      '        }',
       '      }',
       '    }',
       '  };',

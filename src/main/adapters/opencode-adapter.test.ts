@@ -45,7 +45,6 @@ describe('OpencodeAdapter', () => {
         expect(tillDoneCode).toContain('var ev = input.event')
         expect(tillDoneCode).toContain('ev.type === "todo.updated"')
         expect(tillDoneCode).toContain('ev.properties?.sessionID')
-        expect(tillDoneCode).toContain('client.session.prompt')
         expect(tillDoneCode).toContain('isTillDoneEnabled(sessionId)')
         expect(tillDoneCode).toContain('parsed.sessions[sessionId]')
         expect(tillDoneCode).toContain('return false;')
@@ -58,15 +57,10 @@ describe('OpencodeAdapter', () => {
         ].join('\n'))
         expect(tillDoneCode).toContain('INITIAL_TODO_PROMPT')
 
-        // Verify per-item completion checking and dynamic idle nudge
-        expect(tillDoneCode).toContain('DONE_STATUSES')
-        expect(tillDoneCode).toContain('function isTodoComplete(todo)')
-        expect(tillDoneCode).toContain('function buildIdlePrompt(todos)')
-        expect(tillDoneCode).toContain('Remaining items:')
-        expect(tillDoneCode).toContain('completed.length + "/" + todos.length')
-        expect(tillDoneCode).toContain('var nudge = buildIdlePrompt(sessionState.todos)')
-        // The static CONTINUE_PROMPT is replaced by the dynamic buildIdlePrompt
-        expect(tillDoneCode).not.toContain('var CONTINUE_PROMPT')
+        // Idle nudging is handled by the agent-manager (universal for all agents),
+        // not by the plugin. The plugin only handles tool blocking + todo state tracking.
+        expect(tillDoneCode).not.toContain('session.idle')
+        expect(tillDoneCode).not.toContain('CONTINUE_PROMPT')
 
         const tillDoneConfigPath = supportPaths.find(path => path.endsWith('.20x-tilldone-config.json'))!
         expect(JSON.parse(readFileSync(tillDoneConfigPath, 'utf-8'))).toEqual({ defaultEnabled: true, sessions: {} })
@@ -164,143 +158,6 @@ describe('OpencodeAdapter', () => {
             'regular-session': true
           }
         })
-      } finally {
-        rmSync(workspaceDir, { recursive: true, force: true })
-      }
-    })
-
-    it('buildIdlePrompt lists each incomplete todo individually in the nudge', () => {
-      const adapter = new OpencodeAdapter()
-      const workspaceDir = mkdtempSync(join(tmpdir(), 'opencode-adapter-test-'))
-
-      try {
-        ;(adapter as any).writeRuntimePluginFiles({
-          agentId: 'agent-1',
-          taskId: 'task-1',
-          workspaceDir
-        })
-
-        const pluginPaths = (adapter as any).pluginFilePaths as string[]
-        const tillDonePath = pluginPaths.find((p: string) => p.endsWith('20x-tilldone.js'))!
-        const code = readFileSync(tillDonePath, 'utf-8')
-
-        // Extract only the helper functions (everything before the TillDone export)
-        // and strip the import so it runs in a plain Function body.
-        const exportIdx = code.indexOf('export var TillDone')
-        const helperCode = code
-          .slice(0, exportIdx)
-          .replace(/^import .*/gm, '')
-
-        // eslint-disable-next-line no-new-func
-        const fn = new Function(helperCode + `
-          return { normalizeTodos, isTodoComplete, hasIncompleteTodos, buildIdlePrompt, DONE_STATUSES };
-        `)
-        const helpers = fn()
-
-        // All todos completed → should return null (no nudge needed)
-        expect(helpers.buildIdlePrompt([
-          { id: '1', content: 'write tests', status: 'completed' },
-          { id: '2', content: 'review PR', status: 'done' }
-        ])).toBeNull()
-
-        // Empty todos → should return INITIAL_TODO_PROMPT
-        const emptyResult = helpers.buildIdlePrompt([])
-        expect(emptyResult).toContain('todowrite')
-        expect(emptyResult).toContain('before using other tools')
-
-        // Mix of completed and incomplete → should list remaining items
-        const mixedResult = helpers.buildIdlePrompt([
-          { id: '1', content: 'write tests', status: 'completed' },
-          { id: '2', content: 'fix linting', status: 'in_progress' },
-          { id: '3', content: 'update docs', status: 'pending' },
-          { id: '4', content: 'deploy', status: 'cancelled' }
-        ])
-        expect(mixedResult).toContain('2/4 completed')
-        expect(mixedResult).toContain('Remaining items:')
-        expect(mixedResult).toContain('[in_progress] fix linting')
-        expect(mixedResult).toContain('[pending] update docs')
-        expect(mixedResult).not.toContain('write tests')
-        expect(mixedResult).not.toContain('deploy')
-
-        // Single incomplete → should show 0/1 completed
-        const singleResult = helpers.buildIdlePrompt([
-          { id: '1', content: 'implement feature', status: 'pending' }
-        ])
-        expect(singleResult).toContain('0/1 completed')
-        expect(singleResult).toContain('[pending] implement feature')
-
-        // isTodoComplete checks each status correctly
-        expect(helpers.isTodoComplete({ status: 'completed' })).toBe(true)
-        expect(helpers.isTodoComplete({ status: 'done' })).toBe(true)
-        expect(helpers.isTodoComplete({ status: 'cancelled' })).toBe(true)
-        expect(helpers.isTodoComplete({ status: 'removed' })).toBe(true)
-        expect(helpers.isTodoComplete({ status: 'pending' })).toBe(false)
-        expect(helpers.isTodoComplete({ status: 'in_progress' })).toBe(false)
-      } finally {
-        rmSync(workspaceDir, { recursive: true, force: true })
-      }
-    })
-
-    it('getIncompleteTodos returns remaining items from the state file', async () => {
-      const adapter = new OpencodeAdapter()
-      const workspaceDir = mkdtempSync(join(tmpdir(), 'opencode-adapter-test-'))
-
-      try {
-        ;(adapter as any).writeRuntimePluginFiles({
-          agentId: 'agent-1',
-          taskId: 'task-1',
-          workspaceDir,
-          tillDone: true
-        })
-        ;(adapter as any).writeTillDoneSessionConfig('ses-1', true)
-
-        const config = { agentId: 'agent-1', taskId: 'task-1', workspaceDir }
-
-        // No state for session → empty array (no todos created yet)
-        const noState = await adapter.getIncompleteTodos('ses-1', config)
-        expect(noState).toEqual([])
-
-        // Write state with mixed todos
-        const statePath = (adapter as any).tillDoneStatePath as string
-        const state = {
-          'ses-1': {
-            todos: [
-              { content: 'write tests', status: 'completed' },
-              { content: 'fix bug', status: 'in_progress' },
-              { content: 'deploy', status: 'pending' }
-            ]
-          }
-        }
-        const { writeFileSync: wfs } = await import('fs')
-        wfs(statePath, JSON.stringify(state), 'utf-8')
-
-        const incomplete = await adapter.getIncompleteTodos('ses-1', config)
-        expect(incomplete).toEqual([
-          { content: 'fix bug', status: 'in_progress' },
-          { content: 'deploy', status: 'pending' }
-        ])
-
-        // All completed → null (no nudge needed)
-        const doneState = {
-          'ses-1': {
-            todos: [
-              { content: 'write tests', status: 'completed' },
-              { content: 'fix bug', status: 'done' }
-            ]
-          }
-        }
-        wfs(statePath, JSON.stringify(doneState), 'utf-8')
-        const allDone = await adapter.getIncompleteTodos('ses-1', config)
-        expect(allDone).toBeNull()
-
-        // Disabled session → null
-        ;(adapter as any).writeTillDoneSessionConfig('ses-disabled', false)
-        const disabled = await adapter.getIncompleteTodos('ses-disabled', config)
-        expect(disabled).toBeNull()
-
-        // Unknown session (not tracked) → null
-        const unknown = await adapter.getIncompleteTodos('ses-unknown', config)
-        expect(unknown).toBeNull()
       } finally {
         rmSync(workspaceDir, { recursive: true, force: true })
       }
