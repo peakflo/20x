@@ -3,6 +3,7 @@ import { CheckCircle, Loader2, ExternalLink } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogBody } from '@/components/ui/Dialog'
 import { useSettingsStore } from '@/stores/settings-store'
+import { subscribe } from '@/lib/shared-ipc-listeners'
 
 interface GlabCliSetupDialogProps {
   open: boolean
@@ -25,9 +26,11 @@ export function GlabCliSetupDialog({ open, onOpenChange, onComplete }: GlabCliSe
   }, [open])
 
   useEffect(() => {
-    return window.electronAPI.onGitlabDeviceCode((code) => {
-      setDeviceCode(code)
-    })
+    return subscribe<string>(
+      'gitlab:deviceCode',
+      (cb) => window.electronAPI.onGitlabDeviceCode(cb),
+      (code) => setDeviceCode(code)
+    )
   }, [])
 
   const handleAuth = async () => {

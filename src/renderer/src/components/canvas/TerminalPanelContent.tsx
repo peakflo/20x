@@ -3,6 +3,7 @@ import { Terminal as XTerm } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { useCanvasStore } from '@/stores/canvas-store'
+import { subscribe } from '@/lib/shared-ipc-listeners'
 import '@xterm/xterm/css/xterm.css'
 
 interface TerminalPanelContentProps {
@@ -131,20 +132,28 @@ export function TerminalPanelContent({ terminalId, cwd }: TerminalPanelContentPr
         window.electronAPI.terminal.write(terminalId, data)
       })
 
-      const removeDataListener = window.electronAPI.terminal.onData(({ id, data }) => {
-        if (id === terminalId) {
-          term.write(data)
+      const removeDataListener = subscribe<{ id: string; data: string }>(
+        'terminal:data',
+        (cb) => window.electronAPI.terminal.onData(cb),
+        ({ id, data }) => {
+          if (id === terminalId) {
+            term.write(data)
+          }
         }
-      })
+      )
 
       let processExited = false
 
-      const removeExitListener = window.electronAPI.terminal.onExit(({ id }) => {
-        if (id === terminalId) {
-          processExited = true
-          term.write('\r\n\x1b[90m[Process exited — press Enter to restart]\x1b[0m\r\n')
+      const removeExitListener = subscribe<{ id: string }>(
+        'terminal:exit',
+        (cb) => window.electronAPI.terminal.onExit(cb),
+        ({ id }) => {
+          if (id === terminalId) {
+            processExited = true
+            term.write('\r\n\x1b[90m[Process exited — press Enter to restart]\x1b[0m\r\n')
+          }
         }
-      })
+      )
 
       // Respawn the shell when the user presses Enter after exit
       const respawnDispose = term.onKey(({ domEvent }) => {

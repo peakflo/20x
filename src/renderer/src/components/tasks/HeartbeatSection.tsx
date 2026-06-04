@@ -5,6 +5,7 @@ import { Badge } from '@/components/ui/Badge'
 import { Textarea } from '@/components/ui/Textarea'
 import { Markdown } from '@/components/ui/Markdown'
 import { Dialog, DialogContent, DialogHeader, DialogBody, DialogTitle } from '@/components/ui/Dialog'
+import { subscribe } from '@/lib/shared-ipc-listeners'
 import type { WorkfloTask } from '@/types'
 import type { HeartbeatStatusResult } from '@/types/electron'
 import { HeartbeatStatus } from '@/types'
@@ -66,22 +67,28 @@ export function HeartbeatSection({ task, onTaskUpdated }: HeartbeatSectionProps)
     fetchLogs()
   }, [fetchStatus, fetchContent, fetchLogs])
 
-  // Listen for heartbeat events
+  // Listen for heartbeat events (shared listeners to avoid MaxListeners warning)
   useEffect(() => {
-    const unsubAlert = window.electronAPI.onHeartbeatAlert((event: unknown) => {
-      const alert = event as { taskId: string }
-      if (alert.taskId === task.id) {
-        fetchStatus()
-        fetchContent()
-        fetchLogs()
+    const unsubAlert = subscribe<{ taskId: string }>(
+      'heartbeat:alert',
+      (cb) => window.electronAPI.onHeartbeatAlert(cb as (event: unknown) => void),
+      (alert) => {
+        if (alert.taskId === task.id) {
+          fetchStatus()
+          fetchContent()
+          fetchLogs()
+        }
       }
-    })
-    const unsubDisabled = window.electronAPI.onHeartbeatDisabled((event: unknown) => {
-      const data = event as { taskId: string }
-      if (data.taskId === task.id) {
-        fetchStatus()
+    )
+    const unsubDisabled = subscribe<{ taskId: string }>(
+      'heartbeat:disabled',
+      (cb) => window.electronAPI.onHeartbeatDisabled(cb as (event: unknown) => void),
+      (data) => {
+        if (data.taskId === task.id) {
+          fetchStatus()
+        }
       }
-    })
+    )
     return () => { unsubAlert(); unsubDisabled() }
   }, [task.id, fetchStatus, fetchContent, fetchLogs])
 
