@@ -54,7 +54,6 @@ const CONNECTOR_CATALOG: ConnectorType[] = [
   { id: 'notion', name: 'Notion', description: 'Connect to Notion REST API for database queries and task sync', iconName: 'FileText', category: 'Productivity' },
   // Communication
   { id: 'google-mail', name: 'Gmail', description: 'Connect to Gmail for email and calendar', iconName: 'Mail', category: 'Communication' },
-  { id: 'slack', name: 'Slack (Bot)', description: 'Connect to Slack with a bot token for automated messaging and channel management', iconName: 'MessageSquare', category: 'Communication' },
   { id: 'slack-user', name: 'Slack', description: 'Connect to Slack with user-level OAuth to post messages as yourself', iconName: 'MessageSquare', category: 'Communication' },
   { id: 'outlook', name: 'Outlook', description: 'Connect to Outlook for email and calendar', iconName: 'Mail', category: 'Communication' },
   { id: 'tldv', name: 'TLDV', description: 'Connect to TLDV for meeting recording and transcription', iconName: 'MessageSquare', category: 'Communication' },
