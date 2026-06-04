@@ -1777,7 +1777,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
           if (toolObj?.todos && Array.isArray(toolObj.todos)) {
             currentSession.todos = (toolObj.todos as Array<Record<string, unknown>>)
               .filter(Boolean)
-              .map((t, i) => ({
+              .map((t) => ({
                 content: String(t.content || t.text || t.title || ''),
                 status: String(t.status || 'pending')
               }))
