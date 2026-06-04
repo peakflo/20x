@@ -2113,11 +2113,11 @@ describe('AgentManager tillDone nudge on idle', () => {
           ]
         }
       }
-    ])
+    ] as any)
 
     // Poll while BUSY — should capture todos onto session
     await (mgr as any).pollSingleSession(entry)
-    expect(session.todos).toEqual([
+    expect((session as any).todos).toEqual([
       { content: 'write unit tests', status: 'in_progress' },
       { content: 'fix linting errors', status: 'pending' },
       { content: 'update README', status: 'pending' }
@@ -2165,13 +2165,13 @@ describe('AgentManager tillDone nudge on idle', () => {
           ]
         }
       }
-    ])
+    ] as any)
 
     await (mgr as any).pollSingleSession(entry)
     // Nudge counter should reset on BUSY
     expect(entry.tillDoneNudgeCount).toBe(0)
     // Todos should be updated to all completed
-    expect(session.todos).toEqual([
+    expect((session as any).todos).toEqual([
       { content: 'write unit tests', status: 'completed' },
       { content: 'fix linting errors', status: 'completed' },
       { content: 'update README', status: 'completed' }
