@@ -89,10 +89,11 @@ export function EnterpriseSettings() {
   // ── Connected view ─────────────────────────────────────────────
   if (isAuthenticated && currentTenant) {
     return (
-      <SettingsSection
-        title="20x Cloud"
-        description="Connected to your organization's 20x Cloud"
-      >
+      <>
+        <SettingsSection
+          title="20x Cloud"
+          description="Connected to your organization's 20x Cloud"
+        >
         <div className="space-y-4">
           {/* Connected status */}
           <div className="flex items-center gap-2 py-2">
@@ -296,6 +297,15 @@ export function EnterpriseSettings() {
           </div>
         </div>
       </SettingsSection>
+
+      <EnterpriseLoginModal
+        open={showLoginModal}
+        onClose={() => {
+          setShowLoginModal(false)
+          loadSession()
+        }}
+      />
+    </>
     )
   }
 
