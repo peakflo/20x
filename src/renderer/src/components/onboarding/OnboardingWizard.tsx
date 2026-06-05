@@ -524,7 +524,7 @@ export function OnboardingWizard({ open, onOpenChange }: OnboardingWizardProps) 
           <DialogHeader>
             <DialogTitle>Welcome to 20x</DialogTitle>
             <DialogDescription>
-              AI-powered task management for software teams
+              Get 20x more done with AI agents
             </DialogDescription>
           </DialogHeader>
 
