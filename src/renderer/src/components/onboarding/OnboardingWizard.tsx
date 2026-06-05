@@ -300,14 +300,6 @@ export function OnboardingWizard({ open, onOpenChange }: OnboardingWizardProps) 
     return cleanup
   }, [open])
 
-  // After enterprise login completes, fetch templates
-  useEffect(() => {
-    if (isAuthenticated && !wasAuthenticated) {
-      fetchPresetups()
-    }
-    setWasAuthenticated(isAuthenticated)
-  }, [isAuthenticated, wasAuthenticated, fetchPresetups])
-
   const handleInstall = useCallback(async (toolKey: string) => {
     setInstalling(toolKey)
     try {
@@ -401,6 +393,17 @@ export function OnboardingWizard({ open, onOpenChange }: OnboardingWizardProps) 
       setCreating(false)
     }
   }, [createDefaultAgent, fetchPresetups, onOpenChange])
+
+  // When auth completes while login modal is open, auto-close it and run post-auth flow.
+  // This handles the browser signup flow where login/tenant-select happens in the background
+  // and isAuthenticated flips to true while the modal is still showing.
+  useEffect(() => {
+    if (isAuthenticated && !wasAuthenticated && loginModalOpen) {
+      setLoginModalOpen(false)
+      runPostAuthFlow()
+    }
+    setWasAuthenticated(isAuthenticated)
+  }, [isAuthenticated, wasAuthenticated, loginModalOpen, runPostAuthFlow])
 
   const handleStart = async () => {
     if (!selectedAgent) return
