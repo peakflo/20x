@@ -151,14 +151,16 @@ type ProviderChoice = GitProvider | 'none'
 
 function GitProviderRow({
   selected,
-  onSelect
+  onSelect,
+  toolStatus
 }: {
   selected: ProviderChoice | null
   onSelect: (p: ProviderChoice) => void
+  toolStatus: Record<string, ToolStatus> | null
 }) {
-  const options: { value: ProviderChoice; label: string }[] = [
-    { value: 'github', label: 'GitHub' },
-    { value: 'gitlab', label: 'GitLab' }
+  const options: { value: ProviderChoice; label: string; cliKey: string; cliName: string }[] = [
+    { value: 'github', label: 'GitHub', cliKey: 'gh', cliName: 'gh' },
+    { value: 'gitlab', label: 'GitLab', cliKey: 'glab', cliName: 'glab' }
   ]
 
   return (
@@ -167,21 +169,30 @@ function GitProviderRow({
         Where are your repos? <span className="opacity-60">(optional)</span>
       </p>
       <div className="flex gap-2">
-        {options.map((opt) => (
-          <button
-            key={opt.value}
-            type="button"
-            onClick={() => onSelect(selected === opt.value ? 'none' : opt.value)}
-            className={`px-3 py-1.5 rounded-md border text-xs font-medium transition-all cursor-pointer ${
-              selected === opt.value
-                ? 'border-primary bg-primary/5 text-foreground'
-                : 'border-border text-muted-foreground hover:border-muted-foreground/40'
-            }`}
-          >
-            {opt.label}
-            {selected === opt.value && <Check className="inline size-3 ml-1" />}
-          </button>
-        ))}
+        {options.map((opt) => {
+          const cli = toolStatus?.[opt.cliKey]
+          return (
+            <button
+              key={opt.value}
+              type="button"
+              onClick={() => onSelect(selected === opt.value ? 'none' : opt.value)}
+              className={`px-3 py-1.5 rounded-md border text-xs font-medium transition-all cursor-pointer flex items-center gap-1.5 ${
+                selected === opt.value
+                  ? 'border-primary bg-primary/5 text-foreground'
+                  : 'border-border text-muted-foreground hover:border-muted-foreground/40'
+              }`}
+            >
+              {opt.label}
+              {selected === opt.value && <Check className="inline size-3" />}
+              {toolStatus && cli?.installed && (
+                <span className="text-emerald-400 text-[10px] font-normal flex items-center gap-0.5">
+                  <Check className="size-2.5" />
+                  {opt.cliName}
+                </span>
+              )}
+            </button>
+          )
+        })}
       </div>
     </div>
   )
@@ -572,6 +583,7 @@ export function OnboardingWizard({ open, onOpenChange }: OnboardingWizardProps) 
               <GitProviderRow
                 selected={providerChoice}
                 onSelect={handleProviderSelect}
+                toolStatus={toolStatus}
               />
             )}
 
