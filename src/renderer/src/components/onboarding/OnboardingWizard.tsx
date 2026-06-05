@@ -1,20 +1,16 @@
-import { useEffect, useState, useRef, useCallback } from 'react'
+import { useEffect, useState, useCallback } from 'react'
 import {
   Check,
-  Download,
   Loader2,
-  Terminal,
-  RefreshCw,
-  X,
   AlertTriangle,
   ArrowRight,
-  Bot,
-  Rocket,
-  FolderOpen
+  ChevronDown,
+  ChevronUp,
+  Download,
+  Sparkles,
+  Zap
 } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
-import { Input } from '@/components/ui/Input'
-import { Label } from '@/components/ui/Label'
 import {
   Dialog,
   DialogContent,
@@ -25,21 +21,14 @@ import {
 } from '@/components/ui/Dialog'
 import { useAgentStore } from '@/stores/agent-store'
 import { useSettingsStore, type GitProvider } from '@/stores/settings-store'
-import { agentConfigApi, depsApi } from '@/lib/ipc-client'
-import { CodingAgentType, CODING_AGENTS, CLAUDE_MODELS, CODEX_MODELS } from '@/types'
+import { useEnterpriseStore } from '@/stores/enterprise-store'
+import { useDashboardStore } from '@/stores/dashboard-store'
+import { EnterpriseLoginModal } from '@/components/settings/tabs/EnterpriseLoginModal'
+import { PresetupWizard } from '@/components/dashboard/PresetupWizard'
+import { CodingAgentType, CLAUDE_MODELS, CODEX_MODELS } from '@/types'
+import { agentConfigApi } from '@/lib/ipc-client'
 import type { ToolStatus } from '@/types/electron'
-
-/* ─── Types ─── */
-
-type OnboardingStep = 'welcome' | 'provider' | 'tools' | 'agent'
-type OnboardingProviderChoice = GitProvider | 'none'
-
-interface ProgressEvent {
-  agentName: string
-  stage: string
-  output: string
-  percent: number
-}
+import type { PresetupTemplate } from '@/stores/dashboard-store'
 
 /* ─── Force-onboarding flag ─── */
 
@@ -62,793 +51,104 @@ export function shouldShowOnboarding(
   return cMaj !== sMaj || cMin !== sMin
 }
 
-/* ─── Tool metadata ─── */
+/* ─── Agent card metadata ─── */
 
-const TOOL_META: Record<
-  string,
+type AgentChoice = CodingAgentType | 'peakflo'
+
+interface AgentOption {
+  type: AgentChoice
+  label: string
+  tagline: string
+  color: string
+  letter: string
+}
+
+const AGENT_OPTIONS: AgentOption[] = [
   {
-    label: string
-    color: string
-    letter: string
-    required?: boolean
-    description: string
-    category: 'prerequisite' | 'agent' | 'tool'
-  }
-> = {
-  nodejs: {
-    label: 'Node.js',
-    color: 'bg-green-600',
-    letter: 'N',
-    required: true,
-    description: 'JavaScript runtime (required for all agents)',
-    category: 'prerequisite'
-  },
-  npm: {
-    label: 'npm',
-    color: 'bg-red-600',
-    letter: 'n',
-    required: true,
-    description: 'Package manager (included with Node.js)',
-    category: 'prerequisite'
-  },
-  git: {
-    label: 'Git',
-    color: 'bg-orange-600',
-    letter: 'G',
-    description: 'Version control system',
-    category: 'prerequisite'
-  },
-  gh: {
-    label: 'GitHub CLI',
-    color: 'bg-gray-600',
-    letter: 'gh',
-    description: 'GitHub command-line tool',
-    category: 'tool'
-  },
-  glab: {
-    label: 'GitLab CLI',
-    color: 'bg-orange-500',
-    letter: 'gl',
-    description: 'GitLab command-line tool',
-    category: 'tool'
-  },
-  claudeCode: {
+    type: CodingAgentType.CLAUDE_CODE,
     label: 'Claude Code',
+    tagline: 'Anthropic',
     color: 'bg-amber-600',
-    letter: 'C',
-    description: "Anthropic's coding agent",
-    category: 'agent'
+    letter: 'C'
   },
-  opencode: {
+  {
+    type: CodingAgentType.OPENCODE,
     label: 'OpenCode',
+    tagline: 'Open-source, free models',
     color: 'bg-blue-600',
-    letter: 'O',
-    description: 'Open-source coding agent (free models)',
-    category: 'agent'
+    letter: 'O'
   },
-  codex: {
+  {
+    type: CodingAgentType.CODEX,
     label: 'Codex',
+    tagline: 'OpenAI',
     color: 'bg-purple-600',
-    letter: 'X',
-    description: "OpenAI's coding agent",
-    category: 'agent'
+    letter: 'X'
+  }
+]
+
+/* ─── Tool status helpers ─── */
+
+interface ToolCheck {
+  key: string
+  label: string
+}
+
+const CORE_TOOLS: ToolCheck[] = [
+  { key: 'nodejs', label: 'Node.js' },
+  { key: 'npm', label: 'npm' },
+  { key: 'git', label: 'Git' }
+]
+
+function getAgentToolKey(type: CodingAgentType): string {
+  switch (type) {
+    case CodingAgentType.CLAUDE_CODE:
+      return 'claudeCode'
+    case CodingAgentType.OPENCODE:
+      return 'opencode'
+    case CodingAgentType.CODEX:
+      return 'codex'
   }
 }
 
-const INSTALLABLE = ['nodejs', 'npm', 'git', 'gh', 'glab', 'claudeCode', 'opencode', 'codex', 'pnpm']
-const INSTALL_ORDER = ['nodejs', 'git', 'gh', 'glab', 'claudeCode', 'opencode', 'codex']
+/* ─── Auto-select best default model ─── */
 
-function isVisibleToolForProvider(key: string, provider: OnboardingProviderChoice | null): boolean {
-  if (key === 'gh') return provider === 'github'
-  if (key === 'glab') return provider === 'gitlab'
-  return true
-}
-
-function getVisibleInstallOrder(provider: OnboardingProviderChoice | null): string[] {
-  return INSTALL_ORDER.filter((key) => isVisibleToolForProvider(key, provider))
-}
-
-function getVisibleToolKeys(provider: OnboardingProviderChoice | null): string[] {
-  return Object.keys(TOOL_META).filter((key) => isVisibleToolForProvider(key, provider))
-}
-
-/* ─── Step 1: Welcome ─── */
-
-function WelcomeStep({ onNext }: { onNext: () => void }) {
-  return (
-    <div className="flex flex-col items-center text-center py-4">
-      <div className="rounded-full bg-primary/10 p-4 mb-6">
-        <Rocket className="size-8 text-primary" />
-      </div>
-
-      <h2 className="text-2xl font-bold text-foreground mb-2">Welcome to 20x</h2>
-      <p className="text-sm text-muted-foreground mb-8 leading-relaxed max-w-sm">
-        AI-powered task management for software teams. Let&apos;s get your environment set up in a
-        few quick steps.
-      </p>
-
-      <ul className="text-left text-sm text-muted-foreground space-y-3 mb-8 w-full max-w-xs">
-        <li className="flex items-start gap-2.5">
-          <Check className="size-4 text-primary mt-0.5 shrink-0" />
-          <span>Detect &amp; install required CLI tools</span>
-        </li>
-        <li className="flex items-start gap-2.5">
-          <Check className="size-4 text-primary mt-0.5 shrink-0" />
-          <span>Configure your first coding agent</span>
-        </li>
-      </ul>
-
-      <Button onClick={onNext} className="w-full max-w-xs">
-        Get Started
-        <ArrowRight className="size-4 ml-1.5" />
-      </Button>
-    </div>
-  )
-}
-
-/* ─── Step 1b: Git Provider Choice ─── */
-
-function ProviderChoiceStep({
-  onNext,
-  selectedProvider,
-  onSelectProvider
-}: {
-  onNext: () => void
-  selectedProvider: OnboardingProviderChoice | null
-  onSelectProvider: (provider: OnboardingProviderChoice) => void
-}) {
-  const { setGitProvider } = useSettingsStore()
-
-  const handleSelect = async (provider: OnboardingProviderChoice) => {
-    onSelectProvider(provider)
-    await setGitProvider(provider === 'none' ? null : provider)
+async function getDefaultModel(type: CodingAgentType): Promise<string> {
+  if (type === CodingAgentType.CLAUDE_CODE) {
+    return CLAUDE_MODELS[0]?.id || ''
   }
-
-  return (
-    <div className="flex flex-col items-center text-center py-4">
-      <h2 className="text-2xl font-bold text-foreground mb-2">Choose your workspace</h2>
-      <p className="text-sm text-muted-foreground mb-6 leading-relaxed max-w-sm">
-        Select the platform where your repositories are hosted, or continue without repo tools.
-      </p>
-
-      <div className="grid grid-cols-3 gap-3 w-full max-w-xl mb-8">
-        {/* GitHub option */}
-        <button
-          type="button"
-          onClick={() => handleSelect('github')}
-          className={`flex flex-col items-center gap-3 rounded-xl border-2 p-6 transition-all ${
-            selectedProvider === 'github'
-              ? 'border-primary bg-primary/5 shadow-md'
-              : 'border-border hover:border-muted-foreground/50 hover:bg-muted/30'
-          }`}
-        >
-          <div className="bg-gray-600 rounded-full size-12 flex items-center justify-center text-white text-sm font-bold">
-            gh
-          </div>
-          <div>
-            <p className="text-sm font-semibold text-foreground">GitHub</p>
-            <p className="text-xs text-muted-foreground mt-0.5">github.com</p>
-          </div>
-          {selectedProvider === 'github' && (
-            <Check className="size-5 text-primary" />
-          )}
-        </button>
-
-        {/* GitLab option */}
-        <button
-          type="button"
-          onClick={() => handleSelect('gitlab')}
-          className={`flex flex-col items-center gap-3 rounded-xl border-2 p-6 transition-all ${
-            selectedProvider === 'gitlab'
-              ? 'border-primary bg-primary/5 shadow-md'
-              : 'border-border hover:border-muted-foreground/50 hover:bg-muted/30'
-          }`}
-        >
-          <div className="bg-orange-500 rounded-full size-12 flex items-center justify-center text-white text-sm font-bold">
-            gl
-          </div>
-          <div>
-            <p className="text-sm font-semibold text-foreground">GitLab</p>
-            <p className="text-xs text-muted-foreground mt-0.5">gitlab.com</p>
-          </div>
-          {selectedProvider === 'gitlab' && (
-            <Check className="size-5 text-primary" />
-          )}
-        </button>
-
-        {/* No repo tools option */}
-        <button
-          type="button"
-          onClick={() => handleSelect('none')}
-          className={`flex flex-col items-center gap-3 rounded-xl border-2 p-6 transition-all ${
-            selectedProvider === 'none'
-              ? 'border-primary bg-primary/5 shadow-md'
-              : 'border-border hover:border-muted-foreground/50 hover:bg-muted/30'
-          }`}
-        >
-          <div className="bg-muted rounded-full size-12 flex items-center justify-center text-muted-foreground text-sm font-bold">
-            <X className="size-5" />
-          </div>
-          <div>
-            <p className="text-sm font-semibold text-foreground">I don&apos;t use them</p>
-            <p className="text-xs text-muted-foreground mt-0.5">Skip repo tools</p>
-          </div>
-          {selectedProvider === 'none' && (
-            <Check className="size-5 text-primary" />
-          )}
-        </button>
-      </div>
-
-      <Button onClick={onNext} disabled={!selectedProvider} className="w-full max-w-xs">
-        Continue
-        <ArrowRight className="size-4 ml-1.5" />
-      </Button>
-    </div>
-  )
-}
-
-/* ─── Step 2: Tools & Agents ─── */
-
-function ToolsAndAgentsStep({
-  onNext,
-  onSkip,
-  selectedProvider
-}: {
-  onNext: () => void
-  onSkip: () => void
-  selectedProvider: OnboardingProviderChoice | null
-}) {
-  const [status, setStatus] = useState<Record<string, ToolStatus> | null>(null)
-  const [installing, setInstalling] = useState<string | null>(null)
-  const [terminalOutput, setTerminalOutput] = useState('')
-  const [loading, setLoading] = useState(true)
-  const [customOpencodePath, setCustomOpencodePath] = useState('')
-  const [savingPath, setSavingPath] = useState(false)
-  const [pathError, setPathError] = useState<string | null>(null)
-  const termRef = useRef<HTMLDivElement>(null)
-
-  const detect = useCallback(async () => {
-    setLoading(true)
-    try {
-      const result = await window.electronAPI.agentInstaller.detect()
-      setStatus(result)
-    } catch (err) {
-      console.error('Failed to detect agents:', err)
-    } finally {
-      setLoading(false)
-    }
-  }, [])
-
-  useEffect(() => {
-    detect()
-    setTerminalOutput('')
-  }, [detect])
-
-  useEffect(() => {
-    const cleanup = window.electronAPI.agentInstaller.onProgress((data: ProgressEvent) => {
-      setTerminalOutput((prev) => prev + data.output)
-      if (data.stage === 'complete' || data.stage === 'error') {
-        setInstalling(null)
-        detect()
-      }
-    })
-    return cleanup
-  }, [detect])
-
-  useEffect(() => {
-    if (termRef.current) {
-      termRef.current.scrollTop = termRef.current.scrollHeight
-    }
-  }, [terminalOutput])
-
-  const handleInstall = async (agentName: string) => {
-    setInstalling(agentName)
-    setTerminalOutput(
-      (prev) =>
-        prev + `\n── Installing ${TOOL_META[agentName]?.label || agentName} ──\n`
-    )
-    try {
-      const result = await window.electronAPI.agentInstaller.install(agentName) as { success: boolean; error: string | null; newStatus: Record<string, ToolStatus> }
-      // On some platforms the install returns immediately without progress events
-      // (e.g. glab/gh on macOS), so we must clear the installing state here.
-      if (result && !result.success) {
-        setTerminalOutput((prev) => prev + `${result.error || 'Installation not available on this platform.'}\n`)
-        setInstalling(null)
-        if (result.newStatus) setStatus(result.newStatus)
-      }
-    } catch (err) {
-      setTerminalOutput((prev) => prev + `Error: ${err}\n`)
-      setInstalling(null)
-    }
+  if (type === CodingAgentType.CODEX) {
+    return CODEX_MODELS[0]?.id || ''
   }
-
-  const handleInstallAll = async () => {
-    if (!status) return
-    const missing = getVisibleInstallOrder(selectedProvider).filter((key) => {
-      const s = status[key]
-      return s && !s.installed
-    })
-
-    for (const agentName of missing) {
-      const freshStatus = await window.electronAPI.agentInstaller.detect()
-      setStatus(freshStatus)
-      if (freshStatus[agentName]?.installed) continue
-
-      setInstalling(agentName)
-      setTerminalOutput(
-        (prev) =>
-          prev + `\n── Installing ${TOOL_META[agentName]?.label || agentName} ──\n`
-      )
-      try {
-        const result = await window.electronAPI.agentInstaller.install(agentName) as { success: boolean; error: string | null; newStatus: Record<string, ToolStatus> }
-        if (result && !result.success) {
-          setTerminalOutput((prev) => prev + `${result.error || 'Installation not available on this platform.'}\n`)
-          if (result.newStatus) setStatus(result.newStatus)
-        }
-      } catch (err) {
-        setTerminalOutput((prev) => prev + `Error: ${err}\n`)
-      }
-      await new Promise((r) => setTimeout(r, 500))
-    }
-    setInstalling(null)
-    await detect()
-  }
-
-  const handleSetOpencodePath = async () => {
-    if (!customOpencodePath.trim()) {
-      setPathError('Please enter the directory path containing the binary.')
-      return
-    }
-    setSavingPath(true)
-    setPathError(null)
-    try {
-      const result = await depsApi.setOpencodePath(customOpencodePath.trim())
-      if (result.success) {
-        await detect()
-      } else {
-        setPathError(result.error || 'Binary not found at that path.')
-      }
-    } catch {
-      setPathError('Failed to save path.')
-    } finally {
-      setSavingPath(false)
-    }
-  }
-
-  const visibleInstallOrder = getVisibleInstallOrder(selectedProvider)
-  const visibleToolKeys = getVisibleToolKeys(selectedProvider)
-
-  const missingCount = status
-    ? visibleInstallOrder.filter((key) => status[key] && !status[key].installed).length
-    : 0
-
-  const installedCount = status
-    ? visibleToolKeys.filter((key) => status[key]?.installed).length
-    : 0
-  const totalCount = status ? visibleToolKeys.filter((key) => status[key]).length : 0
-
-  const hasPrerequisites = status?.nodejs?.installed && status?.npm?.installed
-
-  const renderCategory = (
-    category: 'prerequisite' | 'agent' | 'tool',
-    title: string
-  ) => {
-    const items = Object.entries(TOOL_META).filter(([key, meta]) => {
-      if (meta.category !== category) return false
-      return isVisibleToolForProvider(key, selectedProvider)
-    })
-    if (items.length === 0) return null
-
-    return (
-      <div className="mb-3">
-        <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-1.5 px-1">
-          {title}
-        </p>
-        <div className="grid gap-1.5">
-          {items.map(([key, meta]) => {
-            const toolStatus = status?.[key]
-            if (!toolStatus) return null
-            const isInstalling = installing === key
-            const canInstall = INSTALLABLE.includes(key)
-            const needsPrereq =
-              !hasPrerequisites && meta.category === 'agent' && !toolStatus.installed
-
-            return (
-              <div
-                key={key}
-                className={`flex items-center gap-3 rounded-lg border border-border p-2.5 bg-background ${
-                  needsPrereq ? 'opacity-60' : ''
-                }`}
-              >
-                <div
-                  className={`${meta.color} rounded-full size-8 flex items-center justify-center text-white text-xs font-bold shrink-0`}
-                >
-                  {meta.letter}
-                </div>
-
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium text-foreground leading-tight">
-                    {meta.label}
-                    {meta.required && <span className="text-red-400 ml-1">*</span>}
-                  </p>
-                  <p className="text-xs text-muted-foreground truncate">
-                    {toolStatus.installed && toolStatus.version
-                      ? `v${toolStatus.version}`
-                      : meta.description}
-                  </p>
-                </div>
-
-                {isInstalling ? (
-                  <span className="flex items-center gap-1.5 text-xs text-yellow-400 shrink-0">
-                    <Loader2 className="size-3.5 animate-spin" />
-                    Installing...
-                  </span>
-                ) : toolStatus.installed ? (
-                  <span className="flex items-center gap-1.5 text-xs text-emerald-400 shrink-0">
-                    <Check className="size-3.5" />
-                    Installed
-                  </span>
-                ) : (
-                  <span className="text-xs text-red-400 shrink-0">Missing</span>
-                )}
-
-                {!toolStatus.installed && canInstall && !isInstalling && (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => handleInstall(key)}
-                    disabled={!!installing || needsPrereq}
-                    className="ml-1 h-7 px-2.5 text-xs shrink-0"
-                    title={needsPrereq ? 'Install Node.js first' : undefined}
-                  >
-                    <Download className="size-3 mr-1" />
-                    Install
-                  </Button>
-                )}
-              </div>
-            )
-          })}
-        </div>
-      </div>
-    )
-  }
-
-  return (
-    <>
-      {loading && !status ? (
-        <div className="flex items-center justify-center py-8 gap-3 text-muted-foreground">
-          <Loader2 className="size-5 animate-spin" />
-          <span>Detecting installed tools...</span>
-        </div>
-      ) : (
-        <>
-          {/* Prerequisites warning */}
-          {status && !hasPrerequisites && (
-            <div className="flex items-start gap-2 rounded-lg border border-yellow-500/30 bg-yellow-500/5 p-3 mb-4 text-sm">
-              <AlertTriangle className="size-4 text-yellow-400 shrink-0 mt-0.5" />
-              <div>
-                <p className="font-medium text-yellow-400">Prerequisites missing</p>
-                <p className="text-xs text-muted-foreground mt-0.5">
-                  Node.js and npm are required before installing coding agents. Install them first,
-                  or click &quot;Install All&quot; to set up everything in order.
-                </p>
-              </div>
-            </div>
-          )}
-
-          {/* Status grid */}
-          {renderCategory('prerequisite', 'Prerequisites')}
-          {renderCategory('tool', 'Tools')}
-          {renderCategory('agent', 'Coding Agents')}
-
-          {/* Custom OpenCode path */}
-          {status && !status.opencode?.installed && (
-            <div className="mt-3 pt-3 border-t border-border">
-              <p className="text-xs font-medium text-muted-foreground mb-2 uppercase tracking-wide">
-                Custom OpenCode path
-              </p>
-              <div className="flex gap-2">
-                <Input
-                  value={customOpencodePath}
-                  onChange={(e) => setCustomOpencodePath(e.target.value)}
-                  placeholder="e.g. /home/user/.opencode/bin"
-                  className="flex-1"
-                />
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={handleSetOpencodePath}
-                  disabled={savingPath || !customOpencodePath.trim()}
-                >
-                  {savingPath ? (
-                    <Loader2 className="size-4 animate-spin" />
-                  ) : (
-                    <FolderOpen className="size-4" />
-                  )}
-                  Set
-                </Button>
-              </div>
-              {pathError && <p className="text-xs text-destructive mt-1.5">{pathError}</p>}
-            </div>
-          )}
-
-          {/* Actions */}
-          <div className="flex items-center gap-3 mt-4 mb-4">
-            {missingCount > 0 && (
-              <Button size="sm" onClick={handleInstallAll} disabled={!!installing}>
-                {installing ? (
-                  <Loader2 className="size-3.5 animate-spin mr-1.5" />
-                ) : (
-                  <Download className="size-3.5 mr-1.5" />
-                )}
-                Install All Missing ({missingCount})
-              </Button>
-            )}
-            <Button variant="ghost" size="sm" onClick={detect} disabled={!!installing}>
-              <RefreshCw className={`size-3.5 mr-1 ${loading ? 'animate-spin' : ''}`} />
-              Refresh
-            </Button>
-            {missingCount === 0 && status && (
-              <span className="text-xs text-emerald-400 flex items-center gap-1.5">
-                <Check className="size-3.5" />
-                All tools are installed!
-              </span>
-            )}
-          </div>
-
-          {/* Terminal output */}
-          {terminalOutput && (
-            <div>
-              <div className="flex items-center justify-between mb-2">
-                <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                  <Terminal className="size-3.5" />
-                  Installation output
-                </div>
-                <button
-                  onClick={() => setTerminalOutput('')}
-                  className="text-xs text-muted-foreground hover:text-foreground transition-colors"
-                >
-                  <X className="size-3.5" />
-                </button>
-              </div>
-              <div
-                ref={termRef}
-                className="bg-black/80 border border-border rounded-lg p-3 max-h-40 overflow-y-auto font-mono text-xs text-green-400 whitespace-pre-wrap"
-              >
-                {terminalOutput}
-              </div>
-            </div>
-          )}
-
-          {/* Navigation */}
-          <div className="flex items-center gap-3 mt-4 border-t border-border pt-4">
-            <Button onClick={onNext}>
-              Continue
-              <ArrowRight className="size-4 ml-1.5" />
-            </Button>
-            <Button variant="ghost" onClick={onSkip}>
-              Skip setup
-            </Button>
-            <span className="ml-auto text-xs text-muted-foreground">
-              {installedCount}/{totalCount} installed
-            </span>
-          </div>
-        </>
-      )}
-    </>
-  )
-}
-
-/* ─── Step 4: Agent Configuration ─── */
-
-interface ModelOption {
-  id: string
-  name: string
-}
-
-function AgentConfigStep({
-  onCreated,
-  error,
-  setError
-}: {
-  onCreated: () => void
-  error: string | null
-  setError: (e: string | null) => void
-}) {
-  const [name, setName] = useState('Robo')
-  const [codingAgent, setCodingAgent] = useState<CodingAgentType>(CodingAgentType.OPENCODE)
-  const [model, setModel] = useState('')
-  const [models, setModels] = useState<ModelOption[]>([])
-  const [loadingModels, setLoadingModels] = useState(true)
-  const [creating, setCreating] = useState(false)
-  const { agents, createAgent, updateAgent } = useAgentStore()
-
-  useEffect(() => {
-    let cancelled = false
-    setLoadingModels(true)
-    setModel('')
-
-    if (codingAgent === CodingAgentType.CLAUDE_CODE) {
-      const list = CLAUDE_MODELS.map((m) => ({ id: m.id, name: m.name }))
-      setModels(list)
-      if (list.length > 0) setModel(list[0].id)
-      setLoadingModels(false)
-      return
-    }
-
-    if (codingAgent === CodingAgentType.CODEX) {
-      const list = CODEX_MODELS.map((m) => ({ id: m.id, name: m.name }))
-      setModels(list)
-      if (list.length > 0) setModel(list[0].id)
-      setLoadingModels(false)
-      return
-    }
-
-    // OpenCode — fetch from server
-    agentConfigApi
-      .getProviders(undefined, CodingAgentType.OPENCODE)
-      .then((result) => {
-        if (cancelled) return
-        if (result?.providers) {
-          const list: ModelOption[] = []
-          const providers = Array.isArray(result.providers) ? result.providers : []
-          for (const p of providers) {
-            if (Array.isArray(p.models)) {
-              for (const m of p.models as { id?: string; name?: string }[]) {
-                if (m?.id)
-                  list.push({ id: `${p.id}/${m.id}`, name: `${p.name} – ${m.name || m.id}` })
-              }
-            } else if (p.models && typeof p.models === 'object') {
-              // Use Object.entries so the map key serves as fallback model ID
-              // (custom providers like routerAI may not have id on the value)
-              for (const [key, m] of Object.entries(p.models as Record<string, { id?: string; name?: string }>)) {
-                const modelId = m?.id || key
-                if (modelId)
-                  list.push({ id: `${p.id}/${modelId}`, name: `${p.name} – ${m?.name || modelId}` })
-              }
+  // OpenCode — try to fetch, fall back gracefully
+  try {
+    const result = await agentConfigApi.getProviders(undefined, CodingAgentType.OPENCODE)
+    if (result?.providers) {
+      const providers = Array.isArray(result.providers) ? result.providers : []
+      for (const p of providers) {
+        if (Array.isArray(p.models)) {
+          for (const m of p.models as { id?: string; name?: string }[]) {
+            if (m?.id) {
+              const name = (m.name || '').toLowerCase()
+              if (name.includes('free')) return `${p.id}/${m.id}`
             }
           }
-          setModels(list)
-          if (list.length > 0) {
-            const zenFree = list.find((m) => m.name.toLowerCase().includes('free'))
-            setModel(zenFree?.id || list[0].id)
+          const first = (p.models as { id?: string }[])[0]
+          if (first?.id) return `${p.id}/${first.id}`
+        } else if (p.models && typeof p.models === 'object') {
+          for (const [key, m] of Object.entries(
+            p.models as Record<string, { id?: string; name?: string }>
+          )) {
+            const modelId = m?.id || key
+            if (modelId) return `${p.id}/${modelId}`
           }
         }
-      })
-      .catch(() => {})
-      .finally(() => {
-        if (!cancelled) setLoadingModels(false)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [codingAgent])
-
-  const handleCreate = async () => {
-    if (!name.trim()) {
-      setError('Agent name is required')
-      return
-    }
-    setCreating(true)
-    setError(null)
-    try {
-      const existingDefault = agents.find(
-        (a) => a.is_default && (!a.config.coding_agent || !a.config.model)
-      )
-      if (existingDefault) {
-        await updateAgent(existingDefault.id, {
-          name: name.trim(),
-          config: {
-            ...existingDefault.config,
-            coding_agent: codingAgent,
-            model: model || undefined
-          }
-        })
-      } else {
-        await createAgent({
-          name: name.trim(),
-          config: {
-            coding_agent: codingAgent,
-            model: model || undefined
-          },
-          is_default: true
-        })
       }
-      onCreated()
-    } catch {
-      setError('Failed to create agent')
-    } finally {
-      setCreating(false)
     }
+  } catch {
+    // Silently fail — user can configure model later in settings
   }
-
-  return (
-    <>
-      <div className="rounded-full bg-primary/10 p-2.5 w-fit mb-4">
-        <Bot className="size-5 text-primary" />
-      </div>
-
-      <h2 className="text-2xl font-bold text-foreground mb-2">Set up your agent</h2>
-      <p className="text-sm text-muted-foreground mb-6 leading-relaxed">
-        Configure your AI coding agent to work on tasks.
-      </p>
-
-      <div className="space-y-4">
-        <div className="space-y-1.5">
-          <Label htmlFor="setup-agent-name">Agent name</Label>
-          <Input
-            id="setup-agent-name"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="Robo"
-          />
-        </div>
-
-        <div className="space-y-1.5">
-          <Label htmlFor="setup-coding-agent">Coding agent</Label>
-          <select
-            id="setup-coding-agent"
-            value={codingAgent}
-            onChange={(e) => setCodingAgent(e.target.value as CodingAgentType)}
-            className="w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm cursor-pointer"
-          >
-            {CODING_AGENTS.map((a) => (
-              <option key={a.value} value={a.value}>
-                {a.label}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        <div className="space-y-1.5">
-          <Label htmlFor="setup-agent-model">Model</Label>
-          {loadingModels ? (
-            <div className="flex items-center gap-2 px-3 py-2 text-sm text-muted-foreground border border-input rounded-md">
-              <Loader2 className="size-4 animate-spin" />
-              Loading models...
-            </div>
-          ) : models.length > 0 ? (
-            <select
-              id="setup-agent-model"
-              value={model}
-              onChange={(e) => setModel(e.target.value)}
-              className="w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm cursor-pointer"
-            >
-              <option value="">Select a model...</option>
-              {models.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.name}
-                </option>
-              ))}
-            </select>
-          ) : (
-            <Input
-              id="setup-agent-model"
-              value={model}
-              onChange={(e) => setModel(e.target.value)}
-              placeholder="provider/model-id"
-            />
-          )}
-          {!loadingModels && models.length === 0 && codingAgent === CodingAgentType.OPENCODE && (
-            <p className="text-xs text-muted-foreground">
-              Could not load models from OpenCode server. You can configure this later in settings.
-            </p>
-          )}
-        </div>
-      </div>
-
-      {error && <p className="mt-3 text-xs text-destructive">{error}</p>}
-
-      <div className="flex items-center gap-3 mt-6">
-        <Button onClick={handleCreate} disabled={creating || !name.trim()}>
-          {creating ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-4" />}
-          {agents.find((a) => a.is_default && (!a.config.coding_agent || !a.config.model))
-            ? 'Update agent'
-            : 'Create agent'}
-        </Button>
-      </div>
-    </>
-  )
+  return ''
 }
 
 /* ─── Helpers ─── */
@@ -858,6 +158,52 @@ function hasCompleteDefaultAgent(): boolean {
   return agents.some((a) => a.is_default && !!a.config.coding_agent && !!a.config.model)
 }
 
+/* ─── Git Provider Choice (inline, optional) ─── */
+
+type ProviderChoice = GitProvider | 'none'
+
+function GitProviderRow({
+  selected,
+  onSelect
+}: {
+  selected: ProviderChoice | null
+  onSelect: (p: ProviderChoice) => void
+}) {
+  const options: { value: ProviderChoice; label: string }[] = [
+    { value: 'github', label: 'GitHub' },
+    { value: 'gitlab', label: 'GitLab' }
+  ]
+
+  return (
+    <div>
+      <p className="text-xs text-muted-foreground mb-2">
+        Where are your repos? <span className="opacity-60">(optional)</span>
+      </p>
+      <div className="flex gap-2">
+        {options.map((opt) => (
+          <button
+            key={opt.value}
+            type="button"
+            onClick={() => onSelect(selected === opt.value ? 'none' : opt.value)}
+            className={`px-3 py-1.5 rounded-md border text-xs font-medium transition-all cursor-pointer ${
+              selected === opt.value
+                ? 'border-primary bg-primary/5 text-foreground'
+                : 'border-border text-muted-foreground hover:border-muted-foreground/40'
+            }`}
+          >
+            {opt.label}
+            {selected === opt.value && <Check className="inline size-3 ml-1" />}
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+/* ─── Onboarding step type ─── */
+
+type OnboardingScreen = 'main' | 'templates'
+
 /* ─── Main OnboardingWizard ─── */
 
 interface OnboardingWizardProps {
@@ -866,110 +212,528 @@ interface OnboardingWizardProps {
 }
 
 export function OnboardingWizard({ open, onOpenChange }: OnboardingWizardProps) {
-  const [currentStep, setCurrentStep] = useState(0)
-  const [steps, setSteps] = useState<OnboardingStep[]>([])
+  const [screen, setScreen] = useState<OnboardingScreen>('main')
+  const [selectedAgent, setSelectedAgent] = useState<AgentChoice | null>(null)
+  const [providerChoice, setProviderChoice] = useState<ProviderChoice | null>(null)
+  const [toolStatus, setToolStatus] = useState<Record<string, ToolStatus> | null>(null)
+  const [toolsExpanded, setToolsExpanded] = useState(false)
+  const [creating, setCreating] = useState(false)
+  const [installing, setInstalling] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [selectedProvider, setSelectedProvider] = useState<OnboardingProviderChoice | null>(null)
-  const { fetchAgents } = useAgentStore()
-  const { fetchSettings, gitProvider } = useSettingsStore()
+  const [loginModalOpen, setLoginModalOpen] = useState(false)
+  const [wizardTemplate, setWizardTemplate] = useState<PresetupTemplate | null>(null)
+  const [wasAuthenticated, setWasAuthenticated] = useState(false)
 
-  // Build step list on open
+  const { fetchAgents, agents, createAgent, updateAgent } = useAgentStore()
+  const { fetchSettings, setGitProvider } = useSettingsStore()
+  const { isAuthenticated, loadSession } = useEnterpriseStore()
+  const { presetupTemplates, fetchPresetups } = useDashboardStore()
+
+  // Initialize state on open
   useEffect(() => {
     if (!open) return
-
-    const force = isForceOnboarding()
-
-    Promise.all([fetchAgents(), fetchSettings()]).then(() => {
-      const stepList: OnboardingStep[] = ['welcome', 'provider', 'tools']
-
-      // Agent config step — skip if default agent is fully configured
-      if (force || !hasCompleteDefaultAgent()) {
-        stepList.push('agent')
-      }
-
-      setSteps(stepList)
-      setCurrentStep(0)
-      setError(null)
-      // Restore previously saved provider choice
-      if (gitProvider) {
-        setSelectedProvider(gitProvider)
-      }
-    })
-  }, [open, fetchAgents, fetchSettings])
-
-  const advance = useCallback(() => {
     setError(null)
-    if (currentStep >= steps.length - 1) {
-      onOpenChange(false)
-    } else {
-      setCurrentStep((s) => s + 1)
+    setScreen('main')
+
+    Promise.all([fetchAgents(), fetchSettings(), loadSession()]).then(() => {
+      // Pre-select agent if one is already configured
+      const existing = useAgentStore.getState().agents.find(
+        (a) => a.is_default && a.config.coding_agent
+      )
+      if (existing?.config.coding_agent) {
+        setSelectedAgent(existing.config.coding_agent as CodingAgentType)
+      }
+      // Restore git provider choice
+      const gp = useSettingsStore.getState().gitProvider
+      if (gp) setProviderChoice(gp)
+    })
+
+    // Detect tools in background
+    window.electronAPI.agentInstaller
+      .detect()
+      .then(setToolStatus)
+      .catch(() => {})
+  }, [open, fetchAgents, fetchSettings, loadSession])
+
+  // Listen for install progress events
+  useEffect(() => {
+    if (!open) return
+    const cleanup = window.electronAPI.agentInstaller.onProgress(
+      (data: { stage: string }) => {
+        if (data.stage === 'complete' || data.stage === 'error') {
+          setInstalling(null)
+          window.electronAPI.agentInstaller
+            .detect()
+            .then(setToolStatus)
+            .catch(() => {})
+        }
+      }
+    )
+    return cleanup
+  }, [open])
+
+  // After enterprise login completes, fetch templates
+  useEffect(() => {
+    if (isAuthenticated && !wasAuthenticated) {
+      fetchPresetups()
     }
-  }, [currentStep, steps.length, onOpenChange])
+    setWasAuthenticated(isAuthenticated)
+  }, [isAuthenticated, wasAuthenticated, fetchPresetups])
 
-  const dismiss = useCallback(() => {
+  const handleInstall = useCallback(async (toolKey: string) => {
+    setInstalling(toolKey)
+    try {
+      const result = (await window.electronAPI.agentInstaller.install(toolKey)) as {
+        success: boolean
+        error: string | null
+        newStatus: Record<string, ToolStatus>
+      }
+      if (result?.newStatus) {
+        setToolStatus(result.newStatus)
+      } else {
+        const fresh = await window.electronAPI.agentInstaller.detect()
+        setToolStatus(fresh)
+      }
+    } catch {
+      const fresh = await window.electronAPI.agentInstaller.detect()
+      setToolStatus(fresh)
+    } finally {
+      setInstalling(null)
+    }
+  }, [])
+
+  const handleProviderSelect = useCallback(
+    async (p: ProviderChoice) => {
+      setProviderChoice(p)
+      await setGitProvider(p === 'none' ? null : p)
+    },
+    [setGitProvider]
+  )
+
+  const createDefaultAgent = useCallback(
+    async (agentType: CodingAgentType) => {
+      const model = await getDefaultModel(agentType)
+
+      const existingDefault = agents.find(
+        (a) => a.is_default && (!a.config.coding_agent || !a.config.model)
+      )
+
+      if (existingDefault) {
+        await updateAgent(existingDefault.id, {
+          name: existingDefault.name || 'Robo',
+          config: {
+            ...existingDefault.config,
+            coding_agent: agentType,
+            model: model || undefined
+          }
+        })
+      } else if (!hasCompleteDefaultAgent()) {
+        await createAgent({
+          name: 'Robo',
+          config: {
+            coding_agent: agentType,
+            model: model || undefined
+          },
+          is_default: true
+        })
+      }
+    },
+    [agents, createAgent, updateAgent]
+  )
+
+  const handleStart = async () => {
+    if (!selectedAgent) return
+    setCreating(true)
+    setError(null)
+
+    try {
+      if (selectedAgent === 'peakflo') {
+        // Open login modal — after auth, handleLoginClose transitions forward
+        setLoginModalOpen(true)
+        setCreating(false)
+        return
+      }
+
+      // BYO agent path — create default agent and close
+      await createDefaultAgent(selectedAgent)
+      onOpenChange(false)
+    } catch {
+      setError('Failed to set up agent. You can configure it later in Settings.')
+    } finally {
+      setCreating(false)
+    }
+  }
+
+  // After enterprise login modal closes
+  const handleLoginClose = useCallback(async () => {
+    setLoginModalOpen(false)
+    const auth = useEnterpriseStore.getState().isAuthenticated
+    if (!auth) return // User cancelled
+
+    // Auto-install OpenCode + create default agent
+    setCreating(true)
+    try {
+      if (!hasCompleteDefaultAgent()) {
+        const status = await window.electronAPI.agentInstaller.detect()
+        setToolStatus(status)
+        if (!status.opencode?.installed) {
+          setInstalling('opencode')
+          await window.electronAPI.agentInstaller.install('opencode')
+          setInstalling(null)
+        }
+        await createDefaultAgent(CodingAgentType.OPENCODE)
+      }
+
+      // Fetch templates and show them if available
+      await fetchPresetups()
+      const templates = useDashboardStore.getState().presetupTemplates
+      if (templates.length > 0) {
+        setScreen('templates')
+      } else {
+        onOpenChange(false)
+      }
+    } catch {
+      const templates = useDashboardStore.getState().presetupTemplates
+      if (templates.length > 0) {
+        setScreen('templates')
+      } else {
+        onOpenChange(false)
+      }
+    } finally {
+      setCreating(false)
+    }
+  }, [createDefaultAgent, fetchPresetups, onOpenChange])
+
+  const handleSkip = () => {
     onOpenChange(false)
-  }, [onOpenChange])
+  }
 
-  const current = steps[currentStep]
+  // Compute tool health for the selected BYO agent
+  const selectedCodingAgent =
+    selectedAgent && selectedAgent !== 'peakflo' ? selectedAgent : null
+
+  const agentInstalled =
+    selectedCodingAgent && toolStatus
+      ? toolStatus[getAgentToolKey(selectedCodingAgent)]?.installed
+      : null
+
+  // Claude Code & Codex need npm; OpenCode can install standalone
+  const needsNpm =
+    selectedCodingAgent === CodingAgentType.CLAUDE_CODE ||
+    selectedCodingAgent === CodingAgentType.CODEX
+  const npmAvailable = toolStatus?.npm?.installed ?? false
+  const canInstallAgent = !needsNpm || npmAvailable
+
+  // Block when agent isn't installed and we can't install it
+  const agentBlocked =
+    selectedCodingAgent && agentInstalled === false && !canInstallAgent
+
+  /* ─── Render: Templates screen ─── */
+
+  if (screen === 'templates') {
+    return (
+      <>
+        <Dialog open={open} onOpenChange={(o) => !o && handleSkip()}>
+          <DialogContent className="max-w-lg">
+            <DialogHeader>
+              <DialogTitle>Start with a template</DialogTitle>
+              <DialogDescription>
+                Set up pre-built workflows for your team, or do it later from the Dashboard.
+              </DialogDescription>
+            </DialogHeader>
+            <DialogBody className="space-y-4">
+              <div className="grid grid-cols-2 gap-3">
+                {presetupTemplates.map((template) => (
+                  <button
+                    key={template.slug}
+                    type="button"
+                    onClick={() => setWizardTemplate(template)}
+                    className="rounded-lg border border-border bg-card p-4 text-left transition-all hover:border-primary/40 hover:bg-secondary/30 cursor-pointer group"
+                  >
+                    <p className="text-sm font-medium text-foreground group-hover:text-primary transition-colors">
+                      {template.name}
+                    </p>
+                    <p className="text-xs text-muted-foreground mt-1 line-clamp-2">
+                      {template.description}
+                    </p>
+                    <span className="inline-flex items-center gap-1 text-xs text-primary mt-2 font-medium">
+                      Set up <ArrowRight className="size-3" />
+                    </span>
+                  </button>
+                ))}
+              </div>
+
+              <div className="flex items-center gap-3 pt-2">
+                <Button onClick={() => onOpenChange(false)} className="flex-1">
+                  Done
+                </Button>
+                <Button
+                  variant="ghost"
+                  onClick={() => onOpenChange(false)}
+                  className="text-muted-foreground"
+                >
+                  Set up later
+                </Button>
+              </div>
+            </DialogBody>
+          </DialogContent>
+        </Dialog>
+
+        {wizardTemplate && (
+          <PresetupWizard
+            template={wizardTemplate}
+            onClose={() => setWizardTemplate(null)}
+          />
+        )}
+      </>
+    )
+  }
+
+  /* ─── Render: Main screen ─── */
 
   return (
-    <Dialog open={open} onOpenChange={(o) => !o && dismiss()}>
-      <DialogContent className="max-w-2xl">
-        <DialogHeader>
-          <DialogTitle>
-            {current === 'welcome'
-              ? 'Welcome'
-              : current === 'provider'
-                ? 'Git Provider'
-                : current === 'tools'
-                  ? 'Agent & Tool Setup'
-                  : current === 'agent'
-                    ? 'Agent Configuration'
-                    : 'Setup'}
-          </DialogTitle>
-          <DialogDescription>
-            {steps.length > 1 && (
-              <span className="text-xs">
-                Step {currentStep + 1} of {steps.length}
-              </span>
-            )}
-          </DialogDescription>
-        </DialogHeader>
+    <>
+      <Dialog open={open && !loginModalOpen} onOpenChange={(o) => !o && handleSkip()}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Welcome to 20x</DialogTitle>
+            <DialogDescription>
+              AI-powered task management for software teams
+            </DialogDescription>
+          </DialogHeader>
 
-        {/* Step indicator */}
-        {steps.length > 1 && (
-          <div className="flex items-center gap-1.5 px-6">
-            {steps.map((_, i) => (
-              <div
-                key={i}
-                className={`h-1 rounded-full transition-colors ${
-                  i <= currentStep ? 'w-6 bg-primary' : 'w-6 bg-border'
+          <DialogBody className="space-y-5">
+            {/* ── Peakflo option ── */}
+            <div>
+              <button
+                type="button"
+                onClick={() => setSelectedAgent('peakflo')}
+                className={`w-full flex items-center gap-3 rounded-xl border-2 p-4 transition-all cursor-pointer ${
+                  selectedAgent === 'peakflo'
+                    ? 'border-primary bg-primary/5 shadow-md'
+                    : 'border-border hover:border-muted-foreground/40 hover:bg-muted/20'
                 }`}
-              />
-            ))}
-          </div>
-        )}
-
-        <DialogBody>
-          {current === 'welcome' && <WelcomeStep onNext={advance} />}
-
-          {current === 'provider' && (
-            <ProviderChoiceStep
-              onNext={advance}
-              selectedProvider={selectedProvider}
-              onSelectProvider={setSelectedProvider}
-            />
-          )}
-
-          {current === 'tools' && <ToolsAndAgentsStep onNext={advance} onSkip={dismiss} selectedProvider={selectedProvider} />}
-
-          {current === 'agent' && (
-            <div className="px-2 pt-2 pb-2">
-              <AgentConfigStep error={error} setError={setError} onCreated={advance} />
+              >
+                <div className="bg-gradient-to-br from-primary to-primary/70 rounded-full size-10 flex items-center justify-center text-white shrink-0">
+                  <Zap className="size-5" />
+                </div>
+                <div className="text-left flex-1">
+                  <p className="text-sm font-semibold text-foreground">Peakflo</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    Managed agents, workflows &amp; integrations
+                  </p>
+                </div>
+                {selectedAgent === 'peakflo' && (
+                  <Check className="size-4 text-primary shrink-0" />
+                )}
+              </button>
             </div>
-          )}
-        </DialogBody>
-      </DialogContent>
-    </Dialog>
+
+            {/* ── BYO agent options ── */}
+            <div>
+              <p className="text-xs text-muted-foreground mb-2">
+                Or bring your own agent:
+              </p>
+              <div className="grid grid-cols-3 gap-2.5">
+                {AGENT_OPTIONS.map((agent) => {
+                  const isSelected = selectedAgent === agent.type
+                  return (
+                    <button
+                      key={agent.type}
+                      type="button"
+                      onClick={() => setSelectedAgent(agent.type)}
+                      className={`group relative flex flex-col items-center gap-2 rounded-xl border-2 p-3 transition-all cursor-pointer ${
+                        isSelected
+                          ? 'border-primary bg-primary/5 shadow-md'
+                          : 'border-border hover:border-muted-foreground/40 hover:bg-muted/20'
+                      }`}
+                    >
+                      <div
+                        className={`${agent.color} rounded-full size-9 flex items-center justify-center text-white text-sm font-bold transition-transform ${
+                          isSelected ? 'scale-110' : 'group-hover:scale-105'
+                        }`}
+                      >
+                        {agent.letter}
+                      </div>
+                      <div className="text-center">
+                        <p className="text-xs font-semibold text-foreground leading-tight">
+                          {agent.label}
+                        </p>
+                        <p className="text-[10px] text-muted-foreground mt-0.5">
+                          {agent.tagline}
+                        </p>
+                      </div>
+                      {isSelected && (
+                        <div className="absolute top-1.5 right-1.5">
+                          <Check className="size-3.5 text-primary" />
+                        </div>
+                      )}
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+
+            {/* ── Git provider (optional, BYO only) ── */}
+            {selectedAgent && selectedAgent !== 'peakflo' && (
+              <GitProviderRow
+                selected={providerChoice}
+                onSelect={handleProviderSelect}
+              />
+            )}
+
+            {/* ── Tool health (collapsed, BYO only) ── */}
+            {toolStatus && selectedCodingAgent && (
+              <div className="rounded-lg border border-border bg-muted/20 overflow-hidden">
+                <button
+                  type="button"
+                  onClick={() => setToolsExpanded((v) => !v)}
+                  className="w-full flex items-center gap-2.5 px-3 py-2.5 text-left cursor-pointer hover:bg-muted/30 transition-colors"
+                >
+                  {agentInstalled ? (
+                    <Check className="size-4 text-emerald-400 shrink-0" />
+                  ) : agentBlocked ? (
+                    <AlertTriangle className="size-4 text-red-400 shrink-0" />
+                  ) : (
+                    <AlertTriangle className="size-4 text-amber-400 shrink-0" />
+                  )}
+                  <span className="text-xs text-muted-foreground flex-1">
+                    {agentInstalled
+                      ? `${AGENT_OPTIONS.find((a) => a.type === selectedCodingAgent)?.label} ready`
+                      : agentBlocked
+                        ? `Install Node.js first to set up ${AGENT_OPTIONS.find((a) => a.type === selectedCodingAgent)?.label}`
+                        : `${AGENT_OPTIONS.find((a) => a.type === selectedCodingAgent)?.label} not installed — will be set up automatically`}
+                  </span>
+                  {toolsExpanded ? (
+                    <ChevronUp className="size-3.5 text-muted-foreground" />
+                  ) : (
+                    <ChevronDown className="size-3.5 text-muted-foreground" />
+                  )}
+                </button>
+
+                {toolsExpanded && (
+                  <div className="border-t border-border px-3 py-2.5 space-y-1.5">
+                    {/* Agent CLI */}
+                    <div className="flex items-center gap-2 text-xs">
+                      {agentInstalled ? (
+                        <Check className="size-3 text-emerald-400 shrink-0" />
+                      ) : (
+                        <span className="size-3 rounded-full border border-amber-400 shrink-0" />
+                      )}
+                      <span className="text-muted-foreground flex-1">
+                        {AGENT_OPTIONS.find((a) => a.type === selectedCodingAgent)?.label} CLI
+                        {agentInstalled &&
+                          toolStatus[getAgentToolKey(selectedCodingAgent)]?.version && (
+                            <span className="ml-1 opacity-60">
+                              v{toolStatus[getAgentToolKey(selectedCodingAgent)]?.version}
+                            </span>
+                          )}
+                      </span>
+                      {agentInstalled === false && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="h-5 px-1.5 text-[10px]"
+                          disabled={!!installing || !canInstallAgent}
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            handleInstall(getAgentToolKey(selectedCodingAgent))
+                          }}
+                        >
+                          {installing === getAgentToolKey(selectedCodingAgent) ? (
+                            <Loader2 className="size-3 animate-spin" />
+                          ) : (
+                            <>
+                              <Download className="size-2.5 mr-0.5" />
+                              Install
+                            </>
+                          )}
+                        </Button>
+                      )}
+                    </div>
+
+                    {/* Core tools */}
+                    <div className="border-t border-border/50 pt-1.5 mt-1.5">
+                      {CORE_TOOLS.map((tool) => {
+                        const st = toolStatus[tool.key]
+                        const isInstalling = installing === tool.key
+                        return (
+                          <div key={tool.key} className="flex items-center gap-2 text-xs py-0.5">
+                            {st?.installed ? (
+                              <Check className="size-3 text-emerald-400 shrink-0" />
+                            ) : (
+                              <span className="size-3 rounded-full border border-muted-foreground/40 shrink-0" />
+                            )}
+                            <span className="text-muted-foreground flex-1">
+                              {tool.label}
+                              {st?.installed && st.version && (
+                                <span className="ml-1 opacity-60">v{st.version}</span>
+                              )}
+                            </span>
+                            {!st?.installed && (
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                className="h-5 px-1.5 text-[10px]"
+                                disabled={!!installing}
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  handleInstall(tool.key)
+                                }}
+                              >
+                                {isInstalling ? (
+                                  <Loader2 className="size-3 animate-spin" />
+                                ) : (
+                                  <>
+                                    <Download className="size-2.5 mr-0.5" />
+                                    Install
+                                  </>
+                                )}
+                              </Button>
+                            )}
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* ── Error ── */}
+            {error && <p className="text-xs text-destructive">{error}</p>}
+
+            {/* ── Actions ── */}
+            <div className="flex items-center gap-3">
+              <Button
+                onClick={handleStart}
+                disabled={!selectedAgent || creating || !!agentBlocked}
+                className="flex-1"
+              >
+                {creating ? (
+                  <Loader2 className="size-4 animate-spin mr-1.5" />
+                ) : selectedAgent === 'peakflo' ? (
+                  <Zap className="size-4 mr-1.5" />
+                ) : (
+                  <Sparkles className="size-4 mr-1.5" />
+                )}
+                {selectedAgent === 'peakflo' ? 'Sign up / Log in' : 'Get Started'}
+                {!creating && <ArrowRight className="size-4 ml-1.5" />}
+              </Button>
+              <Button
+                variant="ghost"
+                onClick={handleSkip}
+                className="text-muted-foreground"
+              >
+                Skip
+              </Button>
+            </div>
+          </DialogBody>
+        </DialogContent>
+      </Dialog>
+
+      {/* Enterprise login modal — opens when user picks Peakflo */}
+      <EnterpriseLoginModal open={loginModalOpen} onClose={handleLoginClose} />
+    </>
   )
 }

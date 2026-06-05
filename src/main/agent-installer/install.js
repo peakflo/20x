@@ -694,6 +694,22 @@ export async function installAgent(agentName, onProgress) {
     }
   }
 
+  // OpenCode — prefer standalone install (no npm dependency) when npm is not available
+  if (agentName === 'opencode') {
+    let hasNpm = false
+    try {
+      const { promisify } = await import('util')
+      const execFileAsync = promisify(execFile)
+      await execFileAsync(isWin ? 'npm.cmd' : 'npm', ['--version'], { timeout: 5000, shell: isWin, windowsHide: true })
+      hasNpm = true
+    } catch { /* npm not available */ }
+
+    if (!hasNpm) {
+      return installOpencodeStandalone(onProgress)
+    }
+    // Fall through to npm install if npm is available
+  }
+
   const info = INSTALL_COMMANDS[agentName]
   if (!info) {
     return {
@@ -1067,6 +1083,67 @@ async function installGlabLinux(onProgress) {
   }
 
   return installLinuxBinaryFromTarball({ tarUrl, archiveName, binName: 'glab', onProgress })
+}
+
+/**
+ * Install OpenCode via standalone methods (no npm required).
+ * macOS/Linux: curl installer script from opencode.ai
+ * Windows: scoop or direct download
+ */
+async function installOpencodeStandalone(onProgress) {
+  const isWin = process.platform === 'win32'
+
+  if (isWin) {
+    // Try scoop first, fall back to error with manual instructions
+    onProgress({ stage: 'starting', output: 'Installing OpenCode via scoop...\n', percent: 5 })
+    try {
+      return await spawnInstall('scoop', ['install', 'opencode'], 'opencode', onProgress)
+    } catch {
+      onProgress({ stage: 'error', output: 'scoop not found. Install OpenCode manually: https://opencode.ai/download\n', percent: 100 })
+      return {
+        success: false,
+        error: 'Install OpenCode from https://opencode.ai/download or run: scoop install opencode',
+        newStatus: await detectInstalledAgents()
+      }
+    }
+  }
+
+  // macOS / Linux — use the official curl installer
+  onProgress({ stage: 'starting', output: '$ curl -fsSL https://opencode.ai/install | bash\n', percent: 5 })
+  return new Promise((resolve) => {
+    const proc = spawn('bash', ['-c', 'curl -fsSL https://opencode.ai/install | bash'], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env }
+    })
+
+    proc.stdout.on('data', (chunk) => {
+      onProgress({ stage: 'installing', output: chunk.toString(), percent: 50 })
+    })
+
+    proc.stderr.on('data', (chunk) => {
+      onProgress({ stage: 'installing', output: chunk.toString(), percent: 50 })
+    })
+
+    proc.on('error', async (err) => {
+      onProgress({ stage: 'error', output: `Error: ${err.message}\n`, percent: 100 })
+      resolve({ success: false, error: err.message, newStatus: await detectInstalledAgents() })
+    })
+
+    proc.on('close', async (code) => {
+      // The installer may place the binary in ~/.local/bin or similar — ensure it's on PATH
+      const localBin = join(homedir(), '.local', 'bin')
+      ensureOnPath(localBin)
+
+      const newStatus = await detectInstalledAgents()
+      if (code === 0 || newStatus.opencode?.installed) {
+        onProgress({ stage: 'complete', output: 'OpenCode installed successfully!\n', percent: 100 })
+        resolve({ success: true, error: null, newStatus })
+      } else {
+        onProgress({ stage: 'error', output: `Install script exited with code ${code}\n`, percent: 100 })
+        resolve({ success: false, error: `Install failed with exit code ${code}`, newStatus })
+      }
+    })
+  })
 }
 
 /**
