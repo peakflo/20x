@@ -369,6 +369,39 @@ export function OnboardingWizard({ open, onOpenChange }: OnboardingWizardProps) 
     [agents, createAgent, updateAgent]
   )
 
+  const runPostAuthFlow = useCallback(async () => {
+    setCreating(true)
+    try {
+      if (!hasCompleteDefaultAgent()) {
+        const status = await window.electronAPI.agentInstaller.detect()
+        setToolStatus(status)
+        if (!status.opencode?.installed) {
+          setInstalling(DetectKey.OPENCODE)
+          await window.electronAPI.agentInstaller.install(DetectKey.OPENCODE)
+          setInstalling(null)
+        }
+        await createDefaultAgent(CodingAgentType.OPENCODE)
+      }
+
+      await fetchPresetups()
+      const templates = useDashboardStore.getState().presetupTemplates
+      if (templates.length > 0) {
+        setScreen(OnboardingScreen.TEMPLATES)
+      } else {
+        onOpenChange(false)
+      }
+    } catch {
+      const templates = useDashboardStore.getState().presetupTemplates
+      if (templates.length > 0) {
+        setScreen(OnboardingScreen.TEMPLATES)
+      } else {
+        onOpenChange(false)
+      }
+    } finally {
+      setCreating(false)
+    }
+  }, [createDefaultAgent, fetchPresetups, onOpenChange])
+
   const handleStart = async () => {
     if (!selectedAgent) return
     setCreating(true)
@@ -376,7 +409,12 @@ export function OnboardingWizard({ open, onOpenChange }: OnboardingWizardProps) 
 
     try {
       if (selectedAgent === AgentChoiceType.PEAKFLO) {
-        // Open login modal — after auth, handleLoginClose transitions forward
+        // Already authenticated — skip login, go straight to post-auth flow
+        if (isAuthenticated) {
+          await runPostAuthFlow()
+          return
+        }
+        // Not authenticated — open login modal
         setLoginModalOpen(true)
         setCreating(false)
         return
@@ -397,40 +435,8 @@ export function OnboardingWizard({ open, onOpenChange }: OnboardingWizardProps) 
     setLoginModalOpen(false)
     const auth = useEnterpriseStore.getState().isAuthenticated
     if (!auth) return // User cancelled
-
-    // Auto-install OpenCode + create default agent
-    setCreating(true)
-    try {
-      if (!hasCompleteDefaultAgent()) {
-        const status = await window.electronAPI.agentInstaller.detect()
-        setToolStatus(status)
-        if (!status.opencode?.installed) {
-          setInstalling(DetectKey.OPENCODE)
-          await window.electronAPI.agentInstaller.install(DetectKey.OPENCODE)
-          setInstalling(null)
-        }
-        await createDefaultAgent(CodingAgentType.OPENCODE)
-      }
-
-      // Fetch templates and show them if available
-      await fetchPresetups()
-      const templates = useDashboardStore.getState().presetupTemplates
-      if (templates.length > 0) {
-        setScreen(OnboardingScreen.TEMPLATES)
-      } else {
-        onOpenChange(false)
-      }
-    } catch {
-      const templates = useDashboardStore.getState().presetupTemplates
-      if (templates.length > 0) {
-        setScreen(OnboardingScreen.TEMPLATES)
-      } else {
-        onOpenChange(false)
-      }
-    } finally {
-      setCreating(false)
-    }
-  }, [createDefaultAgent, fetchPresetups, onOpenChange])
+    await runPostAuthFlow()
+  }, [runPostAuthFlow])
 
   const handleSkip = () => {
     onOpenChange(false)
