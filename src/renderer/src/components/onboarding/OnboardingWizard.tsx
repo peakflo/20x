@@ -512,6 +512,9 @@ export function OnboardingWizard({ open, onOpenChange }: OnboardingWizardProps) 
               <div className="grid grid-cols-3 gap-2.5">
                 {AGENT_OPTIONS.map((agent) => {
                   const isSelected = selectedAgent === agent.type
+                  const toolKey = getAgentToolKey(agent.type as CodingAgentType)
+                  const detected = toolStatus?.[toolKey]
+                  const isInstalled = detected?.installed === true
                   return (
                     <button
                       key={agent.type}
@@ -538,6 +541,21 @@ export function OnboardingWizard({ open, onOpenChange }: OnboardingWizardProps) 
                           {agent.tagline}
                         </p>
                       </div>
+                      {/* Detected status */}
+                      {toolStatus && (
+                        <span className={`text-[10px] flex items-center gap-0.5 ${
+                          isInstalled ? 'text-emerald-400' : 'text-muted-foreground/50'
+                        }`}>
+                          {isInstalled ? (
+                            <>
+                              <Check className="size-2.5" />
+                              {detected?.version ? `v${detected.version}` : 'Installed'}
+                            </>
+                          ) : (
+                            'Not installed'
+                          )}
+                        </span>
+                      )}
                       {isSelected && (
                         <div className="absolute top-1.5 right-1.5">
                           <Check className="size-3.5 text-primary" />
@@ -557,41 +575,29 @@ export function OnboardingWizard({ open, onOpenChange }: OnboardingWizardProps) 
               />
             )}
 
-            {/* ── Agent CLI status (BYO only) ── */}
-            {toolStatus && selectedCodingAgent && (
+            {/* ── Install prompt (only when selected agent is not installed) ── */}
+            {toolStatus && selectedCodingAgent && agentInstalled === false && (
               <div className="flex items-center gap-2.5 px-3 py-2 rounded-lg border border-border bg-muted/20 text-xs">
-                {agentInstalled ? (
-                  <Check className="size-4 text-emerald-400 shrink-0" />
-                ) : (
-                  <AlertTriangle className="size-4 text-amber-400 shrink-0" />
-                )}
+                <AlertTriangle className="size-4 text-amber-400 shrink-0" />
                 <span className="text-muted-foreground flex-1">
-                  {agentInstalled
-                    ? `${AGENT_OPTIONS.find((a) => a.type === selectedCodingAgent)?.label} CLI ready${
-                        toolStatus[getAgentToolKey(selectedCodingAgent)]?.version
-                          ? ` (v${toolStatus[getAgentToolKey(selectedCodingAgent)]?.version})`
-                          : ''
-                      }`
-                    : `${AGENT_OPTIONS.find((a) => a.type === selectedCodingAgent)?.label} will be installed automatically`}
+                  {AGENT_OPTIONS.find((a) => a.type === selectedCodingAgent)?.label} will be installed automatically
                 </span>
-                {agentInstalled === false && (
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    className="h-5 px-1.5 text-[10px]"
-                    disabled={!!installing}
-                    onClick={() => handleInstall(getAgentToolKey(selectedCodingAgent))}
-                  >
-                    {installing === getAgentToolKey(selectedCodingAgent) ? (
-                      <Loader2 className="size-3 animate-spin" />
-                    ) : (
-                      <>
-                        <Download className="size-2.5 mr-0.5" />
-                        Install now
-                      </>
-                    )}
-                  </Button>
-                )}
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-5 px-1.5 text-[10px]"
+                  disabled={!!installing}
+                  onClick={() => handleInstall(getAgentToolKey(selectedCodingAgent))}
+                >
+                  {installing === getAgentToolKey(selectedCodingAgent) ? (
+                    <Loader2 className="size-3 animate-spin" />
+                  ) : (
+                    <>
+                      <Download className="size-2.5 mr-0.5" />
+                      Install now
+                    </>
+                  )}
+                </Button>
               </div>
             )}
 
