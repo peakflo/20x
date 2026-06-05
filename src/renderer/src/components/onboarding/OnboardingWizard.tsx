@@ -28,12 +28,42 @@ import { agentConfigApi } from '@/lib/ipc-client'
 import type { ToolStatus } from '@/types/electron'
 import type { PresetupTemplate } from '@/stores/dashboard-store'
 
+/* ─── Enums & Constants ─── */
+
+enum OnboardingScreen {
+  MAIN = 'main',
+  TEMPLATES = 'templates'
+}
+
+enum AgentChoiceType {
+  PEAKFLO = 'peakflo'
+}
+
+enum DetectKey {
+  CLAUDE_CODE = 'claudeCode',
+  OPENCODE = 'opencode',
+  CODEX = 'codex',
+  GH = 'gh',
+  GLAB = 'glab'
+}
+
+enum ProviderChoiceValue {
+  NONE = 'none'
+}
+
+const STORAGE_KEYS = {
+  DEBUG_ONBOARDING: 'debug:onboarding',
+  FORCE_ONBOARDING: 'force-onboarding'
+} as const
+
+const DEFAULT_AGENT_NAME = 'Robo'
+
 /* ─── Force-onboarding flag ─── */
 
 export function isForceOnboarding(): boolean {
   return (
-    localStorage.getItem('debug:onboarding') === 'true' ||
-    localStorage.getItem('force-onboarding') === 'true'
+    localStorage.getItem(STORAGE_KEYS.DEBUG_ONBOARDING) === 'true' ||
+    localStorage.getItem(STORAGE_KEYS.FORCE_ONBOARDING) === 'true'
   )
 }
 
@@ -51,7 +81,7 @@ export function shouldShowOnboarding(
 
 /* ─── Agent card metadata ─── */
 
-type AgentChoice = CodingAgentType | 'peakflo'
+type AgentChoice = CodingAgentType | AgentChoiceType.PEAKFLO
 
 interface AgentOption {
   type: AgentChoice
@@ -87,14 +117,14 @@ const AGENT_OPTIONS: AgentOption[] = [
 
 /* ─── Tool status helpers ─── */
 
-function getAgentToolKey(type: CodingAgentType): string {
+function getAgentToolKey(type: CodingAgentType): DetectKey {
   switch (type) {
     case CodingAgentType.CLAUDE_CODE:
-      return 'claudeCode'
+      return DetectKey.CLAUDE_CODE
     case CodingAgentType.OPENCODE:
-      return 'opencode'
+      return DetectKey.OPENCODE
     case CodingAgentType.CODEX:
-      return 'codex'
+      return DetectKey.CODEX
   }
 }
 
@@ -147,7 +177,19 @@ function hasCompleteDefaultAgent(): boolean {
 
 /* ─── Git Provider Choice (inline, optional) ─── */
 
-type ProviderChoice = GitProvider | 'none'
+type ProviderChoice = GitProvider | ProviderChoiceValue.NONE
+
+interface GitProviderOption {
+  value: ProviderChoice
+  label: string
+  cliKey: DetectKey
+  cliName: string
+}
+
+const GIT_PROVIDER_OPTIONS: GitProviderOption[] = [
+  { value: 'github', label: 'GitHub', cliKey: DetectKey.GH, cliName: 'gh' },
+  { value: 'gitlab', label: 'GitLab', cliKey: DetectKey.GLAB, cliName: 'glab' }
+]
 
 function GitProviderRow({
   selected,
@@ -158,10 +200,6 @@ function GitProviderRow({
   onSelect: (p: ProviderChoice) => void
   toolStatus: Record<string, ToolStatus> | null
 }) {
-  const options: { value: ProviderChoice; label: string; cliKey: string; cliName: string }[] = [
-    { value: 'github', label: 'GitHub', cliKey: 'gh', cliName: 'gh' },
-    { value: 'gitlab', label: 'GitLab', cliKey: 'glab', cliName: 'glab' }
-  ]
 
   return (
     <div>
@@ -169,13 +207,13 @@ function GitProviderRow({
         Where are your repos? <span className="opacity-60">(optional)</span>
       </p>
       <div className="flex gap-2">
-        {options.map((opt) => {
+        {GIT_PROVIDER_OPTIONS.map((opt) => {
           const cli = toolStatus?.[opt.cliKey]
           return (
             <button
               key={opt.value}
               type="button"
-              onClick={() => onSelect(selected === opt.value ? 'none' : opt.value)}
+              onClick={() => onSelect(selected === opt.value ? ProviderChoiceValue.NONE : opt.value)}
               className={`px-3 py-1.5 rounded-md border text-xs font-medium transition-all cursor-pointer flex items-center gap-1.5 ${
                 selected === opt.value
                   ? 'border-primary bg-primary/5 text-foreground'
@@ -198,10 +236,6 @@ function GitProviderRow({
   )
 }
 
-/* ─── Onboarding step type ─── */
-
-type OnboardingScreen = 'main' | 'templates'
-
 /* ─── Main OnboardingWizard ─── */
 
 interface OnboardingWizardProps {
@@ -210,7 +244,7 @@ interface OnboardingWizardProps {
 }
 
 export function OnboardingWizard({ open, onOpenChange }: OnboardingWizardProps) {
-  const [screen, setScreen] = useState<OnboardingScreen>('main')
+  const [screen, setScreen] = useState(OnboardingScreen.MAIN)
   const [selectedAgent, setSelectedAgent] = useState<AgentChoice | null>(null)
   const [providerChoice, setProviderChoice] = useState<ProviderChoice | null>(null)
   const [toolStatus, setToolStatus] = useState<Record<string, ToolStatus> | null>(null)
@@ -230,7 +264,7 @@ export function OnboardingWizard({ open, onOpenChange }: OnboardingWizardProps) 
   useEffect(() => {
     if (!open) return
     setError(null)
-    setScreen('main')
+    setScreen(OnboardingScreen.MAIN)
 
     Promise.all([fetchAgents(), fetchSettings(), loadSession()]).then(() => {
       // Pre-select agent if one is already configured
@@ -302,7 +336,7 @@ export function OnboardingWizard({ open, onOpenChange }: OnboardingWizardProps) 
   const handleProviderSelect = useCallback(
     async (p: ProviderChoice) => {
       setProviderChoice(p)
-      await setGitProvider(p === 'none' ? null : p)
+      await setGitProvider(p === ProviderChoiceValue.NONE ? null : p)
     },
     [setGitProvider]
   )
@@ -317,7 +351,7 @@ export function OnboardingWizard({ open, onOpenChange }: OnboardingWizardProps) 
 
       if (existingDefault) {
         await updateAgent(existingDefault.id, {
-          name: existingDefault.name || 'Robo',
+          name: existingDefault.name || DEFAULT_AGENT_NAME,
           config: {
             ...existingDefault.config,
             coding_agent: agentType,
@@ -326,7 +360,7 @@ export function OnboardingWizard({ open, onOpenChange }: OnboardingWizardProps) 
         })
       } else if (!hasCompleteDefaultAgent()) {
         await createAgent({
-          name: 'Robo',
+          name: DEFAULT_AGENT_NAME,
           config: {
             coding_agent: agentType,
             model: model || undefined
@@ -344,7 +378,7 @@ export function OnboardingWizard({ open, onOpenChange }: OnboardingWizardProps) 
     setError(null)
 
     try {
-      if (selectedAgent === 'peakflo') {
+      if (selectedAgent === AgentChoiceType.PEAKFLO) {
         // Open login modal — after auth, handleLoginClose transitions forward
         setLoginModalOpen(true)
         setCreating(false)
@@ -374,8 +408,8 @@ export function OnboardingWizard({ open, onOpenChange }: OnboardingWizardProps) 
         const status = await window.electronAPI.agentInstaller.detect()
         setToolStatus(status)
         if (!status.opencode?.installed) {
-          setInstalling('opencode')
-          await window.electronAPI.agentInstaller.install('opencode')
+          setInstalling(DetectKey.OPENCODE)
+          await window.electronAPI.agentInstaller.install(DetectKey.OPENCODE)
           setInstalling(null)
         }
         await createDefaultAgent(CodingAgentType.OPENCODE)
@@ -385,14 +419,14 @@ export function OnboardingWizard({ open, onOpenChange }: OnboardingWizardProps) 
       await fetchPresetups()
       const templates = useDashboardStore.getState().presetupTemplates
       if (templates.length > 0) {
-        setScreen('templates')
+        setScreen(OnboardingScreen.TEMPLATES)
       } else {
         onOpenChange(false)
       }
     } catch {
       const templates = useDashboardStore.getState().presetupTemplates
       if (templates.length > 0) {
-        setScreen('templates')
+        setScreen(OnboardingScreen.TEMPLATES)
       } else {
         onOpenChange(false)
       }
@@ -407,7 +441,7 @@ export function OnboardingWizard({ open, onOpenChange }: OnboardingWizardProps) 
 
   // Compute tool health for the selected BYO agent
   const selectedCodingAgent =
-    selectedAgent && selectedAgent !== 'peakflo' ? selectedAgent : null
+    selectedAgent && selectedAgent !== AgentChoiceType.PEAKFLO ? selectedAgent : null
 
   const agentInstalled =
     selectedCodingAgent && toolStatus
@@ -416,7 +450,7 @@ export function OnboardingWizard({ open, onOpenChange }: OnboardingWizardProps) 
 
   /* ─── Render: Templates screen ─── */
 
-  if (screen === 'templates') {
+  if (screen === OnboardingScreen.TEMPLATES) {
     return (
       <>
         <Dialog open={open} onOpenChange={(o) => !o && handleSkip()}>
@@ -493,9 +527,9 @@ export function OnboardingWizard({ open, onOpenChange }: OnboardingWizardProps) 
             <div>
               <button
                 type="button"
-                onClick={() => setSelectedAgent('peakflo')}
+                onClick={() => setSelectedAgent(AgentChoiceType.PEAKFLO)}
                 className={`w-full flex items-center gap-3 rounded-xl border-2 p-4 transition-all cursor-pointer ${
-                  selectedAgent === 'peakflo'
+                  selectedAgent === AgentChoiceType.PEAKFLO
                     ? 'border-primary bg-primary/5 shadow-md'
                     : 'border-border hover:border-muted-foreground/40 hover:bg-muted/20'
                 }`}
@@ -509,7 +543,7 @@ export function OnboardingWizard({ open, onOpenChange }: OnboardingWizardProps) 
                     Managed agents, workflows &amp; integrations
                   </p>
                 </div>
-                {selectedAgent === 'peakflo' && (
+                {selectedAgent === AgentChoiceType.PEAKFLO && (
                   <Check className="size-4 text-primary shrink-0" />
                 )}
               </button>
@@ -579,7 +613,7 @@ export function OnboardingWizard({ open, onOpenChange }: OnboardingWizardProps) 
             </div>
 
             {/* ── Git provider (optional, BYO only) ── */}
-            {selectedAgent && selectedAgent !== 'peakflo' && (
+            {selectedAgent && selectedAgent !== AgentChoiceType.PEAKFLO && (
               <GitProviderRow
                 selected={providerChoice}
                 onSelect={handleProviderSelect}
@@ -625,12 +659,12 @@ export function OnboardingWizard({ open, onOpenChange }: OnboardingWizardProps) 
               >
                 {creating ? (
                   <Loader2 className="size-4 animate-spin mr-1.5" />
-                ) : selectedAgent === 'peakflo' ? (
+                ) : selectedAgent === AgentChoiceType.PEAKFLO ? (
                   <Zap className="size-4 mr-1.5" />
                 ) : (
                   <Sparkles className="size-4 mr-1.5" />
                 )}
-                {selectedAgent === 'peakflo' ? 'Sign up / Log in' : 'Get Started'}
+                {selectedAgent === AgentChoiceType.PEAKFLO ? 'Sign up / Log in' : 'Get Started'}
                 {!creating && <ArrowRight className="size-4 ml-1.5" />}
               </Button>
               <Button
