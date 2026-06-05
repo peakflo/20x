@@ -25,6 +25,7 @@ import { EnterpriseLoginModal } from '@/components/settings/tabs/EnterpriseLogin
 import { PresetupWizard } from '@/components/dashboard/PresetupWizard'
 import { CodingAgentType, CLAUDE_MODELS, CODEX_MODELS } from '@/types'
 import { agentConfigApi } from '@/lib/ipc-client'
+import { AnthropicLogo, OpenCodeLogo, OpenAILogo } from '@/components/icons/AgentLogos'
 import type { ToolStatus } from '@/types/electron'
 import type { PresetupTemplate } from '@/stores/dashboard-store'
 
@@ -87,8 +88,7 @@ interface AgentOption {
   type: AgentChoice
   label: string
   tagline: string
-  color: string
-  letter: string
+  Logo: React.ComponentType<{ className?: string }>
 }
 
 const AGENT_OPTIONS: AgentOption[] = [
@@ -96,22 +96,19 @@ const AGENT_OPTIONS: AgentOption[] = [
     type: CodingAgentType.CLAUDE_CODE,
     label: 'Claude Code',
     tagline: 'Anthropic',
-    color: 'bg-amber-600',
-    letter: 'C'
+    Logo: AnthropicLogo
   },
   {
     type: CodingAgentType.OPENCODE,
     label: 'OpenCode',
     tagline: 'Open-source, free models',
-    color: 'bg-blue-600',
-    letter: 'O'
+    Logo: OpenCodeLogo
   },
   {
     type: CodingAgentType.CODEX,
     label: 'Codex',
     tagline: 'OpenAI',
-    color: 'bg-purple-600',
-    letter: 'X'
+    Logo: OpenAILogo
   }
 ]
 
@@ -571,13 +568,11 @@ export function OnboardingWizard({ open, onOpenChange }: OnboardingWizardProps) 
                           : 'border-border hover:border-muted-foreground/40 hover:bg-muted/20'
                       }`}
                     >
-                      <div
-                        className={`${agent.color} rounded-full size-9 flex items-center justify-center text-white text-sm font-bold transition-transform ${
+                      <agent.Logo
+                        className={`size-9 transition-transform ${
                           isSelected ? 'scale-110' : 'group-hover:scale-105'
                         }`}
-                      >
-                        {agent.letter}
-                      </div>
+                      />
                       <div className="text-center">
                         <p className="text-xs font-semibold text-foreground leading-tight">
                           {agent.label}
