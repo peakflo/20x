@@ -694,20 +694,39 @@ export async function installAgent(agentName, onProgress) {
     }
   }
 
-  // OpenCode — prefer standalone install (no npm dependency) when npm is not available
+  // Coding agents — prefer standalone installers (no npm dependency)
   if (agentName === 'opencode') {
-    let hasNpm = false
-    try {
-      const { promisify } = await import('util')
-      const execFileAsync = promisify(execFile)
-      await execFileAsync(isWin ? 'npm.cmd' : 'npm', ['--version'], { timeout: 5000, shell: isWin, windowsHide: true })
-      hasNpm = true
-    } catch { /* npm not available */ }
+    return installStandaloneAgent(agentName, {
+      curlUrl: 'https://opencode.ai/install',
+      curlShell: 'bash',
+      winCmd: 'scoop',
+      winArgs: ['install', 'opencode'],
+      winFallback: 'Install OpenCode from https://opencode.ai/download or run: scoop install opencode',
+      successMsg: 'OpenCode installed successfully!\n',
+      detectKey: 'opencode'
+    }, onProgress)
+  }
 
-    if (!hasNpm) {
-      return installOpencodeStandalone(onProgress)
-    }
-    // Fall through to npm install if npm is available
+  if (agentName === 'claudeCode') {
+    return installStandaloneAgent(agentName, {
+      curlUrl: 'https://claude.ai/install.sh',
+      curlShell: 'sh',
+      winPowershell: 'irm https://claude.ai/install.ps1 | iex',
+      winFallback: 'Install Claude Code from https://claude.ai/download',
+      successMsg: 'Claude Code installed successfully!\n',
+      detectKey: 'claudeCode'
+    }, onProgress)
+  }
+
+  if (agentName === 'codex') {
+    return installStandaloneAgent(agentName, {
+      curlUrl: 'https://chatgpt.com/codex/install.sh',
+      curlShell: 'sh',
+      winPowershell: 'irm https://chatgpt.com/codex/install.ps1 | iex',
+      winFallback: 'Install Codex from https://openai.com/codex',
+      successMsg: 'Codex installed successfully!\n',
+      detectKey: 'codex'
+    }, onProgress)
   }
 
   const info = INSTALL_COMMANDS[agentName]
@@ -719,7 +738,7 @@ export async function installAgent(agentName, onProgress) {
     }
   }
 
-  // Check if npm is available before attempting npm installs
+  // Check if npm is available before attempting npm installs (pnpm etc.)
   try {
     const { promisify } = await import('util')
     const execFileAsync = promisify(execFile)
@@ -1086,32 +1105,71 @@ async function installGlabLinux(onProgress) {
 }
 
 /**
- * Install OpenCode via standalone methods (no npm required).
- * macOS/Linux: curl installer script from opencode.ai
- * Windows: scoop or direct download
+ * Install a coding agent via standalone methods (no npm required).
+ * macOS/Linux: curl installer script
+ * Windows: PowerShell installer or scoop
+ *
+ * @param {string} agentName
+ * @param {{ curlUrl: string, curlShell: string, winCmd?: string, winArgs?: string[], winPowershell?: string, winFallback: string, successMsg: string, detectKey: string }} opts
+ * @param {(progress: { stage: string, output: string, percent: number }) => void} onProgress
  */
-async function installOpencodeStandalone(onProgress) {
+async function installStandaloneAgent(agentName, opts, onProgress) {
   const isWin = process.platform === 'win32'
 
   if (isWin) {
-    // Try scoop first, fall back to error with manual instructions
-    onProgress({ stage: 'starting', output: 'Installing OpenCode via scoop...\n', percent: 5 })
-    try {
-      return await spawnInstall('scoop', ['install', 'opencode'], 'opencode', onProgress)
-    } catch {
-      onProgress({ stage: 'error', output: 'scoop not found. Install OpenCode manually: https://opencode.ai/download\n', percent: 100 })
-      return {
-        success: false,
-        error: 'Install OpenCode from https://opencode.ai/download or run: scoop install opencode',
-        newStatus: await detectInstalledAgents()
-      }
+    if (opts.winPowershell) {
+      // Use PowerShell installer (Claude Code, Codex)
+      onProgress({ stage: 'starting', output: `$ powershell -c "${opts.winPowershell}"\n`, percent: 5 })
+      return new Promise((resolve) => {
+        const proc = spawn('powershell', ['-ExecutionPolicy', 'ByPass', '-Command', opts.winPowershell], {
+          stdio: ['ignore', 'pipe', 'pipe'],
+          windowsHide: true
+        })
+
+        proc.stdout.on('data', (chunk) => {
+          onProgress({ stage: 'installing', output: chunk.toString(), percent: 50 })
+        })
+        proc.stderr.on('data', (chunk) => {
+          onProgress({ stage: 'installing', output: chunk.toString(), percent: 50 })
+        })
+        proc.on('error', async (err) => {
+          onProgress({ stage: 'error', output: `Error: ${err.message}\n`, percent: 100 })
+          resolve({ success: false, error: err.message, newStatus: await detectInstalledAgents() })
+        })
+        proc.on('close', async (code) => {
+          const newStatus = await detectInstalledAgents()
+          if (code === 0 || newStatus[opts.detectKey]?.installed) {
+            onProgress({ stage: 'complete', output: opts.successMsg, percent: 100 })
+            resolve({ success: true, error: null, newStatus })
+          } else {
+            onProgress({ stage: 'error', output: `Installer exited with code ${code}\n`, percent: 100 })
+            resolve({ success: false, error: `Install failed with exit code ${code}`, newStatus })
+          }
+        })
+      })
+    }
+
+    if (opts.winCmd && opts.winArgs) {
+      // Use scoop/winget (OpenCode)
+      onProgress({ stage: 'starting', output: `$ ${opts.winCmd} ${opts.winArgs.join(' ')}\n`, percent: 5 })
+      try {
+        return await spawnInstall(opts.winCmd, opts.winArgs, agentName, onProgress)
+      } catch { /* fall through */ }
+    }
+
+    onProgress({ stage: 'error', output: `${opts.winFallback}\n`, percent: 100 })
+    return {
+      success: false,
+      error: opts.winFallback,
+      newStatus: await detectInstalledAgents()
     }
   }
 
   // macOS / Linux — use the official curl installer
-  onProgress({ stage: 'starting', output: '$ curl -fsSL https://opencode.ai/install | bash\n', percent: 5 })
+  const curlCmd = `curl -fsSL ${opts.curlUrl} | ${opts.curlShell}`
+  onProgress({ stage: 'starting', output: `$ ${curlCmd}\n`, percent: 5 })
   return new Promise((resolve) => {
-    const proc = spawn('bash', ['-c', 'curl -fsSL https://opencode.ai/install | bash'], {
+    const proc = spawn('bash', ['-c', curlCmd], {
       stdio: ['ignore', 'pipe', 'pipe'],
       env: { ...process.env }
     })
@@ -1130,13 +1188,13 @@ async function installOpencodeStandalone(onProgress) {
     })
 
     proc.on('close', async (code) => {
-      // The installer may place the binary in ~/.local/bin or similar — ensure it's on PATH
+      // Ensure common binary install paths are on PATH
       const localBin = join(homedir(), '.local', 'bin')
       ensureOnPath(localBin)
 
       const newStatus = await detectInstalledAgents()
-      if (code === 0 || newStatus.opencode?.installed) {
-        onProgress({ stage: 'complete', output: 'OpenCode installed successfully!\n', percent: 100 })
+      if (code === 0 || newStatus[opts.detectKey]?.installed) {
+        onProgress({ stage: 'complete', output: opts.successMsg, percent: 100 })
         resolve({ success: true, error: null, newStatus })
       } else {
         onProgress({ stage: 'error', output: `Install script exited with code ${code}\n`, percent: 100 })

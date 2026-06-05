@@ -4,8 +4,6 @@ import {
   Loader2,
   AlertTriangle,
   ArrowRight,
-  ChevronDown,
-  ChevronUp,
   Download,
   Sparkles,
   Zap
@@ -88,17 +86,6 @@ const AGENT_OPTIONS: AgentOption[] = [
 ]
 
 /* ─── Tool status helpers ─── */
-
-interface ToolCheck {
-  key: string
-  label: string
-}
-
-const CORE_TOOLS: ToolCheck[] = [
-  { key: 'nodejs', label: 'Node.js' },
-  { key: 'npm', label: 'npm' },
-  { key: 'git', label: 'Git' }
-]
 
 function getAgentToolKey(type: CodingAgentType): string {
   switch (type) {
@@ -216,7 +203,6 @@ export function OnboardingWizard({ open, onOpenChange }: OnboardingWizardProps) 
   const [selectedAgent, setSelectedAgent] = useState<AgentChoice | null>(null)
   const [providerChoice, setProviderChoice] = useState<ProviderChoice | null>(null)
   const [toolStatus, setToolStatus] = useState<Record<string, ToolStatus> | null>(null)
-  const [toolsExpanded, setToolsExpanded] = useState(false)
   const [creating, setCreating] = useState(false)
   const [installing, setInstalling] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -417,17 +403,6 @@ export function OnboardingWizard({ open, onOpenChange }: OnboardingWizardProps) 
       ? toolStatus[getAgentToolKey(selectedCodingAgent)]?.installed
       : null
 
-  // Claude Code & Codex need npm; OpenCode can install standalone
-  const needsNpm =
-    selectedCodingAgent === CodingAgentType.CLAUDE_CODE ||
-    selectedCodingAgent === CodingAgentType.CODEX
-  const npmAvailable = toolStatus?.npm?.installed ?? false
-  const canInstallAgent = !needsNpm || npmAvailable
-
-  // Block when agent isn't installed and we can't install it
-  const agentBlocked =
-    selectedCodingAgent && agentInstalled === false && !canInstallAgent
-
   /* ─── Render: Templates screen ─── */
 
   if (screen === 'templates') {
@@ -582,120 +557,40 @@ export function OnboardingWizard({ open, onOpenChange }: OnboardingWizardProps) 
               />
             )}
 
-            {/* ── Tool health (collapsed, BYO only) ── */}
+            {/* ── Agent CLI status (BYO only) ── */}
             {toolStatus && selectedCodingAgent && (
-              <div className="rounded-lg border border-border bg-muted/20 overflow-hidden">
-                <button
-                  type="button"
-                  onClick={() => setToolsExpanded((v) => !v)}
-                  className="w-full flex items-center gap-2.5 px-3 py-2.5 text-left cursor-pointer hover:bg-muted/30 transition-colors"
-                >
-                  {agentInstalled ? (
-                    <Check className="size-4 text-emerald-400 shrink-0" />
-                  ) : agentBlocked ? (
-                    <AlertTriangle className="size-4 text-red-400 shrink-0" />
-                  ) : (
-                    <AlertTriangle className="size-4 text-amber-400 shrink-0" />
-                  )}
-                  <span className="text-xs text-muted-foreground flex-1">
-                    {agentInstalled
-                      ? `${AGENT_OPTIONS.find((a) => a.type === selectedCodingAgent)?.label} ready`
-                      : agentBlocked
-                        ? `Install Node.js first to set up ${AGENT_OPTIONS.find((a) => a.type === selectedCodingAgent)?.label}`
-                        : `${AGENT_OPTIONS.find((a) => a.type === selectedCodingAgent)?.label} not installed — will be set up automatically`}
-                  </span>
-                  {toolsExpanded ? (
-                    <ChevronUp className="size-3.5 text-muted-foreground" />
-                  ) : (
-                    <ChevronDown className="size-3.5 text-muted-foreground" />
-                  )}
-                </button>
-
-                {toolsExpanded && (
-                  <div className="border-t border-border px-3 py-2.5 space-y-1.5">
-                    {/* Agent CLI */}
-                    <div className="flex items-center gap-2 text-xs">
-                      {agentInstalled ? (
-                        <Check className="size-3 text-emerald-400 shrink-0" />
-                      ) : (
-                        <span className="size-3 rounded-full border border-amber-400 shrink-0" />
-                      )}
-                      <span className="text-muted-foreground flex-1">
-                        {AGENT_OPTIONS.find((a) => a.type === selectedCodingAgent)?.label} CLI
-                        {agentInstalled &&
-                          toolStatus[getAgentToolKey(selectedCodingAgent)]?.version && (
-                            <span className="ml-1 opacity-60">
-                              v{toolStatus[getAgentToolKey(selectedCodingAgent)]?.version}
-                            </span>
-                          )}
-                      </span>
-                      {agentInstalled === false && (
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          className="h-5 px-1.5 text-[10px]"
-                          disabled={!!installing || !canInstallAgent}
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            handleInstall(getAgentToolKey(selectedCodingAgent))
-                          }}
-                        >
-                          {installing === getAgentToolKey(selectedCodingAgent) ? (
-                            <Loader2 className="size-3 animate-spin" />
-                          ) : (
-                            <>
-                              <Download className="size-2.5 mr-0.5" />
-                              Install
-                            </>
-                          )}
-                        </Button>
-                      )}
-                    </div>
-
-                    {/* Core tools */}
-                    <div className="border-t border-border/50 pt-1.5 mt-1.5">
-                      {CORE_TOOLS.map((tool) => {
-                        const st = toolStatus[tool.key]
-                        const isInstalling = installing === tool.key
-                        return (
-                          <div key={tool.key} className="flex items-center gap-2 text-xs py-0.5">
-                            {st?.installed ? (
-                              <Check className="size-3 text-emerald-400 shrink-0" />
-                            ) : (
-                              <span className="size-3 rounded-full border border-muted-foreground/40 shrink-0" />
-                            )}
-                            <span className="text-muted-foreground flex-1">
-                              {tool.label}
-                              {st?.installed && st.version && (
-                                <span className="ml-1 opacity-60">v{st.version}</span>
-                              )}
-                            </span>
-                            {!st?.installed && (
-                              <Button
-                                size="sm"
-                                variant="ghost"
-                                className="h-5 px-1.5 text-[10px]"
-                                disabled={!!installing}
-                                onClick={(e) => {
-                                  e.stopPropagation()
-                                  handleInstall(tool.key)
-                                }}
-                              >
-                                {isInstalling ? (
-                                  <Loader2 className="size-3 animate-spin" />
-                                ) : (
-                                  <>
-                                    <Download className="size-2.5 mr-0.5" />
-                                    Install
-                                  </>
-                                )}
-                              </Button>
-                            )}
-                          </div>
-                        )
-                      })}
-                    </div>
-                  </div>
+              <div className="flex items-center gap-2.5 px-3 py-2 rounded-lg border border-border bg-muted/20 text-xs">
+                {agentInstalled ? (
+                  <Check className="size-4 text-emerald-400 shrink-0" />
+                ) : (
+                  <AlertTriangle className="size-4 text-amber-400 shrink-0" />
+                )}
+                <span className="text-muted-foreground flex-1">
+                  {agentInstalled
+                    ? `${AGENT_OPTIONS.find((a) => a.type === selectedCodingAgent)?.label} CLI ready${
+                        toolStatus[getAgentToolKey(selectedCodingAgent)]?.version
+                          ? ` (v${toolStatus[getAgentToolKey(selectedCodingAgent)]?.version})`
+                          : ''
+                      }`
+                    : `${AGENT_OPTIONS.find((a) => a.type === selectedCodingAgent)?.label} will be installed automatically`}
+                </span>
+                {agentInstalled === false && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-5 px-1.5 text-[10px]"
+                    disabled={!!installing}
+                    onClick={() => handleInstall(getAgentToolKey(selectedCodingAgent))}
+                  >
+                    {installing === getAgentToolKey(selectedCodingAgent) ? (
+                      <Loader2 className="size-3 animate-spin" />
+                    ) : (
+                      <>
+                        <Download className="size-2.5 mr-0.5" />
+                        Install now
+                      </>
+                    )}
+                  </Button>
                 )}
               </div>
             )}
@@ -707,7 +602,7 @@ export function OnboardingWizard({ open, onOpenChange }: OnboardingWizardProps) 
             <div className="flex items-center gap-3">
               <Button
                 onClick={handleStart}
-                disabled={!selectedAgent || creating || !!agentBlocked}
+                disabled={!selectedAgent || creating}
                 className="flex-1"
               >
                 {creating ? (
