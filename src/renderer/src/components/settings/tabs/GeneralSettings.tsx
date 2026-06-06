@@ -4,7 +4,7 @@ import { SettingsSection } from '../SettingsSection'
 import { Label } from '@/components/ui/Label'
 import { Switch } from '@/components/ui/Switch'
 import { Button } from '@/components/ui/Button'
-import { ToolSetupDialog } from '@/components/AgentSetupWizard'
+import { OnboardingWizard } from '@/components/onboarding/OnboardingWizard'
 import { settingsApi, mobileApi, updaterApi, worktreeApi, onWorkspaceCleanupProgress } from '@/lib/ipc-client'
 
 export function GeneralSettings() {
@@ -571,7 +571,7 @@ const [currentVersion, setCurrentVersion] = useState<string | null>(null)
         <Wrench className="size-4 mr-1.5" />
         Open Setup Wizard
       </Button>
-      <ToolSetupDialog open={setupDialogOpen} onOpenChange={setSetupDialogOpen} />
+      <OnboardingWizard open={setupDialogOpen} onOpenChange={setSetupDialogOpen} />
     </SettingsSection>
     </>
   )
