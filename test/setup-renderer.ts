@@ -65,7 +65,25 @@ const mockElectronAPI = {
   shell: {
     openPath: vi.fn().mockResolvedValue(undefined),
     showItemInFolder: vi.fn().mockResolvedValue(undefined),
-    readTextFile: vi.fn().mockResolvedValue(null)
+    readTextFile: vi.fn().mockResolvedValue(null),
+    openExternal: vi.fn().mockResolvedValue(undefined)
+  },
+  enterprise: {
+    login: vi.fn().mockResolvedValue({ userId: 'u1', email: 'test@test.com', companies: [] }),
+    signupInBrowser: vi.fn().mockResolvedValue({ userId: 'u1', email: 'test@test.com', companies: [] }),
+    selectTenant: vi.fn().mockResolvedValue({ token: 'jwt', tenant: { id: 't1', name: 'Test' } }),
+    logout: vi.fn().mockResolvedValue(undefined),
+    getSession: vi.fn().mockResolvedValue({ isAuthenticated: false, userEmail: null, userId: null, currentTenant: null }),
+    listCompanies: vi.fn().mockResolvedValue([]),
+    syncResources: vi.fn().mockResolvedValue({}),
+    apiRequest: vi.fn().mockResolvedValue({}),
+    getJwt: vi.fn().mockResolvedValue(null),
+    refreshToken: vi.fn().mockResolvedValue(undefined),
+    getAuthTokens: vi.fn().mockResolvedValue({ accessToken: '', refreshToken: '', tenantId: '' }),
+    getAiGatewayStatus: vi.fn().mockResolvedValue(null),
+    getApiUrl: vi.fn().mockResolvedValue('https://api.peakflo.ai'),
+    enableIframeAuth: vi.fn().mockResolvedValue(undefined),
+    disableIframeAuth: vi.fn().mockResolvedValue(undefined)
   },
   notifications: {
     show: vi.fn().mockResolvedValue(undefined)
@@ -170,6 +188,15 @@ const mockElectronAPI = {
   onTasksRefresh: vi.fn((_cb: () => void) => {
     return vi.fn()
   }),
+  agentInstaller: {
+    detect: vi.fn().mockResolvedValue({}),
+    install: vi.fn().mockResolvedValue({ success: true, error: null, newStatus: {} }),
+    getCommand: vi.fn().mockResolvedValue(''),
+    onProgress: vi.fn((_cb: (data: unknown) => void) => vi.fn())
+  },
+  app: {
+    getVersion: vi.fn().mockResolvedValue('0.0.1')
+  },
   updater: {
     check: vi.fn().mockResolvedValue({ success: true }),
     download: vi.fn().mockResolvedValue({ success: true }),

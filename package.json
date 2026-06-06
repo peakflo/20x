@@ -1,6 +1,6 @@
 {
   "name": "20x",
-  "version": "0.0.91",
+  "version": "0.0.92",
   "packageManager": "pnpm@9.15.2",
   "description": "20x — AI-powered desktop task manager",
   "main": "./out/main/index.js",
@@ -84,6 +84,7 @@
     "happy-dom": "^20.5.0",
     "husky": "^9.1.7",
     "lucide-react": "^0.468.0",
+    "node-gyp-build": "^4.8.4",
     "png-to-ico": "^3.0.1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
