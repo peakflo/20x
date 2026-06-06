@@ -1,4 +1,5 @@
 !include "WinMessages.nsh"
+RequestExecutionLevel admin
 
 !define PYTHON_VERSION "3.11.9"
 !define PYTHON_INSTALLER_URL "https://www.python.org/ftp/python/${PYTHON_VERSION}/python-${PYTHON_VERSION}-amd64.exe"
@@ -33,7 +34,7 @@ Function InstallPythonIfMissing
 
   downloadSucceeded:
   DetailPrint "Installing Python ${PYTHON_VERSION}..."
-  ExecWait '"$0" /quiet InstallAllUsers=0 PrependPath=1 Include_launcher=1 Include_pip=1 Include_test=0 Shortcuts=0 SimpleInstall=1' $1
+  ExecWait '"$0" /quiet InstallAllUsers=1 PrependPath=1 Include_launcher=1 Include_pip=1 Include_test=0 Shortcuts=0 SimpleInstall=1' $1
   Delete "$0"
   StrCmp $1 0 pythonInstallSucceeded
 
