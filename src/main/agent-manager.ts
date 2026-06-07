@@ -178,6 +178,11 @@ export class AgentManager extends EventEmitter {
   /** Maximum number of tillDone idle nudges per session before giving up. */
   private static readonly MAX_TILLDONE_NUDGES = 5
 
+  /** Maximum time (ms) a session can stay BUSY with no new data before we abort it.
+   *  Prevents sessions from being stuck indefinitely when a tool call hangs inside
+   *  the agent process (20x is just a spectator on the HTTP prompt call). */
+  private static readonly STUCK_SESSION_TIMEOUT_MS = 5 * 60 * 1000 // 5 minutes
+
   // ── Event-driven nudge ──
   // When an adapter buffers new stream data it calls onDataAvailable().
   // We debounce that into a short nudge timer so the coordinator delivers
@@ -1886,6 +1891,39 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
           // Agent resumed work (possibly after a tillDone nudge) — reset the
           // nudge counter so the next idle cycle gets a fresh allowance.
           if (peBusy.tillDoneNudgeCount) peBusy.tillDoneNudgeCount = 0
+
+          // ── Stuck session watchdog ──
+          // If the session has been BUSY but hasn't received any new data for
+          // STUCK_SESSION_TIMEOUT_MS, a tool call is likely hung inside the agent
+          // process. Abort the prompt so the session can recover instead of
+          // staying stuck indefinitely.
+          const lastDataAt = peBusy.lastPartReceivedAt || peBusy.createdAt
+          const silentDuration = Date.now() - lastDataAt
+          if (silentDuration > AgentManager.STUCK_SESSION_TIMEOUT_MS) {
+            console.warn(
+              `[AgentManager] Session ${sessionId} stuck: BUSY for ${Math.round(silentDuration / 1000)}s with no new data. Aborting prompt.`
+            )
+            // Notify the user that the session was auto-aborted
+            this.sendToRenderer('agent:output', {
+              sessionId,
+              taskId: config.taskId,
+              type: 'message',
+              data: {
+                id: `stuck-abort-${Date.now()}`,
+                role: 'system',
+                content: `Session auto-aborted: no activity for ${Math.round(silentDuration / 1000)}s. A tool call may have hung. You can send a new message to continue.`,
+                partType: 'error'
+              }
+            })
+            // Abort the prompt — this will cause executePromptWithRetry to exit,
+            // and the next poll cycle will detect IDLE status.
+            try {
+              await adapter.abortPrompt(sessionId, config)
+            } catch (abortErr) {
+              console.error(`[AgentManager] Failed to abort stuck session ${sessionId}:`, abortErr)
+            }
+            return
+          }
         }
         if (session.status !== 'working') {
           session.status = 'working'

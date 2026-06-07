@@ -25,7 +25,9 @@ type V2QuestionRequest = import('@opencode-ai/sdk/v2/client').QuestionRequest
 let OpenCodeV2: OpenCodeV2Module | null = null
 let OpenCodeV2Client: V2ClientModule | null = null
 
-// Custom fetch with no timeout — agent prompts can run indefinitely
+// Custom fetch with no timeout — used ONLY for session.prompt() which stays open
+// for the entire agent loop (including all tool calls). All other SDK calls use the
+// default fetch which has the SDK's built-in 60s timeout.
 const noTimeoutAgent = new UndiciAgent({ headersTimeout: 0, bodyTimeout: 0 })
 const noTimeoutFetch = (req: unknown) => (globalThis as unknown as Record<string, (...args: unknown[]) => unknown>).fetch(req, { dispatcher: noTimeoutAgent })
 
@@ -50,7 +52,9 @@ export class OpencodeAdapter implements CodingAgentAdapter {
   private sharedClient: V2OpencodeClient | null = null
   /** A separate V2 client with a reasonable timeout for quick operations (config, providers, health) */
   private quickClient: V2OpencodeClient | null = null
-  private clients: Map<string, OpencodeClient> = new Map() // sessionId -> ocClient
+  private clients: Map<string, OpencodeClient> = new Map() // sessionId -> ocClient (default timeout, for polling/status/create)
+  /** Separate clients with no timeout, used ONLY for session.prompt() which runs indefinitely */
+  private promptClients: Map<string, OpencodeClient> = new Map()
   private v2Client: V2OpencodeClient | null = null
   private promptAborts: Map<string, AbortController> = new Map()
   /** Provider errors captured from prompt results (surfaced via getStatus) */
@@ -572,6 +576,16 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     // Ensure common binary install paths are in PATH so the SDK can find `opencode`
     this.ensureBinaryPaths()
 
+    // Set bash tool timeout if not already configured.
+    // Without this, bash commands inside the agent run indefinitely — a single
+    // hung `npm install` or `git clone` will keep the session stuck forever.
+    // 10 minutes is generous enough for legitimate long-running commands while
+    // preventing truly stuck processes.
+    if (!process.env.OPENCODE_EXPERIMENTAL_BASH_DEFAULT_TIMEOUT_MS) {
+      process.env.OPENCODE_EXPERIMENTAL_BASH_DEFAULT_TIMEOUT_MS = '600000' // 10 minutes
+      console.log('[OpencodeAdapter] Set OPENCODE_EXPERIMENTAL_BASH_DEFAULT_TIMEOUT_MS=600000 (10min)')
+    }
+
     const isDefaultUrl = targetUrl === DEFAULT_SERVER_URL || targetUrl === 'http://127.0.0.1:4096'
 
     this.serverStarting = (async () => {
@@ -582,8 +596,7 @@ export class OpencodeAdapter implements CodingAgentAdapter {
           this.serverInstance = null
           // Create a V2 client for the existing server (has global.health())
           this.sharedClient = OpenCodeV2Client!.createOpencodeClient({
-            baseUrl: accessibleUrl,
-            fetch: noTimeoutFetch as unknown as typeof fetch
+            baseUrl: accessibleUrl
           })
           // Create a separate client with bounded timeout for quick operations
           this.quickClient = OpenCodeV2Client!.createOpencodeClient({
@@ -668,7 +681,10 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     // calls that aborted all running sessions when parallel tasks started.
 
     const baseUrl = this.serverUrl || config.serverUrl || DEFAULT_SERVER_URL
-    const ocClient = OpenCodeSDK!.createOpencodeClient({ baseUrl, fetch: noTimeoutFetch as unknown as (request: Request) => ReturnType<typeof fetch> })
+    // Default client uses SDK's built-in timeout (60s) for session create, polling, MCP ops, etc.
+    const ocClient = OpenCodeSDK!.createOpencodeClient({ baseUrl })
+    // Separate client with no timeout — used ONLY for session.prompt() which runs indefinitely
+    const promptClient = OpenCodeSDK!.createOpencodeClient({ baseUrl, fetch: noTimeoutFetch as unknown as (request: Request) => ReturnType<typeof fetch> })
 
     // Register runtime plugins via config.update() so the running server loads them.
     // Plugins are registered globally (no directory scope) because the OpenCode server
@@ -776,6 +792,7 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     const ocSessionId = result.data.id
     this.writeTillDoneSessionConfig(ocSessionId, config.tillDone !== false)
     this.clients.set(ocSessionId, ocClient)
+    this.promptClients.set(ocSessionId, promptClient)
     this.sessionPermissionModes.set(ocSessionId, config.permissionMode || 'ask')
 
     return ocSessionId
@@ -788,7 +805,10 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     await this.ensureServerRunning(config.serverUrl || DEFAULT_SERVER_URL)
 
     const baseUrl = this.serverUrl || config.serverUrl || DEFAULT_SERVER_URL
-    const ocClient = OpenCodeSDK!.createOpencodeClient({ baseUrl, fetch: noTimeoutFetch as unknown as (request: Request) => ReturnType<typeof fetch> })
+    // Default client uses SDK's built-in timeout for polling/status
+    const ocClient = OpenCodeSDK!.createOpencodeClient({ baseUrl })
+    // Separate client with no timeout for session.prompt() only
+    const promptClient = OpenCodeSDK!.createOpencodeClient({ baseUrl, fetch: noTimeoutFetch as unknown as (request: Request) => ReturnType<typeof fetch> })
 
     // Register runtime plugins globally (see createSession comment for rationale)
     if (this.pluginFilePaths.length > 0) {
@@ -813,6 +833,7 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     }
 
     this.clients.set(sessionId, ocClient)
+    this.promptClients.set(sessionId, promptClient)
     this.sessionPermissionModes.set(sessionId, config.permissionMode || 'ask')
     this.writeTillDoneSessionConfig(sessionId, config.tillDone !== false)
 
@@ -870,7 +891,9 @@ export class OpencodeAdapter implements CodingAgentAdapter {
   }
 
   async sendPrompt(sessionId: string, parts: MessagePart[], config: SessionConfig): Promise<void> {
-    const ocClient = this.clients.get(sessionId)
+    // Use the no-timeout prompt client for session.prompt() which runs indefinitely.
+    // Falls back to the default client if promptClients entry is missing (shouldn't happen).
+    const ocClient = this.promptClients.get(sessionId) || this.clients.get(sessionId)
     if (!ocClient) {
       throw new Error(`No client found for session ${sessionId}`)
     }
@@ -1282,6 +1305,7 @@ export class OpencodeAdapter implements CodingAgentAdapter {
   async destroySession(sessionId: string, _config: SessionConfig): Promise<void> {
     await this.abortPrompt(sessionId, _config)
     this.clients.delete(sessionId)
+    this.promptClients.delete(sessionId)
     this.pendingPermissions.delete(sessionId)
     this.sessionPermissionModes.delete(sessionId)
     this.removeTillDoneSessionConfig(sessionId)
@@ -1631,7 +1655,7 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     if (!OpenCodeV2Client) throw new Error('OpenCode V2 SDK not loaded')
 
     const baseUrl = this.serverUrl || config.serverUrl || DEFAULT_SERVER_URL
-    this.v2Client = OpenCodeV2Client.createOpencodeClient({ baseUrl, fetch: noTimeoutFetch as unknown as typeof fetch })
+    this.v2Client = OpenCodeV2Client.createOpencodeClient({ baseUrl })
     return this.v2Client
   }
 
