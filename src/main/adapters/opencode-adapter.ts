@@ -832,6 +832,53 @@ export class OpencodeAdapter implements CodingAgentAdapter {
       throw new Error('Session no longer exists on server')
     }
 
+    // Abort any in-progress server-side prompt before resuming.
+    // This clears zombie tool calls that may be stuck waiting for
+    // permission approval (e.g. external_directory) from a previous
+    // app instance.  Without this, the server won't process new tool
+    // calls until the old ones complete — which they never will.
+    try {
+      await ocClient.session.abort({
+        path: { id: sessionId },
+        ...(config.workspaceDir && { query: { directory: config.workspaceDir } }),
+      })
+      console.log(`[OpencodeAdapter] Aborted any in-progress prompt on resume for session ${sessionId}`)
+    } catch {
+      // Non-fatal: session may already be idle
+    }
+
+    // Also clear any stale pending permissions from before the restart
+    try {
+      if (OpenCodeV2Client) {
+        const v2 = this.v2Client || OpenCodeV2Client.createOpencodeClient({
+          baseUrl: this.serverUrl || DEFAULT_SERVER_URL
+        })
+        if (!this.v2Client) this.v2Client = v2
+
+        const listResult = await v2.permission.list({})
+        if (listResult.data && Array.isArray(listResult.data)) {
+          const allPending = listResult.data as Array<{ id: string; sessionID: string }>
+          const sessionPending = allPending.filter(p => p.sessionID === sessionId)
+          for (const perm of sessionPending) {
+            try {
+              await v2.permission.reply({
+                requestID: perm.id,
+                reply: 'always'
+              })
+              console.log(`[OpencodeAdapter] Auto-approved stale permission ${perm.id} on resume`)
+            } catch {
+              // Permission may have already expired
+            }
+          }
+          if (sessionPending.length > 0) {
+            console.log(`[OpencodeAdapter] Cleared ${sessionPending.length} stale permission(s) on resume for session ${sessionId}`)
+          }
+        }
+      }
+    } catch (err) {
+      console.warn(`[OpencodeAdapter] Failed to clear stale permissions on resume:`, err instanceof Error ? err.message : err)
+    }
+
     this.clients.set(sessionId, ocClient)
     this.promptClients.set(sessionId, promptClient)
     this.sessionPermissionModes.set(sessionId, config.permissionMode || 'ask')
