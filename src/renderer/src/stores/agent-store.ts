@@ -409,7 +409,9 @@ export const useAgentStore = create<AgentState>((set, get) => {
           id: msgId,
           role,
           content,
-          timestamp: new Date(),
+          timestamp: (msg as Record<string, unknown>).receivedAt
+            ? new Date((msg as Record<string, unknown>).receivedAt as number)
+            : new Date(),
           partType: msg.partType,
           tool: msg.tool as AgentMessage['tool'],
           taskProgress: (msg as Record<string, unknown>).taskProgress as AgentMessage['taskProgress']

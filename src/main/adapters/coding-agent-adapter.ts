@@ -102,6 +102,7 @@ export interface MessagePart {
   }
   update?: boolean // Mark as update to existing message
   realSessionId?: string // Real session ID from backend (for updating database)
+  receivedAt?: number // Unix ms when this event was originally received (for replay timestamp preservation)
   taskProgress?: {
     taskId: string
     status: 'started' | 'running' | 'completed' | 'failed' | 'stopped'

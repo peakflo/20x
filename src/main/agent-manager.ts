@@ -2147,7 +2147,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     // on a follow-up message the streaming replay (with yet another set of
     // stableId-based IDs) was not deduped by either — causing every
     // historical message to appear twice.
-    const batchMessages: Array<{ id: string; role: string; content: string; partType?: string; tool?: unknown; taskProgress?: unknown }> = []
+    const batchMessages: Array<{ id: string; role: string; content: string; partType?: string; tool?: unknown; taskProgress?: unknown; receivedAt?: number }> = []
     const resumedSeenMessageIds = new Set<string>()
     const resumedSeenPartIds = new Set<string>()
     const resumedPartContentLengths = new Map<string, string>()
@@ -2170,7 +2170,8 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
             content: part.content || part.text || '',
             partType: part.type,
             tool: part.tool,
-            taskProgress: part.taskProgress
+            taskProgress: part.taskProgress,
+            receivedAt: part.receivedAt
           })
         }
       }
@@ -2571,7 +2572,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
         workspaceDir: session.workspaceDir || this.db.getWorkspaceDir(session.taskId)
       }
       const messages = await session.adapter.getAllMessages(sessionId, config)
-      const batchMessages: Array<{ id: string; role: string; content: string; partType?: string; tool?: unknown; taskProgress?: unknown }> = []
+      const batchMessages: Array<{ id: string; role: string; content: string; partType?: string; tool?: unknown; taskProgress?: unknown; receivedAt?: number }> = []
 
       for (const message of messages) {
         if (message.role === MessageRole.USER) continue
@@ -2598,7 +2599,8 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
             content: part.content || part.text || '',
             partType,
             tool: part.tool,
-            taskProgress: part.taskProgress
+            taskProgress: part.taskProgress,
+            receivedAt: part.receivedAt
           })
         }
       }
@@ -3299,7 +3301,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     })
 
     // Collect all message parts into a single batch (matching resumeAdapterSession pattern)
-    const batchMessages: Array<{ id: string; role: string; content: string; partType?: string; tool?: unknown; update?: boolean; taskProgress?: unknown }> = []
+    const batchMessages: Array<{ id: string; role: string; content: string; partType?: string; tool?: unknown; update?: boolean; taskProgress?: unknown; receivedAt?: number }> = []
     for (const msg of messages) {
       for (const part of msg.parts) {
         batchMessages.push({
@@ -3318,6 +3320,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
             todos: part.tool.todos
           } : undefined,
           taskProgress: part.taskProgress,
+          receivedAt: part.receivedAt,
           // Pass update flag so mobile store merges tool results into their
           // pending tool_use entries (e.g. status pending → success)
           ...(part.update ? { update: true } : {})

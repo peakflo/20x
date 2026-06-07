@@ -798,8 +798,12 @@ export class AcpAdapter implements CodingAgentAdapter {
         session
       )
 
+      // Propagate original arrival time from the permanent event to each part
+      const receivedAt = (event as Record<string, unknown>)?._receivedAt as number | undefined
+
       // Keep only latest version of each part
       for (const part of parts) {
+        if (receivedAt) part.receivedAt = receivedAt
         const key = `${part.id}-${part.role || 'assistant'}`
         // Only keep if newer or doesn't exist
         if (!partsByIdAndRole.has(key) || part.update) {
@@ -1226,6 +1230,8 @@ export class AcpAdapter implements CodingAgentAdapter {
         }
       }
 
+      // Stamp with arrival time so replays can preserve original timing
+      ;(notification as unknown as Record<string, unknown>)._receivedAt = Date.now()
       session.permanentMessages.push(notification)
     }
 
