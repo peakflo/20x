@@ -87,10 +87,10 @@ export class OpencodeAdapter implements CodingAgentAdapter {
   /** Per-session MCP server configs — retained so we can re-register servers
    *  if they disconnect mid-session (e.g. after a global config push). */
   private sessionMcpConfigs: Map<string, Record<string, { type: string; url?: string; headers?: Record<string, string>; command?: string; args?: string[]; env?: Record<string, string> }>> = new Map()
-  /** Timestamp of last MCP health check per session — throttles checks to once per 30s */
+  /** Timestamp of last MCP health check per session — throttles checks to once per 60s */
   private lastMcpHealthCheck: Map<string, number> = new Map()
   /** Minimum interval (ms) between MCP health checks per session */
-  private static readonly MCP_HEALTH_CHECK_INTERVAL_MS = 30_000
+  private static readonly MCP_HEALTH_CHECK_INTERVAL_MS = 60_000
 
   constructor(private db?: Pick<DatabaseManager, 'getSetting'>) {
     this.sdkLoading = this.loadSDK()
@@ -1498,27 +1498,60 @@ export class OpencodeAdapter implements CodingAgentAdapter {
       const statusMap = await this.getMcpStatusMap(ocClient, config.workspaceDir)
       if (!statusMap) return
 
+      // Classify servers: "missing" (not in status map at all) vs "disconnected" (exists but not connected)
+      const missing: string[] = []
       const disconnected: string[] = []
       for (const name of Object.keys(mcpConfigs)) {
         const entry = statusMap[name]
         const status = entry?.status
-        // If missing from the status map or explicitly not connected, it needs reconnection
-        if (!status || (status !== 'connected' && status !== 'connecting')) {
+        if (!entry && !status) {
+          // Server completely absent from status map — needs re-registration
+          missing.push(name)
+        } else if (status && status !== 'connected' && status !== 'connecting') {
+          // Server exists but is in a bad state (e.g. 'failed', 'disconnected')
           disconnected.push(name)
+        }
+        // else: 'connected' or 'connecting' — healthy, skip
+      }
+
+      if (missing.length === 0 && disconnected.length === 0) return
+
+      // Log diagnostic details so we can debug the disconnect pattern
+      const statusSummary = Object.keys(mcpConfigs).map(name => {
+        const s = statusMap[name]?.status ?? 'ABSENT'
+        return `${name}=${s}`
+      }).join(', ')
+      console.warn(`[OpencodeAdapter] MCP health check for session ${sessionId}: ${statusSummary}`)
+
+      // For DISCONNECTED servers (present but not connected), just call mcp.connect()
+      // WITHOUT mcp.add(). Calling mcp.add() replaces the server definition, which
+      // restarts it and can cause a disconnect-reconnect loop.
+      for (const name of disconnected) {
+        try {
+          const connectResult = await ocClient.mcp.connect({
+            path: { name },
+            ...(config.workspaceDir && { query: { directory: config.workspaceDir } })
+          })
+
+          if (connectResult.data === false) {
+            console.error(`[OpencodeAdapter] MCP reconnect (connect-only) failed for '${name}' — connect returned false`)
+          } else {
+            console.log(`[OpencodeAdapter] MCP server '${name}' reconnected (connect-only) for session ${sessionId}`)
+          }
+        } catch (err) {
+          console.error(`[OpencodeAdapter] MCP reconnect (connect-only) failed for '${name}':`, err instanceof Error ? err.message : err)
         }
       }
 
-      if (disconnected.length === 0) return
-
-      console.warn(`[OpencodeAdapter] MCP servers disconnected for session ${sessionId}: ${disconnected.join(', ')}. Reconnecting...`)
-
-      for (const name of disconnected) {
+      // For MISSING servers (absent from status map), re-register with mcp.add() + mcp.connect()
+      for (const name of missing) {
         const mcpConfig = mcpConfigs[name]
         try {
           const mcpAddConfig = mcpConfig.type === 'http'
             ? { type: 'remote' as const, url: mcpConfig.url ?? '', headers: mcpConfig.headers }
             : { type: 'local' as const, command: [mcpConfig.command ?? '', ...(mcpConfig.args ?? [])], environment: mcpConfig.env }
 
+          console.log(`[OpencodeAdapter] Re-registering missing MCP server '${name}' for session ${sessionId}`)
           await ocClient.mcp.add({
             body: { name, config: mcpAddConfig },
             ...(config.workspaceDir && { query: { directory: config.workspaceDir } })
@@ -1530,14 +1563,19 @@ export class OpencodeAdapter implements CodingAgentAdapter {
           })
 
           if (connectResult.data === false) {
-            console.error(`[OpencodeAdapter] MCP reconnect failed for '${name}' — connect returned false`)
+            console.error(`[OpencodeAdapter] MCP reconnect (full re-register) failed for '${name}' — connect returned false`)
           } else {
-            console.log(`[OpencodeAdapter] MCP server '${name}' reconnected for session ${sessionId}`)
+            console.log(`[OpencodeAdapter] MCP server '${name}' re-registered and connected for session ${sessionId}`)
           }
         } catch (err) {
-          console.error(`[OpencodeAdapter] MCP reconnect failed for '${name}':`, err instanceof Error ? err.message : err)
+          console.error(`[OpencodeAdapter] MCP reconnect (full re-register) failed for '${name}':`, err instanceof Error ? err.message : err)
         }
       }
+
+      // After reconnection, push the cooldown forward to give servers time to stabilize.
+      // Without this, the next health check in 30s might catch servers still in 'connecting' state
+      // and trigger another unnecessary reconnection attempt.
+      this.lastMcpHealthCheck.set(sessionId, Date.now())
     } catch (err) {
       // Non-fatal — MCP health check is best-effort
       console.warn(`[OpencodeAdapter] MCP health check failed for session ${sessionId}:`, err instanceof Error ? err.message : err)
