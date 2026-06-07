@@ -84,6 +84,13 @@ export class OpencodeAdapter implements CodingAgentAdapter {
   /** Per-session workspace directory — needed for permission replies and other
    *  session-scoped V2 API calls initiated from global SSE events. */
   private sessionWorkspaceDirs: Map<string, string> = new Map()
+  /** Per-session MCP server configs — retained so we can re-register servers
+   *  if they disconnect mid-session (e.g. after a global config push). */
+  private sessionMcpConfigs: Map<string, Record<string, { type: string; url?: string; headers?: Record<string, string>; command?: string; args?: string[]; env?: Record<string, string> }>> = new Map()
+  /** Timestamp of last MCP health check per session — throttles checks to once per 30s */
+  private lastMcpHealthCheck: Map<string, number> = new Map()
+  /** Minimum interval (ms) between MCP health checks per session */
+  private static readonly MCP_HEALTH_CHECK_INTERVAL_MS = 30_000
 
   constructor(private db?: Pick<DatabaseManager, 'getSetting'>) {
     this.sdkLoading = this.loadSDK()
@@ -266,18 +273,15 @@ export class OpencodeAdapter implements CodingAgentAdapter {
    * Push the merged provider/auth config to the running OpenCode server.
    *
    * ⚠️  PATCH /global/config causes the server to call disposeAllInstancesAndEmitGlobalDisposed(),
-   * which aborts every running session processor.  This must ONLY be called:
-   *   1. Once on first server connection (ensureServerRunning)
-   *   2. Explicitly via notifyConfigChanged() when the user edits settings or a key rotates
-   *   3. From getProvidersInner() which is a user-initiated settings UI query
+   * which aborts every running session processor AND disconnects all MCP servers.
    *
-   * NEVER call this in hot paths like getClient() or createSession().
+   * Strategy:
+   *   - When sessions are active: push via directory-scoped PATCH /config for each
+   *     active session directory. This updates the config without killing MCP connections.
+   *   - When no sessions are active: safe to use global endpoint.
    */
   private async pushMergedConfigToClient(client: V2OpencodeClient): Promise<void> {
     const hasActivePrompts = this.promptAborts.size > 0
-    if (hasActivePrompts) {
-      console.warn(`[OpencodeAdapter] pushMergedConfigToClient: ${this.promptAborts.size} prompt(s) in flight — config push may abort them`)
-    }
 
     try {
       const mergedConfig = buildMergedOpencodeConfig(undefined, this.db)
@@ -290,17 +294,38 @@ export class OpencodeAdapter implements CodingAgentAdapter {
       console.log('[OpencodeAdapter] pushMergedConfigToClient: pushing providers:', providerIds.join(', '))
 
       const castConfig = mergedConfig as import('@opencode-ai/sdk/v2/client').Config
-      try {
-        const result = await client.global.config.update({ config: castConfig })
-        if (result.error) {
-          console.warn('[OpencodeAdapter] global.config.update returned error:', JSON.stringify(result.error))
-          // Fall through to try directory-scoped endpoint
-          throw new Error('global.config.update returned error')
+
+      if (hasActivePrompts) {
+        // Sessions are running — use directory-scoped config updates to avoid
+        // disposeAllInstances which would kill MCP connections.
+        console.log(`[OpencodeAdapter] pushMergedConfigToClient: ${this.promptAborts.size} prompt(s) active — using directory-scoped config push`)
+        const directories = new Set(this.sessionWorkspaceDirs.values())
+        if (directories.size > 0) {
+          for (const dir of directories) {
+            try {
+              await client.config.update({ config: castConfig, directory: dir })
+            } catch {
+              // Individual directory push failed — non-fatal
+            }
+          }
+        } else {
+          // No directories known — fall back to global as last resort
+          console.warn('[OpencodeAdapter] pushMergedConfigToClient: no known directories, using global endpoint (may disrupt active sessions)')
+          await client.global.config.update({ config: castConfig })
         }
-      } catch {
-        const result = await client.config.update({ config: castConfig })
-        if (result.error) {
-          console.warn('[OpencodeAdapter] config.update returned error:', JSON.stringify(result.error))
+      } else {
+        // No active sessions — safe to use global endpoint
+        try {
+          const result = await client.global.config.update({ config: castConfig })
+          if (result.error) {
+            console.warn('[OpencodeAdapter] global.config.update returned error:', JSON.stringify(result.error))
+            throw new Error('global.config.update returned error')
+          }
+        } catch {
+          const result = await client.config.update({ config: castConfig })
+          if (result.error) {
+            console.warn('[OpencodeAdapter] config.update returned error:', JSON.stringify(result.error))
+          }
         }
       }
       this.configPushed = true
@@ -689,15 +714,15 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     // Separate client with no timeout — used ONLY for session.prompt() which runs indefinitely
     const promptClient = OpenCodeSDK!.createOpencodeClient({ baseUrl, fetch: noTimeoutFetch as unknown as (request: Request) => ReturnType<typeof fetch> })
 
-    // Register runtime plugins via config.update() so the running server loads them.
-    // Plugins are registered globally (no directory scope) because the OpenCode server
-    // resolves session directories to the actual git repo root, which differs from the
-    // workspace directory where plugin files are written. Each plugin uses absolute paths
-    // for its state/config files so different workspaces don't conflict.
+    // Register runtime plugins via directory-scoped config.update().
+    // Using the directory scope avoids side-effects on other sessions — unscoped
+    // config patches can trigger disposeAllInstances on the OpenCode server,
+    // which kills MCP connections for every running session.
     if (this.pluginFilePaths.length > 0) {
       try {
         await ocClient.config.update({
-          body: { plugin: [...this.pluginFilePaths] } as Record<string, unknown>
+          body: { plugin: [...this.pluginFilePaths] } as Record<string, unknown>,
+          ...(config.workspaceDir && { query: { directory: config.workspaceDir } })
         })
         console.log('[OpencodeAdapter] Registered runtime plugins via config.update:', this.pluginFilePaths)
       } catch (err) {
@@ -798,6 +823,7 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     this.promptClients.set(ocSessionId, promptClient)
     this.sessionPermissionModes.set(ocSessionId, config.permissionMode || 'ask')
     if (config.workspaceDir) this.sessionWorkspaceDirs.set(ocSessionId, config.workspaceDir)
+    if (config.mcpServers) this.sessionMcpConfigs.set(ocSessionId, config.mcpServers as Record<string, { type: string; url?: string; headers?: Record<string, string>; command?: string; args?: string[]; env?: Record<string, string> }>)
 
     return ocSessionId
   }
@@ -814,11 +840,13 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     // Separate client with no timeout for session.prompt() only
     const promptClient = OpenCodeSDK!.createOpencodeClient({ baseUrl, fetch: noTimeoutFetch as unknown as (request: Request) => ReturnType<typeof fetch> })
 
-    // Register runtime plugins globally (see createSession comment for rationale)
+    // Register runtime plugins via directory-scoped config.update() to avoid
+    // side-effects on other sessions (see createSession comment).
     if (this.pluginFilePaths.length > 0) {
       try {
         await ocClient.config.update({
-          body: { plugin: [...this.pluginFilePaths] } as Record<string, unknown>
+          body: { plugin: [...this.pluginFilePaths] } as Record<string, unknown>,
+          ...(config.workspaceDir && { query: { directory: config.workspaceDir } })
         })
         console.log('[OpencodeAdapter] Registered runtime plugins via config.update:', this.pluginFilePaths)
       } catch (err) {
@@ -937,6 +965,7 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     this.promptClients.set(sessionId, promptClient)
     this.sessionPermissionModes.set(sessionId, config.permissionMode || 'ask')
     if (config.workspaceDir) this.sessionWorkspaceDirs.set(sessionId, config.workspaceDir)
+    if (config.mcpServers) this.sessionMcpConfigs.set(sessionId, config.mcpServers as Record<string, { type: string; url?: string; headers?: Record<string, string>; command?: string; args?: string[]; env?: Record<string, string> }>)
     this.writeTillDoneSessionConfig(sessionId, config.tillDone !== false)
 
     // Fetch existing messages
@@ -1445,6 +1474,76 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     }
   }
 
+  /**
+   * Check MCP server health for this session and reconnect any that have disconnected.
+   * Throttled to at most once per MCP_HEALTH_CHECK_INTERVAL_MS per session.
+   *
+   * This is called from the agent-manager's polling loop to catch MCP servers
+   * that were disconnected by global config pushes (e.g. settings UI opened)
+   * or transient HTTP failures on remote MCP servers.
+   */
+  async checkAndReconnectMcpServers(sessionId: string, config: SessionConfig): Promise<void> {
+    // Throttle: skip if checked recently
+    const now = Date.now()
+    const lastCheck = this.lastMcpHealthCheck.get(sessionId) || 0
+    if (now - lastCheck < OpencodeAdapter.MCP_HEALTH_CHECK_INTERVAL_MS) return
+
+    this.lastMcpHealthCheck.set(sessionId, now)
+
+    const ocClient = this.clients.get(sessionId)
+    const mcpConfigs = this.sessionMcpConfigs.get(sessionId)
+    if (!ocClient || !mcpConfigs || Object.keys(mcpConfigs).length === 0) return
+
+    try {
+      const statusMap = await this.getMcpStatusMap(ocClient, config.workspaceDir)
+      if (!statusMap) return
+
+      const disconnected: string[] = []
+      for (const name of Object.keys(mcpConfigs)) {
+        const entry = statusMap[name]
+        const status = entry?.status
+        // If missing from the status map or explicitly not connected, it needs reconnection
+        if (!status || (status !== 'connected' && status !== 'connecting')) {
+          disconnected.push(name)
+        }
+      }
+
+      if (disconnected.length === 0) return
+
+      console.warn(`[OpencodeAdapter] MCP servers disconnected for session ${sessionId}: ${disconnected.join(', ')}. Reconnecting...`)
+
+      for (const name of disconnected) {
+        const mcpConfig = mcpConfigs[name]
+        try {
+          const mcpAddConfig = mcpConfig.type === 'http'
+            ? { type: 'remote' as const, url: mcpConfig.url ?? '', headers: mcpConfig.headers }
+            : { type: 'local' as const, command: [mcpConfig.command ?? '', ...(mcpConfig.args ?? [])], environment: mcpConfig.env }
+
+          await ocClient.mcp.add({
+            body: { name, config: mcpAddConfig },
+            ...(config.workspaceDir && { query: { directory: config.workspaceDir } })
+          })
+
+          const connectResult = await ocClient.mcp.connect({
+            path: { name },
+            ...(config.workspaceDir && { query: { directory: config.workspaceDir } })
+          })
+
+          if (connectResult.data === false) {
+            console.error(`[OpencodeAdapter] MCP reconnect failed for '${name}' — connect returned false`)
+          } else {
+            console.log(`[OpencodeAdapter] MCP server '${name}' reconnected for session ${sessionId}`)
+          }
+        } catch (err) {
+          console.error(`[OpencodeAdapter] MCP reconnect failed for '${name}':`, err instanceof Error ? err.message : err)
+        }
+      }
+    } catch (err) {
+      // Non-fatal — MCP health check is best-effort
+      console.warn(`[OpencodeAdapter] MCP health check failed for session ${sessionId}:`, err instanceof Error ? err.message : err)
+    }
+  }
+
   async abortPrompt(sessionId: string, _config: SessionConfig): Promise<void> {
     const abort = this.promptAborts.get(sessionId)
     if (abort) {
@@ -1480,6 +1579,8 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     this.pendingPermissions.delete(sessionId)
     this.sessionPermissionModes.delete(sessionId)
     this.sessionWorkspaceDirs.delete(sessionId)
+    this.sessionMcpConfigs.delete(sessionId)
+    this.lastMcpHealthCheck.delete(sessionId)
     this.removeTillDoneSessionConfig(sessionId)
 
     if (this.clients.size > 0) {

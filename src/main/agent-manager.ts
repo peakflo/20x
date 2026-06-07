@@ -1961,6 +1961,18 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
           // nudge counter so the next idle cycle gets a fresh allowance.
           if (peBusy.tillDoneNudgeCount) peBusy.tillDoneNudgeCount = 0
 
+          // ── MCP server health check ──
+          // Periodically check if MCP servers are still connected and reconnect
+          // any that were dropped (e.g. by a global config push from settings UI).
+          // Self-throttled inside the adapter to at most once per 30s.
+          if ('checkAndReconnectMcpServers' in adapter && typeof adapter.checkAndReconnectMcpServers === 'function') {
+            try {
+              await adapter.checkAndReconnectMcpServers(sessionId, config)
+            } catch {
+              // Non-fatal — MCP health check is best-effort
+            }
+          }
+
           // ── Fast stuck-tool detector ──
           // Some tools (notably `read` on cross-workspace files) silently hang
           // without producing any output or asking for permission. The general
