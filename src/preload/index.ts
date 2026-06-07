@@ -101,6 +101,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('agentSession:stopByTaskId', taskId),
     send: (sessionId: string, message: string, taskId?: string, agentId?: string, attachments?: Array<{ id: string; filename: string; size: number; mime_type: string }>): Promise<{ success: boolean; newSessionId?: string }> =>
       ipcRenderer.invoke('agentSession:send', sessionId, message, taskId, agentId, attachments),
+    sendByTaskId: (taskId: string, message: string, attachments?: Array<{ id: string; filename: string; size: number; mime_type: string }>): Promise<{ success: boolean; sessionId: string | null; newSessionId?: string }> =>
+      ipcRenderer.invoke('agentSession:sendByTaskId', taskId, message, attachments),
     approve: (sessionId: string, approved: boolean, message?: string): Promise<{ success: boolean }> =>
       ipcRenderer.invoke('agentSession:approve', sessionId, approved, message),
     syncSkills: (sessionId: string): Promise<{ created: string[]; updated: string[]; unchanged: string[] }> =>

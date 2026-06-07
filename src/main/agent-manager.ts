@@ -2926,6 +2926,30 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     return { sessionId: found.sessionId }
   }
 
+  /**
+   * Sends a message by taskId — used when the renderer's session mapping
+   * is broken and the normal send-by-sessionId path can't resolve a sessionId.
+   * Tries to find a live in-memory session first, then falls back to
+   * sendMessage's built-in resume/create logic.
+   */
+  async sendByTaskId(
+    taskId: string,
+    message: string,
+    attachments?: MessageAttachmentRef[]
+  ): Promise<{ sessionId: string | null; newSessionId?: string }> {
+    const found = this.findSessionByTaskId(taskId)
+    if (found) {
+      console.log(`[AgentManager] sendByTaskId: found live session ${found.sessionId} for task ${taskId}`)
+      const result = await this.sendMessage(found.sessionId, message, taskId, found.session.agentId, attachments)
+      return { sessionId: found.sessionId, ...result }
+    }
+    // No live session — delegate to sendMessage with empty sessionId.
+    // Its internal logic will try resume from persisted session_id, or create a new one.
+    console.log(`[AgentManager] sendByTaskId: no live session for task ${taskId}, delegating to sendMessage for recovery`)
+    const result = await this.sendMessage('', message, taskId, undefined, attachments)
+    return { sessionId: null, ...result }
+  }
+
   async sendMessage(
     sessionId: string,
     message: string,

@@ -237,6 +237,121 @@ describe('serializeTranscriptForDebug', () => {
     expect(result).not.toContain('Raw Agent Transcript')
   })
 
+  // ── Diagnostics tests ──
+
+  it('should show elapsed time and STUCK marker for running tools older than 60s', () => {
+    const twoMinutesAgo = new Date(Date.now() - 120_000)
+    const messages = [makeMessage({
+      timestamp: twoMinutesAgo,
+      partType: 'tool',
+      content: '',
+      tool: {
+        name: 'read',
+        status: 'running',
+        input: '{"filePath":"/some/directory/"}'
+      }
+    })]
+    const result = serializeTranscriptForDebug(messages, {
+      status: SessionStatus.WORKING,
+      messageCount: 1
+    })
+
+    expect(result).toContain('[running — 2m elapsed ⚠️ STUCK]')
+  })
+
+  it('should show elapsed time without STUCK for running tools under 60s', () => {
+    const tenSecondsAgo = new Date(Date.now() - 10_000)
+    const messages = [makeMessage({
+      timestamp: tenSecondsAgo,
+      partType: 'tool',
+      content: '',
+      tool: {
+        name: 'Bash',
+        status: 'running',
+        input: 'npm test'
+      }
+    })]
+    const result = serializeTranscriptForDebug(messages, {
+      status: SessionStatus.WORKING,
+      messageCount: 1
+    })
+
+    expect(result).toContain('[running — 10s elapsed]')
+    expect(result).not.toContain('STUCK')
+  })
+
+  it('should include Stuck Tools diagnostic section when tools running > 30s', () => {
+    const fiveMinutesAgo = new Date(Date.now() - 300_000)
+    const messages = [makeMessage({
+      timestamp: fiveMinutesAgo,
+      partType: 'tool',
+      content: '',
+      tool: {
+        name: 'read',
+        status: 'running',
+        input: '{"filePath":"/some/path"}'
+      }
+    })]
+    const result = serializeTranscriptForDebug(messages, {
+      status: SessionStatus.WORKING,
+      messageCount: 1
+    })
+
+    expect(result).toContain('--- ⚠️ Stuck Tools ---')
+    expect(result).toContain('read — running for 5m')
+  })
+
+  it('should show Silent For duration when last message is old', () => {
+    const threeMinutesAgo = new Date(Date.now() - 180_000)
+    const messages = [makeMessage({
+      timestamp: threeMinutesAgo,
+      content: 'Last message'
+    })]
+    const result = serializeTranscriptForDebug(messages, {
+      status: SessionStatus.IDLE,
+      messageCount: 1
+    })
+
+    expect(result).toContain('Silent For: 3m (since last message)')
+  })
+
+  it('should not show Silent For when last message is recent', () => {
+    const twoSecondsAgo = new Date(Date.now() - 2_000)
+    const messages = [makeMessage({
+      timestamp: twoSecondsAgo,
+      content: 'Just happened'
+    })]
+    const result = serializeTranscriptForDebug(messages, {
+      status: SessionStatus.WORKING,
+      messageCount: 1
+    })
+
+    expect(result).not.toContain('Silent For')
+  })
+
+  it('should show pending approval info in header', () => {
+    const result = serializeTranscriptForDebug([], {
+      status: SessionStatus.WAITING_APPROVAL,
+      messageCount: 0,
+      pendingApproval: {
+        action: 'bash',
+        description: 'Run: rm -rf /tmp/test'
+      }
+    })
+
+    expect(result).toContain('⚠️ Pending Approval: bash — Run: rm -rf /tmp/test')
+  })
+
+  it('should not show pending approval when null', () => {
+    const result = serializeTranscriptForDebug([], {
+      status: SessionStatus.IDLE,
+      messageCount: 0,
+      pendingApproval: null
+    })
+
+    expect(result).not.toContain('Pending Approval')
+  })
+
   it('should include tool errors from raw transcript', () => {
     const rawTranscript: RawTranscriptMessage[] = [
       {

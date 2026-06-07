@@ -101,6 +101,8 @@ interface AgentTranscriptPanelProps {
   sessionId?: string | null
   taskId?: string
   agentId?: string
+  /** Pending approval request for debug diagnostics */
+  pendingApproval?: { action: string; description: string } | null
 }
 
 export interface ComposerAttachment {
@@ -546,7 +548,8 @@ export function AgentTranscriptPanel({
   systemStatus,
   sessionId,
   taskId,
-  agentId
+  agentId,
+  pendingApproval
 }: AgentTranscriptPanelProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const panelRef = useRef<HTMLDivElement>(null)
@@ -574,7 +577,8 @@ export function AgentTranscriptPanel({
       agentId,
       status,
       systemStatus,
-      messageCount: messages.length
+      messageCount: messages.length,
+      pendingApproval: pendingApproval ?? null
     }, rawTranscript)
     navigator.clipboard.writeText(debugText).then(() => {
       setDebugCopyToast(true)
@@ -582,7 +586,7 @@ export function AgentTranscriptPanel({
     }).catch((err) => {
       console.error('Failed to copy debug info:', err)
     })
-  }, [messages, sessionId, taskId, agentId, status, systemStatus])
+  }, [messages, sessionId, taskId, agentId, status, systemStatus, pendingApproval])
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {

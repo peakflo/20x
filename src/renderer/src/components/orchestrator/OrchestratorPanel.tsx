@@ -127,6 +127,8 @@ export function OrchestratorPanel({ onClose }: OrchestratorPanelProps) {
           onStop={stop}
           onSend={handleSendMessage}
           className="flex-1 min-h-0"
+          sessionId={currentSession?.sessionId}
+          pendingApproval={currentSession?.pendingApproval ?? undefined}
         />
       )}
 

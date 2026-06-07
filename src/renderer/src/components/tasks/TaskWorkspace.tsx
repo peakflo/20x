@@ -729,6 +729,10 @@ Update existing skills that were helpful or create new ones for patterns worth r
               onPickAttachments={handlePickAttachments}
               onAddAttachmentPaths={handleAddAttachmentPaths}
               className="h-full"
+              sessionId={session.sessionId}
+              taskId={task.id}
+              agentId={task.agent_id ?? undefined}
+              pendingApproval={session.pendingApproval ?? undefined}
             />
           </div>
         )}

@@ -153,14 +153,15 @@ describe('useAgentSession', () => {
       expect(mockElectronAPI.agentSession.send).toHaveBeenCalledWith('sess-1', 'Use this file', 'task-1', 'agent-1', attachments)
     })
 
-    it('throws when no active session', async () => {
+    it('falls back to sendByTaskId when no active session', async () => {
       const { result } = renderHook(() => useAgentSession('task-1'))
 
-      await expect(
-        act(async () => {
-          await result.current.sendMessage('Hello')
-        })
-      ).rejects.toThrow('No active session')
+      await act(async () => {
+        await result.current.sendMessage('Hello')
+      })
+
+      expect(mockElectronAPI.agentSession.send).not.toHaveBeenCalled()
+      expect(mockElectronAPI.agentSession.sendByTaskId).toHaveBeenCalledWith('task-1', 'Hello', undefined)
     })
 
     it('uses latest sessionId from store, not stale closure', async () => {

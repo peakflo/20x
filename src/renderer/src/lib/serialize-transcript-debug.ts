@@ -35,9 +35,25 @@ function formatTimestamp(date: Date): string {
   return date.toISOString()
 }
 
-function serializeToolInfo(tool: NonNullable<AgentMessage['tool']>): string {
+function formatElapsed(ms: number): string {
+  if (ms < 1000) return `${ms}ms`
+  const secs = Math.floor(ms / 1000)
+  if (secs < 60) return `${secs}s`
+  const mins = Math.floor(secs / 60)
+  const remainSecs = secs % 60
+  return remainSecs > 0 ? `${mins}m${remainSecs}s` : `${mins}m`
+}
+
+function serializeToolInfo(tool: NonNullable<AgentMessage['tool']>, msgTimestamp?: Date, now?: Date): string {
   const lines: string[] = []
-  lines.push(`    tool: ${tool.name} [${tool.status}]`)
+  let statusLabel = tool.status
+  // For running tools, show how long they've been stuck
+  if (tool.status === 'running' && msgTimestamp && now) {
+    const elapsed = now.getTime() - msgTimestamp.getTime()
+    statusLabel = `running — ${formatElapsed(elapsed)} elapsed`
+    if (elapsed > 60_000) statusLabel += ' ⚠️ STUCK'
+  }
+  lines.push(`    tool: ${tool.name} [${statusLabel}]`)
   if (tool.title) lines.push(`    title: ${tool.title}`)
   if (tool.input) lines.push(`    input: ${truncate(String(tool.input), MAX_TOOL_CONTENT)}`)
   if (tool.output) lines.push(`    output: ${truncate(String(tool.output), MAX_TOOL_CONTENT)}`)
@@ -52,7 +68,7 @@ function serializeToolInfo(tool: NonNullable<AgentMessage['tool']>): string {
   return lines.join('\n')
 }
 
-function serializeMessage(msg: AgentMessage, index: number): string {
+function serializeMessage(msg: AgentMessage, index: number, now?: Date): string {
   const lines: string[] = []
   const ts = formatTimestamp(msg.timestamp)
   const partLabel = msg.partType ? ` (${msg.partType})` : ''
@@ -63,7 +79,7 @@ function serializeMessage(msg: AgentMessage, index: number): string {
   }
 
   if (msg.tool) {
-    lines.push(serializeToolInfo(msg.tool))
+    lines.push(serializeToolInfo(msg.tool, msg.timestamp, now))
   }
 
   if (msg.taskProgress) {
@@ -122,6 +138,7 @@ export interface TranscriptDebugInfo {
   status: SessionStatus
   systemStatus?: string | null
   messageCount: number
+  pendingApproval?: { action: string; description: string } | null
 }
 
 /**
@@ -134,23 +151,61 @@ export function serializeTranscriptForDebug(
   info: TranscriptDebugInfo,
   rawTranscript?: RawTranscriptMessage[]
 ): string {
+  const now = new Date()
+
+  // ── Compute diagnostics ──
+  const stuckTools: Array<{ index: number; name: string; elapsed: number; input?: string }> = []
+  messages.forEach((msg, i) => {
+    if (msg.tool?.status === 'running') {
+      const elapsed = now.getTime() - msg.timestamp.getTime()
+      if (elapsed > 30_000) {
+        stuckTools.push({
+          index: i,
+          name: msg.tool.name,
+          elapsed,
+          input: msg.tool.input ? truncate(String(msg.tool.input), 200) : undefined
+        })
+      }
+    }
+  })
+
+  const lastMsg = messages.length > 0 ? messages[messages.length - 1] : null
+  const silentDuration = lastMsg ? now.getTime() - lastMsg.timestamp.getTime() : null
+
   const header = [
     '=== Agent Transcript Debug ===',
-    `Timestamp: ${new Date().toISOString()}`,
+    `Timestamp: ${now.toISOString()}`,
     `Session: ${info.sessionId || '(none)'}`,
     info.taskId ? `Task: ${info.taskId}` : null,
     info.agentId ? `Agent: ${info.agentId}` : null,
     `Status: ${info.status}`,
     info.systemStatus ? `System Status: ${info.systemStatus}` : null,
     `Total Messages: ${info.messageCount}`,
+    silentDuration != null && silentDuration > 30_000
+      ? `Silent For: ${formatElapsed(silentDuration)} (since last message)`
+      : null,
+    info.pendingApproval
+      ? `⚠️ Pending Approval: ${info.pendingApproval.action} — ${info.pendingApproval.description}`
+      : null,
   ].filter(Boolean).join('\n')
+
+  const sections = [header]
+
+  // ── Stuck tools diagnostic ──
+  if (stuckTools.length > 0) {
+    sections.push('')
+    sections.push('--- ⚠️ Stuck Tools ---')
+    for (const st of stuckTools) {
+      const line = `[${st.index}] ${st.name} — running for ${formatElapsed(st.elapsed)}`
+      sections.push(line)
+      if (st.input) sections.push(`  input: ${st.input}`)
+    }
+  }
 
   // ── UI Messages Section ──
   const recent = messages.slice(-MAX_UI_MESSAGES)
   const skipped = messages.length - recent.length
-  const uiBody = recent.map((msg, i) => serializeMessage(msg, skipped + i)).join('\n\n')
-
-  const sections = [header]
+  const uiBody = recent.map((msg, i) => serializeMessage(msg, skipped + i, now)).join('\n\n')
 
   // UI messages
   sections.push('')
