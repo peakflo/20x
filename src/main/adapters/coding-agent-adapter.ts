@@ -188,14 +188,6 @@ export interface CodingAgentAdapter {
   abortPrompt(sessionId: string, config: SessionConfig): Promise<void>
 
   /**
-   * Check MCP server health and reconnect any that have disconnected.
-   * Optional — adapters that don't manage MCP servers can skip this.
-   * Called periodically from the polling loop; implementations should
-   * self-throttle to avoid excessive API calls.
-   */
-  checkAndReconnectMcpServers?(sessionId: string, config: SessionConfig): Promise<void>
-
-  /**
    * Get tools currently in "running" state.
    * Used by the stuck-tool detector to abort tools that hang without producing
    * data (e.g. cross-workspace file reads that the server silently blocks).
