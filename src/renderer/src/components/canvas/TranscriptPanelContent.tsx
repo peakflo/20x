@@ -87,9 +87,9 @@ export function TranscriptPanelContent({ taskId }: TranscriptPanelContentProps) 
       onRestart={handleRestart}
       onSend={handleSend}
       className="h-full select-text"
-      sessionId={session?.sessionId}
+      sessionId={session?.sessionId ?? undefined}
       taskId={taskId}
-      agentId={task?.agent_id}
+      agentId={task?.agent_id ?? undefined}
     />
   )
 }

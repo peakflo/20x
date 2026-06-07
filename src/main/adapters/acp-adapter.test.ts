@@ -2769,4 +2769,152 @@ describe('AcpAdapter - Codex Quota/Error Handling', () => {
       expect(session.lastSessionUpdateType).toBe('tool_call')
     })
   })
+
+  describe('agent_message dedup with streaming chunks', () => {
+    it('should not duplicate when agent_message arrives after chunks for the same turn (no messageId)', () => {
+      // Regression: agent_message with null messageId used randomUUID(),
+      // bypassing seenPartIds and creating a duplicate message.
+      const sessionId = 'test-session'
+      const priv = adapterPrivate(adapter)
+      const session = createMockSession(sessionId)
+      session.currentTurnId = 0
+      session.activeTurnId = null
+      session.lastSessionUpdateType = null
+      priv.sessions.set(sessionId, session)
+
+      const seenPartIds = new Set<string>()
+      const partContentLengths = new Map<string, string>()
+
+      // 1) Streaming chunks arrive first
+      const chunk1 = {
+        method: 'session/update',
+        params: {
+          sessionId,
+          update: {
+            sessionUpdate: 'agent_message_chunk',
+            content: { type: 'text', text: 'Hello ' }
+          }
+        }
+      }
+
+      const chunk2 = {
+        method: 'session/update',
+        params: {
+          sessionId,
+          update: {
+            sessionUpdate: 'agent_message_chunk',
+            content: { type: 'text', text: 'world!' }
+          }
+        }
+      }
+
+      const parts1 = priv.convertAcpEventToMessageParts(chunk1, new Set(), seenPartIds, partContentLengths, session)
+      session.lastSessionUpdateType = 'agent_message_chunk'
+      const parts2 = priv.convertAcpEventToMessageParts(chunk2, new Set(), seenPartIds, partContentLengths, session)
+
+      expect(parts1).toHaveLength(1)
+      expect(parts2).toHaveLength(1)
+      expect(parts2[0].text).toBe('Hello world!')
+      expect(parts2[0].id).toBe('agent-response-1')
+
+      // 2) Final agent_message arrives WITHOUT a messageId
+      session.lastSessionUpdateType = 'agent_message_chunk'
+      const finalMessage = {
+        method: 'session/update',
+        params: {
+          sessionId,
+          update: {
+            sessionUpdate: 'agent_message',
+            messageId: null,
+            content: { type: 'text', text: 'Hello world!' }
+          }
+        }
+      }
+
+      const finalParts = priv.convertAcpEventToMessageParts(finalMessage, new Set(), seenPartIds, partContentLengths, session)
+
+      // Should NOT create a new part — the streaming chunks already covered it
+      expect(finalParts).toHaveLength(0)
+    })
+
+    it('should update existing entry when agent_message has more complete text than chunks', () => {
+      const sessionId = 'test-session'
+      const priv = adapterPrivate(adapter)
+      const session = createMockSession(sessionId)
+      session.currentTurnId = 0
+      session.activeTurnId = null
+      session.lastSessionUpdateType = null
+      priv.sessions.set(sessionId, session)
+
+      const seenPartIds = new Set<string>()
+      const partContentLengths = new Map<string, string>()
+
+      // 1) Only partial chunk arrived
+      const chunk = {
+        method: 'session/update',
+        params: {
+          sessionId,
+          update: {
+            sessionUpdate: 'agent_message_chunk',
+            content: { type: 'text', text: 'Partial' }
+          }
+        }
+      }
+
+      priv.convertAcpEventToMessageParts(chunk, new Set(), seenPartIds, partContentLengths, session)
+      session.lastSessionUpdateType = 'agent_message_chunk'
+
+      // 2) Final agent_message has more complete text
+      const finalMessage = {
+        method: 'session/update',
+        params: {
+          sessionId,
+          update: {
+            sessionUpdate: 'agent_message',
+            messageId: null,
+            content: { type: 'text', text: 'Partial response with full details here.' }
+          }
+        }
+      }
+
+      const finalParts = priv.convertAcpEventToMessageParts(finalMessage, new Set(), seenPartIds, partContentLengths, session)
+
+      // Should emit an update with the more complete text
+      expect(finalParts).toHaveLength(1)
+      expect(finalParts[0].text).toBe('Partial response with full details here.')
+      expect(finalParts[0].update).toBe(true)
+      expect(finalParts[0].id).toBe('agent-response-1')
+    })
+
+    it('should still create new entries for agent_message with a stable messageId', () => {
+      const sessionId = 'test-session'
+      const priv = adapterPrivate(adapter)
+      const session = createMockSession(sessionId)
+      session.currentTurnId = 0
+      session.activeTurnId = null
+      session.lastSessionUpdateType = null
+      priv.sessions.set(sessionId, session)
+
+      const seenPartIds = new Set<string>()
+      const partContentLengths = new Map<string, string>()
+
+      const agentMessage = {
+        method: 'session/update',
+        params: {
+          sessionId,
+          update: {
+            sessionUpdate: 'agent_message',
+            messageId: 'stable-id-from-backend',
+            content: { type: 'text', text: 'A complete response.' }
+          }
+        }
+      }
+
+      const parts = priv.convertAcpEventToMessageParts(agentMessage, new Set(), seenPartIds, partContentLengths, session)
+
+      expect(parts).toHaveLength(1)
+      expect(parts[0].id).toBe('stable-id-from-backend')
+      expect(parts[0].text).toBe('A complete response.')
+    })
+  })
 })

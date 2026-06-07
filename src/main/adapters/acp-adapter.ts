@@ -1869,9 +1869,24 @@ export class AcpAdapter implements CodingAgentAdapter {
         const role = update.sessionUpdate === 'user_message' || update.sessionUpdate === 'human_message'
           ? 'user'
           : 'assistant'
-        const partId = update.messageId || `${update.sessionUpdate}-${randomUUID()}`
 
-        if (!seenPartIds.has(partId)) {
+        // For assistant messages without a stable messageId, derive a
+        // deterministic ID from the current turn so it matches the streaming
+        // chunk ID (`agent-response-{turnId}`).  This prevents duplicates
+        // where the same text shows up once from chunks and again from
+        // the final agent_message event with a random UUID.
+        let partId: string
+        if (update.messageId) {
+          partId = update.messageId
+        } else if (role === 'assistant' && session) {
+          const turnId = this.getAssistantTurnId(session)
+          partId = turnId > 0 ? `agent-response-${turnId}` : 'agent-response'
+        } else {
+          partId = `${update.sessionUpdate}-${randomUUID()}`
+        }
+
+        const alreadySeen = seenPartIds.has(partId)
+        if (!alreadySeen) {
           seenPartIds.add(partId)
           partContentLengths.set(partId, text)
           parts.push({
@@ -1880,6 +1895,21 @@ export class AcpAdapter implements CodingAgentAdapter {
             text,
             role
           })
+        } else if (role === 'assistant') {
+          // Final agent_message may have more complete text than the
+          // accumulated chunks — update the existing entry so the
+          // renderer gets the definitive version.
+          const existingText = partContentLengths.get(partId) || ''
+          if (text.length > existingText.length) {
+            partContentLengths.set(partId, text)
+            parts.push({
+              id: partId,
+              type: MessagePartType.TEXT,
+              text,
+              role,
+              update: true
+            })
+          }
         }
       } else if (update.sessionUpdate === 'plan') {
         // Handle agent plan - we can ignore this for now or display it later

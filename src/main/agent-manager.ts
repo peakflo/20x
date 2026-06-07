@@ -2586,7 +2586,10 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
 
           session.seenPartIds.add(partId)
           if (part.content || part.text) {
-            session.partContentLengths.set(partId, String((part.content || part.text || '').length))
+            // Store actual text content, NOT length — partContentLengths is used
+            // for chunk accumulation in streaming; storing a length string causes
+            // the number to be prepended to the next streamed chunk.
+            session.partContentLengths.set(partId, part.content || part.text || '')
           }
 
           batchMessages.push({

@@ -1126,6 +1126,45 @@ describe('AgentManager transitionToIdle — enterprise task completion after fee
     expect(sessionWithAdapter.seenPartIds.has('final-part')).toBe(true)
   })
 
+  it('stores actual text content in partContentLengths, not string length (regression: number prefix bug)', async () => {
+    // Regression: partContentLengths stored String(text.length) (e.g. "133")
+    // instead of actual text. When chunk accumulation read it back, the number
+    // was prepended to the next streamed chunk: "133Fixed and pushed..."
+    const mockDb = createEnterpriseTaskDb({
+      status: TaskStatus.AgentWorking,
+      output_fields: [],
+      source_id: null,
+    })
+    const { mgr, session } = setupManager(mockDb)
+    const partText = 'This is the actual message content that should be stored'
+    const adapter = {
+      getAllMessages: vi.fn(async () => ([
+        {
+          id: 'msg-1',
+          role: MessageRole.ASSISTANT,
+          parts: [
+            { id: 'text-part-1', type: MessagePartType.TEXT, text: partText, content: partText }
+          ]
+        }
+      ]))
+    }
+
+    const sessionWithAdapter = {
+      ...session,
+      adapter: adapter as any
+    }
+    vi.spyOn(mgr as any, 'extractOutputValues').mockResolvedValue(undefined)
+    vi.spyOn(mgr as any, 'sendToRenderer')
+
+    await (mgr as any).transitionToIdle('session-1', sessionWithAdapter)
+
+    // partContentLengths should store the ACTUAL text, not its length
+    const storedValue = sessionWithAdapter.partContentLengths.get('text-part-1')
+    expect(storedValue).toBe(partText)
+    // Must NOT be the string representation of the length
+    expect(storedValue).not.toBe(String(partText.length))
+  })
+
   it('resumeAdapterSession uses same IDs for batch replay and dedup state (regression: dual-loop bug)', async () => {
     // This test ensures the batch replay IDs and dedup state IDs are identical.
     // Previously, two separate loops each called Date.now() + Math.random() for
