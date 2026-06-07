@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/Button'
 import { Markdown } from '@/components/ui/Markdown'
 import type { AgentMessage } from '@/hooks/use-agent-session'
 import { SessionStatus } from '@/stores/agent-store'
+import { serializeTranscriptForDebug } from '@/lib/serialize-transcript-debug'
 
 enum ViewMode {
   MARKDOWN = 'markdown',
@@ -95,6 +96,10 @@ interface AgentTranscriptPanelProps {
   className?: string
   /** Transient system status (e.g. 'Compacting conversation history…') */
   systemStatus?: string | null
+  /** Session metadata for debug copy (hidden feature) */
+  sessionId?: string | null
+  taskId?: string
+  agentId?: string
 }
 
 export interface ComposerAttachment {
@@ -537,13 +542,56 @@ export function AgentTranscriptPanel({
   onPickAttachments,
   onAddAttachmentPaths,
   className,
-  systemStatus
+  systemStatus,
+  sessionId,
+  taskId,
+  agentId
 }: AgentTranscriptPanelProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
+  const panelRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const [viewMode, setViewMode] = useState<ViewMode>(ViewMode.MARKDOWN)
   const [pendingAttachments, setPendingAttachments] = useState<ComposerAttachment[]>([])
   const [isDragOverComposer, setIsDragOverComposer] = useState(false)
+  const [debugCopyToast, setDebugCopyToast] = useState(false)
+
+  // ── Hidden debug copy: Cmd/Ctrl+Shift+D ──
+  const copyDebugInfo = useCallback(() => {
+    const debugText = serializeTranscriptForDebug(messages, {
+      sessionId,
+      taskId,
+      agentId,
+      status,
+      systemStatus,
+      messageCount: messages.length
+    })
+    navigator.clipboard.writeText(debugText).then(() => {
+      setDebugCopyToast(true)
+      setTimeout(() => setDebugCopyToast(false), 2000)
+    }).catch((err) => {
+      console.error('Failed to copy debug info:', err)
+    })
+  }, [messages, sessionId, taskId, agentId, status, systemStatus])
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Cmd/Ctrl+Shift+D — copy debug transcript
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'd') {
+        // Only fire when this panel (or a descendant) has focus
+        if (!panelRef.current?.contains(document.activeElement) && document.activeElement !== panelRef.current) return
+        e.preventDefault()
+        copyDebugInfo()
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [copyDebugInfo])
+
+  // Context menu handler for the header area
+  const handleHeaderContextMenu = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    copyDebugInfo()
+  }, [copyDebugInfo])
 
   // Find the latest todowrite message to show as a pinned summary
   const latestTodos = useMemo(() => {
@@ -705,9 +753,19 @@ export function AgentTranscriptPanel({
   }
 
   return (
-    <div className={`flex flex-col min-h-0 bg-background border-l border-border ${className ?? ''}`}>
+    <div ref={panelRef} tabIndex={-1} className={`flex flex-col min-h-0 bg-background border-l border-border relative ${className ?? ''}`}>
+      {/* Debug copy toast — only visible briefly after copy */}
+      {debugCopyToast && (
+        <div className="absolute top-12 left-1/2 -translate-x-1/2 z-50 bg-card border border-border rounded-md px-3 py-1.5 text-xs text-foreground shadow-lg animate-in fade-in duration-150">
+          Debug info copied to clipboard
+        </div>
+      )}
       {/* Header — windows-titlebar-safe adds right padding on Windows to avoid title bar overlay */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-border/50 shrink-0 windows-titlebar-safe">
+      <div
+        className="flex items-center justify-between px-4 py-3 border-b border-border/50 shrink-0 windows-titlebar-safe"
+        onContextMenu={handleHeaderContextMenu}
+        title="Right-click to copy debug info"
+      >
         <div className="flex items-center gap-2">
           <Terminal className="h-4 w-4 text-muted-foreground" />
           <span className="text-sm font-medium">
