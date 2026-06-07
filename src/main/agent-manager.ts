@@ -1897,32 +1897,76 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
           // STUCK_SESSION_TIMEOUT_MS, a tool call is likely hung inside the agent
           // process. Abort the prompt so the session can recover instead of
           // staying stuck indefinitely.
+          //
+          // Exception: if the last polled message is a `question` tool in running
+          // state, the session is waiting for user input — not stuck. This can
+          // happen when the OpenCode question.list() check fails silently and
+          // getStatus() reports BUSY instead of WAITING_APPROVAL.
           const lastDataAt = peBusy.lastPartReceivedAt || peBusy.createdAt
           const silentDuration = Date.now() - lastDataAt
           if (silentDuration > AgentManager.STUCK_SESSION_TIMEOUT_MS) {
-            console.warn(
-              `[AgentManager] Session ${sessionId} stuck: BUSY for ${Math.round(silentDuration / 1000)}s with no new data. Aborting prompt.`
-            )
-            // Notify the user that the session was auto-aborted
-            this.sendToRenderer('agent:output', {
-              sessionId,
-              taskId: config.taskId,
-              type: 'message',
-              data: {
-                id: `stuck-abort-${Date.now()}`,
-                role: 'system',
-                content: `Session auto-aborted: no activity for ${Math.round(silentDuration / 1000)}s. A tool call may have hung. You can send a new message to continue.`,
-                partType: 'error'
-              }
-            })
-            // Abort the prompt — this will cause executePromptWithRetry to exit,
-            // and the next poll cycle will detect IDLE status.
-            try {
-              await adapter.abortPrompt(sessionId, config)
-            } catch (abortErr) {
-              console.error(`[AgentManager] Failed to abort stuck session ${sessionId}:`, abortErr)
+            // Check if the session is actually waiting for user input.
+            // This can happen when OpenCode's question.list() check fails silently
+            // and getStatus() reports BUSY instead of WAITING_APPROVAL, even though
+            // the agent is just waiting for the user to answer a question.
+            //
+            // We check three signals:
+            // 1. Session was in waiting_approval from a previous poll cycle
+            // 2. Current batch has a question/permission tool
+            // 3. Adapter has pending permissions (SSE-based)
+            let isWaitingForInput = false
+
+            // Signal 1: session was previously in waiting_approval
+            if (session.status === 'waiting_approval') {
+              isWaitingForInput = true
             }
-            return
+
+            // Signal 2: current batch has question/permission tool
+            if (!isWaitingForInput) {
+              for (const msg of batchMessages) {
+                const tool = msg.tool as { name?: string; questions?: unknown[] } | undefined
+                if (tool?.name === 'question' || tool?.name === 'permission') {
+                  isWaitingForInput = true
+                  break
+                }
+              }
+            }
+
+            // Signal 3: adapter has pending permissions from SSE events
+            if (!isWaitingForInput && 'getPendingApproval' in adapter && typeof adapter.getPendingApproval === 'function') {
+              const pending = (adapter as unknown as { getPendingApproval: (sid: string) => unknown }).getPendingApproval(sessionId)
+              if (pending) isWaitingForInput = true
+            }
+
+            if (isWaitingForInput) {
+              console.log(
+                `[AgentManager] Session ${sessionId} BUSY for ${Math.round(silentDuration / 1000)}s but has pending user input — not aborting`
+              )
+            } else {
+              console.warn(
+                `[AgentManager] Session ${sessionId} stuck: BUSY for ${Math.round(silentDuration / 1000)}s with no new data. Aborting prompt.`
+              )
+              // Notify the user that the session was auto-aborted
+              this.sendToRenderer('agent:output', {
+                sessionId,
+                taskId: config.taskId,
+                type: 'message',
+                data: {
+                  id: `stuck-abort-${Date.now()}`,
+                  role: 'system',
+                  content: `Session auto-aborted: no activity for ${Math.round(silentDuration / 1000)}s. A tool call may have hung. You can send a new message to continue.`,
+                  partType: 'error'
+                }
+              })
+              // Abort the prompt — this will cause executePromptWithRetry to exit,
+              // and the next poll cycle will detect IDLE status.
+              try {
+                await adapter.abortPrompt(sessionId, config)
+              } catch (abortErr) {
+                console.error(`[AgentManager] Failed to abort stuck session ${sessionId}:`, abortErr)
+              }
+              return
+            }
           }
         }
         if (session.status !== 'working') {
