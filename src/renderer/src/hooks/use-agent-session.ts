@@ -86,10 +86,15 @@ export function useAgentSession(taskId: string | undefined) {
   const stop = useCallback(async () => {
     if (!taskId) return
     const currentSession = useAgentStore.getState().sessions.get(taskId)
-    if (!currentSession?.sessionId) return
-    console.log('[use-agent-session] stop() called for session:', currentSession.sessionId)
-    console.trace('[use-agent-session] stop() stack trace')
-    await agentSessionApi.stop(currentSession.sessionId)
+    if (currentSession?.sessionId) {
+      console.log('[use-agent-session] stop() called for session:', currentSession.sessionId)
+      await agentSessionApi.stop(currentSession.sessionId)
+    } else {
+      // Fallback: session mapping lost in renderer — ask the backend
+      // to find and stop the session by taskId directly.
+      console.log('[use-agent-session] stop() no sessionId, falling back to stopByTaskId:', taskId)
+      await agentSessionApi.stopByTaskId(taskId)
+    }
     endSession(taskId)
   }, [taskId, endSession])
 

@@ -2911,6 +2911,21 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     })
   }
 
+  /**
+   * Stops a session by taskId — used when the renderer's session mapping
+   * is broken (Session: none) and the normal stop-by-sessionId path fails.
+   */
+  async stopByTaskId(taskId: string): Promise<{ sessionId: string | null }> {
+    const found = this.findSessionByTaskId(taskId)
+    if (!found) {
+      console.log(`[AgentManager] stopByTaskId: no active session found for task ${taskId}`)
+      return { sessionId: null }
+    }
+    console.log(`[AgentManager] stopByTaskId: found session ${found.sessionId} for task ${taskId}, stopping`)
+    await this.stopSession(found.sessionId)
+    return { sessionId: found.sessionId }
+  }
+
   async sendMessage(
     sessionId: string,
     message: string,

@@ -355,6 +355,11 @@ export function registerIpcHandlers(
     return { success: true }
   })
 
+  ipcMain.handle('agentSession:stopByTaskId', async (_, taskId: string) => {
+    const result = await agentManager.stopByTaskId(taskId)
+    return { success: true, sessionId: result.sessionId }
+  })
+
   ipcMain.handle(
     'agentSession:send',
     async (_, sessionId: string, message: string, taskId?: string, agentId?: string, attachments?: Array<{ id: string; filename: string; size: number; mime_type: string }>) => {
