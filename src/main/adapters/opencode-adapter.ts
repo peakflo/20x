@@ -2025,16 +2025,35 @@ export class OpencodeAdapter implements CodingAgentAdapter {
 
   /**
    * Silently approve a permission request (used when permissionMode is 'allow').
+   * Uses the V2 SDK permission.reply() which hits the correct endpoint
+   * (POST /permission/{requestID}/reply). The V1 endpoint
+   * (POST /session/{id}/permissions/{permissionID}) returns 404 for
+   * permissions created by the V2 system.
    */
-  private async autoApprovePermission(sessionId: string, permissionId: string): Promise<void> {
+  private async autoApprovePermission(_sessionId: string, permissionId: string): Promise<void> {
     try {
+      // Try V2 SDK first — this is the correct endpoint for V2 permissions
+      if (OpenCodeV2Client) {
+        const v2 = this.v2Client || OpenCodeV2Client.createOpencodeClient({
+          baseUrl: this.serverUrl || DEFAULT_SERVER_URL
+        })
+        if (!this.v2Client) this.v2Client = v2
+
+        await v2.permission.reply({
+          requestID: permissionId,
+          reply: 'always'
+        })
+        console.log(`[OpencodeAdapter] Auto-approved permission ${permissionId} via V2 API`)
+        return
+      }
+
+      // Fallback to raw fetch if V2 SDK is not available
       const baseUrl = this.serverUrl || DEFAULT_SERVER_URL
-      const url = `${baseUrl}/session/${encodeURIComponent(sessionId)}/permissions/${encodeURIComponent(permissionId)}`
-      // OpenCode accepts "once", "always", or "reject"
+      const url = `${baseUrl}/permission/${encodeURIComponent(permissionId)}/reply`
       const res = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ response: 'always' })
+        body: JSON.stringify({ reply: 'always' })
       })
       if (!res.ok) {
         console.warn(`[OpencodeAdapter] Auto-approve HTTP ${res.status}: ${await res.text().catch(() => '')}`)
