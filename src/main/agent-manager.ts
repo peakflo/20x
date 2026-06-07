@@ -2439,6 +2439,62 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
   }
 
   /**
+   * Get raw transcript for debugging. Returns all message parts with full tool
+   * input/output, thinking blocks, errors, etc. Used by the renderer's hidden
+   * "Copy Debug Info" feature to include raw coding agent data.
+   * Truncates individual fields to keep the payload manageable.
+   */
+  async getRawTranscriptForDebug(taskId: string): Promise<Array<{ role: string; parts: Array<{ type: string; content?: string; tool?: { name: string; status?: string; input?: string; output?: string; error?: string } }> }>> {
+    let session: AgentSession | undefined
+    for (const s of this.sessions.values()) {
+      if (s.taskId === taskId) {
+        session = s
+        break
+      }
+    }
+
+    if (!session?.adapter?.getAllMessages) {
+      return []
+    }
+
+    const MAX_FIELD = 3000
+    const truncField = (val: unknown): string | undefined => {
+      if (val == null) return undefined
+      const s = typeof val === 'string' ? val : JSON.stringify(val)
+      return s.length > MAX_FIELD ? s.slice(0, MAX_FIELD) + `… (${s.length - MAX_FIELD} more)` : s
+    }
+
+    try {
+      const config: SessionConfig = {
+        agentId: session.agentId,
+        taskId: session.taskId,
+        workspaceDir: session.workspaceDir || this.db.getWorkspaceDir(taskId)
+      }
+      const messages = await session.adapter.getAllMessages(session.id, config)
+      return messages
+        .filter(m => m.parts && m.parts.length > 0)
+        .slice(-100) // Last 100 messages only
+        .map(m => ({
+          role: m.role,
+          parts: m.parts.map(p => ({
+            type: p.type,
+            content: truncField(p.content || p.text),
+            tool: p.tool ? {
+              name: p.tool.name,
+              status: p.tool.status,
+              input: truncField(p.tool.input),
+              output: truncField(p.tool.output),
+              error: p.tool.error
+            } : undefined
+          }))
+        }))
+    } catch (err) {
+      console.error(`[AgentManager] Failed to get raw transcript for task ${taskId}:`, err)
+      return []
+    }
+  }
+
+  /**
    * Get a summary transcript for a task's session.
    * Returns assistant text messages suitable for sibling subtask coordination.
    * Used by the task-api-server to serve transcript data to subtask MCP agents.

@@ -207,6 +207,7 @@ interface ElectronAPI {
     syncSkills: (sessionId: string) => Promise<SkillSyncResult>
     syncSkillsForTask: (taskId: string) => Promise<SkillSyncResult>
     learnFromSession: (sessionId: string, message: string) => Promise<SkillSyncResult>
+    getRawTranscript: (taskId: string) => Promise<Array<{ role: string; parts: Array<{ type: string; content?: string; tool?: { name: string; status?: string; input?: string; output?: string; error?: string } }> }>>
   }
   agentConfig: {
     getProviders: (serverUrl?: string, backendType?: string) => Promise<{ providers: { id: string; name: string; models: unknown }[]; default: Record<string, string> } | null>

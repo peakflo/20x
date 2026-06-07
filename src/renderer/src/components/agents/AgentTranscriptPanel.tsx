@@ -5,7 +5,8 @@ import { Button } from '@/components/ui/Button'
 import { Markdown } from '@/components/ui/Markdown'
 import type { AgentMessage } from '@/hooks/use-agent-session'
 import { SessionStatus } from '@/stores/agent-store'
-import { serializeTranscriptForDebug } from '@/lib/serialize-transcript-debug'
+import { serializeTranscriptForDebug, type RawTranscriptMessage } from '@/lib/serialize-transcript-debug'
+import { agentSessionApi } from '@/lib/ipc-client'
 
 enum ViewMode {
   MARKDOWN = 'markdown',
@@ -556,7 +557,17 @@ export function AgentTranscriptPanel({
   const [debugCopyToast, setDebugCopyToast] = useState(false)
 
   // ── Hidden debug copy: Cmd/Ctrl+Shift+D ──
-  const copyDebugInfo = useCallback(() => {
+  const copyDebugInfo = useCallback(async () => {
+    // Fetch raw coding agent transcript from main process
+    let rawTranscript: RawTranscriptMessage[] | undefined
+    if (taskId) {
+      try {
+        rawTranscript = await agentSessionApi.getRawTranscript(taskId)
+      } catch (err) {
+        console.warn('Failed to fetch raw transcript:', err)
+      }
+    }
+
     const debugText = serializeTranscriptForDebug(messages, {
       sessionId,
       taskId,
@@ -564,7 +575,7 @@ export function AgentTranscriptPanel({
       status,
       systemStatus,
       messageCount: messages.length
-    })
+    }, rawTranscript)
     navigator.clipboard.writeText(debugText).then(() => {
       setDebugCopyToast(true)
       setTimeout(() => setDebugCopyToast(false), 2000)

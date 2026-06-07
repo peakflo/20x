@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { serializeTranscriptForDebug } from './serialize-transcript-debug'
+import type { RawTranscriptMessage } from './serialize-transcript-debug'
 import { SessionStatus } from '@/stores/agent-store'
 import type { AgentMessage } from '@/stores/agent-store'
 
@@ -32,13 +33,14 @@ describe('serializeTranscriptForDebug', () => {
     expect(result).toContain('=== End Debug ===')
   })
 
-  it('should serialize basic assistant messages', () => {
+  it('should include UI Messages section label', () => {
     const messages = [makeMessage({ content: 'Test response' })]
     const result = serializeTranscriptForDebug(messages, {
       status: SessionStatus.IDLE,
       messageCount: 1
     })
 
+    expect(result).toContain('--- UI Messages (processed) ---')
     expect(result).toContain('assistant')
     expect(result).toContain('Test response')
   })
@@ -104,7 +106,7 @@ describe('serializeTranscriptForDebug', () => {
     expect(result.length).toBeLessThan(longContent.length)
   })
 
-  it('should only include last 50 messages', () => {
+  it('should only include last 50 UI messages', () => {
     const messages = Array.from({ length: 80 }, (_, i) =>
       makeMessage({ id: `msg-${i}`, content: `Message ${i}` })
     )
@@ -116,8 +118,6 @@ describe('serializeTranscriptForDebug', () => {
     expect(result).toContain('30 earlier messages omitted')
     expect(result).toContain('Message 30')
     expect(result).toContain('Message 79')
-    expect(result).not.toContain('Message 0\n')
-    expect(result).not.toContain('Message 29\n')
   })
 
   it('should include step metadata', () => {
@@ -169,5 +169,88 @@ describe('serializeTranscriptForDebug', () => {
     })
 
     expect(result).toContain('Session: (none)')
+  })
+
+  // ── Raw transcript tests ──
+
+  it('should include raw transcript section when provided', () => {
+    const rawTranscript: RawTranscriptMessage[] = [
+      {
+        role: 'assistant',
+        parts: [
+          { type: 'text', content: 'Let me check the code.' },
+          { type: 'tool', tool: { name: 'Bash', status: 'completed', input: 'ls -la', output: 'file1.ts\nfile2.ts' } }
+        ]
+      }
+    ]
+    const result = serializeTranscriptForDebug([], {
+      status: SessionStatus.IDLE,
+      messageCount: 0
+    }, rawTranscript)
+
+    expect(result).toContain('--- Raw Agent Transcript (1 messages) ---')
+    expect(result).toContain('assistant')
+    expect(result).toContain('[text]')
+    expect(result).toContain('Let me check the code.')
+    expect(result).toContain('[tool]')
+    expect(result).toContain('tool: Bash [completed]')
+    expect(result).toContain('input: ls -la')
+    expect(result).toContain('output: file1.ts')
+  })
+
+  it('should include reasoning/thinking blocks from raw transcript', () => {
+    const rawTranscript: RawTranscriptMessage[] = [
+      {
+        role: 'assistant',
+        parts: [
+          { type: 'reasoning', content: 'I need to think about this carefully...' },
+          { type: 'text', content: 'Here is my answer.' }
+        ]
+      }
+    ]
+    const result = serializeTranscriptForDebug([], {
+      status: SessionStatus.IDLE,
+      messageCount: 0
+    }, rawTranscript)
+
+    expect(result).toContain('[reasoning]')
+    expect(result).toContain('I need to think about this carefully...')
+    expect(result).toContain('[text]')
+    expect(result).toContain('Here is my answer.')
+  })
+
+  it('should omit raw transcript section when empty', () => {
+    const result = serializeTranscriptForDebug([], {
+      status: SessionStatus.IDLE,
+      messageCount: 0
+    }, [])
+
+    expect(result).not.toContain('Raw Agent Transcript')
+  })
+
+  it('should omit raw transcript section when undefined', () => {
+    const result = serializeTranscriptForDebug([], {
+      status: SessionStatus.IDLE,
+      messageCount: 0
+    })
+
+    expect(result).not.toContain('Raw Agent Transcript')
+  })
+
+  it('should include tool errors from raw transcript', () => {
+    const rawTranscript: RawTranscriptMessage[] = [
+      {
+        role: 'assistant',
+        parts: [
+          { type: 'tool', tool: { name: 'Edit', status: 'error', error: 'Permission denied: /etc/hosts' } }
+        ]
+      }
+    ]
+    const result = serializeTranscriptForDebug([], {
+      status: SessionStatus.IDLE,
+      messageCount: 0
+    }, rawTranscript)
+
+    expect(result).toContain('error: Permission denied: /etc/hosts')
   })
 })

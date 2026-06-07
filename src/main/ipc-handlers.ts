@@ -380,6 +380,10 @@ export function registerIpcHandlers(
     return await agentManager.learnFromSession(sessionId, message)
   })
 
+  ipcMain.handle('agentSession:getRawTranscript', async (_, taskId: string) => {
+    return await agentManager.getRawTranscriptForDebug(taskId)
+  })
+
   // Agent Config handlers
   ipcMain.handle('agentConfig:getProviders', async (_, serverUrl?: string, backendType?: string) => {
     return await agentManager.getProviders(serverUrl, undefined, backendType)

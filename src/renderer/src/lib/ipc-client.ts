@@ -134,6 +134,10 @@ export const agentSessionApi = {
 
   learnFromSession: (sessionId: string, message: string): Promise<SkillSyncResult> => {
     return window.electronAPI.agentSession.learnFromSession(sessionId, message)
+  },
+
+  getRawTranscript: (taskId: string): Promise<Array<{ role: string; parts: Array<{ type: string; content?: string; tool?: { name: string; status?: string; input?: string; output?: string; error?: string } }> }>> => {
+    return window.electronAPI.agentSession.getRawTranscript(taskId)
   }
 }
 
