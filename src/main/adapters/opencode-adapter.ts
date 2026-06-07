@@ -832,11 +832,14 @@ export class OpencodeAdapter implements CodingAgentAdapter {
       throw new Error('Session no longer exists on server')
     }
 
-    // Abort any in-progress server-side prompt before resuming.
-    // This clears zombie tool calls that may be stuck waiting for
-    // permission approval (e.g. external_directory) from a previous
-    // app instance.  Without this, the server won't process new tool
-    // calls until the old ones complete — which they never will.
+    // ── Clean up stale session state from previous app instance ──
+    // When the app restarts and resumes a session, tool calls from the
+    // previous instance may still be in "running" state.  The OpenCode
+    // server reports these as "busy" even though nothing is actually
+    // executing.  This blocks new prompts and aborts.
+    //
+    // Fix: abort any in-progress prompt, then delete zombie "running"
+    // tool parts via V2 part.delete.
     try {
       await ocClient.session.abort({
         path: { id: sessionId },
@@ -847,7 +850,12 @@ export class OpencodeAdapter implements CodingAgentAdapter {
       // Non-fatal: session may already be idle
     }
 
-    // Also clear any stale pending permissions from before the restart
+    // Delete zombie "running" tool parts that survived the abort.
+    // When a prompt is aborted, individual tool parts remain in
+    // "running" state permanently.  The server counts them as active
+    // work, so the session stays "busy" forever — a catch-22 that
+    // prevents both new prompts and message deletion.
+    // Using v2.part.delete is the only way to clear them.
     try {
       if (OpenCodeV2Client) {
         const v2 = this.v2Client || OpenCodeV2Client.createOpencodeClient({
@@ -855,6 +863,51 @@ export class OpencodeAdapter implements CodingAgentAdapter {
         })
         if (!this.v2Client) this.v2Client = v2
 
+        // Scan messages for zombie running tool parts
+        const msgsResult = await ocClient.session.messages({
+          path: { id: sessionId },
+          ...(config.workspaceDir && { query: { directory: config.workspaceDir } }),
+        })
+        let zombieCount = 0
+        if (msgsResult.data && Array.isArray(msgsResult.data)) {
+          for (const msg of msgsResult.data) {
+            const msgId = (msg as Record<string, unknown>).info
+              ? ((msg as Record<string, unknown>).info as Record<string, unknown>).id as string
+              : undefined
+            if (!msgId) continue
+            for (const part of ((msg as Record<string, unknown>).parts as Array<Record<string, unknown>>) || []) {
+              if (part.type !== 'tool') continue
+              const state = part.state as Record<string, unknown> | undefined
+              if (state?.status !== 'running') continue
+
+              try {
+                await v2.part.delete({
+                  sessionID: sessionId,
+                  messageID: msgId,
+                  partID: part.id as string,
+                  ...(config.workspaceDir && { directory: config.workspaceDir }),
+                })
+                zombieCount++
+              } catch {
+                // Part may already have been cleaned up
+              }
+            }
+          }
+        }
+        if (zombieCount > 0) {
+          console.log(`[OpencodeAdapter] Deleted ${zombieCount} zombie running tool part(s) on resume for session ${sessionId}`)
+          // Abort again after cleanup to transition the server from busy → idle
+          try {
+            await ocClient.session.abort({
+              path: { id: sessionId },
+              ...(config.workspaceDir && { query: { directory: config.workspaceDir } }),
+            })
+          } catch {
+            // Non-fatal
+          }
+        }
+
+        // Also clear any stale pending permissions
         const listResult = await v2.permission.list({})
         if (listResult.data && Array.isArray(listResult.data)) {
           const allPending = listResult.data as Array<{ id: string; sessionID: string }>
@@ -870,13 +923,10 @@ export class OpencodeAdapter implements CodingAgentAdapter {
               // Permission may have already expired
             }
           }
-          if (sessionPending.length > 0) {
-            console.log(`[OpencodeAdapter] Cleared ${sessionPending.length} stale permission(s) on resume for session ${sessionId}`)
-          }
         }
       }
     } catch (err) {
-      console.warn(`[OpencodeAdapter] Failed to clear stale permissions on resume:`, err instanceof Error ? err.message : err)
+      console.warn(`[OpencodeAdapter] Failed to clean up stale session state on resume:`, err instanceof Error ? err.message : err)
     }
 
     this.clients.set(sessionId, ocClient)
