@@ -1782,6 +1782,35 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
         }
       }
 
+      // ── MCP disconnect detection ──
+      // When an MCP tool call fails with "Connection closed" or "Not connected",
+      // immediately trigger a health check to reconnect the server rather than
+      // waiting for the next 60-second interval. This reduces the window where
+      // subsequent tool calls also fail.
+      if (newParts.length > 0 && 'checkAndReconnectMcpServers' in adapter && typeof adapter.checkAndReconnectMcpServers === 'function') {
+        const MCP_DISCONNECT_PATTERNS = ['Connection closed', 'Not connected', 'MCP error -32000']
+        const hasMcpError = newParts.some(part => {
+          const errorText = part.tool?.error || ''
+          return errorText && MCP_DISCONNECT_PATTERNS.some(p => errorText.includes(p))
+        })
+        if (hasMcpError) {
+          console.warn(`[AgentManager] Session ${sessionId}: MCP tool error detected, triggering immediate reconnection`)
+          // Force bypass the throttle by resetting the last check timestamp
+          // (the adapter's lastMcpHealthCheck map is private, so we just call the method
+          // which will check status and reconnect if needed)
+          try {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const adapterAny = adapter as any
+            if (adapterAny.lastMcpHealthCheck) {
+              adapterAny.lastMcpHealthCheck.delete(sessionId)
+            }
+            await adapter.checkAndReconnectMcpServers(sessionId, config)
+          } catch {
+            // Non-fatal — best-effort reconnection
+          }
+        }
+      }
+
       // hasSeenWork is set exclusively in the BUSY / WAITING_APPROVAL status
       // handler below — not here.  Message content is unreliable (user echoes,
       // stale fingerprint updates from previous turns can produce non-user parts
