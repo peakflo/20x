@@ -188,6 +188,19 @@ export interface CodingAgentAdapter {
   abortPrompt(sessionId: string, config: SessionConfig): Promise<void>
 
   /**
+   * Get tools currently in "running" state.
+   * Used by the stuck-tool detector to abort tools that hang without producing
+   * data (e.g. cross-workspace file reads that the server silently blocks).
+   * Optional — returns empty array if the adapter doesn't support it.
+   */
+  getRunningTools?(sessionId: string, config: SessionConfig): Promise<Array<{
+    partId: string
+    toolName: string
+    startTime?: number // Unix ms when the tool started
+    input?: Record<string, unknown> // Tool input (e.g. { filePath: "..." })
+  }>>
+
+  /**
    * Destroy/cleanup session
    */
   destroySession(sessionId: string, config: SessionConfig): Promise<void>

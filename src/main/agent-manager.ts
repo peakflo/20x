@@ -143,6 +143,10 @@ interface PollingEntry {
    *  Once it exceeds the threshold the session is aborted immediately
    *  instead of waiting for the full watchdog timeout. */
   garbledOutputCount?: number
+  /** Tracks when a tool part was first seen in "running" state (partId → timestamp).
+   *  Used by the fast stuck-tool detector to abort tools that hang without producing
+   *  data (e.g. cross-workspace file reads that OpenCode silently blocks). */
+  runningToolFirstSeen?: Map<string, number>
 }
 
 interface MessageAttachmentRef {
@@ -191,6 +195,12 @@ export class AgentManager extends EventEmitter {
    *  Prevents sessions from being stuck indefinitely when a tool call hangs inside
    *  the agent process (20x is just a spectator on the HTTP prompt call). */
   private static readonly STUCK_SESSION_TIMEOUT_MS = 5 * 60 * 1000 // 5 minutes
+
+  /** Maximum time (ms) a single tool can stay in "running" state before it's
+   *  considered stuck. This is much shorter than the session watchdog because
+   *  a single hung tool (e.g. cross-workspace file read that OpenCode silently
+   *  blocks) should be aborted quickly so the agent can recover. */
+  private static readonly STUCK_TOOL_TIMEOUT_MS = 90 * 1000 // 90 seconds
 
   // ── Event-driven nudge ──
   // When an adapter buffers new stream data it calls onDataAvailable().
@@ -1950,6 +1960,55 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
           // Agent resumed work (possibly after a tillDone nudge) — reset the
           // nudge counter so the next idle cycle gets a fresh allowance.
           if (peBusy.tillDoneNudgeCount) peBusy.tillDoneNudgeCount = 0
+
+          // ── Fast stuck-tool detector ──
+          // Some tools (notably `read` on cross-workspace files) silently hang
+          // without producing any output or asking for permission. The general
+          // watchdog below waits 5 minutes, which is far too long for a single
+          // tool. Here we check for tools stuck in "running" state for >90s.
+          if (!peBusy.watchdogFired && 'getRunningTools' in adapter && typeof adapter.getRunningTools === 'function') {
+            try {
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              const getRunningToolsFn = (adapter as any).getRunningTools.bind(adapter)
+              const runningTools: Array<{ partId: string; toolName: string; startTime?: number; input?: Record<string, unknown> }> = await getRunningToolsFn(sessionId, config)
+              const now = Date.now()
+              for (const tool of runningTools) {
+                if (!tool.startTime) continue
+                const elapsed = now - tool.startTime
+                if (elapsed > AgentManager.STUCK_TOOL_TIMEOUT_MS) {
+                  // Build a descriptive reason
+                  let reason = `Tool "${tool.toolName}" has been running for ${Math.round(elapsed / 1000)}s with no output`
+                  const filePath = tool.input?.filePath as string | undefined
+                  if (filePath && config.workspaceDir && !filePath.startsWith(config.workspaceDir)) {
+                    reason = `Tool "${tool.toolName}" stuck trying to access file outside workspace: ${filePath}`
+                  }
+
+                  peBusy.watchdogFired = true
+                  console.warn(`[AgentManager] Session ${sessionId}: ${reason}. Aborting.`)
+
+                  this.sendToRenderer('agent:output', {
+                    sessionId,
+                    taskId: config.taskId,
+                    type: 'message',
+                    data: {
+                      id: `stuck-tool-${Date.now()}`,
+                      role: 'system',
+                      content: `Session auto-aborted: ${reason}. You can send a new message to continue.`,
+                      partType: 'error'
+                    }
+                  })
+                  try {
+                    await adapter.abortPrompt(sessionId, config)
+                  } catch (abortErr) {
+                    console.error(`[AgentManager] Failed to abort stuck-tool session ${sessionId}:`, abortErr)
+                  }
+                  return
+                }
+              }
+            } catch {
+              // Non-fatal — fall through to the general watchdog
+            }
+          }
 
           // ── Stuck session watchdog ──
           // If the session has been BUSY but hasn't received any new data for

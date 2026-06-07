@@ -81,6 +81,9 @@ export class OpencodeAdapter implements CodingAgentAdapter {
   private sseAbort: AbortController | null = null
   /** Per-session permission mode ('ask' = surface in UI, 'allow' = auto-approve) */
   private sessionPermissionModes: Map<string, 'ask' | 'allow'> = new Map()
+  /** Per-session workspace directory — needed for permission replies and other
+   *  session-scoped V2 API calls initiated from global SSE events. */
+  private sessionWorkspaceDirs: Map<string, string> = new Map()
 
   constructor(private db?: Pick<DatabaseManager, 'getSetting'>) {
     this.sdkLoading = this.loadSDK()
@@ -794,6 +797,7 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     this.clients.set(ocSessionId, ocClient)
     this.promptClients.set(ocSessionId, promptClient)
     this.sessionPermissionModes.set(ocSessionId, config.permissionMode || 'ask')
+    if (config.workspaceDir) this.sessionWorkspaceDirs.set(ocSessionId, config.workspaceDir)
 
     return ocSessionId
   }
@@ -932,6 +936,7 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     this.clients.set(sessionId, ocClient)
     this.promptClients.set(sessionId, promptClient)
     this.sessionPermissionModes.set(sessionId, config.permissionMode || 'ask')
+    if (config.workspaceDir) this.sessionWorkspaceDirs.set(sessionId, config.workspaceDir)
     this.writeTillDoneSessionConfig(sessionId, config.tillDone !== false)
 
     // Fetch existing messages
@@ -1391,6 +1396,55 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     return newParts
   }
 
+  async getRunningTools(sessionId: string, config: SessionConfig): Promise<Array<{
+    partId: string
+    toolName: string
+    startTime?: number
+    input?: Record<string, unknown>
+  }>> {
+    const ocClient = this.clients.get(sessionId)
+    if (!ocClient) return []
+
+    try {
+      const messagesResult = await ocClient.session.messages({
+        path: { id: sessionId },
+        ...(config.workspaceDir && { query: { directory: config.workspaceDir } })
+      })
+
+      if (!messagesResult.data || !Array.isArray(messagesResult.data)) return []
+
+      const running: Array<{
+        partId: string
+        toolName: string
+        startTime?: number
+        input?: Record<string, unknown>
+      }> = []
+
+      for (const msg of messagesResult.data) {
+        const parts = (msg as Record<string, unknown>).parts as Array<Record<string, unknown>> | undefined
+        if (!parts || !Array.isArray(parts)) continue
+        for (const part of parts) {
+          if (part.type !== 'tool') continue
+          const state = part.state as Record<string, unknown> | undefined
+          if (!state || state.status !== 'running') continue
+          const timeObj = state.time as Record<string, unknown> | undefined
+          const input = state.input as Record<string, unknown> | undefined
+          running.push({
+            partId: part.id as string,
+            toolName: (part.tool as string) || 'unknown',
+            startTime: timeObj?.start as number | undefined,
+            input: input || undefined
+          })
+        }
+      }
+
+      return running
+    } catch (err) {
+      console.warn(`[OpencodeAdapter] getRunningTools failed for ${sessionId}:`, err instanceof Error ? err.message : err)
+      return []
+    }
+  }
+
   async abortPrompt(sessionId: string, _config: SessionConfig): Promise<void> {
     const abort = this.promptAborts.get(sessionId)
     if (abort) {
@@ -1425,6 +1479,7 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     this.promptClients.delete(sessionId)
     this.pendingPermissions.delete(sessionId)
     this.sessionPermissionModes.delete(sessionId)
+    this.sessionWorkspaceDirs.delete(sessionId)
     this.removeTillDoneSessionConfig(sessionId)
 
     if (this.clients.size > 0) {
@@ -1984,10 +2039,12 @@ export class OpencodeAdapter implements CodingAgentAdapter {
         reply = 'once'
       }
 
+      const directory = this.sessionWorkspaceDirs.get(sessionId)
       console.log(`[OpencodeAdapter] Responding to permission ${first.id} via V2 API: ${reply} (permission=${first.permission}, patterns=${first.patterns.join(', ')})`)
       await v2.permission.reply({
         requestID: first.id,
-        reply
+        reply,
+        ...(directory && { directory })
       })
 
       // Trigger immediate poll so agent-manager sees the unblocked session
@@ -2127,7 +2184,11 @@ export class OpencodeAdapter implements CodingAgentAdapter {
    * (POST /session/{id}/permissions/{permissionID}) returns 404 for
    * permissions created by the V2 system.
    */
-  private async autoApprovePermission(_sessionId: string, permissionId: string): Promise<void> {
+  private async autoApprovePermission(sessionId: string, permissionId: string): Promise<void> {
+    // Resolve the workspace directory for this session — the OpenCode server
+    // may need it to properly scope the permission reply.
+    const directory = this.sessionWorkspaceDirs.get(sessionId)
+
     try {
       // Try V2 SDK first — this is the correct endpoint for V2 permissions
       if (OpenCodeV2Client) {
@@ -2138,15 +2199,17 @@ export class OpencodeAdapter implements CodingAgentAdapter {
 
         await v2.permission.reply({
           requestID: permissionId,
-          reply: 'always'
+          reply: 'always',
+          ...(directory && { directory })
         })
-        console.log(`[OpencodeAdapter] Auto-approved permission ${permissionId} via V2 API`)
+        console.log(`[OpencodeAdapter] Auto-approved permission ${permissionId} via V2 API${directory ? ` (dir=${directory})` : ''}`)
         return
       }
 
       // Fallback to raw fetch if V2 SDK is not available
       const baseUrl = this.serverUrl || DEFAULT_SERVER_URL
-      const url = `${baseUrl}/permission/${encodeURIComponent(permissionId)}/reply`
+      const dirQuery = directory ? `?directory=${encodeURIComponent(directory)}` : ''
+      const url = `${baseUrl}/permission/${encodeURIComponent(permissionId)}/reply${dirQuery}`
       const res = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
