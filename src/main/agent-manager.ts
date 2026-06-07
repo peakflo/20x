@@ -134,6 +134,10 @@ interface PollingEntry {
   /** How many times the tillDone nudge has been sent for this polling cycle.
    *  Capped at MAX_TILLDONE_NUDGES to prevent infinite nudge loops. */
   tillDoneNudgeCount?: number
+  /** True once the stuck-session watchdog has fired for this polling cycle.
+   *  Prevents the abort message from spamming every poll tick while the
+   *  backend is still transitioning from BUSY → IDLE after the abort. */
+  watchdogFired?: boolean
 }
 
 interface MessageAttachmentRef {
@@ -1711,6 +1715,9 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       // the secondary grace period for models with brief idle gaps.
       if (newParts.length > 0) {
         entry.lastPartReceivedAt = Date.now()
+        // Reset watchdog flag — new data means the session is alive again.
+        // If a follow-up message also gets stuck, the watchdog can re-fire.
+        entry.watchdogFired = false
       }
 
       // hasSeenWork is set exclusively in the BUSY / WAITING_APPROVAL status
@@ -1904,7 +1911,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
           // getStatus() reports BUSY instead of WAITING_APPROVAL.
           const lastDataAt = peBusy.lastPartReceivedAt || peBusy.createdAt
           const silentDuration = Date.now() - lastDataAt
-          if (silentDuration > AgentManager.STUCK_SESSION_TIMEOUT_MS) {
+          if (silentDuration > AgentManager.STUCK_SESSION_TIMEOUT_MS && !peBusy.watchdogFired) {
             // Check if the session is actually waiting for user input.
             // This can happen when OpenCode's question.list() check fails silently
             // and getStatus() reports BUSY instead of WAITING_APPROVAL, even though
@@ -1943,6 +1950,10 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
                 `[AgentManager] Session ${sessionId} BUSY for ${Math.round(silentDuration / 1000)}s but has pending user input — not aborting`
               )
             } else {
+              // Mark the watchdog as fired BEFORE sending the message/abort.
+              // This prevents the abort notification from spamming every poll
+              // tick while the backend transitions from BUSY → IDLE.
+              peBusy.watchdogFired = true
               console.warn(
                 `[AgentManager] Session ${sessionId} stuck: BUSY for ${Math.round(silentDuration / 1000)}s with no new data. Aborting prompt.`
               )
