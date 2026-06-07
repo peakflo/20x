@@ -1768,15 +1768,14 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     sessionId: string,
     approved: boolean,
     optionId?: string
-  ): Promise<void> {
+  ): Promise<boolean> {
     const queue = this.pendingPermissions.get(sessionId)
     if (!queue || queue.length === 0) {
       // Fallback: try the V2 API for pending permissions.
       // This handles the case where pendingPermissions was lost (e.g., app restart
       // or watchdog abort) but the permission is still pending in OpenCode.
       console.warn(`[OpencodeAdapter] No pending permission in memory for session ${sessionId}, trying V2 API fallback`)
-      await this.respondToPermissionViaV2(sessionId, approved, optionId)
-      return
+      return await this.respondToPermissionViaV2(sessionId, approved, optionId)
     }
 
     const pending = queue.shift()!
@@ -1815,6 +1814,7 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     if (this.onDataAvailable) {
       this.onDataAvailable(sessionId)
     }
+    return true
   }
 
   /**
@@ -1822,40 +1822,43 @@ export class OpencodeAdapter implements CodingAgentAdapter {
    * Used when the in-memory pendingPermissions map is empty (e.g., after
    * app restart or watchdog abort) but the permission is still pending
    * in the OpenCode backend.
+   *
+   * Uses v2Client.permission.list() (top-level, lists all sessions) and
+   * v2Client.permission.reply() to find and respond to the permission.
    */
   private async respondToPermissionViaV2(
     sessionId: string,
     approved: boolean,
     optionId?: string
-  ): Promise<void> {
+  ): Promise<boolean> {
     try {
       if (!OpenCodeV2Client) {
         console.warn(`[OpencodeAdapter] Cannot fetch permissions — V2 SDK not loaded`)
-        return
+        return false
       }
       const v2 = this.v2Client || OpenCodeV2Client.createOpencodeClient({
         baseUrl: this.serverUrl || DEFAULT_SERVER_URL
       })
       if (!this.v2Client) this.v2Client = v2
 
-      const result = await (v2 as unknown as {
-        session: {
-          permission: {
-            list: (params: { sessionID: string }) => Promise<{ data?: { data?: Array<{ id: string; sessionID: string; action: string; resources: string[] }> } }>
-            reply: (params: { sessionID: string; requestID: string; reply: string; message?: string }) => Promise<unknown>
-          }
-        }
-      }).session.permission.list({ sessionID: sessionId })
-
-      const pending = result.data?.data
-      if (!pending || pending.length === 0) {
-        console.warn(`[OpencodeAdapter] No pending permissions found via V2 API for session ${sessionId}`)
-        return
+      // permission.list() returns ALL pending permissions across all sessions.
+      // Filter to the target session.
+      const listResult = await v2.permission.list({})
+      if (listResult.error || !listResult.data) {
+        console.warn(`[OpencodeAdapter] V2 permission.list() failed or returned no data for session ${sessionId}`)
+        return false
       }
 
-      const first = pending[0]
+      const allPending = listResult.data as Array<{ id: string; sessionID: string; permission: string; patterns: string[] }>
+      const sessionPending = allPending.filter(p => p.sessionID === sessionId)
+      if (sessionPending.length === 0) {
+        console.warn(`[OpencodeAdapter] No pending permissions found via V2 API for session ${sessionId}`)
+        return false
+      }
 
-      let reply: string
+      const first = sessionPending[0]
+
+      let reply: 'once' | 'always' | 'reject'
       if (!approved) {
         reply = 'reject'
       } else if (optionId === 'allow-always' || optionId === 'approved-for-session') {
@@ -1864,15 +1867,8 @@ export class OpencodeAdapter implements CodingAgentAdapter {
         reply = 'once'
       }
 
-      console.log(`[OpencodeAdapter] Responding to permission ${first.id} via V2 API: ${reply} (action=${first.action}, resources=${first.resources.join(', ')})`)
-      await (v2 as unknown as {
-        session: {
-          permission: {
-            reply: (params: { sessionID: string; requestID: string; reply: string; message?: string }) => Promise<unknown>
-          }
-        }
-      }).session.permission.reply({
-        sessionID: sessionId,
+      console.log(`[OpencodeAdapter] Responding to permission ${first.id} via V2 API: ${reply} (permission=${first.permission}, patterns=${first.patterns.join(', ')})`)
+      await v2.permission.reply({
         requestID: first.id,
         reply
       })
@@ -1881,8 +1877,10 @@ export class OpencodeAdapter implements CodingAgentAdapter {
       if (this.onDataAvailable) {
         this.onDataAvailable(sessionId)
       }
+      return true
     } catch (err) {
       console.error(`[OpencodeAdapter] V2 permission fallback failed for session ${sessionId}:`, err)
+      return false
     }
   }
 

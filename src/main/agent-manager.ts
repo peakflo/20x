@@ -3259,7 +3259,20 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
         selectedOption = answerMap[message] || (approved ? 'approved' : 'abort')
       }
       console.log(`[AgentManager] Responding to ACP adapter approval with: ${selectedOption}`)
-      await (adapter as unknown as AcpAdapter).respondToApproval(sessionId, approved, selectedOption)
+      // OpenCode adapter returns boolean (true=handled, false=no permission found).
+      // AcpAdapter returns void. Cast to boolean|void to handle both.
+      const handled = await (adapter as unknown as { respondToApproval: (sid: string, approved: boolean, opt?: string) => Promise<boolean | void> }).respondToApproval(sessionId, approved, selectedOption)
+
+      // If no pending permission was found (stale prompt after watchdog abort
+      // or app restart), send a continuation message so the session recovers.
+      // AcpAdapter returns void (undefined), which won't match === false.
+      if (handled === false && approved) {
+        console.log(`[AgentManager] No pending permission found for ${sessionId}, sending continuation message to recover session`)
+        this.doSendAdapterMessage(session, sessionId, 'continue').catch((err) => {
+          console.error(`[AgentManager] Continuation message failed for session ${sessionId}:`, err)
+          this.handleSessionError(sessionId, session!, err)
+        })
+      }
       return
     }
 
