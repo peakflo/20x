@@ -138,6 +138,11 @@ interface PollingEntry {
    *  Prevents the abort message from spamming every poll tick while the
    *  backend is still transitioning from BUSY → IDLE after the abort. */
   watchdogFired?: boolean
+  /** Count of consecutive poll cycles containing garbled model output
+   *  (e.g. hallucinated `<｜DSML｜` tool-call markup as plain text).
+   *  Once it exceeds the threshold the session is aborted immediately
+   *  instead of waiting for the full watchdog timeout. */
+  garbledOutputCount?: number
 }
 
 interface MessageAttachmentRef {
@@ -1718,6 +1723,53 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
         // Reset watchdog flag — new data means the session is alive again.
         // If a follow-up message also gets stuck, the watchdog can re-fire.
         entry.watchdogFired = false
+      }
+
+      // ── Garbled output detection ──
+      // Some models hallucinate tool-call markup as plain text (e.g. outputting
+      // `<｜DSML｜tool_calls>` character-by-character). This wastes tokens and
+      // never resolves. Detect the pattern and abort early instead of waiting
+      // for the full watchdog timeout (which can be 5+ minutes).
+      if (newParts.length > 0) {
+        const GARBLED_PATTERNS = ['<｜DSML｜', '<│DSML│', 'DSML｜tool_calls', 'DSML｜invoke']
+        let hasGarbled = false
+        for (const part of newParts) {
+          const text = part.content || part.text || ''
+          if (text.length > 50 && GARBLED_PATTERNS.some(p => text.includes(p))) {
+            hasGarbled = true
+            break
+          }
+        }
+        if (hasGarbled) {
+          entry.garbledOutputCount = (entry.garbledOutputCount || 0) + 1
+          // Abort after 2 consecutive detections to avoid false positives
+          if (entry.garbledOutputCount >= 2 && !entry.watchdogFired) {
+            entry.watchdogFired = true
+            console.warn(
+              `[AgentManager] Session ${sessionId}: garbled model output detected (${entry.garbledOutputCount} cycles). Aborting to prevent token waste.`
+            )
+            this.sendToRenderer('agent:output', {
+              sessionId,
+              taskId: config.taskId,
+              type: 'message',
+              data: {
+                id: `garbled-abort-${Date.now()}`,
+                role: 'system',
+                content: 'Session aborted: model is producing garbled output (hallucinated tool-call markup). You can send a new message to continue.',
+                partType: 'error'
+              }
+            })
+            try {
+              await adapter.abortPrompt(sessionId, config)
+            } catch (abortErr) {
+              console.error(`[AgentManager] Failed to abort garbled session ${sessionId}:`, abortErr)
+            }
+            return
+          }
+        } else {
+          // Reset counter when output looks normal
+          entry.garbledOutputCount = 0
+        }
       }
 
       // hasSeenWork is set exclusively in the BUSY / WAITING_APPROVAL status

@@ -1300,6 +1300,26 @@ export class OpencodeAdapter implements CodingAgentAdapter {
       abort.abort()
       this.promptAborts.delete(sessionId)
     }
+
+    // Also abort the session on the server side to ensure the backend
+    // stops processing. Without this, the backend continues running the
+    // old prompt (model generating tokens, bash commands executing) and
+    // rejects or queues new prompts — so the user can't recover by
+    // sending a follow-up message.
+    const ocClient = this.clients.get(sessionId)
+    if (ocClient) {
+      try {
+        await ocClient.session.abort({
+          path: { id: sessionId },
+          ...(_config.workspaceDir && { query: { directory: _config.workspaceDir } }),
+        })
+        console.log(`[OpencodeAdapter] Server-side abort sent for session ${sessionId}`)
+      } catch (err) {
+        // Non-fatal: the local abort is sufficient for the HTTP request.
+        // Server-side abort can fail if session is already idle or not found.
+        console.warn(`[OpencodeAdapter] Server-side abort failed for ${sessionId}:`, err instanceof Error ? err.message : err)
+      }
+    }
   }
 
   async destroySession(sessionId: string, _config: SessionConfig): Promise<void> {
