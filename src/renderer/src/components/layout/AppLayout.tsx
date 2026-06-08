@@ -7,6 +7,7 @@ import { DeleteConfirmDialog } from '@/components/tasks/DeleteConfirmDialog'
 import { UpdateDialog } from '@/components/update/UpdateDialog'
 import { Dialog, DialogContent, DialogHeader, DialogBody, DialogTitle } from '@/components/ui/Dialog'
 import { OnboardingWizard, shouldShowOnboarding } from '@/components/onboarding/OnboardingWizard'
+import { SetupProgressToast } from '@/components/onboarding/SetupProgressToast'
 
 // Lazy-load heavy workspace components — only imported when their view is active.
 // This reduces the initial bundle size and speeds up first render significantly.
@@ -534,6 +535,9 @@ export function AppLayout() {
           {toast.message}
         </div>
       )}
+
+      {/* Background setup progress */}
+      <SetupProgressToast />
     </>
   )
 }

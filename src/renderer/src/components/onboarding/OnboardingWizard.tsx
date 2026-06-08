@@ -21,6 +21,7 @@ import { useAgentStore } from '@/stores/agent-store'
 import { useSettingsStore, type GitProvider } from '@/stores/settings-store'
 import { useEnterpriseStore } from '@/stores/enterprise-store'
 import { useDashboardStore } from '@/stores/dashboard-store'
+import { useSetupProgressStore } from '@/stores/setup-progress-store'
 import { EnterpriseLoginModal } from '@/components/settings/tabs/EnterpriseLoginModal'
 import { PresetupWizard } from '@/components/dashboard/PresetupWizard'
 import { CodingAgentType, CLAUDE_MODELS, CODEX_MODELS } from '@/types'
@@ -127,6 +128,40 @@ function getAgentToolKey(type: CodingAgentType): DetectKey {
 
 /* ─── Auto-select best default model ─── */
 
+const PEAKFLO_PROVIDER_ID = 'peakflo'
+
+/** Pick first model from a provider's model list (array or object). */
+function pickFirstModel(
+  providerId: string,
+  models: unknown
+): string | null {
+  if (Array.isArray(models)) {
+    for (const m of models as { id?: string; name?: string }[]) {
+      if (m?.id) return `${providerId}/${m.id}`
+    }
+  } else if (models && typeof models === 'object') {
+    for (const [key, m] of Object.entries(models as Record<string, { id?: string }>)) {
+      const modelId = m?.id || key
+      if (modelId) return `${providerId}/${modelId}`
+    }
+  }
+  return null
+}
+
+/** Pick first "free" model from a provider's model list. */
+function pickFreeModel(
+  providerId: string,
+  models: unknown
+): string | null {
+  if (!Array.isArray(models)) return null
+  for (const m of models as { id?: string; name?: string }[]) {
+    if (m?.id && (m.name || '').toLowerCase().includes('free')) {
+      return `${providerId}/${m.id}`
+    }
+  }
+  return null
+}
+
 async function getDefaultModel(type: CodingAgentType): Promise<string> {
   if (type === CodingAgentType.CLAUDE_CODE) {
     return CLAUDE_MODELS[0]?.id || ''
@@ -134,29 +169,29 @@ async function getDefaultModel(type: CodingAgentType): Promise<string> {
   if (type === CodingAgentType.CODEX) {
     return CODEX_MODELS[0]?.id || ''
   }
-  // OpenCode — try to fetch, fall back gracefully
+  // OpenCode — try to fetch providers, prefer Peakflo gateway if authenticated
   try {
     const result = await agentConfigApi.getProviders(undefined, CodingAgentType.OPENCODE)
     if (result?.providers) {
       const providers = Array.isArray(result.providers) ? result.providers : []
+
+      // 1. If authenticated via Peakflo, prefer the Peakflo gateway model
+      const peakfloProvider = providers.find((p) => p.id === PEAKFLO_PROVIDER_ID)
+      if (peakfloProvider) {
+        const model = pickFirstModel(PEAKFLO_PROVIDER_ID, peakfloProvider.models)
+        if (model) return model
+      }
+
+      // 2. Otherwise, pick first free model from any provider
       for (const p of providers) {
-        if (Array.isArray(p.models)) {
-          for (const m of p.models as { id?: string; name?: string }[]) {
-            if (m?.id) {
-              const name = (m.name || '').toLowerCase()
-              if (name.includes('free')) return `${p.id}/${m.id}`
-            }
-          }
-          const first = (p.models as { id?: string }[])[0]
-          if (first?.id) return `${p.id}/${first.id}`
-        } else if (p.models && typeof p.models === 'object') {
-          for (const [key, m] of Object.entries(
-            p.models as Record<string, { id?: string; name?: string }>
-          )) {
-            const modelId = m?.id || key
-            if (modelId) return `${p.id}/${modelId}`
-          }
-        }
+        const free = pickFreeModel(p.id, p.models)
+        if (free) return free
+      }
+
+      // 3. Fall back to first model from first provider
+      for (const p of providers) {
+        const first = pickFirstModel(p.id, p.models)
+        if (first) return first
       }
     }
   } catch {
@@ -361,36 +396,81 @@ export function OnboardingWizard({ open, onOpenChange }: OnboardingWizardProps) 
     [agents, createAgent, updateAgent]
   )
 
+  /**
+   * Run post-auth setup in background: close dialog immediately,
+   * show progress via SetupProgressToast.
+   */
   const runPostAuthFlow = useCallback(async () => {
-    setCreating(true)
-    try {
-      if (!hasCompleteDefaultAgent()) {
-        const status = await window.electronAPI.agentInstaller.detect()
-        setToolStatus(status)
-        if (!status.opencode?.installed) {
-          setInstalling(DetectKey.OPENCODE)
-          await window.electronAPI.agentInstaller.install(DetectKey.OPENCODE)
-          setInstalling(null)
-        }
-        await createDefaultAgent(CodingAgentType.OPENCODE)
-      }
+    const progress = useSetupProgressStore.getState()
 
+    // Close dialog immediately — don't block the main UI
+    onOpenChange(false)
+
+    // If agent already fully configured, just fetch templates
+    if (hasCompleteDefaultAgent()) {
       await fetchPresetups()
       const templates = useDashboardStore.getState().presetupTemplates
       if (templates.length > 0) {
         setScreen(OnboardingScreen.TEMPLATES)
-      } else {
-        onOpenChange(false)
+        onOpenChange(true)
       }
-    } catch {
+      return
+    }
+
+    // Start background progress toast
+    progress.start('Detecting installed tools...')
+
+    try {
+      // Phase 1: Detect tools
+      const status = await window.electronAPI.agentInstaller.detect()
+      setToolStatus(status)
+
+      // Phase 2: Install OpenCode if needed
+      if (!status.opencode?.installed) {
+        progress.update({ phase: 'installing', message: 'Installing OpenCode...', percent: 10 })
+
+        // Subscribe to install progress events for real-time updates
+        const cleanup = window.electronAPI.agentInstaller.onProgress(
+          (data: { stage: string; percent: number; output: string }) => {
+            if (data.stage === 'complete' || data.stage === 'error') return
+            // Map install percent (0-100) to our range (10-50)
+            const mapped = 10 + Math.round((data.percent || 0) * 0.4)
+            progress.update({ percent: mapped, message: data.output?.trim()?.slice(-60) || 'Installing OpenCode...' })
+          }
+        )
+
+        try {
+          await window.electronAPI.agentInstaller.install(DetectKey.OPENCODE)
+        } finally {
+          cleanup()
+        }
+      }
+
+      // Phase 3: Start OpenCode server & configure model
+      progress.update({ phase: 'starting', message: 'Starting OpenCode server...', percent: 55 })
+
+      // createDefaultAgent calls getDefaultModel which calls getProviders,
+      // which triggers ensureServerRunning() — this starts the server
+      progress.update({ phase: 'configuring', message: 'Configuring agent & model...', percent: 70 })
+      await createDefaultAgent(CodingAgentType.OPENCODE)
+      await useAgentStore.getState().fetchAgents()
+
+      // Phase 4: Fetch templates
+      progress.update({ message: 'Loading templates...', percent: 90 })
+      await fetchPresetups()
+
+      // Done!
+      progress.finish('Agent ready — you can start working!')
+
+      // If templates exist, show them
       const templates = useDashboardStore.getState().presetupTemplates
       if (templates.length > 0) {
         setScreen(OnboardingScreen.TEMPLATES)
-      } else {
-        onOpenChange(false)
+        onOpenChange(true)
       }
-    } finally {
-      setCreating(false)
+    } catch (err) {
+      console.error('[OnboardingWizard] Background setup failed:', err)
+      progress.fail('Setup failed — configure agent in Settings')
     }
   }, [createDefaultAgent, fetchPresetups, onOpenChange])
 
@@ -407,23 +487,22 @@ export function OnboardingWizard({ open, onOpenChange }: OnboardingWizardProps) 
 
   const handleStart = async () => {
     if (!selectedAgent) return
-    setCreating(true)
     setError(null)
 
-    try {
-      if (selectedAgent === AgentChoiceType.PEAKFLO) {
-        // Already authenticated — skip login, go straight to post-auth flow
-        if (isAuthenticated) {
-          await runPostAuthFlow()
-          return
-        }
-        // Not authenticated — open login modal
-        setLoginModalOpen(true)
-        setCreating(false)
+    if (selectedAgent === AgentChoiceType.PEAKFLO) {
+      if (isAuthenticated) {
+        // Already authenticated — run background setup (closes dialog immediately)
+        runPostAuthFlow()
         return
       }
+      // Not authenticated — open login modal
+      setLoginModalOpen(true)
+      return
+    }
 
-      // BYO agent path — create default agent and close
+    // BYO agent path — create default agent and close
+    setCreating(true)
+    try {
       await createDefaultAgent(selectedAgent)
       onOpenChange(false)
     } catch {
