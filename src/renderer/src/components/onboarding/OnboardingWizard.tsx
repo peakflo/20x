@@ -21,7 +21,7 @@ import { useAgentStore } from '@/stores/agent-store'
 import { useSettingsStore, type GitProvider } from '@/stores/settings-store'
 import { useEnterpriseStore } from '@/stores/enterprise-store'
 import { useDashboardStore } from '@/stores/dashboard-store'
-import { useSetupProgressStore } from '@/stores/setup-progress-store'
+import { useProgressToastStore } from '@/stores/progress-toast-store'
 import { EnterpriseLoginModal } from '@/components/settings/tabs/EnterpriseLoginModal'
 import { PresetupWizard } from '@/components/dashboard/PresetupWizard'
 import { CodingAgentType, CLAUDE_MODELS, CODEX_MODELS } from '@/types'
@@ -398,10 +398,11 @@ export function OnboardingWizard({ open, onOpenChange }: OnboardingWizardProps) 
 
   /**
    * Run post-auth setup in background: close dialog immediately,
-   * show progress via SetupProgressToast.
+   * show progress via the general-purpose progress toast.
    */
   const runPostAuthFlow = useCallback(async () => {
-    const progress = useSetupProgressStore.getState()
+    const toasts = useProgressToastStore.getState()
+    const TOAST_ID = 'agent-setup'
 
     // Close dialog immediately — don't block the main UI
     onOpenChange(false)
@@ -418,7 +419,7 @@ export function OnboardingWizard({ open, onOpenChange }: OnboardingWizardProps) 
     }
 
     // Start background progress toast
-    progress.start('Detecting installed tools...')
+    toasts.show(TOAST_ID, 'Setting up agent', 'Detecting installed tools...')
 
     try {
       // Phase 1: Detect tools
@@ -427,7 +428,7 @@ export function OnboardingWizard({ open, onOpenChange }: OnboardingWizardProps) 
 
       // Phase 2: Install OpenCode if needed
       if (!status.opencode?.installed) {
-        progress.update({ phase: 'installing', message: 'Installing OpenCode...', percent: 10 })
+        toasts.update(TOAST_ID, { message: 'Installing OpenCode...', percent: 10 })
 
         // Subscribe to install progress events for real-time updates
         const cleanup = window.electronAPI.agentInstaller.onProgress(
@@ -435,7 +436,7 @@ export function OnboardingWizard({ open, onOpenChange }: OnboardingWizardProps) 
             if (data.stage === 'complete' || data.stage === 'error') return
             // Map install percent (0-100) to our range (10-50)
             const mapped = 10 + Math.round((data.percent || 0) * 0.4)
-            progress.update({ percent: mapped, message: data.output?.trim()?.slice(-60) || 'Installing OpenCode...' })
+            toasts.update(TOAST_ID, { percent: mapped, message: data.output?.trim()?.slice(-60) || 'Installing OpenCode...' })
           }
         )
 
@@ -447,20 +448,20 @@ export function OnboardingWizard({ open, onOpenChange }: OnboardingWizardProps) 
       }
 
       // Phase 3: Start OpenCode server & configure model
-      progress.update({ phase: 'starting', message: 'Starting OpenCode server...', percent: 55 })
+      toasts.update(TOAST_ID, { message: 'Starting OpenCode server...', percent: 55 })
 
       // createDefaultAgent calls getDefaultModel which calls getProviders,
       // which triggers ensureServerRunning() — this starts the server
-      progress.update({ phase: 'configuring', message: 'Configuring agent & model...', percent: 70 })
+      toasts.update(TOAST_ID, { message: 'Configuring agent & model...', percent: 70 })
       await createDefaultAgent(CodingAgentType.OPENCODE)
       await useAgentStore.getState().fetchAgents()
 
       // Phase 4: Fetch templates
-      progress.update({ message: 'Loading templates...', percent: 90 })
+      toasts.update(TOAST_ID, { message: 'Loading templates...', percent: 90 })
       await fetchPresetups()
 
       // Done!
-      progress.finish('Agent ready — you can start working!')
+      toasts.finish(TOAST_ID, 'Agent ready — you can start working!')
 
       // If templates exist, show them
       const templates = useDashboardStore.getState().presetupTemplates
@@ -470,7 +471,7 @@ export function OnboardingWizard({ open, onOpenChange }: OnboardingWizardProps) 
       }
     } catch (err) {
       console.error('[OnboardingWizard] Background setup failed:', err)
-      progress.fail('Setup failed — configure agent in Settings')
+      toasts.fail(TOAST_ID, 'Setup failed — configure agent in Settings')
     }
   }, [createDefaultAgent, fetchPresetups, onOpenChange])
 
