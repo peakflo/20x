@@ -82,7 +82,6 @@ export const useTaskStore = create<TaskState>((set) => ({
   createTask: async (data) => {
     try {
       const task = normalizeTask(await taskApi.create(data))
-      set((state) => ({ tasks: [task, ...state.tasks], error: null }))
       return task
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
