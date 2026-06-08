@@ -8,9 +8,14 @@ const mockElectronAPI = window.electronAPI
 // Capture listener callbacks before any test clears mocks.
 // The store registers these once at module init time.
 let deletedCallback: ((event: { taskId: string }) => void) | null = null
+let createdCallback: ((event: { task: WorkfloTask }) => void) | null = null
 {
   const calls = (mockElectronAPI.onTaskDeleted as unknown as Mock).mock.calls
   if (calls.length > 0) deletedCallback = calls[0][0]
+}
+{
+  const calls = (mockElectronAPI.onTaskCreated as unknown as Mock).mock.calls
+  if (calls.length > 0) createdCallback = calls[0][0]
 }
 
 beforeEach(() => {
@@ -49,7 +54,7 @@ describe('useTaskStore', () => {
   })
 
   describe('createTask', () => {
-    it('prepends new task to list', async () => {
+    it('returns the created task from the backend', async () => {
       useTaskStore.setState({ tasks: [{ id: 't1', title: 'Existing' }] as unknown as WorkfloTask[] })
       const newTask = { id: 't2', title: 'New Task' }
       ;(mockElectronAPI.db.createTask as unknown as Mock).mockResolvedValue(newTask)
@@ -57,9 +62,33 @@ describe('useTaskStore', () => {
       const result = await useTaskStore.getState().createTask({ title: 'New Task' } as unknown as CreateTaskDTO)
 
       expect(result).toMatchObject(newTask)
+      // The task is NOT added to the store directly — onTaskCreated event does that
       const tasks = useTaskStore.getState().tasks
-      expect(tasks[0].id).toBe('t2')
+      expect(tasks).toHaveLength(1)
+    })
+
+    it('prepends task to list when onTaskCreated event fires', () => {
+      useTaskStore.setState({ tasks: [{ id: 't1', title: 'Existing' }] as unknown as WorkfloTask[] })
+      const newTask = { id: 't2', title: 'New Task' } as unknown as WorkfloTask
+
+      if (createdCallback) {
+        createdCallback({ task: newTask })
+      }
+
+      const tasks = useTaskStore.getState().tasks
       expect(tasks).toHaveLength(2)
+      expect(tasks[0].id).toBe('t2')
+    })
+
+    it('deduplicates when onTaskCreated fires for an already-present task', () => {
+      useTaskStore.setState({ tasks: [{ id: 't1', title: 'Existing' }] as unknown as WorkfloTask[] })
+      const eventTask = { id: 't1', title: 'Existing' } as unknown as WorkfloTask
+
+      if (createdCallback) {
+        createdCallback({ task: eventTask })
+      }
+
+      expect(useTaskStore.getState().tasks).toHaveLength(1)
     })
 
     it('throws and sets error on failure', async () => {
