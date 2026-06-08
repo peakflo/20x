@@ -1,7 +1,35 @@
 import { execFile } from 'child_process'
 import { promisify } from 'util'
+import { join } from 'path'
+import { homedir } from 'os'
+import { existsSync } from 'fs'
 
 const execFileAsync = promisify(execFile)
+
+/**
+ * Ensure well-known agent install directories are on the running process's
+ * PATH so detection works immediately after install without an app restart.
+ */
+function ensureAgentPaths() {
+  const home = homedir()
+  const sep = process.platform === 'win32' ? ';' : ':'
+  const pathEnv = process.env.PATH || ''
+  const segments = pathEnv.split(sep)
+
+  const knownDirs = [
+    join(home, '.opencode', 'bin'),  // OpenCode standalone installer
+    join(home, '.local', 'bin')       // Linux binary installs
+  ]
+
+  let modified = false
+  for (const dir of knownDirs) {
+    if (existsSync(dir) && !segments.includes(dir) && !segments.includes(`${dir}/`)) {
+      process.env.PATH = `${dir}${sep}${process.env.PATH}`
+      modified = true
+    }
+  }
+  return modified
+}
 
 /**
  * Detect which agents and tools are installed on this system.
@@ -9,6 +37,9 @@ const execFileAsync = promisify(execFile)
  */
 export async function detectInstalledAgents() {
   const isWin = process.platform === 'win32'
+
+  // Ensure well-known install dirs are on PATH before probing
+  ensureAgentPaths()
 
   /**
    * Run a command and extract a version string from stdout.

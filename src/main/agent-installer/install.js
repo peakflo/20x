@@ -699,9 +699,18 @@ export async function installAgent(agentName, onProgress) {
     return installStandaloneAgent(agentName, {
       curlUrl: 'https://opencode.ai/install',
       curlShell: 'bash',
-      winCmd: 'scoop',
-      winArgs: ['install', 'opencode'],
-      winFallback: 'Install OpenCode from https://opencode.ai/download or run: scoop install opencode',
+      winPowershell: [
+        '$installDir = "$env:USERPROFILE\\.opencode\\bin"',
+        'New-Item -ItemType Directory -Force -Path $installDir | Out-Null',
+        '$zip = "$env:TEMP\\opencode-windows-x64.zip"',
+        'Invoke-WebRequest -Uri "https://github.com/anomalyco/opencode/releases/latest/download/opencode-windows-x64.zip" -OutFile $zip',
+        'Expand-Archive -Force -Path $zip -DestinationPath $installDir',
+        'Remove-Item $zip -Force',
+        '$userPath = [Environment]::GetEnvironmentVariable("Path", "User")',
+        'if ($userPath -notlike "*$installDir*") { [Environment]::SetEnvironmentVariable("Path", "$installDir;$userPath", "User") }',
+        'Write-Host "OpenCode installed to $installDir"'
+      ].join('; '),
+      winFallback: 'Install OpenCode from https://opencode.ai/download',
       successMsg: 'OpenCode installed successfully!\n',
       detectKey: 'opencode'
     }, onProgress)
@@ -1137,6 +1146,11 @@ async function installStandaloneAgent(agentName, opts, onProgress) {
           resolve({ success: false, error: err.message, newStatus: await detectInstalledAgents() })
         })
         proc.on('close', async (code) => {
+          // Ensure well-known install dirs are on this process's PATH
+          // so detection works immediately without an app restart
+          const opencodeDir = join(homedir(), '.opencode', 'bin')
+          ensureOnPath(opencodeDir)
+
           const newStatus = await detectInstalledAgents()
           if (code === 0 || newStatus[opts.detectKey]?.installed) {
             onProgress({ stage: 'complete', output: opts.successMsg, percent: 100 })
@@ -1150,7 +1164,7 @@ async function installStandaloneAgent(agentName, opts, onProgress) {
     }
 
     if (opts.winCmd && opts.winArgs) {
-      // Use scoop/winget (OpenCode)
+      // Use scoop/winget as fallback
       onProgress({ stage: 'starting', output: `$ ${opts.winCmd} ${opts.winArgs.join(' ')}\n`, percent: 5 })
       try {
         return await spawnInstall(opts.winCmd, opts.winArgs, agentName, onProgress)
