@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react'
+import React, { useEffect, useState, useCallback } from 'react'
 import {
   Check,
   Loader2,
@@ -399,24 +399,21 @@ export function OnboardingWizard({ open, onOpenChange }: OnboardingWizardProps) 
   /**
    * Run post-auth setup in background: close dialog immediately,
    * show progress via the general-purpose progress toast.
+   *
+   * Always installs the binary + starts the server, even if an agent
+   * record already exists (it may be stale from a previous version).
    */
+  const setupRunning = React.useRef(false)
   const runPostAuthFlow = useCallback(async () => {
+    // Guard against double-calls (useEffect + handleLoginClose can both fire)
+    if (setupRunning.current) return
+    setupRunning.current = true
+
     const toasts = useProgressToastStore.getState()
     const TOAST_ID = 'agent-setup'
 
     // Close dialog immediately — don't block the main UI
     onOpenChange(false)
-
-    // If agent already fully configured, just fetch templates
-    if (hasCompleteDefaultAgent()) {
-      await fetchPresetups()
-      const templates = useDashboardStore.getState().presetupTemplates
-      if (templates.length > 0) {
-        setScreen(OnboardingScreen.TEMPLATES)
-        onOpenChange(true)
-      }
-      return
-    }
 
     // Start background progress toast
     toasts.show(TOAST_ID, 'Setting up agent', 'Detecting installed tools...')
@@ -445,13 +442,16 @@ export function OnboardingWizard({ open, onOpenChange }: OnboardingWizardProps) 
         } finally {
           cleanup()
         }
+      } else {
+        toasts.update(TOAST_ID, { percent: 50, message: 'OpenCode already installed' })
       }
 
-      // Phase 3: Start OpenCode server & configure model
+      // Phase 3: Start OpenCode server & configure agent + model
       toasts.update(TOAST_ID, { message: 'Starting OpenCode server...', percent: 55 })
 
       // createDefaultAgent calls getDefaultModel which calls getProviders,
-      // which triggers ensureServerRunning() — this starts the server
+      // which triggers ensureServerRunning() — this starts the server.
+      // It also skips creation if a complete default agent already exists.
       toasts.update(TOAST_ID, { message: 'Configuring agent & model...', percent: 70 })
       await createDefaultAgent(CodingAgentType.OPENCODE)
       await useAgentStore.getState().fetchAgents()
@@ -472,6 +472,8 @@ export function OnboardingWizard({ open, onOpenChange }: OnboardingWizardProps) 
     } catch (err) {
       console.error('[OnboardingWizard] Background setup failed:', err)
       toasts.fail(TOAST_ID, 'Setup failed — configure agent in Settings')
+    } finally {
+      setupRunning.current = false
     }
   }, [createDefaultAgent, fetchPresetups, onOpenChange])
 
@@ -748,7 +750,9 @@ export function OnboardingWizard({ open, onOpenChange }: OnboardingWizardProps) 
                 ) : (
                   <Sparkles className="size-4 mr-1.5" />
                 )}
-                {selectedAgent === AgentChoiceType.PEAKFLO ? 'Sign up / Log in' : 'Get Started'}
+                {selectedAgent === AgentChoiceType.PEAKFLO
+                  ? (isAuthenticated ? 'Get Started' : 'Sign up / Log in')
+                  : 'Get Started'}
                 {!creating && <ArrowRight className="size-4 ml-1.5" />}
               </Button>
               <Button
