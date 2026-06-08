@@ -57,6 +57,10 @@ describe('OpencodeAdapter', () => {
         ].join('\n'))
         expect(tillDoneCode).toContain('INITIAL_TODO_PROMPT')
 
+        // The skill tool is allowed through because skills contain planning instructions
+        // that the agent needs to read BEFORE creating the todo list
+        expect(tillDoneCode).toContain('input.tool === "skill"')
+
         // Idle nudging is handled by the agent-manager (universal for all agents),
         // not by the plugin. The plugin only handles tool blocking + todo state tracking.
         expect(tillDoneCode).not.toContain('session.idle')
