@@ -835,13 +835,22 @@ describe('OpencodeAdapter', () => {
         // (dynamic import succeeded at module init), it would use the SDK path
         // and never reach fetch. Either path is valid depending on the env.
         if (mockFetch.mock.calls.length > 0) {
-          expect(mockFetch).toHaveBeenCalledWith(
-            'http://localhost:4096/permission/per_123/reply?directory=%2Fworkspace%2Ftask_1',
-            expect.objectContaining({
-              method: 'POST',
-              body: JSON.stringify({ reply: 'always' })
-            })
+          // Node's built-in fetch may wrap (url, init) into a Request object,
+          // so check the first arg for either a plain URL string or a Request.
+          const firstArg = mockFetch.mock.calls[0][0]
+          const url = typeof firstArg === 'string' ? firstArg : firstArg.url
+          expect(url).toBe(
+            'http://localhost:4096/permission/per_123/reply?directory=%2Fworkspace%2Ftask_1'
           )
+          if (typeof firstArg === 'string') {
+            // Classic two-arg form
+            expect(mockFetch.mock.calls[0][1]).toEqual(
+              expect.objectContaining({ method: 'POST', body: JSON.stringify({ reply: 'always' }) })
+            )
+          } else {
+            // Request object form — method is on the Request, body is a stream
+            expect(firstArg.method).toBe('POST')
+          }
         }
       } finally {
         vi.unstubAllGlobals()
