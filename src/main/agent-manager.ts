@@ -451,7 +451,7 @@ export class AgentManager extends EventEmitter {
         // Inject OAuth Bearer token if the server has one
         let finalHeaders = { ...mcpServer.headers }
         if (this.oauthManager && mcpServer.oauth_metadata && 'resource_url' in mcpServer.oauth_metadata) {
-          const token = await this.oauthManager.getValidMcpServerToken(mcpServer.id)
+          const token = await this.oauthManager.getValidMcpServerToken(mcpServer.id, { forceRefresh: true })
           if (token) {
             finalHeaders = { ...finalHeaders, Authorization: `Bearer ${token}` }
           }

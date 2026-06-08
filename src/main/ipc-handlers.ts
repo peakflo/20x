@@ -748,7 +748,7 @@ export function registerIpcHandlers(
     }
 
     if (!oauthManager) return { connected: false }
-    return oauthManager.getMcpServerOAuthStatus(mcpServerId)
+    return await oauthManager.validateMcpServerOAuthStatus(mcpServerId)
   })
 
   ipcMain.handle('mcp:revokeOAuthToken', async (_, mcpServerId: string) => {

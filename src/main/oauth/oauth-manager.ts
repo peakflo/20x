@@ -455,14 +455,18 @@ export class OAuthManager {
   /**
    * Get a valid access token for an MCP server, refreshing if needed.
    */
-  async getValidMcpServerToken(mcpServerId: string): Promise<string | null> {
+  async getValidMcpServerToken(
+    mcpServerId: string,
+    opts?: { forceRefresh?: boolean }
+  ): Promise<string | null> {
     const tokenRecord = this.db.getOAuthTokenByMcpServer(mcpServerId)
     if (!tokenRecord) return null
 
     const expiresAt = new Date(tokenRecord.expires_at).getTime()
     const nowPlus5Min = Date.now() + 5 * 60 * 1000
+    const shouldRefresh = tokenRecord.refresh_token && (opts?.forceRefresh || expiresAt < nowPlus5Min)
 
-    if (expiresAt < nowPlus5Min) {
+    if (shouldRefresh) {
       try {
         await this.refreshMcpServerToken(tokenRecord)
         const refreshed = this.db.getOAuthTokenByMcpServer(mcpServerId)
@@ -495,6 +499,22 @@ export class OAuthManager {
     }
 
     return tokenRecord.access_token
+  }
+
+  /**
+   * Validate OAuth status for an MCP server using the same token path used by
+   * agent sessions. This prevents the UI from reporting "connected" when the
+   * stored access token has been revoked upstream but still exists locally.
+   */
+  async validateMcpServerOAuthStatus(mcpServerId: string): Promise<{ connected: boolean; expiresAt?: string }> {
+    const tokenRecord = this.db.getOAuthTokenByMcpServer(mcpServerId)
+    if (!tokenRecord) return { connected: false }
+
+    const token = await this.getValidMcpServerToken(mcpServerId, { forceRefresh: true })
+    if (!token) return { connected: false }
+
+    const refreshed = this.db.getOAuthTokenByMcpServer(mcpServerId)
+    return refreshed ? { connected: true, expiresAt: refreshed.expires_at } : { connected: false }
   }
 
   /**

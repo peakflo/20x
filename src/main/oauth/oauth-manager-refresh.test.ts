@@ -84,7 +84,16 @@ function makeMockDb(tokenRecord = makeTokenRecord()) {
       if (id === tokenRecord.mcp_server_id) storedToken = null
     }),
     deleteOAuthToken: vi.fn(),
-    updateOAuthToken: vi.fn(),
+    updateOAuthToken: vi.fn((id: string, accessToken: string, refreshToken: string, expiresIn: number) => {
+      if (!storedToken || storedToken.id !== id) return
+      storedToken = {
+        ...storedToken,
+        access_token: accessToken,
+        refresh_token: refreshToken,
+        expires_at: new Date(Date.now() + expiresIn * 1000).toISOString(),
+        updated_at: new Date().toISOString()
+      }
+    }),
     // Stub out methods called by constructor/init that we don't care about
     _storedToken: () => storedToken
   }
@@ -195,5 +204,40 @@ describe('OAuthManager — refresh failure cleanup', () => {
 
     expect(result).toBe('still-valid-token')
     expect(mockNotificationConstructor).not.toHaveBeenCalled()
+  })
+
+  it('force refreshes a non-expired token before handing it to agent sessions', async () => {
+    const freshDb = makeMockDb(makeTokenRecord({
+      expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+      access_token: 'still-valid-token'
+    }))
+    const freshManager = new OAuthManager(freshDb as never)
+    const mcpProvider = (freshManager as any).providers.get('mcp-server')
+    mcpProvider.refreshToken = vi.fn().mockResolvedValue({
+      access_token: 'fresh-access-token',
+      refresh_token: 'fresh-refresh-token',
+      expires_in: 3600
+    })
+
+    const result = await freshManager.getValidMcpServerToken('srv-notion', { forceRefresh: true })
+
+    expect(result).toBe('fresh-access-token')
+    expect(freshDb.updateOAuthToken).toHaveBeenCalled()
+  })
+
+  it('validateMcpServerOAuthStatus marks server disconnected when forced refresh fails', async () => {
+    const freshDb = makeMockDb(makeTokenRecord({
+      expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString()
+    }))
+    const freshManager = new OAuthManager(freshDb as never)
+    const mcpProvider = (freshManager as any).providers.get('mcp-server')
+    mcpProvider.refreshToken = vi.fn().mockRejectedValue(
+      new Error('MCP OAuth token refresh failed: 400 {"error":"invalid_grant"}')
+    )
+
+    const status = await freshManager.validateMcpServerOAuthStatus('srv-notion')
+
+    expect(status).toEqual({ connected: false })
+    expect(freshDb.deleteOAuthTokenByMcpServer).toHaveBeenCalledWith('srv-notion')
   })
 })
