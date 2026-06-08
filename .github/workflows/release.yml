@@ -126,6 +126,11 @@ jobs:
       - name: Rename arch-specific update manifest
         run: cp dist/latest-mac.yml dist/latest-mac-${{ matrix.arch }}.yml
 
+      - name: Create stable asset names
+        run: |
+          cp dist/20x-*-${{ matrix.arch }}.dmg dist/20x-mac-${{ matrix.arch }}.dmg
+          cp dist/20x-*-${{ matrix.arch }}.zip dist/20x-mac-${{ matrix.arch }}.zip
+
       - name: Upload release assets directly
         uses: softprops/action-gh-release@v2
         with:
@@ -167,6 +172,9 @@ jobs:
       - name: Package for Windows
         run: pnpm exec electron-builder --win --x64 --publish never
 
+      - name: Create stable asset names
+        run: cp dist/*.exe dist/20x-windows-x64.exe
+
       - name: Upload release assets directly
         uses: softprops/action-gh-release@v2
         with:
@@ -206,6 +214,9 @@ jobs:
 
       - name: Package for Linux
         run: pnpm exec electron-builder --linux --x64 --publish never
+
+      - name: Create stable asset names
+        run: cp dist/*.AppImage dist/20x-linux-x86_64.AppImage
 
       - name: Upload release assets directly
         uses: softprops/action-gh-release@v2
