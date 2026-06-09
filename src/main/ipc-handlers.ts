@@ -970,9 +970,12 @@ export function registerIpcHandlers(
           const existingMcpDev = localServers.find((s) => s.name === mcpDevServerName)
 
           if (existingMcpDev) {
-            // Update URL in case environment changed (e.g. local → stage → prod)
-            if (existingMcpDev.url !== mcpDevUrl) {
-              db.updateMcpServer(existingMcpDev.id, { url: mcpDevUrl })
+            // Update URL and ensure source is 'enterprise' (may be missing on
+            // servers created before this fix). Also handles env changes
+            // (e.g. local → stage → prod).
+            const needsUpdate = existingMcpDev.url !== mcpDevUrl || existingMcpDev.source !== 'enterprise'
+            if (needsUpdate) {
+              db.updateMcpServer(existingMcpDev.id, { url: mcpDevUrl, source: 'enterprise' })
               console.log('[enterprise] Updated MCP Dev Server URL:', mcpDevUrl)
             }
           } else {
@@ -981,6 +984,7 @@ export function registerIpcHandlers(
               type: 'remote',
               url: mcpDevUrl,
               headers: {},
+              source: 'enterprise',
               // The enterprise JWT is injected dynamically by the MCP transport
               // layer (via EnterpriseAuth.getJwt()), not stored statically here.
               // The MCP client retrieves a fresh JWT before each connection.
