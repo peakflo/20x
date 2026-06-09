@@ -435,11 +435,12 @@ export function OnboardingWizard({ open, onOpenChange }: OnboardingWizardProps) 
 
         // Subscribe to install progress events for real-time updates
         const cleanup = window.electronAPI.agentInstaller.onProgress(
-          (data: { stage: string; percent: number; output: string }) => {
+          (data: { stage: string; percent: number }) => {
             if (data.stage === 'complete' || data.stage === 'error') return
             // Map install percent (0-100) to our range (10-50)
             const mapped = 10 + Math.round((data.percent || 0) * 0.4)
-            toasts.update(TOAST_ID, { percent: mapped, message: data.output?.trim()?.slice(-60) || 'Installing OpenCode...' })
+            const message = data.percent > 60 ? 'Almost there...' : 'Downloading & installing OpenCode...'
+            toasts.update(TOAST_ID, { percent: mapped, message })
           }
         )
 
