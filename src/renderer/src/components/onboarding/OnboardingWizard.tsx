@@ -460,15 +460,9 @@ export function OnboardingWizard({ open, onOpenChange }: OnboardingWizardProps) 
       toasts.update(TOAST_ID, { message: 'Loading templates...', percent: 90 })
       await fetchPresetups()
 
-      // Done!
+      // Done! — don't reopen the dialog; let the user start working immediately.
+      // Templates are available from the Dashboard whenever they need them.
       toasts.finish(TOAST_ID, 'Agent ready — you can start working!')
-
-      // If templates exist, show them
-      const templates = useDashboardStore.getState().presetupTemplates
-      if (templates.length > 0) {
-        setScreen(OnboardingScreen.TEMPLATES)
-        onOpenChange(true)
-      }
     } catch (err) {
       console.error('[OnboardingWizard] Background setup failed:', err)
       toasts.fail(TOAST_ID, 'Setup failed — configure agent in Settings')
