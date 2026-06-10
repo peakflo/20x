@@ -283,6 +283,16 @@ export class EnterpriseAuth {
       this.logAuthEvent('ai_gateway_virtual_key_fetch_error', this.describeError(err))
       const msg = err instanceof Error ? err.message : String(err)
       warnings.push(`AI Gateway models unavailable: ${msg}`)
+
+      // apiRequest's 401-retry handler calls clearStoredData() on failure,
+      // which nukes the JWT + tenant we just stored. Re-store them so the
+      // session stays alive even if the AI gateway fetch failed.
+      if (!this.db.getSetting(KEYS.TENANT_ID)) {
+        this.storeJwt(result.token, result.expiresIn)
+        this.db.setSetting(KEYS.TENANT_ID, result.tenant.id)
+        this.db.setSetting(KEYS.TENANT_NAME, result.tenant.name)
+        this.logAuthEvent('auth_state_restored_after_ai_gateway_failure')
+      }
     }
 
     return {
