@@ -10,8 +10,9 @@ import {
 import { Label } from '@/components/ui/Label'
 import { Input } from '@/components/ui/Input'
 import { Button } from '@/components/ui/Button'
+import { Checkbox } from '@/components/ui/Checkbox'
 import { useEnterpriseStore } from '@/stores/enterprise-store'
-import { ExternalLink } from 'lucide-react'
+import { CreditCard, ExternalLink } from 'lucide-react'
 
 interface EnterpriseLoginModalProps {
   open: boolean
@@ -33,6 +34,7 @@ export function EnterpriseLoginModal({ open, onClose }: EnterpriseLoginModalProp
 
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [includeAiSubscription, setIncludeAiSubscription] = useState(true)
 
   // After login, we may have tenants to select — show that step in the same modal
   const showTenantSelection = availableTenants && availableTenants.length > 0
@@ -45,8 +47,11 @@ export function EnterpriseLoginModal({ open, onClose }: EnterpriseLoginModalProp
   }, [email, password, login])
 
   const handleBrowserSignup = useCallback(async (mode: 'register' | 'login') => {
-    await signupInBrowser(mode)
-  }, [signupInBrowser])
+    await signupInBrowser(
+      mode,
+      mode === 'register' ? { includeAiSubscription } : undefined
+    )
+  }, [includeAiSubscription, signupInBrowser])
 
   const handleSelectTenant = useCallback(async (tenantId: string) => {
     // Must await selectTenant before closing — the onClose callback checks
@@ -74,6 +79,7 @@ export function EnterpriseLoginModal({ open, onClose }: EnterpriseLoginModalProp
     }
     setEmail('')
     setPassword('')
+    setIncludeAiSubscription(true)
     clearError()
     onClose()
   }, [showTenantSelection, isAuthenticated, clearError, onClose])
@@ -85,12 +91,12 @@ export function EnterpriseLoginModal({ open, onClose }: EnterpriseLoginModalProp
           <DialogTitle>
             {showTenantSelection
               ? (isAuthenticated ? 'Switch Organization' : 'Select Organization')
-              : 'Sign in to 20x Cloud'}
+              : 'Connect to 20x Cloud'}
           </DialogTitle>
           <DialogDescription>
             {showTenantSelection
               ? `Signed in as ${userEmail}. Choose an organization to connect.`
-              : 'Enter your 20x Cloud credentials to connect.'}
+              : 'Sign in or create an account to connect.'}
           </DialogDescription>
         </DialogHeader>
         <DialogBody>
@@ -220,6 +226,22 @@ export function EnterpriseLoginModal({ open, onClose }: EnterpriseLoginModalProp
 
               {/* Browser signup/login */}
               <div className="flex flex-col gap-2 pt-2">
+                <label className="flex items-start gap-3 rounded-md border border-border bg-background p-3 cursor-pointer">
+                  <Checkbox
+                    checked={includeAiSubscription}
+                    onCheckedChange={(checked) => setIncludeAiSubscription(checked === true)}
+                    className="mt-0.5"
+                  />
+                  <span className="min-w-0 flex-1">
+                    <span className="flex items-center gap-2 text-sm font-medium text-foreground">
+                      <CreditCard className="h-4 w-4 text-muted-foreground" />
+                      Include AI subscription
+                    </span>
+                    <span className="mt-1 block text-xs leading-5 text-muted-foreground">
+                      Roll model access into this new 20x Cloud account.
+                    </span>
+                  </span>
+                </label>
                 <Button
                   type="button"
                   variant="outline"
