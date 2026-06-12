@@ -49,9 +49,11 @@ export function EnterpriseLoginModal({ open, onClose }: EnterpriseLoginModalProp
   }, [signupInBrowser])
 
   const handleSelectTenant = useCallback(async (tenantId: string) => {
-    // Close modal immediately — sync runs in the background via IPC
-    onClose()
+    // Must await selectTenant before closing — the onClose callback checks
+    // isAuthenticated, which is only set after selectTenant completes.
+    // The loading spinner keeps the UI responsive while we wait.
     await selectTenant(tenantId)
+    onClose()
   }, [selectTenant, onClose])
 
   const handleClose = useCallback(() => {

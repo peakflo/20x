@@ -295,6 +295,9 @@ export function OnboardingWizard({ open, onOpenChange }: OnboardingWizardProps) 
   // Initialize state on open
   useEffect(() => {
     if (!open) return
+    // Sync wasAuthenticated so the auth-watcher useEffect doesn't falsely
+    // detect a false→true transition from loadSession restoring a session.
+    setWasAuthenticated(useEnterpriseStore.getState().isAuthenticated)
     setError(null)
     setScreen(OnboardingScreen.MAIN)
 
@@ -473,16 +476,16 @@ export function OnboardingWizard({ open, onOpenChange }: OnboardingWizardProps) 
     }
   }, [createDefaultAgent, fetchPresetups, onOpenChange])
 
-  // When auth completes while login modal is open, auto-close it and run post-auth flow.
-  // This handles the browser signup flow where login/tenant-select happens in the background
-  // and isAuthenticated flips to true while the modal is still showing.
+  // When auth changes from false→true during onboarding, auto-run setup.
+  // Don't gate on loginModalOpen — handleSelectTenant may have already
+  // closed the modal before isAuthenticated flips (which was the bug).
   useEffect(() => {
-    if (isAuthenticated && !wasAuthenticated && loginModalOpen) {
+    if (isAuthenticated && !wasAuthenticated) {
       setLoginModalOpen(false)
       runPostAuthFlow()
     }
     setWasAuthenticated(isAuthenticated)
-  }, [isAuthenticated, wasAuthenticated, loginModalOpen, runPostAuthFlow])
+  }, [isAuthenticated, wasAuthenticated, runPostAuthFlow])
 
   const handleStart = async () => {
     if (!selectedAgent) return
