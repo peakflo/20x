@@ -451,8 +451,12 @@ function ensureArray<T = string>(value: unknown): T[] {
 
 /** Safely parse a JSON column that should be an array */
 function parseJsonArray<T = string>(raw: string | null | undefined, fallback = '[]'): T[] {
-  const parsed = JSON.parse(raw || fallback)
-  return ensureArray<T>(parsed)
+  try {
+    const parsed = JSON.parse(raw || fallback)
+    return ensureArray<T>(parsed)
+  } catch {
+    return []
+  }
 }
 
 function deserializeTask(row: TaskRow): TaskRecord {
