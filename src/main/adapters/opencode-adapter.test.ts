@@ -61,6 +61,10 @@ describe('OpencodeAdapter', () => {
         // that the agent needs to read BEFORE creating the todo list
         expect(tillDoneCode).toContain('input.tool === "skill"')
 
+        // Task-management MCP tools are allowed through so agents can read task context
+        // (description, subtasks, skills) before creating the todo list
+        expect(tillDoneCode).toContain('input.tool.startsWith("mcp__task-management__")')
+
         // Idle nudging is handled by the agent-manager (universal for all agents),
         // not by the plugin. The plugin only handles tool blocking + todo state tracking.
         expect(tillDoneCode).not.toContain('session.idle')

@@ -1774,7 +1774,7 @@ export class OpencodeAdapter implements CodingAgentAdapter {
       'export var TillDone = async function({ client }) {',
       '  return {',
       '    "tool.execute.before": async function(input) {',
-      '      if (input.tool === "todowrite" || input.tool === "skill") return;',
+      '      if (input.tool === "todowrite" || input.tool === "skill" || input.tool.startsWith("mcp__task-management__")) return;',
       '      var sessionId = input.sessionID;',
       '      if (!sessionId) return;',
       '      if (!isTillDoneEnabled(sessionId)) return;',
