@@ -61,6 +61,10 @@ describe('OpencodeAdapter', () => {
         // that the agent needs to read BEFORE creating the todo list
         expect(tillDoneCode).toContain('input.tool === "skill"')
 
+        // The task tool (subagent delegation) is allowed through so agents can
+        // delegate work to subagents before creating the todo list
+        expect(tillDoneCode).toContain('input.tool === "task"')
+
         // Idle nudging is handled by the agent-manager (universal for all agents),
         // not by the plugin. The plugin only handles tool blocking + todo state tracking.
         expect(tillDoneCode).not.toContain('session.idle')
