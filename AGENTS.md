@@ -1,10 +1,10 @@
-# AGENTS.md — Multi-Agent Architecture (Phase 3)
+# AGENTS.md — Multi-Agent Architecture
 
-This document describes the planned multi-agent system for 20x. It is not yet implemented — this serves as the architectural specification for Phase 3 development.
+This document describes the multi-agent system for 20x. The core architecture described here is fully implemented in `src/main/agent-manager.ts`.
 
 ## Overview
 
-20x will support running multiple AI coding agents in parallel, each working on assigned tasks within specific codebases. Agents are managed through the OpenCode SDK and interact with users via streaming terminal transcripts with human-in-the-loop (HITL) approval flows.
+20x supports running multiple AI coding agents in parallel, each working on assigned tasks within specific codebases. Three coding agent backends are supported: **Claude Code** (Anthropic), **OpenCode** (open-source), and **Codex** (OpenAI). Agents are managed through the `AgentManager` class and interact with users via streaming terminal transcripts with human-in-the-loop (HITL) approval flows.
 
 ## Agent Model
 

@@ -477,3 +477,48 @@ describe('Closed database behavior', () => {
     expect(db.getMcpServer('any-id')).toBeUndefined()
   })
 })
+
+describe('JSON resilience — malformed columns', () => {
+  let rawDb: import('better-sqlite3').Database
+
+  beforeEach(() => {
+    rawDb = (db as unknown as { db: import('better-sqlite3').Database }).db
+  })
+
+  it('returns [] for labels when column contains malformed JSON', () => {
+    const task = db.createTask(makeTask({ title: 'Corrupt Labels Task' }))!
+    rawDb.prepare('UPDATE tasks SET labels = ? WHERE id = ?').run('not valid json{', task.id)
+
+    const result = db.getTask(task.id)
+    expect(result).not.toBeNull()
+    expect(result?.title).toBe('Corrupt Labels Task')
+    expect(result?.labels).toEqual([])
+  })
+
+  it('returns [] for attachments when column contains malformed JSON', () => {
+    const task = db.createTask(makeTask({ title: 'Corrupt Attachments Task' }))!
+    rawDb.prepare('UPDATE tasks SET attachments = ? WHERE id = ?').run('{broken', task.id)
+
+    const result = db.getTask(task.id)
+    expect(result?.attachments).toEqual([])
+  })
+
+  it('returns [] for repos when column contains malformed JSON', () => {
+    const task = db.createTask(makeTask({ title: 'Corrupt Repos Task' }))!
+    rawDb.prepare('UPDATE tasks SET repos = ? WHERE id = ?').run('[[invalid', task.id)
+
+    const result = db.getTask(task.id)
+    expect(result?.repos).toEqual([])
+  })
+
+  it('does not crash getTasks when one task has malformed JSON', () => {
+    const task1 = db.createTask(makeTask({ title: 'Good Task' }))!
+    const task2 = db.createTask(makeTask({ title: 'Bad Task' }))!
+    rawDb.prepare('UPDATE tasks SET labels = ? WHERE id = ?').run('%%%broken%%%', task2.id)
+
+    const tasks = db.getTasks()
+    expect(tasks.length).toBe(2)
+    expect(tasks.find(t => t.id === task2.id)?.labels).toEqual([])
+    expect(tasks.find(t => t.id === task1.id)?.title).toBe('Good Task')
+  })
+})

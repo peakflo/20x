@@ -5,6 +5,7 @@
  * endpoints via fetch, avoiding the native module version mismatch.
  */
 import { createServer, type Server as HttpServer } from 'http'
+import { randomUUID, timingSafeEqual } from 'crypto'
 import { CronExpressionParser } from 'cron-parser'
 import type { DatabaseManager } from './database'
 import { TaskStatus } from '../shared/constants'
@@ -16,6 +17,14 @@ let startupPromise: Promise<number> | null = null
 let notifyRenderer: ((channel: string, data: unknown) => void) | null = null
 let transcriptProvider: ((taskId: string) => Promise<Array<{ role: string; text: string }>>) | null = null
 let agentController: Pick<AgentManager, 'startTask'> | null = null
+
+/** Bearer token required by all callers of the task API (e.g. task-management MCP). */
+let taskApiToken: string | null = null
+
+/** Returns the bearer token to be passed to MCP child processes via TASK_API_TOKEN env var. */
+export function getTaskApiToken(): string | null {
+  return taskApiToken
+}
 
 export function getTaskApiPort(): number | null {
   return port
@@ -55,10 +64,28 @@ export function startTaskApiServer(db: DatabaseManager): Promise<number> {
   if (server && port) return Promise.resolve(port)
   if (startupPromise) return startupPromise
 
+  // Generate a fresh token each time the server starts
+  taskApiToken = randomUUID()
+
   startupPromise = new Promise((resolve, reject) => {
     server = createServer((req, res) => {
       // CORS not needed — local only
       res.setHeader('Content-Type', 'application/json')
+
+      // Auth check — reject requests without the correct bearer token
+      const authHeader = req.headers.authorization
+      const provided = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null
+      const expected = taskApiToken!
+      const tokenValid =
+        provided !== null &&
+        provided.length === expected.length &&
+        timingSafeEqual(Buffer.from(provided), Buffer.from(expected))
+
+      if (!tokenValid) {
+        res.writeHead(401)
+        res.end(JSON.stringify({ error: 'Unauthorized' }))
+        return
+      }
 
       let body = ''
       req.on('data', (chunk) => { body += chunk })

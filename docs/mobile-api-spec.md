@@ -260,18 +260,32 @@ List all configured skills (available to agents).
   {
     "id": "skill_abc123",
     "name": "Code Review",
-    "description": "Reviews pull requests",
-    "agent_id": "agent_abc123"
+    "description": "Reviews pull requests for correctness and style",
+    "content": "# Code Review\nReview the diff for...",
+    "version": 3,
+    "confidence": 0.85,
+    "uses": 12,
+    "last_used": "2026-05-10T09:00:00.000Z",
+    "tags": ["review", "quality"],
+    "created_at": "2026-01-15T10:00:00.000Z",
+    "updated_at": "2026-05-10T09:00:00.000Z"
   }
 ]
 ```
 
-| Field       | Type            | Description |
-|-------------|-----------------|-------------|
-| `id`        | `string`        | Skill ID |
-| `name`      | `string`        | Display name |
-| `description`| `string`       | What the skill does |
-| `agent_id`  | `string \| null`| Agent this skill belongs to (null = available to all) |
+| Field         | Type       | Description |
+|---------------|------------|-------------|
+| `id`          | `string`   | Skill ID |
+| `name`        | `string`   | Display name |
+| `description` | `string`   | What the skill does |
+| `content`     | `string`   | Full skill instructions (Markdown) |
+| `version`     | `number`   | Incremented on each update |
+| `confidence`  | `number`   | 0.0–1.0 score reflecting how reliably this skill performs |
+| `uses`        | `number`   | Total number of times this skill has been used |
+| `last_used`   | `string \| null` | ISO 8601 timestamp of last use |
+| `tags`        | `string[]` | Categorisation tags |
+| `created_at`  | `string`   | ISO 8601 |
+| `updated_at`  | `string`   | ISO 8601 |
 
 ---
 
@@ -327,6 +341,143 @@ Fetch repositories for a GitHub organization.
 ```
 
 **Error:** `400` — `org` is required. `500` — GitHub not configured.
+
+---
+
+#### `GET /api/github/orgs`
+
+List all available organizations and personal accounts across all authenticated git providers (GitHub and/or GitLab).
+
+**Response:** `200 OK`
+
+```json
+[
+  { "value": "rumaisa", "label": "rumaisa (GitHub personal)", "provider": "github" },
+  { "value": "peakflo", "label": "peakflo (GitHub)", "provider": "github" },
+  { "value": "my-gitlab-group", "label": "my-gitlab-group (GitLab)", "provider": "gitlab" }
+]
+```
+
+| Field      | Type     | Description |
+|------------|----------|-------------|
+| `value`    | `string` | Org/username to pass to `POST /api/github/repos` |
+| `label`    | `string` | Human-readable display name with provider suffix |
+| `provider` | `string` | `"github"` or `"gitlab"` |
+
+**Error:** `500` — No git provider authenticated.
+
+---
+
+### Task Sources
+
+#### `GET /api/task-sources`
+
+List all configured task sources (Linear, HubSpot, GitHub Issues, etc.).
+
+**Response:** `200 OK` — Array of task source objects.
+
+---
+
+#### `POST /api/task-sources`
+
+Create a new task source.
+
+**Request Body:**
+
+```json
+{
+  "name": "My Linear Workspace",
+  "plugin_id": "linear",
+  "config": { "team_id": "TEAM_123" },
+  "mcp_server_id": null
+}
+```
+
+| Field           | Type                   | Required | Description |
+|-----------------|------------------------|----------|-------------|
+| `name`          | `string`               | Yes      | Display name |
+| `plugin_id`     | `string`               | Yes      | Plugin identifier (e.g. `linear`, `hubspot`, `github-issues`) |
+| `config`        | `object`               | No       | Plugin-specific configuration |
+| `mcp_server_id` | `string \| null`       | No       | Associated MCP server ID |
+
+**Response:** `200 OK` — Created task source object.
+
+---
+
+#### `POST /api/task-sources/sync-all`
+
+Trigger a sync of all enabled task sources.
+
+**Response:** `200 OK` — Array of sync results, one per source.
+
+---
+
+#### `POST /api/task-sources/:id/sync`
+
+Sync a single task source by ID.
+
+**Response:** `200 OK`
+
+```json
+{ "source_id": "src_abc123", "imported": 5, "updated": 2, "errors": [] }
+```
+
+---
+
+### Tasks (additional endpoints)
+
+#### `POST /api/tasks`
+
+Create a new task.
+
+**Request Body:**
+
+```json
+{
+  "title": "Fix login bug",
+  "description": "Users cannot log in with SSO",
+  "type": "coding",
+  "priority": "high",
+  "labels": ["bug", "auth"],
+  "repos": ["peakflo/20x"]
+}
+```
+
+| Field         | Type       | Required | Description |
+|---------------|------------|----------|-------------|
+| `title`       | `string`   | Yes      | Task title |
+| `description` | `string`   | No       | Markdown description |
+| `type`        | `TaskType` | No       | Default: `general` |
+| `priority`    | `TaskPriority` | No   | Default: `medium` |
+| `labels`      | `string[]` | No       | Labels array |
+| `repos`       | `string[]` | No       | GitHub/GitLab repo full names |
+| `agent_id`    | `string`   | No       | Pre-assign an agent |
+
+**Response:** `200 OK` — Created task object.
+
+**Error:** `400` — `title` is required.
+
+---
+
+#### `POST /api/tasks/reorder-subtasks`
+
+Reorder subtasks under a parent task.
+
+**Request Body:**
+
+```json
+{
+  "parentId": "task_abc123",
+  "orderedIds": ["task_child3", "task_child1", "task_child2"]
+}
+```
+
+| Field        | Type       | Required | Description |
+|--------------|------------|----------|-------------|
+| `parentId`   | `string`   | Yes      | Parent task ID |
+| `orderedIds` | `string[]` | Yes      | Subtask IDs in desired order |
+
+**Response:** `200 OK` — `{ "success": true }`
 
 ---
 

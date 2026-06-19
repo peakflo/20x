@@ -163,13 +163,16 @@ The task-management MCP server provides these tools used during triage:
 
 ### `find_similar_tasks` Algorithm
 
-Uses SQL `LIKE` substring matching — not semantic search:
+Uses **SQLite FTS5 full-text search** with BM25 ranking — not semantic search and not simple LIKE matching:
 
-- `title_keywords` → `WHERE title LIKE '%keyword%'`
-- `description_keywords` → `WHERE description LIKE '%keyword%'`
-- `type` → exact match
-- `labels` → JSON substring match
-- `completed_only` → filters to completed tasks only (default: true)
+- Keywords are tokenised into individual words and matched using FTS5 `MATCH` expressions
+- `title_keywords` → `title:<word>*` (prefix match, higher BM25 weight)
+- `description_keywords` → `description:<word>*` (prefix match, lower BM25 weight)
+- `type` → exact column filter
+- `labels` → `labels:<word>` per label token
+- Results are ranked by `bm25(tasks_fts, 10.0, 5.0, 2.0, 1.0)` — title matches weighted 10×, description 5×
+- `completed_only` → filters to completed tasks first; falls back to all statuses if no results found
+- Falls back to recent tasks ordered by `created_at DESC` if no keywords are provided
 
 ## Key Files
 
