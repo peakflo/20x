@@ -1206,7 +1206,7 @@ export class AcpAdapter implements CodingAgentAdapter {
         const lastText = this.extractTextFromUpdateContent(lastUpdate.content)
         const nextText = this.extractTextFromUpdateContent(nextUpdate.content)
         if (typeof lastUpdate.content === 'object' && lastUpdate.content !== null) {
-          (lastUpdate.content as Record<string, unknown>).text = lastText + nextText
+          (lastUpdate.content as Record<string, unknown>).text = this.mergeStreamingText(lastText, nextText)
           consolidated = true
         }
       }
@@ -1497,6 +1497,38 @@ export class AcpAdapter implements CodingAgentAdapter {
     }
 
     return ''
+  }
+
+  private mergeStreamingText(currentText: string, incomingChunk: string): string {
+    if (!currentText) return incomingChunk
+    if (!incomingChunk) return currentText
+
+    if (incomingChunk.startsWith(currentText)) {
+      return incomingChunk
+    }
+
+    if (currentText.endsWith(incomingChunk)) {
+      return currentText
+    }
+
+    const MIN_OVERLAP_CHARS = 8
+
+    const maxSkippedPrefix = Math.min(32, currentText.length - MIN_OVERLAP_CHARS)
+    for (let skipped = 1; skipped <= maxSkippedPrefix; skipped++) {
+      const replayedText = currentText.slice(skipped)
+      if (incomingChunk.startsWith(replayedText)) {
+        return currentText.slice(0, skipped) + incomingChunk
+      }
+    }
+
+    const maxOverlap = Math.min(currentText.length, incomingChunk.length)
+    for (let length = maxOverlap; length > 0; length--) {
+      if (length >= MIN_OVERLAP_CHARS && currentText.endsWith(incomingChunk.slice(0, length))) {
+        return currentText + incomingChunk.slice(length)
+      }
+    }
+
+    return currentText + incomingChunk
   }
 
   private isUserUpdateType(sessionUpdate?: string | null): boolean {
@@ -1802,7 +1834,7 @@ export class AcpAdapter implements CodingAgentAdapter {
         if (chunk) {
           // Accumulate text across multiple chunks
           const currentText = partContentLengths.get(messageId) || ''
-          const newText = currentText + chunk
+          const newText = this.mergeStreamingText(currentText, chunk)
           partContentLengths.set(messageId, newText)
 
           // Return update part with accumulated text
@@ -1826,7 +1858,7 @@ export class AcpAdapter implements CodingAgentAdapter {
         if (chunk) {
           // Accumulate text across multiple chunks
           const currentText = partContentLengths.get(thinkingId) || ''
-          const newText = currentText + chunk
+          const newText = this.mergeStreamingText(currentText, chunk)
           partContentLengths.set(thinkingId, newText)
 
           // Return update part with accumulated text
@@ -1849,7 +1881,7 @@ export class AcpAdapter implements CodingAgentAdapter {
         if (chunk) {
           // Accumulate text across multiple chunks
           const currentText = partContentLengths.get(userId) || ''
-          const newText = currentText + chunk
+          const newText = this.mergeStreamingText(currentText, chunk)
           partContentLengths.set(userId, newText)
 
           // Return update part with accumulated text
