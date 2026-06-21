@@ -1819,6 +1819,61 @@ describe('AgentManager startAdapterPolling — IDLE grace period for follow-up m
     expect(entry.hasSeenWork).toBe(true)
   })
 
+  it('pollSingleSession does not inject a duplicate status error when the poll already emitted the same error text', async () => {
+    const mgr = buildManager()
+    const errorMessage = 'API Error: Server is temporarily limiting requests (not your usage limit) - Rate limited'
+    const adapter = {
+      pollMessages: vi.fn(async () => [
+        {
+          id: 'provider-error',
+          role: 'assistant',
+          type: MessagePartType.ERROR,
+          content: errorMessage,
+          receivedAt: Date.now(),
+        }
+      ] as any[]),
+      getStatus: vi.fn(async () => ({ type: SessionStatusType.ERROR, message: errorMessage })),
+    }
+
+    const session = {
+      agentId: 'agent-1',
+      taskId: 'task-1',
+      status: 'working',
+      createdAt: new Date(),
+      seenMessageIds: new Set<string>(),
+      seenPartIds: new Set<string>(),
+      partContentLengths: new Map<string, string>(),
+      adapter,
+      pollingStarted: true,
+    }
+    ;(mgr as any).sessions.set('session-1', session)
+
+    ;(mgr as any).startAdapterPolling(
+      'session-1',
+      adapter,
+      { agentId: 'agent-1', taskId: 'task-1', workspaceDir: '/tmp/ws' },
+      undefined,
+      session
+    )
+
+    const entry = (mgr as any).pollingEntries.get('session-1')
+    await (mgr as any).pollSingleSession(entry)
+
+    const sendSpy = vi.mocked((mgr as any).sendToRenderer)
+    const outputBatchCalls = sendSpy.mock.calls.filter(([channel]) => channel === 'agent:output-batch')
+    const outputCalls = sendSpy.mock.calls.filter(([channel]) => channel === 'agent:output')
+    const statusCalls = sendSpy.mock.calls.filter(([channel]) => channel === 'agent:status')
+
+    expect(outputBatchCalls).toHaveLength(1)
+    expect((outputBatchCalls[0][1] as any).messages).toEqual([
+      expect.objectContaining({ id: 'provider-error', content: errorMessage })
+    ])
+    expect(outputCalls).toHaveLength(0)
+    expect(statusCalls).toEqual([
+      ['agent:status', expect.objectContaining({ status: 'error' })]
+    ])
+  })
+
   it('pollSingleSession transitions to idle after BUSY then IDLE (work completed)', async () => {
     const mgr = buildManager()
     const adapter = buildAdapter()

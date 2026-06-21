@@ -654,6 +654,7 @@ export function AgentTranscriptPanel({
     if (last.partType === 'error' || last.partType === 'retry') return last
     return null
   }, [messages, status])
+  const showErrorBanner = !!lastErrorMessage && lastErrorMessage.partType !== 'error'
 
   const atBottomRef = useRef(true)
   const [showScrollToBottom, setShowScrollToBottom] = useState(false)
@@ -826,7 +827,7 @@ export function AgentTranscriptPanel({
       </div>
 
       {/* Error banner */}
-      {lastErrorMessage && (
+      {showErrorBanner && lastErrorMessage && (
         <div className="flex items-center gap-2 px-4 py-2.5 bg-red-500/10 border-b border-red-500/20 shrink-0">
           <AlertTriangle className="h-3.5 w-3.5 text-red-400 shrink-0" />
           <span className="text-xs text-red-300 truncate">{lastErrorMessage.content}</span>

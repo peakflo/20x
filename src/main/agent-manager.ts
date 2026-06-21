@@ -190,6 +190,7 @@ export class AgentManager extends EventEmitter {
   private static readonly MAX_SESSION_REDIRECTS = 200
   /** Maximum number of tillDone idle nudges per session before giving up. */
   private static readonly MAX_TILLDONE_NUDGES = 5
+  private static readonly ERROR_TEXT_DEDUPE_WINDOW_MS = 5_000
 
   /** Maximum time (ms) a session can stay BUSY with no new data before we abort it.
    *  Prevents sessions from being stuck indefinitely when a tool call hangs inside
@@ -226,6 +227,28 @@ export class AgentManager extends EventEmitter {
   constructor(db: DatabaseManager) {
     super()
     this.db = db
+  }
+
+  private normalizeErrorText(value?: string): string {
+    return (value || '').replace(/\s+/g, ' ').trim().toLowerCase()
+  }
+
+  private hasMatchingErrorMessage(
+    messages: Array<{ content: string; partType?: string; receivedAt?: number }>,
+    errorMessage?: string
+  ): boolean {
+    const normalizedError = this.normalizeErrorText(errorMessage)
+    if (!normalizedError) return false
+
+    const now = Date.now()
+    return messages.some((message) => {
+      if (message.partType !== 'error' && message.partType !== 'retry') return false
+      if (message.receivedAt && now - message.receivedAt > AgentManager.ERROR_TEXT_DEDUPE_WINDOW_MS) {
+        return false
+      }
+      const normalizedContent = this.normalizeErrorText(message.content)
+      return normalizedContent === normalizedError
+    })
   }
 
   /**
@@ -1790,7 +1813,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       // Collect all parts into a batch instead of sending individually.
       // This avoids flooding the renderer with N separate IPC messages
       // that each trigger a Zustand state update + React re-render.
-      const batchMessages: Array<{ id: string; role: string; content: string; partType?: string; tool?: unknown; update?: boolean; taskProgress?: unknown }> = []
+      const batchMessages: Array<{ id: string; role: string; content: string; partType?: string; tool?: unknown; update?: boolean; taskProgress?: unknown; receivedAt?: number }> = []
       for (const part of newParts) {
         // Skip ALL user/human messages from polling — we already show them in the UI
         // via sendToRenderer in startAdapterSession (initial) and doSendAdapterMessage (follow-ups).
@@ -1805,7 +1828,8 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
           partType: part.type,
           tool: part.tool,
           update: part.update,
-          taskProgress: part.taskProgress
+          taskProgress: part.taskProgress,
+          receivedAt: part.receivedAt
         })
       }
 
@@ -1899,18 +1923,21 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
           return
         }
 
-        // Regular error (e.g., rate limit)
-        this.sendToRenderer('agent:output', {
-          sessionId,
-          taskId: config.taskId,
-          type: 'message',
-          data: {
-            id: `error-${Date.now()}`,
-            role: 'system',
-            content: status.message || 'An unexpected error occurred. Check logs for details.',
-            partType: 'error'
-          }
-        })
+        // Regular error (e.g., rate limit). If the same poll already delivered
+        // the provider error as a transcript part, do not inject a second copy.
+        if (!this.hasMatchingErrorMessage(batchMessages, status.message)) {
+          this.sendToRenderer('agent:output', {
+            sessionId,
+            taskId: config.taskId,
+            type: 'message',
+            data: {
+              id: `error-${Date.now()}`,
+              role: 'system',
+              content: status.message || 'An unexpected error occurred. Check logs for details.',
+              partType: 'error'
+            }
+          })
+        }
 
         if (session) {
           session.status = 'error'

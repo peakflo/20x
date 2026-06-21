@@ -4,9 +4,14 @@ import { AgentTranscriptPanel } from './AgentTranscriptPanel'
 import { SessionStatus } from '@/stores/agent-store'
 
 vi.mock('@tanstack/react-virtual', () => ({
-  useVirtualizer: () => ({
-    getTotalSize: () => 0,
-    getVirtualItems: () => [],
+  useVirtualizer: ({ count }: { count: number }) => ({
+    getTotalSize: () => count * 120,
+    getVirtualItems: () => Array.from({ length: count }, (_, index) => ({
+      index,
+      key: index,
+      start: index * 120,
+      size: 120
+    })),
     scrollToIndex: vi.fn(),
     measureElement: vi.fn()
   })
@@ -79,5 +84,32 @@ describe('AgentTranscriptPanel drag and drop attachments', () => {
         }
       ]
     })
+  })
+})
+
+describe('AgentTranscriptPanel error display', () => {
+  afterEach(() => {
+    cleanup()
+    vi.clearAllMocks()
+  })
+
+  it('does not render a separate banner for an error already shown as the final message', () => {
+    render(
+      <AgentTranscriptPanel
+        messages={[
+          {
+            id: 'error-1',
+            role: 'system',
+            content: 'API Error: Server is temporarily limiting requests',
+            timestamp: new Date(),
+            partType: 'error'
+          }
+        ]}
+        status={SessionStatus.IDLE}
+        onStop={() => undefined}
+      />
+    )
+
+    expect(screen.getAllByText('API Error: Server is temporarily limiting requests')).toHaveLength(1)
   })
 })
