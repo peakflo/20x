@@ -75,6 +75,7 @@ describe('ClaudeCodeAdapter error result handling', () => {
 
       const errorPart = parts.find((p: any) => p.text?.includes('Rate limit'))
       expect(errorPart).toBeDefined()
+      expect(errorPart!.type).toBe(MessagePartType.ERROR)
       expect(errorPart!.text).toBe('Rate limit exceeded')
     })
 
@@ -93,6 +94,7 @@ describe('ClaudeCodeAdapter error result handling', () => {
 
       const errorPart = parts.find((p: any) => p.text?.includes('Connection timeout'))
       expect(errorPart).toBeDefined()
+      expect(errorPart!.type).toBe(MessagePartType.ERROR)
       expect(errorPart!.text).toBe('Connection timeout; Retry failed')
     })
 
@@ -111,7 +113,34 @@ describe('ClaudeCodeAdapter error result handling', () => {
 
       const errorPart = parts.find((p: any) => p.text?.includes('RATE_LIMIT'))
       expect(errorPart).toBeDefined()
+      expect(errorPart!.type).toBe(MessagePartType.ERROR)
       expect(errorPart!.text).toContain('Too many requests')
+    })
+
+    it('surfaces Claude API error assistant messages as error parts', async () => {
+      const errorMsg = {
+        type: 'assistant',
+        isApiErrorMessage: true,
+        message: {
+          id: 'api-error-msg',
+          role: 'assistant',
+          content: [{ type: 'text', text: 'Prompt is too long' }],
+        },
+        uuid: 'api-error-1',
+      }
+      const { adapter } = createAdapterWithSession('s1', [errorMsg])
+
+      const seenPartIds = new Set<string>()
+      const partContentLengths = new Map<string, string>()
+      const parts = await adapter.pollMessages('s1', new Set(), seenPartIds, partContentLengths, {} as any)
+
+      expect(parts).toEqual([
+        expect.objectContaining({
+          id: 'api-error-msg-text-0',
+          type: MessagePartType.ERROR,
+          text: 'Prompt is too long',
+        })
+      ])
     })
 
     it('surfaces fallback error text when no details available', async () => {

@@ -75,6 +75,7 @@ const stepStartTimes = new Map<string, number>()
 
 // Maximum dedup IDs per task before eviction (prevents memory leak during long sessions)
 const MAX_SEEN_IDS_PER_TASK = 10_000
+const ERROR_CONTENT_DEDUPE_WINDOW_MS = 5_000
 
 function getSeen(taskId: string): Set<string> {
   if (!seenIds.has(taskId)) seenIds.set(taskId, new Set())
@@ -95,6 +96,30 @@ function findBySessionId(sessions: Map<string, TaskSession>, sid: string): TaskS
     if (s.sessionId === sid) return s
   }
   return undefined
+}
+
+function normalizeMessageContent(content: string): string {
+  return content.replace(/\s+/g, ' ').trim().toLowerCase()
+}
+
+function isErrorPart(partType: string | undefined): boolean {
+  return partType === 'error' || partType === 'retry'
+}
+
+function hasRecentDuplicateError(
+  messages: AgentMessage[],
+  partType: string | undefined,
+  content: string,
+  now: number
+): boolean {
+  if (!content || !isErrorPart(partType)) return false
+
+  const normalized = normalizeMessageContent(content)
+  return messages.some((message) => {
+    if (now - message.timestamp.getTime() > ERROR_CONTENT_DEDUPE_WINDOW_MS) return false
+    if (!isErrorPart(message.partType)) return false
+    return normalizeMessageContent(message.content) === normalized
+  })
 }
 
 // ── Store ─────────────────────────────────────────────────────
@@ -288,6 +313,16 @@ export const useAgentStore = create<AgentState>((set, get) => {
 
     // Ignore empty placeholder parts without poisoning dedup for the real content.
     if (!content && !data.tool && !data.questions && !data.todos && !data.taskProgress) return
+    const partType = data.partType as string | undefined
+    if (hasRecentDuplicateError(
+      resolvedSession.messages,
+      partType,
+      content,
+      Date.now()
+    )) {
+      seen.add(msgId)
+      return
+    }
     seen.add(msgId)
 
     set({
@@ -295,7 +330,7 @@ export const useAgentStore = create<AgentState>((set, get) => {
         ...resolvedSession,
         messages: [
           ...resolvedSession.messages,
-          { id: msgId, role, content, timestamp: new Date(), partType: data.partType as string, tool: data.tool as AgentMessage['tool'], taskProgress: data.taskProgress as AgentMessage['taskProgress'] }
+          { id: msgId, role, content, timestamp: new Date(), partType, tool: data.tool as AgentMessage['tool'], taskProgress: data.taskProgress as AgentMessage['taskProgress'] }
         ]
       })
     })
@@ -403,6 +438,12 @@ export const useAgentStore = create<AgentState>((set, get) => {
 
         // Allow empty content for tool/question/task_progress messages
         if (!content && !msg.tool && !(msg as Record<string, unknown>).taskProgress) continue
+        const now = Date.now()
+        const partType = msg.partType
+        if (hasRecentDuplicateError(messages, partType, content, now)) {
+          seen.add(msgId)
+          continue
+        }
         seen.add(msgId)
 
         messages.push({
@@ -411,8 +452,8 @@ export const useAgentStore = create<AgentState>((set, get) => {
           content,
           timestamp: (msg as Record<string, unknown>).receivedAt
             ? new Date((msg as Record<string, unknown>).receivedAt as number)
-            : new Date(),
-          partType: msg.partType,
+            : new Date(now),
+          partType,
           tool: msg.tool as AgentMessage['tool'],
           taskProgress: (msg as Record<string, unknown>).taskProgress as AgentMessage['taskProgress']
         })

@@ -249,6 +249,46 @@ describe('useAgentStore', () => {
       expect(msgs[0].content).toBe('Hello')
     })
 
+    it('deduplicates identical explicit error messages across roles', async () => {
+      useAgentStore.getState().initSession('task-1', 'sess-1', 'agent-1')
+
+      const content = 'API Error: Server is temporarily limiting requests (not your usage limit) - Rate limited'
+      batchCallback!({
+        sessionId: 'sess-1',
+        taskId: 'task-1',
+        messages: [
+          { id: 'assistant-error-text', role: 'assistant', content, partType: 'error' },
+          { id: 'system-error-text', role: 'system', content, partType: 'error' }
+        ]
+      })
+      await flushBatches()
+
+      const msgs = useAgentStore.getState().sessions.get('task-1')!.messages
+      expect(msgs).toHaveLength(1)
+      expect(msgs[0].content).toBe(content)
+      expect(msgs[0].partType).toBe('error')
+    })
+
+    it('does not infer errors from plain text content', async () => {
+      useAgentStore.getState().initSession('task-1', 'sess-1', 'agent-1')
+
+      const content = 'API Error: Server is temporarily limiting requests (not your usage limit) - Rate limited'
+      batchCallback!({
+        sessionId: 'sess-1',
+        taskId: 'task-1',
+        messages: [
+          { id: 'assistant-text', role: 'assistant', content, partType: 'text' },
+          { id: 'system-text', role: 'system', content, partType: 'text' }
+        ]
+      })
+      await flushBatches()
+
+      const msgs = useAgentStore.getState().sessions.get('task-1')!.messages
+      expect(msgs).toHaveLength(2)
+      expect(msgs[0].partType).toBe('text')
+      expect(msgs[1].partType).toBe('text')
+    })
+
     it('handles update messages (tool completion)', async () => {
       useAgentStore.getState().initSession('task-1', 'sess-1', 'agent-1')
 

@@ -1056,6 +1056,23 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
           session.lastError = errorText
         }
 
+        if (msg.type === 'assistant' && (msg as Record<string, unknown>).isApiErrorMessage === true) {
+          const raw = msg as Record<string, unknown>
+          const messageField = raw.message as { content?: unknown[] } | undefined
+          const contentField = Array.isArray(messageField?.content)
+            ? messageField.content
+            : Array.isArray(raw.content) ? raw.content as unknown[] : []
+          const text = contentField
+            .map((part) => {
+              const partRecord = part as { type?: string; text?: string }
+              return partRecord.type === 'text' ? partRecord.text || '' : ''
+            })
+            .filter(Boolean)
+            .join('\n')
+          session.status = 'error'
+          session.lastError = text || 'Claude Code API error'
+        }
+
         // Buffer message (only if we didn't throw above)
         session.messageBuffer.push(message)
 
@@ -1210,6 +1227,7 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
       usage?: { total_tokens: number; tool_uses: number; duration_ms: number }
       task_type?: string
       prompt?: string
+      isApiErrorMessage?: boolean
     }
 
     // ── Skip messages from inside a subtask ──
@@ -1227,6 +1245,7 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
     if (msgWithProps.type === 'assistant' || msgWithProps.type === 'assistant_message') {
       // Content is nested inside message.content for Claude Code SDK format
       const content = msgWithProps.message?.content || (Array.isArray(msgWithProps.content) ? msgWithProps.content : [])
+      const partType = msgWithProps.isApiErrorMessage ? MessagePartType.ERROR : MessagePartType.TEXT
 
       // Use the stable API message ID (e.g. msg_01FG7...) for dedup, not the streaming UUID.
       // Claude Code sends multiple streaming chunks with different UUIDs but the same API message ID
@@ -1252,7 +1271,7 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
               partContentLengths.set(partId, String(text.length))
               parts.push({
                 id: partId,
-                type: MessagePartType.TEXT,
+                type: partType,
                 text,
                 update: true,
               })
@@ -1263,7 +1282,7 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
           partContentLengths.set(partId, String(text.length))
           parts.push({
             id: partId,
-            type: MessagePartType.TEXT,
+            type: partType,
             text,
           })
         } else if (blockWithProps.type === 'thinking') {
@@ -1539,7 +1558,7 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
           partContentLengths.set(partId, String(errorText.length))
           parts.push({
             id: partId,
-            type: MessagePartType.TEXT,
+            type: MessagePartType.ERROR,
             text: errorText,
             role: 'system',
           })
