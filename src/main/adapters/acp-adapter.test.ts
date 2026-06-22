@@ -2837,6 +2837,167 @@ describe('AcpAdapter - Codex Quota/Error Handling', () => {
       expect(finalParts).toHaveLength(0)
     })
 
+    it('should merge overlapping assistant chunks without repeating the shared boundary text', () => {
+      const sessionId = 'test-session'
+      const priv = adapterPrivate(adapter)
+      const session = createMockSession(sessionId)
+      priv.sessions.set(sessionId, session)
+
+      const seenPartIds = new Set<string>()
+      const partContentLengths = new Map<string, string>()
+
+      const chunk1 = {
+        method: 'session/update',
+        params: {
+          sessionId,
+          update: {
+            sessionUpdate: 'agent_message_chunk',
+            content: { type: 'text', text: 'The matching UI' }
+          }
+        }
+      }
+
+      const chunk2 = {
+        method: 'session/update',
+        params: {
+          sessionId,
+          update: {
+            sessionUpdate: 'agent_message_chunk',
+            content: { type: 'text', text: 'matching UI looks like the transcript' }
+          }
+        }
+      }
+
+      priv.convertAcpEventToMessageParts(chunk1, new Set(), seenPartIds, partContentLengths, session)
+      const parts2 = priv.convertAcpEventToMessageParts(chunk2, new Set(), seenPartIds, partContentLengths, session)
+
+      expect(parts2).toHaveLength(1)
+      expect(parts2[0].text).toBe('The matching UI looks like the transcript')
+      expect(parts2[0].text).not.toContain('matching UImatching UI')
+    })
+
+    it('should handle cumulative assistant chunks by keeping the latest full text', () => {
+      const sessionId = 'test-session'
+      const priv = adapterPrivate(adapter)
+      const session = createMockSession(sessionId)
+      priv.sessions.set(sessionId, session)
+
+      const seenPartIds = new Set<string>()
+      const partContentLengths = new Map<string, string>()
+
+      const chunk1 = {
+        method: 'session/update',
+        params: {
+          sessionId,
+          update: {
+            sessionUpdate: 'agent_message_chunk',
+            content: { type: 'text', text: 'Error: streaming' }
+          }
+        }
+      }
+
+      const chunk2 = {
+        method: 'session/update',
+        params: {
+          sessionId,
+          update: {
+            sessionUpdate: 'agent_message_chunk',
+            content: { type: 'text', text: 'Error: streaming failed after timeout' }
+          }
+        }
+      }
+
+      priv.convertAcpEventToMessageParts(chunk1, new Set(), seenPartIds, partContentLengths, session)
+      const parts2 = priv.convertAcpEventToMessageParts(chunk2, new Set(), seenPartIds, partContentLengths, session)
+
+      expect(parts2).toHaveLength(1)
+      expect(parts2[0].text).toBe('Error: streaming failed after timeout')
+    })
+
+    it('should merge replayed assistant chunks that restart after the first character', () => {
+      const sessionId = 'test-session'
+      const priv = adapterPrivate(adapter)
+      const session = createMockSession(sessionId)
+      priv.sessions.set(sessionId, session)
+
+      const seenPartIds = new Set<string>()
+      const partContentLengths = new Map<string, string>()
+
+      const chunk1 = {
+        method: 'session/update',
+        params: {
+          sessionId,
+          update: {
+            sessionUpdate: 'agent_message_chunk',
+            content: {
+              type: 'text',
+              text: "I'll use the pr-heartbeat-check workflow for this"
+            }
+          }
+        }
+      }
+
+      const chunk2 = {
+        method: 'session/update',
+        params: {
+          sessionId,
+          update: {
+            sessionUpdate: 'agent_message_chunk',
+            content: {
+              type: 'text',
+              text: "'ll use the pr-heartbeat-check workflow for this, scoped to PR #380"
+            }
+          }
+        }
+      }
+
+      priv.convertAcpEventToMessageParts(chunk1, new Set(), seenPartIds, partContentLengths, session)
+      const parts2 = priv.convertAcpEventToMessageParts(chunk2, new Set(), seenPartIds, partContentLengths, session)
+
+      expect(parts2).toHaveLength(1)
+      expect(parts2[0].text).toBe("I'll use the pr-heartbeat-check workflow for this, scoped to PR #380")
+      expect(parts2[0].text).not.toContain("workflow for this'll use")
+    })
+
+    it('should consolidate permanent history with overlap-aware chunk merging', async () => {
+      const sessionId = 'test-session'
+      const priv = adapterPrivate(adapter)
+      const session = createMockSession(sessionId)
+      priv.sessions.set(sessionId, session)
+
+      priv.handleRpcMessage(session, {
+        jsonrpc: '2.0',
+        method: 'session/update',
+        params: {
+          sessionId,
+          update: {
+            sessionUpdate: 'agent_message_chunk',
+            content: { type: 'text', text: 'some errors are shown' }
+          }
+        }
+      })
+
+      priv.handleRpcMessage(session, {
+        jsonrpc: '2.0',
+        method: 'session/update',
+        params: {
+          sessionId,
+          update: {
+            sessionUpdate: 'agent_message_chunk',
+            content: { type: 'text', text: 'errors are shown 3 times' }
+          }
+        }
+      })
+
+      expect(session.permanentMessages).toHaveLength(1)
+
+      const messages = await adapter.getAllMessages(sessionId, {} as never)
+      const text = messages.flatMap((message) => message.parts).map((part) => part.text).join('')
+
+      expect(text).toBe('some errors are shown 3 times')
+      expect(text).not.toContain('errors are shownerrors are shown')
+    })
+
     it('should update existing entry when agent_message has more complete text than chunks', () => {
       const sessionId = 'test-session'
       const priv = adapterPrivate(adapter)
