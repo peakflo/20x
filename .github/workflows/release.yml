@@ -146,7 +146,10 @@ jobs:
           path: dist/latest-mac-${{ matrix.arch }}.yml
 
   build-windows:
-    runs-on: windows-latest
+    # Pinned to windows-2022: windows-latest ships Visual Studio 18 (VS 2026),
+    # which the bundled node-gyp 11.5.0 can't detect, breaking the from-source
+    # rebuild of better-sqlite3. windows-2022 has VS 2022 + the C++ workload.
+    runs-on: windows-2022
     permissions:
       contents: write
 
