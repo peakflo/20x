@@ -953,6 +953,11 @@ export class AgentManager extends EventEmitter {
       }
     }
 
+    // Add Entity-KB Linkage section (only when agent has both graph_* and datastore_* tools)
+    if (agentId) {
+      md += this.buildEntityKbLinkageSection(agentId)
+    }
+
     // Add secrets section — name and description only, never the value
     if (agentId) {
       const agent2 = this.db.getAgent(agentId)
@@ -1062,6 +1067,11 @@ export class AgentManager extends EventEmitter {
 
         md += `---\n\n`
       }
+    }
+
+    // Add Entity-KB Linkage section (only when agent has both graph_* and datastore_* tools)
+    if (agentId) {
+      md += this.buildEntityKbLinkageSection(agentId)
     }
 
     // Add secrets section — name and description only, never the value
@@ -1384,6 +1394,12 @@ export class AgentManager extends EventEmitter {
         // Append output field instructions
         if (currentTask?.output_fields && Array.isArray(currentTask.output_fields) && currentTask.output_fields.length > 0) {
           promptText += this.buildOutputFieldInstructions(currentTask.output_fields)
+        }
+
+        // Append entity-KB linkage instructions when the task involves entities
+        // and the agent has access to both graph_* and datastore_* tools
+        if (currentTask) {
+          promptText += this.buildEntityKbLinkageInstructions(currentTask, agentId)
         }
 
         // Copy attachments and build references
@@ -3908,6 +3924,137 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     return lines.join('\n')
   }
 
+  // ── Entity-KB Linkage Awareness ──────────────────────────────
+
+  /**
+   * Checks whether an agent has access to Business Context tools (graph_* and
+   * datastore_*) via any of its MCP servers. Returns an object describing which
+   * tool families are available so callers can generate targeted documentation.
+   */
+  private getBusinessContextToolAccess(agentId: string): {
+    hasGraphTools: boolean
+    hasDatastoreTools: boolean
+    hasLinkTool: boolean
+    graphToolNames: string[]
+    datastoreToolNames: string[]
+  } {
+    const agent = this.db.getAgent(agentId)
+    const mcpEntries = agent?.config?.mcp_servers || []
+
+    const graphToolNames: string[] = []
+    const datastoreToolNames: string[] = []
+
+    for (const entry of mcpEntries) {
+      const serverId = typeof entry === 'string' ? entry : (entry as AgentMcpServerEntry).serverId
+      const enabledTools = typeof entry === 'string' ? undefined : (entry as AgentMcpServerEntry).enabledTools
+      const mcpServer = this.db.getMcpServer(serverId)
+      if (!mcpServer?.tools) continue
+
+      const tools = enabledTools
+        ? mcpServer.tools.filter(t => enabledTools.includes(t.name))
+        : mcpServer.tools
+
+      for (const tool of tools) {
+        if (tool.name.startsWith('graph_')) graphToolNames.push(tool.name)
+        if (tool.name.startsWith('datastore_')) datastoreToolNames.push(tool.name)
+      }
+    }
+
+    return {
+      hasGraphTools: graphToolNames.length > 0,
+      hasDatastoreTools: datastoreToolNames.length > 0,
+      hasLinkTool: graphToolNames.includes('graph_link_datastore'),
+      graphToolNames: [...new Set(graphToolNames)],
+      datastoreToolNames: [...new Set(datastoreToolNames)]
+    }
+  }
+
+  /**
+   * Generates a documentation section about the Entity-KB linkage workflow
+   * for inclusion in CLAUDE.md or AGENTS.md. Only returns content when the
+   * agent actually has access to both graph_* and datastore_* tools.
+   */
+  private buildEntityKbLinkageSection(agentId: string): string {
+    const access = this.getBusinessContextToolAccess(agentId)
+    if (!access.hasGraphTools || !access.hasDatastoreTools) return ''
+
+    let section = `## Business Context: Entity–Datastore Linkage\n\n`
+    section += `This agent has access to **Graph** tools (\`graph_*\`) and **Datastore** tools (\`datastore_*\`) `
+    section += `that work together to provide context-aware entity generation.\n\n`
+
+    section += `### How it works\n\n`
+    section += `- **Datastores** hold knowledge base content (documents, chunks) that provide domain context.\n`
+    section += `- **Graph** tools manage entities, relationships, and their metadata.\n`
+
+    if (access.hasLinkTool) {
+      section += `- **\`graph_link_datastore\`** creates links between graph objects (entities, relationships, entity types) and datastore assets (datastores, files, chunks).\n`
+      section += `- Links record which datastore sources informed a generated entity (provenance).\n`
+    }
+
+    section += `\n### Entity generation workflow\n\n`
+    section += `When generating or enriching entities, follow this protocol:\n\n`
+    section += `1. **Discover** — Use \`datastore_list\` to find relevant datastores in the workspace.\n`
+    section += `2. **Query** — Use \`datastore_query\` with semantic search to find content relevant to the entity being generated. Note the datastore ID, file ID, and chunk ID from the results.\n`
+    section += `3. **Generate** — Create or update the entity using the retrieved context.\n`
+
+    if (access.hasLinkTool) {
+      section += `4. **Link** — Call \`graph_link_datastore\` to connect the generated entity to each datastore source that informed it:\n`
+      section += `   - \`subject_type\`: "entity" | "relationship" | "entity_type"\n`
+      section += `   - \`subject_id\`: the ID of the generated graph object\n`
+      section += `   - \`asset_type\`: "datastore" | "file" | "chunk" (use the most specific level available)\n`
+      section += `   - \`asset_id\`: the datastore/file/chunk ID from step 2\n`
+      section += `   - \`link_role\`: "source" (generation source), "evidence" (relationship support), or "reference" (general)\n`
+      section += `   - \`confidence\`: 0.0–1.0 reflecting retrieval relevance\n`
+      section += `   - \`reason\`: brief human-readable explanation of why this source is linked\n`
+    }
+
+    section += `\n### Important rules\n\n`
+    section += `- **Never invent IDs.** Datastore, file, and chunk IDs must come from tool results (\`datastore_list\`, \`datastore_query\`, \`datastore_get_files\`, \`datastore_get_chunks\`). Do not fabricate or guess them.\n`
+    section += `- **Tenant isolation is automatic.** The server enforces tenant scoping — do not pass tenant/company IDs in tool arguments.\n`
+    section += `- **Link roles matter.** Use "source" when the datastore content directly informed entity generation. Use "evidence" when it supports a relationship claim. Use "reference" only for general background material.\n`
+    section += `- **Be specific.** Prefer linking to a chunk or file over linking to an entire datastore when the source is a specific document section.\n`
+
+    section += `\n---\n\n`
+
+    return section
+  }
+
+  /**
+   * Returns entity-KB linkage instructions to append to the initial prompt
+   * when the task involves entity generation and the agent has access to
+   * Business Context tools. Returns empty string if not applicable.
+   */
+  private buildEntityKbLinkageInstructions(task: TaskRecord, agentId: string): string {
+    const access = this.getBusinessContextToolAccess(agentId)
+
+    // Only inject instructions when the agent has both graph and datastore tools
+    if (!access.hasGraphTools || !access.hasDatastoreTools) return ''
+
+    // Detect whether this task involves entities/graph/knowledge base work
+    const entityKeywords = [
+      'entity', 'entities', 'graph', 'knowledge base', 'datastore',
+      'business context', 'relationship', 'entity type', 'knowledge graph',
+      'entity graph', 'linked datastore', 'kb linkage'
+    ]
+    const taskText = `${task.title} ${task.description || ''} ${(task.labels || []).join(' ')}`.toLowerCase()
+    const isEntityRelated = entityKeywords.some(kw => taskText.includes(kw))
+
+    if (!isEntityRelated) return ''
+
+    let instructions = `\n\n## Entity–Datastore Linkage Protocol\n\n`
+    instructions += `This task involves graph entities. When you create or modify entities/relationships, follow the Business Context linkage protocol:\n\n`
+    instructions += `1. **Before generating**: Query relevant datastores using \`datastore_list\` and \`datastore_query\` to gather context. Record the IDs (datastore, file, chunk) of every source you use.\n`
+    instructions += `2. **After generating**: For each entity or relationship you create/modify, call \`graph_link_datastore\` to link it to the datastore sources that informed the generation.\n`
+    instructions += `   - Use \`link_role: "source"\` for content that directly informed the entity.\n`
+    instructions += `   - Use \`link_role: "evidence"\` for content that supports a relationship.\n`
+    instructions += `   - Include a brief \`reason\` explaining the link (e.g., "AP aging analysis from financial health framework").\n`
+    instructions += `   - Set \`confidence\` based on how relevant the source was (0.0–1.0).\n`
+    instructions += `3. **Return linked results**: When reporting generated entities, include their linked datastores for transparency.\n\n`
+    instructions += `**Important**: Only use real IDs returned by datastore tools. Never fabricate datastore, file, or chunk IDs.\n`
+
+    return instructions
+  }
+
   private resolveDefaultAgentId(): string | null {
     const agents = this.db.getAgents()
     const defaultAgent = agents.find((agent) => agent.is_default)
@@ -3968,7 +4115,8 @@ Important:
 - If the task already has output_fields defined (from an external source), preserve them and only add additional fields if needed. Do not remove existing output fields.
 - When creating subtasks, the parent task's agent will coordinate — subtask agents handle individual pieces.
 - Subtask agents can see the parent task, all sibling subtasks' status/resolution/outputs, and sibling transcripts for coordination.
-- NEVER use external integration MCP tools (like pf-workflo-integrations) for local task updates — always use task-management tools.`
+- NEVER use external integration MCP tools (like pf-workflo-integrations) for local task updates — always use task-management tools.
+- If the task involves creating, generating, or enriching entities, relationships, entity types, or knowledge graphs, add the label "entity-graph" so the executing agent receives entity–datastore linkage instructions automatically.`
   }
 
   /**

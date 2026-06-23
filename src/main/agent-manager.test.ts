@@ -2284,3 +2284,331 @@ describe('AgentManager tillDone nudge on idle', () => {
     expect(sendSpy).not.toHaveBeenCalled()
   })
 })
+
+// ── Entity-KB Linkage Awareness Tests ──────────────────────────────
+
+describe('Entity-KB Linkage Awareness', () => {
+  function createMockDbWithMcpTools(tools: Array<{ name: string; description: string }>, agentConfig: Record<string, unknown> = {}) {
+    return {
+      getTask: vi.fn(() => ({
+        id: 'task-1',
+        title: 'Test Task',
+        repos: ['org/repo'],
+        skill_ids: ['skill-1'],
+        labels: [],
+      })),
+      getTasks: vi.fn(() => []),
+      getSubtasks: vi.fn(() => []),
+      getAgent: vi.fn(() => ({
+        id: 'agent-1',
+        name: 'Test Agent',
+        config: {
+          mcp_servers: ['mcp-server-1'],
+          ...agentConfig,
+        },
+      })),
+      getAgents: vi.fn(() => ([{
+        id: 'agent-1',
+        name: 'Test Agent',
+        is_default: true,
+        config: { mcp_servers: ['mcp-server-1'], ...agentConfig },
+      }])),
+      getSkills: vi.fn(() => [makeSkillRecord()]),
+      getSkillsByIds: vi.fn(() => [makeSkillRecord()]),
+      getSkillByName: vi.fn(() => null),
+      getMcpServer: vi.fn(() => ({
+        id: 'mcp-server-1',
+        name: 'Workflo MCP Dev Server',
+        type: 'remote',
+        url: 'https://example.com/api/mcp/dev/mcp',
+        tools,
+        headers: {},
+        environment: {},
+        source: 'enterprise',
+      })),
+      getMcpServers: vi.fn(() => []),
+      getSecretsByIds: vi.fn(() => []),
+      getSecretsWithValues: vi.fn(() => []),
+      getSetting: vi.fn(() => null),
+      getWorkspaceDir: vi.fn(() => '/tmp/test-workspace'),
+      updateTask: vi.fn(),
+    } as unknown as ConstructorParameters<typeof AgentManager>[0]
+  }
+
+  describe('getBusinessContextToolAccess', () => {
+    it('returns hasGraphTools=true when agent has graph_* tools', () => {
+      const db = createMockDbWithMcpTools([
+        { name: 'graph_entities', description: 'List entities' },
+        { name: 'graph_resolve', description: 'Resolve entity' },
+      ])
+      const mgr = new AgentManager(db)
+      const access = (mgr as any).getBusinessContextToolAccess('agent-1')
+
+      expect(access.hasGraphTools).toBe(true)
+      expect(access.hasDatastoreTools).toBe(false)
+      expect(access.hasLinkTool).toBe(false)
+      expect(access.graphToolNames).toEqual(['graph_entities', 'graph_resolve'])
+    })
+
+    it('returns hasDatastoreTools=true when agent has datastore_* tools', () => {
+      const db = createMockDbWithMcpTools([
+        { name: 'datastore_list', description: 'List datastores' },
+        { name: 'datastore_query', description: 'Query datastore' },
+      ])
+      const mgr = new AgentManager(db)
+      const access = (mgr as any).getBusinessContextToolAccess('agent-1')
+
+      expect(access.hasGraphTools).toBe(false)
+      expect(access.hasDatastoreTools).toBe(true)
+      expect(access.datastoreToolNames).toEqual(['datastore_list', 'datastore_query'])
+    })
+
+    it('detects graph_link_datastore tool specifically', () => {
+      const db = createMockDbWithMcpTools([
+        { name: 'graph_entities', description: 'List entities' },
+        { name: 'graph_link_datastore', description: 'Link entity to datastore' },
+        { name: 'datastore_list', description: 'List datastores' },
+      ])
+      const mgr = new AgentManager(db)
+      const access = (mgr as any).getBusinessContextToolAccess('agent-1')
+
+      expect(access.hasGraphTools).toBe(true)
+      expect(access.hasDatastoreTools).toBe(true)
+      expect(access.hasLinkTool).toBe(true)
+    })
+
+    it('returns false for all when agent has no graph/datastore tools', () => {
+      const db = createMockDbWithMcpTools([
+        { name: 'workflow_list', description: 'List workflows' },
+        { name: 'task_list', description: 'List tasks' },
+      ])
+      const mgr = new AgentManager(db)
+      const access = (mgr as any).getBusinessContextToolAccess('agent-1')
+
+      expect(access.hasGraphTools).toBe(false)
+      expect(access.hasDatastoreTools).toBe(false)
+      expect(access.hasLinkTool).toBe(false)
+    })
+
+    it('respects enabledTools filter on MCP server entries', () => {
+      const db = createMockDbWithMcpTools([
+        { name: 'graph_entities', description: 'List entities' },
+        { name: 'graph_link_datastore', description: 'Link entity to datastore' },
+        { name: 'datastore_list', description: 'List datastores' },
+        { name: 'datastore_query', description: 'Query datastore' },
+      ])
+      // Override getAgent to use enabledTools filter
+      ;(db.getAgent as any).mockReturnValue({
+        id: 'agent-1',
+        name: 'Test Agent',
+        config: {
+          mcp_servers: [{ serverId: 'mcp-server-1', enabledTools: ['graph_entities', 'datastore_list'] }],
+        },
+      })
+      const mgr = new AgentManager(db)
+      const access = (mgr as any).getBusinessContextToolAccess('agent-1')
+
+      expect(access.hasGraphTools).toBe(true)
+      expect(access.hasDatastoreTools).toBe(true)
+      expect(access.hasLinkTool).toBe(false) // graph_link_datastore filtered out
+      expect(access.graphToolNames).toEqual(['graph_entities'])
+      expect(access.datastoreToolNames).toEqual(['datastore_list'])
+    })
+  })
+
+  describe('buildEntityKbLinkageSection', () => {
+    it('returns empty string when agent lacks graph tools', () => {
+      const db = createMockDbWithMcpTools([
+        { name: 'datastore_list', description: 'List datastores' },
+      ])
+      const mgr = new AgentManager(db)
+      const section = (mgr as any).buildEntityKbLinkageSection('agent-1')
+
+      expect(section).toBe('')
+    })
+
+    it('returns empty string when agent lacks datastore tools', () => {
+      const db = createMockDbWithMcpTools([
+        { name: 'graph_entities', description: 'List entities' },
+      ])
+      const mgr = new AgentManager(db)
+      const section = (mgr as any).buildEntityKbLinkageSection('agent-1')
+
+      expect(section).toBe('')
+    })
+
+    it('returns documentation section when agent has both graph and datastore tools', () => {
+      const db = createMockDbWithMcpTools([
+        { name: 'graph_entities', description: 'List entities' },
+        { name: 'graph_link_datastore', description: 'Link entity to datastore' },
+        { name: 'datastore_list', description: 'List datastores' },
+        { name: 'datastore_query', description: 'Query datastore' },
+      ])
+      const mgr = new AgentManager(db)
+      const section = (mgr as any).buildEntityKbLinkageSection('agent-1')
+
+      expect(section).toContain('Business Context: Entity–Datastore Linkage')
+      expect(section).toContain('Entity generation workflow')
+      expect(section).toContain('Discover')
+      expect(section).toContain('Query')
+      expect(section).toContain('Generate')
+      expect(section).toContain('Link')
+      expect(section).toContain('graph_link_datastore')
+      expect(section).toContain('Never invent IDs')
+      expect(section).toContain('Tenant isolation is automatic')
+    })
+
+    it('omits link step when graph_link_datastore tool is not available', () => {
+      const db = createMockDbWithMcpTools([
+        { name: 'graph_entities', description: 'List entities' },
+        { name: 'graph_resolve', description: 'Resolve entity' },
+        { name: 'datastore_list', description: 'List datastores' },
+      ])
+      const mgr = new AgentManager(db)
+      const section = (mgr as any).buildEntityKbLinkageSection('agent-1')
+
+      expect(section).toContain('Business Context: Entity–Datastore Linkage')
+      expect(section).toContain('Discover')
+      expect(section).toContain('Query')
+      expect(section).toContain('Generate')
+      expect(section).not.toContain('graph_link_datastore')
+      expect(section).not.toContain('link_role')
+    })
+  })
+
+  describe('buildEntityKbLinkageInstructions', () => {
+    it('returns empty string when agent lacks Business Context tools', () => {
+      const db = createMockDbWithMcpTools([
+        { name: 'workflow_list', description: 'List workflows' },
+      ])
+      const mgr = new AgentManager(db)
+      const task = {
+        id: 'task-1',
+        title: 'Generate entity types for AP',
+        description: 'Create entity types from knowledge base',
+        labels: ['entity-graph'],
+      }
+      const instructions = (mgr as any).buildEntityKbLinkageInstructions(task, 'agent-1')
+
+      expect(instructions).toBe('')
+    })
+
+    it('returns empty string when task is not entity-related', () => {
+      const db = createMockDbWithMcpTools([
+        { name: 'graph_entities', description: 'List entities' },
+        { name: 'graph_link_datastore', description: 'Link entity to datastore' },
+        { name: 'datastore_list', description: 'List datastores' },
+        { name: 'datastore_query', description: 'Query datastore' },
+      ])
+      const mgr = new AgentManager(db)
+      const task = {
+        id: 'task-1',
+        title: 'Fix login bug',
+        description: 'The login page shows an error',
+        labels: ['bugfix'],
+      }
+      const instructions = (mgr as any).buildEntityKbLinkageInstructions(task, 'agent-1')
+
+      expect(instructions).toBe('')
+    })
+
+    it('returns instructions when task title mentions entities', () => {
+      const db = createMockDbWithMcpTools([
+        { name: 'graph_entities', description: 'List entities' },
+        { name: 'graph_link_datastore', description: 'Link entity to datastore' },
+        { name: 'datastore_list', description: 'List datastores' },
+        { name: 'datastore_query', description: 'Query datastore' },
+      ])
+      const mgr = new AgentManager(db)
+      const task = {
+        id: 'task-1',
+        title: 'Generate entity types for AP workflow',
+        description: 'Create new entity types based on AP processes',
+        labels: [],
+      }
+      const instructions = (mgr as any).buildEntityKbLinkageInstructions(task, 'agent-1')
+
+      expect(instructions).toContain('Entity–Datastore Linkage Protocol')
+      expect(instructions).toContain('Before generating')
+      expect(instructions).toContain('After generating')
+      expect(instructions).toContain('graph_link_datastore')
+      expect(instructions).toContain('Never fabricate')
+    })
+
+    it('detects entity-related tasks by labels', () => {
+      const db = createMockDbWithMcpTools([
+        { name: 'graph_entities', description: 'List entities' },
+        { name: 'graph_link_datastore', description: 'Link entity to datastore' },
+        { name: 'datastore_list', description: 'List datastores' },
+      ])
+      const mgr = new AgentManager(db)
+      const task = {
+        id: 'task-1',
+        title: 'Update AP configuration',
+        description: 'Modify the AP setup',
+        labels: ['entity-graph', 'ap'],
+      }
+      const instructions = (mgr as any).buildEntityKbLinkageInstructions(task, 'agent-1')
+
+      expect(instructions).toContain('Entity–Datastore Linkage Protocol')
+    })
+
+    it('detects entity-related tasks by description keywords', () => {
+      const db = createMockDbWithMcpTools([
+        { name: 'graph_entities', description: 'List entities' },
+        { name: 'graph_link_datastore', description: 'Link entity to datastore' },
+        { name: 'datastore_list', description: 'List datastores' },
+      ])
+      const mgr = new AgentManager(db)
+      const task = {
+        id: 'task-1',
+        title: 'Build financial framework',
+        description: 'Query the knowledge base and create business context entries',
+        labels: [],
+      }
+      const instructions = (mgr as any).buildEntityKbLinkageInstructions(task, 'agent-1')
+
+      expect(instructions).toContain('Entity–Datastore Linkage Protocol')
+    })
+  })
+
+  describe('CLAUDE.md and AGENTS.md include Entity-KB section', () => {
+    it('includes Entity-KB linkage section in CLAUDE.md when tools are available', async () => {
+      const db = createMockDbWithMcpTools([
+        { name: 'graph_entities', description: 'List entities' },
+        { name: 'graph_link_datastore', description: 'Link entity to datastore' },
+        { name: 'datastore_list', description: 'List datastores' },
+        { name: 'datastore_query', description: 'Query datastore' },
+      ], { coding_agent: 'claude-code' })
+      const mgr = new AgentManager(db)
+      const md = (mgr as any).generateClaudeMd([makeSkillRecord()], ['org/repo'], '/tmp/workspace', 'agent-1')
+
+      expect(md).toContain('Business Context: Entity–Datastore Linkage')
+      expect(md).toContain('Entity generation workflow')
+    })
+
+    it('excludes Entity-KB linkage section in CLAUDE.md when tools are not available', async () => {
+      const db = createMockDbWithMcpTools([
+        { name: 'workflow_list', description: 'List workflows' },
+      ], { coding_agent: 'claude-code' })
+      const mgr = new AgentManager(db)
+      const md = (mgr as any).generateClaudeMd([makeSkillRecord()], ['org/repo'], '/tmp/workspace', 'agent-1')
+
+      expect(md).not.toContain('Business Context: Entity–Datastore Linkage')
+    })
+
+    it('includes Entity-KB linkage section in AGENTS.md when tools are available', async () => {
+      const db = createMockDbWithMcpTools([
+        { name: 'graph_entities', description: 'List entities' },
+        { name: 'graph_link_datastore', description: 'Link entity to datastore' },
+        { name: 'datastore_list', description: 'List datastores' },
+        { name: 'datastore_query', description: 'Query datastore' },
+      ], { coding_agent: 'opencode' })
+      const mgr = new AgentManager(db)
+      const md = (mgr as any).generateAgentsMd([makeSkillRecord()], ['org/repo'], '/tmp/workspace', 'agent-1')
+
+      expect(md).toContain('Business Context: Entity–Datastore Linkage')
+      expect(md).toContain('Entity generation workflow')
+    })
+  })
+})
