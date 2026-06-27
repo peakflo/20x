@@ -469,6 +469,7 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
             taskLayout={taskLayout}
             browserSessionId={panel.browserSessionId}
             streamPort={panel.streamPort}
+            zoom={zoom}
           />
         </div>
       )}
@@ -567,9 +568,10 @@ interface PanelContentProps {
   taskLayout?: TaskWorkspaceLayout
   browserSessionId?: string
   streamPort?: number
+  zoom: number
 }
 
-const MemoizedPanelContent = memo(function PanelContent({ type, id, refId, url, title, taskLayout, browserSessionId, streamPort }: PanelContentProps) {
+const MemoizedPanelContent = memo(function PanelContent({ type, id, refId, url, title, taskLayout, browserSessionId, streamPort, zoom }: PanelContentProps) {
   if (type === 'task' && refId) {
     return <TaskPanelContent panelId={id} taskId={refId} panelLayout={taskLayout} />
   }
@@ -583,7 +585,7 @@ const MemoizedPanelContent = memo(function PanelContent({ type, id, refId, url, 
     return <WebPagePanelContent panelId={id} url={url} title={title} />
   }
   if (type === 'terminal') {
-    return <TerminalPanelContent terminalId={id} cwd={url} />
+    return <TerminalPanelContent terminalId={id} cwd={url} canvasZoom={zoom} />
   }
   if (type === 'browser') {
     return <BrowserPanelContent panelId={id} url={url} sessionName={browserSessionId} streamPort={streamPort} />

@@ -14,8 +14,16 @@ vi.mock('@xterm/xterm', () => ({
     cols = 80
     rows = 24
     textarea = document.createElement('textarea')
+    element?: HTMLElement
     loadAddon() {}
-    open() {}
+    open(container: HTMLElement) {
+      this.element = document.createElement('div')
+      this.element.className = 'xterm'
+      const screen = document.createElement('div')
+      screen.className = 'xterm-screen'
+      this.element.appendChild(screen)
+      container.appendChild(this.element)
+    }
     focus() {}
     clear() {}
     write() {}
@@ -175,6 +183,55 @@ describe('TerminalPanelContent', () => {
     secondCwd.resolve({ cwd: '/tmp/two' })
     await waitFor(() => {
       expect(terminalKill).toHaveBeenCalledWith('panel-1', 222)
+    })
+  })
+
+  it('keeps terminal rendering unchanged and adjusts xterm mouse coordinates inside the zoomed canvas', async () => {
+    terminalCreate.mockResolvedValue({ pid: 333 })
+    terminalGetCwd.mockResolvedValue({ cwd: null })
+
+    const { container } = render(
+      <TerminalPanelContent terminalId="panel-1" cwd="/tmp" canvasZoom={0.5} />
+    )
+
+    const terminal = container.querySelector('.xterm-container') as HTMLElement
+    const xterm = container.querySelector('.xterm') as HTMLElement
+    const screen = container.querySelector('.xterm-screen') as HTMLElement
+
+    expect(terminal.style.width).toBe('')
+    expect(terminal.style.height).toBe('')
+    expect(terminal.style.transform).toBe('')
+
+    vi.spyOn(screen, 'getBoundingClientRect').mockReturnValue({
+      width: 320,
+      height: 240,
+      top: 20,
+      left: 10,
+      right: 330,
+      bottom: 260,
+      x: 10,
+      y: 20,
+      toJSON: () => ({}),
+    })
+    const mouseDownHandler = vi.fn((event: MouseEvent) => {
+      expect(event.clientX).toBe(70)
+      expect(event.clientY).toBe(120)
+    })
+    xterm.addEventListener('mousedown', mouseDownHandler)
+
+    screen.dispatchEvent(new MouseEvent('mousedown', {
+      bubbles: true,
+      cancelable: true,
+      clientX: 40,
+      clientY: 70,
+      button: 0,
+      buttons: 1,
+    }))
+
+    expect(mouseDownHandler).toHaveBeenCalledTimes(1)
+
+    await waitFor(() => {
+      expect(terminalCreate).toHaveBeenCalled()
     })
   })
 })
