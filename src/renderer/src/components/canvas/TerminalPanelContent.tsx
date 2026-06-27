@@ -10,6 +10,8 @@ interface TerminalPanelContentProps {
   terminalId: string
   /** Initial working directory — restored from persisted panel state */
   cwd?: string
+  /** Current canvas zoom. xterm pointer math must compensate for canvas transforms. */
+  canvasZoom?: number
 }
 
 /**
@@ -25,7 +27,7 @@ interface TerminalPanelContentProps {
  *      sees truly-zero values even during layout shifts.
  *   3. Every fit() call is wrapped in try-catch.
  */
-export function TerminalPanelContent({ terminalId, cwd }: TerminalPanelContentProps) {
+export function TerminalPanelContent({ terminalId, cwd, canvasZoom = 1 }: TerminalPanelContentProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const xtermRef = useRef<XTerm | null>(null)
   const fitAddonRef = useRef<FitAddon | null>(null)
@@ -39,6 +41,8 @@ export function TerminalPanelContent({ terminalId, cwd }: TerminalPanelContentPr
 
   // Store cwd in a ref — only used at init time, never triggers re-init
   const cwdRef = useRef(cwd)
+  const adjustedMouseEventsRef = useRef<WeakSet<MouseEvent>>(new WeakSet())
+  const activeMouseAdjustmentRef = useRef<{ left: number; top: number; zoom: number } | null>(null)
 
   const initTerminal = useCallback(async () => {
     console.log(`[Terminal:${terminalId}] initTerminal called`, {
@@ -288,6 +292,96 @@ export function TerminalPanelContent({ terminalId, cwd }: TerminalPanelContentPr
     return () => clearInterval(interval)
   }, [isReady, terminalId])
 
+  const safeCanvasZoom = Number.isFinite(canvasZoom) && canvasZoom > 0 ? canvasZoom : 1
+
+  useEffect(() => {
+    const container = containerRef.current
+    if (!container || Math.abs(safeCanvasZoom - 1) < 0.001) return
+
+    const ownerDocument = container.ownerDocument
+
+    const getAnchor = () => {
+      const anchor =
+        container.querySelector<HTMLElement>('.xterm-screen') ??
+        xtermRef.current?.element ??
+        container
+      const rect = anchor.getBoundingClientRect()
+      return { left: rect.left, top: rect.top, zoom: safeCanvasZoom }
+    }
+
+    const cloneMouseEvent = (event: MouseEvent, anchor: { left: number; top: number; zoom: number }) => {
+      const clientX = anchor.left + (event.clientX - anchor.left) / anchor.zoom
+      const clientY = anchor.top + (event.clientY - anchor.top) / anchor.zoom
+      const cloned = new MouseEvent(event.type, {
+        bubbles: event.bubbles,
+        cancelable: event.cancelable,
+        composed: event.composed,
+        detail: event.detail,
+        screenX: event.screenX,
+        screenY: event.screenY,
+        clientX,
+        clientY,
+        ctrlKey: event.ctrlKey,
+        shiftKey: event.shiftKey,
+        altKey: event.altKey,
+        metaKey: event.metaKey,
+        button: event.button,
+        buttons: event.buttons,
+        relatedTarget: event.relatedTarget,
+      })
+      adjustedMouseEventsRef.current.add(cloned)
+      return cloned
+    }
+
+    const redispatchAdjustedEvent = (
+      event: MouseEvent,
+      target: EventTarget | null,
+      anchor: { left: number; top: number; zoom: number }
+    ) => {
+      if (!target) return
+      event.preventDefault()
+      event.stopImmediatePropagation()
+      target.dispatchEvent(cloneMouseEvent(event, anchor))
+    }
+
+    const handleMouseDownCapture = (event: MouseEvent) => {
+      if (adjustedMouseEventsRef.current.has(event) || event.button !== 0) return
+      const anchor = getAnchor()
+      activeMouseAdjustmentRef.current = anchor
+      redispatchAdjustedEvent(event, event.target, anchor)
+    }
+
+    const handleDocumentMouseCapture = (event: MouseEvent) => {
+      if (adjustedMouseEventsRef.current.has(event)) return
+      const anchor = activeMouseAdjustmentRef.current
+      if (!anchor) return
+      redispatchAdjustedEvent(event, event.target, anchor)
+      if (event.type === 'mouseup') {
+        activeMouseAdjustmentRef.current = null
+      }
+    }
+
+    container.addEventListener('mousedown', handleMouseDownCapture, true)
+    ownerDocument.addEventListener('mousemove', handleDocumentMouseCapture, true)
+    ownerDocument.addEventListener('mouseup', handleDocumentMouseCapture, true)
+
+    return () => {
+      container.removeEventListener('mousedown', handleMouseDownCapture, true)
+      ownerDocument.removeEventListener('mousemove', handleDocumentMouseCapture, true)
+      ownerDocument.removeEventListener('mouseup', handleDocumentMouseCapture, true)
+      activeMouseAdjustmentRef.current = null
+    }
+  }, [safeCanvasZoom])
+
+  // Focus the terminal when the container is clicked
+  const handleClick = useCallback(() => {
+    console.log(`[Terminal:${terminalId}] container clicked, focusing. hasXterm:`, !!xtermRef.current, 'textarea:', !!xtermRef.current?.textarea)
+    xtermRef.current?.focus()
+    setTimeout(() => {
+      console.log(`[Terminal:${terminalId}] after click-focus, activeElement:`, document.activeElement?.tagName, document.activeElement?.className)
+    }, 50)
+  }, [terminalId])
+
   if (error) {
     return (
       <div className="flex items-center justify-center h-full text-red-400/60 text-xs">
@@ -298,15 +392,6 @@ export function TerminalPanelContent({ terminalId, cwd }: TerminalPanelContentPr
       </div>
     )
   }
-
-  // Focus the terminal when the container is clicked
-  const handleClick = useCallback(() => {
-    console.log(`[Terminal:${terminalId}] container clicked, focusing. hasXterm:`, !!xtermRef.current, 'textarea:', !!xtermRef.current?.textarea)
-    xtermRef.current?.focus()
-    setTimeout(() => {
-      console.log(`[Terminal:${terminalId}] after click-focus, activeElement:`, document.activeElement?.tagName, document.activeElement?.className)
-    }, 50)
-  }, [terminalId])
 
   return (
     <div
