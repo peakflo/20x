@@ -494,12 +494,12 @@ export const onWorkspaceCleanupProgress = (callback: (event: WorkspaceCleanupPro
 }
 
 export const enterpriseApi = {
-  signupInBrowser: (mode: 'register' | 'login' = 'register'): Promise<{
+  signupInBrowser: (mode: 'register' | 'login' = 'register', options?: { includeAiSubscription?: boolean }): Promise<{
     userId: string
     email: string
     companies: { id: string; name: string; isPrimary: boolean }[]
   }> => {
-    return window.electronAPI.enterprise.signupInBrowser(mode)
+    return window.electronAPI.enterprise.signupInBrowser(mode, options)
   },
 
   login: (email: string, password: string): Promise<{

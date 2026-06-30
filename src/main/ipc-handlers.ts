@@ -833,7 +833,7 @@ export function registerIpcHandlers(
 
   // Enterprise auth handlers
 
-  ipcMain.handle('enterprise:signupInBrowser', async (_, mode: 'register' | 'login') => {
+  ipcMain.handle('enterprise:signupInBrowser', async (_, mode: 'register' | 'login', options?: { includeAiSubscription?: boolean }) => {
     if (!enterpriseAuth) throw new Error('Enterprise auth not available')
 
     const { AuthCallbackServer } = await import('./oauth/auth-callback-server')
@@ -856,10 +856,14 @@ export function registerIpcHandlers(
       }
 
       const path = mode === 'register' ? '/register' : '/login'
-      const signupUrl = `${frontendOrigin}${path}?redirect_uri=${encodeURIComponent(redirectUri)}`
+      const signupUrl = new URL(`${frontendOrigin}${path}`)
+      signupUrl.searchParams.set('redirect_uri', redirectUri)
+      if (mode === 'register' && options?.includeAiSubscription) {
+        signupUrl.searchParams.set('include_ai_subscription', 'true')
+      }
 
       // Open the URL in the user's default browser
-      await shell.openExternal(signupUrl)
+      await shell.openExternal(signupUrl.toString())
 
       // Wait for the callback with tokens
       const tokens = await callbackServer.waitForCallback()

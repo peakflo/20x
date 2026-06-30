@@ -338,7 +338,7 @@ interface ElectronAPI {
     getInfo: () => Promise<{ url: string; port: number }>
   }
   enterprise: {
-    signupInBrowser: (mode: 'register' | 'login') => Promise<{
+    signupInBrowser: (mode: 'register' | 'login', options?: { includeAiSubscription?: boolean }) => Promise<{
       userId: string
       email: string
       companies: { id: string; name: string; isPrimary: boolean }[]
