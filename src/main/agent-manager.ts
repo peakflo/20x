@@ -5,7 +5,7 @@ import { existsSync, copyFileSync, mkdirSync, readFileSync, readdirSync, statSyn
 import { mkdir, writeFile } from 'fs/promises'
 import { Notification } from 'electron'
 import type { BrowserWindow } from 'electron'
-import type { DatabaseManager, AgentMcpServerEntry, McpServerSource, OutputFieldRecord, SecretRecord, SkillRecord, TaskRecord } from './database'
+import type { DatabaseManager, AgentMcpServerEntry, McpServerRecord, McpServerSource, OutputFieldRecord, SecretRecord, SkillRecord, TaskRecord } from './database'
 import { TaskStatus, SessionStatus, PluginActionId } from '../shared/constants'
 import type { WorktreeManager } from './worktree-manager'
 import type { GitHubManager } from './github-manager'
@@ -471,46 +471,7 @@ export class AgentManager extends EventEmitter {
           env
         }
       } else if (mcpServer.type === 'remote') {
-        // Inject OAuth Bearer token if the server has one
-        let finalHeaders = { ...mcpServer.headers }
-        if (this.oauthManager && mcpServer.oauth_metadata && 'resource_url' in mcpServer.oauth_metadata) {
-          const token = await this.oauthManager.getValidMcpServerToken(mcpServer.id)
-          if (token) {
-            finalHeaders = { ...finalHeaders, Authorization: `Bearer ${token}` }
-          }
-        }
-
-        // Inject enterprise JWT for Workflo MCP Dev Server — route through auth proxy
-        let finalUrl = mcpServer.url
-        if (
-          this.enterpriseAuth &&
-          isEnterpriseMcpDevServer({ source: mcpServer.source, url: mcpServer.url, headers: finalHeaders })
-        ) {
-          finalUrl = resolveEnterpriseMcpDevUrl(mcpServer.url, this.enterpriseAuth.getApiUrl())
-          const proxyPort = getMcpAuthProxyPort()
-          const proxyUrl = proxyPort ? registerMcpProxyTarget(finalUrl, mcpServer.name) : null
-          if (proxyUrl) {
-            finalUrl = proxyUrl
-            // Don't send static Authorization — proxy injects fresh JWT per request
-            delete finalHeaders['Authorization']
-            console.log(`[AgentManager] MCP Dev Server routed through auth proxy: ${proxyUrl} -> ${resolveEnterpriseMcpDevUrl(mcpServer.url, this.enterpriseAuth.getApiUrl())}`)
-          } else {
-            // Fallback: static JWT (proxy not running)
-            try {
-              const jwt = await this.enterpriseAuth.getJwt()
-              finalHeaders = { ...finalHeaders, Authorization: `Bearer ${jwt}` }
-              console.log('[AgentManager] MCP Dev Server using static JWT (proxy not available)')
-            } catch (err) {
-              console.warn('[AgentManager] Failed to inject enterprise JWT for MCP Dev Server:', err)
-            }
-          }
-        }
-
-        result[mcpServer.name] = {
-          type: 'http',
-          url: finalUrl,
-          headers: finalHeaders
-        }
+        result[mcpServer.name] = await this.buildRemoteMcpServerConfig(mcpServer)
       }
     }
 
@@ -540,7 +501,76 @@ export class AgentManager extends EventEmitter {
       }
     }
 
+    // Always include the enterprise Workflo MCP Dev Server for every agent
+    // session once enterprise mode is active. It appears in the local DB after
+    // login (registered by the enterprise:selectTenant handler) and exposes
+    // workflows-as-tools, integrations, datastores and data tables. Auto-adding
+    // it here — rather than relying on each agent's stored config.mcp_servers —
+    // makes it available to ALL agents by default and is robust to enterprise
+    // sync overwriting per-agent mcp_servers. Mirrors the task-management
+    // force-include above.
+    if (this.enterpriseAuth) {
+      const devServer = this.db.getMcpServers().find(
+        (s) =>
+          s.type === 'remote' &&
+          isEnterpriseMcpDevServer({ source: s.source, url: s.url, headers: s.headers })
+      )
+      if (devServer && !result[devServer.name]) {
+        result[devServer.name] = await this.buildRemoteMcpServerConfig(devServer)
+      }
+    }
+
     return result
+  }
+
+  /**
+   * Builds the adapter config for a remote (HTTP) MCP server, applying:
+   *  - OAuth Bearer token injection for servers with an OAuth registration
+   *  - Enterprise JWT injection (via auth proxy, falling back to a static JWT)
+   *    for the Workflo MCP Dev Server, with URL canonicalisation to the active
+   *    enterprise API origin.
+   */
+  private async buildRemoteMcpServerConfig(mcpServer: McpServerRecord): Promise<McpServerConfig> {
+    // Inject OAuth Bearer token if the server has one
+    let finalHeaders = { ...mcpServer.headers }
+    if (this.oauthManager && mcpServer.oauth_metadata && 'resource_url' in mcpServer.oauth_metadata) {
+      const token = await this.oauthManager.getValidMcpServerToken(mcpServer.id)
+      if (token) {
+        finalHeaders = { ...finalHeaders, Authorization: `Bearer ${token}` }
+      }
+    }
+
+    // Inject enterprise JWT for Workflo MCP Dev Server — route through auth proxy
+    let finalUrl = mcpServer.url
+    if (
+      this.enterpriseAuth &&
+      isEnterpriseMcpDevServer({ source: mcpServer.source, url: mcpServer.url, headers: finalHeaders })
+    ) {
+      finalUrl = resolveEnterpriseMcpDevUrl(mcpServer.url, this.enterpriseAuth.getApiUrl())
+      const proxyPort = getMcpAuthProxyPort()
+      const proxyUrl = proxyPort ? registerMcpProxyTarget(finalUrl, mcpServer.name) : null
+      if (proxyUrl) {
+        finalUrl = proxyUrl
+        // Don't send static Authorization — proxy injects fresh JWT per request
+        delete finalHeaders['Authorization']
+        console.log(`[AgentManager] MCP Dev Server routed through auth proxy: ${proxyUrl} -> ${resolveEnterpriseMcpDevUrl(mcpServer.url, this.enterpriseAuth.getApiUrl())}`)
+      } else {
+        // Fallback: static JWT (proxy not running)
+        try {
+          const jwt = await this.enterpriseAuth.getJwt()
+          finalHeaders = { ...finalHeaders, Authorization: `Bearer ${jwt}` }
+          console.log('[AgentManager] MCP Dev Server using static JWT (proxy not available)')
+        } catch (err) {
+          console.warn('[AgentManager] Failed to inject enterprise JWT for MCP Dev Server:', err)
+        }
+      }
+    }
+
+    return {
+      type: 'http',
+      url: finalUrl,
+      headers: finalHeaders
+    }
   }
 
   private async buildSessionConfig(agentId: string, taskId: string, workspaceDir?: string): Promise<SessionConfig> {

@@ -822,6 +822,15 @@ describe('AgentManager MCP server routing', () => {
         oauth_metadata: {},
         source: 'enterprise',
       })),
+      getMcpServers: vi.fn(() => [{
+        id: 'workflo-stage-server',
+        name: '[Workflo] MCP Dev Server',
+        type: 'remote',
+        url: 'https://stage-api.peakflo.ai/api/mcp/dev/mcp',
+        headers: {},
+        oauth_metadata: {},
+        source: 'enterprise',
+      }]),
     } as unknown as ConstructorParameters<typeof AgentManager>[0]
 
     const manager = new AgentManager(mockDb)
@@ -862,6 +871,15 @@ describe('AgentManager MCP server routing', () => {
         oauth_metadata: {},
         source: 'user',  // but it was added by the user, not by enterprise sync
       })),
+      getMcpServers: vi.fn(() => [{
+        id: 'tan-insurance-workflo',
+        name: '[Workflo] MCP Dev Server',
+        type: 'remote',
+        url: 'https://stage-api.peakflo.ai/api/mcp/dev/mcp',
+        headers: {},
+        oauth_metadata: {},
+        source: 'user',
+      }]),
     } as unknown as ConstructorParameters<typeof AgentManager>[0]
 
     const manager = new AgentManager(mockDb)
@@ -902,6 +920,15 @@ describe('AgentManager MCP server routing', () => {
         oauth_metadata: {},
         source: 'enterprise',
       })),
+      getMcpServers: vi.fn(() => [{
+        id: 'tan-insurance-workflo',
+        name: 'Tan Insurance MCP workflo',
+        type: 'remote',
+        url: 'https://stage-api.peakflo.ai/api/mcp/dev/mcp',
+        headers: { Authorization: 'Bearer pfwf_tenant_a_key' },
+        oauth_metadata: {},
+        source: 'enterprise',
+      }]),
     } as unknown as ConstructorParameters<typeof AgentManager>[0]
 
     const manager = new AgentManager(mockDb)
@@ -917,6 +944,75 @@ describe('AgentManager MCP server routing', () => {
       url: 'https://stage-api.peakflo.ai/api/mcp/dev/mcp',
       headers: { Authorization: 'Bearer pfwf_tenant_a_key' },
     })
+  })
+
+  it('auto-includes the enterprise MCP Dev Server for every agent even when it is NOT in the agent config', async () => {
+    // The core "by default" behaviour: an agent whose stored config.mcp_servers
+    // does NOT list the Workflo MCP Dev Server should still get it injected at
+    // session-build time, as long as the row exists in the DB (registered after
+    // login) and enterprise auth is active. This makes it available to ALL
+    // agents and is robust to enterprise sync overwriting per-agent mcp_servers.
+    const mockDb = {
+      getAgent: vi.fn(() => ({
+        id: 'agent-1',
+        name: 'OPS L2',
+        config: {
+          mcp_servers: [], // agent has NO MCP servers configured
+        },
+      })),
+      getMcpServer: vi.fn(() => null),
+      getMcpServers: vi.fn(() => [{
+        id: 'workflo-dev',
+        name: '[Workflo] MCP Dev Server',
+        type: 'remote',
+        url: 'https://stage-api.peakflo.ai/api/mcp/dev/mcp',
+        headers: {},
+        oauth_metadata: {},
+        source: 'enterprise',
+      }]),
+    } as unknown as ConstructorParameters<typeof AgentManager>[0]
+
+    const manager = new AgentManager(mockDb)
+    manager.setEnterpriseAuth({
+      getApiUrl: vi.fn(() => 'https://api.peakflo.ai'),
+      getJwt: vi.fn(async () => 'fresh-prod-jwt'),
+    } as any)
+
+    const mcpServers = await (manager as any).buildMcpServersForAdapter('agent-1')
+
+    expect(mcpServers['[Workflo] MCP Dev Server']).toMatchObject({
+      type: 'http',
+      // URL canonicalised to the active enterprise origin
+      url: 'https://api.peakflo.ai/api/mcp/dev/mcp',
+      headers: { Authorization: 'Bearer fresh-prod-jwt' },
+    })
+  })
+
+  it('does NOT auto-include any MCP Dev Server when enterprise auth is not active', async () => {
+    const mockDb = {
+      getAgent: vi.fn(() => ({
+        id: 'agent-1',
+        name: 'OPS L2',
+        config: { mcp_servers: [] },
+      })),
+      getMcpServer: vi.fn(() => null),
+      getMcpServers: vi.fn(() => [{
+        id: 'workflo-dev',
+        name: '[Workflo] MCP Dev Server',
+        type: 'remote',
+        url: 'https://stage-api.peakflo.ai/api/mcp/dev/mcp',
+        headers: {},
+        oauth_metadata: {},
+        source: 'enterprise',
+      }]),
+    } as unknown as ConstructorParameters<typeof AgentManager>[0]
+
+    const manager = new AgentManager(mockDb)
+    // No setEnterpriseAuth — not logged into enterprise mode
+
+    const mcpServers = await (manager as any).buildMcpServersForAdapter('agent-1')
+
+    expect(mcpServers['[Workflo] MCP Dev Server']).toBeUndefined()
   })
 })
 
