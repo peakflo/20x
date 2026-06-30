@@ -24,6 +24,25 @@ vi.mock('child_process', () => ({
   }))
 }))
 
+// Mock fs/os so configureCodexAuthEnv() is deterministic: existsSync controls
+// whether a Codex CLI login (~/.codex/auth.json) is "present", and mkdtempSync
+// returns a stable path instead of touching disk.
+vi.mock('fs', async (importActual) => {
+  const actual = await importActual<typeof import('fs')>()
+  return {
+    ...actual,
+    existsSync: vi.fn(actual.existsSync),
+    mkdtempSync: vi.fn(() => '/tmp/codex-session-test')
+  }
+})
+vi.mock('os', async (importActual) => {
+  const actual = await importActual<typeof import('os')>()
+  return {
+    ...actual,
+    homedir: vi.fn(() => '/home/testuser')
+  }
+})
+
 // Type for accessing private members of AcpAdapter in tests
 interface AcpAdapterPrivate {
   sessions: Map<string, AcpSessionForTest>
@@ -45,6 +64,8 @@ interface AcpAdapterPrivate {
   handleRpcMessage(session: AcpSessionForTest, message: unknown): void
   authenticateSession(session: AcpSessionForTest, initResult: unknown): Promise<void>
   sendRpcRequest(session: AcpSessionForTest, method: string, params?: unknown): Promise<unknown>
+  configureCodexAuthEnv(env: Record<string, string>, config: { apiKeys?: { openai?: string } }): boolean
+  agentType: string
 }
 
 interface JsonRpcRequestForTest {
@@ -80,6 +101,7 @@ interface AcpSessionForTest {
   pendingAssistantTurnSplit: boolean
   toolCallMetadata: Map<string, { name: string; input: string; title?: string }>
   lastError: string | null
+  codexUseApiKey?: boolean
 }
 
 /** Cast adapter to access private members for testing */
@@ -110,7 +132,8 @@ function createMockSession(sessionId: string): AcpSessionForTest {
     activeTurnId: null,
     pendingAssistantTurnSplit: false,
     toolCallMetadata: new Map(),
-    lastError: null
+    lastError: null,
+    codexUseApiKey: false
   }
 }
 
@@ -202,13 +225,14 @@ describe('AcpAdapter - Turn Detection', () => {
   })
 
   describe('Authentication selection', () => {
-    it('uses chatgpt (Codex CLI login) when no API key is available', async () => {
+    it('uses chatgpt (Codex CLI login) on the subscription path', async () => {
       const priv = adapterPrivate(adapter)
       const session = createMockSession('auth-session')
+      session.codexUseApiKey = false // subscription / CLI login decided upstream
       const sendRpcRequestSpy = vi.spyOn(priv, 'sendRpcRequest').mockResolvedValue({})
 
-      delete process.env.OPENAI_API_KEY
-      delete process.env.CODEX_API_KEY
+      // An ambient API key in the shell must NOT change auth-method selection.
+      process.env.CODEX_API_KEY = 'ambient-key-should-be-ignored'
 
       await priv.authenticateSession(session, {
         authMethods: [
@@ -217,18 +241,19 @@ describe('AcpAdapter - Turn Detection', () => {
         ]
       })
 
-      // Without an API key, should fall back to chatgpt (Codex CLI login)
+      // On the subscription path, fall back to chatgpt (Codex CLI login)
       expect(sendRpcRequestSpy).toHaveBeenCalledWith(session, 'authenticate', {
         methodId: 'chatgpt'
       })
+
+      delete process.env.CODEX_API_KEY
     })
 
-    it('prefers key-based Codex auth when an API key is available', async () => {
+    it('prefers key-based Codex auth when the session uses API-key auth', async () => {
       const priv = adapterPrivate(adapter)
       const session = createMockSession('auth-session')
+      session.codexUseApiKey = true // API-key auth decided upstream
       const sendRpcRequestSpy = vi.spyOn(priv, 'sendRpcRequest').mockResolvedValue({})
-
-      process.env.CODEX_API_KEY = 'test-key'
 
       await priv.authenticateSession(session, {
         authMethods: [
@@ -3101,5 +3126,107 @@ describe('AcpAdapter - Codex Quota/Error Handling', () => {
       expect(parts[0].id).toBe('stable-id-from-backend')
       expect(parts[0].text).toBe('A complete response.')
     })
+  })
+})
+
+describe('AcpAdapter - configureCodexAuthEnv (Codex auth precedence)', () => {
+  let adapter: AcpAdapter
+  let existsSyncMock: ReturnType<typeof vi.fn>
+
+  beforeEach(async () => {
+    adapter = new AcpAdapter('codex')
+    const fs = await import('fs')
+    existsSyncMock = fs.existsSync as unknown as ReturnType<typeof vi.fn>
+    existsSyncMock.mockReset()
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('uses the Codex CLI login (subscription) and strips ambient API keys', () => {
+    // User is logged into Codex (subscription) AND has an ambient OPENAI_API_KEY
+    // exported in their shell — the classic "terminal works, 20x shows limits" case.
+    existsSyncMock.mockReturnValue(true)
+    const env: Record<string, string> = {
+      OPENAI_API_KEY: 'sk-ambient-from-shell',
+      CODEX_API_KEY: 'sk-ambient-from-shell'
+    }
+
+    const usesApiKey = adapterPrivate(adapter).configureCodexAuthEnv(env, {})
+
+    expect(usesApiKey).toBe(false)
+    // Ambient keys must be stripped so codex-acp uses ~/.codex (subscription).
+    expect(env.OPENAI_API_KEY).toBeUndefined()
+    expect(env.CODEX_API_KEY).toBeUndefined()
+    // No isolated CODEX_HOME — use the default ~/.codex with the existing login.
+    expect(env.CODEX_HOME).toBeUndefined()
+    expect(env.NO_BROWSER).toBeUndefined()
+  })
+
+  it('uses an explicitly-configured API key even when a CLI login exists', () => {
+    existsSyncMock.mockReturnValue(true)
+    const env: Record<string, string> = {}
+
+    const usesApiKey = adapterPrivate(adapter).configureCodexAuthEnv(env, {
+      apiKeys: { openai: 'sk-explicit-agent-key' }
+    })
+
+    expect(usesApiKey).toBe(true)
+    expect(env.OPENAI_API_KEY).toBe('sk-explicit-agent-key')
+    expect(env.CODEX_API_KEY).toBe('sk-explicit-agent-key')
+    expect(env.NO_BROWSER).toBe('1')
+    expect(env.CODEX_HOME).toBe('/tmp/codex-session-test')
+  })
+
+  it('falls back to an ambient API key when no CLI login is present', () => {
+    existsSyncMock.mockReturnValue(false)
+    const env: Record<string, string> = { OPENAI_API_KEY: 'sk-ambient' }
+
+    const usesApiKey = adapterPrivate(adapter).configureCodexAuthEnv(env, {})
+
+    expect(usesApiKey).toBe(true)
+    expect(env.OPENAI_API_KEY).toBe('sk-ambient')
+    expect(env.NO_BROWSER).toBe('1')
+    expect(env.CODEX_HOME).toBe('/tmp/codex-session-test')
+  })
+
+  it('returns false when there is no login and no API key', () => {
+    existsSyncMock.mockReturnValue(false)
+    const env: Record<string, string> = {}
+
+    const usesApiKey = adapterPrivate(adapter).configureCodexAuthEnv(env, {})
+
+    expect(usesApiKey).toBe(false)
+    expect(env.CODEX_HOME).toBeUndefined()
+  })
+
+  it('authenticateSession allows chatgpt method on the subscription path', async () => {
+    const session = createMockSession('sub-session')
+    session.codexUseApiKey = false
+    const sendRpc = vi
+      .spyOn(adapterPrivate(adapter), 'sendRpcRequest')
+      .mockResolvedValue(undefined)
+
+    await adapterPrivate(adapter).authenticateSession(session, {
+      authMethods: [{ id: 'chatgpt' }, { id: 'openai-api-key' }]
+    })
+
+    // On the subscription path we must NOT pick the API-key method.
+    expect(sendRpc).toHaveBeenCalledWith(session, 'authenticate', { methodId: 'chatgpt' })
+  })
+
+  it('authenticateSession filters out chatgpt when using API-key auth', async () => {
+    const session = createMockSession('key-session')
+    session.codexUseApiKey = true
+    const sendRpc = vi
+      .spyOn(adapterPrivate(adapter), 'sendRpcRequest')
+      .mockResolvedValue(undefined)
+
+    await adapterPrivate(adapter).authenticateSession(session, {
+      authMethods: [{ id: 'chatgpt' }, { id: 'openai-api-key' }]
+    })
+
+    expect(sendRpc).toHaveBeenCalledWith(session, 'authenticate', { methodId: 'openai-api-key' })
   })
 })
