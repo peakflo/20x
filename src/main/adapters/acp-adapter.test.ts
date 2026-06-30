@@ -24,6 +24,16 @@ vi.mock('child_process', () => ({
   }))
 }))
 
+// Mock fs so configureCodexAuthEnv()'s mkdtempSync returns a stable path instead
+// of touching disk (used to assert the isolated CODEX_HOME in API-key mode).
+vi.mock('fs', async (importActual) => {
+  const actual = await importActual<typeof import('fs')>()
+  return {
+    ...actual,
+    mkdtempSync: vi.fn(() => '/tmp/codex-session-test')
+  }
+})
+
 // Type for accessing private members of AcpAdapter in tests
 interface AcpAdapterPrivate {
   sessions: Map<string, AcpSessionForTest>
@@ -45,6 +55,11 @@ interface AcpAdapterPrivate {
   handleRpcMessage(session: AcpSessionForTest, message: unknown): void
   authenticateSession(session: AcpSessionForTest, initResult: unknown): Promise<void>
   sendRpcRequest(session: AcpSessionForTest, method: string, params?: unknown): Promise<unknown>
+  configureCodexAuthEnv(
+    env: Record<string, string | undefined>,
+    config: { apiKeys?: { openai?: string }; authMethod?: 'subscription' | 'api_key' }
+  ): boolean
+  agentType: string
 }
 
 interface JsonRpcRequestForTest {
@@ -80,6 +95,8 @@ interface AcpSessionForTest {
   pendingAssistantTurnSplit: boolean
   toolCallMetadata: Map<string, { name: string; input: string; title?: string }>
   lastError: string | null
+  codexUseApiKey?: boolean
+  codexAuthSummary?: string
 }
 
 /** Cast adapter to access private members for testing */
@@ -110,7 +127,8 @@ function createMockSession(sessionId: string): AcpSessionForTest {
     activeTurnId: null,
     pendingAssistantTurnSplit: false,
     toolCallMetadata: new Map(),
-    lastError: null
+    lastError: null,
+    codexUseApiKey: false
   }
 }
 
@@ -202,13 +220,14 @@ describe('AcpAdapter - Turn Detection', () => {
   })
 
   describe('Authentication selection', () => {
-    it('uses chatgpt (Codex CLI login) when no API key is available', async () => {
+    it('uses chatgpt (Codex CLI login) on the subscription path', async () => {
       const priv = adapterPrivate(adapter)
       const session = createMockSession('auth-session')
+      session.codexUseApiKey = false // subscription / CLI login decided upstream
       const sendRpcRequestSpy = vi.spyOn(priv, 'sendRpcRequest').mockResolvedValue({})
 
-      delete process.env.OPENAI_API_KEY
-      delete process.env.CODEX_API_KEY
+      // An ambient API key in the shell must NOT change auth-method selection.
+      process.env.CODEX_API_KEY = 'ambient-key-should-be-ignored'
 
       await priv.authenticateSession(session, {
         authMethods: [
@@ -217,18 +236,19 @@ describe('AcpAdapter - Turn Detection', () => {
         ]
       })
 
-      // Without an API key, should fall back to chatgpt (Codex CLI login)
+      // On the subscription path, fall back to chatgpt (Codex CLI login)
       expect(sendRpcRequestSpy).toHaveBeenCalledWith(session, 'authenticate', {
         methodId: 'chatgpt'
       })
+
+      delete process.env.CODEX_API_KEY
     })
 
-    it('prefers key-based Codex auth when an API key is available', async () => {
+    it('prefers key-based Codex auth when the session uses API-key auth', async () => {
       const priv = adapterPrivate(adapter)
       const session = createMockSession('auth-session')
+      session.codexUseApiKey = true // API-key auth decided upstream
       const sendRpcRequestSpy = vi.spyOn(priv, 'sendRpcRequest').mockResolvedValue({})
-
-      process.env.CODEX_API_KEY = 'test-key'
 
       await priv.authenticateSession(session, {
         authMethods: [
@@ -2396,7 +2416,7 @@ describe('AcpAdapter - Codex Quota/Error Handling', () => {
       expect(session.activeTurnId).toBeNull()
     })
 
-    it('should push error event to message buffers', () => {
+    it('should push error event to the live buffer but NOT persist it', () => {
       const session = createMockSession('test-session')
 
       adapterPrivate(adapter).handleQuotaError(session, {
@@ -2404,13 +2424,37 @@ describe('AcpAdapter - Codex Quota/Error Handling', () => {
         userMessage: 'Quota exceeded: Check your plan.'
       })
 
+      // Live buffer gets the error so the user sees it during the session...
       expect(session.messageBuffer).toHaveLength(1)
-      expect(session.permanentMessages).toHaveLength(1)
+      // ...but it must NOT enter permanentMessages, otherwise it would be
+      // replayed on every resume and keep "showing limits" after the user
+      // upgrades / re-logs in / waits for the window to reset.
+      expect(session.permanentMessages).toHaveLength(0)
 
       const errorEvent = session.messageBuffer[0] as Record<string, unknown>
       expect(errorEvent._isError).toBe(true)
       expect(errorEvent.message).toBe('Quota exceeded: Check your plan.')
       expect(errorEvent.data).toBeNull()
+    })
+
+    it('stale quota error does not survive a resume replay (getAllMessages)', async () => {
+      const session = createMockSession('test-session')
+      adapterPrivate(adapter).sessions.set('test-session', session)
+
+      // Simulate the session hitting a usage limit.
+      adapterPrivate(adapter).handleQuotaError(session, {
+        errorType: 'usage_limit_exceeded',
+        userMessage: 'Quota exceeded: Check your plan.'
+      })
+
+      // On resume, only permanentMessages are replayed. The transient quota
+      // error must be gone so the upgraded/re-logged-in user starts clean.
+      const messages = await adapter.getAllMessages('test-session', {} as never)
+      const replayedText = messages
+        .flatMap((m) => m.parts)
+        .map((p) => p.text || p.content || '')
+        .join('\n')
+      expect(replayedText).not.toContain('Quota exceeded')
     })
 
     it('should trigger onDataAvailable callback', () => {
@@ -3077,5 +3121,143 @@ describe('AcpAdapter - Codex Quota/Error Handling', () => {
       expect(parts[0].id).toBe('stable-id-from-backend')
       expect(parts[0].text).toBe('A complete response.')
     })
+  })
+})
+
+describe('AcpAdapter - configureCodexAuthEnv (Codex auth precedence)', () => {
+  let adapter: AcpAdapter
+
+  beforeEach(() => {
+    adapter = new AcpAdapter('codex')
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('authMethod=subscription strips ambient API keys and uses ~/.codex', () => {
+    // Explicit subscription choice + an ambient OPENAI_API_KEY exported in the
+    // shell — the classic "terminal works, 20x shows out of rate limits" case.
+    const env: Record<string, string | undefined> = {
+      OPENAI_API_KEY: 'sk-ambient-from-shell',
+      CODEX_API_KEY: 'sk-ambient-from-shell'
+    }
+
+    const usesApiKey = adapterPrivate(adapter).configureCodexAuthEnv(env, {
+      authMethod: 'subscription'
+    })
+
+    expect(usesApiKey).toBe(false)
+    // Ambient keys must be stripped so codex-acp uses ~/.codex (subscription).
+    expect(env.OPENAI_API_KEY).toBeUndefined()
+    expect(env.CODEX_API_KEY).toBeUndefined()
+    // CODEX_HOME pinned to the codex CLI default so codex-acp reads the same login.
+    expect(env.CODEX_HOME).toMatch(/[\\/]\.codex$/)
+    expect(env.NO_BROWSER).toBeUndefined()
+  })
+
+  it('authMethod=subscription ignores even an explicitly-configured API key', () => {
+    const env: Record<string, string | undefined> = {}
+
+    const usesApiKey = adapterPrivate(adapter).configureCodexAuthEnv(env, {
+      authMethod: 'subscription',
+      apiKeys: { openai: 'sk-explicit-agent-key' }
+    })
+
+    expect(usesApiKey).toBe(false)
+    expect(env.OPENAI_API_KEY).toBeUndefined()
+    expect(env.CODEX_HOME).toMatch(/[\\/]\.codex$/)
+  })
+
+  it('authMethod=subscription preserves an inherited custom CODEX_HOME', () => {
+    // The user's terminal `codex` may use a custom CODEX_HOME (a different ChatGPT
+    // account); 20x inherits it and must NOT override it with the default ~/.codex.
+    const env: Record<string, string | undefined> = { CODEX_HOME: '/custom/codex/home' }
+
+    const usesApiKey = adapterPrivate(adapter).configureCodexAuthEnv(env, {
+      authMethod: 'subscription'
+    })
+
+    expect(usesApiKey).toBe(false)
+    expect(env.CODEX_HOME).toBe('/custom/codex/home')
+  })
+
+  it('authMethod=api_key uses the explicit per-agent key in an isolated CODEX_HOME', () => {
+    const env: Record<string, string | undefined> = {}
+
+    const usesApiKey = adapterPrivate(adapter).configureCodexAuthEnv(env, {
+      authMethod: 'api_key',
+      apiKeys: { openai: 'sk-explicit-agent-key' }
+    })
+
+    expect(usesApiKey).toBe(true)
+    expect(env.OPENAI_API_KEY).toBe('sk-explicit-agent-key')
+    expect(env.CODEX_API_KEY).toBe('sk-explicit-agent-key')
+    expect(env.NO_BROWSER).toBe('1')
+    expect(env.CODEX_HOME).toBe('/tmp/codex-session-test')
+  })
+
+  it('authMethod=api_key falls back to an ambient key when no per-agent key is set', () => {
+    const env: Record<string, string | undefined> = { OPENAI_API_KEY: 'sk-ambient' }
+
+    const usesApiKey = adapterPrivate(adapter).configureCodexAuthEnv(env, {
+      authMethod: 'api_key'
+    })
+
+    expect(usesApiKey).toBe(true)
+    expect(env.OPENAI_API_KEY).toBe('sk-ambient')
+    expect(env.CODEX_HOME).toBe('/tmp/codex-session-test')
+  })
+
+  it('legacy (no authMethod): an ambient key alone does NOT force API-key mode', () => {
+    // The original bug: an ambient shell OPENAI_API_KEY hijacked subscription users.
+    const env: Record<string, string | undefined> = { OPENAI_API_KEY: 'sk-ambient' }
+
+    const usesApiKey = adapterPrivate(adapter).configureCodexAuthEnv(env, {})
+
+    expect(usesApiKey).toBe(false)
+    expect(env.OPENAI_API_KEY).toBeUndefined()
+    expect(env.CODEX_HOME).toMatch(/[\\/]\.codex$/)
+  })
+
+  it('legacy (no authMethod): an explicit per-agent key opts into API-key mode', () => {
+    const env: Record<string, string | undefined> = {}
+
+    const usesApiKey = adapterPrivate(adapter).configureCodexAuthEnv(env, {
+      apiKeys: { openai: 'sk-explicit-agent-key' }
+    })
+
+    expect(usesApiKey).toBe(true)
+    expect(env.OPENAI_API_KEY).toBe('sk-explicit-agent-key')
+    expect(env.CODEX_HOME).toBe('/tmp/codex-session-test')
+  })
+
+  it('authenticateSession allows chatgpt method on the subscription path', async () => {
+    const session = createMockSession('sub-session')
+    session.codexUseApiKey = false
+    const sendRpc = vi
+      .spyOn(adapterPrivate(adapter), 'sendRpcRequest')
+      .mockResolvedValue(undefined)
+
+    await adapterPrivate(adapter).authenticateSession(session, {
+      authMethods: [{ id: 'chatgpt' }, { id: 'openai-api-key' }]
+    })
+
+    // On the subscription path we must NOT pick the API-key method.
+    expect(sendRpc).toHaveBeenCalledWith(session, 'authenticate', { methodId: 'chatgpt' })
+  })
+
+  it('authenticateSession filters out chatgpt when using API-key auth', async () => {
+    const session = createMockSession('key-session')
+    session.codexUseApiKey = true
+    const sendRpc = vi
+      .spyOn(adapterPrivate(adapter), 'sendRpcRequest')
+      .mockResolvedValue(undefined)
+
+    await adapterPrivate(adapter).authenticateSession(session, {
+      authMethods: [{ id: 'chatgpt' }, { id: 'openai-api-key' }]
+    })
+
+    expect(sendRpc).toHaveBeenCalledWith(session, 'authenticate', { methodId: 'openai-api-key' })
   })
 })

@@ -494,12 +494,20 @@ function loadPlatformShellEnv(): Promise<void> {
   const CODEX_API_KEY_END = '__20X_CODEX_API_KEY_END__'
   const ANTHROPIC_API_KEY_START = '__20X_ANTHROPIC_API_KEY_START__'
   const ANTHROPIC_API_KEY_END = '__20X_ANTHROPIC_API_KEY_END__'
+  // CODEX_HOME: if the user's terminal `codex` uses a custom CODEX_HOME (e.g. a
+  // work profile / a different ChatGPT account than ~/.codex), 20x must read the
+  // SAME one — otherwise codex-acp authenticates as whatever account lives in the
+  // default ~/.codex, which may be a free/over-limit account ("Upgrade to Plus")
+  // while the terminal subscription works fine.
+  const CODEX_HOME_START = '__20X_CODEX_HOME_START__'
+  const CODEX_HOME_END = '__20X_CODEX_HOME_END__'
 
   const command = [
     `printf '%s%s%s\\n' "${PATH_START}" "$PATH" "${PATH_END}"`,
     `printf '%s%s%s\\n' "${OPENAI_API_KEY_START}" "$OPENAI_API_KEY" "${OPENAI_API_KEY_END}"`,
     `printf '%s%s%s\\n' "${CODEX_API_KEY_START}" "$CODEX_API_KEY" "${CODEX_API_KEY_END}"`,
-    `printf '%s%s%s\\n' "${ANTHROPIC_API_KEY_START}" "$ANTHROPIC_API_KEY" "${ANTHROPIC_API_KEY_END}"`
+    `printf '%s%s%s\\n' "${ANTHROPIC_API_KEY_START}" "$ANTHROPIC_API_KEY" "${ANTHROPIC_API_KEY_END}"`,
+    `printf '%s%s%s\\n' "${CODEX_HOME_START}" "$CODEX_HOME" "${CODEX_HOME_END}"`
   ].join('; ')
 
   const extractMarkedValue = (stdout: string, start: string, end: string): string | undefined => {
@@ -532,6 +540,14 @@ function loadPlatformShellEnv(): Promise<void> {
 
           const anthropicApiKey = extractMarkedValue(stdout, ANTHROPIC_API_KEY_START, ANTHROPIC_API_KEY_END)
           if (anthropicApiKey) process.env.ANTHROPIC_API_KEY = anthropicApiKey
+
+          // Inherit a custom CODEX_HOME so codex-acp authenticates as the SAME
+          // ChatGPT account the user's terminal `codex` uses.
+          const codexHome = extractMarkedValue(stdout, CODEX_HOME_START, CODEX_HOME_END)
+          if (codexHome) {
+            process.env.CODEX_HOME = codexHome
+            console.log('[Main] Inherited CODEX_HOME from shell:', codexHome)
+          }
 
           resolve()
           return

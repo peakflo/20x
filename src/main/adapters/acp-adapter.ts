@@ -9,7 +9,7 @@
 import { spawn, ChildProcess } from 'child_process'
 import { randomUUID } from 'crypto'
 import { mkdtempSync } from 'fs'
-import { tmpdir } from 'os'
+import { homedir, tmpdir } from 'os'
 import { dirname, join } from 'path'
 import type {
   CodingAgentAdapter,
@@ -124,6 +124,8 @@ interface AcpSession {
   pendingAssistantTurnSplit: boolean  // True after tool activity; next assistant chunk must start a new turn
   toolCallMetadata: Map<string, { name: string; input: string; title?: string }>  // Cached metadata from initial tool_call events
   lastError: string | null  // Last error message (e.g., quota exceeded) for status reporting
+  codexUseApiKey: boolean  // True when Codex auth uses an API key (vs. ChatGPT subscription / CLI login)
+  codexAuthSummary: string  // Human-readable auth identity used (for diagnostics, surfaced in errors)
 }
 
 /**
@@ -221,15 +223,70 @@ export class AcpAdapter implements CodingAgentAdapter {
         return {
           command: this.resolveCodexBinary(),
           args: [],
-          env: {
-            // Codex requires OPENAI_API_KEY or CODEX_API_KEY
-            ...(process.env.OPENAI_API_KEY && { OPENAI_API_KEY: process.env.OPENAI_API_KEY }),
-            ...(process.env.CODEX_API_KEY && { CODEX_API_KEY: process.env.CODEX_API_KEY })
-          }
+          // Auth env is decided per-session by configureCodexAuthEnv(), which
+          // gives the user's Codex CLI login (ChatGPT subscription) priority over
+          // any ambient OPENAI_API_KEY/CODEX_API_KEY. Do NOT inject ambient keys
+          // here — that previously hijacked subscription users into API-key auth.
+          env: {}
         }
       default:
         throw new Error(`Unsupported ACP agent type: ${agentType}`)
     }
+  }
+
+  /**
+   * Decide how Codex authenticates for this session and mutate `env` accordingly.
+   * Returns true when API-key auth is used, false when the ChatGPT subscription /
+   * Codex CLI login is used.
+   *
+   * The user's explicit choice in the agent configuration (config.authMethod) is
+   * the source of truth:
+   *   - 'subscription' -> use the Codex CLI login (~/.codex), exactly like running
+   *     `codex` in a terminal. Any ambient OPENAI_API_KEY/CODEX_API_KEY inherited
+   *     from the user's shell is STRIPPED so it cannot hijack auth into API-key
+   *     mode (which bills a separate, often-exhausted quota and made 20x show
+   *     "out of rate limits" even though the terminal subscription worked fine).
+   *   - 'api_key' -> use an API key (the per-agent config key if set, otherwise the
+   *     ambient one) in an isolated temp CODEX_HOME so keys can differ per session.
+   *
+   * When authMethod is unset (legacy agents), fall back to the historical rule but
+   * WITHOUT the ambient-key hijack: only an explicitly-configured per-agent API
+   * key implies API-key mode; otherwise default to the subscription/login path.
+   */
+  private configureCodexAuthEnv(env: Record<string, string | undefined>, config: SessionConfig): boolean {
+    if (this.agentType !== 'codex') return false
+
+    const explicitApiKey = config.apiKeys?.openai
+    const useApiKey =
+      config.authMethod === 'api_key' ? true
+      : config.authMethod === 'subscription' ? false
+      : !!explicitApiKey // legacy default: only an explicit key opts into API-key mode
+
+    if (useApiKey) {
+      const key = explicitApiKey || env.OPENAI_API_KEY || env.CODEX_API_KEY
+      if (key) {
+        env.OPENAI_API_KEY = key
+        env.CODEX_API_KEY = key
+      }
+      env.NO_BROWSER = '1'
+      env.CODEX_HOME = mkdtempSync(join(tmpdir(), 'codex-session-'))
+      console.log(`[AcpAdapter/codex] Auth: API key (authMethod=${config.authMethod ?? 'legacy'}, isolated CODEX_HOME)`)
+      return true
+    }
+
+    // Subscription / Codex CLI login path. Strip ambient keys so they can't
+    // hijack auth away from the ChatGPT subscription in the default CODEX_HOME.
+    delete env.OPENAI_API_KEY
+    delete env.CODEX_API_KEY
+    // Pin CODEX_HOME to the same dir the `codex` CLI uses in a terminal, so
+    // codex-acp reads the exact subscription login the user already has. We only
+    // set it when not already provided (a user who runs `codex` with a custom
+    // CODEX_HOME will have it in their shell env, which we inherit and preserve).
+    if (!env.CODEX_HOME) {
+      env.CODEX_HOME = join(homedir(), '.codex')
+    }
+    console.log(`[AcpAdapter/codex] Auth: ChatGPT subscription / Codex CLI login (authMethod=${config.authMethod ?? 'legacy'}, CODEX_HOME=${env.CODEX_HOME})`)
+    return false
   }
 
   async initialize(): Promise<void> {
@@ -249,11 +306,14 @@ export class AcpAdapter implements CodingAgentAdapter {
     const authMethods = (Array.isArray(initObj?.authMethods) ? initObj.authMethods : []) as Array<{ id: string; [key: string]: unknown }>
 
     if (authMethods.length > 0) {
-      const hasOpenAiKey = !!session.config.apiKeys?.openai || !!process.env.OPENAI_API_KEY || !!process.env.CODEX_API_KEY
+      // Use the auth mode decided in configureCodexAuthEnv() rather than sniffing
+      // ambient env vars. An ambient OPENAI_API_KEY in the user's shell must not
+      // flip a subscription user into API-key auth (and filter out "chatgpt").
+      const hasOpenAiKey = session.codexUseApiKey
 
-      // When an API key is provided, filter out "chatgpt" browser-based auth so
-      // codex-acp uses the key instead of opening an OAuth popup. When no key is
-      // provided, allow all methods including chatgpt (Codex CLI login).
+      // When using an API key, filter out "chatgpt" browser-based auth so
+      // codex-acp uses the key instead of opening an OAuth popup. On the
+      // subscription path, allow all methods including chatgpt (Codex CLI login).
       const usableMethods = (this.agentType === 'codex' && hasOpenAiKey)
         ? authMethods.filter((m) => m.id !== 'chatgpt')
         : authMethods
@@ -268,6 +328,8 @@ export class AcpAdapter implements CodingAgentAdapter {
         ? (apiKeyMethod || usableMethods[0])
         : (usableMethods.find((m) => m.id !== 'openai-api-key' && m.id !== 'codex-api-key') || apiKeyMethod || null)
 
+      console.log(`[AcpAdapter/${this.agentType}] Available auth methods: [${authMethods.map((m) => m.id).join(', ')}]; codexUseApiKey=${session.codexUseApiKey}`)
+
       if (!authMethod) {
         console.log(`[AcpAdapter/${this.agentType}] No usable auth method found; skipping authenticate`)
         return
@@ -278,10 +340,13 @@ export class AcpAdapter implements CodingAgentAdapter {
       // no stale disk credentials. This allows different API keys per session.
 
       console.log(`[AcpAdapter/${this.agentType}] Authenticating with method: ${authMethod.id}`)
+      session.codexAuthSummary = `${session.codexUseApiKey ? 'API key' : 'subscription'} via authenticate(${authMethod.id})`
 
       await this.sendRpcRequest(session, 'authenticate', {
         methodId: authMethod.id
       })
+    } else {
+      console.log(`[AcpAdapter/${this.agentType}] No auth methods advertised by agent (already authenticated); codexUseApiKey=${session.codexUseApiKey}`)
     }
   }
 
@@ -296,22 +361,6 @@ export class AcpAdapter implements CodingAgentAdapter {
       ...this.agentConfig.env
     }
 
-    // Override with configured API keys if provided
-    if (config.apiKeys?.openai) {
-      env.OPENAI_API_KEY = config.apiKeys.openai
-      env.CODEX_API_KEY = config.apiKeys.openai
-    }
-
-    // For Codex with an API key: set NO_BROWSER=1 to prevent the OAuth browser
-    // popup, and CODEX_HOME to a per-session temp dir so stale disk credentials
-    // don't override the env var key. This also allows different keys per session.
-    // Without an API key: let codex-acp use the default CODEX_HOME (~/.codex/)
-    // so existing Codex CLI login credentials are available.
-    if (this.agentType === 'codex' && (env.OPENAI_API_KEY || env.CODEX_API_KEY)) {
-      env.NO_BROWSER = '1'
-      env.CODEX_HOME = mkdtempSync(join(tmpdir(), 'codex-session-'))
-    }
-
     if (config.apiKeys?.anthropic) {
       env.ANTHROPIC_API_KEY = config.apiKeys.anthropic
     }
@@ -323,10 +372,15 @@ export class AcpAdapter implements CodingAgentAdapter {
       }
     }
 
-    // Log warnings if API keys are missing
-    if (this.agentType === 'codex' && !env.OPENAI_API_KEY && !env.CODEX_API_KEY) {
-      console.log('[AcpAdapter/codex] No API key configured — will use Codex CLI login if available')
-    }
+    // Decide Codex auth (subscription vs API key) LAST so it is authoritative.
+    // It must run after secret-env injection: a user secret named OPENAI_API_KEY /
+    // CODEX_API_KEY would otherwise be re-added to env after subscription mode
+    // stripped it, re-hijacking Codex into API-key auth (stale "out of rate
+    // limits" that survives restarts because the secret lives in the DB).
+    const codexUseApiKey = this.configureCodexAuthEnv(env, config)
+    const codexAuthSummary = this.agentType === 'codex'
+      ? `${codexUseApiKey ? 'API key' : 'subscription'} (authMethod=${config.authMethod ?? 'legacy'}, CODEX_HOME=${env.CODEX_HOME ?? 'default'})`
+      : ''
 
     // Spawn ACP agent process
     // On Windows, .cmd/.bat wrappers need shell:true to resolve
@@ -363,7 +417,9 @@ export class AcpAdapter implements CodingAgentAdapter {
       activeTurnId: null,
       pendingAssistantTurnSplit: false,
       toolCallMetadata: new Map(),
-      lastError: null
+      lastError: null,
+      codexUseApiKey,
+      codexAuthSummary
     }
 
     // Temporarily store with workspace ID, will re-key after getting ACP session ID
@@ -449,31 +505,9 @@ export class AcpAdapter implements CodingAgentAdapter {
       ...this.agentConfig.env
     }
 
-    // Override with configured API keys if provided
-    if (config.apiKeys?.openai) {
-      env.OPENAI_API_KEY = config.apiKeys.openai
-      env.CODEX_API_KEY = config.apiKeys.openai
-    }
-
-    // For Codex with an API key: set NO_BROWSER=1 to prevent the OAuth browser
-    // popup, and CODEX_HOME to a per-session temp dir so stale disk credentials
-    // don't override the env var key. This also allows different keys per session.
-    // Without an API key: let codex-acp use the default CODEX_HOME (~/.codex/)
-    // so existing Codex CLI login credentials are available.
-    if (this.agentType === 'codex' && (env.OPENAI_API_KEY || env.CODEX_API_KEY)) {
-      env.NO_BROWSER = '1'
-      env.CODEX_HOME = mkdtempSync(join(tmpdir(), 'codex-session-'))
-    }
-
     if (config.apiKeys?.anthropic) {
       env.ANTHROPIC_API_KEY = config.apiKeys.anthropic
     }
-
-    console.log(`[AcpAdapter/${this.agentType}] Environment after config:`, {
-      hasAnthropicInEnv: !!env.ANTHROPIC_API_KEY,
-      anthropicKeyLength: env.ANTHROPIC_API_KEY?.length,
-      anthropicKeyPrefix: env.ANTHROPIC_API_KEY?.substring(0, 5)
-    })
 
     // Inject secret env vars directly into process environment
     if (config.secretEnvVars && Object.keys(config.secretEnvVars).length > 0) {
@@ -482,12 +516,18 @@ export class AcpAdapter implements CodingAgentAdapter {
       }
     }
 
-    // Log warnings if API keys are missing (agents may have their own auth)
-    if (this.agentType === 'codex') {
-      if (!env.OPENAI_API_KEY && !env.CODEX_API_KEY) {
-        console.warn('[AcpAdapter/codex] No OPENAI_API_KEY or CODEX_API_KEY in environment — relying on agent\'s own auth')
-      }
-    }
+    // Decide Codex auth (subscription vs API key) LAST so it is authoritative —
+    // see createSession for why this must run after secret-env injection.
+    const codexUseApiKey = this.configureCodexAuthEnv(env, config)
+    const codexAuthSummary = this.agentType === 'codex'
+      ? `${codexUseApiKey ? 'API key' : 'subscription'} (authMethod=${config.authMethod ?? 'legacy'}, CODEX_HOME=${env.CODEX_HOME ?? 'default'})`
+      : ''
+
+    console.log(`[AcpAdapter/${this.agentType}] Environment after config:`, {
+      hasAnthropicInEnv: !!env.ANTHROPIC_API_KEY,
+      anthropicKeyLength: env.ANTHROPIC_API_KEY?.length,
+      anthropicKeyPrefix: env.ANTHROPIC_API_KEY?.substring(0, 5)
+    })
 
     // Spawn ACP agent process
     // On Windows, .cmd/.bat wrappers need shell:true to resolve
@@ -524,7 +564,9 @@ export class AcpAdapter implements CodingAgentAdapter {
       activeTurnId: null,
       pendingAssistantTurnSplit: false,
       toolCallMetadata: new Map(),
-      lastError: null
+      lastError: null,
+      codexUseApiKey,
+      codexAuthSummary
     }
 
     // Store with the Codex UUID (same as sessionId since we now return UUID from createSession)
@@ -1133,23 +1175,39 @@ export class AcpAdapter implements CodingAgentAdapter {
    * a clear, actionable error message to the user.
    */
   private handleQuotaError(session: AcpSession, errorInfo: { errorType: string; userMessage: string }): void {
+    // Append the auth identity 20x used so the user (and we) can see whether the
+    // limit came from their subscription or an API key — the whole point of the
+    // "terminal works but 20x doesn't" investigation.
+    const authNote = session.codexAuthSummary ? ` [20x auth: ${session.codexAuthSummary}]` : ''
+    const userMessage = `${errorInfo.userMessage}${authNote}`
+
     console.warn(
       `[AcpAdapter/${this.agentType}] Provider error (${errorInfo.errorType}):`,
-      errorInfo.userMessage
+      userMessage
     )
 
     session.status = SessionStatusType.ERROR
-    session.lastError = errorInfo.userMessage
+    session.lastError = userMessage
     session.activeTurnId = null
 
-    // Push a user-friendly error event to the message buffers
+    // Push a user-friendly error event to the LIVE message buffer only.
+    //
+    // IMPORTANT: Quota/rate-limit errors are TRANSIENT conditions tied to a
+    // point in time. They must NOT be written to permanentMessages, because
+    // permanentMessages is replayed on every session resume (getAllMessages).
+    // If we persisted them, the "Quota exceeded / Rate limit reached" message
+    // would re-appear at the end of the transcript forever — even after the
+    // user upgrades their Codex plan, re-logs in, or simply waits for the
+    // window to reset. That stale message is exactly what makes 20x keep
+    // "showing limits" after the underlying limit is gone. session.lastError
+    // is already cleared on the next sendPrompt() for recovery, so keeping the
+    // event out of the permanent history fully clears the stale state on resume.
     const errorEvent = {
       _isError: true,
-      message: errorInfo.userMessage,
+      message: userMessage,
       data: null  // Don't expose raw error data for known error types
     }
     session.messageBuffer.push(errorEvent)
-    this.addToPermanentMessages(session, errorEvent)
     this.onDataAvailable?.(session.sessionId)
   }
 
