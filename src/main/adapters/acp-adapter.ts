@@ -348,9 +348,6 @@ export class AcpAdapter implements CodingAgentAdapter {
       ...this.agentConfig.env
     }
 
-    // Decide Codex auth (subscription vs API key) and mutate env accordingly.
-    const codexUseApiKey = this.configureCodexAuthEnv(env, config)
-
     if (config.apiKeys?.anthropic) {
       env.ANTHROPIC_API_KEY = config.apiKeys.anthropic
     }
@@ -361,6 +358,13 @@ export class AcpAdapter implements CodingAgentAdapter {
         env[key] = value
       }
     }
+
+    // Decide Codex auth (subscription vs API key) LAST so it is authoritative.
+    // It must run after secret-env injection: a user secret named OPENAI_API_KEY /
+    // CODEX_API_KEY would otherwise be re-added to env after subscription mode
+    // stripped it, re-hijacking Codex into API-key auth (stale "out of rate
+    // limits" that survives restarts because the secret lives in the DB).
+    const codexUseApiKey = this.configureCodexAuthEnv(env, config)
 
     // Spawn ACP agent process
     // On Windows, .cmd/.bat wrappers need shell:true to resolve
@@ -484,18 +488,9 @@ export class AcpAdapter implements CodingAgentAdapter {
       ...this.agentConfig.env
     }
 
-    // Decide Codex auth (subscription vs API key) and mutate env accordingly.
-    const codexUseApiKey = this.configureCodexAuthEnv(env, config)
-
     if (config.apiKeys?.anthropic) {
       env.ANTHROPIC_API_KEY = config.apiKeys.anthropic
     }
-
-    console.log(`[AcpAdapter/${this.agentType}] Environment after config:`, {
-      hasAnthropicInEnv: !!env.ANTHROPIC_API_KEY,
-      anthropicKeyLength: env.ANTHROPIC_API_KEY?.length,
-      anthropicKeyPrefix: env.ANTHROPIC_API_KEY?.substring(0, 5)
-    })
 
     // Inject secret env vars directly into process environment
     if (config.secretEnvVars && Object.keys(config.secretEnvVars).length > 0) {
@@ -503,6 +498,16 @@ export class AcpAdapter implements CodingAgentAdapter {
         env[key] = value
       }
     }
+
+    // Decide Codex auth (subscription vs API key) LAST so it is authoritative —
+    // see createSession for why this must run after secret-env injection.
+    const codexUseApiKey = this.configureCodexAuthEnv(env, config)
+
+    console.log(`[AcpAdapter/${this.agentType}] Environment after config:`, {
+      hasAnthropicInEnv: !!env.ANTHROPIC_API_KEY,
+      anthropicKeyLength: env.ANTHROPIC_API_KEY?.length,
+      anthropicKeyPrefix: env.ANTHROPIC_API_KEY?.substring(0, 5)
+    })
 
     // Spawn ACP agent process
     // On Windows, .cmd/.bat wrappers need shell:true to resolve
