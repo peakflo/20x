@@ -2396,7 +2396,7 @@ describe('AcpAdapter - Codex Quota/Error Handling', () => {
       expect(session.activeTurnId).toBeNull()
     })
 
-    it('should push error event to message buffers', () => {
+    it('should push error event to the live buffer but NOT persist it', () => {
       const session = createMockSession('test-session')
 
       adapterPrivate(adapter).handleQuotaError(session, {
@@ -2404,13 +2404,37 @@ describe('AcpAdapter - Codex Quota/Error Handling', () => {
         userMessage: 'Quota exceeded: Check your plan.'
       })
 
+      // Live buffer gets the error so the user sees it during the session...
       expect(session.messageBuffer).toHaveLength(1)
-      expect(session.permanentMessages).toHaveLength(1)
+      // ...but it must NOT enter permanentMessages, otherwise it would be
+      // replayed on every resume and keep "showing limits" after the user
+      // upgrades / re-logs in / waits for the window to reset.
+      expect(session.permanentMessages).toHaveLength(0)
 
       const errorEvent = session.messageBuffer[0] as Record<string, unknown>
       expect(errorEvent._isError).toBe(true)
       expect(errorEvent.message).toBe('Quota exceeded: Check your plan.')
       expect(errorEvent.data).toBeNull()
+    })
+
+    it('stale quota error does not survive a resume replay (getAllMessages)', async () => {
+      const session = createMockSession('test-session')
+      adapterPrivate(adapter).sessions.set('test-session', session)
+
+      // Simulate the session hitting a usage limit.
+      adapterPrivate(adapter).handleQuotaError(session, {
+        errorType: 'usage_limit_exceeded',
+        userMessage: 'Quota exceeded: Check your plan.'
+      })
+
+      // On resume, only permanentMessages are replayed. The transient quota
+      // error must be gone so the upgraded/re-logged-in user starts clean.
+      const messages = await adapter.getAllMessages('test-session', {} as never)
+      const replayedText = messages
+        .flatMap((m) => m.parts)
+        .map((p) => p.text || p.content || '')
+        .join('\n')
+      expect(replayedText).not.toContain('Quota exceeded')
     })
 
     it('should trigger onDataAvailable callback', () => {

@@ -1142,14 +1142,24 @@ export class AcpAdapter implements CodingAgentAdapter {
     session.lastError = errorInfo.userMessage
     session.activeTurnId = null
 
-    // Push a user-friendly error event to the message buffers
+    // Push a user-friendly error event to the LIVE message buffer only.
+    //
+    // IMPORTANT: Quota/rate-limit errors are TRANSIENT conditions tied to a
+    // point in time. They must NOT be written to permanentMessages, because
+    // permanentMessages is replayed on every session resume (getAllMessages).
+    // If we persisted them, the "Quota exceeded / Rate limit reached" message
+    // would re-appear at the end of the transcript forever — even after the
+    // user upgrades their Codex plan, re-logs in, or simply waits for the
+    // window to reset. That stale message is exactly what makes 20x keep
+    // "showing limits" after the underlying limit is gone. session.lastError
+    // is already cleared on the next sendPrompt() for recovery, so keeping the
+    // event out of the permanent history fully clears the stale state on resume.
     const errorEvent = {
       _isError: true,
       message: errorInfo.userMessage,
       data: null  // Don't expose raw error data for known error types
     }
     session.messageBuffer.push(errorEvent)
-    this.addToPermanentMessages(session, errorEvent)
     this.onDataAvailable?.(session.sessionId)
   }
 
