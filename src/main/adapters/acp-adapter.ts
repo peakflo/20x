@@ -1162,6 +1162,15 @@ export class AcpAdapter implements CodingAgentAdapter {
           errorType,
           userMessage: `Rate limit reached: ${providerMessage}. Please wait a moment before trying again.`
         }
+      case 'unauthorized':
+        return {
+          errorType,
+          // Two common causes: (a) this session was CREATED under a Codex login
+          // that has since been invalidated (logged out / switched accounts), so
+          // its token can no longer be refreshed and the session can't be resumed;
+          // (b) the CODEX_HOME 20x uses has no valid login. Cover both.
+          userMessage: `Codex sign-in is no longer valid: ${providerMessage} If this is an older session, start a NEW session — it was created under a Codex login that has since changed. If a new session also fails, run \`codex login\` in a terminal (using the CODEX_HOME shown below) and retry.`
+        }
       default:
         return {
           errorType,

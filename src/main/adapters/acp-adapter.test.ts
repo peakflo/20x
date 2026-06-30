@@ -2374,6 +2374,21 @@ describe('AcpAdapter - Codex Quota/Error Handling', () => {
       expect(result!.userMessage).toContain('wait')
     })
 
+    it('should extract unauthorized error with a re-login hint', () => {
+      const result = adapterPrivate(adapter).extractCodexErrorInfo({
+        code: -32603,
+        message: 'Internal error',
+        data: {
+          message: 'Your access token could not be refreshed because you have since logged out or signed in to another account.',
+          codex_error_info: 'unauthorized'
+        }
+      })
+      expect(result).not.toBeNull()
+      expect(result!.errorType).toBe('unauthorized')
+      expect(result!.userMessage).toContain('codex login')
+      expect(result!.userMessage).toContain('CODEX_HOME')
+    })
+
     it('should handle unknown codex error types gracefully', () => {
       const result = adapterPrivate(adapter).extractCodexErrorInfo({
         code: -32603,
