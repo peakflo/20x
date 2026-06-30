@@ -9,7 +9,7 @@
 import { spawn, ChildProcess } from 'child_process'
 import { randomUUID } from 'crypto'
 import { mkdtempSync } from 'fs'
-import { tmpdir } from 'os'
+import { homedir, tmpdir } from 'os'
 import { dirname, join } from 'path'
 import type {
   CodingAgentAdapter,
@@ -125,6 +125,7 @@ interface AcpSession {
   toolCallMetadata: Map<string, { name: string; input: string; title?: string }>  // Cached metadata from initial tool_call events
   lastError: string | null  // Last error message (e.g., quota exceeded) for status reporting
   codexUseApiKey: boolean  // True when Codex auth uses an API key (vs. ChatGPT subscription / CLI login)
+  codexAuthSummary: string  // Human-readable auth identity used (for diagnostics, surfaced in errors)
 }
 
 /**
@@ -277,7 +278,14 @@ export class AcpAdapter implements CodingAgentAdapter {
     // hijack auth away from the ChatGPT subscription in the default CODEX_HOME.
     delete env.OPENAI_API_KEY
     delete env.CODEX_API_KEY
-    console.log(`[AcpAdapter/codex] Auth: ChatGPT subscription / Codex CLI login (authMethod=${config.authMethod ?? 'legacy'}, ~/.codex)`)
+    // Pin CODEX_HOME to the same dir the `codex` CLI uses in a terminal, so
+    // codex-acp reads the exact subscription login the user already has. We only
+    // set it when not already provided (a user who runs `codex` with a custom
+    // CODEX_HOME will have it in their shell env, which we inherit and preserve).
+    if (!env.CODEX_HOME) {
+      env.CODEX_HOME = join(homedir(), '.codex')
+    }
+    console.log(`[AcpAdapter/codex] Auth: ChatGPT subscription / Codex CLI login (authMethod=${config.authMethod ?? 'legacy'}, CODEX_HOME=${env.CODEX_HOME})`)
     return false
   }
 
@@ -320,6 +328,8 @@ export class AcpAdapter implements CodingAgentAdapter {
         ? (apiKeyMethod || usableMethods[0])
         : (usableMethods.find((m) => m.id !== 'openai-api-key' && m.id !== 'codex-api-key') || apiKeyMethod || null)
 
+      console.log(`[AcpAdapter/${this.agentType}] Available auth methods: [${authMethods.map((m) => m.id).join(', ')}]; codexUseApiKey=${session.codexUseApiKey}`)
+
       if (!authMethod) {
         console.log(`[AcpAdapter/${this.agentType}] No usable auth method found; skipping authenticate`)
         return
@@ -330,10 +340,13 @@ export class AcpAdapter implements CodingAgentAdapter {
       // no stale disk credentials. This allows different API keys per session.
 
       console.log(`[AcpAdapter/${this.agentType}] Authenticating with method: ${authMethod.id}`)
+      session.codexAuthSummary = `${session.codexUseApiKey ? 'API key' : 'subscription'} via authenticate(${authMethod.id})`
 
       await this.sendRpcRequest(session, 'authenticate', {
         methodId: authMethod.id
       })
+    } else {
+      console.log(`[AcpAdapter/${this.agentType}] No auth methods advertised by agent (already authenticated); codexUseApiKey=${session.codexUseApiKey}`)
     }
   }
 
@@ -365,6 +378,9 @@ export class AcpAdapter implements CodingAgentAdapter {
     // stripped it, re-hijacking Codex into API-key auth (stale "out of rate
     // limits" that survives restarts because the secret lives in the DB).
     const codexUseApiKey = this.configureCodexAuthEnv(env, config)
+    const codexAuthSummary = this.agentType === 'codex'
+      ? `${codexUseApiKey ? 'API key' : 'subscription'} (authMethod=${config.authMethod ?? 'legacy'}, CODEX_HOME=${env.CODEX_HOME ?? 'default'})`
+      : ''
 
     // Spawn ACP agent process
     // On Windows, .cmd/.bat wrappers need shell:true to resolve
@@ -402,7 +418,8 @@ export class AcpAdapter implements CodingAgentAdapter {
       pendingAssistantTurnSplit: false,
       toolCallMetadata: new Map(),
       lastError: null,
-      codexUseApiKey
+      codexUseApiKey,
+      codexAuthSummary
     }
 
     // Temporarily store with workspace ID, will re-key after getting ACP session ID
@@ -502,6 +519,9 @@ export class AcpAdapter implements CodingAgentAdapter {
     // Decide Codex auth (subscription vs API key) LAST so it is authoritative —
     // see createSession for why this must run after secret-env injection.
     const codexUseApiKey = this.configureCodexAuthEnv(env, config)
+    const codexAuthSummary = this.agentType === 'codex'
+      ? `${codexUseApiKey ? 'API key' : 'subscription'} (authMethod=${config.authMethod ?? 'legacy'}, CODEX_HOME=${env.CODEX_HOME ?? 'default'})`
+      : ''
 
     console.log(`[AcpAdapter/${this.agentType}] Environment after config:`, {
       hasAnthropicInEnv: !!env.ANTHROPIC_API_KEY,
@@ -545,7 +565,8 @@ export class AcpAdapter implements CodingAgentAdapter {
       pendingAssistantTurnSplit: false,
       toolCallMetadata: new Map(),
       lastError: null,
-      codexUseApiKey
+      codexUseApiKey,
+      codexAuthSummary
     }
 
     // Store with the Codex UUID (same as sessionId since we now return UUID from createSession)
@@ -1154,13 +1175,19 @@ export class AcpAdapter implements CodingAgentAdapter {
    * a clear, actionable error message to the user.
    */
   private handleQuotaError(session: AcpSession, errorInfo: { errorType: string; userMessage: string }): void {
+    // Append the auth identity 20x used so the user (and we) can see whether the
+    // limit came from their subscription or an API key — the whole point of the
+    // "terminal works but 20x doesn't" investigation.
+    const authNote = session.codexAuthSummary ? ` [20x auth: ${session.codexAuthSummary}]` : ''
+    const userMessage = `${errorInfo.userMessage}${authNote}`
+
     console.warn(
       `[AcpAdapter/${this.agentType}] Provider error (${errorInfo.errorType}):`,
-      errorInfo.userMessage
+      userMessage
     )
 
     session.status = SessionStatusType.ERROR
-    session.lastError = errorInfo.userMessage
+    session.lastError = userMessage
     session.activeTurnId = null
 
     // Push a user-friendly error event to the LIVE message buffer only.
@@ -1177,7 +1204,7 @@ export class AcpAdapter implements CodingAgentAdapter {
     // event out of the permanent history fully clears the stale state on resume.
     const errorEvent = {
       _isError: true,
-      message: errorInfo.userMessage,
+      message: userMessage,
       data: null  // Don't expose raw error data for known error types
     }
     session.messageBuffer.push(errorEvent)

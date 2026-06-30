@@ -96,6 +96,7 @@ interface AcpSessionForTest {
   toolCallMetadata: Map<string, { name: string; input: string; title?: string }>
   lastError: string | null
   codexUseApiKey?: boolean
+  codexAuthSummary?: string
 }
 
 /** Cast adapter to access private members for testing */
@@ -3150,8 +3151,8 @@ describe('AcpAdapter - configureCodexAuthEnv (Codex auth precedence)', () => {
     // Ambient keys must be stripped so codex-acp uses ~/.codex (subscription).
     expect(env.OPENAI_API_KEY).toBeUndefined()
     expect(env.CODEX_API_KEY).toBeUndefined()
-    // No isolated CODEX_HOME — use the default ~/.codex with the existing login.
-    expect(env.CODEX_HOME).toBeUndefined()
+    // CODEX_HOME pinned to the codex CLI default so codex-acp reads the same login.
+    expect(env.CODEX_HOME).toMatch(/[\\/]\.codex$/)
     expect(env.NO_BROWSER).toBeUndefined()
   })
 
@@ -3165,7 +3166,20 @@ describe('AcpAdapter - configureCodexAuthEnv (Codex auth precedence)', () => {
 
     expect(usesApiKey).toBe(false)
     expect(env.OPENAI_API_KEY).toBeUndefined()
-    expect(env.CODEX_HOME).toBeUndefined()
+    expect(env.CODEX_HOME).toMatch(/[\\/]\.codex$/)
+  })
+
+  it('authMethod=subscription preserves an inherited custom CODEX_HOME', () => {
+    // The user's terminal `codex` may use a custom CODEX_HOME (a different ChatGPT
+    // account); 20x inherits it and must NOT override it with the default ~/.codex.
+    const env: Record<string, string | undefined> = { CODEX_HOME: '/custom/codex/home' }
+
+    const usesApiKey = adapterPrivate(adapter).configureCodexAuthEnv(env, {
+      authMethod: 'subscription'
+    })
+
+    expect(usesApiKey).toBe(false)
+    expect(env.CODEX_HOME).toBe('/custom/codex/home')
   })
 
   it('authMethod=api_key uses the explicit per-agent key in an isolated CODEX_HOME', () => {
@@ -3203,7 +3217,7 @@ describe('AcpAdapter - configureCodexAuthEnv (Codex auth precedence)', () => {
 
     expect(usesApiKey).toBe(false)
     expect(env.OPENAI_API_KEY).toBeUndefined()
-    expect(env.CODEX_HOME).toBeUndefined()
+    expect(env.CODEX_HOME).toMatch(/[\\/]\.codex$/)
   })
 
   it('legacy (no authMethod): an explicit per-agent key opts into API-key mode', () => {
