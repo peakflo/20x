@@ -8,8 +8,8 @@
 
 import { spawn, ChildProcess } from 'child_process'
 import { randomUUID } from 'crypto'
-import { existsSync, mkdtempSync } from 'fs'
-import { homedir, tmpdir } from 'os'
+import { mkdtempSync } from 'fs'
+import { tmpdir } from 'os'
 import { dirname, join } from 'path'
 import type {
   CodingAgentAdapter,
@@ -238,48 +238,46 @@ export class AcpAdapter implements CodingAgentAdapter {
    * Returns true when API-key auth is used, false when the ChatGPT subscription /
    * Codex CLI login is used.
    *
-   * Precedence mirrors the `codex` CLI in a terminal:
-   *   1. Explicit per-agent API key (config.apiKeys.openai) -> API-key auth in an
-   *      isolated temp CODEX_HOME so different keys can be used per session.
-   *   2. Existing Codex CLI login (~/.codex/auth.json, i.e. ChatGPT subscription)
-   *      -> use it via the default CODEX_HOME. Crucially, strip any ambient
-   *      OPENAI_API_KEY/CODEX_API_KEY inherited from the user's shell so it does
-   *      NOT hijack auth into API-key mode. That hijack billed a separate,
-   *      often-exhausted quota and made 20x show "out of rate limits" even though
-   *      the terminal subscription worked perfectly.
-   *   3. No login and no explicit key, but an ambient API key exists -> fall back
-   *      to API-key auth in an isolated temp CODEX_HOME.
+   * The user's explicit choice in the agent configuration (config.authMethod) is
+   * the source of truth:
+   *   - 'subscription' -> use the Codex CLI login (~/.codex), exactly like running
+   *     `codex` in a terminal. Any ambient OPENAI_API_KEY/CODEX_API_KEY inherited
+   *     from the user's shell is STRIPPED so it cannot hijack auth into API-key
+   *     mode (which bills a separate, often-exhausted quota and made 20x show
+   *     "out of rate limits" even though the terminal subscription worked fine).
+   *   - 'api_key' -> use an API key (the per-agent config key if set, otherwise the
+   *     ambient one) in an isolated temp CODEX_HOME so keys can differ per session.
+   *
+   * When authMethod is unset (legacy agents), fall back to the historical rule but
+   * WITHOUT the ambient-key hijack: only an explicitly-configured per-agent API
+   * key implies API-key mode; otherwise default to the subscription/login path.
    */
   private configureCodexAuthEnv(env: Record<string, string | undefined>, config: SessionConfig): boolean {
     if (this.agentType !== 'codex') return false
 
     const explicitApiKey = config.apiKeys?.openai
-    if (explicitApiKey) {
-      env.OPENAI_API_KEY = explicitApiKey
-      env.CODEX_API_KEY = explicitApiKey
+    const useApiKey =
+      config.authMethod === 'api_key' ? true
+      : config.authMethod === 'subscription' ? false
+      : !!explicitApiKey // legacy default: only an explicit key opts into API-key mode
+
+    if (useApiKey) {
+      const key = explicitApiKey || env.OPENAI_API_KEY || env.CODEX_API_KEY
+      if (key) {
+        env.OPENAI_API_KEY = key
+        env.CODEX_API_KEY = key
+      }
       env.NO_BROWSER = '1'
       env.CODEX_HOME = mkdtempSync(join(tmpdir(), 'codex-session-'))
-      console.log('[AcpAdapter/codex] Auth: explicit API key (isolated CODEX_HOME)')
+      console.log(`[AcpAdapter/codex] Auth: API key (authMethod=${config.authMethod ?? 'legacy'}, isolated CODEX_HOME)`)
       return true
     }
 
-    const hasCodexLogin = existsSync(join(homedir(), '.codex', 'auth.json'))
-    if (hasCodexLogin) {
-      // Subscription / CLI-login path — do not let ambient keys override it.
-      delete env.OPENAI_API_KEY
-      delete env.CODEX_API_KEY
-      console.log('[AcpAdapter/codex] Auth: Codex CLI login / subscription (~/.codex)')
-      return false
-    }
-
-    if (env.OPENAI_API_KEY || env.CODEX_API_KEY) {
-      env.NO_BROWSER = '1'
-      env.CODEX_HOME = mkdtempSync(join(tmpdir(), 'codex-session-'))
-      console.log('[AcpAdapter/codex] Auth: ambient API key (no CLI login found)')
-      return true
-    }
-
-    console.log('[AcpAdapter/codex] Auth: no API key and no CLI login found')
+    // Subscription / Codex CLI login path. Strip ambient keys so they can't
+    // hijack auth away from the ChatGPT subscription in the default CODEX_HOME.
+    delete env.OPENAI_API_KEY
+    delete env.CODEX_API_KEY
+    console.log(`[AcpAdapter/codex] Auth: ChatGPT subscription / Codex CLI login (authMethod=${config.authMethod ?? 'legacy'}, ~/.codex)`)
     return false
   }
 

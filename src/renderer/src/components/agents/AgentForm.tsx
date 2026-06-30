@@ -54,7 +54,7 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
   )
   const [expandedServers, setExpandedServers] = useState<Set<string>>(new Set())
 
-  // Auth method state (Claude Code only)
+  // Auth method state (Claude Code and Codex)
   const [authMethod, setAuthMethod] = useState<ClaudeAuthMethod>(
     agent?.config.auth_method ?? 'subscription'
   )
@@ -107,9 +107,9 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
     }
   }, [codingAgent, serverUrl])
 
-  // Reset auth method when switching away from Claude Code
+  // Reset auth method for agents that don't expose a subscription/api_key choice
   useEffect(() => {
-    if (codingAgent !== CodingAgentType.CLAUDE_CODE) {
+    if (codingAgent !== CodingAgentType.CLAUDE_CODE && codingAgent !== CodingAgentType.CODEX) {
       setAuthMethod('subscription')
     }
   }, [codingAgent])
@@ -205,7 +205,9 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
       config: {
         coding_agent: codingAgent || undefined,
         model: model.trim() || undefined,
-        auth_method: codingAgent === CodingAgentType.CLAUDE_CODE ? authMethod : undefined,
+        auth_method: (codingAgent === CodingAgentType.CLAUDE_CODE || codingAgent === CodingAgentType.CODEX)
+          ? authMethod
+          : undefined,
         permission_mode: permissionMode,
         system_prompt: systemPrompt.trim() || undefined,
         max_parallel_sessions: maxParallelSessions,
@@ -213,7 +215,10 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
         skill_ids: skillIds,
         secret_ids: secretIds.length > 0 ? secretIds : undefined,
         api_keys: {
-          openai: openaiApiKey.trim() || undefined,
+          // Only persist the OpenAI key when Codex is in api_key mode
+          openai: (codingAgent === CodingAgentType.CODEX && authMethod === 'api_key')
+            ? (openaiApiKey.trim() || undefined)
+            : undefined,
           // Only save anthropic key when in api_key mode
           anthropic: (codingAgent === CodingAgentType.CLAUDE_CODE && authMethod === 'api_key')
             ? (anthropicApiKey.trim() || undefined)
@@ -410,28 +415,60 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
         </>
       )}
 
-      {/* API Key Configuration for Codex */}
+      {/* Auth Method & API Key Configuration for Codex */}
       {codingAgent === CodingAgentType.CODEX && (
-        <div className="space-y-1.5">
-          <Label htmlFor="openai-api-key">OpenAI API Key</Label>
-          <Input
-            id="openai-api-key"
-            type="password"
-            value={openaiApiKey}
-            onChange={(e) => setOpenaiApiKey(e.target.value)}
-            placeholder={hasOpenaiEnv ? '••••••••' : 'sk-proj-...'}
-          />
-          {!openaiApiKey && hasOpenaiEnv && (
-            <p className="text-xs text-muted-foreground">
-              ✓ Using OPENAI_API_KEY from environment
-            </p>
+        <>
+          <div className="space-y-1.5">
+            <Label htmlFor="codex-auth-method">Authentication Method</Label>
+            <select
+              id="codex-auth-method"
+              value={authMethod}
+              onChange={(e) => setAuthMethod(e.target.value as ClaudeAuthMethod)}
+              className="w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm cursor-pointer"
+            >
+              <option value="subscription">ChatGPT Subscription (default)</option>
+              <option value="api_key">API Key (pay-per-use)</option>
+            </select>
+            {authMethod === 'subscription' && (
+              <p className="text-xs text-muted-foreground">
+                Uses your Codex CLI login (ChatGPT Plus/Pro/Business subscription), exactly like running <code>codex</code> in a terminal.
+                {hasOpenaiEnv && (
+                  <span className="block mt-1 text-yellow-500">
+                    Note: OPENAI_API_KEY found in environment but will be ignored in subscription mode.
+                  </span>
+                )}
+              </p>
+            )}
+          </div>
+
+          {authMethod === 'api_key' && (
+            <div className="space-y-1.5">
+              <Label htmlFor="openai-api-key">OpenAI API Key</Label>
+              <Input
+                id="openai-api-key"
+                type="password"
+                value={openaiApiKey}
+                onChange={(e) => setOpenaiApiKey(e.target.value)}
+                placeholder={hasOpenaiEnv ? '••••••••' : 'sk-proj-...'}
+              />
+              {openaiApiKey && (
+                <p className="text-xs text-muted-foreground">
+                  Using provided API key
+                </p>
+              )}
+              {!openaiApiKey && hasOpenaiEnv && (
+                <p className="text-xs text-muted-foreground">
+                  ✓ Using OPENAI_API_KEY from environment
+                </p>
+              )}
+              {!openaiApiKey && !hasOpenaiEnv && (
+                <p className="text-xs text-destructive">
+                  Required: Enter your API key or set OPENAI_API_KEY environment variable
+                </p>
+              )}
+            </div>
           )}
-          {!openaiApiKey && !hasOpenaiEnv && (
-            <p className="text-xs text-muted-foreground">
-              Optional — leave empty to use Codex CLI login (requires a paid ChatGPT subscription)
-            </p>
-          )}
-        </div>
+        </>
       )}
 
       {/* Auth Method & API Key Configuration for Claude Code */}

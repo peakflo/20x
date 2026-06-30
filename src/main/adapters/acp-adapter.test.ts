@@ -24,22 +24,13 @@ vi.mock('child_process', () => ({
   }))
 }))
 
-// Mock fs/os so configureCodexAuthEnv() is deterministic: existsSync controls
-// whether a Codex CLI login (~/.codex/auth.json) is "present", and mkdtempSync
-// returns a stable path instead of touching disk.
+// Mock fs so configureCodexAuthEnv()'s mkdtempSync returns a stable path instead
+// of touching disk (used to assert the isolated CODEX_HOME in API-key mode).
 vi.mock('fs', async (importActual) => {
   const actual = await importActual<typeof import('fs')>()
   return {
     ...actual,
-    existsSync: vi.fn(actual.existsSync),
     mkdtempSync: vi.fn(() => '/tmp/codex-session-test')
-  }
-})
-vi.mock('os', async (importActual) => {
-  const actual = await importActual<typeof import('os')>()
-  return {
-    ...actual,
-    homedir: vi.fn(() => '/home/testuser')
   }
 })
 
@@ -64,7 +55,10 @@ interface AcpAdapterPrivate {
   handleRpcMessage(session: AcpSessionForTest, message: unknown): void
   authenticateSession(session: AcpSessionForTest, initResult: unknown): Promise<void>
   sendRpcRequest(session: AcpSessionForTest, method: string, params?: unknown): Promise<unknown>
-  configureCodexAuthEnv(env: Record<string, string>, config: { apiKeys?: { openai?: string } }): boolean
+  configureCodexAuthEnv(
+    env: Record<string, string | undefined>,
+    config: { apiKeys?: { openai?: string }; authMethod?: 'subscription' | 'api_key' }
+  ): boolean
   agentType: string
 }
 
@@ -3131,29 +3125,26 @@ describe('AcpAdapter - Codex Quota/Error Handling', () => {
 
 describe('AcpAdapter - configureCodexAuthEnv (Codex auth precedence)', () => {
   let adapter: AcpAdapter
-  let existsSyncMock: ReturnType<typeof vi.fn>
 
-  beforeEach(async () => {
+  beforeEach(() => {
     adapter = new AcpAdapter('codex')
-    const fs = await import('fs')
-    existsSyncMock = fs.existsSync as unknown as ReturnType<typeof vi.fn>
-    existsSyncMock.mockReset()
   })
 
   afterEach(() => {
     vi.restoreAllMocks()
   })
 
-  it('uses the Codex CLI login (subscription) and strips ambient API keys', () => {
-    // User is logged into Codex (subscription) AND has an ambient OPENAI_API_KEY
-    // exported in their shell — the classic "terminal works, 20x shows limits" case.
-    existsSyncMock.mockReturnValue(true)
-    const env: Record<string, string> = {
+  it('authMethod=subscription strips ambient API keys and uses ~/.codex', () => {
+    // Explicit subscription choice + an ambient OPENAI_API_KEY exported in the
+    // shell — the classic "terminal works, 20x shows out of rate limits" case.
+    const env: Record<string, string | undefined> = {
       OPENAI_API_KEY: 'sk-ambient-from-shell',
       CODEX_API_KEY: 'sk-ambient-from-shell'
     }
 
-    const usesApiKey = adapterPrivate(adapter).configureCodexAuthEnv(env, {})
+    const usesApiKey = adapterPrivate(adapter).configureCodexAuthEnv(env, {
+      authMethod: 'subscription'
+    })
 
     expect(usesApiKey).toBe(false)
     // Ambient keys must be stripped so codex-acp uses ~/.codex (subscription).
@@ -3164,11 +3155,24 @@ describe('AcpAdapter - configureCodexAuthEnv (Codex auth precedence)', () => {
     expect(env.NO_BROWSER).toBeUndefined()
   })
 
-  it('uses an explicitly-configured API key even when a CLI login exists', () => {
-    existsSyncMock.mockReturnValue(true)
-    const env: Record<string, string> = {}
+  it('authMethod=subscription ignores even an explicitly-configured API key', () => {
+    const env: Record<string, string | undefined> = {}
 
     const usesApiKey = adapterPrivate(adapter).configureCodexAuthEnv(env, {
+      authMethod: 'subscription',
+      apiKeys: { openai: 'sk-explicit-agent-key' }
+    })
+
+    expect(usesApiKey).toBe(false)
+    expect(env.OPENAI_API_KEY).toBeUndefined()
+    expect(env.CODEX_HOME).toBeUndefined()
+  })
+
+  it('authMethod=api_key uses the explicit per-agent key in an isolated CODEX_HOME', () => {
+    const env: Record<string, string | undefined> = {}
+
+    const usesApiKey = adapterPrivate(adapter).configureCodexAuthEnv(env, {
+      authMethod: 'api_key',
       apiKeys: { openai: 'sk-explicit-agent-key' }
     })
 
@@ -3179,26 +3183,39 @@ describe('AcpAdapter - configureCodexAuthEnv (Codex auth precedence)', () => {
     expect(env.CODEX_HOME).toBe('/tmp/codex-session-test')
   })
 
-  it('falls back to an ambient API key when no CLI login is present', () => {
-    existsSyncMock.mockReturnValue(false)
-    const env: Record<string, string> = { OPENAI_API_KEY: 'sk-ambient' }
+  it('authMethod=api_key falls back to an ambient key when no per-agent key is set', () => {
+    const env: Record<string, string | undefined> = { OPENAI_API_KEY: 'sk-ambient' }
 
-    const usesApiKey = adapterPrivate(adapter).configureCodexAuthEnv(env, {})
+    const usesApiKey = adapterPrivate(adapter).configureCodexAuthEnv(env, {
+      authMethod: 'api_key'
+    })
 
     expect(usesApiKey).toBe(true)
     expect(env.OPENAI_API_KEY).toBe('sk-ambient')
-    expect(env.NO_BROWSER).toBe('1')
     expect(env.CODEX_HOME).toBe('/tmp/codex-session-test')
   })
 
-  it('returns false when there is no login and no API key', () => {
-    existsSyncMock.mockReturnValue(false)
-    const env: Record<string, string> = {}
+  it('legacy (no authMethod): an ambient key alone does NOT force API-key mode', () => {
+    // The original bug: an ambient shell OPENAI_API_KEY hijacked subscription users.
+    const env: Record<string, string | undefined> = { OPENAI_API_KEY: 'sk-ambient' }
 
     const usesApiKey = adapterPrivate(adapter).configureCodexAuthEnv(env, {})
 
     expect(usesApiKey).toBe(false)
+    expect(env.OPENAI_API_KEY).toBeUndefined()
     expect(env.CODEX_HOME).toBeUndefined()
+  })
+
+  it('legacy (no authMethod): an explicit per-agent key opts into API-key mode', () => {
+    const env: Record<string, string | undefined> = {}
+
+    const usesApiKey = adapterPrivate(adapter).configureCodexAuthEnv(env, {
+      apiKeys: { openai: 'sk-explicit-agent-key' }
+    })
+
+    expect(usesApiKey).toBe(true)
+    expect(env.OPENAI_API_KEY).toBe('sk-explicit-agent-key')
+    expect(env.CODEX_HOME).toBe('/tmp/codex-session-test')
   })
 
   it('authenticateSession allows chatgpt method on the subscription path', async () => {
