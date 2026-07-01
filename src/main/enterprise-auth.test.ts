@@ -6,10 +6,14 @@ const authMock = {
   signOut: vi.fn(async () => ({})),
   refreshSession: vi.fn(async (): Promise<{
     data: { session: { access_token: string; refresh_token: string } | null }
-    error: { message: string; status?: number } | null
+    error: { message: string; status?: number; code?: string; name?: string } | null
   }> => ({ data: { session: null }, error: null })),
   signInWithPassword: vi.fn(async () => ({ data: null, error: null }))
 }
+
+// Store an encrypted-at-rest value the way the mocked safeStorage (base64 utf8)
+// expects it, so getStored*/decryptValue round-trips in tests.
+const enc = (value: string): string => Buffer.from(value, 'utf8').toString('base64')
 
 vi.mock('@supabase/supabase-js', () => ({
   createClient: vi.fn(() => ({
@@ -403,5 +407,241 @@ describe('EnterpriseAuth logging', () => {
     expect(errCall![0]).toContain('500')
 
     errorSpy.mockRestore()
+  })
+})
+
+// ── Regression: premature logout on transient refresh failures ──────
+// Problem 1 from parent task u92mprhpqojofy42nmicvfa7: the user was signed out
+// after a successful enterprise login because ANY refresh failure (including
+// flaky network / 5xx) wiped stored credentials. These tests lock in the rule
+// that only DEFINITIVE auth errors clear the session.
+describe('EnterpriseAuth — transient vs. definitive refresh failures', () => {
+  let db: MockDb
+  let warnSpy: ReturnType<typeof vi.spyOn>
+
+  const seedSession = (d: MockDb): void => {
+    d.setSetting('enterprise_supabase_access_token', enc('access-token'))
+    d.setSetting('enterprise_supabase_refresh_token', enc('refresh-token'))
+    d.setSetting('enterprise_tenant_id', 'tenant-1')
+    d.setSetting('enterprise_tenant_name', 'Peakflo')
+    d.setSetting('enterprise_user_id', 'user-1')
+    d.setSetting('enterprise_user_email', 'user@peakflo.co')
+  }
+
+  const wasCleared = (spy: ReturnType<typeof vi.spyOn>): boolean =>
+    spy.mock.calls.some((c) => String(c[0]).includes('auth_state_cleared'))
+
+  beforeEach(() => {
+    db = new MockDb()
+    warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200, json: async () => ({}) })))
+    authMock.signOut.mockResolvedValue({})
+    authMock.refreshSession.mockResolvedValue({ data: { session: null }, error: null })
+  })
+
+  afterEach(() => {
+    warnSpy.mockRestore()
+    vi.unstubAllGlobals()
+    vi.clearAllMocks()
+  })
+
+  it('does NOT clear credentials on a transient 5xx refresh failure', async () => {
+    seedSession(db)
+    authMock.refreshSession.mockResolvedValue({
+      data: { session: null },
+      error: { message: 'Service Unavailable', status: 503 }
+    })
+
+    const auth = new EnterpriseAuth(db as never)
+
+    await expect(auth.refreshToken()).rejects.toThrow(/Unable to reach 20x Cloud/)
+
+    // Session must be preserved so a later retry can succeed
+    expect(db.getSetting('enterprise_supabase_refresh_token')).not.toBeNull()
+    expect(db.getSetting('enterprise_supabase_access_token')).not.toBeNull()
+    expect(db.getSetting('enterprise_tenant_id')).toBe('tenant-1')
+    expect(wasCleared(warnSpy)).toBe(false)
+    expect(
+      warnSpy.mock.calls.some((c) => String(c[0]).includes('auth_refresh_transient_skip_clear'))
+    ).toBe(true)
+  })
+
+  it('does NOT clear credentials when refreshSession throws a network error', async () => {
+    seedSession(db)
+    authMock.refreshSession.mockRejectedValue(new Error('fetch failed'))
+
+    const auth = new EnterpriseAuth(db as never)
+
+    await expect(auth.refreshToken()).rejects.toThrow(/Unable to reach 20x Cloud/)
+
+    expect(db.getSetting('enterprise_supabase_refresh_token')).not.toBeNull()
+    expect(wasCleared(warnSpy)).toBe(false)
+  })
+
+  it('DOES clear credentials when the refresh token is definitively invalid (invalid_grant)', async () => {
+    seedSession(db)
+    authMock.refreshSession.mockResolvedValue({
+      data: { session: null },
+      error: { message: 'Invalid Refresh Token', status: 400, code: 'invalid_grant' }
+    })
+
+    const auth = new EnterpriseAuth(db as never)
+
+    await expect(auth.refreshToken()).rejects.toThrow('Session expired')
+
+    expect(db.getSetting('enterprise_supabase_refresh_token')).toBeNull()
+    expect(db.getSetting('enterprise_supabase_access_token')).toBeNull()
+    expect(wasCleared(warnSpy)).toBe(true)
+    expect(
+      warnSpy.mock.calls.some((c) => String(c[0]).includes('auth_clear_supabase_refresh_failed'))
+    ).toBe(true)
+  })
+
+  it('apiRequest 401 → transient refresh failure keeps the session (no clear)', async () => {
+    db.setSetting('enterprise_jwt', enc('jwt-token'))
+    db.setSetting('enterprise_jwt_expires_at', String(Date.now() + 10 * 60_000))
+    db.setSetting('enterprise_supabase_refresh_token', enc('refresh-token'))
+    db.setSetting('enterprise_tenant_id', 'tenant-1')
+
+    authMock.refreshSession.mockResolvedValue({
+      data: { session: null },
+      error: { message: 'Bad Gateway', status: 502 }
+    })
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: false,
+      status: 401,
+      json: async () => ({ message: 'Unauthorized' })
+    })))
+
+    const auth = new EnterpriseAuth(db as never)
+
+    await expect(auth.apiRequest('GET', '/api/test')).rejects.toThrow(/Unable to reach 20x Cloud/)
+
+    // JWT + refresh token preserved; not signed out on a transient failure
+    expect(db.getSetting('enterprise_jwt')).not.toBeNull()
+    expect(db.getSetting('enterprise_supabase_refresh_token')).not.toBeNull()
+    expect(wasCleared(warnSpy)).toBe(false)
+    expect(
+      warnSpy.mock.calls.some((c) => String(c[0]).includes('auth_api_401_retry_transient'))
+    ).toBe(true)
+  })
+})
+
+// ── Regression: selectTenant session restoration ────────────────────
+// Problem 2 from parent task: selectTenant threw "Not authenticated — please
+// sign in first" even though the user still had a valid refresh token.
+describe('EnterpriseAuth — selectTenant session restoration', () => {
+  let db: MockDb
+  let warnSpy: ReturnType<typeof vi.spyOn>
+
+  beforeEach(() => {
+    db = new MockDb()
+    warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    authMock.signOut.mockResolvedValue({})
+    authMock.refreshSession.mockResolvedValue({ data: { session: null }, error: null })
+  })
+
+  afterEach(() => {
+    warnSpy.mockRestore()
+    vi.unstubAllGlobals()
+    vi.clearAllMocks()
+  })
+
+  it('restores the access token from the refresh token when none is stored', async () => {
+    // No access token stored, but we DO hold a valid refresh token
+    db.setSetting('enterprise_supabase_refresh_token', enc('refresh-token'))
+    authMock.refreshSession.mockResolvedValue({
+      data: { session: { access_token: 'restored-access', refresh_token: 'rotated-refresh' } },
+      error: null
+    })
+
+    const fetchFn = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('/api/20x/auth/select-tenant')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            token: 'jwt-token',
+            expiresIn: 3600,
+            tenant: { id: 'tenant-1', name: 'Peakflo' }
+          })
+        }
+      }
+      if (url.includes('/api/20x/ai-gateway/virtual-key')) {
+        throw new Error('AI gateway unavailable')
+      }
+      throw new Error(`Unexpected fetch URL: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchFn)
+
+    const auth = new EnterpriseAuth(db as never)
+    const result = await auth.selectTenant('tenant-1')
+
+    expect(result.tenant).toEqual({ id: 'tenant-1', name: 'Peakflo' })
+    // select-tenant must have been called with the RESTORED access token
+    const selectCall = (fetchFn.mock.calls as Array<[RequestInfo | URL, RequestInit?]>).find(
+      ([input]) => String(input).includes('/api/20x/auth/select-tenant')
+    )
+    expect((selectCall?.[1]?.headers as Record<string, string>)?.Authorization).toBe(
+      'Bearer restored-access'
+    )
+    expect(authMock.refreshSession).toHaveBeenCalledTimes(1)
+  })
+
+  it('refreshes the Supabase session and retries once when select-tenant returns 401', async () => {
+    db.setSetting('enterprise_supabase_access_token', enc('stale-access'))
+    db.setSetting('enterprise_supabase_refresh_token', enc('refresh-token'))
+    authMock.refreshSession.mockResolvedValue({
+      data: { session: { access_token: 'fresh-access', refresh_token: 'rotated-refresh' } },
+      error: null
+    })
+
+    let selectCalls = 0
+    const fetchFn = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('/api/20x/auth/select-tenant')) {
+        selectCalls++
+        if (selectCalls === 1) {
+          return { ok: false, status: 401, json: async () => ({ message: 'Token expired' }) }
+        }
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            token: 'jwt-token',
+            expiresIn: 3600,
+            tenant: { id: 'tenant-1', name: 'Peakflo' }
+          })
+        }
+      }
+      if (url.includes('/api/20x/ai-gateway/virtual-key')) {
+        throw new Error('AI gateway unavailable')
+      }
+      throw new Error(`Unexpected fetch URL: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchFn)
+
+    const auth = new EnterpriseAuth(db as never)
+    const result = await auth.selectTenant('tenant-1')
+
+    expect(result.tenant).toEqual({ id: 'tenant-1', name: 'Peakflo' })
+    expect(selectCalls).toBe(2)
+    const secondSelect = (fetchFn.mock.calls as Array<[RequestInfo | URL, RequestInit?]>).filter(
+      ([input]) => String(input).includes('/api/20x/auth/select-tenant')
+    )[1]
+    expect((secondSelect?.[1]?.headers as Record<string, string>)?.Authorization).toBe(
+      'Bearer fresh-access'
+    )
+  })
+
+  it('throws "Not authenticated" only when no tokens exist at all', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200, json: async () => ({}) })))
+    const auth = new EnterpriseAuth(db as never)
+
+    await expect(auth.selectTenant('tenant-1')).rejects.toThrow('Not authenticated — please sign in first')
+    expect(
+      warnSpy.mock.calls.some((c) => String(c[0]).includes('auth_select_tenant_not_authenticated'))
+    ).toBe(true)
   })
 })
