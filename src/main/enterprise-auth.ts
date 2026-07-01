@@ -85,6 +85,24 @@ export interface EnterpriseSession {
   currentTenant: { id: string; name: string } | null
 }
 
+/**
+ * Thrown when the enterprise session is *definitively* invalid and the user
+ * must sign in again (e.g. the Supabase refresh token was rejected with
+ * invalid_grant / refresh_token_not_found). Distinct from transient
+ * network/5xx failures, which must NOT invalidate the stored session.
+ *
+ * When this error is thrown, stored credentials have already been cleared.
+ */
+export class EnterpriseAuthInvalidError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'EnterpriseAuthInvalidError'
+  }
+}
+
+/** Minimal shape of a Supabase refresh error we inspect for classification. */
+type RefreshErrorLike = { message?: string; status?: number; code?: string; name?: string } | null
+
 interface EnterpriseAiGatewayVirtualKeyResponse {
   apiKey: string
   baseUrl: string
@@ -250,22 +268,51 @@ export class EnterpriseAuth {
       throw new Error('Tenant ID is required')
     }
 
-    const accessToken = this.getStoredSupabaseAccessToken()
+    this.logAuthEvent('auth_select_tenant_start', { tenantId })
+
+    // Prefer the stored Supabase access token. If it's missing (e.g. it was
+    // rotated/expired since login), attempt to restore it from the refresh
+    // token before giving up — this prevents the spurious
+    // "Not authenticated — please sign in first" error when the user actually
+    // still holds a valid refresh token.
+    let accessToken = this.getStoredSupabaseAccessToken()
     if (!accessToken) {
+      accessToken = await this.tryRefreshSupabaseAccessToken()
+    }
+    if (!accessToken) {
+      this.logAuthEvent('auth_select_tenant_not_authenticated')
       throw new Error('Not authenticated — please sign in first')
     }
 
-    const response = await fetch(`${this.apiUrl}/api/20x/auth/select-tenant`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${accessToken}`
-      },
-      body: JSON.stringify({ tenantId })
-    })
+    const doSelect = (token: string): Promise<Response> =>
+      fetch(`${this.apiUrl}/api/20x/auth/select-tenant`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ tenantId })
+      })
+
+    let response = await doSelect(accessToken)
+
+    // The stored access token may have expired between login and selection.
+    // Refresh the Supabase session once and retry before surfacing an error.
+    if (response.status === 401) {
+      this.logAuthEvent('auth_select_tenant_access_token_expired')
+      const refreshed = await this.tryRefreshSupabaseAccessToken()
+      if (refreshed) {
+        accessToken = refreshed
+        response = await doSelect(accessToken)
+      }
+    }
 
     if (!response.ok) {
       const body = await response.json().catch(() => ({}))
+      this.logAuthEvent('auth_select_tenant_failed', {
+        status: response.status,
+        message: body.message ?? null
+      })
       throw new Error(body.message || `Failed to select tenant (${response.status})`)
     }
 
@@ -275,6 +322,10 @@ export class EnterpriseAuth {
     this.storeJwt(result.token, result.expiresIn)
     this.db.setSetting(KEYS.TENANT_ID, result.tenant.id)
     this.db.setSetting(KEYS.TENANT_NAME, result.tenant.name)
+    this.logAuthEvent('auth_select_tenant_success', {
+      tenantId: result.tenant.id,
+      tenantName: result.tenant.name
+    })
     const warnings: string[] = []
     try {
       this.logAuthEvent('ai_gateway_virtual_key_fetch_start')
@@ -369,31 +420,10 @@ export class EnterpriseAuth {
   }
 
   private async executeRefresh(): Promise<{ token: string }> {
-    // First refresh the Supabase session
-    const refreshToken = this.getStoredSupabaseRefreshToken()
-    if (!refreshToken) {
-      this.logAuthEvent('auth_clear_missing_refresh_token')
-      this.clearStoredData()
-      this.notifySessionExpired('No refresh token — please sign in to 20x Cloud again.')
-      throw new Error('No refresh token available — please sign in again')
-    }
-
-    const { data, error } = await this.supabase.auth.refreshSession({
-      refresh_token: refreshToken
-    })
-
-    if (error || !data.session) {
-      this.logAuthEvent('auth_clear_supabase_refresh_failed', {
-        message: error?.message || 'No session returned',
-        status: (error as { status?: number } | null)?.status
-      })
-      this.clearStoredData()
-      this.notifySessionExpired('Session expired — please sign in to 20x Cloud again.')
-      throw new Error('Session expired — please sign in again')
-    }
-
-    // Store updated Supabase tokens
-    this.storeSupabaseSession(data.session)
+    // First refresh the Supabase session. This clears stored data ONLY when
+    // the refresh token is definitively invalid — transient network/5xx
+    // failures throw without wiping the session so the user stays signed in.
+    const accessToken = await this.refreshSupabaseSession()
 
     // Now refresh the pf-workflo JWT
     const tenantId = this.db.getSetting(KEYS.TENANT_ID)
@@ -405,7 +435,7 @@ export class EnterpriseAuth {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${data.session.access_token}`
+        'Authorization': `Bearer ${accessToken}`
       },
       body: JSON.stringify({ tenantId })
     })
@@ -419,6 +449,141 @@ export class EnterpriseAuth {
     this.storeJwt(result.token, result.expiresIn)
 
     return { token: result.token }
+  }
+
+  /**
+   * Refresh the underlying Supabase session using the stored refresh token and
+   * return the fresh access token.
+   *
+   * Credential-clearing policy:
+   * - Missing refresh token          → clear + throw EnterpriseAuthInvalidError
+   * - Refresh rejected (invalid_grant / 400/401 / refresh token not found)
+   *                                   → clear + throw EnterpriseAuthInvalidError
+   * - Transient failure (network / timeout / 5xx / 408 / 429 / unknown)
+   *                                   → KEEP session, throw plain Error
+   *
+   * This is the single choke-point that decides whether an involuntary
+   * sign-out happens, which is what prevented premature logouts on flaky
+   * networks.
+   */
+  private async refreshSupabaseSession(): Promise<string> {
+    const refreshToken = this.getStoredSupabaseRefreshToken()
+    if (!refreshToken) {
+      this.logAuthEvent('auth_clear_missing_refresh_token')
+      this.clearStoredData()
+      this.notifySessionExpired('No refresh token — please sign in to 20x Cloud again.')
+      throw new EnterpriseAuthInvalidError('No refresh token available — please sign in again')
+    }
+
+    let session: Session | null = null
+    let error: RefreshErrorLike = null
+    try {
+      const result = await this.supabase.auth.refreshSession({ refresh_token: refreshToken })
+      session = result.data.session
+      error = result.error as RefreshErrorLike
+    } catch (err) {
+      // A thrown error (rather than a returned { error }) is almost always a
+      // network/transport failure — treat as transient, do NOT clear.
+      this.logAuthEvent('auth_refresh_transient_skip_clear', {
+        reason: 'refresh_session_threw',
+        ...this.describeError(err)
+      })
+      throw new Error('Unable to reach 20x Cloud to refresh the session — please try again')
+    }
+
+    if (error || !session) {
+      const classification = this.classifyRefreshError(error)
+      if (classification === 'invalid') {
+        this.logAuthEvent('auth_clear_supabase_refresh_failed', {
+          message: error?.message || 'No session returned',
+          status: error?.status,
+          code: error?.code
+        })
+        this.clearStoredData()
+        this.notifySessionExpired('Session expired — please sign in to 20x Cloud again.')
+        throw new EnterpriseAuthInvalidError('Session expired — please sign in again')
+      }
+
+      // Transient: keep the stored session intact so a later retry can succeed.
+      this.logAuthEvent('auth_refresh_transient_skip_clear', {
+        message: error?.message || 'No session returned',
+        status: error?.status,
+        code: error?.code
+      })
+      throw new Error('Unable to reach 20x Cloud to refresh the session — please try again')
+    }
+
+    // Store updated Supabase tokens
+    this.storeSupabaseSession(session)
+    return session.access_token
+  }
+
+  /**
+   * Best-effort variant of refreshSupabaseSession used by selectTenant.
+   * Returns the fresh access token, or null if the session could not be
+   * restored (whether the failure was definitive or transient — the caller
+   * decides how to surface it). Definitive failures still clear credentials
+   * inside refreshSupabaseSession.
+   */
+  private async tryRefreshSupabaseAccessToken(): Promise<string | null> {
+    try {
+      return await this.refreshSupabaseSession()
+    } catch (err) {
+      this.logAuthEvent('auth_supabase_restore_failed', this.describeError(err))
+      return null
+    }
+  }
+
+  /**
+   * Classify a Supabase refresh error as a definitive auth failure ('invalid',
+   * requiring re-login) or a recoverable/transient one ('transient', keep the
+   * session). The default for ambiguous cases is 'transient' so we never sign a
+   * user out on an error we don't positively recognise as auth-invalid.
+   */
+  private classifyRefreshError(error: RefreshErrorLike): 'invalid' | 'transient' {
+    // No structured error but no session either — ambiguous; don't clear.
+    if (!error) return 'transient'
+
+    const status = typeof error.status === 'number' ? error.status : undefined
+    const code = (error.code || '').toLowerCase()
+    const message = (error.message || '').toLowerCase()
+    const name = (error.name || '').toLowerCase()
+
+    // Definitive auth-invalid signals: the refresh token itself is bad.
+    const invalidCodes = [
+      'invalid_grant',
+      'refresh_token_not_found',
+      'refresh_token_already_used',
+      'session_not_found',
+      'session_expired',
+      'bad_jwt'
+    ]
+    if (invalidCodes.includes(code)) return 'invalid'
+    if (
+      /invalid refresh token|refresh token not found|already used|invalid_grant|invalid token|session (?:not found|expired)|jwt expired/.test(
+        message
+      )
+    ) {
+      return 'invalid'
+    }
+
+    // Transient signals: network / server errors → keep the session.
+    if (name.includes('retryable') || name.includes('fetch')) return 'transient'
+    if (
+      /fetch failed|failed to fetch|network|timeout|timed out|econn|enotfound|eai_again|socket|temporar|unavailable|502|503|504/.test(
+        message
+      )
+    ) {
+      return 'transient'
+    }
+    if (status !== undefined) {
+      if (status >= 500 || status === 408 || status === 429 || status === 0) return 'transient'
+      // Explicit auth-rejection status codes from the refresh endpoint.
+      if (status === 400 || status === 401 || status === 403 || status === 422) return 'invalid'
+    }
+
+    // Unknown shape → be conservative and keep the session.
+    return 'transient'
   }
 
   // ── API Request Proxy ────────────────────────────────────────────
@@ -454,19 +619,42 @@ export class EnterpriseAuth {
         const retryResponse = await fetch(url, { ...fetchOptions, headers })
 
         if (!retryResponse.ok) {
+          // We just proved the session is valid by refreshing it successfully.
+          // A non-ok here (even another 401) is therefore a RESOURCE-level
+          // rejection specific to this endpoint (e.g. an AI-gateway virtual key
+          // that isn't provisioned) — NOT an invalid session. Surface the
+          // resource error WITHOUT clearing credentials, otherwise an optional
+          // post-auth call (like the AI-gateway key fetch inside selectTenant)
+          // would wipe the freshly-established session.
           const retryBody = await retryResponse.json().catch(() => ({}))
+          this.logAuthEvent('auth_api_401_retry_resource_error', {
+            method: normalizedMethod,
+            path,
+            status: retryResponse.status
+          })
           throw new Error(retryBody.message || `API request failed (${retryResponse.status})`)
         }
 
         return retryResponse.json().catch(() => null)
       } catch (error) {
-        this.logAuthEvent('auth_clear_after_api_401_retry_failed', {
-          method: method.toUpperCase(),
+        // Only clear credentials when the refresh itself proved the session is
+        // DEFINITIVELY invalid. Transient network/5xx failures and
+        // resource-level rejections must NOT sign the user out.
+        if (error instanceof EnterpriseAuthInvalidError) {
+          this.logAuthEvent('auth_clear_after_api_401_retry_failed', {
+            method: normalizedMethod,
+            path,
+            error: this.describeError(error)
+          })
+          this.clearStoredData()
+          throw new Error('Session expired — please sign in again')
+        }
+        this.logAuthEvent('auth_api_401_retry_no_clear', {
+          method: normalizedMethod,
           path,
           error: this.describeError(error)
         })
-        this.clearStoredData()
-        throw new Error('Session expired — please sign in again')
+        throw error instanceof Error ? error : new Error(String(error))
       }
     }
 
@@ -510,12 +698,21 @@ export class EnterpriseAuth {
         headers['Authorization'] = `Bearer ${retryJwt}`
         response = await fetch(url, { method: 'GET', headers })
       } catch (error) {
-        this.logAuthEvent('auth_clear_after_download_401_retry_failed', {
+        // Only clear credentials on a definitive auth failure — transient
+        // network/5xx errors must not sign the user out.
+        if (error instanceof EnterpriseAuthInvalidError) {
+          this.logAuthEvent('auth_clear_after_download_401_retry_failed', {
+            path,
+            error: this.describeError(error)
+          })
+          this.clearStoredData()
+          throw new Error('Session expired — please sign in again')
+        }
+        this.logAuthEvent('auth_download_401_retry_transient', {
           path,
           error: this.describeError(error)
         })
-        this.clearStoredData()
-        throw new Error('Session expired — please sign in again')
+        throw error instanceof Error ? error : new Error(String(error))
       }
     }
 

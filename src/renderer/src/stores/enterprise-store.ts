@@ -158,12 +158,16 @@ export const useEnterpriseStore = create<EnterpriseState>((set) => ({
     set({ isLoading: true, error: null })
     try {
       const result = await enterpriseApi.selectTenant(tenantId)
-      // Show "Connected" immediately — sync runs in background
+      // Show "Connected" immediately — sync runs in background.
+      // Clear availableTenants and error so the modal reflects the connected
+      // state (and doesn't re-render the org picker) on success.
       set({
         isLoading: false,
         isAuthenticated: true,
         isSyncing: true,
-        currentTenant: result.tenant
+        currentTenant: result.tenant,
+        availableTenants: null,
+        error: null
       })
       // Surface non-fatal warnings (e.g. AI gateway key fetch failure)
       if (result.warnings?.length) {
