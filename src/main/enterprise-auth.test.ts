@@ -522,7 +522,49 @@ describe('EnterpriseAuth — transient vs. definitive refresh failures', () => {
     expect(db.getSetting('enterprise_supabase_refresh_token')).not.toBeNull()
     expect(wasCleared(warnSpy)).toBe(false)
     expect(
-      warnSpy.mock.calls.some((c) => String(c[0]).includes('auth_api_401_retry_transient'))
+      warnSpy.mock.calls.some((c) => String(c[0]).includes('auth_api_401_retry_no_clear'))
+    ).toBe(true)
+  })
+
+  it('does NOT clear the session when a resource endpoint keeps returning 401 after a valid refresh', async () => {
+    // Reproduces the PRIMARY root cause: an optional post-auth resource fetch
+    // (e.g. AI-gateway virtual key) 401s, the token refreshes successfully, but
+    // the resource STILL 401s. That must surface a resource error, never wipe
+    // the freshly-established enterprise session.
+    db.setSetting('enterprise_jwt', enc('jwt-token'))
+    db.setSetting('enterprise_jwt_expires_at', String(Date.now() + 10 * 60_000))
+    db.setSetting('enterprise_supabase_access_token', enc('access-token'))
+    db.setSetting('enterprise_supabase_refresh_token', enc('refresh-token'))
+    db.setSetting('enterprise_tenant_id', 'tenant-1')
+    db.setSetting('enterprise_tenant_name', 'Peakflo')
+
+    // Refresh succeeds → session is proven valid
+    authMock.refreshSession.mockResolvedValue({
+      data: { session: { access_token: 'fresh-access', refresh_token: 'rotated-refresh' } },
+      error: null
+    })
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      // The pf-workflo JWT refresh endpoint succeeds
+      if (url.includes('/api/20x/auth/refresh')) {
+        return { ok: true, status: 200, json: async () => ({ token: 'new-jwt', expiresIn: 3600 }) }
+      }
+      // The resource endpoint always 401s (e.g. AI gateway not provisioned)
+      return { ok: false, status: 401, json: async () => ({ message: 'Virtual key not provisioned' }) }
+    }))
+
+    const auth = new EnterpriseAuth(db as never)
+
+    await expect(auth.apiRequest('GET', '/api/20x/ai-gateway/virtual-key')).rejects.toThrow(
+      'Virtual key not provisioned'
+    )
+
+    // The session survives the resource-level 401
+    expect(db.getSetting('enterprise_supabase_refresh_token')).not.toBeNull()
+    expect(db.getSetting('enterprise_tenant_id')).toBe('tenant-1')
+    expect(wasCleared(warnSpy)).toBe(false)
+    expect(
+      warnSpy.mock.calls.some((c) => String(c[0]).includes('auth_api_401_retry_resource_error'))
     ).toBe(true)
   })
 })

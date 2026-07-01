@@ -618,27 +618,28 @@ export class EnterpriseAuth {
         headers['Authorization'] = `Bearer ${retryJwt}`
         const retryResponse = await fetch(url, { ...fetchOptions, headers })
 
-        // A fresh token that is STILL rejected means the session is genuinely
-        // invalid → clear and require re-login.
-        if (retryResponse.status === 401) {
-          this.logAuthEvent('auth_clear_after_api_401_retry_failed', {
+        if (!retryResponse.ok) {
+          // We just proved the session is valid by refreshing it successfully.
+          // A non-ok here (even another 401) is therefore a RESOURCE-level
+          // rejection specific to this endpoint (e.g. an AI-gateway virtual key
+          // that isn't provisioned) — NOT an invalid session. Surface the
+          // resource error WITHOUT clearing credentials, otherwise an optional
+          // post-auth call (like the AI-gateway key fetch inside selectTenant)
+          // would wipe the freshly-established session.
+          const retryBody = await retryResponse.json().catch(() => ({}))
+          this.logAuthEvent('auth_api_401_retry_resource_error', {
             method: normalizedMethod,
             path,
-            reason: 'retry_still_401'
+            status: retryResponse.status
           })
-          this.clearStoredData()
-          throw new EnterpriseAuthInvalidError('Session expired — please sign in again')
-        }
-
-        if (!retryResponse.ok) {
-          const retryBody = await retryResponse.json().catch(() => ({}))
           throw new Error(retryBody.message || `API request failed (${retryResponse.status})`)
         }
 
         return retryResponse.json().catch(() => null)
       } catch (error) {
-        // Only clear credentials when the failure is a DEFINITIVE auth error.
-        // Transient network/5xx failures must not sign the user out.
+        // Only clear credentials when the refresh itself proved the session is
+        // DEFINITIVELY invalid. Transient network/5xx failures and
+        // resource-level rejections must NOT sign the user out.
         if (error instanceof EnterpriseAuthInvalidError) {
           this.logAuthEvent('auth_clear_after_api_401_retry_failed', {
             method: normalizedMethod,
@@ -648,7 +649,7 @@ export class EnterpriseAuth {
           this.clearStoredData()
           throw new Error('Session expired — please sign in again')
         }
-        this.logAuthEvent('auth_api_401_retry_transient', {
+        this.logAuthEvent('auth_api_401_retry_no_clear', {
           method: normalizedMethod,
           path,
           error: this.describeError(error)
