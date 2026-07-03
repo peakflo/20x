@@ -90,7 +90,7 @@ async function shutdownAppServices(): Promise<void> {
 
   // Kill orphaned task-management-mcp processes (spawned by opencode, not cleaned up on exit)
   killOrphanedMcpProcesses()
-  console.log('[Shutdown] Killed orphaned task-management-mcp processes')
+  console.log('[Shutdown] Cleaned up orphaned task-management-mcp processes')
 
   db?.close()
 

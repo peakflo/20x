@@ -18,7 +18,12 @@ describe('getOrphanMcpKillCommand', () => {
 })
 
 describe('killOrphanedMcpProcesses', () => {
-  it('does not throw when no matching processes exist', () => {
-    expect(() => killOrphanedMcpProcesses(process.platform)).not.toThrow()
-  })
+  it(
+    'does not throw when no matching processes exist',
+    () => {
+      expect(() => killOrphanedMcpProcesses(process.platform)).not.toThrow()
+    },
+    // PowerShell Get-CimInstance can take several seconds on Windows
+    process.platform === 'win32' ? 15_000 : 5_000
+  )
 })
