@@ -53,7 +53,14 @@ export function EnterpriseLoginModal({ open, onClose }: EnterpriseLoginModalProp
     // isAuthenticated, which is only set after selectTenant completes.
     // The loading spinner keeps the UI responsive while we wait.
     await selectTenant(tenantId)
-    onClose()
+    // Only close on success. selectTenant() swallows failures into the store's
+    // `error` state (and leaves isAuthenticated false); closing unconditionally
+    // would hide that error and make it look like "nothing happened" after a
+    // click. Keep the modal open so the user sees what went wrong.
+    const { isAuthenticated: authed, error: selectError } = useEnterpriseStore.getState()
+    if (authed && !selectError) {
+      onClose()
+    }
   }, [selectTenant, onClose])
 
   const handleClose = useCallback(() => {
