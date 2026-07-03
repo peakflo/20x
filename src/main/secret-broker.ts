@@ -163,15 +163,13 @@ exec "\$_real_shell" "\$@"
 }
 
 /**
- * Windows equivalent of the secret shell wrapper using PowerShell.
- * Fetches secrets from the broker and injects them as environment variables
- * before executing the real command.
+ * Windows PowerShell secret shell wrapper script body.
+ * Exported for unit tests.
  */
-function writeWindowsSecretShellWrapper(): string {
-  const shellPath = join(app.getPath('userData'), 'secret-shell.ps1')
-  const debugLog = join(app.getPath('userData'), 'secret-shell-debug.log').replace(/\\/g, '\\\\')
+export function buildWindowsSecretShellScript(debugLogPath: string): string {
+  const debugLog = debugLogPath.replace(/\\/g, '\\\\')
 
-  const script = `# 20x Secret Shell Wrapper (Windows PowerShell)
+  return `# 20x Secret Shell Wrapper (Windows PowerShell)
 # Fetches secrets from the local broker and injects them into the command environment.
 
 $ErrorActionPreference = "SilentlyContinue"
@@ -212,6 +210,18 @@ if ($args.Count -gt 0) {
     cmd.exe /c
 }
 `
+}
+
+/**
+ * Windows equivalent of the secret shell wrapper using PowerShell.
+ * Fetches secrets from the broker and injects them as environment variables
+ * before executing the real command.
+ */
+function writeWindowsSecretShellWrapper(): string {
+  const shellPath = join(app.getPath('userData'), 'secret-shell.ps1')
+  const debugLog = join(app.getPath('userData'), 'secret-shell-debug.log')
+
+  const script = buildWindowsSecretShellScript(debugLog)
 
   writeFileSync(shellPath, script, 'utf-8')
   console.log(`[SecretBroker] Wrote shell wrapper to ${shellPath}`)

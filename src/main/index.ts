@@ -1,4 +1,4 @@
-import { execFile, execSync } from 'child_process'
+import { execFile } from 'child_process'
 import { readdirSync } from 'fs'
 import { app, BrowserWindow, dialog, net, protocol, session, shell, Tray, Menu, nativeImage } from 'electron'
 import { join } from 'path'
@@ -35,6 +35,7 @@ import { registerUpdaterIpc, initAutoUpdater, isUpdateDownloaded, getPendingVers
 import { initCrashLogger } from './crash-logger'
 import { installProcessStreamErrorHandlers } from './process-stream-errors'
 import { getWindowsPathEntries, prependMissingWindowsPaths } from './windows-runtime-paths'
+import { killOrphanedMcpProcesses } from './shutdown-orphans'
 
 /**
  * Validate that a URL is safe to open via shell.openExternal.
@@ -88,16 +89,8 @@ async function shutdownAppServices(): Promise<void> {
   stopTaskApiServer()
 
   // Kill orphaned task-management-mcp processes (spawned by opencode, not cleaned up on exit)
-  try {
-    if (process.platform === 'win32') {
-      execSync('taskkill /F /FI "IMAGENAME eq node.exe" /FI "WINDOWTITLE eq task-management-mcp*"', { stdio: 'ignore' })
-    } else {
-      execSync('pkill -f "task-management-mcp\\.js"', { stdio: 'ignore' })
-    }
-    console.log('[Shutdown] Killed orphaned task-management-mcp processes')
-  } catch {
-    // pkill/taskkill exits non-zero if no processes matched — that's fine
-  }
+  killOrphanedMcpProcesses()
+  console.log('[Shutdown] Killed orphaned task-management-mcp processes')
 
   db?.close()
 

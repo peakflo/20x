@@ -113,13 +113,13 @@ Added settings persistence IPC:
 
 ## Known Issues and Limitations
 
-1. **Secret broker Windows support is untested.** The PowerShell wrapper script was written but not verified end-to-end with actual agent processes that require secret injection.
+1. **Secret broker Windows support** — PowerShell wrapper (`secret-shell.ps1`) is covered by unit tests; end-to-end agent session verification on Windows is still recommended.
 
 2. **Hard-coded tool versions.** Node.js (v22.16.0) and Git (v2.49.0) download URLs in `install.js` will become outdated. Should be fetched dynamically from GitHub releases API.
 
 3. **No UAC elevation for MSI installs.** The `runInstaller` function uses `PowerShell Start-Process` without `-Verb RunAs`, so MSI installations requiring admin will fail silently. Users may need to run 20x as administrator for Node.js/Git installs.
 
-4. **taskkill process cleanup is aggressive.** The orphan cleanup on app quit uses `taskkill /F /FI "IMAGENAME eq node.exe"` with a window title filter, which may not match background processes and could theoretically kill unrelated node processes (though the title filter mitigates this).
+4. **taskkill process cleanup** — Replaced window-title filter with PowerShell command-line matching (`*task-management-mcp*`) so orphaned MCP processes are found reliably on Windows.
 
 5. **DialogTitle accessibility warnings.** Some dialog components produce Radix UI console warnings about missing `DialogTitle` for screen readers. These are cosmetic and don't affect functionality.
 
