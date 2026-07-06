@@ -140,6 +140,9 @@ export interface AgentMcpServerEntry {
   enabledTools?: string[]
 }
 
+import type { ReasoningEffort } from '@shared/reasoning-effort'
+export type { ReasoningEffort }
+
 export interface CreateMcpServerDTO {
   name: string
   type?: 'local' | 'remote'
@@ -163,6 +166,7 @@ export interface UpdateMcpServerDTO {
 export interface AgentConfig {
   coding_agent?: CodingAgentType
   model?: string
+  reasoning_effort?: ReasoningEffort
   auth_method?: ClaudeAuthMethod
   permission_mode?: AgentPermissionMode
   system_prompt?: string

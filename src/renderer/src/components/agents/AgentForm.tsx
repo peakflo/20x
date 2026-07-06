@@ -11,7 +11,9 @@ import { useMcpStore } from '@/stores/mcp-store'
 import { useSkillStore } from '@/stores/skill-store'
 import { SkillSelectorDialog } from '@/components/skills/SkillSelectorDialog'
 import { SecretSelector } from '@/components/secrets/SecretSelector'
+import { CLAUDE_REASONING_EFFORT_VALUES, CODEX_REASONING_EFFORT_VALUES } from '@shared/reasoning-effort'
 import type { Agent, CreateAgentDTO, UpdateAgentDTO, AgentMcpServerEntry, ClaudeAuthMethod, AgentPermissionMode } from '@/types'
+import type { ReasoningEffort } from '@/types'
 import { CodingAgentType, CODING_AGENTS, CLAUDE_MODELS, CODEX_MODELS } from '@/types'
 
 interface AgentFormProps {
@@ -44,6 +46,7 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
   const [serverUrl, setServerUrl] = useState(agent?.server_url ?? 'http://localhost:4096')
   const [codingAgent, setCodingAgent] = useState<CodingAgentType | ''>(agent?.config.coding_agent ?? '')
   const [model, setModel] = useState(agent?.config.model ?? '')
+  const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort | ''>(agent?.config.reasoning_effort ?? '')
   const [systemPrompt, setSystemPrompt] = useState(agent?.config.system_prompt ?? '')
   const [maxParallelSessions, setMaxParallelSessions] = useState(agent?.config.max_parallel_sessions ?? 1)
   const [skillIds, setSkillIds] = useState<string[] | undefined>(agent?.config.skill_ids)
@@ -72,6 +75,11 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
 
   const { servers: globalMcpServers, fetchServers: fetchMcpServers } = useMcpStore()
   const { skills, fetchSkills } = useSkillStore()
+  const supportsReasoningEffort = codingAgent === CodingAgentType.CLAUDE_CODE || codingAgent === CodingAgentType.CODEX
+  const reasoningEffortValues = codingAgent === CodingAgentType.CLAUDE_CODE
+    ? CLAUDE_REASONING_EFFORT_VALUES
+    : CODEX_REASONING_EFFORT_VALUES
+  const supportedReasoningEfforts = new Set<string>(reasoningEffortValues)
 
   useEffect(() => {
     fetchMcpServers()
@@ -109,10 +117,19 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
 
   // Reset auth method for agents that don't expose a subscription/api_key choice
   useEffect(() => {
+    const currentReasoningEfforts = new Set<string>(
+      codingAgent === CodingAgentType.CLAUDE_CODE
+        ? CLAUDE_REASONING_EFFORT_VALUES
+        : CODEX_REASONING_EFFORT_VALUES
+    )
+
     if (codingAgent !== CodingAgentType.CLAUDE_CODE && codingAgent !== CodingAgentType.CODEX) {
       setAuthMethod('subscription')
+      setReasoningEffort('')
+    } else if (reasoningEffort && !currentReasoningEfforts.has(reasoningEffort)) {
+      setReasoningEffort('')
     }
-  }, [codingAgent])
+  }, [codingAgent, reasoningEffort])
 
   const fetchModels = async () => {
     setIsLoadingModels(true)
@@ -205,6 +222,9 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
       config: {
         coding_agent: codingAgent || undefined,
         model: model.trim() || undefined,
+        reasoning_effort: supportsReasoningEffort && supportedReasoningEfforts.has(reasoningEffort)
+          ? reasoningEffort || undefined
+          : undefined,
         auth_method: (codingAgent === CodingAgentType.CLAUDE_CODE || codingAgent === CodingAgentType.CODEX)
           ? authMethod
           : undefined,
@@ -412,6 +432,22 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
             )}
           </div>
           </div>
+          {supportsReasoningEffort && (
+            <div className="space-y-1.5">
+              <Label htmlFor="agent-reasoning-effort">Reasoning Effort</Label>
+              <select
+                id="agent-reasoning-effort"
+                value={reasoningEffort}
+                onChange={(e) => setReasoningEffort(e.target.value as ReasoningEffort | '')}
+                className="w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm cursor-pointer"
+              >
+                <option value="">Default</option>
+                {reasoningEffortValues.map((effort) => (
+                  <option key={effort} value={effort}>{effort}</option>
+                ))}
+              </select>
+            </div>
+          )}
         </>
       )}
 

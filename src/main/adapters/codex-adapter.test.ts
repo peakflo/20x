@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest'
-import { DEFAULT_CODEX_MODEL } from './codex-adapter'
+import { CodexAdapter, DEFAULT_CODEX_MODEL } from './codex-adapter'
+
+type CodexAdapterWithArgs = {
+  buildCodexArgs(config: { model?: string; reasoningEffort?: string }): string[]
+}
 
 describe('DEFAULT_CODEX_MODEL', () => {
   it('defaults Codex sessions to GPT-5.5', () => {
@@ -34,5 +38,29 @@ describe('CodexAdapter findCodexExecutable fallback paths', () => {
     expect(source).toContain('readdirSync')
     // Should NOT have hardcoded version numbers
     expect(source).not.toMatch(/\.nvm\/versions\/node\/v\d+\.\d+\.\d+/)
+  })
+
+  it('passes reasoning effort through Codex config overrides', () => {
+    const adapter = new CodexAdapter()
+    const buildCodexArgs = (adapter as unknown as CodexAdapterWithArgs).buildCodexArgs.bind(adapter)
+
+    expect(buildCodexArgs({ model: 'gpt-5.5', reasoningEffort: 'high' })).toEqual([
+      '--model',
+      'gpt-5.5',
+      '-c',
+      'model_reasoning_effort="high"',
+      '--json-rpc',
+    ])
+  })
+
+  it('does not pass unsupported max effort to Codex', () => {
+    const adapter = new CodexAdapter()
+    const buildCodexArgs = (adapter as unknown as CodexAdapterWithArgs).buildCodexArgs.bind(adapter)
+
+    expect(buildCodexArgs({ model: 'gpt-5.5', reasoningEffort: 'max' })).toEqual([
+      '--model',
+      'gpt-5.5',
+      '--json-rpc',
+    ])
   })
 })

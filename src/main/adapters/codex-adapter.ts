@@ -174,6 +174,20 @@ export class CodexAdapter implements CodingAgentAdapter {
     return env
   }
 
+  private buildCodexArgs(config: SessionConfig): string[] {
+    const args = [
+      '--model',
+      config.model || DEFAULT_CODEX_MODEL,
+    ]
+
+    if (config.reasoningEffort && config.reasoningEffort !== 'max') {
+      args.push('-c', `model_reasoning_effort="${config.reasoningEffort}"`)
+    }
+
+    args.push('--json-rpc')
+    return args
+  }
+
   async createSession(config: SessionConfig): Promise<string> {
     if (!this.codexExecutablePath) {
       throw new Error('Codex executable not found')
@@ -186,11 +200,7 @@ export class CodexAdapter implements CodingAgentAdapter {
     const needsShell = process.platform === 'win32' && /\.(cmd|bat)$/i.test(this.codexExecutablePath!)
     const codexProcess = spawn(
       this.codexExecutablePath,
-      [
-        '--model',
-        config.model || DEFAULT_CODEX_MODEL,
-        '--json-rpc', // Enable JSON-RPC mode
-      ],
+      this.buildCodexArgs(config),
       {
         cwd: config.workspaceDir,
         stdio: ['pipe', 'pipe', 'pipe'],
@@ -279,11 +289,7 @@ export class CodexAdapter implements CodingAgentAdapter {
     const needsShellResume = process.platform === 'win32' && /\.(cmd|bat)$/i.test(this.codexExecutablePath!)
     const codexProcess = spawn(
       this.codexExecutablePath,
-      [
-        '--model',
-        config.model || DEFAULT_CODEX_MODEL,
-        '--json-rpc',
-      ],
+      this.buildCodexArgs(config),
       {
         cwd: config.workspaceDir,
         stdio: ['pipe', 'pipe', 'pipe'],
