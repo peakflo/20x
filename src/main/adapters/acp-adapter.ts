@@ -1247,6 +1247,20 @@ export class AcpAdapter implements CodingAgentAdapter {
   /**
    * Adds a notification or event to the permanent message history, with
    * consolidation and size-based pruning to prevent OOM.
+   *
+   * IMPORTANT: events are stored as deep clones. The incoming `event` object is
+   * the SAME object that handleRpcMessage() pushed into session.messageBuffer
+   * for live polling. This method mutates stored events in two ways:
+   *   1. chunk consolidation rewrites content.text on the last stored event
+   *   2. tool outputs are truncated to 100KB for history
+   * Without cloning, those mutations corrupted the un-polled live buffer:
+   * when several agent_message_chunk deltas arrived between polls (always the
+   * case at the START of a response — the first token burst lands before the
+   * first poll cycle), consolidation silently rewrote the FIRST buffered chunk
+   * into the full accumulated text while the later buffered chunks stayed raw
+   * deltas. pollMessages() then appended those deltas again after the already
+   * complete text, scrambling the beginning of the message
+   * ("Hello world, how are you? world, how are you?").
    */
   private addToPermanentMessages(session: AcpSession, event: unknown): void {
     const notification = event as JsonRpcNotification
@@ -1271,11 +1285,16 @@ export class AcpAdapter implements CodingAgentAdapter {
     }
 
     if (!consolidated) {
+      // Deep-clone before storing so history-only mutations (chunk
+      // consolidation above on later events, output truncation below) never
+      // leak into the identical object still queued in session.messageBuffer.
+      const stored = structuredClone(notification)
+
       // Capping tool output size in permanent messages (replayed on resume).
       // The full output is still delivered to the UI during the live session,
       // but truncated here to keep the history bounded.
-      if (notification.method === 'session/update') {
-        const update = (notification.params as { update?: SessionUpdate })?.update
+      if (stored.method === 'session/update') {
+        const update = (stored.params as { update?: SessionUpdate })?.update
         if (update?.rawOutput && typeof update.rawOutput === 'object') {
           const ro = update.rawOutput as Record<string, unknown>
           const MAX_HISTORY_OUTPUT_CHARS = 100_000 // 100KB per tool output in history
@@ -1289,8 +1308,8 @@ export class AcpAdapter implements CodingAgentAdapter {
       }
 
       // Stamp with arrival time so replays can preserve original timing
-      ;(notification as unknown as Record<string, unknown>)._receivedAt = Date.now()
-      session.permanentMessages.push(notification)
+      ;(stored as unknown as Record<string, unknown>)._receivedAt = Date.now()
+      session.permanentMessages.push(stored)
     }
 
     // Enforce absolute limit on permanent history to prevent OOM.

@@ -3261,3 +3261,132 @@ describe('AcpAdapter - configureCodexAuthEnv (Codex auth precedence)', () => {
     expect(sendRpc).toHaveBeenCalledWith(session, 'authenticate', { methodId: 'openai-api-key' })
   })
 })
+
+// ─── Regression: live buffer / permanent history aliasing (scrambled message start) ───
+//
+// handleRpcMessage() pushes each notification object into BOTH session.messageBuffer
+// (live polling) and session.permanentMessages (resume history). addToPermanentMessages()
+// consolidates consecutive assistant chunks by MUTATING content.text on the last stored
+// event — which, without a defensive copy, is the SAME object still sitting un-polled in
+// messageBuffer. When several delta chunks arrive between polls (always the case at the
+// start of a response: the first token burst lands before the first poll cycle), the first
+// buffered chunk silently becomes the full accumulated text while the following buffered
+// chunks stay raw deltas. pollMessages() then re-appends those middle deltas after the
+// already-complete text, scrambling the beginning of the message
+// ("Hello world, how world, how" style).
+describe('AcpAdapter - live buffer vs permanent history aliasing', () => {
+  let adapter: AcpAdapter
+
+  beforeEach(() => {
+    adapter = new AcpAdapter('codex')
+  })
+
+  afterEach(() => {
+    vi.clearAllMocks()
+  })
+
+  function chunkNotification(sessionId: string, text: string): unknown {
+    return {
+      jsonrpc: '2.0',
+      method: 'session/update',
+      params: {
+        sessionId,
+        update: {
+          sessionUpdate: 'agent_message_chunk',
+          content: { type: 'text', text }
+        }
+      }
+    }
+  }
+
+  it('does not scramble the message start when several delta chunks arrive before the first poll', async () => {
+    const sessionId = 'burst-session'
+    const priv = adapterPrivate(adapter)
+    const session = createMockSession(sessionId)
+    priv.sessions.set(sessionId, session)
+
+    // A burst of small delta chunks arrives on stdout before the polling
+    // loop gets a chance to run (typical at the START of every response).
+    priv.handleRpcMessage(session, chunkNotification(sessionId, 'Hello'))
+    priv.handleRpcMessage(session, chunkNotification(sessionId, ' world'))
+    priv.handleRpcMessage(session, chunkNotification(sessionId, ', how are you?'))
+
+    const parts = await adapter.pollMessages(sessionId, new Set(), new Set(), new Map(), {} as never)
+
+    expect(parts.length).toBeGreaterThan(0)
+    const finalText = parts[parts.length - 1]?.text
+    expect(finalText).toBe('Hello world, how are you?')
+  })
+
+  it('does not scramble longer delta bursts with short middle chunks', async () => {
+    const sessionId = 'burst-session-2'
+    const priv = adapterPrivate(adapter)
+    const session = createMockSession(sessionId)
+    priv.sessions.set(sessionId, session)
+
+    const deltas = ['I', "'ll", ' check', ' the', ' logs', ' and', ' reproduce', ' the issue now.']
+    for (const delta of deltas) {
+      priv.handleRpcMessage(session, chunkNotification(sessionId, delta))
+    }
+
+    const parts = await adapter.pollMessages(sessionId, new Set(), new Set(), new Map(), {} as never)
+
+    const finalText = parts[parts.length - 1]?.text
+    expect(finalText).toBe("I'll check the logs and reproduce the issue now.")
+  })
+
+  it('keeps un-polled live chunks pristine when permanent history consolidates them', () => {
+    const sessionId = 'pristine-session'
+    const priv = adapterPrivate(adapter)
+    const session = createMockSession(sessionId)
+    priv.sessions.set(sessionId, session)
+
+    priv.handleRpcMessage(session, chunkNotification(sessionId, 'Hello'))
+    priv.handleRpcMessage(session, chunkNotification(sessionId, ' world'))
+
+    // Permanent history consolidates into one event…
+    expect(session.permanentMessages).toHaveLength(1)
+    const permText = (session.permanentMessages[0] as { params: { update: { content: { text: string } } } })
+      .params.update.content.text
+    expect(permText).toBe('Hello world')
+
+    // …but the live buffer must still hold the ORIGINAL raw deltas.
+    const bufferTexts = session.messageBuffer.map((e) =>
+      (e as { params: { update: { content: { text: string } } } }).params.update.content.text
+    )
+    expect(bufferTexts).toEqual(['Hello', ' world'])
+  })
+
+  it('does not truncate live tool output when capping permanent history', () => {
+    const sessionId = 'truncate-session'
+    const priv = adapterPrivate(adapter)
+    const session = createMockSession(sessionId)
+    priv.sessions.set(sessionId, session)
+
+    const bigOutput = 'x'.repeat(150_000)
+    priv.handleRpcMessage(session, {
+      jsonrpc: '2.0',
+      method: 'session/update',
+      params: {
+        sessionId,
+        update: {
+          sessionUpdate: 'tool_call_update',
+          toolCallId: 'tool-big',
+          status: 'completed',
+          rawOutput: { stdout: bigOutput }
+        }
+      }
+    })
+
+    // Permanent history is capped at 100KB per tool output…
+    const permStdout = (session.permanentMessages[0] as { params: { update: { rawOutput: { stdout: string } } } })
+      .params.update.rawOutput.stdout
+    expect(permStdout.length).toBeLessThan(bigOutput.length)
+    expect(permStdout).toContain('truncated in history')
+
+    // …but the live buffer must still carry the FULL output to the UI.
+    const liveStdout = (session.messageBuffer[0] as { params: { update: { rawOutput: { stdout: string } } } })
+      .params.update.rawOutput.stdout
+    expect(liveStdout).toBe(bigOutput)
+  })
+})
