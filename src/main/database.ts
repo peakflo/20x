@@ -4,6 +4,7 @@ import { join } from 'path'
 import { existsSync, mkdirSync, rmSync } from 'fs'
 import { createId } from '@paralleldrive/cuid2'
 import { TaskStatus } from '../shared/constants'
+import type { ReasoningEffort } from '../shared/reasoning-effort'
 import { startTaskApiServer } from './task-api-server'
 
 export interface AgentRow {
@@ -34,6 +35,7 @@ export interface AgentMcpServerEntry {
 export interface AgentConfigRecord {
   coding_agent?: 'opencode' | 'claude-code' | 'codex'
   model?: string
+  reasoning_effort?: ReasoningEffort
   auth_method?: 'subscription' | 'api_key'
   permission_mode?: 'ask' | 'allow'
   system_prompt?: string

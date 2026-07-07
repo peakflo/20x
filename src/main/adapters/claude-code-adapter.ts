@@ -654,12 +654,14 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
 
     // Build options
     const secretHooks = this.buildSecretHooks(config)
+    const effort = config.reasoningEffort === 'minimal' ? undefined : config.reasoningEffort
     const options: Options = {
       cwd: config.workspaceDir,
       pathToClaudeCodeExecutable: claudePath,
       env: this.buildClaudeEnvironment(),
       mcpServers: config.mcpServers as Record<string, McpServerConfig> | undefined,
       model: config.model,
+      effort,
       systemPrompt: config.systemPrompt,
       abortController,
       permissionMode: 'bypassPermissions', // Auto-approve all actions (user has already chosen to run agent)
@@ -687,6 +689,7 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
       cwd: options.cwd,
       pathToClaudeCodeExecutable: options.pathToClaudeCodeExecutable,
       model: options.model,
+      effort: options.effort,
       permissionMode: options.permissionMode,
       continue: options.continue,
       resume: options.resume,

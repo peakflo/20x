@@ -484,6 +484,21 @@ export class AcpAdapter implements CodingAgentAdapter {
       }
     }
 
+    if (config.reasoningEffort && config.reasoningEffort !== 'max' && acpSessionId) {
+      try {
+        await this.sendRpcRequest(session, 'session/set_config_option', {
+          sessionId: acpSessionId,
+          configId: 'model_reasoning_effort',
+          value: config.reasoningEffort
+        })
+        console.log(`[AcpAdapter/${this.agentType}] Reasoning effort set to: ${config.reasoningEffort}`)
+      } catch (error: unknown) {
+        const errMsg = error instanceof Error ? error.message : String(error)
+        console.warn(`[AcpAdapter/${this.agentType}] Failed to set reasoning effort: ${errMsg}`)
+        // Continue even if reasoning effort setting fails (agent will use default)
+      }
+    }
+
     console.log(`[AcpAdapter/${this.agentType}] Session created: ${sessionId} (ACP: ${acpSessionId})`)
 
     // Return the ACP session ID so it can be persisted and used for resuming

@@ -3,6 +3,8 @@
  * Defines common operations that all coding agent implementations must support.
  */
 
+import type { ReasoningEffort } from '../../shared/reasoning-effort'
+
 export enum SessionStatusType {
   IDLE = 'idle',
   BUSY = 'busy',
@@ -42,6 +44,7 @@ export interface SessionConfig {
   workspaceDir: string
   serverUrl?: string
   model?: string
+  reasoningEffort?: ReasoningEffort
   systemPrompt?: string
   tools?: Record<string, boolean>
   promptAbort?: AbortController
