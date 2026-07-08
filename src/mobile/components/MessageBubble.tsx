@@ -260,7 +260,7 @@ function TaskProgressMessage({ message }: { message: AgentMessage }) {
   )
 }
 
-function ToolCallMessage({ message, showTimestamp = true }: { message: AgentMessage; showTimestamp?: boolean }) {
+function ToolCallMessage({ message }: { message: AgentMessage }) {
   const [expanded, setExpanded] = useState(false)
   const tool = message.tool!
   const isRunning = !tool.status || tool.status === 'in_progress' || tool.status === 'running' || tool.status === 'pending'
@@ -284,11 +284,9 @@ function ToolCallMessage({ message, showTimestamp = true }: { message: AgentMess
         <span className="text-foreground/80 font-medium shrink-0">{tool.name}</span>
         {subtitle && <span className="min-w-0 flex-1 text-muted-foreground truncate">{subtitle}</span>}
         {!subtitle && <span className="flex-1" />}
-        {showTimestamp && (
-          <span className="shrink-0 text-[10px] text-muted-foreground opacity-0 transition-opacity group-hover/tool:opacity-100">
-            {message.timestamp.toLocaleTimeString()}
-          </span>
-        )}
+        <span className="w-20 shrink-0 text-right text-[10px] text-muted-foreground opacity-0 transition-opacity group-hover/tool:opacity-100">
+          {message.timestamp.toLocaleTimeString()}
+        </span>
         {isRunning && (
           <svg className="h-3 w-3 shrink-0 text-muted-foreground animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
             <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
@@ -326,7 +324,7 @@ function ToolCallMessage({ message, showTimestamp = true }: { message: AgentMess
   )
 }
 
-function ReasoningMessage({ message, showTimestamp = true }: { message: AgentMessage; showTimestamp?: boolean }) {
+function ReasoningMessage({ message }: { message: AgentMessage }) {
   const [expanded, setExpanded] = useState(false)
   const summary = message.content.split('\n').map((line) => line.trim()).find(Boolean) || 'Thinking'
 
@@ -342,11 +340,9 @@ function ReasoningMessage({ message, showTimestamp = true }: { message: AgentMes
         )}>▶</span>
         <span className="shrink-0 text-purple-300">Thinking</span>
         <span className="min-w-0 flex-1 truncate text-purple-200/70">{summary}</span>
-        {showTimestamp && (
-          <span className="shrink-0 text-[10px] text-muted-foreground opacity-0 transition-opacity group-hover/tool:opacity-100">
-            {message.timestamp.toLocaleTimeString()}
-          </span>
-        )}
+        <span className="w-20 shrink-0 text-right text-[10px] text-muted-foreground opacity-0 transition-opacity group-hover/tool:opacity-100">
+          {message.timestamp.toLocaleTimeString()}
+        </span>
       </button>
       {expanded && (
         <div className="ml-5 border-l border-purple-400/30 pl-3 py-1.5 text-purple-100/90">
@@ -360,12 +356,11 @@ function ReasoningMessage({ message, showTimestamp = true }: { message: AgentMes
 export function MessageActivityGroup({ messages }: { messages: AgentMessage[] }) {
   return (
     <div className="w-full border-l border-border/30 pl-2 py-0.5">
-      {messages.map((message, index) => {
-        const showTimestamp = index === messages.length - 1
+      {messages.map((message) => {
         if (message.partType === 'reasoning') {
-          return <ReasoningMessage key={message.id} message={message} showTimestamp={showTimestamp} />
+          return <ReasoningMessage key={message.id} message={message} />
         }
-        return <ToolCallMessage key={message.id} message={message} showTimestamp={showTimestamp} />
+        return <ToolCallMessage key={message.id} message={message} />
       })}
     </div>
   )
