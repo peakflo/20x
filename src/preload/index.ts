@@ -348,8 +348,22 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('app:setMinimizeToTray', enabled)
   },
   mobile: {
-    getInfo: (): Promise<{ url: string; port: number }> =>
-      ipcRenderer.invoke('mobile:getInfo')
+    getInfo: (): Promise<{ url: string; port: number; lanUrl: string; tunnelUrl: string | null; tunnelActive: boolean }> =>
+      ipcRenderer.invoke('mobile:getInfo'),
+    startTunnel: (): Promise<{ tunnelUrl: string }> =>
+      ipcRenderer.invoke('mobile:startTunnel'),
+    stopTunnel: (): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke('mobile:stopTunnel'),
+    getSessions: (): Promise<{ id: string; device_name: string; paired_at: number; last_seen: number }[]> =>
+      ipcRenderer.invoke('mobile:getSessions'),
+    revokeSession: (sessionId: string): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke('mobile:revokeSession', sessionId),
+    revokeAllSessions: (): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke('mobile:revokeAllSessions'),
+    onPairingInitiated: (fn: (data: { pin: string; pairCodeId: string; expiresAt: number }) => void) =>
+      ipcRenderer.on('mobile:pairing-initiated', (_, data) => fn(data)),
+    onDeviceConnected: (fn: (data: { sessionId: string; deviceName: string }) => void) =>
+      ipcRenderer.on('mobile:device-connected', (_, data) => fn(data))
   },
   enterprise: {
     signupInBrowser: (mode: 'register' | 'login'): Promise<{

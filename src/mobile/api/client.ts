@@ -6,8 +6,14 @@
 import { getAuthToken } from './auth'
 
 const MOBILE_API_PORT = '20620'
+// When served via a reverse proxy (Cloudflare tunnel, https with no explicit port),
+// use relative URLs — the proxy handles the port mapping.
+const isBehindProxy =
+  typeof window !== 'undefined' &&
+  window.location.protocol === 'https:' &&
+  !window.location.port
 const BASE =
-  typeof window !== 'undefined' && window.location.port !== MOBILE_API_PORT
+  typeof window !== 'undefined' && !isBehindProxy && window.location.port !== MOBILE_API_PORT
     ? `http://${window.location.hostname}:${MOBILE_API_PORT}`
     : ''
 

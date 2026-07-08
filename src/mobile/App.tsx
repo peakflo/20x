@@ -9,6 +9,8 @@ import { RepoSelectorPage } from './pages/RepoSelectorPage'
 import { TaskFormPage } from './pages/TaskFormPage'
 import { SkillSelectorPage } from './pages/SkillSelectorPage'
 import { SettingsPage } from './pages/SettingsPage'
+import { PairPage } from './pages/PairPage'
+import { getPairCodeFromUrl, hasSessionToken } from './api/auth'
 
 export type Route =
   | { page: 'list' }
@@ -21,6 +23,8 @@ export type Route =
   | { page: 'settings' }
 
 export function App() {
+  const pairCode = getPairCodeFromUrl()
+  const [paired, setPaired] = useState(() => !pairCode && hasSessionToken())
   const [route, setRoute] = useState<Route>({ page: 'list' })
   const isPopRef = useRef(false)
 
@@ -84,6 +88,25 @@ export function App() {
     const timer = setInterval(() => fetchTasks(), 10_000)
     return () => clearInterval(timer)
   }, [fetchTasks])
+
+  // Show pairing flow if QR code scanned or no session
+  if (pairCode && !paired) {
+    return <PairPage pairCode={pairCode} onPaired={() => setPaired(true)} />
+  }
+
+  if (!paired) {
+    return (
+      <div className="h-full flex items-center justify-center bg-background p-6">
+        <div className="text-center space-y-4 max-w-xs">
+          <div className="text-5xl">📱</div>
+          <h2 className="font-semibold text-foreground">Not Connected</h2>
+          <p className="text-sm text-muted-foreground">
+            Open 20x on your desktop, go to Settings → Connect Phone, and scan the QR code.
+          </p>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="h-full flex flex-col bg-background text-foreground">

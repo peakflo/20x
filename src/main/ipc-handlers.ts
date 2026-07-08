@@ -2,7 +2,10 @@ import { ipcMain, dialog, shell, Notification, app, session, webContents } from 
 import * as childProcess from 'child_process'
 import { copyFileSync, existsSync, unlinkSync, readdirSync, statSync, readFileSync, rmSync } from 'fs'
 import { join, basename, extname } from 'path'
+import { networkInterfaces } from 'os'
+import { randomUUID } from 'crypto'
 import WebSocket from 'ws'
+import { startTunnel, stopTunnel, getTunnelUrl, isTunnelActive } from './tunnel-manager'
 import type {
   DatabaseManager,
   CreateTaskData,
@@ -445,7 +448,11 @@ export function registerIpcHandlers(
   })
 
   ipcMain.handle('settings:getAll', () => {
-    return db.getAllSettings()
+    const all = db.getAllSettings()
+    // Strip internal mobile pairing keys — they're live credentials, not UI settings
+    return Object.fromEntries(
+      Object.entries(all).filter(([k]) => !k.startsWith('mobile_init_code_'))
+    )
   })
 
   // Environment variable handlers
@@ -823,12 +830,70 @@ export function registerIpcHandlers(
     return enabled
   })
 
-  // Mobile web UI info — include auth token in URL hash so mobile SPA can authenticate
+  // Mobile web UI info — QR contains one-time init code, not the session token
   ipcMain.handle('mobile:getInfo', () => {
     const port = 20620
-    const token = db.getSetting('mobile_auth_token') || ''
-    const hash = token ? `#token=${token}` : ''
-    return { url: `http://localhost:${port}/${hash}`, port }
+
+    // Generate a fresh init code (5 min expiry)
+    const initCode = randomUUID()
+    const expiresAt = Math.floor(Date.now() / 1000) + 300
+    db.setSetting(`mobile_init_code_${initCode}`, '1')
+    db.setSetting(`mobile_init_code_${initCode}_exp`, String(expiresAt))
+
+    // Get LAN IP
+    const nets = networkInterfaces()
+    let lanIp = 'localhost'
+    for (const iface of Object.values(nets)) {
+      for (const addr of iface ?? []) {
+        if (addr.family === 'IPv4' && !addr.internal) {
+          lanIp = addr.address
+          break
+        }
+      }
+      if (lanIp !== 'localhost') break
+    }
+
+    const tunnelUrl = getTunnelUrl()
+    const baseUrl = tunnelUrl ?? `http://${lanIp}:${port}`
+    const pairUrl = `${baseUrl}/pair?code=${initCode}`
+    const lanPairUrl = `http://${lanIp}:${port}/pair?code=${initCode}`
+
+    return {
+      url: pairUrl,
+      port,
+      lanUrl: lanPairUrl,
+      tunnelUrl: tunnelUrl ? `${tunnelUrl}/pair?code=${initCode}` : null,
+      tunnelActive: isTunnelActive()
+    }
+  })
+
+  ipcMain.handle('mobile:startTunnel', async () => {
+    const port = 20620
+    const url = await startTunnel(port)
+    // Generate fresh init code for the new tunnel URL
+    const initCode = randomUUID()
+    const expiresAt = Math.floor(Date.now() / 1000) + 300
+    db.setSetting(`mobile_init_code_${initCode}`, '1')
+    db.setSetting(`mobile_init_code_${initCode}_exp`, String(expiresAt))
+    return { tunnelUrl: `${url}/pair?code=${initCode}` }
+  })
+
+  ipcMain.handle('mobile:stopTunnel', () => {
+    stopTunnel()
+    return { success: true }
+  })
+
+  ipcMain.handle('mobile:getSessions', () => {
+    return db.getMobileSessions()
+  })
+
+  ipcMain.handle('mobile:revokeSession', (_, sessionId: string) => {
+    return { success: db.revokeMobileSession(sessionId) }
+  })
+
+  ipcMain.handle('mobile:revokeAllSessions', () => {
+    db.revokeAllMobileSessions()
+    return { success: true }
   })
 
   // Enterprise auth handlers

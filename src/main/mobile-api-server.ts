@@ -6,10 +6,10 @@
  * See docs/mobile-api-spec.md for the full API specification.
  */
 import { createServer, type IncomingMessage, type ServerResponse, type Server as HttpServer } from 'http'
-import { join } from 'path'
+import { join, sep } from 'path'
 import { existsSync, readFileSync, statSync } from 'fs'
 import { WebSocketServer, WebSocket } from 'ws'
-import { randomUUID, timingSafeEqual } from 'crypto'
+import { randomUUID, createHash, randomInt } from 'crypto'
 import type { DatabaseManager } from './database'
 import type { AgentManager } from './agent-manager'
 import type { GitHubManager } from './github-manager'
@@ -26,18 +26,24 @@ let githubRef: GitHubManager | null = null
 let gitlabRef: GitLabManager | null = null
 let syncManagerRef: SyncManager | null = null
 let pluginRegistryRef: PluginRegistry | null = null
-let authToken: string | null = null
 let notifyDesktop: ((channel: string, data: unknown) => void) | null = null
 
 const wsClients = new Set<WebSocket>()
 
-/** Timing-safe comparison to prevent token-length side-channel leaks. */
-function safeTokenMatch(provided: string | null | undefined, expected: string): boolean {
-  if (!provided) return false
-  const a = Buffer.from(provided)
-  const b = Buffer.from(expected)
-  if (a.length !== b.length) return false
-  return timingSafeEqual(a, b)
+const PIN_EXPIRY_SECONDS = 60
+const PIN_MAX_ATTEMPTS = 3
+
+function hashToken(token: string): string {
+  return createHash('sha256').update(token).digest('hex')
+}
+
+function validateSession(provided: string | null | undefined): boolean {
+  if (!provided || !dbRef) return false
+  const hash = hashToken(provided)
+  const session = dbRef.getMobileSessionByTokenHash(hash)
+  if (!session) return false
+  dbRef.touchMobileSession(hash)
+  return true
 }
 
 // ── Public API ───────────────────────────────────────────────
@@ -60,14 +66,6 @@ export function startMobileApiServer(
   syncManagerRef = syncManager ?? null
   pluginRegistryRef = pluginRegistry ?? null
 
-  // Read or generate auth token — auth is always required
-  authToken = db.getSetting('mobile_auth_token') ?? null
-  if (!authToken) {
-    authToken = randomUUID()
-    db.setSetting('mobile_auth_token', authToken)
-    console.log('[MobileAPI] No auth token configured — generated new token')
-  }
-
   return new Promise((resolve, reject) => {
     server = createServer(handleHttpRequest)
 
@@ -75,15 +73,12 @@ export function startMobileApiServer(
     wss = new WebSocketServer({ noServer: true })
 
     server.on('upgrade', (req, socket, head) => {
-      // Auth check for WS
-      if (authToken) {
-        const url = new URL(req.url || '/', `http://localhost`)
-        const token = url.searchParams.get('token')
-        if (!safeTokenMatch(token, authToken)) {
-          socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n')
-          socket.destroy()
-          return
-        }
+      const url = new URL(req.url || '/', `http://localhost`)
+      const token = url.searchParams.get('token')
+      if (!validateSession(token)) {
+        socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n')
+        socket.destroy()
+        return
       }
 
       if (req.url?.startsWith('/ws')) {
@@ -204,16 +199,20 @@ function handleHttpRequest(req: IncomingMessage, res: ServerResponse): void {
   const url = new URL(req.url || '/', `http://localhost`)
   const pathname = url.pathname
 
-  // API routes — require auth
+  // Pairing endpoints — no session required
+  if (pathname === '/api/auth/pair/initiate' || pathname === '/api/auth/pair/verify') {
+    void handleApiRoute(req, res, pathname, url)
+    return
+  }
+
+  // All other API routes — require valid session
   if (pathname.startsWith('/api/')) {
-    if (authToken) {
-      const authHeader = req.headers.authorization
-      const provided = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null
-      if (!safeTokenMatch(provided, authToken)) {
-        res.writeHead(401, { 'Content-Type': 'application/json' })
-        res.end(JSON.stringify({ error: 'Unauthorized' }))
-        return
-      }
+    const authHeader = req.headers.authorization
+    const provided = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null
+    if (!validateSession(provided)) {
+      res.writeHead(401, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ error: 'Unauthorized' }))
+      return
     }
     void handleApiRoute(req, res, pathname, url)
     return
@@ -250,7 +249,7 @@ async function handleApiRoute(req: IncomingMessage, res: ServerResponse, pathnam
       }
 
       try {
-        const result = await routePost(pathname, params)
+        const result = await routePost(pathname, params, req)
         res.writeHead(200)
         res.end(JSON.stringify(result))
       } catch (err: unknown) {
@@ -371,6 +370,11 @@ async function routeGet(pathname: string, url: URL): Promise<unknown> {
     return getActiveSessions()
   }
 
+  // GET /api/auth/sessions — connected devices list
+  if (pathname === '/api/auth/sessions') {
+    return db.getMobileSessions()
+  }
+
   // GET /api/task-sources — list all configured task sources
   if (pathname === '/api/task-sources') {
     return db.getTaskSources()
@@ -465,9 +469,80 @@ async function routeGet(pathname: string, url: URL): Promise<unknown> {
 
 // ── POST routes ──────────────────────────────────────────────
 
-async function routePost(pathname: string, params: Record<string, unknown>): Promise<unknown> {
+async function routePost(pathname: string, params: Record<string, unknown>, req?: IncomingMessage): Promise<unknown> {
   const agent = agentRef!
   const db = dbRef!
+
+  // POST /api/auth/pair/initiate — phone sends init code, server generates PIN
+  if (pathname === '/api/auth/pair/initiate') {
+    const { code } = params as { code?: string }
+    if (!code) throw Object.assign(new Error('code is required'), { status: 400 })
+
+    const now = Math.floor(Date.now() / 1000)
+    // Validate init code exists and not expired
+    const validCode = db.getSetting(`mobile_init_code_${code}`)
+    const validUntil = db.getSetting(`mobile_init_code_${code}_exp`)
+    if (!validCode || !validUntil || now > parseInt(validUntil)) {
+      throw Object.assign(new Error('Invalid or expired QR code. Please scan a new QR code.'), { status: 401 })
+    }
+    // Delete init code — single use
+    db.deleteSetting(`mobile_init_code_${code}`)
+    db.deleteSetting(`mobile_init_code_${code}_exp`)
+
+    // Generate PIN and pair code ID
+    const pin = String(randomInt(100000, 1000000))
+    const pairCodeId = randomUUID()
+    db.createMobilePairCode(pairCodeId, pin, now + PIN_EXPIRY_SECONDS)
+
+    // Push PIN to desktop
+    if (notifyDesktop) {
+      notifyDesktop('mobile:pairing-initiated', { pin, pairCodeId, expiresAt: now + PIN_EXPIRY_SECONDS })
+    }
+
+    return { pairCodeId, expiresIn: PIN_EXPIRY_SECONDS }
+  }
+
+  // POST /api/auth/pair/verify — phone submits PIN
+  if (pathname === '/api/auth/pair/verify') {
+    const { pairCodeId, pin } = params as { pairCodeId?: string; pin?: string }
+    if (!pairCodeId || !pin) throw Object.assign(new Error('pairCodeId and pin are required'), { status: 400 })
+
+    const now = Math.floor(Date.now() / 1000)
+    const record = db.getMobilePairCode(pairCodeId)
+
+    if (!record) throw Object.assign(new Error('Invalid pairing session'), { status: 401 })
+    if (now > record.expires_at) {
+      db.deleteMobilePairCode(pairCodeId)
+      throw Object.assign(new Error('PIN expired. Please scan the QR code again.'), { status: 401 })
+    }
+
+    const attempts = db.incrementPairCodeAttempts(pairCodeId)
+    if (attempts > PIN_MAX_ATTEMPTS) {
+      db.deleteMobilePairCode(pairCodeId)
+      throw Object.assign(new Error('Too many incorrect attempts. Please scan the QR code again.'), { status: 401 })
+    }
+
+    if (record.pin !== pin.trim()) {
+      const remaining = PIN_MAX_ATTEMPTS - attempts
+      throw Object.assign(new Error(`Incorrect PIN. ${remaining} attempt${remaining === 1 ? '' : 's'} remaining.`), { status: 401 })
+    }
+
+    // PIN correct — issue session token
+    db.deleteMobilePairCode(pairCodeId)
+    const sessionToken = randomUUID()
+    const tokenHash = hashToken(sessionToken)
+    const sessionId = randomUUID()
+    const userAgent = req?.headers['user-agent'] || 'Unknown device'
+    const deviceName = parseDeviceName(userAgent)
+    db.createMobileSession(sessionId, tokenHash, deviceName)
+
+    // Notify desktop of new connection
+    if (notifyDesktop) {
+      notifyDesktop('mobile:device-connected', { sessionId, deviceName })
+    }
+
+    return { sessionToken, sessionId, deviceName }
+  }
 
   // POST /api/plugins/:id/resolve-options — resolve dynamic options for a plugin config field
   const pluginResolveMatch = pathname.match(/^\/api\/plugins\/([^/]+)\/resolve-options$/)
@@ -663,6 +738,15 @@ async function routePost(pathname: string, params: Record<string, unknown>): Pro
 
 // ── Helpers ──────────────────────────────────────────────────
 
+function parseDeviceName(userAgent: string): string {
+  if (/iPhone/i.test(userAgent)) return 'iPhone'
+  if (/iPad/i.test(userAgent)) return 'iPad'
+  if (/Android/i.test(userAgent)) return 'Android'
+  if (/Windows/i.test(userAgent)) return 'Windows Browser'
+  if (/Mac/i.test(userAgent)) return 'Mac Browser'
+  return 'Unknown device'
+}
+
 function getActiveSessions(): Array<{ sessionId: string; agentId: string; taskId: string; status: string }> {
   if (!dbRef) return []
 
@@ -696,7 +780,15 @@ function stripSensitiveAgentFields(agent: ReturnType<DatabaseManager['getAgent']
 function serveMobileSPA(res: ServerResponse, pathname: string): void {
   // Resolve static file from out/mobile/
   const mobileDir = join(__dirname, '../mobile')
-  let filePath = join(mobileDir, pathname === '/' ? 'index.html' : pathname)
+  const resolved = join(mobileDir, pathname === '/' ? 'index.html' : pathname)
+
+  // Guard against path traversal — ensure resolved path stays inside mobileDir
+  let filePath: string
+  if (!resolved.startsWith(mobileDir + sep) && resolved !== join(mobileDir, 'index.html')) {
+    filePath = join(mobileDir, 'index.html')
+  } else {
+    filePath = resolved
+  }
 
   // If not found, serve index.html (SPA fallback)
   if (!existsSync(filePath) || !statSync(filePath).isFile()) {
