@@ -145,6 +145,31 @@ function deriveToolSubtitle(tool?: AgentMessage['tool']): string {
   return ''
 }
 
+function sanitizeToolContent(content: unknown): string {
+  if (content == null) return ''
+
+  if (typeof content === 'object') {
+    const obj = content as Record<string, unknown>
+    if (obj.type === 'image' && obj.source) {
+      const source = obj.source as Record<string, unknown>
+      const dataLength = typeof source.data === 'string' ? source.data.length : 0
+      return `[Image content: ${dataLength} characters of base64 data]`
+    }
+
+    const stringified = JSON.stringify(content, null, 2)
+    return stringified.length > 1000 ? `[Object: ${stringified.substring(0, 1000)}...]` : stringified
+  }
+
+  const str = String(content)
+  const maxDisplayLength = 5000
+  if (str.length <= maxDisplayLength) return str
+
+  const base64Chars = (str.match(/[A-Za-z0-9+/=]/g) || []).length
+  if (base64Chars / str.length > 0.9) return `[Binary content: ${str.length} characters]`
+
+  return str.substring(0, maxDisplayLength) + `\n\n... (${str.length - maxDisplayLength} more characters)`
+}
+
 function formatDuration(ms: number): string {
   const seconds = Math.floor(ms / 1000)
   if (seconds < 60) return `${seconds}s`
@@ -239,16 +264,16 @@ function ToolCallMessage({ message }: { message: AgentMessage }) {
   const subtitle = deriveToolSubtitle(tool)
 
   return (
-    <div className="rounded-md bg-card border border-border/50 overflow-hidden">
+    <div className="w-full min-w-0 overflow-hidden">
       <button
         onClick={() => setExpanded(!expanded)}
-        className="w-full flex items-center gap-2 px-3 py-2 font-mono text-xs hover:bg-white/5 transition-colors"
+        className="w-full flex items-center gap-2 py-1 font-mono text-xs text-muted-foreground active:text-foreground transition-colors"
       >
         {/* Wrench icon */}
         <svg className="h-3 w-3 text-muted-foreground shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
         </svg>
-        <span className="text-foreground font-medium">{tool.name}</span>
+        <span className="text-foreground/80 font-medium">{tool.name}</span>
         {subtitle && <span className="text-muted-foreground truncate"> {subtitle}</span>}
         {isRunning && (
           <svg className="h-3 w-3 ml-auto shrink-0 text-muted-foreground animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -266,23 +291,23 @@ function ToolCallMessage({ message }: { message: AgentMessage }) {
         )}>▶</span>
       </button>
       {expanded && (
-        <div className="px-3 py-2 border-t border-border/30 space-y-2 text-[11px] font-mono">
+        <div className="ml-5 border-l border-border/40 pl-3 py-1.5 space-y-2 text-[11px] font-mono">
           {tool.input && (
             <div>
               <div className="text-muted-foreground mb-0.5">Input</div>
-              <pre className="bg-background/50 rounded p-2 overflow-x-auto max-h-40 overflow-y-auto whitespace-pre-wrap text-muted-foreground">{tool.input}</pre>
+              <pre className="overflow-x-auto max-h-40 overflow-y-auto whitespace-pre-wrap break-words text-muted-foreground">{sanitizeToolContent(tool.input)}</pre>
             </div>
           )}
           {tool.output && (
             <div>
               <div className="text-muted-foreground mb-0.5">Output</div>
-              <pre className="bg-background/50 rounded p-2 overflow-x-auto max-h-40 overflow-y-auto whitespace-pre-wrap text-muted-foreground">{tool.output}</pre>
+              <pre className="overflow-x-auto max-h-40 overflow-y-auto whitespace-pre-wrap break-words text-muted-foreground">{sanitizeToolContent(tool.output)}</pre>
             </div>
           )}
           {tool.error && (
             <div>
               <div className="text-red-400 mb-0.5">Error</div>
-              <pre className="bg-red-500/10 rounded p-2 text-red-300 whitespace-pre-wrap">{tool.error}</pre>
+              <pre className="text-red-300 whitespace-pre-wrap break-words">{tool.error}</pre>
             </div>
           )}
         </div>
@@ -380,14 +405,14 @@ export function MessageBubble({ message, onAnswer, canAnswerQuestion = false }: 
   const isReasoning = message.partType === 'reasoning'
 
   return (
-    <div className={cn('flex gap-2', isUser ? 'justify-end' : 'justify-start')}>
+    <div className={cn('flex gap-2', isUser ? 'justify-end' : 'justify-start', !isUser && 'w-full')}>
       <div className={cn(
-        'max-w-[90%] rounded-md px-3 py-2 overflow-hidden min-w-0',
-        isUser && 'bg-secondary text-foreground',
-        isSystem && !isError && 'bg-yellow-500/10 text-yellow-200',
-        isError && 'bg-red-500/10 text-red-200 border border-red-500/20',
-        isReasoning && 'bg-purple-500/10 text-purple-200 border border-purple-500/20',
-        !isUser && !isSystem && !isError && !isReasoning && 'bg-card text-foreground/80 border border-border/50'
+        'overflow-hidden min-w-0',
+        isUser && 'max-w-[90%] rounded-md px-3 py-2 bg-secondary text-foreground',
+        isSystem && !isError && 'w-full border-l border-yellow-500/40 pl-3 py-1 text-yellow-200',
+        isError && 'w-full border-l border-red-500/40 pl-3 py-1 text-red-200',
+        isReasoning && 'w-full border-l border-purple-500/40 pl-3 py-1 text-purple-200',
+        !isUser && !isSystem && !isError && !isReasoning && 'w-full py-1 text-foreground/80'
       )}>
         <div className="break-words min-w-0">
           <Markdown size="sm">{message.content}</Markdown>

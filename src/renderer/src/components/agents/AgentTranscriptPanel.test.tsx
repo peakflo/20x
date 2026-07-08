@@ -113,3 +113,82 @@ describe('AgentTranscriptPanel error display', () => {
     expect(screen.getAllByText('API Error: Server is temporarily limiting requests')).toHaveLength(1)
   })
 })
+
+describe('AgentTranscriptPanel message layout', () => {
+  afterEach(() => {
+    cleanup()
+    vi.clearAllMocks()
+  })
+
+  it('renders agent text full width without card bubble chrome while keeping user bubbles', () => {
+    render(
+      <AgentTranscriptPanel
+        messages={[
+          {
+            id: 'agent-1',
+            role: 'assistant',
+            content: 'Here is the result',
+            timestamp: new Date(),
+            partType: 'text'
+          },
+          {
+            id: 'user-1',
+            role: 'user',
+            content: 'Thanks',
+            timestamp: new Date(),
+            partType: 'text'
+          }
+        ]}
+        status={SessionStatus.IDLE}
+        onStop={() => undefined}
+      />
+    )
+
+    const agentMessage = screen.getByText('Here is the result').closest('.overflow-hidden')
+    const userMessage = screen.getByText('Thanks').closest('.overflow-hidden')
+
+    expect(agentMessage).toHaveClass('w-full')
+    expect(agentMessage).not.toHaveClass('bg-card')
+    expect(agentMessage).not.toHaveClass('rounded-md')
+    expect(userMessage).toHaveClass('rounded-md')
+    expect(userMessage).toHaveClass('bg-secondary')
+  })
+
+  it('renders tool calls as compact expandable rows without a card bubble', () => {
+    render(
+      <AgentTranscriptPanel
+        messages={[
+          {
+            id: 'tool-1',
+            role: 'assistant',
+            content: 'Bash',
+            timestamp: new Date(),
+            partType: 'tool',
+            tool: {
+              name: 'Bash',
+              status: 'success',
+              title: 'pnpm test',
+              input: 'pnpm test',
+              output: 'pass'
+            }
+          }
+        ]}
+        status={SessionStatus.IDLE}
+        onStop={() => undefined}
+      />
+    )
+
+    const toolButton = screen.getByRole('button', { name: /Bash pnpm test/i })
+    const toolContainer = toolButton.parentElement
+
+    expect(toolContainer).toHaveClass('w-full')
+    expect(toolContainer).not.toHaveClass('bg-card')
+    expect(toolContainer).not.toHaveClass('rounded-md')
+    expect(screen.queryByText('Output:')).toBeNull()
+
+    fireEvent.click(toolButton)
+
+    expect(screen.getByText('Output:')).toBeInTheDocument()
+    expect(screen.getByText('pass')).toBeInTheDocument()
+  })
+})

@@ -347,20 +347,20 @@ function ToolCallMessage({ message }: { message: AgentMessage }) {
   const subtitle = deriveToolSubtitle(tool)
 
   return (
-    <div className="rounded-md bg-card border border-border/50 overflow-hidden">
+    <div className="w-full min-w-0 overflow-hidden">
       <button
         onClick={() => setExpanded(!expanded)}
-        className="w-full flex items-center gap-2 px-3 py-2 text-xs font-mono hover:bg-white/5 transition-colors"
+        className="w-full flex items-center gap-2 py-1 text-xs font-mono text-muted-foreground hover:text-foreground transition-colors"
       >
         <ChevronRight className={`h-3 w-3 text-muted-foreground shrink-0 transition-transform ${expanded ? 'rotate-90' : ''}`} />
         <Wrench className="h-3 w-3 text-muted-foreground shrink-0" />
-        <span className="text-foreground">{tool.name}</span>
+        <span className="text-foreground/80">{tool.name}</span>
         {subtitle && <span className="text-muted-foreground truncate"> {subtitle}</span>}
         {isRunning && <Loader2 className="h-3 w-3 ml-auto shrink-0 text-muted-foreground animate-spin" />}
         {isError && <AlertTriangle className="h-3 w-3 ml-auto shrink-0 text-red-400" />}
       </button>
       {expanded && (
-        <div className="border-t border-border/30 px-3 py-2 text-[11px] font-mono space-y-2">
+        <div className="ml-5 border-l border-border/40 pl-3 py-1.5 text-[11px] font-mono space-y-2">
           {tool.input && (
             <div>
               <span className="text-muted-foreground">Input:</span>
@@ -381,7 +381,7 @@ function ToolCallMessage({ message }: { message: AgentMessage }) {
           )}
         </div>
       )}
-      <div className="flex items-center gap-2 px-3 pb-1.5">
+      <div className="flex items-center gap-2 pl-5 pb-1">
         <span className="text-[10px] text-muted-foreground">{message.timestamp.toLocaleTimeString()}</span>
         {message.stepMeta && (
           <span className="text-[10px] text-muted-foreground">{formatStepMeta(message.stepMeta)}</span>
@@ -424,18 +424,18 @@ function MessageBubble({ message, onAnswer, viewMode, canAnswerQuestion = false 
   const isError = message.partType === 'error' || message.partType === 'retry'
 
   return (
-    <div className={`flex gap-2 ${isUser ? 'justify-end' : 'justify-start'}`}>
+    <div className={`flex gap-2 ${isUser ? 'justify-end' : 'justify-start'} ${!isUser ? 'w-full' : ''}`}>
       <div
-        className={`max-w-[90%] rounded-md px-3 py-2 overflow-hidden min-w-0 ${
+        className={`overflow-hidden min-w-0 ${
           isError
-            ? 'bg-red-500/10 text-red-200 border border-red-500/20'
+            ? 'w-full text-red-200 border-l border-red-500/40 pl-3 py-1'
             : isUser
-              ? 'bg-secondary text-foreground'
+              ? 'max-w-[90%] rounded-md px-3 py-2 bg-secondary text-foreground'
               : isSystem
-                ? 'bg-yellow-500/10 text-yellow-200'
+                ? 'w-full text-yellow-200 border-l border-yellow-500/40 pl-3 py-1'
                 : isReasoning
-                  ? 'bg-purple-500/10 text-purple-200 border border-purple-500/20'
-                  : 'bg-card text-foreground/80 border border-border/50'
+                  ? 'w-full text-purple-200 border-l border-purple-500/40 pl-3 py-1'
+                  : 'w-full text-foreground/80 py-1'
         }`}
       >
         {isError && (
@@ -451,7 +451,7 @@ function MessageBubble({ message, onAnswer, viewMode, canAnswerQuestion = false 
             {message.content}
           </pre>
         )}
-        <div className="flex items-center gap-2 mt-1">
+        <div className={`flex items-center gap-2 mt-1 ${!isUser ? 'opacity-70' : ''}`}>
           <span className="text-[10px] text-muted-foreground">{message.timestamp.toLocaleTimeString()}</span>
           {message.stepMeta && (
             <span className="text-[10px] text-muted-foreground">{formatStepMeta(message.stepMeta)}</span>
