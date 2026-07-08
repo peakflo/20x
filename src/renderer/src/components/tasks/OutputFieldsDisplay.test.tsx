@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, cleanup } from '@testing-library/react'
+import { fireEvent, render, screen, cleanup, waitFor } from '@testing-library/react'
 import { OutputFieldsDisplay } from './OutputFieldsDisplay'
+import { shellApi } from '@/lib/ipc-client'
 import type { OutputField } from '@/types'
 
 // Mock shellApi used by FileFieldPreview
@@ -34,6 +35,12 @@ describe('OutputFieldsDisplay', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        writeText: vi.fn().mockResolvedValue(undefined)
+      }
+    })
   })
 
   it('shows Complete button when all required fields are filled (optional fields empty)', () => {
@@ -142,5 +149,37 @@ describe('OutputFieldsDisplay', () => {
     expect(screen.getByDisplayValue('https://example.com/pr/123')).toBeInTheDocument()
     expect(screen.getByText('pr url')).toBeInTheDocument()
     expect(screen.getByPlaceholderText('Enter pr url...')).toBeInTheDocument()
+  })
+
+  it('copies populated output field values', async () => {
+    render(
+      <OutputFieldsDisplay
+        fields={[makeField({ id: 'summary', name: 'Summary', value: 'Ready for review' })]}
+        onChange={onChange}
+      />
+    )
+
+    fireEvent.click(screen.getByLabelText('Copy value'))
+
+    await waitFor(() => {
+      expect(navigator.clipboard.writeText).toHaveBeenCalledWith('Ready for review')
+    })
+  })
+
+  it('copies text file preview content', async () => {
+    vi.mocked(shellApi.readTextFile).mockResolvedValue({ content: 'line 1\nline 2', size: 13 })
+
+    render(
+      <OutputFieldsDisplay
+        fields={[makeField({ id: 'report', name: 'Report', type: 'file', value: '/tmp/report.md' })]}
+        onChange={onChange}
+      />
+    )
+
+    fireEvent.click(await screen.findByLabelText('Copy file preview'))
+
+    await waitFor(() => {
+      expect(navigator.clipboard.writeText).toHaveBeenCalledWith('line 1\nline 2')
+    })
   })
 })

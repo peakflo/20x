@@ -5,9 +5,10 @@
  * Used in: task descriptions, agent transcripts, plugin documentation.
  */
 
-import { memo, useMemo } from 'react'
+import { memo, useMemo, useState } from 'react'
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { Check, Copy } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 /** Allow the default safe protocols plus our local app-attachment:// scheme */
@@ -27,6 +28,39 @@ interface MarkdownProps {
 // Hoisted to module scope to prevent recreation on every render
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const REMARK_PLUGINS = [remarkGfm] as any[]
+
+function extractText(node: React.ReactNode): string {
+  if (node == null || typeof node === 'boolean') return ''
+  if (typeof node === 'string' || typeof node === 'number') return String(node)
+  if (Array.isArray(node)) return node.map(extractText).join('')
+  if (typeof node === 'object' && 'props' in node) {
+    return extractText((node as React.ReactElement<{ children?: React.ReactNode }>).props.children)
+  }
+  return ''
+}
+
+function CopyCodeButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false)
+
+  const handleCopy = async () => {
+    if (!text) return
+    await navigator.clipboard?.writeText(text)
+    setCopied(true)
+    window.setTimeout(() => setCopied(false), 1200)
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={handleCopy}
+      className="absolute right-2 top-2 z-10 flex h-6 w-6 items-center justify-center rounded text-muted-foreground opacity-0 transition hover:bg-background/80 hover:text-foreground group-hover:opacity-100 focus:opacity-100"
+      aria-label={copied ? 'Copied code' : 'Copy code'}
+      title={copied ? 'Copied' : 'Copy code'}
+    >
+      {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+    </button>
+  )
+}
 
 // Size-based class mappings — hoisted to module scope (static data)
 const SIZE_CLASSES = {
@@ -143,9 +177,15 @@ export const Markdown = memo(function Markdown({ children, size = 'sm', classNam
       )
     },
     // Pre (wraps code blocks) — sole scroll container for fenced code
-    pre: ({ children, ...props }: React.ComponentPropsWithoutRef<'pre'>) => (
-      <pre className={cn('bg-muted rounded overflow-x-auto w-full', classes.codeBlock)} {...props}>{children}</pre>
-    ),
+    pre: ({ children, ...props }: React.ComponentPropsWithoutRef<'pre'>) => {
+      const text = extractText(children).replace(/\n$/, '')
+      return (
+        <div className="group relative">
+          <CopyCodeButton text={text} />
+          <pre className={cn('bg-muted rounded overflow-x-auto w-full pr-10', classes.codeBlock)} {...props}>{children}</pre>
+        </div>
+      )
+    },
     // Links
     a: ({ children, ...props }: React.ComponentPropsWithoutRef<'a'>) => (
       <a className="text-primary hover:underline cursor-pointer" target="_blank" rel="noopener noreferrer" {...props}>{children}</a>

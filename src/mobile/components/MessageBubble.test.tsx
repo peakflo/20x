@@ -54,3 +54,70 @@ describe('MessageBubble question actions', () => {
     expect(queryByText('Submit')).toBeNull()
   })
 })
+
+describe('MessageBubble message layout', () => {
+  afterEach(() => {
+    cleanup()
+  })
+
+  it('renders agent text full width without card bubble chrome while keeping user bubbles', () => {
+    const assistantMessage: AgentMessage = {
+      id: 'assistant-1',
+      role: 'assistant',
+      content: 'Here is the result',
+      timestamp: new Date('2026-03-10T00:00:00.000Z'),
+      partType: 'text'
+    }
+    const userMessage: AgentMessage = {
+      id: 'user-1',
+      role: 'user',
+      content: 'Thanks',
+      timestamp: new Date('2026-03-10T00:00:00.000Z'),
+      partType: 'text'
+    }
+
+    const { rerender } = render(<MessageBubble message={assistantMessage} />)
+    const assistantBubble = document.querySelector('.overflow-hidden')
+
+    expect(assistantBubble?.classList.contains('w-full')).toBe(true)
+    expect(assistantBubble?.classList.contains('bg-card')).toBe(false)
+    expect(assistantBubble?.classList.contains('rounded-md')).toBe(false)
+
+    rerender(<MessageBubble message={userMessage} />)
+    const userBubble = document.querySelector('.overflow-hidden')
+
+    expect(userBubble?.classList.contains('rounded-md')).toBe(true)
+    expect(userBubble?.classList.contains('bg-secondary')).toBe(true)
+  })
+
+  it('renders tool calls as compact expandable rows without a card bubble', () => {
+    const toolMessage: AgentMessage = {
+      id: 'tool-1',
+      role: 'assistant',
+      content: 'Bash',
+      timestamp: new Date('2026-03-10T00:00:00.000Z'),
+      partType: 'tool',
+      tool: {
+        name: 'Bash',
+        status: 'success',
+        title: 'pnpm test',
+        input: 'pnpm test',
+        output: 'pass'
+      }
+    }
+
+    const { getByRole, queryByText, getByText } = render(<MessageBubble message={toolMessage} />)
+    const toolButton = getByRole('button', { name: /Bash pnpm test/i })
+    const toolContainer = toolButton.parentElement
+
+    expect(toolContainer?.classList.contains('w-full')).toBe(true)
+    expect(toolContainer?.classList.contains('bg-card')).toBe(false)
+    expect(toolContainer?.classList.contains('rounded-md')).toBe(false)
+    expect(queryByText('Output')).toBeNull()
+
+    fireEvent.click(toolButton)
+
+    expect(getByText('Output')).toBeTruthy()
+    expect(getByText('pass')).toBeTruthy()
+  })
+})
