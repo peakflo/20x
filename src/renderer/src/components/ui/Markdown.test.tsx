@@ -2,12 +2,21 @@
  * Unit tests for Markdown component
  */
 
-import { describe, it, expect } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import '@testing-library/jest-dom/vitest'
 import { Markdown } from './Markdown'
 
 describe('Markdown', () => {
+  beforeEach(() => {
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        writeText: vi.fn().mockResolvedValue(undefined)
+      }
+    })
+  })
+
   describe('Basic Rendering', () => {
     it('renders plain text', () => {
       render(<Markdown>Hello, World!</Markdown>)
@@ -132,6 +141,17 @@ Second paragraph.`
 
       // Code blocks should have block display class
       expect(code?.className).toContain('block')
+    })
+
+    it('copies fenced code block content', async () => {
+      const markdown = '```javascript\nconst x = 1;\nconst y = 2;\n```'
+      const { container } = render(<Markdown>{markdown}</Markdown>)
+
+      fireEvent.click(within(container).getByLabelText('Copy code'))
+
+      await waitFor(() => {
+        expect(navigator.clipboard.writeText).toHaveBeenCalledWith('const x = 1;\nconst y = 2;')
+      })
     })
 
     it('inline code stays inline in lists', () => {

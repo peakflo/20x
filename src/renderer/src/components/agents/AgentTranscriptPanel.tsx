@@ -84,6 +84,14 @@ function deriveToolSubtitle(tool?: AgentMessage['tool']): string {
   return ''
 }
 
+function isCompactActivityMessage(message: AgentMessage): boolean {
+  return (message.partType === 'tool' && !!message.tool) || message.partType === 'reasoning'
+}
+
+type TranscriptItem =
+  | { type: 'message'; key: string; message: AgentMessage }
+  | { type: 'activity'; key: string; messages: AgentMessage[] }
+
 
 interface AgentTranscriptPanelProps {
   title?: string
@@ -339,7 +347,7 @@ function TaskProgressMessage({ message }: { message: AgentMessage }) {
   )
 }
 
-function ToolCallMessage({ message }: { message: AgentMessage }) {
+function ToolCallMessage({ message, showTimestamp = true }: { message: AgentMessage; showTimestamp?: boolean }) {
   const [expanded, setExpanded] = useState(false)
   const tool = message.tool!
   const isRunning = !tool.status || tool.status === 'in_progress' || tool.status === 'running' || tool.status === 'pending'
@@ -347,17 +355,23 @@ function ToolCallMessage({ message }: { message: AgentMessage }) {
   const subtitle = deriveToolSubtitle(tool)
 
   return (
-    <div className="w-full min-w-0 overflow-hidden">
+    <div className="group/tool w-full min-w-0 overflow-hidden">
       <button
         onClick={() => setExpanded(!expanded)}
-        className="w-full flex items-center gap-2 py-1 text-xs font-mono text-muted-foreground hover:text-foreground transition-colors"
+        className="flex h-6 w-full items-center gap-2 rounded-sm px-1 text-xs font-mono text-muted-foreground hover:bg-white/5 hover:text-foreground transition-colors"
       >
         <ChevronRight className={`h-3 w-3 text-muted-foreground shrink-0 transition-transform ${expanded ? 'rotate-90' : ''}`} />
         <Wrench className="h-3 w-3 text-muted-foreground shrink-0" />
-        <span className="text-foreground/80">{tool.name}</span>
-        {subtitle && <span className="text-muted-foreground truncate"> {subtitle}</span>}
-        {isRunning && <Loader2 className="h-3 w-3 ml-auto shrink-0 text-muted-foreground animate-spin" />}
-        {isError && <AlertTriangle className="h-3 w-3 ml-auto shrink-0 text-red-400" />}
+        <span className="text-foreground/80 shrink-0">{tool.name}</span>
+        {subtitle && <span className="min-w-0 flex-1 truncate text-muted-foreground">{subtitle}</span>}
+        {!subtitle && <span className="flex-1" />}
+        {showTimestamp && (
+          <span className="shrink-0 text-[10px] text-muted-foreground opacity-0 transition-opacity group-hover/tool:opacity-100">
+            {message.timestamp.toLocaleTimeString()}
+          </span>
+        )}
+        {isRunning && <Loader2 className="h-3 w-3 shrink-0 text-muted-foreground animate-spin" />}
+        {isError && <AlertTriangle className="h-3 w-3 shrink-0 text-red-400" />}
       </button>
       {expanded && (
         <div className="ml-5 border-l border-border/40 pl-3 py-1.5 text-[11px] font-mono space-y-2">
@@ -381,12 +395,52 @@ function ToolCallMessage({ message }: { message: AgentMessage }) {
           )}
         </div>
       )}
-      <div className="flex items-center gap-2 pl-5 pb-1">
-        <span className="text-[10px] text-muted-foreground">{message.timestamp.toLocaleTimeString()}</span>
-        {message.stepMeta && (
-          <span className="text-[10px] text-muted-foreground">{formatStepMeta(message.stepMeta)}</span>
+    </div>
+  )
+}
+
+function ReasoningMessage({ message, viewMode, showTimestamp = true }: { message: AgentMessage; viewMode?: ViewMode; showTimestamp?: boolean }) {
+  const [expanded, setExpanded] = useState(false)
+  const summary = message.content.split('\n').map((line) => line.trim()).find(Boolean) || 'Thinking'
+
+  return (
+    <div className="group/tool w-full min-w-0 overflow-hidden">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="flex h-6 w-full items-center gap-2 rounded-sm px-1 text-xs font-mono text-purple-300/80 hover:bg-white/5 hover:text-purple-200 transition-colors"
+      >
+        <ChevronRight className={`h-3 w-3 shrink-0 text-purple-300/60 transition-transform ${expanded ? 'rotate-90' : ''}`} />
+        <span className="shrink-0 text-purple-300">Thinking</span>
+        <span className="min-w-0 flex-1 truncate text-purple-200/70">{summary}</span>
+        {showTimestamp && (
+          <span className="shrink-0 text-[10px] text-muted-foreground opacity-0 transition-opacity group-hover/tool:opacity-100">
+            {message.timestamp.toLocaleTimeString()}
+          </span>
         )}
-      </div>
+      </button>
+      {expanded && (
+        <div className="ml-5 border-l border-purple-400/30 pl-3 py-1.5 text-purple-100/90">
+          {viewMode === ViewMode.MARKDOWN ? (
+            <Markdown size="sm">{message.content}</Markdown>
+          ) : (
+            <pre className="whitespace-pre-wrap break-words font-mono text-xs">{message.content}</pre>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function ActivityMessageGroup({ messages, viewMode }: { messages: AgentMessage[]; viewMode?: ViewMode }) {
+  return (
+    <div className="w-full border-l border-border/30 pl-2 py-0.5">
+      {messages.map((message, index) => {
+        const showTimestamp = index === messages.length - 1
+        if (message.partType === 'reasoning') {
+          return <ReasoningMessage key={message.id} message={message} viewMode={viewMode} showTimestamp={showTimestamp} />
+        }
+        return <ToolCallMessage key={message.id} message={message} showTimestamp={showTimestamp} />
+      })}
     </div>
   )
 }
@@ -404,8 +458,8 @@ function MessageBubble({ message, onAnswer, viewMode, canAnswerQuestion = false 
     return <PlanReviewMessage message={message} />
   }
 
-  if (message.partType === 'tool' && message.tool) {
-    return <ToolCallMessage message={message} />
+  if (isCompactActivityMessage(message)) {
+    return <ActivityMessageGroup messages={[message]} viewMode={viewMode} />
   }
 
   if (message.partType === 'task_progress' && message.taskProgress) {
@@ -420,7 +474,6 @@ function MessageBubble({ message, onAnswer, viewMode, canAnswerQuestion = false 
 
   const isUser = message.role === 'user'
   const isSystem = message.role === 'system'
-  const isReasoning = message.partType === 'reasoning'
   const isError = message.partType === 'error' || message.partType === 'retry'
 
   return (
@@ -433,9 +486,7 @@ function MessageBubble({ message, onAnswer, viewMode, canAnswerQuestion = false 
               ? 'max-w-[90%] rounded-md px-3 py-2 bg-secondary text-foreground'
               : isSystem
                 ? 'w-full text-yellow-200 border-l border-yellow-500/40 pl-3 py-1'
-                : isReasoning
-                  ? 'w-full text-purple-200 border-l border-purple-500/40 pl-3 py-1'
-                  : 'w-full text-foreground/80 py-1'
+                : 'w-full text-foreground/80 py-1'
         }`}
       >
         {isError && (
@@ -443,7 +494,6 @@ function MessageBubble({ message, onAnswer, viewMode, canAnswerQuestion = false 
             <AlertTriangle className="h-3 w-3" /> Error
           </span>
         )}
-        {isReasoning && <span className="text-[10px] text-purple-400 block mb-1">Thinking</span>}
         {viewMode === ViewMode.MARKDOWN ? (
           <Markdown size="sm">{message.content}</Markdown>
         ) : (
@@ -658,9 +708,27 @@ export function AgentTranscriptPanel({
 
   const atBottomRef = useRef(true)
   const [showScrollToBottom, setShowScrollToBottom] = useState(false)
+  const transcriptItems = useMemo<TranscriptItem[]>(() => {
+    const items: TranscriptItem[] = []
+    for (let index = 0; index < messages.length; index += 1) {
+      const message = messages[index]
+      if (!isCompactActivityMessage(message)) {
+        items.push({ type: 'message', key: message.id, message })
+        continue
+      }
+
+      const group: AgentMessage[] = [message]
+      while (index + 1 < messages.length && isCompactActivityMessage(messages[index + 1])) {
+        index += 1
+        group.push(messages[index])
+      }
+      items.push({ type: 'activity', key: group.map((item) => item.id).join(':'), messages: group })
+    }
+    return items
+  }, [messages])
 
   const virtualizer = useVirtualizer({
-    count: messages.length,
+    count: transcriptItems.length,
     getScrollElement: () => scrollRef.current,
     // Realistic estimate for average message height (tool calls, markdown blocks, etc.)
     // — reduces layout thrash and improves scroll smoothness vs the previous 60px default
@@ -679,18 +747,18 @@ export function AgentTranscriptPanel({
   }, [])
 
   const scrollToBottom = useCallback(() => {
-    if (messages.length > 0) {
-      virtualizer.scrollToIndex(messages.length - 1, { align: 'end' })
+    if (transcriptItems.length > 0) {
+      virtualizer.scrollToIndex(transcriptItems.length - 1, { align: 'end' })
       atBottomRef.current = true
       setShowScrollToBottom(false)
     }
-  }, [messages.length, virtualizer])
+  }, [transcriptItems.length, virtualizer])
 
   useEffect(() => {
-    if (messages.length > 0 && atBottomRef.current) {
-      virtualizer.scrollToIndex(messages.length - 1, { align: 'end' })
+    if (transcriptItems.length > 0 && atBottomRef.current) {
+      virtualizer.scrollToIndex(transcriptItems.length - 1, { align: 'end' })
     }
-  }, [messages.length, virtualizer])
+  }, [transcriptItems.length, virtualizer])
 
   const getStatusColor = () => {
     switch (status) {
@@ -869,9 +937,11 @@ export function AgentTranscriptPanel({
           ) : (
             <>
               <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
-                {virtualizer.getVirtualItems().map((virtualRow) => (
+                {virtualizer.getVirtualItems().map((virtualRow) => {
+                  const item = transcriptItems[virtualRow.index]
+                  return (
                   <div
-                    key={messages[virtualRow.index].id}
+                    key={item.key}
                     ref={virtualizer.measureElement}
                     data-index={virtualRow.index}
                     style={{
@@ -883,15 +953,20 @@ export function AgentTranscriptPanel({
                     }}
                   >
                     <div className="pb-2">
-                      <MemoizedMessageBubble
-                        message={messages[virtualRow.index]}
-                        onAnswer={onSend}
-                        viewMode={viewMode}
-                        canAnswerQuestion={messages[virtualRow.index].id === activeQuestionId}
-                      />
+                      {item.type === 'activity' ? (
+                        <ActivityMessageGroup messages={item.messages} viewMode={viewMode} />
+                      ) : (
+                        <MemoizedMessageBubble
+                          message={item.message}
+                          onAnswer={onSend}
+                          viewMode={viewMode}
+                          canAnswerQuestion={item.message.id === activeQuestionId}
+                        />
+                      )}
                     </div>
                   </div>
-                ))}
+                  )
+                })}
               </div>
               {status === SessionStatus.WORKING && (
                 <div className="flex items-center gap-2 text-xs text-muted-foreground">

@@ -3,7 +3,7 @@ import { useTaskStore } from '../stores/task-store'
 import { useAgentStore, SessionStatus } from '../stores/agent-store'
 import { api } from '../api/client'
 import { useSessionControls } from '../hooks/useSessionControls'
-import { MessageBubble } from '../components/MessageBubble'
+import { MessageActivityGroup, MessageBubble, isCompactActivityMessage } from '../components/MessageBubble'
 import { ChatInput, type ChatInputAttachment } from '../components/ChatInput'
 import { cn } from '../lib/utils'
 import type { Route } from '../App'
@@ -391,14 +391,25 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
             </div>
           )}
 
-          {messages.map((msg) => (
-            <MessageBubble
-              key={msg.id}
-              message={msg}
-              onAnswer={handleAnswer}
-              canAnswerQuestion={msg.id === activeQuestionId}
-            />
-          ))}
+          {messages.map((msg, index) => {
+            if (!isCompactActivityMessage(msg)) {
+              return (
+                <MessageBubble
+                  key={msg.id}
+                  message={msg}
+                  onAnswer={handleAnswer}
+                  canAnswerQuestion={msg.id === activeQuestionId}
+                />
+              )
+            }
+            if (index > 0 && isCompactActivityMessage(messages[index - 1])) return null
+
+            const group = [msg]
+            for (let nextIndex = index + 1; nextIndex < messages.length && isCompactActivityMessage(messages[nextIndex]); nextIndex += 1) {
+              group.push(messages[nextIndex])
+            }
+            return <MessageActivityGroup key={group.map((item) => item.id).join(':')} messages={group} />
+          })}
 
           {/* Working indicator */}
           {isWorking && messages.length > 0 && (

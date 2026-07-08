@@ -178,6 +178,10 @@ function formatDuration(ms: number): string {
   return `${minutes}m ${remainingSeconds}s`
 }
 
+export function isCompactActivityMessage(message: AgentMessage): boolean {
+  return (message.partType === 'tool' && !!message.tool?.name) || message.partType === 'reasoning'
+}
+
 function TaskProgressMessage({ message }: { message: AgentMessage }) {
   const [expanded, setExpanded] = useState(false)
   const tp = message.taskProgress!
@@ -256,7 +260,7 @@ function TaskProgressMessage({ message }: { message: AgentMessage }) {
   )
 }
 
-function ToolCallMessage({ message }: { message: AgentMessage }) {
+function ToolCallMessage({ message, showTimestamp = true }: { message: AgentMessage; showTimestamp?: boolean }) {
   const [expanded, setExpanded] = useState(false)
   const tool = message.tool!
   const isRunning = !tool.status || tool.status === 'in_progress' || tool.status === 'running' || tool.status === 'pending'
@@ -264,31 +268,37 @@ function ToolCallMessage({ message }: { message: AgentMessage }) {
   const subtitle = deriveToolSubtitle(tool)
 
   return (
-    <div className="w-full min-w-0 overflow-hidden">
+    <div className="group/tool w-full min-w-0 overflow-hidden">
       <button
         onClick={() => setExpanded(!expanded)}
-        className="w-full flex items-center gap-2 py-1 font-mono text-xs text-muted-foreground active:text-foreground transition-colors"
+        className="flex h-6 w-full items-center gap-2 rounded-sm px-1 font-mono text-xs text-muted-foreground active:text-foreground transition-colors"
       >
-        {/* Wrench icon */}
-        <svg className="h-3 w-3 text-muted-foreground shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
-        </svg>
-        <span className="text-foreground/80 font-medium">{tool.name}</span>
-        {subtitle && <span className="text-muted-foreground truncate"> {subtitle}</span>}
-        {isRunning && (
-          <svg className="h-3 w-3 ml-auto shrink-0 text-muted-foreground animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
-          </svg>
-        )}
-        {isError && (
-          <svg className="h-3 w-3 ml-auto shrink-0 text-red-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/>
-          </svg>
-        )}
         <span className={cn(
           'text-muted-foreground transition-transform text-[10px]',
           expanded && 'rotate-90'
         )}>▶</span>
+        {/* Wrench icon */}
+        <svg className="h-3 w-3 text-muted-foreground shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
+        </svg>
+        <span className="text-foreground/80 font-medium shrink-0">{tool.name}</span>
+        {subtitle && <span className="min-w-0 flex-1 text-muted-foreground truncate">{subtitle}</span>}
+        {!subtitle && <span className="flex-1" />}
+        {showTimestamp && (
+          <span className="shrink-0 text-[10px] text-muted-foreground opacity-0 transition-opacity group-hover/tool:opacity-100">
+            {message.timestamp.toLocaleTimeString()}
+          </span>
+        )}
+        {isRunning && (
+          <svg className="h-3 w-3 shrink-0 text-muted-foreground animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
+          </svg>
+        )}
+        {isError && (
+          <svg className="h-3 w-3 shrink-0 text-red-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/>
+          </svg>
+        )}
       </button>
       {expanded && (
         <div className="ml-5 border-l border-border/40 pl-3 py-1.5 space-y-2 text-[11px] font-mono">
@@ -312,6 +322,51 @@ function ToolCallMessage({ message }: { message: AgentMessage }) {
           )}
         </div>
       )}
+    </div>
+  )
+}
+
+function ReasoningMessage({ message, showTimestamp = true }: { message: AgentMessage; showTimestamp?: boolean }) {
+  const [expanded, setExpanded] = useState(false)
+  const summary = message.content.split('\n').map((line) => line.trim()).find(Boolean) || 'Thinking'
+
+  return (
+    <div className="group/tool w-full min-w-0 overflow-hidden">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="flex h-6 w-full items-center gap-2 rounded-sm px-1 font-mono text-xs text-purple-300/80 active:text-purple-200 transition-colors"
+      >
+        <span className={cn(
+          'text-purple-300/60 transition-transform text-[10px]',
+          expanded && 'rotate-90'
+        )}>▶</span>
+        <span className="shrink-0 text-purple-300">Thinking</span>
+        <span className="min-w-0 flex-1 truncate text-purple-200/70">{summary}</span>
+        {showTimestamp && (
+          <span className="shrink-0 text-[10px] text-muted-foreground opacity-0 transition-opacity group-hover/tool:opacity-100">
+            {message.timestamp.toLocaleTimeString()}
+          </span>
+        )}
+      </button>
+      {expanded && (
+        <div className="ml-5 border-l border-purple-400/30 pl-3 py-1.5 text-purple-100/90">
+          <Markdown size="sm">{message.content}</Markdown>
+        </div>
+      )}
+    </div>
+  )
+}
+
+export function MessageActivityGroup({ messages }: { messages: AgentMessage[] }) {
+  return (
+    <div className="w-full border-l border-border/30 pl-2 py-0.5">
+      {messages.map((message, index) => {
+        const showTimestamp = index === messages.length - 1
+        if (message.partType === 'reasoning') {
+          return <ReasoningMessage key={message.id} message={message} showTimestamp={showTimestamp} />
+        }
+        return <ToolCallMessage key={message.id} message={message} showTimestamp={showTimestamp} />
+      })}
     </div>
   )
 }
@@ -378,8 +433,8 @@ export function MessageBubble({ message, onAnswer, canAnswerQuestion = false }: 
   }
 
   // Tool call — require a name to avoid rendering ghost entries with no tool name
-  if (message.partType === 'tool' && message.tool?.name) {
-    return <ToolCallMessage message={message} />
+  if (isCompactActivityMessage(message)) {
+    return <MessageActivityGroup messages={[message]} />
   }
 
   // Task progress — live subagent task tracking
@@ -402,7 +457,6 @@ export function MessageBubble({ message, onAnswer, canAnswerQuestion = false }: 
   const isUser = message.role === 'user'
   const isSystem = message.role === 'system'
   const isError = message.partType === 'error'
-  const isReasoning = message.partType === 'reasoning'
 
   return (
     <div className={cn('flex gap-2', isUser ? 'justify-end' : 'justify-start', !isUser && 'w-full')}>
@@ -411,8 +465,7 @@ export function MessageBubble({ message, onAnswer, canAnswerQuestion = false }: 
         isUser && 'max-w-[90%] rounded-md px-3 py-2 bg-secondary text-foreground',
         isSystem && !isError && 'w-full border-l border-yellow-500/40 pl-3 py-1 text-yellow-200',
         isError && 'w-full border-l border-red-500/40 pl-3 py-1 text-red-200',
-        isReasoning && 'w-full border-l border-purple-500/40 pl-3 py-1 text-purple-200',
-        !isUser && !isSystem && !isError && !isReasoning && 'w-full py-1 text-foreground/80'
+        !isUser && !isSystem && !isError && 'w-full py-1 text-foreground/80'
       )}>
         <div className="break-words min-w-0">
           <Markdown size="sm">{message.content}</Markdown>

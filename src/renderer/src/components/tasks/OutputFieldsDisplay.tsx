@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
-import { FileOutput, CheckCircle2, FileText, FolderOpen, ExternalLink } from 'lucide-react'
+import { FileOutput, CheckCircle2, FileText, FolderOpen, ExternalLink, Copy, Check } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
 import { Textarea } from '@/components/ui/Textarea'
@@ -22,6 +22,40 @@ function isFieldFilled(field: OutputField): boolean {
   if (typeof v === 'boolean') return true
   if (Array.isArray(v) && v.length === 0) return false
   return true
+}
+
+function stringifyFieldValue(value: unknown): string {
+  if (value === null || value === undefined) return ''
+  if (typeof value === 'string') return value
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+  if (Array.isArray(value)) return value.map(String).join('\n')
+  return JSON.stringify(value, null, 2)
+}
+
+function CopyValueButton({ value, label = 'Copy value' }: { value: unknown; label?: string }) {
+  const [copied, setCopied] = useState(false)
+  const text = stringifyFieldValue(value)
+  if (!text) return null
+
+  const handleCopy = async () => {
+    await navigator.clipboard?.writeText(text)
+    setCopied(true)
+    window.setTimeout(() => setCopied(false), 1200)
+  }
+
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="sm"
+      className="h-5 px-1.5 text-muted-foreground hover:text-foreground"
+      onClick={handleCopy}
+      aria-label={copied ? 'Copied value' : label}
+      title={copied ? 'Copied' : label}
+    >
+      {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+    </Button>
+  )
 }
 
 interface OutputFieldsDisplayProps {
@@ -75,6 +109,15 @@ export function OutputFieldsDisplay({ fields, onChange, isActive, onComplete, ta
 function OutputFieldInput({ field, onValueChange, taskUpdatedAt }: { field: OutputField; onValueChange: (value: unknown) => void; taskUpdatedAt?: string }) {
   const [localValue, setLocalValue] = useState<string>(String(field.value ?? ''))
   const fieldLabel = getFieldLabel(field)
+  const label = (
+    <div className="flex items-center justify-between gap-2">
+      <Label className="text-xs">
+        {fieldLabel}
+        {field.required && <span className="text-destructive ml-0.5">*</span>}
+      </Label>
+      <CopyValueButton value={field.value} />
+    </div>
+  )
 
   // Sync local state when field.value changes externally (e.g. agent extraction)
   useEffect(() => {
@@ -90,10 +133,7 @@ function OutputFieldInput({ field, onValueChange, taskUpdatedAt }: { field: Outp
     case 'textarea':
       return (
         <div className="space-y-1.5">
-          <Label className="text-xs">
-            {fieldLabel}
-            {field.required && <span className="text-destructive ml-0.5">*</span>}
-          </Label>
+          {label}
           <Textarea
             value={localValue}
             onChange={(e) => handleChange(e.target.value)}
@@ -114,16 +154,14 @@ function OutputFieldInput({ field, onValueChange, taskUpdatedAt }: { field: Outp
             {fieldLabel}
             {field.required && <span className="text-destructive ml-0.5">*</span>}
           </Label>
+          <CopyValueButton value={field.value} />
         </div>
       )
 
     case 'list':
       return (
         <div className="space-y-1.5">
-          <Label className="text-xs">
-            {fieldLabel}
-            {field.required && <span className="text-destructive ml-0.5">*</span>}
-          </Label>
+          {label}
           {field.options && field.options.length > 0 ? (
             <Select
               value={String(field.value ?? '')}
@@ -149,10 +187,7 @@ function OutputFieldInput({ field, onValueChange, taskUpdatedAt }: { field: Outp
         : field.value ? [String(field.value)] : []
       return (
         <div className="space-y-1.5">
-          <Label className="text-xs">
-            {fieldLabel}
-            {field.required && <span className="text-destructive ml-0.5">*</span>}
-          </Label>
+          {label}
           {filePaths.length > 0 ? (
             <div className="space-y-1.5">
               {filePaths.map((fp) => (
@@ -171,10 +206,7 @@ function OutputFieldInput({ field, onValueChange, taskUpdatedAt }: { field: Outp
     case 'number':
       return (
         <div className="space-y-1.5">
-          <Label className="text-xs">
-            {fieldLabel}
-            {field.required && <span className="text-destructive ml-0.5">*</span>}
-          </Label>
+          {label}
           <Input
             type="number"
             value={localValue}
@@ -187,10 +219,7 @@ function OutputFieldInput({ field, onValueChange, taskUpdatedAt }: { field: Outp
     case 'date':
       return (
         <div className="space-y-1.5">
-          <Label className="text-xs">
-            {fieldLabel}
-            {field.required && <span className="text-destructive ml-0.5">*</span>}
-          </Label>
+          {label}
           <Input
             type="date"
             value={String(field.value ?? '')}
@@ -203,10 +232,7 @@ function OutputFieldInput({ field, onValueChange, taskUpdatedAt }: { field: Outp
     default:
       return (
         <div className="space-y-1.5">
-          <Label className="text-xs">
-            {fieldLabel}
-            {field.required && <span className="text-destructive ml-0.5">*</span>}
-          </Label>
+          {label}
           <Input
             type={field.type === 'email' ? 'email' : field.type === 'url' ? 'url' : 'text'}
             value={localValue}
@@ -241,6 +267,7 @@ function FileFieldPreview({ filePath, taskUpdatedAt }: { filePath: string; taskU
         <FileText className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
         <span className="text-xs font-medium truncate flex-1">{fileName}</span>
         <div className="flex items-center gap-1 shrink-0">
+          {preview && <CopyValueButton value={preview} label="Copy file preview" />}
           <Button variant="ghost" size="sm" className="h-6 px-1.5" onClick={() => shellApi.openPath(filePath)}>
             <ExternalLink className="h-3 w-3" />
           </Button>

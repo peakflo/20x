@@ -9,7 +9,7 @@ import { useSessionControls } from '../hooks/useSessionControls'
 import { Badge } from '../components/Badge'
 import { PriorityBadge } from '../components/PriorityBadge'
 import { TaskStatusDot } from '../components/TaskStatusDot'
-import { MessageBubble } from '../components/MessageBubble'
+import { MessageActivityGroup, MessageBubble, isCompactActivityMessage } from '../components/MessageBubble'
 import { cn, formatDate, isOverdue, formatRelativeDate, formatRelativeFuture, STATUS_VARIANT, STATUS_DOT_COLORS } from '../lib/utils'
 import type { Route } from '../App'
 
@@ -688,9 +688,18 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
             {hasMessages && (
               <>
                 <div className="space-y-2 bg-background rounded-md border border-border/50 p-3">
-                  {previewMessages.map((msg) => (
-                    <MessageBubble key={msg.id} message={msg} />
-                  ))}
+                  {previewMessages.map((msg, index) => {
+                    if (!isCompactActivityMessage(msg)) {
+                      return <MessageBubble key={msg.id} message={msg} />
+                    }
+                    if (index > 0 && isCompactActivityMessage(previewMessages[index - 1])) return null
+
+                    const group = [msg]
+                    for (let nextIndex = index + 1; nextIndex < previewMessages.length && isCompactActivityMessage(previewMessages[nextIndex]); nextIndex += 1) {
+                      group.push(previewMessages[nextIndex])
+                    }
+                    return <MessageActivityGroup key={group.map((item) => item.id).join(':')} messages={group} />
+                  })}
                 </div>
                 {session!.messages.length > 3 && (
                   <button
