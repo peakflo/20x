@@ -120,4 +120,92 @@ describe('MessageBubble message layout', () => {
     expect(getByText('Output')).toBeTruthy()
     expect(getByText('pass')).toBeTruthy()
   })
+
+  it('shows tool descriptions in compact rows and exact commands in expanded details', () => {
+    const command = `cd "/Users/dmitryvedenyapin/Library/Application Support/20x/workspaces/vebrwpyobv88637krcachtxa/workflow-builder" && git add packages/ui/app/business-context/graph/page.tsx && git commit -q -F - <<'MSG'
+fix(ui): move custom-property editor from Overview into the Properties tab
+
+The "add custom property" controls were on the Overview (main) tab, so users
+who went to Properties to add a field saw only the read-only cube params.
+MSG
+git push 2>&1 | tail -2`
+
+    const toolMessage: AgentMessage = {
+      id: 'tool-description',
+      role: 'assistant',
+      content: 'Bash',
+      timestamp: new Date('2026-03-10T00:00:00.000Z'),
+      partType: 'tool',
+      tool: {
+        name: 'Bash',
+        status: 'success',
+        input: JSON.stringify({
+          command,
+          description: 'Commit and push placement fix'
+        }, null, 2),
+        output: 'pass'
+      }
+    }
+
+    const { getByRole, queryByText, getByText } = render(<MessageBubble message={toolMessage} />)
+    const toolButton = getByRole('button', { name: /Bash Commit and push placement fix/i })
+    expect(queryByText(/workflow-builder/)).toBeNull()
+    expect(queryByText('Command')).toBeNull()
+
+    fireEvent.click(toolButton)
+
+    expect(getByText('Command')).toBeTruthy()
+    expect(getByText((_, element) => element?.tagName === 'PRE' && element.textContent === command)).toBeTruthy()
+  })
+
+  it('shows only filenames for file editing tool subtitles', () => {
+    const filePath = '/Users/dmitryvedenyapin/Library/Application Support/20x/workspaces/vebrwpyobv88637krcachtxa/workflow-builder/packages/ui/app/business-context/graph/page.tsx'
+
+    const toolMessage: AgentMessage = {
+      id: 'tool-edit',
+      role: 'assistant',
+      content: 'Edit',
+      timestamp: new Date('2026-03-10T00:00:00.000Z'),
+      partType: 'tool',
+      tool: {
+        name: 'Edit',
+        status: 'success',
+        input: JSON.stringify({
+          replace_all: false,
+          file_path: filePath,
+          old_string: '              {/* Properties Tab */}',
+          new_string: '              {/* Properties Tab */}'
+        }, null, 2),
+        output: 'updated'
+      }
+    }
+
+    const { getByRole, queryByRole } = render(<MessageBubble message={toolMessage} />)
+
+    expect(getByRole('button', { name: /Edit page\.tsx/i })).toBeTruthy()
+    expect(queryByRole('button', { name: /workflow-builder/i })).toBeNull()
+  })
+
+  it('shows only filenames for read tool subtitles', () => {
+    const filePath = '/Users/dmitryvedenyapin/Library/Application Support/20x/workspaces/vebrwpyobv88637krcachtxa/workflow-builder/packages/cubejs/lib/custom-dimensions.js'
+
+    const toolMessage: AgentMessage = {
+      id: 'tool-read',
+      role: 'assistant',
+      content: 'Read',
+      timestamp: new Date('2026-03-10T00:00:00.000Z'),
+      partType: 'tool',
+      tool: {
+        name: 'Read',
+        status: 'success',
+        input: JSON.stringify({ file_path: filePath }, null, 2),
+        output: 'const customDimensions = []'
+      }
+    }
+
+    const { getByRole, queryByRole } = render(<MessageBubble message={toolMessage} />)
+
+    expect(getByRole('button', { name: /Read custom-dimensions\.js/i })).toBeTruthy()
+    expect(queryByRole('button', { name: /workflow-builder/i })).toBeNull()
+  })
 })

@@ -30,6 +30,7 @@ export interface AgentMessage {
     name: string
     status: string
     title?: string
+    description?: string
     input?: string
     output?: string
     error?: string
