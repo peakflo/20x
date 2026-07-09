@@ -72,13 +72,72 @@ function sanitizeToolContent(content: unknown): string {
 
   return str.substring(0, MAX_DISPLAY_LENGTH) + `\n\n... (${str.length - MAX_DISPLAY_LENGTH} more characters)`
 }
+
+function parseToolInput(input: unknown): Record<string, unknown> | null {
+  if (!input) return null
+  if (typeof input === 'object') return input as Record<string, unknown>
+  if (typeof input !== 'string') return null
+
+  try {
+    const parsed = JSON.parse(input)
+    return parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : null
+  } catch {
+    return null
+  }
+}
+
+function basenameFromPath(value: string): string {
+  const normalized = value.replace(/\\/g, '/').replace(/\/+$/, '')
+  return normalized.split('/').filter(Boolean).pop() || value
+}
+
+function isFilePathTool(toolName: string): boolean {
+  return ['read', 'edit', 'multiedit', 'write', 'notebookedit'].includes(toolName.toLowerCase())
+}
+
+function deriveToolDescription(tool: AgentMessage['tool']): string {
+  if (!tool) return ''
+  if (tool.description) return tool.description
+
+  const input = parseToolInput(tool.input)
+  const description = input?.description
+  return typeof description === 'string' ? description : ''
+}
+
+function deriveToolCommand(tool: AgentMessage['tool']): string {
+  if (!tool) return ''
+
+  const input = parseToolInput(tool.input)
+  const command = input?.command
+  if (Array.isArray(command)) return command.map(String).join(' ')
+  if (typeof command === 'string') return command
+
+  if (tool.name.toLowerCase() === 'command' && typeof tool.input === 'string') {
+    return tool.input
+  }
+
+  return ''
+}
+
 function deriveToolSubtitle(tool?: AgentMessage['tool']): string {
   if (!tool) return ''
-  if (tool.title) return tool.title
+
+  const description = deriveToolDescription(tool)
+  if (description) return description
+
+  if (tool.title) {
+    return isFilePathTool(tool.name) ? basenameFromPath(tool.title) : tool.title
+  }
 
   if (tool.name === 'command' && typeof tool.input === 'string') {
     const firstLine = tool.input.split('\n').map((line) => line.trim()).find(Boolean)
     return firstLine ? firstLine.slice(0, 120) : ''
+  }
+
+  const input = parseToolInput(tool.input)
+  const filePath = input?.file_path || input?.path || input?.filename
+  if (isFilePathTool(tool.name) && typeof filePath === 'string') {
+    return basenameFromPath(filePath)
   }
 
   return ''
@@ -353,6 +412,7 @@ function ToolCallMessage({ message }: { message: AgentMessage }) {
   const isRunning = !tool.status || tool.status === 'in_progress' || tool.status === 'running' || tool.status === 'pending'
   const isError = tool.status === 'error' || tool.status === 'failed'
   const subtitle = deriveToolSubtitle(tool)
+  const command = deriveToolCommand(tool)
 
   return (
     <div className="group/tool w-full min-w-0 overflow-hidden">
@@ -373,6 +433,12 @@ function ToolCallMessage({ message }: { message: AgentMessage }) {
       </button>
       {expanded && (
         <div className="ml-5 border-l border-border/40 pl-3 py-1.5 text-[11px] font-mono space-y-2">
+          {command && (
+            <div>
+              <span className="text-muted-foreground">Command:</span>
+              <pre className="mt-0.5 text-muted-foreground whitespace-pre-wrap break-words max-h-40 overflow-y-auto">{command}</pre>
+            </div>
+          )}
           {tool.input && (
             <div>
               <span className="text-muted-foreground">Input:</span>

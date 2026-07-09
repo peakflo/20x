@@ -90,6 +90,7 @@ export interface MessagePart {
     name: string
     status?: string
     title?: string
+    description?: string
     input?: unknown
     output?: unknown
     error?: string
@@ -123,6 +124,7 @@ export interface MessagePayload {
     name: string
     status?: string
     title?: string
+    description?: string
     input?: unknown
     output?: unknown
     error?: string
