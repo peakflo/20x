@@ -62,6 +62,8 @@ pnpm test:main     # Main process tests only
 pnpm test:renderer # Renderer tests only
 ```
 
+Test scripts use a cross-platform launcher (`scripts/run-vitest.mjs`) so `pnpm test:run` works on Windows PowerShell without extra setup.
+
 ## Questions?
 
 Open a [GitHub Discussion](https://github.com/peakflo/20x/discussions) or join our [Discord](https://discord.gg/bPgkmycM).
