@@ -1,0 +1,327 @@
+import { describe, it, expect, vi } from 'vitest'
+import { CodexAppServerAdapter } from './codex-app-server-adapter'
+import { MessagePartType, MessageRole, SessionStatusType } from './coding-agent-adapter'
+
+vi.mock('child_process', () => ({
+  spawn: vi.fn(),
+  execFile: vi.fn((_cmd, _args, callback) => callback(null, '/usr/local/bin/codex\n', ''))
+}))
+
+interface AppServerAdapterPrivate {
+  sessions: Map<string, AppServerSessionForTest>
+  handleRpcMessage(session: AppServerSessionForTest, message: unknown): void
+  convertEventToMessageParts(
+    event: unknown,
+    seenMessageIds: Set<string>,
+    seenPartIds: Set<string>,
+    partContentLengths: Map<string, string>,
+    session: AppServerSessionForTest
+  ): Array<{
+    id?: string
+    type: MessagePartType
+    text?: string
+    role?: string
+    update?: boolean
+    tool?: { name: string; status?: string; input?: unknown; output?: unknown }
+  }>
+  buildEnvironment(config: {
+    authMethod?: 'subscription' | 'api_key'
+    apiKeys?: { openai?: string }
+    secretEnvVars?: Record<string, string>
+  }): {
+    env: NodeJS.ProcessEnv
+    usesApiKey: boolean
+    summary: string
+  }
+  bufferAllThreadItems(session: AppServerSessionForTest, threadId: string): Promise<void>
+  sendRpcRequest(session: AppServerSessionForTest, method: string, params?: unknown): Promise<unknown>
+}
+
+interface AppServerSessionForTest {
+  sessionId: string
+  threadId: string | null
+  activeTurnId: string | null
+  process: {
+    stdin: { write: ReturnType<typeof vi.fn> }
+  }
+  stdoutBuffer: string
+  status: SessionStatusType
+  messageBuffer: unknown[]
+  permanentMessages: unknown[]
+  pendingRequests: Map<string | number, {
+    resolve: (value: unknown) => void
+    reject: (error: Error) => void
+  }>
+  pendingApproval: unknown | null
+  nextRequestId: number
+  lastError: string | null
+  config: { permissionMode?: 'ask' | 'allow' }
+  streamedTextByItemId: Map<string, string>
+  runningTools: Map<string, {
+    partId: string
+    toolName: string
+    startTime?: number
+    input?: Record<string, unknown>
+  }>
+  codexUseApiKey: boolean
+  codexAuthSummary: string
+}
+
+function adapterPrivate(adapter: CodexAppServerAdapter): AppServerAdapterPrivate {
+  return adapter as unknown as AppServerAdapterPrivate
+}
+
+function createSession(): AppServerSessionForTest {
+  return {
+    sessionId: 'task-1',
+    threadId: 'thread-1',
+    activeTurnId: null,
+    process: { stdin: { write: vi.fn() } },
+    stdoutBuffer: '',
+    status: SessionStatusType.IDLE,
+    messageBuffer: [],
+    permanentMessages: [],
+    pendingRequests: new Map(),
+    pendingApproval: null,
+    nextRequestId: 1,
+    lastError: null,
+    config: { permissionMode: 'ask' },
+    streamedTextByItemId: new Map(),
+    runningTools: new Map(),
+    codexUseApiKey: false,
+    codexAuthSummary: ''
+  }
+}
+
+describe('CodexAppServerAdapter', () => {
+  it('accumulates agent message deltas into an updating text part', () => {
+    const adapter = adapterPrivate(new CodexAppServerAdapter())
+    const session = createSession()
+    const seenMessageIds = new Set<string>()
+    const seenPartIds = new Set<string>()
+    const lengths = new Map<string, string>()
+
+    const first = adapter.convertEventToMessageParts({
+      method: 'item/agentMessage/delta',
+      params: { itemId: 'item-1', delta: 'hel', threadId: 'thread-1', turnId: 'turn-1' }
+    }, seenMessageIds, seenPartIds, lengths, session)
+
+    const second = adapter.convertEventToMessageParts({
+      method: 'item/agentMessage/delta',
+      params: { itemId: 'item-1', delta: 'lo', threadId: 'thread-1', turnId: 'turn-1' }
+    }, seenMessageIds, seenPartIds, lengths, session)
+
+    expect(first[0]).toMatchObject({
+      id: 'agent-item-1',
+      type: MessagePartType.TEXT,
+      text: 'hel',
+      role: MessageRole.ASSISTANT,
+      update: false
+    })
+    expect(second[0]).toMatchObject({
+      id: 'agent-item-1',
+      type: MessagePartType.TEXT,
+      text: 'hello',
+      role: MessageRole.ASSISTANT,
+      update: true
+    })
+  })
+
+  it('tracks running tool items and clears them on completion', () => {
+    const adapter = adapterPrivate(new CodexAppServerAdapter())
+    const session = createSession()
+    const seenMessageIds = new Set<string>()
+    const seenPartIds = new Set<string>()
+    const lengths = new Map<string, string>()
+
+    const started = adapter.convertEventToMessageParts({
+      method: 'item/started',
+      params: {
+        startedAtMs: 123,
+        item: { id: 'tool-1', type: 'commandExecution', command: 'pnpm test' },
+        threadId: 'thread-1',
+        turnId: 'turn-1'
+      }
+    }, seenMessageIds, seenPartIds, lengths, session)
+
+    expect(started[0]).toMatchObject({
+      id: 'tool-tool-1',
+      type: MessagePartType.TOOL,
+      tool: { name: 'commandExecution', status: 'running' }
+    })
+    expect(session.runningTools.get('tool-tool-1')).toMatchObject({
+      partId: 'tool-tool-1',
+      toolName: 'commandExecution',
+      startTime: 123
+    })
+
+    const completed = adapter.convertEventToMessageParts({
+      method: 'item/completed',
+      params: {
+        item: { id: 'tool-1', type: 'commandExecution', output: 'ok' },
+        threadId: 'thread-1',
+        turnId: 'turn-1'
+      }
+    }, seenMessageIds, seenPartIds, lengths, session)
+
+    expect(completed[0]).toMatchObject({
+      id: 'tool-tool-1',
+      type: MessagePartType.TOOL,
+      update: true,
+      tool: { name: 'commandExecution', status: 'completed' }
+    })
+    expect(session.runningTools.has('tool-tool-1')).toBe(false)
+  })
+
+  it('stores command approval requests and responds with app-server decision shape', async () => {
+    const adapterInstance = new CodexAppServerAdapter()
+    const adapter = adapterPrivate(adapterInstance)
+    const session = createSession()
+    adapter.sessions.set('thread-1', session)
+
+    adapter.handleRpcMessage(session, {
+      jsonrpc: '2.0',
+      id: 7,
+      method: 'item/commandExecution/requestApproval',
+      params: {
+        itemId: 'cmd-1',
+        command: 'git status',
+        reason: 'needs shell access',
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        startedAtMs: 1
+      }
+    })
+
+    expect(session.status).toBe(SessionStatusType.WAITING_APPROVAL)
+    expect(session.pendingApproval).toMatchObject({
+      requestId: 7,
+      toolCallId: 'cmd-1',
+      responseKind: 'commandExecution'
+    })
+
+    await adapterInstance.respondToApproval('thread-1', true)
+
+    expect(session.process.stdin.write).toHaveBeenCalledWith(
+      `${JSON.stringify({ jsonrpc: '2.0', id: 7, result: { decision: 'accept' } })}\n`
+    )
+    expect(session.pendingApproval).toBeNull()
+  })
+
+  it('preserves app-server approval decisions when provided', () => {
+    const adapter = adapterPrivate(new CodexAppServerAdapter())
+    const session = createSession()
+
+    adapter.handleRpcMessage(session, {
+      jsonrpc: '2.0',
+      id: 8,
+      method: 'item/commandExecution/requestApproval',
+      params: {
+        itemId: 'cmd-2',
+        command: 'curl https://example.com',
+        availableDecisions: ['acceptForSession', 'decline', 'cancel'],
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        startedAtMs: 1
+      }
+    })
+
+    expect(session.pendingApproval).toMatchObject({
+      options: [
+        { optionId: 'acceptForSession', name: 'Allow for Session', kind: 'allow' },
+        { optionId: 'decline', name: 'Deny', kind: 'reject' },
+        { optionId: 'cancel', name: 'Deny and Stop', kind: 'reject' }
+      ]
+    })
+  })
+
+  it('converts command output deltas into updating tool parts', () => {
+    const adapter = adapterPrivate(new CodexAppServerAdapter())
+    const session = createSession()
+    const seenMessageIds = new Set<string>()
+    const seenPartIds = new Set<string>()
+    const lengths = new Map<string, string>()
+
+    const first = adapter.convertEventToMessageParts({
+      method: 'item/commandExecution/outputDelta',
+      params: { itemId: 'cmd-1', delta: 'line 1\n' }
+    }, seenMessageIds, seenPartIds, lengths, session)
+    const second = adapter.convertEventToMessageParts({
+      method: 'item/commandExecution/outputDelta',
+      params: { itemId: 'cmd-1', delta: 'line 2\n' }
+    }, seenMessageIds, seenPartIds, lengths, session)
+
+    expect(first[0]).toMatchObject({
+      id: 'tool-cmd-1',
+      type: MessagePartType.TOOL,
+      update: false,
+      tool: { name: 'command', status: 'running', output: 'line 1\n' }
+    })
+    expect(second[0]).toMatchObject({
+      id: 'tool-cmd-1',
+      type: MessagePartType.TOOL,
+      update: true,
+      tool: { name: 'command', status: 'running', output: 'line 1\nline 2\n' }
+    })
+  })
+
+  it('clears stale live buffer before sending a new prompt', async () => {
+    const adapterInstance = new CodexAppServerAdapter()
+    const adapter = adapterPrivate(adapterInstance)
+    const session = createSession()
+    adapter.sessions.set('thread-1', session)
+    session.messageBuffer.push({ method: 'item/agentMessage/delta', params: { itemId: 'stale', delta: 'stale' } })
+    session.pendingRequests.set(1, { resolve: vi.fn(), reject: vi.fn() })
+
+    const sendPromise = adapterInstance.sendPrompt('thread-1', [{ type: MessagePartType.TEXT, text: 'hello' }], {
+      agentId: 'agent-1',
+      taskId: 'task-1',
+      workspaceDir: '/tmp/workspace'
+    })
+    const pending = session.pendingRequests.get(1)
+    expect(pending).toBeTruthy()
+    pending?.resolve({ turnId: 'turn-1' })
+    await sendPromise
+
+    expect(session.messageBuffer).toHaveLength(1)
+    expect(session.messageBuffer[0]).toMatchObject({
+      method: 'item/completed',
+      params: { item: { type: 'user_message', text: 'hello' } }
+    })
+  })
+
+  it('strips ambient OpenAI keys for subscription auth and preserves explicit API-key mode', () => {
+    const adapter = adapterPrivate(new CodexAppServerAdapter())
+    const originalOpenAI = process.env.OPENAI_API_KEY
+    const originalCodex = process.env.CODEX_API_KEY
+    process.env.OPENAI_API_KEY = 'ambient-openai'
+    process.env.CODEX_API_KEY = 'ambient-codex'
+
+    try {
+      const subscriptionEnv = adapter.buildEnvironment({
+        authMethod: 'subscription',
+        secretEnvVars: { OPENAI_API_KEY: 'secret-openai' }
+      })
+      expect(subscriptionEnv.usesApiKey).toBe(false)
+      expect(subscriptionEnv.env.OPENAI_API_KEY).toBeUndefined()
+      expect(subscriptionEnv.env.CODEX_API_KEY).toBeUndefined()
+
+      const apiKeyEnv = adapter.buildEnvironment({
+        authMethod: 'api_key',
+        apiKeys: { openai: 'explicit-key' },
+        secretEnvVars: { CUSTOM_SECRET: 'secret' }
+      })
+      expect(apiKeyEnv.usesApiKey).toBe(true)
+      expect(apiKeyEnv.env.OPENAI_API_KEY).toBe('explicit-key')
+      expect(apiKeyEnv.env.CODEX_API_KEY).toBe('explicit-key')
+      expect(apiKeyEnv.env.CUSTOM_SECRET).toBe('secret')
+      expect(apiKeyEnv.env.NO_BROWSER).toBe('1')
+      expect(apiKeyEnv.env.CODEX_HOME).toContain('codex-app-server-session-')
+    } finally {
+      if (originalOpenAI === undefined) delete process.env.OPENAI_API_KEY
+      else process.env.OPENAI_API_KEY = originalOpenAI
+      if (originalCodex === undefined) delete process.env.CODEX_API_KEY
+      else process.env.CODEX_API_KEY = originalCodex
+    }
+  })
+})
