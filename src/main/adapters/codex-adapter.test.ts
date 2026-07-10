@@ -6,8 +6,8 @@ type CodexAdapterWithArgs = {
 }
 
 describe('DEFAULT_CODEX_MODEL', () => {
-  it('defaults Codex sessions to GPT-5.5', () => {
-    expect(DEFAULT_CODEX_MODEL).toBe('gpt-5.5')
+  it('defaults Codex sessions to GPT-5.6 Sol', () => {
+    expect(DEFAULT_CODEX_MODEL).toBe('gpt-5.6-sol')
   })
 })
 
@@ -44,9 +44,9 @@ describe('CodexAdapter findCodexExecutable fallback paths', () => {
     const adapter = new CodexAdapter()
     const buildCodexArgs = (adapter as unknown as CodexAdapterWithArgs).buildCodexArgs.bind(adapter)
 
-    expect(buildCodexArgs({ model: 'gpt-5.5', reasoningEffort: 'high' })).toEqual([
+    expect(buildCodexArgs({ model: 'gpt-5.6-sol', reasoningEffort: 'high' })).toEqual([
       '--model',
-      'gpt-5.5',
+      'gpt-5.6-sol',
       '-c',
       'model_reasoning_effort="high"',
       '--json-rpc',
@@ -57,9 +57,9 @@ describe('CodexAdapter findCodexExecutable fallback paths', () => {
     const adapter = new CodexAdapter()
     const buildCodexArgs = (adapter as unknown as CodexAdapterWithArgs).buildCodexArgs.bind(adapter)
 
-    expect(buildCodexArgs({ model: 'gpt-5.5', reasoningEffort: 'max' })).toEqual([
+    expect(buildCodexArgs({ model: 'gpt-5.6-sol', reasoningEffort: 'max' })).toEqual([
       '--model',
-      'gpt-5.5',
+      'gpt-5.6-sol',
       '--json-rpc',
     ])
   })
