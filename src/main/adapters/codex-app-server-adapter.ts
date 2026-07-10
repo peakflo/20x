@@ -6,7 +6,7 @@
  * 20x's CodingAgentAdapter contract.
  */
 
-import { spawn, execFile, type ChildProcess } from 'child_process'
+import { spawn, type ChildProcess } from 'child_process'
 import { mkdtempSync } from 'fs'
 import { homedir, tmpdir } from 'os'
 import { join } from 'path'
@@ -21,7 +21,6 @@ import type {
 } from './coding-agent-adapter'
 import { MessagePartType, MessageRole, SessionStatusType } from './coding-agent-adapter'
 
-const execFileAsync = promisify(execFile)
 const DEFAULT_CODEX_APP_SERVER_MODEL = 'gpt-5.5'
 
 interface JsonRpcRequest {
@@ -415,7 +414,7 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
   async checkHealth(): Promise<{ available: boolean; reason?: string }> {
     try {
       const executable = await this.findCodexExecutable()
-      await execFileAsync(executable, ['app-server', '--help'], { timeout: 5000 })
+      await this.execFileAsync(executable, ['app-server', '--help'], { timeout: 5000 })
       return { available: true }
     } catch (error) {
       return {
@@ -524,9 +523,19 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
     const isWin = process.platform === 'win32'
     const finder = isWin ? 'where' : 'which'
     const binary = isWin ? 'codex.cmd' : 'codex'
-    const { stdout } = await execFileAsync(finder, [binary])
+    const { stdout } = await this.execFileAsync(finder, [binary])
     this.codexExecutablePath = stdout.trim().split(/\r?\n/)[0]
     return this.codexExecutablePath
+  }
+
+  private async execFileAsync(
+    command: string,
+    args: string[],
+    options?: { timeout?: number }
+  ): Promise<{ stdout: string }> {
+    const { execFile } = await import('child_process')
+    const execFileAsync = promisify(execFile)
+    return await execFileAsync(command, args, options) as { stdout: string }
   }
 
   private buildEnvironment(config: SessionConfig): {
