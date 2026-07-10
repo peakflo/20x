@@ -25,25 +25,23 @@ describe('CLAUDE_MODELS', () => {
 })
 
 describe('CODEX_MODELS', () => {
-  it('lists GPT-5.5 first as the recommended model', () => {
+  it('lists GPT-5.6 Sol first as the recommended model', () => {
     expect(CODEX_MODELS[0]).toEqual({
-      id: CodexModel.GPT_5_5,
-      name: 'GPT-5.5 (Recommended)'
+      id: CodexModel.GPT_5_6_SOL,
+      name: 'GPT-5.6 Sol (Recommended)'
     })
   })
 
-  it('still includes GPT-5.4 as a selectable fallback model', () => {
-    expect(CODEX_MODELS).toContainEqual({
-      id: CodexModel.GPT_5_4,
-      name: 'GPT-5.4'
-    })
-  })
-
-  it('still includes the prior GPT-5.3 Codex model', () => {
-    expect(CODEX_MODELS).toContainEqual({
-      id: CodexModel.GPT_5_3_CODEX,
-      name: 'GPT-5.3 Codex'
-    })
+  it('lists the supported Codex models in preferred order', () => {
+    expect(CODEX_MODELS).toEqual([
+      { id: CodexModel.GPT_5_6_SOL, name: 'GPT-5.6 Sol (Recommended)' },
+      { id: CodexModel.GPT_5_6_TERRA, name: 'GPT-5.6 Terra' },
+      { id: CodexModel.GPT_5_6_LUNA, name: 'GPT-5.6 Luna' },
+      { id: CodexModel.GPT_5_5, name: 'GPT-5.5' },
+      { id: CodexModel.GPT_5_4, name: 'GPT-5.4' },
+      { id: CodexModel.GPT_5_4_MINI, name: 'GPT-5.4 Mini' },
+      { id: CodexModel.GPT_5_3_CODEX_SPARK, name: 'GPT-5.3 Codex Spark' }
+    ])
   })
 
   it('does not include unsupported GPT-5.4 Codex model', () => {

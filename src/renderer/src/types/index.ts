@@ -69,29 +69,23 @@ export const CLAUDE_MODELS: { id: ClaudeModel; name: string }[] = [
 ]
 
 export enum CodexModel {
+  GPT_5_6_SOL = 'gpt-5.6-sol',
+  GPT_5_6_TERRA = 'gpt-5.6-terra',
+  GPT_5_6_LUNA = 'gpt-5.6-luna',
   GPT_5_5 = 'gpt-5.5',
-  GPT_5_3_CODEX = 'gpt-5.3-codex',
-  GPT_5_2_CODEX = 'gpt-5.2-codex',
-  GPT_5_1_CODEX_MAX = 'gpt-5.1-codex-max',
-  GPT_5_1_CODEX = 'gpt-5.1-codex',
-  GPT_5_1_CODEX_MINI = 'gpt-5.1-codex-mini',
-  GPT_5_CODEX = 'gpt-5-codex',
   GPT_5_4 = 'gpt-5.4',
-  GPT_5 = 'gpt-5',
-  GPT_5_MINI = 'gpt-5-mini'
+  GPT_5_4_MINI = 'gpt-5.4-mini',
+  GPT_5_3_CODEX_SPARK = 'gpt-5.3-codex-spark'
 }
 
 export const CODEX_MODELS: { id: CodexModel; name: string }[] = [
-  { id: CodexModel.GPT_5_5, name: 'GPT-5.5 (Recommended)' },
+  { id: CodexModel.GPT_5_6_SOL, name: 'GPT-5.6 Sol (Recommended)' },
+  { id: CodexModel.GPT_5_6_TERRA, name: 'GPT-5.6 Terra' },
+  { id: CodexModel.GPT_5_6_LUNA, name: 'GPT-5.6 Luna' },
+  { id: CodexModel.GPT_5_5, name: 'GPT-5.5' },
   { id: CodexModel.GPT_5_4, name: 'GPT-5.4' },
-  { id: CodexModel.GPT_5_3_CODEX, name: 'GPT-5.3 Codex' },
-  { id: CodexModel.GPT_5_2_CODEX, name: 'GPT-5.2 Codex' },
-  { id: CodexModel.GPT_5_1_CODEX_MAX, name: 'GPT-5.1 Codex Max' },
-  { id: CodexModel.GPT_5_1_CODEX, name: 'GPT-5.1 Codex' },
-  { id: CodexModel.GPT_5_1_CODEX_MINI, name: 'GPT-5.1 Codex Mini' },
-  { id: CodexModel.GPT_5_CODEX, name: 'GPT-5 Codex' },
-  { id: CodexModel.GPT_5, name: 'GPT-5' },
-  { id: CodexModel.GPT_5_MINI, name: 'GPT-5 Mini (Fastest)' }
+  { id: CodexModel.GPT_5_4_MINI, name: 'GPT-5.4 Mini' },
+  { id: CodexModel.GPT_5_3_CODEX_SPARK, name: 'GPT-5.3 Codex Spark' }
 ]
 
 export interface McpServerConfig {
