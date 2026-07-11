@@ -396,20 +396,20 @@ function ReasoningMessage({ message }: { message: AgentMessage }) {
     <div className="group/tool w-full min-w-0 overflow-hidden">
       <button
         onClick={() => setExpanded(!expanded)}
-        className="flex h-6 w-full items-center gap-2 rounded-sm px-1 font-mono text-xs text-teal-300/80 active:text-teal-200 transition-colors"
+        className="flex h-6 w-full items-center gap-2 rounded-sm px-1 font-mono text-xs text-teal-700/90 dark:text-teal-300/80 active:text-teal-700 dark:active:text-teal-200 transition-colors"
       >
         <span className={cn(
-          'text-teal-300/60 transition-transform text-[10px]',
+          'text-teal-600/70 dark:text-teal-300/60 transition-transform text-[10px]',
           expanded && 'rotate-90'
         )}>▶</span>
-        <span className="shrink-0 text-teal-300">Thinking</span>
-        <span className="min-w-0 flex-1 truncate text-teal-200/70">{summary}</span>
+        <span className="shrink-0 text-teal-700 dark:text-teal-300">Thinking</span>
+        <span className="min-w-0 flex-1 truncate text-muted-foreground">{summary}</span>
         <span className="w-20 shrink-0 text-right text-[10px] text-muted-foreground opacity-0 transition-opacity group-hover/tool:opacity-100">
           {message.timestamp.toLocaleTimeString()}
         </span>
       </button>
       {expanded && (
-        <div className="ml-5 border-l border-teal-400/30 pl-3 py-1.5 text-teal-100/90">
+        <div className="ml-5 border-l border-teal-500/30 pl-3 py-1.5 text-foreground/75">
           <Markdown size="sm">{message.content}</Markdown>
         </div>
       )}
