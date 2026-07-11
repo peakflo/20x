@@ -626,6 +626,12 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
     if (config.reasoningEffort && config.reasoningEffort !== 'max') {
       overrides.model_reasoning_effort = config.reasoningEffort
     }
+    if (this.resolveSandboxMode(config) === 'workspace-write') {
+      overrides.sandbox_workspace_write = {
+        network_access: true,
+        writable_roots: [config.workspaceDir]
+      }
+    }
     if (config.mcpServers && Object.keys(config.mcpServers).length > 0) {
       overrides.mcp_servers = this.convertMcpServers(config.mcpServers)
     }

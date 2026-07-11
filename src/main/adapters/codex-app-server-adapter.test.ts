@@ -34,7 +34,9 @@ interface AppServerAdapterPrivate {
     summary: string
   }
   buildConfigOverrides(config: {
+    workspaceDir: string
     reasoningEffort?: string
+    sandboxMode?: 'read-only' | 'workspace-write' | 'danger-full-access'
     mcpServers?: Record<string, {
       type: 'stdio' | 'http' | 'sse'
       command?: string
@@ -348,7 +350,9 @@ describe('CodexAppServerAdapter', () => {
     const adapter = adapterPrivate(new CodexAppServerAdapter())
 
     const config = adapter.buildConfigOverrides({
+      workspaceDir: '/tmp/workspace',
       reasoningEffort: 'high',
+      sandboxMode: 'workspace-write',
       mcpServers: {
         local: {
           type: 'stdio',
@@ -366,6 +370,10 @@ describe('CodexAppServerAdapter', () => {
 
     expect(config).toEqual({
       model_reasoning_effort: 'high',
+      sandbox_workspace_write: {
+        network_access: true,
+        writable_roots: ['/tmp/workspace']
+      },
       mcp_servers: {
         local: {
           command: 'node',
