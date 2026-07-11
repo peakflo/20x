@@ -134,12 +134,12 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
   }, [activeModal, closeModal, onSelectTask])
 
   return (
-    <aside className="flex flex-col h-full w-[260px] shrink-0 border-r bg-sidebar overflow-hidden">
+    <aside className="flex flex-col h-full w-[264px] shrink-0 border-r border-sidebar-border bg-sidebar text-sidebar-foreground overflow-hidden">
       {sidebarView === 'tasks' ? (
         <>
-          <div className="no-drag flex items-center justify-between px-4 py-3">
+          <div className="no-drag flex items-center justify-between px-4 pt-4 pb-3">
             <div className="flex items-center gap-2">
-              <h2 className="text-sm font-semibold">Tasks</h2>
+              <h2 className="text-[13px] font-semibold uppercase tracking-wider text-muted-foreground">Tasks</h2>
               {overdueCount > 0 && (
                 <span className="flex items-center justify-center min-w-5 h-5 rounded-full bg-red-500/15 text-red-400 text-[11px] font-medium px-1.5">
                   {overdueCount}
@@ -175,7 +175,7 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder="Search tasks..."
-                className="w-full rounded-md border border-input bg-transparent pl-9 pr-8 py-2 text-sm placeholder:text-muted-foreground focus:border-ring focus:ring-1 focus:ring-ring/30"
+                className="w-full rounded-lg border border-input bg-card pl-9 pr-8 py-2 text-sm shadow-xs placeholder:text-muted-foreground focus:border-ring focus:ring-2 focus:ring-ring/20 transition-all"
               />
               {searchQuery && (
                 <button
@@ -284,8 +284,8 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
         </>
       ) : (
         <>
-          <div className="no-drag flex items-center justify-between px-4 pb-4">
-            <h2 className="text-sm font-semibold">Skills</h2>
+          <div className="no-drag flex items-center justify-between px-4 pt-4 pb-4">
+            <h2 className="text-[13px] font-semibold uppercase tracking-wider text-muted-foreground">Skills</h2>
             <Button size="sm" onClick={handleCreateSkill}>
               <Plus className="h-3.5 w-3.5" />
               New
@@ -300,7 +300,7 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
                 value={skillSearchQuery}
                 onChange={(e) => setSkillSearchQuery(e.target.value)}
                 placeholder="Search skills..."
-                className="w-full rounded-md border border-input bg-transparent pl-9 pr-8 py-2 text-sm placeholder:text-muted-foreground focus:border-ring focus:ring-1 focus:ring-ring/30"
+                className="w-full rounded-lg border border-input bg-card pl-9 pr-8 py-2 text-sm shadow-xs placeholder:text-muted-foreground focus:border-ring focus:ring-2 focus:ring-ring/20 transition-all"
               />
               {skillSearchQuery && (
                 <button
