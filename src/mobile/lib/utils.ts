@@ -68,7 +68,7 @@ export const STATUS_DOT_COLORS: Record<string, string> = {
   [TaskStatus.NotStarted]: 'bg-muted-foreground',
   [TaskStatus.Triaging]: 'bg-muted-foreground animate-pulse',
   [TaskStatus.AgentWorking]: 'bg-amber-400',
-  [TaskStatus.ReadyForReview]: 'bg-cyan-400',
+  [TaskStatus.ReadyForReview]: 'bg-orange-400',
   [TaskStatus.AgentLearning]: 'bg-blue-400',
   [TaskStatus.Completed]: 'bg-emerald-400'
 }
@@ -107,7 +107,7 @@ export const STATUS_VARIANT: Record<string, { label: string; variant: BadgeVaria
   [TaskStatus.NotStarted]: { label: 'Not Started', variant: 'default' },
   [TaskStatus.Triaging]: { label: 'Triaging', variant: 'default' },
   [TaskStatus.AgentWorking]: { label: 'Agent Working', variant: 'yellow' },
-  [TaskStatus.ReadyForReview]: { label: 'Ready for Review', variant: 'cyan' },
+  [TaskStatus.ReadyForReview]: { label: 'Ready for Review', variant: 'orange' },
   [TaskStatus.AgentLearning]: { label: 'Agent Learning', variant: 'blue' },
   [TaskStatus.Completed]: { label: 'Completed', variant: 'green' }
 }
