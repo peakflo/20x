@@ -93,8 +93,10 @@ colors stay legible on paper without editing 90+ files.
 - `src/renderer/src/components/layout/{AppLayout,Sidebar}.tsx` — app shell
 - `src/renderer/src/components/ui/*` — Button, Input, Select, Badge, Dialog, …
 
-## Deliberate scope notes
+## Canvas surfaces
 
-- The **infinite-canvas** panels (terminal, browser, web) keep their dark
-  technical chrome in both themes — a light canvas wrapping dark terminal
-  panels reads worse than a consistently dark workspace surface.
+The infinite canvas is fully theme-aware via dedicated tokens
+(`--canvas-bg`, `--canvas-panel`, `--canvas-chrome`, `--canvas-toolbar`,
+`--canvas-dot`) — light in light mode, neutral charcoal in dark mode. Only the
+**terminal** panel's inner content stays dark (it renders a real terminal), but
+its panel chrome follows the theme like every other panel.
