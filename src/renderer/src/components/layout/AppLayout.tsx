@@ -181,11 +181,11 @@ export function AppLayout() {
     <>
       {/* ── Top bar: drag region with logo (left) + nav switcher (center) + actions (right) ── */}
       <div className="drag-region frost h-13 flex-shrink-0 flex items-center justify-center px-4 border-b border-border/70 windows-titlebar-pad">
-        {/* Logo + wordmark + update indicator — pinned left */}
+        {/* Logo + wordmark + update indicator — pinned left. The white logo mark
+            always sits on a brand-gradient tile, so it stays visible in both themes. */}
         <div className="no-drag absolute left-4 flex items-center gap-2.5 macos-titlebar-pad">
-          <div className="relative grid h-7 w-7 place-items-center rounded-lg bg-card border border-border/70 shadow-xs">
-            {/* Logo mark is pure white; invert it in light mode so it stays visible on the light chip. */}
-            <img src={logo20x} className="h-4 w-4 invert dark:invert-0" alt="20x" />
+          <div className="relative grid h-7 w-7 place-items-center rounded-lg bg-gradient-to-br from-primary to-primary/75 shadow-sm ring-1 ring-black/5">
+            <img src={logo20x} className="h-4 w-4" alt="20x" />
             {updateAvailableVersion && (
               <button
                 onClick={() => setUpdateDialogOpen(true)}
@@ -197,28 +197,9 @@ export function AppLayout() {
           <span className="text-[15px] font-semibold tracking-tight text-foreground">20x</span>
         </div>
 
-        {/* View switcher — centered segmented control */}
-        <div className="no-drag flex items-center gap-0.5 rounded-xl border border-border/60 bg-muted/50 p-1 shadow-xs">
-          {NAV_ITEMS.map(({ key, label, icon: Icon }) => {
-            const active = sidebarView === key && activeModal !== 'settings'
-            return (
-              <button
-                key={key}
-                onClick={() => {
-                  if (activeModal === 'settings') closeModal()
-                  setSidebarView(key)
-                }}
-                className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-all duration-150 cursor-pointer flex items-center gap-1.5 ${
-                  active
-                    ? 'bg-card text-foreground shadow-sm'
-                    : 'text-muted-foreground hover:text-foreground hover:bg-accent/60'
-                }`}
-              >
-                <Icon className="h-3.5 w-3.5" />
-                {label}
-              </button>
-            )
-          })}
+        {/* Current section — centered label (primary nav now lives in the left rail) */}
+        <div className="no-drag text-[13px] font-medium text-muted-foreground/90 pointer-events-none select-none">
+          {activeModal === 'settings' ? 'Settings' : NAV_ITEMS.find((n) => n.key === sidebarView)?.label ?? ''}
         </div>
 
         {/* Global actions — pinned right; offset on Windows to avoid native window controls. */}
@@ -247,8 +228,36 @@ export function AppLayout() {
         </div>
       </div>
 
-      {/* ── Content area: optional sidebar + workspace + orchestrator ── */}
+      {/* ── Content area: left rail + optional sidebar + workspace + orchestrator ── */}
       <div className="flex flex-1 min-h-0 overflow-hidden">
+        {/* Primary navigation — slim vertical icon rail */}
+        <nav className="no-drag flex w-14 flex-shrink-0 flex-col items-center gap-1 border-r border-sidebar-border bg-sidebar py-3">
+          {NAV_ITEMS.map(({ key, label, icon: Icon }) => {
+            const active = sidebarView === key && activeModal !== 'settings'
+            return (
+              <button
+                key={key}
+                onClick={() => {
+                  if (activeModal === 'settings') closeModal()
+                  setSidebarView(key)
+                }}
+                title={label}
+                aria-label={label}
+                className={`relative grid h-11 w-11 place-items-center rounded-xl transition-all duration-150 cursor-pointer ${
+                  active
+                    ? 'bg-primary/12 text-primary'
+                    : 'text-muted-foreground hover:bg-accent hover:text-foreground'
+                }`}
+              >
+                {active && (
+                  <span className="absolute left-0 top-1/2 h-5 w-[3px] -translate-y-1/2 rounded-r-full bg-primary" />
+                )}
+                <Icon className="h-[18px] w-[18px]" />
+              </button>
+            )
+          })}
+        </nav>
+
         {/* Sidebar — only for tasks and skills views */}
         {sidebarView !== 'dashboard' && sidebarView !== 'canvas' && (
           <Sidebar
