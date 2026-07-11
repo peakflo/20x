@@ -342,9 +342,9 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
         case TaskStatus.Completed:
           return { label: 'Completed', color: 'bg-green-500/20 text-green-400', border: 'border-green-500/50', bg: 'bg-green-500/10' }
         case TaskStatus.Triaging:
-          return { label: 'Triaging', color: 'bg-orange-500/20 text-orange-400', border: 'border-orange-500/50', bg: 'bg-orange-500/10' }
+          return { label: 'Triaging', color: 'bg-slate-500/20 text-slate-400', border: 'border-slate-500/50', bg: 'bg-slate-500/10' }
         case TaskStatus.ReadyForReview:
-          return { label: 'Review', color: 'bg-teal-500/20 text-teal-400', border: 'border-teal-500/50', bg: 'bg-teal-500/10' }
+          return { label: 'Review', color: 'bg-orange-500/20 text-orange-400', border: 'border-orange-500/50', bg: 'bg-orange-500/10' }
         default:
           return TYPE_CONFIG.task
       }

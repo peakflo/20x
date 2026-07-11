@@ -56,11 +56,11 @@
   color-scheme: light;
 }
 
-/* Dark theme (true-gray neutrals #141414 / #1c1c1c) */
+/* Dark theme (true-gray neutrals #141414 / #1e1e1e) */
 .dark {
   --background: #141414;
   --foreground: #eaeaea;
-  --card: #1c1c1c;
+  --card: #1e1e1e;
   --card-foreground: #eaeaea;
   --primary: #1e96eb;
   --primary-foreground: #ffffff;

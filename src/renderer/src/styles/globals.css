@@ -108,11 +108,11 @@
   color-scheme: light;
 }
 
-/* ── Dark theme — true-gray neutrals (#141414 / #1c1c1c), azure brand ─────── */
+/* ── Dark theme — true-gray neutrals (#141414 / #1e1e1e), azure brand ─────── */
 .dark {
   --background: #141414;
   --foreground: #eaeaea;
-  --card: #1c1c1c;
+  --card: #1e1e1e;
   --card-foreground: #eaeaea;
   --popover: #1e1e1e;
   --popover-foreground: #eaeaea;
@@ -146,7 +146,7 @@
 
   /* Infinite-canvas surfaces (true-gray, matching the dark theme) */
   --canvas-bg: #0f0f0f;
-  --canvas-panel: #1c1c1c;
+  --canvas-panel: #1e1e1e;
   --canvas-chrome: #242424;
   --canvas-toolbar: rgba(28, 28, 28, 0.9);
   --canvas-dot: rgba(255, 255, 255, 0.06);
