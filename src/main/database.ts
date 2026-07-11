@@ -38,6 +38,7 @@ export interface AgentConfigRecord {
   reasoning_effort?: ReasoningEffort
   auth_method?: 'subscription' | 'api_key'
   permission_mode?: 'ask' | 'allow'
+  sandbox_mode?: 'read-only' | 'workspace-write' | 'danger-full-access'
   system_prompt?: string
   mcp_servers?: Array<string | AgentMcpServerEntry>
   skill_ids?: string[]
