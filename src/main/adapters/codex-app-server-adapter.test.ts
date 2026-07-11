@@ -306,6 +306,33 @@ describe('CodexAppServerAdapter', () => {
     })
   })
 
+  it('serializes and caps command tool payloads before IPC delivery', () => {
+    const adapter = adapterPrivate(new CodexAppServerAdapter())
+    const session = createSession()
+    const seenMessageIds = new Set<string>()
+    const seenPartIds = new Set<string>()
+    const lengths = new Map<string, string>()
+
+    const parts = adapter.convertEventToMessageParts({
+      method: 'item/completed',
+      params: {
+        item: {
+          id: 'cmd-large',
+          type: 'commandExecution',
+          command: 'yes',
+          output: 'x'.repeat(120_000)
+        },
+        threadId: 'thread-1',
+        turnId: 'turn-1'
+      }
+    }, seenMessageIds, seenPartIds, lengths, session)
+
+    expect(parts[0].tool?.input).toEqual(expect.any(String))
+    expect(parts[0].tool?.output).toEqual(expect.any(String))
+    expect((parts[0].tool?.output as string).length).toBeLessThan(101_000)
+    expect(parts[0].tool?.output as string).toContain('truncated for display')
+  })
+
   it('clears stale live buffer before sending a new prompt', async () => {
     const adapterInstance = new CodexAppServerAdapter()
     const adapter = adapterPrivate(adapterInstance)

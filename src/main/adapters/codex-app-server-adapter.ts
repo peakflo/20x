@@ -22,6 +22,8 @@ import type {
 import { MessagePartType, MessageRole, SessionStatusType } from './coding-agent-adapter'
 
 const DEFAULT_CODEX_APP_SERVER_MODEL = 'gpt-5.5'
+const MAX_IPC_TOOL_INPUT_CHARS = 20_000
+const MAX_IPC_TOOL_OUTPUT_CHARS = 100_000
 
 interface JsonRpcRequest {
   jsonrpc: '2.0'
@@ -134,6 +136,30 @@ function extractToolName(item: Record<string, unknown>): string {
     asString(item.type) ||
     'tool'
   )
+}
+
+function truncateForIpc(value: string, maxChars: number): string {
+  if (value.length <= maxChars) return value
+  return `${value.slice(0, maxChars)}\n... (truncated for display)`
+}
+
+function stringifyForIpc(value: unknown, maxChars: number): string | undefined {
+  if (value == null) return undefined
+  if (typeof value === 'string') return truncateForIpc(value, maxChars)
+  try {
+    const seen = new WeakSet<object>()
+    return truncateForIpc(JSON.stringify(value, (_key, nested) => {
+      if (typeof nested === 'bigint') return nested.toString()
+      if (typeof nested === 'function' || typeof nested === 'symbol') return undefined
+      if (nested && typeof nested === 'object') {
+        if (seen.has(nested)) return '[Circular]'
+        seen.add(nested)
+      }
+      return nested
+    }, 2), maxChars)
+  } catch {
+    return truncateForIpc(String(value), maxChars)
+  }
 }
 
 function summarizeApproval(params: Record<string, unknown>, fallback: string): string {
@@ -981,7 +1007,7 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
     const itemId = asString(params.itemId) || asString(params.processId) || asString(params.turnId) || `${toolName}-${Date.now()}`
     const partId = `tool-${itemId}`
     const previous = session.streamedTextByItemId.get(partId) || ''
-    const next = previous + extractText(params)
+    const next = truncateForIpc(previous + extractText(params), MAX_IPC_TOOL_OUTPUT_CHARS)
     const update = seenPartIds.has(partId)
     seenPartIds.add(partId)
     session.streamedTextByItemId.set(partId, next)
@@ -995,7 +1021,7 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
         name: toolName,
         status: 'running',
         title: toolName,
-        input: params,
+        input: stringifyForIpc(params, MAX_IPC_TOOL_INPUT_CHARS),
         output: next
       },
       update
@@ -1057,8 +1083,8 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
         name: toolName,
         status: isCompleted ? 'completed' : 'running',
         title: toolName,
-        input: item,
-        output: isCompleted ? item : undefined
+        input: stringifyForIpc(item, MAX_IPC_TOOL_INPUT_CHARS),
+        output: isCompleted ? stringifyForIpc(extractText(item) || item, MAX_IPC_TOOL_OUTPUT_CHARS) : undefined
       },
       update: isCompleted
     }
