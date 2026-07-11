@@ -1,67 +1,120 @@
 @import "tailwindcss";
 
-@theme {
-  /* Cursor Dark Midnight palette */
-  --color-background: #1E2127;
-  --color-foreground: #EBEEF4;
-  --color-card: #191D23;
-  --color-card-foreground: #EBEEF4;
-  --color-primary: #85A4C3;
-  --color-primary-foreground: #1E2127;
-  --color-secondary: #30353F;
-  --color-secondary-foreground: #EBEEF4;
-  --color-muted: #30353F;
-  --color-muted-foreground: #535D71;
-  --color-accent: #313C47;
-  --color-accent-foreground: #EBEEF4;
-  --color-destructive: #C06771;
-  --color-destructive-foreground: #EBEEF4;
-  --color-border: #30353F;
-  --color-input: #30353F;
-  --color-ring: #85A4C3;
-  --radius-sm: 6px;
-  --radius-md: 8px;
-  --radius-lg: 12px;
+/* ══════════════════════════════════════════════════════════════════════════
+   20x Mobile — shares the "Aperture" design system with the desktop app.
+   Light + dark driven by the `.dark` class on <html>. No CDN fonts here
+   (mobile CSP restricts font-src to 'self'), so we lean on the system stack.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --radius-xs: 6px;
+  --radius-sm: 8px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 18px;
+
+  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 }
 
-@font-face {
-  font-family: "Geist";
-  src: url("https://cdn.jsdelivr.net/fontsource/fonts/geist-sans@latest/latin-400-normal.woff2") format("woff2");
-  font-weight: 400;
-  font-style: normal;
-  font-display: swap;
+/* Light theme (true-gray neutrals, azure brand) */
+:root {
+  --background: #fafafa;
+  --foreground: #121212;
+  --card: #ffffff;
+  --card-foreground: #121212;
+  --primary: #1e96eb;
+  --primary-foreground: #ffffff;
+  --secondary: #f4f4f5;
+  --secondary-foreground: #232323;
+  --muted: #f4f4f5;
+  --muted-foreground: #8e8d91;
+  --accent: #eeeeef;
+  --accent-foreground: #121212;
+  --destructive: #eb4335;
+  --destructive-foreground: #ffffff;
+  --border: #e3e2e4;
+  --input: #dcdcdd;
+  --ring: #1e96eb;
+  color-scheme: light;
 }
-@font-face {
-  font-family: "Geist";
-  src: url("https://cdn.jsdelivr.net/fontsource/fonts/geist-sans@latest/latin-500-normal.woff2") format("woff2");
-  font-weight: 500;
-  font-style: normal;
-  font-display: swap;
+
+/* Dark theme (true-gray neutrals #141414 / #1e1e1e) */
+.dark {
+  --background: #141414;
+  --foreground: #eaeaea;
+  --card: #1e1e1e;
+  --card-foreground: #eaeaea;
+  --primary: #1e96eb;
+  --primary-foreground: #ffffff;
+  --secondary: #242424;
+  --secondary-foreground: #eaeaea;
+  --muted: #232323;
+  --muted-foreground: #8e8d91;
+  --accent: #282828;
+  --accent-foreground: #eaeaea;
+  --destructive: #eb4335;
+  --destructive-foreground: #ffffff;
+  --border: #2d2d2d;
+  --input: #333333;
+  --ring: #1e96eb;
+  color-scheme: dark;
 }
-@font-face {
-  font-family: "Geist";
-  src: url("https://cdn.jsdelivr.net/fontsource/fonts/geist-sans@latest/latin-600-normal.woff2") format("woff2");
-  font-weight: 600;
-  font-style: normal;
-  font-display: swap;
+
+/* Mode-aware accent palette (see desktop globals for rationale) */
+:root:not(.dark) {
+  --color-red-400: #dc2626;
+  --color-orange-400: #ea580c;
+  --color-amber-400: #b45309;
+  --color-yellow-400: #a16207;
+  --color-green-400: #16a34a;
+  --color-emerald-400: #059669;
+  --color-teal-400: #0d9488;
+  --color-cyan-400: #0891b2;
+  --color-sky-400: #0284c7;
+  --color-blue-400: #2563eb;
+  --color-indigo-400: #4f46e5;
+  --color-violet-400: #7c3aed;
+  --color-purple-400: #9333ea;
+  --color-pink-400: #db2777;
+  --color-rose-400: #e11d48;
 }
 
 /* ── Reset ────────────────────────────────────── */
 @layer base {
   * {
     box-sizing: border-box;
-    border-color: var(--color-border);
+    border-color: var(--border);
   }
 }
 
 html, body, #root {
   height: 100%;
   overflow: hidden;
-  font-family: "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  background: var(--color-background);
-  color: var(--color-foreground);
+  font-family: var(--font-sans);
+  background: var(--background);
+  color: var(--foreground);
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
   font-size: 14px;
+  letter-spacing: -0.006em;
 }
 
 /* Safe area insets for notched phones */
@@ -74,12 +127,20 @@ body {
 }
 
 /* ── Focus — handled per-component ────────────── */
-:focus-visible {
-  outline: none;
-}
+:focus-visible { outline: none; }
 
 /* ── Scrollbar ────────────────────────────────── */
-::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: 99px; }
-::-webkit-scrollbar-thumb:hover { background: #535D71; }
+::-webkit-scrollbar-thumb {
+  background: color-mix(in oklab, var(--muted-foreground) 32%, transparent);
+  border-radius: 99px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in oklab, var(--muted-foreground) 55%, transparent);
+}
+
+::selection {
+  background: color-mix(in oklab, var(--primary) 26%, transparent);
+  color: var(--foreground);
+}

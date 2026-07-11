@@ -2,6 +2,9 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 import App from './App'
 import './styles/globals.css'
+// Eagerly boot the theme store so it applies the persisted theme and starts
+// listening for OS-level light/dark changes before first paint.
+import '@/stores/theme-store'
 
 // Suppress xterm.js internal "toFixed is not a function" crash.
 // xterm's _reportWindowsOptions() calls .toFixed() on dimension values that

@@ -26,7 +26,7 @@ const COLUMNS: StatusColumn[] = [
   { key: TaskStatus.NotStarted, label: 'Not Started', color: 'text-gray-400', dotColor: 'bg-gray-400', headerBg: 'bg-gray-500/8', columnBg: 'bg-gray-500/[0.03]' },
   { key: TaskStatus.Triaging, label: 'Triaging', color: 'text-slate-300', dotColor: 'bg-slate-400', headerBg: 'bg-slate-500/8', columnBg: 'bg-slate-500/[0.03]' },
   { key: TaskStatus.AgentWorking, label: 'Agent Working', color: 'text-amber-400', dotColor: 'bg-amber-400', headerBg: 'bg-amber-500/8', columnBg: 'bg-amber-500/[0.03]' },
-  { key: TaskStatus.ReadyForReview, label: 'Ready for Review', color: 'text-purple-400', dotColor: 'bg-purple-400', headerBg: 'bg-purple-500/8', columnBg: 'bg-purple-500/[0.03]' },
+  { key: TaskStatus.ReadyForReview, label: 'Ready for Review', color: 'text-pink-400', dotColor: 'bg-pink-400', headerBg: 'bg-pink-500/8', columnBg: 'bg-pink-500/[0.03]' },
   { key: TaskStatus.AgentLearning, label: 'Agent Learning', color: 'text-blue-400', dotColor: 'bg-blue-400', headerBg: 'bg-blue-500/8', columnBg: 'bg-blue-500/[0.03]' }
 ]
 
@@ -101,7 +101,7 @@ function isOverdue(dateStr: string | null): boolean {
 const AVATAR_COLORS = [
   'bg-blue-500/80',
   'bg-emerald-500/80',
-  'bg-purple-500/80',
+  'bg-teal-500/80',
   'bg-amber-500/80',
   'bg-rose-500/80',
   'bg-cyan-500/80',

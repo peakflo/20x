@@ -95,7 +95,7 @@ const subtaskStatusDotColor: Record<TaskStatus, string> = {
   [TaskStatus.NotStarted]: 'bg-muted-foreground',
   [TaskStatus.Triaging]: 'bg-muted-foreground animate-pulse',
   [TaskStatus.AgentWorking]: 'bg-amber-400 animate-pulse',
-  [TaskStatus.ReadyForReview]: 'bg-purple-400',
+  [TaskStatus.ReadyForReview]: 'bg-pink-400',
   [TaskStatus.AgentLearning]: 'bg-blue-400 animate-pulse',
   [TaskStatus.Completed]: 'bg-emerald-400'
 }
@@ -684,7 +684,7 @@ export function TaskDetailView({ task, agents, onEdit, onDelete, onUpdateAttachm
                     {Array.from({ length: 5 }, (_, i) => (
                       <Star
                         key={i}
-                        className={`h-3.5 w-3.5 ${i < task.feedback_rating! ? 'fill-amber-400 text-amber-400' : 'text-muted-foreground/30'}`}
+                        className={`h-3.5 w-3.5 ${i < task.feedback_rating! ? 'fill-[#f5b301] text-[#f5b301]' : 'text-muted-foreground/30'}`}
                       />
                     ))}
                   </div>

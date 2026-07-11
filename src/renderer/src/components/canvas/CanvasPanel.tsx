@@ -325,12 +325,12 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
   // ── Panel type styling ────────────────────────────────────
   const cfg = useMemo(() => {
     const TYPE_CONFIG: Record<string, { label: string; color: string; border: string; bg: string }> = {
-      task: { label: 'Task', color: 'bg-blue-500/20 text-blue-400', border: 'border-blue-500/40', bg: 'bg-[#141a26]' },
-      transcript: { label: 'Transcript', color: 'bg-purple-500/20 text-purple-400', border: 'border-purple-500/40', bg: 'bg-[#141a26]' },
-      app: { label: 'App', color: 'bg-green-500/20 text-green-400', border: 'border-green-500/40', bg: 'bg-[#141a26]' },
-      webpage: { label: 'Web', color: 'bg-cyan-500/20 text-cyan-400', border: 'border-cyan-500/40', bg: 'bg-[#141a26]' },
-      terminal: { label: 'Terminal', color: 'bg-amber-500/20 text-amber-400', border: 'border-amber-500/50', bg: 'bg-[#141a26]' },
-      browser: { label: 'Browser', color: 'bg-orange-500/20 text-orange-400', border: 'border-orange-500/40', bg: 'bg-[#141a26]' },
+      task: { label: 'Task', color: 'bg-blue-500/20 text-blue-400', border: 'border-blue-500/40', bg: 'bg-[var(--canvas-panel)]' },
+      transcript: { label: 'Transcript', color: 'bg-teal-500/20 text-teal-400', border: 'border-teal-500/40', bg: 'bg-[var(--canvas-panel)]' },
+      app: { label: 'App', color: 'bg-green-500/20 text-green-400', border: 'border-green-500/40', bg: 'bg-[var(--canvas-panel)]' },
+      webpage: { label: 'Web', color: 'bg-cyan-500/20 text-cyan-400', border: 'border-cyan-500/40', bg: 'bg-[var(--canvas-panel)]' },
+      terminal: { label: 'Terminal', color: 'bg-amber-500/20 text-amber-400', border: 'border-amber-500/50', bg: 'bg-[var(--canvas-panel)]' },
+      browser: { label: 'Browser', color: 'bg-orange-500/20 text-orange-400', border: 'border-orange-500/40', bg: 'bg-[var(--canvas-panel)]' },
     }
 
     if (panel.type === 'task' && taskStatus) {
@@ -342,15 +342,15 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
         case TaskStatus.Completed:
           return { label: 'Completed', color: 'bg-green-500/20 text-green-400', border: 'border-green-500/50', bg: 'bg-green-500/10' }
         case TaskStatus.Triaging:
-          return { label: 'Triaging', color: 'bg-orange-500/20 text-orange-400', border: 'border-orange-500/50', bg: 'bg-orange-500/10' }
+          return { label: 'Triaging', color: 'bg-slate-500/20 text-slate-400', border: 'border-slate-500/50', bg: 'bg-slate-500/10' }
         case TaskStatus.ReadyForReview:
-          return { label: 'Review', color: 'bg-purple-500/20 text-purple-400', border: 'border-purple-500/50', bg: 'bg-purple-500/10' }
+          return { label: 'Review', color: 'bg-pink-500/20 text-pink-400', border: 'border-pink-500/50', bg: 'bg-pink-500/10' }
         default:
           return TYPE_CONFIG.task
       }
     }
 
-    return TYPE_CONFIG[panel.type] ?? { label: 'Panel', color: 'bg-muted/30 text-muted-foreground', border: 'border-border/50', bg: 'bg-[#141a26]' }
+    return TYPE_CONFIG[panel.type] ?? { label: 'Panel', color: 'bg-muted/30 text-muted-foreground', border: 'border-border/50', bg: 'bg-[var(--canvas-panel)]' }
   }, [panel.type, taskStatus])
 
   return (
@@ -360,7 +360,7 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
       onMouseDown={handleMouseDown}
       onMouseEnter={handlePanelMouseEnter}
       onMouseLeave={handlePanelMouseLeave}
-      className={`absolute rounded-xl border bg-[#1a2030] shadow-2xl flex flex-col transition-shadow duration-150 group/panel ${cfg.border} ${
+      className={`absolute rounded-xl border bg-[var(--canvas-chrome)] shadow-2xl flex flex-col transition-shadow duration-150 group/panel ${cfg.border} ${
         isDragging ? 'shadow-indigo-500/10 ring-1 ring-indigo-500/30' : ''
       } ${isConnectingLocal ? 'ring-2 ring-orange-500/50' : ''} ${
         isProximityTarget ? 'ring-2 ring-orange-500/60 shadow-orange-500/20 shadow-2xl' : ''
