@@ -55,7 +55,7 @@ interface AppServerSessionForTest {
   pendingApproval: unknown | null
   nextRequestId: number
   lastError: string | null
-  config: { permissionMode?: 'ask' | 'allow' }
+  config: { permissionMode?: 'ask' | 'allow'; sandboxMode?: 'read-only' | 'workspace-write' | 'danger-full-access' }
   streamedTextByItemId: Map<string, string>
   runningTools: Map<string, {
     partId: string
@@ -233,6 +233,47 @@ describe('CodexAppServerAdapter', () => {
         { optionId: 'cancel', name: 'Deny and Stop', kind: 'reject' }
       ]
     })
+  })
+
+  it('auto-approves MCP elicitation requests with app-server action shape', () => {
+    const adapter = adapterPrivate(new CodexAppServerAdapter())
+    const session = createSession()
+    session.config.permissionMode = 'allow'
+
+    adapter.handleRpcMessage(session, {
+      jsonrpc: '2.0',
+      id: 9,
+      method: 'mcpServer/elicitation/request',
+      params: {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        message: 'Need input'
+      }
+    })
+
+    expect(session.process.stdin.write).toHaveBeenCalledWith(
+      `${JSON.stringify({ jsonrpc: '2.0', id: 9, result: { action: 'accept', content: {} } })}\n`
+    )
+  })
+
+  it('passes configured sandbox mode to app-server turn start', async () => {
+    const adapterInstance = new CodexAppServerAdapter()
+    const adapter = adapterPrivate(adapterInstance)
+    const session = createSession()
+    adapter.sessions.set('thread-1', session)
+    const sendRpcRequest = vi.fn().mockResolvedValue({ turnId: 'turn-1' })
+    adapter.sendRpcRequest = sendRpcRequest
+
+    await adapterInstance.sendPrompt('thread-1', [{ type: MessagePartType.TEXT, text: 'hello' }], {
+      agentId: 'agent-1',
+      taskId: 'task-1',
+      workspaceDir: '/tmp/workspace',
+      sandboxMode: 'danger-full-access'
+    })
+
+    expect(sendRpcRequest).toHaveBeenCalledWith(session, 'turn/start', expect.objectContaining({
+      sandbox: 'danger-full-access'
+    }))
   })
 
   it('converts command output deltas into updating tool parts', () => {

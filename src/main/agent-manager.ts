@@ -580,6 +580,7 @@ export class AgentManager extends EventEmitter {
       mcpServers,
       authMethod: agent.config?.auth_method,
       permissionMode: agent.config?.permission_mode,
+      sandboxMode: agent.config?.sandbox_mode,
       apiKeys: agent.config?.api_keys,
       tillDone: this.shouldEnableTillDone(taskId, task)
     }
@@ -1217,6 +1218,7 @@ export class AgentManager extends EventEmitter {
       mcpServers,
       authMethod: agent.config?.auth_method,
       permissionMode: agent.config?.permission_mode,
+      sandboxMode: agent.config?.sandbox_mode,
       apiKeys: agent.config?.api_keys,
       tillDone: this.shouldEnableTillDone(taskId, task)
     }
@@ -2280,6 +2282,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       mcpServers,
       authMethod: agent.config?.auth_method,
       permissionMode: agent.config?.permission_mode,
+      sandboxMode: agent.config?.sandbox_mode,
       apiKeys: agent.config?.api_keys,
       tillDone: this.shouldEnableTillDone(taskId, task)
     }

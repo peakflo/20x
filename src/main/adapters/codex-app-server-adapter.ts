@@ -194,7 +194,7 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
       model: config.model || DEFAULT_CODEX_APP_SERVER_MODEL,
       approvalPolicy: config.permissionMode === 'allow' ? 'never' : 'on-request',
       approvalsReviewer: 'user',
-      sandbox: 'workspace-write',
+      sandbox: this.resolveSandboxMode(config),
       developerInstructions: config.systemPrompt || null,
       runtimeWorkspaceRoots: [config.workspaceDir],
       config: this.buildConfigOverrides(config)
@@ -224,6 +224,7 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
       model: config.model || DEFAULT_CODEX_APP_SERVER_MODEL,
       approvalPolicy: config.permissionMode === 'allow' ? 'never' : 'on-request',
       approvalsReviewer: 'user',
+      sandbox: this.resolveSandboxMode(config),
       runtimeWorkspaceRoots: [config.workspaceDir],
       initialTurnsPage: { limit: 50 },
       config: this.buildConfigOverrides(config)
@@ -281,7 +282,8 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
       model: config.model || DEFAULT_CODEX_APP_SERVER_MODEL,
       effort: config.reasoningEffort && config.reasoningEffort !== 'max' ? config.reasoningEffort : null,
       approvalPolicy: config.permissionMode === 'allow' ? 'never' : 'on-request',
-      approvalsReviewer: 'user'
+      approvalsReviewer: 'user',
+      sandbox: this.resolveSandboxMode(config)
     })
 
     if (isObject(result)) {
@@ -714,10 +716,9 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
     params: Record<string, unknown>
   ): void {
     if (session.config.permissionMode === 'allow') {
-      const response = request.method === 'execCommandApproval'
-        ? { decision: 'approved' }
-        : { decision: 'accept' }
-      this.sendRpcResponse(session, request.id, response)
+      const responseKind = this.getApprovalResponseKind(request.method)
+      const selected = responseKind === 'execCommand' ? 'approved' : 'accept'
+      this.sendRpcResponse(session, request.id, this.buildApprovalResponse(responseKind, selected, true))
       return
     }
 
@@ -784,6 +785,17 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
     if (method === 'mcpServer/elicitation/request') return 'elicitation'
     if (method === 'item/tool/requestUserInput') return 'userInput'
     return 'generic'
+  }
+
+  private resolveSandboxMode(config: SessionConfig): 'read-only' | 'workspace-write' | 'danger-full-access' {
+    switch (config.sandboxMode) {
+      case 'read-only':
+      case 'workspace-write':
+      case 'danger-full-access':
+        return config.sandboxMode
+      default:
+        return 'workspace-write'
+    }
   }
 
   private addEvent(session: AppServerSession, event: unknown): void {

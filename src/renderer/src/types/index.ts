@@ -33,6 +33,7 @@ export enum CodingAgentType {
 }
 
 export type AgentPermissionMode = 'ask' | 'allow'
+export type AgentSandboxMode = 'read-only' | 'workspace-write' | 'danger-full-access'
 
 export type ClaudeAuthMethod = 'subscription' | 'api_key'
 
@@ -169,6 +170,7 @@ export interface AgentConfig {
   reasoning_effort?: ReasoningEffort
   auth_method?: ClaudeAuthMethod
   permission_mode?: AgentPermissionMode
+  sandbox_mode?: AgentSandboxMode
   system_prompt?: string
   mcp_servers?: Array<string | AgentMcpServerEntry>
   skill_ids?: string[]
