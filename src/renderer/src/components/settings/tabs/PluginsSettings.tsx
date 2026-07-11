@@ -441,7 +441,7 @@ function InstalledPluginCard({
           {resources.agents.length > 0 && (
             <div>
               <div className="flex items-center gap-1.5 text-[11px] font-medium text-foreground mb-1">
-                <Bot className="h-3 w-3 text-purple-400" />
+                <Bot className="h-3 w-3 text-teal-400" />
                 Agents ({resources.agents.length})
               </div>
               <div className="space-y-1 ml-4.5">

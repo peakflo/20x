@@ -68,7 +68,7 @@ export const STATUS_DOT_COLORS: Record<string, string> = {
   [TaskStatus.NotStarted]: 'bg-muted-foreground',
   [TaskStatus.Triaging]: 'bg-muted-foreground animate-pulse',
   [TaskStatus.AgentWorking]: 'bg-amber-400',
-  [TaskStatus.ReadyForReview]: 'bg-purple-400',
+  [TaskStatus.ReadyForReview]: 'bg-teal-400',
   [TaskStatus.AgentLearning]: 'bg-blue-400',
   [TaskStatus.Completed]: 'bg-emerald-400'
 }
@@ -83,7 +83,7 @@ export const STATUS_LABELS: Record<string, string> = {
 }
 
 // Badge variant mappings — matches desktop Badge.tsx variants
-export type BadgeVariant = 'default' | 'blue' | 'green' | 'yellow' | 'red' | 'purple' | 'orange'
+export type BadgeVariant = 'default' | 'blue' | 'green' | 'yellow' | 'red' | 'teal' | 'orange'
 
 export const BADGE_VARIANTS: Record<BadgeVariant, string> = {
   default: 'border-border/50 bg-muted text-muted-foreground',
@@ -91,7 +91,7 @@ export const BADGE_VARIANTS: Record<BadgeVariant, string> = {
   green: 'border-emerald-500/20 bg-emerald-500/10 text-emerald-400',
   yellow: 'border-amber-500/20 bg-amber-500/10 text-amber-400',
   red: 'border-red-500/20 bg-red-500/10 text-red-400',
-  purple: 'border-purple-500/20 bg-purple-500/10 text-purple-400',
+  teal: 'border-teal-500/20 bg-teal-500/10 text-teal-400',
   orange: 'border-orange-500/20 bg-orange-500/10 text-orange-400'
 }
 
@@ -106,7 +106,7 @@ export const STATUS_VARIANT: Record<string, { label: string; variant: BadgeVaria
   [TaskStatus.NotStarted]: { label: 'Not Started', variant: 'default' },
   [TaskStatus.Triaging]: { label: 'Triaging', variant: 'default' },
   [TaskStatus.AgentWorking]: { label: 'Agent Working', variant: 'yellow' },
-  [TaskStatus.ReadyForReview]: { label: 'Ready for Review', variant: 'purple' },
+  [TaskStatus.ReadyForReview]: { label: 'Ready for Review', variant: 'teal' },
   [TaskStatus.AgentLearning]: { label: 'Agent Learning', variant: 'blue' },
   [TaskStatus.Completed]: { label: 'Completed', variant: 'green' }
 }

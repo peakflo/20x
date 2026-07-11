@@ -48,7 +48,7 @@ function ParentTaskContextMobile({ parentTask, onNavigate }: { parentTask: Task;
             )}
             <PriorityBadge priority={parentTask.priority} />
             {parentTask.type !== 'general' && (
-              <Badge variant={parentTask.type === 'coding' ? 'blue' : parentTask.type === 'review' ? 'purple' : 'default'}>
+              <Badge variant={parentTask.type === 'coding' ? 'blue' : parentTask.type === 'review' ? 'teal' : 'default'}>
                 {parentTask.type}
               </Badge>
             )}
@@ -296,7 +296,7 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
           )}
           <PriorityBadge priority={task.priority} />
           {task.type !== 'general' && (
-            <Badge variant={task.type === 'coding' ? 'blue' : task.type === 'review' ? 'purple' : 'default'}>
+            <Badge variant={task.type === 'coding' ? 'blue' : task.type === 'review' ? 'teal' : 'default'}>
               {task.type}
             </Badge>
           )}

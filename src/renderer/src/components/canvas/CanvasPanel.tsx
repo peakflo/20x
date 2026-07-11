@@ -326,7 +326,7 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
   const cfg = useMemo(() => {
     const TYPE_CONFIG: Record<string, { label: string; color: string; border: string; bg: string }> = {
       task: { label: 'Task', color: 'bg-blue-500/20 text-blue-400', border: 'border-blue-500/40', bg: 'bg-[var(--canvas-panel)]' },
-      transcript: { label: 'Transcript', color: 'bg-purple-500/20 text-purple-400', border: 'border-purple-500/40', bg: 'bg-[var(--canvas-panel)]' },
+      transcript: { label: 'Transcript', color: 'bg-teal-500/20 text-teal-400', border: 'border-teal-500/40', bg: 'bg-[var(--canvas-panel)]' },
       app: { label: 'App', color: 'bg-green-500/20 text-green-400', border: 'border-green-500/40', bg: 'bg-[var(--canvas-panel)]' },
       webpage: { label: 'Web', color: 'bg-cyan-500/20 text-cyan-400', border: 'border-cyan-500/40', bg: 'bg-[var(--canvas-panel)]' },
       terminal: { label: 'Terminal', color: 'bg-amber-500/20 text-amber-400', border: 'border-amber-500/50', bg: 'bg-[var(--canvas-panel)]' },
@@ -344,7 +344,7 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
         case TaskStatus.Triaging:
           return { label: 'Triaging', color: 'bg-orange-500/20 text-orange-400', border: 'border-orange-500/50', bg: 'bg-orange-500/10' }
         case TaskStatus.ReadyForReview:
-          return { label: 'Review', color: 'bg-purple-500/20 text-purple-400', border: 'border-purple-500/50', bg: 'bg-purple-500/10' }
+          return { label: 'Review', color: 'bg-teal-500/20 text-teal-400', border: 'border-teal-500/50', bg: 'bg-teal-500/10' }
         default:
           return TYPE_CONFIG.task
       }

@@ -708,14 +708,14 @@ function SnapGuides({
                   top: visibleTop - 1000,
                   width: 1,
                   height: visibleHeight + 2000,
-                  background: 'rgba(99,102,241,0.25)',
+                  background: 'rgba(30,150,235,0.25)',
                 }
               : {
                   left: visibleLeft - 1000,
                   top: guide.position,
                   width: visibleWidth + 2000,
                   height: 1,
-                  background: 'rgba(99,102,241,0.25)',
+                  background: 'rgba(30,150,235,0.25)',
                 }
           }
         />

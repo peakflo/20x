@@ -5,7 +5,7 @@ import type { TaskType } from '@/types'
 const typeConfig: Record<TaskType, { label: string; icon: LucideIcon; variant: BadgeVariant }> = {
   coding: { label: 'Coding', icon: Code, variant: 'blue' },
   manual: { label: 'Manual', icon: Hand, variant: 'default' },
-  review: { label: 'Review', icon: Eye, variant: 'purple' },
+  review: { label: 'Review', icon: Eye, variant: 'teal' },
   approval: { label: 'Approval', icon: CheckCircle, variant: 'green' },
   general: { label: 'General', icon: Circle, variant: 'default' }
 }

@@ -186,7 +186,7 @@ export function CanvasContextMenu({ position, onClose }: CanvasContextMenuProps)
               return (
                 <MenuItem
                   key={taskId}
-                  icon={<MessageSquare className="h-3.5 w-3.5 text-purple-400" />}
+                  icon={<MessageSquare className="h-3.5 w-3.5 text-teal-400" />}
                   label={task?.title || `Session ${taskId.slice(0, 8)}`}
                   sublabel={`${session.messages.length} messages`}
                   onClick={() =>

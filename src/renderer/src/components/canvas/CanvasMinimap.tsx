@@ -9,10 +9,10 @@ const MINIMAP_PAD = 12 // padding inside the minimap
 
 // Panel type → color mapping
 const PANEL_COLORS: Record<string, string> = {
-  task: 'rgba(99,102,241,0.7)',     // indigo
+  task: 'rgba(30,150,235,0.7)',     // indigo
   browser: 'rgba(249,115,22,0.7)',  // orange
   terminal: 'rgba(34,197,94,0.7)',  // green
-  app: 'rgba(168,85,247,0.7)',      // purple
+  app: 'rgba(20,184,166,0.7)',      // teal
   transcript: 'rgba(59,130,246,0.6)', // blue
   webpage: 'rgba(236,72,153,0.6)',  // pink
   placeholder: 'rgba(107,114,128,0.4)', // gray
@@ -201,7 +201,7 @@ export function CanvasMinimap({
               if (!from || !to) return null
               const edgeColor = edge.edgeType === 'browser' ? 'rgba(249,115,22,0.4)'
                 : edge.edgeType === 'terminal' ? 'rgba(34,197,94,0.4)'
-                : 'rgba(99,102,241,0.3)'
+                : 'rgba(30,150,235,0.3)'
               return (
                 <line
                   key={edge.id}

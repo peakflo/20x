@@ -29,7 +29,7 @@ export function TaskListItem({ task, onSelect, sessionStatus, isSubtask, subtask
     const map: Record<string, string> = {
       [TaskStatus.NotStarted]: 'bg-muted-foreground',
       [TaskStatus.AgentWorking]: 'bg-amber-400',
-      [TaskStatus.ReadyForReview]: 'bg-purple-400',
+      [TaskStatus.ReadyForReview]: 'bg-teal-400',
       [TaskStatus.Completed]: 'bg-emerald-400',
     }
     return map[task.status] || 'bg-muted-foreground'

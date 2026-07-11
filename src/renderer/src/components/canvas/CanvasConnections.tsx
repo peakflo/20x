@@ -133,10 +133,10 @@ export function CanvasConnections({
         const edgeType = edge.edge.edgeType
         const colorFaded = edgeType === 'browser' ? 'rgba(249,115,22,0.5)'
           : edgeType === 'terminal' ? 'rgba(34,197,94,0.5)'
-          : 'rgba(99,102,241,0.45)'
+          : 'rgba(30,150,235,0.45)'
         const colorDot = edgeType === 'browser' ? 'rgba(249,115,22,0.8)'
           : edgeType === 'terminal' ? 'rgba(34,197,94,0.8)'
-          : 'rgba(99,102,241,0.7)'
+          : 'rgba(30,150,235,0.7)'
 
         return (
           <g key={edge.id}>
@@ -191,7 +191,7 @@ export function CanvasConnections({
           <path
             d={pendingPath.path}
             fill="none"
-            stroke="rgba(99,102,241,0.3)"
+            stroke="rgba(30,150,235,0.3)"
             strokeWidth="2"
             strokeDasharray="6 4"
             strokeLinecap="round"
@@ -200,7 +200,7 @@ export function CanvasConnections({
             cx={pendingPath.fromAnchor.x}
             cy={pendingPath.fromAnchor.y}
             r="3"
-            fill="rgba(99,102,241,0.5)"
+            fill="rgba(30,150,235,0.5)"
           />
           {mouseCanvasPos && (
             <circle
@@ -208,7 +208,7 @@ export function CanvasConnections({
               cy={mouseCanvasPos.y}
               r="4"
               fill="none"
-              stroke="rgba(99,102,241,0.4)"
+              stroke="rgba(30,150,235,0.4)"
               strokeWidth="1.5"
             />
           )}
@@ -273,7 +273,7 @@ function EdgeDeleteDot({
       className="pointer-events-auto cursor-pointer opacity-0 hover:opacity-100 transition-opacity"
       onClick={(e) => { e.stopPropagation(); onDelete() }}
     >
-      <circle cx={x} cy={y} r="7" style={{ fill: 'var(--canvas-panel)' }} stroke="rgba(99,102,241,0.3)" strokeWidth="1" />
+      <circle cx={x} cy={y} r="7" style={{ fill: 'var(--canvas-panel)' }} stroke="rgba(30,150,235,0.3)" strokeWidth="1" />
       <line x1={x - 2.5} y1={y - 2.5} x2={x + 2.5} y2={y + 2.5} stroke="rgba(239,68,68,0.7)" strokeWidth="1.5" strokeLinecap="round" />
       <line x1={x + 2.5} y1={y - 2.5} x2={x - 2.5} y2={y + 2.5} stroke="rgba(239,68,68,0.7)" strokeWidth="1.5" strokeLinecap="round" />
     </g>

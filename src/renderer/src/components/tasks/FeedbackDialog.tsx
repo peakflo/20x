@@ -52,7 +52,7 @@ export function FeedbackDialog({ open, onSubmit, onSkip, onCancel }: FeedbackDia
                 <Star
                   className={`h-7 w-7 transition-colors ${
                     star <= (hoveredStar || rating)
-                      ? 'fill-amber-400 text-amber-400'
+                      ? 'fill-[#f5b301] text-[#f5b301]'
                       : 'text-muted-foreground/40'
                   }`}
                 />
