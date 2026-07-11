@@ -234,6 +234,7 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
     session.threadId = threadId
     this.sessions.delete(config.taskId)
     this.sessions.set(threadId, session)
+    void this.logMcpServerInventory(session, threadId, 'thread/start')
     return threadId
   }
 
@@ -255,6 +256,8 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
       initialTurnsPage: { limit: 50 },
       config: this.buildConfigOverrides(config)
     })
+
+    void this.logMcpServerInventory(session, sessionId, 'thread/resume')
 
     try {
       await this.bufferAllThreadItems(session, sessionId)
@@ -642,6 +645,39 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
       }
     }
     return result
+  }
+
+  private async logMcpServerInventory(session: AppServerSession, threadId: string, context: string): Promise<void> {
+    try {
+      const result = await this.sendRpcRequest(session, 'mcpServerStatus/list', {
+        threadId,
+        detail: 'toolsAndAuthOnly',
+        limit: 100
+      })
+      if (!isObject(result) || !Array.isArray(result.data)) return
+
+      const servers = result.data
+        .filter(isObject)
+        .map((server) => {
+          const tools = server.tools
+          const toolNames = Array.isArray(tools)
+            ? tools.map((tool) => isObject(tool) ? asString(tool.name) : undefined).filter(Boolean)
+            : isObject(tools)
+              ? Object.keys(tools)
+              : []
+
+          return {
+            name: asString(server.name) || 'unknown',
+            authStatus: asString(server.authStatus) || null,
+            toolCount: toolNames.length,
+            toolNames: toolNames.slice(0, 50)
+          }
+        })
+
+      console.log('[CodexAppServerAdapter] MCP inventory', { context, threadId, servers })
+    } catch (error) {
+      console.warn('[CodexAppServerAdapter] Failed to list MCP inventory:', error)
+    }
   }
 
   private setupStdoutParser(process: ChildProcess, session: AppServerSession): void {
