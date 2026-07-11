@@ -1,132 +1,306 @@
 @import "tailwindcss";
 
-@theme {
-  /* Cursor Dark Midnight palette */
-  --color-background: #1E2127;
-  --color-foreground: #EBEEF4;
-  --color-card: #191D23;
-  --color-card-foreground: #EBEEF4;
-  --color-popover: #191D23;
-  --color-popover-foreground: #EBEEF4;
-  --color-primary: #85A4C3;
-  --color-primary-foreground: #1E2127;
-  --color-secondary: #30353F;
-  --color-secondary-foreground: #EBEEF4;
-  --color-muted: #30353F;
-  --color-muted-foreground: #535D71;
-  --color-accent: #313C47;
-  --color-accent-foreground: #EBEEF4;
-  --color-destructive: #C06771;
-  --color-destructive-foreground: #EBEEF4;
-  --color-border: #30353F;
-  --color-input: #30353F;
-  --color-ring: #85A4C3;
-  --color-sidebar: #191D23;
-  --color-sidebar-foreground: #E4E8F0;
-  --color-sidebar-border: #30353F;
-  --color-sidebar-accent: #313C47;
-  --color-sidebar-muted: #30353F;
-  --radius-sm: 6px;
-  --radius-md: 8px;
-  --radius-lg: 12px;
+/* ══════════════════════════════════════════════════════════════════════════
+   20x Design System — "Aperture"
+   A ground-up visual language blending AFFiNE's calm, structured spatial
+   system (hairline borders, generous whitespace, frosted chrome) with
+   LobeChat's warmth (soft radii, gentle shadows, refined controls).
+   Full light + dark support driven by the `.dark` class on <html>.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* ── Tailwind token bridge ──────────────────────────────────────────────────
+   Map Tailwind color utilities to runtime CSS variables so `.dark` overrides
+   re-skin the whole app instantly. `inline` makes utilities emit var() refs. */
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-muted: var(--sidebar-muted);
+
+  /* Radii — softer, LobeChat-inspired */
+  --radius-xs: 6px;
+  --radius-sm: 8px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 18px;
+  --radius-2xl: 24px;
+
+  /* Type families */
+  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
 }
 
-@font-face {
-  font-family: "Geist";
-  src: url("https://cdn.jsdelivr.net/fontsource/fonts/geist-sans@latest/latin-400-normal.woff2") format("woff2");
-  font-weight: 400;
-  font-style: normal;
-  font-display: swap;
-}
-@font-face {
-  font-family: "Geist";
-  src: url("https://cdn.jsdelivr.net/fontsource/fonts/geist-sans@latest/latin-500-normal.woff2") format("woff2");
-  font-weight: 500;
-  font-style: normal;
-  font-display: swap;
-}
-@font-face {
-  font-family: "Geist";
-  src: url("https://cdn.jsdelivr.net/fontsource/fonts/geist-sans@latest/latin-600-normal.woff2") format("woff2");
-  font-weight: 600;
-  font-style: normal;
-  font-display: swap;
+/* ── Light theme (default) — warm paper, AFFiNE-like ──────────────────────── */
+:root {
+  --background: #f7f7f5;
+  --foreground: #1a1a1c;
+  --card: #ffffff;
+  --card-foreground: #1a1a1c;
+  --popover: #ffffff;
+  --popover-foreground: #1a1a1c;
+  --primary: #2e5ce6;
+  --primary-foreground: #ffffff;
+  --secondary: #efefec;
+  --secondary-foreground: #26262a;
+  --muted: #f1f1ef;
+  --muted-foreground: #6c6c72;
+  --accent: #ececea;
+  --accent-foreground: #1a1a1c;
+  --destructive: #e5484d;
+  --destructive-foreground: #ffffff;
+  --success: #2f9e63;
+  --success-foreground: #ffffff;
+  --warning: #d9820b;
+  --warning-foreground: #ffffff;
+  --border: #e7e7e3;
+  --input: #e0e0dc;
+  --ring: #2e5ce6;
+
+  --sidebar: #f2f2ef;
+  --sidebar-foreground: #33333a;
+  --sidebar-border: #e7e7e3;
+  --sidebar-accent: #e7e7e3;
+  --sidebar-muted: #ededea;
+
+  /* Frosted chrome surfaces (top bar / sidebar translucency) */
+  --chrome: rgba(247, 247, 245, 0.72);
+  --chrome-solid: #f7f7f5;
+  --overlay: rgba(24, 24, 27, 0.32);
+
+  /* Elevation — soft, warm-gray shadows */
+  --shadow-xs: 0 1px 2px rgba(24, 24, 27, 0.05);
+  --shadow-sm: 0 1px 3px rgba(24, 24, 27, 0.07), 0 1px 2px rgba(24, 24, 27, 0.04);
+  --shadow-md: 0 4px 12px -2px rgba(24, 24, 27, 0.09), 0 2px 6px -2px rgba(24, 24, 27, 0.06);
+  --shadow-lg: 0 12px 32px -6px rgba(24, 24, 27, 0.14), 0 4px 12px -4px rgba(24, 24, 27, 0.08);
+  --shadow-pop: 0 8px 28px -6px rgba(24, 24, 27, 0.16), 0 2px 8px -3px rgba(24, 24, 27, 0.08);
+
+  color-scheme: light;
 }
 
-/* ── Reset ────────────────────────────────────── */
+/* ── Dark theme — deep neutral charcoal (not blue-tinted) ─────────────────── */
+.dark {
+  --background: #131316;
+  --foreground: #ececee;
+  --card: #1b1b1f;
+  --card-foreground: #ececee;
+  --popover: #1c1c20;
+  --popover-foreground: #ececee;
+  --primary: #6a8ef2;
+  --primary-foreground: #0b0b0d;
+  --secondary: #242428;
+  --secondary-foreground: #ececee;
+  --muted: #232327;
+  --muted-foreground: #8b8b93;
+  --accent: #2a2a2f;
+  --accent-foreground: #ececee;
+  --destructive: #f0575d;
+  --destructive-foreground: #ffffff;
+  --success: #3ecf8e;
+  --success-foreground: #06140d;
+  --warning: #f0a63c;
+  --warning-foreground: #1a1200;
+  --border: #2a2a2e;
+  --input: #302f35;
+  --ring: #6a8ef2;
+
+  --sidebar: #161619;
+  --sidebar-foreground: #d3d3d8;
+  --sidebar-border: #262629;
+  --sidebar-accent: #26262b;
+  --sidebar-muted: #232327;
+
+  --chrome: rgba(19, 19, 22, 0.68);
+  --chrome-solid: #131316;
+  --overlay: rgba(0, 0, 0, 0.6);
+
+  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 4px 14px -2px rgba(0, 0, 0, 0.5);
+  --shadow-lg: 0 16px 40px -8px rgba(0, 0, 0, 0.6);
+  --shadow-pop: 0 10px 34px -6px rgba(0, 0, 0, 0.6);
+
+  color-scheme: dark;
+}
+
+/* ── Mode-aware accent palette ──────────────────────────────────────────────
+   Widely-used Tailwind accent shades (text-*-400 / bg-*-400) are tuned for
+   dark backgrounds. In light mode we darken the *-400/-300 text shades so
+   status colors stay legible on paper without touching 90+ component files. */
+:root:not(.dark) {
+  --color-red-400: #dc2626;
+  --color-red-300: #b91c1c;
+  --color-orange-400: #ea580c;
+  --color-amber-400: #b45309;
+  --color-amber-300: #92600a;
+  --color-yellow-400: #a16207;
+  --color-yellow-300: #854d0e;
+  --color-green-400: #16a34a;
+  --color-green-300: #15803d;
+  --color-emerald-400: #059669;
+  --color-teal-400: #0d9488;
+  --color-cyan-400: #0891b2;
+  --color-sky-400: #0284c7;
+  --color-blue-400: #2563eb;
+  --color-blue-300: #1d4ed8;
+  --color-indigo-400: #4f46e5;
+  --color-violet-400: #7c3aed;
+  --color-purple-400: #9333ea;
+  --color-purple-300: #7e22ce;
+  --color-purple-200: #6b21a8;
+  --color-fuchsia-400: #c026d3;
+  --color-pink-400: #db2777;
+  --color-rose-400: #e11d48;
+}
+
+/* ── Web fonts ──────────────────────────────────────────────────────────────
+   Inter (UI) + JetBrains Mono (code / tabular). CDN with strong system
+   fallbacks so the app degrades gracefully offline. */
+@font-face {
+  font-family: "Inter"; font-style: normal; font-weight: 400; font-display: swap;
+  src: url("https://cdn.jsdelivr.net/fontsource/fonts/inter@latest/latin-400-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Inter"; font-style: normal; font-weight: 500; font-display: swap;
+  src: url("https://cdn.jsdelivr.net/fontsource/fonts/inter@latest/latin-500-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Inter"; font-style: normal; font-weight: 600; font-display: swap;
+  src: url("https://cdn.jsdelivr.net/fontsource/fonts/inter@latest/latin-600-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Inter"; font-style: normal; font-weight: 700; font-display: swap;
+  src: url("https://cdn.jsdelivr.net/fontsource/fonts/inter@latest/latin-700-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "JetBrains Mono"; font-style: normal; font-weight: 400; font-display: swap;
+  src: url("https://cdn.jsdelivr.net/fontsource/fonts/jetbrains-mono@latest/latin-400-normal.woff2") format("woff2");
+}
+
+/* ── Reset ──────────────────────────────────────────────────────────────── */
 @layer base {
   * {
     box-sizing: border-box;
-    border-color: var(--color-border);
+    border-color: var(--border);
   }
 }
 
 html, body, #root {
   height: 100%;
   overflow: hidden;
-  font-family: "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  background: var(--color-background);
-  color: var(--color-foreground);
+  font-family: var(--font-sans);
+  background: var(--background);
+  color: var(--foreground);
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
   font-size: 14px;
+  font-feature-settings: "cv01", "cv03", "ss01";
+  letter-spacing: -0.006em;
 }
 
-/* ── App Shell ────────────────────────────────── */
 #root {
   display: flex;
   flex-direction: column;
 }
 
-/* ── Drag regions for macOS traffic lights ────── */
+/* Smooth theme transitions on surfaces (not on transforms/opacity) */
+body, .theme-transition {
+  transition: background-color 0.25s ease, color 0.25s ease, border-color 0.25s ease;
+}
+
+/* ── Utility layer ──────────────────────────────────────────────────────── */
+@layer utilities {
+  /* Frosted glass chrome — used by top bar + sidebar */
+  .frost {
+    background-color: var(--chrome);
+    backdrop-filter: saturate(180%) blur(20px);
+    -webkit-backdrop-filter: saturate(180%) blur(20px);
+  }
+  .shadow-xs   { box-shadow: var(--shadow-xs); }
+  .shadow-card { box-shadow: var(--shadow-sm); }
+  .shadow-pop  { box-shadow: var(--shadow-pop); }
+  .shadow-float{ box-shadow: var(--shadow-lg); }
+  .font-mono   { font-family: var(--font-mono); }
+  .ring-focus  { box-shadow: 0 0 0 3px color-mix(in oklab, var(--ring) 30%, transparent); }
+}
+
+/* ── Drag regions for macOS traffic lights ─────────────────────────────── */
 .drag-region { -webkit-app-region: drag; }
 .no-drag { -webkit-app-region: no-drag; }
 
-/* ── macOS: push left-pinned elements past the traffic lights (≈ 70px physical).
-   Divides by --zoom-factor (set by AppLayout) so the gap stays constant
-   regardless of Cmd+/Cmd- page zoom.  Fallback: 80px at zoom 1×. ── */
+/* macOS: push left-pinned elements past the traffic lights (constant physical gap). */
 [data-platform="darwin"] .macos-titlebar-pad {
   margin-left: calc(80px / var(--zoom-factor, 1));
 }
 
-/* ── Windows: push content left of the title-bar overlay (min/max/close ≈ 140px) ── */
+/* Windows title-bar overlay safe areas */
 [data-platform="win32"] .windows-titlebar-pad { padding-right: 150px; }
-/* ── Windows: any top-right header that sits behind the overlay needs right padding too ── */
 [data-platform="win32"] .windows-titlebar-safe { padding-right: 150px; }
-/* ── Windows: shift absolutely-positioned right-side buttons left of the overlay ── */
 [data-platform="win32"] .windows-titlebar-actions { right: 154px; }
 
-/* ── Scrollbar ────────────────────────────────── */
-::-webkit-scrollbar { width: 5px; height: 5px; }
+/* ── Scrollbar ──────────────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: 99px; }
-::-webkit-scrollbar-thumb:hover { background: #535D71; }
-
-/* ── Native form elements ─────────────────────── */
-select {
-  appearance: none;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%2371717a' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
-  background-repeat: no-repeat;
-  background-position: right 8px center;
-  padding-right: 26px !important;
-  background-color: var(--color-card);
-  color: var(--color-foreground);
+::-webkit-scrollbar-thumb {
+  background: color-mix(in oklab, var(--muted-foreground) 32%, transparent);
+  border-radius: 99px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in oklab, var(--muted-foreground) 55%, transparent);
+  background-clip: padding-box;
 }
 
+/* ── Native form elements ───────────────────────────────────────────────── */
+select {
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  padding-right: 28px !important;
+  background-color: var(--card);
+  color: var(--foreground);
+}
 select option {
-  background-color: var(--color-card);
-  color: var(--color-foreground);
+  background-color: var(--card);
+  color: var(--foreground);
 }
 
 input[type="date"]::-webkit-calendar-picker-indicator {
   filter: invert(0.5);
   cursor: pointer;
 }
+input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
 
-input[type="search"]::-webkit-search-cancel-button {
-  -webkit-appearance: none;
-}
+/* ── Focus — handled per-component ──────────────────────────────────────── */
+:focus-visible { outline: none; }
 
-/* ── Focus — handled per-component, not globally ─ */
-:focus-visible {
-  outline: none;
+/* ── Selection ──────────────────────────────────────────────────────────── */
+::selection {
+  background: color-mix(in oklab, var(--primary) 26%, transparent);
+  color: var(--foreground);
 }

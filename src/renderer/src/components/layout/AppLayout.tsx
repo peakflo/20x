@@ -27,6 +27,7 @@ import { TaskStatus, PluginActionId } from '@/types'
 import type { FileAttachment } from '@/types'
 import { MessageSquare, ExternalLink, LayoutDashboard, CheckSquare, Zap, Settings, Layers } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
+import { ThemeToggle } from './ThemeToggle'
 import type { SidebarView } from '@/stores/ui-store'
 import logo20x from '@/assets/logos/20x.svg'
 
@@ -179,41 +180,44 @@ export function AppLayout() {
   return (
     <>
       {/* ── Top bar: drag region with logo (left) + nav switcher (center) + actions (right) ── */}
-      <div className="drag-region h-12 flex-shrink-0 flex items-center justify-center px-4 border-b border-border/50 windows-titlebar-pad">
-        {/* Logo + update indicator — pinned left */}
-        <div className="no-drag absolute left-4 flex items-center gap-2 macos-titlebar-pad">
-          <div className="relative">
-            <img src={logo20x} className="h-5 w-5" alt="20x" />
+      <div className="drag-region frost h-13 flex-shrink-0 flex items-center justify-center px-4 border-b border-border/70 windows-titlebar-pad">
+        {/* Logo + wordmark + update indicator — pinned left */}
+        <div className="no-drag absolute left-4 flex items-center gap-2.5 macos-titlebar-pad">
+          <div className="relative grid h-7 w-7 place-items-center rounded-lg bg-card border border-border/70 shadow-xs">
+            <img src={logo20x} className="h-4 w-4" alt="20x" />
             {updateAvailableVersion && (
               <button
                 onClick={() => setUpdateDialogOpen(true)}
-                className="absolute -top-1 -right-1 h-2.5 w-2.5 rounded-full bg-amber-400 ring-2 ring-background cursor-pointer animate-pulse"
+                className="absolute -top-1 -right-1 h-2.5 w-2.5 rounded-full bg-warning ring-2 ring-[var(--chrome-solid)] cursor-pointer animate-pulse"
                 title={`Update available: v${updateAvailableVersion}`}
               />
             )}
           </div>
-          <span className="text-sm font-semibold text-foreground">20x</span>
+          <span className="text-[15px] font-semibold tracking-tight text-foreground">20x</span>
         </div>
 
-        {/* View switcher — centered */}
-        <div className="no-drag flex rounded-md border border-border bg-muted/30 p-0.5">
-          {NAV_ITEMS.map(({ key, label, icon: Icon }) => (
-            <button
-              key={key}
-              onClick={() => {
-                if (activeModal === 'settings') closeModal()
-                setSidebarView(key)
-              }}
-              className={`rounded px-3 py-1 text-xs font-medium transition-colors cursor-pointer flex items-center gap-1.5 ${
-                sidebarView === key
-                  ? 'bg-background text-foreground shadow-sm'
-                  : 'text-muted-foreground hover:text-foreground'
-              }`}
-            >
-              <Icon className="h-3 w-3" />
-              {label}
-            </button>
-          ))}
+        {/* View switcher — centered segmented control */}
+        <div className="no-drag flex items-center gap-0.5 rounded-xl border border-border/60 bg-muted/50 p-1 shadow-xs">
+          {NAV_ITEMS.map(({ key, label, icon: Icon }) => {
+            const active = sidebarView === key && activeModal !== 'settings'
+            return (
+              <button
+                key={key}
+                onClick={() => {
+                  if (activeModal === 'settings') closeModal()
+                  setSidebarView(key)
+                }}
+                className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-all duration-150 cursor-pointer flex items-center gap-1.5 ${
+                  active
+                    ? 'bg-card text-foreground shadow-sm'
+                    : 'text-muted-foreground hover:text-foreground hover:bg-accent/60'
+                }`}
+              >
+                <Icon className="h-3.5 w-3.5" />
+                {label}
+              </button>
+            )
+          })}
         </div>
 
         {/* Global actions — pinned right; offset on Windows to avoid native window controls. */}
@@ -221,22 +225,22 @@ export function AppLayout() {
           className="no-drag absolute right-4 flex items-center gap-1 windows-titlebar-actions"
           style={isWindows ? { right: WINDOWS_TITLEBAR_ACTION_RIGHT } : undefined}
         >
-          <Button
-            variant="ghost"
-            size="sm"
+          <ThemeToggle />
+          <button
             onClick={openSettings}
-            className="h-7 px-2"
             title="Settings"
+            className="grid h-8 w-8 place-items-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground cursor-pointer"
           >
-            <Settings className="h-3.5 w-3.5" />
-          </Button>
+            <Settings className="h-4 w-4" />
+          </button>
+          <div className="mx-1 h-5 w-px bg-border/70" />
           <Button
-            variant={showOrchestrator ? 'default' : 'ghost'}
+            variant={showOrchestrator ? 'default' : 'secondary'}
             size="sm"
             onClick={toggleOrchestrator}
-            className="h-7 px-2"
+            className="h-8"
           >
-            <MessageSquare className="h-3.5 w-3.5 mr-1" />
+            <MessageSquare className="h-3.5 w-3.5" />
             <span className="text-xs">Mastermind</span>
           </Button>
         </div>
