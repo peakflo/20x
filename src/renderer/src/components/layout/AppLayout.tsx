@@ -184,7 +184,8 @@ export function AppLayout() {
         {/* Logo + wordmark + update indicator — pinned left */}
         <div className="no-drag absolute left-4 flex items-center gap-2.5 macos-titlebar-pad">
           <div className="relative grid h-7 w-7 place-items-center rounded-lg bg-card border border-border/70 shadow-xs">
-            <img src={logo20x} className="h-4 w-4" alt="20x" />
+            {/* Logo mark is pure white; invert it in light mode so it stays visible on the light chip. */}
+            <img src={logo20x} className="h-4 w-4 invert dark:invert-0" alt="20x" />
             {updateAvailableVersion && (
               <button
                 onClick={() => setUpdateDialogOpen(true)}
