@@ -634,11 +634,11 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
           env: server.env || {}
         }
       } else {
-        result[name] = {
-          type: server.type,
-          url: server.url,
-          headers: server.headers || {}
+        const remoteConfig: Record<string, unknown> = { url: server.url }
+        if (server.headers && Object.keys(server.headers).length > 0) {
+          remoteConfig.http_headers = server.headers
         }
+        result[name] = remoteConfig
       }
     }
     return result

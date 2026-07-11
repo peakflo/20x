@@ -33,6 +33,17 @@ interface AppServerAdapterPrivate {
     usesApiKey: boolean
     summary: string
   }
+  buildConfigOverrides(config: {
+    reasoningEffort?: string
+    mcpServers?: Record<string, {
+      type: 'stdio' | 'http' | 'sse'
+      command?: string
+      args?: string[]
+      env?: Record<string, string>
+      url?: string
+      headers?: Record<string, string>
+    }>
+  }): Record<string, unknown>
   bufferAllThreadItems(session: AppServerSessionForTest, threadId: string): Promise<void>
   sendRpcRequest(session: AppServerSessionForTest, method: string, params?: unknown): Promise<unknown>
 }
@@ -331,6 +342,42 @@ describe('CodexAppServerAdapter', () => {
     expect(parts[0].tool?.output).toEqual(expect.any(String))
     expect((parts[0].tool?.output as string).length).toBeLessThan(101_000)
     expect(parts[0].tool?.output as string).toContain('truncated for display')
+  })
+
+  it('converts 20x MCP configs to codex app-server config shape', () => {
+    const adapter = adapterPrivate(new CodexAppServerAdapter())
+
+    const config = adapter.buildConfigOverrides({
+      reasoningEffort: 'high',
+      mcpServers: {
+        local: {
+          type: 'stdio',
+          command: 'node',
+          args: ['server.js'],
+          env: { TOKEN: 'secret' }
+        },
+        remote: {
+          type: 'http',
+          url: 'https://example.com/mcp',
+          headers: { Authorization: 'Bearer token' }
+        }
+      }
+    })
+
+    expect(config).toEqual({
+      model_reasoning_effort: 'high',
+      mcp_servers: {
+        local: {
+          command: 'node',
+          args: ['server.js'],
+          env: { TOKEN: 'secret' }
+        },
+        remote: {
+          url: 'https://example.com/mcp',
+          http_headers: { Authorization: 'Bearer token' }
+        }
+      }
+    })
   })
 
   it('clears stale live buffer before sending a new prompt', async () => {
