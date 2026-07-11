@@ -346,6 +346,114 @@ describe('CodexAppServerAdapter', () => {
     expect(parts[0].tool?.output as string).toContain('truncated for display')
   })
 
+  it('uses server and tool names for app-server MCP tool calls', () => {
+    const adapter = adapterPrivate(new CodexAppServerAdapter())
+    const session = createSession()
+    const seenMessageIds = new Set<string>()
+    const seenPartIds = new Set<string>()
+    const lengths = new Map<string, string>()
+
+    const parts = adapter.convertEventToMessageParts({
+      method: 'item/completed',
+      params: {
+        item: {
+          type: 'mcpToolCall',
+          id: 'call-1',
+          server: 'Carousell_MCP',
+          tool: 'workflow_get_node_parameter',
+          status: 'completed',
+          arguments: { workflowId: 'wf-1' },
+          result: { content: [{ type: 'text', text: 'ok' }] }
+        },
+        threadId: 'thread-1',
+        turnId: 'turn-1'
+      }
+    }, seenMessageIds, seenPartIds, lengths, session)
+
+    expect(parts[0]).toMatchObject({
+      id: 'tool-call-1',
+      type: MessagePartType.TOOL,
+      tool: {
+        name: 'Carousell_MCP.workflow_get_node_parameter',
+        title: 'Carousell_MCP.workflow_get_node_parameter',
+        status: 'completed'
+      }
+    })
+  })
+
+  it('uses changed file names for app-server file change tool titles', () => {
+    const adapter = adapterPrivate(new CodexAppServerAdapter())
+    const session = createSession()
+    const seenMessageIds = new Set<string>()
+    const seenPartIds = new Set<string>()
+    const lengths = new Map<string, string>()
+
+    const parts = adapter.convertEventToMessageParts({
+      method: 'item/completed',
+      params: {
+        item: {
+          type: 'fileChange',
+          id: 'call-2',
+          changes: [{
+            path: '/tmp/workspace/src/renderer/src/components/agents/AgentTranscriptPanel.tsx',
+            kind: { type: 'modify' }
+          }],
+          status: 'completed'
+        },
+        threadId: 'thread-1',
+        turnId: 'turn-1'
+      }
+    }, seenMessageIds, seenPartIds, lengths, session)
+
+    expect(parts[0]).toMatchObject({
+      id: 'tool-call-2',
+      type: MessagePartType.TOOL,
+      tool: {
+        name: 'fileChange',
+        title: 'AgentTranscriptPanel.tsx',
+        status: 'completed'
+      }
+    })
+  })
+
+  it('uses command text for app-server command execution tool titles', () => {
+    const adapter = adapterPrivate(new CodexAppServerAdapter())
+    const session = createSession()
+    const seenMessageIds = new Set<string>()
+    const seenPartIds = new Set<string>()
+    const lengths = new Map<string, string>()
+
+    const parts = adapter.convertEventToMessageParts({
+      method: 'item/completed',
+      params: {
+        item: {
+          type: 'commandExecution',
+          id: 'call-3',
+          command: '/bin/zsh -lc "rg fallback"',
+          commandActions: [{
+            type: 'search',
+            command: 'rg -n "mcpToolCall" src/main/adapters',
+            query: 'mcpToolCall',
+            path: 'adapters'
+          }],
+          status: 'completed'
+        },
+        threadId: 'thread-1',
+        turnId: 'turn-1'
+      }
+    }, seenMessageIds, seenPartIds, lengths, session)
+
+    expect(parts[0]).toMatchObject({
+      id: 'tool-call-3',
+      type: MessagePartType.TOOL,
+      tool: {
+        name: 'commandExecution',
+        title: 'rg -n "mcpToolCall" src/main/adapters',
+        status: 'completed'
+      }
+    })
+  })
+
   it('converts 20x MCP configs to codex app-server config shape', () => {
     const adapter = adapterPrivate(new CodexAppServerAdapter())
 

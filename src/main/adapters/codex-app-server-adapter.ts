@@ -9,7 +9,7 @@
 import { spawn, type ChildProcess } from 'child_process'
 import { mkdtempSync } from 'fs'
 import { homedir, tmpdir } from 'os'
-import { join } from 'path'
+import { basename, join } from 'path'
 import { promisify } from 'util'
 import type {
   CodingAgentAdapter,
@@ -129,6 +129,12 @@ function extractText(value: unknown): string {
 }
 
 function extractToolName(item: Record<string, unknown>): string {
+  const server = asString(item.server)
+  const tool = asString(item.tool)
+  if ((item.type === 'mcpToolCall' || server || tool) && (server || tool)) {
+    return [server, tool].filter(Boolean).join('.')
+  }
+
   return (
     asString(item.toolName) ||
     asString(item.tool_name) ||
@@ -136,6 +142,34 @@ function extractToolName(item: Record<string, unknown>): string {
     asString(item.type) ||
     'tool'
   )
+}
+
+function extractToolTitle(item: Record<string, unknown>, toolName: string): string {
+  if (item.type === 'commandExecution') {
+    const actionCommand = Array.isArray(item.commandActions)
+      ? item.commandActions
+        .filter(isObject)
+        .map((action) => asString(action.command))
+        .find(Boolean)
+      : undefined
+    const command = actionCommand || asString(item.command)
+    if (command) return command
+  }
+
+  if (item.type === 'fileChange') {
+    const paths = Array.isArray(item.changes)
+      ? item.changes
+        .filter(isObject)
+        .map((change) => asString(change.path))
+        .filter((path): path is string => !!path)
+      : []
+    const directPath = asString(item.path)
+    if (paths.length === 1) return basename(paths[0])
+    if (paths.length > 1) return `${basename(paths[0])} +${paths.length - 1}`
+    if (directPath) return basename(directPath)
+  }
+
+  return toolName
 }
 
 function truncateForIpc(value: string, maxChars: number): string {
@@ -1118,6 +1152,7 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
     }
 
     const toolName = extractToolName(item)
+    const toolTitle = extractToolTitle(item, toolName)
     const partId = `tool-${itemId}`
     const isCompleted = method === 'item/completed'
     if (!isCompleted && seenPartIds.has(partId)) return []
@@ -1130,7 +1165,7 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
       tool: {
         name: toolName,
         status: isCompleted ? 'completed' : 'running',
-        title: toolName,
+        title: toolTitle,
         input: stringifyForIpc(item, MAX_IPC_TOOL_INPUT_CHARS),
         output: isCompleted ? stringifyForIpc(extractText(item) || item, MAX_IPC_TOOL_OUTPUT_CHARS) : undefined
       },

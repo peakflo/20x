@@ -126,6 +126,7 @@ function deriveToolSubtitle(tool?: AgentMessage['tool']): string {
   if (description) return description
 
   if (tool.title) {
+    if (tool.title === tool.name) return ''
     return isFilePathTool(tool.name) ? basenameFromPath(tool.title) : tool.title
   }
 
