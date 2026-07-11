@@ -158,7 +158,7 @@ export function CanvasMinimap({
     >
       {/* Header bar — always visible */}
       <div
-        className="flex items-center justify-between px-2 py-1 bg-[#1a2030]/95 backdrop-blur-sm border border-border/40 rounded-t-lg cursor-pointer"
+        className="flex items-center justify-between px-2 py-1 bg-[var(--canvas-toolbar)] backdrop-blur-sm border border-border/40 rounded-t-lg cursor-pointer"
         style={{ width: MINIMAP_W, borderBottom: collapsed ? undefined : 'none', borderRadius: collapsed ? '8px' : undefined }}
         onClick={() => setCollapsed((c) => !c)}
       >
@@ -180,7 +180,7 @@ export function CanvasMinimap({
       {/* Minimap body */}
       {!collapsed && (
         <div
-          className="bg-[#0d1117]/95 backdrop-blur-sm border border-border/40 border-t-0 rounded-b-lg overflow-hidden"
+          className="bg-[var(--canvas-bg)] backdrop-blur-sm border border-border/40 border-t-0 rounded-b-lg overflow-hidden"
           style={{ width: MINIMAP_W }}
         >
           {/* SVG minimap */}

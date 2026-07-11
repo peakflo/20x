@@ -1,12 +1,12 @@
 # 20x Design System — "Aperture"
 
 A ground-up visual language for 20x, replacing the previous dark-only
-"Cursor Midnight" theme. Aperture blends two references:
+"Cursor Midnight" theme. Aperture pairs two ideas:
 
-- **AFFiNE** — the *spatial system*: calm neutral surfaces, hairline (1px)
-  borders, generous whitespace, frosted translucent chrome, structured layout.
-- **LobeChat** — the *component warmth*: soft radii, gentle layered shadows, a
-  refined brand accent, smooth micro-interactions, pill-shaped controls.
+- A **structured spatial system** — calm neutral surfaces, hairline (1px)
+  borders, generous whitespace, frosted translucent chrome, clear layout rhythm.
+- **Warm, refined controls** — soft radii, gentle layered shadows, a
+  distinctive brand accent, smooth micro-interactions, pill-shaped controls.
 
 It ships **full light + dark** support (previously the app was dark-only).
 
@@ -59,7 +59,7 @@ re-skinned the app automatically.
 | `warning` | `#d9820b` | `#f0a63c` |
 
 The dark theme moved from the old **blue-tinted** grays to a **neutral
-charcoal** (AFFiNE/LobeChat style). Widely-used Tailwind accent shades
+charcoal**. Widely-used Tailwind accent shades
 (`text-*-400`) are darkened in light mode via variable overrides so status
 colors stay legible on paper without editing 90+ files.
 

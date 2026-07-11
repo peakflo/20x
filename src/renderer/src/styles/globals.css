@@ -2,9 +2,9 @@
 
 /* ══════════════════════════════════════════════════════════════════════════
    20x Design System — "Aperture"
-   A ground-up visual language blending AFFiNE's calm, structured spatial
-   system (hairline borders, generous whitespace, frosted chrome) with
-   LobeChat's warmth (soft radii, gentle shadows, refined controls).
+   A ground-up visual language: a calm, structured spatial system (hairline
+   borders, generous whitespace, frosted translucent chrome) paired with warm,
+   refined controls (soft radii, gentle layered shadows, a distinctive accent).
    Full light + dark support driven by the `.dark` class on <html>.
    ══════════════════════════════════════════════════════════════════════════ */
 
@@ -41,7 +41,7 @@
   --color-sidebar-accent: var(--sidebar-accent);
   --color-sidebar-muted: var(--sidebar-muted);
 
-  /* Radii — softer, LobeChat-inspired */
+  /* Radii — soft and rounded */
   --radius-xs: 6px;
   --radius-sm: 8px;
   --radius-md: 10px;
@@ -54,7 +54,7 @@
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
 }
 
-/* ── Light theme (default) — warm paper, AFFiNE-like ──────────────────────── */
+/* ── Light theme (default) — warm paper ───────────────────────────────────── */
 :root {
   --background: #f7f7f5;
   --foreground: #1a1a1c;
@@ -90,6 +90,13 @@
   --chrome: rgba(247, 247, 245, 0.72);
   --chrome-solid: #f7f7f5;
   --overlay: rgba(24, 24, 27, 0.32);
+
+  /* Infinite-canvas surfaces */
+  --canvas-bg: #ecece8;
+  --canvas-panel: #ffffff;
+  --canvas-chrome: #f4f4f1;
+  --canvas-toolbar: rgba(255, 255, 255, 0.9);
+  --canvas-dot: rgba(24, 24, 27, 0.10);
 
   /* Elevation — soft, warm-gray shadows */
   --shadow-xs: 0 1px 2px rgba(24, 24, 27, 0.05);
@@ -136,6 +143,13 @@
   --chrome: rgba(19, 19, 22, 0.68);
   --chrome-solid: #131316;
   --overlay: rgba(0, 0, 0, 0.6);
+
+  /* Infinite-canvas surfaces (neutral charcoal, matching the dark theme) */
+  --canvas-bg: #0f0f12;
+  --canvas-panel: #1b1b1f;
+  --canvas-chrome: #202024;
+  --canvas-toolbar: rgba(27, 27, 31, 0.9);
+  --canvas-dot: rgba(255, 255, 255, 0.06);
 
   --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.3);
   --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.4);
