@@ -12,7 +12,7 @@ import { useSkillStore } from '@/stores/skill-store'
 import { SkillSelectorDialog } from '@/components/skills/SkillSelectorDialog'
 import { SecretSelector } from '@/components/secrets/SecretSelector'
 import { CLAUDE_REASONING_EFFORT_VALUES, CODEX_REASONING_EFFORT_VALUES } from '@shared/reasoning-effort'
-import type { Agent, CreateAgentDTO, UpdateAgentDTO, AgentMcpServerEntry, ClaudeAuthMethod, AgentPermissionMode } from '@/types'
+import type { Agent, CreateAgentDTO, UpdateAgentDTO, AgentMcpServerEntry, ClaudeAuthMethod, AgentPermissionMode, AgentSandboxMode } from '@/types'
 import type { ReasoningEffort } from '@/types'
 import { CodingAgentType, CODING_AGENTS, CLAUDE_MODELS, CODEX_MODELS } from '@/types'
 
@@ -63,6 +63,9 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
   )
   const [permissionMode, setPermissionMode] = useState<AgentPermissionMode>(
     agent?.config.permission_mode ?? 'ask'
+  )
+  const [sandboxMode, setSandboxMode] = useState<AgentSandboxMode>(
+    agent?.config.sandbox_mode ?? 'workspace-write'
   )
 
   // API keys state
@@ -229,6 +232,7 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
           ? authMethod
           : undefined,
         permission_mode: permissionMode,
+        sandbox_mode: codingAgent === CodingAgentType.CODEX ? sandboxMode : undefined,
         system_prompt: systemPrompt.trim() || undefined,
         max_parallel_sessions: maxParallelSessions,
         mcp_servers: mcpServersConfig.length > 0 ? mcpServersConfig : undefined,
@@ -369,10 +373,25 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
             </select>
             <p className="text-xs text-muted-foreground">
               {codingAgent === CodingAgentType.CODEX
-                ? 'Allow automatically auto-approves Codex ACP permission requests for this agent.'
+                ? 'Allow automatically auto-approves Codex permission requests for this agent.'
                 : 'Controls how this agent handles tool and command approval prompts.'}
             </p>
           </div>
+          {codingAgent === CodingAgentType.CODEX && (
+            <div className="space-y-1.5">
+              <Label htmlFor="agent-sandbox-mode">Sandbox</Label>
+              <select
+                id="agent-sandbox-mode"
+                value={sandboxMode}
+                onChange={(e) => setSandboxMode(e.target.value as AgentSandboxMode)}
+                className="w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm cursor-pointer"
+              >
+                <option value="read-only">Read only</option>
+                <option value="workspace-write">Workspace write</option>
+                <option value="danger-full-access">Full access</option>
+              </select>
+            </div>
+          )}
           <div className="space-y-1.5">
             <Label htmlFor="agent-model">Model</Label>
           <div className="relative">

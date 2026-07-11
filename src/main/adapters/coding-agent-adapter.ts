@@ -52,6 +52,7 @@ export interface SessionConfig {
   /** Claude Code auth method: 'subscription' (OAuth/Pro/Max) or 'api_key' (pay-per-use). Defaults to 'subscription'. */
   authMethod?: 'subscription' | 'api_key'
   permissionMode?: 'ask' | 'allow'
+  sandboxMode?: 'read-only' | 'workspace-write' | 'danger-full-access'
   apiKeys?: {
     openai?: string
     anthropic?: string

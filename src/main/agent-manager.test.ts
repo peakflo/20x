@@ -44,6 +44,7 @@ vi.mock('electron', () => {
 vi.mock('./adapters/opencode-adapter', () => ({ OpencodeAdapter: vi.fn() }))
 vi.mock('./adapters/claude-code-adapter', () => ({ ClaudeCodeAdapter: vi.fn() }))
 vi.mock('./adapters/acp-adapter', () => ({ AcpAdapter: vi.fn() }))
+vi.mock('./adapters/codex-app-server-adapter', () => ({ CodexAppServerAdapter: vi.fn() }))
 vi.mock('./task-api-server', () => ({ getTaskApiPort: vi.fn(), waitForTaskApiServer: vi.fn() }))
 vi.mock('./secret-broker', () => ({
   registerSecretSession: vi.fn(),
@@ -54,6 +55,8 @@ vi.mock('./secret-broker', () => ({
 
 import { mkdir as mkdirAsync, writeFile as writeFileAsync } from 'fs/promises'
 import { existsSync, copyFileSync, mkdirSync, readFileSync } from 'fs'
+import { AcpAdapter } from './adapters/acp-adapter'
+import { CodexAppServerAdapter } from './adapters/codex-app-server-adapter'
 
 const mockedMkdirAsync = vi.mocked(mkdirAsync)
 const mockedWriteFileAsync = vi.mocked(writeFileAsync)
@@ -121,6 +124,32 @@ let manager: AgentManager
 describe('AgentManager skill file paths', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    delete process.env.CODEX_APP_SERVER
+  })
+
+  describe('getAdapter', () => {
+    it('uses Codex app-server by default for Codex agents', () => {
+      const mockDb = createMockDb({ coding_agent: 'codex' })
+      manager = new AgentManager(mockDb)
+
+      const adapter = (manager as any).getAdapter('agent-1')
+
+      expect(adapter).toBeInstanceOf(CodexAppServerAdapter)
+      expect(CodexAppServerAdapter).toHaveBeenCalledOnce()
+      expect(AcpAdapter).not.toHaveBeenCalled()
+    })
+
+    it('keeps an explicit ACP fallback for Codex agents', () => {
+      process.env.CODEX_APP_SERVER = '0'
+      const mockDb = createMockDb({ coding_agent: 'codex' })
+      manager = new AgentManager(mockDb)
+
+      const adapter = (manager as any).getAdapter('agent-1')
+
+      expect(adapter).toBeInstanceOf(AcpAdapter)
+      expect(AcpAdapter).toHaveBeenCalledWith('codex')
+      expect(CodexAppServerAdapter).not.toHaveBeenCalled()
+    })
   })
 
   describe('shouldEnableTillDone', () => {

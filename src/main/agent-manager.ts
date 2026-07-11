@@ -13,6 +13,7 @@ import type { GitLabManager } from './gitlab-manager'
 import { OpencodeAdapter } from './adapters/opencode-adapter'
 import { ClaudeCodeAdapter } from './adapters/claude-code-adapter'
 import { AcpAdapter } from './adapters/acp-adapter'
+import { CodexAppServerAdapter } from './adapters/codex-app-server-adapter'
 import type { CodingAgentAdapter, SessionConfig, MessagePart, SessionMessage, McpServerConfig } from './adapters/coding-agent-adapter'
 import { SessionStatusType, MessagePartType, MessageRole } from './adapters/coding-agent-adapter'
 import { getTaskApiPort, waitForTaskApiServer } from './task-api-server'
@@ -414,8 +415,13 @@ export class AgentManager extends EventEmitter {
         adapter = new ClaudeCodeAdapter()
         break
       case CodingAgentType.CODEX:
-        console.log('[AgentManager] Creating new AcpAdapter for Codex')
-        adapter = new AcpAdapter('codex')
+        if (process.env.CODEX_APP_SERVER === '0') {
+          console.log('[AgentManager] Creating new AcpAdapter for Codex')
+          adapter = new AcpAdapter('codex')
+        } else {
+          console.log('[AgentManager] Creating new CodexAppServerAdapter for Codex')
+          adapter = new CodexAppServerAdapter()
+        }
         break
       default:
         console.warn(`[AgentManager] Unknown coding agent type: ${backendType}`)
@@ -574,6 +580,7 @@ export class AgentManager extends EventEmitter {
       mcpServers,
       authMethod: agent.config?.auth_method,
       permissionMode: agent.config?.permission_mode,
+      sandboxMode: agent.config?.sandbox_mode,
       apiKeys: agent.config?.api_keys,
       tillDone: this.shouldEnableTillDone(taskId, task)
     }
@@ -1211,6 +1218,7 @@ export class AgentManager extends EventEmitter {
       mcpServers,
       authMethod: agent.config?.auth_method,
       permissionMode: agent.config?.permission_mode,
+      sandboxMode: agent.config?.sandbox_mode,
       apiKeys: agent.config?.api_keys,
       tillDone: this.shouldEnableTillDone(taskId, task)
     }
@@ -2274,6 +2282,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       mcpServers,
       authMethod: agent.config?.auth_method,
       permissionMode: agent.config?.permission_mode,
+      sandboxMode: agent.config?.sandbox_mode,
       apiKeys: agent.config?.api_keys,
       tillDone: this.shouldEnableTillDone(taskId, task)
     }
