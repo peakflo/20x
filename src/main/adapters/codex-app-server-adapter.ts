@@ -162,6 +162,11 @@ function stringifyForIpc(value: unknown, maxChars: number): string | undefined {
   }
 }
 
+function normalizeCodexMcpServerName(name: string): string {
+  const normalized = name.replace(/[^a-zA-Z0-9_-]+/g, '_').replace(/^_+|_+$/g, '')
+  return normalized || 'mcp_server'
+}
+
 function summarizeApproval(params: Record<string, unknown>, fallback: string): string {
   const command = asString(params.command)
   const reason = asString(params.reason)
@@ -630,8 +635,9 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
   private convertMcpServers(servers: Record<string, McpServerConfig>): Record<string, unknown> {
     const result: Record<string, unknown> = {}
     for (const [name, server] of Object.entries(servers)) {
+      const codexName = normalizeCodexMcpServerName(name)
       if (server.type === 'stdio') {
-        result[name] = {
+        result[codexName] = {
           command: server.command,
           args: server.args || [],
           env: server.env || {}
@@ -641,7 +647,7 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
         if (server.headers && Object.keys(server.headers).length > 0) {
           remoteConfig.http_headers = server.headers
         }
-        result[name] = remoteConfig
+        result[codexName] = remoteConfig
       }
     }
     return result

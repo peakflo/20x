@@ -356,7 +356,7 @@ describe('CodexAppServerAdapter', () => {
           args: ['server.js'],
           env: { TOKEN: 'secret' }
         },
-        remote: {
+        'Carousell MCP': {
           type: 'http',
           url: 'https://example.com/mcp',
           headers: { Authorization: 'Bearer token' }
@@ -372,7 +372,7 @@ describe('CodexAppServerAdapter', () => {
           args: ['server.js'],
           env: { TOKEN: 'secret' }
         },
-        remote: {
+        Carousell_MCP: {
           url: 'https://example.com/mcp',
           http_headers: { Authorization: 'Bearer token' }
         }
