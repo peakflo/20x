@@ -7,6 +7,29 @@ export type SortDirection = 'asc' | 'desc'
 export type ActiveModal = 'create' | 'edit' | 'delete' | 'settings' | 'repo-selector' | 'gh-setup' | null
 export type SidebarView = 'tasks' | 'skills' | 'dashboard' | 'canvas'
 
+// ── Persisted sidebar layout (localStorage) ──
+const SIDEBAR_WIDTH_KEY = 'ui-sidebar-width'
+const SIDEBAR_COLLAPSED_KEY = 'ui-sidebar-collapsed'
+const SIDEBAR_MIN_WIDTH = 220
+const SIDEBAR_MAX_WIDTH = 440
+const SIDEBAR_DEFAULT_WIDTH = 264
+
+function readStoredWidth(): number {
+  try {
+    const v = Number(localStorage.getItem(SIDEBAR_WIDTH_KEY))
+    return v >= SIDEBAR_MIN_WIDTH && v <= SIDEBAR_MAX_WIDTH ? v : SIDEBAR_DEFAULT_WIDTH
+  } catch {
+    return SIDEBAR_DEFAULT_WIDTH
+  }
+}
+function readStoredCollapsed(): boolean {
+  try {
+    return localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
 interface UIState {
   sidebarView: SidebarView
   statusFilter: TaskStatus | 'all'
@@ -29,6 +52,10 @@ interface UIState {
   createTaskPrefill: { title: string; description: string } | null
   /** Whether the Mastermind drawer is open (global) */
   showOrchestrator: boolean
+  /** Whether the contextual (tasks/skills) sidebar is collapsed (persisted) */
+  sidebarCollapsed: boolean
+  /** Contextual sidebar width in px (persisted) */
+  sidebarWidth: number
 
   setSidebarView: (view: SidebarView) => void
   setStatusFilter: (filter: TaskStatus | 'all') => void
@@ -61,6 +88,11 @@ interface UIState {
   /** Toggle the Mastermind orchestrator drawer */
   setShowOrchestrator: (show: boolean) => void
   toggleOrchestrator: () => void
+  /** Collapse/expand the contextual sidebar (persisted) */
+  toggleSidebarCollapsed: () => void
+  setSidebarCollapsed: (collapsed: boolean) => void
+  /** Set the contextual sidebar width (clamped + persisted) */
+  setSidebarWidth: (width: number) => void
 }
 
 export const useUIStore = create<UIState>((set) => ({
@@ -81,6 +113,8 @@ export const useUIStore = create<UIState>((set) => ({
   canvasPendingApp: null,
   createTaskPrefill: null,
   showOrchestrator: false,
+  sidebarCollapsed: readStoredCollapsed(),
+  sidebarWidth: readStoredWidth(),
 
   setSidebarView: (sidebarView) => set({ sidebarView }),
   setStatusFilter: (statusFilter) => set({ statusFilter }),
@@ -137,5 +171,19 @@ export const useUIStore = create<UIState>((set) => ({
   },
   clearCreateTaskPrefill: () => set({ createTaskPrefill: null }),
   setShowOrchestrator: (showOrchestrator) => set({ showOrchestrator }),
-  toggleOrchestrator: () => set((s) => ({ showOrchestrator: !s.showOrchestrator }))
+  toggleOrchestrator: () => set((s) => ({ showOrchestrator: !s.showOrchestrator })),
+  toggleSidebarCollapsed: () => set((s) => {
+    const sidebarCollapsed = !s.sidebarCollapsed
+    try { localStorage.setItem(SIDEBAR_COLLAPSED_KEY, sidebarCollapsed ? '1' : '0') } catch { /* ignore */ }
+    return { sidebarCollapsed }
+  }),
+  setSidebarCollapsed: (sidebarCollapsed) => {
+    try { localStorage.setItem(SIDEBAR_COLLAPSED_KEY, sidebarCollapsed ? '1' : '0') } catch { /* ignore */ }
+    set({ sidebarCollapsed })
+  },
+  setSidebarWidth: (width) => {
+    const clamped = Math.max(SIDEBAR_MIN_WIDTH, Math.min(SIDEBAR_MAX_WIDTH, Math.round(width)))
+    try { localStorage.setItem(SIDEBAR_WIDTH_KEY, String(clamped)) } catch { /* ignore */ }
+    set({ sidebarWidth: clamped })
+  }
 }))

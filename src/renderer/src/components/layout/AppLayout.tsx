@@ -25,14 +25,25 @@ import { useTaskSourceStore } from '@/stores/task-source-store'
 import { isOverdue, isSnoozed } from '@/lib/utils'
 import { TaskStatus, PluginActionId } from '@/types'
 import type { FileAttachment } from '@/types'
-import { MessageSquare, ExternalLink, LayoutDashboard, CheckSquare, Zap, Settings, Layers } from 'lucide-react'
+import { MessageSquare, ExternalLink, LayoutDashboard, CheckSquare, Zap, Settings, Layers, PanelLeftClose, PanelLeftOpen, Search } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { ThemeToggle } from './ThemeToggle'
+import { StatusBar } from './StatusBar'
+import { CommandPalette } from './CommandPalette'
 import type { SidebarView } from '@/stores/ui-store'
 import logo20x from '@/assets/logos/20x.svg'
 
 const isWindows = navigator.platform.toLowerCase().startsWith('win') || navigator.userAgent.includes('Windows')
+const isMac = navigator.platform.toLowerCase().includes('mac')
+const modKey = isMac ? '⌘' : 'Ctrl'
 const WINDOWS_TITLEBAR_ACTION_RIGHT = 168
+
+const NAV_ITEMS: { key: SidebarView; label: string; icon: typeof LayoutDashboard }[] = [
+  { key: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+  { key: 'canvas', label: 'Canvas', icon: Layers },
+  { key: 'tasks', label: 'Tasks', icon: CheckSquare },
+  { key: 'skills', label: 'Skills', icon: Zap }
+]
 
 export function AppLayout() {
   const { tasks, allTasks, selectedTask, createTask, updateTask, deleteTask, selectTask } = useTasks()
@@ -62,6 +73,11 @@ export function AppLayout() {
   const toggleOrchestrator = useUIStore((s) => s.toggleOrchestrator)
   const createTaskPrefill = useUIStore((s) => s.createTaskPrefill)
   const clearCreateTaskPrefill = useUIStore((s) => s.clearCreateTaskPrefill)
+  const sidebarCollapsed = useUIStore((s) => s.sidebarCollapsed)
+  const toggleSidebarCollapsed = useUIStore((s) => s.toggleSidebarCollapsed)
+
+  // ── Command palette ──
+  const [cmdOpen, setCmdOpen] = useState(false)
 
   // ── Update indicator state ──
   const [updateAvailableVersion, setUpdateAvailableVersion] = useState<string | null>(null)
@@ -170,12 +186,25 @@ export function AppLayout() {
     return () => window.removeEventListener('resize', update)
   }, [])
 
-  const NAV_ITEMS: { key: SidebarView; label: string; icon: typeof LayoutDashboard }[] = [
-    { key: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
-    { key: 'canvas', label: 'Canvas', icon: Layers },
-    { key: 'tasks', label: 'Tasks', icon: CheckSquare },
-    { key: 'skills', label: 'Skills', icon: Zap }
-  ]
+  // ── Global keyboard shortcuts: ⌘/Ctrl+K command palette, ⌘/Ctrl+1–4 view switch ──
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey) || e.altKey) return
+      if (e.key.toLowerCase() === 'k') {
+        e.preventDefault()
+        setCmdOpen((v) => !v)
+        return
+      }
+      const n = Number(e.key)
+      if (Number.isInteger(n) && n >= 1 && n <= NAV_ITEMS.length) {
+        e.preventDefault()
+        if (activeModal === 'settings') closeModal()
+        setSidebarView(NAV_ITEMS[n - 1].key)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [activeModal, closeModal, setSidebarView])
 
   return (
     <>
@@ -195,12 +224,45 @@ export function AppLayout() {
             )}
           </div>
           <span className="text-[15px] font-semibold tracking-tight text-foreground">20x</span>
+
+          {/* Sidebar collapse toggle — only for views that have a contextual sidebar */}
+          {(sidebarView === 'tasks' || sidebarView === 'skills') && activeModal !== 'settings' && (
+            <button
+              onClick={toggleSidebarCollapsed}
+              title={sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'}
+              className="ml-0.5 grid h-7 w-7 place-items-center rounded-lg text-muted-foreground hover:bg-accent hover:text-foreground transition-colors cursor-pointer"
+            >
+              {sidebarCollapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
+            </button>
+          )}
+
+          {/* Breadcrumb — current section */}
+          {(() => {
+            const item = activeModal === 'settings'
+              ? { label: 'Settings', icon: Settings }
+              : NAV_ITEMS.find((n) => n.key === sidebarView)
+            if (!item) return null
+            const Icon = item.icon
+            return (
+              <div className="flex items-center gap-1.5">
+                <span className="text-border/80 text-sm">/</span>
+                <Icon className="h-3.5 w-3.5 text-muted-foreground" />
+                <span className="text-[13px] font-medium text-foreground/90">{item.label}</span>
+              </div>
+            )
+          })()}
         </div>
 
-        {/* Current section — centered label (primary nav now lives in the left rail) */}
-        <div className="no-drag text-[13px] font-medium text-muted-foreground/90 pointer-events-none select-none">
-          {activeModal === 'settings' ? 'Settings' : NAV_ITEMS.find((n) => n.key === sidebarView)?.label ?? ''}
-        </div>
+        {/* Centered command/search launcher (⌘K) */}
+        <button
+          onClick={() => setCmdOpen(true)}
+          title="Search or run a command"
+          className="no-drag flex h-8 w-[240px] max-w-[34vw] items-center gap-2 rounded-lg border border-border/60 bg-muted/40 px-3 text-xs text-muted-foreground shadow-xs transition-colors hover:bg-accent hover:text-foreground cursor-pointer"
+        >
+          <Search className="h-3.5 w-3.5 shrink-0" />
+          <span className="flex-1 truncate text-left">Search or run a command…</span>
+          <kbd className="shrink-0 rounded border border-border bg-background/60 px-1.5 py-0.5 text-[10px]">{modKey}K</kbd>
+        </button>
 
         {/* Global actions — pinned right; offset on Windows to avoid native window controls. */}
         <div
@@ -232,7 +294,7 @@ export function AppLayout() {
       <div className="flex flex-1 min-h-0 overflow-hidden">
         {/* Primary navigation — slim vertical icon rail */}
         <nav className="no-drag flex w-14 flex-shrink-0 flex-col items-center gap-1 border-r border-sidebar-border bg-sidebar py-3">
-          {NAV_ITEMS.map(({ key, label, icon: Icon }) => {
+          {NAV_ITEMS.map(({ key, label, icon: Icon }, i) => {
             const active = sidebarView === key && activeModal !== 'settings'
             return (
               <button
@@ -241,9 +303,8 @@ export function AppLayout() {
                   if (activeModal === 'settings') closeModal()
                   setSidebarView(key)
                 }}
-                title={label}
                 aria-label={label}
-                className={`relative grid h-11 w-11 place-items-center rounded-xl transition-all duration-150 cursor-pointer ${
+                className={`group relative grid h-11 w-11 place-items-center rounded-xl transition-all duration-150 cursor-pointer ${
                   active
                     ? 'bg-primary/12 text-primary'
                     : 'text-muted-foreground hover:bg-accent hover:text-foreground'
@@ -253,13 +314,18 @@ export function AppLayout() {
                   <span className="absolute left-0 top-1/2 h-5 w-[3px] -translate-y-1/2 rounded-r-full bg-primary" />
                 )}
                 <Icon className="h-[18px] w-[18px]" />
+                {/* Hover flyout label + shortcut */}
+                <span className="pointer-events-none absolute left-full top-1/2 z-50 ml-2 flex -translate-y-1/2 translate-x-[-4px] items-center gap-2 whitespace-nowrap rounded-lg border border-border bg-popover px-2 py-1 text-xs font-medium text-foreground opacity-0 shadow-pop transition-all duration-150 group-hover:translate-x-0 group-hover:opacity-100">
+                  {label}
+                  <kbd className="rounded border border-border bg-muted px-1 text-[10px] text-muted-foreground">{modKey}{i + 1}</kbd>
+                </span>
               </button>
             )
           })}
         </nav>
 
-        {/* Sidebar — only for tasks and skills views */}
-        {sidebarView !== 'dashboard' && sidebarView !== 'canvas' && (
+        {/* Sidebar — only for tasks and skills views, and when not collapsed */}
+        {sidebarView !== 'dashboard' && sidebarView !== 'canvas' && !sidebarCollapsed && (
           <Sidebar
             tasks={tasks}
             selectedTaskId={selectedTask?.id || null}
@@ -269,8 +335,8 @@ export function AppLayout() {
           />
         )}
 
-        {/* Workspace — shrinks when orchestrator is open */}
-        <main className="flex flex-col flex-1 min-w-0 overflow-hidden bg-background transition-all duration-200">
+        {/* Workspace — floats as a rounded card, shrinks when orchestrator is open */}
+        <main className="flex flex-col flex-1 min-w-0 overflow-hidden rounded-2xl border border-border bg-card shadow-card m-2 transition-all duration-200">
           <div className="flex-1 h-0 overflow-hidden relative">
             {/* Canvas — always mounted so iframes/terminals survive navigation */}
             <div
@@ -362,6 +428,9 @@ export function AppLayout() {
           </div>
         </div>
       </div>
+
+      {/* Bottom status bar — live agent/task counts + version */}
+      <StatusBar />
 
       {/* Create Task Dialog — dismiss on outside click */}
       <Dialog open={activeModal === 'create'} onOpenChange={(open) => { if (!open) { closeModal(); clearCreateTaskPrefill() } }}>
@@ -549,6 +618,9 @@ export function AppLayout() {
           {toast.message}
         </div>
       )}
+
+      {/* Command palette (⌘K / Ctrl+K) */}
+      <CommandPalette open={cmdOpen} onOpenChange={setCmdOpen} />
 
       {/* Background progress toasts (setup, task progress, etc.) */}
       <ProgressToastStack />
