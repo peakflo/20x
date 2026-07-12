@@ -1,23 +1,23 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { EventEmitter } from 'node:events'
 
+// vi.mock is hoisted to the top of the file, so the factory can only reference
+// variables created with vi.hoisted() (which is hoisted alongside it).
+const mocks = vi.hoisted(() => ({ quick: vi.fn() }))
+
+vi.mock('cloudflared', () => ({
+  Tunnel: { quick: mocks.quick }
+}))
+
+// Import after the mock is registered.
+import { startTunnel, stopTunnel, getTunnelUrl, isTunnelActive } from './tunnel-manager'
+
 // Fake Tunnel that behaves like cloudflared's Tunnel EventEmitter.
 class FakeTunnel extends EventEmitter {
   stop = vi.fn(() => true)
 }
 
 let lastTunnel: FakeTunnel | null = null
-const quick = vi.fn(() => {
-  lastTunnel = new FakeTunnel()
-  return lastTunnel
-})
-
-vi.mock('cloudflared', () => ({
-  Tunnel: { quick }
-}))
-
-// Import after mock is registered.
-import { startTunnel, stopTunnel, getTunnelUrl, isTunnelActive } from './tunnel-manager'
 
 const URL = 'https://random-words.trycloudflare.com'
 
@@ -26,7 +26,11 @@ describe('tunnel-manager', () => {
     vi.useFakeTimers()
     stopTunnel() // reset module state between tests
     lastTunnel = null
-    quick.mockClear()
+    mocks.quick.mockReset()
+    mocks.quick.mockImplementation(() => {
+      lastTunnel = new FakeTunnel()
+      return lastTunnel
+    })
   })
 
   afterEach(() => {
@@ -93,7 +97,7 @@ describe('tunnel-manager', () => {
 
     // A fresh start spins up a new tunnel instead of returning the dead URL.
     const p2 = startTunnel(20620)
-    expect(quick).toHaveBeenCalledTimes(2)
+    expect(mocks.quick).toHaveBeenCalledTimes(2)
     lastTunnel!.emit('url', URL)
     lastTunnel!.emit('connected', { id: 'c2', ip: '1.2.3.4', location: 'SIN' })
     await expect(p2).resolves.toBe(URL)
