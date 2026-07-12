@@ -36,7 +36,7 @@ export function StatusBar() {
   }, [tasks])
 
   return (
-    <div className="frost flex-shrink-0 flex items-center gap-4 h-6 px-3 border-t border-border/70 text-[11px] text-muted-foreground select-none tabular-nums">
+    <div className="bg-background flex-shrink-0 flex items-center gap-4 h-6 px-3 text-[11px] text-muted-foreground select-none tabular-nums">
       <span className="flex items-center gap-1.5" title={`${runningAgents} agent session${runningAgents !== 1 ? 's' : ''} running`}>
         <span
           className={`h-1.5 w-1.5 rounded-full ${runningAgents > 0 ? 'bg-primary animate-pulse' : 'bg-muted-foreground/40'}`}

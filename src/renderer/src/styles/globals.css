@@ -56,7 +56,7 @@
 
 /* ── Light theme (default) — true-gray neutrals, azure brand ──────────────── */
 :root {
-  --background: #fafafa;
+  --background: #f4f4f5;
   --foreground: #121212;
   --card: #ffffff;
   --card-foreground: #121212;
@@ -64,11 +64,11 @@
   --popover-foreground: #121212;
   --primary: #1e96eb;
   --primary-foreground: #ffffff;
-  --secondary: #f4f4f5;
+  --secondary: #eaeaec;
   --secondary-foreground: #232323;
-  --muted: #f4f4f5;
+  --muted: #eeeeef;
   --muted-foreground: #8e8d91;
-  --accent: #eeeeef;
+  --accent: #e6e6e8;
   --accent-foreground: #121212;
   --destructive: #eb4335;
   --destructive-foreground: #ffffff;
@@ -87,8 +87,8 @@
   --sidebar-muted: #eeeeef;
 
   /* Frosted chrome surfaces (top bar / sidebar translucency) */
-  --chrome: rgba(250, 250, 250, 0.72);
-  --chrome-solid: #fafafa;
+  --chrome: rgba(244, 244, 245, 0.72);
+  --chrome-solid: #f4f4f5;
   --overlay: rgba(0, 0, 0, 0.30);
 
   /* Infinite-canvas surfaces */
