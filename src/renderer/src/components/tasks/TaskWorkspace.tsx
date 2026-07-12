@@ -5,6 +5,7 @@ import { SnoozeDialog } from './SnoozeDialog'
 import { IncompatibleSessionDialog } from './IncompatibleSessionDialog'
 import { TaskDetailView } from './TaskDetailView'
 import { AgentTranscriptPanel } from '@/components/agents/AgentTranscriptPanel'
+import { ChangesPanel } from './ChangesPanel'
 import { AgentApprovalBanner } from '@/components/agents/AgentApprovalBanner'
 import { GhCliSetupDialog } from '@/components/github/GhCliSetupDialog'
 import { OrgPickerDialog } from '@/components/github/OrgPickerDialog'
@@ -59,6 +60,8 @@ export function TaskWorkspace({
   const { removeSession, updateAgent } = useAgentStore()
   const { githubOrg, checkGhCli, checkGlabCli, setGithubOrg, fetchSettings } = useSettingsStore()
 
+  const [rightTab, setRightTab] = useState<'transcript' | 'changes'>('transcript')
+  const [changesSummary, setChangesSummary] = useState<{ files: number; additions: number; deletions: number } | null>(null)
   const [showGhSetup, setShowGhSetup] = useState(false)
   const [showOrgPicker, setShowOrgPicker] = useState(false)
   const [showRepoSelector, setShowRepoSelector] = useState(false)
@@ -718,22 +721,48 @@ Update existing skills that were helpful or create new ones for patterns worth r
         )}
 
         {showPanel && panelLayout !== 'task-only' && (
-          <div className="min-h-0 min-w-0 h-full">
-            <AgentTranscriptPanel
-              messages={session.messages}
-              status={session.status}
-              systemStatus={session.systemStatus}
-              onStop={handleAbort}
-              onRestart={handleStartFreshSession}
-              onSend={handleSend}
-              onPickAttachments={handlePickAttachments}
-              onAddAttachmentPaths={handleAddAttachmentPaths}
-              className="h-full"
-              sessionId={session.sessionId}
-              taskId={task.id}
-              agentId={task.agent_id ?? undefined}
-              pendingApproval={session.pendingApproval ?? undefined}
-            />
+          <div className="min-h-0 min-w-0 h-full flex flex-col">
+            {/* Transcript / Changes tab switcher */}
+            <div className="flex items-center gap-1 border-b border-border/60 px-3 pt-2 pb-1 flex-shrink-0">
+              {(['transcript', 'changes'] as const).map((tab) => (
+                <button
+                  key={tab}
+                  onClick={() => setRightTab(tab)}
+                  className={`flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors cursor-pointer ${
+                    rightTab === tab ? 'bg-accent text-foreground' : 'text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  <span className="capitalize">{tab}</span>
+                  {tab === 'changes' && changesSummary && changesSummary.files > 0 && (
+                    <span className="inline-flex items-center rounded-full bg-primary/15 px-1.5 text-[10px] font-semibold text-primary tabular-nums">
+                      {changesSummary.files}
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
+            {/* Both panels stay mounted: transcript preserves scroll/stream; Changes
+                fetches its diff so the tab badge reflects changes without opening it. */}
+            <div className={rightTab === 'transcript' ? 'flex-1 min-h-0' : 'hidden'}>
+              <AgentTranscriptPanel
+                messages={session.messages}
+                status={session.status}
+                systemStatus={session.systemStatus}
+                onStop={handleAbort}
+                onRestart={handleStartFreshSession}
+                onSend={handleSend}
+                onPickAttachments={handlePickAttachments}
+                onAddAttachmentPaths={handleAddAttachmentPaths}
+                className="h-full"
+                sessionId={session.sessionId}
+                taskId={task.id}
+                agentId={task.agent_id ?? undefined}
+                pendingApproval={session.pendingApproval ?? undefined}
+              />
+            </div>
+            <div className={rightTab === 'changes' ? 'flex-1 min-h-0' : 'hidden'}>
+              <ChangesPanel taskId={task.id} repos={task.repos} className="h-full" onSummary={setChangesSummary} />
+            </div>
           </div>
         )}
 

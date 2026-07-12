@@ -203,6 +203,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('worktree:setup', taskId, repos, org, provider),
     cleanup: (taskId: string, repos: { fullName: string }[], org: string, removeTaskDir?: boolean): Promise<void> =>
       ipcRenderer.invoke('worktree:cleanup', taskId, repos, org, removeTaskDir),
+    changes: (taskId: string, repos: { fullName: string }[]): Promise<Array<{ repo: string; diff: string; error?: string; noWorktree?: boolean; path?: string; branch?: string; pushed?: boolean; prNumber?: number; prUrl?: string; prState?: string; prTitle?: string; ciStatus?: 'passing' | 'failing' | 'pending' | 'none' }>> =>
+      ipcRenderer.invoke('worktree:changes', taskId, repos),
     runCleanupNow: (): Promise<{ cleaned: number; errors: string[] }> =>
       ipcRenderer.invoke('workspace:runCleanupNow')
   },

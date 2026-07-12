@@ -256,4 +256,172 @@ export class WorktreeManager {
       }
     }
   }
+
+  /**
+   * Collect the working-tree diff for each of a task's repo worktrees.
+   * Returns one raw unified diff per repo — tracked changes vs HEAD plus
+   * untracked files rendered via `git diff --no-index` (read-only; never
+   * mutates the index). Repos without a worktree yet are skipped; per-repo
+   * failures are reported rather than thrown so one bad repo can't hide the rest.
+   */
+  async getTaskChanges(
+    taskId: string,
+    repos: { fullName: string }[]
+  ): Promise<Array<{ repo: string; diff: string; error?: string; noWorktree?: boolean; path?: string; branch?: string; pushed?: boolean; prNumber?: number; prUrl?: string; prState?: string; prTitle?: string; ciStatus?: 'passing' | 'failing' | 'pending' | 'none' }>> {
+    const results: Array<{ repo: string; diff: string; error?: string; noWorktree?: boolean; path?: string; branch?: string; pushed?: boolean; prNumber?: number; prUrl?: string; prState?: string; prTitle?: string; ciStatus?: 'passing' | 'failing' | 'pending' | 'none' }> = []
+    const gitOpts = { maxBuffer: 64 * 1024 * 1024 }
+
+    for (const repo of repos) {
+      const repoName = repo.fullName.split('/').pop() || repo.fullName
+      const wtPath = this.worktreePath(taskId, repoName)
+      if (!existsSync(wtPath)) {
+        console.log(`[WorktreeManager] getTaskChanges: no worktree for ${repo.fullName} at ${wtPath}`)
+        results.push({ repo: repo.fullName, diff: '', noWorktree: true, path: wtPath })
+        continue
+      }
+
+      try {
+        // Agents auto-commit, so "uncommitted only" (git diff HEAD) is usually
+        // empty. We want the task's whole diff: base branch → current work
+        // (committed + uncommitted). Discover the base branch this worktree
+        // forked from, then diff against the merge-base.
+        let baseRef = ''
+        try {
+          const { stdout } = await execFileAsync(
+            'git', ['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'],
+            { cwd: wtPath, ...gitOpts }
+          )
+          baseRef = stdout.trim() // e.g. "origin/main"
+        } catch { /* origin/HEAD not set */ }
+        if (!baseRef) {
+          for (const cand of ['origin/main', 'origin/master', 'main', 'master']) {
+            try {
+              await execFileAsync('git', ['rev-parse', '--verify', '--quiet', cand], { cwd: wtPath, ...gitOpts })
+              baseRef = cand
+              break
+            } catch { /* not this candidate */ }
+          }
+        }
+
+        // Diff target: merge-base with the base branch (captures committed work);
+        // fall back to HEAD (uncommitted only) if no base can be resolved.
+        let against = 'HEAD'
+        if (baseRef) {
+          try {
+            const { stdout } = await execFileAsync('git', ['merge-base', 'HEAD', baseRef], { cwd: wtPath, ...gitOpts })
+            const mergeBase = stdout.trim()
+            if (mergeBase) against = mergeBase
+          } catch { /* keep HEAD */ }
+        }
+
+        // `git diff <against>` compares that commit to the WORKING TREE, so the
+        // patch includes both committed and uncommitted changes.
+        let tracked = ''
+        try {
+          const { stdout } = await execFileAsync(
+            'git', ['-c', 'core.quotepath=false', 'diff', '--no-color', against],
+            { cwd: wtPath, ...gitOpts }
+          )
+          tracked = stdout
+        } catch (e) {
+          const err = e as { stdout?: string }
+          tracked = err.stdout ?? ''
+        }
+
+        // Untracked files → new-file patches (no index mutation).
+        let untracked = ''
+        try {
+          const { stdout } = await execFileAsync(
+            'git', ['ls-files', '--others', '--exclude-standard', '-z'],
+            { cwd: wtPath, ...gitOpts }
+          )
+          for (const file of stdout.split('\0').filter(Boolean)) {
+            try {
+              await execFileAsync(
+                'git', ['diff', '--no-color', '--no-index', '--', '/dev/null', file],
+                { cwd: wtPath, ...gitOpts }
+              )
+            } catch (e) {
+              // --no-index exits 1 when files differ; the patch is on stdout.
+              const err = e as { stdout?: string }
+              if (err.stdout) untracked += err.stdout
+            }
+          }
+        } catch {
+          // Ignore untracked enumeration failures.
+        }
+
+        // Branch + PR metadata so the UI can group changes by branch / PR.
+        let branch: string | undefined
+        try {
+          const { stdout } = await execFileAsync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: wtPath, ...gitOpts })
+          const b = stdout.trim()
+          branch = b && b !== 'HEAD' ? b : undefined
+        } catch { /* detached HEAD */ }
+
+        let pushed = false
+        if (branch) {
+          try {
+            await execFileAsync('git', ['rev-parse', '--verify', '--quiet', `origin/${branch}`], { cwd: wtPath, ...gitOpts })
+            pushed = true
+          } catch { /* branch not on remote yet */ }
+        }
+
+        // Best-effort PR/MR lookup (only when the branch is pushed).
+        let prNumber: number | undefined
+        let prUrl: string | undefined
+        let prState: string | undefined
+        let prTitle: string | undefined
+        let ciStatus: 'passing' | 'failing' | 'pending' | 'none' | undefined
+        if (branch && pushed) {
+          let provider: 'github' | 'gitlab' | 'other' = 'other'
+          try {
+            const { stdout } = await execFileAsync('git', ['remote', 'get-url', 'origin'], { cwd: wtPath, ...gitOpts })
+            const url = stdout.toLowerCase()
+            if (url.includes('gitlab')) provider = 'gitlab'
+            else if (url.includes('github')) provider = 'github'
+          } catch { /* ignore */ }
+
+          try {
+            if (provider === 'github') {
+              const { stdout } = await execFileAsync(
+                'gh', ['pr', 'view', branch, '--json', 'number,url,state,title,statusCheckRollup'],
+                { cwd: wtPath, timeout: 8000, ...gitOpts }
+              )
+              const j = JSON.parse(stdout) as {
+                number?: number; url?: string; state?: string; title?: string
+                statusCheckRollup?: Array<{ status?: string; conclusion?: string; state?: string }>
+              }
+              prNumber = j.number; prUrl = j.url; prState = j.state; prTitle = j.title
+              // Aggregate all check runs / status contexts into a single rollup.
+              const items = j.statusCheckRollup
+              if (!items || items.length === 0) {
+                ciStatus = 'none'
+              } else {
+                let pending = false
+                let failing = false
+                for (const it of items) {
+                  if (it.status && it.status !== 'COMPLETED') { pending = true; continue }
+                  const s = (it.conclusion || it.state || '').toUpperCase()
+                  if (['FAILURE', 'ERROR', 'CANCELLED', 'TIMED_OUT', 'ACTION_REQUIRED', 'STARTUP_FAILURE'].includes(s)) failing = true
+                  else if (['PENDING', 'EXPECTED', 'REQUESTED', 'WAITING', 'QUEUED', 'IN_PROGRESS'].includes(s)) pending = true
+                }
+                ciStatus = failing ? 'failing' : pending ? 'pending' : 'passing'
+              }
+            } else if (provider === 'gitlab') {
+              const { stdout } = await execFileAsync('glab', ['mr', 'list', '--source-branch', branch, '--output', 'json'], { cwd: wtPath, timeout: 8000, ...gitOpts })
+              const arr = JSON.parse(stdout) as Array<{ iid?: number; web_url?: string; state?: string; title?: string }>
+              if (Array.isArray(arr) && arr[0]) { prNumber = arr[0].iid; prUrl = arr[0].web_url; prState = arr[0].state; prTitle = arr[0].title }
+            }
+          } catch { /* no PR/MR, or CLI unavailable */ }
+        }
+
+        results.push({ repo: repo.fullName, diff: tracked + untracked, branch, pushed, prNumber, prUrl, prState, prTitle, ciStatus })
+      } catch (e) {
+        results.push({ repo: repo.fullName, diff: '', error: (e as Error).message })
+      }
+    }
+
+    return results
+  }
 }
