@@ -42,8 +42,13 @@ describe('tunnel-manager', () => {
     const p = startTunnel(20620)
     const t = lastTunnel!
 
-    // Forces the IPv4 edge to avoid the slow/broken IPv6 DNS path behind VPNs.
-    expect(mocks.quick).toHaveBeenCalledWith('http://localhost:20620', { '--edge-ip-version': 4 })
+    // Origin dials 127.0.0.1 (IPv4-only server). Passes an isolated --config so
+    // a user's ~/.cloudflared/config.yml (ingress -> http_status:404) is ignored,
+    // and --edge-ip-version 4 to avoid the slow/broken IPv6 DNS path behind VPNs.
+    expect(mocks.quick).toHaveBeenCalledWith(
+      'http://127.0.0.1:20620',
+      expect.objectContaining({ '--edge-ip-version': 4, '--config': expect.stringContaining('cloudflared') })
+    )
 
     // URL is printed by cloudflared before the edge connection is up.
     t.emit('url', URL)
