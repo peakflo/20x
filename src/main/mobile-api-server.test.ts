@@ -101,13 +101,13 @@ describe('mobile-api-server: route matching', () => {
   })
 })
 
-describe('mobile-api-server: auth token logging', () => {
+describe('mobile-api-server: auth', () => {
   afterEach(() => {
     stopMobileApiServer()
     vi.restoreAllMocks()
   })
 
-  it('does not log the generated mobile auth token', async () => {
+  it('starts without storing any plaintext credentials', async () => {
     const { db } = createTestDb()
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
 
@@ -118,14 +118,15 @@ describe('mobile-api-server: auth token logging', () => {
       0
     )
 
-    const token = db.getSetting('mobile_auth_token')
-    expect(token).toBeTruthy()
+    // Old single-token auth is gone — no mobile_auth_token should be stored
+    const legacyToken = db.getSetting('mobile_auth_token')
+    expect(legacyToken).toBeFalsy()
 
-    const logs = logSpy.mock.calls
-      .map((call) => call.map(String).join(' '))
-      .join('\n')
+    // No session tokens should appear in logs (sessions are created on pairing, not startup)
+    const sessions = db.getMobileSessions()
+    expect(sessions).toHaveLength(0)
 
-    expect(logs).toContain('generated new token')
-    expect(logs).not.toContain(token)
+    const logs = logSpy.mock.calls.map((call) => call.map(String).join(' ')).join('\n')
+    expect(logs).toContain('[MobileAPI] Started on port')
   })
 })

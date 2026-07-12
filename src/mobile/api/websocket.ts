@@ -44,11 +44,16 @@ export function connectWebSocket(): void {
     return
   }
 
-  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
   const MOBILE_API_PORT = '20620'
-  const host = window.location.port !== MOBILE_API_PORT
-    ? `${window.location.hostname}:${MOBILE_API_PORT}`
-    : window.location.host
+  // When served via a reverse proxy (Cloudflare tunnel, https with no explicit port),
+  // use same-origin WebSocket — the proxy handles the port mapping.
+  const isBehindProxy = window.location.protocol === 'https:' && !window.location.port
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+  const host = isBehindProxy
+    ? window.location.host
+    : window.location.port !== MOBILE_API_PORT
+      ? `${window.location.hostname}:${MOBILE_API_PORT}`
+      : window.location.host
   let url = `${protocol}//${host}/ws`
   const token = getAuthToken()
   if (token) url += `?token=${encodeURIComponent(token)}`

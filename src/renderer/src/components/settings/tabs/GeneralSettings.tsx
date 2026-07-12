@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import QRCode from 'qrcode'
 import { Wrench, RefreshCw, Download, Check, Loader2, Trash2 } from 'lucide-react'
 import { SettingsSection } from '../SettingsSection'
 import { Label } from '@/components/ui/Label'
@@ -12,7 +13,14 @@ export function GeneralSettings() {
   const [launchAtStartup, setLaunchAtStartup] = useState(false)
   const [notificationsEnabled, setNotificationsEnabled] = useState(false)
   const [minimizeToTray, setMinimizeToTray] = useState(false)
-  const [mobileUrl, setMobileUrl] = useState('')
+  const [mobileLanUrl, setMobileLanUrl] = useState('')
+  const [mobileTunnelUrl, setMobileTunnelUrl] = useState<string | null>(null)
+  const [tunnelActive, setTunnelActive] = useState(false)
+  const [tunnelLoading, setTunnelLoading] = useState(false)
+  const [qrDataUrl, setQrDataUrl] = useState<string | null>(null)
+  const [pairingPin, setPairingPin] = useState<string | null>(null)
+  const [pinSecondsLeft, setPinSecondsLeft] = useState(0)
+  const [sessions, setSessions] = useState<{ id: string; device_name: string; paired_at: number; last_seen: number }[]>([])
   const [loading, setLoading] = useState(true)
 
   // Updater state
@@ -123,11 +131,42 @@ const [currentVersion, setCurrentVersion] = useState<string | null>(null)
       // Load mobile URL separately so its failure doesn't block other settings
       try {
         const info = await mobileApi.getInfo()
-        setMobileUrl(info.url)
+        setMobileLanUrl(info.lanUrl)
+        setMobileTunnelUrl(info.tunnelUrl)
+        setTunnelActive(info.tunnelActive)
+        const qrUrl = info.tunnelUrl ?? info.lanUrl ?? info.url
+        if (qrUrl) {
+          const dataUrl = await QRCode.toDataURL(qrUrl, { width: 200, margin: 1 })
+          setQrDataUrl(dataUrl)
+        }
       } catch (error) {
         console.error('Failed to load mobile URL:', error)
-        setMobileUrl('')
       }
+
+      // Load connected devices
+      try {
+        const s = await mobileApi.getSessions()
+        setSessions(s)
+      } catch { /* ignore */ }
+
+      // Listen for pairing PIN from mobile client
+      mobileApi.onPairingInitiated(({ pin, expiresAt }) => {
+        setPairingPin(pin)
+        const tick = () => {
+          const left = Math.max(0, Math.floor(expiresAt - Date.now() / 1000))
+          setPinSecondsLeft(left)
+          if (left > 0) setTimeout(tick, 1000)
+          else setPairingPin(null)
+        }
+        tick()
+      })
+
+      // Refresh sessions when device connects
+      mobileApi.onDeviceConnected(async () => {
+        const s = await mobileApi.getSessions()
+        setSessions(s)
+        setPairingPin(null)
+      })
 
       // Load current app version
       try {
@@ -228,24 +267,23 @@ const [currentVersion, setCurrentVersion] = useState<string | null>(null)
     </SettingsSection>
 
     <SettingsSection
-      title="Mobile Web"
-      description="Access 20x from your phone or tablet on the same network"
+      title="Connect Phone"
+      description="Access 20x from your phone or any browser"
     >
       <div className="space-y-4">
+        {/* LAN URL row */}
         <div className="flex items-center justify-between py-2 border-b border-border">
           <div className="space-y-0.5">
-            <Label>Address</Label>
-            <p className="text-xs text-muted-foreground">
-              Open this URL on any device connected to the same Wi-Fi
-            </p>
+            <Label>Local network</Label>
+            <p className="text-xs text-muted-foreground">Works on same Wi-Fi</p>
           </div>
-          {mobileUrl ? (
+          {mobileLanUrl ? (
             <div className="flex items-center gap-2">
-              <code className="text-sm font-mono bg-accent/50 rounded px-2.5 py-1 text-foreground select-all">
-                {mobileUrl}
+              <code className="text-sm font-mono bg-accent/50 rounded px-2.5 py-1 text-foreground select-all max-w-[260px] truncate">
+                {mobileLanUrl.split('#')[0]}
               </code>
               <button
-                onClick={() => navigator.clipboard.writeText(mobileUrl)}
+                onClick={() => navigator.clipboard.writeText(mobileLanUrl)}
                 className="p-1.5 rounded-md hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
                 title="Copy URL"
               >
@@ -260,6 +298,152 @@ const [currentVersion, setCurrentVersion] = useState<string | null>(null)
             <span className="text-sm text-muted-foreground">Unavailable</span>
           )}
         </div>
+
+        {/* Remote access toggle */}
+        <div className="flex items-center justify-between py-2 border-b border-border">
+          <div className="space-y-0.5">
+            <Label>Remote access</Label>
+            <p className="text-xs text-muted-foreground">
+              {tunnelActive
+                ? 'Accessible from anywhere via Cloudflare tunnel'
+                : 'Enable to access from outside your network'}
+            </p>
+          </div>
+          <Switch
+            checked={tunnelActive}
+            disabled={tunnelLoading}
+            onCheckedChange={async (checked) => {
+              setTunnelLoading(true)
+              try {
+                if (checked) {
+                  const { tunnelUrl: url } = await mobileApi.startTunnel()
+                  setMobileTunnelUrl(url)
+                  setTunnelActive(true)
+                  if (url) {
+                    const dataUrl = await QRCode.toDataURL(url, { width: 200, margin: 1 })
+                    setQrDataUrl(dataUrl)
+                  }
+                } else {
+                  await mobileApi.stopTunnel()
+                  setMobileTunnelUrl(null)
+                  setTunnelActive(false)
+                  if (mobileLanUrl) {
+                    const dataUrl = await QRCode.toDataURL(mobileLanUrl, { width: 200, margin: 1 })
+                    setQrDataUrl(dataUrl)
+                  }
+                }
+              } catch (err) {
+                console.error('Tunnel toggle failed:', err)
+              } finally {
+                setTunnelLoading(false)
+              }
+            }}
+          />
+        </div>
+
+        {/* Tunnel URL row */}
+        {tunnelActive && mobileTunnelUrl && (
+          <div className="flex items-center justify-between py-2 border-b border-border">
+            <div className="space-y-0.5">
+              <Label>Remote URL</Label>
+              <p className="text-xs text-muted-foreground">Share or scan to connect</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <code className="text-sm font-mono bg-accent/50 rounded px-2.5 py-1 text-foreground select-all max-w-[260px] truncate">
+                {mobileTunnelUrl.split('#')[0]}
+              </code>
+              <button
+                onClick={() => navigator.clipboard.writeText(mobileTunnelUrl)}
+                className="p-1.5 rounded-md hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
+                title="Copy URL"
+              >
+                <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>
+                </svg>
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* QR code + PIN overlay */}
+        {qrDataUrl && (
+          <div className="flex flex-col items-center gap-3 pt-2">
+            <div className="relative">
+              <img src={qrDataUrl} alt="QR code" className="rounded-lg border border-border" width={200} height={200} />
+              {/* PIN overlay — shown when phone has scanned and is waiting for PIN */}
+              {pairingPin && (
+                <div className="absolute inset-0 bg-background/95 rounded-lg flex flex-col items-center justify-center gap-2">
+                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Enter this PIN on your phone</p>
+                  <div className="flex gap-1.5">
+                    {pairingPin.split('').map((d, i) => (
+                      <span key={i} className="w-8 h-10 flex items-center justify-center bg-accent rounded-md text-xl font-mono font-bold text-foreground">
+                        {d}
+                      </span>
+                    ))}
+                  </div>
+                  <p className="text-xs text-muted-foreground">Expires in {pinSecondsLeft}s</p>
+                </div>
+              )}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              {pairingPin ? 'Phone is waiting for PIN' : tunnelActive ? 'Scan from anywhere' : 'Scan on same Wi-Fi'}
+            </p>
+            <button
+              onClick={async () => {
+                try {
+                  const info = await mobileApi.getInfo()
+                  const qrUrl = info.tunnelUrl ?? info.lanUrl ?? info.url
+                  if (qrUrl) {
+                    const dataUrl = await QRCode.toDataURL(qrUrl, { width: 200, margin: 1 })
+                    setQrDataUrl(dataUrl)
+                  }
+                } catch { /* ignore */ }
+              }}
+              className="text-xs text-muted-foreground hover:text-foreground underline"
+            >
+              Regenerate QR
+            </button>
+          </div>
+        )}
+
+        {/* Connected devices */}
+        {sessions.length > 0 && (
+          <div className="pt-2 space-y-2">
+            <div className="flex items-center justify-between">
+              <Label>Connected devices</Label>
+              <button
+                onClick={async () => {
+                  await mobileApi.revokeAllSessions()
+                  setSessions([])
+                }}
+                className="text-xs text-red-400 hover:text-red-300"
+              >
+                Revoke all
+              </button>
+            </div>
+            <div className="space-y-1">
+              {sessions.map((s) => (
+                <div key={s.id} className="flex items-center justify-between py-1.5 px-2 rounded-md bg-accent/30">
+                  <div>
+                    <p className="text-sm text-foreground">📱 {s.device_name}</p>
+                    <p className="text-xs text-muted-foreground">
+                      Last seen {new Date(s.last_seen * 1000).toLocaleDateString()}
+                    </p>
+                  </div>
+                  <button
+                    onClick={async () => {
+                      await mobileApi.revokeSession(s.id)
+                      setSessions(prev => prev.filter(x => x.id !== s.id))
+                    }}
+                    className="text-xs text-red-400 hover:text-red-300 px-2 py-1"
+                  >
+                    Revoke
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     </SettingsSection>
 

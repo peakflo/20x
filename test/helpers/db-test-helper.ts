@@ -198,6 +198,23 @@ export function createTestDb(): { db: DatabaseManager; rawDb: InstanceType<typeo
 
     CREATE UNIQUE INDEX IF NOT EXISTS idx_installed_plugins_name_marketplace
       ON installed_plugins(name, marketplace_id);
+
+    CREATE TABLE IF NOT EXISTS mobile_pair_codes (
+      id TEXT PRIMARY KEY,
+      pin TEXT NOT NULL,
+      expires_at INTEGER NOT NULL,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch())
+    );
+
+    CREATE TABLE IF NOT EXISTS mobile_sessions (
+      id TEXT PRIMARY KEY,
+      token_hash TEXT NOT NULL UNIQUE,
+      device_name TEXT,
+      paired_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      last_seen INTEGER NOT NULL DEFAULT (unixepoch()),
+      revoked INTEGER NOT NULL DEFAULT 0
+    );
   `)
 
   const manager = new DatabaseManager()

@@ -269,8 +269,29 @@ export const updaterApi = {
 }
 
 export const mobileApi = {
-  getInfo: (): Promise<{ url: string; port: number }> => {
-    return window.electronAPI?.mobile?.getInfo() ?? Promise.resolve({ url: '', port: 0 })
+  getInfo: (): Promise<{ url: string; port: number; lanUrl: string; tunnelUrl: string | null; tunnelActive: boolean }> => {
+    return window.electronAPI?.mobile?.getInfo() ?? Promise.resolve({ url: '', port: 0, lanUrl: '', tunnelUrl: null, tunnelActive: false })
+  },
+  startTunnel: (): Promise<{ tunnelUrl: string }> => {
+    return window.electronAPI?.mobile?.startTunnel() ?? Promise.resolve({ tunnelUrl: '' })
+  },
+  stopTunnel: (): Promise<{ success: boolean }> => {
+    return window.electronAPI?.mobile?.stopTunnel() ?? Promise.resolve({ success: false })
+  },
+  getSessions: (): Promise<{ id: string; device_name: string; paired_at: number; last_seen: number }[]> => {
+    return window.electronAPI?.mobile?.getSessions() ?? Promise.resolve([])
+  },
+  revokeSession: (sessionId: string): Promise<{ success: boolean }> => {
+    return window.electronAPI?.mobile?.revokeSession(sessionId) ?? Promise.resolve({ success: false })
+  },
+  revokeAllSessions: (): Promise<{ success: boolean }> => {
+    return window.electronAPI?.mobile?.revokeAllSessions() ?? Promise.resolve({ success: false })
+  },
+  onPairingInitiated: (fn: (data: { pin: string; pairCodeId: string; expiresAt: number }) => void): void => {
+    window.electronAPI?.mobile?.onPairingInitiated(fn)
+  },
+  onDeviceConnected: (fn: (data: { sessionId: string; deviceName: string }) => void): void => {
+    window.electronAPI?.mobile?.onDeviceConnected(fn)
   }
 }
 

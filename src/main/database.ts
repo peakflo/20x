@@ -1116,6 +1116,23 @@ export class DatabaseManager {
 
       CREATE UNIQUE INDEX IF NOT EXISTS idx_installed_plugins_name_marketplace
         ON installed_plugins(name, marketplace_id);
+
+      CREATE TABLE IF NOT EXISTS mobile_pair_codes (
+        id TEXT PRIMARY KEY,
+        pin TEXT NOT NULL,
+        expires_at INTEGER NOT NULL,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL DEFAULT (unixepoch())
+      );
+
+      CREATE TABLE IF NOT EXISTS mobile_sessions (
+        id TEXT PRIMARY KEY,
+        token_hash TEXT NOT NULL UNIQUE,
+        device_name TEXT,
+        paired_at INTEGER NOT NULL DEFAULT (unixepoch()),
+        last_seen INTEGER NOT NULL DEFAULT (unixepoch()),
+        revoked INTEGER NOT NULL DEFAULT 0
+      );
     `)
   }
 
@@ -2802,5 +2819,54 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
   deleteInstalledPlugin(id: string): boolean {
     const result = this.db.prepare('DELETE FROM installed_plugins WHERE id = ?').run(id)
     return result.changes > 0
+  }
+
+  // ── Mobile pairing ─────────────────────────────────────────
+
+  createMobilePairCode(id: string, pin: string, expiresAt: number): void {
+    this.db.prepare(
+      'INSERT INTO mobile_pair_codes (id, pin, expires_at) VALUES (?, ?, ?)'
+    ).run(id, pin, expiresAt)
+  }
+
+  getMobilePairCode(id: string): { id: string; pin: string; expires_at: number; attempts: number } | undefined {
+    return this.db.prepare('SELECT * FROM mobile_pair_codes WHERE id = ?').get(id) as { id: string; pin: string; expires_at: number; attempts: number } | undefined
+  }
+
+  incrementPairCodeAttempts(id: string): number {
+    this.db.prepare('UPDATE mobile_pair_codes SET attempts = attempts + 1 WHERE id = ?').run(id)
+    const row = this.db.prepare('SELECT attempts FROM mobile_pair_codes WHERE id = ?').get(id) as { attempts: number } | undefined
+    return row?.attempts ?? 0
+  }
+
+  deleteMobilePairCode(id: string): void {
+    this.db.prepare('DELETE FROM mobile_pair_codes WHERE id = ?').run(id)
+  }
+
+  createMobileSession(id: string, tokenHash: string, deviceName: string): void {
+    this.db.prepare(
+      'INSERT INTO mobile_sessions (id, token_hash, device_name) VALUES (?, ?, ?)'
+    ).run(id, tokenHash, deviceName)
+  }
+
+  getMobileSessionByTokenHash(tokenHash: string): { id: string; device_name: string; paired_at: number; last_seen: number; revoked: number } | undefined {
+    return this.db.prepare('SELECT * FROM mobile_sessions WHERE token_hash = ? AND revoked = 0').get(tokenHash) as { id: string; device_name: string; paired_at: number; last_seen: number; revoked: number } | undefined
+  }
+
+  getMobileSessions(): { id: string; device_name: string; paired_at: number; last_seen: number; revoked: number }[] {
+    return this.db.prepare('SELECT id, device_name, paired_at, last_seen, revoked FROM mobile_sessions WHERE revoked = 0 ORDER BY last_seen DESC').all() as { id: string; device_name: string; paired_at: number; last_seen: number; revoked: number }[]
+  }
+
+  touchMobileSession(tokenHash: string): void {
+    this.db.prepare('UPDATE mobile_sessions SET last_seen = unixepoch() WHERE token_hash = ?').run(tokenHash)
+  }
+
+  revokeMobileSession(id: string): boolean {
+    const result = this.db.prepare('UPDATE mobile_sessions SET revoked = 1 WHERE id = ?').run(id)
+    return result.changes > 0
+  }
+
+  revokeAllMobileSessions(): void {
+    this.db.prepare('UPDATE mobile_sessions SET revoked = 1').run()
   }
 }
