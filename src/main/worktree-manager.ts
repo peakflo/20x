@@ -267,8 +267,8 @@ export class WorktreeManager {
   async getTaskChanges(
     taskId: string,
     repos: { fullName: string }[]
-  ): Promise<Array<{ repo: string; diff: string; error?: string; noWorktree?: boolean; path?: string; branch?: string; pushed?: boolean; prNumber?: number; prUrl?: string; prState?: string }>> {
-    const results: Array<{ repo: string; diff: string; error?: string; noWorktree?: boolean; path?: string; branch?: string; pushed?: boolean; prNumber?: number; prUrl?: string; prState?: string }> = []
+  ): Promise<Array<{ repo: string; diff: string; error?: string; noWorktree?: boolean; path?: string; branch?: string; pushed?: boolean; prNumber?: number; prUrl?: string; prState?: string; prTitle?: string; ciStatus?: 'passing' | 'failing' | 'pending' | 'none' }>> {
+    const results: Array<{ repo: string; diff: string; error?: string; noWorktree?: boolean; path?: string; branch?: string; pushed?: boolean; prNumber?: number; prUrl?: string; prState?: string; prTitle?: string; ciStatus?: 'passing' | 'failing' | 'pending' | 'none' }> = []
     const gitOpts = { maxBuffer: 64 * 1024 * 1024 }
 
     for (const repo of repos) {
@@ -371,6 +371,8 @@ export class WorktreeManager {
         let prNumber: number | undefined
         let prUrl: string | undefined
         let prState: string | undefined
+        let prTitle: string | undefined
+        let ciStatus: 'passing' | 'failing' | 'pending' | 'none' | undefined
         if (branch && pushed) {
           let provider: 'github' | 'gitlab' | 'other' = 'other'
           try {
@@ -382,18 +384,39 @@ export class WorktreeManager {
 
           try {
             if (provider === 'github') {
-              const { stdout } = await execFileAsync('gh', ['pr', 'view', branch, '--json', 'number,url,state'], { cwd: wtPath, timeout: 8000, ...gitOpts })
-              const j = JSON.parse(stdout) as { number?: number; url?: string; state?: string }
-              prNumber = j.number; prUrl = j.url; prState = j.state
+              const { stdout } = await execFileAsync(
+                'gh', ['pr', 'view', branch, '--json', 'number,url,state,title,statusCheckRollup'],
+                { cwd: wtPath, timeout: 8000, ...gitOpts }
+              )
+              const j = JSON.parse(stdout) as {
+                number?: number; url?: string; state?: string; title?: string
+                statusCheckRollup?: Array<{ status?: string; conclusion?: string; state?: string }>
+              }
+              prNumber = j.number; prUrl = j.url; prState = j.state; prTitle = j.title
+              // Aggregate all check runs / status contexts into a single rollup.
+              const items = j.statusCheckRollup
+              if (!items || items.length === 0) {
+                ciStatus = 'none'
+              } else {
+                let pending = false
+                let failing = false
+                for (const it of items) {
+                  if (it.status && it.status !== 'COMPLETED') { pending = true; continue }
+                  const s = (it.conclusion || it.state || '').toUpperCase()
+                  if (['FAILURE', 'ERROR', 'CANCELLED', 'TIMED_OUT', 'ACTION_REQUIRED', 'STARTUP_FAILURE'].includes(s)) failing = true
+                  else if (['PENDING', 'EXPECTED', 'REQUESTED', 'WAITING', 'QUEUED', 'IN_PROGRESS'].includes(s)) pending = true
+                }
+                ciStatus = failing ? 'failing' : pending ? 'pending' : 'passing'
+              }
             } else if (provider === 'gitlab') {
               const { stdout } = await execFileAsync('glab', ['mr', 'list', '--source-branch', branch, '--output', 'json'], { cwd: wtPath, timeout: 8000, ...gitOpts })
-              const arr = JSON.parse(stdout) as Array<{ iid?: number; web_url?: string; state?: string }>
-              if (Array.isArray(arr) && arr[0]) { prNumber = arr[0].iid; prUrl = arr[0].web_url; prState = arr[0].state }
+              const arr = JSON.parse(stdout) as Array<{ iid?: number; web_url?: string; state?: string; title?: string }>
+              if (Array.isArray(arr) && arr[0]) { prNumber = arr[0].iid; prUrl = arr[0].web_url; prState = arr[0].state; prTitle = arr[0].title }
             }
           } catch { /* no PR/MR, or CLI unavailable */ }
         }
 
-        results.push({ repo: repo.fullName, diff: tracked + untracked, branch, pushed, prNumber, prUrl, prState })
+        results.push({ repo: repo.fullName, diff: tracked + untracked, branch, pushed, prNumber, prUrl, prState, prTitle, ciStatus })
       } catch (e) {
         results.push({ repo: repo.fullName, diff: '', error: (e as Error).message })
       }

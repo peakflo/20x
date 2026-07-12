@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react
 import {
   ChevronRight, RefreshCw, Loader2, FileDiff, Columns2, Rows3, WrapText, GitBranch,
   FilePlus2, FileMinus2, FilePen, FileSymlink, FolderGit2, GitPullRequest, ExternalLink,
+  CheckCircle2, XCircle,
 } from 'lucide-react'
 import { worktreeApi } from '@/lib/ipc-client'
 import { parseUnifiedDiff, wordDiff, type DiffFile, type DiffHunk, type DiffLine, type WordSegment, type FileStatus } from '@/lib/diff-parser'
@@ -19,6 +20,8 @@ interface RepoChanges {
   prNumber?: number
   prUrl?: string
   prState?: string
+  prTitle?: string
+  ciStatus?: 'passing' | 'failing' | 'pending' | 'none'
 }
 
 type ViewMode = 'unified' | 'split'
@@ -178,6 +181,13 @@ function SplitRows({ rows, wrap }: { rows: Row[]; wrap: boolean }) {
   )
 }
 
+function CiBadge({ status }: { status?: RepoChanges['ciStatus'] }) {
+  if (!status || status === 'none') return null
+  if (status === 'passing') return <span title="Checks passing" className="inline-flex items-center text-success"><CheckCircle2 className="h-3.5 w-3.5" /></span>
+  if (status === 'failing') return <span title="Checks failing" className="inline-flex items-center text-destructive"><XCircle className="h-3.5 w-3.5" /></span>
+  return <span title="Checks running" className="inline-flex items-center text-warning"><Loader2 className="h-3.5 w-3.5 animate-spin" /></span>
+}
+
 function FileBlock({ file, viewMode, wrap }: { file: DiffFile; viewMode: ViewMode; wrap: boolean }) {
   // Files start collapsed — the panel opens as a clean changed-files overview;
   // click a file to expand its diff.
@@ -243,6 +253,7 @@ export function ChangesPanel({ taskId, repos, className, onSummary }: {
       const parsed = res.map((r) => ({
         repo: r.repo, error: r.error, noWorktree: r.noWorktree, path: r.path,
         branch: r.branch, pushed: r.pushed, prNumber: r.prNumber, prUrl: r.prUrl, prState: r.prState,
+        prTitle: r.prTitle, ciStatus: r.ciStatus,
         files: r.diff ? parseUnifiedDiff(r.diff) : [],
       }))
       setData(parsed)
@@ -327,25 +338,29 @@ export function ChangesPanel({ taskId, repos, className, onSummary }: {
           const repoDel = repo.files.reduce((s, f) => s + f.deletions, 0)
           return (
             <div key={repo.repo}>
-              {/* Per-repo group header: repo · branch · PR (or local/not-pushed) */}
+              {/* Per-repo group header: branch (no PR) — or PR title + link + CI status */}
               <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-border/50 bg-muted/30 px-3 py-2 text-[11px] sticky top-0 z-20">
-                <GitBranch className="h-3 w-3 text-muted-foreground shrink-0" />
-                <span className="font-medium text-foreground">{repo.repo}</span>
-                {repo.branch && (
-                  <span className="rounded border border-border bg-card px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground" title="Branch">{repo.branch}</span>
-                )}
+                <span className="font-medium text-foreground shrink-0">{repo.repo}</span>
                 {repo.prUrl ? (
-                  <button
-                    onClick={() => window.electronAPI?.shell?.openExternal?.(repo.prUrl!)}
-                    className="inline-flex items-center gap-1 text-primary hover:underline cursor-pointer"
-                    title={repo.prUrl}
-                  >
-                    <GitPullRequest className="h-3 w-3" />#{repo.prNumber}
-                    {repo.prState && <span className="text-muted-foreground/70">· {repo.prState.toLowerCase()}</span>}
-                    <ExternalLink className="h-2.5 w-2.5" />
-                  </button>
+                  <>
+                    <button
+                      onClick={() => window.electronAPI?.shell?.openExternal?.(repo.prUrl!)}
+                      className="inline-flex min-w-0 items-center gap-1 text-primary hover:underline cursor-pointer"
+                      title={`${repo.prTitle ?? ''} (${repo.prUrl})`}
+                    >
+                      <GitPullRequest className="h-3 w-3 shrink-0" />
+                      <span className="truncate max-w-[240px]">{repo.prTitle || `Pull request #${repo.prNumber}`}</span>
+                      <span className="shrink-0 text-muted-foreground/70">#{repo.prNumber}</span>
+                      <ExternalLink className="h-2.5 w-2.5 shrink-0" />
+                    </button>
+                    <CiBadge status={repo.ciStatus} />
+                  </>
                 ) : (
-                  <span className="text-muted-foreground/60">{repo.pushed ? 'pushed · no PR' : 'local · not pushed'}</span>
+                  <span className="inline-flex items-center gap-1.5 text-muted-foreground">
+                    <GitBranch className="h-3 w-3 shrink-0" />
+                    <span className="font-mono text-[10px] text-foreground/80">{repo.branch ?? 'detached HEAD'}</span>
+                    <span className="text-muted-foreground/60">{repo.pushed ? '· no PR yet' : '· not pushed'}</span>
+                  </span>
                 )}
                 <DiffStatLabel additions={repoAdd} deletions={repoDel} className="ml-auto text-[10px]" />
               </div>
