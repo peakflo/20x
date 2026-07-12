@@ -116,7 +116,7 @@ function createWindow(): void {
     minHeight: 600,
     backgroundColor: '#1E2127',
     ...(isMac
-      ? { titleBarStyle: 'hiddenInset' as const, trafficLightPosition: { x: 14, y: 14 } }
+      ? { titleBarStyle: 'hiddenInset' as const, trafficLightPosition: { x: 12, y: 12 } }
       : {
           titleBarStyle: 'hidden' as const,
           titleBarOverlay: { color: '#1E2127', symbolColor: '#535D71', height: 36 },

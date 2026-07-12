@@ -209,12 +209,12 @@ export function AppLayout() {
   return (
     <>
       {/* ── Top bar: drag region with logo (left) + nav switcher (center) + actions (right) ── */}
-      <div className="drag-region bg-background h-10 flex-shrink-0 flex items-center justify-center px-4 windows-titlebar-pad">
+      <div className="drag-region bg-background h-9 flex-shrink-0 flex items-center justify-center px-3 windows-titlebar-pad">
         {/* Logo + wordmark + update indicator — pinned left. The white logo mark
             always sits on a brand-gradient tile, so it stays visible in both themes. */}
-        <div className="no-drag absolute left-4 flex items-center gap-2 macos-titlebar-pad">
-          <div className="relative grid h-[22px] w-[22px] place-items-center rounded-md bg-gradient-to-br from-primary to-primary/75 shadow-sm ring-1 ring-black/5">
-            <img src={logo20x} className="h-3.5 w-3.5" alt="20x" />
+        <div className="no-drag absolute left-3 flex items-center gap-1.5 macos-titlebar-pad">
+          <div className="relative grid h-5 w-5 place-items-center rounded-md bg-gradient-to-br from-primary to-primary/75 shadow-sm ring-1 ring-black/5">
+            <img src={logo20x} className="h-3 w-3" alt="20x" />
             {updateAvailableVersion && (
               <button
                 onClick={() => setUpdateDialogOpen(true)}
@@ -223,7 +223,7 @@ export function AppLayout() {
               />
             )}
           </div>
-          <span className="text-[13px] font-semibold tracking-tight text-foreground">20x</span>
+          <span className="text-[12px] font-semibold tracking-tight text-foreground">20x</span>
 
           {/* Sidebar collapse toggle — only for views that have a contextual sidebar */}
           {(sidebarView === 'tasks' || sidebarView === 'skills') && activeModal !== 'settings' && (
@@ -277,7 +277,7 @@ export function AppLayout() {
           >
             <Settings className="h-3.5 w-3.5" />
           </button>
-          <div className="mx-1 h-4 w-px bg-border/70" />
+          <div className="mx-1 h-3.5 w-px bg-border/70" />
           <Button
             variant={showOrchestrator ? 'default' : 'secondary'}
             size="sm"
@@ -293,7 +293,7 @@ export function AppLayout() {
       {/* ── Content area: left rail + optional sidebar + workspace + orchestrator ── */}
       <div className="flex flex-1 min-h-0 overflow-hidden">
         {/* Primary navigation — slim vertical icon rail */}
-        <nav className="no-drag flex w-11 flex-shrink-0 flex-col items-center gap-0.5 bg-background py-2">
+        <nav className="no-drag flex w-10 flex-shrink-0 flex-col items-center gap-0.5 bg-background py-1.5">
           {NAV_ITEMS.map(({ key, label, icon: Icon }, i) => {
             const active = sidebarView === key && activeModal !== 'settings'
             return (
@@ -304,7 +304,7 @@ export function AppLayout() {
                   setSidebarView(key)
                 }}
                 aria-label={label}
-                className={`group relative grid h-9 w-9 place-items-center rounded-lg transition-all duration-150 cursor-pointer ${
+                className={`group relative grid h-8 w-8 place-items-center rounded-lg transition-all duration-150 cursor-pointer ${
                   active
                     ? 'bg-primary/12 text-primary'
                     : 'text-muted-foreground hover:bg-accent hover:text-foreground'

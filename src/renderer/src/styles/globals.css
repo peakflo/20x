@@ -230,7 +230,7 @@ html, body, #root {
   color: var(--foreground);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
-  font-size: 13px;
+  font-size: 12px;
   font-feature-settings: "cv01", "cv03", "ss01";
   letter-spacing: -0.006em;
 }
