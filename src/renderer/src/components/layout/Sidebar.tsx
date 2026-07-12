@@ -50,6 +50,8 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
   const setSearchQuery = useUIStore((s) => s.setSearchQuery)
   const skillSearchQuery = useUIStore((s) => s.skillSearchQuery)
   const setSkillSearchQuery = useUIStore((s) => s.setSkillSearchQuery)
+  const sidebarWidth = useUIStore((s) => s.sidebarWidth)
+  const setSidebarWidth = useUIStore((s) => s.setSidebarWidth)
 
   const sources = useTaskSourceStore((s) => s.sources)
   const syncingIds = useTaskSourceStore((s) => s.syncingIds)
@@ -133,8 +135,29 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
     onSelectTask(id)
   }, [activeModal, closeModal, onSelectTask])
 
+  // Drag-to-resize the sidebar (width persisted in the UI store).
+  const startResize = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    const startX = e.clientX
+    const startWidth = sidebarWidth
+    const onMove = (ev: MouseEvent) => setSidebarWidth(startWidth + (ev.clientX - startX))
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+      document.body.style.userSelect = ''
+      document.body.style.cursor = ''
+    }
+    document.body.style.userSelect = 'none'
+    document.body.style.cursor = 'col-resize'
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }, [sidebarWidth, setSidebarWidth])
+
   return (
-    <aside className="flex flex-col h-full w-[264px] shrink-0 border-r border-sidebar-border bg-sidebar text-sidebar-foreground overflow-hidden">
+    <aside
+      className="relative flex flex-col h-full shrink-0 bg-background text-sidebar-foreground overflow-hidden"
+      style={{ width: sidebarWidth }}
+    >
       {sidebarView === 'tasks' ? (
         <>
           <div className="no-drag flex items-center justify-between px-4 pt-4 pb-3">
@@ -327,6 +350,13 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
           </div>
         </>
       )}
+
+      {/* Drag-to-resize handle on the right edge */}
+      <div
+        onMouseDown={startResize}
+        title="Drag to resize"
+        className="no-drag absolute right-0 top-0 z-10 h-full w-1.5 cursor-col-resize hover:bg-primary/30 active:bg-primary/50 transition-colors"
+      />
     </aside>
   )
 }

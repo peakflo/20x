@@ -252,7 +252,7 @@ function QuestionMessage({ message, onAnswer, canAnswer }: { message: AgentMessa
                 onChange={(e) => handleTextChange(qi, e.target.value)}
                 disabled={isLocked}
                 placeholder="Type your answer..."
-                className="w-full bg-background border border-border/50 rounded px-3 py-2 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary/50"
+                className="w-full bg-input border border-border/50 rounded px-3 py-2 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary/50"
                 onKeyDown={(e) => { if (e.key === 'Enter' && allAnswered) handleSubmit() }}
               />
             )}
@@ -1097,7 +1097,7 @@ export function AgentTranscriptPanel({
                 ref={inputRef}
                 rows={1}
                 placeholder="Send a message... (Shift+Enter for new line)"
-                className="flex-1 bg-muted/50 border border-border rounded-lg px-3 py-1.5 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/30 resize-none overflow-hidden max-h-32 min-h-[32px]"
+                className="flex-1 bg-input border border-border rounded-lg px-3 py-1.5 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/30 resize-none overflow-hidden max-h-32 min-h-[32px]"
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' && !e.shiftKey) {
                     e.preventDefault()
