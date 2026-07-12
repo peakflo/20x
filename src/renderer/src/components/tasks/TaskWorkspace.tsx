@@ -5,6 +5,7 @@ import { SnoozeDialog } from './SnoozeDialog'
 import { IncompatibleSessionDialog } from './IncompatibleSessionDialog'
 import { TaskDetailView } from './TaskDetailView'
 import { AgentTranscriptPanel } from '@/components/agents/AgentTranscriptPanel'
+import { ChangesPanel } from './ChangesPanel'
 import { AgentApprovalBanner } from '@/components/agents/AgentApprovalBanner'
 import { GhCliSetupDialog } from '@/components/github/GhCliSetupDialog'
 import { OrgPickerDialog } from '@/components/github/OrgPickerDialog'
@@ -59,6 +60,7 @@ export function TaskWorkspace({
   const { removeSession, updateAgent } = useAgentStore()
   const { githubOrg, checkGhCli, checkGlabCli, setGithubOrg, fetchSettings } = useSettingsStore()
 
+  const [rightTab, setRightTab] = useState<'transcript' | 'changes'>('transcript')
   const [showGhSetup, setShowGhSetup] = useState(false)
   const [showOrgPicker, setShowOrgPicker] = useState(false)
   const [showRepoSelector, setShowRepoSelector] = useState(false)
@@ -718,22 +720,44 @@ Update existing skills that were helpful or create new ones for patterns worth r
         )}
 
         {showPanel && panelLayout !== 'task-only' && (
-          <div className="min-h-0 min-w-0 h-full">
-            <AgentTranscriptPanel
-              messages={session.messages}
-              status={session.status}
-              systemStatus={session.systemStatus}
-              onStop={handleAbort}
-              onRestart={handleStartFreshSession}
-              onSend={handleSend}
-              onPickAttachments={handlePickAttachments}
-              onAddAttachmentPaths={handleAddAttachmentPaths}
-              className="h-full"
-              sessionId={session.sessionId}
-              taskId={task.id}
-              agentId={task.agent_id ?? undefined}
-              pendingApproval={session.pendingApproval ?? undefined}
-            />
+          <div className="min-h-0 min-w-0 h-full flex flex-col">
+            {/* Transcript / Changes tab switcher */}
+            <div className="flex items-center gap-1 border-b border-border/60 px-3 pt-2 pb-1 flex-shrink-0">
+              {(['transcript', 'changes'] as const).map((tab) => (
+                <button
+                  key={tab}
+                  onClick={() => setRightTab(tab)}
+                  className={`rounded-md px-2.5 py-1 text-xs font-medium capitalize transition-colors cursor-pointer ${
+                    rightTab === tab ? 'bg-accent text-foreground' : 'text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  {tab}
+                </button>
+              ))}
+            </div>
+            {/* Transcript stays mounted (preserves scroll/stream); Changes mounts on demand */}
+            <div className={rightTab === 'transcript' ? 'flex-1 min-h-0' : 'hidden'}>
+              <AgentTranscriptPanel
+                messages={session.messages}
+                status={session.status}
+                systemStatus={session.systemStatus}
+                onStop={handleAbort}
+                onRestart={handleStartFreshSession}
+                onSend={handleSend}
+                onPickAttachments={handlePickAttachments}
+                onAddAttachmentPaths={handleAddAttachmentPaths}
+                className="h-full"
+                sessionId={session.sessionId}
+                taskId={task.id}
+                agentId={task.agent_id ?? undefined}
+                pendingApproval={session.pendingApproval ?? undefined}
+              />
+            </div>
+            {rightTab === 'changes' && (
+              <div className="flex-1 min-h-0">
+                <ChangesPanel taskId={task.id} repos={task.repos} className="h-full" />
+              </div>
+            )}
           </div>
         )}
 

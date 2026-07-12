@@ -256,4 +256,77 @@ export class WorktreeManager {
       }
     }
   }
+
+  /**
+   * Collect the working-tree diff for each of a task's repo worktrees.
+   * Returns one raw unified diff per repo — tracked changes vs HEAD plus
+   * untracked files rendered via `git diff --no-index` (read-only; never
+   * mutates the index). Repos without a worktree yet are skipped; per-repo
+   * failures are reported rather than thrown so one bad repo can't hide the rest.
+   */
+  async getTaskChanges(
+    taskId: string,
+    repos: { fullName: string }[]
+  ): Promise<Array<{ repo: string; diff: string; error?: string }>> {
+    const results: Array<{ repo: string; diff: string; error?: string }> = []
+    const gitOpts = { maxBuffer: 64 * 1024 * 1024 }
+
+    for (const repo of repos) {
+      const repoName = repo.fullName.split('/').pop() || repo.fullName
+      const wtPath = this.worktreePath(taskId, repoName)
+      if (!existsSync(wtPath)) continue
+
+      try {
+        // Tracked changes vs HEAD (modifications + deletions, staged or not).
+        let tracked = ''
+        try {
+          const { stdout } = await execFileAsync(
+            'git', ['-c', 'core.quotepath=false', 'diff', '--no-color', 'HEAD'],
+            { cwd: wtPath, ...gitOpts }
+          )
+          tracked = stdout
+        } catch (e) {
+          const err = e as { stdout?: string }
+          tracked = err.stdout ?? ''
+          if (!tracked) {
+            // No HEAD yet (empty repo) — fall back to index/worktree diff.
+            const { stdout } = await execFileAsync(
+              'git', ['-c', 'core.quotepath=false', 'diff', '--no-color'],
+              { cwd: wtPath, ...gitOpts }
+            ).catch(() => ({ stdout: '' }))
+            tracked = stdout
+          }
+        }
+
+        // Untracked files → new-file patches (no index mutation).
+        let untracked = ''
+        try {
+          const { stdout } = await execFileAsync(
+            'git', ['ls-files', '--others', '--exclude-standard', '-z'],
+            { cwd: wtPath, ...gitOpts }
+          )
+          for (const file of stdout.split('\0').filter(Boolean)) {
+            try {
+              await execFileAsync(
+                'git', ['diff', '--no-color', '--no-index', '--', '/dev/null', file],
+                { cwd: wtPath, ...gitOpts }
+              )
+            } catch (e) {
+              // --no-index exits 1 when files differ; the patch is on stdout.
+              const err = e as { stdout?: string }
+              if (err.stdout) untracked += err.stdout
+            }
+          }
+        } catch {
+          // Ignore untracked enumeration failures.
+        }
+
+        results.push({ repo: repo.fullName, diff: tracked + untracked })
+      } catch (e) {
+        results.push({ repo: repo.fullName, diff: '', error: (e as Error).message })
+      }
+    }
+
+    return results
+  }
 }
