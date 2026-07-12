@@ -1848,6 +1848,78 @@ describe('AgentManager startAdapterPolling — IDLE grace period for follow-up m
     expect(entry.hasSeenWork).toBe(true)
   })
 
+  it('does not spam auto-abort messages when a stuck running tool remains visible after polling restarts', async () => {
+    const mgr = buildManager()
+    const startedAt = Date.now() - 240_000
+    const abortPrompt = vi.fn(async () => undefined)
+    const adapter = {
+      pollMessages: vi.fn(async () => [] as any[]),
+      getStatus: vi.fn(async () => ({ type: SessionStatusType.BUSY })),
+      getRunningTools: vi.fn(async () => [{
+        partId: 'tool-call-1',
+        toolName: 'commandExecution',
+        startTime: startedAt,
+        input: {}
+      }]),
+      abortPrompt,
+    }
+
+    const session = {
+      agentId: 'agent-1',
+      taskId: 'task-1',
+      status: 'working',
+      createdAt: new Date(),
+      seenMessageIds: new Set<string>(),
+      seenPartIds: new Set<string>(),
+      partContentLengths: new Map<string, string>(),
+      adapter,
+      pollingStarted: true,
+    }
+    ;(mgr as any).sessions.set('session-1', session)
+
+    ;(mgr as any).startAdapterPolling(
+      'session-1',
+      adapter,
+      { agentId: 'agent-1', taskId: 'task-1', workspaceDir: '/tmp/ws' },
+      undefined,
+      session
+    )
+
+    const firstEntry = (mgr as any).pollingEntries.get('session-1')
+    await (mgr as any).pollSingleSession(firstEntry)
+
+    expect(abortPrompt).toHaveBeenCalledOnce()
+
+    // Reproduce the reported spam path: polling starts again while the same
+    // App Server running tool is still visible. The new PollingEntry has a
+    // fresh watchdogFired=false, so the session-level one-shot guard must
+    // suppress another chat error and abort attempt.
+    ;(mgr as any).startAdapterPolling(
+      'session-1',
+      adapter,
+      { agentId: 'agent-1', taskId: 'task-1', workspaceDir: '/tmp/ws' },
+      undefined,
+      session
+    )
+
+    const secondEntry = (mgr as any).pollingEntries.get('session-1')
+    await (mgr as any).pollSingleSession(secondEntry)
+
+    const sendSpy = vi.mocked((mgr as any).sendToRenderer)
+    const autoAbortMessages = sendSpy.mock.calls.filter(([channel, payload]) => (
+      channel === 'agent:output' &&
+      String((payload as any).data?.content || '').startsWith('Session auto-aborted:')
+    ))
+
+    expect(autoAbortMessages).toHaveLength(1)
+    expect(autoAbortMessages[0][1]).toMatchObject({
+      data: {
+        content: expect.stringContaining('Tool "commandExecution" has been running')
+      }
+    })
+    expect(abortPrompt).toHaveBeenCalledOnce()
+  })
+
   it('pollSingleSession does not inject a duplicate status error when the poll already emitted the same error text', async () => {
     const mgr = buildManager()
     const errorMessage = 'API Error: Server is temporarily limiting requests (not your usage limit) - Rate limited'

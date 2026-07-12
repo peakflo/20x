@@ -55,6 +55,9 @@ interface AgentSession {
   adapter?: CodingAgentAdapter
   secretSessionToken?: string
   pollingStarted?: boolean
+  /** True after an auto-abort notice has been shown for the current prompt.
+   *  Reset when the user sends a new prompt or the adapter emits fresh output. */
+  autoAbortNotified?: boolean
 }
 
 function normalizeUrlPath(pathname: string): string {
@@ -1585,6 +1588,29 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     }
   }
 
+  private sendAutoAbortMessageOnce(
+    sessionId: string,
+    session: AgentSession,
+    taskId: string,
+    idPrefix: string,
+    content: string
+  ): boolean {
+    if (session.autoAbortNotified) return false
+    session.autoAbortNotified = true
+    this.sendToRenderer('agent:output', {
+      sessionId,
+      taskId,
+      type: 'message',
+      data: {
+        id: `${idPrefix}-${Date.now()}`,
+        role: 'system',
+        content,
+        partType: 'error'
+      }
+    })
+    return true
+  }
+
   /**
    * Ensures the single polling coordinator timer is running.
    */
@@ -1766,6 +1792,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
         // Reset watchdog flag — new data means the session is alive again.
         // If a follow-up message also gets stuck, the watchdog can re-fire.
         entry.watchdogFired = false
+        activeSession.autoAbortNotified = false
       }
 
       // ── Garbled output detection ──
@@ -1791,17 +1818,13 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
             console.warn(
               `[AgentManager] Session ${sessionId}: garbled model output detected (${entry.garbledOutputCount} cycles). Aborting to prevent token waste.`
             )
-            this.sendToRenderer('agent:output', {
+            this.sendAutoAbortMessageOnce(
               sessionId,
-              taskId: config.taskId,
-              type: 'message',
-              data: {
-                id: `garbled-abort-${Date.now()}`,
-                role: 'system',
-                content: 'Session aborted: model is producing garbled output (hallucinated tool-call markup). You can send a new message to continue.',
-                partType: 'error'
-              }
-            })
+              activeSession,
+              config.taskId,
+              'garbled-abort',
+              'Session aborted: model is producing garbled output (hallucinated tool-call markup). You can send a new message to continue.'
+            )
             try {
               await adapter.abortPrompt(sessionId, config)
             } catch (abortErr) {
@@ -2021,19 +2044,15 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
                   }
 
                   peBusy.watchdogFired = true
-                  console.warn(`[AgentManager] Session ${sessionId}: ${reason}. Aborting.`)
-
-                  this.sendToRenderer('agent:output', {
+                  const shouldAbort = this.sendAutoAbortMessageOnce(
                     sessionId,
-                    taskId: config.taskId,
-                    type: 'message',
-                    data: {
-                      id: `stuck-tool-${Date.now()}`,
-                      role: 'system',
-                      content: `Session auto-aborted: ${reason}. You can send a new message to continue.`,
-                      partType: 'error'
-                    }
-                  })
+                    session,
+                    config.taskId,
+                    'stuck-tool',
+                    `Session auto-aborted: ${reason}. You can send a new message to continue.`
+                  )
+                  if (!shouldAbort) return
+                  console.warn(`[AgentManager] Session ${sessionId}: ${reason}. Aborting.`)
                   try {
                     await adapter.abortPrompt(sessionId, config)
                   } catch (abortErr) {
@@ -2102,21 +2121,18 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
               // This prevents the abort notification from spamming every poll
               // tick while the backend transitions from BUSY → IDLE.
               peBusy.watchdogFired = true
+              // Notify the user that the session was auto-aborted
+              const shouldAbort = this.sendAutoAbortMessageOnce(
+                sessionId,
+                session,
+                config.taskId,
+                'stuck-abort',
+                `Session auto-aborted: no activity for ${Math.round(silentDuration / 1000)}s. A tool call may have hung. You can send a new message to continue.`
+              )
+              if (!shouldAbort) return
               console.warn(
                 `[AgentManager] Session ${sessionId} stuck: BUSY for ${Math.round(silentDuration / 1000)}s with no new data. Aborting prompt.`
               )
-              // Notify the user that the session was auto-aborted
-              this.sendToRenderer('agent:output', {
-                sessionId,
-                taskId: config.taskId,
-                type: 'message',
-                data: {
-                  id: `stuck-abort-${Date.now()}`,
-                  role: 'system',
-                  content: `Session auto-aborted: no activity for ${Math.round(silentDuration / 1000)}s. A tool call may have hung. You can send a new message to continue.`,
-                  partType: 'error'
-                }
-              })
               // Abort the prompt — this will cause executePromptWithRetry to exit,
               // and the next poll cycle will detect IDLE status.
               try {
@@ -3298,6 +3314,8 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     message: string,
     attachments?: MessageAttachmentRef[]
   ): Promise<void> {
+    session.autoAbortNotified = false
+
     if (session.status === 'error') {
       // Check if this is an incompatible session error (non-recoverable)
       if (session.adapter) {
