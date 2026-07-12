@@ -367,13 +367,16 @@ export class WorktreeManager {
           } catch { /* branch not on remote yet */ }
         }
 
-        // Best-effort PR/MR lookup (only when the branch is pushed).
+        // Best-effort PR/MR lookup for the branch checked out in this worktree.
+        // `gh pr view` (no branch arg) resolves the current branch's PR directly,
+        // so it works even when the local origin/<branch> tracking ref is stale
+        // (i.e. the branch is pushed but this worktree hasn't fetched it).
         let prNumber: number | undefined
         let prUrl: string | undefined
         let prState: string | undefined
         let prTitle: string | undefined
         let ciStatus: 'passing' | 'failing' | 'pending' | 'none' | undefined
-        if (branch && pushed) {
+        if (branch) {
           let provider: 'github' | 'gitlab' | 'other' = 'other'
           try {
             const { stdout } = await execFileAsync('git', ['remote', 'get-url', 'origin'], { cwd: wtPath, ...gitOpts })
@@ -385,7 +388,7 @@ export class WorktreeManager {
           try {
             if (provider === 'github') {
               const { stdout } = await execFileAsync(
-                'gh', ['pr', 'view', branch, '--json', 'number,url,state,title,statusCheckRollup'],
+                'gh', ['pr', 'view', '--json', 'number,url,state,title,statusCheckRollup'],
                 { cwd: wtPath, timeout: 8000, ...gitOpts }
               )
               const j = JSON.parse(stdout) as {
@@ -415,6 +418,11 @@ export class WorktreeManager {
             }
           } catch { /* no PR/MR, or CLI unavailable */ }
         }
+        // A resolved PR implies the branch is pushed, even if the local
+        // origin/<branch> tracking ref is missing/stale.
+        pushed = pushed || Boolean(prUrl)
+
+        console.log(`[WorktreeManager] getTaskChanges ${repo.fullName}: branch=${branch ?? '(detached)'} pushed=${pushed} pr=${prNumber ?? 'none'} ci=${ciStatus ?? 'n/a'}`)
 
         results.push({ repo: repo.fullName, diff: tracked + untracked, branch, pushed, prNumber, prUrl, prState, prTitle, ciStatus })
       } catch (e) {
