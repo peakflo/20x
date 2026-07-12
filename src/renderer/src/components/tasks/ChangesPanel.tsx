@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import {
   ChevronRight, RefreshCw, Loader2, FileDiff, Columns2, Rows3, WrapText, GitBranch,
-  FilePlus2, FileMinus2, FilePen, FileSymlink, FolderGit2,
+  FilePlus2, FileMinus2, FilePen, FileSymlink, FolderGit2, GitPullRequest, ExternalLink,
 } from 'lucide-react'
 import { worktreeApi } from '@/lib/ipc-client'
 import { parseUnifiedDiff, wordDiff, type DiffFile, type DiffHunk, type DiffLine, type WordSegment, type FileStatus } from '@/lib/diff-parser'
@@ -14,6 +14,11 @@ interface RepoChanges {
   error?: string
   noWorktree?: boolean
   path?: string
+  branch?: string
+  pushed?: boolean
+  prNumber?: number
+  prUrl?: string
+  prState?: string
 }
 
 type ViewMode = 'unified' | 'split'
@@ -235,7 +240,11 @@ export function ChangesPanel({ taskId, repos, className, onSummary }: {
     setLoading(true)
     try {
       const res = await worktreeApi.changes(taskId, list.map((fullName) => ({ fullName })))
-      const parsed = res.map((r) => ({ repo: r.repo, error: r.error, noWorktree: r.noWorktree, path: r.path, files: r.diff ? parseUnifiedDiff(r.diff) : [] }))
+      const parsed = res.map((r) => ({
+        repo: r.repo, error: r.error, noWorktree: r.noWorktree, path: r.path,
+        branch: r.branch, pushed: r.pushed, prNumber: r.prNumber, prUrl: r.prUrl, prState: r.prState,
+        files: r.diff ? parseUnifiedDiff(r.diff) : [],
+      }))
       setData(parsed)
       let a = 0, d = 0, f = 0
       for (const repo of parsed) for (const file of repo.files) { a += file.additions; d += file.deletions; f++ }
@@ -260,7 +269,6 @@ export function ChangesPanel({ taskId, repos, className, onSummary }: {
   }, [data])
 
   const hasChanges = (data ?? []).some((r) => r.files.length > 0)
-  const showRepoHeaders = (data ?? []).filter((r) => r.files.length > 0).length > 1 || repos.length > 1
 
   return (
     <div className={cn('flex h-full flex-col bg-card', className)}>
@@ -315,13 +323,32 @@ export function ChangesPanel({ taskId, repos, className, onSummary }: {
             return <div key={repo.repo} className="px-3 py-2 text-xs text-destructive">{repo.repo}: {repo.error}</div>
           }
           if (repo.files.length === 0) return null
+          const repoAdd = repo.files.reduce((s, f) => s + f.additions, 0)
+          const repoDel = repo.files.reduce((s, f) => s + f.deletions, 0)
           return (
             <div key={repo.repo}>
-              {showRepoHeaders && (
-                <div className="flex items-center gap-1.5 bg-muted/30 px-3 py-1.5 text-[11px] font-medium text-muted-foreground sticky top-0 z-20">
-                  <GitBranch className="h-3 w-3" /> {repo.repo}
-                </div>
-              )}
+              {/* Per-repo group header: repo · branch · PR (or local/not-pushed) */}
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-border/50 bg-muted/30 px-3 py-2 text-[11px] sticky top-0 z-20">
+                <GitBranch className="h-3 w-3 text-muted-foreground shrink-0" />
+                <span className="font-medium text-foreground">{repo.repo}</span>
+                {repo.branch && (
+                  <span className="rounded border border-border bg-card px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground" title="Branch">{repo.branch}</span>
+                )}
+                {repo.prUrl ? (
+                  <button
+                    onClick={() => window.electronAPI?.shell?.openExternal?.(repo.prUrl!)}
+                    className="inline-flex items-center gap-1 text-primary hover:underline cursor-pointer"
+                    title={repo.prUrl}
+                  >
+                    <GitPullRequest className="h-3 w-3" />#{repo.prNumber}
+                    {repo.prState && <span className="text-muted-foreground/70">· {repo.prState.toLowerCase()}</span>}
+                    <ExternalLink className="h-2.5 w-2.5" />
+                  </button>
+                ) : (
+                  <span className="text-muted-foreground/60">{repo.pushed ? 'pushed · no PR' : 'local · not pushed'}</span>
+                )}
+                <DiffStatLabel additions={repoAdd} deletions={repoDel} className="ml-auto text-[10px]" />
+              </div>
               {repo.files.map((file, i) => (
                 <FileBlock key={`${repo.repo}:${file.path}:${i}`} file={file} viewMode={viewMode} wrap={wrap} />
               ))}

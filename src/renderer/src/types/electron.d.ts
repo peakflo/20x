@@ -263,7 +263,7 @@ interface ElectronAPI {
   worktree: {
     setup: (taskId: string, repos: { fullName: string; defaultBranch: string }[], org: string, provider: 'github' | 'gitlab') => Promise<string>
     cleanup: (taskId: string, repos: { fullName: string }[], org: string, removeTaskDir?: boolean) => Promise<void>
-    changes: (taskId: string, repos: { fullName: string }[]) => Promise<Array<{ repo: string; diff: string; error?: string; noWorktree?: boolean; path?: string }>>
+    changes: (taskId: string, repos: { fullName: string }[]) => Promise<Array<{ repo: string; diff: string; error?: string; noWorktree?: boolean; path?: string; branch?: string; pushed?: boolean; prNumber?: number; prUrl?: string; prState?: string }>>
     runCleanupNow: () => Promise<{ cleaned: number; errors: string[] }>
   }
   taskSources: {

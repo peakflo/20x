@@ -267,8 +267,8 @@ export class WorktreeManager {
   async getTaskChanges(
     taskId: string,
     repos: { fullName: string }[]
-  ): Promise<Array<{ repo: string; diff: string; error?: string; noWorktree?: boolean; path?: string }>> {
-    const results: Array<{ repo: string; diff: string; error?: string; noWorktree?: boolean; path?: string }> = []
+  ): Promise<Array<{ repo: string; diff: string; error?: string; noWorktree?: boolean; path?: string; branch?: string; pushed?: boolean; prNumber?: number; prUrl?: string; prState?: string }>> {
+    const results: Array<{ repo: string; diff: string; error?: string; noWorktree?: boolean; path?: string; branch?: string; pushed?: boolean; prNumber?: number; prUrl?: string; prState?: string }> = []
     const gitOpts = { maxBuffer: 64 * 1024 * 1024 }
 
     for (const repo of repos) {
@@ -351,7 +351,49 @@ export class WorktreeManager {
           // Ignore untracked enumeration failures.
         }
 
-        results.push({ repo: repo.fullName, diff: tracked + untracked })
+        // Branch + PR metadata so the UI can group changes by branch / PR.
+        let branch: string | undefined
+        try {
+          const { stdout } = await execFileAsync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: wtPath, ...gitOpts })
+          const b = stdout.trim()
+          branch = b && b !== 'HEAD' ? b : undefined
+        } catch { /* detached HEAD */ }
+
+        let pushed = false
+        if (branch) {
+          try {
+            await execFileAsync('git', ['rev-parse', '--verify', '--quiet', `origin/${branch}`], { cwd: wtPath, ...gitOpts })
+            pushed = true
+          } catch { /* branch not on remote yet */ }
+        }
+
+        // Best-effort PR/MR lookup (only when the branch is pushed).
+        let prNumber: number | undefined
+        let prUrl: string | undefined
+        let prState: string | undefined
+        if (branch && pushed) {
+          let provider: 'github' | 'gitlab' | 'other' = 'other'
+          try {
+            const { stdout } = await execFileAsync('git', ['remote', 'get-url', 'origin'], { cwd: wtPath, ...gitOpts })
+            const url = stdout.toLowerCase()
+            if (url.includes('gitlab')) provider = 'gitlab'
+            else if (url.includes('github')) provider = 'github'
+          } catch { /* ignore */ }
+
+          try {
+            if (provider === 'github') {
+              const { stdout } = await execFileAsync('gh', ['pr', 'view', branch, '--json', 'number,url,state'], { cwd: wtPath, timeout: 8000, ...gitOpts })
+              const j = JSON.parse(stdout) as { number?: number; url?: string; state?: string }
+              prNumber = j.number; prUrl = j.url; prState = j.state
+            } else if (provider === 'gitlab') {
+              const { stdout } = await execFileAsync('glab', ['mr', 'list', '--source-branch', branch, '--output', 'json'], { cwd: wtPath, timeout: 8000, ...gitOpts })
+              const arr = JSON.parse(stdout) as Array<{ iid?: number; web_url?: string; state?: string }>
+              if (Array.isArray(arr) && arr[0]) { prNumber = arr[0].iid; prUrl = arr[0].web_url; prState = arr[0].state }
+            }
+          } catch { /* no PR/MR, or CLI unavailable */ }
+        }
+
+        results.push({ repo: repo.fullName, diff: tracked + untracked, branch, pushed, prNumber, prUrl, prState })
       } catch (e) {
         results.push({ repo: repo.fullName, diff: '', error: (e as Error).message })
       }
