@@ -209,7 +209,7 @@ export function AppLayout() {
   return (
     <>
       {/* ── Top bar: drag region with logo (left) + nav switcher (center) + actions (right) ── */}
-      <div className="drag-region bg-background h-13 flex-shrink-0 flex items-center justify-center px-4 windows-titlebar-pad">
+      <div className="drag-region bg-background h-11 flex-shrink-0 flex items-center justify-center px-4 windows-titlebar-pad">
         {/* Logo + wordmark + update indicator — pinned left. The white logo mark
             always sits on a brand-gradient tile, so it stays visible in both themes. */}
         <div className="no-drag absolute left-4 flex items-center gap-2.5 macos-titlebar-pad">
@@ -293,7 +293,7 @@ export function AppLayout() {
       {/* ── Content area: left rail + optional sidebar + workspace + orchestrator ── */}
       <div className="flex flex-1 min-h-0 overflow-hidden">
         {/* Primary navigation — slim vertical icon rail */}
-        <nav className="no-drag flex w-14 flex-shrink-0 flex-col items-center gap-1 bg-background py-3">
+        <nav className="no-drag flex w-12 flex-shrink-0 flex-col items-center gap-1 bg-background py-2.5">
           {NAV_ITEMS.map(({ key, label, icon: Icon }, i) => {
             const active = sidebarView === key && activeModal !== 'settings'
             return (
@@ -304,16 +304,16 @@ export function AppLayout() {
                   setSidebarView(key)
                 }}
                 aria-label={label}
-                className={`group relative grid h-11 w-11 place-items-center rounded-xl transition-all duration-150 cursor-pointer ${
+                className={`group relative grid h-10 w-10 place-items-center rounded-xl transition-all duration-150 cursor-pointer ${
                   active
                     ? 'bg-primary/12 text-primary'
                     : 'text-muted-foreground hover:bg-accent hover:text-foreground'
                 }`}
               >
                 {active && (
-                  <span className="absolute left-0 top-1/2 h-5 w-[3px] -translate-y-1/2 rounded-r-full bg-primary" />
+                  <span className="absolute left-0 top-1/2 h-4 w-[3px] -translate-y-1/2 rounded-r-full bg-primary" />
                 )}
-                <Icon className="h-[18px] w-[18px]" />
+                <Icon className="h-[17px] w-[17px]" />
                 {/* Hover flyout label + shortcut */}
                 <span className="pointer-events-none absolute left-full top-1/2 z-50 ml-2 flex -translate-y-1/2 translate-x-[-4px] items-center gap-2 whitespace-nowrap rounded-lg border border-border bg-popover px-2 py-1 text-xs font-medium text-foreground opacity-0 shadow-pop transition-all duration-150 group-hover:translate-x-0 group-hover:opacity-100">
                   {label}
