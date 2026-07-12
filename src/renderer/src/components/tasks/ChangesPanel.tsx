@@ -172,7 +172,9 @@ function SplitRows({ rows, wrap }: { rows: Row[]; wrap: boolean }) {
 }
 
 function FileBlock({ file, viewMode, wrap }: { file: DiffFile; viewMode: ViewMode; wrap: boolean }) {
-  const [open, setOpen] = useState(true)
+  // Files start collapsed — the panel opens as a clean changed-files overview;
+  // click a file to expand its diff.
+  const [open, setOpen] = useState(false)
   const meta = STATUS_META[file.status]
   const Icon = meta.icon
   return (
