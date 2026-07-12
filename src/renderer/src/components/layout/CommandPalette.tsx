@@ -114,7 +114,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
           }))
       : []
 
-    return [...filteredBase, ...appItems, ...skillItems, ...taskItems]
+    return [...filteredBase, ...appItems, ...taskItems, ...skillItems]
   }, [query, tasks, skills, applications, themeResolved, closeModal, setSidebarView, openCreateModal, toggleOrchestrator, openSettings, toggleTheme, selectTask, selectSkill, openApplication])
 
   // Keep highlight within bounds when the list shrinks.
