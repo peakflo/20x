@@ -211,24 +211,40 @@ function FileBlock({ file, viewMode, wrap }: { file: DiffFile; viewMode: ViewMod
   )
 }
 
-export function ChangesPanel({ taskId, repos, className }: { taskId: string; repos: string[]; className?: string }) {
+export interface ChangesSummary { files: number; additions: number; deletions: number }
+
+export function ChangesPanel({ taskId, repos, className, onSummary }: {
+  taskId: string
+  repos: string[]
+  className?: string
+  onSummary?: (s: ChangesSummary) => void
+}) {
   const [data, setData] = useState<RepoChanges[] | null>(null)
   const [loading, setLoading] = useState(false)
   const [viewMode, setViewMode] = useState<ViewMode>(() => (localStorage.getItem('diff-view-mode') as ViewMode) || 'unified')
   const [wrap, setWrap] = useState<boolean>(() => localStorage.getItem('diff-wrap') === '1')
 
+  // Key the fetch on a stable string so unrelated re-renders (new array identity)
+  // don't re-run git diff.
+  const reposKey = repos.join('|')
   const load = useCallback(async () => {
-    if (!repos.length) { setData([]); return }
+    const list = reposKey ? reposKey.split('|') : []
+    if (!list.length) { setData([]); onSummary?.({ files: 0, additions: 0, deletions: 0 }); return }
     setLoading(true)
     try {
-      const res = await worktreeApi.changes(taskId, repos.map((r) => ({ fullName: r })))
-      setData(res.map((r) => ({ repo: r.repo, error: r.error, files: r.diff ? parseUnifiedDiff(r.diff) : [] })))
+      const res = await worktreeApi.changes(taskId, list.map((fullName) => ({ fullName })))
+      const parsed = res.map((r) => ({ repo: r.repo, error: r.error, files: r.diff ? parseUnifiedDiff(r.diff) : [] }))
+      setData(parsed)
+      let a = 0, d = 0, f = 0
+      for (const repo of parsed) for (const file of repo.files) { a += file.additions; d += file.deletions; f++ }
+      onSummary?.({ files: f, additions: a, deletions: d })
     } catch (e) {
       setData([{ repo: '', files: [], error: (e as Error).message }])
+      onSummary?.({ files: 0, additions: 0, deletions: 0 })
     } finally {
       setLoading(false)
     }
-  }, [taskId, repos])
+  }, [taskId, reposKey, onSummary])
 
   useEffect(() => { void load() }, [load])
 
@@ -278,7 +294,7 @@ export function ChangesPanel({ taskId, repos, className }: { taskId: string; rep
         {data && repos.length > 0 && !hasChanges && !loading && (
           <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center text-sm text-muted-foreground">
             <FileDiff className="h-6 w-6 opacity-40" />
-            No uncommitted changes in the task worktree{repos.length > 1 ? 's' : ''}.
+            No changes in the task worktree{repos.length > 1 ? 's' : ''} yet.
           </div>
         )}
         {data?.map((repo) => {

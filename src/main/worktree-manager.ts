@@ -277,25 +277,51 @@ export class WorktreeManager {
       if (!existsSync(wtPath)) continue
 
       try {
-        // Tracked changes vs HEAD (modifications + deletions, staged or not).
+        // Agents auto-commit, so "uncommitted only" (git diff HEAD) is usually
+        // empty. We want the task's whole diff: base branch → current work
+        // (committed + uncommitted). Discover the base branch this worktree
+        // forked from, then diff against the merge-base.
+        let baseRef = ''
+        try {
+          const { stdout } = await execFileAsync(
+            'git', ['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'],
+            { cwd: wtPath, ...gitOpts }
+          )
+          baseRef = stdout.trim() // e.g. "origin/main"
+        } catch { /* origin/HEAD not set */ }
+        if (!baseRef) {
+          for (const cand of ['origin/main', 'origin/master', 'main', 'master']) {
+            try {
+              await execFileAsync('git', ['rev-parse', '--verify', '--quiet', cand], { cwd: wtPath, ...gitOpts })
+              baseRef = cand
+              break
+            } catch { /* not this candidate */ }
+          }
+        }
+
+        // Diff target: merge-base with the base branch (captures committed work);
+        // fall back to HEAD (uncommitted only) if no base can be resolved.
+        let against = 'HEAD'
+        if (baseRef) {
+          try {
+            const { stdout } = await execFileAsync('git', ['merge-base', 'HEAD', baseRef], { cwd: wtPath, ...gitOpts })
+            const mergeBase = stdout.trim()
+            if (mergeBase) against = mergeBase
+          } catch { /* keep HEAD */ }
+        }
+
+        // `git diff <against>` compares that commit to the WORKING TREE, so the
+        // patch includes both committed and uncommitted changes.
         let tracked = ''
         try {
           const { stdout } = await execFileAsync(
-            'git', ['-c', 'core.quotepath=false', 'diff', '--no-color', 'HEAD'],
+            'git', ['-c', 'core.quotepath=false', 'diff', '--no-color', against],
             { cwd: wtPath, ...gitOpts }
           )
           tracked = stdout
         } catch (e) {
           const err = e as { stdout?: string }
           tracked = err.stdout ?? ''
-          if (!tracked) {
-            // No HEAD yet (empty repo) — fall back to index/worktree diff.
-            const { stdout } = await execFileAsync(
-              'git', ['-c', 'core.quotepath=false', 'diff', '--no-color'],
-              { cwd: wtPath, ...gitOpts }
-            ).catch(() => ({ stdout: '' }))
-            tracked = stdout
-          }
         }
 
         // Untracked files → new-file patches (no index mutation).
