@@ -98,7 +98,7 @@ export function ChatInput({
           placeholder={placeholder}
           disabled={disabled}
           rows={1}
-          className="flex-1 bg-muted/50 border border-border rounded-lg px-3 py-1.5 text-sm text-foreground placeholder:text-muted-foreground resize-none overflow-hidden max-h-32 focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/30 min-h-[32px] disabled:opacity-40"
+          className="flex-1 bg-input border border-border rounded-lg px-3 py-1.5 text-sm text-foreground placeholder:text-muted-foreground resize-none overflow-hidden max-h-32 focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/30 min-h-[32px] disabled:opacity-40"
         />
         {onOpenAttachmentPicker && (
           <button
