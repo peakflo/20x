@@ -149,8 +149,7 @@ const [currentVersion, setCurrentVersion] = useState<string | null>(null)
         setSessions(s)
       } catch { /* ignore */ }
 
-      // Listen for pairing PIN from mobile client
-      mobileApi.onPairingInitiated(({ pin, expiresAt }) => {
+      const activatePin = (pin: string, expiresAt: number) => {
         setPairingPin(pin)
         const tick = () => {
           const left = Math.max(0, Math.floor(expiresAt - Date.now() / 1000))
@@ -159,7 +158,14 @@ const [currentVersion, setCurrentVersion] = useState<string | null>(null)
           else setPairingPin(null)
         }
         tick()
-      })
+      }
+
+      // Restore pending PIN if phone scanned QR while Settings tab was not active
+      const pending = await mobileApi.getPendingPin()
+      if (pending) activatePin(pending.pin, pending.expiresAt)
+
+      // Listen for pairing PIN from mobile client
+      mobileApi.onPairingInitiated(({ pin, expiresAt }) => activatePin(pin, expiresAt))
 
       // Refresh sessions when device connects
       mobileApi.onDeviceConnected(async () => {

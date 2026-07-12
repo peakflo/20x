@@ -339,6 +339,7 @@ interface ElectronAPI {
     getInfo: () => Promise<{ url: string; port: number; lanUrl: string; tunnelUrl: string | null; tunnelActive: boolean }>
     startTunnel: () => Promise<{ tunnelUrl: string }>
     stopTunnel: () => Promise<{ success: boolean }>
+    getPendingPin: () => Promise<{ pin: string; pairCodeId: string; expiresAt: number } | null>
     getSessions: () => Promise<{ id: string; device_name: string; paired_at: number; last_seen: number }[]>
     revokeSession: (sessionId: string) => Promise<{ success: boolean }>
     revokeAllSessions: () => Promise<{ success: boolean }>

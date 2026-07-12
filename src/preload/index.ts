@@ -356,6 +356,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('mobile:startTunnel'),
     stopTunnel: (): Promise<{ success: boolean }> =>
       ipcRenderer.invoke('mobile:stopTunnel'),
+    getPendingPin: (): Promise<{ pin: string; pairCodeId: string; expiresAt: number } | null> =>
+      ipcRenderer.invoke('mobile:getPendingPin'),
     getSessions: (): Promise<{ id: string; device_name: string; paired_at: number; last_seen: number }[]> =>
       ipcRenderer.invoke('mobile:getSessions'),
     revokeSession: (sessionId: string): Promise<{ success: boolean }> =>
