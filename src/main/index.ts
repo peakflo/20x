@@ -161,6 +161,19 @@ function createWindow(): void {
     }, 60_000)
   })
 
+  // Force the main window to 100% zoom on first load. Chromium persists page
+  // zoom per host, so an accidental Cmd+- gets remembered — and because `pnpm dev`
+  // loads from `localhost`, a stray zoom level stays applied on every dev launch
+  // (the app opens zoomed out/in with no obvious way back). Reset once per launch;
+  // in-session Cmd+/Cmd- still works. Embedded <webview> contents have their own
+  // webContents and are unaffected.
+  let didResetZoom = false
+  mainWindow.webContents.on('did-finish-load', () => {
+    if (didResetZoom) return
+    didResetZoom = true
+    mainWindow?.webContents.setZoomLevel(0)
+  })
+
   // Auto-reload on renderer crash (blank screen recovery)
   mainWindow.webContents.on('render-process-gone', (_event, details) => {
     console.error(`[Main] Renderer crashed: reason=${details.reason}, exitCode=${details.exitCode}`)
