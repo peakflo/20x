@@ -797,6 +797,13 @@ describe('OpencodeAdapter', () => {
 
     it('autoApprovePermission calls V2 SDK permission.reply with correct args including directory', async () => {
       const adapter = new OpencodeAdapter()
+      // The SDK is imported asynchronously in the constructor (fire-and-forget).
+      // autoApprovePermission only uses the mocked v2Client once the module-level
+      // OpenCodeV2Client has finished loading; otherwise it falls through to a real
+      // fetch() to DEFAULT_SERVER_URL (localhost:4096), which hangs the test if an
+      // OpenCode server happens to be running locally. Await the load so the V2
+      // path is taken deterministically (fixes the local 5s timeout / CI flake).
+      await (adapter as any).sdkLoading
       const mockReply = vi.fn().mockResolvedValue({ data: {}, error: null })
       const mockV2Client = {
         permission: { reply: mockReply, list: vi.fn() }
@@ -805,7 +812,15 @@ describe('OpencodeAdapter', () => {
       // Set the workspace directory for the session
       ;(adapter as any).sessionWorkspaceDirs.set('ses_abc', '/workspace/task_1')
 
-      await (adapter as any).autoApprovePermission('ses_abc', 'per_123')
+      // Safety net: if the SDK failed to load, keep the raw-fetch fallback path
+      // from making a real network call that would hang the test.
+      const mockFetch = vi.fn().mockResolvedValue({ ok: true, text: async () => '{}' })
+      vi.stubGlobal('fetch', mockFetch)
+      try {
+        await (adapter as any).autoApprovePermission('ses_abc', 'per_123')
+      } finally {
+        vi.unstubAllGlobals()
+      }
 
       // If OpenCodeV2Client is loaded (it is in test env since we import the module),
       // it should try to use v2Client. If OpenCodeV2Client is null (dynamic import
