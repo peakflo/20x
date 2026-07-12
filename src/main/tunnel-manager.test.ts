@@ -42,6 +42,9 @@ describe('tunnel-manager', () => {
     const p = startTunnel(20620)
     const t = lastTunnel!
 
+    // Forces the IPv4 edge to avoid the slow/broken IPv6 DNS path behind VPNs.
+    expect(mocks.quick).toHaveBeenCalledWith('http://localhost:20620', { '--edge-ip-version': 4 })
+
     // URL is printed by cloudflared before the edge connection is up.
     t.emit('url', URL)
     await Promise.resolve()
@@ -63,7 +66,7 @@ describe('tunnel-manager', () => {
     const t = lastTunnel!
     t.emit('url', URL)
 
-    vi.advanceTimersByTime(30_000)
+    vi.advanceTimersByTime(120_000)
 
     await expect(p).rejects.toThrow(/never connected/i)
     expect(t.stop).toHaveBeenCalled()
