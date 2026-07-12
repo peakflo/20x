@@ -2,11 +2,13 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import * as DialogPrimitive from '@radix-ui/react-dialog'
 import {
   Search, LayoutDashboard, Layers, CheckSquare, Zap, Settings, MessageSquare,
-  Plus, Sun, Moon, CornerDownLeft, type LucideIcon
+  Plus, Sun, Moon, CornerDownLeft, LayoutGrid, type LucideIcon
 } from 'lucide-react'
 import { useUIStore } from '@/stores/ui-store'
 import { useThemeStore } from '@/stores/theme-store'
 import { useTaskStore } from '@/stores/task-store'
+import { useSkillStore } from '@/stores/skill-store'
+import { useDashboardStore } from '@/stores/dashboard-store'
 import { cn } from '@/lib/utils'
 
 interface CommandItem {
@@ -36,10 +38,20 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
   const themeResolved = useThemeStore((s) => s.resolved)
   const tasks = useTaskStore((s) => s.tasks)
   const selectTask = useTaskStore((s) => s.selectTask)
+  const skills = useSkillStore((s) => s.skills)
+  const selectSkill = useSkillStore((s) => s.selectSkill)
+  const applications = useDashboardStore((s) => s.applications)
+  const openApplication = useDashboardStore((s) => s.openApplication)
 
-  // Reset query + highlight whenever the palette opens.
+  // Reset query + highlight whenever the palette opens, and make sure skills +
+  // applications are loaded so they're searchable even before those views are visited.
   useEffect(() => {
-    if (open) { setQuery(''); setActive(0) }
+    if (open) {
+      setQuery('')
+      setActive(0)
+      useSkillStore.getState().fetchSkills()
+      useDashboardStore.getState().fetchAllIfNeeded()
+    }
   }, [open])
 
   const close = () => onOpenChange(false)
@@ -62,7 +74,33 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
       ? base.filter((c) => (c.label + ' ' + (c.keywords ?? '')).toLowerCase().includes(q))
       : base
 
-    // Task search — only when the user has typed something.
+    // Content search — only when the user has typed something.
+    const appItems: CommandItem[] = q
+      ? applications
+          .filter((a) => a.name.toLowerCase().includes(q))
+          .slice(0, 6)
+          .map((a) => ({
+            id: `app-${a.workflowId}`,
+            group: 'Applications',
+            label: a.name,
+            icon: LayoutGrid,
+            run: () => { closeModal(); setSidebarView('dashboard'); void openApplication(a.workflowId); close() },
+          }))
+      : []
+
+    const skillItems: CommandItem[] = q
+      ? skills
+          .filter((s) => s.name.toLowerCase().includes(q) || (s.description ?? '').toLowerCase().includes(q))
+          .slice(0, 6)
+          .map((s) => ({
+            id: `skill-${s.id}`,
+            group: 'Skills',
+            label: s.name,
+            icon: Zap,
+            run: () => { closeModal(); selectSkill(s.id); setSidebarView('skills'); close() },
+          }))
+      : []
+
     const taskItems: CommandItem[] = q
       ? tasks
           .filter((t) => !t.parent_task_id && t.title.toLowerCase().includes(q))
@@ -76,8 +114,8 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
           }))
       : []
 
-    return [...filteredBase, ...taskItems]
-  }, [query, tasks, themeResolved, closeModal, setSidebarView, openCreateModal, toggleOrchestrator, openSettings, toggleTheme, selectTask])
+    return [...filteredBase, ...appItems, ...skillItems, ...taskItems]
+  }, [query, tasks, skills, applications, themeResolved, closeModal, setSidebarView, openCreateModal, toggleOrchestrator, openSettings, toggleTheme, selectTask, selectSkill, openApplication])
 
   // Keep highlight within bounds when the list shrinks.
   useEffect(() => { setActive((a) => Math.min(a, Math.max(0, items.length - 1))) }, [items.length])
@@ -111,7 +149,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
               autoFocus
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search or run a command…"
+              placeholder="Search tasks, skills, apps — or run a command…"
               className="h-12 w-full bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-none"
             />
             <kbd className="hidden shrink-0 rounded border border-border bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground sm:block">esc</kbd>
