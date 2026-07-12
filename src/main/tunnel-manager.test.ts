@@ -63,7 +63,7 @@ describe('tunnel-manager', () => {
     const t = lastTunnel!
     t.emit('url', URL)
 
-    vi.advanceTimersByTime(30_000)
+    vi.advanceTimersByTime(120_000)
 
     await expect(p).rejects.toThrow(/never connected/i)
     expect(t.stop).toHaveBeenCalled()
