@@ -267,14 +267,18 @@ export class WorktreeManager {
   async getTaskChanges(
     taskId: string,
     repos: { fullName: string }[]
-  ): Promise<Array<{ repo: string; diff: string; error?: string }>> {
-    const results: Array<{ repo: string; diff: string; error?: string }> = []
+  ): Promise<Array<{ repo: string; diff: string; error?: string; noWorktree?: boolean; path?: string }>> {
+    const results: Array<{ repo: string; diff: string; error?: string; noWorktree?: boolean; path?: string }> = []
     const gitOpts = { maxBuffer: 64 * 1024 * 1024 }
 
     for (const repo of repos) {
       const repoName = repo.fullName.split('/').pop() || repo.fullName
       const wtPath = this.worktreePath(taskId, repoName)
-      if (!existsSync(wtPath)) continue
+      if (!existsSync(wtPath)) {
+        console.log(`[WorktreeManager] getTaskChanges: no worktree for ${repo.fullName} at ${wtPath}`)
+        results.push({ repo: repo.fullName, diff: '', noWorktree: true, path: wtPath })
+        continue
+      }
 
       try {
         // Agents auto-commit, so "uncommitted only" (git diff HEAD) is usually

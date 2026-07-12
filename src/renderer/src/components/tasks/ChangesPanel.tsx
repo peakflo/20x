@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import {
   ChevronRight, RefreshCw, Loader2, FileDiff, Columns2, Rows3, WrapText, GitBranch,
-  FilePlus2, FileMinus2, FilePen, FileSymlink,
+  FilePlus2, FileMinus2, FilePen, FileSymlink, FolderGit2,
 } from 'lucide-react'
 import { worktreeApi } from '@/lib/ipc-client'
 import { parseUnifiedDiff, wordDiff, type DiffFile, type DiffHunk, type DiffLine, type WordSegment, type FileStatus } from '@/lib/diff-parser'
@@ -12,6 +12,8 @@ interface RepoChanges {
   repo: string
   files: DiffFile[]
   error?: string
+  noWorktree?: boolean
+  path?: string
 }
 
 type ViewMode = 'unified' | 'split'
@@ -233,7 +235,7 @@ export function ChangesPanel({ taskId, repos, className, onSummary }: {
     setLoading(true)
     try {
       const res = await worktreeApi.changes(taskId, list.map((fullName) => ({ fullName })))
-      const parsed = res.map((r) => ({ repo: r.repo, error: r.error, files: r.diff ? parseUnifiedDiff(r.diff) : [] }))
+      const parsed = res.map((r) => ({ repo: r.repo, error: r.error, noWorktree: r.noWorktree, path: r.path, files: r.diff ? parseUnifiedDiff(r.diff) : [] }))
       setData(parsed)
       let a = 0, d = 0, f = 0
       for (const repo of parsed) for (const file of repo.files) { a += file.additions; d += file.deletions; f++ }
@@ -291,11 +293,22 @@ export function ChangesPanel({ taskId, repos, className, onSummary }: {
         {!loading && !repos.length && (
           <div className="flex h-full items-center justify-center px-6 text-center text-sm text-muted-foreground">This task has no linked repositories.</div>
         )}
-        {data && repos.length > 0 && !hasChanges && !loading && (
-          <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center text-sm text-muted-foreground">
-            <FileDiff className="h-6 w-6 opacity-40" />
-            No changes in the task worktree{repos.length > 1 ? 's' : ''} yet.
-          </div>
+        {data && repos.length > 0 && !hasChanges && !loading && !data.some((r) => r.error) && (
+          data.length > 0 && data.every((r) => r.noWorktree) ? (
+            <div className="flex h-full flex-col items-center justify-center gap-1.5 px-6 text-center text-sm text-muted-foreground">
+              <FolderGit2 className="h-6 w-6 opacity-40" />
+              This task&apos;s worktree isn&apos;t set up yet.
+              <span className="text-xs text-muted-foreground/70">Start the agent on this task to create it.</span>
+              {data.filter((r) => r.path).map((r) => (
+                <code key={r.repo} className="mt-1 max-w-full truncate rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground/60">{r.path}</code>
+              ))}
+            </div>
+          ) : (
+            <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center text-sm text-muted-foreground">
+              <FileDiff className="h-6 w-6 opacity-40" />
+              No changes in the task worktree{repos.length > 1 ? 's' : ''} yet.
+            </div>
+          )
         )}
         {data?.map((repo) => {
           if (repo.error) {
