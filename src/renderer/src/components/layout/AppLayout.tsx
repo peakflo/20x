@@ -209,7 +209,7 @@ export function AppLayout() {
   return (
     <>
       {/* ── Top bar: drag region with logo (left) + nav switcher (center) + actions (right) ── */}
-      <div className="drag-region bg-background h-8 flex-shrink-0 flex items-center justify-center px-3 windows-titlebar-pad">
+      <div className="drag-region bg-background h-8 flex-shrink-0 flex items-center justify-center px-3 pt-0.5 windows-titlebar-pad">
         {/* Logo + wordmark + update indicator — pinned left. The white logo mark
             always sits on a brand-gradient tile, so it stays visible in both themes. */}
         <div className="no-drag absolute left-3 flex items-center gap-1.5 macos-titlebar-pad">
@@ -293,7 +293,7 @@ export function AppLayout() {
       {/* ── Content area: left rail + optional sidebar + workspace + orchestrator ── */}
       <div className="flex flex-1 min-h-0 overflow-hidden">
         {/* Primary navigation — slim vertical icon rail */}
-        <nav className="no-drag flex w-10 flex-shrink-0 flex-col items-center gap-0.5 bg-background py-1.5">
+        <nav className="no-drag flex w-9 flex-shrink-0 flex-col items-center gap-0.5 bg-background py-1.5">
           {NAV_ITEMS.map(({ key, label, icon: Icon }, i) => {
             const active = sidebarView === key && activeModal !== 'settings'
             return (
