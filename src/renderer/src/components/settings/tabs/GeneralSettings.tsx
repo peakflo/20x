@@ -17,6 +17,7 @@ export function GeneralSettings() {
   const [mobileTunnelUrl, setMobileTunnelUrl] = useState<string | null>(null)
   const [tunnelActive, setTunnelActive] = useState(false)
   const [tunnelLoading, setTunnelLoading] = useState(false)
+  const [tunnelError, setTunnelError] = useState<string | null>(null)
   const [qrDataUrl, setQrDataUrl] = useState<string | null>(null)
   const [pairingPin, setPairingPin] = useState<string | null>(null)
   const [pinSecondsLeft, setPinSecondsLeft] = useState(0)
@@ -320,6 +321,7 @@ const [currentVersion, setCurrentVersion] = useState<string | null>(null)
             disabled={tunnelLoading}
             onCheckedChange={async (checked) => {
               setTunnelLoading(true)
+              setTunnelError(null)
               try {
                 if (checked) {
                   const { tunnelUrl: url } = await mobileApi.startTunnel()
@@ -340,12 +342,16 @@ const [currentVersion, setCurrentVersion] = useState<string | null>(null)
                 }
               } catch (err) {
                 console.error('Tunnel toggle failed:', err)
+                setTunnelError(err instanceof Error ? err.message : 'Failed to start remote access')
               } finally {
                 setTunnelLoading(false)
               }
             }}
           />
         </div>
+        {tunnelError && (
+          <p className="text-xs text-destructive -mt-1 mb-2">{tunnelError}</p>
+        )}
 
         {/* Tunnel URL row */}
         {tunnelActive && mobileTunnelUrl && (
