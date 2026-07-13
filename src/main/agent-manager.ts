@@ -2829,8 +2829,8 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
    * Extracts output field values BEFORE notifying so the renderer
    * picks up the updated task data on re-fetch.
    */
-  private async replayMissedTranscriptPartsBeforeIdle(sessionId: string, session: AgentSession): Promise<void> {
-    if (!session.adapter?.getAllMessages) return
+  private async replayMissedTranscriptPartsBeforeIdle(sessionId: string, session: AgentSession): Promise<number> {
+    if (!session.adapter?.getAllMessages) return 0
 
     try {
       const config: SessionConfig = {
@@ -2880,9 +2880,38 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
           messages: batchMessages
         })
       }
+      return batchMessages.length
     } catch (err) {
       console.error(`[AgentManager] replayMissedTranscriptPartsBeforeIdle error for ${sessionId}:`, err)
+      return 0
     }
+  }
+
+  private resumeAdapterPollingAfterPrematureIdle(sessionId: string, session: AgentSession): void {
+    if (!session.adapter) return
+
+    const sessionConfig: SessionConfig = {
+      agentId: session.agentId,
+      taskId: session.taskId,
+      workspaceDir: session.workspaceDir || this.db.getWorkspaceDir(session.taskId)
+    }
+
+    session.status = 'working'
+    session.pollingStarted = true
+    this.startAdapterPolling(sessionId, session.adapter, sessionConfig, true, session)
+
+    const pollingEntry = this.pollingEntries.get(sessionId)
+    if (pollingEntry) {
+      pollingEntry.hasSeenWork = true
+      pollingEntry.lastPartReceivedAt = Date.now()
+    }
+
+    this.sendToRenderer('agent:status', {
+      sessionId,
+      agentId: session.agentId,
+      taskId: session.taskId,
+      status: 'working'
+    })
   }
 
   private async transitionToIdle(sessionId: string, session: AgentSession): Promise<void> {
@@ -2890,8 +2919,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       console.log(`[AgentManager] transitionToIdle: session ${sessionId} already idle, skipping`)
       return
     }
-    session.status = 'idle'
-    console.log(`[AgentManager] Session ${sessionId} → idle`)
+    console.log(`[AgentManager] Session ${sessionId} preparing to transition idle`)
 
     // Helper: yield event loop between synchronous DB operations so IPC,
     // timers and rendering callbacks can run.  transitionToIdle chains many
@@ -2900,10 +2928,14 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     const yieldEventLoop = (): Promise<void> => new Promise((r) => setImmediate(r))
 
     // In learning mode, skip output extraction, task status, and renderer notification
-    if (session.learningMode) return
+    if (session.learningMode) {
+      session.status = 'idle'
+      return
+    }
 
     // In triage mode, set status back to NotStarted (now with agent_id assigned) and return early
     if (session.isTriageSession) {
+      session.status = 'idle'
       console.log(`[AgentManager] Triage session completed for task ${session.taskId}, reverting to NotStarted`)
       this.db.updateTask(session.taskId, { status: TaskStatus.NotStarted, session_id: null })
       await yieldEventLoop()
@@ -2926,8 +2958,31 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     // Polling can observe IDLE in the same tick that the adapter persists the
     // final assistant message. Reconcile once against the stored transcript so
     // the UI doesn't miss the last response.
-    await this.replayMissedTranscriptPartsBeforeIdle(sessionId, session)
+    const replayedPartCount = await this.replayMissedTranscriptPartsBeforeIdle(sessionId, session)
     await yieldEventLoop()
+
+    if (session.adapter) {
+      try {
+        const config: SessionConfig = {
+          agentId: session.agentId,
+          taskId: session.taskId,
+          workspaceDir: session.workspaceDir || this.db.getWorkspaceDir(session.taskId)
+        }
+        const statusAfterReplay = await session.adapter.getStatus(sessionId, config)
+        if (statusAfterReplay.type !== SessionStatusType.IDLE) {
+          console.log(
+            `[AgentManager] Idle transition for ${sessionId} deferred after replay: replayed=${replayedPartCount}, adapterStatus=${statusAfterReplay.type}`
+          )
+          this.resumeAdapterPollingAfterPrematureIdle(sessionId, session)
+          return
+        }
+      } catch (err) {
+        console.error(`[AgentManager] Failed to re-check adapter status before idle for ${sessionId}:`, err)
+      }
+    }
+
+    session.status = 'idle'
+    console.log(`[AgentManager] Session ${sessionId} → idle`)
 
     // Check if task exists (e.g., orchestrator-session doesn't have a real task)
     const task = this.db.getTask(session.taskId)

@@ -1155,6 +1155,44 @@ describe('AgentManager transitionToIdle — enterprise task completion after fee
     expect(sessionWithAdapter.seenPartIds.has('final-part')).toBe(true)
   })
 
+  it('keeps polling and does not mark ready when adapter is still busy after transcript replay', async () => {
+    const mockDb = createEnterpriseTaskDb({
+      status: TaskStatus.AgentWorking,
+      output_fields: [],
+      source_id: null,
+    })
+    const { mgr, session } = setupManager(mockDb)
+    const adapter = {
+      getAllMessages: vi.fn(async () => ([
+        {
+          id: 'msg-1',
+          role: MessageRole.ASSISTANT,
+          parts: [
+            { id: 'late-progress', type: MessagePartType.TEXT, text: 'Still verifying', content: 'Still verifying' }
+          ]
+        }
+      ])),
+      getStatus: vi.fn(async () => ({ type: SessionStatusType.BUSY })),
+      pollMessages: vi.fn(async () => [] as any[]),
+    }
+
+    const sessionWithAdapter = {
+      ...session,
+      adapter: adapter as any,
+      workspaceDir: '/tmp/test-workspace'
+    }
+    vi.spyOn(mgr as any, 'extractOutputValues').mockResolvedValue(undefined)
+    vi.spyOn(mgr as any, 'ensurePollingCoordinator').mockImplementation(() => undefined)
+
+    await (mgr as any).transitionToIdle('session-1', sessionWithAdapter)
+
+    expect(adapter.getAllMessages).toHaveBeenCalledOnce()
+    expect(adapter.getStatus).toHaveBeenCalledOnce()
+    expect(mockDb.updateTask).not.toHaveBeenCalledWith('task-1', { status: TaskStatus.ReadyForReview })
+    expect((mgr as any).pollingEntries.has('session-1')).toBe(true)
+    expect(sessionWithAdapter.status).toBe('working')
+  })
+
   it('stores actual text content in partContentLengths, not string length (regression: number prefix bug)', async () => {
     // Regression: partContentLengths stored String(text.length) (e.g. "133")
     // instead of actual text. When chunk accumulation read it back, the number

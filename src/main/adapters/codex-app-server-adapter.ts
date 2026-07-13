@@ -74,6 +74,8 @@ interface AppServerSession {
   permanentMessages: unknown[]
   bufferedThreadItemIds: Set<string>
   pendingCompletionRefreshes: number
+  sawThreadStatusNotification: boolean
+  pendingThreadIdle: boolean
   pendingRequests: Map<string | number, {
     resolve: (value: unknown) => void
     reject: (error: Error) => void
@@ -555,6 +557,8 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
       permanentMessages: [],
       bufferedThreadItemIds: new Set(),
       pendingCompletionRefreshes: 0,
+      sawThreadStatusNotification: false,
+      pendingThreadIdle: false,
       pendingRequests: new Map(),
       pendingApproval: null,
       nextRequestId: 1,
@@ -801,6 +805,7 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
     if (notification.method === 'turn/started') {
       session.status = SessionStatusType.BUSY
       session.activeTurnId = asString(params.turnId) || session.activeTurnId
+      session.pendingThreadIdle = false
     }
 
     if (notification.method === 'turn/completed') {
@@ -810,6 +815,22 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
         void this.reconcileCompletedTurn(session)
       } else {
         session.status = SessionStatusType.IDLE
+      }
+    }
+
+    if (notification.method === 'thread/status/changed') {
+      session.sawThreadStatusNotification = true
+      const status = isObject(params.status) ? asString(params.status.type) : ''
+      if (status === 'active') {
+        session.status = SessionStatusType.BUSY
+        session.pendingThreadIdle = false
+      } else if (status === 'idle') {
+        session.activeTurnId = null
+        session.pendingThreadIdle = true
+        this.markIdleIfSettled(session)
+      } else if (status === 'systemError') {
+        session.status = SessionStatusType.ERROR
+        session.lastError = 'Codex app-server thread entered system error state'
       }
     }
 
@@ -1025,11 +1046,19 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
       console.warn('[CodexAppServerAdapter] Failed to reconcile completed turn items:', error)
     } finally {
       session.pendingCompletionRefreshes = Math.max(0, session.pendingCompletionRefreshes - 1)
-      if (session.pendingCompletionRefreshes === 0 && !session.activeTurnId && session.status !== SessionStatusType.ERROR) {
-        session.status = SessionStatusType.IDLE
-        this.onDataAvailable?.(session.threadId || session.sessionId)
-      }
+      this.markIdleIfSettled(session)
     }
+  }
+
+  private markIdleIfSettled(session: AppServerSession): void {
+    if (session.status === SessionStatusType.ERROR) return
+    if (session.pendingCompletionRefreshes > 0) return
+    if (session.activeTurnId) return
+    if (session.sawThreadStatusNotification && !session.pendingThreadIdle) return
+
+    session.pendingThreadIdle = false
+    session.status = SessionStatusType.IDLE
+    this.onDataAvailable?.(session.threadId || session.sessionId)
   }
 
   private convertEventToMessageParts(
