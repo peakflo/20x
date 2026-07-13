@@ -397,7 +397,7 @@ export function TaskDetailView({ task, agents, onEdit, onDelete, onUpdateAttachm
 
   return (
     <div className="flex flex-col h-full">
-      <div className="flex items-center justify-between border-b px-6 py-4 shrink-0">
+      <div className="flex items-center justify-between border-b border-border/60 px-6 py-4 shrink-0">
         <div className="flex items-center gap-2.5">
           <TaskStatusBadge status={task.status} />
           <TaskTypeBadge type={task.type} />
