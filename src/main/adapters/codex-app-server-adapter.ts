@@ -128,6 +128,10 @@ function extractText(value: unknown): string {
   return ''
 }
 
+function extractRole(item: Record<string, unknown>): string {
+  return (asString(item.role) || asString(item.author) || asString(item.sender) || '').toLowerCase()
+}
+
 function extractToolName(item: Record<string, unknown>): string {
   const server = asString(item.server)
   const tool = asString(item.tool)
@@ -1121,9 +1125,10 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
   ): MessagePart[] {
     const itemId = extractItemId(params)
     const type = asString(item.type) || ''
+    const role = extractRole(item)
     const text = extractText(item)
 
-    if (type.includes('user') || type === 'user_message') {
+    if (role === 'user' || type.includes('user') || type === 'user_message') {
       const partId = `user-${itemId}`
       if (seenPartIds.has(partId)) return []
       seenPartIds.add(partId)
@@ -1136,7 +1141,7 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
       }]
     }
 
-    if (type.includes('agent') || type.includes('assistant') || (!type && text)) {
+    if (role === 'assistant' || type.includes('agent') || type.includes('assistant') || (!type && text)) {
       const partId = `agent-${itemId}`
       if (seenPartIds.has(partId) && method !== 'item/completed') return []
       seenPartIds.add(partId)
