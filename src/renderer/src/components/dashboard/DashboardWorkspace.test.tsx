@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
-import { render, screen, cleanup, fireEvent } from '@testing-library/react'
+import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
 import { DashboardWorkspace } from './DashboardWorkspace'
 import { useDashboardStore } from '@/stores/dashboard-store'
 import { useEnterpriseStore } from '@/stores/enterprise-store'
@@ -22,6 +22,7 @@ vi.mock('@/lib/ipc-client', () => ({
     logout: vi.fn(),
     getSession: vi.fn().mockResolvedValue({ isAuthenticated: false }),
     refreshToken: vi.fn(),
+    signupInBrowser: vi.fn(),
     getApiUrl: vi.fn().mockResolvedValue('http://localhost:2000'),
     getJwt: vi.fn().mockResolvedValue('mock-jwt-token'),
     enableIframeAuth: vi.fn().mockResolvedValue({ apiUrl: 'http://localhost:2000' }),
@@ -146,6 +147,16 @@ describe('DashboardWorkspace', () => {
     render(<DashboardWorkspace />)
     expect(screen.getByText('Connect to 20x Cloud')).toBeDefined()
     expect(screen.getByText('Connect')).toBeDefined() // CTA button
+  })
+
+  it('opens the cloud signup modal from the connect CTA', async () => {
+    render(<DashboardWorkspace />)
+    const connectButton = screen.getByText('Connect').closest('button') as HTMLButtonElement
+
+    await waitFor(() => expect(connectButton.disabled).toBe(false))
+    fireEvent.click(connectButton)
+
+    expect(screen.getByText('Include AI subscription')).toBeDefined()
   })
 
   it('renders hero section with rotating title', () => {

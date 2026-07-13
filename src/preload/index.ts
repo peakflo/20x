@@ -370,11 +370,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.on('mobile:device-connected', (_, data) => fn(data))
   },
   enterprise: {
-    signupInBrowser: (mode: 'register' | 'login'): Promise<{
+    signupInBrowser: (mode: 'register' | 'login', options?: { includeAiSubscription?: boolean }): Promise<{
       userId: string
       email: string
       companies: { id: string; name: string; isPrimary: boolean }[]
-    }> => ipcRenderer.invoke('enterprise:signupInBrowser', mode),
+    }> => ipcRenderer.invoke('enterprise:signupInBrowser', mode, options),
     login: (email: string, password: string): Promise<{
       userId: string
       email: string

@@ -347,7 +347,7 @@ interface ElectronAPI {
     onDeviceConnected: (fn: (data: { sessionId: string; deviceName: string }) => void) => void
   }
   enterprise: {
-    signupInBrowser: (mode: 'register' | 'login') => Promise<{
+    signupInBrowser: (mode: 'register' | 'login', options?: { includeAiSubscription?: boolean }) => Promise<{
       userId: string
       email: string
       companies: { id: string; name: string; isPrimary: boolean }[]
