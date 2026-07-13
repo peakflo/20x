@@ -27,6 +27,16 @@ let gitlabRef: GitLabManager | null = null
 let syncManagerRef: SyncManager | null = null
 let pluginRegistryRef: PluginRegistry | null = null
 let notifyDesktop: ((channel: string, data: unknown) => void) | null = null
+let pendingPin: { pin: string; pairCodeId: string; expiresAt: number } | null = null
+
+export function getPendingPin(): { pin: string; pairCodeId: string; expiresAt: number } | null {
+  if (!pendingPin) return null
+  if (Math.floor(Date.now() / 1000) > pendingPin.expiresAt) {
+    pendingPin = null
+    return null
+  }
+  return pendingPin
+}
 
 const wsClients = new Set<WebSocket>()
 
@@ -494,6 +504,9 @@ async function routePost(pathname: string, params: Record<string, unknown>, req?
     const pairCodeId = randomUUID()
     db.createMobilePairCode(pairCodeId, pin, now + PIN_EXPIRY_SECONDS)
 
+    // Store pending PIN so renderer can fetch it if Settings isn't open when event fires
+    pendingPin = { pin, pairCodeId, expiresAt: now + PIN_EXPIRY_SECONDS }
+
     // Push PIN to desktop
     if (notifyDesktop) {
       notifyDesktop('mobile:pairing-initiated', { pin, pairCodeId, expiresAt: now + PIN_EXPIRY_SECONDS })
@@ -528,6 +541,7 @@ async function routePost(pathname: string, params: Record<string, unknown>, req?
     }
 
     // PIN correct — issue session token
+    pendingPin = null
     db.deleteMobilePairCode(pairCodeId)
     const sessionToken = randomUUID()
     const tokenHash = hashToken(sessionToken)

@@ -278,6 +278,9 @@ export const mobileApi = {
   stopTunnel: (): Promise<{ success: boolean }> => {
     return window.electronAPI?.mobile?.stopTunnel() ?? Promise.resolve({ success: false })
   },
+  getPendingPin: (): Promise<{ pin: string; pairCodeId: string; expiresAt: number } | null> => {
+    return window.electronAPI?.mobile?.getPendingPin() ?? Promise.resolve(null)
+  },
   getSessions: (): Promise<{ id: string; device_name: string; paired_at: number; last_seen: number }[]> => {
     return window.electronAPI?.mobile?.getSessions() ?? Promise.resolve([])
   },

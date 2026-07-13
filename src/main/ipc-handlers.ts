@@ -6,6 +6,7 @@ import { networkInterfaces } from 'os'
 import { randomUUID } from 'crypto'
 import WebSocket from 'ws'
 import { startTunnel, stopTunnel, getTunnelUrl, isTunnelActive } from './tunnel-manager'
+import { getPendingPin } from './mobile-api-server'
 import type {
   DatabaseManager,
   CreateTaskData,
@@ -885,6 +886,10 @@ export function registerIpcHandlers(
   ipcMain.handle('mobile:stopTunnel', () => {
     stopTunnel()
     return { success: true }
+  })
+
+  ipcMain.handle('mobile:getPendingPin', () => {
+    return getPendingPin()
   })
 
   ipcMain.handle('mobile:getSessions', () => {
