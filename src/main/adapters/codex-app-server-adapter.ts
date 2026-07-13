@@ -72,6 +72,10 @@ interface AppServerSession {
   status: SessionStatusType
   messageBuffer: unknown[]
   permanentMessages: unknown[]
+  bufferedThreadItemIds: Set<string>
+  pendingCompletionRefreshes: number
+  sawThreadStatusNotification: boolean
+  pendingThreadIdle: boolean
   pendingRequests: Map<string | number, {
     resolve: (value: unknown) => void
     reject: (error: Error) => void
@@ -81,6 +85,7 @@ interface AppServerSession {
   lastError: string | null
   config: SessionConfig
   streamedTextByItemId: Map<string, string>
+  assistantTextKeysByTurn: Map<string, Set<string>>
   runningTools: Map<string, {
     partId: string
     toolName: string
@@ -398,14 +403,20 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
     const partContentLengths = new Map<string, string>()
     const partsByIdAndRole = new Map<string, MessagePart>()
 
-    for (const event of session.permanentMessages) {
-      const parts = this.convertEventToMessageParts(event, seenMessageIds, seenPartIds, partContentLengths, session)
-      for (const part of parts) {
-        const key = `${part.id || `part-${partsByIdAndRole.size}`}-${part.role || MessageRole.ASSISTANT}`
-        if (!partsByIdAndRole.has(key) || part.update) {
-          partsByIdAndRole.set(key, part)
+    const assistantTextKeysByTurn = session.assistantTextKeysByTurn
+    session.assistantTextKeysByTurn = new Map()
+    try {
+      for (const event of session.permanentMessages) {
+        const parts = this.convertEventToMessageParts(event, seenMessageIds, seenPartIds, partContentLengths, session)
+        for (const part of parts) {
+          const key = `${part.id || `part-${partsByIdAndRole.size}`}-${part.role || MessageRole.ASSISTANT}`
+          if (!partsByIdAndRole.has(key) || part.update) {
+            partsByIdAndRole.set(key, part)
+          }
         }
       }
+    } finally {
+      session.assistantTextKeysByTurn = assistantTextKeysByTurn
     }
 
     const messages: SessionMessage[] = []
@@ -464,6 +475,7 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
     session.permanentMessages.length = 0
     session.pendingRequests.clear()
     session.streamedTextByItemId.clear()
+    session.assistantTextKeysByTurn.clear()
     session.runningTools.clear()
     this.sessions.delete(sessionId)
   }
@@ -551,12 +563,17 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
       status: SessionStatusType.IDLE,
       messageBuffer: [],
       permanentMessages: [],
+      bufferedThreadItemIds: new Set(),
+      pendingCompletionRefreshes: 0,
+      sawThreadStatusNotification: false,
+      pendingThreadIdle: false,
       pendingRequests: new Map(),
       pendingApproval: null,
       nextRequestId: 1,
       lastError: null,
       config,
       streamedTextByItemId: new Map(),
+      assistantTextKeysByTurn: new Map(),
       runningTools: new Map(),
       codexUseApiKey: authEnv.usesApiKey,
       codexAuthSummary: authEnv.summary
@@ -797,11 +814,33 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
     if (notification.method === 'turn/started') {
       session.status = SessionStatusType.BUSY
       session.activeTurnId = asString(params.turnId) || session.activeTurnId
+      session.pendingThreadIdle = false
     }
 
     if (notification.method === 'turn/completed') {
-      session.status = SessionStatusType.IDLE
       session.activeTurnId = null
+      if (session.threadId) {
+        session.pendingCompletionRefreshes += 1
+        void this.reconcileCompletedTurn(session)
+      } else {
+        session.status = SessionStatusType.IDLE
+      }
+    }
+
+    if (notification.method === 'thread/status/changed') {
+      session.sawThreadStatusNotification = true
+      const status = isObject(params.status) ? asString(params.status.type) : ''
+      if (status === 'active') {
+        session.status = SessionStatusType.BUSY
+        session.pendingThreadIdle = false
+      } else if (status === 'idle') {
+        session.activeTurnId = null
+        session.pendingThreadIdle = true
+        this.markIdleIfSettled(session)
+      } else if (status === 'systemError') {
+        session.status = SessionStatusType.ERROR
+        session.lastError = 'Codex app-server thread entered system error state'
+      }
     }
 
     if (notification.method === 'error') {
@@ -922,6 +961,13 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
   private bufferThreadItems(session: AppServerSession, result: unknown): void {
     const items = isObject(result) && Array.isArray(result.data) ? result.data : []
     for (const item of items) {
+      if (isObject(item)) {
+        const itemId = asString(item.id)
+        if (itemId) {
+          if (session.bufferedThreadItemIds.has(itemId)) continue
+          session.bufferedThreadItemIds.add(itemId)
+        }
+      }
       this.addEvent(session, {
         method: 'item/completed',
         params: {
@@ -978,6 +1024,13 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
       for (const turn of turns) {
         if (!isObject(turn) || !Array.isArray(turn.items)) continue
         for (const item of turn.items) {
+          if (isObject(item)) {
+            const itemId = asString(item.id)
+            if (itemId) {
+              if (session.bufferedThreadItemIds.has(itemId)) continue
+              session.bufferedThreadItemIds.add(itemId)
+            }
+          }
           this.addEvent(session, {
             method: 'item/completed',
             params: {
@@ -992,6 +1045,29 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
       if (!cursor) return
     }
     console.warn('[CodexAppServerAdapter] Stopped thread/turns pagination after 20 pages')
+  }
+
+  private async reconcileCompletedTurn(session: AppServerSession): Promise<void> {
+    try {
+      if (!session.threadId) return
+      await this.bufferAllThreadItems(session, session.threadId)
+    } catch (error) {
+      console.warn('[CodexAppServerAdapter] Failed to reconcile completed turn items:', error)
+    } finally {
+      session.pendingCompletionRefreshes = Math.max(0, session.pendingCompletionRefreshes - 1)
+      this.markIdleIfSettled(session)
+    }
+  }
+
+  private markIdleIfSettled(session: AppServerSession): void {
+    if (session.status === SessionStatusType.ERROR) return
+    if (session.pendingCompletionRefreshes > 0) return
+    if (session.activeTurnId) return
+    if (session.sawThreadStatusNotification && !session.pendingThreadIdle) return
+
+    session.pendingThreadIdle = false
+    session.status = SessionStatusType.IDLE
+    this.onDataAvailable?.(session.threadId || session.sessionId)
   }
 
   private convertEventToMessageParts(
@@ -1144,8 +1220,15 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
     if (role === 'assistant' || type.includes('agent') || type.includes('assistant') || (!type && text)) {
       const partId = `agent-${itemId}`
       if (seenPartIds.has(partId) && method !== 'item/completed') return []
-      seenPartIds.add(partId)
       const finalText = text || session.streamedTextByItemId.get(itemId) || ''
+      const alreadySeen = seenPartIds.has(partId)
+      if (!alreadySeen && method === 'item/completed' && this.hasSeenAssistantTextForTurn(session, params, item, finalText)) {
+        return []
+      }
+      seenPartIds.add(partId)
+      if (method === 'item/completed') {
+        this.markAssistantTextForTurn(session, params, item, finalText)
+      }
       partContentLengths.set(partId, String(finalText.length))
       return [{
         id: partId,
@@ -1190,6 +1273,40 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
 
     partContentLengths.set(partId, `${part.tool?.status}:${toolName}`)
     return [part]
+  }
+
+  private hasSeenAssistantTextForTurn(
+    session: AppServerSession,
+    params: Record<string, unknown>,
+    item: Record<string, unknown>,
+    text: string
+  ): boolean {
+    const key = this.buildAssistantTextKey(text)
+    if (!key) return false
+    const turnKey = this.extractTurnKey(params, item)
+    return session.assistantTextKeysByTurn.get(turnKey)?.has(key) ?? false
+  }
+
+  private markAssistantTextForTurn(
+    session: AppServerSession,
+    params: Record<string, unknown>,
+    item: Record<string, unknown>,
+    text: string
+  ): void {
+    const key = this.buildAssistantTextKey(text)
+    if (!key) return
+    const turnKey = this.extractTurnKey(params, item)
+    const seenForTurn = session.assistantTextKeysByTurn.get(turnKey) ?? new Set<string>()
+    seenForTurn.add(key)
+    session.assistantTextKeysByTurn.set(turnKey, seenForTurn)
+  }
+
+  private extractTurnKey(params: Record<string, unknown>, item: Record<string, unknown>): string {
+    return asString(params.turnId) || asString(item.turnId) || asString(params.threadId) || 'unknown-turn'
+  }
+
+  private buildAssistantTextKey(text: string): string {
+    return text.trim().replace(/\s+/g, ' ')
   }
 
   private sendRpcRequest(session: AppServerSession, method: string, params?: unknown): Promise<unknown> {

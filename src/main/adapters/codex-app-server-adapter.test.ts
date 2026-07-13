@@ -61,6 +61,10 @@ interface AppServerSessionForTest {
   status: SessionStatusType
   messageBuffer: unknown[]
   permanentMessages: unknown[]
+  bufferedThreadItemIds: Set<string>
+  pendingCompletionRefreshes: number
+  sawThreadStatusNotification: boolean
+  pendingThreadIdle: boolean
   pendingRequests: Map<string | number, {
     resolve: (value: unknown) => void
     reject: (error: Error) => void
@@ -70,6 +74,7 @@ interface AppServerSessionForTest {
   lastError: string | null
   config: { permissionMode?: 'ask' | 'allow'; sandboxMode?: 'read-only' | 'workspace-write' | 'danger-full-access' }
   streamedTextByItemId: Map<string, string>
+  assistantTextKeysByTurn: Map<string, Set<string>>
   runningTools: Map<string, {
     partId: string
     toolName: string
@@ -94,16 +99,25 @@ function createSession(): AppServerSessionForTest {
     status: SessionStatusType.IDLE,
     messageBuffer: [],
     permanentMessages: [],
+    bufferedThreadItemIds: new Set(),
+    pendingCompletionRefreshes: 0,
+    sawThreadStatusNotification: false,
+    pendingThreadIdle: false,
     pendingRequests: new Map(),
     pendingApproval: null,
     nextRequestId: 1,
     lastError: null,
     config: { permissionMode: 'ask' },
     streamedTextByItemId: new Map(),
+    assistantTextKeysByTurn: new Map(),
     runningTools: new Map(),
     codexUseApiKey: false,
     codexAuthSummary: ''
   }
+}
+
+function flushPromises(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve))
 }
 
 describe('CodexAppServerAdapter', () => {
@@ -169,6 +183,172 @@ describe('CodexAppServerAdapter', () => {
       role: MessageRole.ASSISTANT
     })
     expect(parts[0].tool).toBeUndefined()
+  })
+
+  it('deduplicates identical assistant final messages from different item ids in the same turn', () => {
+    const adapter = adapterPrivate(new CodexAppServerAdapter())
+    const session = createSession()
+    const seenMessageIds = new Set<string>()
+    const seenPartIds = new Set<string>()
+    const lengths = new Map<string, string>()
+    const finalText = 'Updated and verified.\n\nLatest link:\nhttps://3050-example.runworkflo.com/?exec=abc'
+
+    const first = adapter.convertEventToMessageParts({
+      method: 'item/completed',
+      params: {
+        item: {
+          id: 'agent-message-final',
+          type: 'agent_message',
+          role: 'assistant',
+          content: finalText
+        },
+        threadId: 'thread-1',
+        turnId: 'turn-1'
+      }
+    }, seenMessageIds, seenPartIds, lengths, session)
+
+    const duplicate = adapter.convertEventToMessageParts({
+      method: 'item/completed',
+      params: {
+        item: {
+          id: 'response-item-message-final',
+          type: 'message',
+          role: 'assistant',
+          content: finalText
+        },
+        threadId: 'thread-1',
+        turnId: 'turn-1'
+      }
+    }, seenMessageIds, seenPartIds, lengths, session)
+
+    expect(first).toHaveLength(1)
+    expect(first[0]).toMatchObject({
+      id: 'agent-agent-message-final',
+      type: MessagePartType.TEXT,
+      text: finalText,
+      role: MessageRole.ASSISTANT
+    })
+    expect(duplicate).toHaveLength(0)
+  })
+
+  it('reconciles completed turns before reporting idle so final text is not lost', async () => {
+    const adapterInstance = new CodexAppServerAdapter()
+    const adapter = adapterPrivate(adapterInstance)
+    const session = createSession()
+    session.status = SessionStatusType.BUSY
+    adapter.sessions.set('thread-1', session)
+
+    adapter.handleRpcMessage(session, {
+      jsonrpc: '2.0',
+      method: 'turn/completed',
+      params: {
+        threadId: 'thread-1',
+        turnId: 'turn-1'
+      }
+    })
+
+    expect(session.status).toBe(SessionStatusType.BUSY)
+    expect(session.pendingCompletionRefreshes).toBe(1)
+    expect(session.pendingRequests.size).toBe(1)
+
+    const pending = Array.from(session.pendingRequests.values())[0]
+    pending.resolve({
+      data: [{
+        id: 'final-1',
+        type: 'message',
+        role: 'assistant',
+        content: 'Done: https://3050-example.runworkflo.com/?exec=abc',
+        turnId: 'turn-1'
+      }]
+    })
+    await flushPromises()
+
+    expect(session.pendingCompletionRefreshes).toBe(0)
+    expect(session.status).toBe(SessionStatusType.IDLE)
+
+    const parts = await adapterInstance.pollMessages(
+      'thread-1',
+      new Set(),
+      new Set(),
+      new Map(),
+      {} as never
+    )
+
+    expect(parts).toEqual([
+      expect.objectContaining({
+        id: 'agent-final-1',
+        type: MessagePartType.TEXT,
+        role: MessageRole.ASSISTANT,
+        text: 'Done: https://3050-example.runworkflo.com/?exec=abc'
+      })
+    ])
+  })
+
+  it('keeps the session busy when a completed turn is followed by an active thread status', async () => {
+    const adapterInstance = new CodexAppServerAdapter()
+    const adapter = adapterPrivate(adapterInstance)
+    const session = createSession()
+    session.status = SessionStatusType.BUSY
+    adapter.sessions.set('thread-1', session)
+
+    adapter.handleRpcMessage(session, {
+      jsonrpc: '2.0',
+      method: 'thread/status/changed',
+      params: {
+        threadId: 'thread-1',
+        status: { type: 'active', activeFlags: ['model'] }
+      }
+    })
+
+    adapter.handleRpcMessage(session, {
+      jsonrpc: '2.0',
+      method: 'turn/completed',
+      params: {
+        threadId: 'thread-1',
+        turnId: 'turn-1'
+      }
+    })
+
+    const pending = Array.from(session.pendingRequests.values())[0]
+    pending.resolve({
+      data: [{
+        id: 'progress-after-turn',
+        type: 'message',
+        role: 'assistant',
+        content: 'Still checking the result',
+        turnId: 'turn-1'
+      }]
+    })
+    await flushPromises()
+
+    expect(session.status).toBe(SessionStatusType.BUSY)
+    expect(session.pendingCompletionRefreshes).toBe(0)
+
+    adapter.handleRpcMessage(session, {
+      jsonrpc: '2.0',
+      method: 'thread/status/changed',
+      params: {
+        threadId: 'thread-1',
+        status: { type: 'idle' }
+      }
+    })
+
+    expect(session.status).toBe(SessionStatusType.IDLE)
+
+    const parts = await adapterInstance.pollMessages(
+      'thread-1',
+      new Set(),
+      new Set(),
+      new Map(),
+      {} as never
+    )
+
+    expect(parts).toEqual([
+      expect.objectContaining({
+        id: 'agent-progress-after-turn',
+        text: 'Still checking the result'
+      })
+    ])
   })
 
   it('tracks running tool items and clears them on completion', () => {
