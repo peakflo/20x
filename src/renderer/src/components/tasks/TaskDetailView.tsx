@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react'
-import { Pencil, Trash2, Calendar, User, Tag, Clock, Bot, Play, History, GitBranch, Plus, X, BookOpen, AlarmClockOff, BellRing, Folder, Repeat, Star, Sparkles, ListTree, ArrowLeft, ChevronRight, ChevronDown, GripVertical, Layers, Settings2, AlertCircle } from 'lucide-react'
+import { Pencil, Trash2, Calendar, User, Tag, Clock, Bot, Play, History, GitBranch, Plus, X, BookOpen, AlarmClockOff, BellRing, Folder, Repeat, Star, Sparkles, ListTree, ArrowLeft, ChevronRight, ChevronDown, GripVertical, Layers, Settings2, AlertCircle, SquareArrowOutUpRight } from 'lucide-react'
 import { DndContext, closestCenter, KeyboardSensor, PointerSensor, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core'
 import { arrayMove, SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
@@ -100,7 +100,7 @@ const subtaskStatusDotColor: Record<TaskStatus, string> = {
   [TaskStatus.Completed]: 'bg-emerald-400'
 }
 
-function SortableSubtaskItem({ subtask, onNavigateToTask }: { subtask: WorkfloTask; onNavigateToTask?: (taskId: string) => void }) {
+function SortableSubtaskItem({ subtask, onNavigateToTask, onOpenSubtaskInWindow }: { subtask: WorkfloTask; onNavigateToTask?: (taskId: string) => void; onOpenSubtaskInWindow?: (taskId: string) => void }) {
   const {
     attributes,
     listeners,
@@ -138,13 +138,23 @@ function SortableSubtaskItem({ subtask, onNavigateToTask }: { subtask: WorkfloTa
         <div className="min-w-0 flex-1">
           <div className="text-sm truncate">{subtask.title}</div>
         </div>
-        <ChevronRight className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
       </button>
+      {onOpenSubtaskInWindow && (
+        <button
+          onClick={(e) => { e.stopPropagation(); onOpenSubtaskInWindow(subtask.id) }}
+          title="Open in a separate window"
+          aria-label="Open subtask in a separate window"
+          className="shrink-0 p-1 rounded text-muted-foreground/50 hover:text-foreground hover:bg-accent transition-colors cursor-pointer"
+        >
+          <SquareArrowOutUpRight className="h-3.5 w-3.5" />
+        </button>
+      )}
+      <ChevronRight className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
     </div>
   )
 }
 
-function SubtasksSection({ subtasks, onNavigateToTask, onAddSubtask, onReorderSubtasks }: { subtasks: WorkfloTask[]; onNavigateToTask?: (taskId: string) => void; onAddSubtask?: (title: string) => void; onReorderSubtasks?: (orderedIds: string[]) => void }) {
+function SubtasksSection({ subtasks, onNavigateToTask, onOpenSubtaskInWindow, onAddSubtask, onReorderSubtasks }: { subtasks: WorkfloTask[]; onNavigateToTask?: (taskId: string) => void; onOpenSubtaskInWindow?: (taskId: string) => void; onAddSubtask?: (title: string) => void; onReorderSubtasks?: (orderedIds: string[]) => void }) {
   const [isAdding, setIsAdding] = React.useState(false)
   const [newTitle, setNewTitle] = React.useState('')
   const inputRef = React.useRef<HTMLInputElement>(null)
@@ -208,6 +218,7 @@ function SubtasksSection({ subtasks, onNavigateToTask, onAddSubtask, onReorderSu
                 key={subtask.id}
                 subtask={subtask}
                 onNavigateToTask={onNavigateToTask}
+                onOpenSubtaskInWindow={onOpenSubtaskInWindow}
               />
             ))}
           </SortableContext>
@@ -372,11 +383,13 @@ interface TaskDetailViewProps {
   subtasks?: WorkfloTask[]
   parentTask?: WorkfloTask | null
   onNavigateToTask?: (taskId: string) => void
+  /** When provided, each subtask shows an action to open it as a separate window/panel. */
+  onOpenSubtaskInWindow?: (taskId: string) => void
   onAddSubtask?: (title: string) => void
   onReorderSubtasks?: (orderedIds: string[]) => void
 }
 
-export function TaskDetailView({ task, agents, onEdit, onDelete, onUpdateAttachments, onUpdateOutputFields, onCompleteTask, onAssignAgent, onUpdateRepos, onAddRepos, onUpdateSkillIds, onAddSkills, onStartAgent, canStartAgent, onResumeAgent, canResumeAgent, onRestartAgent, canRestartAgent, onSnooze, onUnsnooze, onReassign, onTriage, canTriage, onEditAgent, onUpdateDescription, onUpdateAutoFlags, subtasks, parentTask, onNavigateToTask, onAddSubtask, onReorderSubtasks }: TaskDetailViewProps) {
+export function TaskDetailView({ task, agents, onEdit, onDelete, onUpdateAttachments, onUpdateOutputFields, onCompleteTask, onAssignAgent, onUpdateRepos, onAddRepos, onUpdateSkillIds, onAddSkills, onStartAgent, canStartAgent, onResumeAgent, canResumeAgent, onRestartAgent, canRestartAgent, onSnooze, onUnsnooze, onReassign, onTriage, canTriage, onEditAgent, onUpdateDescription, onUpdateAutoFlags, subtasks, parentTask, onNavigateToTask, onOpenSubtaskInWindow, onAddSubtask, onReorderSubtasks }: TaskDetailViewProps) {
   const { skills, fetchSkills } = useSkillStore()
   const openTaskOnCanvas = useUIStore((s) => s.openTaskOnCanvas)
   const isActive = task.status !== TaskStatus.Completed
@@ -720,6 +733,7 @@ export function TaskDetailView({ task, agents, onEdit, onDelete, onUpdateAttachm
             <SubtasksSection
               subtasks={subtasks || []}
               onNavigateToTask={onNavigateToTask}
+              onOpenSubtaskInWindow={onOpenSubtaskInWindow}
               onAddSubtask={onAddSubtask}
               onReorderSubtasks={onReorderSubtasks}
             />
