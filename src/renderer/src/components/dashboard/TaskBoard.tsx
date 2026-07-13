@@ -270,7 +270,7 @@ const ColumnHeader = memo(function ColumnHeader({ column, count }: { column: Sta
 
 const BoardColumn = memo(function BoardColumn({ column, tasks, onSelect, agentMap }: { column: StatusColumn; tasks: WorkfloTask[]; onSelect: (id: string) => void; agentMap: Map<string, Agent> }) {
   return (
-    <div className={`min-w-[230px] max-w-[280px] flex-1 flex flex-col rounded-xl ${column.columnBg} border border-border/15`}>
+    <div className={`min-w-[230px] max-w-[320px] flex-1 flex flex-col rounded-xl ${column.columnBg} border border-border/15`}>
       {/* Sticky header within column */}
       <div className={`sticky top-0 z-10 ${column.columnBg} backdrop-blur-md rounded-t-xl border-b border-border/15`}>
         <ColumnHeader column={column} count={tasks.length} />
@@ -365,9 +365,9 @@ export function TaskBoard() {
       </div>
 
       {isLoading ? (
-        <div className="flex gap-3 pb-2">
+        <div className="flex gap-3 pb-2 overflow-x-auto">
           {COLUMNS.map((col) => (
-            <div key={col.key} className={`min-w-[230px] max-w-[280px] flex-1 rounded-xl ${col.columnBg} border border-border/15`}>
+            <div key={col.key} className={`min-w-[230px] max-w-[320px] flex-1 rounded-xl ${col.columnBg} border border-border/15`}>
               <div className="px-3 py-2.5 border-b border-border/15">
                 <div className="flex items-center gap-2">
                   <div className={`h-2.5 w-2.5 rounded-full ${col.dotColor} opacity-40`} />
@@ -393,7 +393,7 @@ export function TaskBoard() {
           </p>
         </div>
       ) : (
-        <div className="flex gap-3 pb-2">
+        <div className="flex gap-3 pb-2 overflow-x-auto">
           {COLUMNS.map((col) => (
             <BoardColumn
               key={col.key}

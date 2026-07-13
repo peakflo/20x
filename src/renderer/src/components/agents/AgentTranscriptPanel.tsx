@@ -7,6 +7,7 @@ import type { AgentMessage } from '@/hooks/use-agent-session'
 import { SessionStatus } from '@/stores/agent-store'
 import { serializeTranscriptForDebug, type RawTranscriptMessage } from '@/lib/serialize-transcript-debug'
 import { agentSessionApi } from '@/lib/ipc-client'
+import { cn } from '@/lib/utils'
 
 enum ViewMode {
   MARKDOWN = 'markdown',
@@ -899,7 +900,7 @@ export function AgentTranscriptPanel({
   }
 
   return (
-    <div ref={panelRef} tabIndex={-1} className={`flex flex-col min-h-0 bg-background border-l border-border relative ${className ?? ''}`}>
+    <div ref={panelRef} tabIndex={-1} className={cn('flex flex-col min-h-0 bg-background border-l border-border relative', className)}>
       {/* Debug copy toast — only visible briefly after copy */}
       {debugCopyToast && (
         <div className="absolute top-12 left-1/2 -translate-x-1/2 z-50 bg-card border border-border rounded-md px-3 py-1.5 text-xs text-foreground shadow-lg animate-in fade-in duration-150">
@@ -908,7 +909,7 @@ export function AgentTranscriptPanel({
       )}
       {/* Header — windows-titlebar-safe adds right padding on Windows to avoid title bar overlay */}
       <div
-        className="flex items-center justify-between px-4 py-3 border-b border-border/50 shrink-0 windows-titlebar-safe"
+        className="flex items-center justify-between px-4 py-3 border-b border-border/60 shrink-0 windows-titlebar-safe"
         onContextMenu={handleHeaderContextMenu}
         title="Right-click to copy debug info"
       >

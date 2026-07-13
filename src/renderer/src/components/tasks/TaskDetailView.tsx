@@ -247,7 +247,7 @@ function ParentTaskContext({ parentTask, onNavigateToTask }: { parentTask: Workf
       <div className="flex items-center gap-2">
         <button
           onClick={() => setIsExpanded(!isExpanded)}
-          className="flex-1 flex items-center gap-2 px-3 py-2.5 text-left cursor-pointer hover:bg-accent/50 rounded-lg transition-colors"
+          className="flex-1 min-w-0 flex items-center gap-2 px-3 py-2.5 text-left cursor-pointer hover:bg-accent/50 rounded-lg transition-colors"
         >
           {isExpanded ? (
             <ChevronDown className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
@@ -397,7 +397,7 @@ export function TaskDetailView({ task, agents, onEdit, onDelete, onUpdateAttachm
 
   return (
     <div className="flex flex-col h-full">
-      <div className="flex items-center justify-between border-b px-6 py-4 shrink-0">
+      <div className="flex items-center justify-between border-b border-border/60 px-6 py-4 shrink-0">
         <div className="flex items-center gap-2.5">
           <TaskStatusBadge status={task.status} />
           <TaskTypeBadge type={task.type} />

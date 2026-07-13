@@ -721,9 +721,9 @@ Update existing skills that were helpful or create new ones for patterns worth r
         )}
 
         {showPanel && panelLayout !== 'task-only' && (
-          <div className="min-h-0 min-w-0 h-full flex flex-col">
+          <div className={`min-h-0 min-w-0 h-full flex flex-col ${panelLayout !== 'transcript-only' ? 'border-l border-border/60' : ''}`}>
             {/* Transcript / Changes tab switcher */}
-            <div className="flex items-center gap-1 border-b border-border/60 px-3 pt-2 pb-1 flex-shrink-0">
+            <div className="flex items-center gap-1 px-3 pt-2 pb-1 flex-shrink-0">
               {(['transcript', 'changes'] as const).map((tab) => (
                 <button
                   key={tab}
@@ -753,11 +753,11 @@ Update existing skills that were helpful or create new ones for patterns worth r
                 onSend={handleSend}
                 onPickAttachments={handlePickAttachments}
                 onAddAttachmentPaths={handleAddAttachmentPaths}
-                className="h-full"
                 sessionId={session.sessionId}
                 taskId={task.id}
                 agentId={task.agent_id ?? undefined}
                 pendingApproval={session.pendingApproval ?? undefined}
+                className="h-full bg-card border-l-0"
               />
             </div>
             <div className={rightTab === 'changes' ? 'flex-1 min-h-0' : 'hidden'}>

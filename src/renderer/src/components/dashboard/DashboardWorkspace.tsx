@@ -118,7 +118,7 @@ export function DashboardWorkspace() {
   }, [setShowOrchestrator])
 
   return (
-    <div className="h-full overflow-y-auto">
+    <div className="h-full overflow-y-auto overflow-x-hidden">
       {/* Command center — centered narrow column */}
       <div className="max-w-2xl mx-auto px-6 pt-8 pb-6 space-y-5">
         {/* 1. Hero — Recent Mastermind Messages */}
@@ -138,7 +138,7 @@ export function DashboardWorkspace() {
       </div>
 
       {/* Full-width sections below — constrained + centered to align with kanban */}
-      <div className="max-w-screen-xl mx-auto px-6 space-y-6 pb-8">
+      <div className="max-w-[1600px] mx-auto px-6 space-y-6 pb-8">
         {/* Cloud connect prompt — when not authenticated */}
         {!isAuthenticated && (
           <>
