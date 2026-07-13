@@ -247,7 +247,7 @@ function ParentTaskContext({ parentTask, onNavigateToTask }: { parentTask: Workf
       <div className="flex items-center gap-2">
         <button
           onClick={() => setIsExpanded(!isExpanded)}
-          className="flex-1 flex items-center gap-2 px-3 py-2.5 text-left cursor-pointer hover:bg-accent/50 rounded-lg transition-colors"
+          className="flex-1 min-w-0 flex items-center gap-2 px-3 py-2.5 text-left cursor-pointer hover:bg-accent/50 rounded-lg transition-colors"
         >
           {isExpanded ? (
             <ChevronDown className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
