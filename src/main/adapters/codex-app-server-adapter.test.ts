@@ -140,6 +140,37 @@ describe('CodexAppServerAdapter', () => {
     })
   })
 
+  it('converts generic assistant message items into final text parts', () => {
+    const adapter = adapterPrivate(new CodexAppServerAdapter())
+    const session = createSession()
+    const seenMessageIds = new Set<string>()
+    const seenPartIds = new Set<string>()
+    const lengths = new Map<string, string>()
+
+    const parts = adapter.convertEventToMessageParts({
+      method: 'item/completed',
+      params: {
+        item: {
+          id: 'final-1',
+          type: 'message',
+          role: 'assistant',
+          content: 'Here is the app: https://3050-example.runworkflo.com/?exec=abc'
+        },
+        threadId: 'thread-1',
+        turnId: 'turn-1'
+      }
+    }, seenMessageIds, seenPartIds, lengths, session)
+
+    expect(parts).toHaveLength(1)
+    expect(parts[0]).toMatchObject({
+      id: 'agent-final-1',
+      type: MessagePartType.TEXT,
+      text: 'Here is the app: https://3050-example.runworkflo.com/?exec=abc',
+      role: MessageRole.ASSISTANT
+    })
+    expect(parts[0].tool).toBeUndefined()
+  })
+
   it('tracks running tool items and clears them on completion', () => {
     const adapter = adapterPrivate(new CodexAppServerAdapter())
     const session = createSession()
