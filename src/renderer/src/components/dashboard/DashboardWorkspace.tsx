@@ -118,7 +118,7 @@ export function DashboardWorkspace() {
   }, [setShowOrchestrator])
 
   return (
-    <div className="h-full overflow-y-auto">
+    <div className="h-full overflow-y-auto overflow-x-hidden">
       {/* Command center — centered narrow column */}
       <div className="max-w-2xl mx-auto px-6 pt-8 pb-6 space-y-5">
         {/* 1. Hero — Recent Mastermind Messages */}

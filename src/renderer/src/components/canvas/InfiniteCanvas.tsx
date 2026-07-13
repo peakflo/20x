@@ -562,7 +562,7 @@ export function InfiniteCanvas() {
       <div className="absolute top-3 left-3 z-10">
         <Button
           size="sm"
-          className="h-8 px-3 bg-primary text-primary-foreground hover:bg-primary/90 shadow-sm text-xs gap-1.5"
+          className="h-8 px-3 rounded-xl bg-primary text-primary-foreground hover:bg-primary/90 shadow-sm text-xs gap-1.5"
           onClick={(e) => {
             const btn = e.currentTarget.getBoundingClientRect()
             const rect = containerRef.current?.getBoundingClientRect()

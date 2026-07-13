@@ -267,7 +267,7 @@ body, .theme-transition {
 
 /* macOS: push left-pinned elements past the traffic lights (constant physical gap). */
 [data-platform="darwin"] .macos-titlebar-pad {
-  margin-left: calc(80px / var(--zoom-factor, 1));
+  margin-left: calc(92px / var(--zoom-factor, 1));
 }
 
 /* Windows title-bar overlay safe areas */
