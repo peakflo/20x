@@ -39,6 +39,8 @@ interface TaskWorkspaceProps {
   onAssignAgent: (taskId: string, agentId: string | null) => void
   onUpdateTask?: (taskId: string, data: Partial<WorkfloTask>) => Promise<void>
   onNavigateToTask?: (taskId: string) => void
+  /** When provided, each subtask shows an action to open it as a separate canvas window/panel. */
+  onOpenSubtaskInWindow?: (taskId: string) => void
   /** Override the layout — which panels to show. Default: 'both' */
   panelLayout?: TaskWorkspaceLayout
 }
@@ -54,6 +56,7 @@ export function TaskWorkspace({
   onAssignAgent,
   onUpdateTask,
   onNavigateToTask,
+  onOpenSubtaskInWindow,
   panelLayout = 'both'
 }: TaskWorkspaceProps) {
   const { session, start, resume, abort, stop, sendMessage, approve } = useAgentSession(task?.id)
@@ -714,6 +717,7 @@ Update existing skills that were helpful or create new ones for patterns worth r
             subtasks={subtasks}
             parentTask={parentTask}
             onNavigateToTask={onNavigateToTask}
+            onOpenSubtaskInWindow={onOpenSubtaskInWindow}
             onAddSubtask={handleAddSubtask}
             onReorderSubtasks={handleReorderSubtasks}
           />

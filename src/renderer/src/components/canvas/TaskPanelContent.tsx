@@ -1,6 +1,6 @@
 import { useCallback } from 'react'
 import { TaskWorkspace, type TaskWorkspaceLayout } from '@/components/tasks/TaskWorkspace'
-import { useCanvasStore } from '@/stores/canvas-store'
+import { useCanvasStore, DEFAULT_PANEL_WIDTH, DEFAULT_PANEL_HEIGHT } from '@/stores/canvas-store'
 import { useTaskStore } from '@/stores/task-store'
 import { useAgentStore } from '@/stores/agent-store'
 import { useUIStore } from '@/stores/ui-store'
@@ -24,6 +24,9 @@ export function TaskPanelContent({ panelId, taskId, panelLayout = 'both' }: Task
   const agents = useAgentStore((s) => s.agents)
   const updateTask = useTaskStore((s) => s.updateTask)
   const updatePanel = useCanvasStore((s) => s.updatePanel)
+  const addPanel = useCanvasStore((s) => s.addPanel)
+  const addEdge = useCanvasStore((s) => s.addEdge)
+  const bringToFront = useCanvasStore((s) => s.bringToFront)
   const { executeAction } = useTaskSourceStore()
   const { openEditModal, openDeleteModal } = useUIStore()
 
@@ -92,6 +95,43 @@ export function TaskPanelContent({ panelId, taskId, panelLayout = 'both' }: Task
     [panelId, updatePanel]
   )
 
+  // Open a subtask as a separate window (a new task panel) on the canvas,
+  // rather than replacing the current panel. Positions the new panel to the
+  // right of this one and links them with an edge. If the subtask is already
+  // open, bring its panel to the front instead of duplicating it.
+  const handleOpenSubtaskInWindow = useCallback(
+    (tid: string) => {
+      const targetTask = useTaskStore.getState().tasks.find((candidate) => candidate.id === tid)
+      if (!targetTask) return
+
+      const { panels } = useCanvasStore.getState()
+
+      const existing = panels.find((p) => p.type === 'task' && p.refId === tid)
+      if (existing) {
+        bringToFront(existing.id)
+        return
+      }
+
+      const currentPanel = panels.find((p) => p.id === panelId)
+      const gap = 40
+      const newX = currentPanel ? currentPanel.x + currentPanel.width + gap : 0
+      const newY = currentPanel ? currentPanel.y : 0
+
+      const newId = addPanel({
+        type: 'task',
+        title: targetTask.title,
+        refId: targetTask.id,
+        x: newX,
+        y: newY,
+        width: DEFAULT_PANEL_WIDTH,
+        height: DEFAULT_PANEL_HEIGHT,
+      })
+
+      if (newId) addEdge(panelId, newId)
+    },
+    [panelId, addPanel, addEdge, bringToFront]
+  )
+
   if (!task) {
     return (
       <div className="flex items-center justify-center h-full text-muted-foreground/50 text-xs">
@@ -113,6 +153,7 @@ export function TaskPanelContent({ panelId, taskId, panelLayout = 'both' }: Task
         onAssignAgent={handleAssignAgent}
         onUpdateTask={handleUpdateTask}
         onNavigateToTask={handleNavigateToTask}
+        onOpenSubtaskInWindow={handleOpenSubtaskInWindow}
         panelLayout={panelLayout}
       />
     </div>
