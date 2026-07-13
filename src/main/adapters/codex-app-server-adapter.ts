@@ -85,6 +85,7 @@ interface AppServerSession {
   lastError: string | null
   config: SessionConfig
   streamedTextByItemId: Map<string, string>
+  assistantTextKeysByTurn: Map<string, Set<string>>
   runningTools: Map<string, {
     partId: string
     toolName: string
@@ -402,14 +403,20 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
     const partContentLengths = new Map<string, string>()
     const partsByIdAndRole = new Map<string, MessagePart>()
 
-    for (const event of session.permanentMessages) {
-      const parts = this.convertEventToMessageParts(event, seenMessageIds, seenPartIds, partContentLengths, session)
-      for (const part of parts) {
-        const key = `${part.id || `part-${partsByIdAndRole.size}`}-${part.role || MessageRole.ASSISTANT}`
-        if (!partsByIdAndRole.has(key) || part.update) {
-          partsByIdAndRole.set(key, part)
+    const assistantTextKeysByTurn = session.assistantTextKeysByTurn
+    session.assistantTextKeysByTurn = new Map()
+    try {
+      for (const event of session.permanentMessages) {
+        const parts = this.convertEventToMessageParts(event, seenMessageIds, seenPartIds, partContentLengths, session)
+        for (const part of parts) {
+          const key = `${part.id || `part-${partsByIdAndRole.size}`}-${part.role || MessageRole.ASSISTANT}`
+          if (!partsByIdAndRole.has(key) || part.update) {
+            partsByIdAndRole.set(key, part)
+          }
         }
       }
+    } finally {
+      session.assistantTextKeysByTurn = assistantTextKeysByTurn
     }
 
     const messages: SessionMessage[] = []
@@ -468,6 +475,7 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
     session.permanentMessages.length = 0
     session.pendingRequests.clear()
     session.streamedTextByItemId.clear()
+    session.assistantTextKeysByTurn.clear()
     session.runningTools.clear()
     this.sessions.delete(sessionId)
   }
@@ -565,6 +573,7 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
       lastError: null,
       config,
       streamedTextByItemId: new Map(),
+      assistantTextKeysByTurn: new Map(),
       runningTools: new Map(),
       codexUseApiKey: authEnv.usesApiKey,
       codexAuthSummary: authEnv.summary
@@ -1211,8 +1220,15 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
     if (role === 'assistant' || type.includes('agent') || type.includes('assistant') || (!type && text)) {
       const partId = `agent-${itemId}`
       if (seenPartIds.has(partId) && method !== 'item/completed') return []
-      seenPartIds.add(partId)
       const finalText = text || session.streamedTextByItemId.get(itemId) || ''
+      const alreadySeen = seenPartIds.has(partId)
+      if (!alreadySeen && method === 'item/completed' && this.hasSeenAssistantTextForTurn(session, params, item, finalText)) {
+        return []
+      }
+      seenPartIds.add(partId)
+      if (method === 'item/completed') {
+        this.markAssistantTextForTurn(session, params, item, finalText)
+      }
       partContentLengths.set(partId, String(finalText.length))
       return [{
         id: partId,
@@ -1257,6 +1273,40 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
 
     partContentLengths.set(partId, `${part.tool?.status}:${toolName}`)
     return [part]
+  }
+
+  private hasSeenAssistantTextForTurn(
+    session: AppServerSession,
+    params: Record<string, unknown>,
+    item: Record<string, unknown>,
+    text: string
+  ): boolean {
+    const key = this.buildAssistantTextKey(text)
+    if (!key) return false
+    const turnKey = this.extractTurnKey(params, item)
+    return session.assistantTextKeysByTurn.get(turnKey)?.has(key) ?? false
+  }
+
+  private markAssistantTextForTurn(
+    session: AppServerSession,
+    params: Record<string, unknown>,
+    item: Record<string, unknown>,
+    text: string
+  ): void {
+    const key = this.buildAssistantTextKey(text)
+    if (!key) return
+    const turnKey = this.extractTurnKey(params, item)
+    const seenForTurn = session.assistantTextKeysByTurn.get(turnKey) ?? new Set<string>()
+    seenForTurn.add(key)
+    session.assistantTextKeysByTurn.set(turnKey, seenForTurn)
+  }
+
+  private extractTurnKey(params: Record<string, unknown>, item: Record<string, unknown>): string {
+    return asString(params.turnId) || asString(item.turnId) || asString(params.threadId) || 'unknown-turn'
+  }
+
+  private buildAssistantTextKey(text: string): string {
+    return text.trim().replace(/\s+/g, ' ')
   }
 
   private sendRpcRequest(session: AppServerSession, method: string, params?: unknown): Promise<unknown> {

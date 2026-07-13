@@ -74,6 +74,7 @@ interface AppServerSessionForTest {
   lastError: string | null
   config: { permissionMode?: 'ask' | 'allow'; sandboxMode?: 'read-only' | 'workspace-write' | 'danger-full-access' }
   streamedTextByItemId: Map<string, string>
+  assistantTextKeysByTurn: Map<string, Set<string>>
   runningTools: Map<string, {
     partId: string
     toolName: string
@@ -108,6 +109,7 @@ function createSession(): AppServerSessionForTest {
     lastError: null,
     config: { permissionMode: 'ask' },
     streamedTextByItemId: new Map(),
+    assistantTextKeysByTurn: new Map(),
     runningTools: new Map(),
     codexUseApiKey: false,
     codexAuthSummary: ''
@@ -181,6 +183,52 @@ describe('CodexAppServerAdapter', () => {
       role: MessageRole.ASSISTANT
     })
     expect(parts[0].tool).toBeUndefined()
+  })
+
+  it('deduplicates identical assistant final messages from different item ids in the same turn', () => {
+    const adapter = adapterPrivate(new CodexAppServerAdapter())
+    const session = createSession()
+    const seenMessageIds = new Set<string>()
+    const seenPartIds = new Set<string>()
+    const lengths = new Map<string, string>()
+    const finalText = 'Updated and verified.\n\nLatest link:\nhttps://3050-example.runworkflo.com/?exec=abc'
+
+    const first = adapter.convertEventToMessageParts({
+      method: 'item/completed',
+      params: {
+        item: {
+          id: 'agent-message-final',
+          type: 'agent_message',
+          role: 'assistant',
+          content: finalText
+        },
+        threadId: 'thread-1',
+        turnId: 'turn-1'
+      }
+    }, seenMessageIds, seenPartIds, lengths, session)
+
+    const duplicate = adapter.convertEventToMessageParts({
+      method: 'item/completed',
+      params: {
+        item: {
+          id: 'response-item-message-final',
+          type: 'message',
+          role: 'assistant',
+          content: finalText
+        },
+        threadId: 'thread-1',
+        turnId: 'turn-1'
+      }
+    }, seenMessageIds, seenPartIds, lengths, session)
+
+    expect(first).toHaveLength(1)
+    expect(first[0]).toMatchObject({
+      id: 'agent-agent-message-final',
+      type: MessagePartType.TEXT,
+      text: finalText,
+      role: MessageRole.ASSISTANT
+    })
+    expect(duplicate).toHaveLength(0)
   })
 
   it('reconciles completed turns before reporting idle so final text is not lost', async () => {
