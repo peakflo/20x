@@ -72,6 +72,8 @@ interface AppServerSession {
   status: SessionStatusType
   messageBuffer: unknown[]
   permanentMessages: unknown[]
+  bufferedThreadItemIds: Set<string>
+  pendingCompletionRefreshes: number
   pendingRequests: Map<string | number, {
     resolve: (value: unknown) => void
     reject: (error: Error) => void
@@ -551,6 +553,8 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
       status: SessionStatusType.IDLE,
       messageBuffer: [],
       permanentMessages: [],
+      bufferedThreadItemIds: new Set(),
+      pendingCompletionRefreshes: 0,
       pendingRequests: new Map(),
       pendingApproval: null,
       nextRequestId: 1,
@@ -800,8 +804,13 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
     }
 
     if (notification.method === 'turn/completed') {
-      session.status = SessionStatusType.IDLE
       session.activeTurnId = null
+      if (session.threadId) {
+        session.pendingCompletionRefreshes += 1
+        void this.reconcileCompletedTurn(session)
+      } else {
+        session.status = SessionStatusType.IDLE
+      }
     }
 
     if (notification.method === 'error') {
@@ -922,6 +931,13 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
   private bufferThreadItems(session: AppServerSession, result: unknown): void {
     const items = isObject(result) && Array.isArray(result.data) ? result.data : []
     for (const item of items) {
+      if (isObject(item)) {
+        const itemId = asString(item.id)
+        if (itemId) {
+          if (session.bufferedThreadItemIds.has(itemId)) continue
+          session.bufferedThreadItemIds.add(itemId)
+        }
+      }
       this.addEvent(session, {
         method: 'item/completed',
         params: {
@@ -978,6 +994,13 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
       for (const turn of turns) {
         if (!isObject(turn) || !Array.isArray(turn.items)) continue
         for (const item of turn.items) {
+          if (isObject(item)) {
+            const itemId = asString(item.id)
+            if (itemId) {
+              if (session.bufferedThreadItemIds.has(itemId)) continue
+              session.bufferedThreadItemIds.add(itemId)
+            }
+          }
           this.addEvent(session, {
             method: 'item/completed',
             params: {
@@ -992,6 +1015,21 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
       if (!cursor) return
     }
     console.warn('[CodexAppServerAdapter] Stopped thread/turns pagination after 20 pages')
+  }
+
+  private async reconcileCompletedTurn(session: AppServerSession): Promise<void> {
+    try {
+      if (!session.threadId) return
+      await this.bufferAllThreadItems(session, session.threadId)
+    } catch (error) {
+      console.warn('[CodexAppServerAdapter] Failed to reconcile completed turn items:', error)
+    } finally {
+      session.pendingCompletionRefreshes = Math.max(0, session.pendingCompletionRefreshes - 1)
+      if (session.pendingCompletionRefreshes === 0 && !session.activeTurnId && session.status !== SessionStatusType.ERROR) {
+        session.status = SessionStatusType.IDLE
+        this.onDataAvailable?.(session.threadId || session.sessionId)
+      }
+    }
   }
 
   private convertEventToMessageParts(
