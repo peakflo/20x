@@ -82,6 +82,10 @@ function hasUserSuppliedAuthHeader(headers?: Record<string, string>): boolean {
   return false
 }
 
+function isCodexAppServerAdapter(adapter: CodingAgentAdapter): boolean {
+  return adapter instanceof CodexAppServerAdapter || adapter.constructor?.name === 'CodexAppServerAdapter'
+}
+
 /**
  * The MCP server that 20x should auto-manage (URL canonicalisation + JWT
  * injection via mcp-auth-proxy) is exactly: an enterprise-sourced row whose
@@ -1593,10 +1597,12 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     session: AgentSession,
     taskId: string,
     idPrefix: string,
-    content: string
+    content: string,
+    suppressTranscript = false
   ): boolean {
     if (session.autoAbortNotified) return false
     session.autoAbortNotified = true
+    if (suppressTranscript) return true
     this.sendToRenderer('agent:output', {
       sessionId,
       taskId,
@@ -2049,7 +2055,8 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
                     session,
                     config.taskId,
                     'stuck-tool',
-                    `Session auto-aborted: ${reason}. You can send a new message to continue.`
+                    `Session auto-aborted: ${reason}. You can send a new message to continue.`,
+                    isCodexAppServerAdapter(adapter)
                   )
                   if (!shouldAbort) return
                   console.warn(`[AgentManager] Session ${sessionId}: ${reason}. Aborting.`)
@@ -2127,7 +2134,8 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
                 session,
                 config.taskId,
                 'stuck-abort',
-                `Session auto-aborted: no activity for ${Math.round(silentDuration / 1000)}s. A tool call may have hung. You can send a new message to continue.`
+                `Session auto-aborted: no activity for ${Math.round(silentDuration / 1000)}s. A tool call may have hung. You can send a new message to continue.`,
+                isCodexAppServerAdapter(adapter)
               )
               if (!shouldAbort) return
               console.warn(

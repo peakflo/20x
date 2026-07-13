@@ -1920,6 +1920,58 @@ describe('AgentManager startAdapterPolling — IDLE grace period for follow-up m
     expect(abortPrompt).toHaveBeenCalledOnce()
   })
 
+  it('suppresses auto-abort transcript messages for Codex app-server tools', async () => {
+    const mgr = buildManager()
+    const abortPrompt = vi.fn(async () => undefined)
+    const adapter = {
+      pollMessages: vi.fn(async () => [] as any[]),
+      getStatus: vi.fn(async () => ({ type: SessionStatusType.BUSY })),
+      getRunningTools: vi.fn(async () => [{
+        partId: 'tool-call-1',
+        toolName: 'commandExecution',
+        startTime: Date.now() - 240_000,
+        input: {}
+      }]),
+      abortPrompt,
+    }
+    Object.defineProperty(adapter, 'constructor', {
+      value: { name: 'CodexAppServerAdapter' },
+    })
+
+    const session = {
+      agentId: 'agent-1',
+      taskId: 'task-1',
+      status: 'working',
+      createdAt: new Date(),
+      seenMessageIds: new Set<string>(),
+      seenPartIds: new Set<string>(),
+      partContentLengths: new Map<string, string>(),
+      adapter,
+      pollingStarted: true,
+    }
+    ;(mgr as any).sessions.set('session-1', session)
+
+    ;(mgr as any).startAdapterPolling(
+      'session-1',
+      adapter,
+      { agentId: 'agent-1', taskId: 'task-1', workspaceDir: '/tmp/ws' },
+      undefined,
+      session
+    )
+
+    const entry = (mgr as any).pollingEntries.get('session-1')
+    await (mgr as any).pollSingleSession(entry)
+
+    const sendSpy = vi.mocked((mgr as any).sendToRenderer)
+    const autoAbortMessages = sendSpy.mock.calls.filter(([channel, payload]) => (
+      channel === 'agent:output' &&
+      String((payload as any).data?.content || '').startsWith('Session auto-aborted:')
+    ))
+
+    expect(autoAbortMessages).toHaveLength(0)
+    expect(abortPrompt).toHaveBeenCalledOnce()
+  })
+
   it('pollSingleSession does not inject a duplicate status error when the poll already emitted the same error text', async () => {
     const mgr = buildManager()
     const errorMessage = 'API Error: Server is temporarily limiting requests (not your usage limit) - Rate limited'
