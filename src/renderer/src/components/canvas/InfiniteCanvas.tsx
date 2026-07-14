@@ -7,7 +7,7 @@ import { CanvasPanel } from './CanvasPanel'
 import { CanvasConnections } from './CanvasConnections'
 import { CanvasContextMenu } from './CanvasContextMenu'
 import { CanvasMinimap } from './CanvasMinimap'
-import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Move, ZoomIn, ZoomOut, RotateCcw, Plus } from 'lucide-react'
+import { ArrowDown, ArrowDownLeft, ArrowDownRight, ArrowLeft, ArrowRight, ArrowUp, ArrowUpLeft, ArrowUpRight, Move, ZoomIn, ZoomOut, RotateCcw, Plus } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { TaskStatus } from '@/types'
 import { getCanvasTaskStatusStyle, shouldPulseCanvasTaskStatusTransition } from './canvas-status-style'
@@ -74,7 +74,22 @@ function getPanelScreenRect(panel: StatusHighlight, viewport: Viewport) {
   }
 }
 
-type StatusPopupDirection = 'left' | 'right' | 'top' | 'bottom'
+type StatusPopupDirection = 'left' | 'right' | 'top' | 'bottom' | 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right'
+
+function getVectorDirection(deltaX: number, deltaY: number): StatusPopupDirection {
+  const deadZone = 0.35
+  const absX = Math.abs(deltaX)
+  const absY = Math.abs(deltaY)
+
+  if (absX > absY * deadZone && absY > absX * deadZone) {
+    if (deltaX < 0 && deltaY < 0) return 'top-left'
+    if (deltaX > 0 && deltaY < 0) return 'top-right'
+    if (deltaX < 0 && deltaY > 0) return 'bottom-left'
+    return 'bottom-right'
+  }
+  if (absX >= absY) return deltaX < 0 ? 'left' : 'right'
+  return deltaY < 0 ? 'top' : 'bottom'
+}
 
 function getOffscreenBeacon(
   highlight: StatusHighlight,
@@ -119,8 +134,9 @@ function getOffscreenBeacon(
     : side === 'bottom'
       ? containerHeight - STATUS_POPUP_EDGE_PAD
       : Math.min(safeMaxY, Math.max(safeMinY, centerY))
+  const direction = getVectorDirection(centerX - containerWidth / 2, centerY - containerHeight / 2)
   return {
-    direction: side,
+    direction,
     style: {
       left: x,
       top: y,
@@ -657,7 +673,15 @@ export function InfiniteCanvas() {
             ? ArrowRight
             : beacon.direction === 'top'
               ? ArrowUp
-              : ArrowDown
+              : beacon.direction === 'top-left'
+                ? ArrowUpLeft
+                : beacon.direction === 'top-right'
+                  ? ArrowUpRight
+                  : beacon.direction === 'bottom-left'
+                    ? ArrowDownLeft
+                    : beacon.direction === 'bottom-right'
+                      ? ArrowDownRight
+                      : ArrowDown
         return (
           <div
             key={`${highlight.id}-beacon`}

@@ -188,9 +188,9 @@ describe('InfiniteCanvas', () => {
       expect(container.querySelector('[data-canvas-status-edge-highlight="true"]')).toBeTruthy()
     })
     const popup = container.querySelector('[data-canvas-status-edge-highlight="true"]') as HTMLElement
-    expect(popup.dataset.direction).toBe('bottom')
+    expect(popup.dataset.direction).toBe('bottom-left')
     expect(parseFloat(popup.style.left)).toBeGreaterThanOrEqual(170)
-    expect(popup.querySelector('.lucide-arrow-down')).toBeTruthy()
+    expect(popup.querySelector('.lucide-arrow-down-left')).toBeTruthy()
 
     fireEvent.click(screen.getByTitle('Jump to Reviewing Task'))
     expect(useCanvasStore.getState().viewport.x).not.toBe(0)
