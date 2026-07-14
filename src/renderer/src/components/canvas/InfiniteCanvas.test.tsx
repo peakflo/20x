@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { render, screen, cleanup, fireEvent } from '@testing-library/react'
+import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
 import { InfiniteCanvas } from './InfiniteCanvas'
 import { useCanvasStore } from '@/stores/canvas-store'
 import { TaskStatus } from '@/types'
@@ -147,6 +147,51 @@ describe('InfiniteCanvas', () => {
     const taskPanel = container.querySelector('[data-canvas-panel="true"]')
     expect(taskPanel?.className).toContain('border-amber-500/55')
     expect(container.querySelector('svg rect[fill="rgba(245,158,11,0.86)"]')).toBeTruthy()
+  })
+
+  it('shows an off-screen jump popup when a transitioned task is outside the viewport', async () => {
+    const originalResizeObserver = globalThis.ResizeObserver
+    globalThis.ResizeObserver = class {
+      private callback: ResizeObserverCallback
+      constructor(callback: ResizeObserverCallback) {
+        this.callback = callback
+      }
+      observe() {
+        this.callback([{ contentRect: { width: 800, height: 600 } } as ResizeObserverEntry], this as ResizeObserver)
+      }
+      unobserve() {}
+      disconnect() {}
+    }
+
+    taskStoreState.tasks = [
+      makeTask({ id: 'task-123', title: 'Reviewing Task', status: TaskStatus.AgentWorking }),
+    ]
+    useCanvasStore.getState().addPanel({
+      type: 'task',
+      title: 'Reviewing Task',
+      refId: 'task-123',
+      x: 1200,
+      y: 900,
+      width: 400,
+      height: 300,
+    })
+
+    const { container, rerender } = render(<InfiniteCanvas />)
+    expect(container.querySelector('[data-canvas-status-edge-highlight="true"]')).toBeNull()
+
+    taskStoreState.tasks = [
+      makeTask({ id: 'task-123', title: 'Reviewing Task', status: TaskStatus.ReadyForReview }),
+    ]
+    rerender(<InfiniteCanvas />)
+
+    await waitFor(() => {
+      expect(container.querySelector('[data-canvas-status-edge-highlight="true"]')).toBeTruthy()
+    })
+
+    fireEvent.click(screen.getByTitle('Jump to Reviewing Task'))
+    expect(useCanvasStore.getState().viewport.x).toBeLessThan(0)
+
+    globalThis.ResizeObserver = originalResizeObserver
   })
 
   it('keeps browser and terminal colors distinct from task status colors', () => {
