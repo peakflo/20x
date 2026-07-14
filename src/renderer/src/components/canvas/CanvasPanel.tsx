@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState, useEffect, memo, useMemo } from 'react'
+import { useCallback, useRef, useState, useEffect, memo, useMemo, type CSSProperties } from 'react'
 import {
   useCanvasStore,
   calculateSnap,
@@ -17,6 +17,7 @@ import { AppPanelContent } from './AppPanelContent'
 import { WebPagePanelContent } from './WebPagePanelContent'
 import { TerminalPanelContent } from './TerminalPanelContent'
 import { BrowserPanelContent } from './BrowserPanelContent'
+import { getCanvasTaskStatusStyle, shouldPulseCanvasTaskStatusTransition } from './canvas-status-style'
 
 interface CanvasPanelProps {
   panel: CanvasPanelData
@@ -53,8 +54,10 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
   const [isResizing, setIsResizing] = useState(false)
   const [isCollapsed, setIsCollapsed] = useState(false)
   const [taskLayout, setTaskLayout] = useState<TaskWorkspaceLayout>('both')
+  const [statusPulse, setStatusPulse] = useState<{ status: TaskStatus; key: number } | null>(null)
   const dragStart = useRef({ x: 0, y: 0, panelX: 0, panelY: 0 })
   const resizeStart = useRef({ x: 0, y: 0, w: 0, h: 0 })
+  const previousTaskStatusRef = useRef<TaskStatus | undefined>(undefined)
 
   // ── Drag handling ─────────────────────────────────────────
   const handleDragStart = useCallback(
@@ -284,6 +287,26 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
     [panel.type, panel.refId])
   )
 
+  useEffect(() => {
+    if (panel.type !== 'task') {
+      previousTaskStatusRef.current = undefined
+      setStatusPulse(null)
+      return
+    }
+
+    const previous = previousTaskStatusRef.current
+    previousTaskStatusRef.current = taskStatus
+    if (shouldPulseCanvasTaskStatusTransition(previous, taskStatus) && taskStatus) {
+      const key = Date.now()
+      setStatusPulse({ status: taskStatus, key })
+      const timeout = window.setTimeout(() => {
+        setStatusPulse((current) => (current?.key === key ? null : current))
+      }, 1800)
+      return () => window.clearTimeout(timeout)
+    }
+    return undefined
+  }, [panel.type, taskStatus])
+
   // ── Create connected browser panel (from side handle click) ──
   const handleCreateBrowser = useCallback(
     (e: React.MouseEvent) => {
@@ -326,32 +349,33 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
   const cfg = useMemo(() => {
     const TYPE_CONFIG: Record<string, { label: string; color: string; border: string; bg: string }> = {
       task: { label: 'Task', color: 'bg-blue-500/20 text-blue-400', border: 'border-blue-500/40', bg: 'bg-[var(--canvas-panel)]' },
-      transcript: { label: 'Transcript', color: 'bg-teal-500/20 text-teal-400', border: 'border-teal-500/40', bg: 'bg-[var(--canvas-panel)]' },
-      app: { label: 'App', color: 'bg-green-500/20 text-green-400', border: 'border-green-500/40', bg: 'bg-[var(--canvas-panel)]' },
+      transcript: { label: 'Transcript', color: 'bg-cyan-500/20 text-cyan-300', border: 'border-cyan-500/40', bg: 'bg-[var(--canvas-panel)]' },
+      app: { label: 'App', color: 'bg-teal-500/20 text-teal-300', border: 'border-teal-500/40', bg: 'bg-[var(--canvas-panel)]' },
       webpage: { label: 'Web', color: 'bg-cyan-500/20 text-cyan-400', border: 'border-cyan-500/40', bg: 'bg-[var(--canvas-panel)]' },
-      terminal: { label: 'Terminal', color: 'bg-amber-500/20 text-amber-400', border: 'border-amber-500/50', bg: 'bg-[var(--canvas-panel)]' },
-      browser: { label: 'Browser', color: 'bg-orange-500/20 text-orange-400', border: 'border-orange-500/40', bg: 'bg-[var(--canvas-panel)]' },
+      terminal: { label: 'Terminal', color: 'bg-violet-500/20 text-violet-300', border: 'border-violet-500/45', bg: 'bg-[var(--canvas-panel)]' },
+      browser: { label: 'Browser', color: 'bg-orange-500/20 text-orange-300', border: 'border-orange-500/40', bg: 'bg-[var(--canvas-panel)]' },
     }
 
-    if (panel.type === 'task' && taskStatus) {
-      switch (taskStatus) {
-        case TaskStatus.AgentLearning:
-          return { label: 'Learning', color: 'bg-blue-500/20 text-blue-400', border: 'border-blue-500/50', bg: 'bg-blue-500/10' }
-        case TaskStatus.AgentWorking:
-          return { label: 'Working', color: 'bg-amber-500/20 text-amber-400', border: 'border-amber-500/50', bg: 'bg-amber-500/10' }
-        case TaskStatus.Completed:
-          return { label: 'Completed', color: 'bg-green-500/20 text-green-400', border: 'border-green-500/50', bg: 'bg-green-500/10' }
-        case TaskStatus.Triaging:
-          return { label: 'Triaging', color: 'bg-slate-500/20 text-slate-400', border: 'border-slate-500/50', bg: 'bg-slate-500/10' }
-        case TaskStatus.ReadyForReview:
-          return { label: 'Review', color: 'bg-pink-500/20 text-pink-400', border: 'border-pink-500/50', bg: 'bg-pink-500/10' }
-        default:
-          return TYPE_CONFIG.task
-      }
+    if (panel.type === 'task') {
+      return getCanvasTaskStatusStyle(taskStatus) ?? TYPE_CONFIG.task
     }
 
     return TYPE_CONFIG[panel.type] ?? { label: 'Panel', color: 'bg-muted/30 text-muted-foreground', border: 'border-border/50', bg: 'bg-[var(--canvas-panel)]' }
   }, [panel.type, taskStatus])
+
+  const pulseStyle = statusPulse
+    ? getCanvasTaskStatusStyle(statusPulse.status)
+    : null
+  const panelStyle: CSSProperties = {
+    left: panel.x,
+    top: panel.y,
+    width: panel.width,
+    height: isCollapsed ? 'auto' : panel.height,
+    zIndex: panel.zIndex,
+    minWidth: panel.minWidth ?? 200,
+    minHeight: isCollapsed ? undefined : (panel.minHeight ?? 150),
+    '--canvas-status-rgb': pulseStyle?.rgb ?? '59,130,246',
+  } as CSSProperties
 
   return (
     <div
@@ -365,18 +389,21 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
       } ${isConnectingLocal ? 'ring-2 ring-orange-500/50' : ''} ${
         isProximityTarget ? 'ring-2 ring-orange-500/60 shadow-orange-500/20 shadow-2xl' : ''
       }`}
-      style={{
-        left: panel.x,
-        top: panel.y,
-        width: panel.width,
-        height: isCollapsed ? 'auto' : panel.height,
-        zIndex: panel.zIndex,
-        minWidth: panel.minWidth ?? 200,
-        minHeight: isCollapsed ? undefined : (panel.minHeight ?? 150),
-      }}
+      style={panelStyle}
     >
+      {statusPulse && panel.type === 'task' && (
+        <div
+          key={statusPulse.key}
+          className="pointer-events-none absolute -inset-2 z-0 rounded-[18px] canvas-status-transition-flash"
+          aria-hidden="true"
+        >
+          <span className="canvas-status-transition-wave" />
+          <span className="canvas-status-transition-wave canvas-status-transition-wave-delay" />
+        </div>
+      )}
+
       {/* Inner wrapper — clips content within rounded corners */}
-      <div className="flex flex-col flex-1 min-h-0 overflow-hidden rounded-[11px]">
+      <div className="relative z-[1] flex flex-col flex-1 min-h-0 overflow-hidden rounded-[11px]">
       {/* Title bar — drag handle */}
       <div
         className={`flex items-center gap-2 px-3 py-2 border-b border-border/40 flex-shrink-0 cursor-grab active:cursor-grabbing group select-none ${cfg.bg}`}

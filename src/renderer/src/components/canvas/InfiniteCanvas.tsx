@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState, useEffect, useMemo } from 'react'
+import { useCallback, useRef, useState, useEffect, useMemo, type CSSProperties } from 'react'
 import { useCanvasStore, DEFAULT_PANEL_WIDTH, DEFAULT_PANEL_HEIGHT } from '@/stores/canvas-store'
 import type { SnapGuide, CanvasPanelData, Viewport } from '@/stores/canvas-store'
 import { useUIStore } from '@/stores/ui-store'
@@ -7,8 +7,10 @@ import { CanvasPanel } from './CanvasPanel'
 import { CanvasConnections } from './CanvasConnections'
 import { CanvasContextMenu } from './CanvasContextMenu'
 import { CanvasMinimap } from './CanvasMinimap'
-import { Move, ZoomIn, ZoomOut, RotateCcw, Plus } from 'lucide-react'
+import { ArrowDown, ArrowDownLeft, ArrowDownRight, ArrowLeft, ArrowRight, ArrowUp, ArrowUpLeft, ArrowUpRight, Move, ZoomIn, ZoomOut, RotateCcw, Plus } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
+import { TaskStatus } from '@/types'
+import { getCanvasTaskStatusStyle, shouldPulseCanvasTaskStatusTransition } from './canvas-status-style'
 
 /**
  * Check if a panel is visible in the current viewport (with generous margin).
@@ -44,6 +46,105 @@ function isPanelVisible(
 
 // Grid dot spacing in canvas-space pixels
 const GRID_SIZE = 40
+const STATUS_HIGHLIGHT_MS = 5_000
+const STATUS_POPUP_EDGE_PAD = 28
+const STATUS_POPUP_TOP_SAFE = 70
+const STATUS_POPUP_BOTTOM_SAFE = 150
+const STATUS_POPUP_LEFT_SAFE = 170
+const STATUS_POPUP_RIGHT_SAFE = 220
+
+interface StatusHighlight {
+  id: string
+  taskId: string
+  panelId: string
+  title: string
+  rgb: string
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+function getPanelScreenRect(panel: StatusHighlight, viewport: Viewport) {
+  return {
+    left: panel.x * viewport.zoom + viewport.x,
+    top: panel.y * viewport.zoom + viewport.y,
+    width: panel.width * viewport.zoom,
+    height: panel.height * viewport.zoom,
+  }
+}
+
+type StatusPopupDirection = 'left' | 'right' | 'top' | 'bottom' | 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right'
+
+function getVectorDirection(deltaX: number, deltaY: number): StatusPopupDirection {
+  const deadZone = 0.35
+  const absX = Math.abs(deltaX)
+  const absY = Math.abs(deltaY)
+
+  if (absX > absY * deadZone && absY > absX * deadZone) {
+    if (deltaX < 0 && deltaY < 0) return 'top-left'
+    if (deltaX > 0 && deltaY < 0) return 'top-right'
+    if (deltaX < 0 && deltaY > 0) return 'bottom-left'
+    return 'bottom-right'
+  }
+  if (absX >= absY) return deltaX < 0 ? 'left' : 'right'
+  return deltaY < 0 ? 'top' : 'bottom'
+}
+
+function getOffscreenBeacon(
+  highlight: StatusHighlight,
+  viewport: Viewport,
+  containerWidth: number,
+  containerHeight: number
+): { style: CSSProperties; direction: StatusPopupDirection } | null {
+  if (!containerWidth || !containerHeight) return null
+
+  const rect = getPanelScreenRect(highlight, viewport)
+  const centerX = rect.left + rect.width / 2
+  const centerY = rect.top + rect.height / 2
+  const isVisible =
+    rect.left < containerWidth &&
+    rect.left + rect.width > 0 &&
+    rect.top < containerHeight &&
+    rect.top + rect.height > 0
+
+  if (isVisible) return null
+
+  const safeMinX = Math.min(containerWidth - STATUS_POPUP_EDGE_PAD, Math.max(STATUS_POPUP_EDGE_PAD, STATUS_POPUP_LEFT_SAFE))
+  const safeMaxX = Math.max(STATUS_POPUP_EDGE_PAD, containerWidth - STATUS_POPUP_RIGHT_SAFE)
+  const safeMinY = Math.min(containerHeight - STATUS_POPUP_EDGE_PAD, Math.max(STATUS_POPUP_EDGE_PAD, STATUS_POPUP_TOP_SAFE))
+  const safeMaxY = Math.max(STATUS_POPUP_EDGE_PAD, containerHeight - STATUS_POPUP_BOTTOM_SAFE)
+  const leftDistance = Math.abs(centerX)
+  const rightDistance = Math.abs(centerX - containerWidth)
+  const topDistance = Math.abs(centerY)
+  const bottomDistance = Math.abs(centerY - containerHeight)
+  const nearest = Math.min(leftDistance, rightDistance, topDistance, bottomDistance)
+  const side =
+    nearest === leftDistance ? 'left'
+      : nearest === rightDistance ? 'right'
+        : nearest === topDistance ? 'top'
+          : 'bottom'
+  const x = side === 'left'
+    ? STATUS_POPUP_EDGE_PAD
+    : side === 'right'
+      ? containerWidth - STATUS_POPUP_EDGE_PAD
+      : Math.min(safeMaxX, Math.max(safeMinX, centerX))
+  const y = side === 'top'
+    ? STATUS_POPUP_EDGE_PAD
+    : side === 'bottom'
+      ? containerHeight - STATUS_POPUP_EDGE_PAD
+      : Math.min(safeMaxY, Math.max(safeMinY, centerY))
+  const direction = getVectorDirection(centerX - containerWidth / 2, centerY - containerHeight / 2)
+  return {
+    direction,
+    style: {
+      left: x,
+      top: y,
+      transform: 'translate(-50%, -50%)',
+      '--canvas-status-rgb': highlight.rgb,
+    } as CSSProperties,
+  }
+}
 
 /**
  * InfiniteCanvas — the main canvas screen.
@@ -61,6 +162,7 @@ const GRID_SIZE = 40
  */
 export function InfiniteCanvas() {
   const containerRef = useRef<HTMLDivElement>(null)
+  const previousTaskStatusRef = useRef(new Map<string, TaskStatus>())
   const viewport = useCanvasStore((s) => s.viewport)
   const panels = useCanvasStore((s) => s.panels)
   const snapGuides = useCanvasStore((s) => s.snapGuides)
@@ -70,6 +172,7 @@ export function InfiniteCanvas() {
   const zoomTo = useCanvasStore((s) => s.zoomTo)
   const resetViewport = useCanvasStore((s) => s.resetViewport)
   const fitToContent = useCanvasStore((s) => s.fitToContent)
+  const focusPanel = useCanvasStore((s) => s.focusPanel)
   const addPanel = useCanvasStore((s) => s.addPanel)
   const loadCanvas = useCanvasStore((s) => s.loadCanvas)
 
@@ -102,6 +205,7 @@ export function InfiniteCanvas() {
     canvasX: number
     canvasY: number
   } | null>(null)
+  const [statusHighlights, setStatusHighlights] = useState<StatusHighlight[]>([])
 
   // Connection drawing state
   const connectingFromId = useCanvasStore((s) => s.connectingFromId)
@@ -138,6 +242,43 @@ export function InfiniteCanvas() {
   const canvasPendingApp = useUIStore((s) => s.canvasPendingApp)
   const clearCanvasPendingApp = useUIStore((s) => s.clearCanvasPendingApp)
   const allTasks = useTaskStore((s) => s.tasks)
+
+  useEffect(() => {
+    const previousStatuses = previousTaskStatusRef.current
+    const taskPanels = new Map<string, CanvasPanelData>()
+    for (const panel of panels) {
+      if (panel.type === 'task' && panel.refId) taskPanels.set(panel.refId, panel)
+    }
+
+    for (const task of allTasks) {
+      const previous = previousStatuses.get(task.id)
+      previousStatuses.set(task.id, task.status)
+
+      if (!shouldPulseCanvasTaskStatusTransition(previous, task.status)) {
+        continue
+      }
+
+      const panel = taskPanels.get(task.id)
+      if (!panel) continue
+      const statusStyle = getCanvasTaskStatusStyle(task.status)
+
+      const highlight: StatusHighlight = {
+        id: `${task.id}-${Date.now()}`,
+        taskId: task.id,
+        panelId: panel.id,
+        title: task.title,
+        rgb: statusStyle?.rgb ?? '59,130,246',
+        x: panel.x,
+        y: panel.y,
+        width: panel.width,
+        height: panel.height,
+      }
+      setStatusHighlights((current) => [...current.filter((item) => item.taskId !== task.id), highlight])
+      window.setTimeout(() => {
+        setStatusHighlights((current) => current.filter((item) => item.id !== highlight.id))
+      }, STATUS_HIGHLIGHT_MS)
+    }
+  }, [allTasks, panels])
 
   useEffect(() => {
     if (!canvasPendingTaskId) return
@@ -522,6 +663,49 @@ export function InfiniteCanvas() {
         {/* Click target for background */}
         <div data-canvas-bg="true" className="absolute inset-0" style={{ zIndex: -1 }} />
       </div>
+
+      {statusHighlights.map((highlight) => {
+        const beacon = getOffscreenBeacon(highlight, viewport, containerSize.width, containerSize.height)
+        if (!beacon) return null
+        const DirectionIcon = beacon.direction === 'left'
+          ? ArrowLeft
+          : beacon.direction === 'right'
+            ? ArrowRight
+            : beacon.direction === 'top'
+              ? ArrowUp
+              : beacon.direction === 'top-left'
+                ? ArrowUpLeft
+                : beacon.direction === 'top-right'
+                  ? ArrowUpRight
+                  : beacon.direction === 'bottom-left'
+                    ? ArrowDownLeft
+                    : beacon.direction === 'bottom-right'
+                      ? ArrowDownRight
+                      : ArrowDown
+        return (
+          <div
+            key={`${highlight.id}-beacon`}
+            data-canvas-status-edge-highlight="true"
+            data-direction={beacon.direction}
+            className="absolute z-10"
+            style={beacon.style}
+            title={highlight.title}
+          >
+            <button
+              type="button"
+              className="canvas-status-jump-popup flex h-9 w-9 items-center justify-center rounded-full border border-white/20 text-white shadow-lg backdrop-blur-sm"
+              onClick={(e) => {
+                e.stopPropagation()
+                focusPanel(highlight.panelId, containerSize.width, containerSize.height)
+                setStatusHighlights((current) => current.filter((item) => item.id !== highlight.id))
+              }}
+              title={`Jump to ${highlight.title}`}
+            >
+              <DirectionIcon className="h-4 w-4" />
+            </button>
+          </div>
+        )
+      })}
 
       {/* ── HUD: zoom controls ── */}
       <div className="absolute bottom-4 left-4 flex items-center gap-1 bg-[var(--canvas-toolbar)] backdrop-blur-sm border border-border/40 rounded-lg p-1 z-10">

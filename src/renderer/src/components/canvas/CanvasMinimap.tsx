@@ -1,6 +1,8 @@
 import { useCallback, useRef, useState, useMemo } from 'react'
 import { useCanvasStore, type CanvasPanelData, MIN_ZOOM, MAX_ZOOM } from '@/stores/canvas-store'
+import { useTaskStore } from '@/stores/task-store'
 import { Minus, Plus, Maximize2, ChevronDown, ChevronUp } from 'lucide-react'
+import { getCanvasTaskStatusStyle } from './canvas-status-style'
 
 // ── Constants ─────────────────────────────────────────────
 const MINIMAP_W = 180
@@ -9,12 +11,12 @@ const MINIMAP_PAD = 12 // padding inside the minimap
 
 // Panel type → color mapping
 const PANEL_COLORS: Record<string, string> = {
-  task: 'rgba(30,150,235,0.7)',     // indigo
+  task: 'rgba(59,130,246,0.7)',     // fallback blue when a task status is unavailable
   browser: 'rgba(249,115,22,0.7)',  // orange
-  terminal: 'rgba(34,197,94,0.7)',  // green
+  terminal: 'rgba(139,92,246,0.7)',  // violet
   app: 'rgba(20,184,166,0.7)',      // teal
-  transcript: 'rgba(59,130,246,0.6)', // blue
-  webpage: 'rgba(236,72,153,0.6)',  // pink
+  transcript: 'rgba(6,182,212,0.62)', // cyan
+  webpage: 'rgba(14,165,233,0.62)',  // sky
   placeholder: 'rgba(107,114,128,0.4)', // gray
 }
 
@@ -39,6 +41,7 @@ export function CanvasMinimap({
   const panels = useCanvasStore((s) => s.panels)
   const viewport = useCanvasStore((s) => s.viewport)
   const edges = useCanvasStore((s) => s.edges)
+  const tasks = useTaskStore((s) => s.tasks)
   const setViewport = useCanvasStore((s) => s.setViewport)
   const zoomTo = useCanvasStore((s) => s.zoomTo)
   const fitToContent = useCanvasStore((s) => s.fitToContent)
@@ -147,6 +150,12 @@ export function CanvasMinimap({
     return map
   }, [panels])
 
+  const taskStatusMap = useMemo(() => {
+    const map = new Map<string, (typeof tasks)[number]['status']>()
+    for (const task of tasks) map.set(task.id, task.status)
+    return map
+  }, [tasks])
+
   const zoomPercent = Math.round(viewport.zoom * 100)
 
   if (panels.length === 0) return null
@@ -217,7 +226,8 @@ export function CanvasMinimap({
 
             {/* Panel rectangles */}
             {panels.map((p) => {
-              const color = PANEL_COLORS[p.type] || 'rgba(148,163,184,0.5)'
+              const taskStatusStyle = p.type === 'task' ? getCanvasTaskStatusStyle(taskStatusMap.get(p.refId ?? '')) : null
+              const color = taskStatusStyle?.miniFill ?? PANEL_COLORS[p.type] ?? 'rgba(148,163,184,0.5)'
               const px = toMiniX(p.x)
               const py = toMiniY(p.y)
               const pw = Math.max(3, p.width * scale)

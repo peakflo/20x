@@ -1,13 +1,58 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { render, screen, cleanup, fireEvent } from '@testing-library/react'
+import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
 import { InfiniteCanvas } from './InfiniteCanvas'
 import { useCanvasStore } from '@/stores/canvas-store'
+import { TaskStatus } from '@/types'
+import type { WorkfloTask } from '@/types'
+
+const taskStoreState = vi.hoisted(() => ({
+  tasks: [] as WorkfloTask[],
+  selectedTaskId: null as string | null,
+  isLoading: false,
+  error: null as string | null,
+}))
+
+const makeTask = (overrides: Partial<WorkfloTask> = {}): WorkfloTask => ({
+  id: 'task-123',
+  title: 'Task',
+  description: '',
+  type: 'coding',
+  priority: 'medium',
+  status: TaskStatus.NotStarted,
+  assignee: '',
+  due_date: null,
+  labels: [],
+  attachments: [],
+  repos: [],
+  output_fields: [],
+  agent_id: null,
+  session_id: null,
+  external_id: null,
+  source_id: null,
+  source: 'manual',
+  skill_ids: null,
+  snoozed_until: null,
+  resolution: null,
+  feedback_rating: null,
+  feedback_comment: null,
+  is_recurring: false,
+  recurrence_pattern: null,
+  recurrence_parent_id: null,
+  last_occurrence_at: null,
+  next_occurrence_at: null,
+  auto_start_agent: false,
+  auto_complete_without_review: false,
+  parent_task_id: null,
+  sort_order: 0,
+  created_at: '2026-01-01T00:00:00.000Z',
+  updated_at: '2026-01-01T00:00:00.000Z',
+  ...overrides,
+})
 
 // Mock the child components that depend on external stores
 vi.mock('@/stores/task-store', () => ({
   useTaskStore: vi.fn((selector) => {
-    const state = { tasks: [], selectedTaskId: null, isLoading: false, error: null }
-    return selector ? selector(state) : state
+    return selector ? selector(taskStoreState) : taskStoreState
   }),
 }))
 
@@ -44,6 +89,10 @@ describe('InfiniteCanvas', () => {
       connectingFromId: null,
       isLoaded: true, // Skip async load in tests
     })
+    taskStoreState.tasks = []
+    taskStoreState.selectedTaskId = null
+    taskStoreState.isLoading = false
+    taskStoreState.error = null
   })
 
   afterEach(cleanup)
@@ -75,6 +124,102 @@ describe('InfiniteCanvas', () => {
     render(<InfiniteCanvas />)
     expect(screen.getByText('My Task Panel')).toBeTruthy()
     expect(screen.getByText('Task')).toBeTruthy()
+  })
+
+  it('uses task status color coding for task panels and minimap rectangles', () => {
+    taskStoreState.tasks = [
+      makeTask({ id: 'task-123', title: 'Working Task', status: TaskStatus.AgentWorking }),
+    ]
+    useCanvasStore.getState().addPanel({
+      type: 'task',
+      title: 'Working Task',
+      refId: 'task-123',
+      x: 100,
+      y: 100,
+      width: 400,
+      height: 300,
+    })
+
+    const { container } = render(<InfiniteCanvas />)
+
+    const statusBadge = screen.getByText('Working')
+    expect(statusBadge.className).toContain('text-amber-300')
+    const taskPanel = container.querySelector('[data-canvas-panel="true"]')
+    expect(taskPanel?.className).toContain('border-amber-500/55')
+    expect(container.querySelector('svg rect[fill="rgba(245,158,11,0.86)"]')).toBeTruthy()
+  })
+
+  it('shows an off-screen jump popup when a transitioned task is outside the viewport', async () => {
+    const originalResizeObserver = globalThis.ResizeObserver
+    globalThis.ResizeObserver = class {
+      private callback: ResizeObserverCallback
+      constructor(callback: ResizeObserverCallback) {
+        this.callback = callback
+      }
+      observe() {
+        this.callback([{ contentRect: { width: 800, height: 600 } } as ResizeObserverEntry], this as ResizeObserver)
+      }
+      unobserve() {}
+      disconnect() {}
+    }
+
+    taskStoreState.tasks = [
+      makeTask({ id: 'task-123', title: 'Reviewing Task', status: TaskStatus.AgentWorking }),
+    ]
+    useCanvasStore.getState().addPanel({
+      type: 'task',
+      title: 'Reviewing Task',
+      refId: 'task-123',
+      x: -1000,
+      y: 900,
+      width: 400,
+      height: 300,
+    })
+
+    const { container, rerender } = render(<InfiniteCanvas />)
+    expect(container.querySelector('[data-canvas-status-edge-highlight="true"]')).toBeNull()
+
+    taskStoreState.tasks = [
+      makeTask({ id: 'task-123', title: 'Reviewing Task', status: TaskStatus.ReadyForReview }),
+    ]
+    rerender(<InfiniteCanvas />)
+
+    await waitFor(() => {
+      expect(container.querySelector('[data-canvas-status-edge-highlight="true"]')).toBeTruthy()
+    })
+    const popup = container.querySelector('[data-canvas-status-edge-highlight="true"]') as HTMLElement
+    expect(popup.dataset.direction).toBe('bottom-left')
+    expect(parseFloat(popup.style.left)).toBeGreaterThanOrEqual(170)
+    expect(popup.querySelector('.lucide-arrow-down-left')).toBeTruthy()
+
+    fireEvent.click(screen.getByTitle('Jump to Reviewing Task'))
+    expect(useCanvasStore.getState().viewport.x).not.toBe(0)
+
+    globalThis.ResizeObserver = originalResizeObserver
+  })
+
+  it('keeps browser and terminal colors distinct from task status colors', () => {
+    useCanvasStore.getState().addPanel({
+      type: 'browser',
+      title: 'Browser',
+      x: 0,
+      y: 0,
+      width: 400,
+      height: 300,
+    })
+    useCanvasStore.getState().addPanel({
+      type: 'terminal',
+      title: 'Terminal',
+      x: 460,
+      y: 0,
+      width: 400,
+      height: 300,
+    })
+
+    render(<InfiniteCanvas />)
+
+    expect(screen.getAllByText('Browser')[0].className).toContain('text-orange-300')
+    expect(screen.getAllByText('Terminal')[0].className).toContain('text-violet-300')
   })
 
   it('should hide empty state when panels exist', () => {
