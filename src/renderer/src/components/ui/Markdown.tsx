@@ -5,7 +5,7 @@
  * Used in: task descriptions, agent transcripts, plugin documentation.
  */
 
-import { memo, useMemo, useState } from 'react'
+import React, { Fragment, memo, useMemo, useState } from 'react'
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { Check, Copy } from 'lucide-react'
@@ -23,6 +23,7 @@ interface MarkdownProps {
   children: string
   size?: MarkdownSize
   className?: string
+  highlightQuery?: string
 }
 
 // Hoisted to module scope to prevent recreation on every render
@@ -60,6 +61,53 @@ function CopyCodeButton({ text }: { text: string }) {
       {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
     </button>
   )
+}
+
+function splitHighlightedText(text: string, query?: string): React.ReactNode {
+  const normalizedQuery = query?.trim()
+  if (!normalizedQuery) return text
+
+  const lowerText = text.toLowerCase()
+  const lowerQuery = normalizedQuery.toLowerCase()
+  const parts: React.ReactNode[] = []
+  let cursor = 0
+  let matchIndex = lowerText.indexOf(lowerQuery)
+
+  while (matchIndex !== -1) {
+    if (matchIndex > cursor) {
+      parts.push(text.slice(cursor, matchIndex))
+    }
+    const match = text.slice(matchIndex, matchIndex + normalizedQuery.length)
+    parts.push(
+      <mark key={`${matchIndex}-${match}`} className="rounded-sm bg-yellow-300/80 px-0.5 text-black">
+        {match}
+      </mark>
+    )
+    cursor = matchIndex + normalizedQuery.length
+    matchIndex = lowerText.indexOf(lowerQuery, cursor)
+  }
+
+  if (cursor < text.length) {
+    parts.push(text.slice(cursor))
+  }
+
+  return parts.length > 0 ? parts : text
+}
+
+function highlightReactNode(node: React.ReactNode, query?: string): React.ReactNode {
+  if (node == null || typeof node === 'boolean') return node
+  if (typeof node === 'string') return splitHighlightedText(node, query)
+  if (typeof node === 'number') return splitHighlightedText(String(node), query)
+  if (Array.isArray(node)) {
+    return node.map((child, index) => <Fragment key={index}>{highlightReactNode(child, query)}</Fragment>)
+  }
+  if (typeof node === 'object' && 'props' in node) {
+    const element = node as React.ReactElement<{ children?: React.ReactNode }>
+    return React.cloneElement(element, {
+      children: highlightReactNode(element.props.children, query)
+    })
+  }
+  return node
 }
 
 // Size-based class mappings — hoisted to module scope (static data)
@@ -125,7 +173,7 @@ const SIZE_CLASSES = {
  * (e.g., the agent transcript) where parent scrolling would otherwise trigger
  * recreation of the components config object on every frame.
  */
-export const Markdown = memo(function Markdown({ children, size = 'sm', className }: MarkdownProps) {
+export const Markdown = memo(function Markdown({ children, size = 'sm', className, highlightQuery }: MarkdownProps) {
   const classes = SIZE_CLASSES[size]
 
   // Memoize the components config object per `size` to avoid creating a new
@@ -133,17 +181,17 @@ export const Markdown = memo(function Markdown({ children, size = 'sm', classNam
   const components = useMemo(() => ({
     // Headings
     h1: ({ children, ...props }: React.ComponentPropsWithoutRef<'h1'>) => (
-      <h1 className={cn(classes.h1, 'text-foreground')} {...props}>{children}</h1>
+      <h1 className={cn(classes.h1, 'text-foreground')} {...props}>{highlightReactNode(children, highlightQuery)}</h1>
     ),
     h2: ({ children, ...props }: React.ComponentPropsWithoutRef<'h2'>) => (
-      <h2 className={cn(classes.h2, 'text-foreground')} {...props}>{children}</h2>
+      <h2 className={cn(classes.h2, 'text-foreground')} {...props}>{highlightReactNode(children, highlightQuery)}</h2>
     ),
     h3: ({ children, ...props }: React.ComponentPropsWithoutRef<'h3'>) => (
-      <h3 className={cn(classes.h3, 'text-foreground')} {...props}>{children}</h3>
+      <h3 className={cn(classes.h3, 'text-foreground')} {...props}>{highlightReactNode(children, highlightQuery)}</h3>
     ),
     // Paragraphs
     p: ({ children, ...props }: React.ComponentPropsWithoutRef<'p'>) => (
-      <p className={cn(classes.p, 'text-foreground/90')} {...props}>{children}</p>
+      <p className={cn(classes.p, 'text-foreground/90')} {...props}>{highlightReactNode(children, highlightQuery)}</p>
     ),
     // Lists
     ul: ({ children, ...props }: React.ComponentPropsWithoutRef<'ul'>) => (
@@ -153,7 +201,7 @@ export const Markdown = memo(function Markdown({ children, size = 'sm', classNam
       <ol className={cn('list-decimal list-outside', classes.list, 'text-foreground/90')} {...props}>{children}</ol>
     ),
     li: ({ children, ...props }: React.ComponentPropsWithoutRef<'li'>) => (
-      <li className={cn(classes.li, 'text-foreground/90')} {...props}>{children}</li>
+      <li className={cn(classes.li, 'text-foreground/90')} {...props}>{highlightReactNode(children, highlightQuery)}</li>
     ),
     // Code - CRITICAL: inline code must always be inline, block code must be block
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -162,7 +210,7 @@ export const Markdown = memo(function Markdown({ children, size = 'sm', classNam
       if (isCodeBlock || inline === false) {
         return (
           <code className={cn('block font-mono text-foreground whitespace-pre', codeClassName)} {...props}>
-            {children}
+            {highlightReactNode(children, highlightQuery)}
           </code>
         )
       }
@@ -172,7 +220,7 @@ export const Markdown = memo(function Markdown({ children, size = 'sm', classNam
           style={{ display: 'inline !important' } as React.CSSProperties}
           {...props}
         >
-          {children}
+          {highlightReactNode(children, highlightQuery)}
         </code>
       )
     },
@@ -188,7 +236,7 @@ export const Markdown = memo(function Markdown({ children, size = 'sm', classNam
     },
     // Links
     a: ({ children, ...props }: React.ComponentPropsWithoutRef<'a'>) => (
-      <a className="text-primary hover:underline cursor-pointer" target="_blank" rel="noopener noreferrer" {...props}>{children}</a>
+      <a className="text-primary hover:underline cursor-pointer" target="_blank" rel="noopener noreferrer" {...props}>{highlightReactNode(children, highlightQuery)}</a>
     ),
     // Images
     img: ({ alt, src, ...props }: React.ComponentPropsWithoutRef<'img'>) => (
@@ -196,7 +244,7 @@ export const Markdown = memo(function Markdown({ children, size = 'sm', classNam
     ),
     // Blockquotes
     blockquote: ({ children, ...props }: React.ComponentPropsWithoutRef<'blockquote'>) => (
-      <blockquote className={cn('border-l-2 border-border italic text-foreground/80', classes.blockquote)} {...props}>{children}</blockquote>
+      <blockquote className={cn('border-l-2 border-border italic text-foreground/80', classes.blockquote)} {...props}>{highlightReactNode(children, highlightQuery)}</blockquote>
     ),
     // Horizontal rules
     hr: ({ ...props }: React.ComponentPropsWithoutRef<'hr'>) => <hr className={cn('border-border', classes.hr)} {...props} />,
@@ -210,10 +258,10 @@ export const Markdown = memo(function Markdown({ children, size = 'sm', classNam
       <thead className="bg-muted" {...props}>{children}</thead>
     ),
     th: ({ children, ...props }: React.ComponentPropsWithoutRef<'th'>) => (
-      <th className={cn('border border-border text-left font-semibold text-foreground', classes.th)} {...props}>{children}</th>
+      <th className={cn('border border-border text-left font-semibold text-foreground', classes.th)} {...props}>{highlightReactNode(children, highlightQuery)}</th>
     ),
     td: ({ children, ...props }: React.ComponentPropsWithoutRef<'td'>) => (
-      <td className={cn('border border-border text-foreground/90', classes.td)} {...props}>{children}</td>
+      <td className={cn('border border-border text-foreground/90', classes.td)} {...props}>{highlightReactNode(children, highlightQuery)}</td>
     ),
     tbody: ({ children, ...props }: React.ComponentPropsWithoutRef<'tbody'>) => (
       <tbody {...props}>{children}</tbody>
@@ -221,7 +269,7 @@ export const Markdown = memo(function Markdown({ children, size = 'sm', classNam
     tr: ({ children, ...props }: React.ComponentPropsWithoutRef<'tr'>) => (
       <tr className="hover:bg-muted/50 transition-colors" {...props}>{children}</tr>
     ),
-  }), [size]) // Only recreate when size changes
+  }), [classes, highlightQuery]) // Only recreate when rendered styling or highlight changes
 
   return (
     <div className={cn('markdown-content min-w-0', classes.base, className)}>

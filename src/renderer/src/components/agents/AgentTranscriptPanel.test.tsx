@@ -192,6 +192,74 @@ describe('AgentTranscriptPanel message layout', () => {
     expect(screen.getByText('pass')).toBeInTheDocument()
   })
 
+  it('searches collapsed tool details without filtering transcript context', () => {
+    render(
+      <AgentTranscriptPanel
+        messages={[
+          {
+            id: 'assistant-1',
+            role: 'assistant',
+            content: 'Visible context',
+            timestamp: new Date(),
+            partType: 'text'
+          },
+          {
+            id: 'tool-1',
+            role: 'assistant',
+            content: 'Bash',
+            timestamp: new Date(),
+            partType: 'tool',
+            tool: {
+              name: 'Bash',
+              status: 'success',
+              title: 'pnpm test',
+              input: 'pnpm test',
+              output: 'hidden needle output'
+            }
+          }
+        ]}
+        status={SessionStatus.IDLE}
+        onStop={() => undefined}
+      />
+    )
+
+    fireEvent.click(screen.getByTitle('Search transcript'))
+    fireEvent.change(screen.getByPlaceholderText('Search transcript...'), {
+      target: { value: 'needle' }
+    })
+
+    expect(screen.getByText('1/1')).toBeInTheDocument()
+    expect(screen.getByText('Visible context')).toBeInTheDocument()
+    expect(screen.queryByText('hidden needle output')).toBeNull()
+  })
+
+  it('highlights the matched word instead of the whole message', () => {
+    render(
+      <AgentTranscriptPanel
+        messages={[
+          {
+            id: 'agent-1',
+            role: 'assistant',
+            content: 'Search should highlight only this needle word',
+            timestamp: new Date(),
+            partType: 'text'
+          }
+        ]}
+        status={SessionStatus.IDLE}
+        onStop={() => undefined}
+      />
+    )
+
+    fireEvent.click(screen.getByTitle('Search transcript'))
+    fireEvent.change(screen.getByPlaceholderText('Search transcript...'), {
+      target: { value: 'needle' }
+    })
+
+    const highlightedMatch = screen.getByText('needle')
+    expect(highlightedMatch.tagName).toBe('MARK')
+    expect(highlightedMatch.closest('.ring-1')).toBeNull()
+  })
+
   it('shows tool descriptions in compact rows and exact commands in expanded details', () => {
     const command = `cd "/Users/dmitryvedenyapin/Library/Application Support/20x/workspaces/vebrwpyobv88637krcachtxa/workflow-builder" && git add packages/ui/app/business-context/graph/page.tsx && git commit -q -F - <<'MSG'
 fix(ui): move custom-property editor from Overview into the Properties tab

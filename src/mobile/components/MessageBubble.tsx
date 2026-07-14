@@ -1,9 +1,35 @@
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import { Markdown } from '@/components/ui/Markdown'
 import { cn } from '../lib/utils'
 import type { AgentMessage } from '../stores/agent-store'
 
-function QuestionMessage({ message, onAnswer, canAnswer }: { message: AgentMessage; onAnswer?: (answer: string) => void; canAnswer: boolean }) {
+function HighlightedText({ text, query }: { text: string; query?: string }) {
+  const normalizedQuery = query?.trim()
+  if (!normalizedQuery) return <>{text}</>
+
+  const lowerText = text.toLowerCase()
+  const lowerQuery = normalizedQuery.toLowerCase()
+  const parts: ReactNode[] = []
+  let cursor = 0
+  let matchIndex = lowerText.indexOf(lowerQuery)
+
+  while (matchIndex !== -1) {
+    if (matchIndex > cursor) parts.push(text.slice(cursor, matchIndex))
+    const match = text.slice(matchIndex, matchIndex + normalizedQuery.length)
+    parts.push(
+      <mark key={`${matchIndex}-${match}`} className="rounded-sm bg-yellow-300/80 px-0.5 text-black">
+        {match}
+      </mark>
+    )
+    cursor = matchIndex + normalizedQuery.length
+    matchIndex = lowerText.indexOf(lowerQuery, cursor)
+  }
+
+  if (cursor < text.length) parts.push(text.slice(cursor))
+  return <>{parts}</>
+}
+
+function QuestionMessage({ message, onAnswer, canAnswer, searchQuery }: { message: AgentMessage; onAnswer?: (answer: string) => void; canAnswer: boolean; searchQuery?: string }) {
   const questions = message.tool?.questions || []
   const [answers, setAnswers] = useState<Record<number, string>>({})
   const [submitted, setSubmitted] = useState(false)
@@ -28,11 +54,11 @@ function QuestionMessage({ message, onAnswer, canAnswer }: { message: AgentMessa
         <div key={qi} className="space-y-2">
           {q.header && (
             <div className="px-4 py-2 border-b border-border/30">
-              <span className="text-[10px] text-primary font-medium uppercase tracking-wide">{q.header}</span>
+              <span className="text-[10px] text-primary font-medium uppercase tracking-wide"><HighlightedText text={q.header} query={searchQuery} /></span>
             </div>
           )}
           <div className="px-4 py-3">
-            <p className="text-xs text-foreground">{q.question}</p>
+            <p className="text-xs text-foreground"><HighlightedText text={q.question} query={searchQuery} /></p>
           </div>
           {q.options?.length > 0 && (
             <div className="px-4 pb-3 space-y-1.5">
@@ -51,8 +77,8 @@ function QuestionMessage({ message, onAnswer, canAnswer }: { message: AgentMessa
                       isLocked && 'opacity-50 cursor-default'
                     )}
                   >
-                    <div className="font-medium">{opt.label}</div>
-                    {opt.description && <div className="text-muted-foreground mt-0.5">{opt.description}</div>}
+                    <div className="font-medium"><HighlightedText text={opt.label} query={searchQuery} /></div>
+                    {opt.description && <div className="text-muted-foreground mt-0.5"><HighlightedText text={opt.description} query={searchQuery} /></div>}
                   </button>
                 )
               })}
@@ -74,7 +100,7 @@ function QuestionMessage({ message, onAnswer, canAnswer }: { message: AgentMessa
   )
 }
 
-function TodoList({ message }: { message: AgentMessage }) {
+function TodoList({ message, searchQuery }: { message: AgentMessage; searchQuery?: string }) {
   const todos = message.tool?.todos || []
   return (
     <div className="rounded-md bg-card border border-border/50 overflow-hidden">
@@ -97,7 +123,7 @@ function TodoList({ message }: { message: AgentMessage }) {
               t.status === 'completed' && 'opacity-60 line-through text-muted-foreground',
               t.status !== 'completed' && 'text-foreground'
             )}>
-              {t.content}
+              <HighlightedText text={t.content} query={searchQuery} />
             </span>
           </div>
         ))}
@@ -106,7 +132,7 @@ function TodoList({ message }: { message: AgentMessage }) {
   )
 }
 
-function PlanReviewMessage({ message }: { message: AgentMessage }) {
+function PlanReviewMessage({ message, searchQuery }: { message: AgentMessage; searchQuery?: string }) {
   const tool = message.tool
   const label = tool?.title || message.content || 'Plan mode'
   const rawOutput = tool?.output || ''
@@ -120,12 +146,12 @@ function PlanReviewMessage({ message }: { message: AgentMessage }) {
         <svg className="h-3 w-3 text-muted-foreground shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/>
         </svg>
-        <span className="text-foreground">{label}</span>
+        <span className="text-foreground"><HighlightedText text={label} query={searchQuery} /></span>
       </div>
       {details && (
         <div className="px-3 py-2 border-t border-border/30 max-h-[50vh] overflow-y-auto">
           <div className="break-words">
-            <Markdown size="xs">{details}</Markdown>
+            <Markdown size="xs" highlightQuery={searchQuery}>{details}</Markdown>
           </div>
         </div>
       )}
@@ -240,7 +266,7 @@ export function isCompactActivityMessage(message: AgentMessage): boolean {
   return (message.partType === 'tool' && !!message.tool?.name) || message.partType === 'reasoning'
 }
 
-function TaskProgressMessage({ message }: { message: AgentMessage }) {
+function TaskProgressMessage({ message, searchQuery }: { message: AgentMessage; searchQuery?: string }) {
   const [expanded, setExpanded] = useState(false)
   const tp = message.taskProgress!
   const isRunning = tp.status === 'started' || tp.status === 'running'
@@ -263,9 +289,9 @@ function TaskProgressMessage({ message }: { message: AgentMessage }) {
         <svg className="h-3 w-3 text-blue-400 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <polyline points="4 17 10 11 4 5" /><line x1="12" x2="20" y1="19" y2="19" />
         </svg>
-        <span className="text-foreground font-medium truncate">{tp.description || 'Subagent task'}</span>
+        <span className="text-foreground font-medium truncate"><HighlightedText text={tp.description || 'Subagent task'} query={searchQuery} /></span>
         {tp.lastToolName && isRunning && (
-          <span className="text-muted-foreground text-[10px] truncate">· {tp.lastToolName}</span>
+          <span className="text-muted-foreground text-[10px] truncate">· <HighlightedText text={tp.lastToolName} query={searchQuery} /></span>
         )}
         <span className="ml-auto flex items-center gap-1.5 shrink-0">
           {tp.usage && (
@@ -298,7 +324,7 @@ function TaskProgressMessage({ message }: { message: AgentMessage }) {
         <div className="border-t border-border/30 px-3 py-2 space-y-2">
           {tp.summary && (
             <div className="text-xs">
-              <Markdown size="sm">{tp.summary}</Markdown>
+              <Markdown size="sm" highlightQuery={searchQuery}>{tp.summary}</Markdown>
             </div>
           )}
           {tp.usage && (
@@ -317,7 +343,7 @@ function TaskProgressMessage({ message }: { message: AgentMessage }) {
   )
 }
 
-function ToolCallMessage({ message }: { message: AgentMessage }) {
+function ToolCallMessage({ message, searchQuery }: { message: AgentMessage; searchQuery?: string }) {
   const [expanded, setExpanded] = useState(false)
   const tool = message.tool!
   const isRunning = !tool.status || tool.status === 'in_progress' || tool.status === 'running' || tool.status === 'pending'
@@ -339,8 +365,8 @@ function ToolCallMessage({ message }: { message: AgentMessage }) {
         <svg className="h-3 w-3 text-muted-foreground shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
         </svg>
-        <span className="text-foreground/80 font-medium shrink-0">{tool.name}</span>
-        {subtitle && <span className="min-w-0 flex-1 text-muted-foreground truncate">{subtitle}</span>}
+        <span className="text-foreground/80 font-medium shrink-0"><HighlightedText text={tool.name} query={searchQuery} /></span>
+        {subtitle && <span className="min-w-0 flex-1 text-muted-foreground truncate"><HighlightedText text={subtitle} query={searchQuery} /></span>}
         {!subtitle && <span className="flex-1" />}
         <span className="w-20 shrink-0 text-right text-[10px] text-muted-foreground opacity-0 transition-opacity group-hover/tool:opacity-100">
           {message.timestamp.toLocaleTimeString()}
@@ -361,25 +387,25 @@ function ToolCallMessage({ message }: { message: AgentMessage }) {
           {command && (
             <div>
               <div className="text-muted-foreground mb-0.5">Command</div>
-              <pre className="overflow-x-auto max-h-40 overflow-y-auto whitespace-pre-wrap break-words text-muted-foreground">{command}</pre>
+              <pre className="overflow-x-auto max-h-40 overflow-y-auto whitespace-pre-wrap break-words text-muted-foreground"><HighlightedText text={command} query={searchQuery} /></pre>
             </div>
           )}
           {tool.input && (
             <div>
               <div className="text-muted-foreground mb-0.5">Input</div>
-              <pre className="overflow-x-auto max-h-40 overflow-y-auto whitespace-pre-wrap break-words text-muted-foreground">{sanitizeToolContent(tool.input)}</pre>
+              <pre className="overflow-x-auto max-h-40 overflow-y-auto whitespace-pre-wrap break-words text-muted-foreground"><HighlightedText text={sanitizeToolContent(tool.input)} query={searchQuery} /></pre>
             </div>
           )}
           {tool.output && (
             <div>
               <div className="text-muted-foreground mb-0.5">Output</div>
-              <pre className="overflow-x-auto max-h-40 overflow-y-auto whitespace-pre-wrap break-words text-muted-foreground">{sanitizeToolContent(tool.output)}</pre>
+              <pre className="overflow-x-auto max-h-40 overflow-y-auto whitespace-pre-wrap break-words text-muted-foreground"><HighlightedText text={sanitizeToolContent(tool.output)} query={searchQuery} /></pre>
             </div>
           )}
           {tool.error && (
             <div>
               <div className="text-red-400 mb-0.5">Error</div>
-              <pre className="text-red-300 whitespace-pre-wrap break-words">{tool.error}</pre>
+              <pre className="text-red-300 whitespace-pre-wrap break-words"><HighlightedText text={tool.error} query={searchQuery} /></pre>
             </div>
           )}
         </div>
@@ -388,7 +414,7 @@ function ToolCallMessage({ message }: { message: AgentMessage }) {
   )
 }
 
-function ReasoningMessage({ message }: { message: AgentMessage }) {
+function ReasoningMessage({ message, searchQuery }: { message: AgentMessage; searchQuery?: string }) {
   const [expanded, setExpanded] = useState(false)
   const summary = message.content.split('\n').map((line) => line.trim()).find(Boolean) || 'Thinking'
 
@@ -403,34 +429,34 @@ function ReasoningMessage({ message }: { message: AgentMessage }) {
           expanded && 'rotate-90'
         )}>▶</span>
         <span className="shrink-0 text-teal-700 dark:text-teal-300">Thinking</span>
-        <span className="min-w-0 flex-1 truncate text-muted-foreground">{summary}</span>
+        <span className="min-w-0 flex-1 truncate text-muted-foreground"><HighlightedText text={summary} query={searchQuery} /></span>
         <span className="w-20 shrink-0 text-right text-[10px] text-muted-foreground opacity-0 transition-opacity group-hover/tool:opacity-100">
           {message.timestamp.toLocaleTimeString()}
         </span>
       </button>
       {expanded && (
         <div className="ml-5 border-l border-teal-500/30 pl-3 py-1.5 text-foreground/75">
-          <Markdown size="sm">{message.content}</Markdown>
+          <Markdown size="sm" highlightQuery={searchQuery}>{message.content}</Markdown>
         </div>
       )}
     </div>
   )
 }
 
-export function MessageActivityGroup({ messages }: { messages: AgentMessage[] }) {
+export function MessageActivityGroup({ messages, searchQuery }: { messages: AgentMessage[]; searchQuery?: string }) {
   return (
     <div className="w-full border-l border-border/30 pl-2 py-0.5">
       {messages.map((message) => {
         if (message.partType === 'reasoning') {
-          return <ReasoningMessage key={message.id} message={message} />
+          return <ReasoningMessage key={message.id} message={message} searchQuery={searchQuery} />
         }
-        return <ToolCallMessage key={message.id} message={message} />
+        return <ToolCallMessage key={message.id} message={message} searchQuery={searchQuery} />
       })}
     </div>
   )
 }
 
-function TaskNotificationMessage({ message }: { message: AgentMessage }) {
+function TaskNotificationMessage({ message, searchQuery }: { message: AgentMessage; searchQuery?: string }) {
   const tool = message.tool
   const status = tool?.status || 'completed'
   const summary = tool?.output || message.content || 'Task completed'
@@ -462,7 +488,7 @@ function TaskNotificationMessage({ message }: { message: AgentMessage }) {
       </div>
       {summary && (
         <div className={cn('px-3 pb-2', isError ? 'text-red-200' : 'text-foreground/80')}>
-          <Markdown size="sm">{summary}</Markdown>
+          <Markdown size="sm" highlightQuery={searchQuery}>{summary}</Markdown>
         </div>
       )}
     </div>
@@ -473,37 +499,38 @@ interface MessageBubbleProps {
   message: AgentMessage
   onAnswer?: (answer: string) => void
   canAnswerQuestion?: boolean
+  searchQuery?: string
 }
 
-export function MessageBubble({ message, onAnswer, canAnswerQuestion = false }: MessageBubbleProps) {
+export function MessageBubble({ message, onAnswer, canAnswerQuestion = false, searchQuery }: MessageBubbleProps) {
   // Question — check by data content so it renders correctly regardless of partType
   if (message.tool?.questions && message.tool.questions.length > 0) {
-    return <QuestionMessage message={message} onAnswer={onAnswer} canAnswer={canAnswerQuestion} />
+    return <QuestionMessage message={message} onAnswer={onAnswer} canAnswer={canAnswerQuestion} searchQuery={searchQuery} />
   }
 
   // Todo list — check by data content so it renders correctly regardless of partType
   if (message.tool?.todos && message.tool.todos.length > 0) {
-    return <TodoList message={message} />
+    return <TodoList message={message} searchQuery={searchQuery} />
   }
 
   // Plan review
   if (message.partType === 'planreview') {
-    return <PlanReviewMessage message={message} />
+    return <PlanReviewMessage message={message} searchQuery={searchQuery} />
   }
 
   // Tool call — require a name to avoid rendering ghost entries with no tool name
   if (isCompactActivityMessage(message)) {
-    return <MessageActivityGroup messages={[message]} />
+    return <MessageActivityGroup messages={[message]} searchQuery={searchQuery} />
   }
 
   // Task progress — live subagent task tracking
   if (message.partType === 'task_progress' && message.taskProgress) {
-    return <TaskProgressMessage message={message} />
+    return <TaskProgressMessage message={message} searchQuery={searchQuery} />
   }
 
   // Task notification — subtask completion/failure/stopped
   if (message.partType === 'task-notification') {
-    return <TaskNotificationMessage message={message} />
+    return <TaskNotificationMessage message={message} searchQuery={searchQuery} />
   }
 
   // Step markers and system status — skip (absorbed by store)
@@ -527,7 +554,7 @@ export function MessageBubble({ message, onAnswer, canAnswerQuestion = false }: 
         !isUser && !isSystem && !isError && 'w-full py-1 text-foreground/80'
       )}>
         <div className="break-words min-w-0">
-          <Markdown size="sm">{message.content}</Markdown>
+          <Markdown size="sm" highlightQuery={searchQuery}>{message.content}</Markdown>
         </div>
         {message.stepMeta && (
           <div className="flex items-center gap-2 mt-1 text-[10px] text-muted-foreground">
