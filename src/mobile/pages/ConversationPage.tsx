@@ -549,16 +549,13 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
                 <div
                   key={msg.id}
                   ref={(node) => setMessageNode(index, node)}
-                  className={cn(
-                    'rounded-md transition-colors',
-                    normalizedSearchQuery && searchResultIndexes.includes(index) && 'bg-yellow-500/5',
-                    index === activeSearchMessageIndex && 'ring-1 ring-yellow-400/60 bg-yellow-500/10'
-                  )}
+                  className="rounded-md"
                 >
                   <MessageBubble
                     message={msg}
                     onAnswer={handleAnswer}
                     canAnswerQuestion={msg.id === activeQuestionId}
+                    searchQuery={normalizedSearchQuery}
                   />
                 </div>
               )
@@ -571,21 +568,15 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
               group.push(messages[nextIndex])
               groupIndexes.push(nextIndex)
             }
-            const hasSearchMatch = normalizedSearchQuery && groupIndexes.some((itemIndex) => searchResultIndexes.includes(itemIndex))
-            const hasActiveSearchMatch = groupIndexes.includes(activeSearchMessageIndex)
             return (
               <div
                 key={group.map((item) => item.id).join(':')}
                 ref={(node) => {
                   groupIndexes.forEach((itemIndex) => setMessageNode(itemIndex, node))
                 }}
-                className={cn(
-                  'rounded-md transition-colors',
-                  hasSearchMatch && 'bg-yellow-500/5',
-                  hasActiveSearchMatch && 'ring-1 ring-yellow-400/60 bg-yellow-500/10'
-                )}
+                className="rounded-md"
               >
-                <MessageActivityGroup messages={group} />
+                <MessageActivityGroup messages={group} searchQuery={normalizedSearchQuery} />
               </div>
             )
           })}

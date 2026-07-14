@@ -185,6 +185,32 @@ function getTranscriptItemSearchText(item: TranscriptItem): string {
   return getMessageSearchText(item.message)
 }
 
+function HighlightedText({ text, query }: { text: string; query?: string }) {
+  const normalizedQuery = query?.trim()
+  if (!normalizedQuery) return <>{text}</>
+
+  const lowerText = text.toLowerCase()
+  const lowerQuery = normalizedQuery.toLowerCase()
+  const parts: React.ReactNode[] = []
+  let cursor = 0
+  let matchIndex = lowerText.indexOf(lowerQuery)
+
+  while (matchIndex !== -1) {
+    if (matchIndex > cursor) parts.push(text.slice(cursor, matchIndex))
+    const match = text.slice(matchIndex, matchIndex + normalizedQuery.length)
+    parts.push(
+      <mark key={`${matchIndex}-${match}`} className="rounded-sm bg-yellow-300/80 px-0.5 text-black">
+        {match}
+      </mark>
+    )
+    cursor = matchIndex + normalizedQuery.length
+    matchIndex = lowerText.indexOf(lowerQuery, cursor)
+  }
+
+  if (cursor < text.length) parts.push(text.slice(cursor))
+  return <>{parts}</>
+}
+
 
 interface AgentTranscriptPanelProps {
   title?: string
@@ -213,7 +239,7 @@ export interface ComposerAttachment {
   mime_type: string
 }
 
-function QuestionMessage({ message, onAnswer, canAnswer }: { message: AgentMessage; onAnswer?: (answer: string) => void; canAnswer: boolean }) {
+function QuestionMessage({ message, onAnswer, canAnswer, searchQuery }: { message: AgentMessage; onAnswer?: (answer: string) => void; canAnswer: boolean; searchQuery?: string }) {
   const questions = message.tool?.questions || []
   const [answers, setAnswers] = useState<Record<number, string>>({})
   const [textInputs, setTextInputs] = useState<Record<number, string>>({})
@@ -251,8 +277,8 @@ function QuestionMessage({ message, onAnswer, canAnswer }: { message: AgentMessa
         const hasOptions = q.options && q.options.length > 0
         return (
           <div key={qi} className="px-4 py-3 space-y-2.5">
-            {q.header && <span className="text-[10px] text-primary font-medium uppercase tracking-wide">{q.header}</span>}
-            <p className="text-xs text-foreground">{q.question}</p>
+            {q.header && <span className="text-[10px] text-primary font-medium uppercase tracking-wide"><HighlightedText text={q.header} query={searchQuery} /></span>}
+            <p className="text-xs text-foreground"><HighlightedText text={q.question} query={searchQuery} /></p>
             {hasOptions ? (
               <div className="space-y-1.5">
                 {q.options.map((opt, oi) => {
@@ -270,9 +296,9 @@ function QuestionMessage({ message, onAnswer, canAnswer }: { message: AgentMessa
                             : 'border-border/50 hover:bg-white/5 hover:border-border text-foreground/80 cursor-pointer'
                       }`}
                     >
-                      <span className="font-medium">{opt.label}</span>
+                      <span className="font-medium"><HighlightedText text={opt.label} query={searchQuery} /></span>
                       {opt.description && (
-                        <span className="block text-[11px] text-muted-foreground mt-0.5">{opt.description}</span>
+                        <span className="block text-[11px] text-muted-foreground mt-0.5"><HighlightedText text={opt.description} query={searchQuery} /></span>
                       )}
                     </button>
                   )
@@ -314,7 +340,7 @@ function QuestionMessage({ message, onAnswer, canAnswer }: { message: AgentMessa
   )
 }
 
-function TodoWriteMessage({ message }: { message: AgentMessage }) {
+function TodoWriteMessage({ message, searchQuery }: { message: AgentMessage; searchQuery?: string }) {
   const todos = message.tool?.todos || []
   const completed = todos.filter((t) => t.status === 'completed').length
 
@@ -342,7 +368,7 @@ function TodoWriteMessage({ message }: { message: AgentMessage }) {
           >
             {statusIcon(todo.status)}
             <span className={`${todo.status === 'completed' ? 'line-through text-muted-foreground' : 'text-foreground'}`}>
-              {todo.content}
+              <HighlightedText text={todo.content} query={searchQuery} />
             </span>
           </div>
         ))}
@@ -354,7 +380,7 @@ function TodoWriteMessage({ message }: { message: AgentMessage }) {
   )
 }
 
-function PlanReviewMessage({ message }: { message: AgentMessage }) {
+function PlanReviewMessage({ message, searchQuery }: { message: AgentMessage; searchQuery?: string }) {
   const tool = message.tool
   const label = tool?.title || message.content || 'Plan mode'
   const rawOutput = tool?.output || ''
@@ -365,11 +391,11 @@ function PlanReviewMessage({ message }: { message: AgentMessage }) {
     <div className="rounded-md bg-card border border-border/50 overflow-hidden">
       <div className="flex items-center gap-2 px-3 py-2 text-xs font-mono">
         <FileText className="h-3 w-3 text-muted-foreground shrink-0" />
-        <span className="text-foreground">{label}</span>
+        <span className="text-foreground"><HighlightedText text={label} query={searchQuery} /></span>
       </div>
       {details && (
         <div className="px-3 py-2 border-t border-border/30 max-h-[60vh] overflow-y-auto">
-          <Markdown size="xs">{details}</Markdown>
+          <Markdown size="xs" highlightQuery={searchQuery}>{details}</Markdown>
         </div>
       )}
     </div>
@@ -384,7 +410,7 @@ function formatDuration(ms: number): string {
   return `${minutes}m ${remainingSeconds}s`
 }
 
-function TaskProgressMessage({ message }: { message: AgentMessage }) {
+function TaskProgressMessage({ message, searchQuery }: { message: AgentMessage; searchQuery?: string }) {
   const [expanded, setExpanded] = useState(false)
   const tp = message.taskProgress!
   const isRunning = tp.status === 'started' || tp.status === 'running'
@@ -402,9 +428,9 @@ function TaskProgressMessage({ message }: { message: AgentMessage }) {
       >
         <ChevronRight className={`h-3 w-3 text-muted-foreground shrink-0 transition-transform ${expanded ? 'rotate-90' : ''}`} />
         <Terminal className="h-3 w-3 text-blue-400 shrink-0" />
-        <span className="text-foreground truncate">{tp.description || 'Subagent task'}</span>
+        <span className="text-foreground truncate"><HighlightedText text={tp.description || 'Subagent task'} query={searchQuery} /></span>
         {tp.lastToolName && isRunning && (
-          <span className="text-muted-foreground text-[10px] truncate">· {tp.lastToolName}</span>
+          <span className="text-muted-foreground text-[10px] truncate">· <HighlightedText text={tp.lastToolName} query={searchQuery} /></span>
         )}
         <span className="ml-auto flex items-center gap-1.5 shrink-0">
           {tp.usage && (
@@ -421,7 +447,7 @@ function TaskProgressMessage({ message }: { message: AgentMessage }) {
         <div className="border-t border-border/30 px-3 py-2 space-y-2">
           {tp.summary && (
             <div className="text-xs">
-              <Markdown size="sm">{tp.summary}</Markdown>
+              <Markdown size="sm" highlightQuery={searchQuery}>{tp.summary}</Markdown>
             </div>
           )}
           {tp.usage && (
@@ -440,7 +466,7 @@ function TaskProgressMessage({ message }: { message: AgentMessage }) {
   )
 }
 
-function ToolCallMessage({ message }: { message: AgentMessage }) {
+function ToolCallMessage({ message, searchQuery }: { message: AgentMessage; searchQuery?: string }) {
   const [expanded, setExpanded] = useState(false)
   const tool = message.tool!
   const isRunning = !tool.status || tool.status === 'in_progress' || tool.status === 'running' || tool.status === 'pending'
@@ -456,8 +482,8 @@ function ToolCallMessage({ message }: { message: AgentMessage }) {
       >
         <ChevronRight className={`h-3 w-3 text-muted-foreground shrink-0 transition-transform ${expanded ? 'rotate-90' : ''}`} />
         <Wrench className="h-3 w-3 text-muted-foreground shrink-0" />
-        <span className="text-foreground/80 shrink-0">{tool.name}</span>
-        {subtitle && <span className="min-w-0 flex-1 truncate text-muted-foreground">{subtitle}</span>}
+        <span className="text-foreground/80 shrink-0"><HighlightedText text={tool.name} query={searchQuery} /></span>
+        {subtitle && <span className="min-w-0 flex-1 truncate text-muted-foreground"><HighlightedText text={subtitle} query={searchQuery} /></span>}
         {!subtitle && <span className="flex-1" />}
         <span className="w-20 shrink-0 text-right text-[10px] text-muted-foreground opacity-0 transition-opacity group-hover/tool:opacity-100">
           {message.timestamp.toLocaleTimeString()}
@@ -470,25 +496,25 @@ function ToolCallMessage({ message }: { message: AgentMessage }) {
           {command && (
             <div>
               <span className="text-muted-foreground">Command:</span>
-              <pre className="mt-0.5 text-muted-foreground whitespace-pre-wrap break-words max-h-40 overflow-y-auto">{command}</pre>
+              <pre className="mt-0.5 text-muted-foreground whitespace-pre-wrap break-words max-h-40 overflow-y-auto"><HighlightedText text={command} query={searchQuery} /></pre>
             </div>
           )}
           {tool.input && (
             <div>
               <span className="text-muted-foreground">Input:</span>
-              <pre className="mt-0.5 text-muted-foreground whitespace-pre-wrap break-words max-h-40 overflow-y-auto">{sanitizeToolContent(tool.input)}</pre>
+              <pre className="mt-0.5 text-muted-foreground whitespace-pre-wrap break-words max-h-40 overflow-y-auto"><HighlightedText text={sanitizeToolContent(tool.input)} query={searchQuery} /></pre>
             </div>
           )}
           {tool.output && (
             <div>
               <span className="text-muted-foreground">Output:</span>
-              <pre className="mt-0.5 text-muted-foreground whitespace-pre-wrap break-words max-h-40 overflow-y-auto">{sanitizeToolContent(tool.output)}</pre>
+              <pre className="mt-0.5 text-muted-foreground whitespace-pre-wrap break-words max-h-40 overflow-y-auto"><HighlightedText text={sanitizeToolContent(tool.output)} query={searchQuery} /></pre>
             </div>
           )}
           {tool.error && (
             <div>
               <span className="text-red-400">Error:</span>
-              <pre className="mt-0.5 text-red-300 whitespace-pre-wrap break-words">{tool.error}</pre>
+              <pre className="mt-0.5 text-red-300 whitespace-pre-wrap break-words"><HighlightedText text={tool.error} query={searchQuery} /></pre>
             </div>
           )}
         </div>
@@ -497,7 +523,7 @@ function ToolCallMessage({ message }: { message: AgentMessage }) {
   )
 }
 
-function ReasoningMessage({ message, viewMode }: { message: AgentMessage; viewMode?: ViewMode }) {
+function ReasoningMessage({ message, viewMode, searchQuery }: { message: AgentMessage; viewMode?: ViewMode; searchQuery?: string }) {
   const [expanded, setExpanded] = useState(false)
   const summary = message.content.split('\n').map((line) => line.trim()).find(Boolean) || 'Thinking'
 
@@ -509,7 +535,7 @@ function ReasoningMessage({ message, viewMode }: { message: AgentMessage; viewMo
       >
         <ChevronRight className={`h-3 w-3 shrink-0 text-teal-600/70 dark:text-teal-300/60 transition-transform ${expanded ? 'rotate-90' : ''}`} />
         <span className="shrink-0 text-teal-700 dark:text-teal-300">Thinking</span>
-        <span className="min-w-0 flex-1 truncate text-muted-foreground">{summary}</span>
+        <span className="min-w-0 flex-1 truncate text-muted-foreground"><HighlightedText text={summary} query={searchQuery} /></span>
         <span className="w-20 shrink-0 text-right text-[10px] text-muted-foreground opacity-0 transition-opacity group-hover/tool:opacity-100">
           {message.timestamp.toLocaleTimeString()}
         </span>
@@ -517,9 +543,9 @@ function ReasoningMessage({ message, viewMode }: { message: AgentMessage; viewMo
       {expanded && (
         <div className="ml-5 border-l border-teal-500/30 pl-3 py-1.5 text-foreground/75">
           {viewMode === ViewMode.MARKDOWN ? (
-            <Markdown size="sm">{message.content}</Markdown>
+            <Markdown size="sm" highlightQuery={searchQuery}>{message.content}</Markdown>
           ) : (
-            <pre className="whitespace-pre-wrap break-words font-mono text-xs">{message.content}</pre>
+            <pre className="whitespace-pre-wrap break-words font-mono text-xs"><HighlightedText text={message.content} query={searchQuery} /></pre>
           )}
         </div>
       )}
@@ -527,38 +553,38 @@ function ReasoningMessage({ message, viewMode }: { message: AgentMessage; viewMo
   )
 }
 
-function ActivityMessageGroup({ messages, viewMode }: { messages: AgentMessage[]; viewMode?: ViewMode }) {
+function ActivityMessageGroup({ messages, viewMode, searchQuery }: { messages: AgentMessage[]; viewMode?: ViewMode; searchQuery?: string }) {
   return (
     <div className="w-full border-l border-border/30 pl-2 py-0.5">
       {messages.map((message) => {
         if (message.partType === 'reasoning') {
-          return <ReasoningMessage key={message.id} message={message} viewMode={viewMode} />
+          return <ReasoningMessage key={message.id} message={message} viewMode={viewMode} searchQuery={searchQuery} />
         }
-        return <ToolCallMessage key={message.id} message={message} />
+        return <ToolCallMessage key={message.id} message={message} searchQuery={searchQuery} />
       })}
     </div>
   )
 }
 
-function MessageBubble({ message, onAnswer, viewMode, canAnswerQuestion = false }: { message: AgentMessage; onAnswer?: (answer: string) => void; viewMode?: ViewMode; canAnswerQuestion?: boolean }) {
+function MessageBubble({ message, onAnswer, viewMode, canAnswerQuestion = false, searchQuery }: { message: AgentMessage; onAnswer?: (answer: string) => void; viewMode?: ViewMode; canAnswerQuestion?: boolean; searchQuery?: string }) {
   if (message.partType === 'question' && message.tool?.questions) {
-    return <QuestionMessage message={message} onAnswer={onAnswer} canAnswer={canAnswerQuestion} />
+    return <QuestionMessage message={message} onAnswer={onAnswer} canAnswer={canAnswerQuestion} searchQuery={searchQuery} />
   }
 
   if (message.partType === 'todowrite' && message.tool?.todos) {
-    return <TodoWriteMessage message={message} />
+    return <TodoWriteMessage message={message} searchQuery={searchQuery} />
   }
 
   if (message.partType === 'planreview') {
-    return <PlanReviewMessage message={message} />
+    return <PlanReviewMessage message={message} searchQuery={searchQuery} />
   }
 
   if (isCompactActivityMessage(message)) {
-    return <ActivityMessageGroup messages={[message]} viewMode={viewMode} />
+    return <ActivityMessageGroup messages={[message]} viewMode={viewMode} searchQuery={searchQuery} />
   }
 
   if (message.partType === 'task_progress' && message.taskProgress) {
-    return <TaskProgressMessage message={message} />
+    return <TaskProgressMessage message={message} searchQuery={searchQuery} />
   }
 
   // Step markers are absorbed into message stepMeta — skip if any slip through
@@ -590,10 +616,10 @@ function MessageBubble({ message, onAnswer, viewMode, canAnswerQuestion = false 
           </span>
         )}
         {viewMode === ViewMode.MARKDOWN ? (
-          <Markdown size="sm">{message.content}</Markdown>
+          <Markdown size="sm" highlightQuery={searchQuery}>{message.content}</Markdown>
         ) : (
           <pre className="whitespace-pre-wrap break-words font-mono text-xs">
-            {message.content}
+            <HighlightedText text={message.content} query={searchQuery} />
           </pre>
         )}
         <div className={`flex items-center gap-2 mt-1 ${!isUser ? 'opacity-70' : ''}`}>
@@ -1165,19 +1191,16 @@ export function AgentTranscriptPanel({
                       transform: `translateY(${virtualRow.start}px)`,
                     }}
                   >
-                    <div className={cn(
-                      'pb-2 rounded-md transition-colors',
-                      normalizedSearchQuery && searchResultIndexes.includes(virtualRow.index) && 'bg-yellow-500/5',
-                      virtualRow.index === activeSearchItemIndex && 'ring-1 ring-yellow-400/60 bg-yellow-500/10'
-                    )}>
+                    <div className="pb-2">
                       {item.type === 'activity' ? (
-                        <ActivityMessageGroup messages={item.messages} viewMode={viewMode} />
+                        <ActivityMessageGroup messages={item.messages} viewMode={viewMode} searchQuery={normalizedSearchQuery} />
                       ) : (
                         <MemoizedMessageBubble
                           message={item.message}
                           onAnswer={onSend}
                           viewMode={viewMode}
                           canAnswerQuestion={item.message.id === activeQuestionId}
+                          searchQuery={normalizedSearchQuery}
                         />
                       )}
                     </div>
