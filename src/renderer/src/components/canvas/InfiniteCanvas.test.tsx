@@ -3,13 +3,51 @@ import { render, screen, cleanup, fireEvent } from '@testing-library/react'
 import { InfiniteCanvas } from './InfiniteCanvas'
 import { useCanvasStore } from '@/stores/canvas-store'
 import { TaskStatus } from '@/types'
+import type { WorkfloTask } from '@/types'
 
 const taskStoreState = vi.hoisted(() => ({
-  tasks: [] as Array<{ id: string; title: string; status: TaskStatus }>,
+  tasks: [] as WorkfloTask[],
   selectedTaskId: null as string | null,
   isLoading: false,
   error: null as string | null,
 }))
+
+const makeTask = (overrides: Partial<WorkfloTask> = {}): WorkfloTask => ({
+  id: 'task-123',
+  title: 'Task',
+  description: '',
+  type: 'coding',
+  priority: 'medium',
+  status: TaskStatus.NotStarted,
+  assignee: '',
+  due_date: null,
+  labels: [],
+  attachments: [],
+  repos: [],
+  output_fields: [],
+  agent_id: null,
+  session_id: null,
+  external_id: null,
+  source_id: null,
+  source: 'manual',
+  skill_ids: null,
+  snoozed_until: null,
+  resolution: null,
+  feedback_rating: null,
+  feedback_comment: null,
+  is_recurring: false,
+  recurrence_pattern: null,
+  recurrence_parent_id: null,
+  last_occurrence_at: null,
+  next_occurrence_at: null,
+  auto_start_agent: false,
+  auto_complete_without_review: false,
+  parent_task_id: null,
+  sort_order: 0,
+  created_at: '2026-01-01T00:00:00.000Z',
+  updated_at: '2026-01-01T00:00:00.000Z',
+  ...overrides,
+})
 
 // Mock the child components that depend on external stores
 vi.mock('@/stores/task-store', () => ({
@@ -90,7 +128,7 @@ describe('InfiniteCanvas', () => {
 
   it('uses task status color coding for task panels and minimap rectangles', () => {
     taskStoreState.tasks = [
-      { id: 'task-123', title: 'Working Task', status: TaskStatus.AgentWorking },
+      makeTask({ id: 'task-123', title: 'Working Task', status: TaskStatus.AgentWorking }),
     ]
     useCanvasStore.getState().addPanel({
       type: 'task',
@@ -131,8 +169,8 @@ describe('InfiniteCanvas', () => {
 
     render(<InfiniteCanvas />)
 
-    expect(screen.getByText('Browser').className).toContain('text-orange-300')
-    expect(screen.getByText('Terminal').className).toContain('text-violet-300')
+    expect(screen.getAllByText('Browser')[0].className).toContain('text-orange-300')
+    expect(screen.getAllByText('Terminal')[0].className).toContain('text-violet-300')
   })
 
   it('should hide empty state when panels exist', () => {
