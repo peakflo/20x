@@ -170,7 +170,7 @@ describe('InfiniteCanvas', () => {
       type: 'task',
       title: 'Reviewing Task',
       refId: 'task-123',
-      x: 1200,
+      x: -1000,
       y: 900,
       width: 400,
       height: 300,
@@ -187,9 +187,11 @@ describe('InfiniteCanvas', () => {
     await waitFor(() => {
       expect(container.querySelector('[data-canvas-status-edge-highlight="true"]')).toBeTruthy()
     })
+    const popup = container.querySelector('[data-canvas-status-edge-highlight="true"]') as HTMLElement
+    expect(parseFloat(popup.style.left)).toBeGreaterThanOrEqual(170)
 
     fireEvent.click(screen.getByTitle('Jump to Reviewing Task'))
-    expect(useCanvasStore.getState().viewport.x).toBeLessThan(0)
+    expect(useCanvasStore.getState().viewport.x).not.toBe(0)
 
     globalThis.ResizeObserver = originalResizeObserver
   })

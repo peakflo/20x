@@ -47,6 +47,11 @@ function isPanelVisible(
 // Grid dot spacing in canvas-space pixels
 const GRID_SIZE = 40
 const STATUS_HIGHLIGHT_MS = 5_000
+const STATUS_POPUP_EDGE_PAD = 28
+const STATUS_POPUP_TOP_SAFE = 70
+const STATUS_POPUP_BOTTOM_SAFE = 150
+const STATUS_POPUP_LEFT_SAFE = 170
+const STATUS_POPUP_RIGHT_SAFE = 220
 
 interface StatusHighlight {
   id: string
@@ -88,9 +93,30 @@ function getOffscreenBeaconStyle(
 
   if (isVisible) return null
 
-  const pad = 28
-  const x = Math.min(containerWidth - pad, Math.max(pad, centerX))
-  const y = Math.min(containerHeight - pad, Math.max(pad, centerY))
+  const safeMinX = Math.min(containerWidth - STATUS_POPUP_EDGE_PAD, Math.max(STATUS_POPUP_EDGE_PAD, STATUS_POPUP_LEFT_SAFE))
+  const safeMaxX = Math.max(STATUS_POPUP_EDGE_PAD, containerWidth - STATUS_POPUP_RIGHT_SAFE)
+  const safeMinY = Math.min(containerHeight - STATUS_POPUP_EDGE_PAD, Math.max(STATUS_POPUP_EDGE_PAD, STATUS_POPUP_TOP_SAFE))
+  const safeMaxY = Math.max(STATUS_POPUP_EDGE_PAD, containerHeight - STATUS_POPUP_BOTTOM_SAFE)
+  const leftDistance = Math.abs(centerX)
+  const rightDistance = Math.abs(centerX - containerWidth)
+  const topDistance = Math.abs(centerY)
+  const bottomDistance = Math.abs(centerY - containerHeight)
+  const nearest = Math.min(leftDistance, rightDistance, topDistance, bottomDistance)
+  const side =
+    nearest === leftDistance ? 'left'
+      : nearest === rightDistance ? 'right'
+        : nearest === topDistance ? 'top'
+          : 'bottom'
+  const x = side === 'left'
+    ? STATUS_POPUP_EDGE_PAD
+    : side === 'right'
+      ? containerWidth - STATUS_POPUP_EDGE_PAD
+      : Math.min(safeMaxX, Math.max(safeMinX, centerX))
+  const y = side === 'top'
+    ? STATUS_POPUP_EDGE_PAD
+    : side === 'bottom'
+      ? containerHeight - STATUS_POPUP_EDGE_PAD
+      : Math.min(safeMaxY, Math.max(safeMinY, centerY))
   const angle = Math.atan2(centerY - containerHeight / 2, centerX - containerWidth / 2)
 
   return {
