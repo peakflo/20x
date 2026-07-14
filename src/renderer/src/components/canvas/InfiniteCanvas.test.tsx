@@ -2,12 +2,19 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, screen, cleanup, fireEvent } from '@testing-library/react'
 import { InfiniteCanvas } from './InfiniteCanvas'
 import { useCanvasStore } from '@/stores/canvas-store'
+import { TaskStatus } from '@/types'
+
+const taskStoreState = vi.hoisted(() => ({
+  tasks: [] as Array<{ id: string; title: string; status: TaskStatus }>,
+  selectedTaskId: null as string | null,
+  isLoading: false,
+  error: null as string | null,
+}))
 
 // Mock the child components that depend on external stores
 vi.mock('@/stores/task-store', () => ({
   useTaskStore: vi.fn((selector) => {
-    const state = { tasks: [], selectedTaskId: null, isLoading: false, error: null }
-    return selector ? selector(state) : state
+    return selector ? selector(taskStoreState) : taskStoreState
   }),
 }))
 
@@ -44,6 +51,10 @@ describe('InfiniteCanvas', () => {
       connectingFromId: null,
       isLoaded: true, // Skip async load in tests
     })
+    taskStoreState.tasks = []
+    taskStoreState.selectedTaskId = null
+    taskStoreState.isLoading = false
+    taskStoreState.error = null
   })
 
   afterEach(cleanup)
@@ -75,6 +86,53 @@ describe('InfiniteCanvas', () => {
     render(<InfiniteCanvas />)
     expect(screen.getByText('My Task Panel')).toBeTruthy()
     expect(screen.getByText('Task')).toBeTruthy()
+  })
+
+  it('uses task status color coding for task panels and minimap rectangles', () => {
+    taskStoreState.tasks = [
+      { id: 'task-123', title: 'Working Task', status: TaskStatus.AgentWorking },
+    ]
+    useCanvasStore.getState().addPanel({
+      type: 'task',
+      title: 'Working Task',
+      refId: 'task-123',
+      x: 100,
+      y: 100,
+      width: 400,
+      height: 300,
+    })
+
+    const { container } = render(<InfiniteCanvas />)
+
+    const statusBadge = screen.getByText('Working')
+    expect(statusBadge.className).toContain('text-amber-300')
+    const taskPanel = container.querySelector('[data-canvas-panel="true"]')
+    expect(taskPanel?.className).toContain('border-amber-500/55')
+    expect(container.querySelector('svg rect[fill="rgba(245,158,11,0.86)"]')).toBeTruthy()
+  })
+
+  it('keeps browser and terminal colors distinct from task status colors', () => {
+    useCanvasStore.getState().addPanel({
+      type: 'browser',
+      title: 'Browser',
+      x: 0,
+      y: 0,
+      width: 400,
+      height: 300,
+    })
+    useCanvasStore.getState().addPanel({
+      type: 'terminal',
+      title: 'Terminal',
+      x: 460,
+      y: 0,
+      width: 400,
+      height: 300,
+    })
+
+    render(<InfiniteCanvas />)
+
+    expect(screen.getByText('Browser').className).toContain('text-orange-300')
+    expect(screen.getByText('Terminal').className).toContain('text-violet-300')
   })
 
   it('should hide empty state when panels exist', () => {

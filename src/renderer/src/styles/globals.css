@@ -318,3 +318,45 @@ input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
   background: color-mix(in oklab, var(--primary) 26%, transparent);
   color: var(--foreground);
 }
+
+@keyframes canvas-status-flash {
+  0% {
+    box-shadow: 0 0 0 0 rgba(var(--canvas-status-rgb), 0.48);
+    opacity: 1;
+  }
+  70% {
+    box-shadow: 0 0 0 12px rgba(var(--canvas-status-rgb), 0);
+    opacity: 0.7;
+  }
+  100% {
+    box-shadow: 0 0 0 18px rgba(var(--canvas-status-rgb), 0);
+    opacity: 0;
+  }
+}
+
+@keyframes canvas-status-wave {
+  0% {
+    transform: scale(0.96);
+    opacity: 0.55;
+  }
+  100% {
+    transform: scale(1.08);
+    opacity: 0;
+  }
+}
+
+.canvas-status-transition-flash {
+  animation: canvas-status-flash 1.6s ease-out both;
+}
+
+.canvas-status-transition-wave {
+  position: absolute;
+  inset: 0;
+  border: 1px solid rgba(var(--canvas-status-rgb), 0.5);
+  border-radius: inherit;
+  animation: canvas-status-wave 1.4s ease-out both;
+}
+
+.canvas-status-transition-wave-delay {
+  animation-delay: 0.22s;
+}
