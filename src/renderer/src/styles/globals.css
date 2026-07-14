@@ -374,15 +374,3 @@ input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
   background: rgba(var(--canvas-status-rgb), 0.9);
   animation: canvas-status-jump-popup 1.4s ease-in-out infinite;
 }
-
-.canvas-status-jump-popup-arrow {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  width: 8px;
-  height: 8px;
-  border-right: 2px solid currentColor;
-  border-bottom: 2px solid currentColor;
-  transform: translate(-50%, -50%) rotate(calc(var(--canvas-status-popup-angle) + 45deg)) translateX(24px);
-  opacity: 0.9;
-}

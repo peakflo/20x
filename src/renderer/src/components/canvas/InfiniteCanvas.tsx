@@ -7,7 +7,7 @@ import { CanvasPanel } from './CanvasPanel'
 import { CanvasConnections } from './CanvasConnections'
 import { CanvasContextMenu } from './CanvasContextMenu'
 import { CanvasMinimap } from './CanvasMinimap'
-import { LocateFixed, Move, ZoomIn, ZoomOut, RotateCcw, Plus } from 'lucide-react'
+import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Move, ZoomIn, ZoomOut, RotateCcw, Plus } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { TaskStatus } from '@/types'
 import { getCanvasTaskStatusStyle, shouldPulseCanvasTaskStatusTransition } from './canvas-status-style'
@@ -74,12 +74,14 @@ function getPanelScreenRect(panel: StatusHighlight, viewport: Viewport) {
   }
 }
 
-function getOffscreenBeaconStyle(
+type StatusPopupDirection = 'left' | 'right' | 'top' | 'bottom'
+
+function getOffscreenBeacon(
   highlight: StatusHighlight,
   viewport: Viewport,
   containerWidth: number,
   containerHeight: number
-): CSSProperties | null {
+): { style: CSSProperties; direction: StatusPopupDirection } | null {
   if (!containerWidth || !containerHeight) return null
 
   const rect = getPanelScreenRect(highlight, viewport)
@@ -117,15 +119,15 @@ function getOffscreenBeaconStyle(
     : side === 'bottom'
       ? containerHeight - STATUS_POPUP_EDGE_PAD
       : Math.min(safeMaxY, Math.max(safeMinY, centerY))
-  const angle = Math.atan2(centerY - containerHeight / 2, centerX - containerWidth / 2)
-
   return {
-    left: x,
-    top: y,
-    transform: 'translate(-50%, -50%)',
-    '--canvas-status-rgb': highlight.rgb,
-    '--canvas-status-popup-angle': `${angle}rad`,
-  } as CSSProperties
+    direction: side,
+    style: {
+      left: x,
+      top: y,
+      transform: 'translate(-50%, -50%)',
+      '--canvas-status-rgb': highlight.rgb,
+    } as CSSProperties,
+  }
 }
 
 /**
@@ -647,14 +649,22 @@ export function InfiniteCanvas() {
       </div>
 
       {statusHighlights.map((highlight) => {
-        const beaconStyle = getOffscreenBeaconStyle(highlight, viewport, containerSize.width, containerSize.height)
-        if (!beaconStyle) return null
+        const beacon = getOffscreenBeacon(highlight, viewport, containerSize.width, containerSize.height)
+        if (!beacon) return null
+        const DirectionIcon = beacon.direction === 'left'
+          ? ArrowLeft
+          : beacon.direction === 'right'
+            ? ArrowRight
+            : beacon.direction === 'top'
+              ? ArrowUp
+              : ArrowDown
         return (
           <div
             key={`${highlight.id}-beacon`}
             data-canvas-status-edge-highlight="true"
+            data-direction={beacon.direction}
             className="absolute z-10"
-            style={beaconStyle}
+            style={beacon.style}
             title={highlight.title}
           >
             <button
@@ -667,8 +677,7 @@ export function InfiniteCanvas() {
               }}
               title={`Jump to ${highlight.title}`}
             >
-              <LocateFixed className="h-4 w-4" />
-              <span className="canvas-status-jump-popup-arrow" />
+              <DirectionIcon className="h-4 w-4" />
             </button>
           </div>
         )
