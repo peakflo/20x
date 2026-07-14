@@ -1,6 +1,6 @@
 import React, { useRef, useEffect, useState, useMemo, useCallback } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { StopCircle, Loader2, Terminal, Send, ChevronRight, ChevronDown, Wrench, AlertTriangle, CheckCircle2, Circle, Clock, RotateCcw, Code2, Eye, ListTodo, FileText, ArrowDown, Paperclip, X } from 'lucide-react'
+import { StopCircle, Loader2, Terminal, Send, ChevronRight, ChevronDown, Wrench, AlertTriangle, CheckCircle2, Circle, Clock, RotateCcw, Code2, Eye, ListTodo, FileText, ArrowDown, ArrowUp, Paperclip, Search, X } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { Markdown } from '@/components/ui/Markdown'
 import type { AgentMessage } from '@/hooks/use-agent-session'
@@ -152,6 +152,38 @@ function isCompactActivityMessage(message: AgentMessage): boolean {
 type TranscriptItem =
   | { type: 'message'; key: string; message: AgentMessage }
   | { type: 'activity'; key: string; messages: AgentMessage[] }
+
+function collectSearchableText(value: unknown, output: string[]): void {
+  if (value == null) return
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    output.push(String(value))
+    return
+  }
+  if (Array.isArray(value)) {
+    value.forEach((item) => collectSearchableText(item, output))
+    return
+  }
+  if (typeof value === 'object') {
+    Object.values(value as Record<string, unknown>).forEach((item) => collectSearchableText(item, output))
+  }
+}
+
+function getMessageSearchText(message: AgentMessage): string {
+  const parts: string[] = []
+  collectSearchableText(message.role, parts)
+  collectSearchableText(message.partType, parts)
+  collectSearchableText(message.content, parts)
+  collectSearchableText(message.tool, parts)
+  collectSearchableText(message.taskProgress, parts)
+  return parts.join('\n').toLowerCase()
+}
+
+function getTranscriptItemSearchText(item: TranscriptItem): string {
+  if (item.type === 'activity') {
+    return item.messages.map(getMessageSearchText).join('\n')
+  }
+  return getMessageSearchText(item.message)
+}
 
 
 interface AgentTranscriptPanelProps {
@@ -667,7 +699,11 @@ export function AgentTranscriptPanel({
   const scrollRef = useRef<HTMLDivElement>(null)
   const panelRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
+  const searchInputRef = useRef<HTMLInputElement>(null)
   const [viewMode, setViewMode] = useState<ViewMode>(ViewMode.MARKDOWN)
+  const [isSearchOpen, setIsSearchOpen] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [activeSearchResult, setActiveSearchResult] = useState(0)
   const [pendingAttachments, setPendingAttachments] = useState<ComposerAttachment[]>([])
   const [isDragOverComposer, setIsDragOverComposer] = useState(false)
   const [debugCopyToast, setDebugCopyToast] = useState(false)
@@ -709,6 +745,12 @@ export function AgentTranscriptPanel({
         if (!panelRef.current?.contains(document.activeElement) && document.activeElement !== panelRef.current) return
         e.preventDefault()
         copyDebugInfo()
+      }
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'f') {
+        if (!panelRef.current?.contains(document.activeElement) && document.activeElement !== panelRef.current) return
+        e.preventDefault()
+        setIsSearchOpen(true)
+        requestAnimationFrame(() => searchInputRef.current?.focus())
       }
     }
     window.addEventListener('keydown', handleKeyDown)
@@ -790,6 +832,28 @@ export function AgentTranscriptPanel({
     return items
   }, [messages])
 
+  const normalizedSearchQuery = searchQuery.trim().toLowerCase()
+  const searchResultIndexes = useMemo(() => {
+    if (!normalizedSearchQuery) return []
+    return transcriptItems.reduce<number[]>((matches, item, index) => {
+      if (getTranscriptItemSearchText(item).includes(normalizedSearchQuery)) {
+        matches.push(index)
+      }
+      return matches
+    }, [])
+  }, [normalizedSearchQuery, transcriptItems])
+  const activeSearchItemIndex = searchResultIndexes[activeSearchResult] ?? -1
+
+  useEffect(() => {
+    setActiveSearchResult(0)
+  }, [normalizedSearchQuery])
+
+  useEffect(() => {
+    if (activeSearchResult >= searchResultIndexes.length) {
+      setActiveSearchResult(Math.max(searchResultIndexes.length - 1, 0))
+    }
+  }, [activeSearchResult, searchResultIndexes.length])
+
   const virtualizer = useVirtualizer({
     count: transcriptItems.length,
     getScrollElement: () => scrollRef.current,
@@ -818,10 +882,30 @@ export function AgentTranscriptPanel({
   }, [transcriptItems.length, virtualizer])
 
   useEffect(() => {
+    if (activeSearchItemIndex >= 0) return
     if (transcriptItems.length > 0 && atBottomRef.current) {
       virtualizer.scrollToIndex(transcriptItems.length - 1, { align: 'end' })
     }
-  }, [transcriptItems.length, virtualizer])
+  }, [activeSearchItemIndex, transcriptItems.length, virtualizer])
+
+  useEffect(() => {
+    if (activeSearchItemIndex >= 0) {
+      virtualizer.scrollToIndex(activeSearchItemIndex, { align: 'center' })
+      atBottomRef.current = false
+      setShowScrollToBottom(true)
+    }
+  }, [activeSearchItemIndex, virtualizer])
+
+  const goToSearchResult = useCallback((direction: 1 | -1) => {
+    if (searchResultIndexes.length === 0) return
+    setActiveSearchResult((current) => (current + direction + searchResultIndexes.length) % searchResultIndexes.length)
+  }, [searchResultIndexes.length])
+
+  const closeSearch = useCallback(() => {
+    setSearchQuery('')
+    setIsSearchOpen(false)
+    setActiveSearchResult(0)
+  }, [])
 
   const getStatusColor = () => {
     switch (status) {
@@ -931,6 +1015,21 @@ export function AgentTranscriptPanel({
             <Button
               variant="ghost"
               size="sm"
+              onClick={() => {
+                setIsSearchOpen((open) => {
+                  const nextOpen = !open
+                  if (nextOpen) requestAnimationFrame(() => searchInputRef.current?.focus())
+                  return nextOpen
+                })
+              }}
+              className="h-7 px-2"
+              title="Search transcript"
+            >
+              <Search className="h-3.5 w-3.5" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
               onClick={() => setViewMode(viewMode === ViewMode.MARKDOWN ? ViewMode.RAW : ViewMode.MARKDOWN)}
               className="h-7 px-2"
               title={viewMode === ViewMode.MARKDOWN ? 'Show raw content' : 'Show markdown'}
@@ -956,6 +1055,57 @@ export function AgentTranscriptPanel({
           </div>
         </div>
       </div>
+
+      {isSearchOpen && (
+        <div className="flex items-center gap-2 border-b border-border/50 px-4 py-2 shrink-0">
+          <div className="relative min-w-0 flex-1">
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+            <input
+              ref={searchInputRef}
+              type="search"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Escape') closeSearch()
+                if (e.key === 'Enter') {
+                  e.preventDefault()
+                  goToSearchResult(e.shiftKey ? -1 : 1)
+                }
+              }}
+              placeholder="Search transcript..."
+              className="h-8 w-full rounded-md border border-input bg-transparent pl-8 pr-3 text-xs text-foreground placeholder:text-muted-foreground focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring/30"
+            />
+          </div>
+          <span className="w-16 shrink-0 text-right text-[11px] tabular-nums text-muted-foreground">
+            {normalizedSearchQuery ? `${searchResultIndexes.length ? activeSearchResult + 1 : 0}/${searchResultIndexes.length}` : '0/0'}
+          </span>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            onClick={() => goToSearchResult(-1)}
+            disabled={searchResultIndexes.length === 0}
+            className="h-8 w-8"
+            title="Previous result"
+          >
+            <ArrowUp className="h-3.5 w-3.5" />
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            onClick={() => goToSearchResult(1)}
+            disabled={searchResultIndexes.length === 0}
+            className="h-8 w-8"
+            title="Next result"
+          >
+            <ArrowDown className="h-3.5 w-3.5" />
+          </Button>
+          <Button type="button" variant="ghost" size="icon" onClick={closeSearch} className="h-8 w-8" title="Close search">
+            <X className="h-3.5 w-3.5" />
+          </Button>
+        </div>
+      )}
 
       {/* Error banner */}
       {showErrorBanner && lastErrorMessage && (
@@ -1015,7 +1165,11 @@ export function AgentTranscriptPanel({
                       transform: `translateY(${virtualRow.start}px)`,
                     }}
                   >
-                    <div className="pb-2">
+                    <div className={cn(
+                      'pb-2 rounded-md transition-colors',
+                      normalizedSearchQuery && searchResultIndexes.includes(virtualRow.index) && 'bg-yellow-500/5',
+                      virtualRow.index === activeSearchItemIndex && 'ring-1 ring-yellow-400/60 bg-yellow-500/10'
+                    )}>
                       {item.type === 'activity' ? (
                         <ActivityMessageGroup messages={item.messages} viewMode={viewMode} />
                       ) : (

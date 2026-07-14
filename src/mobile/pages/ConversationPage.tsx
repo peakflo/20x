@@ -1,6 +1,6 @@
 import { useRef, useEffect, useCallback, useMemo, useState } from 'react'
 import { useTaskStore } from '../stores/task-store'
-import { useAgentStore, SessionStatus } from '../stores/agent-store'
+import { useAgentStore, SessionStatus, type AgentMessage } from '../stores/agent-store'
 import { api } from '../api/client'
 import { useSessionControls } from '../hooks/useSessionControls'
 import { MessageActivityGroup, MessageBubble, isCompactActivityMessage } from '../components/MessageBubble'
@@ -8,20 +8,62 @@ import { ChatInput, type ChatInputAttachment } from '../components/ChatInput'
 import { cn } from '../lib/utils'
 import type { Route } from '../App'
 
+function collectSearchableText(value: unknown, output: string[]): void {
+  if (value == null) return
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    output.push(String(value))
+    return
+  }
+  if (Array.isArray(value)) {
+    value.forEach((item) => collectSearchableText(item, output))
+    return
+  }
+  if (typeof value === 'object') {
+    Object.values(value as Record<string, unknown>).forEach((item) => collectSearchableText(item, output))
+  }
+}
+
+function getMessageSearchText(message: AgentMessage): string {
+  const parts: string[] = []
+  collectSearchableText(message.role, parts)
+  collectSearchableText(message.partType, parts)
+  collectSearchableText(message.content, parts)
+  collectSearchableText(message.tool, parts)
+  collectSearchableText(message.taskProgress, parts)
+  return parts.join('\n').toLowerCase()
+}
+
 export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNavigate: (route: Route) => void }) {
   const task = useTaskStore((s) => s.tasks.find((t) => t.id === taskId))
   const session = useAgentStore((s) => s.sessions.get(taskId))
   const initSession = useAgentStore((s) => s.initSession)
 
   const scrollRef = useRef<HTMLDivElement>(null)
+  const searchInputRef = useRef<HTMLInputElement>(null)
+  const messageNodeRefs = useRef(new Map<number, HTMLDivElement>())
   const isAtBottomRef = useRef(true)
   const [todosExpanded, setTodosExpanded] = useState(false)
   const [showScrollToBottom, setShowScrollToBottom] = useState(false)
+  const [isSearchOpen, setIsSearchOpen] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [activeSearchResult, setActiveSearchResult] = useState(0)
   const [showAttachmentPicker, setShowAttachmentPicker] = useState(false)
   const [messageAttachments, setMessageAttachments] = useState<ChatInputAttachment[]>([])
 
   const messages = session?.messages || []
   const lastMessage = messages[messages.length - 1]
+  const normalizedSearchQuery = searchQuery.trim().toLowerCase()
+
+  const searchResultIndexes = useMemo(() => {
+    if (!normalizedSearchQuery) return []
+    return messages.reduce<number[]>((matches, message, index) => {
+      if (getMessageSearchText(message).includes(normalizedSearchQuery)) {
+        matches.push(index)
+      }
+      return matches
+    }, [])
+  }, [messages, normalizedSearchQuery])
+  const activeSearchMessageIndex = searchResultIndexes[activeSearchResult] ?? -1
 
   // Determine if the agent is actively working
   const isWorking = session?.status === SessionStatus.WORKING
@@ -135,6 +177,16 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
     setMessageAttachments((prev) => prev.filter((att) => validIds.has(att.id)))
   }, [taskAttachments])
 
+  useEffect(() => {
+    setActiveSearchResult(0)
+  }, [normalizedSearchQuery])
+
+  useEffect(() => {
+    if (activeSearchResult >= searchResultIndexes.length) {
+      setActiveSearchResult(Math.max(searchResultIndexes.length - 1, 0))
+    }
+  }, [activeSearchResult, searchResultIndexes.length])
+
   // Session controls (shared hook provides double-click protection and rollback)
   const { handleStart: _startSession, handleResume: _resumeSession, handleStop: _stopSession, handleRestart: _restartSession } = useSessionControls(taskId)
 
@@ -156,10 +208,19 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
 
   // Auto-scroll to bottom when new messages arrive (only if user is at bottom)
   useEffect(() => {
+    if (activeSearchMessageIndex >= 0) return
     if (isAtBottomRef.current && scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight
     }
-  }, [messages.length, lastMessage?.content])
+  }, [activeSearchMessageIndex, messages.length, lastMessage?.content])
+
+  useEffect(() => {
+    if (activeSearchMessageIndex < 0) return
+    const node = messageNodeRefs.current.get(activeSearchMessageIndex)
+    node?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+    isAtBottomRef.current = false
+    setShowScrollToBottom(true)
+  }, [activeSearchMessageIndex])
 
   // Track scroll position
   const handleScroll = useCallback(() => {
@@ -175,6 +236,25 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
       scrollRef.current.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
       isAtBottomRef.current = true
       setShowScrollToBottom(false)
+    }
+  }, [])
+
+  const goToSearchResult = useCallback((direction: 1 | -1) => {
+    if (searchResultIndexes.length === 0) return
+    setActiveSearchResult((current) => (current + direction + searchResultIndexes.length) % searchResultIndexes.length)
+  }, [searchResultIndexes.length])
+
+  const closeSearch = useCallback(() => {
+    setSearchQuery('')
+    setIsSearchOpen(false)
+    setActiveSearchResult(0)
+  }, [])
+
+  const setMessageNode = useCallback((index: number, node: HTMLDivElement | null) => {
+    if (node) {
+      messageNodeRefs.current.set(index, node)
+    } else {
+      messageNodeRefs.current.delete(index)
     }
   }, [])
 
@@ -226,6 +306,21 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
           )}
           {/* Icon buttons — matches desktop AgentTranscriptPanel */}
           <div className="flex items-center gap-1">
+            <button
+              onClick={() => {
+                setIsSearchOpen((open) => {
+                  const nextOpen = !open
+                  if (nextOpen) requestAnimationFrame(() => searchInputRef.current?.focus())
+                  return nextOpen
+                })
+              }}
+              title="Search transcript"
+              className="inline-flex items-center justify-center h-7 w-7 rounded-md text-muted-foreground hover:bg-white/5 hover:text-foreground active:opacity-60 transition-colors"
+            >
+              <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>
+              </svg>
+            </button>
             {/* Restart — matches desktop RotateCcw icon */}
             {messages.length > 0 && hasSession && (
               <button
@@ -277,6 +372,63 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
           </div>
         </div>
       </div>
+
+      {isSearchOpen && (
+        <div className="shrink-0 flex items-center gap-2 px-4 py-2 border-b border-border/50">
+          <div className="relative min-w-0 flex-1">
+            <svg className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>
+            </svg>
+            <input
+              ref={searchInputRef}
+              type="search"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Escape') closeSearch()
+                if (e.key === 'Enter') {
+                  e.preventDefault()
+                  goToSearchResult(e.shiftKey ? -1 : 1)
+                }
+              }}
+              placeholder="Search transcript..."
+              className="h-8 w-full rounded-md border border-input bg-transparent pl-8 pr-3 text-xs text-foreground placeholder:text-muted-foreground focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring/30"
+            />
+          </div>
+          <span className="w-14 shrink-0 text-right text-[11px] tabular-nums text-muted-foreground">
+            {normalizedSearchQuery ? `${searchResultIndexes.length ? activeSearchResult + 1 : 0}/${searchResultIndexes.length}` : '0/0'}
+          </span>
+          <button
+            onClick={() => goToSearchResult(-1)}
+            disabled={searchResultIndexes.length === 0}
+            title="Previous result"
+            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-white/5 hover:text-foreground disabled:opacity-40"
+          >
+            <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="m18 15-6-6-6 6"/>
+            </svg>
+          </button>
+          <button
+            onClick={() => goToSearchResult(1)}
+            disabled={searchResultIndexes.length === 0}
+            title="Next result"
+            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-white/5 hover:text-foreground disabled:opacity-40"
+          >
+            <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="m6 9 6 6 6-6"/>
+            </svg>
+          </button>
+          <button
+            onClick={closeSearch}
+            title="Close search"
+            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-white/5 hover:text-foreground"
+          >
+            <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M18 6 6 18"/><path d="m6 6 12 12"/>
+            </svg>
+          </button>
+        </div>
+      )}
 
       {/* Pinned todo summary — matches desktop TodoSummary subheader */}
       {latestTodos && (
@@ -394,21 +546,48 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
           {messages.map((msg, index) => {
             if (!isCompactActivityMessage(msg)) {
               return (
-                <MessageBubble
+                <div
                   key={msg.id}
-                  message={msg}
-                  onAnswer={handleAnswer}
-                  canAnswerQuestion={msg.id === activeQuestionId}
-                />
+                  ref={(node) => setMessageNode(index, node)}
+                  className={cn(
+                    'rounded-md transition-colors',
+                    normalizedSearchQuery && searchResultIndexes.includes(index) && 'bg-yellow-500/5',
+                    index === activeSearchMessageIndex && 'ring-1 ring-yellow-400/60 bg-yellow-500/10'
+                  )}
+                >
+                  <MessageBubble
+                    message={msg}
+                    onAnswer={handleAnswer}
+                    canAnswerQuestion={msg.id === activeQuestionId}
+                  />
+                </div>
               )
             }
             if (index > 0 && isCompactActivityMessage(messages[index - 1])) return null
 
             const group = [msg]
+            const groupIndexes = [index]
             for (let nextIndex = index + 1; nextIndex < messages.length && isCompactActivityMessage(messages[nextIndex]); nextIndex += 1) {
               group.push(messages[nextIndex])
+              groupIndexes.push(nextIndex)
             }
-            return <MessageActivityGroup key={group.map((item) => item.id).join(':')} messages={group} />
+            const hasSearchMatch = normalizedSearchQuery && groupIndexes.some((itemIndex) => searchResultIndexes.includes(itemIndex))
+            const hasActiveSearchMatch = groupIndexes.includes(activeSearchMessageIndex)
+            return (
+              <div
+                key={group.map((item) => item.id).join(':')}
+                ref={(node) => {
+                  groupIndexes.forEach((itemIndex) => setMessageNode(itemIndex, node))
+                }}
+                className={cn(
+                  'rounded-md transition-colors',
+                  hasSearchMatch && 'bg-yellow-500/5',
+                  hasActiveSearchMatch && 'ring-1 ring-yellow-400/60 bg-yellow-500/10'
+                )}
+              >
+                <MessageActivityGroup messages={group} />
+              </div>
+            )
           })}
 
           {/* Working indicator */}
