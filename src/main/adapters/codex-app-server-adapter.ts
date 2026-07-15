@@ -114,9 +114,49 @@ function extractThreadId(value: unknown): string | null {
   return null
 }
 
+/**
+ * Deterministic 32-bit string hash (djb2). Used to build stable dedup keys for
+ * thread items that carry no id — never use Date.now()/random here, or the same
+ * item would produce a new key on every reconcile pass and be re-emitted.
+ */
+function hashString(value: string): string {
+  let hash = 5381
+  for (let i = 0; i < value.length; i++) {
+    hash = ((hash << 5) + hash + value.charCodeAt(i)) | 0
+  }
+  return (hash >>> 0).toString(36)
+}
+
+/**
+ * Derives a STABLE identity for a Codex thread item. Many item types
+ * (function_call_output, custom_tool_call_output, tool_search_output, and
+ * user/developer input messages) have no top-level `id` — only a `call_id`, or
+ * nothing at all. This must return the same value across reconcile passes for the
+ * same logical item, otherwise the transcript repeats older messages after every
+ * idle. Returns null when no id-like field exists (caller falls back to a
+ * content-based key).
+ */
+function deriveItemIdentity(item: Record<string, unknown> | undefined): string | null {
+  if (!item) return null
+  const direct = asString(item.id) || asString(item.itemId) || asString(item.item_id)
+  if (direct) return direct
+  const callId = asString(item.call_id) || asString(item.callId)
+  if (callId) {
+    const type = asString(item.type) || 'item'
+    return `${type}:${callId}`
+  }
+  return null
+}
+
 function extractItemId(params: Record<string, unknown>): string {
   const item = isObject(params.item) ? params.item : undefined
-  return asString(params.itemId) || asString(item?.id) || `item-${Date.now()}`
+  const identity = asString(params.itemId) || deriveItemIdentity(item)
+  if (identity) return identity
+  // Last resort: a deterministic key derived from the item's content so the same
+  // item maps to the same part id across reconciles (was `item-${Date.now()}`,
+  // which minted a new id every pass and duplicated the message on each idle).
+  const fingerprint = item ? `${asString(item.type) || 'item'}:${extractText(item)}` : 'item'
+  return `item-${hashString(fingerprint)}`
 }
 
 function extractText(value: unknown): string {
@@ -961,22 +1001,52 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
   private bufferThreadItems(session: AppServerSession, result: unknown): void {
     const items = isObject(result) && Array.isArray(result.data) ? result.data : []
     for (const item of items) {
-      if (isObject(item)) {
-        const itemId = asString(item.id)
-        if (itemId) {
-          if (session.bufferedThreadItemIds.has(itemId)) continue
-          session.bufferedThreadItemIds.add(itemId)
-        }
-      }
-      this.addEvent(session, {
-        method: 'item/completed',
-        params: {
-          threadId: session.threadId,
-          turnId: isObject(item) ? asString(item.turnId) : undefined,
-          item
-        }
-      })
+      this.bufferReconciledThreadItem(session, item, isObject(item) ? asString(item.turnId) : undefined)
     }
+  }
+
+  /**
+   * Buffers a single thread item from a reconcile pass, skipping it if it has
+   * already been buffered. reconcileCompletedTurn() re-lists the entire thread on
+   * every turn/completed, so this MUST be idempotent for every item — including
+   * the many Codex item types that carry no top-level `id` (function_call_output,
+   * custom_tool_call_output, tool_search_output, user/developer messages). We key
+   * off a stable identity (id/itemId/call_id) or, failing that, a deterministic
+   * content hash, and forward that key as `itemId` so the derived part id stays
+   * stable across passes. Without this, id-less items were re-emitted with a fresh
+   * id on every idle and the transcript repeated older messages.
+   */
+  private bufferReconciledThreadItem(
+    session: AppServerSession,
+    item: unknown,
+    turnId: string | undefined
+  ): void {
+    let stableItemId: string | undefined
+    if (isObject(item)) {
+      stableItemId = this.computeThreadItemKey(item, turnId)
+      if (session.bufferedThreadItemIds.has(stableItemId)) return
+      session.bufferedThreadItemIds.add(stableItemId)
+    }
+    this.addEvent(session, {
+      method: 'item/completed',
+      params: {
+        threadId: session.threadId,
+        turnId,
+        item,
+        ...(stableItemId ? { itemId: stableItemId } : {})
+      }
+    })
+  }
+
+  private computeThreadItemKey(item: Record<string, unknown>, turnId: string | undefined): string {
+    const identity = deriveItemIdentity(item)
+    if (identity) return identity
+    // No id-like field (e.g. user/developer input messages). Build a deterministic
+    // key from turn + type + role + content so the same item maps to the same key
+    // across reconcile passes instead of duplicating.
+    const type = asString(item.type) || 'item'
+    const role = extractRole(item)
+    return `synthetic:${turnId || 'noturn'}:${type}:${role}:${hashString(extractText(item))}`
   }
 
   private async bufferAllThreadItems(session: AppServerSession, threadId: string): Promise<void> {
@@ -1024,21 +1094,7 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
       for (const turn of turns) {
         if (!isObject(turn) || !Array.isArray(turn.items)) continue
         for (const item of turn.items) {
-          if (isObject(item)) {
-            const itemId = asString(item.id)
-            if (itemId) {
-              if (session.bufferedThreadItemIds.has(itemId)) continue
-              session.bufferedThreadItemIds.add(itemId)
-            }
-          }
-          this.addEvent(session, {
-            method: 'item/completed',
-            params: {
-              threadId: session.threadId,
-              turnId: asString(turn.id),
-              item
-            }
-          })
+          this.bufferReconciledThreadItem(session, item, asString(turn.id))
         }
       }
       cursor = isObject(result) ? (asString(result.nextCursor) || null) : null
