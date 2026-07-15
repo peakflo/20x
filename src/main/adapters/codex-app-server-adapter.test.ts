@@ -284,6 +284,59 @@ describe('CodexAppServerAdapter', () => {
     ])
   })
 
+  it('does not repeat id-less thread items after each completed turn reconcile', async () => {
+    // Regression: Codex thread items such as function_call_output /
+    // custom_tool_call_output / user+developer input messages have NO top-level
+    // `id` (only `call_id`). reconcileCompletedTurn() re-lists the whole thread
+    // on every turn/completed. Because bufferedThreadItemIds only registered
+    // items that had `item.id` and extractItemId fell back to `item-${Date.now()}`,
+    // these id-less items were re-buffered and re-emitted with a brand new part id
+    // on every idle — so the transcript repeated older messages after each turn.
+    const adapterInstance = new CodexAppServerAdapter()
+    const adapter = adapterPrivate(adapterInstance)
+    const session = createSession()
+    adapter.sessions.set('thread-1', session)
+
+    // Mirrors a codex function_call_output item: no `id`, only `call_id`.
+    const idLessToolOutput = {
+      type: 'commandExecution',
+      call_id: 'call_abc123',
+      command: 'ls -la',
+      aggregatedOutput: 'file1\nfile2',
+      turnId: 'turn-1'
+    }
+
+    const reconcileTurn = async (turnId: string): Promise<void> => {
+      session.status = SessionStatusType.BUSY
+      adapter.handleRpcMessage(session, {
+        jsonrpc: '2.0',
+        method: 'turn/completed',
+        params: { threadId: 'thread-1', turnId }
+      })
+      // Resolve the newest thread/items/list request, mirroring how the real
+      // JSON-RPC response handler settles + removes it.
+      const entries = Array.from(session.pendingRequests.entries())
+      const [id, pending] = entries[entries.length - 1]
+      session.pendingRequests.delete(id)
+      pending.resolve({ data: [idLessToolOutput], nextCursor: null })
+      await flushPromises()
+    }
+
+    await reconcileTurn('turn-1')
+    await reconcileTurn('turn-2')
+    await reconcileTurn('turn-3')
+
+    // The same tool output must only ever be buffered once, no matter how many
+    // turns complete afterwards. Buffering it again re-emits it to the renderer
+    // with a fresh (Date.now-based) part id that dedup can't collapse.
+    const bufferedCopies = session.permanentMessages.filter((event) => {
+      const item = (event as { params?: { item?: { call_id?: string } } })?.params?.item
+      return item?.call_id === 'call_abc123'
+    })
+    expect(bufferedCopies).toHaveLength(1)
+    expect(session.bufferedThreadItemIds.size).toBeGreaterThan(0)
+  })
+
   it('keeps the session busy when a completed turn is followed by an active thread status', async () => {
     const adapterInstance = new CodexAppServerAdapter()
     const adapter = adapterPrivate(adapterInstance)
