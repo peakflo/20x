@@ -1,4 +1,4 @@
-import { useCallback } from 'react'
+import { useCallback, useEffect } from 'react'
 import { agentSessionApi } from '@/lib/ipc-client'
 import { useAgentStore, SessionStatus } from '@/stores/agent-store'
 import type { AgentApprovalRequest } from '@/types/electron'
@@ -35,6 +35,16 @@ export function useAgentSession(taskId: string | undefined) {
   const initSession = useAgentStore((s) => s.initSession)
   const endSession = useAgentStore((s) => s.endSession)
   const clearMessageDedup = useAgentStore((s) => s.clearMessageDedup)
+  const hydrateTranscript = useAgentStore((s) => s.hydrateTranscript)
+
+  // Hydrate from the durable transcript projection when a task view binds.
+  // The store renders state, not history-of-pushes: output produced while
+  // this window wasn't open (background wake-ups, app restarts, resumed
+  // sessions) appears immediately without needing a live session.
+  useEffect(() => {
+    // Guard for partial store mocks / older bridges without the snapshot API
+    if (taskId && typeof hydrateTranscript === 'function') void hydrateTranscript(taskId)
+  }, [taskId, hydrateTranscript])
 
   const sessionState: AgentSessionState = session
     ? {

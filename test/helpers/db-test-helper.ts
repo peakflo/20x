@@ -215,6 +215,21 @@ export function createTestDb(): { db: DatabaseManager; rawDb: InstanceType<typeo
       last_seen INTEGER NOT NULL DEFAULT (unixepoch()),
       revoked INTEGER NOT NULL DEFAULT 0
     );
+
+    CREATE TABLE IF NOT EXISTS transcript_parts (
+      task_id TEXT NOT NULL,
+      part_id TEXT NOT NULL,
+      seq INTEGER NOT NULL,
+      role TEXT NOT NULL DEFAULT 'system',
+      content TEXT NOT NULL DEFAULT '',
+      part_type TEXT,
+      tool TEXT,
+      payload TEXT,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch('subsec') * 1000),
+      updated_at INTEGER NOT NULL DEFAULT (unixepoch('subsec') * 1000),
+      PRIMARY KEY (task_id, part_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_transcript_parts_task_seq ON transcript_parts(task_id, seq);
   `)
 
   const manager = new DatabaseManager()

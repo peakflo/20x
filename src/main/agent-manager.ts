@@ -2597,7 +2597,9 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       this.sendToRenderer('agent:output-batch', {
         sessionId: adapterSessionId,
         taskId,
-        messages: batchMessages
+        messages: batchMessages,
+        // History replay: only seeds an empty durable transcript (backfill)
+        replay: true
       })
     }
 
@@ -2617,6 +2619,14 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       pollingStarted: false,
       secretSessionToken: secretToken
     })
+
+    // Persist the resumed session binding and tell the renderer BEFORE any
+    // follow-up prompt starts. Without this, a silent main-process resume
+    // (e.g. an event-driven wake-up after the runtime was released) leaves the
+    // renderer bound to a stale session id and the wake turn's output renders
+    // late or not at all.
+    this.db.updateTask(taskId, { session_id: adapterSessionId })
+    this.sendToRenderer('task:updated', { taskId, updates: { session_id: adapterSessionId } })
 
     // Notify renderer — session is resumed but idle (no work in progress)
     this.sendToRenderer('agent:status', {
@@ -2907,6 +2917,15 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     } finally {
       this.wakingParents.delete(parentTaskId)
     }
+  }
+
+  /**
+   * Snapshot of the durable transcript projection for a task.
+   * Clients (renderer, mobile) render from this instead of relying on having
+   * observed every live event.
+   */
+  getTranscriptSnapshot(taskId: string, sinceSeq?: number): ReturnType<DatabaseManager['getTranscriptParts']> {
+    return this.db.getTranscriptParts(taskId, sinceSeq)
   }
 
   getLastAssistantMessage(sessionId: string): string | null {
@@ -3904,7 +3923,9 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       this.sendToRenderer('agent:output-batch', {
         sessionId,
         taskId: session.taskId,
-        messages: batchMessages
+        messages: batchMessages,
+        // History replay (mobile catch-up): only seeds an empty durable transcript
+        replay: true
       })
     }
 
@@ -4678,7 +4699,70 @@ Important:
     }
   }
 
+  /** Part types that are absorbed by clients (never rendered as messages) —
+   *  not worth persisting in the durable transcript. */
+  private static readonly EPHEMERAL_PART_TYPES = new Set(['step-start', 'step-finish', 'system-status'])
+
+  /**
+   * Write-through persistence for the durable transcript projection.
+   * Called for every agent:output / agent:output-batch emission.
+   *
+   * Replay batches (session resume, mobile catch-up) re-send history whose
+   * parts may carry regenerated IDs; they only SEED an empty transcript
+   * (backfill for sessions that predate the store) and are skipped otherwise —
+   * the original parts were already persisted when first emitted.
+   */
+  private persistTranscriptEvent(channel: string, data: unknown): void {
+    if (!data || typeof data !== 'object') return
+    const event = data as {
+      taskId?: string
+      replay?: boolean
+      messages?: Array<{ id?: string; role?: string; content?: string; partType?: string; tool?: unknown; questions?: unknown; todos?: unknown; taskProgress?: unknown }>
+      data?: { id?: string; role?: string; content?: string; partType?: string; tool?: unknown; questions?: unknown; todos?: unknown; taskProgress?: unknown }
+    }
+    const taskId = event.taskId
+    if (!taskId) return
+
+    if (event.replay && this.db.hasTranscriptParts(taskId)) return
+
+    const rawParts = channel === 'agent:output-batch'
+      ? (event.messages || [])
+      : (event.data ? [event.data] : [])
+
+    const parts = rawParts
+      .filter((p) => p && p.id)
+      .filter((p) => !p.partType || !AgentManager.EPHEMERAL_PART_TYPES.has(p.partType))
+      .filter((p) => (p.content && p.content.length > 0) || p.tool || p.questions || p.todos || p.taskProgress)
+      .map((p) => ({
+        id: p.id as string,
+        role: p.role,
+        content: p.content,
+        partType: p.partType,
+        tool: p.tool,
+        payload: (p.questions || p.todos || p.taskProgress)
+          ? { questions: p.questions, todos: p.todos, taskProgress: p.taskProgress }
+          : undefined
+      }))
+
+    if (parts.length > 0) {
+      this.db.upsertTranscriptParts(taskId, parts)
+    }
+  }
+
   private sendToRenderer(channel: string, data: unknown): void {
+    // Durable transcript projection: persist every transcript part BEFORE any
+    // client sees it. The main process owns the source of truth; renderer and
+    // mobile hydrate from snapshots (transcript:get) instead of depending on
+    // catching live events, so output produced while no view is bound
+    // (background wake-ups, silently resumed sessions) is never lost.
+    if (channel === 'agent:output' || channel === 'agent:output-batch') {
+      try {
+        this.persistTranscriptEvent(channel, data)
+      } catch (err) {
+        console.error('[AgentManager] Failed to persist transcript parts:', err)
+      }
+    }
+
     if (this.mainWindow && !this.mainWindow.isDestroyed()) {
       this.mainWindow.webContents.send(channel, data)
     }

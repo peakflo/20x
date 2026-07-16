@@ -477,3 +477,60 @@ describe('Closed database behavior', () => {
     expect(db.getMcpServer('any-id')).toBeUndefined()
   })
 })
+
+describe('Durable transcript projection', () => {
+  it('assigns monotonic per-task seq to new parts', () => {
+    db.upsertTranscriptParts('task-1', [
+      { id: 'p1', role: 'user', content: 'hello' },
+      { id: 'p2', role: 'assistant', content: 'hi there' }
+    ])
+    db.upsertTranscriptParts('task-1', [{ id: 'p3', role: 'assistant', content: 'more' }])
+    db.upsertTranscriptParts('task-2', [{ id: 'p1', role: 'user', content: 'other task' }])
+
+    const parts = db.getTranscriptParts('task-1')
+    expect(parts.map((p) => [p.partId, p.seq])).toEqual([['p1', 1], ['p2', 2], ['p3', 3]])
+    // Separate task gets its own seq space and can reuse part ids
+    expect(db.getTranscriptParts('task-2')).toHaveLength(1)
+    expect(db.getTranscriptParts('task-2')[0].seq).toBe(1)
+  })
+
+  it('streaming update replaces content but keeps position (seq)', () => {
+    db.upsertTranscriptParts('task-1', [
+      { id: 'p1', role: 'assistant', content: 'partial' },
+      { id: 'p2', role: 'assistant', content: 'after' }
+    ])
+    db.upsertTranscriptParts('task-1', [{ id: 'p1', role: 'assistant', content: 'partial then complete' }])
+
+    const parts = db.getTranscriptParts('task-1')
+    expect(parts).toHaveLength(2)
+    expect(parts[0].partId).toBe('p1')
+    expect(parts[0].seq).toBe(1)
+    expect(parts[0].content).toBe('partial then complete')
+  })
+
+  it('preserves tool/payload JSON and supports sinceSeq snapshots', () => {
+    db.upsertTranscriptParts('task-1', [
+      { id: 'p1', role: 'assistant', content: '', partType: 'tool', tool: { name: 'bash', status: 'success' } },
+      { id: 'p2', role: 'assistant', content: 'done', payload: { todos: [{ content: 'x', status: 'completed' }] } }
+    ])
+
+    const all = db.getTranscriptParts('task-1')
+    expect((all[0].tool as { name: string }).name).toBe('bash')
+    expect((all[1].payload as { todos: unknown[] }).todos).toHaveLength(1)
+
+    const delta = db.getTranscriptParts('task-1', 1)
+    expect(delta).toHaveLength(1)
+    expect(delta[0].partId).toBe('p2')
+    expect(db.getTranscriptMaxSeq('task-1')).toBe(2)
+  })
+
+  it('hasTranscriptParts and deletion cleanup', () => {
+    expect(db.hasTranscriptParts('task-1')).toBe(false)
+    db.upsertTranscriptParts('task-1', [{ id: 'p1', content: 'x' }])
+    expect(db.hasTranscriptParts('task-1')).toBe(true)
+
+    db.deleteTranscriptParts('task-1')
+    expect(db.hasTranscriptParts('task-1')).toBe(false)
+    expect(db.getTranscriptParts('task-1')).toHaveLength(0)
+  })
+})

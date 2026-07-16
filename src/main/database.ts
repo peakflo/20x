@@ -298,6 +298,30 @@ export interface RecurrencePatternObject {
 /** A cron expression string OR a legacy JSON object */
 export type RecurrencePatternRecord = RecurrencePatternObject | string
 
+/** Input shape for persisting a transcript part (mirrors agent:output payloads). */
+export interface TranscriptPartInput {
+  id: string
+  role?: string
+  content?: string
+  partType?: string
+  tool?: unknown
+  payload?: unknown
+}
+
+/** Persisted transcript part returned by snapshot queries. */
+export interface TranscriptPartRecord {
+  taskId: string
+  partId: string
+  seq: number
+  role: string
+  content: string
+  partType?: string
+  tool?: unknown
+  payload?: unknown
+  createdAt: number
+  updatedAt: number
+}
+
 export interface TaskRecord {
   id: string
   title: string
@@ -1133,6 +1157,26 @@ export class DatabaseManager {
         last_seen INTEGER NOT NULL DEFAULT (unixepoch()),
         revoked INTEGER NOT NULL DEFAULT 0
       );
+
+      -- Durable transcript projection: the main process is the source of truth
+      -- for every message part shown in a task transcript. The renderer hydrates
+      -- from snapshots of this table instead of depending on catching live
+      -- events, so output produced while no view is bound (background wake-ups,
+      -- resumed sessions, mobile) is never lost.
+      CREATE TABLE IF NOT EXISTS transcript_parts (
+        task_id TEXT NOT NULL,
+        part_id TEXT NOT NULL,
+        seq INTEGER NOT NULL,
+        role TEXT NOT NULL DEFAULT 'system',
+        content TEXT NOT NULL DEFAULT '',
+        part_type TEXT,
+        tool TEXT,
+        payload TEXT,
+        created_at INTEGER NOT NULL DEFAULT (unixepoch('subsec') * 1000),
+        updated_at INTEGER NOT NULL DEFAULT (unixepoch('subsec') * 1000),
+        PRIMARY KEY (task_id, part_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_transcript_parts_task_seq ON transcript_parts(task_id, seq);
     `)
   }
 
@@ -1978,6 +2022,99 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
     return rows.map(deserializeTask)
   }
 
+  // ── Durable transcript projection ──────────────────────────────
+  // Every transcript part delivered to any client is persisted here first.
+  // Parts are upserted by (task_id, part_id): streaming updates replace the
+  // content of an existing part while keeping its position (seq).
+
+  /**
+   * Upsert a batch of transcript parts for a task inside one transaction.
+   * New parts get the next per-task seq; existing parts keep their seq and
+   * update content in place (streaming).
+   */
+  upsertTranscriptParts(taskId: string, parts: TranscriptPartInput[]): void {
+    if (!this.ensureDbOpen() || parts.length === 0) return
+
+    const nextSeqStmt = this.db.prepare(
+      'SELECT COALESCE(MAX(seq), 0) + 1 AS next FROM transcript_parts WHERE task_id = ?'
+    )
+    const upsertStmt = this.db.prepare(`
+      INSERT INTO transcript_parts (task_id, part_id, seq, role, content, part_type, tool, payload, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, unixepoch('subsec') * 1000)
+      ON CONFLICT(task_id, part_id) DO UPDATE SET
+        content = excluded.content,
+        part_type = COALESCE(excluded.part_type, transcript_parts.part_type),
+        tool = COALESCE(excluded.tool, transcript_parts.tool),
+        payload = COALESCE(excluded.payload, transcript_parts.payload),
+        updated_at = excluded.updated_at
+    `)
+
+    const txn = this.db.transaction(() => {
+      let nextSeq = (nextSeqStmt.get(taskId) as { next: number }).next
+      for (const part of parts) {
+        if (!part.id) continue
+        upsertStmt.run(
+          taskId,
+          part.id,
+          nextSeq++,
+          part.role || 'system',
+          part.content || '',
+          part.partType ?? null,
+          part.tool != null ? JSON.stringify(part.tool) : null,
+          part.payload != null ? JSON.stringify(part.payload) : null
+        )
+      }
+    })
+    txn()
+  }
+
+  /** Snapshot query: ordered transcript for a task, optionally only parts after seq. */
+  getTranscriptParts(taskId: string, sinceSeq?: number): TranscriptPartRecord[] {
+    if (!this.ensureDbOpen()) return []
+
+    const rows = (sinceSeq != null
+      ? this.db.prepare('SELECT * FROM transcript_parts WHERE task_id = ? AND seq > ? ORDER BY seq ASC').all(taskId, sinceSeq)
+      : this.db.prepare('SELECT * FROM transcript_parts WHERE task_id = ? ORDER BY seq ASC').all(taskId)
+    ) as Array<{
+      task_id: string; part_id: string; seq: number; role: string; content: string;
+      part_type: string | null; tool: string | null; payload: string | null;
+      created_at: number; updated_at: number
+    }>
+
+    return rows.map((r) => ({
+      taskId: r.task_id,
+      partId: r.part_id,
+      seq: r.seq,
+      role: r.role,
+      content: r.content,
+      partType: r.part_type ?? undefined,
+      tool: r.tool ? (JSON.parse(r.tool) as unknown) : undefined,
+      payload: r.payload ? (JSON.parse(r.payload) as unknown) : undefined,
+      createdAt: r.created_at,
+      updatedAt: r.updated_at
+    }))
+  }
+
+  /** True when the task already has persisted transcript parts. */
+  hasTranscriptParts(taskId: string): boolean {
+    if (!this.ensureDbOpen()) return false
+    const row = this.db.prepare('SELECT 1 FROM transcript_parts WHERE task_id = ? LIMIT 1').get(taskId)
+    return !!row
+  }
+
+  /** Highest seq for a task (0 when empty) — used by clients to detect gaps. */
+  getTranscriptMaxSeq(taskId: string): number {
+    if (!this.ensureDbOpen()) return 0
+    const row = this.db.prepare('SELECT COALESCE(MAX(seq), 0) AS max FROM transcript_parts WHERE task_id = ?').get(taskId) as { max: number }
+    return row.max
+  }
+
+  /** Remove a task's transcript (task deletion cleanup). */
+  deleteTranscriptParts(taskId: string): void {
+    if (!this.ensureDbOpen()) return
+    this.db.prepare('DELETE FROM transcript_parts WHERE task_id = ?').run(taskId)
+  }
+
   /**
    * Batch-update sort_order for subtasks under a parent.
    * @param parentId  The parent task ID
@@ -2101,6 +2238,7 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
 
   deleteTask(id: string): boolean {
     this.deleteTaskAttachments(id)
+    this.deleteTranscriptParts(id)
     const result = this.db.prepare('DELETE FROM tasks WHERE id = ?').run(id)
     return result.changes > 0
   }
