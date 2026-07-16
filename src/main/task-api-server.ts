@@ -15,7 +15,7 @@ let port: number | null = null
 let startupPromise: Promise<number> | null = null
 let notifyRenderer: ((channel: string, data: unknown) => void) | null = null
 let transcriptProvider: ((taskId: string) => Promise<Array<{ role: string; text: string }>>) | null = null
-let agentController: Pick<AgentManager, 'startTask'> | null = null
+let agentController: Pick<AgentManager, 'startTask' | 'notifyParentOfSubtaskCompletion'> | null = null
 
 export function getTaskApiPort(): number | null {
   return port
@@ -47,7 +47,9 @@ export function setTranscriptProvider(fn: (taskId: string) => Promise<Array<{ ro
   transcriptProvider = fn
 }
 
-export function setTaskApiAgentController(controller: Pick<AgentManager, 'startTask'> | null): void {
+export function setTaskApiAgentController(
+  controller: Pick<AgentManager, 'startTask' | 'notifyParentOfSubtaskCompletion'> | null
+): void {
   agentController = controller
 }
 
@@ -278,6 +280,21 @@ async function handleRoute(db: DatabaseManager, route: string, params: Record<st
         if (properTask) {
           notifyRenderer('task:updated', { taskId: params.task_id, updates: properTask })
         }
+      }
+
+      // Event-driven coordinator wake-up: when a subtask is moved to a terminal
+      // state (by its agent or a sibling), resume the idle parent coordinator
+      // instead of relying on it staying resident and polling for child status.
+      const newStatus = params.status as string | undefined
+      const parentTaskId = updated.parent_task_id as string | null
+      if (
+        parentTaskId &&
+        (newStatus === TaskStatus.ReadyForReview || newStatus === TaskStatus.Completed) &&
+        agentController?.notifyParentOfSubtaskCompletion
+      ) {
+        agentController.notifyParentOfSubtaskCompletion(parentTaskId, params.task_id as string).catch((err) => {
+          console.error(`[TaskAPI] Failed to wake parent ${parentTaskId} after subtask ${params.task_id} update:`, err)
+        })
       }
 
       return { success: true, task: parsedUpdated }
