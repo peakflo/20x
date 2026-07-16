@@ -1,7 +1,23 @@
-import { Tunnel } from 'cloudflared'
-import { writeFileSync } from 'fs'
-import { join } from 'path'
+import { Tunnel, DEFAULT_CLOUDFLARED_BIN, use as useCloudflaredBin } from 'cloudflared'
+import { writeFileSync, existsSync } from 'fs'
+import { join, sep } from 'path'
 import { tmpdir } from 'os'
+import { app } from 'electron'
+
+// The cloudflared package resolves its bundled binary via `__dirname`, which
+// in a packaged app points inside app.asar. Electron's fs APIs are
+// asar-transparent for reads, but spawning a binary from inside the asar
+// fails (ENOENT) — electron-builder's asarUnpack only extracts the real file
+// to the sibling `app.asar.unpacked` directory, so spawn must be told to use
+// that path explicitly.
+if (app.isPackaged) {
+  const unpackedBin = DEFAULT_CLOUDFLARED_BIN.replace(`app.asar${sep}`, `app.asar.unpacked${sep}`)
+  if (existsSync(unpackedBin)) {
+    useCloudflaredBin(unpackedBin)
+  } else {
+    console.warn('[tunnel] expected unpacked cloudflared binary not found at', unpackedBin)
+  }
+}
 
 let activeTunnel: Tunnel | null = null
 let tunnelUrl: string | null = null

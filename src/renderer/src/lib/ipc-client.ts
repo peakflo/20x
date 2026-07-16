@@ -269,14 +269,31 @@ export const updaterApi = {
 }
 
 export const mobileApi = {
-  getInfo: (): Promise<{ url: string; port: number; lanUrl: string; tunnelUrl: string | null; tunnelActive: boolean }> => {
-    return window.electronAPI?.mobile?.getInfo() ?? Promise.resolve({ url: '', port: 0, lanUrl: '', tunnelUrl: null, tunnelActive: false })
+  getInfo: (): Promise<{
+    url: string
+    port: number
+    lanUrl: string
+    tunnelUrl: string | null
+    tunnelActive: boolean
+    remoteMode: 'quick' | 'custom'
+    customUrl: string | null
+  }> => {
+    return (
+      window.electronAPI?.mobile?.getInfo() ??
+      Promise.resolve({ url: '', port: 0, lanUrl: '', tunnelUrl: null, tunnelActive: false, remoteMode: 'quick', customUrl: null })
+    )
   },
   startTunnel: (): Promise<{ tunnelUrl: string }> => {
     return window.electronAPI?.mobile?.startTunnel() ?? Promise.resolve({ tunnelUrl: '' })
   },
   stopTunnel: (): Promise<{ success: boolean }> => {
     return window.electronAPI?.mobile?.stopTunnel() ?? Promise.resolve({ success: false })
+  },
+  setCustomUrl: (url: string): Promise<{ url: string }> => {
+    return window.electronAPI?.mobile?.setCustomUrl(url) ?? Promise.resolve({ url: '' })
+  },
+  clearCustomUrl: (): Promise<{ success: boolean }> => {
+    return window.electronAPI?.mobile?.clearCustomUrl() ?? Promise.resolve({ success: false })
   },
   getPendingPin: (): Promise<{ pin: string; pairCodeId: string; expiresAt: number } | null> => {
     return window.electronAPI?.mobile?.getPendingPin() ?? Promise.resolve(null)

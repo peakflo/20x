@@ -336,9 +336,19 @@ interface ElectronAPI {
     setMinimizeToTray: (enabled: boolean) => Promise<boolean>
   }
   mobile: {
-    getInfo: () => Promise<{ url: string; port: number; lanUrl: string; tunnelUrl: string | null; tunnelActive: boolean }>
+    getInfo: () => Promise<{
+      url: string
+      port: number
+      lanUrl: string
+      tunnelUrl: string | null
+      tunnelActive: boolean
+      remoteMode: 'quick' | 'custom'
+      customUrl: string | null
+    }>
     startTunnel: () => Promise<{ tunnelUrl: string }>
     stopTunnel: () => Promise<{ success: boolean }>
+    setCustomUrl: (url: string) => Promise<{ url: string }>
+    clearCustomUrl: () => Promise<{ success: boolean }>
     getPendingPin: () => Promise<{ pin: string; pairCodeId: string; expiresAt: number } | null>
     getSessions: () => Promise<{ id: string; device_name: string; paired_at: number; last_seen: number }[]>
     revokeSession: (sessionId: string) => Promise<{ success: boolean }>

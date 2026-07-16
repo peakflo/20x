@@ -835,15 +835,23 @@ export function registerIpcHandlers(
     return enabled
   })
 
-  // Mobile web UI info — QR contains one-time init code, not the session token
-  ipcMain.handle('mobile:getInfo', () => {
-    const port = 20620
-
-    // Generate a fresh init code (5 min expiry)
+  const generateInitCode = (): string => {
     const initCode = randomUUID()
     const expiresAt = Math.floor(Date.now() / 1000) + 300
     db.setSetting(`mobile_init_code_${initCode}`, '1')
     db.setSetting(`mobile_init_code_${initCode}_exp`, String(expiresAt))
+    return initCode
+  }
+
+  const getRemoteMode = (): 'quick' | 'custom' =>
+    db.getSetting('mobile_remote_mode') === 'custom' ? 'custom' : 'quick'
+
+  const getCustomUrl = (): string | null => db.getSetting('mobile_custom_url') || null
+
+  // Mobile web UI info — QR contains one-time init code, not the session token
+  ipcMain.handle('mobile:getInfo', () => {
+    const port = 20620
+    const initCode = generateInitCode()
 
     // Get LAN IP
     const nets = networkInterfaces()
@@ -858,8 +866,11 @@ export function registerIpcHandlers(
       if (lanIp !== 'localhost') break
     }
 
+    const remoteMode = getRemoteMode()
+    const customUrl = getCustomUrl()
     const tunnelUrl = getTunnelUrl()
-    const baseUrl = tunnelUrl ?? `http://${lanIp}:${port}`
+    const remoteBaseUrl = remoteMode === 'custom' ? customUrl : tunnelUrl
+    const baseUrl = remoteBaseUrl ?? `http://${lanIp}:${port}`
     const pairUrl = `${baseUrl}/pair?code=${initCode}`
     const lanPairUrl = `http://${lanIp}:${port}/pair?code=${initCode}`
 
@@ -867,24 +878,41 @@ export function registerIpcHandlers(
       url: pairUrl,
       port,
       lanUrl: lanPairUrl,
-      tunnelUrl: tunnelUrl ? `${tunnelUrl}/pair?code=${initCode}` : null,
-      tunnelActive: isTunnelActive()
+      tunnelUrl: remoteBaseUrl ? `${remoteBaseUrl}/pair?code=${initCode}` : null,
+      tunnelActive: remoteMode === 'custom' ? Boolean(customUrl) : isTunnelActive(),
+      remoteMode,
+      customUrl
     }
   })
 
   ipcMain.handle('mobile:startTunnel', async () => {
     const port = 20620
+    db.setSetting('mobile_remote_mode', 'quick')
     const url = await startTunnel(port)
-    // Generate fresh init code for the new tunnel URL
-    const initCode = randomUUID()
-    const expiresAt = Math.floor(Date.now() / 1000) + 300
-    db.setSetting(`mobile_init_code_${initCode}`, '1')
-    db.setSetting(`mobile_init_code_${initCode}_exp`, String(expiresAt))
+    const initCode = generateInitCode()
     return { tunnelUrl: `${url}/pair?code=${initCode}` }
   })
 
   ipcMain.handle('mobile:stopTunnel', () => {
     stopTunnel()
+    return { success: true }
+  })
+
+  ipcMain.handle('mobile:setCustomUrl', (_, rawUrl: string) => {
+    const url = rawUrl.trim().replace(/\/+$/, '')
+    if (!/^https?:\/\/.+/i.test(url)) {
+      throw new Error('Enter a valid URL starting with http:// or https://')
+    }
+    stopTunnel()
+    db.setSetting('mobile_remote_mode', 'custom')
+    db.setSetting('mobile_custom_url', url)
+    const initCode = generateInitCode()
+    return { url: `${url}/pair?code=${initCode}` }
+  })
+
+  ipcMain.handle('mobile:clearCustomUrl', () => {
+    db.setSetting('mobile_remote_mode', 'quick')
+    db.deleteSetting('mobile_custom_url')
     return { success: true }
   })
 
