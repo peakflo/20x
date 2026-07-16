@@ -53,7 +53,9 @@ const mockElectronAPI = {
     approve: vi.fn().mockResolvedValue({ success: true }),
     syncSkills: vi.fn().mockResolvedValue({ created: [], updated: [], unchanged: [] }),
     syncSkillsForTask: vi.fn().mockResolvedValue({ created: [], updated: [], unchanged: [] }),
-    learnFromSession: vi.fn().mockResolvedValue({ created: [], updated: [], unchanged: [] })
+    learnFromSession: vi.fn().mockResolvedValue({ created: [], updated: [], unchanged: [] }),
+    getRawTranscript: vi.fn().mockResolvedValue([]),
+    getTranscriptSnapshot: vi.fn().mockResolvedValue([])
   },
   agentConfig: {
     getProviders: vi.fn().mockResolvedValue(null)

@@ -146,6 +146,10 @@ export const agentSessionApi = {
 
   getRawTranscript: (taskId: string): Promise<Array<{ role: string; parts: Array<{ type: string; content?: string; tool?: { name: string; status?: string; input?: string; output?: string; error?: string } }> }>> => {
     return window.electronAPI.agentSession.getRawTranscript(taskId)
+  },
+
+  getTranscriptSnapshot: (taskId: string, sinceSeq?: number): Promise<Array<{ taskId: string; partId: string; seq: number; role: string; content: string; partType?: string; tool?: unknown; payload?: unknown; createdAt: number; updatedAt: number }>> => {
+    return window.electronAPI.agentSession.getTranscriptSnapshot(taskId, sinceSeq)
   }
 }
 

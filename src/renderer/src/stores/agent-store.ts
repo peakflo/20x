@@ -137,6 +137,11 @@ interface AgentState {
   deleteAgent: (id: string) => Promise<boolean>
 
   initSession: (taskId: string, sessionId: string, agentId: string) => void
+  /** Hydrate a task's transcript from the main process's durable projection.
+   *  The store renders state, not history-of-pushes: any part produced while
+   *  this window wasn't bound (background wake-ups, resumed sessions) is
+   *  reconciled here. */
+  hydrateTranscript: (taskId: string) => Promise<void>
   endSession: (taskId: string) => void
   removeSession: (taskId: string) => void
   clearMessageDedup: (taskId: string) => void
@@ -167,6 +172,65 @@ export const useAgentStore = create<AgentState>((set, get) => {
     return { sessions: nextSessions, session: created }
   }
 
+  // ── Durable-transcript hydration ──
+  // Snapshot-based reconciliation against the main process's transcript
+  // projection. Live events remain the fast path for streaming; hydration
+  // guarantees nothing is ever missing from the rendered transcript.
+  const hydratingTasks = new Set<string>()
+
+  const hydrateTranscript = async (taskId: string): Promise<void> => {
+    if (!taskId || hydratingTasks.has(taskId)) return
+    // Snapshot API may be absent on older bridges (e.g. mobile web transport)
+    if (typeof window.electronAPI?.agentSession?.getTranscriptSnapshot !== 'function') return
+    hydratingTasks.add(taskId)
+    try {
+      const snapshot = await agentSessionApi.getTranscriptSnapshot(taskId)
+      if (snapshot.length === 0) return
+
+      const state = get()
+      const existing = state.sessions.get(taskId)
+      const seen = getSeen(taskId)
+
+      const existingById = new Map<string, AgentMessage>()
+      for (const m of existing?.messages || []) existingById.set(m.id, m)
+
+      // Snapshot is authoritative for content and order.
+      const merged: AgentMessage[] = snapshot.map((p) => {
+        seen.add(p.partId)
+        const prev = existingById.get(p.partId)
+        const payload = (p.payload || {}) as { taskProgress?: unknown }
+        return {
+          id: p.partId,
+          role: p.role === 'user' ? 'user' : p.role === 'assistant' ? 'assistant' : 'system',
+          content: p.content,
+          timestamp: prev?.timestamp || new Date(p.createdAt),
+          partType: p.partType ?? prev?.partType,
+          tool: (p.tool as AgentMessage['tool']) ?? prev?.tool,
+          taskProgress: (payload.taskProgress as AgentMessage['taskProgress']) ?? prev?.taskProgress,
+          ...(prev?.stepMeta ? { stepMeta: prev.stepMeta } : {})
+        }
+      })
+
+      // Preserve in-memory extras the projection intentionally skips
+      // (ephemeral/system parts) — appended after, in their original order.
+      const snapshotIds = new Set(snapshot.map((p) => p.partId))
+      for (const m of existing?.messages || []) {
+        if (!snapshotIds.has(m.id)) merged.push(m)
+      }
+
+      const current = get()
+      const base = current.sessions.get(taskId) || existing
+      const session: TaskSession = base
+        ? { ...base, messages: merged }
+        : { sessionId: null, agentId: '', taskId, status: SessionStatus.IDLE, messages: merged, pendingApproval: null }
+      set({ sessions: new Map(current.sessions).set(taskId, session) })
+    } catch (err) {
+      console.error(`[agent-store] hydrateTranscript failed for task ${taskId}:`, err)
+    } finally {
+      hydratingTasks.delete(taskId)
+    }
+  }
+
   // ── IPC event subscriptions ──
 
   onAgentStatus((event: AgentStatusEvent) => {
@@ -188,6 +252,11 @@ export const useAgentStore = create<AgentState>((set, get) => {
             pendingApproval: null
           })
         })
+      } else if (event.taskId && event.status === SessionStatus.IDLE) {
+        // A session this window never observed just went idle (e.g. a
+        // background wake-up turn) — reconcile from the durable projection
+        // so its output is not lost.
+        void hydrateTranscript(event.taskId)
       }
       return
     }
@@ -199,6 +268,13 @@ export const useAgentStore = create<AgentState>((set, get) => {
     // Clear pending approval when session goes idle
     if (event.status === SessionStatus.IDLE) updated.pendingApproval = null
     set({ sessions: new Map(state.sessions).set(session.taskId, updated) })
+
+    // Every idle transition reconciles the transcript against the durable
+    // projection — cheap (one snapshot query per turn) and guarantees the
+    // final assistant message is never missing from the view.
+    if (event.status === SessionStatus.IDLE) {
+      void hydrateTranscript(session.taskId)
+    }
   })
 
   onAgentOutput((event: AgentOutputEvent) => {
@@ -548,6 +624,8 @@ export const useAgentStore = create<AgentState>((set, get) => {
         return false
       }
     },
+
+    hydrateTranscript,
 
     initSession: (taskId, sessionId, agentId) => {
       const existing = get().sessions.get(taskId)

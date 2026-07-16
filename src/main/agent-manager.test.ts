@@ -2792,3 +2792,84 @@ describe('AgentManager event-driven parent wake-up', () => {
     expect(wakeSpy).not.toHaveBeenCalled()
   })
 })
+
+describe('AgentManager durable transcript write-through', () => {
+  function buildManager() {
+    const mockDb = createMockDb({})
+    const upserted: Array<{ taskId: string; parts: Array<{ id: string; role?: string; content?: string; partType?: string }> }> = []
+    Object.assign(mockDb as any, {
+      upsertTranscriptParts: vi.fn((taskId: string, parts: never[]) => { upserted.push({ taskId, parts }) }),
+      hasTranscriptParts: vi.fn(() => false),
+      getTranscriptParts: vi.fn(() => [])
+    })
+    const mgr = new AgentManager(mockDb)
+    // Avoid electron window access; keep persist path (sendToRenderer) intact
+    ;(mgr as any).mainWindow = null
+    return { mgr, mockDb, upserted }
+  }
+
+  it('persists agent:output parts before delivery', () => {
+    const { mgr, upserted } = buildManager()
+    ;(mgr as any).sendToRenderer('agent:output', {
+      sessionId: 's1',
+      taskId: 'task-1',
+      type: 'message',
+      data: { id: 'p1', role: 'assistant', content: 'ACK — woke up on completion', partType: 'text' }
+    })
+
+    expect(upserted).toHaveLength(1)
+    expect(upserted[0].taskId).toBe('task-1')
+    expect(upserted[0].parts[0]).toMatchObject({ id: 'p1', role: 'assistant', content: 'ACK — woke up on completion' })
+  })
+
+  it('persists agent:output-batch parts and skips ephemeral part types', () => {
+    const { mgr, upserted } = buildManager()
+    ;(mgr as any).sendToRenderer('agent:output-batch', {
+      sessionId: 's1',
+      taskId: 'task-1',
+      messages: [
+        { id: 'p1', role: 'assistant', content: 'real output', partType: 'text' },
+        { id: 'p2', role: 'system', content: 'x', partType: 'step-start' },
+        { id: 'p3', role: 'system', content: 'y', partType: 'step-finish' },
+        { id: 'p4', role: 'system', content: '', partType: 'text' } // empty, no structure
+      ]
+    })
+
+    expect(upserted).toHaveLength(1)
+    expect(upserted[0].parts.map((p) => p.id)).toEqual(['p1'])
+  })
+
+  it('replay batches only seed an empty transcript', () => {
+    const { mgr, mockDb, upserted } = buildManager()
+
+    // Store already has parts → replay skipped
+    ;(mockDb as any).hasTranscriptParts = vi.fn(() => true)
+    ;(mgr as any).sendToRenderer('agent:output-batch', {
+      sessionId: 's1',
+      taskId: 'task-1',
+      replay: true,
+      messages: [{ id: 'h1', role: 'assistant', content: 'historical', partType: 'text' }]
+    })
+    expect(upserted).toHaveLength(0)
+
+    // Empty store → replay seeds (backfill)
+    ;(mockDb as any).hasTranscriptParts = vi.fn(() => false)
+    ;(mgr as any).sendToRenderer('agent:output-batch', {
+      sessionId: 's1',
+      taskId: 'task-1',
+      replay: true,
+      messages: [{ id: 'h1', role: 'assistant', content: 'historical', partType: 'text' }]
+    })
+    expect(upserted).toHaveLength(1)
+    expect(upserted[0].parts[0].id).toBe('h1')
+  })
+
+  it('exposes snapshots via getTranscriptSnapshot', () => {
+    const { mgr, mockDb } = buildManager()
+    const rows = [{ taskId: 'task-1', partId: 'p1', seq: 1, role: 'assistant', content: 'hi', createdAt: 1, updatedAt: 1 }]
+    ;(mockDb as any).getTranscriptParts = vi.fn(() => rows)
+
+    expect(mgr.getTranscriptSnapshot('task-1')).toEqual(rows)
+    expect((mockDb as any).getTranscriptParts).toHaveBeenCalledWith('task-1', undefined)
+  })
+})
