@@ -140,7 +140,7 @@ const [currentVersion, setCurrentVersion] = useState<string | null>(null)
         setMobileTunnelUrl(info.tunnelUrl)
         setTunnelActive(info.tunnelActive)
         setRemoteMode(info.remoteMode)
-        if (info.customUrl) setCustomUrlInput(info.customUrl)
+        setCustomUrlInput(info.customUrl ?? '')
         const qrUrl = info.tunnelUrl ?? info.lanUrl ?? info.url
         if (qrUrl) {
           const dataUrl = await QRCode.toDataURL(qrUrl, { width: 200, margin: 1 })
@@ -222,6 +222,20 @@ const [currentVersion, setCurrentVersion] = useState<string | null>(null)
       setMinimizeToTray(checked)
     } catch (error) {
       console.error('Failed to update minimize to tray:', error)
+    }
+  }
+
+  // Applies a new active remote URL (or falls back to the LAN URL when null)
+  // to the QR code and tunnel state. Shared by the quick-tunnel switch, the
+  // custom-URL button, and the mode-switch-back-to-quick handler so all three
+  // stay in sync instead of drifting apart.
+  const applyRemoteUrl = async (url: string | null) => {
+    setMobileTunnelUrl(url)
+    setTunnelActive(Boolean(url))
+    const qrUrl = url ?? mobileLanUrl
+    if (qrUrl) {
+      const dataUrl = await QRCode.toDataURL(qrUrl, { width: 200, margin: 1 })
+      setQrDataUrl(dataUrl)
     }
   }
 
@@ -330,14 +344,10 @@ const [currentVersion, setCurrentVersion] = useState<string | null>(null)
               }
               setTunnelLoading(true)
               try {
+                await mobileApi.stopTunnel()
                 await mobileApi.clearCustomUrl()
                 setRemoteMode('quick')
-                setMobileTunnelUrl(null)
-                setTunnelActive(false)
-                if (mobileLanUrl) {
-                  const dataUrl = await QRCode.toDataURL(mobileLanUrl, { width: 200, margin: 1 })
-                  setQrDataUrl(dataUrl)
-                }
+                await applyRemoteUrl(null)
               } catch (err) {
                 setTunnelError(err instanceof Error ? err.message : 'Failed to switch remote access method')
               } finally {
@@ -371,20 +381,10 @@ const [currentVersion, setCurrentVersion] = useState<string | null>(null)
                 try {
                   if (checked) {
                     const { tunnelUrl: url } = await mobileApi.startTunnel()
-                    setMobileTunnelUrl(url)
-                    setTunnelActive(true)
-                    if (url) {
-                      const dataUrl = await QRCode.toDataURL(url, { width: 200, margin: 1 })
-                      setQrDataUrl(dataUrl)
-                    }
+                    await applyRemoteUrl(url)
                   } else {
                     await mobileApi.stopTunnel()
-                    setMobileTunnelUrl(null)
-                    setTunnelActive(false)
-                    if (mobileLanUrl) {
-                      const dataUrl = await QRCode.toDataURL(mobileLanUrl, { width: 200, margin: 1 })
-                      setQrDataUrl(dataUrl)
-                    }
+                    await applyRemoteUrl(null)
                   }
                 } catch (err) {
                   console.error('Tunnel toggle failed:', err)
@@ -417,12 +417,7 @@ const [currentVersion, setCurrentVersion] = useState<string | null>(null)
                   setTunnelError(null)
                   try {
                     const { url } = await mobileApi.setCustomUrl(customUrlInput.trim())
-                    setMobileTunnelUrl(url)
-                    setTunnelActive(true)
-                    if (url) {
-                      const dataUrl = await QRCode.toDataURL(url, { width: 200, margin: 1 })
-                      setQrDataUrl(dataUrl)
-                    }
+                    await applyRemoteUrl(url)
                   } catch (err) {
                     setTunnelError(err instanceof Error ? err.message : 'Failed to set custom URL')
                   } finally {

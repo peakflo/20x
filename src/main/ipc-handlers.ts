@@ -887,8 +887,12 @@ export function registerIpcHandlers(
 
   ipcMain.handle('mobile:startTunnel', async () => {
     const port = 20620
-    db.setSetting('mobile_remote_mode', 'quick')
     const url = await startTunnel(port)
+    // Only persist 'quick' mode once the tunnel actually connects — if
+    // startTunnel() throws, the mode setting must stay whatever it was before
+    // (e.g. a still-valid 'custom' mode/URL shouldn't be clobbered by a
+    // failed quick-tunnel attempt).
+    db.setSetting('mobile_remote_mode', 'quick')
     const initCode = generateInitCode()
     return { tunnelUrl: `${url}/pair?code=${initCode}` }
   })
@@ -899,10 +903,16 @@ export function registerIpcHandlers(
   })
 
   ipcMain.handle('mobile:setCustomUrl', (_, rawUrl: string) => {
-    const url = rawUrl.trim().replace(/\/+$/, '')
-    if (!/^https?:\/\/.+/i.test(url)) {
+    let parsed: URL
+    try {
+      parsed = new URL(rawUrl.trim())
+    } catch {
       throw new Error('Enter a valid URL starting with http:// or https://')
     }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      throw new Error('Enter a valid URL starting with http:// or https://')
+    }
+    const url = parsed.href.replace(/\/+$/, '')
     stopTunnel()
     db.setSetting('mobile_remote_mode', 'custom')
     db.setSetting('mobile_custom_url', url)
