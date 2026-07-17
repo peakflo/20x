@@ -4,7 +4,8 @@ vi.mock('electron', () => ({
   ipcMain: { handle: vi.fn() },
   dialog: { showOpenDialog: vi.fn() },
   shell: { openPath: vi.fn(), showItemInFolder: vi.fn() },
-  Notification: vi.fn().mockImplementation(() => ({ show: vi.fn() }))
+  Notification: vi.fn().mockImplementation(() => ({ show: vi.fn() })),
+  app: { isPackaged: false }
 }))
 
 const { mockChildKill, mockSpawn } = vi.hoisted(() => {

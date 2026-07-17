@@ -350,12 +350,23 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('app:setMinimizeToTray', enabled)
   },
   mobile: {
-    getInfo: (): Promise<{ url: string; port: number; lanUrl: string; tunnelUrl: string | null; tunnelActive: boolean }> =>
-      ipcRenderer.invoke('mobile:getInfo'),
+    getInfo: (): Promise<{
+      url: string
+      port: number
+      lanUrl: string
+      tunnelUrl: string | null
+      tunnelActive: boolean
+      remoteMode: 'quick' | 'custom'
+      customUrl: string | null
+    }> => ipcRenderer.invoke('mobile:getInfo'),
     startTunnel: (): Promise<{ tunnelUrl: string }> =>
       ipcRenderer.invoke('mobile:startTunnel'),
     stopTunnel: (): Promise<{ success: boolean }> =>
       ipcRenderer.invoke('mobile:stopTunnel'),
+    setCustomUrl: (url: string): Promise<{ url: string }> =>
+      ipcRenderer.invoke('mobile:setCustomUrl', url),
+    clearCustomUrl: (): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke('mobile:clearCustomUrl'),
     getPendingPin: (): Promise<{ pin: string; pairCodeId: string; expiresAt: number } | null> =>
       ipcRenderer.invoke('mobile:getPendingPin'),
     getSessions: (): Promise<{ id: string; device_name: string; paired_at: number; last_seen: number }[]> =>
