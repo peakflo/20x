@@ -15,6 +15,7 @@ import { OAuthManager } from './oauth/oauth-manager'
 import { PluginRegistry } from './plugins/registry'
 import { PeakfloPlugin } from './plugins/peakflo-plugin'
 import { LinearPlugin } from './plugins/linear-plugin'
+import { AsanaPlugin } from './plugins/asana-plugin'
 import { HubSpotPlugin } from './plugins/hubspot-plugin'
 import { GitHubIssuesPlugin } from './plugins/github-issues-plugin'
 import { NotionPlugin } from './plugins/notion-plugin'
@@ -723,6 +724,7 @@ app.whenReady().then(async () => {
   pluginRegistry = new PluginRegistry()
   pluginRegistry.register(new PeakfloPlugin())
   pluginRegistry.register(new LinearPlugin())
+  pluginRegistry.register(new AsanaPlugin())
   pluginRegistry.register(new HubSpotPlugin())
   pluginRegistry.register(new GitHubIssuesPlugin(githubManager))
   pluginRegistry.register(new NotionPlugin())
