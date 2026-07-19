@@ -25,6 +25,11 @@ const DEFAULT_CODEX_APP_SERVER_MODEL = 'gpt-5.5'
 const MAX_IPC_TOOL_INPUT_CHARS = 20_000
 const MAX_IPC_TOOL_OUTPUT_CHARS = 100_000
 
+type CodexSandboxPolicy =
+  | { type: 'readOnly'; networkAccess: boolean }
+  | { type: 'workspaceWrite'; networkAccess: boolean; writableRoots: string[] }
+  | { type: 'dangerFullAccess' }
+
 interface JsonRpcRequest {
   jsonrpc: '2.0'
   id: string | number
@@ -410,6 +415,7 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
       approvalPolicy: config.permissionMode === 'allow' ? 'never' : 'on-request',
       approvalsReviewer: 'user',
       sandbox: this.resolveSandboxMode(config),
+      sandboxPolicy: this.buildSandboxPolicy(config),
       runtimeWorkspaceRoots: this.buildRuntimeWorkspaceRoots(config.workspaceDir),
       config: this.buildConfigOverrides(config)
     })
@@ -1031,6 +1037,22 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
         return config.sandboxMode
       default:
         return 'workspace-write'
+    }
+  }
+
+  private buildSandboxPolicy(config: SessionConfig): CodexSandboxPolicy {
+    switch (this.resolveSandboxMode(config)) {
+      case 'read-only':
+        return { type: 'readOnly', networkAccess: true }
+      case 'danger-full-access':
+        return { type: 'dangerFullAccess' }
+      case 'workspace-write':
+      default:
+        return {
+          type: 'workspaceWrite',
+          networkAccess: true,
+          writableRoots: this.buildRuntimeWorkspaceRoots(config.workspaceDir)
+        }
     }
   }
 
