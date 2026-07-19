@@ -7,9 +7,9 @@
  */
 
 import { spawn, type ChildProcess } from 'child_process'
-import { mkdtempSync } from 'fs'
+import { existsSync, mkdtempSync, readFileSync } from 'fs'
 import { homedir, tmpdir } from 'os'
-import { basename, join } from 'path'
+import { basename, isAbsolute, join, relative, resolve } from 'path'
 import { promisify } from 'util'
 import type {
   CodingAgentAdapter,
@@ -24,6 +24,11 @@ import { MessagePartType, MessageRole, SessionStatusType } from './coding-agent-
 const DEFAULT_CODEX_APP_SERVER_MODEL = 'gpt-5.5'
 const MAX_IPC_TOOL_INPUT_CHARS = 20_000
 const MAX_IPC_TOOL_OUTPUT_CHARS = 100_000
+
+type CodexSandboxPolicy =
+  | { type: 'readOnly'; networkAccess: boolean }
+  | { type: 'workspaceWrite'; networkAccess: boolean; writableRoots: string[] }
+  | { type: 'dangerFullAccess' }
 
 interface JsonRpcRequest {
   jsonrpc: '2.0'
@@ -250,6 +255,15 @@ function normalizeCodexMcpServerName(name: string): string {
   return normalized || 'mcp_server'
 }
 
+function uniquePaths(paths: string[]): string[] {
+  return Array.from(new Set(paths.filter(Boolean).map((path) => resolve(path))))
+}
+
+function isSubpath(parent: string, child: string): boolean {
+  const rel = relative(resolve(parent), resolve(child))
+  return rel === '' || (!!rel && !rel.startsWith('..') && !isAbsolute(rel))
+}
+
 function summarizeApproval(params: Record<string, unknown>, fallback: string): string {
   const command = asString(params.command)
   const reason = asString(params.reason)
@@ -310,7 +324,7 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
       approvalsReviewer: 'user',
       sandbox: this.resolveSandboxMode(config),
       developerInstructions: config.systemPrompt || null,
-      runtimeWorkspaceRoots: [config.workspaceDir],
+      runtimeWorkspaceRoots: this.buildRuntimeWorkspaceRoots(config.workspaceDir),
       config: this.buildConfigOverrides(config)
     })
 
@@ -340,7 +354,7 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
       approvalPolicy: config.permissionMode === 'allow' ? 'never' : 'on-request',
       approvalsReviewer: 'user',
       sandbox: this.resolveSandboxMode(config),
-      runtimeWorkspaceRoots: [config.workspaceDir],
+      runtimeWorkspaceRoots: this.buildRuntimeWorkspaceRoots(config.workspaceDir),
       initialTurnsPage: { limit: 50 },
       config: this.buildConfigOverrides(config)
     })
@@ -400,7 +414,10 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
       effort: config.reasoningEffort && config.reasoningEffort !== 'max' ? config.reasoningEffort : null,
       approvalPolicy: config.permissionMode === 'allow' ? 'never' : 'on-request',
       approvalsReviewer: 'user',
-      sandbox: this.resolveSandboxMode(config)
+      sandbox: this.resolveSandboxMode(config),
+      sandboxPolicy: this.buildSandboxPolicy(config),
+      runtimeWorkspaceRoots: this.buildRuntimeWorkspaceRoots(config.workspaceDir),
+      config: this.buildConfigOverrides(config)
     })
 
     if (isObject(result)) {
@@ -724,13 +741,47 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
     if (this.resolveSandboxMode(config) === 'workspace-write') {
       overrides.sandbox_workspace_write = {
         network_access: true,
-        writable_roots: [config.workspaceDir]
+        writable_roots: this.buildRuntimeWorkspaceRoots(config.workspaceDir)
       }
     }
     if (config.mcpServers && Object.keys(config.mcpServers).length > 0) {
       overrides.mcp_servers = this.convertMcpServers(config.mcpServers)
     }
     return overrides
+  }
+
+  private buildRuntimeWorkspaceRoots(workspaceDir: string): string[] {
+    return uniquePaths([workspaceDir, ...this.resolveExternalGitRoots(workspaceDir)])
+  }
+
+  private resolveExternalGitRoots(workspaceDir: string): string[] {
+    const workspaceRoot = resolve(workspaceDir)
+    const dotGitPath = join(workspaceRoot, '.git')
+    if (!existsSync(dotGitPath)) return []
+
+    try {
+      const dotGitContent = readFileSync(dotGitPath, 'utf8').trim()
+      if (!dotGitContent.startsWith('gitdir:')) return []
+
+      const rawGitDir = dotGitContent.slice('gitdir:'.length).trim()
+      if (!rawGitDir) return []
+
+      const gitDir = isAbsolute(rawGitDir)
+        ? resolve(rawGitDir)
+        : resolve(workspaceRoot, rawGitDir)
+      const commonDirPath = join(gitDir, 'commondir')
+      const rawCommonDir = existsSync(commonDirPath)
+        ? readFileSync(commonDirPath, 'utf8').trim()
+        : ''
+      const commonDir = rawCommonDir
+        ? (isAbsolute(rawCommonDir) ? resolve(rawCommonDir) : resolve(gitDir, rawCommonDir))
+        : gitDir
+
+      return [commonDir, gitDir].filter((path) => !isSubpath(workspaceRoot, path))
+    } catch (error) {
+      console.warn('[CodexAppServerAdapter] Failed to resolve external git metadata roots:', error)
+      return []
+    }
   }
 
   private convertMcpServers(servers: Record<string, McpServerConfig>): Record<string, unknown> {
@@ -985,7 +1036,23 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
       case 'danger-full-access':
         return config.sandboxMode
       default:
-        return 'workspace-write'
+        return 'danger-full-access'
+    }
+  }
+
+  private buildSandboxPolicy(config: SessionConfig): CodexSandboxPolicy {
+    switch (this.resolveSandboxMode(config)) {
+      case 'read-only':
+        return { type: 'readOnly', networkAccess: true }
+      case 'danger-full-access':
+        return { type: 'dangerFullAccess' }
+      case 'workspace-write':
+      default:
+        return {
+          type: 'workspaceWrite',
+          networkAccess: true,
+          writableRoots: this.buildRuntimeWorkspaceRoots(config.workspaceDir)
+        }
     }
   }
 

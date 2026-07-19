@@ -1,4 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
+import { tmpdir } from 'os'
+import { join } from 'path'
 import { CodexAppServerAdapter } from './codex-app-server-adapter'
 import { MessagePartType, MessageRole, SessionStatusType } from './coding-agent-adapter'
 
@@ -46,8 +49,12 @@ interface AppServerAdapterPrivate {
       headers?: Record<string, string>
     }>
   }): Record<string, unknown>
+  buildRuntimeWorkspaceRoots(workspaceDir: string): string[]
   bufferAllThreadItems(session: AppServerSessionForTest, threadId: string): Promise<void>
   sendRpcRequest(session: AppServerSessionForTest, method: string, params?: unknown): Promise<unknown>
+  startAppServerProcess(config: unknown, sessionId: string): Promise<AppServerSessionForTest>
+  initializeAppServer(session: AppServerSessionForTest): Promise<void>
+  logMcpServerInventory(session: AppServerSessionForTest, threadId: string, context: string): Promise<void>
 }
 
 interface AppServerSessionForTest {
@@ -549,8 +556,113 @@ describe('CodexAppServerAdapter', () => {
     })
 
     expect(sendRpcRequest).toHaveBeenCalledWith(session, 'turn/start', expect.objectContaining({
-      sandbox: 'danger-full-access'
+      sandbox: 'danger-full-access',
+      sandboxPolicy: { type: 'dangerFullAccess' }
     }))
+  })
+
+  it('defaults missing codex sandbox mode to danger full access', async () => {
+    const adapterInstance = new CodexAppServerAdapter()
+    const adapter = adapterPrivate(adapterInstance)
+    const session = createSession()
+    adapter.sessions.set('thread-1', session)
+    const sendRpcRequest = vi.fn().mockResolvedValue({ turnId: 'turn-1' })
+    adapter.sendRpcRequest = sendRpcRequest
+
+    await adapterInstance.sendPrompt('thread-1', [{ type: MessagePartType.TEXT, text: 'hello' }], {
+      agentId: 'agent-1',
+      taskId: 'task-1',
+      workspaceDir: '/tmp/workspace'
+    })
+
+    expect(sendRpcRequest).toHaveBeenCalledWith(session, 'turn/start', expect.objectContaining({
+      sandbox: 'danger-full-access',
+      sandboxPolicy: { type: 'dangerFullAccess' }
+    }))
+  })
+
+  it('passes external git metadata roots to app-server turn start', async () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'codex-worktree-turn-'))
+    const workspace = join(tmp, 'workspaces', 'task-1', '20x')
+    const gitDir = join(tmp, 'repos', 'peakflo', '20x.git', 'worktrees', '20x')
+    const commonDir = join(tmp, 'repos', 'peakflo', '20x.git')
+    mkdirSync(workspace, { recursive: true })
+    mkdirSync(gitDir, { recursive: true })
+    writeFileSync(join(workspace, '.git'), `gitdir: ${gitDir}\n`)
+    writeFileSync(join(gitDir, 'commondir'), '../..')
+
+    try {
+      const adapterInstance = new CodexAppServerAdapter()
+      const adapter = adapterPrivate(adapterInstance)
+      const session = createSession()
+      adapter.sessions.set('thread-1', session)
+      const sendRpcRequest = vi.fn().mockResolvedValue({ turnId: 'turn-1' })
+      adapter.sendRpcRequest = sendRpcRequest
+
+      await adapterInstance.sendPrompt('thread-1', [{ type: MessagePartType.TEXT, text: 'hello' }], {
+        agentId: 'agent-1',
+        taskId: 'task-1',
+        workspaceDir: workspace,
+        sandboxMode: 'workspace-write'
+      })
+
+      expect(sendRpcRequest).toHaveBeenCalledWith(session, 'turn/start', expect.objectContaining({
+        sandboxPolicy: {
+          type: 'workspaceWrite',
+          networkAccess: true,
+          writableRoots: [workspace, commonDir, gitDir]
+        },
+        runtimeWorkspaceRoots: [workspace, commonDir, gitDir],
+        config: expect.objectContaining({
+          sandbox_workspace_write: {
+            network_access: true,
+            writable_roots: [workspace, commonDir, gitDir]
+          }
+        })
+      }))
+    } finally {
+      rmSync(tmp, { recursive: true, force: true })
+    }
+  })
+
+  it('passes external git metadata roots to app-server thread start', async () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'codex-worktree-'))
+    const workspace = join(tmp, 'workspaces', 'task-1', '20x')
+    const gitDir = join(tmp, 'repos', 'peakflo', '20x.git', 'worktrees', '20x')
+    const commonDir = join(tmp, 'repos', 'peakflo', '20x.git')
+    mkdirSync(workspace, { recursive: true })
+    mkdirSync(gitDir, { recursive: true })
+    writeFileSync(join(workspace, '.git'), `gitdir: ${gitDir}\n`)
+    writeFileSync(join(gitDir, 'commondir'), '../..')
+
+    try {
+      const adapterInstance = new CodexAppServerAdapter()
+      const adapter = adapterPrivate(adapterInstance)
+      const sendRpcRequest = vi.fn().mockResolvedValue({ threadId: 'thread-1' })
+      adapter.sendRpcRequest = sendRpcRequest
+      adapter.logMcpServerInventory = vi.fn()
+      adapter.startAppServerProcess = vi.fn().mockResolvedValue(createSession())
+      adapter.initializeAppServer = vi.fn().mockResolvedValue(undefined)
+
+      await adapterInstance.createSession({
+        agentId: 'agent-1',
+        taskId: 'task-1',
+        workspaceDir: workspace,
+        sandboxMode: 'workspace-write'
+      })
+
+      expect(sendRpcRequest).toHaveBeenCalledWith(expect.anything(), 'thread/start', expect.objectContaining({
+        runtimeWorkspaceRoots: [workspace, commonDir, gitDir],
+        config: expect.objectContaining({
+          sandbox_workspace_write: {
+            network_access: true,
+            writable_roots: [workspace, commonDir, gitDir]
+          }
+        })
+      }))
+    } finally {
+      rmSync(tmp, { recursive: true, force: true })
+    }
   })
 
   it('converts command output deltas into updating tool parts', () => {
