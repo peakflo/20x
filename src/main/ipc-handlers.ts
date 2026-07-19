@@ -35,6 +35,7 @@ import type { EnterpriseAuth } from './enterprise-auth'
 import type { ClaudePluginManager } from './claude-plugin-manager'
 import type { EnterpriseHeartbeat } from './enterprise-heartbeat'
 import type { EnterpriseStateSync } from './enterprise-state-sync'
+import { analytics } from './analytics-service'
 
 const MIME_MAP: Record<string, string> = {
   '.pdf': 'application/pdf',
@@ -103,6 +104,19 @@ export function registerIpcHandlers(
     // Notify renderer so auto-start hook can trigger triage for UI-created tasks
     if (task) {
       event.sender.send('task:created', { task })
+      analytics()?.record('task.created', {
+        taskType: task.type,
+        priority: task.priority,
+        status: task.status,
+        labelCount: task.labels?.length ?? 0,
+        repoCount: task.repos?.length ?? 0,
+        attachmentCount: task.attachments?.length ?? 0,
+        outputFieldCount: task.output_fields?.length ?? 0,
+        hasAgent: !!task.agent_id,
+        hasSource: !!task.source_id,
+        isRecurring: !!task.is_recurring,
+        isSubtask: !!task.parent_task_id
+      })
     }
     return task
   })
@@ -110,7 +124,7 @@ export function registerIpcHandlers(
   ipcMain.handle('db:updateTask', (_, id: string, data: UpdateTaskData) => {
     // Capture previous status before updating (for enterprise sync)
     let previousStatus: string | undefined
-    if (enterpriseStateSync && data.status) {
+    if (data.status) {
       const existing = db.getTask(id)
       if (existing && existing.status !== data.status) {
         previousStatus = existing.status
@@ -139,19 +153,46 @@ export function registerIpcHandlers(
         enterpriseStateSync.recordTaskStatusChange(updated, previousStatus, data.status)
       }
     }
+    if (updated && data.status) {
+      analytics()?.record('task.status_changed', {
+        previousStatus,
+        status: data.status,
+        taskType: updated.type,
+        priority: updated.priority,
+        hasAgent: !!updated.agent_id,
+        hasSource: !!updated.source_id,
+        isSubtask: !!updated.parent_task_id
+      })
+    }
 
     // Record feedback event for enterprise sync
     if (enterpriseStateSync && data.feedback_rating && updated) {
       enterpriseStateSync.recordFeedbackSubmitted(updated, data.feedback_rating)
+    }
+    if (updated && data.feedback_rating) {
+      analytics()?.record('task.feedback_submitted', {
+        rating: data.feedback_rating,
+        taskType: updated.type,
+        hasSource: !!updated.source_id
+      })
     }
 
     return updated
   })
 
   ipcMain.handle('db:deleteTask', (event, id: string) => {
+    const existing = db.getTask(id)
     const success = db.deleteTask(id)
     if (success) {
       event.sender.send('task:deleted', { taskId: id })
+      analytics()?.record('task.deleted', {
+        taskType: existing?.type,
+        status: existing?.status,
+        priority: existing?.priority,
+        hasAgent: !!existing?.agent_id,
+        hasSource: !!existing?.source_id,
+        isSubtask: !!existing?.parent_task_id
+      })
     }
     return success
   })
