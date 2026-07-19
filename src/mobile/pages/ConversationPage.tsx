@@ -6,6 +6,7 @@ import { useSessionControls } from '../hooks/useSessionControls'
 import { MessageActivityGroup, MessageBubble, isCompactActivityMessage } from '../components/MessageBubble'
 import { ChatInput, type ChatInputAttachment } from '../components/ChatInput'
 import { cn } from '../lib/utils'
+import { captureAnalyticsEvent } from '@/lib/analytics'
 import type { Route } from '../App'
 
 function collectSearchableText(value: unknown, output: string[]): void {
@@ -123,6 +124,13 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
       try {
         if (isQuestion) {
           await api.sessions.approve(currentSession.sessionId, true, message)
+          captureAnalyticsEvent('agent_approval_responded', {
+            task_id: taskId,
+            agent_id: currentSession.agentId,
+            session_id: currentSession.sessionId,
+            approved: true,
+            has_message: Boolean(message)
+          })
         } else {
           const result = await api.sessions.send(
             currentSession.sessionId,
@@ -134,6 +142,13 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
           if (result.newSessionId && taskId) {
             initSession(taskId, result.newSessionId, currentSession.agentId)
           }
+          captureAnalyticsEvent('agent_message_sent', {
+            task_id: taskId,
+            agent_id: currentSession.agentId,
+            session_id: result.newSessionId || currentSession.sessionId,
+            attachment_count: options?.attachments?.length ?? 0,
+            recovered_session: Boolean(result.newSessionId)
+          })
         }
         setMessageAttachments([])
         setShowAttachmentPicker(false)
@@ -152,6 +167,14 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
       if (!currentSession?.sessionId || !activeQuestionId) return
       try {
         await api.sessions.approve(currentSession.sessionId, true, answer)
+        captureAnalyticsEvent('agent_approval_responded', {
+          task_id: taskId,
+          agent_id: currentSession.agentId,
+          session_id: currentSession.sessionId,
+          approved: true,
+          has_message: Boolean(answer),
+          source: 'question_option'
+        })
       } catch (e) {
         console.error('Failed to send answer:', e)
       }

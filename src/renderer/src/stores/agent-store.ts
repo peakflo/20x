@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import type { Agent, CreateAgentDTO, UpdateAgentDTO } from '@/types'
 import { agentApi, agentSessionApi, onAgentOutput, onAgentOutputBatch, onAgentStatus, onAgentApproval } from '@/lib/ipc-client'
 import type { AgentOutputEvent, AgentOutputBatchEvent, AgentStatusEvent, AgentApprovalRequest } from '@/types/electron'
+import { captureAnalyticsEvent, getAgentMessageProperties } from '@/lib/analytics'
 
 // ── Message type ──────────────────────────────────────────────
 
@@ -173,6 +174,7 @@ export const useAgentStore = create<AgentState>((set, get) => {
     const state = get()
     const session = findBySessionId(state.sessions, event.sessionId)
       || state.sessions.get(event.taskId)
+    const previousStatus = session?.status
 
     // Auto-create session entry when a session is started remotely (e.g., from mobile)
     // so the desktop app can track and display it
@@ -188,6 +190,14 @@ export const useAgentStore = create<AgentState>((set, get) => {
             pendingApproval: null
           })
         })
+        captureAnalyticsEvent('agent_session_status_changed', {
+          task_id: event.taskId,
+          agent_id: event.agentId,
+          session_id: event.sessionId,
+          previous_status: undefined,
+          next_status: event.status,
+          source: 'backend'
+        })
       }
       return
     }
@@ -199,6 +209,16 @@ export const useAgentStore = create<AgentState>((set, get) => {
     // Clear pending approval when session goes idle
     if (event.status === SessionStatus.IDLE) updated.pendingApproval = null
     set({ sessions: new Map(state.sessions).set(session.taskId, updated) })
+    if (previousStatus !== event.status) {
+      captureAnalyticsEvent('agent_session_status_changed', {
+        task_id: session.taskId,
+        agent_id: event.agentId || session.agentId,
+        session_id: event.sessionId,
+        previous_status: previousStatus,
+        next_status: event.status,
+        source: 'backend'
+      })
+    }
   })
 
   onAgentOutput((event: AgentOutputEvent) => {
@@ -335,6 +355,17 @@ export const useAgentStore = create<AgentState>((set, get) => {
         ]
       })
     })
+    captureAnalyticsEvent('agent_message_received', {
+      task_id: taskId,
+      agent_id: resolvedSession.agentId,
+      session_id: resolvedSession.sessionId,
+      ...getAgentMessageProperties({
+        role,
+        partType,
+        tool: data.tool as AgentMessage['tool'],
+        taskProgress: data.taskProgress as AgentMessage['taskProgress']
+      })
+    })
   })
 
   // ── Batched output handler with microtask debouncing ──
@@ -372,6 +403,9 @@ export const useAgentStore = create<AgentState>((set, get) => {
 
       let messages = [...resolvedSession.messages]
       let messagesChanged = false
+      let newMessageCount = 0
+      let taskProgressCount = 0
+      const toolNames = new Set<string>()
 
       for (const msg of event.messages) {
         const role: AgentMessage['role'] = msg.role === 'user' ? 'user' : msg.role === 'assistant' ? 'assistant' : 'system'
@@ -458,12 +492,24 @@ export const useAgentStore = create<AgentState>((set, get) => {
           tool: msg.tool as AgentMessage['tool'],
           taskProgress: (msg as Record<string, unknown>).taskProgress as AgentMessage['taskProgress']
         })
+        newMessageCount += 1
+        if ((msg as Record<string, unknown>).taskProgress) taskProgressCount += 1
+        const tool = msg.tool as AgentMessage['tool'] | undefined
+        if (tool?.name) toolNames.add(tool.name)
         messagesChanged = true
       }
 
       if (messagesChanged) {
         nextSessions.set(taskId, { ...resolvedSession, messages, systemStatus: null })
         changed = true
+        captureAnalyticsEvent('agent_output_batch_received', {
+          task_id: taskId,
+          agent_id: resolvedSession.agentId,
+          session_id: resolvedSession.sessionId,
+          message_count: newMessageCount,
+          task_progress_count: taskProgressCount,
+          tool_names: Array.from(toolNames).sort()
+        })
       }
     }
 
@@ -492,6 +538,13 @@ export const useAgentStore = create<AgentState>((set, get) => {
         status: SessionStatus.WAITING_APPROVAL
       })
     })
+    captureAnalyticsEvent('agent_approval_requested', {
+      task_id: session.taskId,
+      agent_id: session.agentId,
+      session_id: event.sessionId,
+      action: event.action,
+      has_description: Boolean(event.description)
+    })
   })
 
   // ── Return store ──
@@ -516,6 +569,12 @@ export const useAgentStore = create<AgentState>((set, get) => {
       try {
         const agent = await agentApi.create(data)
         set((state) => ({ agents: [...state.agents, agent] }))
+        captureAnalyticsEvent('agent_created', {
+          agent_id: agent.id,
+          coding_agent: agent.config?.coding_agent,
+          model: agent.config?.model,
+          is_default: agent.is_default
+        })
         return agent
       } catch (err) {
         set({ error: String(err) })
@@ -528,6 +587,13 @@ export const useAgentStore = create<AgentState>((set, get) => {
         const updated = await agentApi.update(id, data)
         if (updated) {
           set((state) => ({ agents: state.agents.map((a) => (a.id === id ? updated : a)) }))
+          captureAnalyticsEvent('agent_updated', {
+            agent_id: updated.id,
+            coding_agent: updated.config?.coding_agent,
+            model: updated.config?.model,
+            is_default: updated.is_default,
+            changed_fields: Object.keys(data).sort()
+          })
         }
         return updated || null
       } catch (err) {
@@ -541,6 +607,7 @@ export const useAgentStore = create<AgentState>((set, get) => {
         const success = await agentApi.delete(id)
         if (success) {
           set((state) => ({ agents: state.agents.filter((a) => a.id !== id) }))
+          captureAnalyticsEvent('agent_deleted', { agent_id: id })
         }
         return success
       } catch (err) {
@@ -616,6 +683,12 @@ export const useAgentStore = create<AgentState>((set, get) => {
       if (session?.sessionId) {
         try {
           await agentSessionApi.stop(session.sessionId)
+          captureAnalyticsEvent('agent_session_stopped', {
+            task_id: taskId,
+            agent_id: session.agentId,
+            session_id: session.sessionId,
+            source: 'task_cleanup'
+          })
         } catch (err) {
           console.error('Failed to stop session:', err)
         }
