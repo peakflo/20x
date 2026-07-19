@@ -7,9 +7,9 @@
  */
 
 import { spawn, type ChildProcess } from 'child_process'
-import { mkdtempSync } from 'fs'
+import { existsSync, mkdtempSync, readFileSync } from 'fs'
 import { homedir, tmpdir } from 'os'
-import { basename, join } from 'path'
+import { basename, isAbsolute, join, relative, resolve } from 'path'
 import { promisify } from 'util'
 import type {
   CodingAgentAdapter,
@@ -250,6 +250,15 @@ function normalizeCodexMcpServerName(name: string): string {
   return normalized || 'mcp_server'
 }
 
+function uniquePaths(paths: string[]): string[] {
+  return Array.from(new Set(paths.filter(Boolean).map((path) => resolve(path))))
+}
+
+function isSubpath(parent: string, child: string): boolean {
+  const rel = relative(resolve(parent), resolve(child))
+  return rel === '' || (!!rel && !rel.startsWith('..') && !isAbsolute(rel))
+}
+
 function summarizeApproval(params: Record<string, unknown>, fallback: string): string {
   const command = asString(params.command)
   const reason = asString(params.reason)
@@ -310,7 +319,7 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
       approvalsReviewer: 'user',
       sandbox: this.resolveSandboxMode(config),
       developerInstructions: config.systemPrompt || null,
-      runtimeWorkspaceRoots: [config.workspaceDir],
+      runtimeWorkspaceRoots: this.buildRuntimeWorkspaceRoots(config.workspaceDir),
       config: this.buildConfigOverrides(config)
     })
 
@@ -340,7 +349,7 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
       approvalPolicy: config.permissionMode === 'allow' ? 'never' : 'on-request',
       approvalsReviewer: 'user',
       sandbox: this.resolveSandboxMode(config),
-      runtimeWorkspaceRoots: [config.workspaceDir],
+      runtimeWorkspaceRoots: this.buildRuntimeWorkspaceRoots(config.workspaceDir),
       initialTurnsPage: { limit: 50 },
       config: this.buildConfigOverrides(config)
     })
@@ -724,13 +733,47 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
     if (this.resolveSandboxMode(config) === 'workspace-write') {
       overrides.sandbox_workspace_write = {
         network_access: true,
-        writable_roots: [config.workspaceDir]
+        writable_roots: this.buildRuntimeWorkspaceRoots(config.workspaceDir)
       }
     }
     if (config.mcpServers && Object.keys(config.mcpServers).length > 0) {
       overrides.mcp_servers = this.convertMcpServers(config.mcpServers)
     }
     return overrides
+  }
+
+  private buildRuntimeWorkspaceRoots(workspaceDir: string): string[] {
+    return uniquePaths([workspaceDir, ...this.resolveExternalGitRoots(workspaceDir)])
+  }
+
+  private resolveExternalGitRoots(workspaceDir: string): string[] {
+    const workspaceRoot = resolve(workspaceDir)
+    const dotGitPath = join(workspaceRoot, '.git')
+    if (!existsSync(dotGitPath)) return []
+
+    try {
+      const dotGitContent = readFileSync(dotGitPath, 'utf8').trim()
+      if (!dotGitContent.startsWith('gitdir:')) return []
+
+      const rawGitDir = dotGitContent.slice('gitdir:'.length).trim()
+      if (!rawGitDir) return []
+
+      const gitDir = isAbsolute(rawGitDir)
+        ? resolve(rawGitDir)
+        : resolve(workspaceRoot, rawGitDir)
+      const commonDirPath = join(gitDir, 'commondir')
+      const rawCommonDir = existsSync(commonDirPath)
+        ? readFileSync(commonDirPath, 'utf8').trim()
+        : ''
+      const commonDir = rawCommonDir
+        ? (isAbsolute(rawCommonDir) ? resolve(rawCommonDir) : resolve(gitDir, rawCommonDir))
+        : gitDir
+
+      return [commonDir, gitDir].filter((path) => !isSubpath(workspaceRoot, path))
+    } catch (error) {
+      console.warn('[CodexAppServerAdapter] Failed to resolve external git metadata roots:', error)
+      return []
+    }
   }
 
   private convertMcpServers(servers: Record<string, McpServerConfig>): Record<string, unknown> {
