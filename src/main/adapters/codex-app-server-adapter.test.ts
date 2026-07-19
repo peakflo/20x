@@ -556,7 +556,28 @@ describe('CodexAppServerAdapter', () => {
     })
 
     expect(sendRpcRequest).toHaveBeenCalledWith(session, 'turn/start', expect.objectContaining({
-      sandbox: 'danger-full-access'
+      sandbox: 'danger-full-access',
+      sandboxPolicy: { type: 'dangerFullAccess' }
+    }))
+  })
+
+  it('defaults missing codex sandbox mode to danger full access', async () => {
+    const adapterInstance = new CodexAppServerAdapter()
+    const adapter = adapterPrivate(adapterInstance)
+    const session = createSession()
+    adapter.sessions.set('thread-1', session)
+    const sendRpcRequest = vi.fn().mockResolvedValue({ turnId: 'turn-1' })
+    adapter.sendRpcRequest = sendRpcRequest
+
+    await adapterInstance.sendPrompt('thread-1', [{ type: MessagePartType.TEXT, text: 'hello' }], {
+      agentId: 'agent-1',
+      taskId: 'task-1',
+      workspaceDir: '/tmp/workspace'
+    })
+
+    expect(sendRpcRequest).toHaveBeenCalledWith(session, 'turn/start', expect.objectContaining({
+      sandbox: 'danger-full-access',
+      sandboxPolicy: { type: 'dangerFullAccess' }
     }))
   })
 
