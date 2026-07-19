@@ -409,7 +409,9 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
       effort: config.reasoningEffort && config.reasoningEffort !== 'max' ? config.reasoningEffort : null,
       approvalPolicy: config.permissionMode === 'allow' ? 'never' : 'on-request',
       approvalsReviewer: 'user',
-      sandbox: this.resolveSandboxMode(config)
+      sandbox: this.resolveSandboxMode(config),
+      runtimeWorkspaceRoots: this.buildRuntimeWorkspaceRoots(config.workspaceDir),
+      config: this.buildConfigOverrides(config)
     })
 
     if (isObject(result)) {
