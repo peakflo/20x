@@ -65,7 +65,7 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
     agent?.config.permission_mode ?? 'ask'
   )
   const [sandboxMode, setSandboxMode] = useState<AgentSandboxMode>(
-    agent?.config.sandbox_mode ?? 'workspace-write'
+    agent?.config.sandbox_mode ?? 'danger-full-access'
   )
 
   // API keys state
@@ -387,8 +387,8 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
                 className="w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm cursor-pointer"
               >
                 <option value="read-only">Read only</option>
-                <option value="workspace-write">Workspace write</option>
                 <option value="danger-full-access">Full access</option>
+                <option value="workspace-write">Workspace write</option>
               </select>
             </div>
           )}
