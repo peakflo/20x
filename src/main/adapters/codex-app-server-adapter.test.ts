@@ -586,6 +586,11 @@ describe('CodexAppServerAdapter', () => {
       })
 
       expect(sendRpcRequest).toHaveBeenCalledWith(session, 'turn/start', expect.objectContaining({
+        sandboxPolicy: {
+          type: 'workspaceWrite',
+          networkAccess: true,
+          writableRoots: [workspace, commonDir, gitDir]
+        },
         runtimeWorkspaceRoots: [workspace, commonDir, gitDir],
         config: expect.objectContaining({
           sandbox_workspace_write: {
