@@ -1036,7 +1036,7 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
       case 'danger-full-access':
         return config.sandboxMode
       default:
-        return 'workspace-write'
+        return 'danger-full-access'
     }
   }
 
