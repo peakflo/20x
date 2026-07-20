@@ -4,6 +4,12 @@ import { dirname, join } from 'path'
 import { app } from 'electron'
 import packageJson from '../../package.json'
 
+declare const __POSTHOG_KEY__: string | undefined
+declare const __POSTHOG_HOST__: string | undefined
+declare const __TELEMETRY_ENABLED__: string | undefined
+declare const __TELEMETRY_FLUSH_BATCH_SIZE__: string | undefined
+declare const __TELEMETRY_MAX_BUFFERED_EVENTS__: string | undefined
+
 interface BufferedAnalyticsEvent {
   event: string
   properties?: Record<string, unknown>
@@ -23,6 +29,30 @@ const DEFAULT_POSTHOG_HOST = 'https://us.i.posthog.com'
 const DEFAULT_FLUSH_BATCH_SIZE = 20
 const DEFAULT_MAX_BUFFERED_EVENTS = 1_000
 const DEFAULT_FLUSH_INTERVAL_MS = 1_000
+
+function nonEmpty(value: string | undefined): string | undefined {
+  return value && value.trim() ? value : undefined
+}
+
+function buildPosthogKey(): string | undefined {
+  return typeof __POSTHOG_KEY__ === 'undefined' ? undefined : __POSTHOG_KEY__
+}
+
+function buildPosthogHost(): string | undefined {
+  return typeof __POSTHOG_HOST__ === 'undefined' ? undefined : __POSTHOG_HOST__
+}
+
+function buildTelemetryEnabled(): string | undefined {
+  return typeof __TELEMETRY_ENABLED__ === 'undefined' ? undefined : __TELEMETRY_ENABLED__
+}
+
+function buildTelemetryFlushBatchSize(): string | undefined {
+  return typeof __TELEMETRY_FLUSH_BATCH_SIZE__ === 'undefined' ? undefined : __TELEMETRY_FLUSH_BATCH_SIZE__
+}
+
+function buildTelemetryMaxBufferedEvents(): string | undefined {
+  return typeof __TELEMETRY_MAX_BUFFERED_EVENTS__ === 'undefined' ? undefined : __TELEMETRY_MAX_BUFFERED_EVENTS__
+}
 
 function parseBoolean(value: string | undefined, fallback: boolean): boolean {
   if (value === undefined) return fallback
@@ -65,11 +95,22 @@ export class AnalyticsService {
   private isFlushing = false
 
   constructor(options: AnalyticsServiceOptions = {}) {
-    this.posthogKey = options.posthogKey ?? process.env['POSTHOG_KEY'] ?? ''
-    this.posthogHost = (options.posthogHost ?? process.env['POSTHOG_HOST'] ?? DEFAULT_POSTHOG_HOST).replace(/\/+$/, '')
-    this.enabled = options.enabled ?? parseBoolean(process.env['TELEMETRY_ENABLED'], true)
-    this.flushBatchSize = options.flushBatchSize ?? parseNumber(process.env['TELEMETRY_FLUSH_BATCH_SIZE'], DEFAULT_FLUSH_BATCH_SIZE)
-    this.maxBufferedEvents = options.maxBufferedEvents ?? parseNumber(process.env['TELEMETRY_MAX_BUFFERED_EVENTS'], DEFAULT_MAX_BUFFERED_EVENTS)
+    this.posthogKey = options.posthogKey ?? nonEmpty(process.env['POSTHOG_KEY']) ?? nonEmpty(buildPosthogKey()) ?? ''
+    this.posthogHost = (
+      options.posthogHost ??
+      nonEmpty(process.env['POSTHOG_HOST']) ??
+      nonEmpty(buildPosthogHost()) ??
+      DEFAULT_POSTHOG_HOST
+    ).replace(/\/+$/, '')
+    this.enabled = options.enabled ?? parseBoolean(nonEmpty(process.env['TELEMETRY_ENABLED']) ?? nonEmpty(buildTelemetryEnabled()), true)
+    this.flushBatchSize = options.flushBatchSize ?? parseNumber(
+      nonEmpty(process.env['TELEMETRY_FLUSH_BATCH_SIZE']) ?? nonEmpty(buildTelemetryFlushBatchSize()),
+      DEFAULT_FLUSH_BATCH_SIZE
+    )
+    this.maxBufferedEvents = options.maxBufferedEvents ?? parseNumber(
+      nonEmpty(process.env['TELEMETRY_MAX_BUFFERED_EVENTS']) ?? nonEmpty(buildTelemetryMaxBufferedEvents()),
+      DEFAULT_MAX_BUFFERED_EVENTS
+    )
     this.distinctId = this.enabled && this.posthogKey ? readOrCreateAnonymousId() : null
 
     if (this.enabled && this.distinctId) {
