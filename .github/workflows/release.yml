@@ -38,6 +38,12 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - name: Build app
+        env:
+          POSTHOG_KEY: ${{ secrets.POSTHOG_KEY }}
+          POSTHOG_HOST: ${{ vars.POSTHOG_HOST }}
+          TELEMETRY_ENABLED: ${{ vars.TELEMETRY_ENABLED }}
+          TELEMETRY_FLUSH_BATCH_SIZE: ${{ vars.TELEMETRY_FLUSH_BATCH_SIZE }}
+          TELEMETRY_MAX_BUFFERED_EVENTS: ${{ vars.TELEMETRY_MAX_BUFFERED_EVENTS }}
         run: pnpm build
 
       - name: Validate signing secrets
@@ -150,6 +156,7 @@ jobs:
     # which the bundled node-gyp 11.5.0 can't detect, breaking the from-source
     # rebuild of better-sqlite3. windows-2022 has VS 2022 + the C++ workload.
     runs-on: windows-2022
+    environment: release
     permissions:
       contents: write
 
@@ -170,6 +177,12 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - name: Build app
+        env:
+          POSTHOG_KEY: ${{ secrets.POSTHOG_KEY }}
+          POSTHOG_HOST: ${{ vars.POSTHOG_HOST }}
+          TELEMETRY_ENABLED: ${{ vars.TELEMETRY_ENABLED }}
+          TELEMETRY_FLUSH_BATCH_SIZE: ${{ vars.TELEMETRY_FLUSH_BATCH_SIZE }}
+          TELEMETRY_MAX_BUFFERED_EVENTS: ${{ vars.TELEMETRY_MAX_BUFFERED_EVENTS }}
         run: pnpm build
 
       - name: Package for Windows
@@ -193,6 +206,7 @@ jobs:
 
   build-linux:
     runs-on: ubicloud-standard-2
+    environment: release
     permissions:
       contents: write
 
@@ -213,6 +227,12 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - name: Build app
+        env:
+          POSTHOG_KEY: ${{ secrets.POSTHOG_KEY }}
+          POSTHOG_HOST: ${{ vars.POSTHOG_HOST }}
+          TELEMETRY_ENABLED: ${{ vars.TELEMETRY_ENABLED }}
+          TELEMETRY_FLUSH_BATCH_SIZE: ${{ vars.TELEMETRY_FLUSH_BATCH_SIZE }}
+          TELEMETRY_MAX_BUFFERED_EVENTS: ${{ vars.TELEMETRY_MAX_BUFFERED_EVENTS }}
         run: pnpm build
 
       - name: Package for Linux
