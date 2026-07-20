@@ -1,6 +1,7 @@
 import { useCallback } from 'react'
 import { agentSessionApi } from '@/lib/ipc-client'
 import { useAgentStore, SessionStatus } from '@/stores/agent-store'
+import { captureAnalyticsEvent } from '@/lib/analytics'
 import type { AgentApprovalRequest } from '@/types/electron'
 
 export type { AgentMessage } from '@/stores/agent-store'
@@ -53,6 +54,13 @@ export function useAgentSession(taskId: string | undefined) {
       const { sessionId } = await agentSessionApi.start(agentId, tId, workspaceDir, skipInitialPrompt)
       // Update with the real sessionId (preserves any messages that arrived early)
       initSession(tId, sessionId, agentId)
+      captureAnalyticsEvent('agent_session_started', {
+        task_id: tId,
+        agent_id: agentId,
+        session_id: sessionId,
+        has_workspace_dir: Boolean(workspaceDir),
+        skip_initial_prompt: Boolean(skipInitialPrompt)
+      })
       return sessionId
     },
     [initSession]
@@ -69,9 +77,20 @@ export function useAgentSession(taskId: string | undefined) {
       if (result.ended) {
         // Session ended normally (task completed) — clean up the pre-registered session
         removeSession(tId)
+        captureAnalyticsEvent('agent_session_resume_ended', {
+          task_id: tId,
+          agent_id: agentId,
+          previous_session_id: ocSessionId
+        })
         return ''
       }
       initSession(tId, result.sessionId, agentId)
+      captureAnalyticsEvent('agent_session_resumed', {
+        task_id: tId,
+        agent_id: agentId,
+        session_id: result.sessionId,
+        previous_session_id: ocSessionId
+      })
       return result.sessionId
     },
     [initSession, clearMessageDedup, removeSession]
@@ -81,6 +100,11 @@ export function useAgentSession(taskId: string | undefined) {
     const currentSession = useAgentStore.getState().sessions.get(taskId!)
     if (!currentSession?.sessionId) return
     await agentSessionApi.abort(currentSession.sessionId)
+    captureAnalyticsEvent('agent_session_aborted', {
+      task_id: taskId,
+      agent_id: currentSession.agentId,
+      session_id: currentSession.sessionId
+    })
   }, [taskId])
 
   const stop = useCallback(async () => {
@@ -89,11 +113,21 @@ export function useAgentSession(taskId: string | undefined) {
     if (currentSession?.sessionId) {
       console.log('[use-agent-session] stop() called for session:', currentSession.sessionId)
       await agentSessionApi.stop(currentSession.sessionId)
+      captureAnalyticsEvent('agent_session_stopped', {
+        task_id: taskId,
+        agent_id: currentSession.agentId,
+        session_id: currentSession.sessionId,
+        fallback: false
+      })
     } else {
       // Fallback: session mapping lost in renderer — ask the backend
       // to find and stop the session by taskId directly.
       console.log('[use-agent-session] stop() no sessionId, falling back to stopByTaskId:', taskId)
       await agentSessionApi.stopByTaskId(taskId)
+      captureAnalyticsEvent('agent_session_stopped', {
+        task_id: taskId,
+        fallback: true
+      })
     }
     endSession(taskId)
   }, [taskId, endSession])
@@ -109,6 +143,13 @@ export function useAgentSession(taskId: string | undefined) {
         if (result.newSessionId && taskId) {
           initSession(taskId, result.newSessionId, currentSession.agentId)
         }
+        captureAnalyticsEvent('agent_message_sent', {
+          task_id: taskId,
+          agent_id: currentSession.agentId,
+          session_id: result.newSessionId || currentSession.sessionId,
+          attachment_count: options?.attachments?.length ?? 0,
+          recovered_session: Boolean(result.newSessionId)
+        })
       } else {
         // Fallback: session mapping lost in renderer — ask the backend
         // to find (or resume/create) the session by taskId directly.
@@ -119,6 +160,12 @@ export function useAgentSession(taskId: string | undefined) {
         if (resolvedSessionId) {
           initSession(taskId, resolvedSessionId, currentSession?.agentId ?? '')
         }
+        captureAnalyticsEvent('agent_message_sent', {
+          task_id: taskId,
+          session_id: resolvedSessionId,
+          attachment_count: options?.attachments?.length ?? 0,
+          fallback: true
+        })
       }
     },
     [taskId, initSession]
@@ -129,6 +176,13 @@ export function useAgentSession(taskId: string | undefined) {
       const currentSession = useAgentStore.getState().sessions.get(taskId!)
       if (!currentSession?.sessionId) throw new Error('No active session')
       await agentSessionApi.approve(currentSession.sessionId, approved, message)
+      captureAnalyticsEvent('agent_approval_responded', {
+        task_id: taskId,
+        agent_id: currentSession.agentId,
+        session_id: currentSession.sessionId,
+        approved,
+        has_message: Boolean(message)
+      })
     },
     [taskId]
   )

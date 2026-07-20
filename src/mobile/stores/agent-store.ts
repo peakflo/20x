@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { api } from '../api/client'
 import { onEvent } from '../api/websocket'
+import { captureAnalyticsEvent, getAgentMessageProperties } from '@/lib/analytics'
 
 // ── Message types (mirrors desktop agent-store) ──────────────
 
@@ -133,11 +134,22 @@ export const useAgentStore = create<AgentState>((set, get) => {
       const session = findBySessionId(state.sessions, event.sessionId)
         || state.sessions.get(event.taskId)
       if (!session) return state
+      const previousStatus = session.status
 
       const updated = { ...session, status: event.status }
       // Patch in real sessionId when session was pre-registered with empty string
       // or when the main process re-keyed the session (temp ID → real ID)
       if (event.sessionId && session.sessionId !== event.sessionId) updated.sessionId = event.sessionId
+      if (previousStatus !== event.status) {
+        captureAnalyticsEvent('agent_session_status_changed', {
+          task_id: session.taskId,
+          agent_id: event.agentId || session.agentId,
+          session_id: event.sessionId,
+          previous_status: previousStatus,
+          next_status: event.status,
+          source: 'backend'
+        })
+      }
       return { sessions: new Map(state.sessions).set(session.taskId, updated) }
     })
   })
@@ -243,6 +255,18 @@ export const useAgentStore = create<AgentState>((set, get) => {
       if (seen.has(msgId)) return state
       seen.add(msgId)
 
+      captureAnalyticsEvent('agent_message_received', {
+        task_id: taskId,
+        agent_id: resolvedSession.agentId,
+        session_id: resolvedSession.sessionId,
+        ...getAgentMessageProperties({
+          role,
+          partType: data.partType as string,
+          tool: data.tool as AgentMessage['tool'],
+          taskProgress: data.taskProgress as AgentMessage['taskProgress']
+        })
+      })
+
       return {
         sessions: new Map(state.sessions).set(taskId, {
           ...resolvedSession,
@@ -282,6 +306,9 @@ export const useAgentStore = create<AgentState>((set, get) => {
       let messages = [...resolvedSession.messages]
       let changed = false
       let systemStatusUpdate: string | null | undefined = undefined
+      let newMessageCount = 0
+      let taskProgressCount = 0
+      const toolNames = new Set<string>()
 
       for (const msg of event.messages) {
         const role: AgentMessage['role'] = msg.role === 'user' ? 'user' : msg.role === 'assistant' ? 'assistant' : 'system'
@@ -355,10 +382,21 @@ export const useAgentStore = create<AgentState>((set, get) => {
           tool: msg.tool as AgentMessage['tool'],
           taskProgress: (msg as Record<string, unknown>).taskProgress as AgentMessage['taskProgress']
         })
+        newMessageCount += 1
+        if ((msg as Record<string, unknown>).taskProgress) taskProgressCount += 1
+        if ((msg.tool as AgentMessage['tool'])?.name) toolNames.add((msg.tool as AgentMessage['tool'])!.name)
         changed = true
       }
 
       if (!changed) return state
+      captureAnalyticsEvent('agent_output_batch_received', {
+        task_id: taskId,
+        agent_id: resolvedSession.agentId,
+        session_id: resolvedSession.sessionId,
+        message_count: newMessageCount,
+        task_progress_count: taskProgressCount,
+        tool_names: Array.from(toolNames).sort()
+      })
 
       return {
         sessions: new Map(state.sessions).set(taskId, {

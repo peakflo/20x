@@ -2,6 +2,9 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { App } from './App'
 import './styles/globals.css'
+import { initAnalytics } from '@/lib/analytics'
+
+initAnalytics('mobile')
 
 // Resolve light/dark before render. Mobile follows the OS by default (its CSP
 // blocks an inline pre-paint script), honouring a stored preference if present.

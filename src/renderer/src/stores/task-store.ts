@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import type { WorkfloTask, CreateTaskDTO, UpdateTaskDTO, OutputField, OutputFieldType } from '@/types'
 import { taskApi, taskSourceApi, onTaskUpdated, onTaskCreated, onTaskDeleted, onTasksRefresh } from '@/lib/ipc-client'
+import { captureAnalyticsEvent, getTaskAnalyticsProperties, getTaskMutationProperties } from '@/lib/analytics'
 
 const VALID_OUTPUT_FIELD_TYPES = new Set<OutputFieldType>([
   'text',
@@ -82,6 +83,10 @@ export const useTaskStore = create<TaskState>((set) => ({
   createTask: async (data) => {
     try {
       const task = normalizeTask(await taskApi.create(data))
+      captureAnalyticsEvent('task_created', {
+        ...getTaskAnalyticsProperties(task),
+        ...getTaskMutationProperties(data as unknown as Record<string, unknown>)
+      })
       return task
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
@@ -99,6 +104,10 @@ export const useTaskStore = create<TaskState>((set) => ({
           tasks: state.tasks.map((t) => (t.id === id ? updated : t)),
           error: null
         }))
+        captureAnalyticsEvent('task_updated', {
+          ...getTaskAnalyticsProperties(updated),
+          ...getTaskMutationProperties(data as Record<string, unknown>)
+        })
         // Fire background export if task has a source
         if (updated.source_id && updated.external_id) {
           taskSourceApi.exportUpdate(id, data as Record<string, unknown>).catch(console.error)
@@ -116,11 +125,16 @@ export const useTaskStore = create<TaskState>((set) => ({
     try {
       const success = await taskApi.delete(id)
       if (success) {
+        const deletedTask = useTaskStore.getState().tasks.find((t) => t.id === id)
         set((state) => ({
           tasks: state.tasks.filter((t) => t.id !== id),
           selectedTaskId: state.selectedTaskId === id ? null : state.selectedTaskId,
           error: null
         }))
+        captureAnalyticsEvent('task_deleted', deletedTask
+          ? getTaskAnalyticsProperties(deletedTask)
+          : { task_id: id }
+        )
       }
       return success
     } catch (err) {
@@ -135,11 +149,21 @@ export const useTaskStore = create<TaskState>((set) => ({
 
 // Listen for task updates from the backend (e.g., when agent changes task status)
 onTaskUpdated((event) => {
+  const previousTask = useTaskStore.getState().tasks.find((t) => t.id === event.taskId)
   useTaskStore.setState((state) => ({
     tasks: state.tasks.map((t) =>
       t.id === event.taskId ? normalizeTask({ ...t, ...event.updates }) : t
     )
   }))
+  const nextStatus = (event.updates as { status?: string }).status
+  if (nextStatus && previousTask?.status !== nextStatus) {
+    captureAnalyticsEvent('task_status_changed', {
+      task_id: event.taskId,
+      previous_status: previousTask?.status,
+      next_status: nextStatus,
+      source: 'backend'
+    })
+  }
 })
 
 // Listen for tasks created externally (e.g., via task-management MCP server)
@@ -147,6 +171,10 @@ onTaskCreated((event) => {
   useTaskStore.setState((state) => {
     // Avoid duplicates
     if (state.tasks.some((t) => t.id === event.task.id)) return state
+    captureAnalyticsEvent('task_created', {
+      ...getTaskAnalyticsProperties(event.task),
+      source: 'backend'
+    })
     return { tasks: [normalizeTask(event.task), ...state.tasks] }
   })
 })
@@ -154,10 +182,15 @@ onTaskCreated((event) => {
 // Listen for task deletions from backend (UI-initiated or external MCP)
 onTaskDeleted((event) => {
   const taskId = event.taskId
+  const deletedTask = useTaskStore.getState().tasks.find((t) => t.id === taskId)
   useTaskStore.setState((state) => ({
     tasks: state.tasks.filter((t) => t.id !== taskId),
     selectedTaskId: state.selectedTaskId === taskId ? null : state.selectedTaskId
   }))
+  captureAnalyticsEvent('task_deleted', deletedTask
+    ? { ...getTaskAnalyticsProperties(deletedTask), source: 'backend' }
+    : { task_id: taskId, source: 'backend' }
+  )
 
   // Automatically remove from canvas if it was added.
   // Dynamic import avoids circular dependency and ensures canvas store is only loaded if needed.

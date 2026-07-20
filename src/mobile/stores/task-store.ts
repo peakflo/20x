@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { api } from '../api/client'
 import { onEvent } from '../api/websocket'
 import type { TaskStatus } from '@shared/constants'
+import { captureAnalyticsEvent, getTaskAnalyticsProperties, getTaskMutationProperties } from '@/lib/analytics'
 
 // Re-export for convenience
 export type { TaskStatus }
@@ -68,6 +69,7 @@ export const useTaskStore = create<TaskState>((set, get) => {
   // Listen to WebSocket events
   onEvent('task:updated', (payload) => {
     const { taskId, updates } = payload as { taskId: string; updates: Partial<Task> }
+    const previousTask = get().tasks.find((t) => t.id === taskId)
     const found = get().tasks.some((t) => t.id === taskId)
     if (found) {
       set((state) => ({
@@ -79,6 +81,14 @@ export const useTaskStore = create<TaskState>((set, get) => {
       // Task not yet in the list (created on desktop) — fetch to pick it up
       get().fetchTasks()
     }
+    if (updates.status && previousTask?.status !== updates.status) {
+      captureAnalyticsEvent('task_status_changed', {
+        task_id: taskId,
+        previous_status: previousTask?.status,
+        next_status: updates.status,
+        source: 'backend'
+      })
+    }
   })
 
   onEvent('task:created', (payload) => {
@@ -86,6 +96,10 @@ export const useTaskStore = create<TaskState>((set, get) => {
     set((state) => {
       // Deduplicate — task may already exist from a concurrent fetchTasks()
       if (state.tasks.some((t) => t.id === task.id)) return state
+      captureAnalyticsEvent('task_created', {
+        ...getTaskAnalyticsProperties(task),
+        source: 'backend'
+      })
       return { tasks: [task, ...state.tasks] }
     })
   })
@@ -128,6 +142,10 @@ export const useTaskStore = create<TaskState>((set, get) => {
           if (state.tasks.some((t) => t.id === task.id)) return state
           return { tasks: [task, ...state.tasks] }
         })
+        captureAnalyticsEvent('task_created', {
+          ...getTaskAnalyticsProperties(task),
+          ...getTaskMutationProperties(data)
+        })
         return task
       } catch (e) {
         console.error('Failed to create task:', e)
@@ -141,6 +159,10 @@ export const useTaskStore = create<TaskState>((set, get) => {
         set((state) => ({
           tasks: state.tasks.map((t) => (t.id === id ? updated : t))
         }))
+        captureAnalyticsEvent('task_updated', {
+          ...getTaskAnalyticsProperties(updated),
+          ...getTaskMutationProperties(data)
+        })
         return true
       } catch (e) {
         console.error('Failed to update task:', e)
