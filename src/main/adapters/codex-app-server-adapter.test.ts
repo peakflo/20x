@@ -344,6 +344,87 @@ describe('CodexAppServerAdapter', () => {
     expect(session.bufferedThreadItemIds.size).toBeGreaterThan(0)
   })
 
+  it('reconciles a reasoning item as a REASONING part, not a duplicate tool part', () => {
+    // Regression: reasoning is streamed live via item/reasoning/textDelta as
+    // `reasoning-<id>` (REASONING). reconcileCompletedTurn() re-lists the thread and
+    // re-emits the same reasoning item as item/completed. convertThreadItem() had no
+    // reasoning branch, so the reconcile copy fell through to the tool branch and was
+    // emitted as `tool-<id>` (TOOL) — a distinct part the renderer appended below the
+    // final message. The reconcile copy must reuse `reasoning-<id>` so it collapses.
+    const adapter = adapterPrivate(new CodexAppServerAdapter())
+    const session = createSession()
+    const seenMessageIds = new Set<string>()
+    const seenPartIds = new Set<string>()
+    const lengths = new Map<string, string>()
+
+    const live = adapter.convertEventToMessageParts({
+      method: 'item/reasoning/textDelta',
+      params: { itemId: 'rs_1', delta: 'Thinking about it', threadId: 'thread-1', turnId: 'turn-1' }
+    }, seenMessageIds, seenPartIds, lengths, session)
+
+    expect(live[0]).toMatchObject({ id: 'reasoning-rs_1', type: MessagePartType.REASONING })
+
+    const reconciled = adapter.convertEventToMessageParts({
+      method: 'item/completed',
+      params: {
+        itemId: 'rs_1',
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        item: { id: 'rs_1', type: 'reasoning', text: 'Thinking about it, done.' }
+      }
+    }, seenMessageIds, seenPartIds, lengths, session)
+
+    expect(reconciled).toHaveLength(1)
+    expect(reconciled[0]).toMatchObject({
+      id: 'reasoning-rs_1',
+      type: MessagePartType.REASONING,
+      role: MessageRole.ASSISTANT,
+      update: true
+    })
+    // Must NOT be re-emitted as a separate tool part with a different id.
+    expect(reconciled[0].id).not.toBe('tool-rs_1')
+    expect(reconciled[0].type).not.toBe(MessagePartType.TOOL)
+  })
+
+  it('does not re-print a streamed assistant message when reconcile re-lists it under a different item id', () => {
+    // Regression: the live agent-message stream and the persisted thread item can
+    // carry DIFFERENT ids (`agent-<streamId>` vs `agent-<persistedId>`), both with
+    // update:false, so the renderer appends the final message twice. The turn text
+    // dedup guard only fired on convertThreadItem's item/completed branch, so a
+    // streamed message was never registered and the reconcile copy slipped through.
+    const adapter = adapterPrivate(new CodexAppServerAdapter())
+    const session = createSession()
+    const seenMessageIds = new Set<string>()
+    const seenPartIds = new Set<string>()
+    const lengths = new Map<string, string>()
+    const finalText = 'Here is the app: https://3050-example.runworkflo.com/?exec=abc'
+
+    const streamed = adapter.convertEventToMessageParts({
+      method: 'item/agentMessage/delta',
+      params: { itemId: 'msg_stream_1', delta: finalText, threadId: 'thread-1', turnId: 'turn-1' }
+    }, seenMessageIds, seenPartIds, lengths, session)
+
+    expect(streamed[0]).toMatchObject({ id: 'agent-msg_stream_1', text: finalText })
+
+    // Reconcile re-lists the SAME logical message under a different persisted id.
+    const reconciled = adapter.convertEventToMessageParts({
+      method: 'item/completed',
+      params: {
+        itemId: 'item_persisted_1',
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        item: {
+          id: 'item_persisted_1',
+          type: 'agent_message',
+          role: 'assistant',
+          content: finalText
+        }
+      }
+    }, seenMessageIds, seenPartIds, lengths, session)
+
+    expect(reconciled).toHaveLength(0)
+  })
+
   it('keeps the session busy when a completed turn is followed by an active thread status', async () => {
     const adapterInstance = new CodexAppServerAdapter()
     const adapter = adapterPrivate(adapterInstance)

@@ -1215,6 +1215,13 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
       seenPartIds.add(partId)
       session.streamedTextByItemId.set(itemId, next)
       partContentLengths.set(partId, String(next.length))
+      // Register the streamed text against the turn so a later reconcile pass that
+      // re-lists this assistant message under a DIFFERENT persisted item id does not
+      // re-emit it as a brand-new part below the final message. Streaming deltas
+      // never reach convertThreadItem()'s item/completed branch (which is the only
+      // other place that marks turn text), so without this the live-vs-reconcile
+      // copies could not be collapsed and the transcript repeated older messages.
+      this.markAssistantTextForTurn(session, params, item ?? {}, next)
       return [{
         id: partId,
         type: MessagePartType.TEXT,
@@ -1326,6 +1333,29 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
     const type = asString(item.type) || ''
     const role = extractRole(item)
     const text = extractText(item)
+
+    // Reasoning items are streamed live via item/reasoning/textDelta as a REASONING
+    // part with id `reasoning-<itemId>`. reconcileCompletedTurn() re-lists the whole
+    // thread and re-emits the same reasoning item as an item/completed. Without this
+    // branch it fell through to the tool branch below and was emitted as a distinct
+    // `tool-<itemId>` TOOL part, so the renderer could not collapse it against the
+    // live `reasoning-<itemId>` part and the reasoning was repeated after each turn.
+    // Emit it with the SAME part id/type as the live stream so the two collapse.
+    if (type.includes('reasoning')) {
+      const partId = `reasoning-${itemId}`
+      const alreadySeen = seenPartIds.has(partId)
+      if (alreadySeen && method !== 'item/completed') return []
+      seenPartIds.add(partId)
+      const reasoningText = text || session.streamedTextByItemId.get(itemId) || ''
+      partContentLengths.set(partId, String(reasoningText.length))
+      return [{
+        id: partId,
+        type: MessagePartType.REASONING,
+        text: reasoningText,
+        role: MessageRole.ASSISTANT,
+        update: alreadySeen
+      }]
+    }
 
     if (role === 'user' || type.includes('user') || type === 'user_message') {
       const partId = `user-${itemId}`
