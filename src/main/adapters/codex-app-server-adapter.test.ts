@@ -238,6 +238,121 @@ describe('CodexAppServerAdapter', () => {
     expect(duplicate).toHaveLength(0)
   })
 
+  it('deduplicates live assistant text when reconcile supplies the turn id later', () => {
+    const adapter = adapterPrivate(new CodexAppServerAdapter())
+    const session = createSession()
+    const seenMessageIds = new Set<string>()
+    const seenPartIds = new Set<string>()
+    const lengths = new Map<string, string>()
+    const finalText = 'The API schema confirms expense lines and the dashboard result is now documented.'
+
+    const streamed = adapter.convertEventToMessageParts({
+      method: 'item/agentMessage/delta',
+      params: {
+        threadId: 'thread-1',
+        itemId: 'streamed-assistant-1',
+        delta: finalText
+      }
+    }, seenMessageIds, seenPartIds, lengths, session)
+
+    const reconciled = adapter.convertEventToMessageParts({
+      method: 'item/completed',
+      params: {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        item: {
+          id: 'item-1133',
+          type: 'agentMessage',
+          text: finalText,
+          phase: 'final_answer'
+        }
+      }
+    }, seenMessageIds, seenPartIds, lengths, session)
+
+    expect(streamed).toHaveLength(1)
+    expect(reconciled).toHaveLength(0)
+  })
+
+  it('deduplicates assistant text across Codex raw event and response item turn metadata shapes', () => {
+    const adapter = adapterPrivate(new CodexAppServerAdapter())
+    const session = createSession()
+    const seenMessageIds = new Set<string>()
+    const seenPartIds = new Set<string>()
+    const lengths = new Map<string, string>()
+    const finalText = 'I could not directly sample raw Mongo here, but the bill-line schema findings are documented.'
+
+    const rawAgentMessage = adapter.convertEventToMessageParts({
+      method: 'item/completed',
+      params: {
+        threadId: 'thread-1',
+        item: {
+          id: 'event-msg-final',
+          type: 'agent_message',
+          role: 'assistant',
+          content: finalText,
+          phase: 'final_answer'
+        }
+      }
+    }, seenMessageIds, seenPartIds, lengths, session)
+
+    const responseItemMessage = adapter.convertEventToMessageParts({
+      method: 'item/completed',
+      params: {
+        threadId: 'thread-1',
+        item: {
+          id: 'response-item-final',
+          type: 'message',
+          role: 'assistant',
+          content: [{ type: 'output_text', text: finalText }],
+          phase: 'final_answer',
+          internal_chat_message_metadata_passthrough: {
+            turn_id: 'turn-1'
+          }
+        }
+      }
+    }, seenMessageIds, seenPartIds, lengths, session)
+
+    expect(rawAgentMessage).toHaveLength(1)
+    expect(responseItemMessage).toHaveLength(0)
+  })
+
+  it('does not deduplicate short repeated assistant answers across different turns', () => {
+    const adapter = adapterPrivate(new CodexAppServerAdapter())
+    const session = createSession()
+    const seenMessageIds = new Set<string>()
+    const seenPartIds = new Set<string>()
+    const lengths = new Map<string, string>()
+
+    const first = adapter.convertEventToMessageParts({
+      method: 'item/completed',
+      params: {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        item: {
+          id: 'answer-1',
+          type: 'agentMessage',
+          text: 'Done'
+        }
+      }
+    }, seenMessageIds, seenPartIds, lengths, session)
+
+    const second = adapter.convertEventToMessageParts({
+      method: 'item/completed',
+      params: {
+        threadId: 'thread-1',
+        turnId: 'turn-2',
+        item: {
+          id: 'answer-2',
+          type: 'agentMessage',
+          text: 'Done'
+        }
+      }
+    }, seenMessageIds, seenPartIds, lengths, session)
+
+    expect(first).toHaveLength(1)
+    expect(second).toHaveLength(1)
+  })
+
   it('reconciles completed turns before reporting idle so final text is not lost', async () => {
     const adapterInstance = new CodexAppServerAdapter()
     const adapter = adapterPrivate(adapterInstance)
@@ -342,6 +457,143 @@ describe('CodexAppServerAdapter', () => {
     })
     expect(bufferedCopies).toHaveLength(1)
     expect(session.bufferedThreadItemIds.size).toBeGreaterThan(0)
+  })
+
+  it('does not reprint assistant text when reconcile returns a different completed item id', async () => {
+    const adapterInstance = new CodexAppServerAdapter()
+    const adapter = adapterPrivate(adapterInstance)
+    const session = createSession()
+    adapter.sessions.set('thread-1', session)
+
+    const seenPartIds = new Set<string>()
+    const partContentLengths = new Map<string, string>()
+
+    adapter.handleRpcMessage(session, {
+      jsonrpc: '2.0',
+      method: 'item/agentMessage/delta',
+      params: {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        itemId: 'streamed-assistant-1',
+        delta: 'I checked the dashboard metrics and the entity is now visible.'
+      }
+    })
+
+    const streamedParts = await adapterInstance.pollMessages(
+      'thread-1',
+      new Set(),
+      seenPartIds,
+      partContentLengths,
+      {} as never
+    )
+
+    expect(streamedParts).toEqual([
+      expect.objectContaining({
+        id: 'agent-streamed-assistant-1',
+        type: MessagePartType.TEXT,
+        role: MessageRole.ASSISTANT,
+        text: 'I checked the dashboard metrics and the entity is now visible.'
+      })
+    ])
+
+    adapter.handleRpcMessage(session, {
+      jsonrpc: '2.0',
+      method: 'turn/completed',
+      params: { threadId: 'thread-1', turnId: 'turn-1' }
+    })
+
+    const [requestId, pending] = Array.from(session.pendingRequests.entries()).at(-1) ?? []
+    expect(requestId).toBeDefined()
+    session.pendingRequests.delete(requestId!)
+    pending!.resolve({
+      data: [{
+        id: 'reconciled-assistant-1',
+        type: 'message',
+        role: 'assistant',
+        content: 'I checked the dashboard metrics and the entity is now visible.',
+        turnId: 'turn-1'
+      }],
+      nextCursor: null
+    })
+    await flushPromises()
+
+    const reconciledParts = await adapterInstance.pollMessages(
+      'thread-1',
+      new Set(),
+      seenPartIds,
+      partContentLengths,
+      {} as never
+    )
+
+    expect(reconciledParts).toEqual([])
+  })
+
+  it('does not reprint reasoning as a tool when completed turn reconcile lists it', async () => {
+    const adapterInstance = new CodexAppServerAdapter()
+    const adapter = adapterPrivate(adapterInstance)
+    const session = createSession()
+    adapter.sessions.set('thread-1', session)
+
+    const seenPartIds = new Set<string>()
+    const partContentLengths = new Map<string, string>()
+
+    adapter.handleRpcMessage(session, {
+      jsonrpc: '2.0',
+      method: 'item/reasoning/textDelta',
+      params: {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        itemId: 'reasoning-1',
+        delta: 'Checking dashboard metrics'
+      }
+    })
+
+    const streamedParts = await adapterInstance.pollMessages(
+      'thread-1',
+      new Set(),
+      seenPartIds,
+      partContentLengths,
+      {} as never
+    )
+
+    expect(streamedParts).toEqual([
+      expect.objectContaining({
+        id: 'reasoning-reasoning-1',
+        type: MessagePartType.REASONING,
+        role: MessageRole.ASSISTANT,
+        text: 'Checking dashboard metrics'
+      })
+    ])
+
+    adapter.handleRpcMessage(session, {
+      jsonrpc: '2.0',
+      method: 'turn/completed',
+      params: { threadId: 'thread-1', turnId: 'turn-1' }
+    })
+
+    const [requestId, pending] = Array.from(session.pendingRequests.entries()).at(-1) ?? []
+    expect(requestId).toBeDefined()
+    session.pendingRequests.delete(requestId!)
+    pending!.resolve({
+      data: [{
+        id: 'reasoning-1',
+        type: 'reasoning',
+        content: 'Checking dashboard metrics',
+        turnId: 'turn-1'
+      }],
+      nextCursor: null
+    })
+    await flushPromises()
+
+    const reconciledParts = await adapterInstance.pollMessages(
+      'thread-1',
+      new Set(),
+      seenPartIds,
+      partContentLengths,
+      {} as never
+    )
+
+    expect(reconciledParts).toEqual([])
   })
 
   it('keeps the session busy when a completed turn is followed by an active thread status', async () => {
