@@ -2520,3 +2520,320 @@ describe('AgentManager tillDone nudge on idle', () => {
     expect(sendSpy).not.toHaveBeenCalled()
   })
 })
+
+describe('AgentManager delegation-aware watchdogs', () => {
+  function buildManager(dbOverrides: Record<string, unknown> = {}) {
+    const mockDb = createMockDb({})
+    Object.assign(mockDb as any, dbOverrides)
+    const mgr = new AgentManager(mockDb)
+    vi.spyOn(mgr as any, 'sendToRenderer').mockImplementation(() => undefined)
+    vi.spyOn(mgr as any, 'ensurePollingCoordinator').mockImplementation(() => undefined)
+    return { mgr, mockDb }
+  }
+
+  function buildBusySession(mgr: AgentManager, adapter: Record<string, unknown>) {
+    const session = {
+      agentId: 'agent-1',
+      taskId: 'task-1',
+      status: 'working' as const,
+      createdAt: new Date(),
+      seenMessageIds: new Set<string>(),
+      seenPartIds: new Set<string>(),
+      partContentLengths: new Map<string, string>(),
+      adapter,
+      pollingStarted: true,
+    }
+    ;(mgr as any).sessions.set('session-1', session)
+    ;(mgr as any).startAdapterPolling(
+      'session-1',
+      adapter,
+      { agentId: 'agent-1', taskId: 'task-1', workspaceDir: '/tmp/ws' },
+      undefined,
+      session
+    )
+    const entry = (mgr as any).pollingEntries.get('session-1')
+    entry.hasSeenWork = true
+    return { session, entry }
+  }
+
+  it('classifies delegation tools correctly', () => {
+    const isDelegation = (AgentManager as any).isDelegationTool.bind(AgentManager)
+    // Subagent spawn tools
+    expect(isDelegation('task')).toBe(true)
+    expect(isDelegation('Task')).toBe(true)
+    expect(isDelegation('agent')).toBe(true)
+    // Subtask orchestration tools (various MCP name manglings)
+    expect(isDelegation('wait_for_subtasks')).toBe(true)
+    expect(isDelegation('mcp__task-management__wait_for_subtasks')).toBe(true)
+    expect(isDelegation('task-management_wait_for_subtasks')).toBe(true)
+    expect(isDelegation('start_task')).toBe(true)
+    // Ordinary tools are not delegation
+    expect(isDelegation('read')).toBe(false)
+    expect(isDelegation('bash')).toBe(false)
+    expect(isDelegation('todowrite')).toBe(false)
+    expect(isDelegation(undefined)).toBe(false)
+  })
+
+  it('stuck-tool detector does NOT abort a long-running delegation tool', async () => {
+    const { mgr } = buildManager()
+    const adapter = {
+      pollMessages: vi.fn(async () => []),
+      getStatus: vi.fn(async () => ({ type: SessionStatusType.BUSY })),
+      getRunningTools: vi.fn(async () => [
+        // Running for 10 minutes — way past STUCK_TOOL_TIMEOUT_MS (90s)
+        { partId: 'p1', toolName: 'mcp__task-management__wait_for_subtasks', startTime: Date.now() - 10 * 60_000 },
+      ]),
+      abortPrompt: vi.fn(async () => undefined),
+    }
+    const { entry } = buildBusySession(mgr, adapter)
+    entry.createdAt = Date.now() - 60_000
+    entry.lastPartReceivedAt = Date.now() - 60_000 // recent enough for session watchdog
+
+    await (mgr as any).pollSingleSession(entry)
+
+    expect(adapter.abortPrompt).not.toHaveBeenCalled()
+    expect(entry.watchdogFired).toBeFalsy()
+  })
+
+  it('stuck-tool detector still aborts a hung non-delegation tool', async () => {
+    const { mgr } = buildManager()
+    const adapter = {
+      pollMessages: vi.fn(async () => []),
+      getStatus: vi.fn(async () => ({ type: SessionStatusType.BUSY })),
+      getRunningTools: vi.fn(async () => [
+        { partId: 'p1', toolName: 'read', startTime: Date.now() - 5 * 60_000 },
+      ]),
+      abortPrompt: vi.fn(async () => undefined),
+    }
+    const { entry } = buildBusySession(mgr, adapter)
+    entry.createdAt = Date.now() - 60_000
+    entry.lastPartReceivedAt = Date.now() - 60_000
+    vi.spyOn(mgr as any, 'sendAutoAbortMessageOnce').mockReturnValue(true)
+
+    await (mgr as any).pollSingleSession(entry)
+
+    expect(adapter.abortPrompt).toHaveBeenCalledOnce()
+    expect(entry.watchdogFired).toBe(true)
+  })
+
+  it('stuck-session watchdog stands down while a delegation tool is running', async () => {
+    const { mgr } = buildManager()
+    const adapter = {
+      pollMessages: vi.fn(async () => []),
+      getStatus: vi.fn(async () => ({ type: SessionStatusType.BUSY })),
+      getRunningTools: vi.fn(async () => [
+        { partId: 'p1', toolName: 'task', startTime: Date.now() - 30_000 },
+      ]),
+      abortPrompt: vi.fn(async () => undefined),
+    }
+    const { entry } = buildBusySession(mgr, adapter)
+    // Silent for 6 minutes — past STUCK_SESSION_TIMEOUT_MS (5 min)
+    entry.createdAt = Date.now() - 10 * 60_000
+    entry.lastPartReceivedAt = Date.now() - 6 * 60_000
+
+    await (mgr as any).pollSingleSession(entry)
+
+    expect(adapter.abortPrompt).not.toHaveBeenCalled()
+    expect(entry.watchdogFired).toBeFalsy()
+  })
+
+  it('stuck-session watchdog stands down while subtasks are still being worked on', async () => {
+    const { mgr, mockDb } = buildManager()
+    ;(mockDb as any).getSubtasks = vi.fn(() => [
+      { id: 'sub-1', title: 'Child A', status: TaskStatus.AgentWorking },
+      { id: 'sub-2', title: 'Child B', status: TaskStatus.ReadyForReview },
+    ])
+    const adapter = {
+      pollMessages: vi.fn(async () => []),
+      getStatus: vi.fn(async () => ({ type: SessionStatusType.BUSY })),
+      abortPrompt: vi.fn(async () => undefined),
+    }
+    const { entry } = buildBusySession(mgr, adapter)
+    entry.createdAt = Date.now() - 10 * 60_000
+    entry.lastPartReceivedAt = Date.now() - 6 * 60_000
+
+    await (mgr as any).pollSingleSession(entry)
+
+    expect(adapter.abortPrompt).not.toHaveBeenCalled()
+    expect(entry.watchdogFired).toBeFalsy()
+  })
+
+  it('stuck-session watchdog still aborts a truly silent session with no delegation', async () => {
+    const { mgr } = buildManager()
+    const adapter = {
+      pollMessages: vi.fn(async () => []),
+      getStatus: vi.fn(async () => ({ type: SessionStatusType.BUSY })),
+      abortPrompt: vi.fn(async () => undefined),
+    }
+    const { entry } = buildBusySession(mgr, adapter)
+    entry.createdAt = Date.now() - 10 * 60_000
+    entry.lastPartReceivedAt = Date.now() - 6 * 60_000
+    vi.spyOn(mgr as any, 'sendAutoAbortMessageOnce').mockReturnValue(true)
+
+    await (mgr as any).pollSingleSession(entry)
+
+    expect(adapter.abortPrompt).toHaveBeenCalledOnce()
+    expect(entry.watchdogFired).toBe(true)
+  })
+})
+
+describe('AgentManager idle-session inactivity reaper', () => {
+  const THIRTY_ONE_MINUTES = 31 * 60_000
+
+  function buildManager(dbOverrides: Record<string, unknown> = {}) {
+    const mockDb = createMockDb({})
+    Object.assign(mockDb as any, {
+      getTask: vi.fn(() => ({ id: 'task-1', title: 'Test Task', repos: [], skill_ids: [], session_id: 'session-1', status: TaskStatus.ReadyForReview })),
+      ...dbOverrides,
+    })
+    const mgr = new AgentManager(mockDb)
+    vi.spyOn(mgr as any, 'sendToRenderer').mockImplementation(() => undefined)
+    const stopSpy = vi.spyOn(mgr, 'stopSession').mockResolvedValue(undefined)
+    return { mgr, mockDb, stopSpy }
+  }
+
+  function addSession(mgr: AgentManager, overrides: Record<string, unknown> = {}) {
+    const session = {
+      id: 'session-1',
+      agentId: 'agent-1',
+      taskId: 'task-1',
+      status: 'idle' as const,
+      createdAt: new Date(Date.now() - THIRTY_ONE_MINUTES),
+      lastActivityAt: Date.now() - THIRTY_ONE_MINUTES,
+      seenMessageIds: new Set<string>(),
+      seenPartIds: new Set<string>(),
+      partContentLengths: new Map<string, string>(),
+      ...overrides,
+    }
+    ;(mgr as any).sessions.set((overrides.id as string) || 'session-1', session)
+    return session
+  }
+
+  it('releases the runtime of a long-idle session (resume-capable)', async () => {
+    const { mgr, stopSpy } = buildManager()
+    addSession(mgr)
+
+    await (mgr as any).reapInactiveSessions()
+
+    // resetTaskStatus=false: this is a resource release, not a user stop
+    expect(stopSpy).toHaveBeenCalledWith('session-1', false)
+  })
+
+  it('never touches a session with an active turn', async () => {
+    const { mgr, stopSpy } = buildManager()
+    addSession(mgr, { status: 'working' })
+
+    await (mgr as any).reapInactiveSessions()
+
+    expect(stopSpy).not.toHaveBeenCalled()
+  })
+
+  it('does not release a recently idle session', async () => {
+    const { mgr, stopSpy } = buildManager()
+    addSession(mgr, { lastActivityAt: Date.now() - 60_000 })
+
+    await (mgr as any).reapInactiveSessions()
+
+    expect(stopSpy).not.toHaveBeenCalled()
+  })
+
+  it('does not release a coordinator whose subtasks are still being worked on', async () => {
+    const { mgr, mockDb, stopSpy } = buildManager()
+    ;(mockDb as any).getSubtasks = vi.fn(() => [
+      { id: 'sub-1', title: 'Child A', status: TaskStatus.AgentWorking },
+    ])
+    addSession(mgr)
+
+    await (mgr as any).reapInactiveSessions()
+
+    expect(stopSpy).not.toHaveBeenCalled()
+  })
+
+  it('skips pseudo-task sessions (no DB row) and sessions without a resume anchor', async () => {
+    const { mgr, mockDb, stopSpy } = buildManager()
+    // No DB row (mastermind / heartbeat pseudo-tasks)
+    ;(mockDb as any).getTask = vi.fn(() => undefined)
+    addSession(mgr)
+    await (mgr as any).reapInactiveSessions()
+    expect(stopSpy).not.toHaveBeenCalled()
+
+    // DB row exists but has no persisted session_id to resume from
+    ;(mockDb as any).getTask = vi.fn(() => ({ id: 'task-1', title: 'Test Task', session_id: null }))
+    await (mgr as any).reapInactiveSessions()
+    expect(stopSpy).not.toHaveBeenCalled()
+  })
+})
+
+describe('AgentManager event-driven parent wake-up', () => {
+  function buildManager(tasks: Record<string, Record<string, unknown>>, subtasks: Record<string, unknown>[]) {
+    const mockDb = createMockDb({})
+    Object.assign(mockDb as any, {
+      getTask: vi.fn((id: string) => tasks[id]),
+      getSubtasks: vi.fn(() => subtasks),
+    })
+    const mgr = new AgentManager(mockDb)
+    vi.spyOn(mgr as any, 'sendToRenderer').mockImplementation(() => undefined)
+    const wakeSpy = vi.spyOn(mgr, 'sendByTaskId').mockResolvedValue({ sessionId: 'parent-session' })
+    return { mgr, mockDb, wakeSpy }
+  }
+
+  const parentTask = { id: 'parent-1', title: 'Parent', status: TaskStatus.ReadyForReview }
+
+  it('wakes an idle parent when all subtasks reach a terminal state', async () => {
+    const { mgr, wakeSpy } = buildManager({ 'parent-1': parentTask }, [
+      { id: 'sub-1', title: 'Child A', status: TaskStatus.ReadyForReview },
+      { id: 'sub-2', title: 'Child B', status: TaskStatus.Completed },
+    ])
+
+    await mgr.notifyParentOfSubtaskCompletion('parent-1', 'sub-1')
+
+    expect(wakeSpy).toHaveBeenCalledOnce()
+    const [taskId, message] = wakeSpy.mock.calls[0]
+    expect(taskId).toBe('parent-1')
+    expect(message).toContain('Child A')
+    expect(message).toContain('Child B')
+    expect(message).toContain('terminal state')
+  })
+
+  it('does not wake the parent while some subtasks are still active', async () => {
+    const { mgr, wakeSpy } = buildManager({ 'parent-1': parentTask }, [
+      { id: 'sub-1', title: 'Child A', status: TaskStatus.ReadyForReview },
+      { id: 'sub-2', title: 'Child B', status: TaskStatus.AgentWorking },
+    ])
+
+    await mgr.notifyParentOfSubtaskCompletion('parent-1', 'sub-1')
+
+    expect(wakeSpy).not.toHaveBeenCalled()
+  })
+
+  it('does not inject a message while the parent session is actively working', async () => {
+    const { mgr, wakeSpy } = buildManager({ 'parent-1': parentTask }, [
+      { id: 'sub-1', title: 'Child A', status: TaskStatus.ReadyForReview },
+    ])
+    ;(mgr as any).sessions.set('parent-session', {
+      id: 'parent-session',
+      agentId: 'agent-1',
+      taskId: 'parent-1',
+      status: 'working',
+      createdAt: new Date(),
+      seenMessageIds: new Set<string>(),
+      seenPartIds: new Set<string>(),
+      partContentLengths: new Map<string, string>(),
+    })
+
+    await mgr.notifyParentOfSubtaskCompletion('parent-1', 'sub-1')
+
+    expect(wakeSpy).not.toHaveBeenCalled()
+  })
+
+  it('does not wake a completed parent task', async () => {
+    const { mgr, wakeSpy } = buildManager(
+      { 'parent-1': { ...parentTask, status: TaskStatus.Completed } },
+      [{ id: 'sub-1', title: 'Child A', status: TaskStatus.Completed }]
+    )
+
+    await mgr.notifyParentOfSubtaskCompletion('parent-1', 'sub-1')
+
+    expect(wakeSpy).not.toHaveBeenCalled()
+  })
+})

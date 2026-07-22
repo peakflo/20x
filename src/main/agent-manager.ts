@@ -60,6 +60,12 @@ interface AgentSession {
   /** True after an auto-abort notice has been shown for the current prompt.
    *  Reset when the user sends a new prompt or the adapter emits fresh output. */
   autoAbortNotified?: boolean
+  /** Timestamp of the last observed activity (creation, new output, prompt,
+   *  or idle transition). Used by the inactivity reaper to decide when an
+   *  idle session's in-memory runtime can be released. Idle is only a state
+   *  flag — a released session is always resumable from the persisted
+   *  session_id, so nothing is lost. */
+  lastActivityAt?: number
 }
 
 function normalizeUrlPath(pathname: string): string {
@@ -219,6 +225,34 @@ export class AgentManager extends EventEmitter {
    *  blocks) should be aborted quickly so the agent can recover. */
   private static readonly STUCK_TOOL_TIMEOUT_MS = 90 * 1000 // 90 seconds
 
+  /** Tool names that delegate work to subagents or block on subtask progress.
+   *  These are long-running BY DESIGN (a coordinator waiting on child agents can
+   *  legitimately produce no output for many minutes), so they are exempt from
+   *  the stuck-tool and stuck-session watchdogs. Aborting a session mid-delegation
+   *  cascades into the child work (server-side aborts kill child sessions;
+   *  in-process subagents die with the parent query), which is never what the
+   *  user wants when the children are still making progress. */
+  private static readonly DELEGATION_TOOL_NAMES = new Set(['task', 'agent', 'subagent'])
+  private static readonly DELEGATION_TOOL_SUBSTRINGS = ['wait_for_subtasks', 'start_task']
+
+  // ── Idle-session inactivity reaper ──
+  // Going idle NEVER terminates a session — idle is only a state flag, and
+  // termination is decoupled from it. A separate low-frequency sweep releases
+  // the in-memory runtime of sessions that have been idle for a long time.
+  // This is safe because the conversation lives with the backend/CLI and the
+  // persisted task.session_id lets sendMessage resume it on demand, so an
+  // idle agent costs ~nothing and can always be woken later.
+  /** How long a session must be continuously idle before its runtime is released. */
+  private static readonly IDLE_SESSION_REAP_THRESHOLD_MS = 30 * 60 * 1000 // 30 minutes
+  /** How often the reaper sweeps. Deliberately infrequent — idle sessions are
+   *  not polled at all between sweeps. */
+  private static readonly IDLE_REAP_SWEEP_INTERVAL_MS = 5 * 60 * 1000 // 5 minutes
+  private reaperTimer: ReturnType<typeof setInterval> | null = null
+
+  /** Parents currently being woken after subtask completion (dedupe guard so
+   *  several subtasks finishing at once produce a single wake-up). */
+  private wakingParents: Set<string> = new Set()
+
   // ── Event-driven nudge ──
   // When an adapter buffers new stream data it calls onDataAvailable().
   // We debounce that into a short nudge timer so the coordinator delivers
@@ -243,6 +277,83 @@ export class AgentManager extends EventEmitter {
   constructor(db: DatabaseManager) {
     super()
     this.db = db
+    this.startIdleSessionReaper()
+  }
+
+  /** True when the tool delegates to subagents or blocks on subtask progress —
+   *  i.e. long-running by design and exempt from watchdog aborts. */
+  private static isDelegationTool(toolName?: string): boolean {
+    if (!toolName) return false
+    const name = toolName.toLowerCase()
+    if (AgentManager.DELEGATION_TOOL_NAMES.has(name)) return true
+    return AgentManager.DELEGATION_TOOL_SUBSTRINGS.some((s) => name.includes(s))
+  }
+
+  /**
+   * True when the task is coordinating subtasks that are still being worked on.
+   * Child progress counts as parent activity: a coordinator session that is
+   * silent while its subtask agents run is NOT stuck and must not be aborted
+   * or reaped, otherwise the child work gets orphaned or cascaded-killed.
+   */
+  private hasActiveSubtaskWork(taskId: string): boolean {
+    try {
+      const subtasks = this.db.getSubtasks(taskId)
+      return subtasks.some(
+        (s) => s.status === TaskStatus.AgentWorking || s.status === TaskStatus.Triaging
+      )
+    } catch {
+      return false
+    }
+  }
+
+  /**
+   * Low-frequency background sweep that releases the in-memory runtime of
+   * long-idle sessions. Never touches sessions with an active turn, never
+   * touches coordinators whose subtasks are still running, and never resets
+   * task status — a released session is resumed transparently by sendMessage
+   * via the persisted session_id.
+   */
+  private startIdleSessionReaper(): void {
+    if (this.reaperTimer) return
+    this.reaperTimer = setInterval(() => {
+      this.reapInactiveSessions().catch((err) => {
+        console.error('[AgentManager] Idle-session reaper sweep failed:', err)
+      })
+    }, AgentManager.IDLE_REAP_SWEEP_INTERVAL_MS)
+    // Don't let the sweep timer keep the process alive on shutdown
+    this.reaperTimer.unref?.()
+  }
+
+  private async reapInactiveSessions(): Promise<void> {
+    const now = Date.now()
+    for (const [sessionId, session] of [...this.sessions.entries()]) {
+      // Only idle sessions are candidates — an active turn is never reaped.
+      if (session.status !== 'idle') continue
+
+      const idleForMs = now - (session.lastActivityAt ?? session.createdAt.getTime())
+      if (idleForMs < AgentManager.IDLE_SESSION_REAP_THRESHOLD_MS) continue
+
+      const task = this.db.getTask(session.taskId)
+      // Pseudo-tasks (mastermind, heartbeat-*) have no DB row — leave them alone.
+      if (!task) continue
+      // No persisted resume anchor — releasing the runtime would lose the
+      // conversation, so keep it in memory.
+      if (!task.session_id) continue
+      // Coordinator with running children — child completion will wake it, and
+      // tearing it down mid-orchestration churns resume cycles for no benefit.
+      if (this.hasActiveSubtaskWork(session.taskId)) continue
+
+      console.log(
+        `[AgentManager] Releasing runtime of idle session ${sessionId} (task ${session.taskId}, idle ${Math.round(idleForMs / 1000)}s). ` +
+        `Resumable on demand from persisted session_id.`
+      )
+      try {
+        // resetTaskStatus=false: reaping is a resource release, not a user stop.
+        await this.stopSession(sessionId, false)
+      } catch (err) {
+        console.error(`[AgentManager] Failed to release idle session ${sessionId}:`, err)
+      }
+    }
   }
 
   private normalizeErrorText(value?: string): string {
@@ -1328,6 +1439,7 @@ export class AgentManager extends EventEmitter {
       workspaceDir,
       status: 'working',
       createdAt: new Date(),
+      lastActivityAt: Date.now(),
       seenMessageIds: new Set(),
       seenPartIds: new Set(),
       partContentLengths: new Map(),
@@ -1835,6 +1947,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       // the secondary grace period for models with brief idle gaps.
       if (newParts.length > 0) {
         entry.lastPartReceivedAt = Date.now()
+        activeSession.lastActivityAt = Date.now()
         // Reset watchdog flag — new data means the session is alive again.
         // If a follow-up message also gets stuck, the watchdog can re-fire.
         entry.watchdogFired = false
@@ -2081,19 +2194,33 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
           // nudge counter so the next idle cycle gets a fresh allowance.
           if (peBusy.tillDoneNudgeCount) peBusy.tillDoneNudgeCount = 0
 
+          // Fetch currently running tools once — shared by the stuck-tool
+          // detector and the stuck-session watchdog's delegation check below.
+          let runningTools: Array<{ partId: string; toolName: string; startTime?: number; input?: Record<string, unknown> }> = []
+          if ('getRunningTools' in adapter && typeof adapter.getRunningTools === 'function') {
+            try {
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              const getRunningToolsFn = (adapter as any).getRunningTools.bind(adapter)
+              runningTools = await getRunningToolsFn(sessionId, config)
+            } catch {
+              // Non-fatal — watchdogs fall back to their other signals
+            }
+          }
+
           // ── Fast stuck-tool detector ──
           // Some tools (notably `read` on cross-workspace files) silently hang
           // without producing any output or asking for permission. The general
           // watchdog below waits 5 minutes, which is far too long for a single
           // tool. Here we check for tools stuck in "running" state for >90s.
-          if (!peBusy.watchdogFired && 'getRunningTools' in adapter && typeof adapter.getRunningTools === 'function') {
+          //
+          // Delegation tools (subagent spawns, subtask waits) are exempt: they
+          // run for minutes by design, and aborting them kills the child work.
+          if (!peBusy.watchdogFired && runningTools.length > 0) {
             try {
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              const getRunningToolsFn = (adapter as any).getRunningTools.bind(adapter)
-              const runningTools: Array<{ partId: string; toolName: string; startTime?: number; input?: Record<string, unknown> }> = await getRunningToolsFn(sessionId, config)
               const now = Date.now()
               for (const tool of runningTools) {
                 if (!tool.startTime) continue
+                if (AgentManager.isDelegationTool(tool.toolName)) continue
                 const elapsed = now - tool.startTime
                 if (elapsed > AgentManager.STUCK_TOOL_TIMEOUT_MS) {
                   // Build a descriptive reason
@@ -2173,9 +2300,32 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
               if (pending) isWaitingForInput = true
             }
 
+            // ── Active delegation check ──
+            // A coordinator that has handed work to subagents or is blocked on
+            // subtask progress produces no output itself for long stretches —
+            // that is delegation, not a hang. Child progress counts as parent
+            // activity. Aborting here would cascade into the children (the
+            // exact "subagents killed when the main agent went quiet" failure),
+            // so the watchdog stands down while delegation is active. If the
+            // delegation ends and the session is still silent, the abort fires
+            // on a later tick as usual.
+            //
+            // Signal 4: a delegation tool (subagent spawn / subtask wait) is running
+            let hasActiveDelegation = runningTools.some((tool) =>
+              AgentManager.isDelegationTool(tool.toolName)
+            )
+            // Signal 5: the task has subtasks that are still being worked on
+            if (!hasActiveDelegation) {
+              hasActiveDelegation = this.hasActiveSubtaskWork(config.taskId)
+            }
+
             if (isWaitingForInput) {
               console.log(
                 `[AgentManager] Session ${sessionId} BUSY for ${Math.round(silentDuration / 1000)}s but has pending user input — not aborting`
+              )
+            } else if (hasActiveDelegation) {
+              console.log(
+                `[AgentManager] Session ${sessionId} BUSY for ${Math.round(silentDuration / 1000)}s but has active delegation (subagents/subtasks in progress) — not aborting`
               )
             } else {
               // Mark the watchdog as fired BEFORE sending the message/abort.
@@ -2521,6 +2671,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       workspaceDir,
       status: 'idle',
       createdAt: new Date(),
+      lastActivityAt: Date.now(),
       seenMessageIds: resumedSeenMessageIds,
       seenPartIds: resumedSeenPartIds,
       partContentLengths: resumedPartContentLengths,
@@ -2764,6 +2915,68 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
    * Get the last assistant message text from a session's conversation.
    * Used by HeartbeatScheduler to extract the heartbeat result.
    */
+  /**
+   * Event-driven coordinator wake-up.
+   *
+   * Called when a subtask reaches a terminal state (ready_for_review or
+   * completed). If the parent coordinator's session is idle — or its runtime
+   * has already been released — it is resumed with a summary prompt so it can
+   * review outputs and continue orchestration.
+   *
+   * This inverts the old model where a parent had to stay resident (and be
+   * polled) while blocking on subtask progress: the parent may go idle at any
+   * time, and exactly one session is touched when there is new work to do.
+   *
+   * Guards:
+   * - If the parent session is live and NOT idle (e.g. blocked inside a
+   *   wait_for_subtasks call), nothing is injected — it will observe the
+   *   subtask state itself.
+   * - The wake-up fires only once ALL subtasks are terminal, so a parent with
+   *   many children gets a single wake-up instead of one per child.
+   * - A dedupe set prevents double-wakes when several children finish at once.
+   */
+  async notifyParentOfSubtaskCompletion(parentTaskId: string, subtaskId: string): Promise<void> {
+    const parentTask = this.db.getTask(parentTaskId)
+    if (!parentTask) return
+    if (parentTask.status === TaskStatus.Completed) return
+
+    const live = this.findSessionByTaskId(parentTaskId)
+    if (live && live.session.status !== 'idle') {
+      console.log(
+        `[AgentManager] Subtask ${subtaskId} terminal, but parent ${parentTaskId} session is ${live.session.status} — no wake-up needed`
+      )
+      return
+    }
+
+    const subtasks = this.db.getSubtasks(parentTaskId)
+    const allTerminal = subtasks.length > 0 && subtasks.every(
+      (s) => s.status === TaskStatus.ReadyForReview || s.status === TaskStatus.Completed
+    )
+    if (!allTerminal) {
+      console.log(
+        `[AgentManager] Subtask ${subtaskId} terminal, but parent ${parentTaskId} still has active subtasks — deferring wake-up`
+      )
+      return
+    }
+
+    if (this.wakingParents.has(parentTaskId)) return
+    this.wakingParents.add(parentTaskId)
+    try {
+      const summary = subtasks
+        .map((s) => `- "${s.title}" (id: ${s.id}) → ${s.status}`)
+        .join('\n')
+      const message =
+        `All subtasks of this task have reached a terminal state:\n${summary}\n\n` +
+        `Use \`get_task\` / \`list_subtasks\` via the task-management MCP server to review their outputs, ` +
+        `then continue coordination: consolidate results, fill in the parent task's output fields, ` +
+        `and complete the task — or create follow-up subtasks if more work is needed.`
+      console.log(`[AgentManager] Waking parent coordinator ${parentTaskId}: all ${subtasks.length} subtasks terminal`)
+      await this.sendByTaskId(parentTaskId, message)
+    } finally {
+      this.wakingParents.delete(parentTaskId)
+    }
+  }
+
   getLastAssistantMessage(sessionId: string): string | null {
     const session = this.sessions.get(sessionId)
     if (!session?.adapter) return null
@@ -3065,7 +3278,11 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       }
     }
 
+    // Idle is a state flag only — it never terminates the session or any
+    // subagent/subtask work. Termination is decoupled and handled solely by
+    // the inactivity reaper (long threshold) or an explicit user stop.
     session.status = 'idle'
+    session.lastActivityAt = Date.now()
     console.log(`[AgentManager] Session ${sessionId} → idle`)
 
     // Check if task exists (e.g., orchestrator-session doesn't have a real task)
@@ -3189,6 +3406,17 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
           heartbeat_next_check_at: updatedTask?.heartbeat_next_check_at
         }
       })
+
+      // Event-driven coordinator wake-up: if this was a subtask, tell the
+      // parent's session that a child reached a terminal state. The parent
+      // does not need to stay resident polling for child status — it can go
+      // idle (or even have its runtime released) and is resumed exactly when
+      // there is something to act on.
+      if (task.parent_task_id) {
+        this.notifyParentOfSubtaskCompletion(task.parent_task_id, session.taskId).catch((err) => {
+          console.error(`[AgentManager] Failed to wake parent ${task.parent_task_id} after subtask ${session.taskId} completed:`, err)
+        })
+      }
     }
 
     this.sendToRenderer('agent:status', {
@@ -3491,6 +3719,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
 
     // Update status to working (but preserve AgentLearning if set)
     session.status = 'working'
+    session.lastActivityAt = Date.now()
     const currentTask = this.db.getTask(session.taskId)
     if (currentTask?.status !== TaskStatus.AgentLearning) {
       this.db.updateTask(session.taskId, { status: TaskStatus.AgentWorking })
@@ -3686,6 +3915,12 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       this.pollingTimer = null
     }
     this.pollingEntries.clear()
+
+    // Stop the idle-session reaper sweep
+    if (this.reaperTimer) {
+      clearInterval(this.reaperTimer)
+      this.reaperTimer = null
+    }
 
     await Promise.allSettled(
       [...this.sessions.keys()].map((sessionId) => {
