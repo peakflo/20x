@@ -1155,6 +1155,48 @@ describe('AgentManager transitionToIdle — enterprise task completion after fee
     expect(sessionWithAdapter.seenPartIds.has('final-part')).toBe(true)
   })
 
+  it('does not replay the final assistant text after idle when only the persisted part id changed', async () => {
+    const mockDb = createEnterpriseTaskDb({
+      status: TaskStatus.AgentWorking,
+      output_fields: [],
+      source_id: null,
+    })
+    const { mgr, session } = setupManager(mockDb)
+    const finalText = 'Investigation complete. The requested list contains 74 IDs, not 73. Root cause is documented.'
+    const adapter = {
+      getAllMessages: vi.fn(async () => ([
+        {
+          id: 'msg-1',
+          role: MessageRole.ASSISTANT,
+          parts: [
+            { id: 'persisted-final-different-id', type: MessagePartType.TEXT, text: finalText, content: finalText }
+          ]
+        }
+      ]))
+    }
+
+    const sessionWithAdapter = {
+      ...session,
+      adapter: adapter as any,
+      seenPartIds: new Set<string>(['live-final-id']),
+      assistantTextKeys: new Set<string>([finalText])
+    }
+    vi.spyOn(mgr as any, 'extractOutputValues').mockResolvedValue(undefined)
+
+    const sendSpy = vi.spyOn(mgr as any, 'sendToRenderer')
+
+    await (mgr as any).transitionToIdle('session-1', sessionWithAdapter)
+
+    const replayCalls = sendSpy.mock.calls.filter(
+      ([channel, payload]) => channel === 'agent:output-batch'
+        && (payload as any)?.messages?.some((msg: any) => msg.content === finalText)
+    )
+
+    expect(adapter.getAllMessages).toHaveBeenCalledOnce()
+    expect(replayCalls).toHaveLength(0)
+    expect(sessionWithAdapter.seenPartIds.has('persisted-final-different-id')).toBe(true)
+  })
+
   it('keeps polling and does not mark ready when adapter is still busy after transcript replay', async () => {
     const mockDb = createEnterpriseTaskDb({
       status: TaskStatus.AgentWorking,
@@ -2068,10 +2110,11 @@ describe('AgentManager startAdapterPolling — IDLE grace period for follow-up m
   it('pollSingleSession transitions to idle after BUSY then IDLE (work completed)', async () => {
     const mgr = buildManager()
     const adapter = buildAdapter()
+    const finalText = 'Investigation complete. The final assistant answer was emitted from live polling before idle replay.'
 
     // First poll: BUSY
     adapter.pollMessages.mockResolvedValueOnce([
-      { id: 'resp-1', role: 'assistant', content: 'Working...', type: 'text' }
+      { id: 'resp-1', role: 'assistant', content: finalText, type: 'text' }
     ])
     adapter.getStatus.mockResolvedValueOnce({ type: SessionStatusType.BUSY })
 
@@ -2112,6 +2155,8 @@ describe('AgentManager startAdapterPolling — IDLE grace period for follow-up m
     adapter.getStatus.mockResolvedValueOnce({ type: SessionStatusType.IDLE })
     await (mgr as any).pollSingleSession(entry)
     expect(transitionSpy).toHaveBeenCalledOnce()
+    const transitionSession = transitionSpy.mock.calls[0][1] as { assistantTextKeys: Set<string> }
+    expect(transitionSession.assistantTextKeys.has(finalText)).toBe(true)
   })
 
   it('pollSingleSession transitions to idle after grace period expires without work (new session stuck)', async () => {

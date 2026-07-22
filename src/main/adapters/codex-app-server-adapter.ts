@@ -24,6 +24,7 @@ import { MessagePartType, MessageRole, SessionStatusType } from './coding-agent-
 const DEFAULT_CODEX_APP_SERVER_MODEL = 'gpt-5.5'
 const MAX_IPC_TOOL_INPUT_CHARS = 20_000
 const MAX_IPC_TOOL_OUTPUT_CHARS = 100_000
+const MIN_THREAD_LEVEL_ASSISTANT_DEDUPE_CHARS = 40
 
 type CodexSandboxPolicy =
   | { type: 'readOnly'; networkAccess: boolean }
@@ -1214,6 +1215,7 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
       const update = seenPartIds.has(partId)
       seenPartIds.add(partId)
       session.streamedTextByItemId.set(itemId, next)
+      this.markAssistantTextForTurn(session, params, {}, next)
       partContentLengths.set(partId, String(next.length))
       return [{
         id: partId,
@@ -1327,6 +1329,19 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
     const role = extractRole(item)
     const text = extractText(item)
 
+    if (type.includes('reasoning')) {
+      const partId = `reasoning-${itemId}`
+      if (seenPartIds.has(partId)) return []
+      seenPartIds.add(partId)
+      partContentLengths.set(partId, String(text.length))
+      return [{
+        id: partId,
+        type: MessagePartType.REASONING,
+        text,
+        role: MessageRole.ASSISTANT
+      }]
+    }
+
     if (role === 'user' || type.includes('user') || type === 'user_message') {
       const partId = `user-${itemId}`
       if (seenPartIds.has(partId)) return []
@@ -1406,8 +1421,10 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
   ): boolean {
     const key = this.buildAssistantTextKey(text)
     if (!key) return false
-    const turnKey = this.extractTurnKey(params, item)
-    return session.assistantTextKeysByTurn.get(turnKey)?.has(key) ?? false
+    for (const scopeKey of this.extractAssistantTextScopeKeys(params, item, key)) {
+      if (session.assistantTextKeysByTurn.get(scopeKey)?.has(key)) return true
+    }
+    return false
   }
 
   private markAssistantTextForTurn(
@@ -1418,14 +1435,40 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
   ): void {
     const key = this.buildAssistantTextKey(text)
     if (!key) return
-    const turnKey = this.extractTurnKey(params, item)
-    const seenForTurn = session.assistantTextKeysByTurn.get(turnKey) ?? new Set<string>()
-    seenForTurn.add(key)
-    session.assistantTextKeysByTurn.set(turnKey, seenForTurn)
+    for (const scopeKey of this.extractAssistantTextScopeKeys(params, item, key)) {
+      const seenForScope = session.assistantTextKeysByTurn.get(scopeKey) ?? new Set<string>()
+      seenForScope.add(key)
+      session.assistantTextKeysByTurn.set(scopeKey, seenForScope)
+    }
   }
 
   private extractTurnKey(params: Record<string, unknown>, item: Record<string, unknown>): string {
-    return asString(params.turnId) || asString(item.turnId) || asString(params.threadId) || 'unknown-turn'
+    const metadata = isObject(item.internal_chat_message_metadata_passthrough)
+      ? item.internal_chat_message_metadata_passthrough
+      : {}
+    return (
+      asString(params.turnId) ||
+      asString(params.turn_id) ||
+      asString(item.turnId) ||
+      asString(item.turn_id) ||
+      asString(metadata.turn_id) ||
+      asString(metadata.turnId) ||
+      asString(params.threadId) ||
+      'unknown-turn'
+    )
+  }
+
+  private extractAssistantTextScopeKeys(
+    params: Record<string, unknown>,
+    item: Record<string, unknown>,
+    textKey: string
+  ): string[] {
+    const keys = new Set<string>([this.extractTurnKey(params, item)])
+    const threadKey = asString(params.threadId) || asString(item.threadId) || asString(item.thread_id)
+    if (threadKey && textKey.length >= MIN_THREAD_LEVEL_ASSISTANT_DEDUPE_CHARS) {
+      keys.add(`thread:${threadKey}`)
+    }
+    return Array.from(keys)
   }
 
   private buildAssistantTextKey(text: string): string {

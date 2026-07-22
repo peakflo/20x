@@ -48,6 +48,7 @@ interface AgentSession {
   seenMessageIds: Set<string>
   seenPartIds: Set<string>
   partContentLengths: Map<string, string>
+  assistantTextKeys?: Set<string>
   learningMode?: boolean
   isTriageSession?: boolean
   lastAssistantText?: string
@@ -140,6 +141,7 @@ interface PollingEntry {
   seenMessageIds: Set<string>
   seenPartIds: Set<string>
   partContentLengths: Map<string, string>
+  assistantTextKeys?: Set<string>
   initialPromptSent?: boolean
   createdAt: number  // Timestamp to enforce grace period before IDLE transition
   hasSeenWork?: boolean  // True once we've seen at least one non-IDLE status
@@ -204,6 +206,7 @@ export class AgentManager extends EventEmitter {
   /** Maximum number of tillDone idle nudges per session before giving up. */
   private static readonly MAX_TILLDONE_NUDGES = 5
   private static readonly ERROR_TEXT_DEDUPE_WINDOW_MS = 5_000
+  private static readonly MIN_ASSISTANT_REPLAY_DEDUPE_CHARS = 40
 
   /** Maximum time (ms) a session can stay BUSY with no new data before we abort it.
    *  Prevents sessions from being stuck indefinitely when a tool call hangs inside
@@ -244,6 +247,26 @@ export class AgentManager extends EventEmitter {
 
   private normalizeErrorText(value?: string): string {
     return (value || '').replace(/\s+/g, ' ').trim().toLowerCase()
+  }
+
+  private normalizeAssistantText(value?: string): string {
+    return (value || '').replace(/\s+/g, ' ').trim()
+  }
+
+  private assistantTextKey(
+    role: string | undefined,
+    partType: string | undefined,
+    content: string,
+    tool?: unknown,
+    taskProgress?: unknown
+  ): string | null {
+    if (role !== MessageRole.ASSISTANT && role !== 'assistant') return null
+    if (tool || taskProgress) return null
+    if (partType && partType !== MessagePartType.TEXT && partType !== MessagePartType.REASONING && partType !== 'text' && partType !== 'reasoning') {
+      return null
+    }
+    const normalized = this.normalizeAssistantText(content)
+    return normalized.length >= AgentManager.MIN_ASSISTANT_REPLAY_DEDUPE_CHARS ? normalized : null
   }
 
   private hasMatchingErrorMessage(
@@ -1308,6 +1331,7 @@ export class AgentManager extends EventEmitter {
       seenMessageIds: new Set(),
       seenPartIds: new Set(),
       partContentLengths: new Map(),
+      assistantTextKeys: new Set(),
       adapter,
       isTriageSession,
       secretSessionToken: secretToken
@@ -1558,6 +1582,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       seenMessageIds: existingSession?.seenMessageIds ?? new Set<string>(),
       seenPartIds: existingSession?.seenPartIds ?? new Set<string>(),
       partContentLengths: existingSession?.partContentLengths ?? new Map<string, string>(),
+      assistantTextKeys: existingSession?.assistantTextKeys ?? new Set<string>(),
       createdAt: Date.now(),
       // Always start fresh: each call to startAdapterPolling corresponds to a
       // newly-sent (fire-and-forget) prompt.  The IDLE grace period must apply
@@ -1875,11 +1900,25 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
         if (part.role === 'user' || (part.role as string) === 'human') {
           continue
         }
+        const role = part.role || 'assistant'
+        const content = part.content || part.text || ''
+        const partType = part.type
+        const assistantKey = this.assistantTextKey(
+          role,
+          partType,
+          content,
+          part.tool,
+          part.taskProgress
+        )
+        if (assistantKey) {
+          entry.assistantTextKeys ??= new Set<string>()
+          entry.assistantTextKeys.add(assistantKey)
+        }
         batchMessages.push({
           id: part.id || `part-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-          role: part.role || 'assistant',
-          content: part.content || part.text || '',
-          partType: part.type,
+          role,
+          content,
+          partType,
           tool: part.tool,
           update: part.update,
           taskProgress: part.taskProgress,
@@ -2246,6 +2285,8 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
           for (const id of pollingEntry.seenMessageIds) session.seenMessageIds.add(id)
           for (const id of pollingEntry.seenPartIds) session.seenPartIds.add(id)
           for (const [k, v] of pollingEntry.partContentLengths) session.partContentLengths.set(k, v)
+          session.assistantTextKeys ??= new Set<string>()
+          for (const key of pollingEntry.assistantTextKeys ?? []) session.assistantTextKeys.add(key)
           // Prune after merging to keep session-level structures bounded
           this.pruneDedup(session.seenMessageIds, session.seenPartIds, session.partContentLengths)
         }
@@ -2433,23 +2474,29 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     const resumedSeenMessageIds = new Set<string>()
     const resumedSeenPartIds = new Set<string>()
     const resumedPartContentLengths = new Map<string, string>()
+    const resumedAssistantTextKeys = new Set<string>()
     for (const message of messages) {
       // Track message-level IDs so adapters that dedup by message ID
       // (e.g. Codex pollMessages) won't re-send historical messages.
       if (message.id) resumedSeenMessageIds.add(message.id)
       for (const part of message.parts) {
         const partId = part.id || `${message.role}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+        const content = part.content || part.text || ''
         // Dedup state
         resumedSeenPartIds.add(partId)
-        if (part.content || part.text) {
-          resumedPartContentLengths.set(partId, String((part.content || part.text || '').length))
+        if (content) {
+          resumedPartContentLengths.set(partId, String(content.length))
+        }
+        const assistantKey = this.assistantTextKey(message.role, part.type, content, part.tool, part.taskProgress)
+        if (assistantKey) {
+          resumedAssistantTextKeys.add(assistantKey)
         }
         // Batch message (only if we're replaying to the renderer)
         if (shouldReplayToRenderer) {
           batchMessages.push({
             id: partId,
             role: message.role,
-            content: part.content || part.text || '',
+            content,
             partType: part.type,
             tool: part.tool,
             taskProgress: part.taskProgress,
@@ -2477,6 +2524,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       seenMessageIds: resumedSeenMessageIds,
       seenPartIds: resumedSeenPartIds,
       partContentLengths: resumedPartContentLengths,
+      assistantTextKeys: resumedAssistantTextKeys,
       adapter,
       pollingStarted: false,
       secretSessionToken: secretToken
@@ -2871,19 +2919,35 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
           if (partType === 'step-start' || partType === 'step-finish' || partType === 'system-status') {
             continue
           }
+          const content = part.content || part.text || ''
+          const assistantKey = this.assistantTextKey(
+            message.role,
+            partType,
+            content,
+            part.tool,
+            part.taskProgress
+          )
+          session.assistantTextKeys ??= new Set<string>()
+          if (assistantKey && session.assistantTextKeys.has(assistantKey)) {
+            session.seenPartIds.add(partId)
+            continue
+          }
 
           session.seenPartIds.add(partId)
-          if (part.content || part.text) {
+          if (content) {
             // Store actual text content, NOT length — partContentLengths is used
             // for chunk accumulation in streaming; storing a length string causes
             // the number to be prepended to the next streamed chunk.
-            session.partContentLengths.set(partId, part.content || part.text || '')
+            session.partContentLengths.set(partId, content)
+          }
+          if (assistantKey) {
+            session.assistantTextKeys.add(assistantKey)
           }
 
           batchMessages.push({
             id: partId,
             role: message.role,
-            content: part.content || part.text || '',
+            content,
             partType,
             tool: part.tool,
             taskProgress: part.taskProgress,
