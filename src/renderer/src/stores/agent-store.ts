@@ -229,8 +229,10 @@ export const useAgentStore = create<AgentState>((set, get) => {
       const existingById = new Map<string, AgentMessage>()
       for (const m of existing?.messages || []) existingById.set(m.id, m)
 
-      // Snapshot is authoritative for content and order.
-      const merged: AgentMessage[] = snapshot.map((p) => {
+      // The durable projection is the SINGLE authoritative, ordered transcript
+      // (persisted seq order). We render it verbatim — mirroring how a projection
+      // snapshot is the source of truth rather than an accumulating push log.
+      const snapshotMessages: AgentMessage[] = snapshot.map((p) => {
         seen.add(p.partId)
         const prev = existingById.get(p.partId)
         const payload = (p.payload || {}) as { taskProgress?: unknown }
@@ -246,12 +248,29 @@ export const useAgentStore = create<AgentState>((set, get) => {
         }
       })
 
-      // Preserve in-memory extras the projection intentionally skips
-      // (ephemeral/system parts) — appended after, in their original order.
+      // Keep ONLY genuinely-unpersisted in-memory parts (e.g. a just-emitted
+      // part not yet written through). A part is an extra iff its id is not in
+      // the snapshot AND its content is not already represented by a snapshot
+      // part — the latter guard drops the "same message under a different id"
+      // duplicate that a whole-thread replay produces. Extras are re-inserted in
+      // timestamp order (NOT blindly appended at the end), so nothing jumps to
+      // the bottom of the transcript.
       const snapshotIds = new Set(snapshot.map((p) => p.partId))
-      for (const m of existing?.messages || []) {
-        if (!snapshotIds.has(m.id)) merged.push(m)
-      }
+      const snapshotContentKeys = new Set(
+        snapshot
+          .map((p) => normalizeMessageContent(p.content))
+          .filter((c) => c.length > 0)
+      )
+      const extras = (existing?.messages || []).filter((m) => {
+        if (snapshotIds.has(m.id)) return false
+        const norm = normalizeMessageContent(m.content)
+        if (norm && snapshotContentKeys.has(norm)) return false
+        return true
+      })
+
+      const merged = extras.length === 0
+        ? snapshotMessages
+        : [...snapshotMessages, ...extras].sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime())
 
       const current = get()
       const base = current.sessions.get(taskId) || existing

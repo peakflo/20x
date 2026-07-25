@@ -118,6 +118,11 @@ export function useAgentSession(taskId: string | undefined) {
         // Session was recreated on the main process — update renderer store
         if (result.newSessionId && taskId) {
           initSession(taskId, result.newSessionId, currentSession.agentId)
+          // A recreated session means the backend resumed and replayed the whole
+          // thread. Reconcile against the durable projection so the transcript is
+          // the single authoritative ordered list (no reorder / no duplicates
+          // from the replay).
+          void hydrateTranscript(taskId)
         }
       } else {
         // Fallback: session mapping lost in renderer — ask the backend
@@ -129,9 +134,13 @@ export function useAgentSession(taskId: string | undefined) {
         if (resolvedSessionId) {
           initSession(taskId, resolvedSessionId, currentSession?.agentId ?? '')
         }
+        // This path always went through resume+replay on the backend — reconcile
+        // to the authoritative projection so the reloaded thread renders once, in
+        // order.
+        void hydrateTranscript(taskId)
       }
     },
-    [taskId, initSession]
+    [taskId, initSession, hydrateTranscript]
   )
 
   const approve = useCallback(
