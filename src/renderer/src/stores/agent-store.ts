@@ -226,15 +226,7 @@ export const useAgentStore = create<AgentState>((set, get) => {
       const existing = state.sessions.get(taskId)
       const seen = getSeen(taskId)
 
-      const existingById = new Map<string, AgentMessage>()
-      for (const m of existing?.messages || []) existingById.set(m.id, m)
-
-      // The durable projection is the SINGLE authoritative, ordered transcript
-      // (persisted seq order). We render it verbatim — mirroring how a projection
-      // snapshot is the source of truth rather than an accumulating push log.
-      const snapshotMessages: AgentMessage[] = snapshot.map((p) => {
-        seen.add(p.partId)
-        const prev = existingById.get(p.partId)
+      const toMessage = (p: typeof snapshot[number], prev?: AgentMessage): AgentMessage => {
         const payload = (p.payload || {}) as { taskProgress?: unknown }
         return {
           id: p.partId,
@@ -246,41 +238,43 @@ export const useAgentStore = create<AgentState>((set, get) => {
           taskProgress: (payload.taskProgress as AgentMessage['taskProgress']) ?? prev?.taskProgress,
           ...(prev?.stepMeta ? { stepMeta: prev.stepMeta } : {})
         }
-      })
+      }
 
-      // Keep ONLY genuinely-unpersisted in-memory parts (e.g. a just-emitted
-      // part not yet written through). A part is an extra iff its id is not in
-      // the snapshot AND its content is not already represented by a snapshot
-      // part — the latter guard drops the "same message under a different id"
-      // duplicate that a whole-thread replay produces. Extras are re-inserted in
-      // timestamp order (NOT blindly appended at the end), so nothing jumps to
-      // the bottom of the transcript.
-      const snapshotIds = new Set(snapshot.map((p) => p.partId))
-      const snapshotContentKeys = new Set(
-        snapshot
-          .map((p) => normalizeMessageContent(p.content))
-          .filter((c) => c.length > 0)
-      )
-      const extras = (existing?.messages || []).filter((m) => {
-        if (snapshotIds.has(m.id)) return false
-        const norm = normalizeMessageContent(m.content)
-        if (norm && snapshotContentKeys.has(norm)) return false
-        return true
-      })
+      // ADDITIVE, NON-DESTRUCTIVE reconciliation.
+      //
+      // The transcript is a dynamically-measured virtual list (@tanstack/react-
+      // virtual). Reordering or wholesale-replacing already-rendered rows
+      // invalidates its height measurements and paints rows on top of each other.
+      // So hydration only ever ADDS missing history; it never reorders or
+      // replaces rows the user is already looking at.
+      const existingMessages = existing?.messages || []
+      if (existingMessages.length === 0) {
+        // Fresh view (e.g. after reload): render the full ordered projection once.
+        const messages = snapshot.map((p) => { seen.add(p.partId); return toMessage(p) })
+        rebuildRenderedIds(taskId, messages)
+        const current = get()
+        const base = current.sessions.get(taskId)
+        const session: TaskSession = base
+          ? { ...base, messages }
+          : { sessionId: null, agentId: '', taskId, status: SessionStatus.IDLE, messages, pendingApproval: null }
+        set({ sessions: new Map(current.sessions).set(taskId, session) })
+        return
+      }
 
-      const merged = extras.length === 0
-        ? snapshotMessages
-        : [...snapshotMessages, ...extras].sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime())
+      // Live view: append only snapshot parts not already rendered, in order, at
+      // the end. Existing rows are left exactly as-is (stable for the virtualizer).
+      // Missing is computed against the ACTUAL rendered message ids (authoritative),
+      // so a stale rendered-id set can never cause a re-append.
+      const existingIds = new Set(existingMessages.map((m) => m.id))
+      const rendered = getRenderedIds(taskId)
+      const missing = snapshot.filter((p) => !existingIds.has(p.partId) && !rendered.has(p.partId))
+      if (missing.length === 0) return
 
+      const appended = missing.map((p) => { seen.add(p.partId); rendered.add(p.partId); return toMessage(p) })
       const current = get()
       const base = current.sessions.get(taskId) || existing
-      const session: TaskSession = base
-        ? { ...base, messages: merged }
-        : { sessionId: null, agentId: '', taskId, status: SessionStatus.IDLE, messages: merged, pendingApproval: null }
-      // Rebuild the rendered-id set to exactly mirror the hydrated messages, so
-      // subsequent live events dedupe against the reconciled transcript.
-      rebuildRenderedIds(taskId, merged)
-      set({ sessions: new Map(current.sessions).set(taskId, session) })
+      if (!base) return
+      set({ sessions: new Map(current.sessions).set(taskId, { ...base, messages: [...base.messages, ...appended] }) })
     } catch (err) {
       console.error(`[agent-store] hydrateTranscript failed for task ${taskId}:`, err)
     } finally {

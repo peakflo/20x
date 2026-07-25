@@ -42,8 +42,10 @@ describe('agent-store transcript hydration', () => {
     ])
   })
 
-  it('snapshot is authoritative for content/order; in-memory extras are preserved', async () => {
-    // Existing in-memory session with a stale part and an ephemeral extra
+  it('is additive and non-destructive on a live view — never reorders/replaces rendered rows', async () => {
+    // Existing rendered rows the user is already looking at. Hydration must NOT
+    // reorder or replace these (that corrupts the virtualizer). It only appends
+    // snapshot parts not already rendered, at the end.
     useAgentStore.setState({
       sessions: new Map([['task-1', {
         sessionId: 's1',
@@ -51,32 +53,26 @@ describe('agent-store transcript hydration', () => {
         taskId: 'task-1',
         status: SessionStatus.WORKING,
         messages: [
-          // Same id as a snapshot part → snapshot content wins.
-          { id: 'p1', role: 'assistant', content: 'stale partial', timestamp: new Date(1) },
-          // A whole-thread replay presented this snapshot part under a DIFFERENT
-          // id — same content. Must be dropped, not duplicated.
-          { id: 'p2-under-different-id', role: 'assistant', content: 'second part', timestamp: new Date(3) },
-          // Genuinely-unpersisted latest extra → preserved, in timestamp order.
-          { id: 'ephemeral-1', role: 'system', content: 'transient note', timestamp: new Date(5000) }
+          { id: 'p1', role: 'assistant', content: 'already rendered A', timestamp: new Date(1) },
+          { id: 'p2', role: 'assistant', content: 'already rendered B', timestamp: new Date(2) }
         ] as AgentMessage[],
         pendingApproval: null
       }]])
     })
 
     getSnapshotMock.mockResolvedValue([
-      part('p1', 1, { content: 'final complete content' }),
-      part('p2', 2, { content: 'second part' })
+      part('p1', 1, { content: 'already rendered A' }),
+      part('p2', 2, { content: 'already rendered B' }),
+      part('p3', 3, { content: 'newly persisted C' })
     ])
 
     await useAgentStore.getState().hydrateTranscript('task-1')
 
     const messages = useAgentStore.getState().sessions.get('task-1')!.messages
-    // p1, p2 (verbatim, ordered), then the genuinely-unpersisted extra by timestamp.
-    // The different-id duplicate of 'second part' is NOT present.
-    expect(messages.map((m: AgentMessage) => m.id)).toEqual(['p1', 'p2', 'ephemeral-1'])
-    expect(messages[0].content).toBe('final complete content')
-    expect(messages.filter((m: AgentMessage) => m.content === 'second part')).toHaveLength(1)
-    // Session metadata (status, ids) untouched by hydration
+    // p1/p2 kept exactly (same objects/order, not replaced); only p3 appended.
+    expect(messages.map((m: AgentMessage) => m.id)).toEqual(['p1', 'p2', 'p3'])
+    expect(messages[0].content).toBe('already rendered A')
+    expect(messages[2].content).toBe('newly persisted C')
     expect(useAgentStore.getState().sessions.get('task-1')!.status).toBe(SessionStatus.WORKING)
   })
 
