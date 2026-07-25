@@ -2919,35 +2919,38 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     }
   }
 
-  /** Tasks whose one-time projection backfill is in flight (dedupe guard). */
+  /** Tasks whose projection backfill is in flight (dedupe guard). */
   private backfillInFlight: Set<string> = new Set()
+  /** Tasks whose full adapter history has already been ingested THIS app run. */
+  private ingestedTasks: Set<string> = new Set()
 
   /**
    * Snapshot of the durable transcript projection for a task.
    * Clients (renderer, mobile) render from this instead of relying on having
    * observed every live event.
    *
-   * If the projection is empty but the task has a persisted session, ingest that
-   * history ONCE (event-sourced backfill) so the projection is the single
-   * complete source — covering sessions that predate write-through.
+   * On the first read per app run, ingest the task's FULL persisted session
+   * history into the projection (idempotent), so the projection is the single
+   * COMPLETE source even when write-through only captured part of it (e.g. only
+   * recent user echoes on a session whose assistant replies predate write-through).
    */
   async getTranscriptSnapshot(taskId: string, sinceSeq?: number): Promise<ReturnType<DatabaseManager['getTranscriptParts']>> {
-    if (!this.db.hasTranscriptParts(taskId)) {
+    if (!this.ingestedTasks.has(taskId)) {
       await this.backfillTranscriptProjection(taskId)
     }
     return this.db.getTranscriptParts(taskId, sinceSeq)
   }
 
   /**
-   * One-time, idempotent ingest of a task's persisted session history into the
-   * durable projection. Reuses the adapter's side-effect-free persisted-history
-   * read (no CLI spawn). Upsert-by-part-id means a later live event or a repeat
-   * call never duplicates. Best-effort: silently no-ops when unavailable.
+   * Idempotent ingest of a task's persisted session history into the durable
+   * projection — runs once per app run per task. Reuses the adapter's
+   * side-effect-free persisted-history read (no CLI spawn). Upsert-by-part-id +
+   * created_at ordering means re-ingesting is safe, never duplicates, and fills
+   * gaps (e.g. assistant messages missing from a partially-populated projection).
+   * Best-effort: silently no-ops when unavailable.
    */
   private async backfillTranscriptProjection(taskId: string): Promise<void> {
-    if (this.backfillInFlight.has(taskId)) return
-    // Re-check under the guard — write-through may have populated it meanwhile.
-    if (this.db.hasTranscriptParts(taskId)) return
+    if (this.backfillInFlight.has(taskId) || this.ingestedTasks.has(taskId)) return
 
     const task = this.db.getTask(taskId)
     const sessionId = task?.session_id
@@ -2961,16 +2964,31 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     try {
       const workspaceDir = this.db.getWorkspaceDir(taskId)
       const messages = await adapter.getPersistedMessages(sessionId, { agentId, taskId, workspaceDir })
+
+      // Dedup the ingest against what the projection already has — by id AND by
+      // (role · content). The content check collapses the id-mismatch case where
+      // a live user echo (id `user-message-*`) and its persisted-session twin
+      // (id `<uuid>-text-0`) are the same message under different ids, so your
+      // own messages are never doubled by the backfill.
+      const normalize = (s: string): string => s.replace(/\s+/g, ' ').trim().toLowerCase()
+      const existing = this.db.getTranscriptParts(taskId)
+      const existingIds = new Set(existing.map((p) => p.partId))
+      const existingKeys = new Set(
+        existing.filter((p) => p.content).map((p) => `${p.role}|${normalize(p.content)}`)
+      )
+
       const parts: Parameters<DatabaseManager['upsertTranscriptParts']>[1] = []
       for (const message of messages) {
         const role = message.role === MessageRole.USER ? 'user'
           : message.role === MessageRole.SYSTEM ? 'system' : 'assistant'
         for (const part of message.parts) {
           if (!part.id) continue
+          if (existingIds.has(part.id)) continue
           const partType = String(part.type)
           if (AgentManager.EPHEMERAL_PART_TYPES.has(partType)) continue
           const content = part.content || part.text || ''
           if (!content && !part.tool && !part.taskProgress) continue
+          if (content && existingKeys.has(`${role}|${normalize(content)}`)) continue
           parts.push({
             id: part.id,
             role,
@@ -2990,6 +3008,10 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       console.error(`[AgentManager] Transcript projection backfill failed for task ${taskId}:`, err)
     } finally {
       this.backfillInFlight.delete(taskId)
+      // A real ingest attempt ran (adapter + session present) — don't repeat the
+      // full history read on every subsequent snapshot this app run. Write-through
+      // keeps the projection current from here.
+      this.ingestedTasks.add(taskId)
     }
   }
 

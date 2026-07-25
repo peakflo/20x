@@ -2082,9 +2082,13 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
   getTranscriptParts(taskId: string, sinceSeq?: number): TranscriptPartRecord[] {
     if (!this.ensureDbOpen()) return []
 
+    // Order by REAL event time (created_at), with seq as a stable tiebreaker.
+    // Insertion order (seq) is not chronological when a partial projection is
+    // later backfilled with older history — ordering by created_at keeps the
+    // transcript correct regardless of when each part was ingested.
     const rows = (sinceSeq != null
-      ? this.db.prepare('SELECT * FROM transcript_parts WHERE task_id = ? AND seq > ? ORDER BY seq ASC').all(taskId, sinceSeq)
-      : this.db.prepare('SELECT * FROM transcript_parts WHERE task_id = ? ORDER BY seq ASC').all(taskId)
+      ? this.db.prepare('SELECT * FROM transcript_parts WHERE task_id = ? AND seq > ? ORDER BY created_at ASC, seq ASC').all(taskId, sinceSeq)
+      : this.db.prepare('SELECT * FROM transcript_parts WHERE task_id = ? ORDER BY created_at ASC, seq ASC').all(taskId)
     ) as Array<{
       task_id: string; part_id: string; seq: number; role: string; content: string;
       part_type: string | null; tool: string | null; payload: string | null;

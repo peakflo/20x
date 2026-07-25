@@ -2920,18 +2920,27 @@ describe('AgentManager transcript projection backfill (event-sourced, ingest-onc
     expect(upserts[0].parts.find((p) => p.id === 'a1')).toMatchObject({ role: 'assistant', receivedAt: 2000 })
   })
 
-  it('does NOT backfill when the projection already has parts', async () => {
+  it('fills gaps even when the projection is partially populated (dedup by id + content)', async () => {
     const { mgr, mockDb, upserts } = buildManager()
-    ;(mockDb as any).hasTranscriptParts = vi.fn(() => true)
-    const getAdapterSpy = vi.spyOn(mgr as any, 'getAdapter')
+    // Projection already has the user echo (different id, same content as the
+    // persisted-session user message) plus nothing else. Backfill must add the
+    // assistant message but NOT re-add the user message.
+    ;(mockDb as any).getTranscriptParts = vi.fn(() => [
+      { taskId: 'task-1', partId: 'user-message-123', seq: 1, role: 'user', content: 'hello', createdAt: 1000, updatedAt: 1000 }
+    ])
+    vi.spyOn(mgr as any, 'getAdapter').mockReturnValue({
+      getPersistedMessages: vi.fn(async () => persisted) // user 'hello' (u1) + assistant 'hi there' (a1)
+    })
 
     await mgr.getTranscriptSnapshot('task-1')
 
-    expect(upserts).toHaveLength(0)
-    expect(getAdapterSpy).not.toHaveBeenCalled()
+    expect(upserts).toHaveLength(1)
+    const ids = upserts[0].parts.map((p) => p.id)
+    expect(ids).toContain('a1')       // assistant gap filled
+    expect(ids).not.toContain('u1')   // user message not duplicated (content already present)
   })
 
-  it('is idempotent — a second snapshot call does not re-ingest', async () => {
+  it('is idempotent per app run — a second snapshot call does not re-ingest', async () => {
     const { mgr, upserts } = buildManager()
     const getPersistedMessages = vi.fn(async () => persisted)
     vi.spyOn(mgr as any, 'getAdapter').mockReturnValue({ getPersistedMessages })
@@ -2939,7 +2948,7 @@ describe('AgentManager transcript projection backfill (event-sourced, ingest-onc
     await mgr.getTranscriptSnapshot('task-1')
     await mgr.getTranscriptSnapshot('task-1')
 
-    expect(upserts).toHaveLength(1) // stored after first; second sees hasTranscriptParts=true
+    expect(upserts).toHaveLength(1) // ingested once this run
     expect(getPersistedMessages).toHaveBeenCalledTimes(1)
   })
 
