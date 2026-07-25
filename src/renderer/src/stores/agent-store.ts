@@ -92,6 +92,41 @@ function getSeen(taskId: string): Set<string> {
   return seen
 }
 
+// Non-evicting per-task set of message ids currently present in the transcript.
+// This mirrors the messages array exactly and is NEVER evicted, so it stays a
+// correct source of truth for "have I already rendered this part?" — unlike the
+// `seen` set, which is capped/evicted (and also tracks absorbed step markers).
+//
+// Why it matters: some providers (notably the Codex app-server) re-list the
+// WHOLE thread on every idle/turn-completed. On a long session the earliest
+// message ids get evicted from `seen`, so those messages would re-append on the
+// reconcile pass — the "earlier messages repeating after going idle" bug. Dedup
+// is intentionally id-only (the durable projection's stable part id), never
+// content-based, so two legitimately-identical messages are never collapsed.
+const renderedIds = new Map<string, Set<string>>()
+
+function getRenderedIds(taskId: string): Set<string> {
+  let ids = renderedIds.get(taskId)
+  if (!ids) { ids = new Set(); renderedIds.set(taskId, ids) }
+  return ids
+}
+
+function resetRenderedIds(taskId: string): void {
+  renderedIds.delete(taskId)
+}
+
+function rebuildRenderedIds(taskId: string, messages: AgentMessage[]): void {
+  const ids = new Set<string>()
+  for (const m of messages) ids.add(m.id)
+  renderedIds.set(taskId, ids)
+}
+
+/** True when a part id is already rendered for this task — resilient to `seen`
+ *  eviction on long sessions because it also consults the non-evicting id set. */
+function isAlreadyRendered(seen: Set<string>, taskId: string, msgId: string): boolean {
+  return seen.has(msgId) || getRenderedIds(taskId).has(msgId)
+}
+
 function findBySessionId(sessions: Map<string, TaskSession>, sid: string): TaskSession | undefined {
   for (const s of sessions.values()) {
     if (s.sessionId === sid) return s
@@ -223,6 +258,9 @@ export const useAgentStore = create<AgentState>((set, get) => {
       const session: TaskSession = base
         ? { ...base, messages: merged }
         : { sessionId: null, agentId: '', taskId, status: SessionStatus.IDLE, messages: merged, pendingApproval: null }
+      // Rebuild the rendered-id set to exactly mirror the hydrated messages, so
+      // subsequent live events dedupe against the reconciled transcript.
+      rebuildRenderedIds(taskId, merged)
       set({ sessions: new Map(current.sessions).set(taskId, session) })
     } catch (err) {
       console.error(`[agent-store] hydrateTranscript failed for task ${taskId}:`, err)
@@ -358,8 +396,10 @@ export const useAgentStore = create<AgentState>((set, get) => {
       return
     }
 
-    // Streaming update — replace content of existing message
-    if (data.update && seen.has(msgId)) {
+    // Streaming update — replace content of existing message. Match by the
+    // non-evicting rendered-id set (not only `seen`) so an update still lands
+    // after the id has been evicted from the capped `seen` set on a long session.
+    if (data.update && (seen.has(msgId) || getRenderedIds(taskId).has(msgId))) {
       set({
         sessions: new Map(state.sessions).set(taskId, {
           ...resolvedSession,
@@ -386,11 +426,18 @@ export const useAgentStore = create<AgentState>((set, get) => {
       return
     }
 
-    if (seen.has(msgId)) return
+    const partType = data.partType as string | undefined
+    // Robust dedup: consult the non-evicting rendered-id set, not only the
+    // capped `seen` set, so a provider re-listing the whole thread on idle
+    // (Codex) does not re-append already-rendered messages whose ids have been
+    // evicted from `seen`.
+    if (isAlreadyRendered(seen, taskId, msgId)) {
+      seen.add(msgId)
+      return
+    }
 
     // Ignore empty placeholder parts without poisoning dedup for the real content.
     if (!content && !data.tool && !data.questions && !data.todos && !data.taskProgress) return
-    const partType = data.partType as string | undefined
     if (hasRecentDuplicateError(
       resolvedSession.messages,
       partType,
@@ -401,6 +448,7 @@ export const useAgentStore = create<AgentState>((set, get) => {
       return
     }
     seen.add(msgId)
+    getRenderedIds(taskId).add(msgId)
 
     set({
       sessions: new Map(ensured.sessions).set(taskId, {
@@ -489,8 +537,10 @@ export const useAgentStore = create<AgentState>((set, get) => {
           continue
         }
 
-        // Streaming update — replace content of existing message
-        if (msg.update && seen.has(msgId)) {
+        // Streaming update — replace content of existing message. Match by the
+        // non-evicting rendered-id set (not only `seen`) so an update still lands
+        // after the id has been evicted from the capped `seen` set on a long session.
+        if (msg.update && (seen.has(msgId) || getRenderedIds(taskId).has(msgId))) {
           messages = messages.map((m): AgentMessage => {
             if (m.id !== msgId) return m
             const keepPartType = m.partType === 'todowrite' || m.partType === 'question' || m.partType === 'planreview' || m.partType === 'task_progress'
@@ -510,18 +560,25 @@ export const useAgentStore = create<AgentState>((set, get) => {
           continue
         }
 
-        // Skip already-seen messages
-        if (seen.has(msgId)) continue
+        // Skip already-rendered messages. Consults the non-evicting rendered-id
+        // set — not only the capped `seen` set — so a provider that re-lists the
+        // whole thread on idle (Codex) does not re-append the session's earliest
+        // messages after `seen` has evicted their ids.
+        const partType = msg.partType
+        if (isAlreadyRendered(seen, taskId, msgId)) {
+          seen.add(msgId)
+          continue
+        }
 
         // Allow empty content for tool/question/task_progress messages
         if (!content && !msg.tool && !(msg as Record<string, unknown>).taskProgress) continue
         const now = Date.now()
-        const partType = msg.partType
         if (hasRecentDuplicateError(messages, partType, content, now)) {
           seen.add(msgId)
           continue
         }
         seen.add(msgId)
+        getRenderedIds(taskId).add(msgId)
 
         messages.push({
           id: msgId,
@@ -630,7 +687,7 @@ export const useAgentStore = create<AgentState>((set, get) => {
     initSession: (taskId, sessionId, agentId) => {
       const existing = get().sessions.get(taskId)
       // Only clear dedup state for a truly new session (not a sessionId update)
-      if (!existing) seenIds.delete(taskId)
+      if (!existing) { seenIds.delete(taskId); resetRenderedIds(taskId) }
 
       set((state) => ({
         sessions: new Map(state.sessions).set(taskId, {
@@ -665,6 +722,7 @@ export const useAgentStore = create<AgentState>((set, get) => {
 
     removeSession: (taskId) => {
       seenIds.delete(taskId)
+      resetRenderedIds(taskId)
       stepStartTimes.delete(taskId)
       set((state) => {
         const next = new Map(state.sessions)
@@ -675,6 +733,7 @@ export const useAgentStore = create<AgentState>((set, get) => {
 
     clearMessageDedup: (taskId) => {
       seenIds.delete(taskId)
+      resetRenderedIds(taskId)
       stepStartTimes.delete(taskId)
       // Clear messages array so replayed messages will be added fresh
       set((state) => {

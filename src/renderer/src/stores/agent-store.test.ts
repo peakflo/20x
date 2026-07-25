@@ -626,3 +626,90 @@ describe('useAgentStore', () => {
     })
   })
 })
+
+describe('reconcile-on-idle repeat prevention (Codex thread re-list)', () => {
+  function flush(): Promise<void> {
+    return Promise.resolve().then(() => undefined)
+  }
+
+  it('does not re-append messages whose ids were evicted from the seen set', async () => {
+    useAgentStore.getState().initSession('task-evict', 'sess-1', 'agent-1')
+
+    // Simulate a long session: fill the session with an early message, then
+    // push >10,000 distinct ids through so the early id is evicted from `seen`.
+    batchCallback!({
+      sessionId: 'sess-1',
+      taskId: 'task-evict',
+      messages: [{ id: 'early-1', role: 'assistant', content: 'EARLIEST MESSAGE' }]
+    })
+    await flush()
+
+    for (let i = 0; i < 10_050; i++) {
+      batchCallback!({
+        sessionId: 'sess-1',
+        taskId: 'task-evict',
+        messages: [{ id: `filler-${i}`, role: 'assistant', content: `f${i}` }]
+      })
+    }
+    await flush()
+
+    const before = useAgentStore.getState().sessions.get('task-evict')!.messages.length
+
+    // Provider re-lists the whole thread on idle — including the earliest message,
+    // whose id has now been evicted from `seen`. It must NOT be re-appended.
+    batchCallback!({
+      sessionId: 'sess-1',
+      taskId: 'task-evict',
+      messages: [{ id: 'early-1', role: 'assistant', content: 'EARLIEST MESSAGE' }]
+    })
+    await flush()
+
+    const msgs = useAgentStore.getState().sessions.get('task-evict')!.messages
+    expect(msgs.length).toBe(before)
+    expect(msgs.filter((m) => m.content === 'EARLIEST MESSAGE')).toHaveLength(1)
+  })
+
+  it('does NOT collapse two legitimately-identical messages under different ids', async () => {
+    // Dedup is id-only (never content-based), so two genuinely distinct parts
+    // that happen to share text — e.g. the user sending the same message twice —
+    // must both render. This is the "my message got replaced by my previous
+    // identical message" regression guard.
+    useAgentStore.getState().initSession('task-dup', 'sess-1', 'agent-1')
+
+    batchCallback!({ sessionId: 'sess-1', taskId: 'task-dup', messages: [{ id: 'u1', role: 'user', content: 'run it again' }] })
+    await flush()
+    batchCallback!({ sessionId: 'sess-1', taskId: 'task-dup', messages: [{ id: 'u2', role: 'user', content: 'run it again' }] })
+    await flush()
+
+    const msgs = useAgentStore.getState().sessions.get('task-dup')!.messages
+    expect(msgs.filter((m) => m.content === 'run it again')).toHaveLength(2)
+  })
+
+  it('still applies a streaming update after the id was evicted from seen', async () => {
+    useAgentStore.getState().initSession('task-upd', 'sess-1', 'agent-1')
+
+    batchCallback!({
+      sessionId: 'sess-1',
+      taskId: 'task-upd',
+      messages: [{ id: 'stream-1', role: 'assistant', content: 'partial' }]
+    })
+    await flush()
+    for (let i = 0; i < 10_050; i++) {
+      batchCallback!({ sessionId: 'sess-1', taskId: 'task-upd', messages: [{ id: `f-${i}`, role: 'assistant', content: `x${i}` }] })
+    }
+    await flush()
+
+    // Update to the (now-evicted-from-seen) streamed message must replace content, not append
+    batchCallback!({
+      sessionId: 'sess-1',
+      taskId: 'task-upd',
+      messages: [{ id: 'stream-1', role: 'assistant', content: 'partial then complete', update: true }]
+    })
+    await flush()
+
+    const msgs = useAgentStore.getState().sessions.get('task-upd')!.messages
+    const streamMsgs = msgs.filter((m) => m.id === 'stream-1')
+    expect(streamMsgs).toHaveLength(1)
+    expect(streamMsgs[0].content).toBe('partial then complete')
+  })
+})
