@@ -2876,7 +2876,7 @@ describe('AgentManager durable transcript write-through', () => {
 })
 
 describe('AgentManager transcript projection backfill (event-sourced, ingest-once)', () => {
-  function buildManager(dbOverrides: Record<string, unknown> = {}) {
+  function buildManager() {
     const mockDb = createMockDb({})
     const upserts: Array<{ taskId: string; parts: Array<{ id: string; role?: string; content?: string; receivedAt?: number }> }> = []
     let stored = false
