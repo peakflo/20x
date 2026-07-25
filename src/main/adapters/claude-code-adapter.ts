@@ -536,6 +536,13 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
         }
 
         if (message.parts.length > 0) {
+          // Preserve the ORIGINAL event time from the session log so replay/
+          // rehydration shows real timestamps (and the durable projection stores
+          // them as created_at) instead of defaulting to "now" on every reload.
+          const receivedAt = entry.timestamp ? Date.parse(entry.timestamp) : NaN
+          if (!Number.isNaN(receivedAt)) {
+            for (const part of message.parts) part.receivedAt = receivedAt
+          }
           messages.push(message)
         }
       }
