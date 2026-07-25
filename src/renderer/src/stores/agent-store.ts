@@ -258,7 +258,6 @@ export const useAgentStore = create<AgentState>((set, get) => {
           ? { ...base, messages }
           : { sessionId: null, agentId: '', taskId, status: SessionStatus.IDLE, messages, pendingApproval: null }
         set({ sessions: new Map(current.sessions).set(taskId, session) })
-        console.log(`[hydrate] task=${taskId} path=EMPTY snapshot=${snapshot.length} rendered=${messages.length} assistant=${messages.filter((m) => m.role === 'assistant').length}`)
         return
       }
 
@@ -269,7 +268,6 @@ export const useAgentStore = create<AgentState>((set, get) => {
       const existingIds = new Set(existingMessages.map((m) => m.id))
       const rendered = getRenderedIds(taskId)
       const missing = snapshot.filter((p) => !existingIds.has(p.partId) && !rendered.has(p.partId))
-      console.log(`[hydrate] task=${taskId} path=ADDITIVE snapshot=${snapshot.length} existing=${existingMessages.length} missing=${missing.length} missingAssistant=${missing.filter((p) => p.role === 'assistant').length}`)
       if (missing.length === 0) return
 
       const appended = missing.map((p) => { seen.add(p.partId); rendered.add(p.partId); return toMessage(p) })
@@ -747,7 +745,6 @@ export const useAgentStore = create<AgentState>((set, get) => {
     },
 
     clearMessageDedup: (taskId) => {
-      console.log(`[clearMessageDedup] task=${taskId} — messages CLEARED (was ${get().sessions.get(taskId)?.messages.length ?? 0})`)
       seenIds.delete(taskId)
       resetRenderedIds(taskId)
       stepStartTimes.delete(taskId)

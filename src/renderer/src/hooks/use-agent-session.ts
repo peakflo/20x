@@ -34,7 +34,6 @@ export function useAgentSession(taskId: string | undefined) {
   const session = useAgentStore((s) => (taskId ? s.sessions.get(taskId) : undefined))
   const initSession = useAgentStore((s) => s.initSession)
   const endSession = useAgentStore((s) => s.endSession)
-  const clearMessageDedup = useAgentStore((s) => s.clearMessageDedup)
   const hydrateTranscript = useAgentStore((s) => s.hydrateTranscript)
 
   // Hydrate from the durable transcript projection when a task view binds.
@@ -72,8 +71,11 @@ export function useAgentSession(taskId: string | undefined) {
 
   const resume = useCallback(
     async (agentId: string, tId: string, ocSessionId: string) => {
-      // Clear message dedup so replayed messages will be added
-      clearMessageDedup(tId)
+      // NOTE: do NOT clear the message list here. The durable transcript
+      // projection is hydrated into the view on mount; clearing would wipe that
+      // full history, and the resume replay would only partially repopulate it.
+      // The replay batch dedups against the hydrated messages (shared part ids),
+      // so nothing is lost or duplicated by leaving them in place.
       initSession(tId, '', agentId)
       const result = await agentSessionApi.resume(agentId, tId, ocSessionId)
       if (result.ended) {
@@ -84,7 +86,7 @@ export function useAgentSession(taskId: string | undefined) {
       initSession(tId, result.sessionId, agentId)
       return result.sessionId
     },
-    [initSession, clearMessageDedup, removeSession]
+    [initSession, removeSession]
   )
 
   const abort = useCallback(async () => {
