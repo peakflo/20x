@@ -534,3 +534,38 @@ describe('Durable transcript projection', () => {
     expect(db.getTranscriptParts('task-1')).toHaveLength(0)
   })
 })
+
+describe('Durable transcript — timestamp provenance', () => {
+  it('persists the original receivedAt as created_at (bulk seed keeps chronology)', () => {
+    // A bulk seed/replay writes the whole history in one burst. Each part must
+    // keep its ORIGINAL time, not a single shared write-time.
+    const t0 = 1_700_000_000_000
+    db.upsertTranscriptParts('task-1', [
+      { id: 'p1', role: 'user', content: 'first', receivedAt: t0 },
+      { id: 'p2', role: 'assistant', content: 'second', receivedAt: t0 + 30_000 },
+      { id: 'p3', role: 'assistant', content: 'third', receivedAt: t0 + 90_000 }
+    ])
+
+    const parts = db.getTranscriptParts('task-1')
+    expect(parts.map((p) => p.createdAt)).toEqual([t0, t0 + 30_000, t0 + 90_000])
+    // Not collapsed to one shared timestamp
+    expect(new Set(parts.map((p) => p.createdAt)).size).toBe(3)
+  })
+
+  it('falls back to write-time only when receivedAt is absent', () => {
+    const before = Date.now()
+    db.upsertTranscriptParts('task-2', [{ id: 'p1', content: 'x' }])
+    const [p] = db.getTranscriptParts('task-2')
+    expect(p.createdAt).toBeGreaterThanOrEqual(before)
+  })
+
+  it('preserves created_at across a later reconcile upsert', () => {
+    const t0 = 1_700_000_000_000
+    db.upsertTranscriptParts('task-3', [{ id: 'p1', content: 'partial', receivedAt: t0 }])
+    // Reconcile pass re-writes the same part with new content (no receivedAt)
+    db.upsertTranscriptParts('task-3', [{ id: 'p1', content: 'partial then final' }])
+    const [p] = db.getTranscriptParts('task-3')
+    expect(p.content).toBe('partial then final')
+    expect(p.createdAt).toBe(t0) // original time preserved
+  })
+})

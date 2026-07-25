@@ -306,6 +306,9 @@ export interface TranscriptPartInput {
   partType?: string
   tool?: unknown
   payload?: unknown
+  /** Original time the part was produced (ms epoch). Persisted as created_at so a
+   *  bulk seed/replay keeps real chronology instead of a single write-time. */
+  receivedAt?: number
 }
 
 /** Persisted transcript part returned by snapshot queries. */
@@ -2038,9 +2041,14 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
     const nextSeqStmt = this.db.prepare(
       'SELECT COALESCE(MAX(seq), 0) + 1 AS next FROM transcript_parts WHERE task_id = ?'
     )
+    // created_at carries the part's ORIGINAL time (receivedAt) when known, not
+    // the write time. Otherwise a bulk seed/replay (which writes the whole
+    // history in one burst) would stamp every row with a near-identical
+    // timestamp and destroy the transcript's chronology. On conflict, created_at
+    // is preserved (never overwritten by a later reconcile pass).
     const upsertStmt = this.db.prepare(`
-      INSERT INTO transcript_parts (task_id, part_id, seq, role, content, part_type, tool, payload, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, unixepoch('subsec') * 1000)
+      INSERT INTO transcript_parts (task_id, part_id, seq, role, content, part_type, tool, payload, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch('subsec') * 1000)
       ON CONFLICT(task_id, part_id) DO UPDATE SET
         content = excluded.content,
         part_type = COALESCE(excluded.part_type, transcript_parts.part_type),
@@ -2051,6 +2059,7 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
 
     const txn = this.db.transaction(() => {
       let nextSeq = (nextSeqStmt.get(taskId) as { next: number }).next
+      const writeNow = Date.now()
       for (const part of parts) {
         if (!part.id) continue
         upsertStmt.run(
@@ -2061,7 +2070,8 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
           part.content || '',
           part.partType ?? null,
           part.tool != null ? JSON.stringify(part.tool) : null,
-          part.payload != null ? JSON.stringify(part.payload) : null
+          part.payload != null ? JSON.stringify(part.payload) : null,
+          typeof part.receivedAt === 'number' ? part.receivedAt : writeNow
         )
       }
     })

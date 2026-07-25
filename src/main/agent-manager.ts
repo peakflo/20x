@@ -4717,8 +4717,8 @@ Important:
     const event = data as {
       taskId?: string
       replay?: boolean
-      messages?: Array<{ id?: string; role?: string; content?: string; partType?: string; tool?: unknown; questions?: unknown; todos?: unknown; taskProgress?: unknown }>
-      data?: { id?: string; role?: string; content?: string; partType?: string; tool?: unknown; questions?: unknown; todos?: unknown; taskProgress?: unknown }
+      messages?: Array<{ id?: string; role?: string; content?: string; partType?: string; tool?: unknown; questions?: unknown; todos?: unknown; taskProgress?: unknown; receivedAt?: number }>
+      data?: { id?: string; role?: string; content?: string; partType?: string; tool?: unknown; questions?: unknown; todos?: unknown; taskProgress?: unknown; receivedAt?: number }
     }
     const taskId = event.taskId
     if (!taskId) return
@@ -4741,7 +4741,8 @@ Important:
         tool: p.tool,
         payload: (p.questions || p.todos || p.taskProgress)
           ? { questions: p.questions, todos: p.todos, taskProgress: p.taskProgress }
-          : undefined
+          : undefined,
+        receivedAt: p.receivedAt
       }))
 
     if (parts.length > 0) {
