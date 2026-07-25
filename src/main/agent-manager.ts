@@ -2919,13 +2919,78 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     }
   }
 
+  /** Tasks whose one-time projection backfill is in flight (dedupe guard). */
+  private backfillInFlight: Set<string> = new Set()
+
   /**
    * Snapshot of the durable transcript projection for a task.
    * Clients (renderer, mobile) render from this instead of relying on having
    * observed every live event.
+   *
+   * If the projection is empty but the task has a persisted session, ingest that
+   * history ONCE (event-sourced backfill) so the projection is the single
+   * complete source — covering sessions that predate write-through.
    */
-  getTranscriptSnapshot(taskId: string, sinceSeq?: number): ReturnType<DatabaseManager['getTranscriptParts']> {
+  async getTranscriptSnapshot(taskId: string, sinceSeq?: number): Promise<ReturnType<DatabaseManager['getTranscriptParts']>> {
+    if (!this.db.hasTranscriptParts(taskId)) {
+      await this.backfillTranscriptProjection(taskId)
+    }
     return this.db.getTranscriptParts(taskId, sinceSeq)
+  }
+
+  /**
+   * One-time, idempotent ingest of a task's persisted session history into the
+   * durable projection. Reuses the adapter's side-effect-free persisted-history
+   * read (no CLI spawn). Upsert-by-part-id means a later live event or a repeat
+   * call never duplicates. Best-effort: silently no-ops when unavailable.
+   */
+  private async backfillTranscriptProjection(taskId: string): Promise<void> {
+    if (this.backfillInFlight.has(taskId)) return
+    // Re-check under the guard — write-through may have populated it meanwhile.
+    if (this.db.hasTranscriptParts(taskId)) return
+
+    const task = this.db.getTask(taskId)
+    const sessionId = task?.session_id
+    const agentId = task?.agent_id
+    if (!sessionId || !agentId) return
+
+    const adapter = this.getAdapter(agentId)
+    if (!adapter || typeof adapter.getPersistedMessages !== 'function') return
+
+    this.backfillInFlight.add(taskId)
+    try {
+      const workspaceDir = this.db.getWorkspaceDir(taskId)
+      const messages = await adapter.getPersistedMessages(sessionId, { agentId, taskId, workspaceDir })
+      const parts: Parameters<DatabaseManager['upsertTranscriptParts']>[1] = []
+      for (const message of messages) {
+        const role = message.role === MessageRole.USER ? 'user'
+          : message.role === MessageRole.SYSTEM ? 'system' : 'assistant'
+        for (const part of message.parts) {
+          if (!part.id) continue
+          const partType = String(part.type)
+          if (AgentManager.EPHEMERAL_PART_TYPES.has(partType)) continue
+          const content = part.content || part.text || ''
+          if (!content && !part.tool && !part.taskProgress) continue
+          parts.push({
+            id: part.id,
+            role,
+            content,
+            partType,
+            tool: part.tool,
+            payload: part.taskProgress ? { taskProgress: part.taskProgress } : undefined,
+            receivedAt: part.receivedAt
+          })
+        }
+      }
+      if (parts.length > 0) {
+        this.db.upsertTranscriptParts(taskId, parts)
+        console.log(`[AgentManager] Backfilled ${parts.length} transcript part(s) into the projection for task ${taskId}`)
+      }
+    } catch (err) {
+      console.error(`[AgentManager] Transcript projection backfill failed for task ${taskId}:`, err)
+    } finally {
+      this.backfillInFlight.delete(taskId)
+    }
   }
 
   getLastAssistantMessage(sessionId: string): string | null {

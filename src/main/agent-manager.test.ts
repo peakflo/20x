@@ -2864,12 +2864,92 @@ describe('AgentManager durable transcript write-through', () => {
     expect(upserted[0].parts[0].id).toBe('h1')
   })
 
-  it('exposes snapshots via getTranscriptSnapshot', () => {
+  it('exposes snapshots via getTranscriptSnapshot', async () => {
     const { mgr, mockDb } = buildManager()
     const rows = [{ taskId: 'task-1', partId: 'p1', seq: 1, role: 'assistant', content: 'hi', createdAt: 1, updatedAt: 1 }]
+    ;(mockDb as any).hasTranscriptParts = vi.fn(() => true) // already populated → no backfill
     ;(mockDb as any).getTranscriptParts = vi.fn(() => rows)
 
-    expect(mgr.getTranscriptSnapshot('task-1')).toEqual(rows)
+    await expect(mgr.getTranscriptSnapshot('task-1')).resolves.toEqual(rows)
     expect((mockDb as any).getTranscriptParts).toHaveBeenCalledWith('task-1', undefined)
+  })
+})
+
+describe('AgentManager transcript projection backfill (event-sourced, ingest-once)', () => {
+  function buildManager(dbOverrides: Record<string, unknown> = {}) {
+    const mockDb = createMockDb({})
+    const upserts: Array<{ taskId: string; parts: Array<{ id: string; role?: string; content?: string; receivedAt?: number }> }> = []
+    let stored = false
+    Object.assign(mockDb as any, {
+      getTask: vi.fn(() => ({ id: 'task-1', agent_id: 'agent-1', session_id: 'sess-abc', title: 'T', repos: [], skill_ids: [] })),
+      getWorkspaceDir: vi.fn(() => '/tmp/ws'),
+      hasTranscriptParts: vi.fn(() => stored),
+      upsertTranscriptParts: vi.fn((taskId: string, parts: never[]) => { upserts.push({ taskId, parts }); stored = true }),
+      getTranscriptParts: vi.fn(() => [])
+    })
+    const mgr = new AgentManager(mockDb)
+    return { mgr, mockDb, upserts }
+  }
+
+  const persisted = [
+    {
+      role: MessageRole.USER,
+      parts: [{ id: 'u1', type: MessagePartType.TEXT, text: 'hello', receivedAt: 1000 }]
+    },
+    {
+      role: MessageRole.ASSISTANT,
+      parts: [
+        { id: 'a1', type: MessagePartType.TEXT, text: 'hi there', receivedAt: 2000 },
+        { id: 's1', type: 'step-start', text: '', receivedAt: 2001 } // ephemeral, skipped
+      ]
+    }
+  ]
+
+  it('ingests persisted history once into the projection with real timestamps', async () => {
+    const { mgr, upserts } = buildManager()
+    vi.spyOn(mgr as any, 'getAdapter').mockReturnValue({
+      getPersistedMessages: vi.fn(async () => persisted)
+    })
+
+    await mgr.getTranscriptSnapshot('task-1')
+
+    expect(upserts).toHaveLength(1)
+    const ids = upserts[0].parts.map((p) => p.id)
+    expect(ids).toEqual(['u1', 'a1']) // step-start ephemeral excluded
+    expect(upserts[0].parts.find((p) => p.id === 'u1')).toMatchObject({ role: 'user', content: 'hello', receivedAt: 1000 })
+    expect(upserts[0].parts.find((p) => p.id === 'a1')).toMatchObject({ role: 'assistant', receivedAt: 2000 })
+  })
+
+  it('does NOT backfill when the projection already has parts', async () => {
+    const { mgr, mockDb, upserts } = buildManager()
+    ;(mockDb as any).hasTranscriptParts = vi.fn(() => true)
+    const getAdapterSpy = vi.spyOn(mgr as any, 'getAdapter')
+
+    await mgr.getTranscriptSnapshot('task-1')
+
+    expect(upserts).toHaveLength(0)
+    expect(getAdapterSpy).not.toHaveBeenCalled()
+  })
+
+  it('is idempotent — a second snapshot call does not re-ingest', async () => {
+    const { mgr, upserts } = buildManager()
+    const getPersistedMessages = vi.fn(async () => persisted)
+    vi.spyOn(mgr as any, 'getAdapter').mockReturnValue({ getPersistedMessages })
+
+    await mgr.getTranscriptSnapshot('task-1')
+    await mgr.getTranscriptSnapshot('task-1')
+
+    expect(upserts).toHaveLength(1) // stored after first; second sees hasTranscriptParts=true
+    expect(getPersistedMessages).toHaveBeenCalledTimes(1)
+  })
+
+  it('no-ops safely when the adapter cannot read persisted history', async () => {
+    const { mgr, upserts } = buildManager()
+    vi.spyOn(mgr as any, 'getAdapter').mockReturnValue({ /* no getPersistedMessages */ })
+
+    const result = await mgr.getTranscriptSnapshot('task-1')
+
+    expect(upserts).toHaveLength(0)
+    expect(result).toEqual([])
   })
 })

@@ -403,6 +403,21 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
     }
   }
 
+  /**
+   * Public, side-effect-free read of the persisted session history from the
+   * on-disk JSONL — no CLI/SDK spawn, no live session required. Used to backfill
+   * the durable transcript projection once. Returns [] if the file is missing.
+   */
+  async getPersistedMessages(sessionId: string, config: SessionConfig): Promise<SessionMessage[]> {
+    const workspaceDir = config.workspaceDir
+    if (!workspaceDir) return []
+    try {
+      return await this.loadSessionHistory(sessionId, workspaceDir)
+    } catch {
+      return []
+    }
+  }
+
   private async loadSessionHistory(sessionId: string, workspaceDir: string): Promise<SessionMessage[]> {
     try {
       const { readFileSync, existsSync } = await import('fs')
