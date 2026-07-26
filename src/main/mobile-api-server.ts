@@ -349,17 +349,23 @@ async function routeGet(pathname: string, url: URL): Promise<unknown> {
     return tasks
   }
 
-  // GET /api/tasks/:taskId/transcript — full durable transcript snapshot
+  // GET /api/tasks/:taskId/transcript — full durable transcript snapshot.
+  // Mobile is a PURE READER of the projection: read straight from the DB, never
+  // via AgentManager.getTranscriptSnapshot (which can trigger the one-time
+  // backfill/ingest). A mobile client connecting must not mutate the projection
+  // or broadcast deltas to other clients. The desktop (session owner) owns the
+  // one-time seed of pre-store sessions.
   const transcriptMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/transcript$/)
   if (transcriptMatch) {
-    return agentRef!.getTranscriptSnapshot(decodeURIComponent(transcriptMatch[1]))
+    return db.getTranscriptParts(decodeURIComponent(transcriptMatch[1]))
   }
 
-  // GET /api/tasks/:taskId/transcript/delta?sinceRev=N — parts changed since rev
+  // GET /api/tasks/:taskId/transcript/delta?sinceRev=N — parts changed since rev.
+  // Pure DB read (see above): no backfill, no writes, no broadcast.
   const deltaMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/transcript\/delta$/)
   if (deltaMatch) {
     const sinceRev = Number(url.searchParams.get('sinceRev') || '0') || 0
-    return agentRef!.getTranscriptDelta(decodeURIComponent(deltaMatch[1]), sinceRev)
+    return db.getTranscriptDelta(decodeURIComponent(deltaMatch[1]), sinceRev)
   }
 
   // GET /api/tasks/:id
