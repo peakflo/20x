@@ -974,6 +974,7 @@ describe('AgentManager transitionToIdle — enterprise task completion after fee
       getSecretsByIds: vi.fn(() => []),
       getSetting: vi.fn(() => null),
       updateTask: vi.fn(),
+      getTranscriptParts: vi.fn(() => [] as Array<{ role: string; content: string }>),
     } as unknown as ConstructorParameters<typeof AgentManager>[0]
   }
 
@@ -1155,6 +1156,45 @@ describe('AgentManager transitionToIdle — enterprise task completion after fee
     expect(adapter.getAllMessages).toHaveBeenCalledOnce()
     expect(replayCall).toBeDefined()
     expect(sessionWithAdapter.seenPartIds.has('final-part')).toBe(true)
+  })
+
+  it('does NOT re-emit a message already persisted under a different part id (codex id-scheme mismatch)', async () => {
+    const mockDb = createEnterpriseTaskDb({ status: TaskStatus.AgentWorking, output_fields: [], source_id: null })
+    // The projection already has this assistant message — captured live under a
+    // codex streaming id (agent-msg_...). getAllMessages returns the SAME text
+    // under the finalized item id (agent-item-42), which is NOT in seenPartIds.
+    ;(mockDb as any).getTranscriptParts = vi.fn(() => [
+      { role: 'assistant', content: 'I confirmed the production path has more than one worker.' }
+    ])
+    const { mgr, session } = setupManager(mockDb)
+    const adapter = {
+      getAllMessages: vi.fn(async () => ([
+        {
+          id: 'msg-1',
+          role: MessageRole.ASSISTANT,
+          parts: [
+            { id: 'agent-item-42', type: MessagePartType.TEXT, text: 'I confirmed the production path has more than one worker.', content: 'I confirmed the production path has more than one worker.' },
+            { id: 'agent-item-43', type: MessagePartType.TEXT, text: 'Brand new content not seen before.', content: 'Brand new content not seen before.' }
+          ]
+        }
+      ]))
+    }
+    const sessionWithAdapter = { ...session, adapter: adapter as any }
+    vi.spyOn(mgr as any, 'extractOutputValues').mockResolvedValue(undefined)
+    const sendSpy = vi.spyOn(mgr as any, 'sendToRenderer')
+
+    await (mgr as any).transitionToIdle('session-1', sessionWithAdapter)
+
+    const batch = sendSpy.mock.calls.find(([channel]) => channel === 'agent:output-batch')?.[1] as
+      | { messages: Array<{ id: string; content: string }> }
+      | undefined
+    const emittedIds = batch?.messages.map((m) => m.id) ?? []
+    // The already-persisted message (different id) must NOT be re-emitted…
+    expect(emittedIds).not.toContain('agent-item-42')
+    // …but genuinely new content still is.
+    expect(emittedIds).toContain('agent-item-43')
+    // The skipped part's id is remembered so it isn't reconsidered next idle.
+    expect(sessionWithAdapter.seenPartIds.has('agent-item-42')).toBe(true)
   })
 
   it('keeps polling and does not mark ready when adapter is still busy after transcript replay', async () => {

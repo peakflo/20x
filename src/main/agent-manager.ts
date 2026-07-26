@@ -3144,6 +3144,21 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       const messages = await session.adapter.getAllMessages(sessionId, config)
       const batchMessages: Array<{ id: string; role: string; content: string; partType?: string; tool?: unknown; taskProgress?: unknown; receivedAt?: number }> = []
 
+      // Dedup against the durable projection by CONTENT, not just by part id.
+      // Some adapters (codex app-server) give a message's live streaming delta a
+      // DIFFERENT part id (e.g. `agent-msg_<hash>`) than its finalized thread
+      // item (`agent-item-N`). seenPartIds holds the live ids, so an id-only
+      // check would treat every finalized item as brand-new and re-emit it —
+      // duplicating each assistant message on every idle transition. Skipping
+      // parts whose text is already persisted makes this safety-net re-read
+      // truly additive (it only fills GENUINELY missing content).
+      const normalize = (s: string): string => s.replace(/\s+/g, ' ').trim().toLowerCase()
+      const existingContent = new Set(
+        this.db.getTranscriptParts(session.taskId)
+          .filter((p) => p.content)
+          .map((p) => normalize(p.content))
+      )
+
       for (const message of messages) {
         if (message.role === MessageRole.USER) continue
 
@@ -3155,18 +3170,26 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
             continue
           }
 
+          const content = part.content || part.text || ''
+          // Already in the projection under a different id (id-scheme mismatch)?
+          // Remember the id so we don't reconsider it, but don't re-emit.
+          if (content && existingContent.has(normalize(content))) {
+            session.seenPartIds.add(partId)
+            continue
+          }
+
           session.seenPartIds.add(partId)
-          if (part.content || part.text) {
+          if (content) {
             // Store actual text content, NOT length — partContentLengths is used
             // for chunk accumulation in streaming; storing a length string causes
             // the number to be prepended to the next streamed chunk.
-            session.partContentLengths.set(partId, part.content || part.text || '')
+            session.partContentLengths.set(partId, content)
           }
 
           batchMessages.push({
             id: partId,
             role: message.role,
-            content: part.content || part.text || '',
+            content,
             partType,
             tool: part.tool,
             taskProgress: part.taskProgress,
