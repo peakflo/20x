@@ -163,8 +163,10 @@ we chased should be gone because there is one writer.
 
 - Remove now-dead IPC (`agent:output` transcript role, if fully replaced) OR keep `agent:output`
   only as a `transcript:changed` trigger. Simplify preload surface.
-- Mobile: point the mobile transport at the same snapshot/delta API (mobile currently relies on
-  the replay push — give it the projection subscription so removing the push doesn’t regress it).
+- Mobile: point the mobile transport at the same snapshot/delta API. **(Done.)** Mobile binds the
+  durable snapshot via `GET /tasks/:id/transcript`, applies `transcript:changed` deltas over the
+  WebSocket, and reconciles the rev-cursor delta on idle — the replay push (`replaySessionMessages`
+  + `/sync` replay) is deleted on both platforms.
 - Add a store-level invariant test: applying the same delta twice is a no-op; out-of-order
   deltas converge; a gap triggers a delta refetch.
 
