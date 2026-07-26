@@ -2406,8 +2406,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     adapter: CodingAgentAdapter,
     agentId: string,
     taskId: string,
-    adapterSessionId: string,
-    options?: { replayToRenderer?: boolean }
+    adapterSessionId: string
   ): Promise<string> {
     // Helper: yield event loop between bursts of sync DB/FS calls
     const yieldEL = (): Promise<void> => new Promise((r) => setImmediate(r))
@@ -2554,53 +2553,24 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       throw error
     }
 
-    const shouldReplayToRenderer = options?.replayToRenderer !== false
-
-    // Build replay batch AND dedup state in a SINGLE pass so that both use
-    // the same generated IDs.  Previously two separate loops each called
-    // `Date.now() + Math.random()` for parts without an id, producing
-    // different IDs.  The frontend's `seen` set then held the batch IDs while
-    // the session's seenPartIds held different IDs, so when polling started
-    // on a follow-up message the streaming replay (with yet another set of
-    // stableId-based IDs) was not deduped by either — causing every
-    // historical message to appear twice.
-    const batchMessages: Array<{ id: string; role: string; content: string; partType?: string; tool?: unknown; taskProgress?: unknown; receivedAt?: number }> = []
+    // Build the session's dedup state from the resumed history so adapter
+    // polling won't re-emit historical parts as new streaming output. The
+    // transcript itself is NOT pushed to clients here — clients render the
+    // durable projection (snapshot + `transcript:changed` deltas); resume's
+    // only transcript role is seeding the projection, which the one-time
+    // backfill (getTranscriptSnapshot) handles independently.
     const resumedSeenMessageIds = new Set<string>()
     const resumedSeenPartIds = new Set<string>()
     const resumedPartContentLengths = new Map<string, string>()
     for (const message of messages) {
-      // Track message-level IDs so adapters that dedup by message ID
-      // (e.g. Codex pollMessages) won't re-send historical messages.
       if (message.id) resumedSeenMessageIds.add(message.id)
       for (const part of message.parts) {
         const partId = part.id || `${message.role}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-        // Dedup state
         resumedSeenPartIds.add(partId)
         if (part.content || part.text) {
           resumedPartContentLengths.set(partId, String((part.content || part.text || '').length))
         }
-        // Batch message (only if we're replaying to the renderer)
-        if (shouldReplayToRenderer) {
-          batchMessages.push({
-            id: partId,
-            role: message.role,
-            content: part.content || part.text || '',
-            partType: part.type,
-            tool: part.tool,
-            taskProgress: part.taskProgress,
-            receivedAt: part.receivedAt
-          })
-        }
       }
-    }
-    if (shouldReplayToRenderer && batchMessages.length > 0) {
-      this.sendToRenderer('agent:output-batch', {
-        sessionId: adapterSessionId,
-        taskId,
-        messages: batchMessages,
-        // History replay: only seeds an empty durable transcript (backfill)
-        replay: true
-      })
     }
 
     // Store session in sessions map — idle until user sends a message
@@ -3656,13 +3626,10 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
             console.log(`[SessionTracker] RESUME_ATTEMPT old=${sessionId} persisted=${persistedSessionId} task=${taskId} reason=session_not_in_memory`)
             const adapter = this.getAdapter(resolvedAgentId)
             if (adapter) {
-              // Replay messages to the renderer so the client doesn't lose
-              // conversation context after an idle period. Previously this used
-              // replayToRenderer: false which caused ~20% context loss on mobile
-              // and desktop when the in-memory session was evicted.
-              const resumedId = await this.resumeAdapterSession(adapter, resolvedAgentId, taskId, persistedSessionId, {
-                replayToRenderer: true
-              })
+              // Resume the backend session for continuation. The transcript is
+              // NOT pushed here — clients render the durable projection (snapshot
+              // + deltas), which already holds the full history.
+              const resumedId = await this.resumeAdapterSession(adapter, resolvedAgentId, taskId, persistedSessionId)
               session = this.sessions.get(resumedId)
               if (session) {
                 sessionId = resumedId
@@ -3962,80 +3929,6 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     return { status: session.status, agentId: session.agentId, taskId: session.taskId }
   }
 
-  /**
-   * Replay all messages from a running session via the adapter.
-   * Used by the mobile API to sync with an already-running session.
-   * Sends a single agent:output-batch event (matching resumeAdapterSession pattern)
-   * to avoid content filtering, step-start/step-finish absorption, and dedup issues
-   * that affect individual agent:output events.
-   */
-  async replaySessionMessages(sessionId: string): Promise<void> {
-    let session = this.sessions.get(sessionId)
-
-    // Fallback: session ID may have been re-keyed (temp → real).
-    // The mobile client might still hold the stale temp ID.
-    if (!session) {
-      const redirectedId = this.sessionIdRedirects.get(sessionId)
-      if (redirectedId) {
-        sessionId = redirectedId
-        session = this.sessions.get(sessionId)
-      }
-    }
-
-    if (!session?.adapter?.getAllMessages) return
-
-    const messages = await session.adapter.getAllMessages(sessionId, {
-      agentId: session.agentId,
-      taskId: session.taskId,
-      workspaceDir: session.workspaceDir || process.cwd()
-    })
-
-    // Collect all message parts into a single batch (matching resumeAdapterSession pattern)
-    const batchMessages: Array<{ id: string; role: string; content: string; partType?: string; tool?: unknown; update?: boolean; taskProgress?: unknown; receivedAt?: number }> = []
-    for (const msg of messages) {
-      for (const part of msg.parts) {
-        batchMessages.push({
-          id: part.id || `${msg.id}-${msg.parts.indexOf(part)}`,
-          role: msg.role === MessageRole.USER ? 'user' : msg.role === MessageRole.ASSISTANT ? 'assistant' : 'system',
-          content: part.text || part.content || '',
-          partType: part.type?.toLowerCase(),
-          tool: part.tool ? {
-            name: part.tool.name,
-            status: part.tool.status || part.state?.status || '',
-            title: part.tool.title || part.state?.title || '',
-            input: typeof part.tool.input === 'string' ? part.tool.input : part.tool.input ? JSON.stringify(part.tool.input) : undefined,
-            output: typeof part.tool.output === 'string' ? part.tool.output : part.tool.output ? JSON.stringify(part.tool.output) : undefined,
-            error: part.tool.error || part.state?.error,
-            questions: part.tool.questions,
-            todos: part.tool.todos
-          } : undefined,
-          taskProgress: part.taskProgress,
-          receivedAt: part.receivedAt,
-          // Pass update flag so mobile store merges tool results into their
-          // pending tool_use entries (e.g. status pending → success)
-          ...(part.update ? { update: true } : {})
-        })
-      }
-    }
-
-    if (batchMessages.length > 0) {
-      this.sendToRenderer('agent:output-batch', {
-        sessionId,
-        taskId: session.taskId,
-        messages: batchMessages,
-        // History replay (mobile catch-up): only seeds an empty durable transcript
-        replay: true
-      })
-    }
-
-    // Also send current status
-    this.sendToRenderer('agent:status', {
-      sessionId,
-      agentId: session.agentId,
-      taskId: session.taskId,
-      status: session.status
-    })
-  }
 
   getActiveSessionsForTask(taskId: string): string[] {
     const sessionIds: string[] = []
@@ -4804,25 +4697,23 @@ Important:
 
   /**
    * Write-through persistence for the durable transcript projection.
-   * Called for every agent:output / agent:output-batch emission.
+   * Called for every agent:output / agent:output-batch emission — the single
+   * chokepoint where live streaming output is ingested into the durable log.
    *
-   * Replay batches (session resume, mobile catch-up) re-send history whose
-   * parts may carry regenerated IDs; they only SEED an empty transcript
-   * (backfill for sessions that predate the store) and are skipped otherwise —
-   * the original parts were already persisted when first emitted.
+   * Upserts are keyed by stable part id (idempotent), so re-emitting an already
+   * persisted part is a no-op. Historical seeding for sessions that predate the
+   * store is handled separately by the one-time backfill
+   * (backfillTranscriptProjection), which writes directly to the projection.
    */
   private persistTranscriptEvent(channel: string, data: unknown): void {
     if (!data || typeof data !== 'object') return
     const event = data as {
       taskId?: string
-      replay?: boolean
       messages?: Array<{ id?: string; role?: string; content?: string; partType?: string; tool?: unknown; questions?: unknown; todos?: unknown; taskProgress?: unknown; receivedAt?: number }>
       data?: { id?: string; role?: string; content?: string; partType?: string; tool?: unknown; questions?: unknown; todos?: unknown; taskProgress?: unknown; receivedAt?: number }
     }
     const taskId = event.taskId
     if (!taskId) return
-
-    if (event.replay && this.db.hasTranscriptParts(taskId)) return
 
     const rawParts = channel === 'agent:output-batch'
       ? (event.messages || [])

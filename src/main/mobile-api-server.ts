@@ -349,6 +349,19 @@ async function routeGet(pathname: string, url: URL): Promise<unknown> {
     return tasks
   }
 
+  // GET /api/tasks/:taskId/transcript — full durable transcript snapshot
+  const transcriptMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/transcript$/)
+  if (transcriptMatch) {
+    return agentRef!.getTranscriptSnapshot(decodeURIComponent(transcriptMatch[1]))
+  }
+
+  // GET /api/tasks/:taskId/transcript/delta?sinceRev=N — parts changed since rev
+  const deltaMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/transcript\/delta$/)
+  if (deltaMatch) {
+    const sinceRev = Number(url.searchParams.get('sinceRev') || '0') || 0
+    return agentRef!.getTranscriptDelta(decodeURIComponent(deltaMatch[1]), sinceRev)
+  }
+
   // GET /api/tasks/:id
   const taskMatch = pathname.match(/^\/api\/tasks\/([^/]+)$/)
   if (taskMatch) {
@@ -695,13 +708,13 @@ async function routePost(pathname: string, params: Record<string, unknown>, req?
     return { success: true }
   }
 
-  // POST /api/sessions/:sessionId/sync — replay messages from a running session
+  // POST /api/sessions/:sessionId/sync — status ping. Transcript is no longer
+  // replayed here; the mobile client renders the durable projection (GET
+  // /api/tasks/:taskId/transcript + `transcript:changed` deltas).
   const syncMatch = pathname.match(/^\/api\/sessions\/([^/]+)\/sync$/)
   if (syncMatch) {
-    const sessionId = syncMatch[1]
-    const status = agent.getSessionStatus(sessionId)
+    const status = agent.getSessionStatus(syncMatch[1])
     if (!status) throw Object.assign(new Error('Session not found or not running'), { status: 404 })
-    await agent.replaySessionMessages(sessionId)
     return { success: true, status: status.status }
   }
 

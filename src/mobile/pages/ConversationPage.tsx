@@ -37,6 +37,13 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
   const task = useTaskStore((s) => s.tasks.find((t) => t.id === taskId))
   const session = useAgentStore((s) => s.sessions.get(taskId))
   const initSession = useAgentStore((s) => s.initSession)
+  const bindTranscript = useAgentStore((s) => s.bindTranscript)
+
+  // Bind this task's transcript from the durable projection on open (and taskId
+  // change). The view renders projection state; live updates arrive as deltas.
+  useEffect(() => {
+    void bindTranscript(taskId)
+  }, [taskId, bindTranscript])
 
   const scrollRef = useRef<HTMLDivElement>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)

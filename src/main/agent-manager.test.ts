@@ -735,7 +735,7 @@ describe('AgentManager implicit resume behavior', () => {
     vi.clearAllMocks()
   })
 
-  it('replays transcript to renderer when sendMessage implicitly resumes a session', async () => {
+  it('does NOT push a transcript replay to the renderer when sendMessage implicitly resumes a session', async () => {
     const mockDb = {
       getTask: vi.fn(() => ({
         id: 'task-1',
@@ -777,15 +777,15 @@ describe('AgentManager implicit resume behavior', () => {
     expect(adapter.resumeSession).toHaveBeenCalledOnce()
     expect(doSendAdapterMessageSpy).toHaveBeenCalledOnce()
 
-    // Implicit resume now replays messages to renderer to prevent context loss
-    // after idle periods on both mobile and desktop
+    // Resume no longer replays the transcript to clients. Clients render the
+    // durable projection (snapshot + `transcript:changed` deltas), so a resume
+    // must not re-emit historical messages as a stream (which caused reorder /
+    // duplication on send-after-idle).
     const outputBatchEvents = sendToRendererSpy.mock.calls.filter(([channel]) => channel === 'agent:output-batch')
-    expect(outputBatchEvents).toHaveLength(1)
-    expect((outputBatchEvents[0][1] as { messages: { content: string }[] }).messages).toHaveLength(1)
-    expect((outputBatchEvents[0][1] as { messages: { content: string }[] }).messages[0].content).toBe('Hello')
+    expect(outputBatchEvents).toHaveLength(0)
   })
 
-  it('still replays transcript during explicit resume', async () => {
+  it('does NOT push a transcript replay during explicit resume', async () => {
     const mockDb = {
       getTask: vi.fn(() => ({
         id: 'task-1',
@@ -823,8 +823,10 @@ describe('AgentManager implicit resume behavior', () => {
 
     await manager.resumeSession('agent-1', 'task-1', 'persisted-session-id')
 
+    // Resume seeds only the in-memory dedup state; it never streams historical
+    // messages to clients. The projection (snapshot + deltas) is the render source.
     const outputBatchEvents = sendToRendererSpy.mock.calls.filter(([channel]) => channel === 'agent:output-batch')
-    expect(outputBatchEvents).toHaveLength(1)
+    expect(outputBatchEvents).toHaveLength(0)
   })
 })
 
@@ -1232,11 +1234,11 @@ describe('AgentManager transitionToIdle — enterprise task completion after fee
     expect(storedValue).not.toBe(String(partText.length))
   })
 
-  it('resumeAdapterSession uses same IDs for batch replay and dedup state (regression: dual-loop bug)', async () => {
-    // This test ensures the batch replay IDs and dedup state IDs are identical.
-    // Previously, two separate loops each called Date.now() + Math.random() for
-    // parts without an id, producing different IDs — causing message duplication
-    // on follow-up messages.
+  it('resumeAdapterSession seeds dedup state from resumed history without replaying to clients', async () => {
+    // Resume builds the in-memory dedup state (seenMessageIds / seenPartIds) so
+    // adapter polling won't re-emit historical parts as new streaming output.
+    // It must NOT push a transcript batch to clients — the projection (snapshot
+    // + `transcript:changed` deltas) is the sole render source.
     const mockDb = createMockDb({})
     const mgr = new AgentManager(mockDb)
     const sendSpy = vi.spyOn(mgr as any, 'sendToRenderer')
@@ -1269,31 +1271,24 @@ describe('AgentManager transitionToIdle — enterprise task completion after fee
       getWorkspaceDir: vi.fn(() => '/tmp/ws'),
     })
 
-    await (mgr as any).resumeAdapterSession(adapter, 'agent-1', 'task-1', 'session-1', {
-      replayToRenderer: true
-    })
+    await (mgr as any).resumeAdapterSession(adapter, 'agent-1', 'task-1', 'session-1')
 
-    // Get the batch messages sent to renderer
+    // No transcript batch is pushed to clients on resume.
     const batchCall = sendSpy.mock.calls.find(
       ([channel]) => channel === 'agent:output-batch'
     )
-    expect(batchCall).toBeDefined()
-    const batchMessages = (batchCall![1] as any).messages as Array<{ id: string }>
+    expect(batchCall).toBeUndefined()
 
-    // Get the session's dedup state
+    // The session's dedup state is seeded from the resumed history.
     const session = (mgr as any).sessions.get('session-1')
     expect(session).toBeDefined()
 
-    // CRITICAL: Every batch message ID must be in the dedup state
-    for (const msg of batchMessages) {
-      expect(session.seenPartIds.has(msg.id)).toBe(true)
-    }
-
-    // Stable part should use its own id
-    expect(batchMessages.find((m: { id: string }) => m.id === 'stable-part-id')).toBeDefined()
+    // Both parts are tracked: the id-less part gets a generated id, the stable
+    // part keeps its own id → two entries total.
+    expect(session.seenPartIds.size).toBe(2)
     expect(session.seenPartIds.has('stable-part-id')).toBe(true)
 
-    // Message-level IDs should also be tracked for codex-style message dedup
+    // Message-level IDs are tracked for codex-style message dedup.
     expect(session.seenMessageIds.has('msg-1')).toBe(true)
     expect(session.seenMessageIds.has('msg-2')).toBe(true)
   })
@@ -2839,29 +2834,19 @@ describe('AgentManager durable transcript write-through', () => {
     expect(upserted[0].parts.map((p) => p.id)).toEqual(['p1'])
   })
 
-  it('replay batches only seed an empty transcript', () => {
+  it('always forwards live parts to the projection regardless of store population (idempotency is at the DB layer)', () => {
     const { mgr, mockDb, upserted } = buildManager()
 
-    // Store already has parts → replay skipped
+    // A populated projection must NOT short-circuit live output — re-emit is a
+    // no-op at the DB layer (upsert keyed by stable part id), not here.
     ;(mockDb as any).hasTranscriptParts = vi.fn(() => true)
     ;(mgr as any).sendToRenderer('agent:output-batch', {
       sessionId: 's1',
       taskId: 'task-1',
-      replay: true,
-      messages: [{ id: 'h1', role: 'assistant', content: 'historical', partType: 'text' }]
-    })
-    expect(upserted).toHaveLength(0)
-
-    // Empty store → replay seeds (backfill)
-    ;(mockDb as any).hasTranscriptParts = vi.fn(() => false)
-    ;(mgr as any).sendToRenderer('agent:output-batch', {
-      sessionId: 's1',
-      taskId: 'task-1',
-      replay: true,
-      messages: [{ id: 'h1', role: 'assistant', content: 'historical', partType: 'text' }]
+      messages: [{ id: 'p1', role: 'assistant', content: 'live output', partType: 'text' }]
     })
     expect(upserted).toHaveLength(1)
-    expect(upserted[0].parts[0].id).toBe('h1')
+    expect(upserted[0].parts[0].id).toBe('p1')
   })
 
   it('exposes snapshots via getTranscriptSnapshot', async () => {

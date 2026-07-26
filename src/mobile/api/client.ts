@@ -106,5 +106,28 @@ export const api = {
       post<{ success: boolean }>(`/api/sessions/${encodeURIComponent(sessionId)}/abort`),
     stop: (sessionId: string) =>
       post<{ success: boolean }>(`/api/sessions/${encodeURIComponent(sessionId)}/stop`)
+  },
+  transcript: {
+    /** Full durable transcript projection for a task (the render source). */
+    snapshot: (taskId: string) =>
+      get<TranscriptPartRecord[]>(`/api/tasks/${encodeURIComponent(taskId)}/transcript`),
+    /** Parts changed since a rev cursor (delta reconcile). */
+    delta: (taskId: string, sinceRev: number) =>
+      get<{ parts: TranscriptPartRecord[]; maxRev: number }>(`/api/tasks/${encodeURIComponent(taskId)}/transcript/delta?sinceRev=${sinceRev}`)
   }
+}
+
+/** A durable transcript projection part (single source of truth for rendering). */
+export interface TranscriptPartRecord {
+  taskId: string
+  partId: string
+  seq: number
+  role: string
+  content: string
+  partType?: string
+  tool?: unknown
+  payload?: unknown
+  createdAt: number
+  updatedAt: number
+  rev: number
 }
