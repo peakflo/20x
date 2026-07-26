@@ -407,6 +407,11 @@ export function registerIpcHandlers(
     return agentManager.getTranscriptSnapshot(taskId, sinceSeq)
   })
 
+  // Event-sourced projection: delta since a rev cursor (parts changed since then).
+  ipcMain.handle('agentSession:getTranscriptDelta', (_, taskId: string, sinceRev: number) => {
+    return agentManager.getTranscriptDelta(taskId, sinceRev)
+  })
+
   // Agent Config handlers
   ipcMain.handle('agentConfig:getProviders', async (_, serverUrl?: string, backendType?: string) => {
     return await agentManager.getProviders(serverUrl, undefined, backendType)

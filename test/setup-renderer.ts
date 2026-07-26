@@ -10,6 +10,7 @@ import type { WorkfloTask } from '../src/renderer/src/types/index'
 export const eventCallbacks = {
   onAgentOutput: null as ((event: AgentOutputEvent) => void) | null,
   onAgentOutputBatch: null as ((event: AgentOutputBatchEvent) => void) | null,
+  onTranscriptChanged: null as ((event: unknown) => void) | null,
   onAgentStatus: null as ((event: AgentStatusEvent) => void) | null,
   onAgentApproval: null as ((event: AgentApprovalRequest) => void) | null,
   onOverdueCheck: null as (() => void) | null,
@@ -55,7 +56,8 @@ const mockElectronAPI = {
     syncSkillsForTask: vi.fn().mockResolvedValue({ created: [], updated: [], unchanged: [] }),
     learnFromSession: vi.fn().mockResolvedValue({ created: [], updated: [], unchanged: [] }),
     getRawTranscript: vi.fn().mockResolvedValue([]),
-    getTranscriptSnapshot: vi.fn().mockResolvedValue([])
+    getTranscriptSnapshot: vi.fn().mockResolvedValue([]),
+    getTranscriptDelta: vi.fn().mockResolvedValue({ parts: [], maxRev: 0 })
   },
   agentConfig: {
     getProviders: vi.fn().mockResolvedValue(null)
@@ -155,6 +157,10 @@ const mockElectronAPI = {
   }),
   onAgentOutputBatch: vi.fn((cb: (event: AgentOutputBatchEvent) => void) => {
     eventCallbacks.onAgentOutputBatch = cb
+    return vi.fn()
+  }),
+  onTranscriptChanged: vi.fn((cb: (event: unknown) => void) => {
+    eventCallbacks.onTranscriptChanged = cb as never
     return vi.fn()
   }),
   onAgentStatus: vi.fn((cb: (event: AgentStatusEvent) => void) => {

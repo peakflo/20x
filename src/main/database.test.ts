@@ -569,3 +569,43 @@ describe('Durable transcript — timestamp provenance', () => {
     expect(p.createdAt).toBe(t0) // original time preserved
   })
 })
+
+describe('Durable transcript — rev cursor + delta (event-sourced)', () => {
+  it('assigns a global monotonic rev on insert and bumps it on content update', () => {
+    const r1 = db.upsertTranscriptParts('t1', [{ id: 'a', role: 'user', content: 'hi' }])
+    const r2 = db.upsertTranscriptParts('t1', [{ id: 'b', role: 'assistant', content: 'yo' }])
+    expect(r2.maxRev).toBeGreaterThan(r1.maxRev)
+    // content update to 'a' bumps its rev above b
+    const r3 = db.upsertTranscriptParts('t1', [{ id: 'a', role: 'user', content: 'hi there' }])
+    expect(r3.maxRev).toBeGreaterThan(r2.maxRev)
+    const parts = db.getTranscriptParts('t1')
+    expect(parts.find((p) => p.partId === 'a')!.rev).toBe(r3.maxRev)
+  })
+
+  it('getTranscriptDelta returns only parts changed after sinceRev (incl. updates)', () => {
+    db.upsertTranscriptParts('t1', [{ id: 'a', role: 'user', content: 'one' }])
+    const afterA = db.getTranscriptMaxRev('t1')
+    db.upsertTranscriptParts('t1', [{ id: 'b', role: 'assistant', content: 'two' }])
+    db.upsertTranscriptParts('t1', [{ id: 'a', role: 'user', content: 'one-edited' }]) // update
+
+    const delta = db.getTranscriptDelta('t1', afterA)
+    const ids = delta.parts.map((p) => p.partId).sort()
+    expect(ids).toEqual(['a', 'b']) // b inserted, a updated — both after afterA
+    expect(delta.parts.find((p) => p.partId === 'a')!.content).toBe('one-edited')
+    expect(delta.maxRev).toBe(db.getTranscriptMaxRev('t1'))
+  })
+
+  it('delta since current maxRev is empty (idempotent cursor)', () => {
+    db.upsertTranscriptParts('t1', [{ id: 'a', content: 'x' }])
+    const max = db.getTranscriptMaxRev('t1')
+    expect(db.getTranscriptDelta('t1', max).parts).toHaveLength(0)
+  })
+
+  it('rev is per-global but delta is task-scoped', () => {
+    db.upsertTranscriptParts('t1', [{ id: 'a', content: 'x' }])
+    db.upsertTranscriptParts('t2', [{ id: 'a', content: 'other task' }])
+    // t1 delta since 0 should only include t1's part
+    const d = db.getTranscriptDelta('t1', 0)
+    expect(d.parts.every((p) => p.taskId === 't1')).toBe(true)
+  })
+})

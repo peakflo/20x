@@ -1,5 +1,5 @@
 import type { WorkfloTask, CreateTaskDTO, UpdateTaskDTO, FileAttachment, Agent, CreateAgentDTO, UpdateAgentDTO, McpServer, CreateMcpServerDTO, UpdateMcpServerDTO, Skill, CreateSkillDTO, UpdateSkillDTO, Secret, CreateSecretDTO, UpdateSecretDTO, TaskSource, CreateTaskSourceDTO, UpdateTaskSourceDTO, SyncResult, PluginMeta, ConfigFieldSchema, ConfigFieldOption, PluginAction, ActionResult, SourceUser, ReassignResult, MarketplaceSource, InstalledPlugin, DiscoverablePlugin, MarketplaceCatalog, PluginResources } from '@/types'
-import type { AgentOutputEvent, AgentOutputBatchEvent, AgentStatusEvent, AgentApprovalRequest, GhCliStatus, GlabCliStatus, GitHubRepo, GitHubCollaborator, WorktreeProgressEvent, WorkspaceCleanupProgressEvent, McpTestResult, SkillSyncResult, DepsStatus, AgentMessageAttachment } from '@/types/electron'
+import type { AgentOutputEvent, AgentOutputBatchEvent, AgentStatusEvent, AgentApprovalRequest, GhCliStatus, GlabCliStatus, GitHubRepo, GitHubCollaborator, WorktreeProgressEvent, WorkspaceCleanupProgressEvent, McpTestResult, SkillSyncResult, DepsStatus, AgentMessageAttachment, TranscriptPartRecord, TranscriptChangedEvent } from '@/types/electron'
 
 export const taskApi = {
   getAll: (): Promise<WorkfloTask[]> => {
@@ -148,8 +148,12 @@ export const agentSessionApi = {
     return window.electronAPI.agentSession.getRawTranscript(taskId)
   },
 
-  getTranscriptSnapshot: (taskId: string, sinceSeq?: number): Promise<Array<{ taskId: string; partId: string; seq: number; role: string; content: string; partType?: string; tool?: unknown; payload?: unknown; createdAt: number; updatedAt: number }>> => {
+  getTranscriptSnapshot: (taskId: string, sinceSeq?: number): Promise<TranscriptPartRecord[]> => {
     return window.electronAPI.agentSession.getTranscriptSnapshot(taskId, sinceSeq)
+  },
+
+  getTranscriptDelta: (taskId: string, sinceRev: number): Promise<{ parts: TranscriptPartRecord[]; maxRev: number }> => {
+    return window.electronAPI.agentSession.getTranscriptDelta(taskId, sinceRev)
   }
 }
 
@@ -213,6 +217,10 @@ export const onAgentOutput = (callback: (event: AgentOutputEvent) => void): (() 
 
 export const onAgentOutputBatch = (callback: (event: AgentOutputBatchEvent) => void): (() => void) => {
   return window.electronAPI.onAgentOutputBatch(callback)
+}
+
+export const onTranscriptChanged = (callback: (event: TranscriptChangedEvent) => void): (() => void) => {
+  return window.electronAPI.onTranscriptChanged(callback)
 }
 
 export const onAgentStatus = (callback: (event: AgentStatusEvent) => void): (() => void) => {

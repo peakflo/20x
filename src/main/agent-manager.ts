@@ -2942,6 +2942,18 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
   }
 
   /**
+   * Delta query for the projection-cache client: parts changed since `sinceRev`,
+   * plus the current maxRev. Ensures the one-time backfill has run so the first
+   * delta after a fresh start is complete.
+   */
+  async getTranscriptDelta(taskId: string, sinceRev: number): Promise<ReturnType<DatabaseManager['getTranscriptDelta']>> {
+    if (!this.ingestedTasks.has(taskId)) {
+      await this.backfillTranscriptProjection(taskId)
+    }
+    return this.db.getTranscriptDelta(taskId, sinceRev)
+  }
+
+  /**
    * Idempotent ingest of a task's persisted session history into the durable
    * projection — runs once per app run per task. Reuses the adapter's
    * side-effect-free persisted-history read (no CLI spawn). Upsert-by-part-id +
@@ -4833,7 +4845,31 @@ Important:
       }))
 
     if (parts.length > 0) {
-      this.db.upsertTranscriptParts(taskId, parts)
+      const { maxRev, changedPartIds } = this.db.upsertTranscriptParts(taskId, parts)
+      // Event-sourced push: notify clients of the delta (the parts just written),
+      // applied idempotently by part id on the client. This is BOTH the durable
+      // update and the low-latency streaming path — a single authoritative source.
+      if (changedPartIds.length > 0) {
+        const prevRev = maxRev - changedPartIds.length
+        const { parts: deltaParts } = this.db.getTranscriptDelta(taskId, prevRev)
+        this.emitTranscriptChanged(taskId, deltaParts, maxRev)
+      }
+    }
+  }
+
+  /**
+   * Emit a transcript delta directly to clients (NOT via sendToRenderer — that
+   * would recurse through persistTranscriptEvent). The renderer/mobile apply
+   * these parts into their projection cache by id; order/dedup are guaranteed by
+   * the cache being keyed on part id and sorted by created_at.
+   */
+  private emitTranscriptChanged(taskId: string, parts: ReturnType<DatabaseManager['getTranscriptParts']>, maxRev: number): void {
+    const payload = { taskId, parts, maxRev }
+    if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+      this.mainWindow.webContents.send('transcript:changed', payload)
+    }
+    for (const fn of this.externalListeners) {
+      try { fn('transcript:changed', payload) } catch { /* ignore */ }
     }
   }
 
