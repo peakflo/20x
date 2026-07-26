@@ -69,6 +69,14 @@ export interface TaskSession {
   pendingApproval: AgentApprovalRequest | null
   /** Transient system status indicator (e.g. 'compacting'). */
   systemStatus?: string | null
+  /**
+   * True from the moment the user sends until the backend confirms the turn is
+   * running (a non-idle status). Resuming an idle session is slow (worktree +
+   * MCP + adapter.resumeSession) and emits an interim `idle` status, so status
+   * alone can't drive a "starting" indicator. Cleared on the first
+   * working/waiting/error status or a safety timeout.
+   */
+  pendingSend?: boolean
 }
 
 // ── Projection cache (SINGLE source of truth for the transcript) ──
@@ -146,6 +154,10 @@ interface AgentState {
   deleteAgent: (id: string) => Promise<boolean>
 
   initSession: (taskId: string, sessionId: string, agentId: string) => void
+  /** Mark a task as "starting" after the user sends, until a turn is confirmed. */
+  beginSend: (taskId: string) => void
+  /** Clear the "starting" indicator (e.g. the send request failed). */
+  endSend: (taskId: string) => void
   /** Bind a task view to the durable transcript projection: load the full
    *  snapshot into the cache and render it. Idempotent; subsequent updates
    *  arrive as `transcript:changed` deltas. */
@@ -251,11 +263,22 @@ export const useAgentStore = create<AgentState>((set, get) => {
     const updated = { ...session, status: event.status }
     if (event.sessionId && session.sessionId !== event.sessionId) updated.sessionId = event.sessionId
     if (event.status === SessionStatus.IDLE) updated.pendingApproval = null
+    // Turn confirmed running (or errored/awaiting input) — stop showing
+    // "starting". Interim `idle` events during resume must NOT clear it.
+    if (event.status !== SessionStatus.IDLE) updated.pendingSend = false
     set({ sessions: new Map(state.sessions).set(session.taskId, updated) })
 
     // Safety-net reconcile at end of each turn — catches any missed delta.
     if (event.status === SessionStatus.IDLE) void reconcileDelta(session.taskId)
   })
+
+  const clearPendingSend = (taskId: string): void => {
+    set((state) => {
+      const s = state.sessions.get(taskId)
+      if (!s?.pendingSend) return state
+      return { sessions: new Map(state.sessions).set(taskId, { ...s, pendingSend: false }) }
+    })
+  }
 
   onAgentApproval((event: AgentApprovalRequest) => {
     const state = get()
@@ -343,6 +366,18 @@ export const useAgentStore = create<AgentState>((set, get) => {
         }
       })
     },
+
+    beginSend: (taskId) => {
+      set((state) => {
+        const s = state.sessions.get(taskId)
+        if (!s) return state
+        return { sessions: new Map(state.sessions).set(taskId, { ...s, pendingSend: true }) }
+      })
+      // Safety net: never leave the composer stuck if no status ever arrives.
+      setTimeout(() => clearPendingSend(taskId), 120_000)
+    },
+
+    endSend: (taskId) => clearPendingSend(taskId),
 
     endSession: (taskId) => {
       set((state) => {

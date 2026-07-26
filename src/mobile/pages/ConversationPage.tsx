@@ -38,6 +38,8 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
   const session = useAgentStore((s) => s.sessions.get(taskId))
   const initSession = useAgentStore((s) => s.initSession)
   const bindTranscript = useAgentStore((s) => s.bindTranscript)
+  const beginSend = useAgentStore((s) => s.beginSend)
+  const endSend = useAgentStore((s) => s.endSend)
 
   // Bind this task's transcript from the durable projection on open (and taskId
   // change). The view renders projection state; live updates arrive as deltas.
@@ -76,6 +78,8 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
   const isWorking = session?.status === SessionStatus.WORKING
   const isWaitingApproval = session?.status === SessionStatus.WAITING_APPROVAL
   const hasSession = !!session?.sessionId
+  // The user sent a message and the backend is still resuming the session.
+  const isStarting = !!session?.pendingSend && !isWorking && !isWaitingApproval
 
   const activeQuestionId = useMemo(() => {
     let questionIndex = -1
@@ -96,8 +100,9 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
   // Smart routing: detect if last message is a question
   const isQuestion = !!activeQuestionId
 
-  // Can the user send input?
-  const canSendInput = hasSession && (isWorking || isWaitingApproval || session?.status === SessionStatus.IDLE)
+  // Can the user send input? Blocked while the session is starting (resuming)
+  // to prevent a confusing double-send during the init window.
+  const canSendInput = hasSession && !isStarting && (isWorking || isWaitingApproval || session?.status === SessionStatus.IDLE)
   const taskAttachments = useMemo(
     () => (Array.isArray(task?.attachments) ? task.attachments : []) as ChatInputAttachment[],
     [task?.attachments]
@@ -116,10 +121,11 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
   // Input placeholder — matches desktop AgentTranscriptPanel
   const placeholder = useMemo(() => {
     if (!hasSession) return 'No active session'
+    if (isStarting) return 'Starting agent…'
     if (isQuestion) return 'Type your answer...'
     if (isWaitingApproval) return 'Approve or provide feedback...'
     return 'Send a message... (Shift+Enter for new line)'
-  }, [hasSession, isQuestion, isWaitingApproval])
+  }, [hasSession, isStarting, isQuestion, isWaitingApproval])
 
   // Smart send handler — mirrors desktop TaskWorkspace.handleSend logic
   const handleSend = useCallback(
@@ -131,6 +137,11 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
         if (isQuestion) {
           await api.sessions.approve(currentSession.sessionId, true, message)
         } else {
+          // Resuming an idle session is slow. Show "starting" immediately (the
+          // send request blocks until the resume completes) so the UI isn't
+          // stuck on "Idle" with an open input. Cleared by the first non-idle
+          // status (see the store) or here on failure.
+          beginSend(taskId)
           const result = await api.sessions.send(
             currentSession.sessionId,
             message,
@@ -146,9 +157,10 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
         setShowAttachmentPicker(false)
       } catch (e) {
         console.error('Failed to send message:', e)
+        endSend(taskId)
       }
     },
-    [taskId, isQuestion, initSession]
+    [taskId, isQuestion, initSession, beginSend, endSend]
   )
 
   // Handle question answer from QuestionMessage options
@@ -297,18 +309,23 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
           {session && (
             <span className={cn(
               'text-xs flex items-center gap-1',
-              session.status === SessionStatus.WORKING && 'text-green-400',
-              session.status === SessionStatus.ERROR && 'text-red-400',
-              session.status === SessionStatus.WAITING_APPROVAL && 'text-yellow-400',
-              session.status === SessionStatus.IDLE && 'text-muted-foreground'
+              isStarting && 'text-green-400',
+              !isStarting && session.status === SessionStatus.WORKING && 'text-green-400',
+              !isStarting && session.status === SessionStatus.ERROR && 'text-red-400',
+              !isStarting && session.status === SessionStatus.WAITING_APPROVAL && 'text-yellow-400',
+              !isStarting && session.status === SessionStatus.IDLE && 'text-muted-foreground'
             )}>
-              {session.status === SessionStatus.WORKING && (
+              {(isStarting || session.status === SessionStatus.WORKING) && (
                 <svg className="h-3 w-3 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
               )}
-              {session.status === SessionStatus.WORKING && 'Working'}
-              {session.status === SessionStatus.IDLE && 'Idle'}
-              {session.status === SessionStatus.ERROR && '● Error'}
-              {session.status === SessionStatus.WAITING_APPROVAL && '● Waiting'}
+              {isStarting ? 'Starting…' : (
+                <>
+                  {session.status === SessionStatus.WORKING && 'Working'}
+                  {session.status === SessionStatus.IDLE && 'Idle'}
+                  {session.status === SessionStatus.ERROR && '● Error'}
+                  {session.status === SessionStatus.WAITING_APPROVAL && '● Waiting'}
+                </>
+              )}
             </span>
           )}
           {/* Icon buttons — matches desktop AgentTranscriptPanel */}

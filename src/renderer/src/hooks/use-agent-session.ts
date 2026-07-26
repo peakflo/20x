@@ -12,6 +12,8 @@ export interface AgentSessionState {
   pendingApproval: AgentApprovalRequest | null
   /** Transient system status indicator (e.g. 'compacting') — cleared on next non-status message */
   systemStatus?: string | null
+  /** User sent and the backend is still resuming the session. */
+  pendingSend?: boolean
 }
 
 export interface SendMessageOptions {
@@ -51,7 +53,8 @@ export function useAgentSession(taskId: string | undefined) {
         status: session.status,
         messages: session.messages,
         pendingApproval: session.pendingApproval,
-        systemStatus: session.systemStatus
+        systemStatus: session.systemStatus,
+        pendingSend: session.pendingSend
       }
     : EMPTY_SESSION
 
@@ -115,22 +118,32 @@ export function useAgentSession(taskId: string | undefined) {
       if (!taskId) throw new Error('No taskId')
       // Get latest session from store, not from closure
       const currentSession = useAgentStore.getState().sessions.get(taskId)
-      if (currentSession?.sessionId) {
-        const result = await agentSessionApi.send(currentSession.sessionId, message, taskId, currentSession.agentId, options?.attachments)
-        // Session was recreated on the main process — update renderer store
-        if (result.newSessionId && taskId) {
-          initSession(taskId, result.newSessionId, currentSession.agentId)
+      // Resuming an idle session is slow (the send call blocks until the resume
+      // completes). Show "starting" immediately so the UI isn't stuck on "Idle"
+      // with an open input. Cleared by the first non-idle status or on failure.
+      const store = useAgentStore.getState()
+      store.beginSend(taskId)
+      try {
+        if (currentSession?.sessionId) {
+          const result = await agentSessionApi.send(currentSession.sessionId, message, taskId, currentSession.agentId, options?.attachments)
+          // Session was recreated on the main process — update renderer store
+          if (result.newSessionId && taskId) {
+            initSession(taskId, result.newSessionId, currentSession.agentId)
+          }
+        } else {
+          // Fallback: session mapping lost in renderer — ask the backend
+          // to find (or resume/create) the session by taskId directly.
+          console.log('[use-agent-session] sendMessage() no sessionId, falling back to sendByTaskId:', taskId)
+          const result = await agentSessionApi.sendByTaskId(taskId, message, options?.attachments)
+          // Update renderer store with the recovered/new sessionId
+          const resolvedSessionId = result.newSessionId || result.sessionId
+          if (resolvedSessionId) {
+            initSession(taskId, resolvedSessionId, currentSession?.agentId ?? '')
+          }
         }
-      } else {
-        // Fallback: session mapping lost in renderer — ask the backend
-        // to find (or resume/create) the session by taskId directly.
-        console.log('[use-agent-session] sendMessage() no sessionId, falling back to sendByTaskId:', taskId)
-        const result = await agentSessionApi.sendByTaskId(taskId, message, options?.attachments)
-        // Update renderer store with the recovered/new sessionId
-        const resolvedSessionId = result.newSessionId || result.sessionId
-        if (resolvedSessionId) {
-          initSession(taskId, resolvedSessionId, currentSession?.agentId ?? '')
-        }
+      } catch (e) {
+        store.endSend(taskId)
+        throw e
       }
     },
     [taskId, initSession]

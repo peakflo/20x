@@ -63,6 +63,14 @@ export interface TaskSession {
   /** Derived, read-only render list — a pure projection of the durable transcript. */
   messages: AgentMessage[]
   systemStatus?: string | null
+  /**
+   * True from the moment the user sends a message until the backend confirms the
+   * turn is running (a non-idle status). Resuming an idle session is slow
+   * (worktree + MCP + adapter.resumeSession) and even emits an interim `idle`
+   * status, so we can't rely on status alone to show "starting". Cleared on the
+   * first working/waiting/error status or a safety timeout.
+   */
+  pendingSend?: boolean
 }
 
 export interface Agent {
@@ -146,6 +154,10 @@ interface AgentState {
   /** Bind a task view to the durable transcript projection (load snapshot). */
   bindTranscript: (taskId: string) => Promise<void>
   initSession: (taskId: string, sessionId: string, agentId: string) => void
+  /** Mark a task as "starting" after the user sends, until a turn is confirmed. */
+  beginSend: (taskId: string) => void
+  /** Clear the "starting" indicator (e.g. the send request failed). */
+  endSend: (taskId: string) => void
   endSession: (taskId: string) => void
   removeSession: (taskId: string) => void
   clearMessageDedup: (taskId: string) => void
@@ -231,9 +243,21 @@ export const useAgentStore = create<AgentState>((set, get) => {
     }
     const updated = { ...session, status: event.status }
     if (event.sessionId && session.sessionId !== event.sessionId) updated.sessionId = event.sessionId
+    // The turn is confirmed running (or errored/awaiting input) — stop showing
+    // "starting". Interim `idle` events during resume must NOT clear it.
+    if (event.status !== SessionStatus.IDLE) updated.pendingSend = false
     set({ sessions: new Map(state.sessions).set(session.taskId, updated) })
     if (event.status === SessionStatus.IDLE) void reconcileDelta(session.taskId)
   })
+
+  // Clear a stuck "starting" indicator if the backend never reports a turn.
+  const clearPendingSend = (taskId: string): void => {
+    set((state) => {
+      const s = state.sessions.get(taskId)
+      if (!s?.pendingSend) return state
+      return { sessions: new Map(state.sessions).set(taskId, { ...s, pendingSend: false }) }
+    })
+  }
 
   return {
     agents: [],
@@ -307,6 +331,18 @@ export const useAgentStore = create<AgentState>((set, get) => {
         }
       })
     },
+
+    beginSend: (taskId) => {
+      set((state) => {
+        const s = state.sessions.get(taskId)
+        if (!s) return state
+        return { sessions: new Map(state.sessions).set(taskId, { ...s, pendingSend: true }) }
+      })
+      // Safety net: never leave the composer stuck if no status ever arrives.
+      setTimeout(() => clearPendingSend(taskId), 120_000)
+    },
+
+    endSend: (taskId) => clearPendingSend(taskId),
 
     endSession: (taskId) => {
       set((state) => {

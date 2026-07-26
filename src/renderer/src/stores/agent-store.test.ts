@@ -241,6 +241,36 @@ describe('useAgentStore', () => {
     })
   })
 
+  describe('pendingSend (starting indicator during resume)', () => {
+    beforeEach(() => {
+      useAgentStore.getState().initSession('task-1', 'sess-1', 'agent-1')
+      useAgentStore.getState().endSession('task-1') // back to idle, keeps the session
+    })
+
+    it('beginSend sets pendingSend', () => {
+      useAgentStore.getState().beginSend('task-1')
+      expect(useAgentStore.getState().sessions.get('task-1')!.pendingSend).toBe(true)
+    })
+
+    it('an interim IDLE status during resume does NOT clear pendingSend', () => {
+      useAgentStore.getState().beginSend('task-1')
+      statusCallback!({ sessionId: 'sess-1', agentId: 'agent-1', taskId: 'task-1', status: SessionStatus.IDLE })
+      expect(useAgentStore.getState().sessions.get('task-1')!.pendingSend).toBe(true)
+    })
+
+    it('a WORKING status clears pendingSend (turn confirmed)', () => {
+      useAgentStore.getState().beginSend('task-1')
+      statusCallback!({ sessionId: 'sess-1', agentId: 'agent-1', taskId: 'task-1', status: SessionStatus.WORKING })
+      expect(useAgentStore.getState().sessions.get('task-1')!.pendingSend).toBe(false)
+    })
+
+    it('endSend clears pendingSend (e.g. send failed)', () => {
+      useAgentStore.getState().beginSend('task-1')
+      useAgentStore.getState().endSend('task-1')
+      expect(useAgentStore.getState().sessions.get('task-1')!.pendingSend).toBe(false)
+    })
+  })
+
   describe('scenario: send-after-restart never loses history (the regression)', () => {
     it('binds a long history on restart, then a send delta appends without dropping anything', async () => {
       // Restart: bind a large existing transcript from the projection snapshot.
