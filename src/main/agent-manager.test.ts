@@ -2905,24 +2905,32 @@ describe('AgentManager transcript projection backfill (event-sourced, ingest-onc
     expect(upserts[0].parts.find((p) => p.id === 'a1')).toMatchObject({ role: 'assistant', receivedAt: 2000 })
   })
 
-  it('fills gaps even when the projection is partially populated (dedup by id + content)', async () => {
+  it('does NOT ingest when the projection already has parts (reader connect is side-effect-free)', async () => {
     const { mgr, mockDb, upserts } = buildManager()
-    // Projection already has the user echo (different id, same content as the
-    // persisted-session user message) plus nothing else. Backfill must add the
-    // assistant message but NOT re-add the user message.
-    ;(mockDb as any).getTranscriptParts = vi.fn(() => [
-      { taskId: 'task-1', partId: 'user-message-123', seq: 1, role: 'user', content: 'hello', createdAt: 1000, updatedAt: 1000 }
-    ])
+    // Projection is already populated by live write-through. A snapshot read
+    // (e.g. a mobile client connecting) must NOT re-ingest the persisted session
+    // — re-ingesting under mismatched ids duplicates messages, and the upsert
+    // would broadcast those dupes to every client (including desktop).
+    ;(mockDb as any).hasTranscriptParts = vi.fn(() => true)
+    const getPersistedMessages = vi.fn(async () => persisted)
+    vi.spyOn(mgr as any, 'getAdapter').mockReturnValue({ getPersistedMessages })
+
+    await mgr.getTranscriptSnapshot('task-1')
+
+    expect(upserts).toHaveLength(0)                 // nothing written
+    expect(getPersistedMessages).not.toHaveBeenCalled() // history not even read
+  })
+
+  it('seeds an empty projection with the full persisted history', async () => {
+    const { mgr, upserts } = buildManager() // hasTranscriptParts starts false
     vi.spyOn(mgr as any, 'getAdapter').mockReturnValue({
-      getPersistedMessages: vi.fn(async () => persisted) // user 'hello' (u1) + assistant 'hi there' (a1)
+      getPersistedMessages: vi.fn(async () => persisted)
     })
 
     await mgr.getTranscriptSnapshot('task-1')
 
     expect(upserts).toHaveLength(1)
-    const ids = upserts[0].parts.map((p) => p.id)
-    expect(ids).toContain('a1')       // assistant gap filled
-    expect(ids).not.toContain('u1')   // user message not duplicated (content already present)
+    expect(upserts[0].parts.map((p) => p.id)).toEqual(['u1', 'a1']) // step-start excluded
   })
 
   it('is idempotent per app run — a second snapshot call does not re-ingest', async () => {

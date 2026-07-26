@@ -2899,10 +2899,10 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
    * Clients (renderer, mobile) render from this instead of relying on having
    * observed every live event.
    *
-   * On the first read per app run, ingest the task's FULL persisted session
-   * history into the projection (idempotent), so the projection is the single
-   * COMPLETE source even when write-through only captured part of it (e.g. only
-   * recent user echoes on a session whose assistant replies predate write-through).
+   * On the first read per app run, if the projection is EMPTY, seed it from the
+   * task's persisted session history (a one-time backfill for sessions that
+   * predate the store). A task that already has parts is returned as-is — its
+   * live write-through capture is authoritative and is never re-ingested.
    */
   async getTranscriptSnapshot(taskId: string, sinceSeq?: number): Promise<ReturnType<DatabaseManager['getTranscriptParts']>> {
     if (!this.ingestedTasks.has(taskId)) {
@@ -2934,6 +2934,19 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
   private async backfillTranscriptProjection(taskId: string): Promise<void> {
     if (this.backfillInFlight.has(taskId) || this.ingestedTasks.has(taskId)) return
 
+    // Seed EMPTY projections ONLY. If the task already has parts, the live
+    // session was captured by write-through — re-ingesting the persisted session
+    // history (whose part ids differ from the live-captured ids) would duplicate
+    // messages under mismatched ids. And because every upsert broadcasts a
+    // `transcript:changed` delta to ALL connected clients, those duplicates would
+    // leak to the desktop view too: a mobile (or any) reader connecting to an
+    // already-populated task must never mutate the projection. Backfill is a
+    // one-time seed for sessions that predate the store, nothing more.
+    if (this.db.hasTranscriptParts(taskId)) {
+      this.ingestedTasks.add(taskId)
+      return
+    }
+
     const task = this.db.getTask(taskId)
     const sessionId = task?.session_id
     const agentId = task?.agent_id
@@ -2947,30 +2960,19 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       const workspaceDir = this.db.getWorkspaceDir(taskId)
       const messages = await adapter.getPersistedMessages(sessionId, { agentId, taskId, workspaceDir })
 
-      // Dedup the ingest against what the projection already has — by id AND by
-      // (role · content). The content check collapses the id-mismatch case where
-      // a live user echo (id `user-message-*`) and its persisted-session twin
-      // (id `<uuid>-text-0`) are the same message under different ids, so your
-      // own messages are never doubled by the backfill.
-      const normalize = (s: string): string => s.replace(/\s+/g, ' ').trim().toLowerCase()
-      const existing = this.db.getTranscriptParts(taskId)
-      const existingIds = new Set(existing.map((p) => p.partId))
-      const existingKeys = new Set(
-        existing.filter((p) => p.content).map((p) => `${p.role}|${normalize(p.content)}`)
-      )
-
+      // The projection is empty here (guarded above), so this is a pure seed —
+      // no dedup against existing parts is needed. Upsert-by-part-id keeps it
+      // idempotent if two seeds ever race.
       const parts: Parameters<DatabaseManager['upsertTranscriptParts']>[1] = []
       for (const message of messages) {
         const role = message.role === MessageRole.USER ? 'user'
           : message.role === MessageRole.SYSTEM ? 'system' : 'assistant'
         for (const part of message.parts) {
           if (!part.id) continue
-          if (existingIds.has(part.id)) continue
           const partType = String(part.type)
           if (AgentManager.EPHEMERAL_PART_TYPES.has(partType)) continue
           const content = part.content || part.text || ''
           if (!content && !part.tool && !part.taskProgress) continue
-          if (content && existingKeys.has(`${role}|${normalize(content)}`)) continue
           parts.push({
             id: part.id,
             role,
