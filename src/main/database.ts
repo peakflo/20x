@@ -976,18 +976,23 @@ export class DatabaseManager {
   private ensureTranscriptRevColumn(): void {
     try {
       const cols = this.db.prepare(`PRAGMA table_info(transcript_parts)`).all() as Array<{ name: string }>
-      if (cols.some((c) => c.name === 'rev')) return
-      this.db.exec(`ALTER TABLE transcript_parts ADD COLUMN rev INTEGER NOT NULL DEFAULT 0`)
+      if (!cols.some((c) => c.name === 'rev')) {
+        // Legacy DB created before `rev` existed — add the column and backfill
+        // existing rows with a global monotonic rev ordered by (created_at, seq).
+        this.db.exec(`ALTER TABLE transcript_parts ADD COLUMN rev INTEGER NOT NULL DEFAULT 0`)
+        this.db.exec(`
+          WITH ordered AS (
+            SELECT rowid AS rid, ROW_NUMBER() OVER (ORDER BY created_at ASC, seq ASC) AS rn
+            FROM transcript_parts
+          )
+          UPDATE transcript_parts SET rev = (SELECT rn FROM ordered WHERE ordered.rid = transcript_parts.rowid)
+        `)
+        console.log('[Database] Added transcript_parts.rev column and backfilled existing rows')
+      }
+      // Create the rev index HERE (not in createTables) so it never runs before
+      // the column exists on a legacy DB. Idempotent + safe on a fresh DB, where
+      // the column is declared in the CREATE TABLE and this simply adds the index.
       this.db.exec(`CREATE INDEX IF NOT EXISTS idx_transcript_parts_task_rev ON transcript_parts(task_id, rev)`)
-      // Backfill existing rows with a global monotonic rev ordered by (created_at, seq).
-      this.db.exec(`
-        WITH ordered AS (
-          SELECT rowid AS rid, ROW_NUMBER() OVER (ORDER BY created_at ASC, seq ASC) AS rn
-          FROM transcript_parts
-        )
-        UPDATE transcript_parts SET rev = (SELECT rn FROM ordered WHERE ordered.rid = transcript_parts.rowid)
-      `)
-      console.log('[Database] Added transcript_parts.rev column and backfilled existing rows')
     } catch (err) {
       console.error('[Database] ensureTranscriptRevColumn failed:', err)
     }
@@ -1212,7 +1217,10 @@ export class DatabaseManager {
         PRIMARY KEY (task_id, part_id)
       );
       CREATE INDEX IF NOT EXISTS idx_transcript_parts_task_seq ON transcript_parts(task_id, seq);
-      CREATE INDEX IF NOT EXISTS idx_transcript_parts_task_rev ON transcript_parts(task_id, rev);
+      -- NOTE: the (task_id, rev) index is created in ensureTranscriptRevColumn(),
+      -- NOT here. On a DB created before rev existed, CREATE TABLE IF NOT EXISTS
+      -- is a no-op (no rev column), so building a rev index here would fail with
+      -- no-such-column before the ALTER TABLE migration runs.
     `)
   }
 
