@@ -241,6 +241,30 @@ describe('useAgentStore', () => {
     })
   })
 
+  describe('scenario: send-after-restart never loses history (the regression)', () => {
+    it('binds a long history on restart, then a send delta appends without dropping anything', async () => {
+      // Restart: bind a large existing transcript from the projection snapshot.
+      const history = Array.from({ length: 200 }, (_, i) =>
+        part({ partId: `h${i}`, role: i % 2 ? 'assistant' : 'user', content: `m${i}`, createdAt: 1000 + i, rev: i + 1 })
+      )
+      getSnapshotMock.mockResolvedValue(history)
+      await useAgentStore.getState().hydrateTranscript('task-1')
+      expect(useAgentStore.getState().sessions.get('task-1')!.messages).toHaveLength(200)
+
+      // Send: user echo + assistant reply arrive as a delta (higher createdAt/rev).
+      fireDelta('task-1', [
+        part({ partId: 'u-new', role: 'user', content: 'new message', createdAt: 2000, rev: 300 }),
+        part({ partId: 'a-new', role: 'assistant', content: 'reply', createdAt: 2001, rev: 301 })
+      ])
+
+      const msgs = useAgentStore.getState().sessions.get('task-1')!.messages
+      expect(msgs).toHaveLength(202) // full history + 2, nothing lost or collapsed
+      expect(msgs[0].id).toBe('h0')
+      expect(msgs[msgs.length - 1].id).toBe('a-new')
+      expect(msgs[msgs.length - 2].id).toBe('u-new')
+    })
+  })
+
   describe('clearMessageDedup (no-op in projection model)', () => {
     it('does not throw and does not wipe the projection', () => {
       useAgentStore.getState().initSession('task-1', 'sess-1', 'agent-1')
