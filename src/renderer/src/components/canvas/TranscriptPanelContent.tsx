@@ -91,6 +91,7 @@ export function TranscriptPanelContent({ taskId }: TranscriptPanelContentProps) 
       taskId={taskId}
       agentId={task?.agent_id ?? undefined}
       pendingApproval={session?.pendingApproval ?? undefined}
+      pendingSend={session?.pendingSend}
     />
   )
 }

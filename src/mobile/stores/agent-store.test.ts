@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { Mock } from 'vitest'
 import { onEvent } from '../api/websocket'
-import { useAgentStore, SessionStatus, type AgentMessage, type TaskSession } from './agent-store'
-import { api } from '../api/client'
+import { useAgentStore, SessionStatus, __clearProjectionsForTest } from './agent-store'
+import { api, type TranscriptPartRecord } from '../api/client'
 
 // Capture the onEvent callbacks registered at store init time
 const eventHandlers = new Map<string, (payload: unknown) => void>()
@@ -12,348 +12,217 @@ const eventHandlers = new Map<string, (payload: unknown) => void>()
     eventHandlers.set(type as string, handler as (payload: unknown) => void)
   }
 }
-const statusHandler = eventHandlers.get('agent:status')
+const statusHandler = eventHandlers.get('agent:status')!
+const transcriptHandler = eventHandlers.get('transcript:changed')!
 
 beforeEach(() => {
-  useAgentStore.setState({
-    agents: [],
-    skills: [],
-    sessions: new Map()
-  })
+  useAgentStore.setState({ agents: [], skills: [], sessions: new Map() })
+  __clearProjectionsForTest()
   vi.clearAllMocks()
 })
 
-function makeMessage(id: string, role: 'user' | 'assistant' | 'system' = 'assistant', content = `msg-${id}`): AgentMessage {
-  return { id, role, content, timestamp: new Date() }
+function part(partId: string, over: Partial<TranscriptPartRecord> = {}): TranscriptPartRecord {
+  return {
+    taskId: over.taskId ?? 'task-1',
+    partId,
+    seq: over.seq ?? 0,
+    role: over.role ?? 'assistant',
+    content: over.content ?? `msg-${partId}`,
+    partType: over.partType,
+    tool: over.tool,
+    payload: over.payload,
+    createdAt: over.createdAt ?? 1000,
+    updatedAt: over.updatedAt ?? 1000,
+    rev: over.rev ?? 1
+  }
 }
 
-function setSession(taskId: string, session: Partial<TaskSession>): void {
+function setSession(taskId: string, status: SessionStatus, sessionId: string | null = 'sess-1', agentId = 'agent-1'): void {
   useAgentStore.setState((state) => ({
     sessions: new Map(state.sessions).set(taskId, {
-      sessionId: session.sessionId ?? 'sess-1',
-      agentId: session.agentId ?? 'agent-1',
+      sessionId,
+      agentId,
       taskId,
-      status: session.status ?? SessionStatus.WORKING,
-      messages: session.messages ?? []
+      status,
+      messages: []
     })
   }))
 }
 
-describe('useAgentStore', () => {
+describe('useAgentStore (projection model)', () => {
+  describe('bindTranscript', () => {
+    it('renders a sorted derived message list from the snapshot', async () => {
+      ;(api.transcript.snapshot as unknown as Mock).mockResolvedValue([
+        part('b', { seq: 2, createdAt: 2000, content: 'second' }),
+        part('a', { seq: 1, createdAt: 1000, content: 'first' })
+      ])
+
+      await useAgentStore.getState().bindTranscript('task-1')
+
+      const s = useAgentStore.getState().sessions.get('task-1')!
+      expect(s.messages.map((m) => m.id)).toEqual(['a', 'b'])
+      expect(s.messages[0].content).toBe('first')
+    })
+
+    it('is a no-op on an empty snapshot (no spurious session)', async () => {
+      ;(api.transcript.snapshot as unknown as Mock).mockResolvedValue([])
+      await useAgentStore.getState().bindTranscript('task-1')
+      expect(useAgentStore.getState().sessions.get('task-1')).toBeUndefined()
+    })
+
+    it('replaces (not appends) the projection when re-binding a snapshot', async () => {
+      ;(api.transcript.snapshot as unknown as Mock).mockResolvedValueOnce([part('a'), part('b')])
+      await useAgentStore.getState().bindTranscript('task-1')
+      __clearProjectionsForTest() // simulate fresh module — snapshot is authoritative
+      ;(api.transcript.snapshot as unknown as Mock).mockResolvedValueOnce([part('a')])
+      await useAgentStore.getState().bindTranscript('task-1')
+      const s = useAgentStore.getState().sessions.get('task-1')!
+      expect(s.messages).toHaveLength(1)
+    })
+  })
+
+  describe('transcript:changed delta', () => {
+    it('applies a delta into the derived list', () => {
+      transcriptHandler({ taskId: 'task-1', parts: [part('a')], maxRev: 1 })
+      const s = useAgentStore.getState().sessions.get('task-1')!
+      expect(s.messages.map((m) => m.id)).toEqual(['a'])
+    })
+
+    it('is idempotent when the same delta arrives twice', () => {
+      transcriptHandler({ taskId: 'task-1', parts: [part('a', { rev: 1 })], maxRev: 1 })
+      transcriptHandler({ taskId: 'task-1', parts: [part('a', { rev: 1 })], maxRev: 1 })
+      const s = useAgentStore.getState().sessions.get('task-1')!
+      expect(s.messages).toHaveLength(1)
+    })
+
+    it('updates content in place (streaming) without duplicating the row', () => {
+      transcriptHandler({ taskId: 'task-1', parts: [part('a', { content: 'hel', rev: 1 })], maxRev: 1 })
+      transcriptHandler({ taskId: 'task-1', parts: [part('a', { content: 'hello', rev: 2 })], maxRev: 2 })
+      const s = useAgentStore.getState().sessions.get('task-1')!
+      expect(s.messages).toHaveLength(1)
+      expect(s.messages[0].content).toBe('hello')
+    })
+
+    it('orders out-of-order deltas by (createdAt, seq)', () => {
+      transcriptHandler({ taskId: 'task-1', parts: [part('b', { seq: 2, createdAt: 2000 })], maxRev: 2 })
+      transcriptHandler({ taskId: 'task-1', parts: [part('a', { seq: 1, createdAt: 1000 })], maxRev: 3 })
+      const s = useAgentStore.getState().sessions.get('task-1')!
+      expect(s.messages.map((m) => m.id)).toEqual(['a', 'b'])
+    })
+
+    it('ignores deltas with no taskId', () => {
+      transcriptHandler({ parts: [part('a')], maxRev: 1 })
+      expect(useAgentStore.getState().sessions.size).toBe(0)
+    })
+  })
+
   describe('syncActiveSessions', () => {
     it('does nothing when no active sessions are returned', async () => {
-      // Pre-populate a session with messages
-      setSession('task-1', {
-        sessionId: 'sess-1',
-        messages: [makeMessage('m1'), makeMessage('m2')]
-      })
       ;(api.sessions.list as unknown as Mock).mockResolvedValue([])
-
       await useAgentStore.getState().syncActiveSessions()
-
-      // Messages should be untouched
-      const session = useAgentStore.getState().sessions.get('task-1')
-      expect(session?.messages).toHaveLength(2)
-      expect(session?.messages[0].id).toBe('m1')
+      expect(useAgentStore.getState().sessions.size).toBe(0)
+      expect(api.transcript.snapshot).not.toHaveBeenCalled()
     })
 
-    it('preserves existing messages when same session reconnects', async () => {
-      // Pre-populate a session with messages (simulating pre-disconnect state)
-      setSession('task-1', {
-        sessionId: 'sess-1',
-        agentId: 'agent-1',
-        status: SessionStatus.WORKING,
-        messages: [makeMessage('m1'), makeMessage('m2'), makeMessage('m3')]
-      })
-
-      // Server returns the same session as active
+    it('registers active sessions and binds each transcript from the projection', async () => {
       ;(api.sessions.list as unknown as Mock).mockResolvedValue([
         { sessionId: 'sess-1', agentId: 'agent-1', taskId: 'task-1', status: 'working' }
       ])
-      ;(api.sessions.sync as unknown as Mock).mockResolvedValue({ success: true, status: 'working' })
+      ;(api.transcript.snapshot as unknown as Mock).mockResolvedValue([part('m1')])
 
       await useAgentStore.getState().syncActiveSessions()
 
-      // Messages should be PRESERVED (not cleared)
-      const session = useAgentStore.getState().sessions.get('task-1')
-      expect(session?.messages).toHaveLength(3)
-      expect(session?.messages[0].id).toBe('m1')
-      expect(session?.messages[1].id).toBe('m2')
-      expect(session?.messages[2].id).toBe('m3')
-
-      // api.sessions.sync should still be called (to fetch missed messages)
-      expect(api.sessions.sync).toHaveBeenCalledWith('sess-1')
+      expect(api.transcript.snapshot).toHaveBeenCalledWith('task-1')
+      const s = useAgentStore.getState().sessions.get('task-1')!
+      expect(s.sessionId).toBe('sess-1')
+      expect(s.status).toBe('working')
+      expect(s.messages.map((m) => m.id)).toEqual(['m1'])
     })
 
-    it('preserves messages when sync request fails on same session', async () => {
-      setSession('task-1', {
-        sessionId: 'sess-1',
-        messages: [makeMessage('m1'), makeMessage('m2')]
-      })
-
+    it('does not call the removed replay/sync endpoint', async () => {
       ;(api.sessions.list as unknown as Mock).mockResolvedValue([
         { sessionId: 'sess-1', agentId: 'agent-1', taskId: 'task-1', status: 'working' }
       ])
-      // Sync fails (network error, server error, etc.)
-      ;(api.sessions.sync as unknown as Mock).mockRejectedValue(new Error('Network error'))
-
+      ;(api.transcript.snapshot as unknown as Mock).mockResolvedValue([])
       await useAgentStore.getState().syncActiveSessions()
-
-      // Messages should STILL be preserved even though sync failed
-      const session = useAgentStore.getState().sessions.get('task-1')
-      expect(session?.messages).toHaveLength(2)
-      expect(session?.messages[0].id).toBe('m1')
-      expect(session?.messages[1].id).toBe('m2')
-    })
-
-    it('clears messages when session ID changes (new/restarted session)', async () => {
-      // Pre-populate with old session messages
-      setSession('task-1', {
-        sessionId: 'old-sess',
-        messages: [makeMessage('old-m1'), makeMessage('old-m2')]
-      })
-
-      // Server returns a DIFFERENT session ID for the same task
-      ;(api.sessions.list as unknown as Mock).mockResolvedValue([
-        { sessionId: 'new-sess', agentId: 'agent-1', taskId: 'task-1', status: 'working' }
-      ])
-      ;(api.sessions.sync as unknown as Mock).mockResolvedValue({ success: true, status: 'working' })
-
-      await useAgentStore.getState().syncActiveSessions()
-
-      // Messages should be CLEARED (new session, full reset)
-      const session = useAgentStore.getState().sessions.get('task-1')
-      expect(session?.messages).toHaveLength(0)
-      expect(session?.sessionId).toBe('new-sess')
-    })
-
-    it('creates new session entry when no existing session for task', async () => {
-      // No pre-existing session
-      ;(api.sessions.list as unknown as Mock).mockResolvedValue([
-        { sessionId: 'sess-1', agentId: 'agent-1', taskId: 'task-1', status: 'working' }
-      ])
-      ;(api.sessions.sync as unknown as Mock).mockResolvedValue({ success: true, status: 'working' })
-
-      await useAgentStore.getState().syncActiveSessions()
-
-      const session = useAgentStore.getState().sessions.get('task-1')
-      expect(session).toBeDefined()
-      expect(session?.sessionId).toBe('sess-1')
-      expect(session?.agentId).toBe('agent-1')
-      expect(session?.status).toBe('working')
-      expect(session?.messages).toHaveLength(0)
-    })
-
-    it('updates status from server while preserving messages on same session', async () => {
-      // Session was "working" on client, server reports "waiting_approval"
-      setSession('task-1', {
-        sessionId: 'sess-1',
-        status: SessionStatus.WORKING,
-        messages: [makeMessage('m1')]
-      })
-
-      ;(api.sessions.list as unknown as Mock).mockResolvedValue([
-        { sessionId: 'sess-1', agentId: 'agent-1', taskId: 'task-1', status: 'waiting_approval' }
-      ])
-      ;(api.sessions.sync as unknown as Mock).mockResolvedValue({ success: true, status: 'waiting_approval' })
-
-      await useAgentStore.getState().syncActiveSessions()
-
-      const session = useAgentStore.getState().sessions.get('task-1')
-      expect(session?.status).toBe('waiting_approval')
-      expect(session?.messages).toHaveLength(1)
-      expect(session?.messages[0].id).toBe('m1')
-    })
-
-    it('does not affect other sessions when syncing active ones', async () => {
-      // Two sessions: task-1 is active, task-2 is idle (not returned by server)
-      setSession('task-1', {
-        sessionId: 'sess-1',
-        messages: [makeMessage('m1')]
-      })
-      setSession('task-2', {
-        sessionId: 'sess-2',
-        status: SessionStatus.IDLE,
-        messages: [makeMessage('m2-1'), makeMessage('m2-2')]
-      })
-
-      ;(api.sessions.list as unknown as Mock).mockResolvedValue([
-        { sessionId: 'sess-1', agentId: 'agent-1', taskId: 'task-1', status: 'working' }
-      ])
-      ;(api.sessions.sync as unknown as Mock).mockResolvedValue({ success: true, status: 'working' })
-
-      await useAgentStore.getState().syncActiveSessions()
-
-      // task-2 should be completely untouched
-      const session2 = useAgentStore.getState().sessions.get('task-2')
-      expect(session2?.messages).toHaveLength(2)
-      expect(session2?.sessionId).toBe('sess-2')
-      expect(session2?.status).toBe('idle')
-    })
-
-    it('handles multiple active sessions with mixed same/different IDs', async () => {
-      // task-1: same session (reconnect), task-2: different session (restarted)
-      setSession('task-1', {
-        sessionId: 'sess-1',
-        messages: [makeMessage('t1-m1'), makeMessage('t1-m2')]
-      })
-      setSession('task-2', {
-        sessionId: 'old-sess-2',
-        messages: [makeMessage('t2-old-m1')]
-      })
-
-      ;(api.sessions.list as unknown as Mock).mockResolvedValue([
-        { sessionId: 'sess-1', agentId: 'agent-1', taskId: 'task-1', status: 'working' },
-        { sessionId: 'new-sess-2', agentId: 'agent-2', taskId: 'task-2', status: 'working' }
-      ])
-      ;(api.sessions.sync as unknown as Mock).mockResolvedValue({ success: true, status: 'working' })
-
-      await useAgentStore.getState().syncActiveSessions()
-
-      // task-1: same session — messages preserved
-      const s1 = useAgentStore.getState().sessions.get('task-1')
-      expect(s1?.messages).toHaveLength(2)
-      expect(s1?.messages[0].id).toBe('t1-m1')
-
-      // task-2: different session — messages cleared
-      const s2 = useAgentStore.getState().sessions.get('task-2')
-      expect(s2?.messages).toHaveLength(0)
-      expect(s2?.sessionId).toBe('new-sess-2')
+      expect(api.sessions.sync).not.toHaveBeenCalled()
     })
 
     it('handles api.sessions.list failure gracefully', async () => {
-      setSession('task-1', {
-        sessionId: 'sess-1',
-        messages: [makeMessage('m1')]
-      })
-
       ;(api.sessions.list as unknown as Mock).mockRejectedValue(new Error('Server down'))
-
       await useAgentStore.getState().syncActiveSessions()
-
-      // Messages should be completely untouched
-      const session = useAgentStore.getState().sessions.get('task-1')
-      expect(session?.messages).toHaveLength(1)
-      expect(session?.messages[0].id).toBe('m1')
+      expect(useAgentStore.getState().sessions.size).toBe(0)
     })
   })
 
-  describe('initSession', () => {
-    it('creates a new session entry', () => {
-      useAgentStore.getState().initSession('task-1', 'sess-1', 'agent-1')
+  describe('agent:status (state only, never messages)', () => {
+    it('updates status without touching the derived messages', () => {
+      setSession('task-1', SessionStatus.WORKING)
+      transcriptHandler({ taskId: 'task-1', parts: [part('m1')], maxRev: 1 })
 
-      const session = useAgentStore.getState().sessions.get('task-1')
-      expect(session).toBeDefined()
-      expect(session?.sessionId).toBe('sess-1')
-      expect(session?.agentId).toBe('agent-1')
-      expect(session?.status).toBe('working')
-      expect(session?.messages).toHaveLength(0)
+      statusHandler({ sessionId: 'sess-1', agentId: 'agent-1', taskId: 'task-1', status: SessionStatus.WAITING_APPROVAL })
+
+      const s = useAgentStore.getState().sessions.get('task-1')!
+      expect(s.status).toBe(SessionStatus.WAITING_APPROVAL)
+      expect(s.messages.map((m) => m.id)).toEqual(['m1'])
     })
 
-    it('preserves existing messages when updating session', () => {
-      setSession('task-1', {
-        sessionId: 'sess-1',
-        messages: [makeMessage('m1')]
-      })
-
-      useAgentStore.getState().initSession('task-1', 'sess-1', 'agent-1')
-
-      const session = useAgentStore.getState().sessions.get('task-1')
-      expect(session?.messages).toHaveLength(1)
-    })
-  })
-
-  describe('endSession', () => {
-    it('sets session to idle and clears sessionId', () => {
-      setSession('task-1', {
-        sessionId: 'sess-1',
-        status: SessionStatus.WORKING,
-        messages: [makeMessage('m1')]
-      })
-
-      useAgentStore.getState().endSession('task-1')
-
-      const session = useAgentStore.getState().sessions.get('task-1')
-      expect(session?.sessionId).toBeNull()
-      expect(session?.status).toBe('idle')
-      expect(session?.messages).toHaveLength(1) // Messages preserved
-    })
-  })
-
-  describe('removeSession', () => {
-    it('removes the session entirely', () => {
-      setSession('task-1', { sessionId: 'sess-1' })
-
-      useAgentStore.getState().removeSession('task-1')
-
-      expect(useAgentStore.getState().sessions.get('task-1')).toBeUndefined()
-    })
-  })
-
-  describe('clearMessageDedup', () => {
-    it('clears messages for a task', () => {
-      setSession('task-1', {
-        sessionId: 'sess-1',
-        messages: [makeMessage('m1'), makeMessage('m2')]
-      })
-
-      useAgentStore.getState().clearMessageDedup('task-1')
-
-      const session = useAgentStore.getState().sessions.get('task-1')
-      expect(session?.messages).toHaveLength(0)
-    })
-  })
-
-  describe('Session ID re-keying via agent:status WebSocket event', () => {
-    it('updates sessionId when status event carries re-keyed session ID', () => {
-      // Session starts with temp UUID (from initial start call)
-      setSession('task-1', {
-        sessionId: 'temp-uuid',
-        agentId: 'agent-1',
-        status: SessionStatus.WORKING
-      })
-
-      // Backend sends status with real session ID after polling detects re-key
-      statusHandler!({
-        sessionId: 'real-session-id',
-        agentId: 'agent-1',
-        taskId: 'task-1',
-        status: SessionStatus.WORKING
-      })
-
-      const session = useAgentStore.getState().sessions.get('task-1')!
-      // Session ID should be updated to the real one, not stuck on temp-uuid
-      expect(session.sessionId).toBe('real-session-id')
+    it('updates sessionId when status event carries a re-keyed session ID', () => {
+      setSession('task-1', SessionStatus.WORKING, 'temp-uuid')
+      statusHandler({ sessionId: 'real-session-id', agentId: 'agent-1', taskId: 'task-1', status: SessionStatus.WORKING })
+      expect(useAgentStore.getState().sessions.get('task-1')!.sessionId).toBe('real-session-id')
     })
 
     it('updates sessionId when pre-registered with empty string', () => {
-      // Session pre-registered with empty sessionId (before start completes)
-      setSession('task-1', {
-        sessionId: '',
-        agentId: 'agent-1',
-        status: SessionStatus.WORKING
-      })
-
-      statusHandler!({
-        sessionId: 'new-session-id',
-        agentId: 'agent-1',
-        taskId: 'task-1',
-        status: SessionStatus.WORKING
-      })
-
-      const session = useAgentStore.getState().sessions.get('task-1')!
-      expect(session.sessionId).toBe('new-session-id')
+      setSession('task-1', SessionStatus.WORKING, '')
+      statusHandler({ sessionId: 'new-session-id', agentId: 'agent-1', taskId: 'task-1', status: SessionStatus.WORKING })
+      expect(useAgentStore.getState().sessions.get('task-1')!.sessionId).toBe('new-session-id')
     })
 
-    it('ignores status events for unknown tasks', () => {
-      statusHandler!({
-        sessionId: 'sess-x',
-        agentId: 'agent-1',
-        taskId: 'unknown-task',
-        status: SessionStatus.WORKING
-      })
+    it('reconciles the delta on idle for a known session', () => {
+      setSession('task-1', SessionStatus.WORKING)
+      ;(api.transcript.delta as unknown as Mock).mockResolvedValue({ parts: [], maxRev: 0 })
+      statusHandler({ sessionId: 'sess-1', agentId: 'agent-1', taskId: 'task-1', status: SessionStatus.IDLE })
+      expect(api.transcript.delta).toHaveBeenCalledWith('task-1', 0)
+    })
 
-      expect(useAgentStore.getState().sessions.has('unknown-task')).toBe(false)
+    it('creates a session entry for a new active status event', () => {
+      statusHandler({ sessionId: 'sess-x', agentId: 'agent-1', taskId: 'task-9', status: SessionStatus.WORKING })
+      const s = useAgentStore.getState().sessions.get('task-9')!
+      expect(s.sessionId).toBe('sess-x')
+      expect(s.status).toBe(SessionStatus.WORKING)
+    })
+  })
+
+  describe('lifecycle', () => {
+    it('initSession creates a working session', () => {
+      useAgentStore.getState().initSession('task-1', 'sess-1', 'agent-1')
+      const s = useAgentStore.getState().sessions.get('task-1')!
+      expect(s.sessionId).toBe('sess-1')
+      expect(s.status).toBe(SessionStatus.WORKING)
+    })
+
+    it('endSession goes idle and clears sessionId but preserves the derived messages', () => {
+      setSession('task-1', SessionStatus.WORKING)
+      transcriptHandler({ taskId: 'task-1', parts: [part('m1')], maxRev: 1 })
+      useAgentStore.getState().endSession('task-1')
+      const s = useAgentStore.getState().sessions.get('task-1')!
+      expect(s.sessionId).toBeNull()
+      expect(s.status).toBe(SessionStatus.IDLE)
+      expect(s.messages).toHaveLength(1)
+    })
+
+    it('removeSession removes the session entirely', () => {
+      setSession('task-1', SessionStatus.WORKING)
+      useAgentStore.getState().removeSession('task-1')
+      expect(useAgentStore.getState().sessions.get('task-1')).toBeUndefined()
+    })
+
+    it('clearMessageDedup is a no-op (projection is the source of truth)', () => {
+      setSession('task-1', SessionStatus.WORKING)
+      transcriptHandler({ taskId: 'task-1', parts: [part('m1'), part('m2', { seq: 1 })], maxRev: 2 })
+      useAgentStore.getState().clearMessageDedup('task-1')
+      expect(useAgentStore.getState().sessions.get('task-1')!.messages).toHaveLength(2)
     })
   })
 })

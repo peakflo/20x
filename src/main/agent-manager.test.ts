@@ -735,7 +735,7 @@ describe('AgentManager implicit resume behavior', () => {
     vi.clearAllMocks()
   })
 
-  it('replays transcript to renderer when sendMessage implicitly resumes a session', async () => {
+  it('does NOT push a transcript replay to the renderer when sendMessage implicitly resumes a session', async () => {
     const mockDb = {
       getTask: vi.fn(() => ({
         id: 'task-1',
@@ -777,15 +777,15 @@ describe('AgentManager implicit resume behavior', () => {
     expect(adapter.resumeSession).toHaveBeenCalledOnce()
     expect(doSendAdapterMessageSpy).toHaveBeenCalledOnce()
 
-    // Implicit resume now replays messages to renderer to prevent context loss
-    // after idle periods on both mobile and desktop
+    // Resume no longer replays the transcript to clients. Clients render the
+    // durable projection (snapshot + `transcript:changed` deltas), so a resume
+    // must not re-emit historical messages as a stream (which caused reorder /
+    // duplication on send-after-idle).
     const outputBatchEvents = sendToRendererSpy.mock.calls.filter(([channel]) => channel === 'agent:output-batch')
-    expect(outputBatchEvents).toHaveLength(1)
-    expect((outputBatchEvents[0][1] as { messages: { content: string }[] }).messages).toHaveLength(1)
-    expect((outputBatchEvents[0][1] as { messages: { content: string }[] }).messages[0].content).toBe('Hello')
+    expect(outputBatchEvents).toHaveLength(0)
   })
 
-  it('still replays transcript during explicit resume', async () => {
+  it('does NOT push a transcript replay during explicit resume', async () => {
     const mockDb = {
       getTask: vi.fn(() => ({
         id: 'task-1',
@@ -823,8 +823,10 @@ describe('AgentManager implicit resume behavior', () => {
 
     await manager.resumeSession('agent-1', 'task-1', 'persisted-session-id')
 
+    // Resume seeds only the in-memory dedup state; it never streams historical
+    // messages to clients. The projection (snapshot + deltas) is the render source.
     const outputBatchEvents = sendToRendererSpy.mock.calls.filter(([channel]) => channel === 'agent:output-batch')
-    expect(outputBatchEvents).toHaveLength(1)
+    expect(outputBatchEvents).toHaveLength(0)
   })
 })
 
@@ -972,6 +974,7 @@ describe('AgentManager transitionToIdle — enterprise task completion after fee
       getSecretsByIds: vi.fn(() => []),
       getSetting: vi.fn(() => null),
       updateTask: vi.fn(),
+      getTranscriptParts: vi.fn(() => [] as Array<{ role: string; content: string }>),
     } as unknown as ConstructorParameters<typeof AgentManager>[0]
   }
 
@@ -1155,7 +1158,46 @@ describe('AgentManager transitionToIdle — enterprise task completion after fee
     expect(sessionWithAdapter.seenPartIds.has('final-part')).toBe(true)
   })
 
-  it('does not replay the final assistant text after idle when only the persisted part id changed', async () => {
+  it('does NOT re-emit a message already persisted under a different part id (codex id-scheme mismatch)', async () => {
+    const mockDb = createEnterpriseTaskDb({ status: TaskStatus.AgentWorking, output_fields: [], source_id: null })
+    // The projection already has this assistant message — captured live under a
+    // codex streaming id (agent-msg_...). getAllMessages returns the SAME text
+    // under the finalized item id (agent-item-42), which is NOT in seenPartIds.
+    ;(mockDb as any).getTranscriptParts = vi.fn(() => [
+      { role: 'assistant', content: 'I confirmed the production path has more than one worker.' }
+    ])
+    const { mgr, session } = setupManager(mockDb)
+    const adapter = {
+      getAllMessages: vi.fn(async () => ([
+        {
+          id: 'msg-1',
+          role: MessageRole.ASSISTANT,
+          parts: [
+            { id: 'agent-item-42', type: MessagePartType.TEXT, text: 'I confirmed the production path has more than one worker.', content: 'I confirmed the production path has more than one worker.' },
+            { id: 'agent-item-43', type: MessagePartType.TEXT, text: 'Brand new content not seen before.', content: 'Brand new content not seen before.' }
+          ]
+        }
+      ]))
+    }
+    const sessionWithAdapter = { ...session, adapter: adapter as any }
+    vi.spyOn(mgr as any, 'extractOutputValues').mockResolvedValue(undefined)
+    const sendSpy = vi.spyOn(mgr as any, 'sendToRenderer')
+
+    await (mgr as any).transitionToIdle('session-1', sessionWithAdapter)
+
+    const batch = sendSpy.mock.calls.find(([channel]) => channel === 'agent:output-batch')?.[1] as
+      | { messages: Array<{ id: string; content: string }> }
+      | undefined
+    const emittedIds = batch?.messages.map((m) => m.id) ?? []
+    // The already-persisted message (different id) must NOT be re-emitted…
+    expect(emittedIds).not.toContain('agent-item-42')
+    // …but genuinely new content still is.
+    expect(emittedIds).toContain('agent-item-43')
+    // The skipped part's id is remembered so it isn't reconsidered next idle.
+    expect(sessionWithAdapter.seenPartIds.has('agent-item-42')).toBe(true)
+  })
+
+  it('does not replay the final assistant text after idle when only the persisted part id changed (assistantTextKeys dedup)', async () => {
     const mockDb = createEnterpriseTaskDb({
       status: TaskStatus.AgentWorking,
       output_fields: [],
@@ -1274,11 +1316,11 @@ describe('AgentManager transitionToIdle — enterprise task completion after fee
     expect(storedValue).not.toBe(String(partText.length))
   })
 
-  it('resumeAdapterSession uses same IDs for batch replay and dedup state (regression: dual-loop bug)', async () => {
-    // This test ensures the batch replay IDs and dedup state IDs are identical.
-    // Previously, two separate loops each called Date.now() + Math.random() for
-    // parts without an id, producing different IDs — causing message duplication
-    // on follow-up messages.
+  it('resumeAdapterSession seeds dedup state from resumed history without replaying to clients', async () => {
+    // Resume builds the in-memory dedup state (seenMessageIds / seenPartIds) so
+    // adapter polling won't re-emit historical parts as new streaming output.
+    // It must NOT push a transcript batch to clients — the projection (snapshot
+    // + `transcript:changed` deltas) is the sole render source.
     const mockDb = createMockDb({})
     const mgr = new AgentManager(mockDb)
     const sendSpy = vi.spyOn(mgr as any, 'sendToRenderer')
@@ -1311,31 +1353,24 @@ describe('AgentManager transitionToIdle — enterprise task completion after fee
       getWorkspaceDir: vi.fn(() => '/tmp/ws'),
     })
 
-    await (mgr as any).resumeAdapterSession(adapter, 'agent-1', 'task-1', 'session-1', {
-      replayToRenderer: true
-    })
+    await (mgr as any).resumeAdapterSession(adapter, 'agent-1', 'task-1', 'session-1')
 
-    // Get the batch messages sent to renderer
+    // No transcript batch is pushed to clients on resume.
     const batchCall = sendSpy.mock.calls.find(
       ([channel]) => channel === 'agent:output-batch'
     )
-    expect(batchCall).toBeDefined()
-    const batchMessages = (batchCall![1] as any).messages as Array<{ id: string }>
+    expect(batchCall).toBeUndefined()
 
-    // Get the session's dedup state
+    // The session's dedup state is seeded from the resumed history.
     const session = (mgr as any).sessions.get('session-1')
     expect(session).toBeDefined()
 
-    // CRITICAL: Every batch message ID must be in the dedup state
-    for (const msg of batchMessages) {
-      expect(session.seenPartIds.has(msg.id)).toBe(true)
-    }
-
-    // Stable part should use its own id
-    expect(batchMessages.find((m: { id: string }) => m.id === 'stable-part-id')).toBeDefined()
+    // Both parts are tracked: the id-less part gets a generated id, the stable
+    // part keeps its own id → two entries total.
+    expect(session.seenPartIds.size).toBe(2)
     expect(session.seenPartIds.has('stable-part-id')).toBe(true)
 
-    // Message-level IDs should also be tracked for codex-style message dedup
+    // Message-level IDs are tracked for codex-style message dedup.
     expect(session.seenMessageIds.has('msg-1')).toBe(true)
     expect(session.seenMessageIds.has('msg-2')).toBe(true)
   })
@@ -2518,5 +2553,490 @@ describe('AgentManager tillDone nudge on idle', () => {
     // Should transition to idle (all done) — no nudge
     expect(transitionSpy).toHaveBeenCalledOnce()
     expect(sendSpy).not.toHaveBeenCalled()
+  })
+})
+
+describe('AgentManager delegation-aware watchdogs', () => {
+  function buildManager(dbOverrides: Record<string, unknown> = {}) {
+    const mockDb = createMockDb({})
+    Object.assign(mockDb as any, dbOverrides)
+    const mgr = new AgentManager(mockDb)
+    vi.spyOn(mgr as any, 'sendToRenderer').mockImplementation(() => undefined)
+    vi.spyOn(mgr as any, 'ensurePollingCoordinator').mockImplementation(() => undefined)
+    return { mgr, mockDb }
+  }
+
+  function buildBusySession(mgr: AgentManager, adapter: Record<string, unknown>) {
+    const session = {
+      agentId: 'agent-1',
+      taskId: 'task-1',
+      status: 'working' as const,
+      createdAt: new Date(),
+      seenMessageIds: new Set<string>(),
+      seenPartIds: new Set<string>(),
+      partContentLengths: new Map<string, string>(),
+      adapter,
+      pollingStarted: true,
+    }
+    ;(mgr as any).sessions.set('session-1', session)
+    ;(mgr as any).startAdapterPolling(
+      'session-1',
+      adapter,
+      { agentId: 'agent-1', taskId: 'task-1', workspaceDir: '/tmp/ws' },
+      undefined,
+      session
+    )
+    const entry = (mgr as any).pollingEntries.get('session-1')
+    entry.hasSeenWork = true
+    return { session, entry }
+  }
+
+  it('classifies delegation tools correctly', () => {
+    const isDelegation = (AgentManager as any).isDelegationTool.bind(AgentManager)
+    // Subagent spawn tools
+    expect(isDelegation('task')).toBe(true)
+    expect(isDelegation('Task')).toBe(true)
+    expect(isDelegation('agent')).toBe(true)
+    // Subtask orchestration tools (various MCP name manglings)
+    expect(isDelegation('wait_for_subtasks')).toBe(true)
+    expect(isDelegation('mcp__task-management__wait_for_subtasks')).toBe(true)
+    expect(isDelegation('task-management_wait_for_subtasks')).toBe(true)
+    expect(isDelegation('start_task')).toBe(true)
+    // Ordinary tools are not delegation
+    expect(isDelegation('read')).toBe(false)
+    expect(isDelegation('bash')).toBe(false)
+    expect(isDelegation('todowrite')).toBe(false)
+    expect(isDelegation(undefined)).toBe(false)
+  })
+
+  it('stuck-tool detector does NOT abort a long-running delegation tool', async () => {
+    const { mgr } = buildManager()
+    const adapter = {
+      pollMessages: vi.fn(async () => []),
+      getStatus: vi.fn(async () => ({ type: SessionStatusType.BUSY })),
+      getRunningTools: vi.fn(async () => [
+        // Running for 10 minutes — way past STUCK_TOOL_TIMEOUT_MS (90s)
+        { partId: 'p1', toolName: 'mcp__task-management__wait_for_subtasks', startTime: Date.now() - 10 * 60_000 },
+      ]),
+      abortPrompt: vi.fn(async () => undefined),
+    }
+    const { entry } = buildBusySession(mgr, adapter)
+    entry.createdAt = Date.now() - 60_000
+    entry.lastPartReceivedAt = Date.now() - 60_000 // recent enough for session watchdog
+
+    await (mgr as any).pollSingleSession(entry)
+
+    expect(adapter.abortPrompt).not.toHaveBeenCalled()
+    expect(entry.watchdogFired).toBeFalsy()
+  })
+
+  it('stuck-tool detector still aborts a hung non-delegation tool', async () => {
+    const { mgr } = buildManager()
+    const adapter = {
+      pollMessages: vi.fn(async () => []),
+      getStatus: vi.fn(async () => ({ type: SessionStatusType.BUSY })),
+      getRunningTools: vi.fn(async () => [
+        { partId: 'p1', toolName: 'read', startTime: Date.now() - 5 * 60_000 },
+      ]),
+      abortPrompt: vi.fn(async () => undefined),
+    }
+    const { entry } = buildBusySession(mgr, adapter)
+    entry.createdAt = Date.now() - 60_000
+    entry.lastPartReceivedAt = Date.now() - 60_000
+    vi.spyOn(mgr as any, 'sendAutoAbortMessageOnce').mockReturnValue(true)
+
+    await (mgr as any).pollSingleSession(entry)
+
+    expect(adapter.abortPrompt).toHaveBeenCalledOnce()
+    expect(entry.watchdogFired).toBe(true)
+  })
+
+  it('stuck-session watchdog stands down while a delegation tool is running', async () => {
+    const { mgr } = buildManager()
+    const adapter = {
+      pollMessages: vi.fn(async () => []),
+      getStatus: vi.fn(async () => ({ type: SessionStatusType.BUSY })),
+      getRunningTools: vi.fn(async () => [
+        { partId: 'p1', toolName: 'task', startTime: Date.now() - 30_000 },
+      ]),
+      abortPrompt: vi.fn(async () => undefined),
+    }
+    const { entry } = buildBusySession(mgr, adapter)
+    // Silent for 6 minutes — past STUCK_SESSION_TIMEOUT_MS (5 min)
+    entry.createdAt = Date.now() - 10 * 60_000
+    entry.lastPartReceivedAt = Date.now() - 6 * 60_000
+
+    await (mgr as any).pollSingleSession(entry)
+
+    expect(adapter.abortPrompt).not.toHaveBeenCalled()
+    expect(entry.watchdogFired).toBeFalsy()
+  })
+
+  it('stuck-session watchdog stands down while subtasks are still being worked on', async () => {
+    const { mgr, mockDb } = buildManager()
+    ;(mockDb as any).getSubtasks = vi.fn(() => [
+      { id: 'sub-1', title: 'Child A', status: TaskStatus.AgentWorking },
+      { id: 'sub-2', title: 'Child B', status: TaskStatus.ReadyForReview },
+    ])
+    const adapter = {
+      pollMessages: vi.fn(async () => []),
+      getStatus: vi.fn(async () => ({ type: SessionStatusType.BUSY })),
+      abortPrompt: vi.fn(async () => undefined),
+    }
+    const { entry } = buildBusySession(mgr, adapter)
+    entry.createdAt = Date.now() - 10 * 60_000
+    entry.lastPartReceivedAt = Date.now() - 6 * 60_000
+
+    await (mgr as any).pollSingleSession(entry)
+
+    expect(adapter.abortPrompt).not.toHaveBeenCalled()
+    expect(entry.watchdogFired).toBeFalsy()
+  })
+
+  it('stuck-session watchdog still aborts a truly silent session with no delegation', async () => {
+    const { mgr } = buildManager()
+    const adapter = {
+      pollMessages: vi.fn(async () => []),
+      getStatus: vi.fn(async () => ({ type: SessionStatusType.BUSY })),
+      abortPrompt: vi.fn(async () => undefined),
+    }
+    const { entry } = buildBusySession(mgr, adapter)
+    entry.createdAt = Date.now() - 10 * 60_000
+    entry.lastPartReceivedAt = Date.now() - 6 * 60_000
+    vi.spyOn(mgr as any, 'sendAutoAbortMessageOnce').mockReturnValue(true)
+
+    await (mgr as any).pollSingleSession(entry)
+
+    expect(adapter.abortPrompt).toHaveBeenCalledOnce()
+    expect(entry.watchdogFired).toBe(true)
+  })
+})
+
+describe('AgentManager idle-session inactivity reaper', () => {
+  const THIRTY_ONE_MINUTES = 31 * 60_000
+
+  function buildManager(dbOverrides: Record<string, unknown> = {}) {
+    const mockDb = createMockDb({})
+    Object.assign(mockDb as any, {
+      getTask: vi.fn(() => ({ id: 'task-1', title: 'Test Task', repos: [], skill_ids: [], session_id: 'session-1', status: TaskStatus.ReadyForReview })),
+      ...dbOverrides,
+    })
+    const mgr = new AgentManager(mockDb)
+    vi.spyOn(mgr as any, 'sendToRenderer').mockImplementation(() => undefined)
+    const stopSpy = vi.spyOn(mgr, 'stopSession').mockResolvedValue(undefined)
+    return { mgr, mockDb, stopSpy }
+  }
+
+  function addSession(mgr: AgentManager, overrides: Record<string, unknown> = {}) {
+    const session = {
+      id: 'session-1',
+      agentId: 'agent-1',
+      taskId: 'task-1',
+      status: 'idle' as const,
+      createdAt: new Date(Date.now() - THIRTY_ONE_MINUTES),
+      lastActivityAt: Date.now() - THIRTY_ONE_MINUTES,
+      seenMessageIds: new Set<string>(),
+      seenPartIds: new Set<string>(),
+      partContentLengths: new Map<string, string>(),
+      ...overrides,
+    }
+    ;(mgr as any).sessions.set((overrides.id as string) || 'session-1', session)
+    return session
+  }
+
+  it('releases the runtime of a long-idle session (resume-capable)', async () => {
+    const { mgr, stopSpy } = buildManager()
+    addSession(mgr)
+
+    await (mgr as any).reapInactiveSessions()
+
+    // resetTaskStatus=false: this is a resource release, not a user stop
+    expect(stopSpy).toHaveBeenCalledWith('session-1', false)
+  })
+
+  it('never touches a session with an active turn', async () => {
+    const { mgr, stopSpy } = buildManager()
+    addSession(mgr, { status: 'working' })
+
+    await (mgr as any).reapInactiveSessions()
+
+    expect(stopSpy).not.toHaveBeenCalled()
+  })
+
+  it('does not release a recently idle session', async () => {
+    const { mgr, stopSpy } = buildManager()
+    addSession(mgr, { lastActivityAt: Date.now() - 60_000 })
+
+    await (mgr as any).reapInactiveSessions()
+
+    expect(stopSpy).not.toHaveBeenCalled()
+  })
+
+  it('does not release a coordinator whose subtasks are still being worked on', async () => {
+    const { mgr, mockDb, stopSpy } = buildManager()
+    ;(mockDb as any).getSubtasks = vi.fn(() => [
+      { id: 'sub-1', title: 'Child A', status: TaskStatus.AgentWorking },
+    ])
+    addSession(mgr)
+
+    await (mgr as any).reapInactiveSessions()
+
+    expect(stopSpy).not.toHaveBeenCalled()
+  })
+
+  it('skips pseudo-task sessions (no DB row) and sessions without a resume anchor', async () => {
+    const { mgr, mockDb, stopSpy } = buildManager()
+    // No DB row (mastermind / heartbeat pseudo-tasks)
+    ;(mockDb as any).getTask = vi.fn(() => undefined)
+    addSession(mgr)
+    await (mgr as any).reapInactiveSessions()
+    expect(stopSpy).not.toHaveBeenCalled()
+
+    // DB row exists but has no persisted session_id to resume from
+    ;(mockDb as any).getTask = vi.fn(() => ({ id: 'task-1', title: 'Test Task', session_id: null }))
+    await (mgr as any).reapInactiveSessions()
+    expect(stopSpy).not.toHaveBeenCalled()
+  })
+})
+
+describe('AgentManager event-driven parent wake-up', () => {
+  function buildManager(tasks: Record<string, Record<string, unknown>>, subtasks: Record<string, unknown>[]) {
+    const mockDb = createMockDb({})
+    Object.assign(mockDb as any, {
+      getTask: vi.fn((id: string) => tasks[id]),
+      getSubtasks: vi.fn(() => subtasks),
+    })
+    const mgr = new AgentManager(mockDb)
+    vi.spyOn(mgr as any, 'sendToRenderer').mockImplementation(() => undefined)
+    const wakeSpy = vi.spyOn(mgr, 'sendByTaskId').mockResolvedValue({ sessionId: 'parent-session' })
+    return { mgr, mockDb, wakeSpy }
+  }
+
+  const parentTask = { id: 'parent-1', title: 'Parent', status: TaskStatus.ReadyForReview }
+
+  it('wakes an idle parent when all subtasks reach a terminal state', async () => {
+    const { mgr, wakeSpy } = buildManager({ 'parent-1': parentTask }, [
+      { id: 'sub-1', title: 'Child A', status: TaskStatus.ReadyForReview },
+      { id: 'sub-2', title: 'Child B', status: TaskStatus.Completed },
+    ])
+
+    await mgr.notifyParentOfSubtaskCompletion('parent-1', 'sub-1')
+
+    expect(wakeSpy).toHaveBeenCalledOnce()
+    const [taskId, message] = wakeSpy.mock.calls[0]
+    expect(taskId).toBe('parent-1')
+    expect(message).toContain('Child A')
+    expect(message).toContain('Child B')
+    expect(message).toContain('terminal state')
+  })
+
+  it('does not wake the parent while some subtasks are still active', async () => {
+    const { mgr, wakeSpy } = buildManager({ 'parent-1': parentTask }, [
+      { id: 'sub-1', title: 'Child A', status: TaskStatus.ReadyForReview },
+      { id: 'sub-2', title: 'Child B', status: TaskStatus.AgentWorking },
+    ])
+
+    await mgr.notifyParentOfSubtaskCompletion('parent-1', 'sub-1')
+
+    expect(wakeSpy).not.toHaveBeenCalled()
+  })
+
+  it('does not inject a message while the parent session is actively working', async () => {
+    const { mgr, wakeSpy } = buildManager({ 'parent-1': parentTask }, [
+      { id: 'sub-1', title: 'Child A', status: TaskStatus.ReadyForReview },
+    ])
+    ;(mgr as any).sessions.set('parent-session', {
+      id: 'parent-session',
+      agentId: 'agent-1',
+      taskId: 'parent-1',
+      status: 'working',
+      createdAt: new Date(),
+      seenMessageIds: new Set<string>(),
+      seenPartIds: new Set<string>(),
+      partContentLengths: new Map<string, string>(),
+    })
+
+    await mgr.notifyParentOfSubtaskCompletion('parent-1', 'sub-1')
+
+    expect(wakeSpy).not.toHaveBeenCalled()
+  })
+
+  it('does not wake a completed parent task', async () => {
+    const { mgr, wakeSpy } = buildManager(
+      { 'parent-1': { ...parentTask, status: TaskStatus.Completed } },
+      [{ id: 'sub-1', title: 'Child A', status: TaskStatus.Completed }]
+    )
+
+    await mgr.notifyParentOfSubtaskCompletion('parent-1', 'sub-1')
+
+    expect(wakeSpy).not.toHaveBeenCalled()
+  })
+})
+
+describe('AgentManager durable transcript write-through', () => {
+  function buildManager() {
+    const mockDb = createMockDb({})
+    const upserted: Array<{ taskId: string; parts: Array<{ id: string; role?: string; content?: string; partType?: string }> }> = []
+    Object.assign(mockDb as any, {
+      upsertTranscriptParts: vi.fn((taskId: string, parts: never[]) => { upserted.push({ taskId, parts }) }),
+      hasTranscriptParts: vi.fn(() => false),
+      getTranscriptParts: vi.fn(() => [])
+    })
+    const mgr = new AgentManager(mockDb)
+    // Avoid electron window access; keep persist path (sendToRenderer) intact
+    ;(mgr as any).mainWindow = null
+    return { mgr, mockDb, upserted }
+  }
+
+  it('persists agent:output parts before delivery', () => {
+    const { mgr, upserted } = buildManager()
+    ;(mgr as any).sendToRenderer('agent:output', {
+      sessionId: 's1',
+      taskId: 'task-1',
+      type: 'message',
+      data: { id: 'p1', role: 'assistant', content: 'ACK — woke up on completion', partType: 'text' }
+    })
+
+    expect(upserted).toHaveLength(1)
+    expect(upserted[0].taskId).toBe('task-1')
+    expect(upserted[0].parts[0]).toMatchObject({ id: 'p1', role: 'assistant', content: 'ACK — woke up on completion' })
+  })
+
+  it('persists agent:output-batch parts and skips ephemeral part types', () => {
+    const { mgr, upserted } = buildManager()
+    ;(mgr as any).sendToRenderer('agent:output-batch', {
+      sessionId: 's1',
+      taskId: 'task-1',
+      messages: [
+        { id: 'p1', role: 'assistant', content: 'real output', partType: 'text' },
+        { id: 'p2', role: 'system', content: 'x', partType: 'step-start' },
+        { id: 'p3', role: 'system', content: 'y', partType: 'step-finish' },
+        { id: 'p4', role: 'system', content: '', partType: 'text' } // empty, no structure
+      ]
+    })
+
+    expect(upserted).toHaveLength(1)
+    expect(upserted[0].parts.map((p) => p.id)).toEqual(['p1'])
+  })
+
+  it('always forwards live parts to the projection regardless of store population (idempotency is at the DB layer)', () => {
+    const { mgr, mockDb, upserted } = buildManager()
+
+    // A populated projection must NOT short-circuit live output — re-emit is a
+    // no-op at the DB layer (upsert keyed by stable part id), not here.
+    ;(mockDb as any).hasTranscriptParts = vi.fn(() => true)
+    ;(mgr as any).sendToRenderer('agent:output-batch', {
+      sessionId: 's1',
+      taskId: 'task-1',
+      messages: [{ id: 'p1', role: 'assistant', content: 'live output', partType: 'text' }]
+    })
+    expect(upserted).toHaveLength(1)
+    expect(upserted[0].parts[0].id).toBe('p1')
+  })
+
+  it('exposes snapshots via getTranscriptSnapshot', async () => {
+    const { mgr, mockDb } = buildManager()
+    const rows = [{ taskId: 'task-1', partId: 'p1', seq: 1, role: 'assistant', content: 'hi', createdAt: 1, updatedAt: 1 }]
+    ;(mockDb as any).hasTranscriptParts = vi.fn(() => true) // already populated → no backfill
+    ;(mockDb as any).getTranscriptParts = vi.fn(() => rows)
+
+    await expect(mgr.getTranscriptSnapshot('task-1')).resolves.toEqual(rows)
+    expect((mockDb as any).getTranscriptParts).toHaveBeenCalledWith('task-1', undefined)
+  })
+})
+
+describe('AgentManager transcript projection backfill (event-sourced, ingest-once)', () => {
+  function buildManager() {
+    const mockDb = createMockDb({})
+    const upserts: Array<{ taskId: string; parts: Array<{ id: string; role?: string; content?: string; receivedAt?: number }> }> = []
+    let stored = false
+    Object.assign(mockDb as any, {
+      getTask: vi.fn(() => ({ id: 'task-1', agent_id: 'agent-1', session_id: 'sess-abc', title: 'T', repos: [], skill_ids: [] })),
+      getWorkspaceDir: vi.fn(() => '/tmp/ws'),
+      hasTranscriptParts: vi.fn(() => stored),
+      upsertTranscriptParts: vi.fn((taskId: string, parts: never[]) => { upserts.push({ taskId, parts }); stored = true }),
+      getTranscriptParts: vi.fn(() => [])
+    })
+    const mgr = new AgentManager(mockDb)
+    return { mgr, mockDb, upserts }
+  }
+
+  const persisted = [
+    {
+      role: MessageRole.USER,
+      parts: [{ id: 'u1', type: MessagePartType.TEXT, text: 'hello', receivedAt: 1000 }]
+    },
+    {
+      role: MessageRole.ASSISTANT,
+      parts: [
+        { id: 'a1', type: MessagePartType.TEXT, text: 'hi there', receivedAt: 2000 },
+        { id: 's1', type: 'step-start', text: '', receivedAt: 2001 } // ephemeral, skipped
+      ]
+    }
+  ]
+
+  it('ingests persisted history once into the projection with real timestamps', async () => {
+    const { mgr, upserts } = buildManager()
+    vi.spyOn(mgr as any, 'getAdapter').mockReturnValue({
+      getPersistedMessages: vi.fn(async () => persisted)
+    })
+
+    await mgr.getTranscriptSnapshot('task-1')
+
+    expect(upserts).toHaveLength(1)
+    const ids = upserts[0].parts.map((p) => p.id)
+    expect(ids).toEqual(['u1', 'a1']) // step-start ephemeral excluded
+    expect(upserts[0].parts.find((p) => p.id === 'u1')).toMatchObject({ role: 'user', content: 'hello', receivedAt: 1000 })
+    expect(upserts[0].parts.find((p) => p.id === 'a1')).toMatchObject({ role: 'assistant', receivedAt: 2000 })
+  })
+
+  it('does NOT ingest when the projection already has parts (reader connect is side-effect-free)', async () => {
+    const { mgr, mockDb, upserts } = buildManager()
+    // Projection is already populated by live write-through. A snapshot read
+    // (e.g. a mobile client connecting) must NOT re-ingest the persisted session
+    // — re-ingesting under mismatched ids duplicates messages, and the upsert
+    // would broadcast those dupes to every client (including desktop).
+    ;(mockDb as any).hasTranscriptParts = vi.fn(() => true)
+    const getPersistedMessages = vi.fn(async () => persisted)
+    vi.spyOn(mgr as any, 'getAdapter').mockReturnValue({ getPersistedMessages })
+
+    await mgr.getTranscriptSnapshot('task-1')
+
+    expect(upserts).toHaveLength(0)                 // nothing written
+    expect(getPersistedMessages).not.toHaveBeenCalled() // history not even read
+  })
+
+  it('seeds an empty projection with the full persisted history', async () => {
+    const { mgr, upserts } = buildManager() // hasTranscriptParts starts false
+    vi.spyOn(mgr as any, 'getAdapter').mockReturnValue({
+      getPersistedMessages: vi.fn(async () => persisted)
+    })
+
+    await mgr.getTranscriptSnapshot('task-1')
+
+    expect(upserts).toHaveLength(1)
+    expect(upserts[0].parts.map((p) => p.id)).toEqual(['u1', 'a1']) // step-start excluded
+  })
+
+  it('is idempotent per app run — a second snapshot call does not re-ingest', async () => {
+    const { mgr, upserts } = buildManager()
+    const getPersistedMessages = vi.fn(async () => persisted)
+    vi.spyOn(mgr as any, 'getAdapter').mockReturnValue({ getPersistedMessages })
+
+    await mgr.getTranscriptSnapshot('task-1')
+    await mgr.getTranscriptSnapshot('task-1')
+
+    expect(upserts).toHaveLength(1) // ingested once this run
+    expect(getPersistedMessages).toHaveBeenCalledTimes(1)
+  })
+
+  it('no-ops safely when the adapter cannot read persisted history', async () => {
+    const { mgr, upserts } = buildManager()
+    vi.spyOn(mgr as any, 'getAdapter').mockReturnValue({ /* no getPersistedMessages */ })
+
+    const result = await mgr.getTranscriptSnapshot('task-1')
+
+    expect(upserts).toHaveLength(0)
+    expect(result).toEqual([])
   })
 })

@@ -606,7 +606,8 @@ function notifyAgentOfBrowserConnection(
       const initSession = useAgentStore.getState().initSession
       try {
         if (task.session_id) {
-          useAgentStore.getState().clearMessageDedup(taskId)
+          // Do NOT clearMessageDedup here — it would wipe the hydrated durable
+          // transcript. The resume replay dedups against the hydrated history.
           initSession(taskId, '', task.agent_id)
           const result = await agentSessionApi.resume(task.agent_id, taskId, task.session_id)
           if (result.ended) {
@@ -765,7 +766,8 @@ function notifyAgentOfTerminalConnection(
       const initSession = useAgentStore.getState().initSession
       try {
         if (task.session_id) {
-          useAgentStore.getState().clearMessageDedup(taskId)
+          // Do NOT clearMessageDedup here — it would wipe the hydrated durable
+          // transcript. The resume replay dedups against the hydrated history.
           initSession(taskId, '', task.agent_id)
           const result = await agentSessionApi.resume(task.agent_id, taskId, task.session_id)
           if (result.ended) {

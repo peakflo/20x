@@ -442,6 +442,17 @@ export function registerIpcHandlers(
     return await agentManager.getRawTranscriptForDebug(taskId)
   })
 
+  // Durable transcript snapshot: the renderer hydrates transcript state from
+  // the main-process projection instead of depending on catching live events.
+  ipcMain.handle('agentSession:getTranscriptSnapshot', (_, taskId: string, sinceSeq?: number) => {
+    return agentManager.getTranscriptSnapshot(taskId, sinceSeq)
+  })
+
+  // Event-sourced projection: delta since a rev cursor (parts changed since then).
+  ipcMain.handle('agentSession:getTranscriptDelta', (_, taskId: string, sinceRev: number) => {
+    return agentManager.getTranscriptDelta(taskId, sinceRev)
+  })
+
   // Agent Config handlers
   ipcMain.handle('agentConfig:getProviders', async (_, serverUrl?: string, backendType?: string) => {
     return await agentManager.getProviders(serverUrl, undefined, backendType)

@@ -60,6 +60,12 @@ interface AgentSession {
   /** True after an auto-abort notice has been shown for the current prompt.
    *  Reset when the user sends a new prompt or the adapter emits fresh output. */
   autoAbortNotified?: boolean
+  /** Timestamp of the last observed activity (creation, new output, prompt,
+   *  or idle transition). Used by the inactivity reaper to decide when an
+   *  idle session's in-memory runtime can be released. Idle is only a state
+   *  flag — a released session is always resumable from the persisted
+   *  session_id, so nothing is lost. */
+  lastActivityAt?: number
 }
 
 function normalizeUrlPath(pathname: string): string {
@@ -219,6 +225,34 @@ export class AgentManager extends EventEmitter {
    *  blocks) should be aborted quickly so the agent can recover. */
   private static readonly STUCK_TOOL_TIMEOUT_MS = 90 * 1000 // 90 seconds
 
+  /** Tool names that delegate work to subagents or block on subtask progress.
+   *  These are long-running BY DESIGN (a coordinator waiting on child agents can
+   *  legitimately produce no output for many minutes), so they are exempt from
+   *  the stuck-tool and stuck-session watchdogs. Aborting a session mid-delegation
+   *  cascades into the child work (server-side aborts kill child sessions;
+   *  in-process subagents die with the parent query), which is never what the
+   *  user wants when the children are still making progress. */
+  private static readonly DELEGATION_TOOL_NAMES = new Set(['task', 'agent', 'subagent'])
+  private static readonly DELEGATION_TOOL_SUBSTRINGS = ['wait_for_subtasks', 'start_task']
+
+  // ── Idle-session inactivity reaper ──
+  // Going idle NEVER terminates a session — idle is only a state flag, and
+  // termination is decoupled from it. A separate low-frequency sweep releases
+  // the in-memory runtime of sessions that have been idle for a long time.
+  // This is safe because the conversation lives with the backend/CLI and the
+  // persisted task.session_id lets sendMessage resume it on demand, so an
+  // idle agent costs ~nothing and can always be woken later.
+  /** How long a session must be continuously idle before its runtime is released. */
+  private static readonly IDLE_SESSION_REAP_THRESHOLD_MS = 30 * 60 * 1000 // 30 minutes
+  /** How often the reaper sweeps. Deliberately infrequent — idle sessions are
+   *  not polled at all between sweeps. */
+  private static readonly IDLE_REAP_SWEEP_INTERVAL_MS = 5 * 60 * 1000 // 5 minutes
+  private reaperTimer: ReturnType<typeof setInterval> | null = null
+
+  /** Parents currently being woken after subtask completion (dedupe guard so
+   *  several subtasks finishing at once produce a single wake-up). */
+  private wakingParents: Set<string> = new Set()
+
   // ── Event-driven nudge ──
   // When an adapter buffers new stream data it calls onDataAvailable().
   // We debounce that into a short nudge timer so the coordinator delivers
@@ -243,6 +277,83 @@ export class AgentManager extends EventEmitter {
   constructor(db: DatabaseManager) {
     super()
     this.db = db
+    this.startIdleSessionReaper()
+  }
+
+  /** True when the tool delegates to subagents or blocks on subtask progress —
+   *  i.e. long-running by design and exempt from watchdog aborts. */
+  private static isDelegationTool(toolName?: string): boolean {
+    if (!toolName) return false
+    const name = toolName.toLowerCase()
+    if (AgentManager.DELEGATION_TOOL_NAMES.has(name)) return true
+    return AgentManager.DELEGATION_TOOL_SUBSTRINGS.some((s) => name.includes(s))
+  }
+
+  /**
+   * True when the task is coordinating subtasks that are still being worked on.
+   * Child progress counts as parent activity: a coordinator session that is
+   * silent while its subtask agents run is NOT stuck and must not be aborted
+   * or reaped, otherwise the child work gets orphaned or cascaded-killed.
+   */
+  private hasActiveSubtaskWork(taskId: string): boolean {
+    try {
+      const subtasks = this.db.getSubtasks(taskId)
+      return subtasks.some(
+        (s) => s.status === TaskStatus.AgentWorking || s.status === TaskStatus.Triaging
+      )
+    } catch {
+      return false
+    }
+  }
+
+  /**
+   * Low-frequency background sweep that releases the in-memory runtime of
+   * long-idle sessions. Never touches sessions with an active turn, never
+   * touches coordinators whose subtasks are still running, and never resets
+   * task status — a released session is resumed transparently by sendMessage
+   * via the persisted session_id.
+   */
+  private startIdleSessionReaper(): void {
+    if (this.reaperTimer) return
+    this.reaperTimer = setInterval(() => {
+      this.reapInactiveSessions().catch((err) => {
+        console.error('[AgentManager] Idle-session reaper sweep failed:', err)
+      })
+    }, AgentManager.IDLE_REAP_SWEEP_INTERVAL_MS)
+    // Don't let the sweep timer keep the process alive on shutdown
+    this.reaperTimer.unref?.()
+  }
+
+  private async reapInactiveSessions(): Promise<void> {
+    const now = Date.now()
+    for (const [sessionId, session] of [...this.sessions.entries()]) {
+      // Only idle sessions are candidates — an active turn is never reaped.
+      if (session.status !== 'idle') continue
+
+      const idleForMs = now - (session.lastActivityAt ?? session.createdAt.getTime())
+      if (idleForMs < AgentManager.IDLE_SESSION_REAP_THRESHOLD_MS) continue
+
+      const task = this.db.getTask(session.taskId)
+      // Pseudo-tasks (mastermind, heartbeat-*) have no DB row — leave them alone.
+      if (!task) continue
+      // No persisted resume anchor — releasing the runtime would lose the
+      // conversation, so keep it in memory.
+      if (!task.session_id) continue
+      // Coordinator with running children — child completion will wake it, and
+      // tearing it down mid-orchestration churns resume cycles for no benefit.
+      if (this.hasActiveSubtaskWork(session.taskId)) continue
+
+      console.log(
+        `[AgentManager] Releasing runtime of idle session ${sessionId} (task ${session.taskId}, idle ${Math.round(idleForMs / 1000)}s). ` +
+        `Resumable on demand from persisted session_id.`
+      )
+      try {
+        // resetTaskStatus=false: reaping is a resource release, not a user stop.
+        await this.stopSession(sessionId, false)
+      } catch (err) {
+        console.error(`[AgentManager] Failed to release idle session ${sessionId}:`, err)
+      }
+    }
   }
 
   private normalizeErrorText(value?: string): string {
@@ -1328,6 +1439,7 @@ export class AgentManager extends EventEmitter {
       workspaceDir,
       status: 'working',
       createdAt: new Date(),
+      lastActivityAt: Date.now(),
       seenMessageIds: new Set(),
       seenPartIds: new Set(),
       partContentLengths: new Map(),
@@ -1835,6 +1947,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       // the secondary grace period for models with brief idle gaps.
       if (newParts.length > 0) {
         entry.lastPartReceivedAt = Date.now()
+        activeSession.lastActivityAt = Date.now()
         // Reset watchdog flag — new data means the session is alive again.
         // If a follow-up message also gets stuck, the watchdog can re-fire.
         entry.watchdogFired = false
@@ -2081,19 +2194,33 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
           // nudge counter so the next idle cycle gets a fresh allowance.
           if (peBusy.tillDoneNudgeCount) peBusy.tillDoneNudgeCount = 0
 
+          // Fetch currently running tools once — shared by the stuck-tool
+          // detector and the stuck-session watchdog's delegation check below.
+          let runningTools: Array<{ partId: string; toolName: string; startTime?: number; input?: Record<string, unknown> }> = []
+          if ('getRunningTools' in adapter && typeof adapter.getRunningTools === 'function') {
+            try {
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              const getRunningToolsFn = (adapter as any).getRunningTools.bind(adapter)
+              runningTools = await getRunningToolsFn(sessionId, config)
+            } catch {
+              // Non-fatal — watchdogs fall back to their other signals
+            }
+          }
+
           // ── Fast stuck-tool detector ──
           // Some tools (notably `read` on cross-workspace files) silently hang
           // without producing any output or asking for permission. The general
           // watchdog below waits 5 minutes, which is far too long for a single
           // tool. Here we check for tools stuck in "running" state for >90s.
-          if (!peBusy.watchdogFired && 'getRunningTools' in adapter && typeof adapter.getRunningTools === 'function') {
+          //
+          // Delegation tools (subagent spawns, subtask waits) are exempt: they
+          // run for minutes by design, and aborting them kills the child work.
+          if (!peBusy.watchdogFired && runningTools.length > 0) {
             try {
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              const getRunningToolsFn = (adapter as any).getRunningTools.bind(adapter)
-              const runningTools: Array<{ partId: string; toolName: string; startTime?: number; input?: Record<string, unknown> }> = await getRunningToolsFn(sessionId, config)
               const now = Date.now()
               for (const tool of runningTools) {
                 if (!tool.startTime) continue
+                if (AgentManager.isDelegationTool(tool.toolName)) continue
                 const elapsed = now - tool.startTime
                 if (elapsed > AgentManager.STUCK_TOOL_TIMEOUT_MS) {
                   // Build a descriptive reason
@@ -2173,9 +2300,32 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
               if (pending) isWaitingForInput = true
             }
 
+            // ── Active delegation check ──
+            // A coordinator that has handed work to subagents or is blocked on
+            // subtask progress produces no output itself for long stretches —
+            // that is delegation, not a hang. Child progress counts as parent
+            // activity. Aborting here would cascade into the children (the
+            // exact "subagents killed when the main agent went quiet" failure),
+            // so the watchdog stands down while delegation is active. If the
+            // delegation ends and the session is still silent, the abort fires
+            // on a later tick as usual.
+            //
+            // Signal 4: a delegation tool (subagent spawn / subtask wait) is running
+            let hasActiveDelegation = runningTools.some((tool) =>
+              AgentManager.isDelegationTool(tool.toolName)
+            )
+            // Signal 5: the task has subtasks that are still being worked on
+            if (!hasActiveDelegation) {
+              hasActiveDelegation = this.hasActiveSubtaskWork(config.taskId)
+            }
+
             if (isWaitingForInput) {
               console.log(
                 `[AgentManager] Session ${sessionId} BUSY for ${Math.round(silentDuration / 1000)}s but has pending user input — not aborting`
+              )
+            } else if (hasActiveDelegation) {
+              console.log(
+                `[AgentManager] Session ${sessionId} BUSY for ${Math.round(silentDuration / 1000)}s but has active delegation (subagents/subtasks in progress) — not aborting`
               )
             } else {
               // Mark the watchdog as fired BEFORE sending the message/abort.
@@ -2312,8 +2462,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     adapter: CodingAgentAdapter,
     agentId: string,
     taskId: string,
-    adapterSessionId: string,
-    options?: { replayToRenderer?: boolean }
+    adapterSessionId: string
   ): Promise<string> {
     // Helper: yield event loop between bursts of sync DB/FS calls
     const yieldEL = (): Promise<void> => new Promise((r) => setImmediate(r))
@@ -2460,57 +2609,35 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       throw error
     }
 
-    const shouldReplayToRenderer = options?.replayToRenderer !== false
-
-    // Build replay batch AND dedup state in a SINGLE pass so that both use
-    // the same generated IDs.  Previously two separate loops each called
-    // `Date.now() + Math.random()` for parts without an id, producing
-    // different IDs.  The frontend's `seen` set then held the batch IDs while
-    // the session's seenPartIds held different IDs, so when polling started
-    // on a follow-up message the streaming replay (with yet another set of
-    // stableId-based IDs) was not deduped by either — causing every
-    // historical message to appear twice.
-    const batchMessages: Array<{ id: string; role: string; content: string; partType?: string; tool?: unknown; taskProgress?: unknown; receivedAt?: number }> = []
+    // Build the session's dedup state from the resumed history so adapter
+    // polling won't re-emit historical parts as new streaming output. The
+    // transcript itself is NOT pushed to clients here — clients render the
+    // durable projection (snapshot + `transcript:changed` deltas); resume's
+    // only transcript role is seeding the projection, which the one-time
+    // backfill (getTranscriptSnapshot) handles independently.
     const resumedSeenMessageIds = new Set<string>()
     const resumedSeenPartIds = new Set<string>()
     const resumedPartContentLengths = new Map<string, string>()
     const resumedAssistantTextKeys = new Set<string>()
     for (const message of messages) {
-      // Track message-level IDs so adapters that dedup by message ID
-      // (e.g. Codex pollMessages) won't re-send historical messages.
       if (message.id) resumedSeenMessageIds.add(message.id)
       for (const part of message.parts) {
         const partId = part.id || `${message.role}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
         const content = part.content || part.text || ''
-        // Dedup state
         resumedSeenPartIds.add(partId)
         if (content) {
           resumedPartContentLengths.set(partId, String(content.length))
         }
+        // Seed the codex reconciled-text dedup key set (#427) so polling won't
+        // re-emit finalized items whose ids differ from the streamed ids.
         const assistantKey = this.assistantTextKey(message.role, part.type, content, part.tool, part.taskProgress)
         if (assistantKey) {
           resumedAssistantTextKeys.add(assistantKey)
         }
-        // Batch message (only if we're replaying to the renderer)
-        if (shouldReplayToRenderer) {
-          batchMessages.push({
-            id: partId,
-            role: message.role,
-            content,
-            partType: part.type,
-            tool: part.tool,
-            taskProgress: part.taskProgress,
-            receivedAt: part.receivedAt
-          })
-        }
+        // NOTE: resume no longer replays history to the renderer — clients render
+        // the durable projection (snapshot + `transcript:changed` deltas). We only
+        // seed the in-memory dedup state here.
       }
-    }
-    if (shouldReplayToRenderer && batchMessages.length > 0) {
-      this.sendToRenderer('agent:output-batch', {
-        sessionId: adapterSessionId,
-        taskId,
-        messages: batchMessages
-      })
     }
 
     // Store session in sessions map — idle until user sends a message
@@ -2521,6 +2648,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       workspaceDir,
       status: 'idle',
       createdAt: new Date(),
+      lastActivityAt: Date.now(),
       seenMessageIds: resumedSeenMessageIds,
       seenPartIds: resumedSeenPartIds,
       partContentLengths: resumedPartContentLengths,
@@ -2529,6 +2657,14 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       pollingStarted: false,
       secretSessionToken: secretToken
     })
+
+    // Persist the resumed session binding and tell the renderer BEFORE any
+    // follow-up prompt starts. Without this, a silent main-process resume
+    // (e.g. an event-driven wake-up after the runtime was released) leaves the
+    // renderer bound to a stale session id and the wake turn's output renders
+    // late or not at all.
+    this.db.updateTask(taskId, { session_id: adapterSessionId })
+    this.sendToRenderer('task:updated', { taskId, updates: { session_id: adapterSessionId } })
 
     // Notify renderer — session is resumed but idle (no work in progress)
     this.sendToRenderer('agent:status', {
@@ -2764,6 +2900,178 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
    * Get the last assistant message text from a session's conversation.
    * Used by HeartbeatScheduler to extract the heartbeat result.
    */
+  /**
+   * Event-driven coordinator wake-up.
+   *
+   * Called when a subtask reaches a terminal state (ready_for_review or
+   * completed). If the parent coordinator's session is idle — or its runtime
+   * has already been released — it is resumed with a summary prompt so it can
+   * review outputs and continue orchestration.
+   *
+   * This inverts the old model where a parent had to stay resident (and be
+   * polled) while blocking on subtask progress: the parent may go idle at any
+   * time, and exactly one session is touched when there is new work to do.
+   *
+   * Guards:
+   * - If the parent session is live and NOT idle (e.g. blocked inside a
+   *   wait_for_subtasks call), nothing is injected — it will observe the
+   *   subtask state itself.
+   * - The wake-up fires only once ALL subtasks are terminal, so a parent with
+   *   many children gets a single wake-up instead of one per child.
+   * - A dedupe set prevents double-wakes when several children finish at once.
+   */
+  async notifyParentOfSubtaskCompletion(parentTaskId: string, subtaskId: string): Promise<void> {
+    const parentTask = this.db.getTask(parentTaskId)
+    if (!parentTask) return
+    if (parentTask.status === TaskStatus.Completed) return
+
+    const live = this.findSessionByTaskId(parentTaskId)
+    if (live && live.session.status !== 'idle') {
+      console.log(
+        `[AgentManager] Subtask ${subtaskId} terminal, but parent ${parentTaskId} session is ${live.session.status} — no wake-up needed`
+      )
+      return
+    }
+
+    const subtasks = this.db.getSubtasks(parentTaskId)
+    const allTerminal = subtasks.length > 0 && subtasks.every(
+      (s) => s.status === TaskStatus.ReadyForReview || s.status === TaskStatus.Completed
+    )
+    if (!allTerminal) {
+      console.log(
+        `[AgentManager] Subtask ${subtaskId} terminal, but parent ${parentTaskId} still has active subtasks — deferring wake-up`
+      )
+      return
+    }
+
+    if (this.wakingParents.has(parentTaskId)) return
+    this.wakingParents.add(parentTaskId)
+    try {
+      const summary = subtasks
+        .map((s) => `- "${s.title}" (id: ${s.id}) → ${s.status}`)
+        .join('\n')
+      const message =
+        `All subtasks of this task have reached a terminal state:\n${summary}\n\n` +
+        `Use \`get_task\` / \`list_subtasks\` via the task-management MCP server to review their outputs, ` +
+        `then continue coordination: consolidate results, fill in the parent task's output fields, ` +
+        `and complete the task — or create follow-up subtasks if more work is needed.`
+      console.log(`[AgentManager] Waking parent coordinator ${parentTaskId}: all ${subtasks.length} subtasks terminal`)
+      await this.sendByTaskId(parentTaskId, message)
+    } finally {
+      this.wakingParents.delete(parentTaskId)
+    }
+  }
+
+  /** Tasks whose projection backfill is in flight (dedupe guard). */
+  private backfillInFlight: Set<string> = new Set()
+  /** Tasks whose full adapter history has already been ingested THIS app run. */
+  private ingestedTasks: Set<string> = new Set()
+
+  /**
+   * Snapshot of the durable transcript projection for a task.
+   * Clients (renderer, mobile) render from this instead of relying on having
+   * observed every live event.
+   *
+   * On the first read per app run, if the projection is EMPTY, seed it from the
+   * task's persisted session history (a one-time backfill for sessions that
+   * predate the store). A task that already has parts is returned as-is — its
+   * live write-through capture is authoritative and is never re-ingested.
+   */
+  async getTranscriptSnapshot(taskId: string, sinceSeq?: number): Promise<ReturnType<DatabaseManager['getTranscriptParts']>> {
+    if (!this.ingestedTasks.has(taskId)) {
+      await this.backfillTranscriptProjection(taskId)
+    }
+    return this.db.getTranscriptParts(taskId, sinceSeq)
+  }
+
+  /**
+   * Delta query for the projection-cache client: parts changed since `sinceRev`,
+   * plus the current maxRev. Ensures the one-time backfill has run so the first
+   * delta after a fresh start is complete.
+   */
+  async getTranscriptDelta(taskId: string, sinceRev: number): Promise<ReturnType<DatabaseManager['getTranscriptDelta']>> {
+    if (!this.ingestedTasks.has(taskId)) {
+      await this.backfillTranscriptProjection(taskId)
+    }
+    return this.db.getTranscriptDelta(taskId, sinceRev)
+  }
+
+  /**
+   * Idempotent ingest of a task's persisted session history into the durable
+   * projection — runs once per app run per task. Reuses the adapter's
+   * side-effect-free persisted-history read (no CLI spawn). Upsert-by-part-id +
+   * created_at ordering means re-ingesting is safe, never duplicates, and fills
+   * gaps (e.g. assistant messages missing from a partially-populated projection).
+   * Best-effort: silently no-ops when unavailable.
+   */
+  private async backfillTranscriptProjection(taskId: string): Promise<void> {
+    if (this.backfillInFlight.has(taskId) || this.ingestedTasks.has(taskId)) return
+
+    // Seed EMPTY projections ONLY. If the task already has parts, the live
+    // session was captured by write-through — re-ingesting the persisted session
+    // history (whose part ids differ from the live-captured ids) would duplicate
+    // messages under mismatched ids. And because every upsert broadcasts a
+    // `transcript:changed` delta to ALL connected clients, those duplicates would
+    // leak to the desktop view too: a mobile (or any) reader connecting to an
+    // already-populated task must never mutate the projection. Backfill is a
+    // one-time seed for sessions that predate the store, nothing more.
+    if (this.db.hasTranscriptParts(taskId)) {
+      this.ingestedTasks.add(taskId)
+      return
+    }
+
+    const task = this.db.getTask(taskId)
+    const sessionId = task?.session_id
+    const agentId = task?.agent_id
+    if (!sessionId || !agentId) return
+
+    const adapter = this.getAdapter(agentId)
+    if (!adapter || typeof adapter.getPersistedMessages !== 'function') return
+
+    this.backfillInFlight.add(taskId)
+    try {
+      const workspaceDir = this.db.getWorkspaceDir(taskId)
+      const messages = await adapter.getPersistedMessages(sessionId, { agentId, taskId, workspaceDir })
+
+      // The projection is empty here (guarded above), so this is a pure seed —
+      // no dedup against existing parts is needed. Upsert-by-part-id keeps it
+      // idempotent if two seeds ever race.
+      const parts: Parameters<DatabaseManager['upsertTranscriptParts']>[1] = []
+      for (const message of messages) {
+        const role = message.role === MessageRole.USER ? 'user'
+          : message.role === MessageRole.SYSTEM ? 'system' : 'assistant'
+        for (const part of message.parts) {
+          if (!part.id) continue
+          const partType = String(part.type)
+          if (AgentManager.EPHEMERAL_PART_TYPES.has(partType)) continue
+          const content = part.content || part.text || ''
+          if (!content && !part.tool && !part.taskProgress) continue
+          parts.push({
+            id: part.id,
+            role,
+            content,
+            partType,
+            tool: part.tool,
+            payload: part.taskProgress ? { taskProgress: part.taskProgress } : undefined,
+            receivedAt: part.receivedAt
+          })
+        }
+      }
+      if (parts.length > 0) {
+        this.db.upsertTranscriptParts(taskId, parts)
+        console.log(`[AgentManager] Backfilled ${parts.length} transcript part(s) into the projection for task ${taskId}`)
+      }
+    } catch (err) {
+      console.error(`[AgentManager] Transcript projection backfill failed for task ${taskId}:`, err)
+    } finally {
+      this.backfillInFlight.delete(taskId)
+      // A real ingest attempt ran (adapter + session present) — don't repeat the
+      // full history read on every subsequent snapshot this app run. Write-through
+      // keeps the projection current from here.
+      this.ingestedTasks.add(taskId)
+    }
+  }
+
   getLastAssistantMessage(sessionId: string): string | null {
     const session = this.sessions.get(sessionId)
     if (!session?.adapter) return null
@@ -2909,6 +3217,21 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       const messages = await session.adapter.getAllMessages(sessionId, config)
       const batchMessages: Array<{ id: string; role: string; content: string; partType?: string; tool?: unknown; taskProgress?: unknown; receivedAt?: number }> = []
 
+      // Dedup against the durable projection by CONTENT, not just by part id.
+      // Some adapters (codex app-server) give a message's live streaming delta a
+      // DIFFERENT part id (e.g. `agent-msg_<hash>`) than its finalized thread
+      // item (`agent-item-N`). seenPartIds holds the live ids, so an id-only
+      // check would treat every finalized item as brand-new and re-emit it —
+      // duplicating each assistant message on every idle transition. Skipping
+      // parts whose text is already persisted makes this safety-net re-read
+      // truly additive (it only fills GENUINELY missing content).
+      const normalize = (s: string): string => s.replace(/\s+/g, ' ').trim().toLowerCase()
+      const existingContent = new Set(
+        this.db.getTranscriptParts(session.taskId)
+          .filter((p) => p.content)
+          .map((p) => normalize(p.content))
+      )
+
       for (const message of messages) {
         if (message.role === MessageRole.USER) continue
 
@@ -2928,7 +3251,15 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
             part.taskProgress
           )
           session.assistantTextKeys ??= new Set<string>()
+          // Already emitted this reconciled assistant text under a different
+          // codex item id (#427)? remember the id and skip re-emit.
           if (assistantKey && session.assistantTextKeys.has(assistantKey)) {
+            session.seenPartIds.add(partId)
+            continue
+          }
+          // Already in the durable projection under a different id (id-scheme
+          // mismatch)? remember the id and skip re-emit.
+          if (content && existingContent.has(normalize(content))) {
             session.seenPartIds.add(partId)
             continue
           }
@@ -3065,7 +3396,11 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       }
     }
 
+    // Idle is a state flag only — it never terminates the session or any
+    // subagent/subtask work. Termination is decoupled and handled solely by
+    // the inactivity reaper (long threshold) or an explicit user stop.
     session.status = 'idle'
+    session.lastActivityAt = Date.now()
     console.log(`[AgentManager] Session ${sessionId} → idle`)
 
     // Check if task exists (e.g., orchestrator-session doesn't have a real task)
@@ -3189,6 +3524,17 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
           heartbeat_next_check_at: updatedTask?.heartbeat_next_check_at
         }
       })
+
+      // Event-driven coordinator wake-up: if this was a subtask, tell the
+      // parent's session that a child reached a terminal state. The parent
+      // does not need to stay resident polling for child status — it can go
+      // idle (or even have its runtime released) and is resumed exactly when
+      // there is something to act on.
+      if (task.parent_task_id) {
+        this.notifyParentOfSubtaskCompletion(task.parent_task_id, session.taskId).catch((err) => {
+          console.error(`[AgentManager] Failed to wake parent ${task.parent_task_id} after subtask ${session.taskId} completed:`, err)
+        })
+      }
     }
 
     this.sendToRenderer('agent:status', {
@@ -3398,13 +3744,10 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
             console.log(`[SessionTracker] RESUME_ATTEMPT old=${sessionId} persisted=${persistedSessionId} task=${taskId} reason=session_not_in_memory`)
             const adapter = this.getAdapter(resolvedAgentId)
             if (adapter) {
-              // Replay messages to the renderer so the client doesn't lose
-              // conversation context after an idle period. Previously this used
-              // replayToRenderer: false which caused ~20% context loss on mobile
-              // and desktop when the in-memory session was evicted.
-              const resumedId = await this.resumeAdapterSession(adapter, resolvedAgentId, taskId, persistedSessionId, {
-                replayToRenderer: true
-              })
+              // Resume the backend session for continuation. The transcript is
+              // NOT pushed here — clients render the durable projection (snapshot
+              // + deltas), which already holds the full history.
+              const resumedId = await this.resumeAdapterSession(adapter, resolvedAgentId, taskId, persistedSessionId)
               session = this.sessions.get(resumedId)
               if (session) {
                 sessionId = resumedId
@@ -3491,6 +3834,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
 
     // Update status to working (but preserve AgentLearning if set)
     session.status = 'working'
+    session.lastActivityAt = Date.now()
     const currentTask = this.db.getTask(session.taskId)
     if (currentTask?.status !== TaskStatus.AgentLearning) {
       this.db.updateTask(session.taskId, { status: TaskStatus.AgentWorking })
@@ -3687,6 +4031,12 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     }
     this.pollingEntries.clear()
 
+    // Stop the idle-session reaper sweep
+    if (this.reaperTimer) {
+      clearInterval(this.reaperTimer)
+      this.reaperTimer = null
+    }
+
     await Promise.allSettled(
       [...this.sessions.keys()].map((sessionId) => {
         // Don't reset task status during app shutdown - preserve current status
@@ -3711,78 +4061,6 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     return { status: session.status, agentId: session.agentId, taskId: session.taskId }
   }
 
-  /**
-   * Replay all messages from a running session via the adapter.
-   * Used by the mobile API to sync with an already-running session.
-   * Sends a single agent:output-batch event (matching resumeAdapterSession pattern)
-   * to avoid content filtering, step-start/step-finish absorption, and dedup issues
-   * that affect individual agent:output events.
-   */
-  async replaySessionMessages(sessionId: string): Promise<void> {
-    let session = this.sessions.get(sessionId)
-
-    // Fallback: session ID may have been re-keyed (temp → real).
-    // The mobile client might still hold the stale temp ID.
-    if (!session) {
-      const redirectedId = this.sessionIdRedirects.get(sessionId)
-      if (redirectedId) {
-        sessionId = redirectedId
-        session = this.sessions.get(sessionId)
-      }
-    }
-
-    if (!session?.adapter?.getAllMessages) return
-
-    const messages = await session.adapter.getAllMessages(sessionId, {
-      agentId: session.agentId,
-      taskId: session.taskId,
-      workspaceDir: session.workspaceDir || process.cwd()
-    })
-
-    // Collect all message parts into a single batch (matching resumeAdapterSession pattern)
-    const batchMessages: Array<{ id: string; role: string; content: string; partType?: string; tool?: unknown; update?: boolean; taskProgress?: unknown; receivedAt?: number }> = []
-    for (const msg of messages) {
-      for (const part of msg.parts) {
-        batchMessages.push({
-          id: part.id || `${msg.id}-${msg.parts.indexOf(part)}`,
-          role: msg.role === MessageRole.USER ? 'user' : msg.role === MessageRole.ASSISTANT ? 'assistant' : 'system',
-          content: part.text || part.content || '',
-          partType: part.type?.toLowerCase(),
-          tool: part.tool ? {
-            name: part.tool.name,
-            status: part.tool.status || part.state?.status || '',
-            title: part.tool.title || part.state?.title || '',
-            input: typeof part.tool.input === 'string' ? part.tool.input : part.tool.input ? JSON.stringify(part.tool.input) : undefined,
-            output: typeof part.tool.output === 'string' ? part.tool.output : part.tool.output ? JSON.stringify(part.tool.output) : undefined,
-            error: part.tool.error || part.state?.error,
-            questions: part.tool.questions,
-            todos: part.tool.todos
-          } : undefined,
-          taskProgress: part.taskProgress,
-          receivedAt: part.receivedAt,
-          // Pass update flag so mobile store merges tool results into their
-          // pending tool_use entries (e.g. status pending → success)
-          ...(part.update ? { update: true } : {})
-        })
-      }
-    }
-
-    if (batchMessages.length > 0) {
-      this.sendToRenderer('agent:output-batch', {
-        sessionId,
-        taskId: session.taskId,
-        messages: batchMessages
-      })
-    }
-
-    // Also send current status
-    this.sendToRenderer('agent:status', {
-      sessionId,
-      agentId: session.agentId,
-      taskId: session.taskId,
-      status: session.status
-    })
-  }
 
   getActiveSessionsForTask(taskId: string): string[] {
     const sessionIds: string[] = []
@@ -4545,7 +4823,93 @@ Important:
     }
   }
 
+  /** Part types that are absorbed by clients (never rendered as messages) —
+   *  not worth persisting in the durable transcript. */
+  private static readonly EPHEMERAL_PART_TYPES = new Set(['step-start', 'step-finish', 'system-status'])
+
+  /**
+   * Write-through persistence for the durable transcript projection.
+   * Called for every agent:output / agent:output-batch emission — the single
+   * chokepoint where live streaming output is ingested into the durable log.
+   *
+   * Upserts are keyed by stable part id (idempotent), so re-emitting an already
+   * persisted part is a no-op. Historical seeding for sessions that predate the
+   * store is handled separately by the one-time backfill
+   * (backfillTranscriptProjection), which writes directly to the projection.
+   */
+  private persistTranscriptEvent(channel: string, data: unknown): void {
+    if (!data || typeof data !== 'object') return
+    const event = data as {
+      taskId?: string
+      messages?: Array<{ id?: string; role?: string; content?: string; partType?: string; tool?: unknown; questions?: unknown; todos?: unknown; taskProgress?: unknown; receivedAt?: number }>
+      data?: { id?: string; role?: string; content?: string; partType?: string; tool?: unknown; questions?: unknown; todos?: unknown; taskProgress?: unknown; receivedAt?: number }
+    }
+    const taskId = event.taskId
+    if (!taskId) return
+
+    const rawParts = channel === 'agent:output-batch'
+      ? (event.messages || [])
+      : (event.data ? [event.data] : [])
+
+    const parts = rawParts
+      .filter((p) => p && p.id)
+      .filter((p) => !p.partType || !AgentManager.EPHEMERAL_PART_TYPES.has(p.partType))
+      .filter((p) => (p.content && p.content.length > 0) || p.tool || p.questions || p.todos || p.taskProgress)
+      .map((p) => ({
+        id: p.id as string,
+        role: p.role,
+        content: p.content,
+        partType: p.partType,
+        tool: p.tool,
+        payload: (p.questions || p.todos || p.taskProgress)
+          ? { questions: p.questions, todos: p.todos, taskProgress: p.taskProgress }
+          : undefined,
+        receivedAt: p.receivedAt
+      }))
+
+    if (parts.length > 0) {
+      const { maxRev, changedPartIds } = this.db.upsertTranscriptParts(taskId, parts)
+      // Event-sourced push: notify clients of the delta (the parts just written),
+      // applied idempotently by part id on the client. This is BOTH the durable
+      // update and the low-latency streaming path — a single authoritative source.
+      if (changedPartIds.length > 0) {
+        const prevRev = maxRev - changedPartIds.length
+        const { parts: deltaParts } = this.db.getTranscriptDelta(taskId, prevRev)
+        this.emitTranscriptChanged(taskId, deltaParts, maxRev)
+      }
+    }
+  }
+
+  /**
+   * Emit a transcript delta directly to clients (NOT via sendToRenderer — that
+   * would recurse through persistTranscriptEvent). The renderer/mobile apply
+   * these parts into their projection cache by id; order/dedup are guaranteed by
+   * the cache being keyed on part id and sorted by created_at.
+   */
+  private emitTranscriptChanged(taskId: string, parts: ReturnType<DatabaseManager['getTranscriptParts']>, maxRev: number): void {
+    const payload = { taskId, parts, maxRev }
+    if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+      this.mainWindow.webContents.send('transcript:changed', payload)
+    }
+    for (const fn of this.externalListeners) {
+      try { fn('transcript:changed', payload) } catch { /* ignore */ }
+    }
+  }
+
   private sendToRenderer(channel: string, data: unknown): void {
+    // Durable transcript projection: persist every transcript part BEFORE any
+    // client sees it. The main process owns the source of truth; renderer and
+    // mobile hydrate from snapshots (transcript:get) instead of depending on
+    // catching live events, so output produced while no view is bound
+    // (background wake-ups, silently resumed sessions) is never lost.
+    if (channel === 'agent:output' || channel === 'agent:output-batch') {
+      try {
+        this.persistTranscriptEvent(channel, data)
+      } catch (err) {
+        console.error('[AgentManager] Failed to persist transcript parts:', err)
+      }
+    }
+
     if (this.mainWindow && !this.mainWindow.isDestroyed()) {
       this.mainWindow.webContents.send(channel, data)
     }

@@ -112,7 +112,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     learnFromSession: (sessionId: string, message: string): Promise<{ created: string[]; updated: string[]; unchanged: string[] }> =>
       ipcRenderer.invoke('agentSession:learnFromSession', sessionId, message),
     getRawTranscript: (taskId: string): Promise<Array<{ role: string; parts: Array<{ type: string; content?: string; tool?: { name: string; status?: string; input?: string; output?: string; error?: string } }> }>> =>
-      ipcRenderer.invoke('agentSession:getRawTranscript', taskId)
+      ipcRenderer.invoke('agentSession:getRawTranscript', taskId),
+    getTranscriptSnapshot: (taskId: string, sinceSeq?: number): Promise<Array<{ taskId: string; partId: string; seq: number; role: string; content: string; partType?: string; tool?: unknown; payload?: unknown; createdAt: number; updatedAt: number; rev: number }>> =>
+      ipcRenderer.invoke('agentSession:getTranscriptSnapshot', taskId, sinceSeq),
+    getTranscriptDelta: (taskId: string, sinceRev: number): Promise<{ parts: Array<{ taskId: string; partId: string; seq: number; role: string; content: string; partType?: string; tool?: unknown; payload?: unknown; createdAt: number; updatedAt: number; rev: number }>; maxRev: number }> =>
+      ipcRenderer.invoke('agentSession:getTranscriptDelta', taskId, sinceRev)
   },
   agentConfig: {
     getProviders: (serverUrl?: string, backendType?: string): Promise<{ providers: { id: string; name: string; models: unknown }[]; default: Record<string, string> } | null> =>
@@ -137,6 +141,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const handler = (_: unknown, data: unknown): void => callback(data)
     ipcRenderer.on('agent:output-batch', handler)
     return () => ipcRenderer.removeListener('agent:output-batch', handler)
+  },
+  onTranscriptChanged: (callback: (event: unknown) => void): (() => void) => {
+    const handler = (_: unknown, data: unknown): void => callback(data)
+    ipcRenderer.on('transcript:changed', handler)
+    return () => ipcRenderer.removeListener('transcript:changed', handler)
   },
   onAgentStatus: (callback: (event: unknown) => void): (() => void) => {
     const handler = (_: unknown, data: unknown): void => callback(data)
