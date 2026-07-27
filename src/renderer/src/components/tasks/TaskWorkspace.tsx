@@ -761,6 +761,7 @@ Update existing skills that were helpful or create new ones for patterns worth r
                 taskId={task.id}
                 agentId={task.agent_id ?? undefined}
                 pendingApproval={session.pendingApproval ?? undefined}
+                pendingSend={session.pendingSend}
                 className="h-full bg-card border-l-0"
               />
             </div>

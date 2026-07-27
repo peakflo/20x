@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach } from 'vitest'
+import RawDatabase from 'better-sqlite3'
 import { createTestDb } from '../../test/helpers/db-test-helper'
 import { makeTask, makeAgent, makeSkill } from '../../test/helpers/task-fixtures'
-import type { DatabaseManager } from './database'
+import { DatabaseManager as RealDatabaseManager, type DatabaseManager } from './database'
 
 let db: DatabaseManager
 
@@ -567,5 +568,124 @@ describe('Durable transcript — timestamp provenance', () => {
     const [p] = db.getTranscriptParts('task-3')
     expect(p.content).toBe('partial then final')
     expect(p.createdAt).toBe(t0) // original time preserved
+  })
+})
+
+describe('Durable transcript — rev cursor + delta (event-sourced)', () => {
+  it('assigns a global monotonic rev on insert and bumps it on content update', () => {
+    const r1 = db.upsertTranscriptParts('t1', [{ id: 'a', role: 'user', content: 'hi' }])
+    const r2 = db.upsertTranscriptParts('t1', [{ id: 'b', role: 'assistant', content: 'yo' }])
+    expect(r2.maxRev).toBeGreaterThan(r1.maxRev)
+    // content update to 'a' bumps its rev above b
+    const r3 = db.upsertTranscriptParts('t1', [{ id: 'a', role: 'user', content: 'hi there' }])
+    expect(r3.maxRev).toBeGreaterThan(r2.maxRev)
+    const parts = db.getTranscriptParts('t1')
+    expect(parts.find((p) => p.partId === 'a')!.rev).toBe(r3.maxRev)
+  })
+
+  it('getTranscriptDelta returns only parts changed after sinceRev (incl. updates)', () => {
+    db.upsertTranscriptParts('t1', [{ id: 'a', role: 'user', content: 'one' }])
+    const afterA = db.getTranscriptMaxRev('t1')
+    db.upsertTranscriptParts('t1', [{ id: 'b', role: 'assistant', content: 'two' }])
+    db.upsertTranscriptParts('t1', [{ id: 'a', role: 'user', content: 'one-edited' }]) // update
+
+    const delta = db.getTranscriptDelta('t1', afterA)
+    const ids = delta.parts.map((p) => p.partId).sort()
+    expect(ids).toEqual(['a', 'b']) // b inserted, a updated — both after afterA
+    expect(delta.parts.find((p) => p.partId === 'a')!.content).toBe('one-edited')
+    expect(delta.maxRev).toBe(db.getTranscriptMaxRev('t1'))
+  })
+
+  it('delta since current maxRev is empty (idempotent cursor)', () => {
+    db.upsertTranscriptParts('t1', [{ id: 'a', content: 'x' }])
+    const max = db.getTranscriptMaxRev('t1')
+    expect(db.getTranscriptDelta('t1', max).parts).toHaveLength(0)
+  })
+
+  it('rev is per-global but delta is task-scoped', () => {
+    db.upsertTranscriptParts('t1', [{ id: 'a', content: 'x' }])
+    db.upsertTranscriptParts('t2', [{ id: 'a', content: 'other task' }])
+    // t1 delta since 0 should only include t1's part
+    const d = db.getTranscriptDelta('t1', 0)
+    expect(d.parts.every((p) => p.taskId === 't1')).toBe(true)
+  })
+})
+
+describe('transcript_parts.rev migration on a legacy DB (no rev column)', () => {
+  // Regression: a DB created before `rev` existed crashed on startup with
+  // "no such column: rev" because createTables built the (task_id, rev) index
+  // before the ALTER TABLE migration added the column. createTables must not
+  // reference rev; ensureTranscriptRevColumn owns the column + index.
+  function makeLegacyManager(): { manager: DatabaseManager; rawDb: InstanceType<typeof RawDatabase> } {
+    const rawDb = new RawDatabase(':memory:')
+    rawDb.pragma('journal_mode = WAL')
+    rawDb.pragma('foreign_keys = ON')
+    // Legacy schema: transcript_parts WITHOUT the rev column (and no rev index).
+    rawDb.exec(`
+      CREATE TABLE transcript_parts (
+        task_id TEXT NOT NULL,
+        part_id TEXT NOT NULL,
+        seq INTEGER NOT NULL,
+        role TEXT NOT NULL DEFAULT 'system',
+        content TEXT NOT NULL DEFAULT '',
+        part_type TEXT,
+        tool TEXT,
+        payload TEXT,
+        created_at INTEGER NOT NULL DEFAULT (unixepoch('subsec') * 1000),
+        updated_at INTEGER NOT NULL DEFAULT (unixepoch('subsec') * 1000),
+        PRIMARY KEY (task_id, part_id)
+      );
+      CREATE INDEX idx_transcript_parts_task_seq ON transcript_parts(task_id, seq);
+      INSERT INTO transcript_parts (task_id, part_id, seq, role, content, created_at, updated_at)
+        VALUES ('t1', 'p1', 1, 'assistant', 'first',  100, 100),
+               ('t1', 'p2', 2, 'assistant', 'second', 200, 200),
+               ('t1', 'p3', 3, 'assistant', 'third',  300, 300);
+    `)
+    const manager = new RealDatabaseManager()
+    ;(manager as unknown as { db: unknown }).db = rawDb
+    return { manager, rawDb }
+  }
+
+  it('createTables does not throw on a legacy DB, and the migration adds+backfills rev', () => {
+    const { manager, rawDb } = makeLegacyManager()
+
+    // Previously threw "no such column: rev" inside createTables.
+    expect(() => (manager as unknown as { createTables(): void }).createTables()).not.toThrow()
+    expect(() =>
+      (manager as unknown as { ensureTranscriptRevColumn(): void }).ensureTranscriptRevColumn()
+    ).not.toThrow()
+
+    // Column now exists.
+    const cols = rawDb.prepare('PRAGMA table_info(transcript_parts)').all() as Array<{ name: string }>
+    expect(cols.some((c) => c.name === 'rev')).toBe(true)
+
+    // Existing rows backfilled with a monotonic rev ordered by (created_at, seq).
+    const rows = rawDb
+      .prepare('SELECT part_id, rev FROM transcript_parts WHERE task_id = ? ORDER BY rev ASC')
+      .all('t1') as Array<{ part_id: string; rev: number }>
+    expect(rows.map((r) => r.part_id)).toEqual(['p1', 'p2', 'p3'])
+    expect(rows[0].rev).toBeLessThan(rows[1].rev)
+    expect(rows[1].rev).toBeLessThan(rows[2].rev)
+
+    // The rev index is present after migration.
+    const idx = rawDb
+      .prepare("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_transcript_parts_task_rev'")
+      .get()
+    expect(idx).toBeDefined()
+
+    // Delta queries work against the migrated DB.
+    expect(manager.getTranscriptDelta('t1', 0).parts).toHaveLength(3)
+  })
+
+  it('is idempotent when the column already exists', () => {
+    const { manager, rawDb } = makeLegacyManager()
+    ;(manager as unknown as { ensureTranscriptRevColumn(): void }).ensureTranscriptRevColumn()
+    const before = (rawDb.prepare('SELECT COALESCE(MAX(rev),0) AS m FROM transcript_parts').get() as { m: number }).m
+    // Second run must not throw or re-backfill.
+    expect(() =>
+      (manager as unknown as { ensureTranscriptRevColumn(): void }).ensureTranscriptRevColumn()
+    ).not.toThrow()
+    const after = (rawDb.prepare('SELECT COALESCE(MAX(rev),0) AS m FROM transcript_parts').get() as { m: number }).m
+    expect(after).toBe(before)
   })
 })

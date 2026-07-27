@@ -230,6 +230,8 @@ interface AgentTranscriptPanelProps {
   agentId?: string
   /** Pending approval request for debug diagnostics */
   pendingApproval?: { action: string; description: string } | null
+  /** User sent a message and the backend is still resuming the session. */
+  pendingSend?: boolean
 }
 
 export interface ComposerAttachment {
@@ -720,8 +722,11 @@ export function AgentTranscriptPanel({
   sessionId,
   taskId,
   agentId,
-  pendingApproval
+  pendingApproval,
+  pendingSend
 }: AgentTranscriptPanelProps) {
+  // The user sent and the backend is still resuming — status still reads idle.
+  const isStarting = !!pendingSend && status !== SessionStatus.WORKING && status !== SessionStatus.WAITING_APPROVAL
   const scrollRef = useRef<HTMLDivElement>(null)
   const panelRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
@@ -934,6 +939,7 @@ export function AgentTranscriptPanel({
   }, [])
 
   const getStatusColor = () => {
+    if (isStarting) return 'text-green-400'
     switch (status) {
       case SessionStatus.WORKING: return 'text-green-400'
       case SessionStatus.ERROR: return 'text-red-400'
@@ -943,6 +949,7 @@ export function AgentTranscriptPanel({
   }
 
   const getStatusLabel = () => {
+    if (isStarting) return 'Starting…'
     switch (status) {
       case SessionStatus.WORKING: return 'Working'
       case SessionStatus.ERROR: return 'Error'
@@ -1034,7 +1041,7 @@ export function AgentTranscriptPanel({
         </div>
         <div className="flex items-center gap-3">
           <span className={`text-xs flex items-center gap-1 ${getStatusColor()}`}>
-            {status === SessionStatus.WORKING && <Loader2 className="h-3 w-3 animate-spin" />}
+            {(isStarting || status === SessionStatus.WORKING) && <Loader2 className="h-3 w-3 animate-spin" />}
             {getStatusLabel()}
           </span>
           <div className="flex items-center gap-1">
@@ -1274,8 +1281,9 @@ export function AgentTranscriptPanel({
               <textarea
                 ref={inputRef}
                 rows={1}
-                placeholder="Send a message... (Shift+Enter for new line)"
-                className="flex-1 bg-input border border-border rounded-lg px-3 py-1.5 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/30 resize-none overflow-hidden max-h-32 min-h-[32px]"
+                disabled={isStarting}
+                placeholder={isStarting ? 'Starting agent…' : 'Send a message... (Shift+Enter for new line)'}
+                className="flex-1 bg-input border border-border rounded-lg px-3 py-1.5 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/30 resize-none overflow-hidden max-h-32 min-h-[32px] disabled:opacity-60"
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' && !e.shiftKey) {
                     e.preventDefault()

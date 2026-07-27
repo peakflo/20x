@@ -227,9 +227,11 @@ export function createTestDb(): { db: DatabaseManager; rawDb: InstanceType<typeo
       payload TEXT,
       created_at INTEGER NOT NULL DEFAULT (unixepoch('subsec') * 1000),
       updated_at INTEGER NOT NULL DEFAULT (unixepoch('subsec') * 1000),
+      rev INTEGER NOT NULL DEFAULT 0,
       PRIMARY KEY (task_id, part_id)
     );
     CREATE INDEX IF NOT EXISTS idx_transcript_parts_task_seq ON transcript_parts(task_id, seq);
+    CREATE INDEX IF NOT EXISTS idx_transcript_parts_task_rev ON transcript_parts(task_id, rev);
   `)
 
   const manager = new DatabaseManager()
