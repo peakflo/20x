@@ -20,6 +20,7 @@ import { getTaskApiPort, waitForTaskApiServer } from './task-api-server'
 import { randomUUID } from 'crypto'
 import { registerSecretSession, unregisterSecretSession, getSecretBrokerPort, writeSecretShellWrapper } from './secret-broker'
 import { registerMcpProxyTarget, getMcpAuthProxyPort } from './mcp-auth-proxy'
+import { analytics } from './analytics-service'
 
 // Coding agent backend type enum
 enum CodingAgentType {
@@ -47,6 +48,7 @@ interface AgentSession {
   seenMessageIds: Set<string>
   seenPartIds: Set<string>
   partContentLengths: Map<string, string>
+  assistantTextKeys?: Set<string>
   learningMode?: boolean
   isTriageSession?: boolean
   lastAssistantText?: string
@@ -90,6 +92,10 @@ function hasUserSuppliedAuthHeader(headers?: Record<string, string>): boolean {
 
 function isCodexAppServerAdapter(adapter: CodingAgentAdapter): boolean {
   return adapter instanceof CodexAppServerAdapter || adapter.constructor?.name === 'CodexAppServerAdapter'
+}
+
+function getAgentProvider(agent: { config?: { coding_agent?: string } } | null | undefined): string {
+  return agent?.config?.coding_agent || CodingAgentType.OPENCODE
 }
 
 /**
@@ -141,6 +147,7 @@ interface PollingEntry {
   seenMessageIds: Set<string>
   seenPartIds: Set<string>
   partContentLengths: Map<string, string>
+  assistantTextKeys?: Set<string>
   initialPromptSent?: boolean
   createdAt: number  // Timestamp to enforce grace period before IDLE transition
   hasSeenWork?: boolean  // True once we've seen at least one non-IDLE status
@@ -205,6 +212,7 @@ export class AgentManager extends EventEmitter {
   /** Maximum number of tillDone idle nudges per session before giving up. */
   private static readonly MAX_TILLDONE_NUDGES = 5
   private static readonly ERROR_TEXT_DEDUPE_WINDOW_MS = 5_000
+  private static readonly MIN_ASSISTANT_REPLAY_DEDUPE_CHARS = 40
 
   /** Maximum time (ms) a session can stay BUSY with no new data before we abort it.
    *  Prevents sessions from being stuck indefinitely when a tool call hangs inside
@@ -350,6 +358,26 @@ export class AgentManager extends EventEmitter {
 
   private normalizeErrorText(value?: string): string {
     return (value || '').replace(/\s+/g, ' ').trim().toLowerCase()
+  }
+
+  private normalizeAssistantText(value?: string): string {
+    return (value || '').replace(/\s+/g, ' ').trim()
+  }
+
+  private assistantTextKey(
+    role: string | undefined,
+    partType: string | undefined,
+    content: string,
+    tool?: unknown,
+    taskProgress?: unknown
+  ): string | null {
+    if (role !== MessageRole.ASSISTANT && role !== 'assistant') return null
+    if (tool || taskProgress) return null
+    if (partType && partType !== MessagePartType.TEXT && partType !== MessagePartType.REASONING && partType !== 'text' && partType !== 'reasoning') {
+      return null
+    }
+    const normalized = this.normalizeAssistantText(content)
+    return normalized.length >= AgentManager.MIN_ASSISTANT_REPLAY_DEDUPE_CHARS ? normalized : null
   }
 
   private hasMatchingErrorMessage(
@@ -1392,6 +1420,16 @@ export class AgentManager extends EventEmitter {
     // Create session via adapter
     const adapterSessionId = await adapter.createSession(sessionConfig)
     console.log(`[AgentManager] Session created: ${adapterSessionId}, workspaceDir=${workspaceDir}`)
+    analytics()?.record('provider.session.started', {
+      provider: getAgentProvider(agent),
+      runtimeMode: sessionConfig.sandboxMode,
+      hasResumeCursor: false,
+      hasCwd: typeof workspaceDir === 'string' && workspaceDir.trim().length > 0,
+      hasModel: typeof sessionConfig.model === 'string' && sessionConfig.model.trim().length > 0,
+      isTriageSession,
+      isSubtask,
+      skipInitialPrompt: !!skipInitialPrompt
+    })
 
     // Store session in sessions map
     this.sessions.set(adapterSessionId, {
@@ -1405,6 +1443,7 @@ export class AgentManager extends EventEmitter {
       seenMessageIds: new Set(),
       seenPartIds: new Set(),
       partContentLengths: new Map(),
+      assistantTextKeys: new Set(),
       adapter,
       isTriageSession,
       secretSessionToken: secretToken
@@ -1655,6 +1694,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       seenMessageIds: existingSession?.seenMessageIds ?? new Set<string>(),
       seenPartIds: existingSession?.seenPartIds ?? new Set<string>(),
       partContentLengths: existingSession?.partContentLengths ?? new Map<string, string>(),
+      assistantTextKeys: existingSession?.assistantTextKeys ?? new Set<string>(),
       createdAt: Date.now(),
       // Always start fresh: each call to startAdapterPolling corresponds to a
       // newly-sent (fire-and-forget) prompt.  The IDLE grace period must apply
@@ -1973,11 +2013,25 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
         if (part.role === 'user' || (part.role as string) === 'human') {
           continue
         }
+        const role = part.role || 'assistant'
+        const content = part.content || part.text || ''
+        const partType = part.type
+        const assistantKey = this.assistantTextKey(
+          role,
+          partType,
+          content,
+          part.tool,
+          part.taskProgress
+        )
+        if (assistantKey) {
+          entry.assistantTextKeys ??= new Set<string>()
+          entry.assistantTextKeys.add(assistantKey)
+        }
         batchMessages.push({
           id: part.id || `part-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-          role: part.role || 'assistant',
-          content: part.content || part.text || '',
-          partType: part.type,
+          role,
+          content,
+          partType,
           tool: part.tool,
           update: part.update,
           taskProgress: part.taskProgress,
@@ -2381,6 +2435,8 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
           for (const id of pollingEntry.seenMessageIds) session.seenMessageIds.add(id)
           for (const id of pollingEntry.seenPartIds) session.seenPartIds.add(id)
           for (const [k, v] of pollingEntry.partContentLengths) session.partContentLengths.set(k, v)
+          session.assistantTextKeys ??= new Set<string>()
+          for (const key of pollingEntry.assistantTextKeys ?? []) session.assistantTextKeys.add(key)
           // Prune after merging to keep session-level structures bounded
           this.pruneDedup(session.seenMessageIds, session.seenPartIds, session.partContentLengths)
         }
@@ -2562,14 +2618,25 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     const resumedSeenMessageIds = new Set<string>()
     const resumedSeenPartIds = new Set<string>()
     const resumedPartContentLengths = new Map<string, string>()
+    const resumedAssistantTextKeys = new Set<string>()
     for (const message of messages) {
       if (message.id) resumedSeenMessageIds.add(message.id)
       for (const part of message.parts) {
         const partId = part.id || `${message.role}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+        const content = part.content || part.text || ''
         resumedSeenPartIds.add(partId)
-        if (part.content || part.text) {
-          resumedPartContentLengths.set(partId, String((part.content || part.text || '').length))
+        if (content) {
+          resumedPartContentLengths.set(partId, String(content.length))
         }
+        // Seed the codex reconciled-text dedup key set (#427) so polling won't
+        // re-emit finalized items whose ids differ from the streamed ids.
+        const assistantKey = this.assistantTextKey(message.role, part.type, content, part.tool, part.taskProgress)
+        if (assistantKey) {
+          resumedAssistantTextKeys.add(assistantKey)
+        }
+        // NOTE: resume no longer replays history to the renderer — clients render
+        // the durable projection (snapshot + `transcript:changed` deltas). We only
+        // seed the in-memory dedup state here.
       }
     }
 
@@ -2585,6 +2652,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       seenMessageIds: resumedSeenMessageIds,
       seenPartIds: resumedSeenPartIds,
       partContentLengths: resumedPartContentLengths,
+      assistantTextKeys: resumedAssistantTextKeys,
       adapter,
       pollingStarted: false,
       secretSessionToken: secretToken
@@ -2604,6 +2672,11 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       agentId,
       taskId,
       status: 'idle'
+    })
+    analytics()?.record('provider.session.recovered', {
+      provider: getAgentProvider(agent),
+      strategy: 'resume-thread',
+      hasResumeCursor: true
     })
 
     return adapterSessionId
@@ -3169,10 +3242,23 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
           if (partType === 'step-start' || partType === 'step-finish' || partType === 'system-status') {
             continue
           }
-
           const content = part.content || part.text || ''
-          // Already in the projection under a different id (id-scheme mismatch)?
-          // Remember the id so we don't reconsider it, but don't re-emit.
+          const assistantKey = this.assistantTextKey(
+            message.role,
+            partType,
+            content,
+            part.tool,
+            part.taskProgress
+          )
+          session.assistantTextKeys ??= new Set<string>()
+          // Already emitted this reconciled assistant text under a different
+          // codex item id (#427)? remember the id and skip re-emit.
+          if (assistantKey && session.assistantTextKeys.has(assistantKey)) {
+            session.seenPartIds.add(partId)
+            continue
+          }
+          // Already in the durable projection under a different id (id-scheme
+          // mismatch)? remember the id and skip re-emit.
           if (content && existingContent.has(normalize(content))) {
             session.seenPartIds.add(partId)
             continue
@@ -3184,6 +3270,9 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
             // for chunk accumulation in streaming; storing a length string causes
             // the number to be prepended to the next streamed chunk.
             session.partContentLengths.set(partId, content)
+          }
+          if (assistantKey) {
+            session.assistantTextKeys.add(assistantKey)
           }
 
           batchMessages.push({
@@ -3522,6 +3611,10 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     }
 
     console.log(`[AgentManager] Destroying session ${sessionId} (resetTaskStatus=${resetTaskStatus})`)
+    analytics()?.record('provider.session.stopped', {
+      provider: getAgentProvider(this.db.getAgent(session.agentId)),
+      resetTaskStatus
+    })
 
     // Stop polling for this session
     this.stopAdapterPolling(sessionId)
@@ -3787,6 +3880,13 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     const promptText = this.buildMessageWithAttachmentContext(session, message, attachments)
     const parts: MessagePart[] = [{ type: MessagePartType.TEXT, text: promptText }]
     await session.adapter.sendPrompt(sessionId, parts, sessionConfig)
+    analytics()?.record('provider.turn.sent', {
+      provider: getAgentProvider(this.db.getAgent(session.agentId)),
+      model: sessionConfig.model,
+      interactionMode: 'message',
+      attachmentCount: attachments?.length ?? 0,
+      hasInput: typeof message === 'string' && message.trim().length > 0
+    })
 
     // Start polling if not already started (for Claude Code after resume)
     if (!session.pollingStarted) {
@@ -3813,6 +3913,10 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       }
     }
     if (!session) throw new Error(`Session not found: ${sessionId}`)
+    analytics()?.record('provider.request.responded', {
+      provider: getAgentProvider(this.db.getAgent(session.agentId)),
+      decision: approved ? 'approved' : 'rejected'
+    })
 
     const adapter = this.getAdapter(session.agentId)
 
@@ -3916,6 +4020,9 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
 
   async stopAllSessions(): Promise<void> {
     console.log(`[AgentManager] Stopping all ${this.sessions.size} sessions`)
+    analytics()?.record('provider.sessions.stopped_all', {
+      sessionCount: this.sessions.size
+    })
 
     // Stop the centralized polling coordinator first
     if (this.pollingTimer) {

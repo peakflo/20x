@@ -35,6 +35,7 @@ import { registerUpdaterIpc, initAutoUpdater, isUpdateDownloaded, getPendingVers
 import { initCrashLogger } from './crash-logger'
 import { installProcessStreamErrorHandlers } from './process-stream-errors'
 import { getWindowsPathEntries, prependMissingWindowsPaths } from './windows-runtime-paths'
+import { initAnalytics, shutdownAnalytics } from './analytics-service'
 
 /**
  * Validate that a URL is safe to open via shell.openExternal.
@@ -78,6 +79,7 @@ async function shutdownAppServices(): Promise<void> {
   workspaceCleanupScheduler?.stop()
 
   await agentManager?.stopAllSessions()
+  await shutdownAnalytics()
   await agentManager?.stopServer()
 
   mcpToolCaller?.destroy()
@@ -671,6 +673,7 @@ app.commandLine.appendSwitch('disable-features', [
 installProcessStreamErrorHandlers()
 
 app.whenReady().then(async () => {
+  const analytics = initAnalytics()
   // Register protocol handler: app-attachment://taskId/attachmentId
   // Serves local attachment files from the attachments directory.
   protocol.handle('app-attachment', (request) => {
@@ -702,6 +705,10 @@ app.whenReady().then(async () => {
 
   db = new DatabaseManager()
   db.initialize()
+  analytics.record('server.boot.heartbeat', {
+    taskCount: db.getTasks().length,
+    agentCount: db.getAgents().length
+  })
 
   // Ensure PATH is ready before creating managers that may spawn child processes
   await pathFixPromise

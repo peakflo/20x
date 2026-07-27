@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import type { Agent, CreateAgentDTO, UpdateAgentDTO } from '@/types'
 import { agentApi, agentSessionApi, onAgentStatus, onAgentApproval, onTranscriptChanged } from '@/lib/ipc-client'
 import type { AgentStatusEvent, AgentApprovalRequest, TranscriptPartRecord, TranscriptChangedEvent } from '@/types/electron'
+import { captureAnalyticsEvent } from '@/lib/analytics'
 
 // ── Message type ──────────────────────────────────────────────
 
@@ -233,6 +234,20 @@ export const useAgentStore = create<AgentState>((set, get) => {
   onTranscriptChanged((event: TranscriptChangedEvent) => {
     if (!event?.taskId) return
     applyParts(event.taskId, event.parts || [], event.maxRev)
+    const parts = event.parts || []
+    if (parts.length > 0) {
+      const s = get().sessions.get(event.taskId)
+      const toolNames = Array.from(
+        new Set(parts.map((p) => (p.tool as { name?: string } | undefined)?.name).filter(Boolean) as string[])
+      ).sort()
+      captureAnalyticsEvent('agent_output_batch_received', {
+        task_id: event.taskId,
+        agent_id: s?.agentId,
+        session_id: s?.sessionId,
+        message_count: parts.length,
+        tool_names: toolNames
+      })
+    }
   })
 
   // Session state only (status / pendingApproval / sessionId) — never messages.
@@ -252,6 +267,14 @@ export const useAgentStore = create<AgentState>((set, get) => {
             pendingApproval: null
           })
         })
+        captureAnalyticsEvent('agent_session_status_changed', {
+          task_id: event.taskId,
+          agent_id: event.agentId,
+          session_id: event.sessionId,
+          previous_status: undefined,
+          next_status: event.status,
+          source: 'backend'
+        })
       } else if (event.taskId && event.status === SessionStatus.IDLE) {
         // A session this window never observed just went idle — bind so its
         // output is rendered from the projection.
@@ -260,6 +283,7 @@ export const useAgentStore = create<AgentState>((set, get) => {
       return
     }
 
+    const previousStatus = session.status
     const updated = { ...session, status: event.status }
     if (event.sessionId && session.sessionId !== event.sessionId) updated.sessionId = event.sessionId
     if (event.status === SessionStatus.IDLE) updated.pendingApproval = null
@@ -267,6 +291,16 @@ export const useAgentStore = create<AgentState>((set, get) => {
     // "starting". Interim `idle` events during resume must NOT clear it.
     if (event.status !== SessionStatus.IDLE) updated.pendingSend = false
     set({ sessions: new Map(state.sessions).set(session.taskId, updated) })
+    if (previousStatus !== event.status) {
+      captureAnalyticsEvent('agent_session_status_changed', {
+        task_id: session.taskId,
+        agent_id: event.agentId || session.agentId,
+        session_id: event.sessionId,
+        previous_status: previousStatus,
+        next_status: event.status,
+        source: 'backend'
+      })
+    }
 
     // Safety-net reconcile at end of each turn — catches any missed delta.
     if (event.status === SessionStatus.IDLE) void reconcileDelta(session.taskId)
@@ -290,6 +324,13 @@ export const useAgentStore = create<AgentState>((set, get) => {
         pendingApproval: event,
         status: SessionStatus.WAITING_APPROVAL
       })
+    })
+    captureAnalyticsEvent('agent_approval_requested', {
+      task_id: session.taskId,
+      agent_id: session.agentId,
+      session_id: event.sessionId,
+      action: event.action,
+      has_description: Boolean(event.description)
     })
   })
 
@@ -315,6 +356,12 @@ export const useAgentStore = create<AgentState>((set, get) => {
       try {
         const agent = await agentApi.create(data)
         set((state) => ({ agents: [...state.agents, agent] }))
+        captureAnalyticsEvent('agent_created', {
+          agent_id: agent.id,
+          coding_agent: agent.config?.coding_agent,
+          model: agent.config?.model,
+          is_default: agent.is_default
+        })
         return agent
       } catch (err) {
         set({ error: String(err) })
@@ -327,6 +374,13 @@ export const useAgentStore = create<AgentState>((set, get) => {
         const updated = await agentApi.update(id, data)
         if (updated) {
           set((state) => ({ agents: state.agents.map((a) => (a.id === id ? updated : a)) }))
+          captureAnalyticsEvent('agent_updated', {
+            agent_id: updated.id,
+            coding_agent: updated.config?.coding_agent,
+            model: updated.config?.model,
+            is_default: updated.is_default,
+            changed_fields: Object.keys(data).sort()
+          })
         }
         return updated || null
       } catch (err) {
@@ -340,6 +394,7 @@ export const useAgentStore = create<AgentState>((set, get) => {
         const success = await agentApi.delete(id)
         if (success) {
           set((state) => ({ agents: state.agents.filter((a) => a.id !== id) }))
+          captureAnalyticsEvent('agent_deleted', { agent_id: id })
         }
         return success
       } catch (err) {
@@ -413,6 +468,12 @@ export const useAgentStore = create<AgentState>((set, get) => {
       if (session?.sessionId) {
         try {
           await agentSessionApi.stop(session.sessionId)
+          captureAnalyticsEvent('agent_session_stopped', {
+            task_id: taskId,
+            agent_id: session.agentId,
+            session_id: session.sessionId,
+            source: 'task_cleanup'
+          })
         } catch (err) {
           console.error('Failed to stop session:', err)
         }

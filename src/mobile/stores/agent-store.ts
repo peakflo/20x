@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { api, type TranscriptPartRecord } from '../api/client'
 import { onEvent } from '../api/websocket'
+import { captureAnalyticsEvent } from '@/lib/analytics'
 
 // ── Message types (mirrors desktop agent-store) ──────────────
 
@@ -218,6 +219,20 @@ export const useAgentStore = create<AgentState>((set, get) => {
     const event = payload as { taskId?: string; parts?: TranscriptPartRecord[]; maxRev?: number }
     if (!event?.taskId) return
     applyParts(event.taskId, event.parts || [], event.maxRev)
+    const parts = event.parts || []
+    if (parts.length > 0) {
+      const s = get().sessions.get(event.taskId)
+      const toolNames = Array.from(
+        new Set(parts.map((p) => (p.tool as { name?: string } | undefined)?.name).filter(Boolean) as string[])
+      ).sort()
+      captureAnalyticsEvent('agent_output_batch_received', {
+        task_id: event.taskId,
+        agent_id: s?.agentId,
+        session_id: s?.sessionId,
+        message_count: parts.length,
+        tool_names: toolNames
+      })
+    }
   })
 
   // Session state only (status / sessionId) — never messages.
@@ -241,12 +256,23 @@ export const useAgentStore = create<AgentState>((set, get) => {
       }
       return
     }
+    const previousStatus = session.status
     const updated = { ...session, status: event.status }
     if (event.sessionId && session.sessionId !== event.sessionId) updated.sessionId = event.sessionId
     // The turn is confirmed running (or errored/awaiting input) — stop showing
     // "starting". Interim `idle` events during resume must NOT clear it.
     if (event.status !== SessionStatus.IDLE) updated.pendingSend = false
     set({ sessions: new Map(state.sessions).set(session.taskId, updated) })
+    if (previousStatus !== event.status) {
+      captureAnalyticsEvent('agent_session_status_changed', {
+        task_id: session.taskId,
+        agent_id: event.agentId || session.agentId,
+        session_id: event.sessionId,
+        previous_status: previousStatus,
+        next_status: event.status,
+        source: 'backend'
+      })
+    }
     if (event.status === SessionStatus.IDLE) void reconcileDelta(session.taskId)
   })
 

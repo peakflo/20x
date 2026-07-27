@@ -5,6 +5,8 @@ import { SettingsSection } from '../SettingsSection'
 import { Label } from '@/components/ui/Label'
 import { Switch } from '@/components/ui/Switch'
 import { Button } from '@/components/ui/Button'
+import { Input } from '@/components/ui/Input'
+import { Select } from '@/components/ui/Select'
 import { OnboardingWizard } from '@/components/onboarding/OnboardingWizard'
 import { settingsApi, mobileApi, updaterApi, worktreeApi, onWorkspaceCleanupProgress } from '@/lib/ipc-client'
 
@@ -18,6 +20,8 @@ export function GeneralSettings() {
   const [tunnelActive, setTunnelActive] = useState(false)
   const [tunnelLoading, setTunnelLoading] = useState(false)
   const [tunnelError, setTunnelError] = useState<string | null>(null)
+  const [remoteMode, setRemoteMode] = useState<'quick' | 'custom'>('quick')
+  const [customUrlInput, setCustomUrlInput] = useState('')
   const [qrDataUrl, setQrDataUrl] = useState<string | null>(null)
   const [pairingPin, setPairingPin] = useState<string | null>(null)
   const [pinSecondsLeft, setPinSecondsLeft] = useState(0)
@@ -135,6 +139,8 @@ const [currentVersion, setCurrentVersion] = useState<string | null>(null)
         setMobileLanUrl(info.lanUrl)
         setMobileTunnelUrl(info.tunnelUrl)
         setTunnelActive(info.tunnelActive)
+        setRemoteMode(info.remoteMode)
+        setCustomUrlInput(info.customUrl ?? '')
         const qrUrl = info.tunnelUrl ?? info.lanUrl ?? info.url
         if (qrUrl) {
           const dataUrl = await QRCode.toDataURL(qrUrl, { width: 200, margin: 1 })
@@ -216,6 +222,20 @@ const [currentVersion, setCurrentVersion] = useState<string | null>(null)
       setMinimizeToTray(checked)
     } catch (error) {
       console.error('Failed to update minimize to tray:', error)
+    }
+  }
+
+  // Applies a new active remote URL (or falls back to the LAN URL when null)
+  // to the QR code and tunnel state. Shared by the quick-tunnel switch, the
+  // custom-URL button, and the mode-switch-back-to-quick handler so all three
+  // stay in sync instead of drifting apart.
+  const applyRemoteUrl = async (url: string | null) => {
+    setMobileTunnelUrl(url)
+    setTunnelActive(Boolean(url))
+    const qrUrl = url ?? mobileLanUrl
+    if (qrUrl) {
+      const dataUrl = await QRCode.toDataURL(qrUrl, { width: 200, margin: 1 })
+      setQrDataUrl(dataUrl)
     }
   }
 
@@ -306,49 +326,110 @@ const [currentVersion, setCurrentVersion] = useState<string | null>(null)
           )}
         </div>
 
-        {/* Remote access toggle */}
+        {/* Remote access method */}
         <div className="flex items-center justify-between py-2 border-b border-border">
           <div className="space-y-0.5">
-            <Label>Remote access</Label>
-            <p className="text-xs text-muted-foreground">
-              {tunnelActive
-                ? 'Accessible from anywhere via Cloudflare tunnel'
-                : 'Enable to access from outside your network'}
-            </p>
+            <Label>Remote access method</Label>
+            <p className="text-xs text-muted-foreground">Cloudflare quick tunnel, or bring your own URL</p>
           </div>
-          <Switch
-            checked={tunnelActive}
+          <Select
+            value={remoteMode}
             disabled={tunnelLoading}
-            onCheckedChange={async (checked) => {
-              setTunnelLoading(true)
+            onChange={async (e) => {
+              const mode = e.target.value as 'quick' | 'custom'
               setTunnelError(null)
+              if (mode === 'custom') {
+                setRemoteMode('custom')
+                return
+              }
+              setTunnelLoading(true)
               try {
-                if (checked) {
-                  const { tunnelUrl: url } = await mobileApi.startTunnel()
-                  setMobileTunnelUrl(url)
-                  setTunnelActive(true)
-                  if (url) {
-                    const dataUrl = await QRCode.toDataURL(url, { width: 200, margin: 1 })
-                    setQrDataUrl(dataUrl)
-                  }
-                } else {
-                  await mobileApi.stopTunnel()
-                  setMobileTunnelUrl(null)
-                  setTunnelActive(false)
-                  if (mobileLanUrl) {
-                    const dataUrl = await QRCode.toDataURL(mobileLanUrl, { width: 200, margin: 1 })
-                    setQrDataUrl(dataUrl)
-                  }
-                }
+                await mobileApi.stopTunnel()
+                await mobileApi.clearCustomUrl()
+                setRemoteMode('quick')
+                await applyRemoteUrl(null)
               } catch (err) {
-                console.error('Tunnel toggle failed:', err)
-                setTunnelError(err instanceof Error ? err.message : 'Failed to start remote access')
+                setTunnelError(err instanceof Error ? err.message : 'Failed to switch remote access method')
               } finally {
                 setTunnelLoading(false)
               }
             }}
+            options={[
+              { value: 'quick', label: 'Cloudflare Quick Tunnel' },
+              { value: 'custom', label: 'Custom URL' }
+            ]}
+            className="w-auto"
           />
         </div>
+
+        {remoteMode === 'quick' ? (
+          <div className="flex items-center justify-between py-2 border-b border-border">
+            <div className="space-y-0.5">
+              <Label>Remote access</Label>
+              <p className="text-xs text-muted-foreground">
+                {tunnelActive
+                  ? 'Accessible from anywhere via Cloudflare tunnel'
+                  : 'Enable to access from outside your network'}
+              </p>
+            </div>
+            <Switch
+              checked={tunnelActive}
+              disabled={tunnelLoading}
+              onCheckedChange={async (checked) => {
+                setTunnelLoading(true)
+                setTunnelError(null)
+                try {
+                  if (checked) {
+                    const { tunnelUrl: url } = await mobileApi.startTunnel()
+                    await applyRemoteUrl(url)
+                  } else {
+                    await mobileApi.stopTunnel()
+                    await applyRemoteUrl(null)
+                  }
+                } catch (err) {
+                  console.error('Tunnel toggle failed:', err)
+                  setTunnelError(err instanceof Error ? err.message : 'Failed to start remote access')
+                } finally {
+                  setTunnelLoading(false)
+                }
+              }}
+            />
+          </div>
+        ) : (
+          <div className="flex items-center justify-between py-2 border-b border-border gap-3">
+            <div className="space-y-0.5">
+              <Label>Custom URL</Label>
+              <p className="text-xs text-muted-foreground">Your own tunnel or reverse proxy pointed at 20x</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <Input
+                value={customUrlInput}
+                onChange={(e) => setCustomUrlInput(e.target.value)}
+                placeholder="https://my-tunnel.example.com"
+                className="w-56"
+                disabled={tunnelLoading}
+              />
+              <Button
+                size="sm"
+                disabled={tunnelLoading || !customUrlInput.trim()}
+                onClick={async () => {
+                  setTunnelLoading(true)
+                  setTunnelError(null)
+                  try {
+                    const { url } = await mobileApi.setCustomUrl(customUrlInput.trim())
+                    await applyRemoteUrl(url)
+                  } catch (err) {
+                    setTunnelError(err instanceof Error ? err.message : 'Failed to set custom URL')
+                  } finally {
+                    setTunnelLoading(false)
+                  }
+                }}
+              >
+                {tunnelActive ? 'Update' : 'Enable'}
+              </Button>
+            </div>
+          </div>
+        )}
         {tunnelError && (
           <p className="text-xs text-destructive -mt-1 mb-2">{tunnelError}</p>
         )}

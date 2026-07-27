@@ -1,9 +1,41 @@
-import { Tunnel } from 'cloudflared'
-import { writeFileSync } from 'fs'
+import { Tunnel, use as useCloudflaredBin } from 'cloudflared'
+import { writeFileSync, existsSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
+import { app } from 'electron'
+
+// The cloudflared package resolves its bundled binary via `__dirname`, which
+// in a packaged app points inside app.asar. Electron's fs APIs are
+// asar-transparent for reads, but spawning a binary from inside the asar
+// fails (ENOENT) — electron-builder's asarUnpack only extracts the real file
+// to the sibling `app.asar.unpacked` directory, so spawn must be told to use
+// that path explicitly. Resolved via process.resourcesPath (same approach as
+// binary-manager.ts) rather than string-replacing the package's own default
+// path, since that default can vary in shape across platforms/versions.
+let cloudflaredBinError: string | null = null
+if (app.isPackaged) {
+  const unpackedBin = join(
+    process.resourcesPath,
+    'app.asar.unpacked',
+    'node_modules',
+    'cloudflared',
+    'bin',
+    process.platform === 'win32' ? 'cloudflared.exe' : 'cloudflared'
+  )
+  if (existsSync(unpackedBin)) {
+    useCloudflaredBin(unpackedBin)
+  } else {
+    cloudflaredBinError = `cloudflared binary not found at ${unpackedBin}. Remote access via Cloudflare tunnel is unavailable in this build.`
+    console.error('[tunnel]', cloudflaredBinError)
+  }
+}
 
 let activeTunnel: Tunnel | null = null
+// The in-flight tunnel between Tunnel.quick() and its 'connected' event —
+// tracked separately from activeTunnel so stopTunnel() (e.g. from a mode
+// switch) can cancel a connection attempt that hasn't resolved yet, instead
+// of only being able to stop a tunnel that already finished connecting.
+let pendingTunnel: Tunnel | null = null
 let tunnelUrl: string | null = null
 
 /**
@@ -32,6 +64,7 @@ const CONNECT_TIMEOUT_MS = 120_000
 
 export async function startTunnel(port: number): Promise<string> {
   if (activeTunnel && tunnelUrl) return tunnelUrl
+  if (cloudflaredBinError) throw new Error(cloudflaredBinError)
 
   return new Promise((resolve, reject) => {
     // Options passed to cloudflared. build_options() uses the key verbatim, so
@@ -55,6 +88,7 @@ export async function startTunnel(port: number): Promise<string> {
       console.warn('[tunnel] could not write isolated cloudflared config, using default:', e)
     }
     const t = Tunnel.quick(`http://127.0.0.1:${port}`, options)
+    pendingTunnel = t
 
     // cloudflared prints the public https://<...>.trycloudflare.com URL to its
     // output BEFORE it has actually registered any connection with Cloudflare's
@@ -78,6 +112,7 @@ export async function startTunnel(port: number): Promise<string> {
       if (settled) return
       settled = true
       t.stop()
+      if (t === pendingTunnel) pendingTunnel = null
       activeTunnel = null
       tunnelUrl = null
       const tail = recentOutput.length ? ` Last cloudflared output:\n${recentOutput.join('\n')}` : ''
@@ -102,9 +137,17 @@ export async function startTunnel(port: number): Promise<string> {
 
     t.on('connected', () => {
       if (settled || !pendingUrl) return
+      // stopTunnel() was called (e.g. user switched to Custom URL) while this
+      // connection was still in flight — don't resurrect it as the active
+      // tunnel now that it's finally connected.
+      if (t !== pendingTunnel) {
+        t.stop()
+        return
+      }
       settled = true
       clearTimeout(timer)
       activeTunnel = t
+      pendingTunnel = null
       tunnelUrl = pendingUrl
       resolve(pendingUrl)
     })
@@ -114,6 +157,7 @@ export async function startTunnel(port: number): Promise<string> {
       settled = true
       clearTimeout(timer)
       t.stop()
+      if (t === pendingTunnel) pendingTunnel = null
       activeTunnel = null
       tunnelUrl = null
       reject(err)
@@ -126,13 +170,16 @@ export async function startTunnel(port: number): Promise<string> {
         activeTunnel = null
         tunnelUrl = null
       }
+      if (t === pendingTunnel) pendingTunnel = null
     })
   })
 }
 
 export function stopTunnel(): void {
   activeTunnel?.stop()
+  pendingTunnel?.stop()
   activeTunnel = null
+  pendingTunnel = null
   tunnelUrl = null
 }
 

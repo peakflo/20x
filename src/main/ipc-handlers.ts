@@ -35,6 +35,7 @@ import type { EnterpriseAuth } from './enterprise-auth'
 import type { ClaudePluginManager } from './claude-plugin-manager'
 import type { EnterpriseHeartbeat } from './enterprise-heartbeat'
 import type { EnterpriseStateSync } from './enterprise-state-sync'
+import { analytics } from './analytics-service'
 
 const MIME_MAP: Record<string, string> = {
   '.pdf': 'application/pdf',
@@ -103,6 +104,19 @@ export function registerIpcHandlers(
     // Notify renderer so auto-start hook can trigger triage for UI-created tasks
     if (task) {
       event.sender.send('task:created', { task })
+      analytics()?.record('task.created', {
+        taskType: task.type,
+        priority: task.priority,
+        status: task.status,
+        labelCount: task.labels?.length ?? 0,
+        repoCount: task.repos?.length ?? 0,
+        attachmentCount: task.attachments?.length ?? 0,
+        outputFieldCount: task.output_fields?.length ?? 0,
+        hasAgent: !!task.agent_id,
+        hasSource: !!task.source_id,
+        isRecurring: !!task.is_recurring,
+        isSubtask: !!task.parent_task_id
+      })
     }
     return task
   })
@@ -110,7 +124,7 @@ export function registerIpcHandlers(
   ipcMain.handle('db:updateTask', (_, id: string, data: UpdateTaskData) => {
     // Capture previous status before updating (for enterprise sync)
     let previousStatus: string | undefined
-    if (enterpriseStateSync && data.status) {
+    if (data.status) {
       const existing = db.getTask(id)
       if (existing && existing.status !== data.status) {
         previousStatus = existing.status
@@ -139,19 +153,46 @@ export function registerIpcHandlers(
         enterpriseStateSync.recordTaskStatusChange(updated, previousStatus, data.status)
       }
     }
+    if (updated && data.status) {
+      analytics()?.record('task.status_changed', {
+        previousStatus,
+        status: data.status,
+        taskType: updated.type,
+        priority: updated.priority,
+        hasAgent: !!updated.agent_id,
+        hasSource: !!updated.source_id,
+        isSubtask: !!updated.parent_task_id
+      })
+    }
 
     // Record feedback event for enterprise sync
     if (enterpriseStateSync && data.feedback_rating && updated) {
       enterpriseStateSync.recordFeedbackSubmitted(updated, data.feedback_rating)
+    }
+    if (updated && data.feedback_rating) {
+      analytics()?.record('task.feedback_submitted', {
+        rating: data.feedback_rating,
+        taskType: updated.type,
+        hasSource: !!updated.source_id
+      })
     }
 
     return updated
   })
 
   ipcMain.handle('db:deleteTask', (event, id: string) => {
+    const existing = db.getTask(id)
     const success = db.deleteTask(id)
     if (success) {
       event.sender.send('task:deleted', { taskId: id })
+      analytics()?.record('task.deleted', {
+        taskType: existing?.type,
+        status: existing?.status,
+        priority: existing?.priority,
+        hasAgent: !!existing?.agent_id,
+        hasSource: !!existing?.source_id,
+        isSubtask: !!existing?.parent_task_id
+      })
     }
     return success
   })
@@ -846,15 +887,23 @@ export function registerIpcHandlers(
     return enabled
   })
 
-  // Mobile web UI info — QR contains one-time init code, not the session token
-  ipcMain.handle('mobile:getInfo', () => {
-    const port = 20620
-
-    // Generate a fresh init code (5 min expiry)
+  const generateInitCode = (): string => {
     const initCode = randomUUID()
     const expiresAt = Math.floor(Date.now() / 1000) + 300
     db.setSetting(`mobile_init_code_${initCode}`, '1')
     db.setSetting(`mobile_init_code_${initCode}_exp`, String(expiresAt))
+    return initCode
+  }
+
+  const getRemoteMode = (): 'quick' | 'custom' =>
+    db.getSetting('mobile_remote_mode') === 'custom' ? 'custom' : 'quick'
+
+  const getCustomUrl = (): string | null => db.getSetting('mobile_custom_url') || null
+
+  // Mobile web UI info — QR contains one-time init code, not the session token
+  ipcMain.handle('mobile:getInfo', () => {
+    const port = 20620
+    const initCode = generateInitCode()
 
     // Get LAN IP
     const nets = networkInterfaces()
@@ -869,8 +918,11 @@ export function registerIpcHandlers(
       if (lanIp !== 'localhost') break
     }
 
+    const remoteMode = getRemoteMode()
+    const customUrl = getCustomUrl()
     const tunnelUrl = getTunnelUrl()
-    const baseUrl = tunnelUrl ?? `http://${lanIp}:${port}`
+    const remoteBaseUrl = remoteMode === 'custom' ? customUrl : tunnelUrl
+    const baseUrl = remoteBaseUrl ?? `http://${lanIp}:${port}`
     const pairUrl = `${baseUrl}/pair?code=${initCode}`
     const lanPairUrl = `http://${lanIp}:${port}/pair?code=${initCode}`
 
@@ -878,24 +930,51 @@ export function registerIpcHandlers(
       url: pairUrl,
       port,
       lanUrl: lanPairUrl,
-      tunnelUrl: tunnelUrl ? `${tunnelUrl}/pair?code=${initCode}` : null,
-      tunnelActive: isTunnelActive()
+      tunnelUrl: remoteBaseUrl ? `${remoteBaseUrl}/pair?code=${initCode}` : null,
+      tunnelActive: remoteMode === 'custom' ? Boolean(customUrl) : isTunnelActive(),
+      remoteMode,
+      customUrl
     }
   })
 
   ipcMain.handle('mobile:startTunnel', async () => {
     const port = 20620
     const url = await startTunnel(port)
-    // Generate fresh init code for the new tunnel URL
-    const initCode = randomUUID()
-    const expiresAt = Math.floor(Date.now() / 1000) + 300
-    db.setSetting(`mobile_init_code_${initCode}`, '1')
-    db.setSetting(`mobile_init_code_${initCode}_exp`, String(expiresAt))
+    // Only persist 'quick' mode once the tunnel actually connects — if
+    // startTunnel() throws, the mode setting must stay whatever it was before
+    // (e.g. a still-valid 'custom' mode/URL shouldn't be clobbered by a
+    // failed quick-tunnel attempt).
+    db.setSetting('mobile_remote_mode', 'quick')
+    const initCode = generateInitCode()
     return { tunnelUrl: `${url}/pair?code=${initCode}` }
   })
 
   ipcMain.handle('mobile:stopTunnel', () => {
     stopTunnel()
+    return { success: true }
+  })
+
+  ipcMain.handle('mobile:setCustomUrl', (_, rawUrl: string) => {
+    let parsed: URL
+    try {
+      parsed = new URL(rawUrl.trim())
+    } catch {
+      throw new Error('Enter a valid URL starting with http:// or https://')
+    }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      throw new Error('Enter a valid URL starting with http:// or https://')
+    }
+    const url = parsed.href.replace(/\/+$/, '')
+    stopTunnel()
+    db.setSetting('mobile_remote_mode', 'custom')
+    db.setSetting('mobile_custom_url', url)
+    const initCode = generateInitCode()
+    return { url: `${url}/pair?code=${initCode}` }
+  })
+
+  ipcMain.handle('mobile:clearCustomUrl', () => {
+    db.setSetting('mobile_remote_mode', 'quick')
+    db.deleteSetting('mobile_custom_url')
     return { success: true }
   })
 

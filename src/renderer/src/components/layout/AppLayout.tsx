@@ -23,6 +23,7 @@ import { useOverdueNotifications } from '@/hooks/use-overdue-notifications'
 import { attachmentApi, worktreeApi, settingsApi, updaterApi } from '@/lib/ipc-client'
 import { useTaskSourceStore } from '@/stores/task-source-store'
 import { isOverdue, isSnoozed } from '@/lib/utils'
+import { captureAnalyticsEvent, capturePageView } from '@/lib/analytics'
 import { TaskStatus, PluginActionId } from '@/types'
 import type { FileAttachment } from '@/types'
 import { MessageSquare, ExternalLink, LayoutDashboard, CheckSquare, Zap, Settings, Layers, PanelLeftClose, PanelLeftOpen, Search } from 'lucide-react'
@@ -105,6 +106,14 @@ export function AppLayout() {
       cleanupMenu()
     }
   }, [])
+
+  useEffect(() => {
+    capturePageView(activeModal === 'settings' ? 'settings' : sidebarView, {
+      sidebar_view: sidebarView,
+      active_modal: activeModal,
+      selected_task_id: selectedTask?.id
+    })
+  }, [sidebarView, activeModal, selectedTask?.id])
 
   const editingTask = useMemo(
     () => editingTaskId ? allTasks.find((t) => t.id === editingTaskId) : undefined,
@@ -193,6 +202,7 @@ export function AppLayout() {
       if (e.key.toLowerCase() === 'k') {
         e.preventDefault()
         setCmdOpen((v) => !v)
+        captureAnalyticsEvent('command_palette_toggled', { source: 'keyboard' })
         return
       }
       const n = Number(e.key)
@@ -200,6 +210,10 @@ export function AppLayout() {
         e.preventDefault()
         if (activeModal === 'settings') closeModal()
         setSidebarView(NAV_ITEMS[n - 1].key)
+        captureAnalyticsEvent('workspace_view_selected', {
+          view: NAV_ITEMS[n - 1].key,
+          source: 'keyboard'
+        })
       }
     }
     window.addEventListener('keydown', onKey)
@@ -217,7 +231,13 @@ export function AppLayout() {
             <img src={logo20x} className="h-3 w-3" alt="20x" />
             {updateAvailableVersion && (
               <button
-                onClick={() => setUpdateDialogOpen(true)}
+                onClick={() => {
+                  setUpdateDialogOpen(true)
+                  captureAnalyticsEvent('update_dialog_opened', {
+                    version: updateAvailableVersion,
+                    source: 'indicator'
+                  })
+                }}
                 className="absolute -top-1 -right-1 h-2.5 w-2.5 rounded-full bg-warning ring-2 ring-[var(--chrome-solid)] cursor-pointer animate-pulse"
                 title={`Update available: v${updateAvailableVersion}`}
               />
@@ -255,7 +275,10 @@ export function AppLayout() {
 
         {/* Centered command/search launcher (⌘K) */}
         <button
-          onClick={() => setCmdOpen(true)}
+          onClick={() => {
+            setCmdOpen(true)
+            captureAnalyticsEvent('command_palette_toggled', { source: 'top_bar' })
+          }}
           title="Search or run a command"
           className="no-drag flex h-7 w-[230px] max-w-[34vw] items-center gap-2 rounded-lg border border-border/60 bg-muted/40 px-2.5 text-[11px] text-muted-foreground shadow-xs transition-colors hover:bg-accent hover:text-foreground cursor-pointer"
         >
@@ -302,6 +325,10 @@ export function AppLayout() {
                 onClick={() => {
                   if (activeModal === 'settings') closeModal()
                   setSidebarView(key)
+                  captureAnalyticsEvent('workspace_view_selected', {
+                    view: key,
+                    source: 'nav'
+                  })
                 }}
                 aria-label={label}
                 className={`group relative grid h-8 w-8 place-items-center rounded-lg transition-all duration-150 cursor-pointer ${
