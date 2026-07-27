@@ -1,4 +1,4 @@
-import { useCallback } from 'react'
+import { useCallback, useEffect } from 'react'
 import { agentSessionApi } from '@/lib/ipc-client'
 import { useAgentStore, SessionStatus } from '@/stores/agent-store'
 import type { AgentApprovalRequest } from '@/types/electron'
@@ -12,6 +12,8 @@ export interface AgentSessionState {
   pendingApproval: AgentApprovalRequest | null
   /** Transient system status indicator (e.g. 'compacting') — cleared on next non-status message */
   systemStatus?: string | null
+  /** User sent and the backend is still resuming the session. */
+  pendingSend?: boolean
 }
 
 export interface SendMessageOptions {
@@ -34,7 +36,16 @@ export function useAgentSession(taskId: string | undefined) {
   const session = useAgentStore((s) => (taskId ? s.sessions.get(taskId) : undefined))
   const initSession = useAgentStore((s) => s.initSession)
   const endSession = useAgentStore((s) => s.endSession)
-  const clearMessageDedup = useAgentStore((s) => s.clearMessageDedup)
+  const hydrateTranscript = useAgentStore((s) => s.hydrateTranscript)
+
+  // Hydrate from the durable transcript projection when a task view binds.
+  // The store renders state, not history-of-pushes: output produced while
+  // this window wasn't open (background wake-ups, app restarts, resumed
+  // sessions) appears immediately without needing a live session.
+  useEffect(() => {
+    // Guard for partial store mocks / older bridges without the snapshot API
+    if (taskId && typeof hydrateTranscript === 'function') void hydrateTranscript(taskId)
+  }, [taskId, hydrateTranscript])
 
   const sessionState: AgentSessionState = session
     ? {
@@ -42,7 +53,8 @@ export function useAgentSession(taskId: string | undefined) {
         status: session.status,
         messages: session.messages,
         pendingApproval: session.pendingApproval,
-        systemStatus: session.systemStatus
+        systemStatus: session.systemStatus,
+        pendingSend: session.pendingSend
       }
     : EMPTY_SESSION
 
@@ -62,8 +74,11 @@ export function useAgentSession(taskId: string | undefined) {
 
   const resume = useCallback(
     async (agentId: string, tId: string, ocSessionId: string) => {
-      // Clear message dedup so replayed messages will be added
-      clearMessageDedup(tId)
+      // NOTE: do NOT clear the message list here. The durable transcript
+      // projection is hydrated into the view on mount; clearing would wipe that
+      // full history, and the resume replay would only partially repopulate it.
+      // The replay batch dedups against the hydrated messages (shared part ids),
+      // so nothing is lost or duplicated by leaving them in place.
       initSession(tId, '', agentId)
       const result = await agentSessionApi.resume(agentId, tId, ocSessionId)
       if (result.ended) {
@@ -74,7 +89,7 @@ export function useAgentSession(taskId: string | undefined) {
       initSession(tId, result.sessionId, agentId)
       return result.sessionId
     },
-    [initSession, clearMessageDedup, removeSession]
+    [initSession, removeSession]
   )
 
   const abort = useCallback(async () => {
@@ -103,22 +118,32 @@ export function useAgentSession(taskId: string | undefined) {
       if (!taskId) throw new Error('No taskId')
       // Get latest session from store, not from closure
       const currentSession = useAgentStore.getState().sessions.get(taskId)
-      if (currentSession?.sessionId) {
-        const result = await agentSessionApi.send(currentSession.sessionId, message, taskId, currentSession.agentId, options?.attachments)
-        // Session was recreated on the main process — update renderer store
-        if (result.newSessionId && taskId) {
-          initSession(taskId, result.newSessionId, currentSession.agentId)
+      // Resuming an idle session is slow (the send call blocks until the resume
+      // completes). Show "starting" immediately so the UI isn't stuck on "Idle"
+      // with an open input. Cleared by the first non-idle status or on failure.
+      const store = useAgentStore.getState()
+      store.beginSend(taskId)
+      try {
+        if (currentSession?.sessionId) {
+          const result = await agentSessionApi.send(currentSession.sessionId, message, taskId, currentSession.agentId, options?.attachments)
+          // Session was recreated on the main process — update renderer store
+          if (result.newSessionId && taskId) {
+            initSession(taskId, result.newSessionId, currentSession.agentId)
+          }
+        } else {
+          // Fallback: session mapping lost in renderer — ask the backend
+          // to find (or resume/create) the session by taskId directly.
+          console.log('[use-agent-session] sendMessage() no sessionId, falling back to sendByTaskId:', taskId)
+          const result = await agentSessionApi.sendByTaskId(taskId, message, options?.attachments)
+          // Update renderer store with the recovered/new sessionId
+          const resolvedSessionId = result.newSessionId || result.sessionId
+          if (resolvedSessionId) {
+            initSession(taskId, resolvedSessionId, currentSession?.agentId ?? '')
+          }
         }
-      } else {
-        // Fallback: session mapping lost in renderer — ask the backend
-        // to find (or resume/create) the session by taskId directly.
-        console.log('[use-agent-session] sendMessage() no sessionId, falling back to sendByTaskId:', taskId)
-        const result = await agentSessionApi.sendByTaskId(taskId, message, options?.attachments)
-        // Update renderer store with the recovered/new sessionId
-        const resolvedSessionId = result.newSessionId || result.sessionId
-        if (resolvedSessionId) {
-          initSession(taskId, resolvedSessionId, currentSession?.agentId ?? '')
-        }
+      } catch (e) {
+        store.endSend(taskId)
+        throw e
       }
     },
     [taskId, initSession]

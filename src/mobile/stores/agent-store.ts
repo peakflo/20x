@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { api } from '../api/client'
+import { api, type TranscriptPartRecord } from '../api/client'
 import { onEvent } from '../api/websocket'
 
 // ── Message types (mirrors desktop agent-store) ──────────────
@@ -60,9 +60,17 @@ export interface TaskSession {
   agentId: string
   taskId: string
   status: SessionStatus
+  /** Derived, read-only render list — a pure projection of the durable transcript. */
   messages: AgentMessage[]
-  /** Transient system status indicator (e.g. 'compacting') — cleared on next non-status message */
   systemStatus?: string | null
+  /**
+   * True from the moment the user sends a message until the backend confirms the
+   * turn is running (a non-idle status). Resuming an idle session is slow
+   * (worktree + MCP + adapter.resumeSession) and even emits an interim `idle`
+   * status, so we can't rely on status alone to show "starting". Cleared on the
+   * first working/waiting/error status or a safety timeout.
+   */
+  pendingSend?: boolean
 }
 
 export interface Agent {
@@ -75,23 +83,56 @@ export interface Agent {
   updated_at: string
 }
 
-// Module-level dedup tracking (capped to prevent unbounded growth)
-const MAX_TRACKED_TASKS = 50
-const seenIds = new Map<string, Set<string>>()
-const stepStartTimes = new Map<string, number>()
+export interface Skill {
+  id: string
+  name: string
+  description: string
+  agent_id: string | null
+}
 
-function getSeen(taskId: string): Set<string> {
-  if (!seenIds.has(taskId)) {
-    // Evict oldest entries when limit is reached (Maps preserve insertion order)
-    while (seenIds.size >= MAX_TRACKED_TASKS) {
-      const oldest = seenIds.keys().next().value
-      if (oldest === undefined) break
-      seenIds.delete(oldest)
-      stepStartTimes.delete(oldest)
-    }
-    seenIds.set(taskId, new Set())
+// ── Projection cache (SINGLE source of truth for the transcript) ──
+// Identical model to the desktop store: the main process owns the durable
+// transcript; the mobile client keeps a per-task cache keyed by stable part id
+// and renders a derived sorted list. One write path: applyParts(), fed by a
+// full snapshot on bind (REST) and idempotent `transcript:changed` deltas (WS).
+
+interface ProjectionCache {
+  parts: Map<string, TranscriptPartRecord>
+  rev: number
+}
+
+const projections = new Map<string, ProjectionCache>()
+const bindingTasks = new Set<string>()
+
+/** Test-only: reset the module-level projection cache between tests. */
+export function __clearProjectionsForTest(): void {
+  projections.clear()
+  bindingTasks.clear()
+}
+
+function getProjection(taskId: string): ProjectionCache {
+  let p = projections.get(taskId)
+  if (!p) { p = { parts: new Map(), rev: 0 }; projections.set(taskId, p) }
+  return p
+}
+
+function toAgentMessage(p: TranscriptPartRecord): AgentMessage {
+  const payload = (p.payload || {}) as { taskProgress?: unknown }
+  return {
+    id: p.partId,
+    role: p.role === 'user' ? 'user' : p.role === 'assistant' ? 'assistant' : 'system',
+    content: p.content,
+    timestamp: new Date(p.createdAt),
+    partType: p.partType,
+    tool: p.tool as AgentMessage['tool'],
+    taskProgress: payload.taskProgress as AgentMessage['taskProgress']
   }
-  return seenIds.get(taskId)!
+}
+
+function deriveMessages(cache: ProjectionCache): AgentMessage[] {
+  return [...cache.parts.values()]
+    .sort((a, b) => (a.createdAt - b.createdAt) || (a.seq - b.seq))
+    .map(toAgentMessage)
 }
 
 function findBySessionId(sessions: Map<string, TaskSession>, sid: string): TaskSession | undefined {
@@ -103,13 +144,6 @@ function findBySessionId(sessions: Map<string, TaskSession>, sid: string): TaskS
 
 // ── Store ─────────────────────────────────────────────────────
 
-export interface Skill {
-  id: string
-  name: string
-  description: string
-  agent_id: string | null
-}
-
 interface AgentState {
   agents: Agent[]
   skills: Skill[]
@@ -117,7 +151,13 @@ interface AgentState {
   fetchAgents: () => Promise<void>
   fetchSkills: () => Promise<void>
   syncActiveSessions: () => Promise<void>
+  /** Bind a task view to the durable transcript projection (load snapshot). */
+  bindTranscript: (taskId: string) => Promise<void>
   initSession: (taskId: string, sessionId: string, agentId: string) => void
+  /** Mark a task as "starting" after the user sends, until a turn is confirmed. */
+  beginSend: (taskId: string) => void
+  /** Clear the "starting" indicator (e.g. the send request failed). */
+  endSend: (taskId: string) => void
   endSession: (taskId: string) => void
   removeSession: (taskId: string) => void
   clearMessageDedup: (taskId: string) => void
@@ -125,250 +165,99 @@ interface AgentState {
 }
 
 export const useAgentStore = create<AgentState>((set, get) => {
+  const commitMessages = (taskId: string): void => {
+    const messages = deriveMessages(getProjection(taskId))
+    set((state) => {
+      const existing = state.sessions.get(taskId)
+      const session: TaskSession = existing
+        ? { ...existing, messages }
+        : { sessionId: null, agentId: '', taskId, status: SessionStatus.IDLE, messages }
+      return { sessions: new Map(state.sessions).set(taskId, session) }
+    })
+  }
+
+  const applyParts = (taskId: string, parts: TranscriptPartRecord[], maxRev?: number): void => {
+    if (parts.length === 0 && maxRev == null) return
+    const cache = getProjection(taskId)
+    for (const p of parts) cache.parts.set(p.partId, p)
+    if (typeof maxRev === 'number') cache.rev = Math.max(cache.rev, maxRev)
+    commitMessages(taskId)
+  }
+
+  const bindTranscript = async (taskId: string): Promise<void> => {
+    if (!taskId || bindingTasks.has(taskId)) return
+    bindingTasks.add(taskId)
+    try {
+      const snapshot = await api.transcript.snapshot(taskId)
+      if (!Array.isArray(snapshot) || snapshot.length === 0) return
+      const maxRev = snapshot.reduce((m, p) => Math.max(m, p.rev || 0), 0)
+      projections.set(taskId, { parts: new Map(snapshot.map((p) => [p.partId, p])), rev: maxRev })
+      commitMessages(taskId)
+    } catch (e) {
+      console.error(`[mobile] bindTranscript failed for ${taskId}:`, e)
+    } finally {
+      bindingTasks.delete(taskId)
+    }
+  }
+
+  const reconcileDelta = async (taskId: string): Promise<void> => {
+    try {
+      const sinceRev = getProjection(taskId).rev
+      const { parts, maxRev } = await api.transcript.delta(taskId, sinceRev)
+      if (parts.length > 0) applyParts(taskId, parts, maxRev)
+      else if (maxRev > sinceRev) getProjection(taskId).rev = maxRev
+    } catch (e) {
+      console.error(`[mobile] reconcileDelta failed for ${taskId}:`, e)
+    }
+  }
+
   // ── WebSocket event subscriptions ──
 
+  // Transcript content: the ONLY writer of messages. Idempotent delta apply.
+  onEvent('transcript:changed', (payload) => {
+    const event = payload as { taskId?: string; parts?: TranscriptPartRecord[]; maxRev?: number }
+    if (!event?.taskId) return
+    applyParts(event.taskId, event.parts || [], event.maxRev)
+  })
+
+  // Session state only (status / sessionId) — never messages.
   onEvent('agent:status', (payload) => {
     const event = payload as { sessionId: string; agentId: string; taskId: string; status: SessionStatus }
-    set((state) => {
-      const session = findBySessionId(state.sessions, event.sessionId)
-        || state.sessions.get(event.taskId)
-      if (!session) return state
-
-      const updated = { ...session, status: event.status }
-      // Patch in real sessionId when session was pre-registered with empty string
-      // or when the main process re-keyed the session (temp ID → real ID)
-      if (event.sessionId && session.sessionId !== event.sessionId) updated.sessionId = event.sessionId
-      return { sessions: new Map(state.sessions).set(session.taskId, updated) }
-    })
-  })
-
-  onEvent('agent:output', (payload) => {
-    const event = payload as { sessionId: string; taskId?: string; type: string; data: Record<string, unknown> }
-    const data = event.data
-
-    // Parse content from event payload (no store state needed)
-    let role: 'user' | 'assistant' | 'system' = 'system'
-    let content = ''
-    let msgId = ''
-
-    if (typeof data === 'object' && data !== null) {
-      role = data.role === 'user' ? 'user' : data.role === 'assistant' ? 'assistant' : 'system'
-      content = (data.content ?? data.text ?? data.message ?? '') as string
-      msgId = (data.id || '') as string
-    } else {
-      content = String(data)
+    const state = get()
+    const session = findBySessionId(state.sessions, event.sessionId) || state.sessions.get(event.taskId)
+    if (!session) {
+      if (event.taskId && event.sessionId && event.status !== SessionStatus.IDLE) {
+        set({
+          sessions: new Map(state.sessions).set(event.taskId, {
+            sessionId: event.sessionId,
+            agentId: event.agentId || '',
+            taskId: event.taskId,
+            status: event.status,
+            messages: deriveMessages(getProjection(event.taskId))
+          })
+        })
+      } else if (event.taskId && event.status === SessionStatus.IDLE) {
+        void bindTranscript(event.taskId)
+      }
+      return
     }
-
-    if (!content && !data.tool && !data.questions && !data.todos && !data.taskProgress) return
-    if (!msgId) msgId = `${role}-${content.slice(0, 50)}-${Date.now()}`
-
-    set((state) => {
-      const session = findBySessionId(state.sessions, event.sessionId)
-        || (event.taskId ? state.sessions.get(event.taskId) : undefined)
-      if (!session) return state
-
-      const resolvedSession = (!session.sessionId && event.sessionId)
-        ? { ...session, sessionId: event.sessionId }
-        : session
-
-      const taskId = resolvedSession.taskId
-      const seen = getSeen(taskId)
-
-      // Absorb step-start
-      if (data.partType === 'step-start') {
-        seen.add(msgId)
-        stepStartTimes.set(taskId, Date.now())
-        return state
-      }
-
-      // Absorb step-finish — annotate last assistant message
-      if (data.partType === 'step-finish') {
-        seen.add(msgId)
-        const msgs = resolvedSession.messages
-        if (msgs.length === 0) return state
-
-        const now = Date.now()
-        const startTime = stepStartTimes.get(taskId)
-        const durationMs = startTime ? now - startTime : undefined
-        const tokens = data.stepTokens as StepMeta['tokens'] | undefined
-        stepStartTimes.delete(taskId)
-
-        let targetIdx = -1
-        for (let i = msgs.length - 1; i >= 0; i--) {
-          if (msgs[i].role === 'assistant') { targetIdx = i; break }
-        }
-        if (targetIdx === -1) return state
-
-        const updated = [...msgs]
-        updated[targetIdx] = { ...updated[targetIdx], stepMeta: { durationMs, tokens } }
-        return {
-          sessions: new Map(state.sessions).set(taskId, { ...resolvedSession, messages: updated })
-        }
-      }
-
-      // Absorb system-status: store as transient indicator, don't add as message
-      if (data.partType === 'system-status') {
-        seen.add(msgId)
-        return {
-          sessions: new Map(state.sessions).set(taskId, {
-            ...resolvedSession,
-            systemStatus: content || null
-          })
-        }
-      }
-
-      // Streaming update — replace existing message content
-      if (data.update && seen.has(msgId)) {
-        return {
-          sessions: new Map(state.sessions).set(taskId, {
-            ...resolvedSession,
-            systemStatus: null, // Clear transient status on real updates
-            messages: resolvedSession.messages.map((m): AgentMessage => {
-              if (m.id !== msgId) return m
-              const keepPartType = m.partType === 'todowrite' || m.partType === 'question' || m.partType === 'planreview' || m.partType === 'task_progress'
-              const newPartType = keepPartType ? m.partType : ((data.partType as string) || m.partType)
-              const newTool = data.tool ? { ...m.tool, ...(data.tool as AgentMessage['tool']) } as AgentMessage['tool'] : m.tool
-              const newTaskProgress = data.taskProgress
-                ? { ...m.taskProgress, ...(data.taskProgress as AgentMessage['taskProgress']) } as AgentMessage['taskProgress']
-                : m.taskProgress
-              const isFinal = m.taskProgress?.status === 'completed' || m.taskProgress?.status === 'failed' || m.taskProgress?.status === 'stopped'
-              const incoming = (data.taskProgress as AgentMessage['taskProgress'])?.status
-              const guardedTP = (isFinal && incoming === 'running') ? m.taskProgress : newTaskProgress
-              return { ...m, content, partType: newPartType, tool: newTool, taskProgress: guardedTP }
-            })
-          })
-        }
-      }
-
-      if (seen.has(msgId)) return state
-      seen.add(msgId)
-
-      return {
-        sessions: new Map(state.sessions).set(taskId, {
-          ...resolvedSession,
-          messages: [
-            ...resolvedSession.messages,
-            {
-              id: msgId,
-              role,
-              content,
-              timestamp: new Date(),
-              partType: data.partType as string,
-              tool: data.tool as AgentMessage['tool'],
-              taskProgress: data.taskProgress as AgentMessage['taskProgress']
-            }
-          ]
-        })
-      }
-    })
+    const updated = { ...session, status: event.status }
+    if (event.sessionId && session.sessionId !== event.sessionId) updated.sessionId = event.sessionId
+    // The turn is confirmed running (or errored/awaiting input) — stop showing
+    // "starting". Interim `idle` events during resume must NOT clear it.
+    if (event.status !== SessionStatus.IDLE) updated.pendingSend = false
+    set({ sessions: new Map(state.sessions).set(session.taskId, updated) })
+    if (event.status === SessionStatus.IDLE) void reconcileDelta(session.taskId)
   })
 
-  // Handle batch message events (sent during session resume and live polling)
-  onEvent('agent:output-batch', (payload) => {
-    const event = payload as { sessionId: string; taskId: string; messages: Array<{ id: string; role: string; content: string; partType?: string; tool?: unknown; update?: boolean }> }
-
+  // Clear a stuck "starting" indicator if the backend never reports a turn.
+  const clearPendingSend = (taskId: string): void => {
     set((state) => {
-      const session = findBySessionId(state.sessions, event.sessionId)
-        || state.sessions.get(event.taskId)
-      if (!session) return state
-
-      const taskId = session.taskId
-      const seen = getSeen(taskId)
-
-      const resolvedSession = (!session.sessionId && event.sessionId)
-        ? { ...session, sessionId: event.sessionId }
-        : session
-
-      let messages = [...resolvedSession.messages]
-      let changed = false
-      let systemStatusUpdate: string | null | undefined = undefined
-
-      for (const msg of event.messages) {
-        const role: AgentMessage['role'] = msg.role === 'user' ? 'user' : msg.role === 'assistant' ? 'assistant' : 'system'
-        const msgId = msg.id || `${role}-${(msg.content || '').slice(0, 50)}-${Date.now()}`
-        const content = msg.content || ''
-
-        // Absorb step-start: record timestamp
-        if (msg.partType === 'step-start') {
-          seen.add(msgId)
-          stepStartTimes.set(taskId, Date.now())
-          continue
-        }
-
-        // Absorb step-finish: annotate last assistant message
-        if (msg.partType === 'step-finish') {
-          seen.add(msgId)
-          const now = Date.now()
-          const startTime = stepStartTimes.get(taskId)
-          const durationMs = startTime ? now - startTime : undefined
-          const tokens = (msg as Record<string, unknown>).stepTokens as { input: number; output: number; cache: number } | undefined
-          stepStartTimes.delete(taskId)
-          let targetIdx = -1
-          for (let i = messages.length - 1; i >= 0; i--) {
-            if (messages[i].role === 'assistant') { targetIdx = i; break }
-          }
-          if (targetIdx !== -1) {
-            messages[targetIdx] = { ...messages[targetIdx], stepMeta: { durationMs, tokens } }
-            changed = true
-          }
-          continue
-        }
-
-        // Absorb system-status: store as transient indicator, don't add as message
-        if (msg.partType === 'system-status') {
-          seen.add(msgId)
-          systemStatusUpdate = content || null
-          changed = true
-          continue
-        }
-
-        // Streaming update — replace content of existing message
-        if (msg.update && seen.has(msgId)) {
-          messages = messages.map((m): AgentMessage => {
-            if (m.id !== msgId) return m
-            const keepPartType = m.partType === 'todowrite' || m.partType === 'question' || m.partType === 'planreview' || m.partType === 'task_progress'
-            const newPartType = keepPartType ? m.partType : (msg.partType || m.partType)
-            const newTool = msg.tool ? { ...m.tool, ...(msg.tool as AgentMessage['tool']) } as AgentMessage['tool'] : m.tool
-            const msgData = msg as Record<string, unknown>
-            const newTaskProgress = msgData.taskProgress
-              ? { ...m.taskProgress, ...(msgData.taskProgress as AgentMessage['taskProgress']) } as AgentMessage['taskProgress']
-              : m.taskProgress
-            const isFinal = m.taskProgress?.status === 'completed' || m.taskProgress?.status === 'failed' || m.taskProgress?.status === 'stopped'
-            const incoming = (msgData.taskProgress as AgentMessage['taskProgress'])?.status
-            const guardedTP = (isFinal && incoming === 'running') ? m.taskProgress : newTaskProgress
-            return { ...m, content, partType: newPartType, tool: newTool, taskProgress: guardedTP }
-          })
-          changed = true
-          continue
-        }
-
-        if (seen.has(msgId)) continue
-        seen.add(msgId)
-        if (!content && !msg.tool && !(msg as Record<string, unknown>).taskProgress) continue
-
-        messages.push({
-          id: msgId,
-          role,
-          content,
-          timestamp: new Date(),
-          partType: msg.partType,
-          tool: msg.tool as AgentMessage['tool'],
-          taskProgress: (msg as Record<string, unknown>).taskProgress as AgentMessage['taskProgress']
-        })
-        changed = true
-      }
-
-      if (!changed) return state
-
-      return {
-        sessions: new Map(state.sessions).set(taskId, {
-          ...resolvedSession,
-          messages,
-          systemStatus: systemStatusUpdate !== undefined ? systemStatusUpdate : null
-        })
-      }
+      const s = state.sessions.get(taskId)
+      if (!s?.pendingSend) return state
+      return { sessions: new Map(state.sessions).set(taskId, { ...s, pendingSend: false }) }
     })
-  })
+  }
 
   return {
     agents: [],
@@ -393,104 +282,80 @@ export const useAgentStore = create<AgentState>((set, get) => {
       }
     },
 
+    bindTranscript,
+
     /**
-     * Fetch active sessions from the server and sync with any running ones.
-     * This allows the mobile UI to connect to sessions already running in Electron.
-     *
-     * On reconnect (same session still active), we preserve existing messages
-     * and only add new ones missed during disconnect. This prevents the flash
-     * of empty state and avoids losing messages if the sync request fails.
-     *
-     * On first connect or session change, we do a full reset + replay.
+     * Reconnect / first-connect: register active sessions and bind each one's
+     * transcript from the durable projection (no replay push needed). Idle tasks
+     * are bound on demand when their view opens (bindTranscript in the page).
      */
     syncActiveSessions: async () => {
       try {
         const activeSessions = (await api.sessions.list()) as Array<{
           sessionId: string; agentId: string; taskId: string; status: string
         }>
-
         if (activeSessions.length === 0) return
 
         set((state) => {
           const nextSessions = new Map(state.sessions)
-
           for (const active of activeSessions) {
             const existing = state.sessions.get(active.taskId)
-            const isSameSession = existing && existing.sessionId === active.sessionId
-
-            if (isSameSession) {
-              // Same session — preserve messages so missed ones are appended
-              // by the replay batch (dedup via seenIds filters out duplicates)
-              nextSessions.set(active.taskId, {
-                sessionId: active.sessionId,
-                agentId: active.agentId,
-                taskId: active.taskId,
-                status: active.status as SessionStatus,
-                messages: existing.messages
-              })
-            } else {
-              // New or different session — full reset so replay populates fresh
-              seenIds.delete(active.taskId)
-              stepStartTimes.delete(active.taskId)
-              nextSessions.set(active.taskId, {
-                sessionId: active.sessionId,
-                agentId: active.agentId,
-                taskId: active.taskId,
-                status: active.status as SessionStatus,
-                messages: []
-              })
-            }
+            nextSessions.set(active.taskId, {
+              sessionId: active.sessionId,
+              agentId: active.agentId,
+              taskId: active.taskId,
+              status: active.status as SessionStatus,
+              messages: existing?.messages || deriveMessages(getProjection(active.taskId))
+            })
           }
-
           return { sessions: nextSessions }
         })
 
-        // Replay messages from each active session (will arrive via WebSocket).
-        // For same-session reconnects: only messages not in seenIds are added.
-        // For new sessions: all messages are added (seenIds was cleared above).
-        for (const active of activeSessions) {
-          try {
-            await api.sessions.sync(active.sessionId)
-          } catch (e) {
-            console.error(`Failed to sync session ${active.sessionId}:`, e)
-          }
-        }
+        await Promise.all(activeSessions.map((a) => bindTranscript(a.taskId)))
       } catch (e) {
         console.error('Failed to sync active sessions:', e)
       }
     },
 
     initSession: (taskId, sessionId, agentId) => {
-      const existing = get().sessions.get(taskId)
-      if (!existing) seenIds.delete(taskId)
-      set((state) => ({
-        sessions: new Map(state.sessions).set(taskId, {
-          sessionId,
-          agentId,
-          taskId,
-          status: existing?.status || SessionStatus.WORKING,
-          messages: existing?.messages || []
-        })
-      }))
+      set((state) => {
+        const existing = state.sessions.get(taskId)
+        return {
+          sessions: new Map(state.sessions).set(taskId, {
+            sessionId,
+            agentId,
+            taskId,
+            status: existing?.status || SessionStatus.WORKING,
+            messages: existing?.messages || deriveMessages(getProjection(taskId))
+          })
+        }
+      })
     },
+
+    beginSend: (taskId) => {
+      set((state) => {
+        const s = state.sessions.get(taskId)
+        if (!s) return state
+        return { sessions: new Map(state.sessions).set(taskId, { ...s, pendingSend: true }) }
+      })
+      // Safety net: never leave the composer stuck if no status ever arrives.
+      setTimeout(() => clearPendingSend(taskId), 120_000)
+    },
+
+    endSend: (taskId) => clearPendingSend(taskId),
 
     endSession: (taskId) => {
       set((state) => {
         const session = state.sessions.get(taskId)
         if (!session) return state
         return {
-          sessions: new Map(state.sessions).set(taskId, {
-            ...session,
-            sessionId: null,
-            status: SessionStatus.IDLE
-          })
+          sessions: new Map(state.sessions).set(taskId, { ...session, sessionId: null, status: SessionStatus.IDLE })
         }
       })
     },
 
     removeSession: (taskId) => {
-      seenIds.delete(taskId)
-      stepStartTimes.delete(taskId)
+      projections.delete(taskId)
       set((state) => {
         const next = new Map(state.sessions)
         next.delete(taskId)
@@ -498,17 +363,9 @@ export const useAgentStore = create<AgentState>((set, get) => {
       })
     },
 
-    clearMessageDedup: (taskId) => {
-      seenIds.delete(taskId)
-      stepStartTimes.delete(taskId)
-      set((state) => {
-        const session = state.sessions.get(taskId)
-        if (!session) return state
-        return {
-          sessions: new Map(state.sessions).set(taskId, { ...session, messages: [] })
-        }
-      })
-    },
+    // No-op in the projection model (no client dedup state; the durable
+    // projection is the source of truth).
+    clearMessageDedup: () => {},
 
     getSession: (taskId) => get().sessions.get(taskId)
   }

@@ -75,6 +75,28 @@ export interface AgentApprovalRequest {
   description: string
 }
 
+/** A durable transcript projection part (the single source of truth for rendering). */
+export interface TranscriptPartRecord {
+  taskId: string
+  partId: string
+  seq: number
+  role: string
+  content: string
+  partType?: string
+  tool?: unknown
+  payload?: unknown
+  createdAt: number
+  updatedAt: number
+  rev: number
+}
+
+/** Payload of the transcript:changed delta push. */
+export interface TranscriptChangedEvent {
+  taskId: string
+  parts: TranscriptPartRecord[]
+  maxRev: number
+}
+
 export interface SkillSyncResult {
   created: string[]
   updated: string[]
@@ -210,6 +232,8 @@ interface ElectronAPI {
     syncSkillsForTask: (taskId: string) => Promise<SkillSyncResult>
     learnFromSession: (sessionId: string, message: string) => Promise<SkillSyncResult>
     getRawTranscript: (taskId: string) => Promise<Array<{ role: string; parts: Array<{ type: string; content?: string; tool?: { name: string; status?: string; input?: string; output?: string; error?: string } }> }>>
+    getTranscriptSnapshot: (taskId: string, sinceSeq?: number) => Promise<TranscriptPartRecord[]>
+    getTranscriptDelta: (taskId: string, sinceRev: number) => Promise<{ parts: TranscriptPartRecord[]; maxRev: number }>
   }
   agentConfig: {
     getProviders: (serverUrl?: string, backendType?: string) => Promise<{ providers: { id: string; name: string; models: unknown }[]; default: Record<string, string> } | null>
@@ -423,6 +447,7 @@ interface ElectronAPI {
   onTasksRefresh: (callback: () => void) => () => void
   onAgentOutput: (callback: (event: AgentOutputEvent) => void) => () => void
   onAgentOutputBatch: (callback: (event: AgentOutputBatchEvent) => void) => () => void
+  onTranscriptChanged: (callback: (event: TranscriptChangedEvent) => void) => () => void
   onAgentStatus: (callback: (event: AgentStatusEvent) => void) => () => void
   onAgentApproval: (callback: (event: AgentApprovalRequest) => void) => () => void
   onAgentIncompatibleSession: (callback: (event: { taskId: string; agentId: string; error: string }) => void) => () => void

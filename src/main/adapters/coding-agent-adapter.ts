@@ -189,6 +189,16 @@ export interface CodingAgentAdapter {
   getAllMessages?(sessionId: string, config: SessionConfig): Promise<SessionMessage[]>
 
   /**
+   * Read the session's PERSISTED history from durable storage (e.g. the CLI's
+   * on-disk session file) WITHOUT requiring a live/in-memory session or spawning
+   * the agent. Used to backfill the durable transcript projection once for
+   * sessions that predate write-through. Parts should carry `receivedAt` (real
+   * event time) so the projection stores true timestamps.
+   * @returns Persisted messages, or [] when unavailable.
+   */
+  getPersistedMessages?(sessionId: string, config: SessionConfig): Promise<SessionMessage[]>
+
+  /**
    * Abort ongoing prompt
    */
   abortPrompt(sessionId: string, config: SessionConfig): Promise<void>

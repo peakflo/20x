@@ -2406,8 +2406,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     adapter: CodingAgentAdapter,
     agentId: string,
     taskId: string,
-    adapterSessionId: string,
-    options?: { replayToRenderer?: boolean }
+    adapterSessionId: string
   ): Promise<string> {
     // Helper: yield event loop between bursts of sync DB/FS calls
     const yieldEL = (): Promise<void> => new Promise((r) => setImmediate(r))
@@ -2554,51 +2553,24 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       throw error
     }
 
-    const shouldReplayToRenderer = options?.replayToRenderer !== false
-
-    // Build replay batch AND dedup state in a SINGLE pass so that both use
-    // the same generated IDs.  Previously two separate loops each called
-    // `Date.now() + Math.random()` for parts without an id, producing
-    // different IDs.  The frontend's `seen` set then held the batch IDs while
-    // the session's seenPartIds held different IDs, so when polling started
-    // on a follow-up message the streaming replay (with yet another set of
-    // stableId-based IDs) was not deduped by either — causing every
-    // historical message to appear twice.
-    const batchMessages: Array<{ id: string; role: string; content: string; partType?: string; tool?: unknown; taskProgress?: unknown; receivedAt?: number }> = []
+    // Build the session's dedup state from the resumed history so adapter
+    // polling won't re-emit historical parts as new streaming output. The
+    // transcript itself is NOT pushed to clients here — clients render the
+    // durable projection (snapshot + `transcript:changed` deltas); resume's
+    // only transcript role is seeding the projection, which the one-time
+    // backfill (getTranscriptSnapshot) handles independently.
     const resumedSeenMessageIds = new Set<string>()
     const resumedSeenPartIds = new Set<string>()
     const resumedPartContentLengths = new Map<string, string>()
     for (const message of messages) {
-      // Track message-level IDs so adapters that dedup by message ID
-      // (e.g. Codex pollMessages) won't re-send historical messages.
       if (message.id) resumedSeenMessageIds.add(message.id)
       for (const part of message.parts) {
         const partId = part.id || `${message.role}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-        // Dedup state
         resumedSeenPartIds.add(partId)
         if (part.content || part.text) {
           resumedPartContentLengths.set(partId, String((part.content || part.text || '').length))
         }
-        // Batch message (only if we're replaying to the renderer)
-        if (shouldReplayToRenderer) {
-          batchMessages.push({
-            id: partId,
-            role: message.role,
-            content: part.content || part.text || '',
-            partType: part.type,
-            tool: part.tool,
-            taskProgress: part.taskProgress,
-            receivedAt: part.receivedAt
-          })
-        }
       }
-    }
-    if (shouldReplayToRenderer && batchMessages.length > 0) {
-      this.sendToRenderer('agent:output-batch', {
-        sessionId: adapterSessionId,
-        taskId,
-        messages: batchMessages
-      })
     }
 
     // Store session in sessions map — idle until user sends a message
@@ -2617,6 +2589,14 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       pollingStarted: false,
       secretSessionToken: secretToken
     })
+
+    // Persist the resumed session binding and tell the renderer BEFORE any
+    // follow-up prompt starts. Without this, a silent main-process resume
+    // (e.g. an event-driven wake-up after the runtime was released) leaves the
+    // renderer bound to a stale session id and the wake turn's output renders
+    // late or not at all.
+    this.db.updateTask(taskId, { session_id: adapterSessionId })
+    this.sendToRenderer('task:updated', { taskId, updates: { session_id: adapterSessionId } })
 
     // Notify renderer — session is resumed but idle (no work in progress)
     this.sendToRenderer('agent:status', {
@@ -2909,6 +2889,116 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     }
   }
 
+  /** Tasks whose projection backfill is in flight (dedupe guard). */
+  private backfillInFlight: Set<string> = new Set()
+  /** Tasks whose full adapter history has already been ingested THIS app run. */
+  private ingestedTasks: Set<string> = new Set()
+
+  /**
+   * Snapshot of the durable transcript projection for a task.
+   * Clients (renderer, mobile) render from this instead of relying on having
+   * observed every live event.
+   *
+   * On the first read per app run, if the projection is EMPTY, seed it from the
+   * task's persisted session history (a one-time backfill for sessions that
+   * predate the store). A task that already has parts is returned as-is — its
+   * live write-through capture is authoritative and is never re-ingested.
+   */
+  async getTranscriptSnapshot(taskId: string, sinceSeq?: number): Promise<ReturnType<DatabaseManager['getTranscriptParts']>> {
+    if (!this.ingestedTasks.has(taskId)) {
+      await this.backfillTranscriptProjection(taskId)
+    }
+    return this.db.getTranscriptParts(taskId, sinceSeq)
+  }
+
+  /**
+   * Delta query for the projection-cache client: parts changed since `sinceRev`,
+   * plus the current maxRev. Ensures the one-time backfill has run so the first
+   * delta after a fresh start is complete.
+   */
+  async getTranscriptDelta(taskId: string, sinceRev: number): Promise<ReturnType<DatabaseManager['getTranscriptDelta']>> {
+    if (!this.ingestedTasks.has(taskId)) {
+      await this.backfillTranscriptProjection(taskId)
+    }
+    return this.db.getTranscriptDelta(taskId, sinceRev)
+  }
+
+  /**
+   * Idempotent ingest of a task's persisted session history into the durable
+   * projection — runs once per app run per task. Reuses the adapter's
+   * side-effect-free persisted-history read (no CLI spawn). Upsert-by-part-id +
+   * created_at ordering means re-ingesting is safe, never duplicates, and fills
+   * gaps (e.g. assistant messages missing from a partially-populated projection).
+   * Best-effort: silently no-ops when unavailable.
+   */
+  private async backfillTranscriptProjection(taskId: string): Promise<void> {
+    if (this.backfillInFlight.has(taskId) || this.ingestedTasks.has(taskId)) return
+
+    // Seed EMPTY projections ONLY. If the task already has parts, the live
+    // session was captured by write-through — re-ingesting the persisted session
+    // history (whose part ids differ from the live-captured ids) would duplicate
+    // messages under mismatched ids. And because every upsert broadcasts a
+    // `transcript:changed` delta to ALL connected clients, those duplicates would
+    // leak to the desktop view too: a mobile (or any) reader connecting to an
+    // already-populated task must never mutate the projection. Backfill is a
+    // one-time seed for sessions that predate the store, nothing more.
+    if (this.db.hasTranscriptParts(taskId)) {
+      this.ingestedTasks.add(taskId)
+      return
+    }
+
+    const task = this.db.getTask(taskId)
+    const sessionId = task?.session_id
+    const agentId = task?.agent_id
+    if (!sessionId || !agentId) return
+
+    const adapter = this.getAdapter(agentId)
+    if (!adapter || typeof adapter.getPersistedMessages !== 'function') return
+
+    this.backfillInFlight.add(taskId)
+    try {
+      const workspaceDir = this.db.getWorkspaceDir(taskId)
+      const messages = await adapter.getPersistedMessages(sessionId, { agentId, taskId, workspaceDir })
+
+      // The projection is empty here (guarded above), so this is a pure seed —
+      // no dedup against existing parts is needed. Upsert-by-part-id keeps it
+      // idempotent if two seeds ever race.
+      const parts: Parameters<DatabaseManager['upsertTranscriptParts']>[1] = []
+      for (const message of messages) {
+        const role = message.role === MessageRole.USER ? 'user'
+          : message.role === MessageRole.SYSTEM ? 'system' : 'assistant'
+        for (const part of message.parts) {
+          if (!part.id) continue
+          const partType = String(part.type)
+          if (AgentManager.EPHEMERAL_PART_TYPES.has(partType)) continue
+          const content = part.content || part.text || ''
+          if (!content && !part.tool && !part.taskProgress) continue
+          parts.push({
+            id: part.id,
+            role,
+            content,
+            partType,
+            tool: part.tool,
+            payload: part.taskProgress ? { taskProgress: part.taskProgress } : undefined,
+            receivedAt: part.receivedAt
+          })
+        }
+      }
+      if (parts.length > 0) {
+        this.db.upsertTranscriptParts(taskId, parts)
+        console.log(`[AgentManager] Backfilled ${parts.length} transcript part(s) into the projection for task ${taskId}`)
+      }
+    } catch (err) {
+      console.error(`[AgentManager] Transcript projection backfill failed for task ${taskId}:`, err)
+    } finally {
+      this.backfillInFlight.delete(taskId)
+      // A real ingest attempt ran (adapter + session present) — don't repeat the
+      // full history read on every subsequent snapshot this app run. Write-through
+      // keeps the projection current from here.
+      this.ingestedTasks.add(taskId)
+    }
+  }
+
   getLastAssistantMessage(sessionId: string): string | null {
     const session = this.sessions.get(sessionId)
     if (!session?.adapter) return null
@@ -3054,6 +3144,21 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       const messages = await session.adapter.getAllMessages(sessionId, config)
       const batchMessages: Array<{ id: string; role: string; content: string; partType?: string; tool?: unknown; taskProgress?: unknown; receivedAt?: number }> = []
 
+      // Dedup against the durable projection by CONTENT, not just by part id.
+      // Some adapters (codex app-server) give a message's live streaming delta a
+      // DIFFERENT part id (e.g. `agent-msg_<hash>`) than its finalized thread
+      // item (`agent-item-N`). seenPartIds holds the live ids, so an id-only
+      // check would treat every finalized item as brand-new and re-emit it —
+      // duplicating each assistant message on every idle transition. Skipping
+      // parts whose text is already persisted makes this safety-net re-read
+      // truly additive (it only fills GENUINELY missing content).
+      const normalize = (s: string): string => s.replace(/\s+/g, ' ').trim().toLowerCase()
+      const existingContent = new Set(
+        this.db.getTranscriptParts(session.taskId)
+          .filter((p) => p.content)
+          .map((p) => normalize(p.content))
+      )
+
       for (const message of messages) {
         if (message.role === MessageRole.USER) continue
 
@@ -3065,18 +3170,26 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
             continue
           }
 
+          const content = part.content || part.text || ''
+          // Already in the projection under a different id (id-scheme mismatch)?
+          // Remember the id so we don't reconsider it, but don't re-emit.
+          if (content && existingContent.has(normalize(content))) {
+            session.seenPartIds.add(partId)
+            continue
+          }
+
           session.seenPartIds.add(partId)
-          if (part.content || part.text) {
+          if (content) {
             // Store actual text content, NOT length — partContentLengths is used
             // for chunk accumulation in streaming; storing a length string causes
             // the number to be prepended to the next streamed chunk.
-            session.partContentLengths.set(partId, part.content || part.text || '')
+            session.partContentLengths.set(partId, content)
           }
 
           batchMessages.push({
             id: partId,
             role: message.role,
-            content: part.content || part.text || '',
+            content,
             partType,
             tool: part.tool,
             taskProgress: part.taskProgress,
@@ -3538,13 +3651,10 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
             console.log(`[SessionTracker] RESUME_ATTEMPT old=${sessionId} persisted=${persistedSessionId} task=${taskId} reason=session_not_in_memory`)
             const adapter = this.getAdapter(resolvedAgentId)
             if (adapter) {
-              // Replay messages to the renderer so the client doesn't lose
-              // conversation context after an idle period. Previously this used
-              // replayToRenderer: false which caused ~20% context loss on mobile
-              // and desktop when the in-memory session was evicted.
-              const resumedId = await this.resumeAdapterSession(adapter, resolvedAgentId, taskId, persistedSessionId, {
-                replayToRenderer: true
-              })
+              // Resume the backend session for continuation. The transcript is
+              // NOT pushed here — clients render the durable projection (snapshot
+              // + deltas), which already holds the full history.
+              const resumedId = await this.resumeAdapterSession(adapter, resolvedAgentId, taskId, persistedSessionId)
               session = this.sessions.get(resumedId)
               if (session) {
                 sessionId = resumedId
@@ -3844,78 +3954,6 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     return { status: session.status, agentId: session.agentId, taskId: session.taskId }
   }
 
-  /**
-   * Replay all messages from a running session via the adapter.
-   * Used by the mobile API to sync with an already-running session.
-   * Sends a single agent:output-batch event (matching resumeAdapterSession pattern)
-   * to avoid content filtering, step-start/step-finish absorption, and dedup issues
-   * that affect individual agent:output events.
-   */
-  async replaySessionMessages(sessionId: string): Promise<void> {
-    let session = this.sessions.get(sessionId)
-
-    // Fallback: session ID may have been re-keyed (temp → real).
-    // The mobile client might still hold the stale temp ID.
-    if (!session) {
-      const redirectedId = this.sessionIdRedirects.get(sessionId)
-      if (redirectedId) {
-        sessionId = redirectedId
-        session = this.sessions.get(sessionId)
-      }
-    }
-
-    if (!session?.adapter?.getAllMessages) return
-
-    const messages = await session.adapter.getAllMessages(sessionId, {
-      agentId: session.agentId,
-      taskId: session.taskId,
-      workspaceDir: session.workspaceDir || process.cwd()
-    })
-
-    // Collect all message parts into a single batch (matching resumeAdapterSession pattern)
-    const batchMessages: Array<{ id: string; role: string; content: string; partType?: string; tool?: unknown; update?: boolean; taskProgress?: unknown; receivedAt?: number }> = []
-    for (const msg of messages) {
-      for (const part of msg.parts) {
-        batchMessages.push({
-          id: part.id || `${msg.id}-${msg.parts.indexOf(part)}`,
-          role: msg.role === MessageRole.USER ? 'user' : msg.role === MessageRole.ASSISTANT ? 'assistant' : 'system',
-          content: part.text || part.content || '',
-          partType: part.type?.toLowerCase(),
-          tool: part.tool ? {
-            name: part.tool.name,
-            status: part.tool.status || part.state?.status || '',
-            title: part.tool.title || part.state?.title || '',
-            input: typeof part.tool.input === 'string' ? part.tool.input : part.tool.input ? JSON.stringify(part.tool.input) : undefined,
-            output: typeof part.tool.output === 'string' ? part.tool.output : part.tool.output ? JSON.stringify(part.tool.output) : undefined,
-            error: part.tool.error || part.state?.error,
-            questions: part.tool.questions,
-            todos: part.tool.todos
-          } : undefined,
-          taskProgress: part.taskProgress,
-          receivedAt: part.receivedAt,
-          // Pass update flag so mobile store merges tool results into their
-          // pending tool_use entries (e.g. status pending → success)
-          ...(part.update ? { update: true } : {})
-        })
-      }
-    }
-
-    if (batchMessages.length > 0) {
-      this.sendToRenderer('agent:output-batch', {
-        sessionId,
-        taskId: session.taskId,
-        messages: batchMessages
-      })
-    }
-
-    // Also send current status
-    this.sendToRenderer('agent:status', {
-      sessionId,
-      agentId: session.agentId,
-      taskId: session.taskId,
-      status: session.status
-    })
-  }
 
   getActiveSessionsForTask(taskId: string): string[] {
     const sessionIds: string[] = []
@@ -4678,7 +4716,93 @@ Important:
     }
   }
 
+  /** Part types that are absorbed by clients (never rendered as messages) —
+   *  not worth persisting in the durable transcript. */
+  private static readonly EPHEMERAL_PART_TYPES = new Set(['step-start', 'step-finish', 'system-status'])
+
+  /**
+   * Write-through persistence for the durable transcript projection.
+   * Called for every agent:output / agent:output-batch emission — the single
+   * chokepoint where live streaming output is ingested into the durable log.
+   *
+   * Upserts are keyed by stable part id (idempotent), so re-emitting an already
+   * persisted part is a no-op. Historical seeding for sessions that predate the
+   * store is handled separately by the one-time backfill
+   * (backfillTranscriptProjection), which writes directly to the projection.
+   */
+  private persistTranscriptEvent(channel: string, data: unknown): void {
+    if (!data || typeof data !== 'object') return
+    const event = data as {
+      taskId?: string
+      messages?: Array<{ id?: string; role?: string; content?: string; partType?: string; tool?: unknown; questions?: unknown; todos?: unknown; taskProgress?: unknown; receivedAt?: number }>
+      data?: { id?: string; role?: string; content?: string; partType?: string; tool?: unknown; questions?: unknown; todos?: unknown; taskProgress?: unknown; receivedAt?: number }
+    }
+    const taskId = event.taskId
+    if (!taskId) return
+
+    const rawParts = channel === 'agent:output-batch'
+      ? (event.messages || [])
+      : (event.data ? [event.data] : [])
+
+    const parts = rawParts
+      .filter((p) => p && p.id)
+      .filter((p) => !p.partType || !AgentManager.EPHEMERAL_PART_TYPES.has(p.partType))
+      .filter((p) => (p.content && p.content.length > 0) || p.tool || p.questions || p.todos || p.taskProgress)
+      .map((p) => ({
+        id: p.id as string,
+        role: p.role,
+        content: p.content,
+        partType: p.partType,
+        tool: p.tool,
+        payload: (p.questions || p.todos || p.taskProgress)
+          ? { questions: p.questions, todos: p.todos, taskProgress: p.taskProgress }
+          : undefined,
+        receivedAt: p.receivedAt
+      }))
+
+    if (parts.length > 0) {
+      const { maxRev, changedPartIds } = this.db.upsertTranscriptParts(taskId, parts)
+      // Event-sourced push: notify clients of the delta (the parts just written),
+      // applied idempotently by part id on the client. This is BOTH the durable
+      // update and the low-latency streaming path — a single authoritative source.
+      if (changedPartIds.length > 0) {
+        const prevRev = maxRev - changedPartIds.length
+        const { parts: deltaParts } = this.db.getTranscriptDelta(taskId, prevRev)
+        this.emitTranscriptChanged(taskId, deltaParts, maxRev)
+      }
+    }
+  }
+
+  /**
+   * Emit a transcript delta directly to clients (NOT via sendToRenderer — that
+   * would recurse through persistTranscriptEvent). The renderer/mobile apply
+   * these parts into their projection cache by id; order/dedup are guaranteed by
+   * the cache being keyed on part id and sorted by created_at.
+   */
+  private emitTranscriptChanged(taskId: string, parts: ReturnType<DatabaseManager['getTranscriptParts']>, maxRev: number): void {
+    const payload = { taskId, parts, maxRev }
+    if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+      this.mainWindow.webContents.send('transcript:changed', payload)
+    }
+    for (const fn of this.externalListeners) {
+      try { fn('transcript:changed', payload) } catch { /* ignore */ }
+    }
+  }
+
   private sendToRenderer(channel: string, data: unknown): void {
+    // Durable transcript projection: persist every transcript part BEFORE any
+    // client sees it. The main process owns the source of truth; renderer and
+    // mobile hydrate from snapshots (transcript:get) instead of depending on
+    // catching live events, so output produced while no view is bound
+    // (background wake-ups, silently resumed sessions) is never lost.
+    if (channel === 'agent:output' || channel === 'agent:output-batch') {
+      try {
+        this.persistTranscriptEvent(channel, data)
+      } catch (err) {
+        console.error('[AgentManager] Failed to persist transcript parts:', err)
+      }
+    }
+
     if (this.mainWindow && !this.mainWindow.isDestroyed()) {
       this.mainWindow.webContents.send(channel, data)
     }

@@ -298,6 +298,35 @@ export interface RecurrencePatternObject {
 /** A cron expression string OR a legacy JSON object */
 export type RecurrencePatternRecord = RecurrencePatternObject | string
 
+/** Input shape for persisting a transcript part (mirrors agent:output payloads). */
+export interface TranscriptPartInput {
+  id: string
+  role?: string
+  content?: string
+  partType?: string
+  tool?: unknown
+  payload?: unknown
+  /** Original time the part was produced (ms epoch). Persisted as created_at so a
+   *  bulk seed/replay keeps real chronology instead of a single write-time. */
+  receivedAt?: number
+}
+
+/** Persisted transcript part returned by snapshot queries. */
+export interface TranscriptPartRecord {
+  taskId: string
+  partId: string
+  seq: number
+  role: string
+  content: string
+  partType?: string
+  tool?: unknown
+  payload?: unknown
+  createdAt: number
+  updatedAt: number
+  /** Global monotonic change cursor for this row (delta subscriptions). */
+  rev: number
+}
+
 export interface TaskRecord {
   id: string
   title: string
@@ -933,9 +962,40 @@ export class DatabaseManager {
     // These must run on EVERY startup (not just during migrations)
     // because they start runtime services (task API server) and
     // ensure default records exist (MCP server, orchestrator skill).
+    this.ensureTranscriptRevColumn()
     this.initializeTasksFts()
     this.initializeTaskManagementMcpServer()
     this.initializeOrchestratorSkill()
+  }
+
+  /**
+   * Idempotently add the `rev` change-cursor column to transcript_parts for DBs
+   * created before it existed. Backfills existing rows with a monotonic rev so
+   * a first delta query returns them in a stable order.
+   */
+  private ensureTranscriptRevColumn(): void {
+    try {
+      const cols = this.db.prepare(`PRAGMA table_info(transcript_parts)`).all() as Array<{ name: string }>
+      if (!cols.some((c) => c.name === 'rev')) {
+        // Legacy DB created before `rev` existed — add the column and backfill
+        // existing rows with a global monotonic rev ordered by (created_at, seq).
+        this.db.exec(`ALTER TABLE transcript_parts ADD COLUMN rev INTEGER NOT NULL DEFAULT 0`)
+        this.db.exec(`
+          WITH ordered AS (
+            SELECT rowid AS rid, ROW_NUMBER() OVER (ORDER BY created_at ASC, seq ASC) AS rn
+            FROM transcript_parts
+          )
+          UPDATE transcript_parts SET rev = (SELECT rn FROM ordered WHERE ordered.rid = transcript_parts.rowid)
+        `)
+        console.log('[Database] Added transcript_parts.rev column and backfilled existing rows')
+      }
+      // Create the rev index HERE (not in createTables) so it never runs before
+      // the column exists on a legacy DB. Idempotent + safe on a fresh DB, where
+      // the column is declared in the CREATE TABLE and this simply adds the index.
+      this.db.exec(`CREATE INDEX IF NOT EXISTS idx_transcript_parts_task_rev ON transcript_parts(task_id, rev)`)
+    } catch (err) {
+      console.error('[Database] ensureTranscriptRevColumn failed:', err)
+    }
   }
 
   private getSchemaVersion(): number {
@@ -1133,6 +1193,34 @@ export class DatabaseManager {
         last_seen INTEGER NOT NULL DEFAULT (unixepoch()),
         revoked INTEGER NOT NULL DEFAULT 0
       );
+
+      -- Durable transcript projection: the main process is the source of truth
+      -- for every message part shown in a task transcript. The renderer hydrates
+      -- from snapshots of this table instead of depending on catching live
+      -- events, so output produced while no view is bound (background wake-ups,
+      -- resumed sessions, mobile) is never lost.
+      CREATE TABLE IF NOT EXISTS transcript_parts (
+        task_id TEXT NOT NULL,
+        part_id TEXT NOT NULL,
+        seq INTEGER NOT NULL,
+        role TEXT NOT NULL DEFAULT 'system',
+        content TEXT NOT NULL DEFAULT '',
+        part_type TEXT,
+        tool TEXT,
+        payload TEXT,
+        created_at INTEGER NOT NULL DEFAULT (unixepoch('subsec') * 1000),
+        updated_at INTEGER NOT NULL DEFAULT (unixepoch('subsec') * 1000),
+        -- Global monotonic change cursor: bumped on every insert AND content
+        -- update, so a client can fetch "everything changed since rev N" (deltas),
+        -- capturing both new parts and streaming edits to existing ones.
+        rev INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (task_id, part_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_transcript_parts_task_seq ON transcript_parts(task_id, seq);
+      -- NOTE: the (task_id, rev) index is created in ensureTranscriptRevColumn(),
+      -- NOT here. On a DB created before rev existed, CREATE TABLE IF NOT EXISTS
+      -- is a no-op (no rev column), so building a rev index here would fail with
+      -- no-such-column before the ALTER TABLE migration runs.
     `)
   }
 
@@ -1978,6 +2066,158 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
     return rows.map(deserializeTask)
   }
 
+  // ── Durable transcript projection ──────────────────────────────
+  // Every transcript part delivered to any client is persisted here first.
+  // Parts are upserted by (task_id, part_id): streaming updates replace the
+  // content of an existing part while keeping its position (seq).
+
+  /**
+   * Upsert a batch of transcript parts for a task inside one transaction.
+   * New parts get the next per-task seq; existing parts keep their seq and
+   * update content in place (streaming).
+   */
+  upsertTranscriptParts(taskId: string, parts: TranscriptPartInput[]): { maxRev: number; changedPartIds: string[] } {
+    if (!this.ensureDbOpen() || parts.length === 0) return { maxRev: this.getTranscriptMaxRev(taskId), changedPartIds: [] }
+
+    const nextSeqStmt = this.db.prepare(
+      'SELECT COALESCE(MAX(seq), 0) + 1 AS next FROM transcript_parts WHERE task_id = ?'
+    )
+    // created_at carries the part's ORIGINAL time (receivedAt) when known, not
+    // the write time. Otherwise a bulk seed/replay (which writes the whole
+    // history in one burst) would stamp every row with a near-identical
+    // timestamp and destroy the transcript's chronology. On conflict, created_at
+    // is preserved (never overwritten by a later reconcile pass).
+    // Each upserted row (insert OR content update) gets a fresh globally-monotonic
+    // `rev` so a client can fetch everything changed since its last rev. On
+    // conflict, created_at is preserved (never overwritten by a later reconcile).
+    const upsertStmt = this.db.prepare(`
+      INSERT INTO transcript_parts (task_id, part_id, seq, role, content, part_type, tool, payload, created_at, updated_at, rev)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch('subsec') * 1000, ?)
+      ON CONFLICT(task_id, part_id) DO UPDATE SET
+        content = excluded.content,
+        part_type = COALESCE(excluded.part_type, transcript_parts.part_type),
+        tool = COALESCE(excluded.tool, transcript_parts.tool),
+        payload = COALESCE(excluded.payload, transcript_parts.payload),
+        updated_at = excluded.updated_at,
+        rev = excluded.rev
+    `)
+    const maxRevStmt = this.db.prepare('SELECT COALESCE(MAX(rev), 0) AS m FROM transcript_parts')
+
+    let maxRev = 0
+    const changedPartIds: string[] = []
+    const txn = this.db.transaction(() => {
+      let nextSeq = (nextSeqStmt.get(taskId) as { next: number }).next
+      let rev = (maxRevStmt.get() as { m: number }).m
+      const writeNow = Date.now()
+      for (const part of parts) {
+        if (!part.id) continue
+        rev += 1
+        upsertStmt.run(
+          taskId,
+          part.id,
+          nextSeq++,
+          part.role || 'system',
+          part.content || '',
+          part.partType ?? null,
+          part.tool != null ? JSON.stringify(part.tool) : null,
+          part.payload != null ? JSON.stringify(part.payload) : null,
+          typeof part.receivedAt === 'number' ? part.receivedAt : writeNow,
+          rev
+        )
+        changedPartIds.push(part.id)
+      }
+      maxRev = rev
+    })
+    txn()
+    return { maxRev, changedPartIds }
+  }
+
+  /**
+   * Delta query: all parts for a task whose rev > sinceRev, ordered chronologically.
+   * Captures both new parts and streaming content updates to existing ones.
+   * Returns the parts and the task's current maxRev so the client can advance its cursor.
+   */
+  getTranscriptDelta(taskId: string, sinceRev: number): { parts: TranscriptPartRecord[]; maxRev: number } {
+    if (!this.ensureDbOpen()) return { parts: [], maxRev: sinceRev }
+    const rows = this.db.prepare(
+      'SELECT * FROM transcript_parts WHERE task_id = ? AND rev > ? ORDER BY created_at ASC, seq ASC'
+    ).all(taskId, sinceRev) as Array<{
+      task_id: string; part_id: string; seq: number; role: string; content: string;
+      part_type: string | null; tool: string | null; payload: string | null;
+      created_at: number; updated_at: number; rev: number
+    }>
+    const maxRow = this.db.prepare('SELECT COALESCE(MAX(rev), ?) AS m FROM transcript_parts WHERE task_id = ?').get(sinceRev, taskId) as { m: number }
+    return {
+      parts: rows.map((r) => ({
+        taskId: r.task_id, partId: r.part_id, seq: r.seq, role: r.role, content: r.content,
+        partType: r.part_type ?? undefined,
+        tool: r.tool ? (JSON.parse(r.tool) as unknown) : undefined,
+        payload: r.payload ? (JSON.parse(r.payload) as unknown) : undefined,
+        createdAt: r.created_at, updatedAt: r.updated_at, rev: r.rev
+      })),
+      maxRev: maxRow.m
+    }
+  }
+
+  /** Current max rev for a task (0 when empty). */
+  getTranscriptMaxRev(taskId: string): number {
+    if (!this.ensureDbOpen()) return 0
+    const row = this.db.prepare('SELECT COALESCE(MAX(rev), 0) AS m FROM transcript_parts WHERE task_id = ?').get(taskId) as { m: number }
+    return row.m
+  }
+
+  /** Snapshot query: ordered transcript for a task, optionally only parts after seq. */
+  getTranscriptParts(taskId: string, sinceSeq?: number): TranscriptPartRecord[] {
+    if (!this.ensureDbOpen()) return []
+
+    // Order by REAL event time (created_at), with seq as a stable tiebreaker.
+    // Insertion order (seq) is not chronological when a partial projection is
+    // later backfilled with older history — ordering by created_at keeps the
+    // transcript correct regardless of when each part was ingested.
+    const rows = (sinceSeq != null
+      ? this.db.prepare('SELECT * FROM transcript_parts WHERE task_id = ? AND seq > ? ORDER BY created_at ASC, seq ASC').all(taskId, sinceSeq)
+      : this.db.prepare('SELECT * FROM transcript_parts WHERE task_id = ? ORDER BY created_at ASC, seq ASC').all(taskId)
+    ) as Array<{
+      task_id: string; part_id: string; seq: number; role: string; content: string;
+      part_type: string | null; tool: string | null; payload: string | null;
+      created_at: number; updated_at: number; rev: number
+    }>
+
+    return rows.map((r) => ({
+      taskId: r.task_id,
+      partId: r.part_id,
+      seq: r.seq,
+      role: r.role,
+      content: r.content,
+      rev: r.rev ?? 0,
+      partType: r.part_type ?? undefined,
+      tool: r.tool ? (JSON.parse(r.tool) as unknown) : undefined,
+      payload: r.payload ? (JSON.parse(r.payload) as unknown) : undefined,
+      createdAt: r.created_at,
+      updatedAt: r.updated_at
+    }))
+  }
+
+  /** True when the task already has persisted transcript parts. */
+  hasTranscriptParts(taskId: string): boolean {
+    if (!this.ensureDbOpen()) return false
+    const row = this.db.prepare('SELECT 1 FROM transcript_parts WHERE task_id = ? LIMIT 1').get(taskId)
+    return !!row
+  }
+
+  /** Highest seq for a task (0 when empty) — used by clients to detect gaps. */
+  getTranscriptMaxSeq(taskId: string): number {
+    if (!this.ensureDbOpen()) return 0
+    const row = this.db.prepare('SELECT COALESCE(MAX(seq), 0) AS max FROM transcript_parts WHERE task_id = ?').get(taskId) as { max: number }
+    return row.max
+  }
+
+  /** Remove a task's transcript (task deletion cleanup). */
+  deleteTranscriptParts(taskId: string): void {
+    if (!this.ensureDbOpen()) return
+    this.db.prepare('DELETE FROM transcript_parts WHERE task_id = ?').run(taskId)
+  }
+
   /**
    * Batch-update sort_order for subtasks under a parent.
    * @param parentId  The parent task ID
@@ -2101,6 +2341,7 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
 
   deleteTask(id: string): boolean {
     this.deleteTaskAttachments(id)
+    this.deleteTranscriptParts(id)
     const result = this.db.prepare('DELETE FROM tasks WHERE id = ?').run(id)
     return result.changes > 0
   }
