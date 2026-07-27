@@ -6,7 +6,7 @@ import { AgentFormDialog } from '../forms/AgentFormDialog'
 import { OpenCodeLogo, AnthropicLogo, OpenAILogo } from '@/components/icons/AgentLogos'
 import { useAgentStore } from '@/stores/agent-store'
 import { agentConfigApi } from '@/lib/ipc-client'
-import { CodingAgentType } from '@/types'
+import { CLAUDE_MODELS, CODEX_MODELS, CodingAgentType } from '@/types'
 import type { Agent, CreateAgentDTO, UpdateAgentDTO } from '@/types'
 
 interface ConnectionInfo {
@@ -45,7 +45,7 @@ export function AgentsSettings() {
       setConnections((prev) => new Map(prev).set(agent.id, {
         status: 'connected',
         providerCount: 1,
-        modelCount: 6,
+        modelCount: CLAUDE_MODELS.length,
         testedAt: new Date()
       }))
       return
@@ -55,7 +55,7 @@ export function AgentsSettings() {
       setConnections((prev) => new Map(prev).set(agent.id, {
         status: 'connected',
         providerCount: 1,
-        modelCount: 4,
+        modelCount: CODEX_MODELS.length,
         testedAt: new Date()
       }))
       return

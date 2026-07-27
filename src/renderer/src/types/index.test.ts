@@ -2,25 +2,13 @@ import { describe, it, expect } from 'vitest'
 import { CLAUDE_MODELS, ClaudeModel, CODEX_MODELS, CodexModel } from './index'
 
 describe('CLAUDE_MODELS', () => {
-  it('includes Claude Fable 5', () => {
-    expect(CLAUDE_MODELS).toContainEqual({
-      id: ClaudeModel.FABLE_5,
-      name: 'claude-fable-5'
-    })
-  })
-
-  it('includes Claude Opus 4.8', () => {
-    expect(CLAUDE_MODELS).toContainEqual({
-      id: ClaudeModel.OPUS_4_8,
-      name: 'claude-opus-4-8'
-    })
-  })
-
-  it('includes Claude Opus 4.7', () => {
-    expect(CLAUDE_MODELS).toContainEqual({
-      id: ClaudeModel.OPUS_4_7,
-      name: 'Claude Opus 4.7'
-    })
+  it('lists the latest Claude models first in preferred order', () => {
+    expect(CLAUDE_MODELS.slice(0, 4)).toEqual([
+      { id: ClaudeModel.FABLE_5, name: 'Claude Fable 5' },
+      { id: ClaudeModel.OPUS_5, name: 'Claude Opus 5' },
+      { id: ClaudeModel.SONNET_5, name: 'Claude Sonnet 5' },
+      { id: ClaudeModel.OPUS_4_8, name: 'Claude Opus 4.8' }
+    ])
   })
 })
 
