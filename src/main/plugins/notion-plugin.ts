@@ -729,7 +729,7 @@ The integration automatically maps Notion properties to task fields:
 
 | Notion Property Type | Task Field | Detected By |
 |---------------------|------------|-------------|
-| Title | Title | (every DB has one) |
+| Title | Title | (every data source has one) |
 | Status / Select named "Status" | Status | Type or name |
 | Select named "Priority" | Priority | Name |
 | People | Assignee | Prefers "Assignee"/"Owner" |
@@ -745,9 +745,9 @@ The integration automatically maps Notion properties to task fields:
 ### "Access forbidden"
 - Open the database in Notion → **...** → **Connections** → ensure your integration is connected
 
-### No databases appear
-- The integration can only see databases explicitly shared with it
-- Share at least one database with your integration
+### No data sources appear
+- The integration can only see data sources explicitly shared with it
+- Share at least one data source with your integration
 
 ### Missing properties in filters
 - Only Status, Select, and Multi-select properties appear as filter options

@@ -163,6 +163,7 @@ export class NotionClient {
    */
   async searchDataSources(): Promise<NotionDataSource[]> {
     const results: NotionDataSource[] = []
+    const seenCursors = new Set<string>()
     let startCursor: string | undefined
 
     do {
@@ -179,7 +180,14 @@ export class NotionClient {
       }>('POST', '/v1/search', body)
 
       results.push(...data.results)
-      startCursor = data.has_more && data.next_cursor ? data.next_cursor : undefined
+      const nextCursor = data.has_more && data.next_cursor ? data.next_cursor : undefined
+      if (nextCursor) {
+        if (seenCursors.has(nextCursor)) {
+          throw new Error('Notion API returned a repeated search cursor')
+        }
+        seenCursors.add(nextCursor)
+      }
+      startCursor = nextCursor
 
       if (startCursor) await this.sleep(RATE_LIMIT_DELAY)
     } while (startCursor)

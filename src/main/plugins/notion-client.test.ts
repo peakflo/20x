@@ -109,6 +109,28 @@ describe('NotionClient', () => {
       })
     })
 
+    it('rejects a repeated search cursor instead of looping forever', async () => {
+      vi.useFakeTimers()
+      const repeatedPage = {
+        results: [],
+        has_more: true,
+        next_cursor: 'repeated-cursor'
+      }
+      const fetchMock = vi.fn()
+        .mockResolvedValueOnce(jsonResponse(repeatedPage))
+        .mockResolvedValueOnce(jsonResponse(repeatedPage))
+      vi.stubGlobal('fetch', fetchMock)
+
+      const resultPromise = client.searchDataSources()
+      const expectation = expect(resultPromise).rejects.toThrow(
+        'Notion API returned a repeated search cursor'
+      )
+      await vi.runAllTimersAsync()
+
+      await expectation
+      expect(fetchMock).toHaveBeenCalledTimes(2)
+    })
+
     it('retrieves and queries a selected data source', async () => {
       const schema = { id: 'data-source-1', title: [], properties: {} }
       const fetchMock = vi.fn()
