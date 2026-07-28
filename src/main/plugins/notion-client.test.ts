@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { NotionClient, type NotionBlock, type NotionFileObject } from './notion-client'
 
 // ── Helpers ──────────────────────────────────────────────────
@@ -43,6 +43,16 @@ function makeFileBlock(
   })
 }
 
+function jsonResponse(body: unknown, status = 200): Response {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    headers: { get: () => null },
+    json: vi.fn().mockResolvedValue(body),
+    text: vi.fn().mockResolvedValue(JSON.stringify(body))
+  } as unknown as Response
+}
+
 // ── Tests ────────────────────────────────────────────────────
 
 describe('NotionClient', () => {
@@ -50,6 +60,77 @@ describe('NotionClient', () => {
 
   beforeEach(() => {
     client = new NotionClient('test-token')
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+  })
+
+  // ── data source API ──────────────────────────────────────
+
+  describe('data source API', () => {
+    it('lists every shared data source using cursor pagination', async () => {
+      vi.useFakeTimers()
+      const fetchMock = vi.fn()
+        .mockResolvedValueOnce(jsonResponse({
+          results: [{ id: 'data-source-1', title: [], properties: {} }],
+          has_more: true,
+          next_cursor: 'cursor-2'
+        }))
+        .mockResolvedValueOnce(jsonResponse({
+          results: [{ id: 'data-source-2', title: [], properties: {} }],
+          has_more: false,
+          next_cursor: null
+        }))
+      vi.stubGlobal('fetch', fetchMock)
+
+      const resultPromise = client.searchDataSources()
+      await vi.runAllTimersAsync()
+
+      await expect(resultPromise).resolves.toEqual([
+        { id: 'data-source-1', title: [], properties: {} },
+        { id: 'data-source-2', title: [], properties: {} }
+      ])
+      expect(fetchMock).toHaveBeenCalledTimes(2)
+
+      const [firstUrl, firstInit] = fetchMock.mock.calls[0] as [string, RequestInit]
+      expect(firstUrl).toBe('https://api.notion.com/v1/search')
+      expect(firstInit.headers).toMatchObject({
+        'Authorization': 'Bearer test-token',
+        'Notion-Version': '2026-03-11'
+      })
+      expect(JSON.parse(firstInit.body as string)).toEqual({
+        filter: { property: 'object', value: 'data_source' },
+        page_size: 100
+      })
+      expect(JSON.parse(fetchMock.mock.calls[1][1].body as string)).toMatchObject({
+        start_cursor: 'cursor-2'
+      })
+    })
+
+    it('retrieves and queries a selected data source', async () => {
+      const schema = { id: 'data-source-1', title: [], properties: {} }
+      const fetchMock = vi.fn()
+        .mockResolvedValueOnce(jsonResponse(schema))
+        .mockResolvedValueOnce(jsonResponse({
+          results: [],
+          has_more: false,
+          next_cursor: null
+        }))
+      vi.stubGlobal('fetch', fetchMock)
+
+      await expect(client.getDataSource('data-source-1')).resolves.toEqual(schema)
+      await expect(client.queryAllPages('data-source-1')).resolves.toEqual([])
+
+      expect(fetchMock.mock.calls[0][0]).toBe(
+        'https://api.notion.com/v1/data_sources/data-source-1'
+      )
+      expect(fetchMock.mock.calls[1][0]).toBe(
+        'https://api.notion.com/v1/data_sources/data-source-1/query'
+      )
+    })
+
   })
 
   // ── blocksToMarkdown ────────────────────────────────────

@@ -7,10 +7,12 @@
 
 // ── Response types ───────────────────────────────────────────
 
-export interface NotionDatabase {
+export interface NotionDataSource {
   id: string
   title: Array<{ plain_text: string }>
   properties: Record<string, NotionPropertySchema>
+  object?: 'data_source'
+  parent?: { type: string; database_id?: string }
 }
 
 export interface NotionPropertySchema {
@@ -95,7 +97,7 @@ export interface NotionTimestampFilter {
 // ── Client ───────────────────────────────────────────────────
 
 const NOTION_API = 'https://api.notion.com'
-const NOTION_VERSION = '2022-06-28'
+const NOTION_VERSION = '2026-03-11'
 const RATE_LIMIT_DELAY = 350 // ms between paginated requests
 
 export class NotionClient {
@@ -153,21 +155,25 @@ export class NotionClient {
   // ── Public methods ───────────────────────────────────────
 
   /**
-   * List databases accessible to the integration
+   * List data sources accessible to the integration.
+   *
+   * Notion API 2025-09-03 and later split databases (containers) from data
+   * sources (the queryable tables). An omitted query returns every shared data
+   * source visible to the integration, subject to Notion's access rules.
    */
-  async searchDatabases(): Promise<NotionDatabase[]> {
-    const results: NotionDatabase[] = []
+  async searchDataSources(): Promise<NotionDataSource[]> {
+    const results: NotionDataSource[] = []
     let startCursor: string | undefined
 
     do {
       const body: Record<string, unknown> = {
-        filter: { property: 'object', value: 'database' },
+        filter: { property: 'object', value: 'data_source' },
         page_size: 100
       }
       if (startCursor) body.start_cursor = startCursor
 
       const data = await this.request<{
-        results: NotionDatabase[]
+        results: NotionDataSource[]
         has_more: boolean
         next_cursor: string | null
       }>('POST', '/v1/search', body)
@@ -182,17 +188,20 @@ export class NotionClient {
   }
 
   /**
-   * Get a database schema (property definitions)
+   * Get a data source schema (property definitions).
    */
-  async getDatabase(databaseId: string): Promise<NotionDatabase> {
-    return this.request<NotionDatabase>('GET', `/v1/databases/${databaseId}`)
+  async getDataSource(dataSourceId: string): Promise<NotionDataSource> {
+    return this.request<NotionDataSource>(
+      'GET',
+      `/v1/data_sources/${encodeURIComponent(dataSourceId)}`
+    )
   }
 
   /**
-   * Query all pages from a database with optional filters and incremental sync
+   * Query all pages from a data source with optional filters and incremental sync
    */
   async queryAllPages(
-    databaseId: string,
+    dataSourceId: string,
     filter?: NotionFilter,
     lastSyncedAt?: string | null
   ): Promise<NotionPage[]> {
@@ -233,7 +242,7 @@ export class NotionClient {
         results: NotionPage[]
         has_more: boolean
         next_cursor: string | null
-      }>('POST', `/v1/databases/${databaseId}/query`, body)
+      }>('POST', `/v1/data_sources/${encodeURIComponent(dataSourceId)}/query`, body)
 
       pages.push(...data.results)
       startCursor = data.has_more && data.next_cursor ? data.next_cursor : undefined
