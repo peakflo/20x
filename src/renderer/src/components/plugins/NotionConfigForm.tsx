@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { Loader2, Plus, X, Search, ChevronDown } from 'lucide-react'
+import { Loader2, Plus, X, Search, ChevronDown, RefreshCw } from 'lucide-react'
 import { Input } from '@/components/ui/Input'
 import { Label } from '@/components/ui/Label'
 import { Button } from '@/components/ui/Button'
@@ -44,47 +44,56 @@ interface NotionFilterRow {
 // ── Main Form ────────────────────────────────────────────────
 
 export function NotionConfigForm({ value, onChange, sourceId }: PluginFormProps) {
-  const [databases, setDatabases] = useState<ConfigFieldOption[]>([])
+  const [dataSources, setDataSources] = useState<ConfigFieldOption[]>([])
   const [dbProperties, setDbProperties] = useState<NotionPropertyInfo[]>([])
-  const [loadingDbs, setLoadingDbs] = useState(false)
+  const [loadingDataSources, setLoadingDataSources] = useState(false)
   const [loadingProps, setLoadingProps] = useState(false)
+  const [dataSourcesError, setDataSourcesError] = useState<string | null>(null)
+  const [dataSourceRefreshKey, setDataSourceRefreshKey] = useState(0)
 
   const updateField = useCallback(
     (key: string, val: unknown) => onChange({ ...value, [key]: val }),
     [value, onChange]
   )
 
-  // Fetch databases when token is present
+  // Fetch data sources when token is present
   useEffect(() => {
     const token = value.api_token as string
     if (!token) {
-      setDatabases([])
+      setDataSources([])
+      setDataSourcesError(null)
       return
     }
-    setLoadingDbs(true)
+    setLoadingDataSources(true)
+    setDataSourcesError(null)
     pluginApi
-      .resolveOptions('notion', 'databases', value, undefined, sourceId)
-      .then(setDatabases)
-      .catch(() => setDatabases([]))
-      .finally(() => setLoadingDbs(false))
-  }, [value.api_token, sourceId])
+      .resolveOptions('notion', 'data_sources', value, undefined, sourceId)
+      .then(setDataSources)
+      .catch((error: unknown) => {
+        setDataSources([])
+        setDataSourcesError(
+          error instanceof Error ? error.message : 'Failed to load data sources'
+        )
+      })
+      .finally(() => setLoadingDataSources(false))
+  }, [value.api_token, sourceId, dataSourceRefreshKey])
 
-  // Fetch properties when database changes
+  // Fetch properties when the data source changes
   useEffect(() => {
-    const dbId = value.database_id as string
-    if (!dbId || !value.api_token) {
+    const dataSourceId = value.data_source_id as string
+    if (!dataSourceId || !value.api_token) {
       setDbProperties([])
       return
     }
     setLoadingProps(true)
     pluginApi
-      .resolveOptions('notion', 'database_properties', value, undefined, sourceId)
+      .resolveOptions('notion', 'data_source_properties', value, undefined, sourceId)
       .then((opts) => {
         setDbProperties(opts.map((o) => JSON.parse(o.value) as NotionPropertyInfo))
       })
       .catch(() => setDbProperties([]))
       .finally(() => setLoadingProps(false))
-  }, [value.database_id, value.api_token, sourceId])
+  }, [value.data_source_id, value.api_token, sourceId])
 
   const filters = (value.filters as NotionFilterRow[]) ?? []
 
@@ -107,7 +116,7 @@ export function NotionConfigForm({ value, onChange, sourceId }: PluginFormProps)
   }
 
   const hasToken = !!(value.api_token as string)
-  const hasDatabase = !!(value.database_id as string)
+  const hasDataSource = !!(value.data_source_id as string)
 
   return (
     <div className="space-y-3">
@@ -126,27 +135,45 @@ export function NotionConfigForm({ value, onChange, sourceId }: PluginFormProps)
         />
       </div>
 
-      {/* Database */}
+      {/* Data source */}
       {hasToken && (
         <div className="space-y-1.5">
-          <Label>Database</Label>
-          {loadingDbs ? (
+          <div className="flex items-center justify-between">
+            <Label>Data source *</Label>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-6 px-2 text-xs"
+              onClick={() => setDataSourceRefreshKey((current) => current + 1)}
+              disabled={loadingDataSources}
+            >
+              <RefreshCw className="mr-1 h-3 w-3" />
+              Refresh
+            </Button>
+          </div>
+          {loadingDataSources ? (
             <div className="flex items-center gap-2 text-xs text-muted-foreground py-2">
-              <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading databases...
+              <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading data sources...
+            </div>
+          ) : dataSourcesError ? (
+            <div className="text-xs text-destructive py-2">
+              Could not load data sources. Refresh, or check the Notion token and
+              sharing permissions.
             </div>
           ) : (
             <SearchableSelect
-              options={databases}
-              value={(value.database_id as string) ?? ''}
-              onChange={(v) => onChange({ ...value, database_id: v, filters: [] })}
-              placeholder="Select database..."
+              options={dataSources}
+              value={(value.data_source_id as string) ?? ''}
+              onChange={(v) => onChange({ ...value, data_source_id: v, filters: [] })}
+              placeholder="Select data source..."
             />
           )}
         </div>
       )}
 
       {/* Filters */}
-      {hasDatabase && (
+      {hasDataSource && (
         <div className="space-y-1.5">
           <div className="flex items-center justify-between">
             <Label>Filters</Label>

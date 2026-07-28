@@ -8,7 +8,7 @@ import type { DatabaseManager, TaskRecord } from '../database'
 // ── Shared mock instance (reset per test) ────────────────────
 
 const mockClientInstance = {
-  getDatabase: vi.fn(),
+  getDataSource: vi.fn(),
   queryAllPages: vi.fn(),
   getPageBlocks: vi.fn(),
   blocksToMarkdown: vi.fn(),
@@ -17,7 +17,7 @@ const mockClientInstance = {
   downloadFile: vi.fn(),
   updatePage: vi.fn(),
   getUsers: vi.fn(),
-  searchDatabases: vi.fn()
+  searchDataSources: vi.fn()
 }
 
 vi.mock('./notion-client', () => ({
@@ -72,7 +72,7 @@ function makePage(overrides: Record<string, unknown> = {}) {
 }
 
 const TEST_ATTACHMENTS_DIR = '/tmp/test-notion-attachments'
-const defaultConfig = { api_token: 'ntn_test', database_id: 'db-1' }
+const defaultConfig = { api_token: 'ntn_test', data_source_id: 'db-1' }
 
 // ── Tests ────────────────────────────────────────────────────
 
@@ -87,7 +87,7 @@ describe('NotionPlugin', () => {
     if (!existsSync(TEST_ATTACHMENTS_DIR)) mkdirSync(TEST_ATTACHMENTS_DIR, { recursive: true })
 
     // Default mock returns
-    mockClientInstance.getDatabase.mockResolvedValue(DB_SCHEMA)
+    mockClientInstance.getDataSource.mockResolvedValue(DB_SCHEMA)
     mockClientInstance.queryAllPages.mockResolvedValue([])
     mockClientInstance.getPageBlocks.mockResolvedValue([])
     mockClientInstance.blocksToMarkdown.mockReturnValue('')
@@ -110,11 +110,11 @@ describe('NotionPlugin', () => {
     expect(plugin.requiresMcpServer).toBe(false)
   })
 
-  it('returns config schema with api_token, database_id, and filters', () => {
+  it('returns config schema with api_token, data_source_id, and filters', () => {
     const schema = plugin.getConfigSchema()
     expect(schema).toHaveLength(3)
     expect(schema[0].key).toBe('api_token')
-    expect(schema[1].key).toBe('database_id')
+    expect(schema[1].key).toBe('data_source_id')
     expect(schema[2].key).toBe('filters')
   })
 
@@ -136,15 +136,41 @@ describe('NotionPlugin', () => {
 
   describe('validateConfig', () => {
     it('returns null for valid config', () => {
-      expect(plugin.validateConfig({ api_token: 'ntn_123', database_id: 'db-1' })).toBeNull()
+      expect(plugin.validateConfig({ api_token: 'ntn_123', data_source_id: 'db-1' })).toBeNull()
     })
 
     it('rejects missing api_token', () => {
-      expect(plugin.validateConfig({ database_id: 'db-1' })).toBe('Integration token is required')
+      expect(plugin.validateConfig({ data_source_id: 'db-1' })).toBe('Integration token is required')
     })
 
-    it('rejects missing database_id', () => {
-      expect(plugin.validateConfig({ api_token: 'ntn_123' })).toBe('Database is required')
+    it('rejects missing data_source_id', () => {
+      expect(plugin.validateConfig({ api_token: 'ntn_123' })).toBe('Data source is required')
+    })
+  })
+
+  describe('resolveOptions', () => {
+    it('returns searched data sources', async () => {
+      mockClientInstance.searchDataSources.mockResolvedValue([
+        {
+          id: 'data-source-1',
+          title: [{ plain_text: 'Tasks' }],
+          properties: {}
+        }
+      ])
+
+      await expect(
+        plugin.resolveOptions('data_sources', defaultConfig, makeContext())
+      ).resolves.toEqual([{ value: 'data-source-1', label: 'Tasks' }])
+    })
+
+    it('surfaces data source search failures', async () => {
+      mockClientInstance.searchDataSources.mockRejectedValue(
+        new Error('Notion search returned incomplete results')
+      )
+
+      await expect(
+        plugin.resolveOptions('data_sources', defaultConfig, makeContext())
+      ).rejects.toThrow('Notion search returned incomplete results')
     })
   })
 

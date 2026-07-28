@@ -18,7 +18,7 @@ import { replaceRemoteImageUrlsInTask } from './replace-image-urls'
 import { normalizeUrlForComparison, buildNormalizedUrlSet } from './url-utils'
 import {
   NotionClient,
-  type NotionDatabase,
+  type NotionDataSource,
   type NotionPage,
   type NotionPropertySchema,
   type NotionPropertyValue,
@@ -190,7 +190,7 @@ const LABELS_HEURISTICS = new Set(['tags', 'labels', 'category'])
 export class NotionPlugin implements TaskSourcePlugin {
   id = 'notion'
   displayName = 'Notion'
-  description = 'Import tasks from a Notion database'
+  description = 'Import tasks from a Notion data source'
   icon = 'BookOpen'
   requiresMcpServer = false
 
@@ -205,10 +205,10 @@ export class NotionPlugin implements TaskSourcePlugin {
         description: 'Internal Integration Token from notion.so/profile/integrations'
       },
       {
-        key: 'database_id',
-        label: 'Database',
+        key: 'data_source_id',
+        label: 'Data source',
         type: 'dynamic-select',
-        optionsResolver: 'databases',
+        optionsResolver: 'data_sources',
         required: true,
         dependsOn: { field: 'api_token', value: '__any__' }
       },
@@ -216,7 +216,7 @@ export class NotionPlugin implements TaskSourcePlugin {
         key: 'filters',
         label: 'Filters',
         type: 'text',
-        dependsOn: { field: 'database_id', value: '__any__' },
+        dependsOn: { field: 'data_source_id', value: '__any__' },
         description: 'Structured filter configuration (managed by custom form)'
       },
     ]
@@ -232,25 +232,25 @@ export class NotionPlugin implements TaskSourcePlugin {
 
     const client = new NotionClient(token)
 
-    if (resolverKey === 'databases') {
+    if (resolverKey === 'data_sources') {
       try {
-        const databases = await client.searchDatabases()
-        return databases.map((db) => ({
-          value: db.id,
-          label: db.title.map((t) => t.plain_text).join('') || 'Untitled'
+        const dataSources = await client.searchDataSources()
+        return dataSources.map((dataSource) => ({
+          value: dataSource.id,
+          label: dataSource.title.map((t) => t.plain_text).join('') || 'Untitled'
         }))
       } catch (err) {
-        console.error('[notion] Failed to fetch databases:', err)
-        return []
+        console.error('[notion] Failed to fetch data sources:', err)
+        throw err
       }
     }
 
-    if (resolverKey === 'database_properties') {
-      const databaseId = config.database_id as string
-      if (!databaseId) return []
+    if (resolverKey === 'data_source_properties') {
+      const dataSourceId = config.data_source_id as string
+      if (!dataSourceId) return []
 
       try {
-        const db = await client.getDatabase(databaseId)
+        const db = await client.getDataSource(dataSourceId)
         const result: ConfigFieldOption[] = []
 
         // Pre-fetch users if any people property exists
@@ -295,7 +295,7 @@ export class NotionPlugin implements TaskSourcePlugin {
 
         return result
       } catch (err) {
-        console.error('[notion] Failed to fetch database properties:', err)
+        console.error('[notion] Failed to fetch data source properties:', err)
         return []
       }
     }
@@ -307,8 +307,8 @@ export class NotionPlugin implements TaskSourcePlugin {
     if (!config.api_token || typeof config.api_token !== 'string') {
       return 'Integration token is required'
     }
-    if (!config.database_id || typeof config.database_id !== 'string') {
-      return 'Database is required'
+    if (!config.data_source_id || typeof config.data_source_id !== 'string') {
+      return 'Data source is required'
     }
     return null
   }
@@ -354,13 +354,13 @@ export class NotionPlugin implements TaskSourcePlugin {
   ): Promise<PluginSyncResult> {
     const result: PluginSyncResult = { imported: 0, updated: 0, errors: [] }
     const token = config.api_token as string
-    const databaseId = config.database_id as string
+    const dataSourceId = config.data_source_id as string
 
     const client = new NotionClient(token)
 
     try {
       // Fetch DB schema and build property map
-      const db = await client.getDatabase(databaseId)
+      const db = await client.getDataSource(dataSourceId)
       const propMap = this.buildPropertyMap(db)
 
       // Build filter from config
@@ -374,7 +374,7 @@ export class NotionPlugin implements TaskSourcePlugin {
       const lastSyncedAt = source?.last_synced_at ?? null
 
       // Fetch pages
-      const pages = await client.queryAllPages(databaseId, notionFilter, lastSyncedAt)
+      const pages = await client.queryAllPages(dataSourceId, notionFilter, lastSyncedAt)
 
       for (const page of pages) {
         if (page.archived) continue
@@ -490,11 +490,11 @@ export class NotionPlugin implements TaskSourcePlugin {
     if (!task.external_id) return
 
     const token = config.api_token as string
-    const databaseId = config.database_id as string
+    const dataSourceId = config.data_source_id as string
     const client = new NotionClient(token)
 
     try {
-      const db = await client.getDatabase(databaseId)
+      const db = await client.getDataSource(dataSourceId)
       const propMap = this.buildPropertyMap(db)
       const properties: Record<string, unknown> = {}
 
@@ -565,11 +565,11 @@ export class NotionPlugin implements TaskSourcePlugin {
     }
 
     const token = config.api_token as string
-    const databaseId = config.database_id as string
+    const dataSourceId = config.data_source_id as string
     const client = new NotionClient(token)
 
     try {
-      const db = await client.getDatabase(databaseId)
+      const db = await client.getDataSource(dataSourceId)
       const propMap = this.buildPropertyMap(db)
       const properties: Record<string, unknown> = {}
 
@@ -639,11 +639,11 @@ export class NotionPlugin implements TaskSourcePlugin {
     }
 
     const token = config.api_token as string
-    const databaseId = config.database_id as string
+    const dataSourceId = config.data_source_id as string
     const client = new NotionClient(token)
 
     try {
-      const db = await client.getDatabase(databaseId)
+      const db = await client.getDataSource(dataSourceId)
       const propMap = this.buildPropertyMap(db)
 
       if (!propMap.assignee) {
@@ -667,7 +667,7 @@ export class NotionPlugin implements TaskSourcePlugin {
 
 ## Overview
 
-Import tasks from any Notion database. Supports incremental sync, server-side filtering by database properties, and bidirectional updates.
+Import tasks from any Notion data source. Supports incremental sync, server-side filtering by data source properties, and bidirectional updates.
 
 ## Prerequisites
 
@@ -729,7 +729,7 @@ The integration automatically maps Notion properties to task fields:
 
 | Notion Property Type | Task Field | Detected By |
 |---------------------|------------|-------------|
-| Title | Title | (every DB has one) |
+| Title | Title | (every data source has one) |
 | Status / Select named "Status" | Status | Type or name |
 | Select named "Priority" | Priority | Name |
 | People | Assignee | Prefers "Assignee"/"Owner" |
@@ -745,9 +745,9 @@ The integration automatically maps Notion properties to task fields:
 ### "Access forbidden"
 - Open the database in Notion → **...** → **Connections** → ensure your integration is connected
 
-### No databases appear
-- The integration can only see databases explicitly shared with it
-- Share at least one database with your integration
+### No data sources appear
+- The integration can only see data sources explicitly shared with it
+- Share at least one data source with your integration
 
 ### Missing properties in filters
 - Only Status, Select, and Multi-select properties appear as filter options
@@ -760,7 +760,7 @@ The integration automatically maps Notion properties to task fields:
    * Auto-detect which Notion properties map to task fields
    */
   private buildPropertyMap(
-    db: NotionDatabase
+    db: NotionDataSource
   ): PropertyMap {
     const props = db.properties
     const map: PropertyMap = { title: '' }
