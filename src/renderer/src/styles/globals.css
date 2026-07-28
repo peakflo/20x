@@ -165,9 +165,14 @@
    dark backgrounds. In light mode we darken the *-400/-300 text shades so
    status colors stay legible on paper without touching 90+ component files. */
 :root:not(.dark) {
+  --color-zinc-400: #71717a;
+  --color-zinc-300: #52525b;
+  --color-slate-400: #64748b;
+  --color-slate-300: #475569;
   --color-red-400: #dc2626;
   --color-red-300: #b91c1c;
   --color-orange-400: #ea580c;
+  --color-orange-300: #c2410c;
   --color-amber-400: #b45309;
   --color-amber-300: #92600a;
   --color-yellow-400: #a16207;
@@ -175,18 +180,23 @@
   --color-green-400: #16a34a;
   --color-green-300: #15803d;
   --color-emerald-400: #059669;
+  --color-emerald-300: #047857;
   --color-teal-400: #0d9488;
+  --color-teal-300: #0f766e;
   --color-cyan-400: #0891b2;
+  --color-cyan-300: #0e7490;
   --color-sky-400: #0284c7;
   --color-blue-400: #2563eb;
   --color-blue-300: #1d4ed8;
   --color-indigo-400: #4f46e5;
   --color-violet-400: #7c3aed;
+  --color-violet-300: #6d28d9;
   --color-purple-400: #9333ea;
   --color-purple-300: #7e22ce;
   --color-purple-200: #6b21a8;
   --color-fuchsia-400: #c026d3;
   --color-pink-400: #db2777;
+  --color-pink-300: #be185d;
   --color-rose-400: #e11d48;
 }
 
