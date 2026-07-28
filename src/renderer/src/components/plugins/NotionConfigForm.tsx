@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { Loader2, Plus, X, Search, ChevronDown } from 'lucide-react'
+import { Loader2, Plus, X, Search, ChevronDown, RefreshCw } from 'lucide-react'
 import { Input } from '@/components/ui/Input'
 import { Label } from '@/components/ui/Label'
 import { Button } from '@/components/ui/Button'
@@ -48,6 +48,8 @@ export function NotionConfigForm({ value, onChange, sourceId }: PluginFormProps)
   const [dbProperties, setDbProperties] = useState<NotionPropertyInfo[]>([])
   const [loadingDataSources, setLoadingDataSources] = useState(false)
   const [loadingProps, setLoadingProps] = useState(false)
+  const [dataSourcesError, setDataSourcesError] = useState<string | null>(null)
+  const [dataSourceRefreshKey, setDataSourceRefreshKey] = useState(0)
 
   const updateField = useCallback(
     (key: string, val: unknown) => onChange({ ...value, [key]: val }),
@@ -59,15 +61,22 @@ export function NotionConfigForm({ value, onChange, sourceId }: PluginFormProps)
     const token = value.api_token as string
     if (!token) {
       setDataSources([])
+      setDataSourcesError(null)
       return
     }
     setLoadingDataSources(true)
+    setDataSourcesError(null)
     pluginApi
       .resolveOptions('notion', 'data_sources', value, undefined, sourceId)
       .then(setDataSources)
-      .catch(() => setDataSources([]))
+      .catch((error: unknown) => {
+        setDataSources([])
+        setDataSourcesError(
+          error instanceof Error ? error.message : 'Failed to load data sources'
+        )
+      })
       .finally(() => setLoadingDataSources(false))
-  }, [value.api_token, sourceId])
+  }, [value.api_token, sourceId, dataSourceRefreshKey])
 
   // Fetch properties when the data source changes
   useEffect(() => {
@@ -129,10 +138,28 @@ export function NotionConfigForm({ value, onChange, sourceId }: PluginFormProps)
       {/* Data source */}
       {hasToken && (
         <div className="space-y-1.5">
-          <Label>Data source</Label>
+          <div className="flex items-center justify-between">
+            <Label>Data source *</Label>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-6 px-2 text-xs"
+              onClick={() => setDataSourceRefreshKey((current) => current + 1)}
+              disabled={loadingDataSources}
+            >
+              <RefreshCw className="mr-1 h-3 w-3" />
+              Refresh
+            </Button>
+          </div>
           {loadingDataSources ? (
             <div className="flex items-center gap-2 text-xs text-muted-foreground py-2">
               <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading data sources...
+            </div>
+          ) : dataSourcesError ? (
+            <div className="text-xs text-destructive py-2">
+              Could not load data sources. Refresh, or check the Notion token and
+              sharing permissions.
             </div>
           ) : (
             <SearchableSelect

@@ -158,8 +158,9 @@ export class NotionClient {
    * List data sources accessible to the integration.
    *
    * Notion API 2025-09-03 and later split databases (containers) from data
-   * sources (the queryable tables). An omitted query returns every shared data
-   * source visible to the integration, subject to Notion's access rules.
+   * sources (the queryable tables). An omitted query searches across shared
+   * data sources. Search is index-backed, so the UI must offer refresh and an
+   * explicitly incomplete response must not be presented as a complete list.
    */
   async searchDataSources(): Promise<NotionDataSource[]> {
     const results: NotionDataSource[] = []
@@ -177,7 +178,27 @@ export class NotionClient {
         results: NotionDataSource[]
         has_more: boolean
         next_cursor: string | null
+        request_status?: {
+          type?: 'complete' | 'incomplete'
+          incomplete_reason?: string
+        }
       }>('POST', '/v1/search', body)
+
+      if (
+        data.request_status?.type === 'incomplete' ||
+        data.request_status?.incomplete_reason
+      ) {
+        throw new Error(
+          `Notion search returned incomplete results${
+            data.request_status.incomplete_reason
+              ? `: ${data.request_status.incomplete_reason}`
+              : ''
+          }`
+        )
+      }
+      if (data.has_more && !data.next_cursor) {
+        throw new Error('Notion API omitted the next search cursor')
+      }
 
       results.push(...data.results)
       const nextCursor = data.has_more && data.next_cursor ? data.next_cursor : undefined

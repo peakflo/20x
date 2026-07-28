@@ -241,7 +241,7 @@ export class NotionPlugin implements TaskSourcePlugin {
         }))
       } catch (err) {
         console.error('[notion] Failed to fetch data sources:', err)
-        return []
+        throw err
       }
     }
 

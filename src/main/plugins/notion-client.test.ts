@@ -70,7 +70,7 @@ describe('NotionClient', () => {
   // ── data source API ──────────────────────────────────────
 
   describe('data source API', () => {
-    it('lists every shared data source using cursor pagination', async () => {
+    it('searches shared data sources using cursor pagination', async () => {
       vi.useFakeTimers()
       const fetchMock = vi.fn()
         .mockResolvedValueOnce(jsonResponse({
@@ -129,6 +129,34 @@ describe('NotionClient', () => {
 
       await expectation
       expect(fetchMock).toHaveBeenCalledTimes(2)
+    })
+
+    it('rejects an explicitly incomplete search response', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(jsonResponse({
+        results: [],
+        has_more: false,
+        next_cursor: null,
+        request_status: {
+          type: 'incomplete',
+          incomplete_reason: 'query_result_limit_reached'
+        }
+      })))
+
+      await expect(client.searchDataSources()).rejects.toThrow(
+        'Notion search returned incomplete results: query_result_limit_reached'
+      )
+    })
+
+    it('rejects pagination without a next cursor', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(jsonResponse({
+        results: [],
+        has_more: true,
+        next_cursor: null
+      })))
+
+      await expect(client.searchDataSources()).rejects.toThrow(
+        'Notion API omitted the next search cursor'
+      )
     })
 
     it('retrieves and queries a selected data source', async () => {

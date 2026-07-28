@@ -148,6 +148,32 @@ describe('NotionPlugin', () => {
     })
   })
 
+  describe('resolveOptions', () => {
+    it('returns searched data sources', async () => {
+      mockClientInstance.searchDataSources.mockResolvedValue([
+        {
+          id: 'data-source-1',
+          title: [{ plain_text: 'Tasks' }],
+          properties: {}
+        }
+      ])
+
+      await expect(
+        plugin.resolveOptions('data_sources', defaultConfig, makeContext())
+      ).resolves.toEqual([{ value: 'data-source-1', label: 'Tasks' }])
+    })
+
+    it('surfaces data source search failures', async () => {
+      mockClientInstance.searchDataSources.mockRejectedValue(
+        new Error('Notion search returned incomplete results')
+      )
+
+      await expect(
+        plugin.resolveOptions('data_sources', defaultConfig, makeContext())
+      ).rejects.toThrow('Notion search returned incomplete results')
+    })
+  })
+
   // ── importTasks ─────────────────────────────────────────
 
   describe('importTasks', () => {
