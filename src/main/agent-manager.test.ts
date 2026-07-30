@@ -39,6 +39,11 @@ vi.mock('electron', () => {
   return {
     app: { getPath: vi.fn(() => '/tmp') },
     Notification: MockNotification,
+    powerSaveBlocker: {
+      start: vi.fn(() => 1),
+      stop: vi.fn(),
+      isStarted: vi.fn(() => false),
+    },
   }
 })
 vi.mock('./adapters/opencode-adapter', () => ({ OpencodeAdapter: vi.fn() }))

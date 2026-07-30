@@ -28,5 +28,10 @@ vi.mock('electron', () => ({
     openExternal: vi.fn()
   },
   BrowserWindow: vi.fn(),
-  Notification: vi.fn().mockImplementation(() => ({ show: vi.fn() }))
+  Notification: vi.fn().mockImplementation(() => ({ show: vi.fn() })),
+  powerSaveBlocker: {
+    start: vi.fn(() => 1),
+    stop: vi.fn(),
+    isStarted: vi.fn(() => false)
+  }
 }))

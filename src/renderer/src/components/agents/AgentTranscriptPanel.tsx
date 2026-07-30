@@ -168,14 +168,24 @@ function collectSearchableText(value: unknown, output: string[]): void {
   }
 }
 
+// Cache per message object: search runs over the whole transcript on every
+// keystroke AND every streamed delta, and serializing large tool payloads each
+// time allocates megabytes. Message objects are identity-stable per part
+// (store projection cache), so a WeakMap makes this compute-once-per-message.
+const messageSearchTextCache = new WeakMap<AgentMessage, string>()
+
 function getMessageSearchText(message: AgentMessage): string {
+  const cached = messageSearchTextCache.get(message)
+  if (cached !== undefined) return cached
   const parts: string[] = []
   collectSearchableText(message.role, parts)
   collectSearchableText(message.partType, parts)
   collectSearchableText(message.content, parts)
   collectSearchableText(message.tool, parts)
   collectSearchableText(message.taskProgress, parts)
-  return parts.join('\n').toLowerCase()
+  const text = parts.join('\n').toLowerCase()
+  messageSearchTextCache.set(message, text)
+  return text
 }
 
 function getTranscriptItemSearchText(item: TranscriptItem): string {
@@ -473,8 +483,10 @@ function ToolCallMessage({ message, searchQuery }: { message: AgentMessage; sear
   const tool = message.tool!
   const isRunning = !tool.status || tool.status === 'in_progress' || tool.status === 'running' || tool.status === 'pending'
   const isError = tool.status === 'error' || tool.status === 'failed'
-  const subtitle = deriveToolSubtitle(tool)
-  const command = deriveToolCommand(tool)
+  // Both derivations JSON.parse the (potentially large) tool input — memoize so
+  // they only run when the tool payload actually changes, not on every render.
+  const subtitle = useMemo(() => deriveToolSubtitle(tool), [tool])
+  const command = useMemo(() => deriveToolCommand(tool), [tool])
 
   return (
     <div className="group/tool w-full min-w-0 overflow-hidden">
@@ -637,6 +649,20 @@ function MessageBubble({ message, onAnswer, viewMode, canAnswerQuestion = false,
 
 const MemoizedMessageBubble = React.memo(MessageBubble)
 
+// Activity groups are the majority of rows while an agent runs. Their
+// `messages` array is rebuilt (new identity) whenever the transcript changes,
+// so compare element identity instead — message objects are stable per part
+// thanks to the store's projection cache, letting untouched groups skip
+// re-rendering entirely during streaming.
+const MemoizedActivityGroup = React.memo(
+  ActivityMessageGroup,
+  (prev, next) =>
+    prev.viewMode === next.viewMode &&
+    prev.searchQuery === next.searchQuery &&
+    prev.messages.length === next.messages.length &&
+    prev.messages.every((message, index) => message === next.messages[index])
+)
+
 function TodoSummary({ todos }: { todos: NonNullable<AgentMessage['tool']>['todos'] }) {
   const [expanded, setExpanded] = useState(true)
   if (!todos || todos.length === 0) return null
@@ -740,6 +766,11 @@ export function AgentTranscriptPanel({
   const [debugCopyToast, setDebugCopyToast] = useState(false)
 
   // ── Hidden debug copy: Cmd/Ctrl+Shift+D ──
+  // Read messages through a ref: depending on `messages` (new identity per
+  // streamed delta) would re-create this callback and tear down / re-register
+  // the global keydown listener 10–20×/s per open transcript panel.
+  const messagesRef = useRef(messages)
+  messagesRef.current = messages
   const copyDebugInfo = useCallback(async () => {
     // Fetch raw coding agent transcript from main process
     let rawTranscript: RawTranscriptMessage[] | undefined
@@ -751,13 +782,14 @@ export function AgentTranscriptPanel({
       }
     }
 
-    const debugText = serializeTranscriptForDebug(messages, {
+    const currentMessages = messagesRef.current
+    const debugText = serializeTranscriptForDebug(currentMessages, {
       sessionId,
       taskId,
       agentId,
       status,
       systemStatus,
-      messageCount: messages.length,
+      messageCount: currentMessages.length,
       pendingApproval: pendingApproval ?? null
     }, rawTranscript)
     navigator.clipboard.writeText(debugText).then(() => {
@@ -766,7 +798,7 @@ export function AgentTranscriptPanel({
     }).catch((err) => {
       console.error('Failed to copy debug info:', err)
     })
-  }, [messages, sessionId, taskId, agentId, status, systemStatus, pendingApproval])
+  }, [sessionId, taskId, agentId, status, systemStatus, pendingApproval])
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -858,7 +890,11 @@ export function AgentTranscriptPanel({
         index += 1
         group.push(messages[index])
       }
-      items.push({ type: 'activity', key: group.map((item) => item.id).join(':'), messages: group })
+      // Key on the first member only: the trailing group grows as the agent
+      // streams tool calls, and a key built from all member ids would change on
+      // every addition — remounting the whole group (losing expanded state) and
+      // forcing the virtualizer to re-measure the row from scratch.
+      items.push({ type: 'activity', key: group[0].id, messages: group })
     }
     return items
   }, [messages])
@@ -1200,7 +1236,7 @@ export function AgentTranscriptPanel({
                   >
                     <div className="pb-2">
                       {item.type === 'activity' ? (
-                        <ActivityMessageGroup messages={item.messages} viewMode={viewMode} searchQuery={normalizedSearchQuery} />
+                        <MemoizedActivityGroup messages={item.messages} viewMode={viewMode} searchQuery={normalizedSearchQuery} />
                       ) : (
                         <MemoizedMessageBubble
                           message={item.message}

@@ -102,9 +102,13 @@ export function App() {
     })
   }, [route, paired])
 
-  // Poll tasks every 10s as a fallback
+  // Poll tasks every 10s as a fallback — but only while the tab is visible.
+  // The WebSocket already pushes task events and re-syncs on visibility
+  // change, so polling a backgrounded tab just burns battery and re-renders.
   useEffect(() => {
-    const timer = setInterval(() => fetchTasks(), 10_000)
+    const timer = setInterval(() => {
+      if (document.visibilityState === 'visible') fetchTasks()
+    }, 10_000)
     return () => clearInterval(timer)
   }, [fetchTasks])
 

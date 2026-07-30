@@ -81,7 +81,17 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
   useEffect(() => {
     if (!isDragging) return
 
-    const handleMove = (e: MouseEvent) => {
+    // rAF-coalesce: mousemove fires at 60–120 Hz and each store write commits
+    // the whole canvas subtree. Process at most one move per frame, dropping
+    // intermediate events.
+    let rafId: number | null = null
+    let lastEvent: MouseEvent | null = null
+    let hadGuides = false
+
+    const processMove = () => {
+      rafId = null
+      const e = lastEvent
+      if (!e) return
       const dx = (e.clientX - dragStart.current.x) / zoom
       const dy = (e.clientY - dragStart.current.y) / zoom
       const newX = dragStart.current.panelX + dx
@@ -96,7 +106,11 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
       )
 
       updatePanel(panel.id, { x: snappedX, y: snappedY })
-      setSnapGuides(guides)
+      // Skip the write when guides stay empty — calculateSnap returns a fresh
+      // array every call, and an unconditional write re-renders the canvas
+      // even when nothing snapped.
+      if (guides.length > 0 || hadGuides) setSnapGuides(guides)
+      hadGuides = guides.length > 0
 
       // Auto-connect proximity detection (browser ↔ task)
       const draggedWithPos = { ...panel, x: snappedX, y: snappedY }
@@ -104,7 +118,17 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
       useCanvasStore.getState().setProximityEdge(prox)
     }
 
+    const handleMove = (e: MouseEvent) => {
+      lastEvent = e
+      if (rafId == null) rafId = requestAnimationFrame(processMove)
+    }
+
     const handleUp = () => {
+      // Flush any pending move so the final position is committed.
+      if (rafId != null) {
+        cancelAnimationFrame(rafId)
+        processMove()
+      }
       // If there's a proximity edge, auto-connect on drop
       const prox = useCanvasStore.getState().proximityEdge
       if (prox) {
@@ -134,6 +158,7 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
     window.addEventListener('mousemove', handleMove)
     window.addEventListener('mouseup', handleUp)
     return () => {
+      if (rafId != null) cancelAnimationFrame(rafId)
       window.removeEventListener('mousemove', handleMove)
       window.removeEventListener('mouseup', handleUp)
     }
@@ -159,7 +184,15 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
   useEffect(() => {
     if (!isResizing) return
 
-    const handleMove = (e: MouseEvent) => {
+    // rAF-coalesced like drag: one store write (and one full canvas commit,
+    // plus terminal/webview reflows) per frame instead of per mousemove.
+    let rafId: number | null = null
+    let lastEvent: MouseEvent | null = null
+
+    const processMove = () => {
+      rafId = null
+      const e = lastEvent
+      if (!e) return
       const dx = (e.clientX - resizeStart.current.x) / zoom
       const dy = (e.clientY - resizeStart.current.y) / zoom
       const minW = panel.minWidth ?? 200
@@ -170,11 +203,23 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
       })
     }
 
-    const handleUp = () => setIsResizing(false)
+    const handleMove = (e: MouseEvent) => {
+      lastEvent = e
+      if (rafId == null) rafId = requestAnimationFrame(processMove)
+    }
+
+    const handleUp = () => {
+      if (rafId != null) {
+        cancelAnimationFrame(rafId)
+        processMove()
+      }
+      setIsResizing(false)
+    }
 
     window.addEventListener('mousemove', handleMove)
     window.addEventListener('mouseup', handleUp)
     return () => {
+      if (rafId != null) cancelAnimationFrame(rafId)
       window.removeEventListener('mousemove', handleMove)
       window.removeEventListener('mouseup', handleUp)
     }

@@ -130,7 +130,11 @@ function createWindow(): void {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
-      webviewTag: true
+      webviewTag: true,
+      // Keep processing agent transcript IPC/timers while the window is
+      // hidden or minimized — throttling a hidden renderer stalls streamed
+      // updates and safety reconciles until the window is shown again.
+      backgroundThrottling: false
     }
   })
 

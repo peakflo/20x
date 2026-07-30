@@ -390,7 +390,10 @@ interface TaskDetailViewProps {
 }
 
 export function TaskDetailView({ task, agents, onEdit, onDelete, onUpdateAttachments, onUpdateOutputFields, onCompleteTask, onAssignAgent, onUpdateRepos, onAddRepos, onUpdateSkillIds, onAddSkills, onStartAgent, canStartAgent, onResumeAgent, canResumeAgent, onRestartAgent, canRestartAgent, onSnooze, onUnsnooze, onReassign, onTriage, canTriage, onEditAgent, onUpdateDescription, onUpdateAutoFlags, subtasks, parentTask, onNavigateToTask, onOpenSubtaskInWindow, onAddSubtask, onReorderSubtasks }: TaskDetailViewProps) {
-  const { skills, fetchSkills } = useSkillStore()
+  // Per-field selectors — a selector-less useSkillStore() re-renders this
+  // large view on every skill-store mutation.
+  const skills = useSkillStore((s) => s.skills)
+  const fetchSkills = useSkillStore((s) => s.fetchSkills)
   const openTaskOnCanvas = useUIStore((s) => s.openTaskOnCanvas)
   const isActive = task.status !== TaskStatus.Completed
 

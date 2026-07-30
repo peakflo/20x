@@ -219,7 +219,10 @@ export function InfiniteCanvas() {
     if (!el) return
     const observer = new ResizeObserver((entries) => {
       const entry = entries[0]
-      if (entry) setContainerSize({ width: entry.contentRect.width, height: entry.contentRect.height })
+      if (!entry) return
+      const { width, height } = entry.contentRect
+      // Bail out when unchanged so dependent memos keep their identity.
+      setContainerSize((prev) => (prev.width === width && prev.height === height ? prev : { width, height }))
     })
     observer.observe(el)
     return () => observer.disconnect()
@@ -350,6 +353,57 @@ export function InfiniteCanvas() {
     })
   }, [canvasPendingApp])
 
+  // ── rAF-coalesced viewport updates ───────────────────────
+  // Trackpad wheel and mousemove events fire at 60–120 Hz (uncoalesced by
+  // React); writing to the store per event commits the whole canvas subtree
+  // per event. Accumulate deltas and flush at most one store write per frame.
+  const pendingPanRef = useRef({ dx: 0, dy: 0 })
+  const pendingZoomRef = useRef<{ deltaY: number; clientX: number; clientY: number; rect: DOMRect } | null>(null)
+  const viewportRafRef = useRef<number | null>(null)
+
+  const flushViewportUpdate = useCallback(() => {
+    viewportRafRef.current = null
+    const pan = pendingPanRef.current
+    if (pan.dx !== 0 || pan.dy !== 0) {
+      pendingPanRef.current = { dx: 0, dy: 0 }
+      panBy(pan.dx, pan.dy)
+    }
+    const zoom = pendingZoomRef.current
+    if (zoom) {
+      pendingZoomRef.current = null
+      zoomAtPoint(zoom.deltaY, zoom.clientX, zoom.clientY, zoom.rect)
+    }
+  }, [panBy, zoomAtPoint])
+
+  const scheduleViewportUpdate = useCallback(() => {
+    if (viewportRafRef.current != null) return
+    viewportRafRef.current = requestAnimationFrame(flushViewportUpdate)
+  }, [flushViewportUpdate])
+
+  const queuePan = useCallback(
+    (dx: number, dy: number) => {
+      pendingPanRef.current.dx += dx
+      pendingPanRef.current.dy += dy
+      scheduleViewportUpdate()
+    },
+    [scheduleViewportUpdate]
+  )
+
+  const queueZoom = useCallback(
+    (deltaY: number, clientX: number, clientY: number, rect: DOMRect) => {
+      const pending = pendingZoomRef.current
+      pendingZoomRef.current = { deltaY: (pending?.deltaY ?? 0) + deltaY, clientX, clientY, rect }
+      scheduleViewportUpdate()
+    },
+    [scheduleViewportUpdate]
+  )
+
+  useEffect(() => {
+    return () => {
+      if (viewportRafRef.current != null) cancelAnimationFrame(viewportRafRef.current)
+    }
+  }, [])
+
   // ── Wheel handler (zoom + trackpad pan) ──────────────────
   const handleWheel = useCallback(
     (e: WheelEvent) => {
@@ -394,12 +448,12 @@ export function InfiniteCanvas() {
 
       if (e.ctrlKey || e.metaKey) {
         const rect = container.getBoundingClientRect()
-        zoomAtPoint(e.deltaY, e.clientX, e.clientY, rect)
+        queueZoom(e.deltaY, e.clientX, e.clientY, rect)
       } else {
-        panBy(-e.deltaX, -e.deltaY)
+        queuePan(-e.deltaX, -e.deltaY)
       }
     },
-    [panBy, zoomAtPoint]
+    [queuePan, queueZoom]
   )
 
   useEffect(() => {
@@ -465,9 +519,9 @@ export function InfiniteCanvas() {
       const dx = e.clientX - panStartRef.current.x
       const dy = e.clientY - panStartRef.current.y
       panStartRef.current = { x: e.clientX, y: e.clientY }
-      panBy(dx, dy)
+      queuePan(dx, dy)
     },
-    [isPanning, panBy]
+    [isPanning, queuePan]
   )
 
   const handleMouseUp = useCallback(() => {
@@ -638,11 +692,17 @@ export function InfiniteCanvas() {
             zoom={viewport.zoom}
             viewportX={viewport.x}
             viewportY={viewport.y}
-            containerRef={containerRef}
+            containerWidth={containerSize.width}
+            containerHeight={containerSize.height}
           />
 
           {/* Snap guides */}
-          <SnapGuides guides={snapGuides} containerRef={containerRef} viewport={viewport} />
+          <SnapGuides
+            guides={snapGuides}
+            containerWidth={containerSize.width}
+            containerHeight={containerSize.height}
+            viewport={viewport}
+          />
 
           {/* Connection lines */}
           <CanvasConnections mouseCanvasPos={mouseCanvasPos} />
@@ -812,24 +872,25 @@ function CanvasGrid({
   zoom,
   viewportX,
   viewportY,
-  containerRef,
+  containerWidth,
+  containerHeight,
 }: {
   zoom: number
   viewportX: number
   viewportY: number
-  containerRef: React.RefObject<HTMLDivElement | null>
+  containerWidth: number
+  containerHeight: number
 }) {
-  const container = containerRef.current
-  if (!container) return null
-
-  const rect = container.getBoundingClientRect()
+  // Container size comes from the ResizeObserver-tracked state — calling
+  // getBoundingClientRect() here (in the render phase) forced a synchronous
+  // style+layout flush on every pan/zoom frame.
   // Guard against zero-size container (during window move/minimize transitions)
-  if (!rect.width || !rect.height || !zoom) return null
+  if (!containerWidth || !containerHeight || !zoom) return null
 
   const visibleLeft = -viewportX / zoom
   const visibleTop = -viewportY / zoom
-  const visibleWidth = rect.width / zoom
-  const visibleHeight = rect.height / zoom
+  const visibleWidth = containerWidth / zoom
+  const visibleHeight = containerHeight / zoom
 
   const gridLeft = Math.floor(visibleLeft / GRID_SIZE) * GRID_SIZE - GRID_SIZE
   const gridTop = Math.floor(visibleTop / GRID_SIZE) * GRID_SIZE - GRID_SIZE
@@ -859,25 +920,22 @@ function CanvasGrid({
 
 function SnapGuides({
   guides,
-  containerRef,
+  containerWidth,
+  containerHeight,
   viewport,
 }: {
   guides: SnapGuide[]
-  containerRef: React.RefObject<HTMLDivElement | null>
+  containerWidth: number
+  containerHeight: number
   viewport: { x: number; y: number; zoom: number }
 }) {
   if (guides.length === 0) return null
-
-  const container = containerRef.current
-  if (!container) return null
-
-  const rect = container.getBoundingClientRect()
-  if (!rect.width || !rect.height || !viewport.zoom) return null
+  if (!containerWidth || !containerHeight || !viewport.zoom) return null
 
   const visibleLeft = -viewport.x / viewport.zoom
   const visibleTop = -viewport.y / viewport.zoom
-  const visibleWidth = rect.width / viewport.zoom
-  const visibleHeight = rect.height / viewport.zoom
+  const visibleWidth = containerWidth / viewport.zoom
+  const visibleHeight = containerHeight / viewport.zoom
 
   return (
     <>

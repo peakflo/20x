@@ -4,6 +4,9 @@ import { Bot, User } from 'lucide-react'
 
 const MASTERMIND_SESSION_ID = 'mastermind-session'
 
+// Stable empty list — a fresh `[]` per render would invalidate memos keyed on it.
+const EMPTY_MESSAGES: AgentMessage[] = []
+
 const ROTATING_TITLES = [
   'What do you want to finish today?',
   'What should we tackle next?',
@@ -40,7 +43,7 @@ export function HeroSection({ onSeeFullConversation }: HeroSectionProps) {
   const [titleIndex, setTitleIndex] = useState(0)
 
   const session = useAgentStore((s) => s.sessions.get(MASTERMIND_SESSION_ID))
-  const messages = session?.messages || []
+  const messages = session?.messages || EMPTY_MESSAGES
 
   // Rotate title every 5 seconds
   useEffect(() => {

@@ -11,18 +11,20 @@ import { isSnoozed } from '@/lib/utils'
  */
 export function StatusBar() {
   const tasks = useTaskStore((s) => s.tasks)
-  const sessions = useAgentStore((s) => s.sessions)
+  // Select the derived count (a primitive) rather than the sessions Map: the
+  // Map gets a new identity on every streamed delta, which re-rendered this
+  // always-mounted bar 10–20×/s during any agent run. Object.is on the number
+  // blocks those re-renders entirely.
+  const runningAgents = useAgentStore((s) => {
+    let n = 0
+    for (const session of s.sessions.values()) if (session.status !== SessionStatus.IDLE) n++
+    return n
+  })
   const [version, setVersion] = useState('')
 
   useEffect(() => {
     window.electronAPI?.app?.getVersion().then((v) => v && setVersion(v))
   }, [])
-
-  const runningAgents = useMemo(() => {
-    let n = 0
-    for (const s of sessions.values()) if (s.status !== SessionStatus.IDLE) n++
-    return n
-  }, [sessions])
 
   const { active, total } = useMemo(() => {
     let a = 0

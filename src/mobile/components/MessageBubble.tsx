@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react'
+import { memo, useMemo, useState, type ReactNode } from 'react'
 import { Markdown } from '@/components/ui/Markdown'
 import { cn } from '../lib/utils'
 import type { AgentMessage } from '../stores/agent-store'
@@ -348,8 +348,10 @@ function ToolCallMessage({ message, searchQuery }: { message: AgentMessage; sear
   const tool = message.tool!
   const isRunning = !tool.status || tool.status === 'in_progress' || tool.status === 'running' || tool.status === 'pending'
   const isError = tool.status === 'error' || tool.status === 'failed'
-  const subtitle = deriveToolSubtitle(tool)
-  const command = deriveToolCommand(tool)
+  // Both derivations JSON.parse the (potentially large) tool input — memoize so
+  // they only run when the tool payload actually changes, not on every render.
+  const subtitle = useMemo(() => deriveToolSubtitle(tool), [tool])
+  const command = useMemo(() => deriveToolCommand(tool), [tool])
 
   return (
     <div className="group/tool w-full min-w-0 overflow-hidden">
@@ -443,18 +445,30 @@ function ReasoningMessage({ message, searchQuery }: { message: AgentMessage; sea
   )
 }
 
-export function MessageActivityGroup({ messages, searchQuery }: { messages: AgentMessage[]; searchQuery?: string }) {
-  return (
-    <div className="w-full border-l border-border/30 pl-2 py-0.5">
-      {messages.map((message) => {
-        if (message.partType === 'reasoning') {
-          return <ReasoningMessage key={message.id} message={message} searchQuery={searchQuery} />
-        }
-        return <ToolCallMessage key={message.id} message={message} searchQuery={searchQuery} />
-      })}
-    </div>
-  )
-}
+// Memoized with an element-wise comparator: the `messages` array is rebuilt
+// (new identity) on every transcript delta, but the message objects themselves
+// are stable per part (store projection cache), so untouched groups skip
+// re-rendering entirely during streaming. Mobile renders the full list without
+// virtualization, which makes this the difference between O(changed) and O(all)
+// work per delta.
+export const MessageActivityGroup = memo(
+  function MessageActivityGroup({ messages, searchQuery }: { messages: AgentMessage[]; searchQuery?: string }) {
+    return (
+      <div className="w-full border-l border-border/30 pl-2 py-0.5">
+        {messages.map((message) => {
+          if (message.partType === 'reasoning') {
+            return <ReasoningMessage key={message.id} message={message} searchQuery={searchQuery} />
+          }
+          return <ToolCallMessage key={message.id} message={message} searchQuery={searchQuery} />
+        })}
+      </div>
+    )
+  },
+  (prev, next) =>
+    prev.searchQuery === next.searchQuery &&
+    prev.messages.length === next.messages.length &&
+    prev.messages.every((message, index) => message === next.messages[index])
+)
 
 function TaskNotificationMessage({ message, searchQuery }: { message: AgentMessage; searchQuery?: string }) {
   const tool = message.tool
@@ -502,7 +516,9 @@ interface MessageBubbleProps {
   searchQuery?: string
 }
 
-export function MessageBubble({ message, onAnswer, canAnswerQuestion = false, searchQuery }: MessageBubbleProps) {
+// Memoized: message objects are identity-stable per part (store projection
+// cache), so bubbles only re-render when their own message actually changes.
+export const MessageBubble = memo(function MessageBubble({ message, onAnswer, canAnswerQuestion = false, searchQuery }: MessageBubbleProps) {
   // Question — check by data content so it renders correctly regardless of partType
   if (message.tool?.questions && message.tool.questions.length > 0) {
     return <QuestionMessage message={message} onAnswer={onAnswer} canAnswer={canAnswerQuestion} searchQuery={searchQuery} />
@@ -567,4 +583,4 @@ export function MessageBubble({ message, onAnswer, canAnswerQuestion = false, se
       </div>
     </div>
   )
-}
+})
