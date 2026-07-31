@@ -1,4 +1,5 @@
-import { useRef, useEffect, useCallback, useMemo, useState } from 'react'
+import { memo, useRef, useEffect, useCallback, useMemo, useState } from 'react'
+import { useVirtualizer } from '@tanstack/react-virtual'
 import { useTaskStore } from '../stores/task-store'
 import { useAgentStore, SessionStatus, type AgentMessage } from '../stores/agent-store'
 import { api } from '../api/client'
@@ -34,6 +35,42 @@ function getMessageSearchText(message: AgentMessage): string {
   return parts.join('\n').toLowerCase()
 }
 
+type TranscriptItem =
+  | { type: 'message'; key: string; message: AgentMessage }
+  | { type: 'activity'; key: string; messages: AgentMessage[] }
+
+function getTranscriptItemSearchText(item: TranscriptItem): string {
+  if (item.type === 'activity') {
+    return item.messages.map(getMessageSearchText).join('\n')
+  }
+  return getMessageSearchText(item.message)
+}
+
+const TranscriptRow = memo(function TranscriptRow({
+  item,
+  activeQuestionId,
+  normalizedSearchQuery,
+  onAnswer
+}: {
+  item: TranscriptItem
+  activeQuestionId: string | null
+  normalizedSearchQuery: string
+  onAnswer: (answer: string) => void
+}) {
+  if (item.type === 'activity') {
+    return <MessageActivityGroup messages={item.messages} searchQuery={normalizedSearchQuery} />
+  }
+
+  return (
+    <MessageBubble
+      message={item.message}
+      onAnswer={onAnswer}
+      canAnswerQuestion={item.message.id === activeQuestionId}
+      searchQuery={normalizedSearchQuery}
+    />
+  )
+})
+
 export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNavigate: (route: Route) => void }) {
   const task = useTaskStore((s) => s.tasks.find((t) => t.id === taskId))
   const session = useAgentStore((s) => s.sessions.get(taskId))
@@ -50,7 +87,6 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
 
   const scrollRef = useRef<HTMLDivElement>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
-  const messageNodeRefs = useRef(new Map<number, HTMLDivElement>())
   const isAtBottomRef = useRef(true)
   const [todosExpanded, setTodosExpanded] = useState(false)
   const [showScrollToBottom, setShowScrollToBottom] = useState(false)
@@ -64,16 +100,35 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
   const lastMessage = messages[messages.length - 1]
   const normalizedSearchQuery = searchQuery.trim().toLowerCase()
 
+  const transcriptItems = useMemo<TranscriptItem[]>(() => {
+    const items: TranscriptItem[] = []
+    for (let index = 0; index < messages.length; index += 1) {
+      const message = messages[index]
+      if (!isCompactActivityMessage(message)) {
+        items.push({ type: 'message', key: message.id, message })
+        continue
+      }
+
+      const group: AgentMessage[] = [message]
+      while (index + 1 < messages.length && isCompactActivityMessage(messages[index + 1])) {
+        index += 1
+        group.push(messages[index])
+      }
+      items.push({ type: 'activity', key: group[0].id, messages: group })
+    }
+    return items
+  }, [messages])
+
   const searchResultIndexes = useMemo(() => {
     if (!normalizedSearchQuery) return []
-    return messages.reduce<number[]>((matches, message, index) => {
-      if (getMessageSearchText(message).includes(normalizedSearchQuery)) {
+    return transcriptItems.reduce<number[]>((matches, item, index) => {
+      if (getTranscriptItemSearchText(item).includes(normalizedSearchQuery)) {
         matches.push(index)
       }
       return matches
     }, [])
-  }, [messages, normalizedSearchQuery])
-  const activeSearchMessageIndex = searchResultIndexes[activeSearchResult] ?? -1
+  }, [normalizedSearchQuery, transcriptItems])
+  const activeSearchItemIndex = searchResultIndexes[activeSearchResult] ?? -1
 
   // Determine if the agent is actively working
   const isWorking = session?.status === SessionStatus.WORKING
@@ -248,21 +303,29 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
     if (task?.agent_id && session?.sessionId) _restartSession(task.agent_id, session.sessionId)
   }, [task?.agent_id, session?.sessionId, _restartSession])
 
-  // Auto-scroll to bottom when new messages arrive (only if user is at bottom)
-  useEffect(() => {
-    if (activeSearchMessageIndex >= 0) return
-    if (isAtBottomRef.current && scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight
-    }
-  }, [activeSearchMessageIndex, messages.length, lastMessage?.content])
+  const virtualizer = useVirtualizer({
+    count: transcriptItems.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => 120,
+    overscan: 8
+  })
 
   useEffect(() => {
-    if (activeSearchMessageIndex < 0) return
-    const node = messageNodeRefs.current.get(activeSearchMessageIndex)
-    node?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+    if (activeSearchItemIndex < 0) return
+    virtualizer.scrollToIndex(activeSearchItemIndex, { align: 'center' })
     isAtBottomRef.current = false
     setShowScrollToBottom(true)
-  }, [activeSearchMessageIndex])
+  }, [activeSearchItemIndex, virtualizer])
+
+  // Auto-scroll to bottom when new rows arrive or the last row streams content.
+  useEffect(() => {
+    if (activeSearchItemIndex >= 0) return
+    if (transcriptItems.length > 0 && isAtBottomRef.current) {
+      requestAnimationFrame(() => {
+        virtualizer.scrollToIndex(transcriptItems.length - 1, { align: 'end' })
+      })
+    }
+  }, [activeSearchItemIndex, lastMessage?.content, transcriptItems.length, virtualizer])
 
   // Track scroll position
   const handleScroll = useCallback(() => {
@@ -274,12 +337,12 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
   }, [])
 
   const scrollToBottom = useCallback(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
+    if (transcriptItems.length > 0) {
+      virtualizer.scrollToIndex(transcriptItems.length - 1, { align: 'end' })
       isAtBottomRef.current = true
       setShowScrollToBottom(false)
     }
-  }, [])
+  }, [transcriptItems.length, virtualizer])
 
   const goToSearchResult = useCallback((direction: 1 | -1) => {
     if (searchResultIndexes.length === 0) return
@@ -290,14 +353,6 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
     setSearchQuery('')
     setIsSearchOpen(false)
     setActiveSearchResult(0)
-  }, [])
-
-  const setMessageNode = useCallback((index: number, node: HTMLDivElement | null) => {
-    if (node) {
-      messageNodeRefs.current.set(index, node)
-    } else {
-      messageNodeRefs.current.delete(index)
-    }
   }, [])
 
   // Session state flags — matches TaskDetailPage logic
@@ -590,43 +645,36 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
             </div>
           )}
 
-          {messages.map((msg, index) => {
-            if (!isCompactActivityMessage(msg)) {
-              return (
-                <div
-                  key={msg.id}
-                  ref={(node) => setMessageNode(index, node)}
-                  className="rounded-md"
-                >
-                  <MessageBubble
-                    message={msg}
-                    onAnswer={handleAnswer}
-                    canAnswerQuestion={msg.id === activeQuestionId}
-                    searchQuery={normalizedSearchQuery}
-                  />
-                </div>
-              )
-            }
-            if (index > 0 && isCompactActivityMessage(messages[index - 1])) return null
-
-            const group = [msg]
-            const groupIndexes = [index]
-            for (let nextIndex = index + 1; nextIndex < messages.length && isCompactActivityMessage(messages[nextIndex]); nextIndex += 1) {
-              group.push(messages[nextIndex])
-              groupIndexes.push(nextIndex)
-            }
-            return (
-              <div
-                key={group.map((item) => item.id).join(':')}
-                ref={(node) => {
-                  groupIndexes.forEach((itemIndex) => setMessageNode(itemIndex, node))
-                }}
-                className="rounded-md"
-              >
-                <MessageActivityGroup messages={group} searchQuery={normalizedSearchQuery} />
-              </div>
-            )
-          })}
+          {messages.length > 0 && (
+            <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
+              {virtualizer.getVirtualItems().map((virtualRow) => {
+                const item = transcriptItems[virtualRow.index]
+                return (
+                  <div
+                    key={item.key}
+                    ref={virtualizer.measureElement}
+                    data-index={virtualRow.index}
+                    style={{
+                      position: 'absolute',
+                      top: 0,
+                      left: 0,
+                      right: 0,
+                      transform: `translateY(${virtualRow.start}px)`
+                    }}
+                  >
+                    <div className="pb-2 rounded-md">
+                      <TranscriptRow
+                        item={item}
+                        activeQuestionId={activeQuestionId}
+                        normalizedSearchQuery={normalizedSearchQuery}
+                        onAnswer={handleAnswer}
+                      />
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
 
           {/* Working indicator */}
           {isWorking && messages.length > 0 && (
