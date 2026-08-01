@@ -7,6 +7,7 @@ import {
   DEFAULT_PANEL_HEIGHT,
   type CanvasPanelData,
 } from '@/stores/canvas-store'
+import { getLiveViewport } from '@/stores/canvas-live-viewport'
 import { X, Focus, Maximize2, Minimize2, PanelLeft, PanelRight, Columns2, Globe } from 'lucide-react'
 import type { TaskWorkspaceLayout } from '@/components/tasks/TaskWorkspace'
 import { useTaskStore } from '@/stores/task-store'
@@ -18,6 +19,19 @@ import { WebPagePanelContent } from './WebPagePanelContent'
 import { TerminalPanelContent } from './TerminalPanelContent'
 import { BrowserPanelContent } from './BrowserPanelContent'
 import { getCanvasTaskStatusStyle, shouldPulseCanvasTaskStatusTransition } from './canvas-status-style'
+
+/**
+ * Off-viewport ("frozen") panel content.
+ *
+ * CSS containment stops a hidden panel's internal churn (streaming transcripts,
+ * terminal output) from invalidating canvas-level layout and paint, which keeps
+ * gesture rasterisation cheap no matter how many background panels are open.
+ *
+ * Deliberately only applied while frozen: containment makes the element a
+ * containing block for fixed-position descendants, and visible task panels
+ * render full-screen dialogs (TaskWorkspace) that must escape the panel.
+ */
+const FROZEN_CONTENT_STYLE: CSSProperties = { visibility: 'hidden', contain: 'layout paint' }
 
 interface CanvasPanelProps {
   panel: CanvasPanelData
@@ -44,6 +58,7 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
   const focusPanel = useCanvasStore((s) => s.focusPanel)
   const setDraggingPanelId = useCanvasStore((s) => s.setDraggingPanelId)
   const setSnapGuides = useCanvasStore((s) => s.setSnapGuides)
+  const setLiveDrag = useCanvasStore((s) => s.setLiveDrag)
   // Read connectingFromId imperatively to avoid re-rendering ALL panels when it changes.
   // Only the connect button click handlers need it — not the render path.
   const setConnectingFromId = useCanvasStore((s) => s.setConnectingFromId)
@@ -57,6 +72,11 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
   const [statusPulse, setStatusPulse] = useState<{ status: TaskStatus; key: number } | null>(null)
   const dragStart = useRef({ x: 0, y: 0, panelX: 0, panelY: 0 })
   const resizeStart = useRef({ x: 0, y: 0, w: 0, h: 0 })
+  // Latest imperative geometry, committed to the store on mouseup. Held in
+  // refs (not effect-local vars) so an effect re-run mid-gesture — a zoom
+  // commit changes the `zoom` prop — can't lose the in-progress position.
+  const dragCommit = useRef({ x: 0, y: 0 })
+  const resizeCommit = useRef({ w: 0, h: 0 })
   const previousTaskStatusRef = useRef<TaskStatus | undefined>(undefined)
 
   // ── Drag handling ─────────────────────────────────────────
@@ -74,6 +94,7 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
         panelX: panel.x,
         panelY: panel.y,
       }
+      dragCommit.current = { x: panel.x, y: panel.y }
     },
     [bringToFront, panel.id, panel.x, panel.y, setDraggingPanelId]
   )
@@ -81,9 +102,17 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
   useEffect(() => {
     if (!isDragging) return
 
-    // rAF-coalesce: mousemove fires at 60–120 Hz and each store write commits
-    // the whole canvas subtree. Process at most one move per frame, dropping
-    // intermediate events.
+    // Imperative drag: the panel is moved with a CSS transform inside a single
+    // rAF and the position is committed to the store ONCE, on mouseup. Writing
+    // x/y per frame (even rAF-coalesced) re-committed the entire canvas subtree
+    // — every panel wrapper, the connections layer and the minimap — 60–120
+    // times a second. Now a drag frame costs one style write.
+    const el = panelRef.current
+    const baseX = dragStart.current.panelX
+    const baseY = dragStart.current.panelY
+
+    if (el) el.style.willChange = 'transform'
+
     let rafId: number | null = null
     let lastEvent: MouseEvent | null = null
     let hadGuides = false
@@ -92,8 +121,11 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
       rafId = null
       const e = lastEvent
       if (!e) return
-      const dx = (e.clientX - dragStart.current.x) / zoom
-      const dy = (e.clientY - dragStart.current.y) / zoom
+      // Read the zoom from the live viewport — during a simultaneous pinch-zoom
+      // the store value lags until the gesture commits.
+      const liveZoom = getLiveViewport().zoom || zoom || 1
+      const dx = (e.clientX - dragStart.current.x) / liveZoom
+      const dy = (e.clientY - dragStart.current.y) / liveZoom
       const newX = dragStart.current.panelX + dx
       const newY = dragStart.current.panelY + dy
 
@@ -105,10 +137,16 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
         otherPanels
       )
 
-      updatePanel(panel.id, { x: snappedX, y: snappedY })
-      // Skip the write when guides stay empty — calculateSnap returns a fresh
-      // array every call, and an unconditional write re-renders the canvas
-      // even when nothing snapped.
+      dragCommit.current = { x: snappedX, y: snappedY }
+      // Move the panel on the compositor. `left`/`top` stay at the store
+      // position for the whole drag, so this delta is always well-defined.
+      if (el) el.style.transform = `translate(${snappedX - baseX}px, ${snappedY - baseY}px)`
+      // Publish the live position for the (few) consumers that must follow the
+      // panel mid-drag — currently just the connection curves.
+      setLiveDrag({ id: panel.id, x: snappedX, y: snappedY })
+
+      // Both setters bail out when nothing actually changed, so a drag that
+      // stays snapped (or never snaps) performs no store write at all.
       if (guides.length > 0 || hadGuides) setSnapGuides(guides)
       hadGuides = guides.length > 0
 
@@ -129,6 +167,24 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
         cancelAnimationFrame(rafId)
         processMove()
       }
+
+      // Hand the final position back to React in a single paint: drop the
+      // transform and write left/top imperatively *now*, then commit the same
+      // values to the store (whose re-render writes identical left/top).
+      const { x: finalX, y: finalY } = dragCommit.current
+      if (el) {
+        el.style.transform = ''
+        el.style.willChange = ''
+        el.style.left = `${finalX}px`
+        el.style.top = `${finalY}px`
+      }
+      // A click on the title bar that never moved must not re-commit the
+      // canvas — only write when the panel actually went somewhere.
+      if (finalX !== baseX || finalY !== baseY) {
+        updatePanel(panel.id, { x: finalX, y: finalY })
+      }
+      setLiveDrag(null)
+
       // If there's a proximity edge, auto-connect on drop
       const prox = useCanvasStore.getState().proximityEdge
       if (prox) {
@@ -159,10 +215,11 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
     window.addEventListener('mouseup', handleUp)
     return () => {
       if (rafId != null) cancelAnimationFrame(rafId)
+      if (el) el.style.willChange = ''
       window.removeEventListener('mousemove', handleMove)
       window.removeEventListener('mouseup', handleUp)
     }
-  }, [isDragging, panel.id, panel.width, panel.height, zoom, updatePanel, setDraggingPanelId, setSnapGuides])
+  }, [isDragging, panel.id, panel.width, panel.height, zoom, updatePanel, setDraggingPanelId, setSnapGuides, setLiveDrag])
 
   // ── Resize handling ───────────────────────────────────────
   const handleResizeStart = useCallback(
@@ -177,6 +234,7 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
         w: panel.width,
         h: panel.height,
       }
+      resizeCommit.current = { w: panel.width, h: panel.height }
     },
     [bringToFront, panel.id, panel.width, panel.height]
   )
@@ -184,8 +242,11 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
   useEffect(() => {
     if (!isResizing) return
 
-    // rAF-coalesced like drag: one store write (and one full canvas commit,
-    // plus terminal/webview reflows) per frame instead of per mousemove.
+    // Imperative like drag: size the element directly inside a rAF and commit
+    // the final size to the store once, on mouseup. The panel's own content
+    // still reflows (plain CSS layout) — but React never re-renders the canvas.
+    const el = panelRef.current
+
     let rafId: number | null = null
     let lastEvent: MouseEvent | null = null
 
@@ -193,14 +254,18 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
       rafId = null
       const e = lastEvent
       if (!e) return
-      const dx = (e.clientX - resizeStart.current.x) / zoom
-      const dy = (e.clientY - resizeStart.current.y) / zoom
+      const liveZoom = getLiveViewport().zoom || zoom || 1
+      const dx = (e.clientX - resizeStart.current.x) / liveZoom
+      const dy = (e.clientY - resizeStart.current.y) / liveZoom
       const minW = panel.minWidth ?? 200
       const minH = panel.minHeight ?? 150
-      updatePanel(panel.id, {
-        width: Math.max(minW, resizeStart.current.w + dx),
-        height: Math.max(minH, resizeStart.current.h + dy),
-      })
+      const nextW = Math.max(minW, resizeStart.current.w + dx)
+      const nextH = Math.max(minH, resizeStart.current.h + dy)
+      resizeCommit.current = { w: nextW, h: nextH }
+      if (el) {
+        el.style.width = `${nextW}px`
+        el.style.height = `${nextH}px`
+      }
     }
 
     const handleMove = (e: MouseEvent) => {
@@ -212,6 +277,10 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
       if (rafId != null) {
         cancelAnimationFrame(rafId)
         processMove()
+      }
+      const { w: finalW, h: finalH } = resizeCommit.current
+      if (finalW !== resizeStart.current.w || finalH !== resizeStart.current.h) {
+        updatePanel(panel.id, { width: finalW, height: finalH })
       }
       setIsResizing(false)
     }
@@ -530,7 +599,7 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
       {!isCollapsed && (
         <div
           className={`flex-1 overflow-hidden min-h-0 ${panel.type === 'task' || panel.type === 'transcript' || panel.type === 'webpage' || panel.type === 'terminal' || panel.type === 'browser' || (panel.type === 'app' && panel.refId) ? '' : 'p-3 overflow-auto'}`}
-          style={frozen ? { visibility: 'hidden' } : undefined}
+          style={frozen ? FROZEN_CONTENT_STYLE : undefined}
         >
           <MemoizedPanelContent
             type={panel.type}

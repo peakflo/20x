@@ -1,6 +1,13 @@
-import { useCallback, useRef, useState, useEffect, useMemo, type CSSProperties } from 'react'
-import { useCanvasStore, DEFAULT_PANEL_WIDTH, DEFAULT_PANEL_HEIGHT } from '@/stores/canvas-store'
-import type { SnapGuide, CanvasPanelData, Viewport } from '@/stores/canvas-store'
+import { useCallback, useRef, useState, useEffect, useLayoutEffect, useMemo, type CSSProperties } from 'react'
+import {
+  useCanvasStore,
+  DEFAULT_PANEL_WIDTH,
+  DEFAULT_PANEL_HEIGHT,
+  panViewport,
+  zoomViewportAtPoint,
+} from '@/stores/canvas-store'
+import type { CanvasPanelData, Viewport } from '@/stores/canvas-store'
+import { getLiveViewport, setLiveViewport } from '@/stores/canvas-live-viewport'
 import { useUIStore } from '@/stores/ui-store'
 import { useTaskStore } from '@/stores/task-store'
 import { CanvasPanel } from './CanvasPanel'
@@ -46,12 +53,47 @@ function isPanelVisible(
 
 // Grid dot spacing in canvas-space pixels
 const GRID_SIZE = 40
+/**
+ * Wheel/trackpad gestures have no "end" event. Commit the viewport to the
+ * store this long after the last wheel event.
+ */
+const WHEEL_IDLE_MS = 150
 const STATUS_HIGHLIGHT_MS = 5_000
 const STATUS_POPUP_EDGE_PAD = 28
 const STATUS_POPUP_TOP_SAFE = 70
 const STATUS_POPUP_BOTTOM_SAFE = 150
 const STATUS_POPUP_LEFT_SAFE = 170
 const STATUS_POPUP_RIGHT_SAFE = 220
+
+/**
+ * Dot-grid background painted on the STATIC container instead of inside the
+ * transformed layer: panning/zooming becomes two background-* property writes
+ * (compositor work) instead of repositioning and re-rasterising a DOM node
+ * that lives under the canvas transform.
+ */
+function gridBackgroundStyle(viewport: Viewport): {
+  backgroundImage: string
+  backgroundSize: string
+  backgroundPosition: string
+} {
+  const size = GRID_SIZE * viewport.zoom
+  // Screen-space dot radius. Matches the previous canvas-space formula
+  // `max(1, min(2, 1.5 / zoom))` rendered under a `scale(zoom)` transform.
+  const dot = Math.max(viewport.zoom, Math.min(2 * viewport.zoom, 1.5))
+  return {
+    backgroundImage: `radial-gradient(circle, var(--canvas-dot) ${dot}px, transparent ${dot}px)`,
+    backgroundSize: `${size}px ${size}px`,
+    backgroundPosition: `${viewport.x + size / 2}px ${viewport.y + size / 2}px`,
+  }
+}
+
+function formatViewportCoords(viewport: Viewport): string {
+  return `${Math.round(-viewport.x / viewport.zoom)}, ${Math.round(-viewport.y / viewport.zoom)}`
+}
+
+function viewportTransform(viewport: Viewport): string {
+  return `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.zoom})`
+}
 
 interface StatusHighlight {
   id: string
@@ -165,10 +207,7 @@ export function InfiniteCanvas() {
   const previousTaskStatusRef = useRef(new Map<string, TaskStatus>())
   const viewport = useCanvasStore((s) => s.viewport)
   const panels = useCanvasStore((s) => s.panels)
-  const snapGuides = useCanvasStore((s) => s.snapGuides)
   const isLoaded = useCanvasStore((s) => s.isLoaded)
-  const panBy = useCanvasStore((s) => s.panBy)
-  const zoomAtPoint = useCanvasStore((s) => s.zoomAtPoint)
   const zoomTo = useCanvasStore((s) => s.zoomTo)
   const resetViewport = useCanvasStore((s) => s.resetViewport)
   const fitToContent = useCanvasStore((s) => s.fitToContent)
@@ -353,27 +392,119 @@ export function InfiniteCanvas() {
     })
   }, [canvasPendingApp])
 
-  // ── rAF-coalesced viewport updates ───────────────────────
-  // Trackpad wheel and mousemove events fire at 60–120 Hz (uncoalesced by
-  // React); writing to the store per event commits the whole canvas subtree
-  // per event. Accumulate deltas and flush at most one store write per frame.
+  // ── Imperative gesture transforms ─────────────────────────
+  // During a pan/zoom gesture React does ZERO work: the accumulated deltas are
+  // applied straight to the transformed layer's `style.transform` (and to the
+  // grid background) inside a single rAF, and the resulting viewport is
+  // committed to the zustand store exactly once, when the gesture ends.
+  //
+  // Writing the viewport to the store per frame (as before) re-committed the
+  // whole canvas subtree — grid, connection curves, minimap and every panel
+  // wrapper — 60–120 times a second. Now that cost is paid once per gesture
+  // and the frames themselves are compositor-bound.
+  const transformLayerRef = useRef<HTMLDivElement>(null)
+  const gridRef = useRef<HTMLDivElement>(null)
+  const zoomLabelRef = useRef<HTMLSpanElement>(null)
+  const coordsLabelRef = useRef<HTMLSpanElement>(null)
+
+  /** Authoritative viewport while a gesture is in flight. */
+  const liveViewportRef = useRef<Viewport>(viewport)
+  const gestureActiveRef = useRef(false)
+  const viewportDirtyRef = useRef(false)
+  const wheelIdleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
   const pendingPanRef = useRef({ dx: 0, dy: 0 })
   const pendingZoomRef = useRef<{ deltaY: number; clientX: number; clientY: number; rect: DOMRect } | null>(null)
   const viewportRafRef = useRef<number | null>(null)
 
+  const applyViewportToDom = useCallback((vp: Viewport) => {
+    const layer = transformLayerRef.current
+    if (layer) layer.style.transform = viewportTransform(vp)
+
+    const grid = gridRef.current
+    if (grid) {
+      const bg = gridBackgroundStyle(vp)
+      grid.style.backgroundImage = bg.backgroundImage
+      grid.style.backgroundSize = bg.backgroundSize
+      grid.style.backgroundPosition = bg.backgroundPosition
+    }
+
+    // HUD readouts stay live during the gesture without a React render.
+    const zoomLabel = zoomLabelRef.current
+    if (zoomLabel) zoomLabel.textContent = `${Math.round(vp.zoom * 100)}%`
+    const coordsLabel = coordsLabelRef.current
+    if (coordsLabel) coordsLabel.textContent = formatViewportCoords(vp)
+
+    // Notify imperative subscribers (minimap viewport rectangle).
+    setLiveViewport(vp)
+  }, [])
+
+  // Store → live viewport sync. Runs for every *programmatic* viewport change
+  // (keyboard zoom, Ctrl+0, focusPanel, minimap navigation, fitToContent) and
+  // for the single commit at the end of a gesture — a no-op re-apply there.
+  // Single sync point, so the ref can never drift from the store.
+  useEffect(() => {
+    liveViewportRef.current = viewport
+    applyViewportToDom(viewport)
+  }, [viewport, applyViewportToDom])
+
+  // A re-render triggered mid-gesture by something else (a panel updated, a
+  // task status streamed in) repaints the transform from the *store* viewport
+  // via JSX and would snap the canvas back a frame. Re-assert the live value
+  // after every commit while a gesture is running.
+  useLayoutEffect(() => {
+    if (gestureActiveRef.current) applyViewportToDom(liveViewportRef.current)
+  })
+
+  const beginGesture = useCallback(() => {
+    if (gestureActiveRef.current) return
+    gestureActiveRef.current = true
+    // Promote the layer for the duration of the gesture only — a permanent
+    // will-change keeps a dedicated compositor layer (and its memory) alive.
+    const layer = transformLayerRef.current
+    if (layer) layer.style.willChange = 'transform'
+  }, [])
+
   const flushViewportUpdate = useCallback(() => {
     viewportRafRef.current = null
+    let next = liveViewportRef.current
+
     const pan = pendingPanRef.current
     if (pan.dx !== 0 || pan.dy !== 0) {
       pendingPanRef.current = { dx: 0, dy: 0 }
-      panBy(pan.dx, pan.dy)
+      next = panViewport(next, pan.dx, pan.dy)
     }
     const zoom = pendingZoomRef.current
     if (zoom) {
       pendingZoomRef.current = null
-      zoomAtPoint(zoom.deltaY, zoom.clientX, zoom.clientY, zoom.rect)
+      next = zoomViewportAtPoint(next, zoom.deltaY, zoom.clientX, zoom.clientY, zoom.rect)
     }
-  }, [panBy, zoomAtPoint])
+
+    if (next === liveViewportRef.current) return
+    liveViewportRef.current = next
+    viewportDirtyRef.current = true
+    applyViewportToDom(next)
+  }, [applyViewportToDom])
+
+  /** End the gesture and commit the live viewport to the store (once). */
+  const commitViewport = useCallback(() => {
+    if (wheelIdleTimerRef.current != null) {
+      clearTimeout(wheelIdleTimerRef.current)
+      wheelIdleTimerRef.current = null
+    }
+    if (viewportRafRef.current != null) {
+      cancelAnimationFrame(viewportRafRef.current)
+      flushViewportUpdate()
+    }
+    gestureActiveRef.current = false
+    const layer = transformLayerRef.current
+    if (layer) layer.style.willChange = ''
+
+    if (!viewportDirtyRef.current) return
+    viewportDirtyRef.current = false
+    // Store remains the source of truth at rest (and scheduleSave persists it).
+    useCanvasStore.getState().setViewport(liveViewportRef.current)
+  }, [flushViewportUpdate])
 
   const scheduleViewportUpdate = useCallback(() => {
     if (viewportRafRef.current != null) return
@@ -401,6 +532,7 @@ export function InfiniteCanvas() {
   useEffect(() => {
     return () => {
       if (viewportRafRef.current != null) cancelAnimationFrame(viewportRafRef.current)
+      if (wheelIdleTimerRef.current != null) clearTimeout(wheelIdleTimerRef.current)
     }
   }, [])
 
@@ -445,6 +577,7 @@ export function InfiniteCanvas() {
       }
 
       e.preventDefault()
+      beginGesture()
 
       if (e.ctrlKey || e.metaKey) {
         const rect = container.getBoundingClientRect()
@@ -452,8 +585,12 @@ export function InfiniteCanvas() {
       } else {
         queuePan(-e.deltaX, -e.deltaY)
       }
+
+      // No "wheel end" event exists — commit once the stream goes quiet.
+      if (wheelIdleTimerRef.current != null) clearTimeout(wheelIdleTimerRef.current)
+      wheelIdleTimerRef.current = setTimeout(commitViewport, WHEEL_IDLE_MS)
     },
-    [queuePan, queueZoom]
+    [queuePan, queueZoom, beginGesture, commitViewport]
   )
 
   useEffect(() => {
@@ -466,6 +603,10 @@ export function InfiniteCanvas() {
   // ── Mouse-drag panning ───────────────────────────────────
   const handleMouseDown = useCallback(
     (e: React.MouseEvent) => {
+      // Flush a still-pending wheel gesture so anything reading the store
+      // viewport below (and on the next interaction) sees the current value.
+      commitViewport()
+
       // Close context menu on any click
       if (contextMenu) {
         setContextMenu(null)
@@ -494,10 +635,11 @@ export function InfiniteCanvas() {
       if (isMiddle || isLeftOnCanvas || isSpacePan) {
         e.preventDefault()
         setIsPanning(true)
+        beginGesture()
         panStartRef.current = { x: e.clientX, y: e.clientY }
       }
     },
-    [spaceHeld, contextMenu]
+    [spaceHeld, contextMenu, commitViewport, beginGesture]
   )
 
   const handleMouseMove = useCallback(
@@ -507,7 +649,7 @@ export function InfiniteCanvas() {
         const container = containerRef.current
         if (container) {
           const rect = container.getBoundingClientRect()
-          const vp = useCanvasStore.getState().viewport
+          const vp = getLiveViewport()
           setMouseCanvasPos({
             x: (e.clientX - rect.left - vp.x) / vp.zoom,
             y: (e.clientY - rect.top - vp.y) / vp.zoom,
@@ -526,7 +668,9 @@ export function InfiniteCanvas() {
 
   const handleMouseUp = useCallback(() => {
     setIsPanning(false)
-  }, [])
+    // Gesture end — this is the single store write for the whole pan.
+    commitViewport()
+  }, [commitViewport])
 
   // ── Context menu ─────────────────────────────────────────
   const handleContextMenu = useCallback(
@@ -534,9 +678,11 @@ export function InfiniteCanvas() {
       e.preventDefault()
       const container = containerRef.current
       if (!container) return
+      commitViewport()
       const rect = container.getBoundingClientRect()
-      const canvasX = (e.clientX - rect.left - viewport.x) / viewport.zoom
-      const canvasY = (e.clientY - rect.top - viewport.y) / viewport.zoom
+      const vp = getLiveViewport()
+      const canvasX = (e.clientX - rect.left - vp.x) / vp.zoom
+      const canvasY = (e.clientY - rect.top - vp.y) / vp.zoom
       setContextMenu({
         clientX: e.clientX,
         clientY: e.clientY,
@@ -544,7 +690,7 @@ export function InfiniteCanvas() {
         canvasY,
       })
     },
-    [viewport]
+    [commitViewport]
   )
 
   // ── Focused panel tracking (for Tab cycling) ─────────────
@@ -574,16 +720,22 @@ export function InfiniteCanvas() {
       if (e.code === 'Space' && !e.repeat && !isInputFocused) {
         setSpaceHeld(true)
       }
+      // Keyboard/programmatic viewport changes keep going through the store —
+      // it stays the source of truth at rest. Commit any in-flight gesture
+      // first so we zoom from the value the user is actually looking at.
       if (e.code === 'Equal' && (e.ctrlKey || e.metaKey) && !isInputFocused) {
         e.preventDefault()
-        zoomTo(viewport.zoom * 1.2)
+        commitViewport()
+        zoomTo(liveViewportRef.current.zoom * 1.2)
       }
       if (e.code === 'Minus' && (e.ctrlKey || e.metaKey) && !isInputFocused) {
         e.preventDefault()
-        zoomTo(viewport.zoom / 1.2)
+        commitViewport()
+        zoomTo(liveViewportRef.current.zoom / 1.2)
       }
       if (e.code === 'Digit0' && (e.ctrlKey || e.metaKey) && !isInputFocused) {
         e.preventDefault()
+        commitViewport()
         resetViewport()
       }
 
@@ -597,6 +749,7 @@ export function InfiniteCanvas() {
             e.preventDefault()
             const container = containerRef.current
             if (container) {
+              commitViewport()
               const rect = container.getBoundingClientRect()
               useCanvasStore.getState().focusPanel(currentPanels[idx].id, rect.width, rect.height)
               setFocusedPanelIndex(idx)
@@ -618,6 +771,7 @@ export function InfiniteCanvas() {
         setFocusedPanelIndex(next)
         const container = containerRef.current
         if (container) {
+          commitViewport()
           const rect = container.getBoundingClientRect()
           useCanvasStore.getState().focusPanel(currentPanels[next].id, rect.width, rect.height)
         }
@@ -654,7 +808,7 @@ export function InfiniteCanvas() {
       window.removeEventListener('keyup', handleKeyUp)
       window.removeEventListener('blur', handleBlur)
     }
-  }, [viewport.zoom, zoomTo, resetViewport, focusedPanelIndex])
+  }, [zoomTo, resetViewport, focusedPanelIndex, commitViewport, setConnectingFromId])
 
   const zoomPercent = Math.round(viewport.zoom * 100)
 
@@ -675,10 +829,22 @@ export function InfiniteCanvas() {
         onMouseLeave={handleMouseUp}
         onContextMenu={handleContextMenu}
       >
+        {/* Background grid dots — painted on the static container so panning
+            and zooming only move a background image (no DOM under the canvas
+            transform, no React work per frame). */}
+        <div
+          ref={gridRef}
+          aria-hidden="true"
+          className="absolute inset-0"
+          style={{ ...gridBackgroundStyle(viewport), pointerEvents: 'none' }}
+        />
+
         {/* Transformed layer */}
         <div
+          ref={transformLayerRef}
+          data-canvas-transform-layer="true"
           style={{
-            transform: `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.zoom})`,
+            transform: viewportTransform(viewport),
             transformOrigin: '0 0',
             position: 'absolute',
             top: 0,
@@ -687,22 +853,8 @@ export function InfiniteCanvas() {
             height: 0,
           }}
         >
-          {/* Background grid dots */}
-          <CanvasGrid
-            zoom={viewport.zoom}
-            viewportX={viewport.x}
-            viewportY={viewport.y}
-            containerWidth={containerSize.width}
-            containerHeight={containerSize.height}
-          />
-
           {/* Snap guides */}
-          <SnapGuides
-            guides={snapGuides}
-            containerWidth={containerSize.width}
-            containerHeight={containerSize.height}
-            viewport={viewport}
-          />
+          <SnapGuides />
 
           {/* Connection lines */}
           <CanvasConnections mouseCanvasPos={mouseCanvasPos} />
@@ -778,7 +930,7 @@ export function InfiniteCanvas() {
         >
           <ZoomOut className="h-3.5 w-3.5" />
         </Button>
-        <span className="text-xs text-muted-foreground w-10 text-center tabular-nums">
+        <span ref={zoomLabelRef} className="text-xs text-muted-foreground w-10 text-center tabular-nums">
           {zoomPercent}%
         </span>
         <Button
@@ -811,11 +963,13 @@ export function InfiniteCanvas() {
             const btn = e.currentTarget.getBoundingClientRect()
             const rect = containerRef.current?.getBoundingClientRect()
             if (!rect) return
+            commitViewport()
+            const vp = getLiveViewport()
             setContextMenu({
               clientX: btn.left,
               clientY: btn.bottom + 4,
-              canvasX: (btn.left - rect.left - viewport.x) / viewport.zoom,
-              canvasY: (btn.bottom + 4 - rect.top - viewport.y) / viewport.zoom,
+              canvasX: (btn.left - rect.left - vp.x) / vp.zoom,
+              canvasY: (btn.bottom + 4 - rect.top - vp.y) / vp.zoom,
             })
           }}
           title="Add to canvas"
@@ -828,9 +982,8 @@ export function InfiniteCanvas() {
       {/* ── HUD: Viewport info (top-right) ── */}
       <div className="absolute top-3 right-3 flex items-center gap-2 text-[10px] text-muted-foreground/40 z-10 select-none">
         <Move className="h-3 w-3" />
-        <span className="tabular-nums">
-          {Math.round(-viewport.x / viewport.zoom)},{' '}
-          {Math.round(-viewport.y / viewport.zoom)}
+        <span ref={coordsLabelRef} className="tabular-nums">
+          {formatViewportCoords(viewport)}
         </span>
       </div>
 
@@ -866,76 +1019,21 @@ export function InfiniteCanvas() {
   )
 }
 
-// ── Grid dots background ───────────────────────────────────
-
-function CanvasGrid({
-  zoom,
-  viewportX,
-  viewportY,
-  containerWidth,
-  containerHeight,
-}: {
-  zoom: number
-  viewportX: number
-  viewportY: number
-  containerWidth: number
-  containerHeight: number
-}) {
-  // Container size comes from the ResizeObserver-tracked state — calling
-  // getBoundingClientRect() here (in the render phase) forced a synchronous
-  // style+layout flush on every pan/zoom frame.
-  // Guard against zero-size container (during window move/minimize transitions)
-  if (!containerWidth || !containerHeight || !zoom) return null
-
-  const visibleLeft = -viewportX / zoom
-  const visibleTop = -viewportY / zoom
-  const visibleWidth = containerWidth / zoom
-  const visibleHeight = containerHeight / zoom
-
-  const gridLeft = Math.floor(visibleLeft / GRID_SIZE) * GRID_SIZE - GRID_SIZE
-  const gridTop = Math.floor(visibleTop / GRID_SIZE) * GRID_SIZE - GRID_SIZE
-  const gridWidth = visibleWidth + GRID_SIZE * 3
-  const gridHeight = visibleHeight + GRID_SIZE * 3
-
-  const dotSize = Math.max(1, Math.min(2, 1.5 / zoom))
-
-  return (
-    <div
-      style={{
-        position: 'absolute',
-        left: gridLeft,
-        top: gridTop,
-        width: gridWidth,
-        height: gridHeight,
-        backgroundImage: `radial-gradient(circle, var(--canvas-dot) ${dotSize}px, transparent ${dotSize}px)`,
-        backgroundSize: `${GRID_SIZE}px ${GRID_SIZE}px`,
-        backgroundPosition: `${GRID_SIZE / 2}px ${GRID_SIZE / 2}px`,
-        pointerEvents: 'none',
-      }}
-    />
-  )
-}
-
 // ── Snap guide lines ───────────────────────────────────────
 
-function SnapGuides({
-  guides,
-  containerWidth,
-  containerHeight,
-  viewport,
-}: {
-  guides: SnapGuide[]
-  containerWidth: number
-  containerHeight: number
-  viewport: { x: number; y: number; zoom: number }
-}) {
-  if (guides.length === 0) return null
-  if (!containerWidth || !containerHeight || !viewport.zoom) return null
+/** Canvas-space half-length of a guide line — long enough to always span the
+ *  viewport at any zoom, so the guides don't depend on the viewport at all. */
+const GUIDE_EXTENT = 50_000
 
-  const visibleLeft = -viewport.x / viewport.zoom
-  const visibleTop = -viewport.y / viewport.zoom
-  const visibleWidth = containerWidth / viewport.zoom
-  const visibleHeight = containerHeight / viewport.zoom
+/**
+ * Subscribes to `snapGuides` itself rather than taking them as a prop: guides
+ * appear/disappear mid-drag, and a prop would force InfiniteCanvas (and with
+ * it every panel) to re-render. The store bails out on structurally equal
+ * guide arrays, so a drag that stays snapped writes nothing at all.
+ */
+function SnapGuides() {
+  const guides = useCanvasStore((s) => s.snapGuides)
+  if (guides.length === 0) return null
 
   return (
     <>
@@ -947,15 +1045,15 @@ function SnapGuides({
             guide.axis === 'x'
               ? {
                   left: guide.position,
-                  top: visibleTop - 1000,
+                  top: -GUIDE_EXTENT,
                   width: 1,
-                  height: visibleHeight + 2000,
+                  height: GUIDE_EXTENT * 2,
                   background: 'rgba(30,150,235,0.25)',
                 }
               : {
-                  left: visibleLeft - 1000,
+                  left: -GUIDE_EXTENT,
                   top: guide.position,
-                  width: visibleWidth + 2000,
+                  width: GUIDE_EXTENT * 2,
                   height: 1,
                   background: 'rgba(30,150,235,0.25)',
                 }

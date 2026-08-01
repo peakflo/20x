@@ -1,5 +1,15 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { useCanvasStore, MIN_ZOOM, MAX_ZOOM, calculateSnap, SNAP_GAP } from './canvas-store'
+import {
+  useCanvasStore,
+  MIN_ZOOM,
+  MAX_ZOOM,
+  calculateSnap,
+  SNAP_GAP,
+  panViewport,
+  clampZoom,
+  zoomViewportAtPoint,
+  snapGuidesEqual,
+} from './canvas-store'
 import type { CanvasPanelData } from './canvas-store'
 
 // Mock settingsApi to prevent actual IPC calls during tests
@@ -22,6 +32,8 @@ describe('canvas-store', () => {
       draggingPanelId: null,
       snapGuides: [],
       connectingFromId: null,
+      proximityEdge: null,
+      liveDrag: null,
     })
   })
 
@@ -266,6 +278,97 @@ describe('canvas-store', () => {
       useCanvasStore.getState().setConnectingFromId('panel-1')
       useCanvasStore.getState().setConnectingFromId(null)
       expect(useCanvasStore.getState().connectingFromId).toBeNull()
+    })
+  })
+
+  // ── Pure viewport math (shared with the imperative gesture path) ──
+
+  describe('viewport math helpers', () => {
+    it('pans without mutating the input viewport', () => {
+      const vp = { x: 10, y: 20, zoom: 2 }
+      const next = panViewport(vp, 5, -5)
+      expect(next).toEqual({ x: 15, y: 15, zoom: 2 })
+      expect(vp).toEqual({ x: 10, y: 20, zoom: 2 })
+    })
+
+    it('clamps zoom to the supported range', () => {
+      expect(clampZoom(100)).toBe(MAX_ZOOM)
+      expect(clampZoom(0)).toBe(MIN_ZOOM)
+      expect(clampZoom(1.5)).toBe(1.5)
+    })
+
+    it('produces the same result as the zoomAtPoint store action', () => {
+      const rect = { left: 0, top: 0 } as DOMRect
+      const expected = zoomViewportAtPoint({ x: 0, y: 0, zoom: 1 }, -120, 400, 300, rect)
+
+      useCanvasStore.getState().zoomAtPoint(-120, 400, 300, rect)
+
+      expect(useCanvasStore.getState().viewport).toEqual(expected)
+    })
+
+    it('keeps the zoom anchor point fixed on screen', () => {
+      const rect = { left: 0, top: 0 } as DOMRect
+      const start = { x: 0, y: 0, zoom: 1 }
+      const anchorX = 400
+      const anchorY = 300
+      const canvasX = (anchorX - start.x) / start.zoom
+      const canvasY = (anchorY - start.y) / start.zoom
+
+      const next = zoomViewportAtPoint(start, -120, anchorX, anchorY, rect)
+
+      expect(canvasX * next.zoom + next.x).toBeCloseTo(anchorX, 6)
+      expect(canvasY * next.zoom + next.y).toBeCloseTo(anchorY, 6)
+    })
+
+    it('compares snap guides structurally', () => {
+      expect(snapGuidesEqual([], [])).toBe(true)
+      expect(
+        snapGuidesEqual([{ axis: 'x', position: 10 }], [{ axis: 'x', position: 10 }])
+      ).toBe(true)
+      expect(
+        snapGuidesEqual([{ axis: 'x', position: 10 }], [{ axis: 'y', position: 10 }])
+      ).toBe(false)
+      expect(snapGuidesEqual([{ axis: 'x', position: 10 }], [])).toBe(false)
+    })
+  })
+
+  // ── Transient drag state: no-op writes must not change identity ──
+
+  describe('transient drag state bail-outs', () => {
+    it('keeps snapGuides identity when the guides are unchanged', () => {
+      useCanvasStore.getState().setSnapGuides([{ axis: 'x', position: 40 }])
+      const first = useCanvasStore.getState().snapGuides
+
+      useCanvasStore.getState().setSnapGuides([{ axis: 'x', position: 40 }])
+      expect(useCanvasStore.getState().snapGuides).toBe(first)
+
+      useCanvasStore.getState().setSnapGuides([{ axis: 'x', position: 41 }])
+      expect(useCanvasStore.getState().snapGuides).not.toBe(first)
+    })
+
+    it('keeps proximityEdge identity when the same pair is re-detected', () => {
+      useCanvasStore.getState().setProximityEdge({ fromId: 'a', toId: 'b' })
+      const first = useCanvasStore.getState().proximityEdge
+
+      useCanvasStore.getState().setProximityEdge({ fromId: 'a', toId: 'b' })
+      expect(useCanvasStore.getState().proximityEdge).toBe(first)
+
+      useCanvasStore.getState().setProximityEdge(null)
+      expect(useCanvasStore.getState().proximityEdge).toBeNull()
+    })
+
+    it('keeps liveDrag identity when the panel has not moved', () => {
+      useCanvasStore.getState().setLiveDrag({ id: 'p1', x: 10, y: 20 })
+      const first = useCanvasStore.getState().liveDrag
+
+      useCanvasStore.getState().setLiveDrag({ id: 'p1', x: 10, y: 20 })
+      expect(useCanvasStore.getState().liveDrag).toBe(first)
+
+      useCanvasStore.getState().setLiveDrag({ id: 'p1', x: 11, y: 20 })
+      expect(useCanvasStore.getState().liveDrag).not.toBe(first)
+
+      useCanvasStore.getState().setLiveDrag(null)
+      expect(useCanvasStore.getState().liveDrag).toBeNull()
     })
   })
 

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, cleanup, fireEvent, waitFor, act } from '@testing-library/react'
 import { InfiniteCanvas } from './InfiniteCanvas'
 import { useCanvasStore } from '@/stores/canvas-store'
 import { TaskStatus } from '@/types'
@@ -87,6 +87,8 @@ describe('InfiniteCanvas', () => {
       draggingPanelId: null,
       snapGuides: [],
       connectingFromId: null,
+      proximityEdge: null,
+      liveDrag: null,
       isLoaded: true, // Skip async load in tests
     })
     taskStoreState.tasks = []
@@ -322,6 +324,101 @@ describe('InfiniteCanvas', () => {
     expect(screen.getByTitle('Focus panel (zoom to fit)')).toBeTruthy()
     expect(screen.getByTitle('Collapse')).toBeTruthy()
     expect(screen.getByTitle('Close panel')).toBeTruthy()
+  })
+
+  // ── Imperative gesture transforms ────────────────────────
+  // During a pan/zoom/drag gesture the canvas must do ZERO React work: the
+  // DOM is transformed directly and the store is written exactly once, when
+  // the gesture ends.
+
+  describe('imperative gesture transforms', () => {
+    const flushFrames = async () => {
+      // rAF + the queued microtasks React uses to commit
+      await act(async () => {
+        await new Promise((resolve) => requestAnimationFrame(() => resolve(null)))
+        await new Promise((resolve) => setTimeout(resolve, 0))
+      })
+    }
+
+    it('pans the layer imperatively and commits the viewport once the wheel goes idle', async () => {
+      const { container } = render(<InfiniteCanvas />)
+      const layer = container.querySelector('[data-canvas-transform-layer="true"]') as HTMLElement
+      const canvas = layer.parentElement as HTMLElement
+
+      fireEvent.wheel(canvas, { deltaX: 30, deltaY: 40 })
+      await flushFrames()
+
+      // DOM moved…
+      expect(layer.style.transform).toBe('translate(-30px, -40px) scale(1)')
+      expect(layer.style.willChange).toBe('transform')
+      // …but the store was NOT written during the gesture.
+      expect(useCanvasStore.getState().viewport).toEqual({ x: 0, y: 0, zoom: 1 })
+
+      // Wheel idle → single commit.
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 200))
+      })
+      expect(useCanvasStore.getState().viewport).toEqual({ x: -30, y: -40, zoom: 1 })
+      expect(layer.style.willChange).toBe('')
+    })
+
+    it('commits the viewport on mouseup after a drag-pan', async () => {
+      const { container } = render(<InfiniteCanvas />)
+      const layer = container.querySelector('[data-canvas-transform-layer="true"]') as HTMLElement
+      const canvas = layer.parentElement as HTMLElement
+
+      fireEvent.mouseDown(canvas, { button: 1, clientX: 100, clientY: 100 })
+      fireEvent.mouseMove(canvas, { clientX: 150, clientY: 130 })
+      await flushFrames()
+
+      expect(layer.style.transform).toBe('translate(50px, 30px) scale(1)')
+      expect(useCanvasStore.getState().viewport).toEqual({ x: 0, y: 0, zoom: 1 })
+
+      fireEvent.mouseUp(canvas)
+      expect(useCanvasStore.getState().viewport).toEqual({ x: 50, y: 30, zoom: 1 })
+    })
+
+    it('keeps the DOM transform in sync with programmatic viewport changes', async () => {
+      const { container } = render(<InfiniteCanvas />)
+      const layer = container.querySelector('[data-canvas-transform-layer="true"]') as HTMLElement
+
+      await act(async () => {
+        useCanvasStore.getState().setViewport({ x: 12, y: 34, zoom: 2 })
+      })
+
+      expect(layer.style.transform).toBe('translate(12px, 34px) scale(2)')
+    })
+
+    it('moves a dragged panel with a transform and writes x/y only on mouseup', async () => {
+      useCanvasStore.getState().addPanel({
+        type: 'task',
+        title: 'Draggable',
+        x: 100,
+        y: 100,
+        width: 400,
+        height: 300,
+      })
+      const { container } = render(<InfiniteCanvas />)
+      const panelEl = container.querySelector('[data-canvas-panel="true"]') as HTMLElement
+      const titleBar = panelEl.querySelector('.cursor-grab') as HTMLElement
+
+      fireEvent.mouseDown(titleBar, { button: 0, clientX: 200, clientY: 200 })
+      fireEvent.mouseMove(window, { clientX: 260, clientY: 250 })
+      await flushFrames()
+
+      // Moved on the compositor, store untouched (left/top still the origin).
+      expect(panelEl.style.transform).toBe('translate(60px, 50px)')
+      expect(panelEl.style.willChange).toBe('transform')
+      expect(useCanvasStore.getState().panels[0]).toMatchObject({ x: 100, y: 100 })
+
+      await act(async () => {
+        fireEvent.mouseUp(window)
+      })
+
+      expect(useCanvasStore.getState().panels[0]).toMatchObject({ x: 160, y: 150 })
+      expect(panelEl.style.transform).toBe('')
+      expect(panelEl.style.willChange).toBe('')
+    })
   })
 
   it('keeps canvas content selectable inside panels', () => {

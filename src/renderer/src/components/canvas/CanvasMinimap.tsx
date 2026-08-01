@@ -1,5 +1,6 @@
-import { useCallback, useRef, useState, useMemo } from 'react'
+import { useCallback, useRef, useState, useMemo, useEffect } from 'react'
 import { useCanvasStore, type CanvasPanelData, MIN_ZOOM, MAX_ZOOM } from '@/stores/canvas-store'
+import { getLiveViewport, subscribeLiveViewport } from '@/stores/canvas-live-viewport'
 import { useTaskStore } from '@/stores/task-store'
 import { Minus, Plus, Maximize2, ChevronDown, ChevronUp } from 'lucide-react'
 import { getCanvasTaskStatusStyle } from './canvas-status-style'
@@ -113,10 +114,12 @@ export function CanvasMinimap({
       const canvasX = (mx - MINIMAP_PAD) / scale + bounds.minX
       const canvasY = (my - MINIMAP_PAD) / scale + bounds.minY
 
-      // Center the viewport on this point
-      const newVpX = -(canvasX * viewport.zoom - containerWidth / 2)
-      const newVpY = -(canvasY * viewport.zoom - containerHeight / 2)
-      setViewport({ x: newVpX, y: newVpY })
+      // Center the viewport on this point (live zoom — a wheel gesture may
+      // still be in flight and not yet committed to the store)
+      const liveZoom = getLiveViewport().zoom || viewport.zoom
+      const newVpX = -(canvasX * liveZoom - containerWidth / 2)
+      const newVpY = -(canvasY * liveZoom - containerHeight / 2)
+      setViewport({ x: newVpX, y: newVpY, zoom: liveZoom })
     },
     [scale, bounds, viewport.zoom, containerWidth, containerHeight, setViewport]
   )
@@ -158,6 +161,39 @@ export function CanvasMinimap({
 
   const zoomPercent = Math.round(viewport.zoom * 100)
 
+  // ── Follow the viewport during a gesture, imperatively ──
+  // The canvas doesn't write the viewport to the store while the user is
+  // panning/zooming (see InfiniteCanvas), so the minimap can't re-render its
+  // way there. Track the live viewport and patch the rect/readouts in place —
+  // no React render, and the minimap still moves at native refresh rate.
+  const vpRectRef = useRef<SVGRectElement>(null)
+  const zoomLabelRef = useRef<HTMLSpanElement>(null)
+  const zoomSliderRef = useRef<HTMLInputElement>(null)
+  // Projection captured during render; only re-derived when the store commits.
+  const projectionRef = useRef({ minX: bounds.minX, minY: bounds.minY, scale })
+  projectionRef.current = { minX: bounds.minX, minY: bounds.minY, scale }
+
+  useEffect(() => {
+    const applyLiveViewport = (vp: { x: number; y: number; zoom: number }) => {
+      const { minX, minY, scale: s } = projectionRef.current
+      const rectEl = vpRectRef.current
+      if (rectEl && s > 0 && vp.zoom > 0) {
+        const left = -vp.x / vp.zoom
+        const top = -vp.y / vp.zoom
+        rectEl.setAttribute('x', String(MINIMAP_PAD + (left - minX) * s))
+        rectEl.setAttribute('y', String(MINIMAP_PAD + (top - minY) * s))
+        rectEl.setAttribute('width', String(Math.max(4, (containerWidth / vp.zoom) * s)))
+        rectEl.setAttribute('height', String(Math.max(3, (containerHeight / vp.zoom) * s)))
+      }
+      const label = zoomLabelRef.current
+      if (label) label.textContent = `${Math.round(vp.zoom * 100)}%`
+      const slider = zoomSliderRef.current
+      if (slider) slider.value = String(vp.zoom * 100)
+    }
+    applyLiveViewport(getLiveViewport())
+    return subscribeLiveViewport(applyLiveViewport)
+  }, [containerWidth, containerHeight, collapsed])
+
   if (panels.length === 0) return null
 
   return (
@@ -175,7 +211,7 @@ export function CanvasMinimap({
           Map
         </span>
         <div className="flex items-center gap-1">
-          <span className="text-[10px] text-muted-foreground/40 tabular-nums">
+          <span ref={zoomLabelRef} className="text-[10px] text-muted-foreground/40 tabular-nums">
             {zoomPercent}%
           </span>
           {collapsed ? (
@@ -249,6 +285,7 @@ export function CanvasMinimap({
 
             {/* Viewport rectangle */}
             <rect
+              ref={vpRectRef}
               x={vpRect.x}
               y={vpRect.y}
               width={Math.max(4, vpRect.w)}
@@ -273,6 +310,7 @@ export function CanvasMinimap({
 
             {/* Zoom slider */}
             <input
+              ref={zoomSliderRef}
               type="range"
               min={MIN_ZOOM * 100}
               max={MAX_ZOOM * 100}
