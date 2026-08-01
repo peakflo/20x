@@ -1,5 +1,5 @@
-import { useCallback, useRef, useState, useMemo, useEffect } from 'react'
-import { useCanvasStore, type CanvasPanelData, MIN_ZOOM, MAX_ZOOM } from '@/stores/canvas-store'
+import { memo, useCallback, useRef, useState, useMemo, useEffect } from 'react'
+import { useCanvasStore, type CanvasPanelData, type CanvasEdge, type Viewport, MIN_ZOOM, MAX_ZOOM } from '@/stores/canvas-store'
 import { getLiveViewport, subscribeLiveViewport } from '@/stores/canvas-live-viewport'
 import { useTaskStore } from '@/stores/task-store'
 import { Minus, Plus, Maximize2, ChevronDown, ChevronUp } from 'lucide-react'
@@ -21,6 +21,107 @@ const PANEL_COLORS: Record<string, string> = {
   placeholder: 'rgba(107,114,128,0.4)', // gray
 }
 
+interface MinimapBounds {
+  minX: number
+  minY: number
+  maxX: number
+  maxY: number
+}
+
+const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value))
+
+function getClampedViewportRect(
+  viewport: Viewport,
+  bounds: MinimapBounds,
+  containerWidth: number,
+  containerHeight: number
+) {
+  const canvasW = bounds.maxX - bounds.minX
+  const canvasH = bounds.maxY - bounds.minY
+  const viewportW = containerWidth / viewport.zoom
+  const viewportH = containerHeight / viewport.zoom
+  const clampedW = Math.min(viewportW, canvasW)
+  const clampedH = Math.min(viewportH, canvasH)
+
+  return {
+    left: clamp(-viewport.x / viewport.zoom, bounds.minX, bounds.maxX - clampedW),
+    top: clamp(-viewport.y / viewport.zoom, bounds.minY, bounds.maxY - clampedH),
+    width: clampedW,
+    height: clampedH,
+  }
+}
+
+const MinimapContent = memo(function MinimapContent({
+  panels,
+  edges,
+  bounds,
+  scale,
+  taskStatusMap,
+}: {
+  panels: CanvasPanelData[]
+  edges: CanvasEdge[]
+  bounds: MinimapBounds
+  scale: number
+  taskStatusMap: Map<string, ReturnType<typeof useTaskStore.getState>['tasks'][number]['status']>
+}) {
+  const panelMap = useMemo(() => {
+    const map = new Map<string, CanvasPanelData>()
+    for (const p of panels) map.set(p.id, p)
+    return map
+  }, [panels])
+
+  const toMiniX = useCallback((cx: number) => MINIMAP_PAD + (cx - bounds.minX) * scale, [bounds.minX, scale])
+  const toMiniY = useCallback((cy: number) => MINIMAP_PAD + (cy - bounds.minY) * scale, [bounds.minY, scale])
+
+  return (
+    <>
+      {/* Edge lines */}
+      {edges.map((edge) => {
+        const from = panelMap.get(edge.fromPanelId)
+        const to = panelMap.get(edge.toPanelId)
+        if (!from || !to) return null
+        const edgeColor = edge.edgeType === 'browser' ? 'rgba(249,115,22,0.4)'
+          : edge.edgeType === 'terminal' ? 'rgba(34,197,94,0.4)'
+          : 'rgba(30,150,235,0.3)'
+        return (
+          <line
+            key={edge.id}
+            x1={toMiniX(from.x + from.width / 2)}
+            y1={toMiniY(from.y + from.height / 2)}
+            x2={toMiniX(to.x + to.width / 2)}
+            y2={toMiniY(to.y + to.height / 2)}
+            stroke={edgeColor}
+            strokeWidth="1"
+          />
+        )
+      })}
+
+      {/* Panel rectangles */}
+      {panels.map((p) => {
+        const taskStatusStyle = p.type === 'task' ? getCanvasTaskStatusStyle(taskStatusMap.get(p.refId ?? '')) : null
+        const color = taskStatusStyle?.miniFill ?? PANEL_COLORS[p.type] ?? 'rgba(148,163,184,0.5)'
+        const px = toMiniX(p.x)
+        const py = toMiniY(p.y)
+        const pw = Math.max(3, p.width * scale)
+        const ph = Math.max(2, p.height * scale)
+        return (
+          <rect
+            key={p.id}
+            x={px}
+            y={py}
+            width={pw}
+            height={ph}
+            rx="1"
+            fill={color}
+            stroke="rgba(255,255,255,0.1)"
+            strokeWidth="0.5"
+          />
+        )
+      })}
+    </>
+  )
+})
+
 /**
  * CanvasMinimap — a small overview map in the bottom-right corner.
  *
@@ -32,7 +133,7 @@ const PANEL_COLORS: Record<string, string> = {
  * - Fit-to-content button
  * - Collapsible
  */
-export function CanvasMinimap({
+function CanvasMinimapComponent({
   containerWidth,
   containerHeight,
 }: {
@@ -63,20 +164,10 @@ export function CanvasMinimap({
       maxX = Math.max(maxX, p.x + p.width)
       maxY = Math.max(maxY, p.y + p.height)
     }
-    // Also include the viewport visible area so it never clips out
-    const vpLeft = -viewport.x / viewport.zoom
-    const vpTop = -viewport.y / viewport.zoom
-    const vpRight = vpLeft + containerWidth / viewport.zoom
-    const vpBottom = vpTop + containerHeight / viewport.zoom
-    minX = Math.min(minX, vpLeft)
-    minY = Math.min(minY, vpTop)
-    maxX = Math.max(maxX, vpRight)
-    maxY = Math.max(maxY, vpBottom)
-
     // Add padding
     const pad = 100
     return { minX: minX - pad, minY: minY - pad, maxX: maxX + pad, maxY: maxY + pad }
-  }, [panels, viewport, containerWidth, containerHeight])
+  }, [panels])
 
   // ── Scale factor: canvas space → minimap space ──────────
   const canvasW = bounds.maxX - bounds.minX
@@ -90,15 +181,12 @@ export function CanvasMinimap({
   const toMiniY = (cy: number) => MINIMAP_PAD + (cy - bounds.minY) * scale
 
   // ── Viewport rectangle in minimap ──────────────────────
-  const vpLeft = -viewport.x / viewport.zoom
-  const vpTop = -viewport.y / viewport.zoom
-  const vpW = containerWidth / viewport.zoom
-  const vpH = containerHeight / viewport.zoom
+  const clampedViewportRect = getClampedViewportRect(viewport, bounds, containerWidth, containerHeight)
   const vpRect = {
-    x: toMiniX(vpLeft),
-    y: toMiniY(vpTop),
-    w: vpW * scale,
-    h: vpH * scale,
+    x: toMiniX(clampedViewportRect.left),
+    y: toMiniY(clampedViewportRect.top),
+    w: clampedViewportRect.width * scale,
+    h: clampedViewportRect.height * scale,
   }
 
   // ── Click/drag on minimap → pan canvas ──────────────────
@@ -146,13 +234,6 @@ export function CanvasMinimap({
     setIsDragging(false)
   }, [])
 
-  // ── Edge lines in minimap ─────────────────────────────
-  const panelMap = useMemo(() => {
-    const map = new Map<string, CanvasPanelData>()
-    for (const p of panels) map.set(p.id, p)
-    return map
-  }, [panels])
-
   const taskStatusMap = useMemo(() => {
     const map = new Map<string, (typeof tasks)[number]['status']>()
     for (const task of tasks) map.set(task.id, task.status)
@@ -170,20 +251,19 @@ export function CanvasMinimap({
   const zoomLabelRef = useRef<HTMLSpanElement>(null)
   const zoomSliderRef = useRef<HTMLInputElement>(null)
   // Projection captured during render; only re-derived when the store commits.
-  const projectionRef = useRef({ minX: bounds.minX, minY: bounds.minY, scale })
-  projectionRef.current = { minX: bounds.minX, minY: bounds.minY, scale }
+  const projectionRef = useRef({ bounds, scale })
+  projectionRef.current = { bounds, scale }
 
   useEffect(() => {
     const applyLiveViewport = (vp: { x: number; y: number; zoom: number }) => {
-      const { minX, minY, scale: s } = projectionRef.current
+      const { bounds: currentBounds, scale: s } = projectionRef.current
       const rectEl = vpRectRef.current
       if (rectEl && s > 0 && vp.zoom > 0) {
-        const left = -vp.x / vp.zoom
-        const top = -vp.y / vp.zoom
-        rectEl.setAttribute('x', String(MINIMAP_PAD + (left - minX) * s))
-        rectEl.setAttribute('y', String(MINIMAP_PAD + (top - minY) * s))
-        rectEl.setAttribute('width', String(Math.max(4, (containerWidth / vp.zoom) * s)))
-        rectEl.setAttribute('height', String(Math.max(3, (containerHeight / vp.zoom) * s)))
+        const rect = getClampedViewportRect(vp, currentBounds, containerWidth, containerHeight)
+        rectEl.setAttribute('x', String(MINIMAP_PAD + (rect.left - currentBounds.minX) * s))
+        rectEl.setAttribute('y', String(MINIMAP_PAD + (rect.top - currentBounds.minY) * s))
+        rectEl.setAttribute('width', String(Math.max(4, rect.width * s)))
+        rectEl.setAttribute('height', String(Math.max(3, rect.height * s)))
       }
       const label = zoomLabelRef.current
       if (label) label.textContent = `${Math.round(vp.zoom * 100)}%`
@@ -239,49 +319,13 @@ export function CanvasMinimap({
             onMouseUp={handleMouseUp}
             onMouseLeave={handleMouseUp}
           >
-            {/* Edge lines */}
-            {edges.map((edge) => {
-              const from = panelMap.get(edge.fromPanelId)
-              const to = panelMap.get(edge.toPanelId)
-              if (!from || !to) return null
-              const edgeColor = edge.edgeType === 'browser' ? 'rgba(249,115,22,0.4)'
-                : edge.edgeType === 'terminal' ? 'rgba(34,197,94,0.4)'
-                : 'rgba(30,150,235,0.3)'
-              return (
-                <line
-                  key={edge.id}
-                  x1={toMiniX(from.x + from.width / 2)}
-                  y1={toMiniY(from.y + from.height / 2)}
-                  x2={toMiniX(to.x + to.width / 2)}
-                  y2={toMiniY(to.y + to.height / 2)}
-                  stroke={edgeColor}
-                  strokeWidth="1"
-                />
-              )
-            })}
-
-            {/* Panel rectangles */}
-            {panels.map((p) => {
-              const taskStatusStyle = p.type === 'task' ? getCanvasTaskStatusStyle(taskStatusMap.get(p.refId ?? '')) : null
-              const color = taskStatusStyle?.miniFill ?? PANEL_COLORS[p.type] ?? 'rgba(148,163,184,0.5)'
-              const px = toMiniX(p.x)
-              const py = toMiniY(p.y)
-              const pw = Math.max(3, p.width * scale)
-              const ph = Math.max(2, p.height * scale)
-              return (
-                <rect
-                  key={p.id}
-                  x={px}
-                  y={py}
-                  width={pw}
-                  height={ph}
-                  rx="1"
-                  fill={color}
-                  stroke="rgba(255,255,255,0.1)"
-                  strokeWidth="0.5"
-                />
-              )
-            })}
+            <MinimapContent
+              panels={panels}
+              edges={edges}
+              bounds={bounds}
+              scale={scale}
+              taskStatusMap={taskStatusMap}
+            />
 
             {/* Viewport rectangle */}
             <rect
@@ -347,3 +391,5 @@ export function CanvasMinimap({
     </div>
   )
 }
+
+export const CanvasMinimap = memo(CanvasMinimapComponent)
