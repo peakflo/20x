@@ -1,4 +1,4 @@
-import { useCallback, useEffect } from 'react'
+import { useCallback, useEffect, useMemo } from 'react'
 import { agentSessionApi } from '@/lib/ipc-client'
 import { useAgentStore, SessionStatus } from '@/stores/agent-store'
 import { captureAnalyticsEvent } from '@/lib/analytics'
@@ -48,16 +48,31 @@ export function useAgentSession(taskId: string | undefined) {
     if (taskId && typeof hydrateTranscript === 'function') void hydrateTranscript(taskId)
   }, [taskId, hydrateTranscript])
 
-  const sessionState: AgentSessionState = session
-    ? {
-        sessionId: session.sessionId,
-        status: session.status,
-        messages: session.messages,
-        pendingApproval: session.pendingApproval,
-        systemStatus: session.systemStatus,
-        pendingSend: session.pendingSend
-      }
-    : EMPTY_SESSION
+  // Project the store session into a stable value. Keyed on individual fields so
+  // the returned object keeps identity across unrelated store deltas (e.g. a new
+  // session Map identity that leaves these fields referentially equal). This lets
+  // downstream React.memo boundaries actually bail out.
+  const sessionState: AgentSessionState = useMemo(
+    () =>
+      session
+        ? {
+            sessionId: session.sessionId,
+            status: session.status,
+            messages: session.messages,
+            pendingApproval: session.pendingApproval,
+            systemStatus: session.systemStatus,
+            pendingSend: session.pendingSend
+          }
+        : EMPTY_SESSION,
+    [
+      session?.sessionId,
+      session?.status,
+      session?.messages,
+      session?.pendingApproval,
+      session?.systemStatus,
+      session?.pendingSend
+    ]
+  )
 
   const start = useCallback(
     async (agentId: string, tId: string, workspaceDir?: string, skipInitialPrompt?: boolean) => {
@@ -212,5 +227,11 @@ export function useAgentSession(taskId: string | undefined) {
     [taskId]
   )
 
-  return { session: sessionState, start, resume, abort, stop, sendMessage, approve }
+  // Memoize the returned hook object so consumers that spread/destructure it (and
+  // any effect/memo keyed on the whole object) see a stable identity when nothing
+  // meaningful changed. All callbacks below are already useCallback-stable.
+  return useMemo(
+    () => ({ session: sessionState, start, resume, abort, stop, sendMessage, approve }),
+    [sessionState, start, resume, abort, stop, sendMessage, approve]
+  )
 }
