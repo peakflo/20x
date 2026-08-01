@@ -46,6 +46,18 @@ function getTranscriptItemSearchText(item: TranscriptItem): string {
   return getMessageSearchText(item.message)
 }
 
+function getMessageContentLength(message: AgentMessage): number {
+  return typeof message.content === 'string' ? message.content.length : 0
+}
+
+function getTranscriptItemContentLength(item: TranscriptItem | undefined): number {
+  if (!item) return 0
+  if (item.type === 'activity') {
+    return item.messages.reduce((total, message) => total + getMessageContentLength(message), 0)
+  }
+  return getMessageContentLength(item.message)
+}
+
 const TranscriptRow = memo(function TranscriptRow({
   item,
   activeQuestionId,
@@ -88,6 +100,8 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
   const scrollRef = useRef<HTMLDivElement>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
   const isAtBottomRef = useRef(true)
+  const scrollRafRef = useRef<number | null>(null)
+  const autoScrollRafRef = useRef<number | null>(null)
   const [todosExpanded, setTodosExpanded] = useState(false)
   const [showScrollToBottom, setShowScrollToBottom] = useState(false)
   const [isSearchOpen, setIsSearchOpen] = useState(false)
@@ -97,7 +111,6 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
   const [messageAttachments, setMessageAttachments] = useState<ChatInputAttachment[]>([])
 
   const messages = session?.messages || []
-  const lastMessage = messages[messages.length - 1]
   const normalizedSearchQuery = searchQuery.trim().toLowerCase()
 
   const transcriptItems = useMemo<TranscriptItem[]>(() => {
@@ -129,6 +142,10 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
     }, [])
   }, [normalizedSearchQuery, transcriptItems])
   const activeSearchItemIndex = searchResultIndexes[activeSearchResult] ?? -1
+  const lastTranscriptItemContentLength = useMemo(
+    () => getTranscriptItemContentLength(transcriptItems[transcriptItems.length - 1]),
+    [transcriptItems]
+  )
 
   // Determine if the agent is actively working
   const isWorking = session?.status === SessionStatus.WORKING
@@ -321,19 +338,45 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
   useEffect(() => {
     if (activeSearchItemIndex >= 0) return
     if (transcriptItems.length > 0 && isAtBottomRef.current) {
-      requestAnimationFrame(() => {
+      if (autoScrollRafRef.current !== null) {
+        cancelAnimationFrame(autoScrollRafRef.current)
+      }
+      autoScrollRafRef.current = requestAnimationFrame(() => {
+        autoScrollRafRef.current = null
+        if (!isAtBottomRef.current) return
         virtualizer.scrollToIndex(transcriptItems.length - 1, { align: 'end' })
       })
     }
-  }, [activeSearchItemIndex, lastMessage?.content, transcriptItems.length, virtualizer])
+    return () => {
+      if (autoScrollRafRef.current !== null) {
+        cancelAnimationFrame(autoScrollRafRef.current)
+        autoScrollRafRef.current = null
+      }
+    }
+  }, [activeSearchItemIndex, lastTranscriptItemContentLength, transcriptItems.length, virtualizer])
 
   // Track scroll position
   const handleScroll = useCallback(() => {
-    if (!scrollRef.current) return
-    const { scrollTop, scrollHeight, clientHeight } = scrollRef.current
-    const isAtBottom = scrollHeight - scrollTop - clientHeight < 80
-    isAtBottomRef.current = isAtBottom
-    setShowScrollToBottom(!isAtBottom)
+    if (scrollRafRef.current !== null) return
+    scrollRafRef.current = requestAnimationFrame(() => {
+      scrollRafRef.current = null
+      if (!scrollRef.current) return
+      const { scrollTop, scrollHeight, clientHeight } = scrollRef.current
+      const isAtBottom = scrollHeight - scrollTop - clientHeight < 80
+      isAtBottomRef.current = isAtBottom
+      setShowScrollToBottom(!isAtBottom)
+    })
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      if (scrollRafRef.current !== null) {
+        cancelAnimationFrame(scrollRafRef.current)
+      }
+      if (autoScrollRafRef.current !== null) {
+        cancelAnimationFrame(autoScrollRafRef.current)
+      }
+    }
   }, [])
 
   const scrollToBottom = useCallback(() => {
