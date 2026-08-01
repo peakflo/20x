@@ -6,12 +6,20 @@ import { useCanvasStore } from '@/stores/canvas-store'
 import { subscribe } from '@/lib/shared-ipc-listeners'
 import '@xterm/xterm/css/xterm.css'
 
+// Verbose terminal lifecycle logs are off by default (they fire on every
+// init/focus/click). Opt in at runtime with:
+//   localStorage.setItem('debug:terminal', '1')
+const TERMINAL_DEBUG =
+  typeof localStorage !== 'undefined' && localStorage.getItem('debug:terminal') === '1'
+
+function tlog(...args: unknown[]): void {
+  if (TERMINAL_DEBUG) console.log(...args)
+}
+
 interface TerminalPanelContentProps {
   terminalId: string
   /** Initial working directory — restored from persisted panel state */
   cwd?: string
-  /** Current canvas zoom. xterm pointer math must compensate for canvas transforms. */
-  canvasZoom?: number
 }
 
 /**
@@ -27,7 +35,12 @@ interface TerminalPanelContentProps {
  *      sees truly-zero values even during layout shifts.
  *   3. Every fit() call is wrapped in try-catch.
  */
-export function TerminalPanelContent({ terminalId, cwd, canvasZoom = 1 }: TerminalPanelContentProps) {
+export function TerminalPanelContent({ terminalId, cwd }: TerminalPanelContentProps) {
+  // Read the committed canvas zoom directly from the store. This subscription
+  // only re-renders THIS terminal when zoom is committed (mouseup / wheel-idle),
+  // instead of the old `zoom` prop that was threaded through MemoizedPanelContent
+  // and broke memoization for every non-terminal panel on each committed zoom.
+  const canvasZoom = useCanvasStore((s) => s.viewport.zoom)
   const containerRef = useRef<HTMLDivElement>(null)
   const xtermRef = useRef<XTerm | null>(null)
   const fitAddonRef = useRef<FitAddon | null>(null)
@@ -41,11 +54,16 @@ export function TerminalPanelContent({ terminalId, cwd, canvasZoom = 1 }: Termin
 
   // Store cwd in a ref — only used at init time, never triggers re-init
   const cwdRef = useRef(cwd)
+  // Last cwd we wrote to the store — lets us skip redundant panel writes when
+  // the 30s poll (or unmount capture) reports an unchanged directory.
+  const lastWrittenCwdRef = useRef(cwd)
+  // Trailing-debounce timer for fit()/resize on rapid container size changes.
+  const resizeDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const adjustedMouseEventsRef = useRef<WeakSet<MouseEvent>>(new WeakSet())
   const activeMouseAdjustmentRef = useRef<{ left: number; top: number; zoom: number } | null>(null)
 
   const initTerminal = useCallback(async () => {
-    console.log(`[Terminal:${terminalId}] initTerminal called`, {
+    tlog(`[Terminal:${terminalId}] initTerminal called`, {
       hasContainer: !!containerRef.current,
       hasXterm: !!xtermRef.current,
       initCalled: initCalledRef.current,
@@ -56,7 +74,7 @@ export function TerminalPanelContent({ terminalId, cwd, canvasZoom = 1 }: Termin
     // During canvas viewport changes or panel open animations the container
     // may still be 0×0 when this runs.
     const rect = containerRef.current.getBoundingClientRect()
-    console.log(`[Terminal:${terminalId}] container rect`, { w: rect.width, h: rect.height })
+    tlog(`[Terminal:${terminalId}] container rect`, { w: rect.width, h: rect.height })
     if (rect.width < 10 || rect.height < 10) return
 
     initCalledRef.current = true
@@ -130,7 +148,7 @@ export function TerminalPanelContent({ terminalId, cwd, canvasZoom = 1 }: Termin
 
       activePidRef.current = pid
 
-      console.log(`[Terminal:${terminalId}] PTY created, setting up listeners`)
+      tlog(`[Terminal:${terminalId}] PTY created, setting up listeners`)
 
       const inputDispose = term.onData((data) => {
         window.electronAPI.terminal.write(terminalId, data)
@@ -187,11 +205,11 @@ export function TerminalPanelContent({ terminalId, cwd, canvasZoom = 1 }: Termin
       ]
 
       // Focus the terminal so it can receive keyboard input
-      console.log(`[Terminal:${terminalId}] calling term.focus(), textarea exists:`, !!term.textarea)
+      tlog(`[Terminal:${terminalId}] calling term.focus(), textarea exists:`, !!term.textarea)
       term.focus()
       // Verify focus actually took
       setTimeout(() => {
-        console.log(`[Terminal:${terminalId}] after focus, activeElement:`, document.activeElement?.tagName, document.activeElement?.className)
+        tlog(`[Terminal:${terminalId}] after focus, activeElement:`, document.activeElement?.tagName, document.activeElement?.className)
       }, 100)
 
       isReadyRef.current = true
@@ -221,21 +239,29 @@ export function TerminalPanelContent({ terminalId, cwd, canvasZoom = 1 }: Termin
         return
       }
 
-      // ── Subsequent resizes: refit ──
+      // ── Subsequent resizes: refit (trailing-debounced) ──
+      // A single drag/zoom fires dozens of ResizeObserver callbacks; running
+      // fitAddon.fit() + the resize IPC on each one thrashes the PTY. Coalesce
+      // to one fit+resize ~80ms after the size settles.
       if (!xtermRef.current || !fitAddonRef.current) return
       if (width < 10 || height < 10) return // still too small — skip
-      try {
-        fitAddonRef.current.fit()
-        if (xtermRef.current && isReadyRef.current) {
-          window.electronAPI.terminal.resize(
-            terminalId,
-            xtermRef.current.cols,
-            xtermRef.current.rows
-          ).catch(() => {})
+      if (resizeDebounceRef.current) clearTimeout(resizeDebounceRef.current)
+      resizeDebounceRef.current = setTimeout(() => {
+        resizeDebounceRef.current = null
+        if (!xtermRef.current || !fitAddonRef.current) return
+        try {
+          fitAddonRef.current.fit()
+          if (xtermRef.current && isReadyRef.current) {
+            window.electronAPI.terminal.resize(
+              terminalId,
+              xtermRef.current.cols,
+              xtermRef.current.rows
+            ).catch(() => {})
+          }
+        } catch {
+          // ignore fit errors during transitions
         }
-      } catch {
-        // ignore fit errors during transitions
-      }
+      }, 80)
     })
 
     observer.observe(containerRef.current)
@@ -246,6 +272,10 @@ export function TerminalPanelContent({ terminalId, cwd, canvasZoom = 1 }: Termin
 
     return () => {
       observer.disconnect()
+      if (resizeDebounceRef.current) {
+        clearTimeout(resizeDebounceRef.current)
+        resizeDebounceRef.current = null
+      }
       const expectedPid = activePidRef.current ?? undefined
       isMountedRef.current = false
 
@@ -253,7 +283,8 @@ export function TerminalPanelContent({ terminalId, cwd, canvasZoom = 1 }: Termin
         // Capture cwd before killing the terminal — persists across restarts.
         // Skip ID-only cleanup when this instance never acquired a PTY pid.
         window.electronAPI.terminal.getCwd(terminalId, expectedPid).then(({ cwd: currentCwd }) => {
-          if (currentCwd) {
+          if (currentCwd && currentCwd !== lastWrittenCwdRef.current) {
+            lastWrittenCwdRef.current = currentCwd
             useCanvasStore.getState().updatePanel(terminalId, { url: currentCwd })
           }
         }).catch(() => {}).finally(() => {
@@ -284,7 +315,10 @@ export function TerminalPanelContent({ terminalId, cwd, canvasZoom = 1 }: Termin
       try {
         const expectedPid = activePidRef.current ?? undefined
         const { cwd: currentCwd } = await window.electronAPI.terminal.getCwd(terminalId, expectedPid)
-        if (currentCwd) {
+        // Skip the store write (and the re-render/persist it triggers) when the
+        // directory hasn't changed since the last write.
+        if (currentCwd && currentCwd !== lastWrittenCwdRef.current) {
+          lastWrittenCwdRef.current = currentCwd
           useCanvasStore.getState().updatePanel(terminalId, { url: currentCwd })
         }
       } catch { /* ignore */ }
@@ -375,10 +409,10 @@ export function TerminalPanelContent({ terminalId, cwd, canvasZoom = 1 }: Termin
 
   // Focus the terminal when the container is clicked
   const handleClick = useCallback(() => {
-    console.log(`[Terminal:${terminalId}] container clicked, focusing. hasXterm:`, !!xtermRef.current, 'textarea:', !!xtermRef.current?.textarea)
+    tlog(`[Terminal:${terminalId}] container clicked, focusing. hasXterm:`, !!xtermRef.current, 'textarea:', !!xtermRef.current?.textarea)
     xtermRef.current?.focus()
     setTimeout(() => {
-      console.log(`[Terminal:${terminalId}] after click-focus, activeElement:`, document.activeElement?.tagName, document.activeElement?.className)
+      tlog(`[Terminal:${terminalId}] after click-focus, activeElement:`, document.activeElement?.tagName, document.activeElement?.className)
     }, 50)
   }, [terminalId])
 

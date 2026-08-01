@@ -301,11 +301,14 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
   // Sync local state when store clears connectingFromId (Escape, background click, or edge completed)
   useEffect(() => {
     if (!isConnectingLocal) return
-    const unsub = useCanvasStore.subscribe((s) => {
-      if (s.connectingFromId !== panel.id) {
-        setIsConnectingLocal(false)
+    const unsub = useCanvasStore.subscribe(
+      (s) => s.connectingFromId,
+      (connectingFromId) => {
+        if (connectingFromId !== panel.id) {
+          setIsConnectingLocal(false)
+        }
       }
-    })
+    )
     return unsub
   }, [isConnectingLocal, panel.id])
 
@@ -383,15 +386,16 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
   // ── Proximity glow — this panel is a target of auto-connect proximity ──
   const [isProximityTarget, setIsProximityTarget] = useState(false)
   useEffect(() => {
-    const unsub = useCanvasStore.subscribe((s, prev) => {
-      if (s.proximityEdge !== prev.proximityEdge) {
-        const isTarget = s.proximityEdge
-          ? (s.proximityEdge.fromId === panel.id || s.proximityEdge.toId === panel.id) &&
-            s.draggingPanelId !== panel.id
+    const unsub = useCanvasStore.subscribe(
+      (s) => s.proximityEdge,
+      (proximityEdge) => {
+        const isTarget = proximityEdge
+          ? (proximityEdge.fromId === panel.id || proximityEdge.toId === panel.id) &&
+            useCanvasStore.getState().draggingPanelId !== panel.id
           : false
         setIsProximityTarget(isTarget)
       }
-    })
+    )
     return unsub
   }, [panel.id])
 
@@ -610,7 +614,6 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
             taskLayout={taskLayout}
             browserSessionId={panel.browserSessionId}
             streamPort={panel.streamPort}
-            zoom={zoom}
           />
         </div>
       )}
@@ -709,10 +712,9 @@ interface PanelContentProps {
   taskLayout?: TaskWorkspaceLayout
   browserSessionId?: string
   streamPort?: number
-  zoom: number
 }
 
-const MemoizedPanelContent = memo(function PanelContent({ type, id, refId, url, title, taskLayout, browserSessionId, streamPort, zoom }: PanelContentProps) {
+const MemoizedPanelContent = memo(function PanelContent({ type, id, refId, url, title, taskLayout, browserSessionId, streamPort }: PanelContentProps) {
   if (type === 'task' && refId) {
     return <TaskPanelContent panelId={id} taskId={refId} panelLayout={taskLayout} />
   }
@@ -726,7 +728,7 @@ const MemoizedPanelContent = memo(function PanelContent({ type, id, refId, url, 
     return <WebPagePanelContent panelId={id} url={url} title={title} />
   }
   if (type === 'terminal') {
-    return <TerminalPanelContent terminalId={id} cwd={url} canvasZoom={zoom} />
+    return <TerminalPanelContent terminalId={id} cwd={url} />
   }
   if (type === 'browser') {
     return <BrowserPanelContent panelId={id} url={url} sessionName={browserSessionId} streamPort={streamPort} />
