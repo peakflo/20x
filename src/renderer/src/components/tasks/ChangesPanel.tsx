@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { memo, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import {
   ChevronRight, RefreshCw, Loader2, FileDiff, Columns2, Rows3, WrapText, GitBranch,
   FilePlus2, FileMinus2, FilePen, FileSymlink, FolderGit2, GitPullRequest, ExternalLink,
@@ -188,12 +188,17 @@ function CiBadge({ status }: { status?: RepoChanges['ciStatus'] }) {
   return <span title="Checks running" className="inline-flex items-center text-warning"><Loader2 className="h-3.5 w-3.5 animate-spin" /></span>
 }
 
-function FileBlock({ file, viewMode, wrap }: { file: DiffFile; viewMode: ViewMode; wrap: boolean }) {
+const FileBlock = memo(function FileBlock({ file, viewMode, wrap }: { file: DiffFile; viewMode: ViewMode; wrap: boolean }) {
   // Files start collapsed — the panel opens as a clean changed-files overview;
   // click a file to expand its diff.
   const [open, setOpen] = useState(false)
   const meta = STATUS_META[file.status]
   const Icon = meta.icon
+  const hunkRows = useMemo(
+    () => (open && !file.binary ? file.hunks.map((hunk) => ({ hunk, rows: alignHunk(hunk) })) : []),
+    [file, open]
+  )
+
   return (
     <div className="border-b border-border/60">
       <button
@@ -210,15 +215,12 @@ function FileBlock({ file, viewMode, wrap }: { file: DiffFile; viewMode: ViewMod
       </button>
       {open && !file.binary && (
         <div className="overflow-x-auto font-mono text-xs leading-[1.55]">
-          {file.hunks.map((hunk, hi) => {
-            const rows = alignHunk(hunk)
-            return (
-              <div key={hi}>
-                <div className="bg-muted/40 px-3 py-0.5 text-[11px] text-muted-foreground">{hunk.header}</div>
-                {viewMode === 'split' ? <SplitRows rows={rows} wrap={wrap} /> : <UnifiedRows rows={rows} wrap={wrap} />}
-              </div>
-            )
-          })}
+          {hunkRows.map(({ hunk, rows }, hi) => (
+            <div key={hi}>
+              <div className="bg-muted/40 px-3 py-0.5 text-[11px] text-muted-foreground">{hunk.header}</div>
+              {viewMode === 'split' ? <SplitRows rows={rows} wrap={wrap} /> : <UnifiedRows rows={rows} wrap={wrap} />}
+            </div>
+          ))}
           {file.hunks.length === 0 && (
             <div className="px-3 py-2 text-[11px] text-muted-foreground">No textual changes.</div>
           )}
@@ -226,7 +228,54 @@ function FileBlock({ file, viewMode, wrap }: { file: DiffFile; viewMode: ViewMod
       )}
     </div>
   )
-}
+})
+
+const RepoBlock = memo(function RepoBlock({ repo, viewMode, wrap }: { repo: RepoChanges; viewMode: ViewMode; wrap: boolean }) {
+  const repoSummary = useMemo(
+    () => repo.files.reduce(
+      (summary, file) => ({
+        additions: summary.additions + file.additions,
+        deletions: summary.deletions + file.deletions,
+      }),
+      { additions: 0, deletions: 0 }
+    ),
+    [repo.files]
+  )
+
+  return (
+    <div>
+      {/* Per-repo group header: branch (no PR) — or PR title + link + CI status */}
+      <div className="sticky top-0 z-20 flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-border/60 bg-card px-3 py-2 text-[11px] shadow-sm">
+        <span className="font-medium text-foreground shrink-0">{repo.repo}</span>
+        {repo.prUrl ? (
+          <>
+            <button
+              onClick={() => window.electronAPI?.shell?.openExternal?.(repo.prUrl!)}
+              className="inline-flex min-w-0 items-center gap-1 rounded-md border border-primary/25 bg-primary/10 px-1.5 py-0.5 text-primary hover:bg-primary/15 hover:underline cursor-pointer"
+              title={`${repo.prTitle ?? ''} (${repo.prUrl})`}
+            >
+              <GitPullRequest className="h-3 w-3 shrink-0" />
+              <span className="truncate max-w-[240px]">{repo.prTitle || `Pull request #${repo.prNumber}`}</span>
+              <span className="shrink-0 text-muted-foreground/70">#{repo.prNumber}</span>
+              <ExternalLink className="h-2.5 w-2.5 shrink-0" />
+            </button>
+            <CiBadge status={repo.ciStatus} />
+          </>
+        ) : (
+          <span className="inline-flex items-center gap-1.5 text-muted-foreground">
+            <GitBranch className="h-3 w-3 shrink-0" />
+            <span className="font-mono text-[10px] text-foreground/80">{repo.branch ?? 'detached HEAD'}</span>
+            <span className="text-muted-foreground/60">{repo.pushed ? '· no PR yet' : '· not pushed'}</span>
+          </span>
+        )}
+        <DiffStatLabel additions={repoSummary.additions} deletions={repoSummary.deletions} className="ml-auto text-[10px]" />
+      </div>
+      {repo.files.map((file, i) => (
+        <FileBlock key={`${repo.repo}:${file.path}:${i}`} file={file} viewMode={viewMode} wrap={wrap} />
+      ))}
+    </div>
+  )
+})
 
 export interface ChangesSummary { files: number; additions: number; deletions: number }
 
@@ -334,41 +383,7 @@ export function ChangesPanel({ taskId, repos, className, onSummary }: {
             return <div key={repo.repo} className="px-3 py-2 text-xs text-destructive">{repo.repo}: {repo.error}</div>
           }
           if (repo.files.length === 0) return null
-          const repoAdd = repo.files.reduce((s, f) => s + f.additions, 0)
-          const repoDel = repo.files.reduce((s, f) => s + f.deletions, 0)
-          return (
-            <div key={repo.repo}>
-              {/* Per-repo group header: branch (no PR) — or PR title + link + CI status */}
-              <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-border/50 bg-muted/30 px-3 py-2 text-[11px] sticky top-0 z-20">
-                <span className="font-medium text-foreground shrink-0">{repo.repo}</span>
-                {repo.prUrl ? (
-                  <>
-                    <button
-                      onClick={() => window.electronAPI?.shell?.openExternal?.(repo.prUrl!)}
-                      className="inline-flex min-w-0 items-center gap-1 text-primary hover:underline cursor-pointer"
-                      title={`${repo.prTitle ?? ''} (${repo.prUrl})`}
-                    >
-                      <GitPullRequest className="h-3 w-3 shrink-0" />
-                      <span className="truncate max-w-[240px]">{repo.prTitle || `Pull request #${repo.prNumber}`}</span>
-                      <span className="shrink-0 text-muted-foreground/70">#{repo.prNumber}</span>
-                      <ExternalLink className="h-2.5 w-2.5 shrink-0" />
-                    </button>
-                    <CiBadge status={repo.ciStatus} />
-                  </>
-                ) : (
-                  <span className="inline-flex items-center gap-1.5 text-muted-foreground">
-                    <GitBranch className="h-3 w-3 shrink-0" />
-                    <span className="font-mono text-[10px] text-foreground/80">{repo.branch ?? 'detached HEAD'}</span>
-                    <span className="text-muted-foreground/60">{repo.pushed ? '· no PR yet' : '· not pushed'}</span>
-                  </span>
-                )}
-                <DiffStatLabel additions={repoAdd} deletions={repoDel} className="ml-auto text-[10px]" />
-              </div>
-              {repo.files.map((file, i) => (
-                <FileBlock key={`${repo.repo}:${file.path}:${i}`} file={file} viewMode={viewMode} wrap={wrap} />
-              ))}
-            </div>
-          )
+          return <RepoBlock key={repo.repo} repo={repo} viewMode={viewMode} wrap={wrap} />
         })}
       </div>
     </div>
