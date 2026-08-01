@@ -60,8 +60,17 @@ export function TaskWorkspace({
   panelLayout = 'both'
 }: TaskWorkspaceProps) {
   const { session, start, resume, abort, stop, sendMessage, approve } = useAgentSession(task?.id)
-  const { removeSession, updateAgent } = useAgentStore()
-  const { githubOrg, checkGhCli, checkGlabCli, setGithubOrg, fetchSettings } = useSettingsStore()
+  // Per-field selectors: a selector-less useStore() subscribes to the whole
+  // store, re-rendering this entire workspace on every streamed delta of every
+  // task's session (agent store) or any settings change. Action identities are
+  // stable, so these selectors never trigger re-renders themselves.
+  const removeSession = useAgentStore((s) => s.removeSession)
+  const updateAgent = useAgentStore((s) => s.updateAgent)
+  const githubOrg = useSettingsStore((s) => s.githubOrg)
+  const checkGhCli = useSettingsStore((s) => s.checkGhCli)
+  const checkGlabCli = useSettingsStore((s) => s.checkGlabCli)
+  const setGithubOrg = useSettingsStore((s) => s.setGithubOrg)
+  const fetchSettings = useSettingsStore((s) => s.fetchSettings)
 
   const [rightTab, setRightTab] = useState<'transcript' | 'changes'>('transcript')
   const [changesSummary, setChangesSummary] = useState<{ files: number; additions: number; deletions: number } | null>(null)
@@ -79,7 +88,8 @@ export function TaskWorkspace({
   const [parentTask, setParentTask] = useState<WorkfloTask | null>(null)
   const startingRef = useRef(false)
 
-  const { fetchTasks, updateTask: updateTaskInStore } = useTaskStore()
+  const fetchTasks = useTaskStore((s) => s.fetchTasks)
+  const updateTaskInStore = useTaskStore((s) => s.updateTask)
 
   // Derive subtasks reactively from the task store so status changes (e.g., from
   // mobile-initiated sessions) update immediately without needing a re-fetch.
@@ -420,16 +430,21 @@ export function TaskWorkspace({
 
   const handleSend = useCallback(
     async (message: string, options?: { attachments?: Array<{ id: string; filename: string; size: number; mime_type: string }> }) => {
+      // Read messages from the store at call time instead of closing over the
+      // render-time array: depending on `session.messages` gives this callback
+      // a new identity on every streamed delta, which defeats React.memo on
+      // every transcript row receiving it as a prop.
+      const messages = (task?.id && useAgentStore.getState().sessions.get(task.id)?.messages) || []
       // Route unresolved question responses through approve(), even if status lags.
       let questionIndex = -1
-      for (let i = session.messages.length - 1; i >= 0; i--) {
-        if (session.messages[i].partType === 'question' && session.messages[i].tool?.questions) {
+      for (let i = messages.length - 1; i >= 0; i--) {
+        if (messages[i].partType === 'question' && messages[i].tool?.questions) {
           questionIndex = i
           break
         }
       }
       const hasActiveQuestion = questionIndex >= 0
-        && !session.messages.slice(questionIndex + 1).some((m) => m.role === 'user')
+        && !messages.slice(questionIndex + 1).some((m) => m.role === 'user')
       if (hasActiveQuestion) {
         await approve(true, message)
         return
@@ -439,7 +454,7 @@ export function TaskWorkspace({
       if (!readySessionId) return
       await sendMessage(message, options)
     },
-    [approve, ensureChatSession, sendMessage, session.messages]
+    [approve, ensureChatSession, sendMessage, task?.id]
   )
 
   const handleAddAttachmentPaths = useCallback(async (filePaths: string[]) => {

@@ -16,7 +16,10 @@ interface TranscriptPanelContentProps {
  */
 export function TranscriptPanelContent({ taskId }: TranscriptPanelContentProps) {
   const { session, stop, start, sendMessage, approve } = useAgentSession(taskId)
-  const { removeSession } = useAgentStore()
+  // Select the single action instead of subscribing to the whole store — a
+  // selector-less useAgentStore() re-renders this panel on every streamed
+  // delta of every task's session.
+  const removeSession = useAgentStore((s) => s.removeSession)
   const task = useTaskStore((s) => s.tasks.find((t) => t.id === taskId))
 
   const messages = session?.messages ?? []
@@ -43,17 +46,22 @@ export function TranscriptPanelContent({ taskId }: TranscriptPanelContentProps) 
 
   const handleSend = useCallback(
     async (message: string) => {
+      // Read messages from the store at call time instead of closing over the
+      // render-time array: depending on `messages` gives this callback a new
+      // identity on every streamed delta, which defeats React.memo on every
+      // transcript row receiving it as a prop.
+      const currentMessages = useAgentStore.getState().sessions.get(taskId)?.messages ?? []
       // Route question responses through approve
       let questionIndex = -1
-      for (let i = messages.length - 1; i >= 0; i--) {
-        if (messages[i].partType === 'question' && messages[i].tool?.questions) {
+      for (let i = currentMessages.length - 1; i >= 0; i--) {
+        if (currentMessages[i].partType === 'question' && currentMessages[i].tool?.questions) {
           questionIndex = i
           break
         }
       }
       const hasActiveQuestion =
         questionIndex >= 0 &&
-        !messages.slice(questionIndex + 1).some((m) => m.role === 'user')
+        !currentMessages.slice(questionIndex + 1).some((m) => m.role === 'user')
       if (hasActiveQuestion) {
         await approve(true, message)
         return
@@ -61,7 +69,7 @@ export function TranscriptPanelContent({ taskId }: TranscriptPanelContentProps) 
 
       await sendMessage(message)
     },
-    [messages, approve, sendMessage]
+    [taskId, approve, sendMessage]
   )
 
   if (!session || (status === SessionStatus.IDLE && messages.length === 0)) {

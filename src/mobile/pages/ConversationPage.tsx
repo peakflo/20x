@@ -25,14 +25,27 @@ function collectSearchableText(value: unknown, output: string[]): void {
   }
 }
 
+// Stable empty list — a fresh `[]` per render would invalidate every memo and
+// effect keyed on `messages` while no session exists.
+const EMPTY_MESSAGES: AgentMessage[] = []
+
+// Cache per message object: search runs over the whole transcript on every
+// keystroke AND every streamed delta. Message objects are identity-stable per
+// part (store projection cache), so a WeakMap makes this compute-once.
+const messageSearchTextCache = new WeakMap<AgentMessage, string>()
+
 function getMessageSearchText(message: AgentMessage): string {
+  const cached = messageSearchTextCache.get(message)
+  if (cached !== undefined) return cached
   const parts: string[] = []
   collectSearchableText(message.role, parts)
   collectSearchableText(message.partType, parts)
   collectSearchableText(message.content, parts)
   collectSearchableText(message.tool, parts)
   collectSearchableText(message.taskProgress, parts)
-  return parts.join('\n').toLowerCase()
+  const text = parts.join('\n').toLowerCase()
+  messageSearchTextCache.set(message, text)
+  return text
 }
 
 type TranscriptItem =
@@ -110,7 +123,9 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
   const [showAttachmentPicker, setShowAttachmentPicker] = useState(false)
   const [messageAttachments, setMessageAttachments] = useState<ChatInputAttachment[]>([])
 
-  const messages = session?.messages || []
+  // Stable empty list — a fresh `[]` per render would invalidate every memo and
+  // effect keyed on `messages` while no session exists.
+  const messages = session?.messages || EMPTY_MESSAGES
   const normalizedSearchQuery = searchQuery.trim().toLowerCase()
 
   const transcriptItems = useMemo<TranscriptItem[]>(() => {

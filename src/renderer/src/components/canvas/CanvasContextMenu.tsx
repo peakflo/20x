@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef } from 'react'
+import { useShallow } from 'zustand/react/shallow'
 import { CheckSquare, MessageSquare, Monitor, AppWindow, Globe, TerminalSquare, Plus, X } from 'lucide-react'
 import { useTaskStore } from '@/stores/task-store'
 import { useAgentStore } from '@/stores/agent-store'
@@ -23,7 +24,20 @@ interface CanvasContextMenuProps {
 export function CanvasContextMenu({ position, onClose }: CanvasContextMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null)
   const tasks = useTaskStore((s) => s.tasks)
-  const sessions = useAgentStore((s) => s.sessions)
+  // Project only what the menu renders (task id + message count) instead of
+  // subscribing to the whole sessions Map, which gets a new identity on every
+  // streamed delta and would re-render the open menu at stream frequency.
+  const activeSessions = useAgentStore(
+    useShallow((s) =>
+      Array.from(s.sessions.entries())
+        .filter(([, session]) => session.messages.length > 0)
+        .slice(0, 10)
+        .map(([taskId, session]) => `${taskId}:${session.messages.length}`)
+    )
+  ).map((entry) => {
+    const separator = entry.lastIndexOf(':')
+    return { taskId: entry.slice(0, separator), messageCount: Number(entry.slice(separator + 1)) }
+  })
   const applications = useDashboardStore((s) => s.applications)
   const addPanel = useCanvasStore((s) => s.addPanel)
   const panels = useCanvasStore((s) => s.panels)
@@ -84,10 +98,6 @@ export function CanvasContextMenu({ position, onClose }: CanvasContextMenuProps)
     .filter((t) => t.status !== TaskStatus.Completed)
     .slice(0, 10)
 
-  // Tasks with active sessions
-  const activeSessions = Array.from(sessions.entries())
-    .filter(([, session]) => session.messages.length > 0)
-    .slice(0, 10)
 
   return (
     <div
@@ -181,14 +191,14 @@ export function CanvasContextMenu({ position, onClose }: CanvasContextMenuProps)
         {/* Transcripts section */}
         {activeSessions.length > 0 && (
           <MenuSection title="Agent Transcripts">
-            {activeSessions.map(([taskId, session]) => {
+            {activeSessions.map(({ taskId, messageCount }) => {
               const task = tasks.find((t) => t.id === taskId)
               return (
                 <MenuItem
                   key={taskId}
                   icon={<MessageSquare className="h-3.5 w-3.5 text-teal-400" />}
                   label={task?.title || `Session ${taskId.slice(0, 8)}`}
-                  sublabel={`${session.messages.length} messages`}
+                  sublabel={`${messageCount} messages`}
                   onClick={() =>
                     handleAddPanel(
                       'transcript',

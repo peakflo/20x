@@ -70,6 +70,59 @@ export const MAX_ZOOM = 3
 export const DEFAULT_PANEL_WIDTH = 1020
 export const DEFAULT_PANEL_HEIGHT = 780
 
+// ── Pure viewport math ─────────────────────────────────────
+// Shared by the store actions *and* by the imperative gesture path in
+// InfiniteCanvas (which transforms the DOM directly during a pan/zoom and
+// only commits to the store once, on gesture end). Keeping the math in one
+// place guarantees the imperative path and the store can never diverge.
+
+/** Translate a viewport by a screen-space delta. */
+export function panViewport(viewport: Viewport, dx: number, dy: number): Viewport {
+  return { ...viewport, x: viewport.x + dx, y: viewport.y + dy }
+}
+
+/** Clamp a zoom level to the supported range. */
+export function clampZoom(zoom: number): number {
+  return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, zoom))
+}
+
+/**
+ * Zoom around a screen point (wheel / pinch). `delta` is the raw wheel deltaY.
+ * Scales the zoom factor by delta magnitude for smooth trackpad pinch-to-zoom:
+ * Mac trackpads send small deltas (~2-4px) per event; mice send larger (~100px).
+ * The intensity is clamped so a single event never exceeds a ~15% step.
+ */
+export function zoomViewportAtPoint(
+  viewport: Viewport,
+  delta: number,
+  clientX: number,
+  clientY: number,
+  containerRect: { left: number; top: number }
+): Viewport {
+  const intensity = Math.min(Math.abs(delta) / 100, 0.15)
+  const factor = delta > 0 ? 1 - intensity : 1 + intensity
+  const newZoom = clampZoom(viewport.zoom * factor)
+
+  const pointX = (clientX - containerRect.left - viewport.x) / viewport.zoom
+  const pointY = (clientY - containerRect.top - viewport.y) / viewport.zoom
+
+  return {
+    x: clientX - containerRect.left - pointX * newZoom,
+    y: clientY - containerRect.top - pointY * newZoom,
+    zoom: newZoom,
+  }
+}
+
+/** Structural equality for snap guide lists — avoids no-op store writes. */
+export function snapGuidesEqual(a: SnapGuide[], b: SnapGuide[]): boolean {
+  if (a === b) return true
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i++) {
+    if (a[i].axis !== b[i].axis || a[i].position !== b[i].position) return false
+  }
+  return true
+}
+
 // ── Store ──────────────────────────────────────────────────
 
 // ── Persistence shape ─────────────────────────────────────
@@ -96,6 +149,18 @@ interface CanvasState {
 
   // Auto-connect proximity state (transient, shown during drag)
   proximityEdge: { fromId: string; toId: string } | null
+
+  /**
+   * Live position of the panel currently being dragged (transient).
+   *
+   * Panel drags move the panel imperatively (CSS transform) and do NOT write
+   * x/y to `panels` until mouseup — that would re-commit the whole canvas
+   * subtree per frame. This tiny slice lets the few consumers that must track
+   * the panel live (connection curves) follow it without dragging the rest of
+   * the canvas into the render.
+   */
+  liveDrag: { id: string; x: number; y: number } | null
+  setLiveDrag: (drag: { id: string; x: number; y: number } | null) => void
 
   // Persistence
   isLoaded: boolean
@@ -155,6 +220,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   snapGuides: [],
   connectingFromId: null,
   proximityEdge: null,
+  liveDrag: null,
   isLoaded: false,
 
   loadCanvas: async () => {
@@ -193,14 +259,12 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   },
 
   panBy: (dx, dy) => {
-    set((s) => ({
-      viewport: { ...s.viewport, x: s.viewport.x + dx, y: s.viewport.y + dy }
-    }))
+    set((s) => ({ viewport: panViewport(s.viewport, dx, dy) }))
     scheduleSave()
   },
 
   zoomTo: (zoom, centerX, centerY) => {
-    const clamped = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, zoom))
+    const clamped = clampZoom(zoom)
     set((s) => {
       if (centerX !== undefined && centerY !== undefined) {
         const ratio = clamped / s.viewport.zoom
@@ -214,21 +278,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   },
 
   zoomAtPoint: (delta, clientX, clientY, containerRect) => {
-    const { viewport } = get()
-    // Scale zoom factor by delta magnitude for smooth trackpad pinch-to-zoom.
-    // Mac trackpads send small deltas (~2-4px) per event; mice send larger (~100px).
-    // Clamp the intensity so it never exceeds a ~15% step per event.
-    const intensity = Math.min(Math.abs(delta) / 100, 0.15)
-    const factor = delta > 0 ? 1 - intensity : 1 + intensity
-    const newZoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, viewport.zoom * factor))
-
-    const pointX = (clientX - containerRect.left - viewport.x) / viewport.zoom
-    const pointY = (clientY - containerRect.top - viewport.y) / viewport.zoom
-
-    const newX = clientX - containerRect.left - pointX * newZoom
-    const newY = clientY - containerRect.top - pointY * newZoom
-
-    set({ viewport: { x: newX, y: newY, zoom: newZoom } })
+    set({ viewport: zoomViewportAtPoint(get().viewport, delta, clientX, clientY, containerRect) })
     scheduleSave()
   },
 
@@ -354,7 +404,19 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
 
   // Drag
   setDraggingPanelId: (id) => set({ draggingPanelId: id }),
-  setSnapGuides: (guides) => set({ snapGuides: guides }),
+  // Bail out when the guides are structurally unchanged — calculateSnap()
+  // allocates a fresh array every frame, and an unconditional write would
+  // re-render the guide layer on every frame of a snapped drag.
+  setSnapGuides: (guides) => {
+    if (snapGuidesEqual(get().snapGuides, guides)) return
+    set({ snapGuides: guides })
+  },
+  setLiveDrag: (drag) => {
+    const prev = get().liveDrag
+    if (prev === drag) return
+    if (prev && drag && prev.id === drag.id && prev.x === drag.x && prev.y === drag.y) return
+    set({ liveDrag: drag })
+  },
 
   // Edges
   addEdge: (fromPanelId, toPanelId, edgeType) => {
@@ -397,7 +459,14 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   },
 
   setConnectingFromId: (id) => set({ connectingFromId: id }),
-  setProximityEdge: (edge) => set({ proximityEdge: edge }),
+  // Proximity detection runs every drag frame and returns a fresh object —
+  // bail out when it names the same pair so subscribers stay put.
+  setProximityEdge: (edge) => {
+    const prev = get().proximityEdge
+    if (prev === edge) return
+    if (prev && edge && prev.fromId === edge.fromId && prev.toId === edge.toId) return
+    set({ proximityEdge: edge })
+  },
 
   clearEdges: () => {
     set({ edges: [] })

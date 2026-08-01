@@ -698,7 +698,8 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
                     for (let nextIndex = index + 1; nextIndex < previewMessages.length && isCompactActivityMessage(previewMessages[nextIndex]); nextIndex += 1) {
                       group.push(previewMessages[nextIndex])
                     }
-                    return <MessageActivityGroup key={group.map((item) => item.id).join(':')} messages={group} />
+                    // Stable key (first member) so a growing trailing group doesn't remount.
+                    return <MessageActivityGroup key={group[0].id} messages={group} />
                   })}
                 </div>
                 {session!.messages.length > 3 && (

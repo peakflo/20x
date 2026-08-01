@@ -116,9 +116,18 @@ export function __clearProjectionsForTest(): void {
   outputAnalyticsByTask.clear()
 }
 
+// Memoize the part → message projection per part record. Unchanged parts keep
+// their exact record reference across deltas (applyParts only replaces changed
+// entries), so reusing the derived AgentMessage preserves object identity and
+// lets React.memo'd rows skip re-rendering the entire transcript on every
+// streamed delta. Entries are GC'd with their part records (WeakMap).
+const messageProjectionCache = new WeakMap<TranscriptPartRecord, AgentMessage>()
+
 function toAgentMessage(p: TranscriptPartRecord): AgentMessage {
+  const cached = messageProjectionCache.get(p)
+  if (cached) return cached
   const payload = (p.payload || {}) as { taskProgress?: unknown }
-  return {
+  const message: AgentMessage = {
     id: p.partId,
     role: p.role === 'user' ? 'user' : p.role === 'assistant' ? 'assistant' : 'system',
     content: p.content,
@@ -128,6 +137,8 @@ function toAgentMessage(p: TranscriptPartRecord): AgentMessage {
     tool: p.tool as AgentMessage['tool'],
     taskProgress: payload.taskProgress as AgentMessage['taskProgress']
   }
+  messageProjectionCache.set(p, message)
+  return message
 }
 
 function deriveMessages(cache: ProjectionCache): AgentMessage[] {

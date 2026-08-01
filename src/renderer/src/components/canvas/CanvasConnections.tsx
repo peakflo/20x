@@ -16,12 +16,20 @@ export function CanvasConnections({
   const connectingFromId = useCanvasStore((s) => s.connectingFromId)
   const proximityEdge = useCanvasStore((s) => s.proximityEdge)
   const removeEdge = useCanvasStore((s) => s.removeEdge)
+  // A dragged panel doesn't write x/y to `panels` until mouseup (see
+  // CanvasPanel) — it publishes its live position here instead. This is the
+  // only component that re-renders per drag frame, and its cost is O(edges).
+  const liveDrag = useCanvasStore((s) => s.liveDrag)
 
   const panelMap = useMemo(() => {
     const map = new Map<string, CanvasPanelData>()
     for (const p of panels) map.set(p.id, p)
+    if (liveDrag) {
+      const dragged = map.get(liveDrag.id)
+      if (dragged) map.set(dragged.id, { ...dragged, x: liveDrag.x, y: liveDrag.y })
+    }
     return map
-  }, [panels])
+  }, [panels, liveDrag])
 
   /**
    * Find the best connection anchor point on a panel edge

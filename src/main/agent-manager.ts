@@ -3,7 +3,7 @@ import { spawn } from 'child_process'
 import { join } from 'path'
 import { existsSync, copyFileSync, mkdirSync, readFileSync, readdirSync, statSync } from 'fs'
 import { mkdir, writeFile } from 'fs/promises'
-import { Notification } from 'electron'
+import { Notification, powerSaveBlocker } from 'electron'
 import type { BrowserWindow } from 'electron'
 import type { DatabaseManager, AgentMcpServerEntry, McpServerSource, OutputFieldRecord, SecretRecord, SkillRecord, TaskRecord } from './database'
 import { TaskStatus, SessionStatus, PluginActionId } from '../shared/constants'
@@ -253,6 +253,18 @@ export class AgentManager extends EventEmitter {
    *  several subtasks finishing at once produce a single wake-up). */
   private wakingParents: Set<string> = new Set()
 
+  // ── App-suspension guard ──
+  // Without this, macOS App Nap (and Windows efficiency mode) can suspend the
+  // whole 20x process tree when the window is hidden/idle — pausing spawned
+  // agent CLI processes mid-run, including their in-process background
+  // subagents that legitimately keep working after a turn goes idle. Hold a
+  // `prevent-app-suspension` blocker while ANY session runtime is alive (not
+  // just non-idle ones, precisely because of those background children); the
+  // idle-session reaper releases runtimes after 30 min, which drops the
+  // blocker too. This does not keep the display awake or prevent lid-close
+  // sleep — it only opts out of idle-time process suspension.
+  private powerSaveBlockerId: number | null = null
+
   // ── Event-driven nudge ──
   // When an adapter buffers new stream data it calls onDataAvailable().
   // We debounce that into a short nudge timer so the coordinator delivers
@@ -325,6 +337,36 @@ export class AgentManager extends EventEmitter {
     }, AgentManager.IDLE_REAP_SWEEP_INTERVAL_MS)
     // Don't let the sweep timer keep the process alive on shutdown
     this.reaperTimer.unref?.()
+  }
+
+  /**
+   * Start/stop the app-suspension blocker based on whether any agent session
+   * runtime is alive. Called (via setImmediate, so the sessions map has
+   * settled) after every session add/remove and status transition. Safe under
+   * ELECTRON_RUN_AS_NODE (tests): powerSaveBlocker is unavailable there and
+   * the method no-ops.
+   */
+  private updatePowerSaveBlocker(): void {
+    if (typeof powerSaveBlocker?.start !== 'function') return
+    try {
+      const hasLiveRuntime = this.sessions.size > 0
+      if (hasLiveRuntime && this.powerSaveBlockerId === null) {
+        this.powerSaveBlockerId = powerSaveBlocker.start('prevent-app-suspension')
+        console.log('[AgentManager] App-suspension blocker started (agent session runtime alive)')
+      } else if (!hasLiveRuntime && this.powerSaveBlockerId !== null) {
+        powerSaveBlocker.stop(this.powerSaveBlockerId)
+        this.powerSaveBlockerId = null
+        console.log('[AgentManager] App-suspension blocker stopped (no live session runtimes)')
+      }
+    } catch (err) {
+      console.error('[AgentManager] Failed to update app-suspension blocker:', err)
+    }
+  }
+
+  /** Schedule a blocker update once the current mutation of the sessions map
+   *  has fully settled. */
+  private schedulePowerSaveBlockerUpdate(): void {
+    setImmediate(() => this.updatePowerSaveBlocker())
   }
 
   private async reapInactiveSessions(): Promise<void> {
@@ -1435,6 +1477,7 @@ export class AgentManager extends EventEmitter {
     })
 
     // Store session in sessions map
+    this.schedulePowerSaveBlockerUpdate()
     this.sessions.set(adapterSessionId, {
       id: adapterSessionId,
       agentId,
@@ -2644,6 +2687,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     }
 
     // Store session in sessions map — idle until user sends a message
+    this.schedulePowerSaveBlockerUpdate()
     this.sessions.set(adapterSessionId, {
       id: adapterSessionId,
       agentId,
@@ -3369,6 +3413,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
 
       // Clean up backend session — triage is done, no need to keep it
       this.sessions.delete(sessionId)
+      this.schedulePowerSaveBlockerUpdate()
       console.log(`[SessionTracker] DESTROYED session=${sessionId} task=${session.taskId} reason=triage_completed`)
       return
     }
@@ -3646,6 +3691,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
 
     this.sessions.delete(sessionId)
     this.lastSentStatus.delete(sessionId)
+    this.schedulePowerSaveBlockerUpdate()
     console.log(`[SessionTracker] DESTROYED session=${sessionId} task=${session.taskId} resetStatus=${resetTaskStatus} reason=stop_session`)
 
     // Clean up any redirect entries pointing to this session
@@ -4783,6 +4829,7 @@ Important:
 
     // Clean up session without changing task status
     this.sessions.delete(sessionId)
+    this.schedulePowerSaveBlockerUpdate()
     console.log(`[AgentManager] Learning complete for session ${sessionId}:`, result)
     return result
   }

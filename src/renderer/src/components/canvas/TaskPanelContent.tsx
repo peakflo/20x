@@ -27,8 +27,12 @@ export function TaskPanelContent({ panelId, taskId, panelLayout = 'both' }: Task
   const addPanel = useCanvasStore((s) => s.addPanel)
   const addEdge = useCanvasStore((s) => s.addEdge)
   const bringToFront = useCanvasStore((s) => s.bringToFront)
-  const { executeAction } = useTaskSourceStore()
-  const { openEditModal, openDeleteModal } = useUIStore()
+  // Per-action selectors: a selector-less useStore() subscribes to the whole
+  // store, so every ui-store change (modals, filters, sidebar) would re-render
+  // every canvas task panel's entire TaskWorkspace tree.
+  const executeAction = useTaskSourceStore((s) => s.executeAction)
+  const openEditModal = useUIStore((s) => s.openEditModal)
+  const openDeleteModal = useUIStore((s) => s.openDeleteModal)
 
   const handleEdit = useCallback(() => {
     if (task) openEditModal(task.id)
