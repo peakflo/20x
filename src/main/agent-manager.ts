@@ -259,6 +259,9 @@ export class AgentManager extends EventEmitter {
   // the data to the UI within ~50ms instead of waiting up to 2 seconds.
   private nudgeTimer: ReturnType<typeof setTimeout> | null = null
   private static readonly NUDGE_DELAY_MS = 50
+  private transcriptChangedTimer: ReturnType<typeof setTimeout> | null = null
+  private pendingTranscriptChanged = new Map<string, { sinceRev: number; maxRev: number }>()
+  private static readonly TRANSCRIPT_CHANGED_FLUSH_MS = 125
   private pollingInProgress = false  // Prevents overlapping tick() calls
   private pollTickFn: (() => Promise<void>) | null = null  // Reference to the tick function
 
@@ -4868,14 +4871,15 @@ Important:
       }))
 
     if (parts.length > 0) {
-      const { maxRev, changedPartIds } = this.db.upsertTranscriptParts(taskId, parts)
+      const result = this.db.upsertTranscriptParts(taskId, parts)
+      if (!result) return
+      const { maxRev, changedPartIds } = result
       // Event-sourced push: notify clients of the delta (the parts just written),
       // applied idempotently by part id on the client. This is BOTH the durable
       // update and the low-latency streaming path — a single authoritative source.
       if (changedPartIds.length > 0) {
         const prevRev = maxRev - changedPartIds.length
-        const { parts: deltaParts } = this.db.getTranscriptDelta(taskId, prevRev)
-        this.emitTranscriptChanged(taskId, deltaParts, maxRev)
+        this.emitTranscriptChanged(taskId, prevRev, maxRev)
       }
     }
   }
@@ -4886,7 +4890,32 @@ Important:
    * these parts into their projection cache by id; order/dedup are guaranteed by
    * the cache being keyed on part id and sorted by created_at.
    */
-  private emitTranscriptChanged(taskId: string, parts: ReturnType<DatabaseManager['getTranscriptParts']>, maxRev: number): void {
+  private emitTranscriptChanged(taskId: string, sinceRev: number, maxRev: number): void {
+    const pending = this.pendingTranscriptChanged.get(taskId)
+    this.pendingTranscriptChanged.set(taskId, {
+      sinceRev: pending ? Math.min(pending.sinceRev, sinceRev) : sinceRev,
+      maxRev: pending ? Math.max(pending.maxRev, maxRev) : maxRev
+    })
+
+    if (this.transcriptChangedTimer) return
+    this.transcriptChangedTimer = setTimeout(() => {
+      this.transcriptChangedTimer = null
+      this.flushTranscriptChanged()
+    }, AgentManager.TRANSCRIPT_CHANGED_FLUSH_MS)
+  }
+
+  private flushTranscriptChanged(): void {
+    const pending = this.pendingTranscriptChanged
+    this.pendingTranscriptChanged = new Map()
+    for (const [taskId, { sinceRev, maxRev: queuedMaxRev }] of pending) {
+      const { parts, maxRev } = this.db.getTranscriptDelta(taskId, sinceRev)
+      const effectiveMaxRev = Math.max(maxRev, queuedMaxRev)
+      if (parts.length === 0 && effectiveMaxRev <= sinceRev) continue
+      this.sendTranscriptChangedNow(taskId, parts, effectiveMaxRev)
+    }
+  }
+
+  private sendTranscriptChangedNow(taskId: string, parts: ReturnType<DatabaseManager['getTranscriptParts']>, maxRev: number): void {
     const payload = { taskId, parts, maxRev }
     if (this.mainWindow && !this.mainWindow.isDestroyed()) {
       this.mainWindow.webContents.send('transcript:changed', payload)

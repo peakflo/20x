@@ -1,8 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { Mock } from 'vitest'
+import { captureAnalyticsEvent } from '@/lib/analytics'
 import { useAgentStore, SessionStatus, __clearProjectionsForTest } from './agent-store'
 import type { Agent, CreateAgentDTO, UpdateAgentDTO } from '@/types'
 import type { AgentStatusEvent, TranscriptPartRecord, TranscriptChangedEvent } from '@/types/electron'
+
+vi.mock('@/lib/analytics', () => ({
+  captureAnalyticsEvent: vi.fn()
+}))
 
 const mockElectronAPI = window.electronAPI
 
@@ -182,6 +187,34 @@ describe('useAgentStore', () => {
       const msgs = useAgentStore.getState().sessions.get('task-1')!.messages
       expect(msgs.find((m) => m.id === 't1')!.tool?.name).toBe('Bash')
       expect(msgs.find((m) => m.id === 'tp1')!.taskProgress?.status).toBe('running')
+    })
+
+    it('batches output analytics until the task goes idle', () => {
+      useAgentStore.getState().initSession('task-1', 'sess-1', 'agent-1')
+
+      fireDelta('task-1', [
+        part({ partId: 'p1', content: 'one', rev: 1 }),
+        part({ partId: 't1', partType: 'tool', content: '', tool: { name: 'Bash', status: 'success' } as never, rev: 2 })
+      ], 2)
+      fireDelta('task-1', [
+        part({ partId: 't2', partType: 'tool', content: '', tool: { name: 'Read', status: 'success' } as never, rev: 3 })
+      ], 3)
+
+      expect(captureAnalyticsEvent).not.toHaveBeenCalledWith('agent_output_batch_received', expect.anything())
+
+      statusCallback!({ sessionId: 'sess-1', agentId: 'agent-1', taskId: 'task-1', status: SessionStatus.IDLE })
+
+      expect(captureAnalyticsEvent).toHaveBeenCalledWith('agent_output_batch_received', {
+        task_id: 'task-1',
+        agent_id: 'agent-1',
+        session_id: 'sess-1',
+        message_count: 3,
+        tool_names: ['Bash', 'Read']
+      })
+      expect(captureAnalyticsEvent).toHaveBeenCalledTimes(2)
+
+      statusCallback!({ sessionId: 'sess-1', agentId: 'agent-1', taskId: 'task-1', status: SessionStatus.IDLE })
+      expect(captureAnalyticsEvent).toHaveBeenCalledTimes(2)
     })
   })
 

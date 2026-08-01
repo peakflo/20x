@@ -1,8 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { Mock } from 'vitest'
+import { captureAnalyticsEvent } from '@/lib/analytics'
 import { onEvent } from '../api/websocket'
 import { useAgentStore, SessionStatus, __clearProjectionsForTest } from './agent-store'
 import { api, type TranscriptPartRecord } from '../api/client'
+
+vi.mock('@/lib/analytics', () => ({
+  captureAnalyticsEvent: vi.fn()
+}))
 
 // Capture the onEvent callbacks registered at store init time
 const eventHandlers = new Map<string, (payload: unknown) => void>()
@@ -113,6 +118,40 @@ describe('useAgentStore (projection model)', () => {
     it('ignores deltas with no taskId', () => {
       transcriptHandler({ parts: [part('a')], maxRev: 1 })
       expect(useAgentStore.getState().sessions.size).toBe(0)
+    })
+
+    it('batches output analytics until the task goes idle', () => {
+      setSession('task-1', SessionStatus.WORKING)
+
+      transcriptHandler({
+        taskId: 'task-1',
+        parts: [
+          part('p1', { content: 'one', rev: 1 }),
+          part('t1', { partType: 'tool', content: '', tool: { name: 'Bash', status: 'success' } as never, rev: 2 })
+        ],
+        maxRev: 2
+      })
+      transcriptHandler({
+        taskId: 'task-1',
+        parts: [part('t2', { partType: 'tool', content: '', tool: { name: 'Read', status: 'success' } as never, rev: 3 })],
+        maxRev: 3
+      })
+
+      expect(captureAnalyticsEvent).not.toHaveBeenCalledWith('agent_output_batch_received', expect.anything())
+
+      statusHandler({ sessionId: 'sess-1', agentId: 'agent-1', taskId: 'task-1', status: SessionStatus.IDLE })
+
+      expect(captureAnalyticsEvent).toHaveBeenCalledWith('agent_output_batch_received', {
+        task_id: 'task-1',
+        agent_id: 'agent-1',
+        session_id: 'sess-1',
+        message_count: 3,
+        tool_names: ['Bash', 'Read']
+      })
+      expect(captureAnalyticsEvent).toHaveBeenCalledTimes(2)
+
+      statusHandler({ sessionId: 'sess-1', agentId: 'agent-1', taskId: 'task-1', status: SessionStatus.IDLE })
+      expect(captureAnalyticsEvent).toHaveBeenCalledTimes(2)
     })
   })
 
