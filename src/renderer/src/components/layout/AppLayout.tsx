@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useMemo, lazy, Suspense } from 'react'
+import { useEffect, useState, useCallback, useMemo, useRef, lazy, Suspense } from 'react'
 import { Sidebar } from './Sidebar'
 import { TaskWorkspace } from '@/components/tasks/TaskWorkspace'
 import { InfiniteCanvas } from '@/components/canvas/InfiniteCanvas'
@@ -18,6 +18,7 @@ const OrchestratorPanel = lazy(() => import('@/components/orchestrator/Orchestra
 import { useTasks } from '@/hooks/use-tasks'
 import { useUIStore } from '@/stores/ui-store'
 import { useAgentStore } from '@/stores/agent-store'
+import { useTaskStore } from '@/stores/task-store'
 import { useAgentAutoStart } from '@/hooks/use-agent-auto-start'
 import { useOverdueNotifications } from '@/hooks/use-overdue-notifications'
 import { attachmentApi, worktreeApi, settingsApi, updaterApi } from '@/lib/ipc-client'
@@ -25,7 +26,7 @@ import { useTaskSourceStore } from '@/stores/task-source-store'
 import { isOverdue, isSnoozed } from '@/lib/utils'
 import { captureAnalyticsEvent, capturePageView } from '@/lib/analytics'
 import { TaskStatus, PluginActionId } from '@/types'
-import type { FileAttachment } from '@/types'
+import type { FileAttachment, OutputField, UpdateTaskDTO } from '@/types'
 import { MessageSquare, ExternalLink, LayoutDashboard, CheckSquare, Zap, Settings, Layers, PanelLeftClose, PanelLeftOpen, Search } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { ThemeToggle } from './ThemeToggle'
@@ -127,12 +128,118 @@ export function AppLayout() {
     () => dashboardPreviewTaskId ? allTasks.find((t) => t.id === dashboardPreviewTaskId) : undefined,
     [dashboardPreviewTaskId, allTasks]
   )
+  const filteredTasksRef = useRef(tasks)
+  filteredTasksRef.current = tasks
 
   const handleGoToFullView = useCallback((taskId: string) => {
     closeDashboardPreview()
     selectTask(taskId)
     setSidebarView('tasks')
   }, [closeDashboardPreview, selectTask, setSidebarView])
+
+  const [toast, setToast] = useState<{ message: string; isError?: boolean } | null>(null)
+  const showToast = useCallback((message: string, isError?: boolean) => {
+    setToast({ message, isError })
+    setTimeout(() => setToast(null), isError ? 5000 : 3000)
+  }, [])
+
+  const getLatestTask = useCallback(
+    (taskId: string | null | undefined) => (
+      taskId ? useTaskStore.getState().tasks.find((t) => t.id === taskId) : undefined
+    ),
+    []
+  )
+
+  const completeTask = useCallback(
+    async (taskId: string, options?: { selectNextTask?: boolean }) => {
+      const task = getLatestTask(taskId)
+      if (!task) return
+      const taskTitle = task.title
+      try {
+        if (task.source_id) {
+          const actionField = task.output_fields.find((f) => f.id === 'action')
+          const actionValue = actionField?.value ? String(actionField.value) : PluginActionId.Complete
+          const result = await executeAction(actionValue, task.id, task.source_id)
+          if (!result.success) {
+            showToast(result.error || 'Failed to complete task', true)
+            return
+          }
+        }
+        await updateTask(task.id, { status: TaskStatus.Completed })
+      } catch (err) {
+        console.error('Failed to complete task:', err)
+        showToast('Failed to complete task', true)
+        return
+      }
+
+      if (options?.selectNextTask) {
+        const activeTasks = filteredTasksRef.current.filter((t) => t.id !== task.id && t.status !== TaskStatus.Completed)
+        selectTask(activeTasks.length > 0 ? activeTasks[0].id : null)
+      }
+      showToast(`"${taskTitle}" completed`)
+    },
+    [executeAction, getLatestTask, selectTask, showToast, updateTask]
+  )
+
+  const selectedTaskId = selectedTask?.id
+  const handleEditSelectedTask = useCallback(() => {
+    if (selectedTaskId) openEditModal(selectedTaskId)
+  }, [openEditModal, selectedTaskId])
+  const handleDeleteSelectedTask = useCallback(() => {
+    if (selectedTaskId) openDeleteModal(selectedTaskId)
+  }, [openDeleteModal, selectedTaskId])
+  const handleUpdateSelectedAttachments = useCallback(
+    async (attachments: FileAttachment[]) => {
+      if (selectedTaskId) await updateTask(selectedTaskId, { attachments })
+    },
+    [selectedTaskId, updateTask]
+  )
+  const handleUpdateSelectedOutputFields = useCallback(
+    async (output_fields: OutputField[]) => {
+      if (selectedTaskId) await updateTask(selectedTaskId, { output_fields })
+    },
+    [selectedTaskId, updateTask]
+  )
+  const handleCompleteSelectedTask = useCallback(async () => {
+    if (selectedTaskId) await completeTask(selectedTaskId, { selectNextTask: true })
+  }, [completeTask, selectedTaskId])
+
+  const handleAssignAgent = useCallback(async (taskId: string, agentId: string | null) => {
+    await updateTask(taskId, { agent_id: agentId })
+  }, [updateTask])
+  const handleUpdateTask = useCallback(async (taskId: string, data: Record<string, unknown>) => {
+    await updateTask(taskId, data as UpdateTaskDTO)
+  }, [updateTask])
+  const handleNavigateToTask = useCallback((taskId: string) => selectTask(taskId), [selectTask])
+
+  const handleEditDashboardPreviewTask = useCallback(() => {
+    if (dashboardPreviewTaskId) openEditModal(dashboardPreviewTaskId)
+  }, [dashboardPreviewTaskId, openEditModal])
+  const handleDeleteDashboardPreviewTask = useCallback(() => {
+    if (dashboardPreviewTaskId) openDeleteModal(dashboardPreviewTaskId)
+  }, [dashboardPreviewTaskId, openDeleteModal])
+  const handleUpdateDashboardPreviewAttachments = useCallback(
+    async (attachments: FileAttachment[]) => {
+      if (dashboardPreviewTaskId) await updateTask(dashboardPreviewTaskId, { attachments })
+    },
+    [dashboardPreviewTaskId, updateTask]
+  )
+  const handleUpdateDashboardPreviewOutputFields = useCallback(
+    async (output_fields: OutputField[]) => {
+      if (dashboardPreviewTaskId) await updateTask(dashboardPreviewTaskId, { output_fields })
+    },
+    [dashboardPreviewTaskId, updateTask]
+  )
+  const handleCompleteDashboardPreviewTask = useCallback(async () => {
+    if (dashboardPreviewTaskId) await completeTask(dashboardPreviewTaskId)
+  }, [completeTask, dashboardPreviewTaskId])
+  const handleNavigateFromDashboardPreview = useCallback(
+    (taskId: string) => {
+      closeDashboardPreview()
+      handleGoToFullView(taskId)
+    },
+    [closeDashboardPreview, handleGoToFullView]
+  )
 
   const overdueCount = useMemo(
     () => tasks.filter(
@@ -142,12 +249,6 @@ export function AppLayout() {
   )
 
   useOverdueNotifications(tasks)
-
-  const [toast, setToast] = useState<{ message: string; isError?: boolean } | null>(null)
-  const showToast = useCallback((message: string, isError?: boolean) => {
-    setToast({ message, isError })
-    setTimeout(() => setToast(null), isError ? 5000 : 3000)
-  }, [])
 
   const [onboardingOpen, setOnboardingOpen] = useState(false)
 
@@ -390,53 +491,14 @@ export function AppLayout() {
               <TaskWorkspace
               task={selectedTask}
               agents={agents}
-              onEdit={() => {
-                if (selectedTask) openEditModal(selectedTask.id)
-              }}
-              onDelete={() => {
-                if (selectedTask) openDeleteModal(selectedTask.id)
-              }}
-              onUpdateAttachments={async (attachments: FileAttachment[]) => {
-                if (selectedTask) {
-                  await updateTask(selectedTask.id, { attachments })
-                }
-              }}
-              onUpdateOutputFields={async (output_fields) => {
-                if (selectedTask) {
-                  await updateTask(selectedTask.id, { output_fields })
-                }
-              }}
-              onCompleteTask={async () => {
-                if (!selectedTask) return
-                const taskTitle = selectedTask.title
-                try {
-                  if (selectedTask.source_id) {
-                    const actionField = selectedTask.output_fields.find((f) => f.id === 'action')
-                    const actionValue = actionField?.value ? String(actionField.value) : PluginActionId.Complete
-                    const result = await executeAction(actionValue, selectedTask.id, selectedTask.source_id)
-                    if (!result.success) {
-                      showToast(result.error || 'Failed to complete task', true)
-                      return
-                    }
-                  }
-                  await updateTask(selectedTask.id, { status: TaskStatus.Completed })
-                } catch (err) {
-                  console.error('Failed to complete task:', err)
-                  showToast('Failed to complete task', true)
-                  return
-                }
-                // Select next active task
-                const activeTasks = tasks.filter((t) => t.id !== selectedTask.id && t.status !== TaskStatus.Completed)
-                selectTask(activeTasks.length > 0 ? activeTasks[0].id : null)
-                showToast(`"${taskTitle}" completed`)
-              }}
-              onAssignAgent={async (taskId, agentId) => {
-                await updateTask(taskId, { agent_id: agentId })
-              }}
-              onUpdateTask={async (taskId, data) => {
-                await updateTask(taskId, data)
-              }}
-              onNavigateToTask={(taskId) => selectTask(taskId)}
+              onEdit={handleEditSelectedTask}
+              onDelete={handleDeleteSelectedTask}
+              onUpdateAttachments={handleUpdateSelectedAttachments}
+              onUpdateOutputFields={handleUpdateSelectedOutputFields}
+              onCompleteTask={handleCompleteSelectedTask}
+              onAssignAgent={handleAssignAgent}
+              onUpdateTask={handleUpdateTask}
+              onNavigateToTask={handleNavigateToTask}
             />
           ) : null}
           </div>
@@ -588,48 +650,14 @@ export function AppLayout() {
               <TaskWorkspace
                 task={dashboardPreviewTask}
                 agents={agents}
-                onEdit={() => {
-                  if (dashboardPreviewTask) openEditModal(dashboardPreviewTask.id)
-                }}
-                onDelete={() => {
-                  if (dashboardPreviewTask) openDeleteModal(dashboardPreviewTask.id)
-                }}
-                onUpdateAttachments={async (attachments: FileAttachment[]) => {
-                  await updateTask(dashboardPreviewTask.id, { attachments })
-                }}
-                onUpdateOutputFields={async (output_fields) => {
-                  await updateTask(dashboardPreviewTask.id, { output_fields })
-                }}
-                onCompleteTask={async () => {
-                  const taskTitle = dashboardPreviewTask.title
-                  try {
-                    if (dashboardPreviewTask.source_id) {
-                      const actionField = dashboardPreviewTask.output_fields.find((f) => f.id === 'action')
-                      const actionValue = actionField?.value ? String(actionField.value) : PluginActionId.Complete
-                      const result = await executeAction(actionValue, dashboardPreviewTask.id, dashboardPreviewTask.source_id)
-                      if (!result.success) {
-                        showToast(result.error || 'Failed to complete task', true)
-                        return
-                      }
-                    }
-                    await updateTask(dashboardPreviewTask.id, { status: TaskStatus.Completed })
-                  } catch (err) {
-                    console.error('Failed to complete task:', err)
-                    showToast('Failed to complete task', true)
-                    return
-                  }
-                  showToast(`"${taskTitle}" completed`)
-                }}
-                onAssignAgent={async (taskId, agentId) => {
-                  await updateTask(taskId, { agent_id: agentId })
-                }}
-                onUpdateTask={async (taskId, data) => {
-                  await updateTask(taskId, data)
-                }}
-                onNavigateToTask={(taskId) => {
-                  closeDashboardPreview()
-                  handleGoToFullView(taskId)
-                }}
+                onEdit={handleEditDashboardPreviewTask}
+                onDelete={handleDeleteDashboardPreviewTask}
+                onUpdateAttachments={handleUpdateDashboardPreviewAttachments}
+                onUpdateOutputFields={handleUpdateDashboardPreviewOutputFields}
+                onCompleteTask={handleCompleteDashboardPreviewTask}
+                onAssignAgent={handleAssignAgent}
+                onUpdateTask={handleUpdateTask}
+                onNavigateToTask={handleNavigateFromDashboardPreview}
               />
             )}
           </div>

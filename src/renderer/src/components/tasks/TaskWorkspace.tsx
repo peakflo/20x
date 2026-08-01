@@ -19,7 +19,7 @@ import { useSettingsStore, type GitProvider } from '@/stores/settings-store'
 import { useTaskStore } from '@/stores/task-store'
 import { taskApi, worktreeApi, taskSourceApi, onAgentIncompatibleSession, onWorktreeProgress, attachmentApi } from '@/lib/ipc-client'
 import { subscribe } from '@/lib/shared-ipc-listeners'
-import { useEffect, useCallback, useRef, useState, useMemo } from 'react'
+import { memo, useEffect, useCallback, useRef, useState, useMemo } from 'react'
 import { TaskStatus } from '@/types'
 import type { WorkfloTask, FileAttachment, OutputField, Agent, UpdateAgentDTO, CreateAgentDTO } from '@/types'
 import type { GitHubRepo } from '@/types/electron'
@@ -37,7 +37,7 @@ interface TaskWorkspaceProps {
   onUpdateOutputFields: (fields: OutputField[]) => void
   onCompleteTask: () => void
   onAssignAgent: (taskId: string, agentId: string | null) => void
-  onUpdateTask?: (taskId: string, data: Partial<WorkfloTask>) => Promise<void>
+  onUpdateTask?: (taskId: string, data: Record<string, unknown>) => Promise<void>
   onNavigateToTask?: (taskId: string) => void
   /** When provided, each subtask shows an action to open it as a separate canvas window/panel. */
   onOpenSubtaskInWindow?: (taskId: string) => void
@@ -45,7 +45,7 @@ interface TaskWorkspaceProps {
   panelLayout?: TaskWorkspaceLayout
 }
 
-export function TaskWorkspace({
+function TaskWorkspaceComponent({
   task,
   agents,
   onEdit,
@@ -640,6 +640,37 @@ Update existing skills that were helpful or create new ones for patterns worth r
     }
   }, [task?.agent_id, task?.id, session.sessionId, start, stop, removeSession, onUpdateTask])
 
+  const handleEditAgent = useCallback((agentId: string) => setEditingAgentId(agentId), [])
+  const handleSaveAgent = useCallback(async (data: CreateAgentDTO | UpdateAgentDTO) => {
+    if (!editingAgentId) return
+    await updateAgent(editingAgentId, data as UpdateAgentDTO)
+    setEditingAgentId(null)
+  }, [editingAgentId, updateAgent])
+
+  const handleUpdateSkillIds = useCallback(async (skillIds: string[] | null) => {
+    if (task?.id && onUpdateTask) await onUpdateTask(task.id, { skill_ids: skillIds })
+  }, [onUpdateTask, task?.id])
+  const handleUpdateDescription = useCallback(async (description: string) => {
+    if (!task?.id) return
+    if (onUpdateTask) {
+      await onUpdateTask(task.id, { description })
+    } else {
+      await taskApi.update(task.id, { description })
+      updateTaskInStore(task.id, { description })
+    }
+  }, [onUpdateTask, task?.id, updateTaskInStore])
+  const handleShowSkillSelector = useCallback(() => setShowSkillSelector(true), [])
+  const handleShowSnooze = useCallback(() => setShowSnooze(true), [])
+  const handleUpdateAutoFlags = useCallback(async (updates: Record<string, unknown>) => {
+    if (!task?.id) return
+    if (onUpdateTask) {
+      await onUpdateTask(task.id, updates)
+    } else {
+      await taskApi.update(task.id, updates)
+      updateTaskInStore(task.id, updates)
+    }
+  }, [onUpdateTask, task?.id, updateTaskInStore])
+
   if (!task) {
     return (
       <div className="flex items-center justify-center h-full">
@@ -666,12 +697,6 @@ Update existing skills that were helpful or create new ones for patterns worth r
   const canTriage = !task.agent_id && agents.length > 0 && triageAgentConfigured && session.status === SessionStatus.IDLE
     && task.status !== TaskStatus.Completed && task.status !== TaskStatus.Triaging
 
-  const handleEditAgent = (agentId: string) => setEditingAgentId(agentId)
-  const handleSaveAgent = async (data: CreateAgentDTO | UpdateAgentDTO) => {
-    if (!editingAgentId) return
-    await updateAgent(editingAgentId, data as UpdateAgentDTO)
-    setEditingAgentId(null)
-  }
   const editingAgent = editingAgentId ? agents.find((a) => a.id === editingAgentId) : undefined
 
   return (
@@ -696,39 +721,22 @@ Update existing skills that were helpful or create new ones for patterns worth r
             onAssignAgent={handleAssignAgent}
             onUpdateRepos={handleUpdateRepos}
             onAddRepos={handleAddRepos}
-            onUpdateSkillIds={async (skillIds) => {
-              if (onUpdateTask) await onUpdateTask(task.id, { skill_ids: skillIds })
-            }}
-            onUpdateDescription={onUpdateTask
-              ? async (description) => {
-                await onUpdateTask(task.id, { description })
-              }
-              : async (description) => {
-                await taskApi.update(task.id, { description })
-                updateTaskInStore(task.id, { description })
-              }
-            }
-            onAddSkills={() => setShowSkillSelector(true)}
+            onUpdateSkillIds={handleUpdateSkillIds}
+            onUpdateDescription={handleUpdateDescription}
+            onAddSkills={handleShowSkillSelector}
             onStartAgent={handleStartSession}
             canStartAgent={!!canStart}
             onResumeAgent={handleResumeSession}
             canResumeAgent={!!canResume}
             onRestartAgent={handleStartFreshSession}
             canRestartAgent={!!canRestart}
-            onSnooze={() => setShowSnooze(true)}
+            onSnooze={handleShowSnooze}
             onUnsnooze={handleUnsnooze}
             onReassign={handleReassign}
             onTriage={handleTriage}
             canTriage={!!canTriage}
             onEditAgent={handleEditAgent}
-            onUpdateAutoFlags={async (updates) => {
-              if (onUpdateTask) {
-                await onUpdateTask(task.id, updates)
-              } else {
-                await taskApi.update(task.id, updates)
-                updateTaskInStore(task.id, updates)
-              }
-            }}
+            onUpdateAutoFlags={handleUpdateAutoFlags}
             subtasks={subtasks}
             parentTask={parentTask}
             onNavigateToTask={onNavigateToTask}
@@ -850,3 +858,5 @@ Update existing skills that were helpful or create new ones for patterns worth r
     </>
   )
 }
+
+export const TaskWorkspace = memo(TaskWorkspaceComponent)

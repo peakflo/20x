@@ -389,7 +389,7 @@ interface TaskDetailViewProps {
   onReorderSubtasks?: (orderedIds: string[]) => void
 }
 
-export function TaskDetailView({ task, agents, onEdit, onDelete, onUpdateAttachments, onUpdateOutputFields, onCompleteTask, onAssignAgent, onUpdateRepos, onAddRepos, onUpdateSkillIds, onAddSkills, onStartAgent, canStartAgent, onResumeAgent, canResumeAgent, onRestartAgent, canRestartAgent, onSnooze, onUnsnooze, onReassign, onTriage, canTriage, onEditAgent, onUpdateDescription, onUpdateAutoFlags, subtasks, parentTask, onNavigateToTask, onOpenSubtaskInWindow, onAddSubtask, onReorderSubtasks }: TaskDetailViewProps) {
+function TaskDetailViewComponent({ task, agents, onEdit, onDelete, onUpdateAttachments, onUpdateOutputFields, onCompleteTask, onAssignAgent, onUpdateRepos, onAddRepos, onUpdateSkillIds, onAddSkills, onStartAgent, canStartAgent, onResumeAgent, canResumeAgent, onRestartAgent, canRestartAgent, onSnooze, onUnsnooze, onReassign, onTriage, canTriage, onEditAgent, onUpdateDescription, onUpdateAutoFlags, subtasks, parentTask, onNavigateToTask, onOpenSubtaskInWindow, onAddSubtask, onReorderSubtasks }: TaskDetailViewProps) {
   // Per-field selectors — a selector-less useSkillStore() re-renders this
   // large view on every skill-store mutation.
   const skills = useSkillStore((s) => s.skills)
@@ -856,3 +856,5 @@ export function TaskDetailView({ task, agents, onEdit, onDelete, onUpdateAttachm
     </div>
   )
 }
+
+export const TaskDetailView = React.memo(TaskDetailViewComponent)
