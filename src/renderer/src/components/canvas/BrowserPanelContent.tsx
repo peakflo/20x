@@ -94,12 +94,14 @@ export function BrowserPanelContent({
 
     setConnectedTaskName(computeConnectedTask())
 
-    // Only re-compute when edges change, not on every panel position change
-    const unsub = useCanvasStore.subscribe((state, prevState) => {
-      if (state.edges !== prevState.edges) {
+    // Only re-compute when edges change, not on every panel position change.
+    // subscribeWithSelector fires the listener only when `edges` identity changes.
+    const unsub = useCanvasStore.subscribe(
+      (state) => state.edges,
+      () => {
         setConnectedTaskName(computeConnectedTask())
       }
-    })
+    )
     return unsub
   }, [panelId])
 

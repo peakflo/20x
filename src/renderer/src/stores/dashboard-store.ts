@@ -407,6 +407,9 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     // Idempotent — don't start multiple timers
     if (_refreshTimerRef) return
     _refreshTimerRef = setInterval(() => {
+      // Skip background refresh while the window is hidden/backgrounded — there's
+      // no visible dashboard to update, and the next tick refetches once visible.
+      if (typeof document !== 'undefined' && document.hidden) return
       // Only refresh if authenticated
       const isAuth = useEnterpriseStore.getState().isAuthenticated
       if (isAuth) {

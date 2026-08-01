@@ -48,6 +48,7 @@ vi.mock('@xterm/addon-web-links', () => ({
 }))
 
 import { TerminalPanelContent } from './TerminalPanelContent'
+import { useCanvasStore } from '@/stores/canvas-store'
 
 function deferred<T>() {
   let resolve!: (value: T) => void
@@ -62,6 +63,7 @@ function deferred<T>() {
 describe('TerminalPanelContent', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    useCanvasStore.setState({ viewport: { x: 0, y: 0, zoom: 1 } })
     terminalWrite.mockResolvedValue(undefined)
     terminalResize.mockResolvedValue(undefined)
     terminalKill.mockResolvedValue(undefined)
@@ -190,8 +192,11 @@ describe('TerminalPanelContent', () => {
     terminalCreate.mockResolvedValue({ pid: 333 })
     terminalGetCwd.mockResolvedValue({ cwd: null })
 
+    // Committed canvas zoom is now read from the store, not a prop.
+    useCanvasStore.setState({ viewport: { x: 0, y: 0, zoom: 0.5 } })
+
     const { container } = render(
-      <TerminalPanelContent terminalId="panel-1" cwd="/tmp" canvasZoom={0.5} />
+      <TerminalPanelContent terminalId="panel-1" cwd="/tmp" />
     )
 
     const terminal = container.querySelector('.xterm-container') as HTMLElement

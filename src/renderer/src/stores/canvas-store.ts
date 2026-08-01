@@ -1,10 +1,21 @@
 import { create } from 'zustand'
+import { subscribeWithSelector } from 'zustand/middleware'
 import { settingsApi } from '@/lib/ipc-client'
 
 const CANVAS_STORAGE_KEY = 'canvas_state'
 const CDP_PORT = 19222
 let saveTimer: ReturnType<typeof setTimeout> | null = null
 const SAVE_DEBOUNCE_MS = 1000
+
+// Verbose browser/terminal edge-wiring logs are off by default (they trace a
+// multi-step async connection flow). Opt in at runtime with:
+//   localStorage.setItem('debug:canvas', '1')
+const CANVAS_DEBUG =
+  typeof localStorage !== 'undefined' && localStorage.getItem('debug:canvas') === '1'
+
+function clog(...args: unknown[]): void {
+  if (CANVAS_DEBUG) console.log(...args)
+}
 
 // ── Panel types ────────────────────────────────────────────
 
@@ -211,7 +222,7 @@ function scheduleSave() {
   }, SAVE_DEBOUNCE_MS)
 }
 
-export const useCanvasStore = create<CanvasState>((set, get) => ({
+export const useCanvasStore = create<CanvasState>()(subscribeWithSelector((set, get) => ({
   viewport: { x: 0, y: 0, zoom: 1 },
   panels: [],
   edges: [],
@@ -472,7 +483,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     set({ edges: [] })
     scheduleSave()
   }
-}))
+})))
 
 // ── Snapping utility ──────────────────────────────────────
 
@@ -638,7 +649,7 @@ function notifyAgentOfBrowserConnection(
     ? useCanvasStore.getState().panels.find((p) => p.id === browserPanel.id) || browserPanel
     : browserPanel
 
-  console.log('[BrowserEdge] notifyAgentOfBrowserConnection called', {
+  clog('[BrowserEdge] notifyAgentOfBrowserConnection called', {
     fromPanelId, toPanelId,
     fromType: fromPanel?.type, toType: toPanel?.type,
     taskRefId: taskPanel?.refId, browserPanelId: freshBrowserPanel?.id,
@@ -648,7 +659,7 @@ function notifyAgentOfBrowserConnection(
   })
 
   if (!taskPanel?.refId || !browserPanel) {
-    console.log('[BrowserEdge] BAIL: no taskPanel.refId or no browserPanel')
+    clog('[BrowserEdge] BAIL: no taskPanel.refId or no browserPanel')
     return
   }
 
@@ -661,14 +672,14 @@ function notifyAgentOfBrowserConnection(
 
     const taskId = taskPanel.refId!
     let session = useAgentStore.getState().getSession(taskId)
-    console.log('[BrowserEdge] session state', { taskId, sessionId: session?.sessionId, agentId: session?.agentId })
+    clog('[BrowserEdge] session state', { taskId, sessionId: session?.sessionId, agentId: session?.agentId })
 
     // If no active session, auto-start or resume the task
     if (!session?.sessionId) {
       const task = useTaskStore.getState().tasks.find((t) => t.id === taskId)
-      console.log('[BrowserEdge] no session, looking up task', { taskId, agentId: task?.agent_id, sessionId: task?.session_id })
+      clog('[BrowserEdge] no session, looking up task', { taskId, agentId: task?.agent_id, sessionId: task?.session_id })
       if (!task?.agent_id) {
-        console.log('[BrowserEdge] BAIL: no agent_id on task')
+        clog('[BrowserEdge] BAIL: no agent_id on task')
         return
       }
 
@@ -692,7 +703,7 @@ function notifyAgentOfBrowserConnection(
           initSession(taskId, sessionId, task.agent_id)
         }
         session = useAgentStore.getState().getSession(taskId)
-        console.log('[BrowserEdge] session after auto-start', { sessionId: session?.sessionId })
+        clog('[BrowserEdge] session after auto-start', { sessionId: session?.sessionId })
       } catch (err) {
         console.error('[BrowserEdge] Failed to auto-start/resume task:', err)
         return
@@ -700,7 +711,7 @@ function notifyAgentOfBrowserConnection(
     }
 
     if (!session?.sessionId) {
-      console.log('[BrowserEdge] BAIL: still no sessionId after auto-start attempt')
+      clog('[BrowserEdge] BAIL: still no sessionId after auto-start attempt')
       return
     }
 
@@ -715,7 +726,7 @@ function notifyAgentOfBrowserConnection(
     const resolveTab = async (attempt: number): Promise<string | null> => {
       const allTargets = await window.electronAPI.browser.getCdpTargets()
       const webviews = allTargets.filter((t) => t.type === 'webview')
-      console.log(`[BrowserEdge] resolveTab attempt=${attempt}`, {
+      clog(`[BrowserEdge] resolveTab attempt=${attempt}`, {
         allTargets: allTargets.map((t) => ({ tabId: t.tabId, type: t.type, url: t.url?.slice(0, 60) })),
         webviewsCount: webviews.length,
         browserUrl,
@@ -731,7 +742,7 @@ function notifyAgentOfBrowserConnection(
           const result = await window.electronAPI.browser.getTargetId(bp.webContentsId)
           if (result.targetId) {
             match = allTargets.find((t) => t.id === result.targetId) || null
-            if (match) console.log('[BrowserEdge] matched by webContentsId→getTargetId', match.tabId)
+            if (match) clog('[BrowserEdge] matched by webContentsId→getTargetId', match.tabId)
           }
         } catch { /* debugger API failed */ }
       }
@@ -740,13 +751,13 @@ function notifyAgentOfBrowserConnection(
       if (!match && browserUrl) {
         const urlBase = browserUrl.split('?')[0].split('#')[0]
         match = webviews.find((t) => t.url.startsWith(urlBase)) || null
-        if (match) console.log('[BrowserEdge] matched by URL', { tabId: match.tabId, matchUrl: match.url?.slice(0, 60) })
+        if (match) clog('[BrowserEdge] matched by URL', { tabId: match.tabId, matchUrl: match.url?.slice(0, 60) })
       }
 
       // 3. Last resort — first available webview
       if (!match) {
         match = webviews[0] || null
-        if (match) console.log('[BrowserEdge] fallback to first webview', match.tabId)
+        if (match) clog('[BrowserEdge] fallback to first webview', match.tabId)
       }
 
       return match?.tabId || null
@@ -756,14 +767,14 @@ function notifyAgentOfBrowserConnection(
       for (let attempt = 0; attempt < 3; attempt++) {
         tabId = await resolveTab(attempt)
         if (tabId) break
-        console.log(`[BrowserEdge] no tab found, retrying in 1s (attempt ${attempt + 1}/3)`)
+        clog(`[BrowserEdge] no tab found, retrying in 1s (attempt ${attempt + 1}/3)`)
         await new Promise((r) => setTimeout(r, 1000))
       }
     } catch (err) {
       console.error('[BrowserEdge] resolveTab error:', err)
     }
 
-    console.log('[BrowserEdge] final result', { tabId, browserTitle, browserUrl })
+    clog('[BrowserEdge] final result', { tabId, browserTitle, browserUrl })
 
     if (!tabId) {
       agentSessionApi.send(
