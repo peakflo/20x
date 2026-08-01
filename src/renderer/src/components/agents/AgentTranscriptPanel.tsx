@@ -185,6 +185,18 @@ function getTranscriptItemSearchText(item: TranscriptItem): string {
   return getMessageSearchText(item.message)
 }
 
+function getMessageContentLength(message: AgentMessage): number {
+  return typeof message.content === 'string' ? message.content.length : 0
+}
+
+function getTranscriptItemContentLength(item: TranscriptItem | undefined): number {
+  if (!item) return 0
+  if (item.type === 'activity') {
+    return item.messages.reduce((total, message) => total + getMessageContentLength(message), 0)
+  }
+  return getMessageContentLength(item.message)
+}
+
 function HighlightedText({ text, query }: { text: string; query?: string }) {
   const normalizedQuery = query?.trim()
   if (!normalizedQuery) return <>{text}</>
@@ -843,6 +855,8 @@ export function AgentTranscriptPanel({
   const showErrorBanner = !!lastErrorMessage && lastErrorMessage.partType !== 'error'
 
   const atBottomRef = useRef(true)
+  const scrollRafRef = useRef<number | null>(null)
+  const autoScrollRafRef = useRef<number | null>(null)
   const [showScrollToBottom, setShowScrollToBottom] = useState(false)
   const transcriptItems = useMemo<TranscriptItem[]>(() => {
     const items: TranscriptItem[] = []
@@ -874,6 +888,10 @@ export function AgentTranscriptPanel({
     }, [])
   }, [normalizedSearchQuery, transcriptItems])
   const activeSearchItemIndex = searchResultIndexes[activeSearchResult] ?? -1
+  const lastTranscriptItemContentLength = useMemo(
+    () => getTranscriptItemContentLength(transcriptItems[transcriptItems.length - 1]),
+    [transcriptItems]
+  )
 
   useEffect(() => {
     setActiveSearchResult(0)
@@ -896,12 +914,16 @@ export function AgentTranscriptPanel({
   })
 
   const handleScroll = useCallback(() => {
-    const el = scrollRef.current
-    if (!el) return
-    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
-    const isAtBottom = distanceFromBottom < 100
-    atBottomRef.current = isAtBottom
-    setShowScrollToBottom(!isAtBottom)
+    if (scrollRafRef.current !== null) return
+    scrollRafRef.current = requestAnimationFrame(() => {
+      scrollRafRef.current = null
+      const el = scrollRef.current
+      if (!el) return
+      const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
+      const isAtBottom = distanceFromBottom < 100
+      atBottomRef.current = isAtBottom
+      setShowScrollToBottom(!isAtBottom)
+    })
   }, [])
 
   const scrollToBottom = useCallback(() => {
@@ -915,9 +937,33 @@ export function AgentTranscriptPanel({
   useEffect(() => {
     if (activeSearchItemIndex >= 0) return
     if (transcriptItems.length > 0 && atBottomRef.current) {
-      virtualizer.scrollToIndex(transcriptItems.length - 1, { align: 'end' })
+      if (autoScrollRafRef.current !== null) {
+        cancelAnimationFrame(autoScrollRafRef.current)
+      }
+      autoScrollRafRef.current = requestAnimationFrame(() => {
+        autoScrollRafRef.current = null
+        if (!atBottomRef.current) return
+        virtualizer.scrollToIndex(transcriptItems.length - 1, { align: 'end' })
+      })
     }
-  }, [activeSearchItemIndex, transcriptItems.length, virtualizer])
+    return () => {
+      if (autoScrollRafRef.current !== null) {
+        cancelAnimationFrame(autoScrollRafRef.current)
+        autoScrollRafRef.current = null
+      }
+    }
+  }, [activeSearchItemIndex, lastTranscriptItemContentLength, transcriptItems.length, virtualizer])
+
+  useEffect(() => {
+    return () => {
+      if (scrollRafRef.current !== null) {
+        cancelAnimationFrame(scrollRafRef.current)
+      }
+      if (autoScrollRafRef.current !== null) {
+        cancelAnimationFrame(autoScrollRafRef.current)
+      }
+    }
+  }, [])
 
   useEffect(() => {
     if (activeSearchItemIndex >= 0) {
