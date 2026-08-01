@@ -2883,7 +2883,10 @@ describe('AgentManager durable transcript write-through', () => {
     const mockDb = createMockDb({})
     const upserted: Array<{ taskId: string; parts: Array<{ id: string; role?: string; content?: string; partType?: string }> }> = []
     Object.assign(mockDb as any, {
-      upsertTranscriptParts: vi.fn((taskId: string, parts: never[]) => { upserted.push({ taskId, parts }) }),
+      upsertTranscriptParts: vi.fn((taskId: string, parts: never[]) => {
+        upserted.push({ taskId, parts })
+        return { maxRev: upserted.length, changedPartIds: [] }
+      }),
       hasTranscriptParts: vi.fn(() => false),
       getTranscriptParts: vi.fn(() => [])
     })
@@ -2947,6 +2950,49 @@ describe('AgentManager durable transcript write-through', () => {
 
     await expect(mgr.getTranscriptSnapshot('task-1')).resolves.toEqual(rows)
     expect((mockDb as any).getTranscriptParts).toHaveBeenCalledWith('task-1', undefined)
+  })
+
+  it('coalesces transcript:changed emissions per task behind one trailing delta read', () => {
+    vi.useFakeTimers()
+    try {
+      const mockDb = createMockDb({})
+      const sent: Array<{ channel: string; data: unknown }> = []
+      let rev = 0
+      Object.assign(mockDb as any, {
+        upsertTranscriptParts: vi.fn((_taskId: string, parts: Array<{ id: string }>) => {
+          rev += parts.length
+          return { maxRev: rev, changedPartIds: parts.map((p) => p.id) }
+        }),
+        getTranscriptDelta: vi.fn((taskId: string, sinceRev: number) => ({
+          maxRev: rev,
+          parts: [
+            { taskId, partId: 'p1', seq: 1, role: 'assistant', content: 'one', createdAt: 1, updatedAt: 1, rev: 1 },
+            { taskId, partId: 'p2', seq: 2, role: 'assistant', content: 'two', createdAt: 2, updatedAt: 2, rev: 2 },
+            { taskId, partId: 'p3', seq: 3, role: 'assistant', content: 'three', createdAt: 3, updatedAt: 3, rev: 3 }
+          ].filter((p) => p.rev > sinceRev)
+        }))
+      })
+      const mgr = new AgentManager(mockDb)
+      mgr.addExternalListener((channel, data) => sent.push({ channel, data }))
+
+      ;(mgr as any).sendToRenderer('agent:output', { taskId: 'task-1', data: { id: 'p1', role: 'assistant', content: 'one', partType: 'text' } })
+      ;(mgr as any).sendToRenderer('agent:output', { taskId: 'task-1', data: { id: 'p2', role: 'assistant', content: 'two', partType: 'text' } })
+      ;(mgr as any).sendToRenderer('agent:output', { taskId: 'task-1', data: { id: 'p3', role: 'assistant', content: 'three', partType: 'text' } })
+
+      expect((mockDb as any).getTranscriptDelta).not.toHaveBeenCalled()
+      expect(sent.filter((e) => e.channel === 'transcript:changed')).toHaveLength(0)
+
+      vi.advanceTimersByTime(125)
+
+      expect((mockDb as any).getTranscriptDelta).toHaveBeenCalledOnce()
+      expect((mockDb as any).getTranscriptDelta).toHaveBeenCalledWith('task-1', 0)
+      const transcriptEvents = sent.filter((e) => e.channel === 'transcript:changed')
+      expect(transcriptEvents).toHaveLength(1)
+      expect(transcriptEvents[0].data).toMatchObject({ taskId: 'task-1', maxRev: 3 })
+      expect((transcriptEvents[0].data as { parts: Array<{ partId: string }> }).parts.map((p) => p.partId)).toEqual(['p1', 'p2', 'p3'])
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 
