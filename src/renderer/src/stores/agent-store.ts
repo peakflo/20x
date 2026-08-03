@@ -96,6 +96,11 @@ interface ProjectionCache {
 }
 
 const projections = new Map<string, ProjectionCache>()
+// Number of mounted transcript views per task. Canvas panels can be kept in the
+// workspace indefinitely, but their full transcript only belongs in renderer
+// memory while at least one view is actually mounted. The durable DB projection
+// is re-hydrated when a view comes back.
+const projectionBindings = new Map<string, number>()
 const bindingTasks = new Set<string>()
 const outputAnalyticsByTask = new Map<string, { messageCount: number; toolNames: Set<string> }>()
 
@@ -112,6 +117,7 @@ function resetProjection(taskId: string): void {
 /** Test-only: clear all projection caches between tests. */
 export function __clearProjectionsForTest(): void {
   projections.clear()
+  projectionBindings.clear()
   bindingTasks.clear()
   outputAnalyticsByTask.clear()
 }
@@ -176,6 +182,8 @@ interface AgentState {
    *  snapshot into the cache and render it. Idempotent; subsequent updates
    *  arrive as `transcript:changed` deltas. */
   hydrateTranscript: (taskId: string) => Promise<void>
+  /** Retain a task's transcript while a view is mounted. Returns its cleanup. */
+  bindTranscript: (taskId: string) => () => void
   endSession: (taskId: string) => void
   removeSession: (taskId: string) => void
   clearMessageDedup: (taskId: string) => void
@@ -232,12 +240,16 @@ export const useAgentStore = create<AgentState>((set, get) => {
     })
   }
 
-  const hydrateTranscript = async (taskId: string): Promise<void> => {
+  const hydrateTranscript = async (taskId: string, requireBinding = false): Promise<void> => {
     if (!taskId || bindingTasks.has(taskId)) return
+    if (requireBinding && !projectionBindings.has(taskId)) return
     if (typeof window.electronAPI?.agentSession?.getTranscriptSnapshot !== 'function') return
     bindingTasks.add(taskId)
     try {
       const snapshot = await agentSessionApi.getTranscriptSnapshot(taskId)
+      // The panel may have gone off-screen while the snapshot IPC was in
+      // flight. Do not repopulate the cache after its final consumer left.
+      if (requireBinding && !projectionBindings.has(taskId)) return
       if (snapshot.length === 0) return
       const maxRev = snapshot.reduce((m, p) => Math.max(m, p.rev || 0), 0)
       // Snapshot is the authoritative full state — replace the cache.
@@ -255,6 +267,7 @@ export const useAgentStore = create<AgentState>((set, get) => {
   // the renderer may have missed (dropped IPC event).
   const reconcileDelta = async (taskId: string): Promise<void> => {
     if (typeof window.electronAPI?.agentSession?.getTranscriptDelta !== 'function') return
+    if (!projections.has(taskId)) return
     try {
       const sinceRev = getProjection(taskId).rev
       const { parts, maxRev } = await agentSessionApi.getTranscriptDelta(taskId, sinceRev)
@@ -270,7 +283,13 @@ export const useAgentStore = create<AgentState>((set, get) => {
   // Transcript content: the ONLY writer of messages. Idempotent delta apply.
   onTranscriptChanged((event: TranscriptChangedEvent) => {
     if (!event?.taskId) return
-    applyParts(event.taskId, event.parts || [], event.maxRev)
+    // Background agents continue writing to the durable projection, but an
+    // unmounted task has no renderer consumer. Ignoring its payload here avoids
+    // rebuilding every off-screen transcript in memory; bindTranscript() loads
+    // the authoritative snapshot when the task becomes visible again.
+    if (projections.has(event.taskId)) {
+      applyParts(event.taskId, event.parts || [], event.maxRev)
+    }
     accumulateOutputAnalytics(event.taskId, event.parts || [])
   })
 
@@ -287,7 +306,9 @@ export const useAgentStore = create<AgentState>((set, get) => {
             agentId: event.agentId || '',
             taskId: event.taskId,
             status: event.status,
-            messages: deriveMessages(getProjection(event.taskId)),
+            messages: projections.has(event.taskId)
+              ? deriveMessages(projections.get(event.taskId)!)
+              : [],
             pendingApproval: null
           })
         })
@@ -299,10 +320,6 @@ export const useAgentStore = create<AgentState>((set, get) => {
           next_status: event.status,
           source: 'backend'
         })
-      } else if (event.taskId && event.status === SessionStatus.IDLE) {
-        // A session this window never observed just went idle — bind so its
-        // output is rendered from the projection.
-        void hydrateTranscript(event.taskId)
       }
       return
     }
@@ -430,7 +447,38 @@ export const useAgentStore = create<AgentState>((set, get) => {
       }
     },
 
-    hydrateTranscript,
+    hydrateTranscript: (taskId) => hydrateTranscript(taskId),
+
+    bindTranscript: (taskId) => {
+      const previousCount = projectionBindings.get(taskId) ?? 0
+      projectionBindings.set(taskId, previousCount + 1)
+      if (previousCount === 0) void hydrateTranscript(taskId, true)
+
+      let released = false
+      return () => {
+        if (released) return
+        released = true
+
+        const nextCount = (projectionBindings.get(taskId) ?? 1) - 1
+        if (nextCount > 0) {
+          projectionBindings.set(taskId, nextCount)
+          return
+        }
+
+        projectionBindings.delete(taskId)
+        resetProjection(taskId)
+        set((state) => {
+          const session = state.sessions.get(taskId)
+          if (!session || session.messages.length === 0) return state
+          return {
+            sessions: new Map(state.sessions).set(taskId, {
+              ...session,
+              messages: []
+            })
+          }
+        })
+      }
+    },
 
     initSession: (taskId, sessionId, agentId) => {
       set((state) => {

@@ -37,16 +37,18 @@ export function useAgentSession(taskId: string | undefined) {
   const session = useAgentStore((s) => (taskId ? s.sessions.get(taskId) : undefined))
   const initSession = useAgentStore((s) => s.initSession)
   const endSession = useAgentStore((s) => s.endSession)
-  const hydrateTranscript = useAgentStore((s) => s.hydrateTranscript)
+  const bindTranscript = useAgentStore((s) => s.bindTranscript)
 
   // Hydrate from the durable transcript projection when a task view binds.
   // The store renders state, not history-of-pushes: output produced while
   // this window wasn't open (background wake-ups, app restarts, resumed
   // sessions) appears immediately without needing a live session.
   useEffect(() => {
-    // Guard for partial store mocks / older bridges without the snapshot API
-    if (taskId && typeof hydrateTranscript === 'function') void hydrateTranscript(taskId)
-  }, [taskId, hydrateTranscript])
+    // Guard for partial store mocks. Releasing the binding drops the renderer
+    // projection while leaving the durable transcript and agent runtime intact.
+    if (taskId && typeof bindTranscript === 'function') return bindTranscript(taskId)
+    return undefined
+  }, [taskId, bindTranscript])
 
   // Project the store session into a stable value. Keyed on individual fields so
   // the returned object keeps identity across unrelated store deltas (e.g. a new

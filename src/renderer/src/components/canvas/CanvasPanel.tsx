@@ -21,7 +21,7 @@ import { BrowserPanelContent } from './BrowserPanelContent'
 import { getCanvasTaskStatusStyle, shouldPulseCanvasTaskStatusTransition } from './canvas-status-style'
 
 /**
- * Off-viewport ("frozen") panel content.
+ * Off-viewport ("frozen") resource panel content.
  *
  * CSS containment stops a hidden panel's internal churn (streaming transcripts,
  * terminal output) from invalidating canvas-level layout and paint, which keeps
@@ -494,6 +494,12 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
     minHeight: isCollapsed ? undefined : (panel.minHeight ?? 150),
     '--canvas-status-rgb': pulseStyle?.rgb ?? '59,130,246',
   } as CSSProperties
+  // Task/transcript trees are cheap to reconstruct from the durable projection
+  // and can contain thousands of DOM nodes each. Unmount them when off-screen,
+  // mirroring a routed chat UI where only the active conversation is mounted.
+  // Browser and terminal panels stay mounted because unmounting would destroy
+  // their live webContents/PTY sessions.
+  const suspendHeavyContent = frozen && (panel.type === 'task' || panel.type === 'transcript')
 
   return (
     <div
@@ -602,19 +608,22 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
       {/* Content area */}
       {!isCollapsed && (
         <div
+          data-canvas-content-mounted={suspendHeavyContent ? 'false' : 'true'}
           className={`flex-1 overflow-hidden min-h-0 ${panel.type === 'task' || panel.type === 'transcript' || panel.type === 'webpage' || panel.type === 'terminal' || panel.type === 'browser' || (panel.type === 'app' && panel.refId) ? '' : 'p-3 overflow-auto'}`}
           style={frozen ? FROZEN_CONTENT_STYLE : undefined}
         >
-          <MemoizedPanelContent
-            type={panel.type}
-            id={panel.id}
-            refId={panel.refId}
-            url={panel.url}
-            title={panel.title}
-            taskLayout={taskLayout}
-            browserSessionId={panel.browserSessionId}
-            streamPort={panel.streamPort}
-          />
+          {!suspendHeavyContent && (
+            <MemoizedPanelContent
+              type={panel.type}
+              id={panel.id}
+              refId={panel.refId}
+              url={panel.url}
+              title={panel.title}
+              taskLayout={taskLayout}
+              browserSessionId={panel.browserSessionId}
+              streamPort={panel.streamPort}
+            />
+          )}
         </div>
       )}
 

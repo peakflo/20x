@@ -79,6 +79,13 @@ vi.mock('@/stores/ui-store', () => ({
 
 describe('InfiniteCanvas', () => {
   beforeEach(() => {
+    const api = window.electronAPI as typeof window.electronAPI & {
+      onHeartbeatAlert?: typeof window.electronAPI.onHeartbeatAlert
+      onHeartbeatDisabled?: typeof window.electronAPI.onHeartbeatDisabled
+    }
+    if (!api.onHeartbeatAlert) api.onHeartbeatAlert = vi.fn(() => vi.fn())
+    if (!api.onHeartbeatDisabled) api.onHeartbeatDisabled = vi.fn(() => vi.fn())
+
     useCanvasStore.setState({
       viewport: { x: 0, y: 0, zoom: 1 },
       panels: [],
@@ -126,6 +133,42 @@ describe('InfiniteCanvas', () => {
     render(<InfiniteCanvas />)
     expect(screen.getByText('My Task Panel')).toBeTruthy()
     expect(screen.getByText('Task')).toBeTruthy()
+  })
+
+  it('unmounts off-screen task content while keeping the lightweight panel shell', async () => {
+    const originalResizeObserver = globalThis.ResizeObserver
+    globalThis.ResizeObserver = class {
+      private callback: ResizeObserverCallback
+      constructor(callback: ResizeObserverCallback) {
+        this.callback = callback
+      }
+      observe() {
+        this.callback([{ contentRect: { width: 800, height: 600 } } as ResizeObserverEntry], this as ResizeObserver)
+      }
+      unobserve() {}
+      disconnect() {}
+    }
+
+    try {
+      useCanvasStore.getState().addPanel({
+        type: 'task',
+        title: 'Far Away Task',
+        refId: 'task-123',
+        x: 5000,
+        y: 5000,
+        width: 400,
+        height: 300,
+      })
+
+      const { container } = render(<InfiniteCanvas />)
+      expect(screen.getByText('Far Away Task')).toBeTruthy()
+      await waitFor(() => {
+        expect(container.querySelector('[data-canvas-content-mounted="false"]')).toBeTruthy()
+      })
+      expect(screen.queryByText('Task not found or deleted')).toBeNull()
+    } finally {
+      globalThis.ResizeObserver = originalResizeObserver
+    }
   })
 
   it('uses task status color coding for task panels and minimap rectangles', () => {
