@@ -30,7 +30,10 @@ function isPanelVisible(
   containerWidth: number,
   containerHeight: number
 ): boolean {
-  if (!containerWidth || !containerHeight) return true // assume visible if unknown
+  // Keep only lightweight shells mounted until the first measurement. Assuming
+  // everything is visible here briefly mounted and hydrated every transcript
+  // during startup, which is exactly the high-water memory spike we avoid.
+  if (!containerWidth || !containerHeight) return false
 
   // Visible region in canvas coordinates
   const margin = 200 // generous margin to avoid flickering at edges
@@ -253,7 +256,10 @@ export function InfiniteCanvas() {
 
   // Track container size for viewport visibility culling
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 })
-  useEffect(() => {
+  // Measure before child passive effects run. This prevents the initial
+  // zero-size fallback from hydrating every canvas transcript for one frame
+  // before off-screen culling becomes active.
+  useLayoutEffect(() => {
     const el = containerRef.current
     if (!el) return
     const observer = new ResizeObserver((entries) => {

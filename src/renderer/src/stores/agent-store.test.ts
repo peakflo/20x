@@ -241,6 +241,56 @@ describe('useAgentStore', () => {
       fireDelta('task-1', [part({ partId: 'p2', content: 'two', createdAt: 200, rev: 2 })])
       expect(useAgentStore.getState().sessions.get('task-1')!.messages.map((m) => m.id)).toEqual(['p1', 'p2'])
     })
+
+    it('releases an unmounted transcript and ignores background deltas until rebound', async () => {
+      getSnapshotMock.mockResolvedValue([part({ partId: 'p1', content: 'large history', rev: 1 })])
+      const release = useAgentStore.getState().bindTranscript('task-1')
+      await vi.waitFor(() => {
+        expect(useAgentStore.getState().sessions.get('task-1')?.messages).toHaveLength(1)
+      })
+
+      release()
+      expect(useAgentStore.getState().sessions.get('task-1')?.messages).toEqual([])
+
+      fireDelta('task-1', [part({ partId: 'p2', content: 'background output', rev: 2 })])
+      expect(useAgentStore.getState().sessions.get('task-1')?.messages).toEqual([])
+    })
+
+    it('keeps the projection until the final mounted consumer releases it', async () => {
+      getSnapshotMock.mockResolvedValue([part({ partId: 'p1', content: 'shared history' })])
+      const releaseFirst = useAgentStore.getState().bindTranscript('task-1')
+      const releaseSecond = useAgentStore.getState().bindTranscript('task-1')
+      await vi.waitFor(() => {
+        expect(useAgentStore.getState().sessions.get('task-1')?.messages).toHaveLength(1)
+      })
+
+      releaseFirst()
+      expect(useAgentStore.getState().sessions.get('task-1')?.messages).toHaveLength(1)
+      releaseSecond()
+      expect(useAgentStore.getState().sessions.get('task-1')?.messages).toEqual([])
+    })
+
+    it('rehydrates the authoritative transcript when a released view mounts again', async () => {
+      getSnapshotMock.mockResolvedValueOnce([part({ partId: 'p1', content: 'first view', rev: 1 })])
+      const release = useAgentStore.getState().bindTranscript('task-1')
+      await vi.waitFor(() => {
+        expect(useAgentStore.getState().sessions.get('task-1')?.messages).toHaveLength(1)
+      })
+      release()
+
+      getSnapshotMock.mockResolvedValueOnce([
+        part({ partId: 'p1', content: 'first view', rev: 1 }),
+        part({ partId: 'p2', content: 'background output', rev: 2 })
+      ])
+      const releaseAgain = useAgentStore.getState().bindTranscript('task-1')
+      await vi.waitFor(() => {
+        expect(useAgentStore.getState().sessions.get('task-1')?.messages.map((message) => message.id)).toEqual([
+          'p1',
+          'p2'
+        ])
+      })
+      releaseAgain()
+    })
   })
 
   describe('Session status via onAgentStatus (state only, not messages)', () => {
