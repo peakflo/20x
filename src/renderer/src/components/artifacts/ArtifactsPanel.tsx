@@ -39,7 +39,7 @@ export function ArtifactsPanel({ artifacts, ui, artifactApi, hasChanges, hasOutp
       </div>
       <div className="relative min-h-0 flex-1">
         <div className={active === PinnedArtifactTabId.DETAILS ? 'h-full' : 'hidden'}>{details}</div>
-        {hasChanges && <div className={active === PinnedArtifactTabId.CHANGES ? 'h-full' : 'hidden'}>{changes}</div>}
+        {hasChanges && active === PinnedArtifactTabId.CHANGES && <div className="h-full">{changes}</div>}
         {hasOutput && <div className={active === PinnedArtifactTabId.OUTPUT ? 'h-full overflow-y-auto p-4' : 'hidden'}>{output}</div>}
         {artifacts.map((artifact) => (
           <div key={artifact.id} className={active === artifact.id ? 'h-full' : 'hidden'}>

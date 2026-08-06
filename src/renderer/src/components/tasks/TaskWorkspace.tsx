@@ -963,7 +963,6 @@ Update existing skills that were helpful or create new ones for patterns worth r
                   />
                 </>
               ) : (
-                <>
                 <ArtifactRail
                   artifacts={artifacts}
                   expanded={artifactUI.railExpanded}
@@ -975,10 +974,6 @@ Update existing skills that were helpful or create new ones for patterns worth r
                   onSelectTab={(tabId) => selectArtifactTab(task.id, tabId, true)}
                   onToggleExpanded={() => setRailExpanded(task.id, !artifactUI.railExpanded)}
                 />
-                <div className="hidden">
-                  <ChangesPanel taskId={task.id} repos={task.repos} onSummary={setChangesSummary} onPullRequests={handlePullRequests} />
-                </div>
-                </>
               )}
             </>
           )}
