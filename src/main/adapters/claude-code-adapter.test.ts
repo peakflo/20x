@@ -33,6 +33,9 @@ function createAdapterWithSession(
     streamTask: null,
     lastError: opts?.lastError ?? null,
     config: {} as any,
+    backgroundTasks: new Map(),
+    sawResult: false,
+    releasePrompt: null,
   }
   ;(adapter as any).sessions.set(sessionId, session)
   return { adapter, session }
@@ -210,6 +213,9 @@ describe('ClaudeCodeAdapter error result handling', () => {
       const session: any = {
         sessionId: 's1',
         queryIterator: fakeIterator,
+        backgroundTasks: new Map(),
+        sawResult: false,
+        releasePrompt: null,
         abortController: null,
         status: 'idle',
         messageBuffer: [],
@@ -245,6 +251,9 @@ describe('ClaudeCodeAdapter error result handling', () => {
       const session = {
         sessionId: 's1',
         queryIterator: fakeIterator,
+        backgroundTasks: new Map(),
+        sawResult: false,
+        releasePrompt: null,
         abortController: null,
         status: 'idle' as const,
         messageBuffer: [],
@@ -276,6 +285,9 @@ describe('ClaudeCodeAdapter error result handling', () => {
       const session = {
         sessionId: 's1',
         queryIterator: fakeIterator,
+        backgroundTasks: new Map(),
+        sawResult: false,
+        releasePrompt: null,
         abortController: null,
         status: 'busy' as const,
         messageBuffer: [],
@@ -307,6 +319,9 @@ describe('ClaudeCodeAdapter error result handling', () => {
       const session: any = {
         sessionId: 's1',
         queryIterator: fakeIterator,
+        backgroundTasks: new Map(),
+        sawResult: false,
+        releasePrompt: null,
         abortController: null,
         status: 'busy',
         messageBuffer: [],
@@ -342,6 +357,9 @@ describe('ClaudeCodeAdapter error result handling', () => {
       const session = {
         sessionId: 's1',
         queryIterator: fakeIterator,
+        backgroundTasks: new Map(),
+        sawResult: false,
+        releasePrompt: null,
         abortController: null,
         status: 'busy' as const,
         messageBuffer: [] as any[],
@@ -453,7 +471,10 @@ describe('ClaudeCodeAdapter error result handling', () => {
       }
       const session: any = {
         sessionId: 'session-uuid-789',
-        queryIterator: fakeIterator, // Process still alive
+        queryIterator: fakeIterator,
+        backgroundTasks: new Map(),
+        sawResult: false,
+        releasePrompt: null, // Process still alive
         isResumed: false,
       }
 
@@ -865,5 +886,213 @@ describe('ClaudeCodeAdapter loadSessionHistory stable IDs (regression)', () => {
     const parts = (adapter as any).convertSDKMessageToParts(resultMsg, seenPartIds, partContentLengths)
     expect(parts).toHaveLength(1)
     expect(parts[0].text).toBe('Final answer from the agent')
+  })
+})
+
+/**
+ * Regression tests for: "Claude Code spawns subagents, then is marked idle,
+ * which pauses/kills the subagents."
+ *
+ * Claude Code backgrounds Task-tool subagents by default: the tool call returns
+ * immediately, the coordinator's turn ends (emitting `result`) and the subagent
+ * keeps working, waking the session later via `task_notification`.  Treating
+ * that `result` as "session finished" made agent-manager mark the task
+ * ready_for_review, unregister it from polling and eventually reap it — and the
+ * one-shot string prompt made the CLI kill the children outright.
+ */
+describe('ClaudeCodeAdapter background subagent lifecycle', () => {
+  /** Drives consumeStream over a fixed list of SDK messages. */
+  function runStream(messages: any[]) {
+    const adapter = new ClaudeCodeAdapter()
+    let i = 0
+    const fakeIterator = {
+      [Symbol.asyncIterator]() { return this },
+      async next() {
+        if (i < messages.length) return { done: false, value: messages[i++] }
+        return { done: true, value: undefined }
+      },
+    }
+    const session: any = {
+      sessionId: 's1',
+      queryIterator: fakeIterator,
+      backgroundTasks: new Map(),
+      sawResult: false,
+      releasePrompt: null,
+      abortController: null,
+      status: 'busy',
+      messageBuffer: [],
+      messageCursor: 0,
+      streamTask: null,
+      lastError: null,
+      config: {} as any,
+    }
+    ;(adapter as any).sessions.set('s1', session)
+    return { adapter, session, fakeIterator }
+  }
+
+  const taskStarted = (id: string, taskType = 'local_agent') => ({
+    type: 'system', subtype: ClaudeSystemSubtype.TASK_STARTED,
+    task_id: id, task_type: taskType, description: `task ${id}`, uuid: `u-start-${id}`,
+  })
+  const taskNotification = (id: string, status: string) => ({
+    type: 'system', subtype: ClaudeSystemSubtype.TASK_NOTIFICATION,
+    task_id: id, status, uuid: `u-note-${id}-${status}`,
+  })
+  const resultMsg = (uuid: string) => ({ type: 'result', subtype: 'success', is_error: false, uuid })
+
+  it('stays busy when the turn emits `result` while a background subagent is still running', async () => {
+    // task_started -> result : the classic "coordinator went quiet" sequence.
+    const { adapter, session } = runStream([taskStarted('t1'), resultMsg('r1')])
+
+    // Stop before the stream ends so we observe mid-flight state.
+    await (adapter as any).trackBackgroundTask('s1', session, taskStarted('t1'))
+    session.sawResult = true
+    ;(adapter as any).settleTurnIfComplete('s1', session)
+
+    expect(session.backgroundTasks.size).toBe(1)
+    expect(session.status).toBe('busy')
+
+    const status = await adapter.getStatus('s1', {} as any)
+    expect(status.type).toBe('busy')
+  })
+
+  it('getStatus reports BUSY even when session.status is idle but a background task is in flight', async () => {
+    const { adapter, session } = runStream([])
+    session.status = 'idle'
+    session.backgroundTasks.set('t1', { taskId: 't1', taskType: 'local_agent', startedAt: Date.now() })
+
+    const status = await adapter.getStatus('s1', {} as any)
+    expect(status.type).toBe('busy')
+  })
+
+  it('settles to idle only once every background task has reported a terminal status', async () => {
+    const { adapter, session } = runStream([])
+
+    ;(adapter as any).trackBackgroundTask('s1', session, taskStarted('t1'))
+    ;(adapter as any).trackBackgroundTask('s1', session, taskStarted('t2', 'local_bash'))
+    session.sawResult = true
+    ;(adapter as any).settleTurnIfComplete('s1', session)
+    expect(session.status).toBe('busy')
+
+    ;(adapter as any).trackBackgroundTask('s1', session, taskNotification('t1', 'completed'))
+    ;(adapter as any).settleTurnIfComplete('s1', session)
+    expect(session.status).toBe('busy')
+
+    ;(adapter as any).trackBackgroundTask('s1', session, taskNotification('t2', 'stopped'))
+    ;(adapter as any).settleTurnIfComplete('s1', session)
+    expect(session.backgroundTasks.size).toBe(0)
+    expect(session.status).toBe('idle')
+    expect((await adapter.getStatus('s1', {} as any)).type).toBe('idle')
+  })
+
+  it('clears a background task from task_updated with a terminal patch status (killed)', async () => {
+    const { adapter, session } = runStream([])
+    ;(adapter as any).trackBackgroundTask('s1', session, taskStarted('t1'))
+    expect(session.backgroundTasks.size).toBe(1)
+
+    ;(adapter as any).trackBackgroundTask('s1', session, {
+      type: 'system', subtype: ClaudeSystemSubtype.TASK_UPDATED,
+      task_id: 't1', patch: { status: 'killed' }, uuid: 'u-upd',
+    })
+    expect(session.backgroundTasks.size).toBe(0)
+  })
+
+  it('ignores non-terminal task_updated patches', async () => {
+    const { adapter, session } = runStream([])
+    ;(adapter as any).trackBackgroundTask('s1', session, taskStarted('t1'))
+    ;(adapter as any).trackBackgroundTask('s1', session, {
+      type: 'system', subtype: ClaudeSystemSubtype.TASK_UPDATED,
+      task_id: 't1', patch: { status: 'running' }, uuid: 'u-upd2',
+    })
+    expect(session.backgroundTasks.size).toBe(1)
+  })
+
+  it('a new assistant turn after `result` clears sawResult so a wake-up is not mistaken for completion', async () => {
+    const { adapter, session } = runStream([
+      taskStarted('t1'),
+      resultMsg('r1'),
+      taskNotification('t1', 'completed'),
+      { type: 'assistant', uuid: 'a1', message: { id: 'm1', content: [{ type: 'text', text: 'child finished' }] } },
+    ])
+    await (adapter as any).consumeStream('s1', session)
+    // Stream ended, so the finally-block drains everything.
+    expect(session.backgroundTasks.size).toBe(0)
+    expect(session.status).toBe('idle')
+  })
+
+  it('exposes in-flight background tasks as delegation tools so watchdogs stand down', async () => {
+    const { adapter, session } = runStream([])
+    ;(adapter as any).trackBackgroundTask('s1', session, taskStarted('t1'))
+    ;(adapter as any).trackBackgroundTask('s1', session, taskStarted('t2', 'local_bash'))
+
+    const tools = await adapter.getRunningTools('s1', {} as any)
+    expect(tools).toHaveLength(2)
+    // Both must be named `task` — a backgrounded bash reported as `bash` would
+    // trip agent-manager's 90s stuck-tool detector and abort the session.
+    expect(tools.every((t) => t.toolName === 'task')).toBe(true)
+    expect(tools[0].partId).toBe('task-t1')
+    expect(typeof tools[0].startTime).toBe('number')
+  })
+
+  it('getRunningTools returns [] for an unknown session', async () => {
+    const adapter = new ClaudeCodeAdapter()
+    expect(await adapter.getRunningTools('nope', {} as any)).toEqual([])
+  })
+
+  it('clears background tasks and releases the prompt stream when the stream ends', async () => {
+    const { adapter, session } = runStream([taskStarted('t1'), resultMsg('r1')])
+    const release = vi.fn()
+    session.releasePrompt = release
+
+    await (adapter as any).consumeStream('s1', session)
+
+    expect(session.backgroundTasks.size).toBe(0)
+    expect(session.releasePrompt).toBeNull()
+    expect(release).toHaveBeenCalled()
+    expect(session.status).toBe('idle')
+  })
+})
+
+describe('ClaudeCodeAdapter background task safety cap', () => {
+  it('ages out a background task that never reports a terminal status', async () => {
+    const adapter = new ClaudeCodeAdapter()
+    const session: any = {
+      sessionId: 's1', queryIterator: null, abortController: null,
+      status: 'busy', messageBuffer: [], messageCursor: 0, streamTask: null,
+      lastError: null, config: {} as any,
+      backgroundTasks: new Map([['stale', {
+        taskId: 'stale', taskType: 'local_agent',
+        startedAt: Date.now() - (61 * 60 * 1000), // 61 minutes ago
+      }]]),
+      sawResult: true,
+      releasePrompt: null,
+    }
+    ;(adapter as any).sessions.set('s1', session)
+
+    // The 2s poll path is what ages it out.
+    const status = await adapter.getStatus('s1', {} as any)
+
+    expect(session.backgroundTasks.size).toBe(0)
+    expect(status.type).toBe('idle')
+  })
+
+  it('keeps a background task that is still within the age cap', async () => {
+    const adapter = new ClaudeCodeAdapter()
+    const session: any = {
+      sessionId: 's1', queryIterator: null, abortController: null,
+      status: 'busy', messageBuffer: [], messageCursor: 0, streamTask: null,
+      lastError: null, config: {} as any,
+      backgroundTasks: new Map([['fresh', {
+        taskId: 'fresh', taskType: 'local_agent', startedAt: Date.now() - 60_000,
+      }]]),
+      sawResult: true,
+      releasePrompt: null,
+    }
+    ;(adapter as any).sessions.set('s1', session)
+
+    const status = await adapter.getStatus('s1', {} as any)
+
+    expect(session.backgroundTasks.size).toBe(1)
+    expect(status.type).toBe('busy')
   })
 })

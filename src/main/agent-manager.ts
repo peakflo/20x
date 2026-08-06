@@ -253,6 +253,10 @@ export class AgentManager extends EventEmitter {
    *  several subtasks finishing at once produce a single wake-up). */
   private wakingParents: Set<string> = new Set()
 
+  /** Sessions currently being re-registered for polling after late adapter data
+   *  (dedupe guard so a burst of buffered messages produces a single wake-up). */
+  private wakingSessions: Set<string> = new Set()
+
   // ── App-suspension guard ──
   // Without this, macOS App Nap (and Windows efficiency mode) can suspend the
   // whole 20x process tree when the window is hidden/idle — pausing spawned
@@ -387,6 +391,10 @@ export class AgentManager extends EventEmitter {
       // Coordinator with running children — child completion will wake it, and
       // tearing it down mid-orchestration churns resume cycles for no benefit.
       if (this.hasActiveSubtaskWork(session.taskId)) continue
+      // Same, for in-process background subagents (Claude Code Task tool). These
+      // have no DB subtask row, so hasActiveSubtaskWork can't see them — but
+      // destroying the session here aborts the query and kills them outright.
+      if (await this.hasActiveDelegationTools(session)) continue
 
       console.log(
         `[AgentManager] Releasing runtime of idle session ${sessionId} (task ${session.taskId}, idle ${Math.round(idleForMs / 1000)}s). ` +
@@ -399,6 +407,36 @@ export class AgentManager extends EventEmitter {
         console.error(`[AgentManager] Failed to release idle session ${sessionId}:`, err)
       }
     }
+  }
+
+  /**
+   * True when the session's adapter still reports a delegation tool (subagent
+   * spawn / backgrounded task) in flight. Used to keep the inactivity reaper off
+   * sessions whose in-process children are still working.
+   */
+  private async hasActiveDelegationTools(session: AgentSession): Promise<boolean> {
+    const adapter = session.adapter
+    if (!adapter || typeof adapter.getRunningTools !== 'function') return false
+    try {
+      const sessionId = this.findSessionIdFor(session)
+      if (!sessionId) return false
+      const tools = await adapter.getRunningTools(sessionId, {
+        agentId: session.agentId,
+        taskId: session.taskId,
+        workspaceDir: session.workspaceDir || this.db.getWorkspaceDir(session.taskId)
+      })
+      return tools.some((t) => AgentManager.isDelegationTool(t.toolName))
+    } catch {
+      return false
+    }
+  }
+
+  /** Reverse lookup of the sessions-map key for a given session object. */
+  private findSessionIdFor(session: AgentSession): string | undefined {
+    for (const [id, s] of this.sessions.entries()) {
+      if (s === session) return id
+    }
+    return undefined
   }
 
   private normalizeErrorText(value?: string): string {
@@ -1760,13 +1798,88 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     // poll cycle when new stream data is buffered (instead of waiting for
     // the 2-second heartbeat).
     if (!adapter.onDataAvailable) {
-      adapter.onDataAvailable = (_sessionId: string) => {
+      adapter.onDataAvailable = (dataSessionId: string) => {
+        // A session whose polling was already stopped (it went idle) can still
+        // produce data later — Claude Code backgrounds subagents, so the turn
+        // ends first and the children report back afterwards. Re-register it,
+        // otherwise nudgePollingCoordinator() is a no-op and the work is lost.
+        this.wakeSessionOnAdapterData(dataSessionId)
         this.nudgePollingCoordinator()
       }
     }
 
     // Start the coordinator if not already running
     this.ensurePollingCoordinator()
+  }
+
+  /**
+   * Re-registers a session for polling when its adapter buffers new data after
+   * polling was already stopped.
+   *
+   * Claude Code runs Task-tool subagents in the background: the coordinator's
+   * turn ends (and the session is unregistered from polling) while the children
+   * keep working and report back minutes later.  Without this, that later output
+   * is buffered in the adapter forever — `nudgePollingCoordinator()` bails out
+   * when `pollingEntries` is empty, so `onDataAvailable` was a dead callback.
+   *
+   * Only wakes when the adapter itself reports it is busy again, so trailing
+   * data from a genuinely-finished session doesn't ping-pong the task status.
+   */
+  private wakeSessionOnAdapterData(sessionId: string): void {
+    if (this.pollingEntries.has(sessionId)) return
+    if (this.wakingSessions.has(sessionId)) return
+
+    let resolvedId = sessionId
+    let session = this.sessions.get(resolvedId)
+    if (!session) {
+      const redirected = this.sessionIdRedirects.get(sessionId)
+      if (redirected) {
+        resolvedId = redirected
+        session = this.sessions.get(resolvedId)
+      }
+    }
+    if (!session || !session.adapter) return
+    if (session.status === 'working') return
+
+    const targetId = resolvedId
+    this.wakingSessions.add(targetId)
+    void (async () => {
+      try {
+        if (this.pollingEntries.has(targetId)) return
+        const config: SessionConfig = {
+          agentId: session!.agentId,
+          taskId: session!.taskId,
+          workspaceDir: session!.workspaceDir || this.db.getWorkspaceDir(session!.taskId)
+        }
+        const status = await session!.adapter!.getStatus(targetId, config)
+        if (status.type !== SessionStatusType.BUSY && status.type !== SessionStatusType.WAITING_APPROVAL) {
+          return
+        }
+        if (this.pollingEntries.has(targetId)) return
+
+        console.log(
+          `[AgentManager] Session ${targetId} produced data after going idle and is ${status.type} again ` +
+          `(background subagent work) — resuming polling`
+        )
+
+        // transitionToIdle may already have flipped the task to ready_for_review;
+        // put it back to working so the UI reflects the still-running children.
+        const task = this.db.getTask(session!.taskId)
+        if (task && task.status === TaskStatus.ReadyForReview) {
+          this.db.updateTask(session!.taskId, { status: TaskStatus.AgentWorking })
+          this.sendToRenderer('task:updated', {
+            taskId: session!.taskId,
+            updates: { status: TaskStatus.AgentWorking }
+          })
+        }
+
+        this.resumeAdapterPollingAfterPrematureIdle(targetId, session!)
+      } catch (err) {
+        console.error(`[AgentManager] wakeSessionOnAdapterData failed for ${targetId}:`, err)
+      } finally {
+        this.wakingSessions.delete(targetId)
+      }
+    })()
   }
 
   /**
