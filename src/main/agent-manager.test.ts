@@ -3091,3 +3091,185 @@ describe('AgentManager transcript projection backfill (event-sourced, ingest-onc
     expect(result).toEqual([])
   })
 })
+
+/**
+ * Regression tests for: Claude Code backgrounds its Task-tool subagents, so the
+ * coordinator's turn ends (session reports IDLE) while the children keep
+ * working.  Two things must not happen:
+ *   1. the inactivity reaper destroying the session (which aborts the query and
+ *      kills the in-process subagents), and
+ *   2. the children's later output being dropped because polling was stopped.
+ */
+describe('AgentManager background subagent protection', () => {
+  const THIRTY_ONE_MINUTES = 31 * 60_000
+
+  function buildManager(dbOverrides: Record<string, unknown> = {}) {
+    const mockDb = createMockDb({})
+    Object.assign(mockDb as any, {
+      getTask: vi.fn(() => ({
+        id: 'task-1', title: 'Test Task', repos: [], skill_ids: [],
+        session_id: 'session-1', status: TaskStatus.ReadyForReview,
+      })),
+      getWorkspaceDir: vi.fn(() => '/tmp/ws'),
+      updateTask: vi.fn(),
+      ...dbOverrides,
+    })
+    const mgr = new AgentManager(mockDb)
+    vi.spyOn(mgr as any, 'sendToRenderer').mockImplementation(() => undefined)
+    return { mgr, mockDb }
+  }
+
+  function addSession(mgr: AgentManager, overrides: Record<string, unknown> = {}) {
+    const session = {
+      id: 'session-1',
+      agentId: 'agent-1',
+      taskId: 'task-1',
+      status: 'idle' as const,
+      createdAt: new Date(Date.now() - THIRTY_ONE_MINUTES),
+      lastActivityAt: Date.now() - THIRTY_ONE_MINUTES,
+      seenMessageIds: new Set<string>(),
+      seenPartIds: new Set<string>(),
+      partContentLengths: new Map<string, string>(),
+      ...overrides,
+    }
+    ;(mgr as any).sessions.set((overrides.id as string) || 'session-1', session)
+    return session
+  }
+
+  describe('inactivity reaper vs in-process background subagents', () => {
+    it('does not reap an idle session whose adapter still reports a running delegation tool', async () => {
+      const { mgr } = buildManager()
+      const stopSpy = vi.spyOn(mgr, 'stopSession').mockResolvedValue(undefined)
+      addSession(mgr, {
+        adapter: {
+          // Claude Code background subagent still in flight
+          getRunningTools: vi.fn(async () => [
+            { partId: 'task-t1', toolName: 'task', startTime: Date.now() - 60_000 },
+          ]),
+        },
+      })
+
+      await (mgr as any).reapInactiveSessions()
+
+      expect(stopSpy).not.toHaveBeenCalled()
+    })
+
+    it('still reaps an idle session whose background tasks have all drained', async () => {
+      const { mgr } = buildManager()
+      const stopSpy = vi.spyOn(mgr, 'stopSession').mockResolvedValue(undefined)
+      addSession(mgr, { adapter: { getRunningTools: vi.fn(async () => []) } })
+
+      await (mgr as any).reapInactiveSessions()
+
+      expect(stopSpy).toHaveBeenCalledWith('session-1', false)
+    })
+
+    it('reaps normally when the adapter does not implement getRunningTools', async () => {
+      const { mgr } = buildManager()
+      const stopSpy = vi.spyOn(mgr, 'stopSession').mockResolvedValue(undefined)
+      addSession(mgr, { adapter: {} })
+
+      await (mgr as any).reapInactiveSessions()
+
+      expect(stopSpy).toHaveBeenCalledWith('session-1', false)
+    })
+
+    it('does not let a throwing getRunningTools block reaping', async () => {
+      const { mgr } = buildManager()
+      const stopSpy = vi.spyOn(mgr, 'stopSession').mockResolvedValue(undefined)
+      addSession(mgr, {
+        adapter: { getRunningTools: vi.fn(async () => { throw new Error('boom') }) },
+      })
+
+      await (mgr as any).reapInactiveSessions()
+
+      expect(stopSpy).toHaveBeenCalledWith('session-1', false)
+    })
+  })
+
+  describe('wake-up on late adapter data', () => {
+    const flush = () => new Promise((r) => setTimeout(r, 0))
+
+    it('re-registers polling when an already-idle session reports BUSY again', async () => {
+      const { mgr, mockDb } = buildManager()
+      const resumeSpy = vi
+        .spyOn(mgr as any, 'resumeAdapterPollingAfterPrematureIdle')
+        .mockImplementation(() => undefined)
+      addSession(mgr, {
+        adapter: { getStatus: vi.fn(async () => ({ type: SessionStatusType.BUSY })) },
+      })
+
+      ;(mgr as any).wakeSessionOnAdapterData('session-1')
+      await flush()
+
+      expect(resumeSpy).toHaveBeenCalled()
+      // The task was flipped to ready_for_review by transitionToIdle — put it back
+      expect((mockDb as any).updateTask).toHaveBeenCalledWith('task-1', {
+        status: TaskStatus.AgentWorking,
+      })
+    })
+
+    it('ignores trailing data from a session that is genuinely finished', async () => {
+      const { mgr, mockDb } = buildManager()
+      const resumeSpy = vi
+        .spyOn(mgr as any, 'resumeAdapterPollingAfterPrematureIdle')
+        .mockImplementation(() => undefined)
+      addSession(mgr, {
+        adapter: { getStatus: vi.fn(async () => ({ type: SessionStatusType.IDLE })) },
+      })
+
+      ;(mgr as any).wakeSessionOnAdapterData('session-1')
+      await flush()
+
+      expect(resumeSpy).not.toHaveBeenCalled()
+      expect((mockDb as any).updateTask).not.toHaveBeenCalled()
+    })
+
+    it('does nothing when the session is still registered for polling', async () => {
+      const { mgr } = buildManager()
+      const resumeSpy = vi
+        .spyOn(mgr as any, 'resumeAdapterPollingAfterPrematureIdle')
+        .mockImplementation(() => undefined)
+      const getStatus = vi.fn(async () => ({ type: SessionStatusType.BUSY }))
+      addSession(mgr, { adapter: { getStatus } })
+      ;(mgr as any).pollingEntries.set('session-1', { sessionId: 'session-1' })
+
+      ;(mgr as any).wakeSessionOnAdapterData('session-1')
+      await flush()
+
+      expect(getStatus).not.toHaveBeenCalled()
+      expect(resumeSpy).not.toHaveBeenCalled()
+    })
+
+    it('dedupes concurrent wake-ups for the same session', async () => {
+      const { mgr } = buildManager()
+      vi.spyOn(mgr as any, 'resumeAdapterPollingAfterPrematureIdle').mockImplementation(() => undefined)
+      const getStatus = vi.fn(async () => ({ type: SessionStatusType.BUSY }))
+      addSession(mgr, { adapter: { getStatus } })
+
+      ;(mgr as any).wakeSessionOnAdapterData('session-1')
+      ;(mgr as any).wakeSessionOnAdapterData('session-1')
+      ;(mgr as any).wakeSessionOnAdapterData('session-1')
+      await flush()
+
+      expect(getStatus).toHaveBeenCalledTimes(1)
+    })
+
+    it('resolves a re-keyed session id through sessionIdRedirects', async () => {
+      const { mgr } = buildManager()
+      const resumeSpy = vi
+        .spyOn(mgr as any, 'resumeAdapterPollingAfterPrematureIdle')
+        .mockImplementation(() => undefined)
+      addSession(mgr, {
+        id: 'real-id',
+        adapter: { getStatus: vi.fn(async () => ({ type: SessionStatusType.BUSY })) },
+      })
+      ;(mgr as any).sessionIdRedirects.set('temp-id', 'real-id')
+
+      ;(mgr as any).wakeSessionOnAdapterData('temp-id')
+      await flush()
+
+      expect(resumeSpy).toHaveBeenCalledWith('real-id', expect.anything())
+    })
+  })
+})

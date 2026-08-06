@@ -39,8 +39,39 @@ export enum ClaudeSystemSubtype {
   TASK_STARTED = 'task_started',
   TASK_PROGRESS = 'task_progress',
   TASK_NOTIFICATION = 'task_notification',
+  TASK_UPDATED = 'task_updated',
+  /** Authoritative in-flight background-task list. Emitted by the CLI but NOT
+   *  surfaced by SDK >= 0.3.x (absent from the SDKMessage union) — older bundled
+   *  SDKs (e.g. 0.2.x) do pass it through, so it is handled defensively both as a
+   *  status source and as a transcript-suppression case. */
+  BACKGROUND_TASKS_CHANGED = 'background_tasks_changed',
   STATUS = 'status',
   THINKING_TOKENS = 'thinking_tokens',
+}
+
+/**
+ * Terminal states for a Claude Code background task. Once a task reports one of
+ * these (via `task_updated.patch.status` or `task_notification.status`) it is no
+ * longer in flight and stops counting towards the session being BUSY.
+ */
+const TERMINAL_TASK_STATUSES = new Set(['completed', 'failed', 'killed', 'stopped'])
+
+/**
+ * Safety cap on how long a background task may be considered "in flight".
+ * Because in-flight background work suppresses IDLE *and* exempts the session
+ * from agent-manager's stuck-session watchdog, a task whose terminal
+ * notification is lost would otherwise pin the session BUSY forever. Generous
+ * enough that no legitimate subagent hits it.
+ */
+const MAX_BACKGROUND_TASK_AGE_MS = 60 * 60 * 1000 // 60 minutes
+
+/** A subagent/bash task that Claude Code is running in the background. */
+interface BackgroundTask {
+  taskId: string
+  /** SDK `task_type`, e.g. 'local_agent' (subagent) or 'local_bash'. */
+  taskType?: string
+  description?: string
+  startedAt: number
 }
 
 interface ClaudeSession {
@@ -55,6 +86,23 @@ interface ClaudeSession {
   lastError: string | null
   config: SessionConfig // Store config for later use
   isResumed?: boolean // True if this session was resumed from persistence
+  /**
+   * Subagent / bash tasks Claude Code is currently running in the background.
+   * Claude Code backgrounds Task-tool subagents by default: the tool call returns
+   * immediately, the assistant's turn ends (emitting `result`) and the subagent
+   * keeps working, waking the session again via `task_notification`.  While this
+   * map is non-empty the session is NOT done — it is paused waiting on children.
+   */
+  backgroundTasks: Map<string, BackgroundTask>
+  /** True once the current turn emitted a non-error `result` message. */
+  sawResult: boolean
+  /**
+   * Closes the streaming-input prompt generator, which lets the Claude Code
+   * process exit.  Called only when the turn is finished AND no background task
+   * is still in flight — keeping it open is what stops the CLI from killing
+   * still-running subagents at end of turn.
+   */
+  releasePrompt: (() => void) | null
 }
 
 export class ClaudeCodeAdapter implements CodingAgentAdapter {
@@ -314,6 +362,9 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
       lastError: null,
       config, // Store config for use in sendPrompt
       isResumed: false, // New session, not resumed
+      backgroundTasks: new Map(),
+      sawResult: false,
+      releasePrompt: null,
     }
 
     // Generate UUID-format session ID (required by Claude Code)
@@ -608,6 +659,9 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
       lastError: null,
       config, // Store config for later use
       isResumed: true, // Resumed from persistence
+      backgroundTasks: new Map(),
+      sawResult: false,
+      releasePrompt: null,
     }
 
     this.sessions.set(sessionId, session)
@@ -656,6 +710,10 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
 
     // Abort previous query if still running (only for subsequent prompts)
     if (!isFirstPrompt && session.queryIterator) {
+      // Release the previous turn's prompt generator first, otherwise it would
+      // keep awaiting while we block on streamTask below.
+      session.releasePrompt?.()
+      session.releasePrompt = null
       session.abortController?.abort()
       // Wait for stream cleanup to complete to avoid race conditions
       if (session.streamTask) {
@@ -724,9 +782,38 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
       mcpServerNames: options.mcpServers ? Object.keys(options.mcpServers) : [],
     })
 
+    // ── Streaming-input prompt ──
+    // Passing a plain string puts the Claude Code CLI in one-shot mode: it closes
+    // stdin, and as soon as the turn emits `result` the process tears down and
+    // KILLS any background task still in flight (observed as
+    // `task_updated {status:'killed'}` / `task_notification {status:'stopped'}`).
+    // Since Claude Code backgrounds Task-tool subagents by default, that silently
+    // killed subagents the moment the coordinator's turn went quiet.
+    //
+    // Yielding the same prompt from an async generator that stays open keeps the
+    // session alive after `result`, so background subagents run to completion and
+    // wake the session again via `task_notification`. releaseTurn() closes the
+    // generator once the turn is done AND no background work remains.
+    let releaseTurn: () => void = () => {}
+    const turnClosed = new Promise<void>((resolve) => {
+      releaseTurn = resolve
+    })
+    session.releasePrompt = releaseTurn
+    session.backgroundTasks.clear()
+    session.sawResult = false
+
+    const promptStream = (async function* () {
+      yield {
+        type: 'user' as const,
+        message: { role: 'user' as const, content: promptText },
+        parent_tool_use_id: null,
+      }
+      await turnClosed
+    })()
+
     // Start new query
     const query = ClaudeAgentSDK.query({
-      prompt: promptText,
+      prompt: promptStream,
       options,
     })
 
@@ -759,9 +846,47 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
       return { type: SessionStatusType.ERROR, message: session.lastError }
     }
 
+    // getStatus is the 2s poll path, so it is also where a stalled background
+    // task gets aged out and a turn that finished between stream messages gets
+    // settled — otherwise a lost terminal notification would pin BUSY forever.
+    this.settleTurnIfComplete(sessionId, session)
+
+    // A turn that ended while subagents are still running in the background is
+    // paused, not finished. Reporting IDLE here makes agent-manager mark the task
+    // ready_for_review, unregister it from polling (so the subagents' output can
+    // never be delivered) and eventually reap the session — killing them.
+    if (session.backgroundTasks.size > 0) {
+      return { type: SessionStatusType.BUSY }
+    }
+
     return {
       type: session.status === 'busy' ? SessionStatusType.BUSY : SessionStatusType.IDLE,
     }
+  }
+
+  /**
+   * Exposes in-flight background subagents as "running tools" so agent-manager's
+   * delegation-aware watchdogs (which look for tool names like `task`/`agent`)
+   * stand down instead of aborting a coordinator that is waiting on children.
+   */
+  async getRunningTools(
+    sessionId: string,
+    _config: SessionConfig
+  ): Promise<Array<{ partId: string; toolName: string; startTime?: number; input?: Record<string, unknown> }>> {
+    const session = this.sessions.get(sessionId)
+    if (!session) return []
+
+    // Every entry is reported as `task` — a name in agent-manager's
+    // DELEGATION_TOOL_NAMES set. Backgrounded work (subagent *and* bash) is
+    // long-running by design, so it must be exempt from BOTH the 90s stuck-tool
+    // detector and the 5min stuck-session watchdog; naming a backgrounded bash
+    // 'bash' would instead get the session aborted after 90 seconds.
+    return [...session.backgroundTasks.values()].map((t) => ({
+      partId: `task-${t.taskId}`,
+      toolName: 'task',
+      startTime: t.startedAt,
+      input: { taskType: t.taskType ?? 'unknown', description: t.description ?? '' },
+    }))
   }
 
   async pollMessages(
@@ -808,6 +933,11 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
     }
 
     console.log(`[ClaudeCodeAdapter] Aborting session ${sessionId}`)
+    // Close the streaming-input prompt first so the generator can't keep the
+    // process alive while we wait for the stream task to unwind.
+    session.releasePrompt?.()
+    session.releasePrompt = null
+    session.backgroundTasks.clear()
     session.abortController?.abort()
 
     // Wait for stream to finish cleanup
@@ -832,6 +962,9 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
     }
 
     // Abort any ongoing query
+    session.releasePrompt?.()
+    session.releasePrompt = null
+    session.backgroundTasks.clear()
     session.abortController?.abort()
 
     // Wait for stream task to complete
@@ -1116,18 +1249,30 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
           this.onDataAvailable(sessionId)
         }
 
+        // Track background subagent/bash tasks so we never report the session as
+        // finished while children are still running.
+        this.trackBackgroundTask(sessionId, session, message)
+
         // Update status based on message type
         if (msg.type === 'status') {
           console.log(`[ClaudeCodeAdapter] Status update: ${msg.subtype}`)
           if (msg.subtype === 'busy') {
             session.status = 'busy'
+            session.sawResult = false
           } else if (msg.subtype === 'idle') {
             session.status = 'idle'
           }
         } else if (msg.type === 'result' && !msg.is_error) {
           console.log('[ClaudeCodeAdapter] Received result message')
-          session.status = 'idle'
+          session.sawResult = true
+        } else if (msg.type === 'assistant' || msg.type === 'user') {
+          // A new turn started (e.g. a background task woke the session back up)
+          session.sawResult = false
         }
+
+        // The turn is only really over when `result` arrived AND nothing is left
+        // running in the background.
+        this.settleTurnIfComplete(sessionId, session)
 
         // Log stderr/stdout if present
         if (msg.type === 'stream_event' && msg.stderr) {
@@ -1181,6 +1326,10 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
       // (heartbeat, subtask) ran in the same directory during idle, --continue
       // would pick up the wrong conversation — the intermittent context-loss bug.
       session.queryIterator = null
+      // The process is gone, so nothing can still be running in the background.
+      session.backgroundTasks.clear()
+      session.releasePrompt?.()
+      session.releasePrompt = null
       if (session.status === 'error') {
         // Error path: queryIterator already null above; no extra work needed.
       } else {
@@ -1190,6 +1339,129 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
         session.isResumed = true
       }
     }
+  }
+
+  /**
+   * Maintains `session.backgroundTasks` from the SDK's task lifecycle messages.
+   *
+   * Note: the raw CLI also emits `background_tasks_changed` (which carries the
+   * authoritative in-flight list), but the SDK filters it out — it is not part of
+   * the `SDKMessage` union — so the set has to be rebuilt from task_started plus
+   * task_updated / task_notification.
+   */
+  private trackBackgroundTask(sessionId: string, session: ClaudeSession, message: SDKMessage): void {
+    const msg = message as unknown as {
+      type?: string
+      subtype?: string
+      task_id?: string
+      task_type?: string
+      subagent_type?: string
+      description?: string
+      status?: string
+      patch?: { status?: string }
+      tasks?: Array<{ task_id?: string; task_type?: string; description?: string }>
+    }
+    if (msg.type !== 'system') return
+
+    // `background_tasks_changed` carries the CLI's authoritative in-flight list.
+    // SDK >= 0.3.x filters it out (verified against 0.3.169 and 0.3.195), but the
+    // app has historically bundled older SDKs that do pass it through — prefer it
+    // when available, since it cannot drift the way reconstruction can.
+    if (msg.subtype === ClaudeSystemSubtype.BACKGROUND_TASKS_CHANGED && Array.isArray(msg.tasks)) {
+      const next = new Map<string, BackgroundTask>()
+      for (const t of msg.tasks) {
+        if (!t?.task_id) continue
+        const existing = session.backgroundTasks.get(t.task_id)
+        next.set(t.task_id, {
+          taskId: t.task_id,
+          taskType: t.task_type ?? existing?.taskType,
+          description: t.description ?? existing?.description,
+          // Preserve the original start time so the staleness cap stays meaningful.
+          startedAt: existing?.startedAt ?? Date.now(),
+        })
+      }
+      session.backgroundTasks = next
+      console.log(
+        `[ClaudeCodeAdapter] Background task list for ${sessionId} refreshed from ` +
+        `background_tasks_changed — ${next.size} in flight`
+      )
+      return
+    }
+
+    if (!msg.task_id) return
+
+    if (msg.subtype === ClaudeSystemSubtype.TASK_STARTED) {
+      session.backgroundTasks.set(msg.task_id, {
+        taskId: msg.task_id,
+        taskType: msg.task_type || (msg.subagent_type ? 'local_agent' : undefined),
+        description: msg.description,
+        startedAt: Date.now(),
+      })
+      console.log(
+        `[ClaudeCodeAdapter] Background task started for ${sessionId}: ${msg.task_id} ` +
+        `(${msg.task_type || 'unknown'}) — ${session.backgroundTasks.size} in flight`
+      )
+      return
+    }
+
+    const terminalStatus =
+      msg.subtype === ClaudeSystemSubtype.TASK_NOTIFICATION ? msg.status :
+      msg.subtype === ClaudeSystemSubtype.TASK_UPDATED ? msg.patch?.status :
+      undefined
+
+    if (terminalStatus && TERMINAL_TASK_STATUSES.has(terminalStatus)) {
+      if (session.backgroundTasks.delete(msg.task_id)) {
+        console.log(
+          `[ClaudeCodeAdapter] Background task ${msg.task_id} ${terminalStatus} for ${sessionId} — ` +
+          `${session.backgroundTasks.size} still in flight`
+        )
+      }
+    }
+  }
+
+  /**
+   * Drops background tasks that have outlived MAX_BACKGROUND_TASK_AGE_MS so a
+   * lost terminal notification can't keep the session BUSY (and un-reapable)
+   * indefinitely.
+   */
+  private pruneStaleBackgroundTasks(sessionId: string, session: ClaudeSession): void {
+    if (session.backgroundTasks.size === 0) return
+    const now = Date.now()
+    for (const [taskId, task] of session.backgroundTasks) {
+      if (now - task.startedAt > MAX_BACKGROUND_TASK_AGE_MS) {
+        session.backgroundTasks.delete(taskId)
+        console.warn(
+          `[ClaudeCodeAdapter] Background task ${taskId} for ${sessionId} exceeded ` +
+          `${MAX_BACKGROUND_TASK_AGE_MS / 60000}min without a terminal notification — ` +
+          `no longer counting it as in flight`
+        )
+      }
+    }
+  }
+
+  /**
+   * Marks the session idle and closes the streaming-input prompt once the turn
+   * has produced a `result` AND no background task is still running.  Until then
+   * the session stays BUSY so agent-manager keeps polling instead of calling
+   * transitionToIdle (which flips the task to ready_for_review and eventually
+   * lets the inactivity reaper destroy the session out from under the subagents).
+   */
+  private settleTurnIfComplete(sessionId: string, session: ClaudeSession): void {
+    if (session.status === 'error') return
+    this.pruneStaleBackgroundTasks(sessionId, session)
+    if (!session.sawResult) return
+    if (session.backgroundTasks.size > 0) {
+      // Paused waiting on background work — explicitly NOT idle.
+      session.status = 'busy'
+      return
+    }
+    if (session.status !== 'idle') {
+      console.log(`[ClaudeCodeAdapter] Turn complete for ${sessionId}, no background tasks left → idle`)
+    }
+    session.status = 'idle'
+    // Let the prompt generator return so the CLI can shut down cleanly.
+    session.releasePrompt?.()
+    session.releasePrompt = null
   }
 
   /**
@@ -1700,6 +1972,21 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
           },
           update: alreadySeen,
         })
+        return parts
+      }
+
+      // ── Internal background-task bookkeeping — never rendered ──
+      // `task_updated` carries wire-level status patches and `background_tasks_changed`
+      // carries the in-flight list. Both are consumed by trackBackgroundTask(); the
+      // user-visible progress is already covered by task_started / task_progress /
+      // task_notification. Without this they fall through to the generic system
+      // handler below, which pushes the raw subtype string as a text bubble —
+      // spamming the transcript with literal "task_updated" /
+      // "background_tasks_changed" messages between every subagent update.
+      if (
+        msgWithProps.subtype === ClaudeSystemSubtype.TASK_UPDATED ||
+        msgWithProps.subtype === ClaudeSystemSubtype.BACKGROUND_TASKS_CHANGED
+      ) {
         return parts
       }
 
