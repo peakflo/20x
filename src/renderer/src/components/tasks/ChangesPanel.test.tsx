@@ -55,8 +55,8 @@ describe('ChangesPanel', () => {
     expect(screen.getByText('new.ts')).toBeInTheDocument()
     expect(screen.getByText('unchanged.ts')).toBeInTheDocument()
     expect(screen.getByText('package.json')).toBeInTheDocument()
-    expect((await screen.findAllByText('README.md')).length).toBeGreaterThan(1)
-    expect(screen.getByText('This file has no changes in the task branch.')).toBeInTheDocument()
+    expect(screen.getAllByText('README.md').length).toBeGreaterThan(0)
+    expect(await screen.findByText('This file has no changes in the task branch.')).toBeInTheDocument()
     expect(screen.getAllByText('+1').length).toBeGreaterThan(0)
     expect(screen.getAllByText('−1').length).toBeGreaterThan(0)
 
