@@ -1096,3 +1096,86 @@ describe('ClaudeCodeAdapter background task safety cap', () => {
     expect(status.type).toBe('busy')
   })
 })
+
+/**
+ * Regression tests for transcript pollution + authoritative background-task list.
+ *
+ * Observed in a real run: the transcript was littered with literal
+ * "background_tasks_changed" / "task_updated" text bubbles between every subagent
+ * update, because unhandled `system` subtypes fall through to a generic handler
+ * that pushes `msg.subtype` as the message content.
+ */
+describe('ClaudeCodeAdapter background-task system messages', () => {
+  it('does not render task_updated as a transcript text bubble', () => {
+    const adapter = new ClaudeCodeAdapter()
+    const parts = (adapter as any).convertSDKMessageToParts(
+      { type: 'system', subtype: ClaudeSystemSubtype.TASK_UPDATED, task_id: 't1',
+        patch: { status: 'completed' }, uuid: 'u1' },
+      new Set<string>(), new Map<string, string>()
+    )
+    expect(parts).toEqual([])
+  })
+
+  it('does not render background_tasks_changed as a transcript text bubble', () => {
+    const adapter = new ClaudeCodeAdapter()
+    const parts = (adapter as any).convertSDKMessageToParts(
+      { type: 'system', subtype: ClaudeSystemSubtype.BACKGROUND_TASKS_CHANGED,
+        tasks: [{ task_id: 't1', task_type: 'local_agent' }], uuid: 'u2' },
+      new Set<string>(), new Map<string, string>()
+    )
+    expect(parts).toEqual([])
+  })
+
+  it('still renders genuinely unknown system subtypes so nothing is silently swallowed', () => {
+    const adapter = new ClaudeCodeAdapter()
+    const parts = (adapter as any).convertSDKMessageToParts(
+      { type: 'system', subtype: 'some_future_subtype', uuid: 'u3' },
+      new Set<string>(), new Map<string, string>()
+    )
+    expect(parts).toHaveLength(1)
+    expect(parts[0].content).toBe('some_future_subtype')
+  })
+
+  it('rebuilds the in-flight set from background_tasks_changed when the SDK passes it through', () => {
+    const adapter = new ClaudeCodeAdapter()
+    const session: any = { backgroundTasks: new Map(), sawResult: false, releasePrompt: null, status: 'busy' }
+
+    ;(adapter as any).trackBackgroundTask('s1', session, {
+      type: 'system', subtype: ClaudeSystemSubtype.BACKGROUND_TASKS_CHANGED,
+      tasks: [{ task_id: 'a', task_type: 'local_agent' }, { task_id: 'b', task_type: 'local_bash' }],
+    })
+    expect([...session.backgroundTasks.keys()].sort()).toEqual(['a', 'b'])
+
+    const startedAtA = session.backgroundTasks.get('a').startedAt
+
+    // A later snapshot with 'a' drained must shrink the set...
+    ;(adapter as any).trackBackgroundTask('s1', session, {
+      type: 'system', subtype: ClaudeSystemSubtype.BACKGROUND_TASKS_CHANGED,
+      tasks: [{ task_id: 'b', task_type: 'local_bash' }],
+    })
+    expect([...session.backgroundTasks.keys()]).toEqual(['b'])
+
+    // ...and an empty snapshot drains it entirely.
+    ;(adapter as any).trackBackgroundTask('s1', session, {
+      type: 'system', subtype: ClaudeSystemSubtype.BACKGROUND_TASKS_CHANGED, tasks: [],
+    })
+    expect(session.backgroundTasks.size).toBe(0)
+    expect(typeof startedAtA).toBe('number')
+  })
+
+  it('preserves startedAt across background_tasks_changed snapshots so the staleness cap stays meaningful', () => {
+    const adapter = new ClaudeCodeAdapter()
+    const oldStart = Date.now() - 120_000
+    const session: any = {
+      backgroundTasks: new Map([['a', { taskId: 'a', taskType: 'local_agent', startedAt: oldStart }]]),
+      sawResult: false, releasePrompt: null, status: 'busy',
+    }
+
+    ;(adapter as any).trackBackgroundTask('s1', session, {
+      type: 'system', subtype: ClaudeSystemSubtype.BACKGROUND_TASKS_CHANGED,
+      tasks: [{ task_id: 'a', task_type: 'local_agent' }],
+    })
+
+    expect(session.backgroundTasks.get('a').startedAt).toBe(oldStart)
+  })
+})

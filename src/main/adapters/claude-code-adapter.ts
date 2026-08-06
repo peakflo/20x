@@ -40,6 +40,11 @@ export enum ClaudeSystemSubtype {
   TASK_PROGRESS = 'task_progress',
   TASK_NOTIFICATION = 'task_notification',
   TASK_UPDATED = 'task_updated',
+  /** Authoritative in-flight background-task list. Emitted by the CLI but NOT
+   *  surfaced by SDK >= 0.3.x (absent from the SDKMessage union) — older bundled
+   *  SDKs (e.g. 0.2.x) do pass it through, so it is handled defensively both as a
+   *  status source and as a transcript-suppression case. */
+  BACKGROUND_TASKS_CHANGED = 'background_tasks_changed',
   STATUS = 'status',
   THINKING_TOKENS = 'thinking_tokens',
 }
@@ -1354,8 +1359,36 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
       description?: string
       status?: string
       patch?: { status?: string }
+      tasks?: Array<{ task_id?: string; task_type?: string; description?: string }>
     }
-    if (msg.type !== 'system' || !msg.task_id) return
+    if (msg.type !== 'system') return
+
+    // `background_tasks_changed` carries the CLI's authoritative in-flight list.
+    // SDK >= 0.3.x filters it out (verified against 0.3.169 and 0.3.195), but the
+    // app has historically bundled older SDKs that do pass it through — prefer it
+    // when available, since it cannot drift the way reconstruction can.
+    if (msg.subtype === ClaudeSystemSubtype.BACKGROUND_TASKS_CHANGED && Array.isArray(msg.tasks)) {
+      const next = new Map<string, BackgroundTask>()
+      for (const t of msg.tasks) {
+        if (!t?.task_id) continue
+        const existing = session.backgroundTasks.get(t.task_id)
+        next.set(t.task_id, {
+          taskId: t.task_id,
+          taskType: t.task_type ?? existing?.taskType,
+          description: t.description ?? existing?.description,
+          // Preserve the original start time so the staleness cap stays meaningful.
+          startedAt: existing?.startedAt ?? Date.now(),
+        })
+      }
+      session.backgroundTasks = next
+      console.log(
+        `[ClaudeCodeAdapter] Background task list for ${sessionId} refreshed from ` +
+        `background_tasks_changed — ${next.size} in flight`
+      )
+      return
+    }
+
+    if (!msg.task_id) return
 
     if (msg.subtype === ClaudeSystemSubtype.TASK_STARTED) {
       session.backgroundTasks.set(msg.task_id, {
@@ -1939,6 +1972,21 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
           },
           update: alreadySeen,
         })
+        return parts
+      }
+
+      // ── Internal background-task bookkeeping — never rendered ──
+      // `task_updated` carries wire-level status patches and `background_tasks_changed`
+      // carries the in-flight list. Both are consumed by trackBackgroundTask(); the
+      // user-visible progress is already covered by task_started / task_progress /
+      // task_notification. Without this they fall through to the generic system
+      // handler below, which pushes the raw subtype string as a text bubble —
+      // spamming the transcript with literal "task_updated" /
+      // "background_tasks_changed" messages between every subagent update.
+      if (
+        msgWithProps.subtype === ClaudeSystemSubtype.TASK_UPDATED ||
+        msgWithProps.subtype === ClaudeSystemSubtype.BACKGROUND_TASKS_CHANGED
+      ) {
         return parts
       }
 
