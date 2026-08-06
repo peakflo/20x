@@ -27,7 +27,7 @@ import { isOverdue, isSnoozed } from '@/lib/utils'
 import { captureAnalyticsEvent, capturePageView } from '@/lib/analytics'
 import { TaskStatus, PluginActionId } from '@/types'
 import type { FileAttachment, OutputField, UpdateTaskDTO } from '@/types'
-import { MessageSquare, ExternalLink, LayoutDashboard, CheckSquare, Zap, Settings, Layers, PanelLeftClose, PanelLeftOpen, Search } from 'lucide-react'
+import { MessageSquare, LayoutDashboard, CheckSquare, Zap, Settings, Layers, PanelLeftClose, PanelLeftOpen, Search } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { ThemeToggle } from './ThemeToggle'
 import { StatusBar } from './StatusBar'
@@ -633,20 +633,8 @@ export function AppLayout() {
 
       {/* Dashboard task preview — reuses the full TaskWorkspace inside a dialog */}
       <Dialog open={!!dashboardPreviewTaskId} onOpenChange={(open) => { if (!open) closeDashboardPreview() }}>
-        <DialogContent className="max-w-[90vw] h-[85vh] w-full">
-          <DialogHeader className="flex-row items-center justify-between gap-4">
-            <DialogTitle className="truncate">{dashboardPreviewTask?.title || 'Task'}</DialogTitle>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="shrink-0 mr-8"
-              onClick={() => dashboardPreviewTaskId && handleGoToFullView(dashboardPreviewTaskId)}
-            >
-              <ExternalLink className="h-3.5 w-3.5 mr-1" />
-              <span className="text-xs">Go to Tasks view</span>
-            </Button>
-          </DialogHeader>
-          <div className="flex-1 min-h-0 overflow-hidden">
+        <DialogContent className="h-[90vh] w-[94vw] max-w-[94vw] overflow-hidden p-0 [&>button]:hidden">
+          <div className="min-h-0 flex-1 overflow-hidden rounded-2xl">
             {dashboardPreviewTask && (
               <TaskWorkspace
                 task={dashboardPreviewTask}
@@ -660,6 +648,7 @@ export function AppLayout() {
                 onUpdateTask={handleUpdateTask}
                 onNavigateToTask={handleNavigateFromDashboardPreview}
                 onBack={closeDashboardPreview}
+                onOpenFullView={() => dashboardPreviewTaskId && handleGoToFullView(dashboardPreviewTaskId)}
               />
             )}
           </div>

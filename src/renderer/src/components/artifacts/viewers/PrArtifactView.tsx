@@ -5,7 +5,7 @@ import type { Artifact } from '@shared/artifacts'
 export function PrArtifactView({ artifact }: { artifact: Artifact }) {
   return (
     <div className="flex h-full items-center justify-center p-6">
-      <div className="w-full max-w-md rounded-lg border border-border/50 bg-[#161b22] p-5">
+      <div className="w-full max-w-md rounded-lg border border-border/50 bg-card p-5">
         <div className="flex items-start gap-3">
           <GitPullRequest className="mt-0.5 h-5 w-5 shrink-0 text-primary" />
           <div className="min-w-0 flex-1">

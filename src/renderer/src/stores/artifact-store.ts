@@ -1,7 +1,6 @@
 import { create } from 'zustand'
 import {
   ArtifactType,
-  artifactWorkpieceForPath,
   type Artifact,
   type ArtifactApi,
   type ArtifactFileEntry,
@@ -19,7 +18,7 @@ export enum PinnedArtifactTabId {
 // v1 could persist hundreds of repository source files from an over-broad
 // workspace scan. Use a versioned key so affected clients do not reconstruct
 // that oversized tab registry before the corrected hydration can run.
-const STORAGE_KEY = '20x:task:artifacts:v3'
+const STORAGE_KEY = '20x:task:artifacts:v4'
 const DEFAULT_UI: ArtifactUIState = { open: false, activeTabId: null, railExpanded: false }
 
 interface PersistedState {
@@ -88,10 +87,10 @@ function normalizeToolPath(taskId: string, path: string): string {
     : normalized
 }
 
-function identity(taskId: string, type: ArtifactType, target: string, workpieceKey?: string): string {
+function identity(taskId: string, type: ArtifactType, target: string | undefined, workpieceKey?: string): string {
   return workpieceKey
     ? `${taskId}:workpiece:${encodeURIComponent(workpieceKey)}`
-    : `${taskId}:${type}:${encodeURIComponent(target)}`
+    : `${taskId}:${type}:${encodeURIComponent(target || '')}`
 }
 
 function titleFromTarget(target: string): string {
@@ -160,7 +159,9 @@ export interface ArtifactMessageLike {
   timestamp?: Date | number
 }
 
-export function artifactsFromMessage(taskId: string, message: ArtifactMessageLike): Array<Omit<Artifact, 'id' | 'reloadTrigger'>> {
+type ProjectedArtifact = Omit<Artifact, 'id' | 'reloadTrigger'> & { id?: string }
+
+export function artifactsFromMessage(taskId: string, message: ArtifactMessageLike): ProjectedArtifact[] {
   if (message.partType !== 'tool' || !message.tool || typeof message.tool !== 'object') return []
   const tool = message.tool as Record<string, unknown>
   if (!isSuccessful(tool.status)) return []
@@ -170,23 +171,27 @@ export function artifactsFromMessage(taskId: string, message: ArtifactMessageLik
   const output = parseObject(tool.output)
   const timestamp = message.timestamp instanceof Date ? message.timestamp.getTime() : message.timestamp
   const updatedAt = message.updatedAt || message.createdAt || timestamp || Date.now()
-  const artifacts: Array<Omit<Artifact, 'id' | 'reloadTrigger'>> = []
+  const artifacts: ProjectedArtifact[] = []
 
-  if (['write', 'edit', 'multiedit', 'notebookedit'].includes(name)) {
-    const rawPath = firstString(input, ['file_path', 'path', 'filename', 'notebook_path'])
-      || firstString(output, ['file_path', 'path', 'filename', 'notebook_path'])
-    if (rawPath) {
-      const path = normalizeToolPath(taskId, rawPath)
-      const type = inferType(path)
-      const workpiece = artifactWorkpieceForPath(path, type)
-      const filename = path.split('/').pop()?.toLowerCase()
-      const isLikelyEntry = !workpiece?.grouped
-        || filename === 'index.html'
-        || filename === 'index.htm'
-        || filename === 'readme.md'
-        || filename === 'readme.mdx'
-      if (workpiece && isLikelyEntry) {
-        artifacts.push({ taskId, type, title: workpiece.title, path, workpieceKey: workpiece.key, updatedAt })
+  if (name.includes('write_artifact_file') || name.includes('edit_artifact_file')) {
+    const registered = output?.artifact
+    if (registered && typeof registered === 'object') {
+      const value = registered as Record<string, unknown>
+      const path = typeof value.path === 'string' ? normalizePath(value.path) : undefined
+      const type = typeof value.type === 'string' && Object.values(ArtifactType).includes(value.type as ArtifactType)
+        ? value.type as ArtifactType
+        : path ? inferType(path) : ArtifactType.FILE
+      const workpieceKey = typeof value.workpieceKey === 'string' ? value.workpieceKey : undefined
+      if (path && workpieceKey) {
+        artifacts.push({
+          id: typeof value.id === 'string' ? value.id : identity(taskId, type, path, workpieceKey),
+          taskId,
+          type,
+          title: typeof value.title === 'string' ? value.title : titleFromTarget(path),
+          path,
+          workpieceKey,
+          updatedAt: typeof value.updatedAt === 'number' ? value.updatedAt : updatedAt
+        })
       }
     }
   }
@@ -211,7 +216,7 @@ export function artifactsFromMessage(taskId: string, message: ArtifactMessageLik
   return artifacts
 }
 
-export function artifactsFromTranscriptPart(taskId: string, part: TranscriptPartRecord): Array<Omit<Artifact, 'id' | 'reloadTrigger'>> {
+export function artifactsFromTranscriptPart(taskId: string, part: TranscriptPartRecord): ProjectedArtifact[] {
   return artifactsFromMessage(taskId, part)
 }
 
@@ -240,7 +245,7 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
 
   upsertArtifact: (candidate, follow = false) => {
     const target = candidate.path || candidate.url
-    if (!target) throw new Error('Artifact requires a path or URL')
+    if (!target && !candidate.id && !candidate.workpieceKey) throw new Error('Artifact requires an identity, path, or URL')
     const id = candidate.id || identity(candidate.taskId, candidate.type, target, candidate.workpieceKey)
     let result!: Artifact
     set((state) => {
@@ -377,7 +382,7 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
       for (const entry of entries) {
         const candidate = fromFileEntry(taskId, entry)
         const target = candidate.path || candidate.url
-        if (!target) continue
+        if (!target && !candidate.workpieceKey) continue
         const id = identity(taskId, candidate.type, target, candidate.workpieceKey)
         const previous = byId.get(id)
         if (

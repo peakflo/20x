@@ -16,7 +16,7 @@ import type { GitHubManager } from './github-manager'
 import type { GitLabManager } from './gitlab-manager'
 import type { SyncManager } from './sync-manager'
 import type { PluginRegistry } from './plugins/registry'
-import { readTaskArtifact, scanTaskArtifacts } from './artifacts'
+import { listTaskArtifactEntries, readTaskArtifact } from './artifacts'
 import type { Artifact, ArtifactFileEntry } from '../shared/artifacts'
 
 // ── State ────────────────────────────────────────────────────
@@ -383,13 +383,13 @@ async function routeGet(pathname: string, url: URL): Promise<unknown> {
     return content
   }
 
-  // GET /api/tasks/:taskId/artifacts — derive the registry from the task
-  // workspace so mobile survives app restarts without a database migration.
+  // GET /api/tasks/:taskId/artifacts — explicit workpiece registry plus the
+  // bounded legacy import/recovery scan.
   const artifactsMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/artifacts$/)
   if (artifactsMatch) {
     const taskId = decodeURIComponent(artifactsMatch[1])
     if (!db.getTask(taskId)) throw Object.assign(new Error('Task not found'), { status: 404 })
-    const entries = await scanTaskArtifacts(db.getWorkspaceDir(taskId))
+    const entries = await listTaskArtifactEntries(db.getWorkspaceDir(taskId), taskId)
     return entries.map((entry) => artifactFromFileEntry(taskId, entry))
   }
 

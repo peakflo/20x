@@ -55,6 +55,7 @@ interface TaskWorkspaceProps {
   /** When provided, each subtask shows an action to open it as a separate canvas window/panel. */
   onOpenSubtaskInWindow?: (taskId: string) => void
   onBack?: () => void
+  onOpenFullView?: () => void
   /** Override the layout — which panels to show. Default: 'both' */
   panelLayout?: TaskWorkspaceLayout
 }
@@ -72,6 +73,7 @@ function TaskWorkspaceComponent({
   onNavigateToTask,
   onOpenSubtaskInWindow,
   onBack,
+  onOpenFullView,
   panelLayout = 'both'
 }: TaskWorkspaceProps) {
   const { session, start, resume, abort, stop, sendMessage, approve } = useAgentSession(task?.id)
@@ -852,7 +854,7 @@ Update existing skills that were helpful or create new ones for patterns worth r
   )
 
   const transcriptView = (
-    <div className="flex h-full min-h-0 flex-col bg-[#0d1117]">
+    <div className="flex h-full min-h-0 flex-col bg-background">
       <AgentApprovalBanner request={session.pendingApproval} onApprove={handleApprove} onReject={handleReject} />
       <AgentTranscriptPanel
         messages={session.messages}
@@ -868,7 +870,7 @@ Update existing skills that were helpful or create new ones for patterns worth r
         agentId={task.agent_id ?? undefined}
         pendingApproval={session.pendingApproval ?? undefined}
         pendingSend={session.pendingSend}
-        className="h-full min-h-0 border-0 bg-[#0d1117]"
+        className="h-full min-h-0 border-0 bg-background"
       />
     </div>
   )
@@ -880,7 +882,7 @@ Update existing skills that were helpful or create new ones for patterns worth r
 
   return (
     <>
-      <div className="relative flex h-full min-h-0 flex-col bg-[#0d1117]">
+      <div className="relative flex h-full min-h-0 flex-col bg-background">
         <TaskHeaderBar
           task={task}
           agent={assignedAgent}
@@ -895,15 +897,16 @@ Update existing skills that were helpful or create new ones for patterns worth r
           onSnooze={handleShowSnooze}
           onOpenCanvas={() => openTaskOnCanvas(task.id)}
           onOpenFolder={() => void handleOpenFolder()}
+          onOpenFullView={onOpenFullView}
           onDelete={onDelete}
         />
         <div ref={workspaceBodyRef} className="relative flex min-h-0 flex-1 overflow-hidden">
           {panelLayout === 'task-only' || (!hasSession && panelLayout === 'both') ? (
-            <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-[#0d1117]">
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
               <div className="min-h-0 flex-1">{detailsView}</div>
               {!hasSession && panelLayout === 'both' && task.status !== TaskStatus.Completed && (
-                <div className="sticky bottom-0 mx-auto w-full max-w-[780px] shrink-0 border-t border-border/50 bg-[#0d1117]/95 px-6 py-3 backdrop-blur">
-                  <div className="flex items-end gap-2 rounded-xl border border-border/50 bg-[#161b22] p-2 shadow-lg">
+                <div className="sticky bottom-0 mx-auto w-full max-w-[780px] shrink-0 border-t border-border/50 bg-background/95 px-6 py-3 backdrop-blur">
+                  <div className="flex items-end gap-2 rounded-xl border border-border/50 bg-card p-2 shadow-lg">
                     <textarea
                       value={kickoffMessage}
                       onChange={(event) => setKickoffMessage(event.target.value)}

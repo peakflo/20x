@@ -32,10 +32,10 @@ export function ArtifactsPanel({ artifacts, ui, artifactApi, hasChanges, hasOutp
   const active = ui.activeTabId || PinnedArtifactTabId.DETAILS
 
   return (
-    <section className={cn('flex h-full min-h-0 min-w-0 flex-col bg-[#0d1117]', className)} data-task-artifacts>
+    <section className={cn('flex h-full min-h-0 min-w-0 flex-col bg-background', className)} data-task-artifacts>
       <div className="relative">
         <ArtifactTabStrip artifacts={artifacts} activeTabId={active} hasChanges={hasChanges} hasOutput={hasOutput} changesCount={changesCount} onSelectTab={onSelectTab} onCloseTab={onCloseTab} className="pr-11" />
-        <button type="button" aria-label="Close artifacts" onClick={onToggleOpen} className="absolute right-2 top-1.5 grid h-7 w-7 place-items-center rounded-md bg-[#0d1117] text-muted-foreground hover:bg-accent hover:text-foreground"><PanelRightClose className="h-3.5 w-3.5" /></button>
+        <button type="button" aria-label="Close artifacts" onClick={onToggleOpen} className="absolute right-2 top-1.5 grid h-7 w-7 place-items-center rounded-md bg-background text-muted-foreground hover:bg-accent hover:text-foreground"><PanelRightClose className="h-3.5 w-3.5" /></button>
       </div>
       <div className="relative min-h-0 flex-1">
         <div className={active === PinnedArtifactTabId.DETAILS ? 'h-full' : 'hidden'}>{details}</div>

@@ -34,3 +34,21 @@ describe('update_own_task schema', () => {
     })
   }
 })
+
+describe('artifact workpiece tool schemas', () => {
+  const toolNames = [
+    'create_artifact',
+    'list_artifacts',
+    'read_artifact_file',
+    'write_artifact_file',
+    'edit_artifact_file'
+  ]
+
+  for (const ext of ['ts', 'js']) {
+    it(`keeps the complete explicit artifact tool set in ${ext}`, () => {
+      const source = readFileSync(resolve(__dir, `task-management-mcp.${ext}`), 'utf-8')
+      for (const toolName of toolNames) expect(source).toContain(`name: '${toolName}'`)
+      expect(source).toContain('TASK_ARTIFACT_SCOPE_ID')
+    })
+  }
+})

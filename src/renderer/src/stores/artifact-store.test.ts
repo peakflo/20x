@@ -25,7 +25,7 @@ beforeEach(() => {
 })
 
 describe('artifact projector', () => {
-  it('projects completed write tools and ignores pending updates', () => {
+  it('does not create artifact identity from generic filesystem writes', () => {
     const completed = artifactsFromMessage('task-1', part({
       name: 'Write', status: 'completed', input: JSON.stringify({ file_path: './outputs/result.md' })
     }))
@@ -33,7 +33,7 @@ describe('artifact projector', () => {
       name: 'Write', status: 'pending', input: JSON.stringify({ file_path: 'docs/draft.md' })
     }))
 
-    expect(completed).toEqual([expect.objectContaining({ type: ArtifactType.MARKDOWN, path: 'outputs/result.md', title: 'result.md' })])
+    expect(completed).toEqual([])
     expect(pending).toEqual([])
   })
 
@@ -46,13 +46,28 @@ describe('artifact projector', () => {
     expect(projected).toEqual([])
   })
 
-  it('projects files written below an explicit deliverable boundary', () => {
+  it('projects explicitly registered artifact file tool results', () => {
     const projected = artifactsFromMessage('task-1', part({
-      name: 'Write',
+      name: 'mcp__task-management__write_artifact_file',
       status: 'success',
-      input: { file_path: '/Users/test/App Data/workspaces/task-1/outputs/demo/index.html' }
+      output: JSON.stringify({
+        artifact: {
+          id: 'task-1:workpiece:artifact_demo_12345678',
+          taskId: 'task-1',
+          type: ArtifactType.HTML,
+          title: 'Demo',
+          path: 'artifacts/artifact_demo_12345678/index.html',
+          workpieceKey: 'artifact_demo_12345678',
+          updatedAt: 123
+        }
+      })
     }))
-    expect(projected[0]).toEqual(expect.objectContaining({ path: 'outputs/demo/index.html', type: ArtifactType.HTML }))
+    expect(projected[0]).toEqual(expect.objectContaining({
+      id: 'task-1:workpiece:artifact_demo_12345678',
+      path: 'artifacts/artifact_demo_12345678/index.html',
+      type: ArtifactType.HTML,
+      workpieceKey: 'artifact_demo_12345678'
+    }))
   })
 
   it('recognizes pull-request URLs in successful tool output', () => {

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { ArrowLeft, Bot, Check, ChevronDown, FolderOpen, Layers, Menu, MoreHorizontal, Pencil, Play, RotateCcw, Sparkles, Trash2 } from 'lucide-react'
+import { ArrowLeft, Bot, Check, ChevronDown, ExternalLink, FolderOpen, Layers, Menu, MoreHorizontal, Pencil, Play, RotateCcw, Sparkles, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { TaskPriorityBadge } from './TaskPriorityBadge'
 import { TaskStatusBadge } from './TaskStatusBadge'
@@ -35,6 +35,7 @@ interface TaskHeaderBarProps {
   onSnooze?: () => void
   onOpenCanvas?: () => void
   onOpenFolder?: () => void
+  onOpenFullView?: () => void
   onDelete: () => void
 }
 
@@ -52,6 +53,7 @@ export function TaskHeaderBar({
   onSnooze,
   onOpenCanvas,
   onOpenFolder,
+  onOpenFullView,
   onDelete
 }: TaskHeaderBarProps) {
   const [editing, setEditing] = useState(false)
@@ -83,7 +85,7 @@ export function TaskHeaderBar({
   const ActionIcon = actionMeta?.icon
 
   return (
-    <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border/50 bg-[#0d1117] px-3">
+    <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border/50 bg-background px-3">
       {onBack && (
         <Button variant="ghost" size="icon" onClick={onBack} title="Back">
           <ArrowLeft className="h-4 w-4" />
@@ -100,7 +102,7 @@ export function TaskHeaderBar({
               if (event.key === 'Enter') void commitTitle()
               if (event.key === 'Escape') { setTitle(task.title); setEditing(false) }
             }}
-            className="h-8 w-full max-w-xl rounded-md border border-primary/50 bg-[#161b22] px-2 text-sm font-medium outline-none"
+            className="h-8 w-full max-w-xl rounded-md border border-primary/50 bg-card px-2 text-sm font-medium outline-none"
             aria-label="Task title"
           />
         ) : (
@@ -113,7 +115,7 @@ export function TaskHeaderBar({
       <div className="hidden items-center gap-1.5 lg:flex">
         <TaskStatusBadge status={task.status} />
         <TaskPriorityBadge priority={task.priority} />
-        <span className="inline-flex max-w-36 items-center gap-1.5 rounded-full border border-border/50 bg-[#161b22] px-2 py-1 text-[11px] text-muted-foreground">
+        <span className="inline-flex max-w-36 items-center gap-1.5 rounded-full border border-border/50 bg-card px-2 py-1 text-[11px] text-muted-foreground">
           <Bot className="h-3 w-3" />
           <span className="truncate">{agent?.name || 'Unassigned'}</span>
         </span>
@@ -135,12 +137,13 @@ export function TaskHeaderBar({
           <MoreHorizontal className="h-4 w-4" />
         </Button>
         {menuOpen && (
-          <div className="absolute right-0 top-9 z-50 w-44 overflow-hidden rounded-lg border border-border/50 bg-[#161b22] p-1 shadow-xl">
+          <div className="absolute right-0 top-9 z-50 w-44 overflow-hidden rounded-lg border border-border/50 bg-popover p-1 shadow-xl">
             {[
               { label: 'Edit task', icon: Pencil, action: onEdit },
               { label: 'Snooze', icon: ChevronDown, action: onSnooze },
               { label: 'Open in canvas', icon: Layers, action: onOpenCanvas },
-              { label: 'Open folder', icon: FolderOpen, action: onOpenFolder }
+              { label: 'Open folder', icon: FolderOpen, action: onOpenFolder },
+              { label: 'Open full task view', icon: ExternalLink, action: onOpenFullView }
             ].filter((item) => item.action).map((item) => (
               <button key={item.label} onClick={() => { setMenuOpen(false); item.action?.() }} className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs text-foreground hover:bg-accent">
                 <item.icon className="h-3.5 w-3.5 text-muted-foreground" />{item.label}

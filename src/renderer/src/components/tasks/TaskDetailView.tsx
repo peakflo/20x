@@ -460,7 +460,7 @@ function TaskDetailViewComponent({ task, agents, onEdit, onDelete, onUpdateAttac
             <ParentTaskContext parentTask={parentTask} onNavigateToTask={onNavigateToTask} />
           )}
 
-          <div className={displayMode === 'prestart' ? 'rounded-xl border border-border/50 bg-[#161b22] p-5' : ''}>
+          <div className={displayMode === 'prestart' ? 'rounded-xl border border-border/50 bg-card p-5' : ''}>
             <h1 className="text-xl font-semibold">{task.title}</h1>
             {(task.description || onUpdateDescription) && (
               <CollapsibleDescription

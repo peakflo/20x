@@ -21,7 +21,7 @@ import { randomUUID } from 'crypto'
 import { registerSecretSession, unregisterSecretSession, getSecretBrokerPort, writeSecretShellWrapper } from './secret-broker'
 import { registerMcpProxyTarget, getMcpAuthProxyPort } from './mcp-auth-proxy'
 import { analytics } from './analytics-service'
-import { inspectTaskArtifact, scanTaskArtifacts } from './artifacts'
+import { inspectTaskArtifact } from './artifacts'
 import { ArtifactType, type Artifact } from '../shared/artifacts'
 
 // Coding agent backend type enum
@@ -35,7 +35,7 @@ const ARTIFACT_WORKSPACE_INSTRUCTIONS = `
 
 [Workspace Deliverables]
 Repository files are code and appear in the task's Changes view; do not treat ordinary source files as artifacts.
-When you create a standalone user-facing deliverable that should appear in Artifacts, write it under an explicit workspace output directory such as \`outputs/<name>/\`, \`artifacts/<name>/\`, \`deliverables/<name>/\`, or \`reports/<name>/\`. Keep supporting files for the same deliverable in that directory. Screenshots and pull requests are detected automatically.`
+For every standalone user-facing deliverable, first call \`create_artifact\` on the task-management MCP server. Then use \`write_artifact_file\`, \`read_artifact_file\`, and \`edit_artifact_file\` with the returned artifact_id. Multiple supporting files belong to that one artifact; mark its preview entry file with \`preview: true\`. Do not create artifact files with generic filesystem Write/Edit tools. Screenshots and pull requests are detected automatically.`
 
 // Default OpenCode server URL (matches database default)
 const DEFAULT_SERVER_URL = 'http://localhost:4096'
@@ -636,7 +636,7 @@ export class AgentManager extends EventEmitter {
    * Builds MCP servers config for adapters (Claude Code, etc.)
    * Converts from database format to adapter format
    */
-  private async buildMcpServersForAdapter(agentId: string, opts?: { ensureTaskManagement?: boolean; taskScope?: { taskId: string; parentTaskId: string } }): Promise<Record<string, McpServerConfig>> {
+  private async buildMcpServersForAdapter(agentId: string, opts?: { ensureTaskManagement?: boolean; taskScope?: { taskId: string; parentTaskId: string }; artifactTaskId?: string }): Promise<Record<string, McpServerConfig>> {
     const agent = this.db.getAgent(agentId)
     const mcpEntries = agent?.config?.mcp_servers || []
     const result: Record<string, McpServerConfig> = {}
@@ -667,6 +667,7 @@ export class AgentManager extends EventEmitter {
           if (opts?.taskScope) {
             env = { ...env, TASK_SCOPE_PARENT_ID: opts.taskScope.parentTaskId, TASK_SCOPE_TASK_ID: opts.taskScope.taskId }
           }
+          if (opts?.artifactTaskId) env = { ...env, TASK_ARTIFACT_SCOPE_ID: opts.artifactTaskId }
         }
 
         result[mcpServer.name] = {
@@ -733,6 +734,7 @@ export class AgentManager extends EventEmitter {
           env.TASK_SCOPE_PARENT_ID = opts.taskScope.parentTaskId
           env.TASK_SCOPE_TASK_ID = opts.taskScope.taskId
         }
+        if (opts?.artifactTaskId) env.TASK_ARTIFACT_SCOPE_ID = opts.artifactTaskId
         result['task-management'] = {
           type: 'stdio',
           command: tmServer.command,
@@ -759,7 +761,7 @@ export class AgentManager extends EventEmitter {
     const isTriageSession = this.isTriageSessionTask(taskId, task)
     const isSubtask = !!task?.parent_task_id
     const taskScope = isSubtask && task?.parent_task_id ? { taskId, parentTaskId: task.parent_task_id } : undefined
-    const mcpServers = await this.buildMcpServersForAdapter(agentId, { ensureTaskManagement: isMastermind || isTriageSession || isSubtask, taskScope })
+    const mcpServers = await this.buildMcpServersForAdapter(agentId, { ensureTaskManagement: isMastermind || isTriageSession || isSubtask || !!task, taskScope, artifactTaskId: task ? taskId : undefined })
 
     // Build system prompt with task context so follow-up messages after idle
     // retain awareness of what task the agent is working on. Without this,
@@ -1404,7 +1406,7 @@ export class AgentManager extends EventEmitter {
     // per-agent MCP configuration.
     const isMastermind = taskId === 'mastermind-session'
     const ensureTaskManagement = isMastermind || isTriageSession || isSubtask || !!task
-    const mcpServers = await this.buildMcpServersForAdapter(agentId, { ensureTaskManagement, taskScope })
+    const mcpServers = await this.buildMcpServersForAdapter(agentId, { ensureTaskManagement, taskScope, artifactTaskId: task ? taskId : undefined })
 
     // Build session config
     const sessionConfig: SessionConfig = {
@@ -2546,7 +2548,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     const taskScope = isSubtask && task?.parent_task_id ? { taskId, parentTaskId: task.parent_task_id } : undefined
     await yieldEL()
 
-    const mcpServers = await this.buildMcpServersForAdapter(agentId, { ensureTaskManagement: isMastermind || isTriageSession || isSubtask, taskScope })
+    const mcpServers = await this.buildMcpServersForAdapter(agentId, { ensureTaskManagement: isMastermind || isTriageSession || isSubtask || !!task, taskScope, artifactTaskId: task ? taskId : undefined })
 
     // Build system prompt with task context (survives context compaction)
     const baseSystemPrompt = agent.config?.system_prompt || ''
@@ -4981,9 +4983,9 @@ Important:
     this.emitArtifactUpdatesFromParts(taskId, parts)
   }
 
-  /** Broadcast task-scoped file artifacts after a completed write-like tool.
-   * The filesystem remains authoritative; scanning here keeps mobile in sync
-   * without persisting a second registry or exposing absolute paths. */
+  /** Broadcast automatically discovered URL/screenshot artifacts. Durable file
+   * workpieces are emitted directly by the task-management artifact tools;
+   * generic repository Write/Edit calls must never create artifact identity. */
   private emitArtifactUpdatesFromParts(taskId: string, parts: ReturnType<DatabaseManager['getTranscriptParts']>): void {
     const prUrls = new Set<string>()
     for (const part of parts) {
@@ -5004,14 +5006,14 @@ Important:
       })
     }
 
-    const writtenPaths = new Map<string, boolean>()
+    const screenshotPaths = new Set<string>()
     for (const part of parts) {
       if (part.partType !== 'tool' || !part.tool || typeof part.tool !== 'object') continue
       const tool = part.tool as { name?: string; status?: string; input?: unknown; output?: unknown }
       const name = (tool.name || '').toLowerCase()
       const status = (tool.status || '').toLowerCase()
       const completed = ['success', 'succeeded', 'complete', 'completed'].includes(status)
-      if (!completed || (!/(^|[./_])(?:write|edit|multiedit|notebookedit|filechange)$/.test(name) && !name.includes('screenshot'))) continue
+      if (!completed || !name.includes('screenshot')) continue
 
       const parseRecord = (value: unknown): Record<string, unknown> | null => {
         if (value && typeof value === 'object') return value as Record<string, unknown>
@@ -5032,41 +5034,25 @@ Important:
         return undefined
       }
       const path = findPath(parseRecord(tool.input)) || findPath(parseRecord(tool.output))
-      if (path) writtenPaths.set(path, name.includes('screenshot') || writtenPaths.get(path) === true)
+      if (path) screenshotPaths.add(path)
     }
-    if (writtenPaths.size === 0) return
+    if (screenshotPaths.size === 0) return
 
     const workspaceDir = this.db.getWorkspaceDir(taskId)
-    void Promise.all([...writtenPaths].map(async ([path, screenshot]) => ({
-      entry: await inspectTaskArtifact(workspaceDir, path),
-      screenshot
-    }))).then(async (results) => {
-      const affectedWorkpieces = new Set(results
-        .filter(({ entry, screenshot }) => !screenshot && entry?.workpieceKey)
-        .map(({ entry }) => entry!.workpieceKey!))
-      const groupedEntries = affectedWorkpieces.size > 0
-        ? (await scanTaskArtifacts(workspaceDir)).filter((entry) => entry.workpieceKey && affectedWorkpieces.has(entry.workpieceKey))
-        : []
-      const entriesToSend = [
-        ...results.filter(({ screenshot }) => screenshot).map(({ entry }) => entry && ({
-          ...entry,
-          title: entry.path.split('/').pop() || entry.title,
+    void Promise.all([...screenshotPaths].map((path) => inspectTaskArtifact(workspaceDir, path))).then((entries) => {
+      for (const discovered of entries) {
+        const entry = discovered && {
+          ...discovered,
+          title: discovered.path.split('/').pop() || discovered.title,
           workpieceKey: undefined
-        })),
-        ...groupedEntries
-      ]
-
-      for (const entry of entriesToSend) {
+        }
         if (!entry) continue
         const artifact: Artifact = {
-          id: entry.workpieceKey
-            ? `${taskId}:workpiece:${encodeURIComponent(entry.workpieceKey)}`
-            : `${taskId}:${entry.type}:${encodeURIComponent(entry.path)}`,
+          id: `${taskId}:${entry.type}:${encodeURIComponent(entry.path)}`,
           taskId,
           type: entry.type,
           title: entry.title,
           path: entry.path,
-          workpieceKey: entry.workpieceKey,
           updatedAt: entry.updatedAt,
           reloadTrigger: Math.floor(entry.updatedAt)
         }

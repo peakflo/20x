@@ -840,6 +840,30 @@ describe('AgentManager MCP server routing', () => {
     vi.clearAllMocks()
   })
 
+  it('pins artifact MCP tools to the current task without restricting task orchestration', async () => {
+    const mockDb = {
+      getAgent: vi.fn(() => ({ id: 'agent-1', name: 'Agent', config: { mcp_servers: ['task-management-id'] } })),
+      getMcpServer: vi.fn(() => ({
+        id: 'task-management-id',
+        name: 'task-management',
+        type: 'local',
+        command: 'node',
+        args: ['task-management-mcp.js'],
+        environment: {}
+      }))
+    } as unknown as ConstructorParameters<typeof AgentManager>[0]
+    const manager = new AgentManager(mockDb)
+
+    const mcpServers = await (manager as any).buildMcpServersForAdapter('agent-1', {
+      artifactTaskId: 'task-current'
+    })
+
+    expect(mcpServers['task-management'].env).toEqual(expect.objectContaining({
+      TASK_ARTIFACT_SCOPE_ID: 'task-current'
+    }))
+    expect(mcpServers['task-management'].env).not.toHaveProperty('TASK_SCOPE_TASK_ID')
+  })
+
   it('canonicalizes Workflo MCP dev server URLs to the active enterprise API URL for enterprise-sourced servers', async () => {
     const mockDb = {
       getAgent: vi.fn(() => ({
@@ -1356,6 +1380,7 @@ describe('AgentManager transitionToIdle — enterprise task completion after fee
     vi.spyOn(mgr as any, 'db', 'get').mockReturnValue({
       ...mockDb,
       getWorkspaceDir: vi.fn(() => '/tmp/ws'),
+      getMcpServers: vi.fn(() => []),
     })
 
     await (mgr as any).resumeAdapterSession(adapter, 'agent-1', 'task-1', 'session-1')

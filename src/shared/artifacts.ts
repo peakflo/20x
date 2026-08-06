@@ -22,6 +22,20 @@ export interface ArtifactFileEntry {
   workpieceKey?: string
 }
 
+/** Metadata returned by the explicit artifact/workpiece tools. Files are
+ * addressed relative to the artifact, never by an unrestricted workspace
+ * path. */
+export interface RegisteredArtifact {
+  artifactId: string
+  taskId: string
+  title: string
+  type: ArtifactType
+  files: string[]
+  entryFile?: string
+  createdAt: number
+  updatedAt: number
+}
+
 export interface ArtifactContent {
   kind: ArtifactContentKind
   content: string

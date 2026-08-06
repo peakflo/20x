@@ -1,17 +1,24 @@
-import { readdir, readFile, realpath, stat } from 'fs/promises'
-import { extname, isAbsolute, relative, resolve, sep, win32 } from 'path'
+import { lstat, mkdir, readdir, readFile, realpath, rename, stat, writeFile } from 'fs/promises'
+import { dirname, extname, isAbsolute, relative, resolve, sep, win32 } from 'path'
+import { randomUUID } from 'crypto'
 import {
   ArtifactContentKind,
   ArtifactType,
   artifactWorkpieceForPath,
+  type Artifact,
   type ArtifactContent,
-  type ArtifactFileEntry
+  type ArtifactFileEntry,
+  type RegisteredArtifact
 } from '../shared/artifacts'
 
 const MAX_SCAN_DEPTH = 10
 const MAX_SCAN_FILES = 500
 const MAX_TEXT_BYTES = 1024 * 1024
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024
+const REGISTRY_VERSION = 1
+const REGISTRY_DIRECTORY = '.20x'
+const REGISTRY_FILENAME = 'artifacts.json'
+const ARTIFACT_FILES_DIRECTORY = 'artifacts'
 
 const EXCLUDED_DIRECTORIES = new Set([
   '.agents',
@@ -55,13 +62,268 @@ const TEXT_MIME_TYPES: Record<string, string> = {
   '.yml': 'application/yaml'
 }
 
-function artifactTypeForPath(filePath: string): ArtifactType | null {
+export function artifactTypeForPath(filePath: string): ArtifactType | null {
   const extension = extname(filePath).toLowerCase()
   if (MARKDOWN_EXTENSIONS.has(extension)) return ArtifactType.MARKDOWN
   if (extension in IMAGE_MIME_TYPES) return ArtifactType.IMAGE
   if (HTML_EXTENSIONS.has(extension)) return ArtifactType.HTML
   if (extension in TEXT_MIME_TYPES) return ArtifactType.FILE
   return null
+}
+
+interface ArtifactRegistryFile {
+  version: number
+  artifacts: RegisteredArtifact[]
+}
+
+const registryWrites = new Map<string, Promise<unknown>>()
+
+function registryPath(workspaceDir: string): string {
+  return resolve(workspaceDir, REGISTRY_DIRECTORY, REGISTRY_FILENAME)
+}
+
+function artifactRootPath(workspaceDir: string, artifactId: string): string {
+  return resolve(workspaceDir, ARTIFACT_FILES_DIRECTORY, artifactId)
+}
+
+function normalizeArtifactFileName(filename: string): string | null {
+  if (!filename || filename.includes('\0') || isAbsolute(filename) || win32.isAbsolute(filename)) return null
+  const normalized = filename.replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/{2,}/g, '/')
+  const segments = normalized.split('/')
+  if (segments.some((segment) => !segment || segment === '.' || segment === '..')) return null
+  return normalized
+}
+
+function validateArtifactId(artifactId: string): boolean {
+  return /^artifact_[a-z0-9][a-z0-9_-]{5,80}$/.test(artifactId)
+}
+
+function slugifyArtifactTitle(title: string): string {
+  return title.toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 32) || 'output'
+}
+
+async function readArtifactRegistry(workspaceDir: string): Promise<ArtifactRegistryFile> {
+  try {
+    const parsed = JSON.parse(await readFile(registryPath(workspaceDir), 'utf8')) as Partial<ArtifactRegistryFile>
+    if (parsed.version !== REGISTRY_VERSION || !Array.isArray(parsed.artifacts)) throw new Error('Unsupported artifact registry')
+    return { version: REGISTRY_VERSION, artifacts: parsed.artifacts }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { version: REGISTRY_VERSION, artifacts: [] }
+    throw error
+  }
+}
+
+async function updateArtifactRegistry<T>(
+  workspaceDir: string,
+  updater: (registry: ArtifactRegistryFile) => Promise<T> | T
+): Promise<T> {
+  const previous = registryWrites.get(workspaceDir) || Promise.resolve()
+  const current = previous.catch(() => undefined).then(async () => {
+    const registry = await readArtifactRegistry(workspaceDir)
+    const result = await updater(registry)
+    const directory = resolve(workspaceDir, REGISTRY_DIRECTORY)
+    await mkdir(directory, { recursive: true })
+    const temporaryPath = resolve(directory, `${REGISTRY_FILENAME}.${randomUUID()}.tmp`)
+    await writeFile(temporaryPath, `${JSON.stringify(registry, null, 2)}\n`, 'utf8')
+    await rename(temporaryPath, registryPath(workspaceDir))
+    return result
+  })
+  registryWrites.set(workspaceDir, current)
+  try {
+    return await current
+  } finally {
+    if (registryWrites.get(workspaceDir) === current) registryWrites.delete(workspaceDir)
+  }
+}
+
+function registeredArtifactPath(record: RegisteredArtifact): string | undefined {
+  return record.entryFile
+    ? `${ARTIFACT_FILES_DIRECTORY}/${record.artifactId}/${record.entryFile}`
+    : undefined
+}
+
+export function registeredArtifactToArtifact(record: RegisteredArtifact): Artifact {
+  const path = registeredArtifactPath(record)
+  return {
+    id: `${record.taskId}:workpiece:${encodeURIComponent(record.artifactId)}`,
+    taskId: record.taskId,
+    type: record.type,
+    title: record.title,
+    path,
+    workpieceKey: record.artifactId,
+    updatedAt: record.updatedAt,
+    reloadTrigger: Math.floor(record.updatedAt)
+  }
+}
+
+function registeredArtifactToEntry(record: RegisteredArtifact): ArtifactFileEntry | null {
+  const path = registeredArtifactPath(record)
+  if (!path) return null
+  return {
+    path,
+    title: record.title,
+    type: record.type,
+    updatedAt: record.updatedAt,
+    size: 0,
+    workpieceKey: record.artifactId
+  }
+}
+
+async function resolveRegisteredArtifactFile(
+  workspaceDir: string,
+  artifactId: string,
+  filename: string,
+  createParent: boolean
+): Promise<{ relativeName: string; absolutePath: string } | null> {
+  if (!validateArtifactId(artifactId)) return null
+  const relativeName = normalizeArtifactFileName(filename)
+  if (!relativeName) return null
+  const workspaceRoot = await realpath(workspaceDir)
+  const root = artifactRootPath(workspaceRoot, artifactId)
+  if (createParent) await mkdir(dirname(resolve(root, relativeName)), { recursive: true })
+  let canonicalRoot: string
+  let canonicalParent: string
+  try {
+    canonicalRoot = await realpath(root)
+    canonicalParent = await realpath(dirname(resolve(root, relativeName)))
+  } catch {
+    return null
+  }
+  if (!isWithinRoot(workspaceRoot, canonicalRoot) || !isWithinRoot(canonicalRoot, canonicalParent)) return null
+  const absolutePath = resolve(canonicalParent, relativeName.split('/').at(-1)!)
+  try {
+    if ((await lstat(absolutePath)).isSymbolicLink()) return null
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return null
+  }
+  return { relativeName, absolutePath }
+}
+
+export async function createRegisteredTaskArtifact(
+  workspaceDir: string,
+  taskId: string,
+  input: { title: string; type: ArtifactType }
+): Promise<RegisteredArtifact> {
+  const title = input.title.trim()
+  if (!title) throw new Error('Artifact title is required')
+  if (input.type === ArtifactType.PR) throw new Error('PR artifacts are created from pull request URLs')
+  const now = Date.now()
+  const artifactId = `artifact_${slugifyArtifactTitle(title)}_${randomUUID().replace(/-/g, '').slice(0, 8)}`
+  await mkdir(artifactRootPath(workspaceDir, artifactId), { recursive: true })
+  return updateArtifactRegistry(workspaceDir, (registry) => {
+    const record: RegisteredArtifact = {
+      artifactId,
+      taskId,
+      title,
+      type: input.type,
+      files: [],
+      createdAt: now,
+      updatedAt: now
+    }
+    registry.artifacts.push(record)
+    return record
+  })
+}
+
+export async function listRegisteredTaskArtifacts(workspaceDir: string, taskId: string): Promise<RegisteredArtifact[]> {
+  const registry = await readArtifactRegistry(workspaceDir)
+  return registry.artifacts.filter((artifact) => artifact.taskId === taskId)
+}
+
+export async function writeRegisteredTaskArtifactFile(
+  workspaceDir: string,
+  taskId: string,
+  input: { artifactId: string; filename: string; content: string; encoding?: 'utf8' | 'base64'; preview?: boolean }
+): Promise<Artifact> {
+  const target = await resolveRegisteredArtifactFile(workspaceDir, input.artifactId, input.filename, true)
+  if (!target) throw new Error('Invalid artifact ID or filename')
+  const bytes = input.encoding === 'base64' ? Buffer.from(input.content, 'base64') : Buffer.from(input.content, 'utf8')
+  const type = artifactTypeForPath(target.relativeName)
+  const limit = type === ArtifactType.IMAGE ? MAX_IMAGE_BYTES : MAX_TEXT_BYTES
+  if (bytes.length > limit) throw new Error(`Artifact file exceeds the ${limit}-byte limit`)
+
+  const record = await updateArtifactRegistry(workspaceDir, async (registry) => {
+    const artifact = registry.artifacts.find((candidate) => candidate.artifactId === input.artifactId && candidate.taskId === taskId)
+    if (!artifact) throw new Error('Artifact not found for this task')
+    await writeFile(target.absolutePath, bytes)
+    if (!artifact.files.includes(target.relativeName)) artifact.files.push(target.relativeName)
+    artifact.files.sort()
+    const currentPriority = artifact.entryFile ? previewPriorityForPath(artifact.entryFile, artifact.type) : -1
+    const candidateType = type || ArtifactType.FILE
+    if (input.preview || !artifact.entryFile || previewPriorityForPath(target.relativeName, candidateType) > currentPriority) {
+      artifact.entryFile = target.relativeName
+      artifact.type = candidateType
+    }
+    artifact.updatedAt = Date.now()
+    return artifact
+  })
+  return registeredArtifactToArtifact(record)
+}
+
+export async function editRegisteredTaskArtifactFile(
+  workspaceDir: string,
+  taskId: string,
+  input: { artifactId: string; filename: string; textToReplace: string; replacement: string }
+): Promise<Artifact> {
+  const target = await resolveRegisteredArtifactFile(workspaceDir, input.artifactId, input.filename, false)
+  if (!target) throw new Error('Invalid artifact ID or filename')
+  const existing = await readFile(target.absolutePath, 'utf8')
+  const first = existing.indexOf(input.textToReplace)
+  if (first < 0) throw new Error('text_to_replace was not found')
+  if (existing.indexOf(input.textToReplace, first + input.textToReplace.length) >= 0) {
+    throw new Error('text_to_replace must match exactly one location')
+  }
+  const content = `${existing.slice(0, first)}${input.replacement}${existing.slice(first + input.textToReplace.length)}`
+  return writeRegisteredTaskArtifactFile(workspaceDir, taskId, {
+    artifactId: input.artifactId,
+    filename: target.relativeName,
+    content,
+    preview: false
+  })
+}
+
+export async function readRegisteredTaskArtifactFile(
+  workspaceDir: string,
+  taskId: string,
+  artifactId: string,
+  filename: string
+): Promise<{ content: string; encoding: 'utf8' | 'base64'; mimeType?: string }> {
+  const registry = await readArtifactRegistry(workspaceDir)
+  if (!registry.artifacts.some((artifact) => artifact.artifactId === artifactId && artifact.taskId === taskId)) {
+    throw new Error('Artifact not found for this task')
+  }
+  const target = await resolveRegisteredArtifactFile(workspaceDir, artifactId, filename, false)
+  if (!target) throw new Error('Invalid artifact ID or filename')
+  const type = artifactTypeForPath(target.relativeName)
+  const bytes = await readFile(target.absolutePath)
+  if (type === ArtifactType.IMAGE) {
+    if (bytes.length > MAX_IMAGE_BYTES) throw new Error('Artifact image exceeds the read limit')
+    return { content: bytes.toString('base64'), encoding: 'base64', mimeType: IMAGE_MIME_TYPES[extname(target.relativeName).toLowerCase()] }
+  }
+  if (bytes.length > MAX_TEXT_BYTES) throw new Error('Artifact file exceeds the read limit')
+  return { content: bytes.toString('utf8'), encoding: 'utf8', mimeType: TEXT_MIME_TYPES[extname(target.relativeName).toLowerCase()] || 'text/plain' }
+}
+
+function previewPriorityForPath(path: string, type: ArtifactType): number {
+  const filename = path.split('/').pop()?.toLowerCase() || ''
+  if (filename === 'index.html' || filename === 'index.htm') return 100
+  if (filename === 'readme.md' || filename === 'readme.mdx') return 90
+  if (type === ArtifactType.HTML) return 80
+  if (type === ArtifactType.MARKDOWN) return 70
+  if (type === ArtifactType.IMAGE) return 60
+  return 10
+}
+
+/** Explicit registry is authoritative. The bounded directory scan remains as
+ * an import/recovery path for artifacts created by older agents. */
+export async function listTaskArtifactEntries(workspaceDir: string, taskId: string): Promise<ArtifactFileEntry[]> {
+  const registered = await listRegisteredTaskArtifacts(workspaceDir, taskId)
+  const registeredRoots = new Set(registered.map((artifact) => `${ARTIFACT_FILES_DIRECTORY}/${artifact.artifactId}/`))
+  const explicitEntries = registered.map(registeredArtifactToEntry).filter((entry): entry is ArtifactFileEntry => entry !== null)
+  const legacyEntries = (await scanTaskArtifacts(workspaceDir)).filter(
+    (entry) => ![...registeredRoots].some((root) => entry.path.startsWith(root))
+  )
+  return [...explicitEntries, ...legacyEntries].sort((a, b) => b.updatedAt - a.updatedAt || a.path.localeCompare(b.path))
 }
 
 function isWithinRoot(rootPath: string, candidatePath: string): boolean {
@@ -130,15 +392,7 @@ export async function scanTaskArtifacts(workspaceDir: string): Promise<ArtifactF
   const artifacts = new Map<string, ArtifactFileEntry>()
   let discoveredFiles = 0
 
-  const previewPriority = (entry: ArtifactFileEntry): number => {
-    const filename = entry.path.split('/').pop()?.toLowerCase() || ''
-    if (filename === 'index.html' || filename === 'index.htm') return 100
-    if (filename === 'readme.md' || filename === 'readme.mdx') return 90
-    if (entry.type === ArtifactType.HTML) return 80
-    if (entry.type === ArtifactType.MARKDOWN) return 70
-    if (entry.type === ArtifactType.IMAGE) return 60
-    return 10
-  }
+  const previewPriority = (entry: ArtifactFileEntry): number => previewPriorityForPath(entry.path, entry.type)
 
   const visit = async (directory: string, depth: number): Promise<void> => {
     if (depth > MAX_SCAN_DEPTH || discoveredFiles >= MAX_SCAN_FILES) return

@@ -3,7 +3,18 @@ import { join } from 'path'
 import { tmpdir } from 'os'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { ArtifactContentKind, ArtifactType } from '../shared/artifacts'
-import { ARTIFACT_FILE_LIMITS, inspectTaskArtifact, readTaskArtifact, scanTaskArtifacts } from './artifacts'
+import {
+  ARTIFACT_FILE_LIMITS,
+  createRegisteredTaskArtifact,
+  editRegisteredTaskArtifactFile,
+  inspectTaskArtifact,
+  listRegisteredTaskArtifacts,
+  listTaskArtifactEntries,
+  readRegisteredTaskArtifactFile,
+  readTaskArtifact,
+  scanTaskArtifacts,
+  writeRegisteredTaskArtifactFile
+} from './artifacts'
 
 describe('task artifact files', () => {
   let testRoot: string
@@ -69,6 +80,83 @@ describe('task artifact files', () => {
       type: ArtifactType.HTML,
       workpieceKey: 'outputs/dashboard'
     }))
+  })
+
+  it('registers one durable workpiece and keeps multiple owned files behind its stable identity', async () => {
+    const registered = await createRegisteredTaskArtifact(workspaceDir, 'task-1', {
+      title: 'Sales dashboard',
+      type: ArtifactType.HTML
+    })
+
+    const first = await writeRegisteredTaskArtifactFile(workspaceDir, 'task-1', {
+      artifactId: registered.artifactId,
+      filename: 'styles.css',
+      content: 'main { display: grid; }'
+    })
+    const preview = await writeRegisteredTaskArtifactFile(workspaceDir, 'task-1', {
+      artifactId: registered.artifactId,
+      filename: 'index.html',
+      content: '<main>Before</main>',
+      preview: true
+    })
+
+    expect(first.id).toBe(preview.id)
+    expect(preview).toEqual(expect.objectContaining({
+      id: `task-1:workpiece:${encodeURIComponent(registered.artifactId)}`,
+      title: 'Sales dashboard',
+      type: ArtifactType.HTML,
+      path: `artifacts/${registered.artifactId}/index.html`,
+      workpieceKey: registered.artifactId
+    }))
+    await expect(listRegisteredTaskArtifacts(workspaceDir, 'task-1')).resolves.toEqual([
+      expect.objectContaining({
+        artifactId: registered.artifactId,
+        files: ['index.html', 'styles.css'],
+        entryFile: 'index.html'
+      })
+    ])
+    await expect(listTaskArtifactEntries(workspaceDir, 'task-1')).resolves.toEqual([
+      expect.objectContaining({
+        path: `artifacts/${registered.artifactId}/index.html`,
+        workpieceKey: registered.artifactId
+      })
+    ])
+  })
+
+  it('reads and exact-edits registered files while enforcing task and path boundaries', async () => {
+    const registered = await createRegisteredTaskArtifact(workspaceDir, 'task-1', {
+      title: 'Report',
+      type: ArtifactType.MARKDOWN
+    })
+    await writeRegisteredTaskArtifactFile(workspaceDir, 'task-1', {
+      artifactId: registered.artifactId,
+      filename: 'report.md',
+      content: '# Before'
+    })
+
+    await editRegisteredTaskArtifactFile(workspaceDir, 'task-1', {
+      artifactId: registered.artifactId,
+      filename: 'report.md',
+      textToReplace: 'Before',
+      replacement: 'After'
+    })
+    await expect(readRegisteredTaskArtifactFile(workspaceDir, 'task-1', registered.artifactId, 'report.md')).resolves.toEqual({
+      content: '# After',
+      encoding: 'utf8',
+      mimeType: 'text/markdown'
+    })
+    await expect(readRegisteredTaskArtifactFile(workspaceDir, 'task-2', registered.artifactId, 'report.md')).rejects.toThrow('Artifact not found')
+    await expect(writeRegisteredTaskArtifactFile(workspaceDir, 'task-1', {
+      artifactId: registered.artifactId,
+      filename: '../escape.md',
+      content: 'nope'
+    })).rejects.toThrow('Invalid artifact ID or filename')
+
+    const outsideFile = join(testRoot, 'outside-registered.md')
+    await writeFile(outsideFile, 'secret')
+    await symlink(outsideFile, join(workspaceDir, 'artifacts', registered.artifactId, 'linked.md'))
+    await expect(readRegisteredTaskArtifactFile(workspaceDir, 'task-1', registered.artifactId, 'linked.md'))
+      .rejects.toThrow('Invalid artifact ID or filename')
   })
 
   it('inspects only a tool-reported file inside the workspace', async () => {

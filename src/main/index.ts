@@ -277,6 +277,7 @@ function createWindow(): void {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send(channel, data)
     }
+    broadcastToMobileClients(channel, data)
   })
 
   // Wire up transcript provider for subtask MCP agents to access sibling transcripts

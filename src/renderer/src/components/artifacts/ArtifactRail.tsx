@@ -19,7 +19,7 @@ export interface ArtifactRailProps {
 
 export function ArtifactRail({ artifacts, expanded, activeTabId, agentActive, hasChanges, hasOutput, changesCount, onSelectTab, onToggleExpanded, className }: ArtifactRailProps) {
   return (
-    <aside className={cn('flex h-full shrink-0 flex-col border-l border-border/50 bg-[#0d1117] transition-[width] duration-200', expanded ? 'w-[220px]' : 'w-12', className)}>
+    <aside className={cn('flex h-full shrink-0 flex-col border-l border-border/50 bg-background transition-[width] duration-200', expanded ? 'w-[220px]' : 'w-12', className)}>
       <div className="flex h-10 items-center border-b border-border/50 px-1.5">
         {expanded && <span className="min-w-0 flex-1 truncate px-1.5 text-xs font-medium text-muted-foreground">Artifacts</span>}
         <button type="button" aria-label={expanded ? 'Collapse artifacts rail' : 'Expand artifacts rail'} onClick={onToggleExpanded} className="grid h-8 w-8 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground">
