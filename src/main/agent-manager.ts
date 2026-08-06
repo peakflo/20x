@@ -21,6 +21,8 @@ import { randomUUID } from 'crypto'
 import { registerSecretSession, unregisterSecretSession, getSecretBrokerPort, writeSecretShellWrapper } from './secret-broker'
 import { registerMcpProxyTarget, getMcpAuthProxyPort } from './mcp-auth-proxy'
 import { analytics } from './analytics-service'
+import { scanTaskArtifacts } from './artifacts'
+import { ArtifactType, type Artifact } from '../shared/artifacts'
 
 // Coding agent backend type enum
 enum CodingAgentType {
@@ -4969,6 +4971,69 @@ Important:
     }
     for (const fn of this.externalListeners) {
       try { fn('transcript:changed', payload) } catch { /* ignore */ }
+    }
+    this.emitArtifactUpdatesFromParts(taskId, parts)
+  }
+
+  /** Broadcast task-scoped file artifacts after a completed write-like tool.
+   * The filesystem remains authoritative; scanning here keeps mobile in sync
+   * without persisting a second registry or exposing absolute paths. */
+  private emitArtifactUpdatesFromParts(taskId: string, parts: ReturnType<DatabaseManager['getTranscriptParts']>): void {
+    const prUrls = new Set<string>()
+    for (const part of parts) {
+      let searchable = typeof part.content === 'string' ? part.content : ''
+      try { searchable += `\n${JSON.stringify(part.tool || {})}` } catch { /* ignore */ }
+      for (const match of searchable.matchAll(/https?:\/\/[^\s)\]>'"]+\/(?:pull|merge_requests)\/\d+/g)) prUrls.add(match[0])
+    }
+    for (const url of prUrls) {
+      const number = url.match(/\/(\d+)$/)?.[1]
+      this.sendArtifactUpdated({
+        id: `${taskId}:${ArtifactType.PR}:${encodeURIComponent(url)}`,
+        taskId,
+        type: ArtifactType.PR,
+        title: number ? `Pull request #${number}` : 'Pull request',
+        url,
+        updatedAt: Date.now(),
+        reloadTrigger: 0
+      })
+    }
+
+    const wroteArtifact = parts.some((part) => {
+      if (part.partType !== 'tool' || !part.tool || typeof part.tool !== 'object') return false
+      const tool = part.tool as { name?: string; status?: string }
+      const name = (tool.name || '').toLowerCase()
+      const status = (tool.status || '').toLowerCase()
+      const completed = ['success', 'succeeded', 'complete', 'completed'].includes(status)
+      return completed && (/(^|[./_])(?:write|edit|multiedit|notebookedit|filechange)$/.test(name) || name.includes('screenshot'))
+    })
+    if (!wroteArtifact) return
+
+    const workspaceDir = this.db.getWorkspaceDir(taskId)
+    void scanTaskArtifacts(workspaceDir).then((entries) => {
+      for (const entry of entries) {
+        const artifact: Artifact = {
+          id: `${taskId}:${entry.type}:${encodeURIComponent(entry.path)}`,
+          taskId,
+          type: entry.type,
+          title: entry.title,
+          path: entry.path,
+          updatedAt: entry.updatedAt,
+          reloadTrigger: Math.floor(entry.updatedAt)
+        }
+        this.sendArtifactUpdated(artifact)
+      }
+    }).catch((error) => {
+      console.warn(`[AgentManager] Failed to refresh artifacts for task ${taskId}:`, error)
+    })
+  }
+
+  private sendArtifactUpdated(artifact: Artifact): void {
+    const artifactPayload = { taskId: artifact.taskId, artifact }
+    if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+      this.mainWindow.webContents.send('artifact:updated', artifactPayload)
+    }
+    for (const fn of this.externalListeners) {
+      try { fn('artifact:updated', artifactPayload) } catch { /* ignore */ }
     }
   }
 

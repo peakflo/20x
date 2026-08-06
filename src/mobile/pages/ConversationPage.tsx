@@ -5,7 +5,9 @@ import { useAgentStore, SessionStatus, type AgentMessage } from '../stores/agent
 import { api } from '../api/client'
 import { useSessionControls } from '../hooks/useSessionControls'
 import { MessageActivityGroup, MessageBubble, isCompactActivityMessage } from '../components/MessageBubble'
+import { ArtifactCard } from '../components/ArtifactCard'
 import { ChatInput, type ChatInputAttachment } from '../components/ChatInput'
+import { useArtifactStore } from '../stores/artifact-store'
 import { cn } from '../lib/utils'
 import { captureAnalyticsEvent } from '@/lib/analytics'
 import type { Route } from '../App'
@@ -103,12 +105,19 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
   const bindTranscript = useAgentStore((s) => s.bindTranscript)
   const beginSend = useAgentStore((s) => s.beginSend)
   const endSend = useAgentStore((s) => s.endSend)
+  const artifactsByTask = useArtifactStore((s) => s.artifactsByTask)
+  const hydrateArtifacts = useArtifactStore((s) => s.hydrate)
+  const artifacts = artifactsByTask.get(taskId) || []
 
   // Bind this task's transcript from the durable projection on open (and taskId
   // change). The view renders projection state; live updates arrive as deltas.
   useEffect(() => {
     void bindTranscript(taskId)
   }, [taskId, bindTranscript])
+
+  useEffect(() => {
+    void hydrateArtifacts(taskId)
+  }, [hydrateArtifacts, taskId])
 
   const scrollRef = useRef<HTMLDivElement>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
@@ -700,6 +709,18 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
                 <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
               </svg>
               <span className="text-xs text-yellow-300">{session.systemStatus}</span>
+            </div>
+          )}
+
+          {artifacts.length > 0 && (
+            <div className="space-y-2 pb-2" aria-label="Task artifacts">
+              {artifacts.slice(0, 3).map((artifact) => (
+                <ArtifactCard
+                  key={`${artifact.id}:${artifact.reloadTrigger}`}
+                  artifact={artifact}
+                  onOpen={() => onNavigate({ page: 'artifact', taskId, artifactId: artifact.id })}
+                />
+              ))}
             </div>
           )}
 

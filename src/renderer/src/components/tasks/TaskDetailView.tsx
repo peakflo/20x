@@ -387,9 +387,15 @@ interface TaskDetailViewProps {
   onOpenSubtaskInWindow?: (taskId: string) => void
   onAddSubtask?: (title: string) => void
   onReorderSubtasks?: (orderedIds: string[]) => void
+  /** Presentation-only mode used by the task workspace redesign. */
+  displayMode?: 'full' | 'prestart' | 'panel'
+  /** Output fields live in their own pinned artifact tab in panel mode. */
+  showOutputFields?: boolean
+  /** The workspace header owns the primary action once a session exists. */
+  showPrimaryActions?: boolean
 }
 
-function TaskDetailViewComponent({ task, agents, onEdit, onDelete, onUpdateAttachments, onUpdateOutputFields, onCompleteTask, onAssignAgent, onUpdateRepos, onAddRepos, onUpdateSkillIds, onAddSkills, onStartAgent, canStartAgent, onResumeAgent, canResumeAgent, onRestartAgent, canRestartAgent, onSnooze, onUnsnooze, onReassign, onTriage, canTriage, onEditAgent, onUpdateDescription, onUpdateAutoFlags, subtasks, parentTask, onNavigateToTask, onOpenSubtaskInWindow, onAddSubtask, onReorderSubtasks }: TaskDetailViewProps) {
+function TaskDetailViewComponent({ task, agents, onEdit, onDelete, onUpdateAttachments, onUpdateOutputFields, onCompleteTask, onAssignAgent, onUpdateRepos, onAddRepos, onUpdateSkillIds, onAddSkills, onStartAgent, canStartAgent, onResumeAgent, canResumeAgent, onRestartAgent, canRestartAgent, onSnooze, onUnsnooze, onReassign, onTriage, canTriage, onEditAgent, onUpdateDescription, onUpdateAutoFlags, subtasks, parentTask, onNavigateToTask, onOpenSubtaskInWindow, onAddSubtask, onReorderSubtasks, displayMode = 'full', showOutputFields = true, showPrimaryActions = true }: TaskDetailViewProps) {
   // Per-field selectors — a selector-less useSkillStore() re-renders this
   // large view on every skill-store mutation.
   const skills = useSkillStore((s) => s.skills)
@@ -413,6 +419,7 @@ function TaskDetailViewComponent({ task, agents, onEdit, onDelete, onUpdateAttac
 
   return (
     <div className="flex flex-col h-full">
+      {displayMode === 'full' && (
       <div className="flex items-center justify-between border-b border-border/60 px-6 py-4 shrink-0">
         <div className="flex items-center gap-2.5">
           <TaskStatusBadge status={task.status} />
@@ -445,14 +452,15 @@ function TaskDetailViewComponent({ task, agents, onEdit, onDelete, onUpdateAttac
           </Button>
         </div>
       </div>
+      )}
 
       <div className="flex-1 overflow-y-auto">
-        <div className="max-w-2xl mx-auto px-8 py-8 space-y-6">
+        <div className={`${displayMode === 'prestart' ? 'max-w-[780px] px-6 py-6' : displayMode === 'panel' ? 'max-w-none px-5 py-5' : 'max-w-2xl px-8 py-8'} mx-auto space-y-6`}>
           {parentTask && onNavigateToTask && (
             <ParentTaskContext parentTask={parentTask} onNavigateToTask={onNavigateToTask} />
           )}
 
-          <div>
+          <div className={displayMode === 'prestart' ? 'rounded-xl border border-border/50 bg-[#161b22] p-5' : ''}>
             <h1 className="text-xl font-semibold">{task.title}</h1>
             {(task.description || onUpdateDescription) && (
               <CollapsibleDescription
@@ -754,7 +762,7 @@ function TaskDetailViewComponent({ task, agents, onEdit, onDelete, onUpdateAttac
 
           {/* Heartbeat monitoring — handled inside the properties grid above */}
 
-          {task.output_fields.length > 0 && (
+          {showOutputFields && task.output_fields.length > 0 && (
             <div className="rounded-md border p-4">
               <OutputFieldsDisplay
                 fields={task.output_fields}
@@ -766,7 +774,7 @@ function TaskDetailViewComponent({ task, agents, onEdit, onDelete, onUpdateAttac
             </div>
           )}
 
-          {isActive && (() => {
+          {showPrimaryActions && isActive && (() => {
             // Prioritized main CTA — state-aware.
             //
             // In most states the happy path is to move the task forward with an

@@ -58,6 +58,8 @@ describe('registerIpcHandlers', () => {
     expect(channels).toContain('skills:getAll')
     expect(channels).toContain('taskSource:sync')
     expect(channels).toContain('plugin:list')
+    expect(channels).toContain('artifacts:scan')
+    expect(channels).toContain('artifacts:read')
   })
 
   it('terminal:kill ignores stale expectedPid and only kills matching process', async () => {

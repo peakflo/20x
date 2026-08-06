@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { useConnectionStore } from './stores/connection-store'
 import { useTaskStore } from './stores/task-store'
 import { useAgentStore } from './stores/agent-store'
+import { useArtifactStore } from './stores/artifact-store'
 import { TaskListPage } from './pages/TaskListPage'
 import { TaskDetailPage } from './pages/TaskDetailPage'
 import { ConversationPage } from './pages/ConversationPage'
@@ -10,6 +11,7 @@ import { TaskFormPage } from './pages/TaskFormPage'
 import { SkillSelectorPage } from './pages/SkillSelectorPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { PairPage } from './pages/PairPage'
+import { ArtifactViewerPage } from './pages/ArtifactViewerPage'
 import { getPairCodeFromUrl, hasSessionToken } from './api/auth'
 import { captureAnalyticsEvent, capturePageView } from '@/lib/analytics'
 
@@ -17,6 +19,7 @@ export type Route =
   | { page: 'list' }
   | { page: 'detail'; taskId: string }
   | { page: 'conversation'; taskId: string }
+  | { page: 'artifact'; taskId: string; artifactId: string }
   | { page: 'repos'; taskId: string }
   | { page: 'skills'; taskId: string }
   | { page: 'create' }
@@ -27,6 +30,7 @@ export function App() {
   const pairCode = getPairCodeFromUrl()
   const [paired, setPaired] = useState(() => !pairCode && hasSessionToken())
   const [route, setRoute] = useState<Route>({ page: 'list' })
+  const activeTaskId = 'taskId' in route ? route.taskId : null
   const isPopRef = useRef(false)
 
   // Navigation that pushes browser history so back button works
@@ -69,6 +73,7 @@ export function App() {
   const fetchAgents = useAgentStore((s) => s.fetchAgents)
   const fetchSkills = useAgentStore((s) => s.fetchSkills)
   const syncActiveSessions = useAgentStore((s) => s.syncActiveSessions)
+  const hydrateArtifacts = useArtifactStore((s) => s.hydrate)
 
   useEffect(() => {
     connect()
@@ -79,20 +84,23 @@ export function App() {
     // Sync active sessions once WebSocket is connected (event-driven, not arbitrary delay)
     setOnFirstConnect(() => {
       syncActiveSessions()
+      if (activeTaskId) void hydrateArtifacts(activeTaskId)
     })
 
     // Re-sync state after WebSocket reconnects to recover missed events
     setOnReconnect(() => {
       fetchTasks()
       syncActiveSessions()
+      if (activeTaskId) void hydrateArtifacts(activeTaskId)
     })
 
     // Re-sync when page becomes visible (phone wakes) even if connection stayed alive,
     // because messages may have been missed while JS was suspended on mobile
     setOnVisibilityReconnect(() => {
       syncActiveSessions()
+      if (activeTaskId) void hydrateArtifacts(activeTaskId)
     })
-  }, [connect, fetchTasks, fetchAgents, fetchSkills, syncActiveSessions, setOnReconnect, setOnFirstConnect, setOnVisibilityReconnect])
+  }, [activeTaskId, connect, fetchTasks, fetchAgents, fetchSkills, hydrateArtifacts, syncActiveSessions, setOnReconnect, setOnFirstConnect, setOnVisibilityReconnect])
 
   useEffect(() => {
     capturePageView(route.page, {
@@ -148,6 +156,9 @@ export function App() {
       )}
       {route.page === 'conversation' && (
         <ConversationPage taskId={route.taskId} onNavigate={navigate} />
+      )}
+      {route.page === 'artifact' && (
+        <ArtifactViewerPage taskId={route.taskId} artifactId={route.artifactId} onNavigate={navigate} />
       )}
       {route.page === 'repos' && (
         <RepoSelectorPage taskId={route.taskId} onNavigate={navigate} />

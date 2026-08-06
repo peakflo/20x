@@ -1,4 +1,5 @@
-import { LayoutList } from 'lucide-react'
+import { LayoutList, Send, Sparkles } from 'lucide-react'
+import { Button } from '@/components/ui/Button'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { FeedbackDialog } from './FeedbackDialog'
 import { SnoozeDialog } from './SnoozeDialog'
@@ -6,6 +7,8 @@ import { IncompatibleSessionDialog } from './IncompatibleSessionDialog'
 import { TaskDetailView } from './TaskDetailView'
 import { AgentTranscriptPanel } from '@/components/agents/AgentTranscriptPanel'
 import { ChangesPanel } from './ChangesPanel'
+import { OutputFieldsDisplay } from './OutputFieldsDisplay'
+import { TaskHeaderBar, TaskPrimaryAction } from './TaskHeaderBar'
 import { AgentApprovalBanner } from '@/components/agents/AgentApprovalBanner'
 import { GhCliSetupDialog } from '@/components/github/GhCliSetupDialog'
 import { OrgPickerDialog } from '@/components/github/OrgPickerDialog'
@@ -19,11 +22,21 @@ import { useSettingsStore, type GitProvider } from '@/stores/settings-store'
 import { useTaskStore } from '@/stores/task-store'
 import { taskApi, worktreeApi, taskSourceApi, onAgentIncompatibleSession, onWorktreeProgress, attachmentApi } from '@/lib/ipc-client'
 import { subscribe } from '@/lib/shared-ipc-listeners'
-import { memo, useEffect, useCallback, useRef, useState, useMemo } from 'react'
+import { memo, useEffect, useCallback, useRef, useState, useMemo, type PointerEvent as ReactPointerEvent } from 'react'
 import { TaskStatus } from '@/types'
 import type { WorkfloTask, FileAttachment, OutputField, Agent, UpdateAgentDTO, CreateAgentDTO } from '@/types'
 import type { GitHubRepo } from '@/types/electron'
 import { isAgentConfigured } from '@shared/agent-utils'
+import { useUIStore } from '@/stores/ui-store'
+import { useArtifactStore, PinnedArtifactTabId } from '@/stores/artifact-store'
+import { artifactApi } from '@/lib/ipc-client'
+import { ArtifactType } from '@shared/artifacts'
+import { ArtifactsPanel } from '@/components/artifacts/ArtifactsPanel'
+import { ArtifactRail } from '@/components/artifacts/ArtifactRail'
+import type { Artifact, ArtifactUIState } from '@shared/artifacts'
+
+const EMPTY_ARTIFACTS: Artifact[] = []
+const DEFAULT_ARTIFACT_UI: ArtifactUIState = { open: false, activeTabId: null, railExpanded: false }
 
 /** Controls which columns are visible in the TaskWorkspace grid */
 export type TaskWorkspaceLayout = 'both' | 'task-only' | 'transcript-only'
@@ -41,6 +54,7 @@ interface TaskWorkspaceProps {
   onNavigateToTask?: (taskId: string) => void
   /** When provided, each subtask shows an action to open it as a separate canvas window/panel. */
   onOpenSubtaskInWindow?: (taskId: string) => void
+  onBack?: () => void
   /** Override the layout — which panels to show. Default: 'both' */
   panelLayout?: TaskWorkspaceLayout
 }
@@ -57,6 +71,7 @@ function TaskWorkspaceComponent({
   onUpdateTask,
   onNavigateToTask,
   onOpenSubtaskInWindow,
+  onBack,
   panelLayout = 'both'
 }: TaskWorkspaceProps) {
   const { session, start, resume, abort, stop, sendMessage, approve } = useAgentSession(task?.id)
@@ -72,8 +87,8 @@ function TaskWorkspaceComponent({
   const setGithubOrg = useSettingsStore((s) => s.setGithubOrg)
   const fetchSettings = useSettingsStore((s) => s.fetchSettings)
 
-  const [rightTab, setRightTab] = useState<'transcript' | 'changes'>('transcript')
   const [changesSummary, setChangesSummary] = useState<{ files: number; additions: number; deletions: number } | null>(null)
+  const [kickoffMessage, setKickoffMessage] = useState('')
   const [showGhSetup, setShowGhSetup] = useState(false)
   const [showOrgPicker, setShowOrgPicker] = useState(false)
   const [showRepoSelector, setShowRepoSelector] = useState(false)
@@ -87,6 +102,21 @@ function TaskWorkspaceComponent({
   const [incompatibleSessionError, setIncompatibleSessionError] = useState<string>()
   const [parentTask, setParentTask] = useState<WorkfloTask | null>(null)
   const startingRef = useRef(false)
+  const workspaceBodyRef = useRef<HTMLDivElement>(null)
+  const resizingRef = useRef(false)
+  const [transcriptWidth, setTranscriptWidth] = useState(() => {
+    const stored = Number(localStorage.getItem('20x:task:transcriptWidth'))
+    return Number.isFinite(stored) && stored >= 320 ? stored : Math.max(320, Math.round(window.innerWidth * 0.44))
+  })
+  const openTaskOnCanvas = useUIStore((s) => s.openTaskOnCanvas)
+  const artifacts = useArtifactStore((s) => task?.id ? (s.artifactsByTask[task.id] || EMPTY_ARTIFACTS) : EMPTY_ARTIFACTS)
+  const artifactUI = useArtifactStore((s) => task?.id ? (s.uiByTask[task.id] || DEFAULT_ARTIFACT_UI) : DEFAULT_ARTIFACT_UI)
+  const hydrateArtifacts = useArtifactStore((s) => s.hydrate)
+  const selectArtifactTab = useArtifactStore((s) => s.selectTab)
+  const removeArtifact = useArtifactStore((s) => s.removeArtifact)
+  const setArtifactsOpen = useArtifactStore((s) => s.setOpen)
+  const setRailExpanded = useArtifactStore((s) => s.setRailExpanded)
+  const upsertArtifact = useArtifactStore((s) => s.upsertArtifact)
 
   const fetchTasks = useTaskStore((s) => s.fetchTasks)
   const updateTaskInStore = useTaskStore((s) => s.updateTask)
@@ -100,6 +130,27 @@ function TaskWorkspaceComponent({
       .filter((t) => t.parent_task_id === task.id)
       .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.created_at.localeCompare(b.created_at))
   }, [allTasks, task?.id])
+
+  useEffect(() => {
+    if (!task?.id) return
+    void hydrateArtifacts(task.id, artifactApi).catch((error) => {
+      console.error('[TaskWorkspace] Failed to hydrate artifacts:', error)
+    })
+  }, [hydrateArtifacts, task?.id])
+
+  const handleResizeMove = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!resizingRef.current || !workspaceBodyRef.current) return
+    const rect = workspaceBodyRef.current.getBoundingClientRect()
+    const next = Math.max(320, Math.min(event.clientX - rect.left, Math.max(320, rect.width - 320)))
+    setTranscriptWidth(next)
+  }, [])
+
+  const handleResizeEnd = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!resizingRef.current) return
+    resizingRef.current = false
+    event.currentTarget.releasePointerCapture?.(event.pointerId)
+    localStorage.setItem('20x:task:transcriptWidth', String(transcriptWidth))
+  }, [transcriptWidth])
 
   // Fetch settings on mount
   useEffect(() => { fetchSettings() }, [])
@@ -671,6 +722,46 @@ Update existing skills that were helpful or create new ones for patterns worth r
     }
   }, [onUpdateTask, task?.id, updateTaskInStore])
 
+  const handleRename = useCallback(async (title: string) => {
+    if (!task?.id) return
+    if (onUpdateTask) await onUpdateTask(task.id, { title })
+    else {
+      await taskApi.update(task.id, { title })
+      updateTaskInStore(task.id, { title })
+    }
+  }, [onUpdateTask, task?.id, updateTaskInStore])
+
+  const handleOpenFolder = useCallback(async () => {
+    if (!task?.id) return
+    const workspaceDir = await window.electronAPI.tasks.getWorkspaceDir(task.id)
+    await window.electronAPI.shell.openPath(workspaceDir)
+  }, [task?.id])
+
+  const handleKickoff = useCallback(async () => {
+    const message = kickoffMessage.trim()
+    if (!message) return
+    if (!task?.agent_id) {
+      await handleTriage()
+      return
+    }
+    setKickoffMessage('')
+    await handleSend(message)
+  }, [handleSend, handleTriage, kickoffMessage, task?.agent_id])
+
+  const handlePullRequests = useCallback((pullRequests: Array<{ repo: string; prNumber?: number; prUrl?: string; prState?: string; prTitle?: string; ciStatus?: 'passing' | 'failing' | 'pending' | 'none' }>) => {
+    if (!task?.id) return
+    for (const pullRequest of pullRequests) {
+      if (!pullRequest.prUrl) continue
+      upsertArtifact({
+        taskId: task.id,
+        type: ArtifactType.PR,
+        title: pullRequest.prTitle || `Pull request #${pullRequest.prNumber || ''}`.trim(),
+        url: pullRequest.prUrl,
+        updatedAt: Date.now()
+      }, false)
+    }
+  }, [task?.id, upsertArtifact])
+
   if (!task) {
     return (
       <div className="flex items-center justify-center h-full">
@@ -683,8 +774,8 @@ Update existing skills that were helpful or create new ones for patterns worth r
     )
   }
 
-  // Show panel if session exists (active or past transcript with messages)
-  const showPanel = session.status !== SessionStatus.IDLE || session.messages.length > 0
+  // Persisted sessions count as started even before their transcript is hydrated.
+  const hasSession = !!task.session_id || !!session.sessionId || session.status !== SessionStatus.IDLE || session.messages.length > 0
   const assignedAgent = task.agent_id ? agents.find((a) => a.id === task.agent_id) : null
   const assignedAgentConfigured = isAgentConfigured(assignedAgent)
   // Triage uses the default agent (or the first agent in the list as a fallback).
@@ -697,103 +788,198 @@ Update existing skills that were helpful or create new ones for patterns worth r
   const canTriage = !task.agent_id && agents.length > 0 && triageAgentConfigured && session.status === SessionStatus.IDLE
     && task.status !== TaskStatus.Completed && task.status !== TaskStatus.Triaging
 
+  let primaryAction: TaskPrimaryAction | null = null
+  let handlePrimaryAction: (() => void) | undefined
+  if (task.status === TaskStatus.ReadyForReview || task.status === TaskStatus.Completed) {
+    if (task.status !== TaskStatus.Completed) {
+      primaryAction = TaskPrimaryAction.COMPLETE
+      handlePrimaryAction = () => void handleCompleteTask()
+    }
+  } else if (canStart) {
+    primaryAction = TaskPrimaryAction.START
+    handlePrimaryAction = () => void handleStartSession()
+  } else if (canResume) {
+    primaryAction = TaskPrimaryAction.RESUME
+    handlePrimaryAction = () => void handleResumeSession()
+  } else if (canRestart) {
+    primaryAction = TaskPrimaryAction.RESTART
+    handlePrimaryAction = () => void handleStartFreshSession()
+  } else if (canTriage) {
+    primaryAction = TaskPrimaryAction.TRIAGE
+    handlePrimaryAction = () => void handleTriage()
+  }
+
   const editingAgent = editingAgentId ? agents.find((a) => a.id === editingAgentId) : undefined
+
+  const detailsView = (
+    <TaskDetailView
+      task={task}
+      agents={agents}
+      onEdit={onEdit}
+      onDelete={onDelete}
+      onUpdateAttachments={onUpdateAttachments}
+      onUpdateOutputFields={onUpdateOutputFields}
+      onCompleteTask={handleCompleteTask}
+      onAssignAgent={handleAssignAgent}
+      onUpdateRepos={handleUpdateRepos}
+      onAddRepos={handleAddRepos}
+      onUpdateSkillIds={handleUpdateSkillIds}
+      onUpdateDescription={handleUpdateDescription}
+      onAddSkills={handleShowSkillSelector}
+      onStartAgent={handleStartSession}
+      canStartAgent={!!canStart}
+      onResumeAgent={handleResumeSession}
+      canResumeAgent={!!canResume}
+      onRestartAgent={handleStartFreshSession}
+      canRestartAgent={!!canRestart}
+      onSnooze={handleShowSnooze}
+      onUnsnooze={handleUnsnooze}
+      onReassign={handleReassign}
+      onTriage={handleTriage}
+      canTriage={!!canTriage}
+      onEditAgent={handleEditAgent}
+      onUpdateAutoFlags={handleUpdateAutoFlags}
+      subtasks={subtasks}
+      parentTask={parentTask}
+      onNavigateToTask={onNavigateToTask}
+      onOpenSubtaskInWindow={onOpenSubtaskInWindow}
+      onAddSubtask={handleAddSubtask}
+      onReorderSubtasks={handleReorderSubtasks}
+      displayMode={hasSession ? 'panel' : 'prestart'}
+      showOutputFields={!hasSession || panelLayout === 'task-only'}
+      showPrimaryActions={!hasSession || panelLayout === 'task-only'}
+    />
+  )
+
+  const transcriptView = (
+    <div className="flex h-full min-h-0 flex-col bg-[#0d1117]">
+      <AgentApprovalBanner request={session.pendingApproval} onApprove={handleApprove} onReject={handleReject} />
+      <AgentTranscriptPanel
+        messages={session.messages}
+        status={session.status}
+        systemStatus={session.systemStatus}
+        onStop={handleAbort}
+        onRestart={handleStartFreshSession}
+        onSend={handleSend}
+        onPickAttachments={handlePickAttachments}
+        onAddAttachmentPaths={handleAddAttachmentPaths}
+        sessionId={session.sessionId}
+        taskId={task.id}
+        agentId={task.agent_id ?? undefined}
+        pendingApproval={session.pendingApproval ?? undefined}
+        pendingSend={session.pendingSend}
+        className="h-full min-h-0 border-0 bg-[#0d1117]"
+      />
+    </div>
+  )
+
+  const openDetails = () => {
+    if (artifactUI.open && artifactUI.activeTabId === PinnedArtifactTabId.DETAILS) setArtifactsOpen(task.id, false)
+    else selectArtifactTab(task.id, PinnedArtifactTabId.DETAILS, true)
+  }
 
   return (
     <>
-      <div className={`grid ${showPanel && panelLayout !== 'task-only' && panelLayout !== 'transcript-only' ? 'grid-cols-2' : 'grid-cols-1'} relative`} style={{ height: '100%' }}>
-        {panelLayout !== 'transcript-only' && (
-        <div className="min-h-0 min-w-0 flex flex-col">
-          <AgentApprovalBanner
-            request={session.pendingApproval}
-            onApprove={handleApprove}
-            onReject={handleReject}
-          />
-          <TaskDetailView
-            task={task}
-            agents={agents}
-            onEdit={onEdit}
-            onDelete={onDelete}
-
-            onUpdateAttachments={onUpdateAttachments}
-            onUpdateOutputFields={onUpdateOutputFields}
-            onCompleteTask={handleCompleteTask}
-            onAssignAgent={handleAssignAgent}
-            onUpdateRepos={handleUpdateRepos}
-            onAddRepos={handleAddRepos}
-            onUpdateSkillIds={handleUpdateSkillIds}
-            onUpdateDescription={handleUpdateDescription}
-            onAddSkills={handleShowSkillSelector}
-            onStartAgent={handleStartSession}
-            canStartAgent={!!canStart}
-            onResumeAgent={handleResumeSession}
-            canResumeAgent={!!canResume}
-            onRestartAgent={handleStartFreshSession}
-            canRestartAgent={!!canRestart}
-            onSnooze={handleShowSnooze}
-            onUnsnooze={handleUnsnooze}
-            onReassign={handleReassign}
-            onTriage={handleTriage}
-            canTriage={!!canTriage}
-            onEditAgent={handleEditAgent}
-            onUpdateAutoFlags={handleUpdateAutoFlags}
-            subtasks={subtasks}
-            parentTask={parentTask}
-            onNavigateToTask={onNavigateToTask}
-            onOpenSubtaskInWindow={onOpenSubtaskInWindow}
-            onAddSubtask={handleAddSubtask}
-            onReorderSubtasks={handleReorderSubtasks}
-          />
+      <div className="relative flex h-full min-h-0 flex-col bg-[#0d1117]">
+        <TaskHeaderBar
+          task={task}
+          agent={assignedAgent}
+          action={primaryAction}
+          onAction={handlePrimaryAction}
+          onBack={onBack}
+          onRename={handleRename}
+          detailsOpen={artifactUI.open && artifactUI.activeTabId === PinnedArtifactTabId.DETAILS}
+          showDetailsToggle={hasSession && panelLayout === 'both'}
+          onToggleDetails={openDetails}
+          onEdit={onEdit}
+          onSnooze={handleShowSnooze}
+          onOpenCanvas={() => openTaskOnCanvas(task.id)}
+          onOpenFolder={() => void handleOpenFolder()}
+          onDelete={onDelete}
+        />
+        <div ref={workspaceBodyRef} className="relative flex min-h-0 flex-1 overflow-hidden">
+          {panelLayout === 'task-only' || (!hasSession && panelLayout === 'both') ? (
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-[#0d1117]">
+              <div className="min-h-0 flex-1">{detailsView}</div>
+              {!hasSession && panelLayout === 'both' && task.status !== TaskStatus.Completed && (
+                <div className="sticky bottom-0 mx-auto w-full max-w-[780px] shrink-0 border-t border-border/50 bg-[#0d1117]/95 px-6 py-3 backdrop-blur">
+                  <div className="flex items-end gap-2 rounded-xl border border-border/50 bg-[#161b22] p-2 shadow-lg">
+                    <textarea
+                      value={kickoffMessage}
+                      onChange={(event) => setKickoffMessage(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void handleKickoff() }
+                      }}
+                      placeholder={task.agent_id ? 'Add kickoff instructions…' : 'Add context, then triage this task…'}
+                      className="max-h-32 min-h-10 flex-1 resize-none bg-transparent px-2 py-2 text-sm outline-none placeholder:text-muted-foreground"
+                      aria-label="Kickoff instructions"
+                    />
+                    <Button onClick={() => void handleKickoff()} disabled={!kickoffMessage.trim()} className="h-9 gap-1.5">
+                      {task.agent_id ? <Send className="h-3.5 w-3.5" /> : <Sparkles className="h-3.5 w-3.5" />}
+                      {task.agent_id ? 'Start' : 'Triage'}
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : panelLayout === 'transcript-only' ? (
+            <div className="min-h-0 min-w-0 flex-1">{transcriptView}</div>
+          ) : (
+            <>
+              <div className="min-h-0 min-w-0 shrink-0" style={{ width: artifactUI.open ? transcriptWidth : 'auto', flex: artifactUI.open ? undefined : 1 }}>
+                {transcriptView}
+              </div>
+              {artifactUI.open ? (
+                <>
+                  <div
+                    role="separator"
+                    aria-orientation="vertical"
+                    aria-label="Resize transcript"
+                    onPointerDown={(event) => { resizingRef.current = true; event.currentTarget.setPointerCapture(event.pointerId) }}
+                    onPointerMove={handleResizeMove}
+                    onPointerUp={handleResizeEnd}
+                    onPointerCancel={handleResizeEnd}
+                    className="group relative w-1 shrink-0 cursor-col-resize bg-border/50 hover:bg-primary/50"
+                  />
+                  <ArtifactsPanel
+                    taskId={task.id}
+                    artifacts={artifacts}
+                    ui={artifactUI}
+                    artifactApi={artifactApi}
+                    hasChanges={task.repos.length > 0}
+                    hasOutput={task.output_fields.length > 0}
+                    changesCount={changesSummary?.files}
+                    onSelectTab={(tabId) => selectArtifactTab(task.id, tabId, true)}
+                    onCloseTab={(artifactId) => removeArtifact(task.id, artifactId)}
+                    onToggleOpen={() => setArtifactsOpen(task.id, false)}
+                    onToggleRail={() => setRailExpanded(task.id, !artifactUI.railExpanded)}
+                    details={detailsView}
+                    changes={<ChangesPanel taskId={task.id} repos={task.repos} className="h-full" onSummary={setChangesSummary} onPullRequests={handlePullRequests} />}
+                    output={<OutputFieldsDisplay fields={task.output_fields} onChange={onUpdateOutputFields} isActive={task.status !== TaskStatus.Completed} onComplete={handleCompleteTask} taskUpdatedAt={task.updated_at} />}
+                    className="min-w-[320px] flex-1 border-l border-border/50"
+                  />
+                </>
+              ) : (
+                <>
+                <ArtifactRail
+                  artifacts={artifacts}
+                  expanded={artifactUI.railExpanded}
+                  activeTabId={artifactUI.activeTabId}
+                  agentActive={session.status === SessionStatus.WORKING}
+                  hasChanges={task.repos.length > 0}
+                  hasOutput={task.output_fields.length > 0}
+                  changesCount={changesSummary?.files}
+                  onSelectTab={(tabId) => selectArtifactTab(task.id, tabId, true)}
+                  onToggleExpanded={() => setRailExpanded(task.id, !artifactUI.railExpanded)}
+                />
+                <div className="hidden">
+                  <ChangesPanel taskId={task.id} repos={task.repos} onSummary={setChangesSummary} onPullRequests={handlePullRequests} />
+                </div>
+                </>
+              )}
+            </>
+          )}
         </div>
-        )}
-
-        {showPanel && panelLayout !== 'task-only' && (
-          <div className={`min-h-0 min-w-0 h-full flex flex-col ${panelLayout !== 'transcript-only' ? 'border-l border-border/60' : ''}`}>
-            {/* Transcript / Changes tab switcher */}
-            <div className="flex items-center gap-1 px-3 pt-2 pb-1 flex-shrink-0">
-              {(['transcript', 'changes'] as const).map((tab) => (
-                <button
-                  key={tab}
-                  onClick={() => setRightTab(tab)}
-                  className={`flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors cursor-pointer ${
-                    rightTab === tab ? 'bg-accent text-foreground' : 'text-muted-foreground hover:text-foreground'
-                  }`}
-                >
-                  <span className="capitalize">{tab}</span>
-                  {tab === 'changes' && changesSummary && changesSummary.files > 0 && (
-                    <span className="inline-flex items-center rounded-full bg-primary/15 px-1.5 text-[10px] font-semibold text-primary tabular-nums">
-                      {changesSummary.files}
-                    </span>
-                  )}
-                </button>
-              ))}
-            </div>
-            {/* Both panels stay mounted: transcript preserves scroll/stream; Changes
-                fetches its diff so the tab badge reflects changes without opening it. */}
-            <div className={rightTab === 'transcript' ? 'flex-1 min-h-0' : 'hidden'}>
-              <AgentTranscriptPanel
-                messages={session.messages}
-                status={session.status}
-                systemStatus={session.systemStatus}
-                onStop={handleAbort}
-                onRestart={handleStartFreshSession}
-                onSend={handleSend}
-                onPickAttachments={handlePickAttachments}
-                onAddAttachmentPaths={handleAddAttachmentPaths}
-                sessionId={session.sessionId}
-                taskId={task.id}
-                agentId={task.agent_id ?? undefined}
-                pendingApproval={session.pendingApproval ?? undefined}
-                pendingSend={session.pendingSend}
-                className="h-full bg-card border-l-0"
-              />
-            </div>
-            <div className={rightTab === 'changes' ? 'flex-1 min-h-0' : 'hidden'}>
-              <ChangesPanel taskId={task.id} repos={task.repos} className="h-full" onSummary={setChangesSummary} />
-            </div>
-          </div>
-        )}
-
         <WorktreeProgressOverlay taskId={task.id} visible={isSettingUpWorktree} />
       </div>
 

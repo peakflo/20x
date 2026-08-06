@@ -36,6 +36,7 @@ import type { ClaudePluginManager } from './claude-plugin-manager'
 import type { EnterpriseHeartbeat } from './enterprise-heartbeat'
 import type { EnterpriseStateSync } from './enterprise-state-sync'
 import { analytics } from './analytics-service'
+import { readTaskArtifact, scanTaskArtifacts } from './artifacts'
 
 const MIME_MAP: Record<string, string> = {
   '.pdf': 'application/pdf',
@@ -247,6 +248,14 @@ export function registerIpcHandlers(
 
   ipcMain.handle('tasks:getWorkspaceDir', (_, taskId: string): string => {
     return db.getWorkspaceDir(taskId)
+  })
+
+  ipcMain.handle('artifacts:scan', async (_, taskId: string) => {
+    return scanTaskArtifacts(db.getWorkspaceDir(taskId))
+  })
+
+  ipcMain.handle('artifacts:read', async (_, taskId: string, relativePath: string) => {
+    return readTaskArtifact(db.getWorkspaceDir(taskId), relativePath)
   })
 
   ipcMain.handle('attachments:open', (_, taskId: string, attachmentId: string) => {

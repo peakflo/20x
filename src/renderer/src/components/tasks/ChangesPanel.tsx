@@ -9,7 +9,7 @@ import { parseUnifiedDiff, wordDiff, type DiffFile, type DiffHunk, type DiffLine
 import { DiffStatLabel } from './DiffStatLabel'
 import { cn } from '@/lib/utils'
 
-interface RepoChanges {
+export interface RepoChanges {
   repo: string
   files: DiffFile[]
   error?: string
@@ -279,11 +279,12 @@ const RepoBlock = memo(function RepoBlock({ repo, viewMode, wrap }: { repo: Repo
 
 export interface ChangesSummary { files: number; additions: number; deletions: number }
 
-export function ChangesPanel({ taskId, repos, className, onSummary }: {
+export function ChangesPanel({ taskId, repos, className, onSummary, onPullRequests }: {
   taskId: string
   repos: string[]
   className?: string
   onSummary?: (s: ChangesSummary) => void
+  onPullRequests?: (pullRequests: Array<Pick<RepoChanges, 'repo' | 'prNumber' | 'prUrl' | 'prState' | 'prTitle' | 'ciStatus'>>) => void
 }) {
   const [data, setData] = useState<RepoChanges[] | null>(null)
   const [loading, setLoading] = useState(false)
@@ -306,6 +307,14 @@ export function ChangesPanel({ taskId, repos, className, onSummary }: {
         files: r.diff ? parseUnifiedDiff(r.diff) : [],
       }))
       setData(parsed)
+      onPullRequests?.(parsed.filter((repo) => repo.prUrl).map((repo) => ({
+        repo: repo.repo,
+        prNumber: repo.prNumber,
+        prUrl: repo.prUrl,
+        prState: repo.prState,
+        prTitle: repo.prTitle,
+        ciStatus: repo.ciStatus
+      })))
       let a = 0, d = 0, f = 0
       for (const repo of parsed) for (const file of repo.files) { a += file.additions; d += file.deletions; f++ }
       onSummary?.({ files: f, additions: a, deletions: d })
@@ -315,7 +324,7 @@ export function ChangesPanel({ taskId, repos, className, onSummary }: {
     } finally {
       setLoading(false)
     }
-  }, [taskId, reposKey, onSummary])
+  }, [taskId, reposKey, onSummary, onPullRequests])
 
   useEffect(() => { void load() }, [load])
 

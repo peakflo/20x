@@ -499,6 +499,7 @@ export function AppLayout() {
               onAssignAgent={handleAssignAgent}
               onUpdateTask={handleUpdateTask}
               onNavigateToTask={handleNavigateToTask}
+              onBack={() => selectTask(null)}
             />
           ) : null}
           </div>
@@ -658,6 +659,7 @@ export function AppLayout() {
                 onAssignAgent={handleAssignAgent}
                 onUpdateTask={handleUpdateTask}
                 onNavigateToTask={handleNavigateFromDashboardPreview}
+                onBack={closeDashboardPreview}
               />
             )}
           </div>

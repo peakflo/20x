@@ -33,6 +33,7 @@ import type {
   PluginResources,
   HeartbeatLog
 } from './index'
+import type { ArtifactApi } from '@shared/artifacts'
 
 export interface AgentSessionStartResult {
   sessionId: string
@@ -199,6 +200,7 @@ interface ElectronAPI {
   tasks: {
     getWorkspaceDir: (taskId: string) => Promise<string>
   }
+  artifacts: ArtifactApi
   mcpServers: {
     getAll: () => Promise<McpServer[]>
     get: (id: string) => Promise<McpServer | undefined>
@@ -457,6 +459,7 @@ interface ElectronAPI {
   onTasksRefresh: (callback: () => void) => () => void
   onAgentOutput: (callback: (event: AgentOutputEvent) => void) => () => void
   onAgentOutputBatch: (callback: (event: AgentOutputBatchEvent) => void) => () => void
+  onArtifactUpdated: (callback: (event: { taskId: string; artifact: import('@shared/artifacts').Artifact }) => void) => () => void
   onTranscriptChanged: (callback: (event: TranscriptChangedEvent) => void) => () => void
   onAgentStatus: (callback: (event: AgentStatusEvent) => void) => () => void
   onAgentApproval: (callback: (event: AgentApprovalRequest) => void) => () => void

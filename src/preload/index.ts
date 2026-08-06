@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
+import type { ArtifactContent, ArtifactFileEntry } from '../shared/artifacts'
 
 contextBridge.exposeInMainWorld('electronAPI', {
   db: {
@@ -15,6 +16,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   tasks: {
     getWorkspaceDir: (taskId: string): Promise<string> =>
       ipcRenderer.invoke('tasks:getWorkspaceDir', taskId)
+  },
+  artifacts: {
+    scan: (taskId: string): Promise<ArtifactFileEntry[]> =>
+      ipcRenderer.invoke('artifacts:scan', taskId),
+    read: (taskId: string, relativePath: string): Promise<ArtifactContent | null> =>
+      ipcRenderer.invoke('artifacts:read', taskId, relativePath)
   },
   attachments: {
     pick: (): Promise<string[]> => ipcRenderer.invoke('attachments:pick'),
@@ -141,6 +148,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const handler = (_: unknown, data: unknown): void => callback(data)
     ipcRenderer.on('agent:output-batch', handler)
     return () => ipcRenderer.removeListener('agent:output-batch', handler)
+  },
+  onArtifactUpdated: (callback: (event: unknown) => void): (() => void) => {
+    const handler = (_: unknown, data: unknown): void => callback(data)
+    ipcRenderer.on('artifact:updated', handler)
+    return () => ipcRenderer.removeListener('artifact:updated', handler)
   },
   onTranscriptChanged: (callback: (event: unknown) => void): (() => void) => {
     const handler = (_: unknown, data: unknown): void => callback(data)
