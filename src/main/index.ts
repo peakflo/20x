@@ -180,6 +180,26 @@ function createWindow(): void {
     mainWindow?.webContents.setZoomLevel(0)
   })
 
+  // On Windows, `titleBarStyle: 'hidden'` + `titleBarOverlay` (Window Controls
+  // Overlay) removes the native frame that would normally host the menu bar's
+  // accelerator table — Menu.setApplicationMenu()'s Ctrl+/Ctrl-/Ctrl+0 roles
+  // don't reliably fire in that mode. Handle the zoom shortcuts directly so
+  // they work regardless of the (invisible) native menu.
+  if (!isMac) {
+    mainWindow.webContents.on('before-input-event', (_event, input) => {
+      if (input.type !== 'keyDown' || !input.control || input.meta || input.alt || input.shift) return
+      const wc = mainWindow?.webContents
+      if (!wc) return
+      if (input.key === '=' || input.key === '+') {
+        wc.setZoomLevel(Math.min(wc.getZoomLevel() + 0.5, 9))
+      } else if (input.key === '-') {
+        wc.setZoomLevel(Math.max(wc.getZoomLevel() - 0.5, -8))
+      } else if (input.key === '0') {
+        wc.setZoomLevel(0)
+      }
+    })
+  }
+
   // Auto-reload on renderer crash (blank screen recovery)
   mainWindow.webContents.on('render-process-gone', (_event, details) => {
     console.error(`[Main] Renderer crashed: reason=${details.reason}, exitCode=${details.exitCode}`)
