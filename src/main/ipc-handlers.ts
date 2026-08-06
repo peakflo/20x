@@ -549,6 +549,10 @@ export function registerIpcHandlers(
     return await githubManager.fetchRepoCollaborators(owner, repo)
   })
 
+  ipcMain.handle('github:fetchPullRequestDetails', async (_, url: string) => {
+    return await githubManager.fetchPullRequestDetails(url)
+  })
+
   // GitLab handlers
   ipcMain.handle('gitlab:checkCli', async () => {
     if (!gitlabManager) return { installed: false, authenticated: false }

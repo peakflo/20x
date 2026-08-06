@@ -393,6 +393,14 @@ async function routeGet(pathname: string, url: URL): Promise<unknown> {
     return entries.map((entry) => artifactFromFileEntry(taskId, entry))
   }
 
+  // GET /api/github/pull-request?url=... — authenticated, read-only PR details.
+  if (pathname === '/api/github/pull-request') {
+    if (!githubRef) throw Object.assign(new Error('GitHub not configured'), { status: 500 })
+    const pullRequestUrl = url.searchParams.get('url')
+    if (!pullRequestUrl) throw Object.assign(new Error('url is required'), { status: 400 })
+    return githubRef.fetchPullRequestDetails(pullRequestUrl)
+  }
+
   // GET /api/tasks/:id
   const taskMatch = pathname.match(/^\/api\/tasks\/([^/]+)$/)
   if (taskMatch) {

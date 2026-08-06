@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
-import type { ArtifactContent, ArtifactFileEntry } from '../shared/artifacts'
+import type { ArtifactContent, ArtifactFileEntry, PullRequestDetails } from '../shared/artifacts'
 
 contextBridge.exposeInMainWorld('electronAPI', {
   db: {
@@ -207,7 +207,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     fetchUserRepos: (): Promise<unknown[]> =>
       ipcRenderer.invoke('github:fetchUserRepos'),
     fetchCollaborators: (owner: string, repo: string): Promise<unknown[]> =>
-      ipcRenderer.invoke('github:fetchCollaborators', owner, repo)
+      ipcRenderer.invoke('github:fetchCollaborators', owner, repo),
+    fetchPullRequestDetails: (url: string): Promise<PullRequestDetails> =>
+      ipcRenderer.invoke('github:fetchPullRequestDetails', url)
   },
   gitlab: {
     checkCli: (): Promise<{ installed: boolean; authenticated: boolean; username?: string }> =>

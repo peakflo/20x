@@ -4,7 +4,7 @@
  * In dev mode (Vite on a different port), we point directly at the Electron server.
  */
 import { getAuthToken } from './auth'
-import type { Artifact, ArtifactContent } from '@shared/artifacts'
+import type { Artifact, ArtifactContent, PullRequestDetails } from '@shared/artifacts'
 
 const MOBILE_API_PORT = '20620'
 // When served via a reverse proxy (Cloudflare tunnel, https with no explicit port),
@@ -89,7 +89,9 @@ export const api = {
     getOrgs: () => get<Array<{ value: string; label: string; provider?: string }>>('/api/github/orgs'),
     setOrg: (org: string) => post<{ org: string }>('/api/github/org', { org }),
     fetchRepos: (org: string, provider?: string) =>
-      post<Array<{ name: string; fullName: string; defaultBranch: string; cloneUrl: string; description: string; isPrivate: boolean }>>('/api/github/repos', { org, provider })
+      post<Array<{ name: string; fullName: string; defaultBranch: string; cloneUrl: string; description: string; isPrivate: boolean }>>('/api/github/repos', { org, provider }),
+    pullRequest: (url: string) =>
+      get<PullRequestDetails>(`/api/github/pull-request?url=${encodeURIComponent(url)}`)
   },
   sessions: {
     list: () => get<unknown[]>('/api/sessions'),

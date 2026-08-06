@@ -33,6 +33,7 @@ import type {
   PluginResources,
   HeartbeatLog
 } from './index'
+import type { PullRequestDetails } from '@shared/artifacts'
 import type { ArtifactApi } from '@shared/artifacts'
 
 export interface AgentSessionStartResult {
@@ -278,6 +279,7 @@ interface ElectronAPI {
     fetchOrgRepos: (org: string) => Promise<GitHubRepo[]>
     fetchUserRepos: () => Promise<GitHubRepo[]>
     fetchCollaborators: (owner: string, repo: string) => Promise<GitHubCollaborator[]>
+    fetchPullRequestDetails: (url: string) => Promise<PullRequestDetails>
   }
   gitlab: {
     checkCli: () => Promise<GlabCliStatus>

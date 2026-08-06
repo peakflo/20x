@@ -11,6 +11,57 @@ export enum ArtifactContentKind {
   DATA_URL = 'data_url'
 }
 
+export enum PullRequestState {
+  OPEN = 'open',
+  CLOSED = 'closed',
+  MERGED = 'merged'
+}
+
+export enum PullRequestReviewDecision {
+  APPROVED = 'approved',
+  CHANGES_REQUESTED = 'changes_requested',
+  REVIEW_REQUIRED = 'review_required',
+  NONE = 'none'
+}
+
+export enum PullRequestCheckState {
+  PASSED = 'passed',
+  FAILED = 'failed',
+  PENDING = 'pending',
+  SKIPPED = 'skipped'
+}
+
+export interface PullRequestCheck {
+  name: string
+  state: PullRequestCheckState
+  url?: string
+}
+
+export interface PullRequestDetails {
+  url: string
+  repository: string
+  number: number
+  title: string
+  body: string
+  state: PullRequestState
+  isDraft: boolean
+  mergeStateStatus?: string
+  reviewDecision: PullRequestReviewDecision
+  author: { login: string; avatarUrl?: string; url?: string }
+  baseRefName: string
+  headRefName: string
+  additions: number
+  deletions: number
+  changedFiles: number
+  commentsCount: number
+  reviewsCount: number
+  createdAt: string
+  updatedAt: string
+  mergedAt?: string
+  closedAt?: string
+  checks: PullRequestCheck[]
+}
+
 export interface ArtifactFileEntry {
   path: string
   title: string
