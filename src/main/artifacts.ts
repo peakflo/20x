@@ -68,8 +68,8 @@ function isWithinRoot(rootPath: string, candidatePath: string): boolean {
   return pathFromRoot === '' || (!pathFromRoot.startsWith(`..${sep}`) && pathFromRoot !== '..' && !isAbsolute(pathFromRoot))
 }
 
-async function resolveArtifactPath(workspaceDir: string, artifactPath: string): Promise<string | null> {
-  if (!artifactPath || artifactPath.includes('\0') || isAbsolute(artifactPath) || win32.isAbsolute(artifactPath)) {
+async function resolveArtifactPath(workspaceDir: string, artifactPath: string, allowAbsolute = false): Promise<string | null> {
+  if (!artifactPath || artifactPath.includes('\0') || (!allowAbsolute && (isAbsolute(artifactPath) || win32.isAbsolute(artifactPath)))) {
     return null
   }
 
@@ -77,12 +77,38 @@ async function resolveArtifactPath(workspaceDir: string, artifactPath: string): 
   let candidatePath: string
   try {
     rootPath = await realpath(workspaceDir)
-    candidatePath = await realpath(resolve(rootPath, artifactPath))
+    candidatePath = await realpath(allowAbsolute && isAbsolute(artifactPath) ? artifactPath : resolve(rootPath, artifactPath))
   } catch {
     return null
   }
 
   return isWithinRoot(rootPath, candidatePath) ? candidatePath : null
+}
+
+/** Resolve one tool-reported write path into a previewable workspace artifact.
+ * Unlike renderer reads this accepts absolute paths, but still rejects anything
+ * outside the task workspace after resolving symlinks. */
+export async function inspectTaskArtifact(workspaceDir: string, artifactPath: string): Promise<ArtifactFileEntry | null> {
+  const filePath = await resolveArtifactPath(workspaceDir, artifactPath, true)
+  if (!filePath) return null
+
+  const type = artifactTypeForPath(filePath)
+  if (!type) return null
+
+  try {
+    const rootPath = await realpath(workspaceDir)
+    const fileStat = await stat(filePath)
+    if (!fileStat.isFile()) return null
+    return {
+      path: relative(rootPath, filePath).split(sep).join('/'),
+      title: filePath.split(sep).pop() || artifactPath,
+      type,
+      updatedAt: fileStat.mtimeMs,
+      size: fileStat.size
+    }
+  } catch {
+    return null
+  }
 }
 
 /**

@@ -21,7 +21,7 @@ import { randomUUID } from 'crypto'
 import { registerSecretSession, unregisterSecretSession, getSecretBrokerPort, writeSecretShellWrapper } from './secret-broker'
 import { registerMcpProxyTarget, getMcpAuthProxyPort } from './mcp-auth-proxy'
 import { analytics } from './analytics-service'
-import { scanTaskArtifacts } from './artifacts'
+import { inspectTaskArtifact } from './artifacts'
 import { ArtifactType, type Artifact } from '../shared/artifacts'
 
 // Coding agent backend type enum
@@ -4998,19 +4998,42 @@ Important:
       })
     }
 
-    const wroteArtifact = parts.some((part) => {
-      if (part.partType !== 'tool' || !part.tool || typeof part.tool !== 'object') return false
-      const tool = part.tool as { name?: string; status?: string }
+    const writtenPaths = new Set<string>()
+    for (const part of parts) {
+      if (part.partType !== 'tool' || !part.tool || typeof part.tool !== 'object') continue
+      const tool = part.tool as { name?: string; status?: string; input?: unknown; output?: unknown }
       const name = (tool.name || '').toLowerCase()
       const status = (tool.status || '').toLowerCase()
       const completed = ['success', 'succeeded', 'complete', 'completed'].includes(status)
-      return completed && (/(^|[./_])(?:write|edit|multiedit|notebookedit|filechange)$/.test(name) || name.includes('screenshot'))
-    })
-    if (!wroteArtifact) return
+      if (!completed || (!/(^|[./_])(?:write|edit|multiedit|notebookedit|filechange)$/.test(name) && !name.includes('screenshot'))) continue
+
+      const parseRecord = (value: unknown): Record<string, unknown> | null => {
+        if (value && typeof value === 'object') return value as Record<string, unknown>
+        if (typeof value !== 'string' || !value.trim()) return null
+        try {
+          const parsed = JSON.parse(value)
+          return parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : null
+        } catch {
+          return null
+        }
+      }
+      const findPath = (record: Record<string, unknown> | null): string | undefined => {
+        if (!record) return undefined
+        for (const key of ['file_path', 'path', 'filename', 'notebook_path']) {
+          const value = record[key]
+          if (typeof value === 'string' && value.trim()) return value.trim()
+        }
+        return undefined
+      }
+      const path = findPath(parseRecord(tool.input)) || findPath(parseRecord(tool.output))
+      if (path) writtenPaths.add(path)
+    }
+    if (writtenPaths.size === 0) return
 
     const workspaceDir = this.db.getWorkspaceDir(taskId)
-    void scanTaskArtifacts(workspaceDir).then((entries) => {
+    void Promise.all([...writtenPaths].map((path) => inspectTaskArtifact(workspaceDir, path))).then((entries) => {
       for (const entry of entries) {
+        if (!entry) continue
         const artifact: Artifact = {
           id: `${taskId}:${entry.type}:${encodeURIComponent(entry.path)}`,
           taskId,

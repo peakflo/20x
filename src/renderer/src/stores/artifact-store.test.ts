@@ -94,4 +94,30 @@ describe('useArtifactStore', () => {
     expect(useArtifactStore.getState().getUI('task-1').activeTabId).toBeNull()
     expect(useArtifactStore.getState().hydratedTasks['task-1']).toBe(true)
   })
+
+  it('hydrates large workspaces atomically and deduplicates StrictMode calls', async () => {
+    const entries = Array.from({ length: 500 }, (_, index) => ({
+      path: `repo/file-${index}.ts`,
+      title: `file-${index}.ts`,
+      type: ArtifactType.FILE,
+      updatedAt: index + 1,
+      size: 20
+    }))
+    const api: ArtifactApi = {
+      scan: vi.fn().mockResolvedValue(entries),
+      read: vi.fn()
+    }
+    const subscriber = vi.fn()
+    const unsubscribe = useArtifactStore.subscribe(subscriber)
+
+    await Promise.all([
+      useArtifactStore.getState().hydrate('task-1', api),
+      useArtifactStore.getState().hydrate('task-1', api)
+    ])
+
+    unsubscribe()
+    expect(api.scan).toHaveBeenCalledTimes(1)
+    expect(subscriber).toHaveBeenCalledTimes(2)
+    expect(useArtifactStore.getState().getArtifacts('task-1')).toHaveLength(500)
+  })
 })

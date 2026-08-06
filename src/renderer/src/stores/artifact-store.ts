@@ -230,6 +230,24 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
       const current = state.artifactsByTask[candidate.taskId] || []
       const index = current.findIndex((artifact) => artifact.id === id)
       const previous = index >= 0 ? current[index] : undefined
+      const turn = state.turnsByTask[candidate.taskId]
+      const shouldFollow = follow && turn?.active && !turn.userSelectedTab
+      const currentUI = state.getUI(candidate.taskId)
+
+      if (
+        previous
+        && previous.taskId === candidate.taskId
+        && previous.type === candidate.type
+        && previous.title === candidate.title
+        && previous.path === candidate.path
+        && previous.url === candidate.url
+        && previous.updatedAt === candidate.updatedAt
+        && (!shouldFollow || (currentUI.open && currentUI.activeTabId === id))
+      ) {
+        result = previous
+        return state
+      }
+
       result = {
         ...previous,
         ...candidate,
@@ -242,8 +260,6 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
       if (index >= 0) next[index] = result
       else next.push(result)
 
-      const turn = state.turnsByTask[candidate.taskId]
-      const shouldFollow = follow && turn?.active && !turn.userSelectedTab
       const nextState = {
         artifactsByTask: { ...state.artifactsByTask, [candidate.taskId]: next },
         uiByTask: shouldFollow
@@ -310,9 +326,70 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
   },
 
   hydrate: async (taskId, artifactApi) => {
-    const entries = await artifactApi.scan(taskId)
-    for (const entry of entries) get().upsertArtifact(fromFileEntry(taskId, entry), false)
-    set((state) => ({ hydratedTasks: { ...state.hydratedTasks, [taskId]: true } }))
+    // Claim hydration before awaiting IPC. React StrictMode mounts effects twice
+    // in development; without this guard both scans race and replay every file.
+    let shouldHydrate = false
+    set((state) => {
+      if (state.hydratedTasks[taskId]) return state
+      shouldHydrate = true
+      return { hydratedTasks: { ...state.hydratedTasks, [taskId]: true } }
+    })
+    if (!shouldHydrate) return
+
+    let entries: ArtifactFileEntry[]
+    try {
+      entries = await artifactApi.scan(taskId)
+    } catch (error) {
+      set((state) => {
+        const hydratedTasks = { ...state.hydratedTasks }
+        delete hydratedTasks[taskId]
+        return { hydratedTasks }
+      })
+      throw error
+    }
+
+    // Merge the full scan atomically. Coding workspaces commonly contain
+    // hundreds of previewable source files; one Zustand update per file caused
+    // React to queue hundreds of full transcript renders and exhaust memory.
+    set((state) => {
+      const current = state.artifactsByTask[taskId] || []
+      const byId = new Map(current.map((artifact) => [artifact.id, artifact]))
+      let changed = false
+
+      for (const entry of entries) {
+        const candidate = fromFileEntry(taskId, entry)
+        const target = candidate.path || candidate.url
+        if (!target) continue
+        const id = identity(taskId, candidate.type, target)
+        const previous = byId.get(id)
+        if (
+          previous
+          && previous.type === candidate.type
+          && previous.title === candidate.title
+          && previous.path === candidate.path
+          && previous.url === candidate.url
+          && previous.updatedAt === candidate.updatedAt
+        ) continue
+
+        byId.set(id, {
+          ...previous,
+          ...candidate,
+          id,
+          reloadTrigger: previous
+            ? previous.reloadTrigger + (candidate.updatedAt > previous.updatedAt ? 1 : 0)
+            : 0
+        })
+        changed = true
+      }
+
+      if (!changed) return state
+      const nextState = {
+        artifactsByTask: { ...state.artifactsByTask, [taskId]: [...byId.values()] },
+        uiByTask: state.uiByTask
+      }
+      persist(nextState)
+      return nextState
+    })
   },
 
   resetTask: (taskId) => set((state) => {

@@ -3,7 +3,7 @@ import { join } from 'path'
 import { tmpdir } from 'os'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { ArtifactContentKind, ArtifactType } from '../shared/artifacts'
-import { ARTIFACT_FILE_LIMITS, readTaskArtifact, scanTaskArtifacts } from './artifacts'
+import { ARTIFACT_FILE_LIMITS, inspectTaskArtifact, readTaskArtifact, scanTaskArtifacts } from './artifacts'
 
 describe('task artifact files', () => {
   let testRoot: string
@@ -48,6 +48,19 @@ describe('task artifact files', () => {
     await symlink(outsideFile, join(workspaceDir, 'linked.md'))
 
     expect(await scanTaskArtifacts(workspaceDir)).toEqual([])
+  })
+
+  it('inspects only a tool-reported file inside the workspace', async () => {
+    await mkdir(join(workspaceDir, 'repo'))
+    const reportPath = join(workspaceDir, 'repo', 'report.md')
+    const outsideFile = join(testRoot, 'outside.md')
+    await writeFile(reportPath, '# Result')
+    await writeFile(outsideFile, 'secret')
+
+    await expect(inspectTaskArtifact(workspaceDir, reportPath)).resolves.toEqual(
+      expect.objectContaining({ path: 'repo/report.md', type: ArtifactType.MARKDOWN })
+    )
+    await expect(inspectTaskArtifact(workspaceDir, outsideFile)).resolves.toBeNull()
   })
 
   it('reads text and image content in renderer-safe transport forms', async () => {
