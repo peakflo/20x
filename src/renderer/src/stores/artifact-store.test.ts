@@ -3,6 +3,16 @@ import { ArtifactContentKind, ArtifactType, type ArtifactApi } from '@shared/art
 import type { TranscriptPartRecord } from '@/types/electron'
 import { artifactsFromMessage, useArtifactStore } from './artifact-store'
 
+const persisted = new Map<string, string>()
+vi.stubGlobal('localStorage', {
+  clear: () => persisted.clear(),
+  getItem: (key: string) => persisted.get(key) ?? null,
+  setItem: (key: string, value: string) => persisted.set(key, value),
+  removeItem: (key: string) => persisted.delete(key),
+  key: (index: number) => [...persisted.keys()][index] ?? null,
+  get length() { return persisted.size }
+})
+
 function part(tool: Record<string, unknown>, overrides: Partial<TranscriptPartRecord> = {}): TranscriptPartRecord {
   return {
     taskId: 'task-1',
@@ -75,6 +85,13 @@ describe('artifact projector', () => {
       name: 'command', status: 'success', output: 'Created https://github.com/peakflo/20x/pull/42'
     }))
     expect(projected).toEqual([expect.objectContaining({ type: ArtifactType.PR, url: 'https://github.com/peakflo/20x/pull/42' })])
+  })
+
+  it('does not promote pull-request examples found while reading source files', () => {
+    const projected = artifactsFromMessage('task-1', part({
+      name: 'Read', status: 'success', output: 'Example: https://github.com/org/repo/pull/123'
+    }))
+    expect(projected).toEqual([])
   })
 })
 

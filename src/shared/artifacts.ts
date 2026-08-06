@@ -116,6 +116,66 @@ export interface ArtifactUIState {
   railExpanded: boolean
 }
 
+const PULL_REQUEST_URL_PATTERN = /https?:\/\/[^\s)\]>'"]+\/(?:pull|merge_requests)\/\d+(?:\b|\/)/i
+const COMMAND_TOOL_PATTERN = /(?:^|[_:-])(bash|command|exec|shell|terminal)(?:$|[_:-])/
+
+function pullRequestUrlIn(value: unknown): string | undefined {
+  if (typeof value === 'string') return value.match(PULL_REQUEST_URL_PATTERN)?.[0]
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const url = pullRequestUrlIn(item)
+      if (url) return url
+    }
+  }
+  if (value && typeof value === 'object') {
+    for (const item of Object.values(value as Record<string, unknown>)) {
+      const url = pullRequestUrlIn(item)
+      if (url) return url
+    }
+  }
+  return undefined
+}
+
+/** Extract a PR created/reported by a tool without scraping arbitrary file or
+ * transcript content. This prevents documentation examples from becoming
+ * bogus artifacts when an agent reads source files. */
+export function pullRequestUrlFromTool(value: unknown): string | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const tool = value as Record<string, unknown>
+  const status = typeof tool.status === 'string' ? tool.status.toLowerCase() : ''
+  if (!['success', 'succeeded', 'complete', 'completed'].includes(status)) return undefined
+  const name = typeof tool.name === 'string' ? tool.name.toLowerCase() : ''
+  const output = tool.output
+
+  let parsedOutput: Record<string, unknown> | null = null
+  if (output && typeof output === 'object' && !Array.isArray(output)) parsedOutput = output as Record<string, unknown>
+  if (typeof output === 'string') {
+    try {
+      const parsed = JSON.parse(output)
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) parsedOutput = parsed as Record<string, unknown>
+    } catch { /* command output is normally plain text */ }
+  }
+
+  for (const key of ['prUrl', 'pr_url', 'pullRequestUrl', 'pull_request_url', 'html_url', 'web_url', 'url']) {
+    const candidate = parsedOutput?.[key]
+    if (typeof candidate === 'string') {
+      const url = candidate.match(PULL_REQUEST_URL_PATTERN)?.[0]
+      if (url) return url
+    }
+  }
+
+  if (name.includes('pull_request') || name.includes('merge_request') || name.includes('create_pr')) {
+    return pullRequestUrlIn(output)
+  }
+
+  if (!COMMAND_TOOL_PATTERN.test(name)) return undefined
+  const text = typeof output === 'string'
+    ? output
+    : typeof parsedOutput?.stdout === 'string' ? parsedOutput.stdout : ''
+  const standalone = text.match(/(?:^|\n)\s*(?:created\s+(?:pull request\s+)?)?(https?:\/\/[^\s)\]>'"]+\/(?:pull|merge_requests)\/\d+(?:\b|\/))\s*(?:\n|$)/i)
+  return standalone?.[1]
+}
+
 /** Directories that form an explicit deliverable boundary. Files elsewhere in
  * a repository are code and belong in Changes, not in the artifact picker. */
 const ARTIFACT_OUTPUT_DIRECTORIES = new Set([

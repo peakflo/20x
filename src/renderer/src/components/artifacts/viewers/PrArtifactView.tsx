@@ -61,9 +61,15 @@ export function PrArtifactView({ artifact }: { artifact: Artifact }) {
       setError('Pull request URL is unavailable.')
       return
     }
+    const fetchPullRequestDetails = window.electronAPI.github.fetchPullRequestDetails
+    if (typeof fetchPullRequestDetails !== 'function') {
+      setLoading(false)
+      setError('Restart 20x to load the updated pull request integration.')
+      return
+    }
     setLoading(true)
     setError(null)
-    void window.electronAPI.github.fetchPullRequestDetails(artifact.url).then((result) => {
+    void fetchPullRequestDetails(artifact.url).then((result) => {
       if (!cancelled) setDetails(result)
     }).catch((reason: unknown) => {
       if (!cancelled) setError(reason instanceof Error ? reason.message : String(reason))

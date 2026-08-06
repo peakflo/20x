@@ -22,7 +22,7 @@ import { registerSecretSession, unregisterSecretSession, getSecretBrokerPort, wr
 import { registerMcpProxyTarget, getMcpAuthProxyPort } from './mcp-auth-proxy'
 import { analytics } from './analytics-service'
 import { inspectTaskArtifact } from './artifacts'
-import { ArtifactType, type Artifact } from '../shared/artifacts'
+import { ArtifactType, pullRequestUrlFromTool, type Artifact } from '../shared/artifacts'
 
 // Coding agent backend type enum
 enum CodingAgentType {
@@ -4989,9 +4989,8 @@ Important:
   private emitArtifactUpdatesFromParts(taskId: string, parts: ReturnType<DatabaseManager['getTranscriptParts']>): void {
     const prUrls = new Set<string>()
     for (const part of parts) {
-      let searchable = typeof part.content === 'string' ? part.content : ''
-      try { searchable += `\n${JSON.stringify(part.tool || {})}` } catch { /* ignore */ }
-      for (const match of searchable.matchAll(/https?:\/\/[^\s)\]>'"]+\/(?:pull|merge_requests)\/\d+/g)) prUrls.add(match[0])
+      const url = pullRequestUrlFromTool(part.tool)
+      if (url) prUrls.add(url)
     }
     for (const url of prUrls) {
       const number = url.match(/\/(\d+)$/)?.[1]

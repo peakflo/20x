@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import {
   ArtifactType,
+  pullRequestUrlFromTool,
   type Artifact,
   type ArtifactApi,
   type ArtifactFileEntry,
@@ -18,7 +19,7 @@ export enum PinnedArtifactTabId {
 // v1 could persist hundreds of repository source files from an over-broad
 // workspace scan. Use a versioned key so affected clients do not reconstruct
 // that oversized tab registry before the corrected hydration can run.
-const STORAGE_KEY = '20x:task:artifacts:v4'
+const STORAGE_KEY = '20x:task:artifacts:v5'
 const DEFAULT_UI: ArtifactUIState = { open: false, activeTabId: null, railExpanded: false }
 
 interface PersistedState {
@@ -208,8 +209,8 @@ export function artifactsFromMessage(taskId: string, message: ArtifactMessageLik
     }
   }
 
-  const prUrl = findUrl(tool.output) || findUrl(message.content)
-  if (prUrl && /\/(pull|merge_requests)\/\d+(?:\b|\/)/.test(prUrl)) {
+  const prUrl = pullRequestUrlFromTool(tool)
+  if (prUrl) {
     artifacts.push({ taskId, type: ArtifactType.PR, title: `Pull request ${titleFromTarget(prUrl)}`, url: prUrl, updatedAt })
   }
 
