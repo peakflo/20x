@@ -19,7 +19,7 @@ describe('task artifact files', () => {
     await rm(testRoot, { recursive: true, force: true })
   })
 
-  it('scans supported files with stable relative paths and skips generated and dependency files', async () => {
+  it('scans preview artifacts with stable relative paths and skips source, generated, and dependency files', async () => {
     await mkdir(join(workspaceDir, 'reports'))
     await mkdir(join(workspaceDir, 'node_modules', 'package'), { recursive: true })
     await writeFile(join(workspaceDir, 'AGENTS.md'), 'generated instructions')
@@ -35,10 +35,9 @@ describe('task artifact files', () => {
     expect(artifacts.map(({ path, title, type }) => ({ path, title, type }))).toEqual(expect.arrayContaining([
       { path: 'reports/summary.md', title: 'summary.md', type: ArtifactType.MARKDOWN },
       { path: 'reports/preview.html', title: 'preview.html', type: ArtifactType.HTML },
-      { path: 'reports/chart.png', title: 'chart.png', type: ArtifactType.IMAGE },
-      { path: 'reports/notes.txt', title: 'notes.txt', type: ArtifactType.FILE }
+      { path: 'reports/chart.png', title: 'chart.png', type: ArtifactType.IMAGE }
     ]))
-    expect(artifacts).toHaveLength(4)
+    expect(artifacts).toHaveLength(3)
     expect(artifacts.every((artifact) => artifact.size >= 0 && artifact.updatedAt > 0)).toBe(true)
   })
 

@@ -15,7 +15,10 @@ export enum PinnedArtifactTabId {
   OUTPUT = 'output'
 }
 
-const STORAGE_KEY = '20x:task:artifacts'
+// v1 could persist hundreds of repository source files from an over-broad
+// workspace scan. Use a versioned key so affected clients do not reconstruct
+// that oversized tab registry before the corrected hydration can run.
+const STORAGE_KEY = '20x:task:artifacts:v2'
 const DEFAULT_UI: ArtifactUIState = { open: false, activeTabId: null, railExpanded: false }
 
 interface PersistedState {

@@ -149,7 +149,11 @@ export async function scanTaskArtifacts(workspaceDir: string): Promise<ArtifactF
       if (directory === rootPath && EXCLUDED_ROOT_FILES.has(entry.name)) continue
 
       const type = artifactTypeForPath(entry.name)
-      if (!type) continue
+      // Restart hydration should recover user-facing previews, not turn every
+      // source file in a checked-out repository into an artifact tab. Generic
+      // text/code files still appear when an agent explicitly writes them via
+      // inspectTaskArtifact(), where they use the FILE fallback viewer.
+      if (!type || type === ArtifactType.FILE) continue
 
       try {
         const fileStat = await stat(absolutePath)
