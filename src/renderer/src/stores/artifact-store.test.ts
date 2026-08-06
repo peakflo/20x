@@ -27,23 +27,32 @@ beforeEach(() => {
 describe('artifact projector', () => {
   it('projects completed write tools and ignores pending updates', () => {
     const completed = artifactsFromMessage('task-1', part({
-      name: 'Write', status: 'completed', input: JSON.stringify({ file_path: './docs/result.md' })
+      name: 'Write', status: 'completed', input: JSON.stringify({ file_path: './outputs/result.md' })
     }))
     const pending = artifactsFromMessage('task-1', part({
       name: 'Write', status: 'pending', input: JSON.stringify({ file_path: 'docs/draft.md' })
     }))
 
-    expect(completed).toEqual([expect.objectContaining({ type: ArtifactType.MARKDOWN, path: 'docs/result.md', title: 'result.md' })])
+    expect(completed).toEqual([expect.objectContaining({ type: ArtifactType.MARKDOWN, path: 'outputs/result.md', title: 'result.md' })])
     expect(pending).toEqual([])
   })
 
-  it('normalizes absolute task-workspace paths to IPC-safe relative paths', () => {
+  it('keeps repository files in Changes instead of promoting them to artifacts', () => {
     const projected = artifactsFromMessage('task-1', part({
       name: 'Edit',
       status: 'success',
       input: { file_path: '/Users/test/App Data/workspaces/task-1/repo/docs/result.html' }
     }))
-    expect(projected[0]).toEqual(expect.objectContaining({ path: 'repo/docs/result.html', type: ArtifactType.HTML }))
+    expect(projected).toEqual([])
+  })
+
+  it('projects files written below an explicit deliverable boundary', () => {
+    const projected = artifactsFromMessage('task-1', part({
+      name: 'Write',
+      status: 'success',
+      input: { file_path: '/Users/test/App Data/workspaces/task-1/outputs/demo/index.html' }
+    }))
+    expect(projected[0]).toEqual(expect.objectContaining({ path: 'outputs/demo/index.html', type: ArtifactType.HTML }))
   })
 
   it('recognizes pull-request URLs in successful tool output', () => {
@@ -64,6 +73,22 @@ describe('useArtifactStore', () => {
     expect(duplicate.id).toBe(first.id)
     expect(duplicate.reloadTrigger).toBe(0)
     expect(updated.reloadTrigger).toBe(1)
+    expect(useArtifactStore.getState().getArtifacts('task-1')).toHaveLength(1)
+  })
+
+  it('keeps one stable tab when a workpiece preview entry changes type', () => {
+    const store = useArtifactStore.getState()
+    const markdown = store.upsertArtifact({
+      taskId: 'task-1', type: ArtifactType.MARKDOWN, title: 'dashboard',
+      path: 'outputs/dashboard/README.md', workpieceKey: 'outputs/dashboard', updatedAt: 10
+    })
+    const html = store.upsertArtifact({
+      taskId: 'task-1', type: ArtifactType.HTML, title: 'dashboard',
+      path: 'outputs/dashboard/index.html', workpieceKey: 'outputs/dashboard', updatedAt: 11
+    })
+
+    expect(html.id).toBe(markdown.id)
+    expect(html.type).toBe(ArtifactType.HTML)
     expect(useArtifactStore.getState().getArtifacts('task-1')).toHaveLength(1)
   })
 

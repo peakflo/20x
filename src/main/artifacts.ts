@@ -3,6 +3,7 @@ import { extname, isAbsolute, relative, resolve, sep, win32 } from 'path'
 import {
   ArtifactContentKind,
   ArtifactType,
+  artifactWorkpieceForPath,
   type ArtifactContent,
   type ArtifactFileEntry
 } from '../shared/artifacts'
@@ -24,7 +25,7 @@ const EXCLUDED_DIRECTORIES = new Set([
   'out'
 ])
 
-const EXCLUDED_ROOT_FILES = new Set(['AGENTS.md', 'CLAUDE.md'])
+const EXCLUDED_ROOT_FILES = new Set(['AGENTS.md', 'CLAUDE.md', 'heartbeat.md'])
 
 const MARKDOWN_EXTENSIONS = new Set(['.md', '.mdx'])
 const IMAGE_MIME_TYPES: Record<string, string> = {
@@ -99,12 +100,15 @@ export async function inspectTaskArtifact(workspaceDir: string, artifactPath: st
     const rootPath = await realpath(workspaceDir)
     const fileStat = await stat(filePath)
     if (!fileStat.isFile()) return null
+    const relativePath = relative(rootPath, filePath).split(sep).join('/')
+    const workpiece = artifactWorkpieceForPath(relativePath, type)
     return {
-      path: relative(rootPath, filePath).split(sep).join('/'),
-      title: filePath.split(sep).pop() || artifactPath,
+      path: relativePath,
+      title: workpiece?.title || filePath.split(sep).pop() || artifactPath,
       type,
       updatedAt: fileStat.mtimeMs,
-      size: fileStat.size
+      size: fileStat.size,
+      workpieceKey: workpiece?.key
     }
   } catch {
     return null
@@ -123,10 +127,21 @@ export async function scanTaskArtifacts(workspaceDir: string): Promise<ArtifactF
     return []
   }
 
-  const artifacts: ArtifactFileEntry[] = []
+  const artifacts = new Map<string, ArtifactFileEntry>()
+  let discoveredFiles = 0
+
+  const previewPriority = (entry: ArtifactFileEntry): number => {
+    const filename = entry.path.split('/').pop()?.toLowerCase() || ''
+    if (filename === 'index.html' || filename === 'index.htm') return 100
+    if (filename === 'readme.md' || filename === 'readme.mdx') return 90
+    if (entry.type === ArtifactType.HTML) return 80
+    if (entry.type === ArtifactType.MARKDOWN) return 70
+    if (entry.type === ArtifactType.IMAGE) return 60
+    return 10
+  }
 
   const visit = async (directory: string, depth: number): Promise<void> => {
-    if (depth > MAX_SCAN_DEPTH || artifacts.length >= MAX_SCAN_FILES) return
+    if (depth > MAX_SCAN_DEPTH || discoveredFiles >= MAX_SCAN_FILES) return
 
     let entries
     try {
@@ -137,7 +152,7 @@ export async function scanTaskArtifacts(workspaceDir: string): Promise<ArtifactF
 
     entries.sort((a, b) => a.name.localeCompare(b.name))
     for (const entry of entries) {
-      if (artifacts.length >= MAX_SCAN_FILES) break
+      if (discoveredFiles >= MAX_SCAN_FILES) break
       if (entry.isSymbolicLink()) continue
 
       const absolutePath = resolve(directory, entry.name)
@@ -149,22 +164,37 @@ export async function scanTaskArtifacts(workspaceDir: string): Promise<ArtifactF
       if (directory === rootPath && EXCLUDED_ROOT_FILES.has(entry.name)) continue
 
       const type = artifactTypeForPath(entry.name)
-      // Restart hydration should recover user-facing previews, not turn every
-      // source file in a checked-out repository into an artifact tab. Generic
-      // text/code files still appear when an agent explicitly writes them via
-      // inspectTaskArtifact(), where they use the FILE fallback viewer.
-      if (!type || type === ArtifactType.FILE) continue
+      if (!type) continue
+
+      const relativePath = relative(rootPath, absolutePath).split(sep).join('/')
+      // A previewable source file is still code. Only root deliverables or files
+      // below an explicit output boundary become logical artifact workpieces.
+      const workpiece = artifactWorkpieceForPath(relativePath, type)
+      if (!workpiece) continue
 
       try {
         const fileStat = await stat(absolutePath)
         if (!fileStat.isFile()) continue
-        artifacts.push({
-          path: relative(rootPath, absolutePath).split(sep).join('/'),
-          title: entry.name,
+        discoveredFiles++
+        const candidate: ArtifactFileEntry = {
+          path: relativePath,
+          title: workpiece.title,
           type,
           updatedAt: fileStat.mtimeMs,
-          size: fileStat.size
-        })
+          size: fileStat.size,
+          workpieceKey: workpiece.key
+        }
+        const previous = artifacts.get(workpiece.key)
+        if (!previous || previewPriority(candidate) > previewPriority(previous)) {
+          artifacts.set(workpiece.key, {
+            ...candidate,
+            updatedAt: Math.max(candidate.updatedAt, previous?.updatedAt || 0)
+          })
+        } else if (fileStat.mtimeMs > previous.updatedAt) {
+          // Supporting-file edits reload the selected preview without replacing
+          // its entry point or creating another top-level tab.
+          artifacts.set(workpiece.key, { ...previous, updatedAt: fileStat.mtimeMs })
+        }
       } catch {
         // A file can disappear while an agent is replacing it. Ignore it and
         // let the next hydration/refresh discover the replacement.
@@ -173,7 +203,7 @@ export async function scanTaskArtifacts(workspaceDir: string): Promise<ArtifactF
   }
 
   await visit(rootPath, 0)
-  return artifacts.sort((a, b) => b.updatedAt - a.updatedAt || a.path.localeCompare(b.path))
+  return [...artifacts.values()].sort((a, b) => b.updatedAt - a.updatedAt || a.path.localeCompare(b.path))
 }
 
 /** Read a previewable artifact while enforcing task-workspace containment. */

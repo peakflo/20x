@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import {
   ArtifactType,
+  artifactWorkpieceForPath,
   type Artifact,
   type ArtifactApi,
   type ArtifactFileEntry,
@@ -18,7 +19,7 @@ export enum PinnedArtifactTabId {
 // v1 could persist hundreds of repository source files from an over-broad
 // workspace scan. Use a versioned key so affected clients do not reconstruct
 // that oversized tab registry before the corrected hydration can run.
-const STORAGE_KEY = '20x:task:artifacts:v2'
+const STORAGE_KEY = '20x:task:artifacts:v3'
 const DEFAULT_UI: ArtifactUIState = { open: false, activeTabId: null, railExpanded: false }
 
 interface PersistedState {
@@ -87,8 +88,10 @@ function normalizeToolPath(taskId: string, path: string): string {
     : normalized
 }
 
-function identity(taskId: string, type: ArtifactType, target: string): string {
-  return `${taskId}:${type}:${encodeURIComponent(target)}`
+function identity(taskId: string, type: ArtifactType, target: string, workpieceKey?: string): string {
+  return workpieceKey
+    ? `${taskId}:workpiece:${encodeURIComponent(workpieceKey)}`
+    : `${taskId}:${type}:${encodeURIComponent(target)}`
 }
 
 function titleFromTarget(target: string): string {
@@ -174,7 +177,17 @@ export function artifactsFromMessage(taskId: string, message: ArtifactMessageLik
       || firstString(output, ['file_path', 'path', 'filename', 'notebook_path'])
     if (rawPath) {
       const path = normalizeToolPath(taskId, rawPath)
-      artifacts.push({ taskId, type: inferType(path), title: titleFromTarget(path), path, updatedAt })
+      const type = inferType(path)
+      const workpiece = artifactWorkpieceForPath(path, type)
+      const filename = path.split('/').pop()?.toLowerCase()
+      const isLikelyEntry = !workpiece?.grouped
+        || filename === 'index.html'
+        || filename === 'index.htm'
+        || filename === 'readme.md'
+        || filename === 'readme.mdx'
+      if (workpiece && isLikelyEntry) {
+        artifacts.push({ taskId, type, title: workpiece.title, path, workpieceKey: workpiece.key, updatedAt })
+      }
     }
   }
 
@@ -209,6 +222,7 @@ function fromFileEntry(taskId: string, entry: ArtifactFileEntry): Omit<Artifact,
     type: entry.type,
     title: entry.title || titleFromTarget(path),
     path,
+    workpieceKey: entry.workpieceKey,
     updatedAt: entry.updatedAt
   }
 }
@@ -227,7 +241,7 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
   upsertArtifact: (candidate, follow = false) => {
     const target = candidate.path || candidate.url
     if (!target) throw new Error('Artifact requires a path or URL')
-    const id = candidate.id || identity(candidate.taskId, candidate.type, target)
+    const id = candidate.id || identity(candidate.taskId, candidate.type, target, candidate.workpieceKey)
     let result!: Artifact
     set((state) => {
       const current = state.artifactsByTask[candidate.taskId] || []
@@ -244,6 +258,7 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
         && previous.title === candidate.title
         && previous.path === candidate.path
         && previous.url === candidate.url
+        && previous.workpieceKey === candidate.workpieceKey
         && previous.updatedAt === candidate.updatedAt
         && (!shouldFollow || (currentUI.open && currentUI.activeTabId === id))
       ) {
@@ -363,7 +378,7 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
         const candidate = fromFileEntry(taskId, entry)
         const target = candidate.path || candidate.url
         if (!target) continue
-        const id = identity(taskId, candidate.type, target)
+        const id = identity(taskId, candidate.type, target, candidate.workpieceKey)
         const previous = byId.get(id)
         if (
           previous
@@ -371,6 +386,7 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
           && previous.title === candidate.title
           && previous.path === candidate.path
           && previous.url === candidate.url
+          && previous.workpieceKey === candidate.workpieceKey
           && previous.updatedAt === candidate.updatedAt
         ) continue
 

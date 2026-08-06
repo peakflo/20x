@@ -21,12 +21,16 @@ describe('task artifact files', () => {
 
   it('scans preview artifacts with stable relative paths and skips source, generated, and dependency files', async () => {
     await mkdir(join(workspaceDir, 'reports'))
+    await mkdir(join(workspaceDir, 'repo', 'docs'), { recursive: true })
     await mkdir(join(workspaceDir, 'node_modules', 'package'), { recursive: true })
     await writeFile(join(workspaceDir, 'AGENTS.md'), 'generated instructions')
+    await writeFile(join(workspaceDir, 'heartbeat.md'), '# Internal monitoring')
     await writeFile(join(workspaceDir, 'reports', 'summary.md'), '# Summary')
     await writeFile(join(workspaceDir, 'reports', 'preview.html'), '<h1>Preview</h1>')
     await writeFile(join(workspaceDir, 'reports', 'chart.png'), Buffer.from([1, 2, 3]))
     await writeFile(join(workspaceDir, 'reports', 'notes.txt'), 'notes')
+    await writeFile(join(workspaceDir, 'repo', 'docs', 'source.md'), 'repository documentation')
+    await writeFile(join(workspaceDir, 'repo', 'preview.html'), '<h1>Repository source</h1>')
     await writeFile(join(workspaceDir, 'reports', 'archive.zip'), 'not previewable')
     await writeFile(join(workspaceDir, 'node_modules', 'package', 'README.md'), 'dependency')
 
@@ -35,9 +39,10 @@ describe('task artifact files', () => {
     expect(artifacts.map(({ path, title, type }) => ({ path, title, type }))).toEqual(expect.arrayContaining([
       { path: 'reports/summary.md', title: 'summary.md', type: ArtifactType.MARKDOWN },
       { path: 'reports/preview.html', title: 'preview.html', type: ArtifactType.HTML },
-      { path: 'reports/chart.png', title: 'chart.png', type: ArtifactType.IMAGE }
+      { path: 'reports/chart.png', title: 'chart.png', type: ArtifactType.IMAGE },
+      { path: 'reports/notes.txt', title: 'notes.txt', type: ArtifactType.FILE }
     ]))
-    expect(artifacts).toHaveLength(3)
+    expect(artifacts).toHaveLength(4)
     expect(artifacts.every((artifact) => artifact.size >= 0 && artifact.updatedAt > 0)).toBe(true)
   })
 
@@ -47,6 +52,23 @@ describe('task artifact files', () => {
     await symlink(outsideFile, join(workspaceDir, 'linked.md'))
 
     expect(await scanTaskArtifacts(workspaceDir)).toEqual([])
+  })
+
+  it('groups a multi-file output directory into one logical artifact', async () => {
+    await mkdir(join(workspaceDir, 'outputs', 'dashboard'), { recursive: true })
+    await writeFile(join(workspaceDir, 'outputs', 'dashboard', 'README.md'), '# Dashboard')
+    await writeFile(join(workspaceDir, 'outputs', 'dashboard', 'index.html'), '<main>Dashboard</main>')
+    await writeFile(join(workspaceDir, 'outputs', 'dashboard', 'styles.css'), 'main { display: grid; }')
+
+    const artifacts = await scanTaskArtifacts(workspaceDir)
+
+    expect(artifacts).toHaveLength(1)
+    expect(artifacts[0]).toEqual(expect.objectContaining({
+      path: 'outputs/dashboard/index.html',
+      title: 'dashboard',
+      type: ArtifactType.HTML,
+      workpieceKey: 'outputs/dashboard'
+    }))
   })
 
   it('inspects only a tool-reported file inside the workspace', async () => {

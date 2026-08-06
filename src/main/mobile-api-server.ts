@@ -837,11 +837,14 @@ function stripSensitiveAgentFields(agent: ReturnType<DatabaseManager['getAgent']
 
 function artifactFromFileEntry(taskId: string, entry: ArtifactFileEntry): Artifact {
   return {
-    id: `${taskId}:${entry.type}:${encodeURIComponent(entry.path)}`,
+    id: entry.workpieceKey
+      ? `${taskId}:workpiece:${encodeURIComponent(entry.workpieceKey)}`
+      : `${taskId}:${entry.type}:${encodeURIComponent(entry.path)}`,
     taskId,
     type: entry.type,
     title: entry.title,
     path: entry.path,
+    workpieceKey: entry.workpieceKey,
     updatedAt: entry.updatedAt,
     reloadTrigger: Math.floor(entry.updatedAt)
   }

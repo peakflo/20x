@@ -21,7 +21,7 @@ import { randomUUID } from 'crypto'
 import { registerSecretSession, unregisterSecretSession, getSecretBrokerPort, writeSecretShellWrapper } from './secret-broker'
 import { registerMcpProxyTarget, getMcpAuthProxyPort } from './mcp-auth-proxy'
 import { analytics } from './analytics-service'
-import { inspectTaskArtifact } from './artifacts'
+import { inspectTaskArtifact, scanTaskArtifacts } from './artifacts'
 import { ArtifactType, type Artifact } from '../shared/artifacts'
 
 // Coding agent backend type enum
@@ -30,6 +30,12 @@ enum CodingAgentType {
   CLAUDE_CODE = 'claude-code',
   CODEX = 'codex'
 }
+
+const ARTIFACT_WORKSPACE_INSTRUCTIONS = `
+
+[Workspace Deliverables]
+Repository files are code and appear in the task's Changes view; do not treat ordinary source files as artifacts.
+When you create a standalone user-facing deliverable that should appear in Artifacts, write it under an explicit workspace output directory such as \`outputs/<name>/\`, \`artifacts/<name>/\`, \`deliverables/<name>/\`, or \`reports/<name>/\`. Keep supporting files for the same deliverable in that directory. Screenshots and pull requests are detected automatically.`
 
 // Default OpenCode server URL (matches database default)
 const DEFAULT_SERVER_URL = 'http://localhost:4096'
@@ -760,7 +766,7 @@ export class AgentManager extends EventEmitter {
     // doSendAdapterMessage sends a bare prompt and the agent loses context.
     const baseSystemPrompt = agent.config?.system_prompt || ''
     const taskContext = task
-      ? `\n\n[Task Context]\nTask: "${task.title}"\n${task.description || ''}`
+      ? `\n\n[Task Context]\nTask: "${task.title}"\n${task.description || ''}${ARTIFACT_WORKSPACE_INSTRUCTIONS}`
       : ''
 
     const config: SessionConfig = {
@@ -1542,7 +1548,7 @@ export class AgentManager extends EventEmitter {
         // Reuse the task we already fetched above instead of hitting the DB again
         const currentTask = task || this.db.getTask(taskId)
         promptText = currentTask
-          ? `Work on task: "${currentTask.title}"\n\n${currentTask.description || ''}`
+          ? `Work on task: "${currentTask.title}"\n\n${currentTask.description || ''}${ARTIFACT_WORKSPACE_INSTRUCTIONS}`
           : `Work on task: ${taskId}`
 
         // Add subtask context: if this is a subtask, include parent and sibling info
@@ -4998,7 +5004,7 @@ Important:
       })
     }
 
-    const writtenPaths = new Set<string>()
+    const writtenPaths = new Map<string, boolean>()
     for (const part of parts) {
       if (part.partType !== 'tool' || !part.tool || typeof part.tool !== 'object') continue
       const tool = part.tool as { name?: string; status?: string; input?: unknown; output?: unknown }
@@ -5026,20 +5032,41 @@ Important:
         return undefined
       }
       const path = findPath(parseRecord(tool.input)) || findPath(parseRecord(tool.output))
-      if (path) writtenPaths.add(path)
+      if (path) writtenPaths.set(path, name.includes('screenshot') || writtenPaths.get(path) === true)
     }
     if (writtenPaths.size === 0) return
 
     const workspaceDir = this.db.getWorkspaceDir(taskId)
-    void Promise.all([...writtenPaths].map((path) => inspectTaskArtifact(workspaceDir, path))).then((entries) => {
-      for (const entry of entries) {
+    void Promise.all([...writtenPaths].map(async ([path, screenshot]) => ({
+      entry: await inspectTaskArtifact(workspaceDir, path),
+      screenshot
+    }))).then(async (results) => {
+      const affectedWorkpieces = new Set(results
+        .filter(({ entry, screenshot }) => !screenshot && entry?.workpieceKey)
+        .map(({ entry }) => entry!.workpieceKey!))
+      const groupedEntries = affectedWorkpieces.size > 0
+        ? (await scanTaskArtifacts(workspaceDir)).filter((entry) => entry.workpieceKey && affectedWorkpieces.has(entry.workpieceKey))
+        : []
+      const entriesToSend = [
+        ...results.filter(({ screenshot }) => screenshot).map(({ entry }) => entry && ({
+          ...entry,
+          title: entry.path.split('/').pop() || entry.title,
+          workpieceKey: undefined
+        })),
+        ...groupedEntries
+      ]
+
+      for (const entry of entriesToSend) {
         if (!entry) continue
         const artifact: Artifact = {
-          id: `${taskId}:${entry.type}:${encodeURIComponent(entry.path)}`,
+          id: entry.workpieceKey
+            ? `${taskId}:workpiece:${encodeURIComponent(entry.workpieceKey)}`
+            : `${taskId}:${entry.type}:${encodeURIComponent(entry.path)}`,
           taskId,
           type: entry.type,
           title: entry.title,
           path: entry.path,
+          workpieceKey: entry.workpieceKey,
           updatedAt: entry.updatedAt,
           reloadTrigger: Math.floor(entry.updatedAt)
         }
