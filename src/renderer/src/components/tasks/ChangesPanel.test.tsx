@@ -50,13 +50,21 @@ describe('ChangesPanel', () => {
   it('shows the repository inventory in All files and preserves the tree in Diff', async () => {
     render(<ChangesPanel taskId="task-1" repos={['peakflo/20x']} />)
 
-    expect(await screen.findByText('components')).toBeInTheDocument()
-    expect(screen.getByText('Button.tsx')).toBeInTheDocument()
-    expect(screen.getByText('new.ts')).toBeInTheDocument()
-    expect(screen.getByText('unchanged.ts')).toBeInTheDocument()
+    expect(await screen.findByText('src')).toBeInTheDocument()
+    expect(screen.queryByText('components')).not.toBeInTheDocument()
+    expect(screen.queryByText('Button.tsx')).not.toBeInTheDocument()
     expect(screen.getByText('package.json')).toBeInTheDocument()
     expect(screen.getAllByText('README.md').length).toBeGreaterThan(0)
     expect(await screen.findByText('This file has no changes in the task branch.')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByText('src').closest('button')!)
+    expect(screen.getByText('components')).toBeInTheDocument()
+    expect(screen.getByText('new.ts')).toBeInTheDocument()
+    expect(screen.getByText('unchanged.ts')).toBeInTheDocument()
+    expect(screen.queryByText('Button.tsx')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByText('components').closest('button')!)
+    expect(screen.getByText('Button.tsx')).toBeInTheDocument()
     expect(screen.getAllByText('+1').length).toBeGreaterThan(0)
     expect(screen.getAllByText('−1').length).toBeGreaterThan(0)
 
@@ -71,7 +79,8 @@ describe('ChangesPanel', () => {
     await waitFor(() => expect(screen.getByText('src/components/Button.tsx')).toBeInTheDocument())
 
     fireEvent.click(screen.getByRole('button', { name: 'All files' }))
-    expect(screen.getByText('components')).toBeInTheDocument()
+    await waitFor(() => expect(screen.queryByText('components')).not.toBeInTheDocument())
+    fireEvent.click(screen.getByText('src').closest('button')!)
     expect(screen.getByText('unchanged.ts')).toBeInTheDocument()
   })
 })

@@ -253,14 +253,20 @@ function TreeFile({ repo, entry, selected, depth, onSelect }: {
   )
 }
 
-function TreeDirectory({ repo, directory, selectedKey, depth, onSelect }: {
+function TreeDirectory({ repo, directory, selectedKey, depth, defaultOpen, onSelect }: {
   repo: string
   directory: ChangeTreeDirectory
   selectedKey: string | null
   depth: number
+  defaultOpen: boolean
   onSelect: (repo: string, file: ChangeTreeFile) => void
 }) {
-  const [open, setOpen] = useState(true)
+  const [open, setOpen] = useState(defaultOpen)
+
+  useEffect(() => {
+    setOpen(defaultOpen)
+  }, [defaultOpen])
+
   return (
     <div>
       <button
@@ -278,7 +284,7 @@ function TreeDirectory({ repo, directory, selectedKey, depth, onSelect }: {
       {open && (
         <div>
           {directory.directories.map((child) => (
-            <TreeDirectory key={child.path} repo={repo} directory={child} selectedKey={selectedKey} depth={depth + 1} onSelect={onSelect} />
+            <TreeDirectory key={child.path} repo={repo} directory={child} selectedKey={selectedKey} depth={depth + 1} defaultOpen={defaultOpen} onSelect={onSelect} />
           ))}
           {directory.files.map((file) => (
             <TreeFile key={file.path} repo={repo} entry={file} selected={selectedKey === `${repo}:${file.path}`} depth={depth + 1} onSelect={onSelect} />
@@ -339,7 +345,7 @@ function RepoTree({ repo, selectedKey, includeAll, onSelect }: {
             ) : null}
           </div>
           {tree.directories.map((directory) => (
-            <TreeDirectory key={directory.path} repo={repo.repo} directory={directory} selectedKey={selectedKey} depth={0} onSelect={onSelect} />
+            <TreeDirectory key={directory.path} repo={repo.repo} directory={directory} selectedKey={selectedKey} depth={0} defaultOpen={!includeAll} onSelect={onSelect} />
           ))}
           {tree.files.map((file) => (
             <TreeFile key={file.path} repo={repo.repo} entry={file} selected={selectedKey === `${repo.repo}:${file.path}`} depth={0} onSelect={onSelect} />
