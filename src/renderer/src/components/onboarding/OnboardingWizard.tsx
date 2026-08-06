@@ -149,14 +149,30 @@ function pickFirstModel(
 }
 
 /** Pick first "free" model from a provider's model list. */
-function pickFreeModel(
+export function pickFreeModel(
   providerId: string,
   models: unknown
 ): string | null {
-  if (!Array.isArray(models)) return null
-  for (const m of models as { id?: string; name?: string }[]) {
-    if (m?.id && (m.name || '').toLowerCase().includes('free')) {
-      return `${providerId}/${m.id}`
+  const candidates = Array.isArray(models)
+    ? (models as { id?: string; name?: string }[]).map((model) => ({
+        id: model?.id,
+        name: model?.name
+      }))
+    : models && typeof models === 'object'
+      ? Object.entries(models as Record<string, { id?: string; name?: string }>).map(
+          ([key, model]) => ({
+            id: model?.id || key,
+            name: model?.name
+          })
+        )
+      : []
+
+  for (const model of candidates) {
+    if (
+      model.id &&
+      `${model.id} ${model.name || ''}`.toLowerCase().includes('free')
+    ) {
+      return `${providerId}/${model.id}`
     }
   }
   return null
