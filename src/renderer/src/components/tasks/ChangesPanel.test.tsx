@@ -47,7 +47,7 @@ describe('ChangesPanel', () => {
     expect(await screen.findByText('components')).toBeInTheDocument()
     expect(screen.getByText('Button.tsx')).toBeInTheDocument()
     expect(screen.getByText('new.ts')).toBeInTheDocument()
-    expect(screen.getByText('src/components/Button.tsx')).toBeInTheDocument()
+    expect(await screen.findByText('src/components/Button.tsx')).toBeInTheDocument()
     expect(screen.getAllByText('+1').length).toBeGreaterThan(0)
     expect(screen.getAllByText('−1').length).toBeGreaterThan(0)
 
