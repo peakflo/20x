@@ -543,7 +543,7 @@ export const worktreeApi = {
   cleanup: (taskId: string, repos: { fullName: string }[], org: string, removeTaskDir?: boolean): Promise<void> => {
     return window.electronAPI.worktree.cleanup(taskId, repos, org, removeTaskDir)
   },
-  changes: (taskId: string, repos: { fullName: string }[]): Promise<Array<{ repo: string; diff: string; error?: string; noWorktree?: boolean; path?: string; branch?: string; pushed?: boolean; prNumber?: number; prUrl?: string; prState?: string; prTitle?: string; ciStatus?: 'passing' | 'failing' | 'pending' | 'none' }>> => {
+  changes: (taskId: string, repos: { fullName: string }[]): Promise<Array<{ repo: string; diff: string; allFiles?: string[]; error?: string; noWorktree?: boolean; path?: string; branch?: string; pushed?: boolean; prNumber?: number; prUrl?: string; prState?: string; prTitle?: string; ciStatus?: 'passing' | 'failing' | 'pending' | 'none' }>> => {
     return window.electronAPI.worktree.changes(taskId, repos)
   },
   runCleanupNow: (): Promise<{ cleaned: number; errors: string[] }> => {

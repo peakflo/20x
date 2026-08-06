@@ -2,17 +2,18 @@ import { memo, useCallback, useEffect, useMemo, useState, type ReactNode } from 
 import {
   ChevronRight, RefreshCw, Loader2, FileDiff, Columns2, Rows3, WrapText, GitBranch,
   FilePlus2, FileMinus2, FilePen, FileSymlink, FolderGit2, GitPullRequest, ExternalLink,
-  CheckCircle2, XCircle, Folder, FolderOpen, Files, ListTree,
+  CheckCircle2, XCircle, File, Folder, FolderOpen, Files, ListTree,
 } from 'lucide-react'
 import { worktreeApi } from '@/lib/ipc-client'
 import { parseUnifiedDiff, wordDiff, type DiffFile, type DiffHunk, type DiffLine, type WordSegment, type FileStatus } from '@/lib/diff-parser'
-import { buildChangeTree, type ChangeTreeDirectory } from '@/lib/change-tree'
+import { buildFileTree, type ChangeTreeDirectory, type ChangeTreeFile } from '@/lib/change-tree'
 import { DiffStatLabel } from './DiffStatLabel'
 import { cn } from '@/lib/utils'
 
 export interface RepoChanges {
   repo: string
   files: DiffFile[]
+  allFiles: string[]
   error?: string
   noWorktree?: boolean
   path?: string
@@ -221,49 +222,22 @@ const DiffBody = memo(function DiffBody({ file, viewMode, wrap }: { file: DiffFi
   )
 })
 
-const FileBlock = memo(function FileBlock({ file, viewMode, wrap }: { file: DiffFile; viewMode: ViewMode; wrap: boolean }) {
-  // Files start collapsed — the panel opens as a clean changed-files overview;
-  // click a file to expand its diff.
-  const [open, setOpen] = useState(false)
-  const meta = STATUS_META[file.status]
-  const Icon = meta.icon
-
-  return (
-    <div className="border-b border-border/60">
-      <button
-        onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-accent/50 transition-colors sticky top-0 z-10 bg-card"
-      >
-        <ChevronRight className={cn('h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform', open && 'rotate-90')} />
-        <Icon className={cn('h-3.5 w-3.5 shrink-0', meta.className)} />
-        <span className="min-w-0 flex-1 truncate font-mono text-xs text-foreground" title={file.path}>
-          {file.status === 'renamed' && file.oldPath ? `${file.oldPath} → ${file.newPath}` : file.path}
-        </span>
-        {!file.binary && <DiffStatLabel additions={file.additions} deletions={file.deletions} className="text-[11px]" />}
-        {file.binary && <span className="text-[11px] text-muted-foreground">binary</span>}
-      </button>
-      {open && !file.binary && (
-        <div className="overflow-x-auto"><DiffBody file={file} viewMode={viewMode} wrap={wrap} /></div>
-      )}
-    </div>
-  )
-})
-
-function TreeFile({ repo, file, selected, depth, onSelect }: {
+function TreeFile({ repo, entry, selected, depth, onSelect }: {
   repo: string
-  file: DiffFile
+  entry: ChangeTreeFile
   selected: boolean
   depth: number
-  onSelect: (repo: string, file: DiffFile) => void
+  onSelect: (repo: string, file: ChangeTreeFile) => void
 }) {
-  const meta = STATUS_META[file.status]
-  const Icon = meta.icon
-  const name = file.path.replace(/\\/g, '/').split('/').at(-1) || file.path
+  const change = entry.change
+  const meta = change ? STATUS_META[change.status] : null
+  const Icon = meta?.icon || File
+  const name = entry.path.replace(/\\/g, '/').split('/').at(-1) || entry.path
   return (
     <button
       type="button"
-      onClick={() => onSelect(repo, file)}
-      title={`${meta.label}: ${file.path}`}
+      onClick={() => onSelect(repo, entry)}
+      title={`${meta?.label || 'Unchanged'}: ${entry.path}`}
       aria-pressed={selected}
       className={cn(
         'flex w-full items-center gap-1.5 rounded-md py-1.5 pr-2 text-left transition-colors',
@@ -271,10 +245,10 @@ function TreeFile({ repo, file, selected, depth, onSelect }: {
       )}
       style={{ paddingLeft: `${8 + depth * 14}px` }}
     >
-      <Icon className={cn('h-3.5 w-3.5 shrink-0', meta.className)} />
+      <Icon className={cn('h-3.5 w-3.5 shrink-0', meta?.className || 'text-muted-foreground/60')} />
       <span className="min-w-0 flex-1 truncate font-mono text-[11px]">{name}</span>
-      {!file.binary && <DiffStatLabel additions={file.additions} deletions={file.deletions} className="text-[10px]" />}
-      <span className={cn('shrink-0 rounded px-1 py-0.5 text-[9px] font-semibold', STATUS_BADGE[file.status])}>{file.status[0].toUpperCase()}</span>
+      {change && !change.binary && <DiffStatLabel additions={change.additions} deletions={change.deletions} className="text-[10px]" />}
+      {change && <span className={cn('shrink-0 rounded px-1 py-0.5 text-[9px] font-semibold', STATUS_BADGE[change.status])}>{change.status[0].toUpperCase()}</span>}
     </button>
   )
 }
@@ -284,7 +258,7 @@ function TreeDirectory({ repo, directory, selectedKey, depth, onSelect }: {
   directory: ChangeTreeDirectory
   selectedKey: string | null
   depth: number
-  onSelect: (repo: string, file: DiffFile) => void
+  onSelect: (repo: string, file: ChangeTreeFile) => void
 }) {
   const [open, setOpen] = useState(true)
   return (
@@ -307,7 +281,7 @@ function TreeDirectory({ repo, directory, selectedKey, depth, onSelect }: {
             <TreeDirectory key={child.path} repo={repo} directory={child} selectedKey={selectedKey} depth={depth + 1} onSelect={onSelect} />
           ))}
           {directory.files.map((file) => (
-            <TreeFile key={file.path} repo={repo} file={file} selected={selectedKey === `${repo}:${file.path}`} depth={depth + 1} onSelect={onSelect} />
+            <TreeFile key={file.path} repo={repo} entry={file} selected={selectedKey === `${repo}:${file.path}`} depth={depth + 1} onSelect={onSelect} />
           ))}
         </div>
       )}
@@ -315,13 +289,17 @@ function TreeDirectory({ repo, directory, selectedKey, depth, onSelect }: {
   )
 }
 
-function RepoTree({ repo, selectedKey, onSelect }: {
+function RepoTree({ repo, selectedKey, includeAll, onSelect }: {
   repo: RepoChanges
   selectedKey: string | null
-  onSelect: (repo: string, file: DiffFile) => void
+  includeAll: boolean
+  onSelect: (repo: string, file: ChangeTreeFile) => void
 }) {
   const [open, setOpen] = useState(true)
-  const tree = useMemo(() => buildChangeTree(repo.files), [repo.files])
+  const tree = useMemo(() => {
+    const paths = includeAll ? repo.allFiles : repo.files.map((file) => file.path)
+    return buildFileTree(paths, repo.files)
+  }, [includeAll, repo.allFiles, repo.files])
   return (
     <div className="border-b border-border/50 py-1 last:border-b-0">
       <button
@@ -337,11 +315,34 @@ function RepoTree({ repo, selectedKey, onSelect }: {
       </button>
       {open && (
         <div>
+          <div className="mb-1 flex min-w-0 items-center gap-1.5 px-7 text-[10px] text-muted-foreground">
+            {repo.prUrl ? (
+              <>
+                <GitPullRequest className="h-3 w-3 shrink-0" />
+                <a
+                  href={repo.prUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="min-w-0 truncate hover:text-foreground hover:underline"
+                  title={repo.prTitle || `Pull request #${repo.prNumber}`}
+                >
+                  {repo.prNumber ? `#${repo.prNumber}` : 'Pull request'}{repo.prTitle ? ` · ${repo.prTitle}` : ''}
+                </a>
+                <CiBadge status={repo.ciStatus} />
+                <ExternalLink className="h-2.5 w-2.5 shrink-0" />
+              </>
+            ) : repo.branch ? (
+              <>
+                <GitBranch className="h-3 w-3 shrink-0" />
+                <span className="min-w-0 truncate font-mono" title={repo.branch}>{repo.branch}</span>
+              </>
+            ) : null}
+          </div>
           {tree.directories.map((directory) => (
             <TreeDirectory key={directory.path} repo={repo.repo} directory={directory} selectedKey={selectedKey} depth={0} onSelect={onSelect} />
           ))}
           {tree.files.map((file) => (
-            <TreeFile key={file.path} repo={repo.repo} file={file} selected={selectedKey === `${repo.repo}:${file.path}`} depth={0} onSelect={onSelect} />
+            <TreeFile key={file.path} repo={repo.repo} entry={file} selected={selectedKey === `${repo.repo}:${file.path}`} depth={0} onSelect={onSelect} />
           ))}
         </div>
       )}
@@ -349,103 +350,63 @@ function RepoTree({ repo, selectedKey, onSelect }: {
   )
 }
 
-function SelectedFileDiff({ repo, file, viewMode, wrap }: { repo: RepoChanges; file: DiffFile; viewMode: ViewMode; wrap: boolean }) {
-  const meta = STATUS_META[file.status]
-  const Icon = meta.icon
+function SelectedFileDiff({ repo, entry, viewMode, wrap }: { repo: RepoChanges; entry: ChangeTreeFile; viewMode: ViewMode; wrap: boolean }) {
+  const change = entry.change
+  const meta = change ? STATUS_META[change.status] : null
+  const Icon = meta?.icon || File
   return (
     <div className="flex h-full min-w-0 flex-col bg-background">
       <div className="flex shrink-0 items-center gap-2 border-b border-border/60 bg-card px-3 py-2">
-        <Icon className={cn('h-3.5 w-3.5 shrink-0', meta.className)} />
+        <Icon className={cn('h-3.5 w-3.5 shrink-0', meta?.className || 'text-muted-foreground')} />
         <div className="min-w-0 flex-1">
-          <div className="truncate font-mono text-xs text-foreground" title={file.path}>{file.path}</div>
+          <div className="truncate font-mono text-xs text-foreground" title={entry.path}>{entry.path}</div>
           <div className="mt-0.5 flex items-center gap-1.5 text-[10px] text-muted-foreground">
-            <span>{repo.repo}</span><span>·</span><span className={meta.className}>{meta.label}</span>
+            <span>{repo.repo}</span><span>·</span><span className={meta?.className}>{meta?.label || 'Unchanged'}</span>
             {repo.branch && <><span>·</span><span className="truncate font-mono">{repo.branch}</span></>}
           </div>
         </div>
-        {!file.binary && <DiffStatLabel additions={file.additions} deletions={file.deletions} className="text-[11px]" />}
+        {change && !change.binary && <DiffStatLabel additions={change.additions} deletions={change.deletions} className="text-[11px]" />}
       </div>
-      <div className="min-h-0 flex-1 overflow-auto"><DiffBody file={file} viewMode={viewMode} wrap={wrap} /></div>
+      <div className="min-h-0 flex-1 overflow-auto">
+        {change
+          ? <DiffBody file={change} viewMode={viewMode} wrap={wrap} />
+          : <div className="flex h-full items-center justify-center px-6 text-center text-sm text-muted-foreground">This file has no changes in the task branch.</div>}
+      </div>
     </div>
   )
 }
 
-function AllFilesView({ repos, selectedKey, onSelect, viewMode, wrap }: {
+function FilesWorkspace({ repos, selectedKey, includeAll, onSelect, viewMode, wrap }: {
   repos: RepoChanges[]
   selectedKey: string | null
-  onSelect: (repo: string, file: DiffFile) => void
+  includeAll: boolean
+  onSelect: (repo: string, file: ChangeTreeFile) => void
   viewMode: ViewMode
   wrap: boolean
 }) {
   const selected = useMemo(() => {
     if (!selectedKey) return null
     for (const repo of repos) {
-      const file = repo.files.find((candidate) => `${repo.repo}:${candidate.path}` === selectedKey)
-      if (file) return { repo, file }
+      const paths = includeAll ? repo.allFiles : repo.files.map((file) => file.path)
+      const path = paths.find((candidate) => `${repo.repo}:${candidate}` === selectedKey)
+      if (path) return { repo, entry: { path, change: repo.files.find((file) => file.path === path) } }
     }
     return null
-  }, [repos, selectedKey])
+  }, [includeAll, repos, selectedKey])
 
   return (
     <div className="flex h-full min-h-0">
       <aside className="w-[34%] min-w-[220px] max-w-[340px] shrink-0 overflow-y-auto border-r border-border/60 bg-card p-1.5">
-        {repos.filter((repo) => repo.files.length > 0).map((repo) => <RepoTree key={repo.repo} repo={repo} selectedKey={selectedKey} onSelect={onSelect} />)}
+        {repos.filter((repo) => includeAll ? repo.allFiles.length > 0 : repo.files.length > 0).map((repo) => <RepoTree key={repo.repo} repo={repo} selectedKey={selectedKey} includeAll={includeAll} onSelect={onSelect} />)}
       </aside>
       <main className="min-w-0 flex-1">
         {selected
-          ? <SelectedFileDiff repo={selected.repo} file={selected.file} viewMode={viewMode} wrap={wrap} />
-          : <div className="flex h-full items-center justify-center text-sm text-muted-foreground">Select a changed file to review its diff.</div>}
+          ? <SelectedFileDiff repo={selected.repo} entry={selected.entry} viewMode={viewMode} wrap={wrap} />
+          : <div className="flex h-full items-center justify-center text-sm text-muted-foreground">Select a file to review it.</div>}
       </main>
     </div>
   )
 }
-
-const RepoBlock = memo(function RepoBlock({ repo, viewMode, wrap }: { repo: RepoChanges; viewMode: ViewMode; wrap: boolean }) {
-  const repoSummary = useMemo(
-    () => repo.files.reduce(
-      (summary, file) => ({
-        additions: summary.additions + file.additions,
-        deletions: summary.deletions + file.deletions,
-      }),
-      { additions: 0, deletions: 0 }
-    ),
-    [repo.files]
-  )
-
-  return (
-    <div>
-      {/* Per-repo group header: branch (no PR) — or PR title + link + CI status */}
-      <div className="sticky top-0 z-20 flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-border/60 bg-card px-3 py-2 text-[11px] shadow-sm">
-        <span className="font-medium text-foreground shrink-0">{repo.repo}</span>
-        {repo.prUrl ? (
-          <>
-            <button
-              onClick={() => window.electronAPI?.shell?.openExternal?.(repo.prUrl!)}
-              className="inline-flex min-w-0 items-center gap-1 rounded-md border border-primary/25 bg-primary/10 px-1.5 py-0.5 text-primary hover:bg-primary/15 hover:underline cursor-pointer"
-              title={`${repo.prTitle ?? ''} (${repo.prUrl})`}
-            >
-              <GitPullRequest className="h-3 w-3 shrink-0" />
-              <span className="truncate max-w-[240px]">{repo.prTitle || `Pull request #${repo.prNumber}`}</span>
-              <span className="shrink-0 text-muted-foreground/70">#{repo.prNumber}</span>
-              <ExternalLink className="h-2.5 w-2.5 shrink-0" />
-            </button>
-            <CiBadge status={repo.ciStatus} />
-          </>
-        ) : (
-          <span className="inline-flex items-center gap-1.5 text-muted-foreground">
-            <GitBranch className="h-3 w-3 shrink-0" />
-            <span className="font-mono text-[10px] text-foreground/80">{repo.branch ?? 'detached HEAD'}</span>
-            <span className="text-muted-foreground/60">{repo.pushed ? '· no PR yet' : '· not pushed'}</span>
-          </span>
-        )}
-        <DiffStatLabel additions={repoSummary.additions} deletions={repoSummary.deletions} className="ml-auto text-[10px]" />
-      </div>
-      {repo.files.map((file, i) => (
-        <FileBlock key={`${repo.repo}:${file.path}:${i}`} file={file} viewMode={viewMode} wrap={wrap} />
-      ))}
-    </div>
-  )
-})
 
 export interface ChangesSummary { files: number; additions: number; deletions: number }
 
@@ -475,12 +436,15 @@ export function ChangesPanel({ taskId, repos, className, onSummary, onPullReques
     setLoading(true)
     try {
       const res = await worktreeApi.changes(taskId, list.map((fullName) => ({ fullName })))
-      const parsed = res.map((r) => ({
-        repo: r.repo, error: r.error, noWorktree: r.noWorktree, path: r.path,
-        branch: r.branch, pushed: r.pushed, prNumber: r.prNumber, prUrl: r.prUrl, prState: r.prState,
-        prTitle: r.prTitle, ciStatus: r.ciStatus,
-        files: r.diff ? parseUnifiedDiff(r.diff) : [],
-      }))
+      const parsed = res.map((r) => {
+        const files = r.diff ? parseUnifiedDiff(r.diff) : []
+        return {
+          repo: r.repo, error: r.error, noWorktree: r.noWorktree, path: r.path,
+          branch: r.branch, pushed: r.pushed, prNumber: r.prNumber, prUrl: r.prUrl, prState: r.prState,
+          prTitle: r.prTitle, ciStatus: r.ciStatus, files,
+          allFiles: r.allFiles?.length ? r.allFiles : files.map((file) => file.path)
+        }
+      })
       setData(parsed)
       onPullRequests?.(parsed.filter((repo) => repo.prUrl).map((repo) => ({
         repo: repo.repo,
@@ -494,7 +458,7 @@ export function ChangesPanel({ taskId, repos, className, onSummary, onPullReques
       for (const repo of parsed) for (const file of repo.files) { a += file.additions; d += file.deletions; f++ }
       onSummary?.({ files: f, additions: a, deletions: d })
     } catch (e) {
-      setData([{ repo: '', files: [], error: (e as Error).message }])
+      setData([{ repo: '', files: [], allFiles: [], error: (e as Error).message }])
       onSummary?.({ files: 0, additions: 0, deletions: 0 })
     } finally {
       setLoading(false)
@@ -517,9 +481,13 @@ export function ChangesPanel({ taskId, repos, className, onSummary, onPullReques
   }, [data])
 
   const hasChanges = (data ?? []).some((r) => r.files.length > 0)
+  const hasWorkspaceFiles = (data ?? []).some((r) => r.allFiles.length > 0)
   const availableFileKeys = useMemo(
-    () => (data ?? []).flatMap((repo) => repo.files.map((file) => `${repo.repo}:${file.path}`)),
-    [data]
+    () => (data ?? []).flatMap((repo) => {
+      const paths = displayMode === ChangesDisplayMode.ALL_FILES ? repo.allFiles : repo.files.map((file) => file.path)
+      return paths.map((path) => `${repo.repo}:${path}`)
+    }),
+    [data, displayMode]
   )
 
   useEffect(() => {
@@ -530,7 +498,7 @@ export function ChangesPanel({ taskId, repos, className, onSummary, onPullReques
     setSelectedFileKey((current) => current && availableFileKeys.includes(current) ? current : availableFileKeys[0])
   }, [availableFileKeys])
 
-  const selectFile = useCallback((repo: string, file: DiffFile) => {
+  const selectFile = useCallback((repo: string, file: ChangeTreeFile) => {
     setSelectedFileKey(`${repo}:${file.path}`)
   }, [])
 
@@ -551,7 +519,7 @@ export function ChangesPanel({ taskId, repos, className, onSummary, onPullReques
           <button
             type="button"
             onClick={() => setChangesMode(ChangesDisplayMode.ALL_FILES)}
-            title="Browse all changed files"
+            title="Browse every tracked and untracked repository file"
             className={cn('flex h-6 items-center gap-1 rounded-md px-2 text-[11px] transition-colors', displayMode === ChangesDisplayMode.ALL_FILES ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground')}
           >
             <ListTree className="h-3.5 w-3.5" />All files
@@ -559,7 +527,7 @@ export function ChangesPanel({ taskId, repos, className, onSummary, onPullReques
           <button
             type="button"
             onClick={() => setChangesMode(ChangesDisplayMode.DIFF)}
-            title="Review the continuous diff"
+            title="Browse changed files"
             className={cn('flex h-6 items-center gap-1 rounded-md px-2 text-[11px] transition-colors', displayMode === ChangesDisplayMode.DIFF ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground')}
           >
             <Files className="h-3.5 w-3.5" />Diff
@@ -583,7 +551,7 @@ export function ChangesPanel({ taskId, repos, className, onSummary, onPullReques
         {!loading && !repos.length && (
           <div className="flex h-full items-center justify-center px-6 text-center text-sm text-muted-foreground">This task has no linked repositories.</div>
         )}
-        {data && repos.length > 0 && !hasChanges && !loading && !data.some((r) => r.error) && (
+        {data && repos.length > 0 && displayMode === ChangesDisplayMode.DIFF && !hasChanges && !loading && !data.some((r) => r.error) && (
           data.length > 0 && data.every((r) => r.noWorktree) ? (
             <div className="flex h-full flex-col items-center justify-center gap-1.5 px-6 text-center text-sm text-muted-foreground">
               <FolderGit2 className="h-6 w-6 opacity-40" />
@@ -600,17 +568,21 @@ export function ChangesPanel({ taskId, repos, className, onSummary, onPullReques
             </div>
           )
         )}
-        {data && hasChanges && displayMode === ChangesDisplayMode.ALL_FILES && (
-          <AllFilesView repos={data} selectedKey={selectedFileKey} onSelect={selectFile} viewMode={viewMode} wrap={wrap} />
-        )}
-        {data && hasChanges && displayMode === ChangesDisplayMode.DIFF && (
-          <div className="h-full overflow-y-auto">
-            {data.map((repo) => {
-              if (repo.error) return <div key={repo.repo} className="px-3 py-2 text-xs text-destructive">{repo.repo}: {repo.error}</div>
-              if (repo.files.length === 0) return null
-              return <RepoBlock key={repo.repo} repo={repo} viewMode={viewMode} wrap={wrap} />
-            })}
+        {data && repos.length > 0 && displayMode === ChangesDisplayMode.ALL_FILES && !hasWorkspaceFiles && !loading && !data.some((r) => r.error) && (
+          <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center text-sm text-muted-foreground">
+            <FolderGit2 className="h-6 w-6 opacity-40" />
+            No files found in the task worktree.
           </div>
+        )}
+        {data && (displayMode === ChangesDisplayMode.ALL_FILES ? hasWorkspaceFiles : hasChanges) && (
+          <FilesWorkspace
+            repos={data}
+            selectedKey={selectedFileKey}
+            includeAll={displayMode === ChangesDisplayMode.ALL_FILES}
+            onSelect={selectFile}
+            viewMode={viewMode}
+            wrap={wrap}
+          />
         )}
       </div>
     </div>

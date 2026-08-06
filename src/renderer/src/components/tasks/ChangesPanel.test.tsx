@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 
 const { changes } = vi.hoisted(() => ({ changes: vi.fn() }))
 vi.mock('@/lib/ipc-client', () => ({ worktreeApi: { changes } }))
@@ -35,31 +35,43 @@ new file mode 100644
 
 beforeEach(() => {
   persisted.clear()
-  changes.mockReset().mockResolvedValue([{ repo: 'peakflo/20x', diff, branch: 'feature/changes', pushed: true }])
+  changes.mockReset().mockResolvedValue([{
+    repo: 'peakflo/20x',
+    diff,
+    allFiles: ['README.md', 'package.json', 'src/components/Button.tsx', 'src/new.ts', 'src/unchanged.ts'],
+    branch: 'feature/changes',
+    pushed: true
+  }])
 })
 
 afterEach(cleanup)
 
 describe('ChangesPanel', () => {
-  it('browses a changed-file hierarchy and switches to the continuous diff', async () => {
+  it('shows the repository inventory in All files and preserves the tree in Diff', async () => {
     render(<ChangesPanel taskId="task-1" repos={['peakflo/20x']} />)
 
     expect(await screen.findByText('components')).toBeInTheDocument()
     expect(screen.getByText('Button.tsx')).toBeInTheDocument()
     expect(screen.getByText('new.ts')).toBeInTheDocument()
-    expect(await screen.findByText('src/components/Button.tsx')).toBeInTheDocument()
+    expect(screen.getByText('unchanged.ts')).toBeInTheDocument()
+    expect(screen.getByText('package.json')).toBeInTheDocument()
+    expect((await screen.findAllByText('README.md')).length).toBeGreaterThan(1)
+    expect(screen.getByText('This file has no changes in the task branch.')).toBeInTheDocument()
     expect(screen.getAllByText('+1').length).toBeGreaterThan(0)
     expect(screen.getAllByText('−1').length).toBeGreaterThan(0)
 
-    fireEvent.click(screen.getByText('new.ts').closest('button')!)
-    expect(screen.getByText('src/new.ts')).toBeInTheDocument()
-    expect(screen.getByText('Added')).toBeInTheDocument()
+    fireEvent.click(screen.getByText('Button.tsx').closest('button')!)
+    expect(screen.getByText('src/components/Button.tsx')).toBeInTheDocument()
+    expect(screen.getByText('Modified')).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: 'Diff' }))
-    expect(screen.queryByText('components')).not.toBeInTheDocument()
-    expect(screen.getByText('src/components/Button.tsx')).toBeInTheDocument()
+    expect(screen.getByText('components')).toBeInTheDocument()
+    expect(screen.queryByText('unchanged.ts')).not.toBeInTheDocument()
+    expect(screen.queryByText('package.json')).not.toBeInTheDocument()
+    await waitFor(() => expect(screen.getByText('src/components/Button.tsx')).toBeInTheDocument())
 
     fireEvent.click(screen.getByRole('button', { name: 'All files' }))
     expect(screen.getByText('components')).toBeInTheDocument()
+    expect(screen.getByText('unchanged.ts')).toBeInTheDocument()
   })
 })

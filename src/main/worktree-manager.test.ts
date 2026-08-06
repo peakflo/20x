@@ -120,4 +120,45 @@ describe('WorktreeManager', () => {
       expect.any(Function)
     )
   })
+
+  it('returns tracked and untracked files for the complete worktree inventory', async () => {
+    existsSyncMock.mockReturnValue(true)
+    execFileMock.mockImplementation((file: string, args: string[], optionsOrCallback: unknown, maybeCallback?: (error: Error | null, stdout?: string, stderr?: string) => void) => {
+      const callback = typeof optionsOrCallback === 'function'
+        ? optionsOrCallback as (error: Error | null, stdout?: string, stderr?: string) => void
+        : maybeCallback as (error: Error | null, stdout?: string, stderr?: string) => void
+      const command = `${file} ${args.join(' ')}`
+
+      if (command.includes('ls-files --cached --others --exclude-standard -z')) {
+        callback(null, 'src/changed.ts\0README.md\0src/untracked.ts\0', '')
+      } else if (command.includes('symbolic-ref --short refs/remotes/origin/HEAD')) {
+        callback(null, 'origin/main\n', '')
+      } else if (command.includes('merge-base HEAD origin/main')) {
+        callback(null, 'base-sha\n', '')
+      } else if (command.includes('diff --no-color base-sha')) {
+        callback(null, '', '')
+      } else if (command.includes('ls-files --others --exclude-standard -z')) {
+        callback(null, '', '')
+      } else if (command.includes('rev-parse --abbrev-ref HEAD')) {
+        callback(null, 'feature/all-files\n', '')
+      } else if (command.includes('rev-parse --verify --quiet origin/feature/all-files')) {
+        callback(null, 'remote-sha\n', '')
+      } else if (command.includes('remote get-url origin')) {
+        callback(null, 'https://example.com/repo.git\n', '')
+      } else {
+        callback(new Error(`Unexpected command: ${command}`))
+      }
+    })
+
+    const manager = new WorktreeManager()
+    const result = await manager.getTaskChanges('task-3', [{ fullName: 'peakflo/20x' }])
+
+    expect(result[0].allFiles).toEqual(['README.md', 'src/changed.ts', 'src/untracked.ts'])
+    expect(execFileMock).toHaveBeenCalledWith(
+      'git',
+      ['-c', 'core.quotepath=false', 'ls-files', '--cached', '--others', '--exclude-standard', '-z'],
+      expect.objectContaining({ maxBuffer: 64 * 1024 * 1024 }),
+      expect.any(Function)
+    )
+  })
 })

@@ -10,15 +10,20 @@ export interface ChangeTreeDirectory {
   name: string
   path: string
   directories: ChangeTreeDirectory[]
-  files: DiffFile[]
+  files: ChangeTreeFile[]
   stats: ChangeTreeStats
+}
+
+export interface ChangeTreeFile {
+  path: string
+  change?: DiffFile
 }
 
 interface MutableDirectory {
   name: string
   path: string
   directories: Map<string, MutableDirectory>
-  files: DiffFile[]
+  files: ChangeTreeFile[]
 }
 
 function finalize(directory: MutableDirectory): ChangeTreeDirectory {
@@ -34,8 +39,8 @@ function finalize(directory: MutableDirectory): ChangeTreeDirectory {
     }),
     files.reduce<ChangeTreeStats>(
       (total, file) => ({
-        additions: total.additions + file.additions,
-        deletions: total.deletions + file.deletions,
+        additions: total.additions + (file.change?.additions || 0),
+        deletions: total.deletions + (file.change?.deletions || 0),
         files: total.files + 1
       }),
       { additions: 0, deletions: 0, files: 0 }
@@ -44,11 +49,13 @@ function finalize(directory: MutableDirectory): ChangeTreeDirectory {
   return { name: directory.name, path: directory.path, directories, files, stats }
 }
 
-export function buildChangeTree(files: DiffFile[]): ChangeTreeDirectory {
+export function buildFileTree(paths: string[], changes: DiffFile[]): ChangeTreeDirectory {
   const root: MutableDirectory = { name: '', path: '', directories: new Map(), files: [] }
+  const changesByPath = new Map(changes.map((file) => [file.path, file]))
 
-  for (const file of files) {
-    const segments = file.path.replace(/\\/g, '/').split('/').filter(Boolean)
+  for (const rawPath of paths) {
+    const path = rawPath.replace(/\\/g, '/')
+    const segments = path.split('/').filter(Boolean)
     if (segments.length === 0) continue
     let directory = root
     for (const segment of segments.slice(0, -1)) {
@@ -60,8 +67,12 @@ export function buildChangeTree(files: DiffFile[]): ChangeTreeDirectory {
       }
       directory = child
     }
-    directory.files.push(file)
+    directory.files.push({ path, change: changesByPath.get(path) })
   }
 
   return finalize(root)
+}
+
+export function buildChangeTree(files: DiffFile[]): ChangeTreeDirectory {
+  return buildFileTree(files.map((file) => file.path), files)
 }

@@ -267,8 +267,8 @@ export class WorktreeManager {
   async getTaskChanges(
     taskId: string,
     repos: { fullName: string }[]
-  ): Promise<Array<{ repo: string; diff: string; error?: string; noWorktree?: boolean; path?: string; branch?: string; pushed?: boolean; prNumber?: number; prUrl?: string; prState?: string; prTitle?: string; ciStatus?: 'passing' | 'failing' | 'pending' | 'none' }>> {
-    const results: Array<{ repo: string; diff: string; error?: string; noWorktree?: boolean; path?: string; branch?: string; pushed?: boolean; prNumber?: number; prUrl?: string; prState?: string; prTitle?: string; ciStatus?: 'passing' | 'failing' | 'pending' | 'none' }> = []
+  ): Promise<Array<{ repo: string; diff: string; allFiles?: string[]; error?: string; noWorktree?: boolean; path?: string; branch?: string; pushed?: boolean; prNumber?: number; prUrl?: string; prState?: string; prTitle?: string; ciStatus?: 'passing' | 'failing' | 'pending' | 'none' }>> {
+    const results: Array<{ repo: string; diff: string; allFiles?: string[]; error?: string; noWorktree?: boolean; path?: string; branch?: string; pushed?: boolean; prNumber?: number; prUrl?: string; prState?: string; prTitle?: string; ciStatus?: 'passing' | 'failing' | 'pending' | 'none' }> = []
     const gitOpts = { maxBuffer: 64 * 1024 * 1024 }
 
     for (const repo of repos) {
@@ -281,6 +281,17 @@ export class WorktreeManager {
       }
 
       try {
+        // Complete browsable worktree inventory: tracked + untracked files,
+        // while respecting .gitignore and never traversing .git internals.
+        let allFiles: string[] = []
+        try {
+          const { stdout } = await execFileAsync(
+            'git', ['-c', 'core.quotepath=false', 'ls-files', '--cached', '--others', '--exclude-standard', '-z'],
+            { cwd: wtPath, ...gitOpts }
+          )
+          allFiles = [...new Set(stdout.split('\0').filter(Boolean))].sort((left, right) => left.localeCompare(right))
+        } catch { /* keep diff available if inventory fails */ }
+
         // Agents auto-commit, so "uncommitted only" (git diff HEAD) is usually
         // empty. We want the task's whole diff: base branch → current work
         // (committed + uncommitted). Discover the base branch this worktree
@@ -424,7 +435,7 @@ export class WorktreeManager {
 
         console.log(`[WorktreeManager] getTaskChanges ${repo.fullName}: branch=${branch ?? '(detached)'} pushed=${pushed} pr=${prNumber ?? 'none'} ci=${ciStatus ?? 'n/a'}`)
 
-        results.push({ repo: repo.fullName, diff: tracked + untracked, branch, pushed, prNumber, prUrl, prState, prTitle, ciStatus })
+        results.push({ repo: repo.fullName, diff: tracked + untracked, allFiles, branch, pushed, prNumber, prUrl, prState, prTitle, ciStatus })
       } catch (e) {
         results.push({ repo: repo.fullName, diff: '', error: (e as Error).message })
       }
