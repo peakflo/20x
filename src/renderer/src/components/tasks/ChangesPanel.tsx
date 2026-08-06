@@ -2,10 +2,11 @@ import { memo, useCallback, useEffect, useMemo, useState, type ReactNode } from 
 import {
   ChevronRight, RefreshCw, Loader2, FileDiff, Columns2, Rows3, WrapText, GitBranch,
   FilePlus2, FileMinus2, FilePen, FileSymlink, FolderGit2, GitPullRequest, ExternalLink,
-  CheckCircle2, XCircle,
+  CheckCircle2, XCircle, Folder, FolderOpen, Files, ListTree,
 } from 'lucide-react'
 import { worktreeApi } from '@/lib/ipc-client'
 import { parseUnifiedDiff, wordDiff, type DiffFile, type DiffHunk, type DiffLine, type WordSegment, type FileStatus } from '@/lib/diff-parser'
+import { buildChangeTree, type ChangeTreeDirectory } from '@/lib/change-tree'
 import { DiffStatLabel } from './DiffStatLabel'
 import { cn } from '@/lib/utils'
 
@@ -25,6 +26,11 @@ export interface RepoChanges {
 }
 
 type ViewMode = 'unified' | 'split'
+
+enum ChangesDisplayMode {
+  ALL_FILES = 'all-files',
+  DIFF = 'diff'
+}
 
 // ── Row model (shared by unified + split rendering) ─────────────────────────
 type Row =
@@ -65,7 +71,14 @@ const STATUS_META: Record<FileStatus, { icon: typeof FilePen; className: string;
   added: { icon: FilePlus2, className: 'text-success', label: 'Added' },
   deleted: { icon: FileMinus2, className: 'text-destructive', label: 'Deleted' },
   renamed: { icon: FileSymlink, className: 'text-primary', label: 'Renamed' },
-  modified: { icon: FilePen, className: 'text-muted-foreground', label: 'Modified' },
+  modified: { icon: FilePen, className: 'text-warning', label: 'Modified' },
+}
+
+const STATUS_BADGE: Record<FileStatus, string> = {
+  added: 'bg-success/10 text-success',
+  deleted: 'bg-destructive/10 text-destructive',
+  renamed: 'bg-primary/10 text-primary',
+  modified: 'bg-warning/10 text-warning'
 }
 
 function Segs({ segs, tone }: { segs: WordSegment[]; tone: 'add' | 'del' }) {
@@ -188,16 +201,32 @@ function CiBadge({ status }: { status?: RepoChanges['ciStatus'] }) {
   return <span title="Checks running" className="inline-flex items-center text-warning"><Loader2 className="h-3.5 w-3.5 animate-spin" /></span>
 }
 
+const DiffBody = memo(function DiffBody({ file, viewMode, wrap }: { file: DiffFile; viewMode: ViewMode; wrap: boolean }) {
+  const hunkRows = useMemo(
+    () => (!file.binary ? file.hunks.map((hunk) => ({ hunk, rows: alignHunk(hunk) })) : []),
+    [file]
+  )
+
+  if (file.binary) return <div className="px-4 py-6 text-center text-xs text-muted-foreground">Binary diff preview is unavailable.</div>
+  return (
+    <div className={cn('font-mono text-xs leading-[1.55]', wrap ? 'min-w-full' : 'min-w-max')}>
+      {hunkRows.map(({ hunk, rows }, hi) => (
+        <div key={hi}>
+          <div className="sticky top-0 z-10 border-y border-border/40 bg-muted px-3 py-1 text-[11px] text-muted-foreground">{hunk.header}</div>
+          {viewMode === 'split' ? <SplitRows rows={rows} wrap={wrap} /> : <UnifiedRows rows={rows} wrap={wrap} />}
+        </div>
+      ))}
+      {file.hunks.length === 0 && <div className="px-4 py-6 text-center text-[11px] text-muted-foreground">No textual changes.</div>}
+    </div>
+  )
+})
+
 const FileBlock = memo(function FileBlock({ file, viewMode, wrap }: { file: DiffFile; viewMode: ViewMode; wrap: boolean }) {
   // Files start collapsed — the panel opens as a clean changed-files overview;
   // click a file to expand its diff.
   const [open, setOpen] = useState(false)
   const meta = STATUS_META[file.status]
   const Icon = meta.icon
-  const hunkRows = useMemo(
-    () => (open && !file.binary ? file.hunks.map((hunk) => ({ hunk, rows: alignHunk(hunk) })) : []),
-    [file, open]
-  )
 
   return (
     <div className="border-b border-border/60">
@@ -214,21 +243,162 @@ const FileBlock = memo(function FileBlock({ file, viewMode, wrap }: { file: Diff
         {file.binary && <span className="text-[11px] text-muted-foreground">binary</span>}
       </button>
       {open && !file.binary && (
-        <div className="overflow-x-auto font-mono text-xs leading-[1.55]">
-          {hunkRows.map(({ hunk, rows }, hi) => (
-            <div key={hi}>
-              <div className="bg-muted/40 px-3 py-0.5 text-[11px] text-muted-foreground">{hunk.header}</div>
-              {viewMode === 'split' ? <SplitRows rows={rows} wrap={wrap} /> : <UnifiedRows rows={rows} wrap={wrap} />}
-            </div>
-          ))}
-          {file.hunks.length === 0 && (
-            <div className="px-3 py-2 text-[11px] text-muted-foreground">No textual changes.</div>
-          )}
-        </div>
+        <div className="overflow-x-auto"><DiffBody file={file} viewMode={viewMode} wrap={wrap} /></div>
       )}
     </div>
   )
 })
+
+function TreeFile({ repo, file, selected, depth, onSelect }: {
+  repo: string
+  file: DiffFile
+  selected: boolean
+  depth: number
+  onSelect: (repo: string, file: DiffFile) => void
+}) {
+  const meta = STATUS_META[file.status]
+  const Icon = meta.icon
+  const name = file.path.replace(/\\/g, '/').split('/').at(-1) || file.path
+  return (
+    <button
+      type="button"
+      onClick={() => onSelect(repo, file)}
+      title={`${meta.label}: ${file.path}`}
+      aria-pressed={selected}
+      className={cn(
+        'flex w-full items-center gap-1.5 rounded-md py-1.5 pr-2 text-left transition-colors',
+        selected ? 'bg-accent text-foreground' : 'text-muted-foreground hover:bg-accent/50 hover:text-foreground'
+      )}
+      style={{ paddingLeft: `${8 + depth * 14}px` }}
+    >
+      <Icon className={cn('h-3.5 w-3.5 shrink-0', meta.className)} />
+      <span className="min-w-0 flex-1 truncate font-mono text-[11px]">{name}</span>
+      {!file.binary && <DiffStatLabel additions={file.additions} deletions={file.deletions} className="text-[10px]" />}
+      <span className={cn('shrink-0 rounded px-1 py-0.5 text-[9px] font-semibold', STATUS_BADGE[file.status])}>{file.status[0].toUpperCase()}</span>
+    </button>
+  )
+}
+
+function TreeDirectory({ repo, directory, selectedKey, depth, onSelect }: {
+  repo: string
+  directory: ChangeTreeDirectory
+  selectedKey: string | null
+  depth: number
+  onSelect: (repo: string, file: DiffFile) => void
+}) {
+  const [open, setOpen] = useState(true)
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+        aria-expanded={open}
+        className="flex w-full items-center gap-1.5 rounded-md py-1.5 pr-2 text-left text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
+        style={{ paddingLeft: `${8 + depth * 14}px` }}
+      >
+        <ChevronRight className={cn('h-3 w-3 shrink-0 transition-transform', open && 'rotate-90')} />
+        {open ? <FolderOpen className="h-3.5 w-3.5 shrink-0 text-primary" /> : <Folder className="h-3.5 w-3.5 shrink-0 text-primary" />}
+        <span className="min-w-0 flex-1 truncate text-xs">{directory.name}</span>
+        <span className="text-[10px] text-muted-foreground/70">{directory.stats.files}</span>
+      </button>
+      {open && (
+        <div>
+          {directory.directories.map((child) => (
+            <TreeDirectory key={child.path} repo={repo} directory={child} selectedKey={selectedKey} depth={depth + 1} onSelect={onSelect} />
+          ))}
+          {directory.files.map((file) => (
+            <TreeFile key={file.path} repo={repo} file={file} selected={selectedKey === `${repo}:${file.path}`} depth={depth + 1} onSelect={onSelect} />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function RepoTree({ repo, selectedKey, onSelect }: {
+  repo: RepoChanges
+  selectedKey: string | null
+  onSelect: (repo: string, file: DiffFile) => void
+}) {
+  const [open, setOpen] = useState(true)
+  const tree = useMemo(() => buildChangeTree(repo.files), [repo.files])
+  return (
+    <div className="border-b border-border/50 py-1 last:border-b-0">
+      <button
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+        aria-expanded={open}
+        className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left hover:bg-accent/50"
+      >
+        <ChevronRight className={cn('h-3 w-3 shrink-0 text-muted-foreground transition-transform', open && 'rotate-90')} />
+        <FolderGit2 className="h-3.5 w-3.5 shrink-0 text-primary" />
+        <span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground">{repo.repo}</span>
+        <span className="text-[10px] text-muted-foreground">{tree.stats.files}</span>
+      </button>
+      {open && (
+        <div>
+          {tree.directories.map((directory) => (
+            <TreeDirectory key={directory.path} repo={repo.repo} directory={directory} selectedKey={selectedKey} depth={0} onSelect={onSelect} />
+          ))}
+          {tree.files.map((file) => (
+            <TreeFile key={file.path} repo={repo.repo} file={file} selected={selectedKey === `${repo.repo}:${file.path}`} depth={0} onSelect={onSelect} />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function SelectedFileDiff({ repo, file, viewMode, wrap }: { repo: RepoChanges; file: DiffFile; viewMode: ViewMode; wrap: boolean }) {
+  const meta = STATUS_META[file.status]
+  const Icon = meta.icon
+  return (
+    <div className="flex h-full min-w-0 flex-col bg-background">
+      <div className="flex shrink-0 items-center gap-2 border-b border-border/60 bg-card px-3 py-2">
+        <Icon className={cn('h-3.5 w-3.5 shrink-0', meta.className)} />
+        <div className="min-w-0 flex-1">
+          <div className="truncate font-mono text-xs text-foreground" title={file.path}>{file.path}</div>
+          <div className="mt-0.5 flex items-center gap-1.5 text-[10px] text-muted-foreground">
+            <span>{repo.repo}</span><span>·</span><span className={meta.className}>{meta.label}</span>
+            {repo.branch && <><span>·</span><span className="truncate font-mono">{repo.branch}</span></>}
+          </div>
+        </div>
+        {!file.binary && <DiffStatLabel additions={file.additions} deletions={file.deletions} className="text-[11px]" />}
+      </div>
+      <div className="min-h-0 flex-1 overflow-auto"><DiffBody file={file} viewMode={viewMode} wrap={wrap} /></div>
+    </div>
+  )
+}
+
+function AllFilesView({ repos, selectedKey, onSelect, viewMode, wrap }: {
+  repos: RepoChanges[]
+  selectedKey: string | null
+  onSelect: (repo: string, file: DiffFile) => void
+  viewMode: ViewMode
+  wrap: boolean
+}) {
+  const selected = useMemo(() => {
+    if (!selectedKey) return null
+    for (const repo of repos) {
+      const file = repo.files.find((candidate) => `${repo.repo}:${candidate.path}` === selectedKey)
+      if (file) return { repo, file }
+    }
+    return null
+  }, [repos, selectedKey])
+
+  return (
+    <div className="flex h-full min-h-0">
+      <aside className="w-[34%] min-w-[220px] max-w-[340px] shrink-0 overflow-y-auto border-r border-border/60 bg-card p-1.5">
+        {repos.filter((repo) => repo.files.length > 0).map((repo) => <RepoTree key={repo.repo} repo={repo} selectedKey={selectedKey} onSelect={onSelect} />)}
+      </aside>
+      <main className="min-w-0 flex-1">
+        {selected
+          ? <SelectedFileDiff repo={selected.repo} file={selected.file} viewMode={viewMode} wrap={wrap} />
+          : <div className="flex h-full items-center justify-center text-sm text-muted-foreground">Select a changed file to review its diff.</div>}
+      </main>
+    </div>
+  )
+}
 
 const RepoBlock = memo(function RepoBlock({ repo, viewMode, wrap }: { repo: RepoChanges; viewMode: ViewMode; wrap: boolean }) {
   const repoSummary = useMemo(
@@ -290,6 +460,11 @@ export function ChangesPanel({ taskId, repos, className, onSummary, onPullReques
   const [loading, setLoading] = useState(false)
   const [viewMode, setViewMode] = useState<ViewMode>(() => (localStorage.getItem('diff-view-mode') as ViewMode) || 'unified')
   const [wrap, setWrap] = useState<boolean>(() => localStorage.getItem('diff-wrap') === '1')
+  const [displayMode, setDisplayMode] = useState<ChangesDisplayMode>(() => {
+    const saved = localStorage.getItem('changes-display-mode')
+    return saved === ChangesDisplayMode.DIFF ? ChangesDisplayMode.DIFF : ChangesDisplayMode.ALL_FILES
+  })
+  const [selectedFileKey, setSelectedFileKey] = useState<string | null>(null)
 
   // Key the fetch on a stable string so unrelated re-renders (new array identity)
   // don't re-run git diff.
@@ -329,6 +504,10 @@ export function ChangesPanel({ taskId, repos, className, onSummary, onPullReques
   useEffect(() => { void load() }, [load])
 
   const setMode = (m: ViewMode) => { setViewMode(m); localStorage.setItem('diff-view-mode', m) }
+  const setChangesMode = (mode: ChangesDisplayMode) => {
+    setDisplayMode(mode)
+    localStorage.setItem('changes-display-mode', mode)
+  }
   const toggleWrap = () => setWrap((w) => { localStorage.setItem('diff-wrap', w ? '0' : '1'); return !w })
 
   const totals = useMemo(() => {
@@ -338,6 +517,22 @@ export function ChangesPanel({ taskId, repos, className, onSummary, onPullReques
   }, [data])
 
   const hasChanges = (data ?? []).some((r) => r.files.length > 0)
+  const availableFileKeys = useMemo(
+    () => (data ?? []).flatMap((repo) => repo.files.map((file) => `${repo.repo}:${file.path}`)),
+    [data]
+  )
+
+  useEffect(() => {
+    if (availableFileKeys.length === 0) {
+      setSelectedFileKey(null)
+      return
+    }
+    setSelectedFileKey((current) => current && availableFileKeys.includes(current) ? current : availableFileKeys[0])
+  }, [availableFileKeys])
+
+  const selectFile = useCallback((repo: string, file: DiffFile) => {
+    setSelectedFileKey(`${repo}:${file.path}`)
+  }, [])
 
   return (
     <div className={cn('flex h-full flex-col bg-card', className)}>
@@ -352,6 +547,24 @@ export function ChangesPanel({ taskId, repos, className, onSummary, onPullReques
           </>
         )}
         <div className="flex-1" />
+        <div className="flex items-center rounded-lg border border-border/60 bg-muted/40 p-0.5">
+          <button
+            type="button"
+            onClick={() => setChangesMode(ChangesDisplayMode.ALL_FILES)}
+            title="Browse all changed files"
+            className={cn('flex h-6 items-center gap-1 rounded-md px-2 text-[11px] transition-colors', displayMode === ChangesDisplayMode.ALL_FILES ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground')}
+          >
+            <ListTree className="h-3.5 w-3.5" />All files
+          </button>
+          <button
+            type="button"
+            onClick={() => setChangesMode(ChangesDisplayMode.DIFF)}
+            title="Review the continuous diff"
+            className={cn('flex h-6 items-center gap-1 rounded-md px-2 text-[11px] transition-colors', displayMode === ChangesDisplayMode.DIFF ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground')}
+          >
+            <Files className="h-3.5 w-3.5" />Diff
+          </button>
+        </div>
         <div className="flex items-center gap-0.5 rounded-lg border border-border/60 bg-muted/40 p-0.5">
           <button onClick={() => setMode('unified')} title="Unified" className={cn('grid h-6 w-6 place-items-center rounded-md transition-colors', viewMode === 'unified' ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground')}><Rows3 className="h-3.5 w-3.5" /></button>
           <button onClick={() => setMode('split')} title="Split" className={cn('grid h-6 w-6 place-items-center rounded-md transition-colors', viewMode === 'split' ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground')}><Columns2 className="h-3.5 w-3.5" /></button>
@@ -363,7 +576,7 @@ export function ChangesPanel({ taskId, repos, className, onSummary, onPullReques
       </div>
 
       {/* Body */}
-      <div className="flex-1 min-h-0 overflow-y-auto">
+      <div className="flex-1 min-h-0">
         {loading && !data && (
           <div className="flex h-full items-center justify-center text-sm text-muted-foreground"><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Computing diff…</div>
         )}
@@ -387,13 +600,18 @@ export function ChangesPanel({ taskId, repos, className, onSummary, onPullReques
             </div>
           )
         )}
-        {data?.map((repo) => {
-          if (repo.error) {
-            return <div key={repo.repo} className="px-3 py-2 text-xs text-destructive">{repo.repo}: {repo.error}</div>
-          }
-          if (repo.files.length === 0) return null
-          return <RepoBlock key={repo.repo} repo={repo} viewMode={viewMode} wrap={wrap} />
-        })}
+        {data && hasChanges && displayMode === ChangesDisplayMode.ALL_FILES && (
+          <AllFilesView repos={data} selectedKey={selectedFileKey} onSelect={selectFile} viewMode={viewMode} wrap={wrap} />
+        )}
+        {data && hasChanges && displayMode === ChangesDisplayMode.DIFF && (
+          <div className="h-full overflow-y-auto">
+            {data.map((repo) => {
+              if (repo.error) return <div key={repo.repo} className="px-3 py-2 text-xs text-destructive">{repo.repo}: {repo.error}</div>
+              if (repo.files.length === 0) return null
+              return <RepoBlock key={repo.repo} repo={repo} viewMode={viewMode} wrap={wrap} />
+            })}
+          </div>
+        )}
       </div>
     </div>
   )
