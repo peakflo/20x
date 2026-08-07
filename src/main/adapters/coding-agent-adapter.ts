@@ -284,6 +284,12 @@ export interface CodingAgentAdapter {
    * which dramatically reduces perceived latency during active streaming.
    *
    * Set by agent-manager when the session is registered for polling.
+   *
+   * Lifecycle contract: an IDLE status ends only the current turn. It must not
+   * close the adapter session or disable this callback. Push transports and
+   * subscriptions must stay open until destroySession() or an explicit abort
+   * closes them. This lets late harness events wake an idle session without a
+   * continuous polling loop.
    */
   onDataAvailable?: (sessionId: string) => void
 }

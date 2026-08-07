@@ -889,6 +889,29 @@ describe('ClaudeCodeAdapter loadSessionHistory stable IDs (regression)', () => {
   })
 })
 
+describe('ClaudeCodeAdapter persistent session input', () => {
+  it('queues a follow-up on the live query instead of closing the session', async () => {
+    const { adapter, session } = createAdapterWithSession('s1', [])
+    await adapter.initialize()
+    const enqueuePrompt = vi.fn()
+    const releasePrompt = vi.fn()
+    session.queryIterator = {} as any
+    ;(session as any).enqueuePrompt = enqueuePrompt
+    session.releasePrompt = releasePrompt
+
+    await adapter.sendPrompt(
+      's1',
+      [{ type: MessagePartType.TEXT, text: 'continue working' }],
+      {} as any,
+    )
+
+    expect(enqueuePrompt).toHaveBeenCalledWith('continue working')
+    expect(releasePrompt).not.toHaveBeenCalled()
+    expect(session.queryIterator).not.toBeNull()
+    expect(session.status).toBe('busy')
+  })
+})
+
 /**
  * Regression tests for: "Claude Code spawns subagents, then is marked idle,
  * which pauses/kills the subagents."
@@ -967,6 +990,8 @@ describe('ClaudeCodeAdapter background subagent lifecycle', () => {
 
   it('settles to idle only once every background task has reported a terminal status', async () => {
     const { adapter, session } = runStream([])
+    const release = vi.fn()
+    session.releasePrompt = release
 
     ;(adapter as any).trackBackgroundTask('s1', session, taskStarted('t1'))
     ;(adapter as any).trackBackgroundTask('s1', session, taskStarted('t2', 'local_bash'))
@@ -983,6 +1008,8 @@ describe('ClaudeCodeAdapter background subagent lifecycle', () => {
     expect(session.backgroundTasks.size).toBe(0)
     expect(session.status).toBe('idle')
     expect((await adapter.getStatus('s1', {} as any)).type).toBe('idle')
+    expect(release).not.toHaveBeenCalled()
+    expect(session.releasePrompt).toBe(release)
   })
 
   it('clears a background task from task_updated with a terminal patch status (killed)', async () => {

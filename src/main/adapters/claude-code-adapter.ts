@@ -97,10 +97,14 @@ interface ClaudeSession {
   /** True once the current turn emitted a non-error `result` message. */
   sawResult: boolean
   /**
-   * Closes the streaming-input prompt generator, which lets the Claude Code
-   * process exit.  Called only when the turn is finished AND no background task
-   * is still in flight — keeping it open is what stops the CLI from killing
-   * still-running subagents at end of turn.
+   * Adds a new user turn to the live Claude Code input stream. Keeping one
+   * stream for the full adapter-session lifetime preserves harness events while
+   * the current turn is idle.
+   */
+  enqueuePrompt: ((promptText: string) => void) | null
+  /**
+   * Closes the persistent streaming-input prompt generator. Normal IDLE never
+   * calls this. Only abort, destroy, or unexpected process exit closes it.
    */
   releasePrompt: (() => void) | null
 }
@@ -364,6 +368,7 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
       isResumed: false, // New session, not resumed
       backgroundTasks: new Map(),
       sawResult: false,
+      enqueuePrompt: null,
       releasePrompt: null,
     }
 
@@ -661,6 +666,7 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
       isResumed: true, // Resumed from persistence
       backgroundTasks: new Map(),
       sawResult: false,
+      enqueuePrompt: null,
       releasePrompt: null,
     }
 
@@ -708,12 +714,23 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
     // Check if this is the first prompt (no query running yet)
     const isFirstPrompt = !session.queryIterator
 
-    // Abort previous query if still running (only for subsequent prompts)
+    // A live query owns a persistent prompt stream. Add the next turn to that
+    // stream instead of closing and recreating the harness process at every
+    // normal idle boundary.
+    if (!isFirstPrompt && session.enqueuePrompt) {
+      session.sawResult = false
+      session.status = 'busy'
+      session.lastError = null
+      session.enqueuePrompt(promptText)
+      return
+    }
+
+    // Recovery path for an old or incomplete live-session state which has no
+    // prompt queue. Close that process before creating a correct persistent one.
     if (!isFirstPrompt && session.queryIterator) {
-      // Release the previous turn's prompt generator first, otherwise it would
-      // keep awaiting while we block on streamTask below.
       session.releasePrompt?.()
       session.releasePrompt = null
+      session.enqueuePrompt = null
       session.abortController?.abort()
       // Wait for stream cleanup to complete to avoid race conditions
       if (session.streamTask) {
@@ -790,25 +807,43 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
     // Since Claude Code backgrounds Task-tool subagents by default, that silently
     // killed subagents the moment the coordinator's turn went quiet.
     //
-    // Yielding the same prompt from an async generator that stays open keeps the
-    // session alive after `result`, so background subagents run to completion and
-    // wake the session again via `task_notification`. releaseTurn() closes the
-    // generator once the turn is done AND no background work remains.
-    let releaseTurn: () => void = () => {}
-    const turnClosed = new Promise<void>((resolve) => {
-      releaseTurn = resolve
-    })
-    session.releasePrompt = releaseTurn
+    // The queue stays open across normal idle boundaries. This matches the
+    // lifecycle used by the other push-based harness adapters: polling can stop,
+    // while the provider event stream remains subscribed and can wake it later.
+    const promptQueue: string[] = [promptText]
+    let wakePromptReader: (() => void) | null = null
+    let promptStreamClosed = false
+
+    session.enqueuePrompt = (nextPrompt: string) => {
+      if (promptStreamClosed) return
+      promptQueue.push(nextPrompt)
+      wakePromptReader?.()
+      wakePromptReader = null
+    }
+    session.releasePrompt = () => {
+      if (promptStreamClosed) return
+      promptStreamClosed = true
+      wakePromptReader?.()
+      wakePromptReader = null
+    }
     session.backgroundTasks.clear()
     session.sawResult = false
 
     const promptStream = (async function* () {
-      yield {
-        type: 'user' as const,
-        message: { role: 'user' as const, content: promptText },
-        parent_tool_use_id: null,
+      while (!promptStreamClosed) {
+        if (promptQueue.length === 0) {
+          await new Promise<void>((resolve) => {
+            wakePromptReader = resolve
+          })
+          continue
+        }
+        const nextPrompt = promptQueue.shift()!
+        yield {
+          type: 'user' as const,
+          message: { role: 'user' as const, content: nextPrompt },
+          parent_tool_use_id: null,
+        }
       }
-      await turnClosed
     })()
 
     // Start new query
@@ -937,6 +972,7 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
     // process alive while we wait for the stream task to unwind.
     session.releasePrompt?.()
     session.releasePrompt = null
+    session.enqueuePrompt = null
     session.backgroundTasks.clear()
     session.abortController?.abort()
 
@@ -964,6 +1000,7 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
     // Abort any ongoing query
     session.releasePrompt?.()
     session.releasePrompt = null
+    session.enqueuePrompt = null
     session.backgroundTasks.clear()
     session.abortController?.abort()
 
@@ -1330,6 +1367,7 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
       session.backgroundTasks.clear()
       session.releasePrompt?.()
       session.releasePrompt = null
+      session.enqueuePrompt = null
       if (session.status === 'error') {
         // Error path: queryIterator already null above; no extra work needed.
       } else {
@@ -1440,8 +1478,9 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
   }
 
   /**
-   * Marks the session idle and closes the streaming-input prompt once the turn
-   * has produced a `result` AND no background task is still running.  Until then
+   * Marks the current turn idle once it has produced a `result` AND no
+   * background task is still running. The streaming-input prompt remains open
+   * for the full session lifetime. Until background work is complete,
    * the session stays BUSY so agent-manager keeps polling instead of calling
    * transitionToIdle (which flips the task to ready_for_review and eventually
    * lets the inactivity reaper destroy the session out from under the subagents).
@@ -1459,9 +1498,6 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
       console.log(`[ClaudeCodeAdapter] Turn complete for ${sessionId}, no background tasks left → idle`)
     }
     session.status = 'idle'
-    // Let the prompt generator return so the CLI can shut down cleanly.
-    session.releasePrompt?.()
-    session.releasePrompt = null
   }
 
   /**

@@ -3209,6 +3209,26 @@ describe('AgentManager background subagent protection', () => {
       })
     })
 
+    it('re-registers polling during the gap before transitionToIdle marks the session idle', async () => {
+      const { mgr } = buildManager()
+      const resumeSpy = vi
+        .spyOn(mgr as any, 'resumeAdapterPollingAfterPrematureIdle')
+        .mockImplementation(() => undefined)
+      const getStatus = vi.fn(async () => ({ type: SessionStatusType.BUSY }))
+      addSession(mgr, {
+        status: 'working',
+        adapter: { getStatus },
+      })
+
+      // pollAdapterSession removes the polling entry before its asynchronous
+      // transitionToIdle call changes this status. A push event can land here.
+      ;(mgr as any).wakeSessionOnAdapterData('session-1')
+      await flush()
+
+      expect(getStatus).toHaveBeenCalledTimes(1)
+      expect(resumeSpy).toHaveBeenCalledWith('session-1', expect.anything())
+    })
+
     it('ignores trailing data from a session that is genuinely finished', async () => {
       const { mgr, mockDb } = buildManager()
       const resumeSpy = vi
