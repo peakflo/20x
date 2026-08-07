@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/Input'
 import { Textarea } from '@/components/ui/Textarea'
 import { Label } from '@/components/ui/Label'
 import { Checkbox } from '@/components/ui/Checkbox'
+import { SearchableSelect } from '@/components/ui/SearchableSelect'
 import { agentConfigApi } from '@/lib/ipc-client'
 import { useMcpStore } from '@/stores/mcp-store'
 import { useSkillStore } from '@/stores/skill-store'
@@ -425,17 +426,13 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
                 </Button>
               </div>
             ) : availableModels.length > 0 ? (
-              <select
+              <SearchableSelect
                 id="agent-model"
                 value={model}
-                onChange={(e) => setModel(e.target.value)}
-                className="w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm cursor-pointer"
-              >
-                <option value="">Select a model...</option>
-                {availableModels.map((m) => (
-                  <option key={m.id} value={m.id}>{m.name}</option>
-                ))}
-              </select>
+                onChange={setModel}
+                placeholder="Select a model..."
+                options={availableModels.map((m) => ({ value: m.id, label: m.name }))}
+              />
             ) : (
               <div className="space-y-2">
                 <Input
