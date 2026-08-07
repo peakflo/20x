@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from 'vitest'
-import { fireEvent, render, screen } from '@testing-library/react'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { SearchableSelect } from './SearchableSelect'
 
 const OPTIONS = [
@@ -9,6 +9,10 @@ const OPTIONS = [
 ]
 
 describe('SearchableSelect', () => {
+  afterEach(() => {
+    cleanup()
+  })
+
   it('filters options by label and value', () => {
     const onChange = vi.fn()
 
