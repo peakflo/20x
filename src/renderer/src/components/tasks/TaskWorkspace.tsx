@@ -22,7 +22,7 @@ import { useSettingsStore, type GitProvider } from '@/stores/settings-store'
 import { useTaskStore } from '@/stores/task-store'
 import { taskApi, worktreeApi, taskSourceApi, onAgentIncompatibleSession, onWorktreeProgress, attachmentApi } from '@/lib/ipc-client'
 import { subscribe } from '@/lib/shared-ipc-listeners'
-import { memo, useEffect, useCallback, useRef, useState, useMemo, type PointerEvent as ReactPointerEvent } from 'react'
+import { memo, useEffect, useLayoutEffect, useCallback, useRef, useState, useMemo, type PointerEvent as ReactPointerEvent } from 'react'
 import { TaskStatus } from '@/types'
 import type { WorkfloTask, FileAttachment, OutputField, Agent, UpdateAgentDTO, CreateAgentDTO } from '@/types'
 import type { GitHubRepo } from '@/types/electron'
@@ -37,6 +37,13 @@ import type { Artifact, ArtifactUIState } from '@shared/artifacts'
 
 const EMPTY_ARTIFACTS: Artifact[] = []
 const DEFAULT_ARTIFACT_UI: ArtifactUIState = { open: false, activeTabId: null, railExpanded: false }
+const MIN_WORKSPACE_PANE_WIDTH = 320
+const WORKSPACE_RESIZER_WIDTH = 4
+
+export function clampTranscriptWidth(width: number, containerWidth: number): number {
+  const maximum = Math.max(MIN_WORKSPACE_PANE_WIDTH, containerWidth - MIN_WORKSPACE_PANE_WIDTH - WORKSPACE_RESIZER_WIDTH)
+  return Math.min(Math.max(MIN_WORKSPACE_PANE_WIDTH, width), maximum)
+}
 
 /** Controls which columns are visible in the TaskWorkspace grid */
 export type TaskWorkspaceLayout = 'both' | 'task-only' | 'transcript-only'
@@ -107,8 +114,11 @@ function TaskWorkspaceComponent({
   const workspaceBodyRef = useRef<HTMLDivElement>(null)
   const resizingRef = useRef(false)
   const [transcriptWidth, setTranscriptWidth] = useState(() => {
-    const stored = Number(localStorage.getItem('20x:task:transcriptWidth'))
-    return Number.isFinite(stored) && stored >= 320 ? stored : Math.max(320, Math.round(window.innerWidth * 0.44))
+    const stored = Number(window.localStorage.getItem('20x:task:transcriptWidth'))
+    const preferred = Number.isFinite(stored) && stored >= MIN_WORKSPACE_PANE_WIDTH
+      ? stored
+      : Math.max(MIN_WORKSPACE_PANE_WIDTH, Math.round(window.innerWidth * 0.44))
+    return clampTranscriptWidth(preferred, window.innerWidth)
   })
   const openTaskOnCanvas = useUIStore((s) => s.openTaskOnCanvas)
   const artifacts = useArtifactStore((s) => task?.id ? (s.artifactsByTask[task.id] || EMPTY_ARTIFACTS) : EMPTY_ARTIFACTS)
@@ -140,10 +150,29 @@ function TaskWorkspaceComponent({
     })
   }, [hydrateArtifacts, task?.id])
 
+  useLayoutEffect(() => {
+    if (!artifactUI.open || !workspaceBodyRef.current) return
+    const container = workspaceBodyRef.current
+    const clampToContainer = () => {
+      const containerWidth = container.getBoundingClientRect().width
+      if (containerWidth <= 0) return
+      setTranscriptWidth((current) => {
+        const next = clampTranscriptWidth(current, containerWidth)
+        if (next !== current) window.localStorage.setItem('20x:task:transcriptWidth', String(next))
+        return next
+      })
+    }
+    clampToContainer()
+    if (typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(clampToContainer)
+    observer.observe(container)
+    return () => observer.disconnect()
+  }, [artifactUI.open])
+
   const handleResizeMove = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
     if (!resizingRef.current || !workspaceBodyRef.current) return
     const rect = workspaceBodyRef.current.getBoundingClientRect()
-    const next = Math.max(320, Math.min(event.clientX - rect.left, Math.max(320, rect.width - 320)))
+    const next = clampTranscriptWidth(event.clientX - rect.left, rect.width)
     setTranscriptWidth(next)
   }, [])
 
@@ -151,7 +180,7 @@ function TaskWorkspaceComponent({
     if (!resizingRef.current) return
     resizingRef.current = false
     event.currentTarget.releasePointerCapture?.(event.pointerId)
-    localStorage.setItem('20x:task:transcriptWidth', String(transcriptWidth))
+    window.localStorage.setItem('20x:task:transcriptWidth', String(transcriptWidth))
   }, [transcriptWidth])
 
   // Fetch settings on mount

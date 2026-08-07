@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, act, fireEvent, screen, waitFor, cleanup } from '@testing-library/react'
-import { TaskWorkspace } from './TaskWorkspace'
+import { clampTranscriptWidth, TaskWorkspace } from './TaskWorkspace'
 import { useAgentStore, SessionStatus } from '@/stores/agent-store'
 import { useSettingsStore } from '@/stores/settings-store'
 import { useArtifactStore } from '@/stores/artifact-store'
@@ -124,6 +124,13 @@ beforeEach(() => {
   ;(window.electronAPI.settings.getAll as ReturnType<typeof vi.fn>).mockResolvedValue({
     github_org: 'peakflo',
     git_provider: 'github'
+  })
+})
+
+describe('clampTranscriptWidth', () => {
+  it('keeps both split panes visible when a persisted width exceeds the container', () => {
+    expect(clampTranscriptWidth(1_200, 900)).toBe(576)
+    expect(clampTranscriptWidth(100, 900)).toBe(320)
   })
 })
 

@@ -299,14 +299,14 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
           <button
             type="button"
             onClick={() => setActiveSection('details')}
-            className={cn('rounded px-3 py-1.5 transition-colors', activeSection === 'details' ? 'bg-[#161b22] text-foreground shadow-sm' : 'text-muted-foreground')}
+            className={cn('rounded px-3 py-1.5 transition-colors', activeSection === 'details' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground')}
           >
             Details
           </button>
           <button
             type="button"
             onClick={() => setActiveSection('artifacts')}
-            className={cn('rounded px-3 py-1.5 transition-colors', activeSection === 'artifacts' ? 'bg-[#161b22] text-foreground shadow-sm' : 'text-muted-foreground')}
+            className={cn('rounded px-3 py-1.5 transition-colors', activeSection === 'artifacts' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground')}
           >
             Artifacts{artifacts.length > 0 ? ` (${artifacts.length})` : ''}
           </button>

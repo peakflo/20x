@@ -614,8 +614,8 @@ function ArtifactTranscriptCard({ artifact, onOpen }: { artifact: Artifact; onOp
         : artifact.type === ArtifactType.MARKDOWN ? 'Markdown' : 'File'
 
   return (
-    <button onClick={() => onOpen(artifact)} className="my-1 ml-1 flex w-[min(420px,calc(100%-8px))] items-center gap-3 rounded-lg border border-border/50 bg-[#161b22] p-2 text-left transition-colors hover:border-primary/40 hover:bg-accent/40">
-      <span className="grid h-10 w-10 shrink-0 place-items-center overflow-hidden rounded-md border border-border/40 bg-[#0d1117]">
+    <button onClick={() => onOpen(artifact)} className="my-1 ml-1 flex w-[min(420px,calc(100%-8px))] items-center gap-3 rounded-lg border border-border/50 bg-card p-2 text-left transition-colors hover:border-primary/40 hover:bg-accent/40">
+      <span className="grid h-10 w-10 shrink-0 place-items-center overflow-hidden rounded-md border border-border/40 bg-muted/40">
         {thumbnail ? <img src={thumbnail} alt="" className="h-full w-full object-cover" /> : <Icon className="h-4 w-4 text-muted-foreground" />}
       </span>
       <span className="min-w-0 flex-1">

@@ -634,6 +634,7 @@ export function AppLayout() {
       {/* Dashboard task preview — reuses the full TaskWorkspace inside a dialog */}
       <Dialog open={!!dashboardPreviewTaskId} onOpenChange={(open) => { if (!open) closeDashboardPreview() }}>
         <DialogContent className="h-[90vh] w-[94vw] max-w-[94vw] overflow-hidden p-0 [&>button]:hidden">
+          <DialogTitle className="sr-only">{dashboardPreviewTask?.title || 'Task preview'}</DialogTitle>
           <div className="min-h-0 flex-1 overflow-hidden rounded-2xl">
             {dashboardPreviewTask && (
               <TaskWorkspace

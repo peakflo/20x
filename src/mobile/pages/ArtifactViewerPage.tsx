@@ -30,6 +30,16 @@ function safeExternalUrl(value?: string): string | null {
   }
 }
 
+function safeImageUrl(value?: string): string | null {
+  if (!value) return null
+  try {
+    const url = new URL(value)
+    return url.protocol === 'https:' || url.protocol === 'http:' ? url.toString() : null
+  } catch {
+    return null
+  }
+}
+
 export function ArtifactViewerPage({ taskId, artifactId, onNavigate }: { taskId: string; artifactId: string; onNavigate: (route: Route) => void }) {
   const artifact = useArtifactStore((state) => state.artifactsByTask.get(taskId)?.find((item) => item.id === artifactId))
   const hydrate = useArtifactStore((state) => state.hydrate)
@@ -76,9 +86,11 @@ export function ArtifactViewerPage({ taskId, artifactId, onNavigate }: { taskId:
   }, [artifact?.reloadTrigger, artifact?.type, artifact?.url])
 
   const imageUrl = useMemo(() => {
-    if (!content || artifact?.type !== ArtifactType.IMAGE) return null
-    return content.kind === ArtifactContentKind.DATA_URL ? content.content : null
-  }, [artifact?.type, content])
+    if (artifact?.type !== ArtifactType.IMAGE) return null
+    const remoteUrl = safeImageUrl(artifact.url)
+    if (remoteUrl) return remoteUrl
+    return content?.kind === ArtifactContentKind.DATA_URL ? content.content : null
+  }, [artifact?.type, artifact?.url, content])
   const externalUrl = safeExternalUrl(artifact?.url)
 
   const handleBack = () => {
@@ -119,7 +131,7 @@ export function ArtifactViewerPage({ taskId, artifactId, onNavigate }: { taskId:
           />
         )}
         {!loading && !error && artifact?.type === ArtifactType.FILE && content && (
-          <pre className="min-h-full whitespace-pre-wrap break-words p-4 font-mono text-xs text-gray-300">{content.kind === ArtifactContentKind.TEXT ? content.content : 'Binary file preview is not available.'}</pre>
+          <pre className="min-h-full whitespace-pre-wrap break-words p-4 font-mono text-xs text-foreground/80">{content.kind === ArtifactContentKind.TEXT ? content.content : 'Binary file preview is not available.'}</pre>
         )}
         {!loading && !error && artifact?.type === ArtifactType.PR && pullRequest && (
           <MobilePullRequestDetails details={pullRequest} />
