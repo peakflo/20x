@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rm, symlink, writeFile } from 'fs/promises'
+import { mkdtemp, mkdir, readdir, readFile, rm, symlink, writeFile } from 'fs/promises'
 import { join } from 'path'
 import { tmpdir } from 'os'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -157,6 +157,67 @@ describe('task artifact files', () => {
     await symlink(outsideFile, join(workspaceDir, 'artifacts', registered.artifactId, 'linked.md'))
     await expect(readRegisteredTaskArtifactFile(workspaceDir, 'task-1', registered.artifactId, 'linked.md'))
       .rejects.toThrow('Invalid artifact ID or filename')
+    await expect(writeRegisteredTaskArtifactFile(workspaceDir, 'task-1', {
+      artifactId: registered.artifactId,
+      filename: 'linked.md',
+      content: 'overwrite'
+    })).rejects.toThrow('Invalid artifact ID or filename')
+    await expect(readFile(outsideFile, 'utf8')).resolves.toBe('secret')
+  })
+
+  it('rejects symlinked registry and artifact directories before writing outside the workspace', async () => {
+    const outsideRegistry = join(testRoot, 'outside-registry')
+    await mkdir(outsideRegistry)
+    await symlink(outsideRegistry, join(workspaceDir, '.20x'))
+
+    await expect(createRegisteredTaskArtifact(workspaceDir, 'task-1', {
+      title: 'Unsafe registry',
+      type: ArtifactType.MARKDOWN
+    })).rejects.toThrow('Unsafe artifact directory')
+    await expect(readdir(outsideRegistry)).resolves.toEqual([])
+
+    await rm(join(workspaceDir, '.20x'))
+    const outsideArtifacts = join(testRoot, 'outside-artifacts')
+    await mkdir(outsideArtifacts)
+    await symlink(outsideArtifacts, join(workspaceDir, 'artifacts'))
+
+    await expect(createRegisteredTaskArtifact(workspaceDir, 'task-1', {
+      title: 'Unsafe files',
+      type: ArtifactType.MARKDOWN
+    })).rejects.toThrow('Unsafe artifact directory')
+    await expect(readdir(outsideArtifacts)).resolves.toEqual([])
+  })
+
+  it('rejects a symlinked registry file without reading or replacing its target', async () => {
+    const outsideRegistryFile = join(testRoot, 'outside-artifacts.json')
+    const outsideContent = '{"version":1,"artifacts":[]}'
+    await writeFile(outsideRegistryFile, outsideContent)
+    await mkdir(join(workspaceDir, '.20x'))
+    await symlink(outsideRegistryFile, join(workspaceDir, '.20x', 'artifacts.json'))
+
+    await expect(listRegisteredTaskArtifacts(workspaceDir, 'task-1')).rejects.toThrow('Unsafe artifact registry')
+    await expect(createRegisteredTaskArtifact(workspaceDir, 'task-1', {
+      title: 'Unsafe registry file',
+      type: ArtifactType.MARKDOWN
+    })).rejects.toThrow('Unsafe artifact registry')
+    await expect(readFile(outsideRegistryFile, 'utf8')).resolves.toBe(outsideContent)
+  })
+
+  it('rejects a symlinked nested artifact directory before creating files through it', async () => {
+    const registered = await createRegisteredTaskArtifact(workspaceDir, 'task-1', {
+      title: 'Report',
+      type: ArtifactType.MARKDOWN
+    })
+    const outsideDirectory = join(testRoot, 'outside-files')
+    await mkdir(outsideDirectory)
+    await symlink(outsideDirectory, join(workspaceDir, 'artifacts', registered.artifactId, 'nested'))
+
+    await expect(writeRegisteredTaskArtifactFile(workspaceDir, 'task-1', {
+      artifactId: registered.artifactId,
+      filename: 'nested/escape.md',
+      content: 'secret'
+    })).rejects.toThrow('Unsafe artifact directory')
+    await expect(readdir(outsideDirectory)).resolves.toEqual([])
   })
 
   it('inspects only a tool-reported file inside the workspace', async () => {

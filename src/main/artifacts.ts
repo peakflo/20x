@@ -1,5 +1,5 @@
 import { lstat, mkdir, readdir, readFile, realpath, rename, stat, writeFile } from 'fs/promises'
-import { dirname, extname, isAbsolute, relative, resolve, sep, win32 } from 'path'
+import { extname, isAbsolute, relative, resolve, sep, win32 } from 'path'
 import { randomUUID } from 'crypto'
 import {
   ArtifactContentKind,
@@ -78,14 +78,6 @@ interface ArtifactRegistryFile {
 
 const registryWrites = new Map<string, Promise<unknown>>()
 
-function registryPath(workspaceDir: string): string {
-  return resolve(workspaceDir, REGISTRY_DIRECTORY, REGISTRY_FILENAME)
-}
-
-function artifactRootPath(workspaceDir: string, artifactId: string): string {
-  return resolve(workspaceDir, ARTIFACT_FILES_DIRECTORY, artifactId)
-}
-
 function normalizeArtifactFileName(filename: string): string | null {
   if (!filename || filename.includes('\0') || isAbsolute(filename) || win32.isAbsolute(filename)) return null
   const normalized = filename.replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/{2,}/g, '/')
@@ -103,8 +95,49 @@ function slugifyArtifactTitle(title: string): string {
 }
 
 async function readArtifactRegistry(workspaceDir: string): Promise<ArtifactRegistryFile> {
+  const workspaceRoot = await realpath(workspaceDir)
+  return readArtifactRegistryFromRoot(workspaceRoot)
+}
+
+/** Walk one directory segment at a time so recursive mkdir never follows a
+ * workspace-controlled symlink before containment has been checked. */
+async function resolveSafeDirectory(
+  trustedRoot: string,
+  segments: string[],
+  create: boolean
+): Promise<string | null> {
+  let directory = trustedRoot
+  for (const segment of segments) {
+    const candidate = resolve(directory, segment)
+    let info
+    try {
+      info = await lstat(candidate)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+      if (!create) return null
+      try {
+        await mkdir(candidate)
+      } catch (mkdirError) {
+        if ((mkdirError as NodeJS.ErrnoException).code !== 'EEXIST') throw mkdirError
+      }
+      info = await lstat(candidate)
+    }
+    if (info.isSymbolicLink() || !info.isDirectory()) {
+      throw new Error('Unsafe artifact directory')
+    }
+    directory = candidate
+  }
+  return directory
+}
+
+async function readArtifactRegistryFromRoot(workspaceRoot: string): Promise<ArtifactRegistryFile> {
+  const directory = await resolveSafeDirectory(workspaceRoot, [REGISTRY_DIRECTORY], false)
+  if (!directory) return { version: REGISTRY_VERSION, artifacts: [] }
+  const filePath = resolve(directory, REGISTRY_FILENAME)
   try {
-    const parsed = JSON.parse(await readFile(registryPath(workspaceDir), 'utf8')) as Partial<ArtifactRegistryFile>
+    const info = await lstat(filePath)
+    if (info.isSymbolicLink() || !info.isFile()) throw new Error('Unsafe artifact registry')
+    const parsed = JSON.parse(await readFile(filePath, 'utf8')) as Partial<ArtifactRegistryFile>
     if (parsed.version !== REGISTRY_VERSION || !Array.isArray(parsed.artifacts)) throw new Error('Unsupported artifact registry')
     return { version: REGISTRY_VERSION, artifacts: parsed.artifacts }
   } catch (error) {
@@ -117,22 +150,23 @@ async function updateArtifactRegistry<T>(
   workspaceDir: string,
   updater: (registry: ArtifactRegistryFile) => Promise<T> | T
 ): Promise<T> {
-  const previous = registryWrites.get(workspaceDir) || Promise.resolve()
+  const workspaceRoot = await realpath(workspaceDir)
+  const previous = registryWrites.get(workspaceRoot) || Promise.resolve()
   const current = previous.catch(() => undefined).then(async () => {
-    const registry = await readArtifactRegistry(workspaceDir)
+    const directory = await resolveSafeDirectory(workspaceRoot, [REGISTRY_DIRECTORY], true)
+    if (!directory) throw new Error('Unable to create artifact registry directory')
+    const registry = await readArtifactRegistryFromRoot(workspaceRoot)
     const result = await updater(registry)
-    const directory = resolve(workspaceDir, REGISTRY_DIRECTORY)
-    await mkdir(directory, { recursive: true })
     const temporaryPath = resolve(directory, `${REGISTRY_FILENAME}.${randomUUID()}.tmp`)
     await writeFile(temporaryPath, `${JSON.stringify(registry, null, 2)}\n`, 'utf8')
-    await rename(temporaryPath, registryPath(workspaceDir))
+    await rename(temporaryPath, resolve(directory, REGISTRY_FILENAME))
     return result
   })
-  registryWrites.set(workspaceDir, current)
+  registryWrites.set(workspaceRoot, current)
   try {
     return await current
   } finally {
-    if (registryWrites.get(workspaceDir) === current) registryWrites.delete(workspaceDir)
+    if (registryWrites.get(workspaceRoot) === current) registryWrites.delete(workspaceRoot)
   }
 }
 
@@ -179,18 +213,13 @@ async function resolveRegisteredArtifactFile(
   const relativeName = normalizeArtifactFileName(filename)
   if (!relativeName) return null
   const workspaceRoot = await realpath(workspaceDir)
-  const root = artifactRootPath(workspaceRoot, artifactId)
-  if (createParent) await mkdir(dirname(resolve(root, relativeName)), { recursive: true })
-  let canonicalRoot: string
-  let canonicalParent: string
-  try {
-    canonicalRoot = await realpath(root)
-    canonicalParent = await realpath(dirname(resolve(root, relativeName)))
-  } catch {
-    return null
-  }
-  if (!isWithinRoot(workspaceRoot, canonicalRoot) || !isWithinRoot(canonicalRoot, canonicalParent)) return null
-  const absolutePath = resolve(canonicalParent, relativeName.split('/').at(-1)!)
+  const root = await resolveSafeDirectory(workspaceRoot, [ARTIFACT_FILES_DIRECTORY, artifactId], false)
+  if (!root) return null
+  const segments = relativeName.split('/')
+  const filenameSegment = segments.pop()!
+  const parent = await resolveSafeDirectory(root, segments, createParent)
+  if (!parent) return null
+  const absolutePath = resolve(parent, filenameSegment)
   try {
     if ((await lstat(absolutePath)).isSymbolicLink()) return null
   } catch (error) {
@@ -209,8 +238,9 @@ export async function createRegisteredTaskArtifact(
   if (input.type === ArtifactType.PR) throw new Error('PR artifacts are created from pull request URLs')
   const now = Date.now()
   const artifactId = `artifact_${slugifyArtifactTitle(title)}_${randomUUID().replace(/-/g, '').slice(0, 8)}`
-  await mkdir(artifactRootPath(workspaceDir, artifactId), { recursive: true })
-  return updateArtifactRegistry(workspaceDir, (registry) => {
+  return updateArtifactRegistry(workspaceDir, async (registry) => {
+    const workspaceRoot = await realpath(workspaceDir)
+    await resolveSafeDirectory(workspaceRoot, [ARTIFACT_FILES_DIRECTORY, artifactId], true)
     const record: RegisteredArtifact = {
       artifactId,
       taskId,
@@ -235,6 +265,10 @@ export async function writeRegisteredTaskArtifactFile(
   taskId: string,
   input: { artifactId: string; filename: string; content: string; encoding?: 'utf8' | 'base64'; preview?: boolean }
 ): Promise<Artifact> {
+  const existingRegistry = await readArtifactRegistry(workspaceDir)
+  if (!existingRegistry.artifacts.some((artifact) => artifact.artifactId === input.artifactId && artifact.taskId === taskId)) {
+    throw new Error('Artifact not found for this task')
+  }
   const target = await resolveRegisteredArtifactFile(workspaceDir, input.artifactId, input.filename, true)
   if (!target) throw new Error('Invalid artifact ID or filename')
   const bytes = input.encoding === 'base64' ? Buffer.from(input.content, 'base64') : Buffer.from(input.content, 'utf8')
