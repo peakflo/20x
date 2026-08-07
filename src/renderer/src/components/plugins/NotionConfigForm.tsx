@@ -1,8 +1,9 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
-import { Loader2, Plus, X, Search, ChevronDown, RefreshCw } from 'lucide-react'
+import { useState, useEffect, useCallback } from 'react'
+import { Loader2, Plus, X, Search, RefreshCw } from 'lucide-react'
 import { Input } from '@/components/ui/Input'
 import { Label } from '@/components/ui/Label'
 import { Button } from '@/components/ui/Button'
+import { SearchableSelect } from '@/components/ui/SearchableSelect'
 import { pluginApi } from '@/lib/ipc-client'
 import type { ConfigFieldOption } from '@/types'
 import type { PluginFormProps } from './PluginFormProps'
@@ -368,96 +369,6 @@ function MultiSelectValues({
           <p className="text-xs text-muted-foreground px-2 py-1">No matching values</p>
         )}
       </div>
-    </div>
-  )
-}
-
-// ── Searchable Select ────────────────────────────────────────
-
-function SearchableSelect({
-  options,
-  value,
-  onChange,
-  placeholder
-}: {
-  options: { value: string; label: string }[]
-  value: string
-  onChange: (value: string) => void
-  placeholder?: string
-}) {
-  const [open, setOpen] = useState(false)
-  const [search, setSearch] = useState('')
-  const containerRef = useRef<HTMLDivElement>(null)
-  const inputRef = useRef<HTMLInputElement>(null)
-
-  useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
-        setOpen(false)
-      }
-    }
-    document.addEventListener('mousedown', handler)
-    return () => document.removeEventListener('mousedown', handler)
-  }, [])
-
-  const filtered = search
-    ? options.filter((o) => o.label.toLowerCase().includes(search.toLowerCase()))
-    : options
-
-  const selectedLabel = options.find((o) => o.value === value)?.label
-
-  return (
-    <div ref={containerRef} className="relative">
-      <button
-        type="button"
-        onClick={() => {
-          setOpen(!open)
-          if (!open) setTimeout(() => inputRef.current?.focus(), 0)
-        }}
-        className="w-full flex items-center justify-between rounded-md border border-input bg-transparent px-3 py-2 text-sm"
-      >
-        <span className={selectedLabel ? '' : 'text-muted-foreground'}>
-          {selectedLabel || placeholder || 'Select...'}
-        </span>
-        <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
-      </button>
-
-      {open && (
-        <div className="absolute z-50 mt-1 w-full rounded-md border border-input bg-popover shadow-md">
-          <div className="relative border-b border-input">
-            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
-            <input
-              ref={inputRef}
-              type="text"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search..."
-              className="w-full bg-transparent pl-8 pr-3 py-2 text-sm outline-none"
-            />
-          </div>
-          <div className="max-h-48 overflow-y-auto p-1">
-            {filtered.map((opt) => (
-              <button
-                key={opt.value}
-                type="button"
-                onClick={() => {
-                  onChange(opt.value)
-                  setOpen(false)
-                  setSearch('')
-                }}
-                className={`w-full text-left rounded px-2 py-1.5 text-sm hover:bg-accent ${
-                  opt.value === value ? 'bg-accent' : ''
-                }`}
-              >
-                {opt.label}
-              </button>
-            ))}
-            {filtered.length === 0 && (
-              <p className="px-2 py-1.5 text-xs text-muted-foreground">No results</p>
-            )}
-          </div>
-        </div>
-      )}
     </div>
   )
 }
