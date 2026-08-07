@@ -978,7 +978,7 @@ Update existing skills that were helpful or create new ones for patterns worth r
                     artifacts={artifacts}
                     ui={artifactUI}
                     artifactApi={artifactApi}
-                    hasChanges={task.repos.length > 0}
+                    hasChanges
                     hasOutput={task.output_fields.length > 0}
                     changesCount={changesSummary?.files}
                     onSelectTab={(tabId) => selectArtifactTab(task.id, tabId, true)}
@@ -997,7 +997,7 @@ Update existing skills that were helpful or create new ones for patterns worth r
                   expanded={artifactUI.railExpanded}
                   activeTabId={artifactUI.activeTabId}
                   agentActive={session.status === SessionStatus.WORKING}
-                  hasChanges={task.repos.length > 0}
+                  hasChanges
                   hasOutput={task.output_fields.length > 0}
                   changesCount={changesSummary?.files}
                   onSelectTab={(tabId) => selectArtifactTab(task.id, tabId, true)}

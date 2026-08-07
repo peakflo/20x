@@ -36,6 +36,11 @@ new file mode 100644
 beforeEach(() => {
   persisted.clear()
   changes.mockReset().mockResolvedValue([{
+    repo: 'Task workspace',
+    diff: '',
+    allFiles: ['.agents/skills/ui/SKILL.md', 'AGENTS.md', 'attachments/spec.pdf'],
+    workspace: true
+  }, {
     repo: 'peakflo/20x',
     diff,
     allFiles: ['README.md', 'package.json', 'src/components/Button.tsx', 'src/new.ts', 'src/unchanged.ts'],
@@ -51,6 +56,9 @@ describe('ChangesPanel', () => {
     render(<ChangesPanel taskId="task-1" repos={['peakflo/20x']} />)
 
     expect(await screen.findByText('src')).toBeInTheDocument()
+    expect(screen.getAllByText('Task workspace').length).toBeGreaterThan(0)
+    expect(screen.getByText('AGENTS.md')).toBeInTheDocument()
+    expect(screen.getByText('attachments')).toBeInTheDocument()
     expect(screen.queryByText('components')).not.toBeInTheDocument()
     expect(screen.queryByText('Button.tsx')).not.toBeInTheDocument()
     expect(screen.getByText('package.json')).toBeInTheDocument()
@@ -73,6 +81,7 @@ describe('ChangesPanel', () => {
     expect(screen.getByText('Modified')).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: 'Diff' }))
+    await waitFor(() => expect(screen.queryAllByText('Task workspace')).toHaveLength(0))
     expect(screen.getByText('components')).toBeInTheDocument()
     expect(screen.queryByText('unchanged.ts')).not.toBeInTheDocument()
     expect(screen.queryByText('package.json')).not.toBeInTheDocument()

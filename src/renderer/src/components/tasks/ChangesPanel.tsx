@@ -14,6 +14,7 @@ export interface RepoChanges {
   repo: string
   files: DiffFile[]
   allFiles: string[]
+  workspace?: boolean
   error?: string
   noWorktree?: boolean
   path?: string
@@ -315,7 +316,7 @@ function RepoTree({ repo, selectedKey, includeAll, onSelect }: {
         className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left hover:bg-accent/50"
       >
         <ChevronRight className={cn('h-3 w-3 shrink-0 text-muted-foreground transition-transform', open && 'rotate-90')} />
-        <FolderGit2 className="h-3.5 w-3.5 shrink-0 text-primary" />
+        {repo.workspace ? <FolderOpen className="h-3.5 w-3.5 shrink-0 text-primary" /> : <FolderGit2 className="h-3.5 w-3.5 shrink-0 text-primary" />}
         <span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground">{repo.repo}</span>
         <span className="text-[10px] text-muted-foreground">{tree.stats.files}</span>
       </button>
@@ -438,14 +439,13 @@ export function ChangesPanel({ taskId, repos, className, onSummary, onPullReques
   const reposKey = repos.join('|')
   const load = useCallback(async () => {
     const list = reposKey ? reposKey.split('|') : []
-    if (!list.length) { setData([]); onSummary?.({ files: 0, additions: 0, deletions: 0 }); return }
     setLoading(true)
     try {
       const res = await worktreeApi.changes(taskId, list.map((fullName) => ({ fullName })))
       const parsed = res.map((r) => {
         const files = r.diff ? parseUnifiedDiff(r.diff) : []
         return {
-          repo: r.repo, error: r.error, noWorktree: r.noWorktree, path: r.path,
+          repo: r.repo, workspace: r.workspace, error: r.error, noWorktree: r.noWorktree, path: r.path,
           branch: r.branch, pushed: r.pushed, prNumber: r.prNumber, prUrl: r.prUrl, prState: r.prState,
           prTitle: r.prTitle, ciStatus: r.ciStatus, files,
           allFiles: r.allFiles?.length ? r.allFiles : files.map((file) => file.path)
@@ -525,7 +525,7 @@ export function ChangesPanel({ taskId, repos, className, onSummary, onPullReques
           <button
             type="button"
             onClick={() => setChangesMode(ChangesDisplayMode.ALL_FILES)}
-            title="Browse every tracked and untracked repository file"
+            title="Browse task workspace files and every tracked or untracked repository file"
             className={cn('flex h-6 items-center gap-1 rounded-md px-2 text-[11px] transition-colors', displayMode === ChangesDisplayMode.ALL_FILES ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground')}
           >
             <ListTree className="h-3.5 w-3.5" />All files
@@ -554,7 +554,7 @@ export function ChangesPanel({ taskId, repos, className, onSummary, onPullReques
         {loading && !data && (
           <div className="flex h-full items-center justify-center text-sm text-muted-foreground"><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Computing diff…</div>
         )}
-        {!loading && !repos.length && (
+        {!loading && !repos.length && displayMode === ChangesDisplayMode.DIFF && (
           <div className="flex h-full items-center justify-center px-6 text-center text-sm text-muted-foreground">This task has no linked repositories.</div>
         )}
         {data && repos.length > 0 && displayMode === ChangesDisplayMode.DIFF && !hasChanges && !loading && !data.some((r) => r.error) && (

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import path from 'path'
 
-const { execFileMock, existsSyncMock, mkdirSyncMock } = vi.hoisted(() => {
+const { execFileMock, existsSyncMock, mkdirSyncMock, readdirMock } = vi.hoisted(() => {
   const execFileMock = vi.fn()
   const existsSyncMock = vi.fn()
   const mkdirSyncMock = vi.fn()
@@ -22,7 +22,7 @@ const { execFileMock, existsSyncMock, mkdirSyncMock } = vi.hoisted(() => {
     })
   }
 
-  return { execFileMock, existsSyncMock, mkdirSyncMock }
+  return { execFileMock, existsSyncMock, mkdirSyncMock, readdirMock: vi.fn() }
 })
 
 vi.mock('child_process', () => ({
@@ -33,6 +33,10 @@ vi.mock('fs', () => ({
   existsSync: existsSyncMock,
   mkdirSync: mkdirSyncMock,
   rmSync: vi.fn()
+}))
+
+vi.mock('fs/promises', () => ({
+  readdir: readdirMock
 }))
 
 vi.mock('electron', () => ({
@@ -48,6 +52,7 @@ describe('WorktreeManager', () => {
     execFileMock.mockReset()
     existsSyncMock.mockReset()
     mkdirSyncMock.mockReset()
+    readdirMock.mockReset().mockRejectedValue(new Error('Workspace unavailable'))
     existsSyncMock.mockReturnValue(false)
     execFileMock.mockImplementation((file: string, args: string[], optionsOrCallback: unknown, maybeCallback?: (error: Error | null, stdout?: string, stderr?: string) => void) => {
       const callback = typeof optionsOrCallback === 'function'
@@ -153,12 +158,38 @@ describe('WorktreeManager', () => {
     const manager = new WorktreeManager()
     const result = await manager.getTaskChanges('task-3', [{ fullName: 'peakflo/20x' }])
 
-    expect(result[0].allFiles).toEqual(['README.md', 'src/changed.ts', 'src/untracked.ts'])
+    expect(result.find((entry) => entry.repo === 'peakflo/20x')?.allFiles).toEqual(['README.md', 'src/changed.ts', 'src/untracked.ts'])
     expect(execFileMock).toHaveBeenCalledWith(
       'git',
       ['-c', 'core.quotepath=false', 'ls-files', '--cached', '--others', '--exclude-standard', '-z'],
       expect.objectContaining({ maxBuffer: 64 * 1024 * 1024 }),
       expect.any(Function)
     )
+  })
+
+  it('returns files outside linked repositories as a task workspace tree', async () => {
+    const workspacePath = path.join('/tmp/20x-user-data', 'workspaces', 'task-4')
+    existsSyncMock.mockImplementation((candidate: string) => candidate === workspacePath)
+
+    const directory = (name: string) => ({ name, isDirectory: () => true, isFile: () => false, isSymbolicLink: () => false })
+    const file = (name: string) => ({ name, isDirectory: () => false, isFile: () => true, isSymbolicLink: () => false })
+    readdirMock.mockImplementation(async (candidate: string) => {
+      if (candidate === workspacePath) return [directory('.agents'), file('AGENTS.md'), directory('attachments'), directory('20x')]
+      if (candidate === path.join(workspacePath, '.agents')) return [directory('skills')]
+      if (candidate === path.join(workspacePath, '.agents', 'skills')) return [directory('ui')]
+      if (candidate === path.join(workspacePath, '.agents', 'skills', 'ui')) return [file('SKILL.md')]
+      if (candidate === path.join(workspacePath, 'attachments')) return [file('spec.pdf')]
+      return []
+    })
+
+    const result = await new WorktreeManager().getTaskChanges('task-4', [{ fullName: 'peakflo/20x' }])
+    const workspace = result.find((entry) => entry.workspace)
+
+    expect(workspace?.allFiles).toEqual([
+      '.agents/skills/ui/SKILL.md',
+      'AGENTS.md',
+      'attachments/spec.pdf'
+    ])
+    expect(workspace?.allFiles).not.toContain('20x')
   })
 })
