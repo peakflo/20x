@@ -55,7 +55,7 @@ export function ArtifactsPanel({ artifacts, ui, artifactApi, hasChanges, hasOutp
         {hasOutput && <div className={active === PinnedArtifactTabId.OUTPUT ? 'h-full overflow-y-auto p-4' : 'hidden'}>{output}</div>}
         {artifacts.map((artifact) => (
           <div key={artifact.id} className={active === artifact.id ? 'h-full' : 'hidden'}>
-            {active === artifact.id ? <ArtifactViewer artifact={{ ...artifact, reloadTrigger: artifact.reloadTrigger + refreshTrigger }} artifactApi={artifactApi} /> : null}
+            {active === artifact.id ? <ArtifactViewer artifact={artifact} artifactApi={artifactApi} refreshTrigger={refreshTrigger} /> : null}
           </div>
         ))}
       </div>
@@ -63,12 +63,12 @@ export function ArtifactsPanel({ artifacts, ui, artifactApi, hasChanges, hasOutp
   )
 }
 
-function ArtifactViewer({ artifact, artifactApi }: { artifact: Artifact; artifactApi: ArtifactApi }) {
+function ArtifactViewer({ artifact, artifactApi, refreshTrigger }: { artifact: Artifact; artifactApi: ArtifactApi; refreshTrigger: number }) {
   switch (artifact.type) {
-    case ArtifactType.MARKDOWN: return <MarkdownArtifactView artifact={artifact} artifactApi={artifactApi} />
-    case ArtifactType.IMAGE: return <ImageArtifactView artifact={artifact} artifactApi={artifactApi} />
-    case ArtifactType.HTML: return <HtmlArtifactView artifact={artifact} artifactApi={artifactApi} />
-    case ArtifactType.PR: return <PrArtifactView artifact={artifact} />
-    default: return <FileArtifactView artifact={artifact} artifactApi={artifactApi} />
+    case ArtifactType.MARKDOWN: return <MarkdownArtifactView artifact={artifact} artifactApi={artifactApi} refreshTrigger={refreshTrigger} />
+    case ArtifactType.IMAGE: return <ImageArtifactView artifact={artifact} artifactApi={artifactApi} refreshTrigger={refreshTrigger} />
+    case ArtifactType.HTML: return <HtmlArtifactView artifact={artifact} artifactApi={artifactApi} refreshTrigger={refreshTrigger} />
+    case ArtifactType.PR: return <PrArtifactView artifact={artifact} refreshTrigger={refreshTrigger} />
+    default: return <FileArtifactView artifact={artifact} artifactApi={artifactApi} refreshTrigger={refreshTrigger} />
   }
 }
