@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertTriangle,
   ArrowRight,
@@ -48,15 +48,17 @@ function CheckIcon({ state }: { state: PullRequestCheckState }) {
   return <Loader2 className="h-3.5 w-3.5 animate-spin text-amber-500" />
 }
 
-export function PrArtifactView({ artifact }: { artifact: Artifact }) {
+export function PrArtifactView({ artifact, refreshTrigger = 0 }: { artifact: Artifact; refreshTrigger?: number }) {
   const [details, setDetails] = useState<PullRequestDetails | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [refreshKey, setRefreshKey] = useState(0)
+  const settledUrlRef = useRef<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
     if (!artifact.url) {
+      settledUrlRef.current = null
       setLoading(false)
       setError('Pull request URL is unavailable.')
       return
@@ -67,17 +69,26 @@ export function PrArtifactView({ artifact }: { artifact: Artifact }) {
       setError('Restart 20x to load the updated pull request integration.')
       return
     }
-    setLoading(true)
-    setError(null)
+    const initialLoad = settledUrlRef.current !== artifact.url
+    if (initialLoad) {
+      setLoading(true)
+      setError(null)
+    }
     void fetchPullRequestDetails(artifact.url).then((result) => {
-      if (!cancelled) setDetails(result)
+      if (!cancelled) {
+        setDetails(result)
+        setError(null)
+      }
     }).catch((reason: unknown) => {
-      if (!cancelled) setError(reason instanceof Error ? reason.message : String(reason))
+      if (!cancelled && initialLoad) setError(reason instanceof Error ? reason.message : String(reason))
     }).finally(() => {
-      if (!cancelled) setLoading(false)
+      if (!cancelled) {
+        settledUrlRef.current = artifact.url!
+        if (initialLoad) setLoading(false)
+      }
     })
     return () => { cancelled = true }
-  }, [artifact.url, artifact.reloadTrigger, refreshKey])
+  }, [artifact.url, artifact.reloadTrigger, refreshKey, refreshTrigger])
 
   const checkSummary = useMemo(() => {
     const checks = details?.checks || []
