@@ -1849,7 +1849,11 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       }
     }
     if (!session || !session.adapter) return
-    if (session.status === 'working') return
+
+    // Do not use session.status as a guard here. The polling entry is removed
+    // before transitionToIdle() completes, so there is a short interval where
+    // the session still says "working" but no poller exists. A harness event in
+    // that interval must re-register polling or its buffered data is stranded.
 
     const targetId = resolvedId
     this.wakingSessions.add(targetId)
