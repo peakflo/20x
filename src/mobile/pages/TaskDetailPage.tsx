@@ -1,4 +1,4 @@
-import { useMemo, useCallback, useState, useRef } from 'react'
+import { useMemo, useCallback, useEffect, useState, useRef } from 'react'
 import { TaskStatus } from '@shared/constants'
 import { isAgentConfigured, getAgentConfigIssue } from '@shared/agent-utils'
 import { CollapsibleDescription } from '../components/CollapsibleDescription'
@@ -10,6 +10,8 @@ import { Badge } from '../components/Badge'
 import { PriorityBadge } from '../components/PriorityBadge'
 import { TaskStatusDot } from '../components/TaskStatusDot'
 import { MessageActivityGroup, MessageBubble, isCompactActivityMessage } from '../components/MessageBubble'
+import { ArtifactCard } from '../components/ArtifactCard'
+import { useArtifactStore } from '../stores/artifact-store'
 import { cn, formatDate, isOverdue, formatRelativeDate, formatRelativeFuture, STATUS_VARIANT, STATUS_DOT_COLORS } from '../lib/utils'
 import type { Route } from '../App'
 
@@ -83,7 +85,17 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
   const endSession = useAgentStore((s) => s.endSession)
 
   const [showFeedback, setShowFeedback] = useState(false)
+  const [activeSection, setActiveSection] = useState<'details' | 'artifacts'>('details')
+  const artifactsByTask = useArtifactStore((s) => s.artifactsByTask)
+  const hydrateArtifacts = useArtifactStore((s) => s.hydrate)
+  const artifactLoadingTaskIds = useArtifactStore((s) => s.loadingTaskIds)
+  const artifacts = artifactsByTask.get(taskId) || []
+  const artifactsLoading = artifactLoadingTaskIds.has(taskId)
   const { handleStart: _startSession, handleResume: _resumeSession, handleStop: _stopSession, busyRef } = useSessionControls(taskId)
+
+  useEffect(() => {
+    if (task) void hydrateArtifacts(taskId)
+  }, [hydrateArtifacts, task, taskId])
 
   // Session is already synced and running (from desktop or elsewhere)
   const isSessionRunning = session?.sessionId && (session.status === SessionStatus.WORKING || session.status === SessionStatus.WAITING_APPROVAL)
@@ -282,7 +294,26 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
         }
       />
 
-      <div className="flex-1 overflow-y-auto">
+      <div className="shrink-0 border-b border-border/50 px-4 py-2">
+        <div className="grid grid-cols-2 rounded-md bg-muted/40 p-0.5 text-xs">
+          <button
+            type="button"
+            onClick={() => setActiveSection('details')}
+            className={cn('rounded px-3 py-1.5 transition-colors', activeSection === 'details' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground')}
+          >
+            Details
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveSection('artifacts')}
+            className={cn('rounded px-3 py-1.5 transition-colors', activeSection === 'artifacts' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground')}
+          >
+            Artifacts{artifacts.length > 0 ? ` (${artifacts.length})` : ''}
+          </button>
+        </div>
+      </div>
+
+      <div className={cn('flex-1 overflow-y-auto', activeSection !== 'details' && 'hidden')}>
         {/* Parent task context panel */}
         {parentTask && (
           <ParentTaskContextMobile parentTask={parentTask} onNavigate={onNavigate} />
@@ -712,6 +743,30 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
                 )}
               </>
             )}
+          </div>
+        )}
+      </div>
+
+      <div className={cn('flex-1 overflow-y-auto p-4', activeSection !== 'artifacts' && 'hidden')}>
+        {artifactsLoading && artifacts.length === 0 && (
+          <div className="flex h-full items-center justify-center text-sm text-muted-foreground">Scanning workspace…</div>
+        )}
+        {!artifactsLoading && artifacts.length === 0 && (
+          <div className="flex h-full flex-col items-center justify-center gap-2 text-center text-muted-foreground">
+            <svg className="h-8 w-8 opacity-30" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/></svg>
+            <p className="text-sm">No artifacts yet</p>
+            <p className="max-w-xs text-xs">Files created by the agent will appear here.</p>
+          </div>
+        )}
+        {artifacts.length > 0 && (
+          <div className="space-y-2">
+            {artifacts.map((artifact) => (
+              <ArtifactCard
+                key={artifact.id}
+                artifact={artifact}
+                onOpen={() => onNavigate({ page: 'artifact', taskId, artifactId: artifact.id })}
+              />
+            ))}
           </div>
         )}
       </div>

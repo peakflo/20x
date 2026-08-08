@@ -4,6 +4,7 @@
  * In dev mode (Vite on a different port), we point directly at the Electron server.
  */
 import { getAuthToken } from './auth'
+import type { Artifact, ArtifactContent, PullRequestDetails } from '@shared/artifacts'
 
 const MOBILE_API_PORT = '20620'
 // When served via a reverse proxy (Cloudflare tunnel, https with no explicit port),
@@ -88,7 +89,9 @@ export const api = {
     getOrgs: () => get<Array<{ value: string; label: string; provider?: string }>>('/api/github/orgs'),
     setOrg: (org: string) => post<{ org: string }>('/api/github/org', { org }),
     fetchRepos: (org: string, provider?: string) =>
-      post<Array<{ name: string; fullName: string; defaultBranch: string; cloneUrl: string; description: string; isPrivate: boolean }>>('/api/github/repos', { org, provider })
+      post<Array<{ name: string; fullName: string; defaultBranch: string; cloneUrl: string; description: string; isPrivate: boolean }>>('/api/github/repos', { org, provider }),
+    pullRequest: (url: string) =>
+      get<PullRequestDetails>(`/api/github/pull-request?url=${encodeURIComponent(url)}`)
   },
   sessions: {
     list: () => get<unknown[]>('/api/sessions'),
@@ -114,8 +117,16 @@ export const api = {
     /** Parts changed since a rev cursor (delta reconcile). */
     delta: (taskId: string, sinceRev: number) =>
       get<{ parts: TranscriptPartRecord[]; maxRev: number }>(`/api/tasks/${encodeURIComponent(taskId)}/transcript/delta?sinceRev=${sinceRev}`)
+  },
+  artifacts: {
+    list: (taskId: string) =>
+      get<Artifact[]>(`/api/tasks/${encodeURIComponent(taskId)}/artifacts`),
+    content: (taskId: string, path: string) =>
+      get<ArtifactContent>(`/api/tasks/${encodeURIComponent(taskId)}/artifacts/content?path=${encodeURIComponent(path)}`)
   }
 }
+
+export type { ArtifactContent }
 
 /** A durable transcript projection part (single source of truth for rendering). */
 export interface TranscriptPartRecord {

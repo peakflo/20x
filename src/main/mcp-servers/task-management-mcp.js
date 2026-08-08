@@ -16,6 +16,9 @@ if (!apiUrl) {
 const scopeParentId = process.env.TASK_SCOPE_PARENT_ID || null
 const scopeTaskId = process.env.TASK_SCOPE_TASK_ID || null
 const isScoped = !!(scopeParentId && scopeTaskId)
+// Artifact access is always pinned to the current task, even when the agent
+// retains broader task orchestration tools.
+const artifactScopeTaskId = process.env.TASK_ARTIFACT_SCOPE_ID || scopeTaskId
 
 async function callApi(route, params = {}) {
   const url = `${apiUrl}${route}`
@@ -35,8 +38,79 @@ async function callApi(route, params = {}) {
 
 // ── Tool definitions ──────────────────────────────────────────
 
+const artifactTools = [
+  {
+    name: 'create_artifact',
+    description: 'Create a durable task-scoped artifact workpiece before writing its files. Returns a stable artifact_id for subsequent file calls.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        task_id: { type: 'string', description: 'Task ID. Automatically scoped in a task agent session.' },
+        title: { type: 'string', description: 'Human-readable artifact title' },
+        type: { type: 'string', enum: ['markdown', 'image', 'html', 'file'], description: 'Initial preview format; updated from the selected entry file when written' }
+      },
+      required: ['title', 'type']
+    }
+  },
+  {
+    name: 'list_artifacts',
+    description: 'List explicitly registered artifact workpieces and their owned files for a task.',
+    inputSchema: {
+      type: 'object',
+      properties: { task_id: { type: 'string', description: 'Task ID. Automatically scoped in a task agent session.' } }
+    }
+  },
+  {
+    name: 'read_artifact_file',
+    description: 'Read a file owned by an artifact. Text is returned as UTF-8; images are returned as base64.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        task_id: { type: 'string', description: 'Task ID. Automatically scoped in a task agent session.' },
+        artifact_id: { type: 'string', description: 'Stable artifact ID returned by create_artifact' },
+        filename: { type: 'string', description: 'Path relative to the artifact root' }
+      },
+      required: ['artifact_id', 'filename']
+    }
+  },
+  {
+    name: 'write_artifact_file',
+    description: 'Write or replace a file inside an existing artifact workpiece. Use preview=true to make this file the artifact entry point.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        task_id: { type: 'string', description: 'Task ID. Automatically scoped in a task agent session.' },
+        artifact_id: { type: 'string', description: 'Stable artifact ID returned by create_artifact' },
+        filename: { type: 'string', description: 'Path relative to the artifact root, such as index.html or data/report.json' },
+        content: { type: 'string', description: 'Complete file content' },
+        encoding: { type: 'string', enum: ['utf8', 'base64'], description: 'Use base64 for binary image content; defaults to utf8' },
+        preview: { type: 'boolean', description: 'Select this file as the artifact preview entry point' }
+      },
+      required: ['artifact_id', 'filename', 'content']
+    }
+  },
+  {
+    name: 'edit_artifact_file',
+    description: 'Edit one exact text occurrence inside an artifact-owned file. Read the file first; the match must occur exactly once.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        task_id: { type: 'string', description: 'Task ID. Automatically scoped in a task agent session.' },
+        artifact_id: { type: 'string', description: 'Stable artifact ID returned by create_artifact' },
+        filename: { type: 'string', description: 'Path relative to the artifact root' },
+        text_to_replace: { type: 'string', description: 'Exact text that must occur once' },
+        replacement: { type: 'string', description: 'Replacement text' }
+      },
+      required: ['artifact_id', 'filename', 'text_to_replace', 'replacement']
+    }
+  }
+]
+
+const artifactToolNames = new Set(artifactTools.map((tool) => tool.name))
+
 // Tools available in BOTH modes
 const sharedTools = [
+  ...artifactTools,
   {
     name: 'list_agents',
     description: 'List all available agents with their capabilities and configurations',
@@ -554,6 +628,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     // Normalize legacy 'in_progress' status to 'agent_working' for any task update
     const normalizedArgs = args ? { ...args } : {}
     if (normalizedArgs.status === 'in_progress') normalizedArgs.status = 'agent_working'
+    if (artifactToolNames.has(name) && artifactScopeTaskId) normalizedArgs.task_id = artifactScopeTaskId
 
     const result = isScoped
       ? await handleScopedCall(name, normalizedArgs)

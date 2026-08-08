@@ -3,6 +3,7 @@ import type { Agent, CreateAgentDTO, UpdateAgentDTO } from '@/types'
 import { agentApi, agentSessionApi, onAgentStatus, onAgentApproval, onTranscriptChanged } from '@/lib/ipc-client'
 import type { AgentStatusEvent, AgentApprovalRequest, TranscriptPartRecord, TranscriptChangedEvent } from '@/types/electron'
 import { captureAnalyticsEvent } from '@/lib/analytics'
+import { useArtifactStore } from './artifact-store'
 
 // ── Message type ──────────────────────────────────────────────
 
@@ -254,6 +255,7 @@ export const useAgentStore = create<AgentState>((set, get) => {
       const maxRev = snapshot.reduce((m, p) => Math.max(m, p.rev || 0), 0)
       // Snapshot is the authoritative full state — replace the cache.
       projections.set(taskId, { parts: new Map(snapshot.map((p) => [p.partId, p])), rev: maxRev })
+      useArtifactStore.getState().projectTranscriptParts(taskId, snapshot)
       commitMessages(taskId)
     } catch (err) {
       console.error(`[agent-store] hydrateTranscript failed for task ${taskId}:`, err)
@@ -283,6 +285,7 @@ export const useAgentStore = create<AgentState>((set, get) => {
   // Transcript content: the ONLY writer of messages. Idempotent delta apply.
   onTranscriptChanged((event: TranscriptChangedEvent) => {
     if (!event?.taskId) return
+    useArtifactStore.getState().projectTranscriptParts(event.taskId, event.parts || [])
     // Background agents continue writing to the durable projection, but an
     // unmounted task has no renderer consumer. Ignoring its payload here avoids
     // rebuilding every off-screen transcript in memory; bindTranscript() loads
@@ -332,6 +335,11 @@ export const useAgentStore = create<AgentState>((set, get) => {
     // "starting". Interim `idle` events during resume must NOT clear it.
     if (event.status !== SessionStatus.IDLE) updated.pendingSend = false
     set({ sessions: new Map(state.sessions).set(session.taskId, updated) })
+    if (previousStatus === SessionStatus.IDLE && event.status !== SessionStatus.IDLE) {
+      useArtifactStore.getState().beginTurn(session.taskId)
+    } else if (previousStatus !== SessionStatus.IDLE && event.status === SessionStatus.IDLE) {
+      useArtifactStore.getState().endTurn(session.taskId)
+    }
     if (previousStatus !== SessionStatus.IDLE && event.status === SessionStatus.IDLE) {
       flushOutputAnalytics(session.taskId, updated)
     }

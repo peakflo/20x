@@ -21,6 +21,8 @@ import { randomUUID } from 'crypto'
 import { registerSecretSession, unregisterSecretSession, getSecretBrokerPort, writeSecretShellWrapper } from './secret-broker'
 import { registerMcpProxyTarget, getMcpAuthProxyPort } from './mcp-auth-proxy'
 import { analytics } from './analytics-service'
+import { inspectTaskArtifact } from './artifacts'
+import { ArtifactType, pullRequestUrlFromTool, type Artifact } from '../shared/artifacts'
 
 // Coding agent backend type enum
 enum CodingAgentType {
@@ -28,6 +30,12 @@ enum CodingAgentType {
   CLAUDE_CODE = 'claude-code',
   CODEX = 'codex'
 }
+
+const ARTIFACT_WORKSPACE_INSTRUCTIONS = `
+
+[Workspace Deliverables]
+Repository files are code and appear in the task's Changes view; do not treat ordinary source files as artifacts.
+For every standalone user-facing deliverable, first call \`create_artifact\` on the task-management MCP server. Then use \`write_artifact_file\`, \`read_artifact_file\`, and \`edit_artifact_file\` with the returned artifact_id. Multiple supporting files belong to that one artifact; mark its preview entry file with \`preview: true\`. Do not create artifact files with generic filesystem Write/Edit tools. Screenshots and pull requests are detected automatically.`
 
 // Default OpenCode server URL (matches database default)
 const DEFAULT_SERVER_URL = 'http://localhost:4096'
@@ -666,7 +674,7 @@ export class AgentManager extends EventEmitter {
    * Builds MCP servers config for adapters (Claude Code, etc.)
    * Converts from database format to adapter format
    */
-  private async buildMcpServersForAdapter(agentId: string, opts?: { ensureTaskManagement?: boolean; taskScope?: { taskId: string; parentTaskId: string } }): Promise<Record<string, McpServerConfig>> {
+  private async buildMcpServersForAdapter(agentId: string, opts?: { ensureTaskManagement?: boolean; taskScope?: { taskId: string; parentTaskId: string }; artifactTaskId?: string }): Promise<Record<string, McpServerConfig>> {
     const agent = this.db.getAgent(agentId)
     const mcpEntries = agent?.config?.mcp_servers || []
     const result: Record<string, McpServerConfig> = {}
@@ -697,6 +705,7 @@ export class AgentManager extends EventEmitter {
           if (opts?.taskScope) {
             env = { ...env, TASK_SCOPE_PARENT_ID: opts.taskScope.parentTaskId, TASK_SCOPE_TASK_ID: opts.taskScope.taskId }
           }
+          if (opts?.artifactTaskId) env = { ...env, TASK_ARTIFACT_SCOPE_ID: opts.artifactTaskId }
         }
 
         result[mcpServer.name] = {
@@ -763,6 +772,7 @@ export class AgentManager extends EventEmitter {
           env.TASK_SCOPE_PARENT_ID = opts.taskScope.parentTaskId
           env.TASK_SCOPE_TASK_ID = opts.taskScope.taskId
         }
+        if (opts?.artifactTaskId) env.TASK_ARTIFACT_SCOPE_ID = opts.artifactTaskId
         result['task-management'] = {
           type: 'stdio',
           command: tmServer.command,
@@ -789,14 +799,14 @@ export class AgentManager extends EventEmitter {
     const isTriageSession = this.isTriageSessionTask(taskId, task)
     const isSubtask = !!task?.parent_task_id
     const taskScope = isSubtask && task?.parent_task_id ? { taskId, parentTaskId: task.parent_task_id } : undefined
-    const mcpServers = await this.buildMcpServersForAdapter(agentId, { ensureTaskManagement: isMastermind || isTriageSession || isSubtask, taskScope })
+    const mcpServers = await this.buildMcpServersForAdapter(agentId, { ensureTaskManagement: isMastermind || isTriageSession || isSubtask || !!task, taskScope, artifactTaskId: task ? taskId : undefined })
 
     // Build system prompt with task context so follow-up messages after idle
     // retain awareness of what task the agent is working on. Without this,
     // doSendAdapterMessage sends a bare prompt and the agent loses context.
     const baseSystemPrompt = agent.config?.system_prompt || ''
     const taskContext = task
-      ? `\n\n[Task Context]\nTask: "${task.title}"\n${task.description || ''}`
+      ? `\n\n[Task Context]\nTask: "${task.title}"\n${task.description || ''}${ARTIFACT_WORKSPACE_INSTRUCTIONS}`
       : ''
 
     const config: SessionConfig = {
@@ -1434,7 +1444,7 @@ export class AgentManager extends EventEmitter {
     // per-agent MCP configuration.
     const isMastermind = taskId === 'mastermind-session'
     const ensureTaskManagement = isMastermind || isTriageSession || isSubtask || !!task
-    const mcpServers = await this.buildMcpServersForAdapter(agentId, { ensureTaskManagement, taskScope })
+    const mcpServers = await this.buildMcpServersForAdapter(agentId, { ensureTaskManagement, taskScope, artifactTaskId: task ? taskId : undefined })
 
     // Build session config
     const sessionConfig: SessionConfig = {
@@ -1578,7 +1588,7 @@ export class AgentManager extends EventEmitter {
         // Reuse the task we already fetched above instead of hitting the DB again
         const currentTask = task || this.db.getTask(taskId)
         promptText = currentTask
-          ? `Work on task: "${currentTask.title}"\n\n${currentTask.description || ''}`
+          ? `Work on task: "${currentTask.title}"\n\n${currentTask.description || ''}${ARTIFACT_WORKSPACE_INSTRUCTIONS}`
           : `Work on task: ${taskId}`
 
         // Add subtask context: if this is a subtask, include parent and sibling info
@@ -2651,7 +2661,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     const taskScope = isSubtask && task?.parent_task_id ? { taskId, parentTaskId: task.parent_task_id } : undefined
     await yieldEL()
 
-    const mcpServers = await this.buildMcpServersForAdapter(agentId, { ensureTaskManagement: isMastermind || isTriageSession || isSubtask, taskScope })
+    const mcpServers = await this.buildMcpServersForAdapter(agentId, { ensureTaskManagement: isMastermind || isTriageSession || isSubtask || !!task, taskScope, artifactTaskId: task ? taskId : undefined })
 
     // Build system prompt with task context (survives context compaction)
     const baseSystemPrompt = agent.config?.system_prompt || ''
@@ -5082,6 +5092,96 @@ Important:
     }
     for (const fn of this.externalListeners) {
       try { fn('transcript:changed', payload) } catch { /* ignore */ }
+    }
+    this.emitArtifactUpdatesFromParts(taskId, parts)
+  }
+
+  /** Broadcast automatically discovered URL/screenshot artifacts. Durable file
+   * workpieces are emitted directly by the task-management artifact tools;
+   * generic repository Write/Edit calls must never create artifact identity. */
+  private emitArtifactUpdatesFromParts(taskId: string, parts: ReturnType<DatabaseManager['getTranscriptParts']>): void {
+    const prUrls = new Set<string>()
+    for (const part of parts) {
+      const url = pullRequestUrlFromTool(part.tool)
+      if (url) prUrls.add(url)
+    }
+    for (const url of prUrls) {
+      const number = url.match(/\/(\d+)$/)?.[1]
+      this.sendArtifactUpdated({
+        id: `${taskId}:${ArtifactType.PR}:${encodeURIComponent(url)}`,
+        taskId,
+        type: ArtifactType.PR,
+        title: number ? `Pull request #${number}` : 'Pull request',
+        url,
+        updatedAt: Date.now(),
+        reloadTrigger: 0
+      })
+    }
+
+    const screenshotPaths = new Set<string>()
+    for (const part of parts) {
+      if (part.partType !== 'tool' || !part.tool || typeof part.tool !== 'object') continue
+      const tool = part.tool as { name?: string; status?: string; input?: unknown; output?: unknown }
+      const name = (tool.name || '').toLowerCase()
+      const status = (tool.status || '').toLowerCase()
+      const completed = ['success', 'succeeded', 'complete', 'completed'].includes(status)
+      if (!completed || !name.includes('screenshot')) continue
+
+      const parseRecord = (value: unknown): Record<string, unknown> | null => {
+        if (value && typeof value === 'object') return value as Record<string, unknown>
+        if (typeof value !== 'string' || !value.trim()) return null
+        try {
+          const parsed = JSON.parse(value)
+          return parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : null
+        } catch {
+          return null
+        }
+      }
+      const findPath = (record: Record<string, unknown> | null): string | undefined => {
+        if (!record) return undefined
+        for (const key of ['file_path', 'path', 'filename', 'notebook_path']) {
+          const value = record[key]
+          if (typeof value === 'string' && value.trim()) return value.trim()
+        }
+        return undefined
+      }
+      const path = findPath(parseRecord(tool.input)) || findPath(parseRecord(tool.output))
+      if (path) screenshotPaths.add(path)
+    }
+    if (screenshotPaths.size === 0) return
+
+    const workspaceDir = this.db.getWorkspaceDir(taskId)
+    void Promise.all([...screenshotPaths].map((path) => inspectTaskArtifact(workspaceDir, path))).then((entries) => {
+      for (const discovered of entries) {
+        const entry = discovered && {
+          ...discovered,
+          title: discovered.path.split('/').pop() || discovered.title,
+          workpieceKey: undefined
+        }
+        if (!entry) continue
+        const artifact: Artifact = {
+          id: `${taskId}:${entry.type}:${encodeURIComponent(entry.path)}`,
+          taskId,
+          type: entry.type,
+          title: entry.title,
+          path: entry.path,
+          updatedAt: entry.updatedAt,
+          reloadTrigger: Math.floor(entry.updatedAt)
+        }
+        this.sendArtifactUpdated(artifact)
+      }
+    }).catch((error) => {
+      console.warn(`[AgentManager] Failed to refresh artifacts for task ${taskId}:`, error)
+    })
+  }
+
+  private sendArtifactUpdated(artifact: Artifact): void {
+    const artifactPayload = { taskId: artifact.taskId, artifact }
+    if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+      this.mainWindow.webContents.send('artifact:updated', artifactPayload)
+    }
+    for (const fn of this.externalListeners) {
+      try { fn('artifact:updated', artifactPayload) } catch { /* ignore */ }
     }
   }
 

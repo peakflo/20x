@@ -1,10 +1,18 @@
 import { execFile, spawn, type ChildProcess } from 'child_process'
 import { promisify } from 'util'
 import { shell } from 'electron'
+import {
+  PullRequestCheckState,
+  PullRequestReviewDecision,
+  PullRequestState,
+  type PullRequestCheck,
+  type PullRequestDetails
+} from '../shared/artifacts'
 
 const execFileAsync = promisify(execFile)
 
 const GH_API_MAX_BUFFER = 10 * 1024 * 1024
+const GITHUB_PULL_REQUEST_URL = /^https:\/\/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)(?:[/?#].*)?$/i
 
 export interface GhCliStatus {
   installed: boolean
@@ -38,6 +46,74 @@ export interface GitHubCollaborator {
   login: string
   avatar_url: string
   type: string
+}
+
+interface RawPullRequestCheck {
+  __typename?: string
+  name?: string
+  context?: string
+  status?: string
+  conclusion?: string
+  state?: string
+  detailsUrl?: string
+  targetUrl?: string
+}
+
+interface RawPullRequestDetails {
+  url?: string
+  number?: number
+  title?: string
+  body?: string
+  state?: string
+  isDraft?: boolean
+  mergeStateStatus?: string
+  reviewDecision?: string
+  author?: { login?: string; avatarUrl?: string; url?: string }
+  baseRefName?: string
+  headRefName?: string
+  additions?: number
+  deletions?: number
+  changedFiles?: number
+  comments?: unknown[]
+  reviews?: unknown[]
+  createdAt?: string
+  updatedAt?: string
+  mergedAt?: string
+  closedAt?: string
+  statusCheckRollup?: RawPullRequestCheck[]
+}
+
+function mapPullRequestState(value?: string): PullRequestState {
+  if (value?.toUpperCase() === 'MERGED') return PullRequestState.MERGED
+  if (value?.toUpperCase() === 'CLOSED') return PullRequestState.CLOSED
+  return PullRequestState.OPEN
+}
+
+function mapReviewDecision(value?: string): PullRequestReviewDecision {
+  switch (value?.toUpperCase()) {
+    case 'APPROVED': return PullRequestReviewDecision.APPROVED
+    case 'CHANGES_REQUESTED': return PullRequestReviewDecision.CHANGES_REQUESTED
+    case 'REVIEW_REQUIRED': return PullRequestReviewDecision.REVIEW_REQUIRED
+    default: return PullRequestReviewDecision.NONE
+  }
+}
+
+function mapCheckState(check: RawPullRequestCheck): PullRequestCheckState {
+  const value = (check.conclusion || check.state || check.status || '').toUpperCase()
+  if (['SUCCESS'].includes(value)) return PullRequestCheckState.PASSED
+  if (['NEUTRAL', 'SKIPPED'].includes(value)) return PullRequestCheckState.SKIPPED
+  if (['FAILURE', 'ERROR', 'TIMED_OUT', 'CANCELLED', 'ACTION_REQUIRED', 'STARTUP_FAILURE'].includes(value)) {
+    return PullRequestCheckState.FAILED
+  }
+  return PullRequestCheckState.PENDING
+}
+
+function mapPullRequestCheck(check: RawPullRequestCheck): PullRequestCheck {
+  return {
+    name: check.name || check.context || 'Check',
+    state: mapCheckState(check),
+    url: check.detailsUrl || check.targetUrl || undefined
+  }
 }
 
 export class GitHubManager {
@@ -186,6 +262,48 @@ export class GitHubManager {
 
     const repos = await this.fetchAccessibleRepos()
     return repos.filter((repo) => repo.fullName.startsWith(`${status.username}/`))
+  }
+
+  async fetchPullRequestDetails(url: string): Promise<PullRequestDetails> {
+    const match = url.match(GITHUB_PULL_REQUEST_URL)
+    if (!match) throw new Error('A valid GitHub pull request URL is required')
+
+    const [, owner, repo, number] = match
+    const { stdout } = await execFileAsync('gh', [
+      'pr', 'view', url,
+      '--json',
+      'url,number,title,body,state,isDraft,mergeStateStatus,reviewDecision,author,baseRefName,headRefName,additions,deletions,changedFiles,comments,reviews,createdAt,updatedAt,mergedAt,closedAt,statusCheckRollup'
+    ], { maxBuffer: GH_API_MAX_BUFFER })
+    const raw = JSON.parse(stdout) as RawPullRequestDetails
+
+    return {
+      url: raw.url || url,
+      repository: `${owner}/${repo}`,
+      number: raw.number || Number(number),
+      title: raw.title || `Pull request #${number}`,
+      body: raw.body || '',
+      state: mapPullRequestState(raw.state),
+      isDraft: raw.isDraft === true,
+      mergeStateStatus: raw.mergeStateStatus || undefined,
+      reviewDecision: mapReviewDecision(raw.reviewDecision),
+      author: {
+        login: raw.author?.login || 'unknown',
+        avatarUrl: raw.author?.avatarUrl || undefined,
+        url: raw.author?.url || undefined
+      },
+      baseRefName: raw.baseRefName || '',
+      headRefName: raw.headRefName || '',
+      additions: raw.additions || 0,
+      deletions: raw.deletions || 0,
+      changedFiles: raw.changedFiles || 0,
+      commentsCount: raw.comments?.length || 0,
+      reviewsCount: raw.reviews?.length || 0,
+      createdAt: raw.createdAt || '',
+      updatedAt: raw.updatedAt || '',
+      mergedAt: raw.mergedAt || undefined,
+      closedAt: raw.closedAt || undefined,
+      checks: (raw.statusCheckRollup || []).map(mapPullRequestCheck)
+    }
   }
 
   async fetchIssues(

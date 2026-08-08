@@ -33,6 +33,10 @@ vi.mock('../src/mobile/api/client', () => ({
       snapshot: vi.fn().mockResolvedValue([]),
       delta: vi.fn().mockResolvedValue({ parts: [], maxRev: 0 })
     },
+    artifacts: {
+      list: vi.fn().mockResolvedValue([]),
+      content: vi.fn().mockResolvedValue(null)
+    },
     git: {
       getProvider: vi.fn().mockResolvedValue({ provider: 'github' })
     },

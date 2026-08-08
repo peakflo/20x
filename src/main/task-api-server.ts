@@ -8,7 +8,15 @@ import { createServer, type Server as HttpServer } from 'http'
 import { CronExpressionParser } from 'cron-parser'
 import type { DatabaseManager } from './database'
 import { TaskStatus } from '../shared/constants'
+import { ArtifactType } from '../shared/artifacts'
 import type { AgentManager } from './agent-manager'
+import {
+  createRegisteredTaskArtifact,
+  editRegisteredTaskArtifactFile,
+  listRegisteredTaskArtifacts,
+  readRegisteredTaskArtifactFile,
+  writeRegisteredTaskArtifactFile
+} from './artifacts'
 
 let server: HttpServer | null = null
 let port: number | null = null
@@ -125,6 +133,73 @@ async function handleRoute(db: DatabaseManager, route: string, params: Record<st
   const rawDb = (db as unknown as { db: import('better-sqlite3').Database }).db // Access the underlying better-sqlite3 instance
 
   switch (route) {
+    case '/create_artifact': {
+      const taskId = typeof params.task_id === 'string' ? params.task_id : ''
+      const title = typeof params.title === 'string' ? params.title : ''
+      const type = typeof params.type === 'string' ? params.type as ArtifactType : ArtifactType.FILE
+      if (!taskId || !db.getTask(taskId)) return { error: 'Task not found' }
+      if (!title.trim()) return { error: 'Artifact title is required' }
+      if (!Object.values(ArtifactType).includes(type) || type === ArtifactType.PR) return { error: 'Unsupported artifact type' }
+      const artifact = await createRegisteredTaskArtifact(db.getWorkspaceDir(taskId), taskId, { title, type })
+      return { artifact }
+    }
+
+    case '/list_artifacts': {
+      const taskId = typeof params.task_id === 'string' ? params.task_id : ''
+      if (!taskId || !db.getTask(taskId)) return { error: 'Task not found' }
+      return listRegisteredTaskArtifacts(db.getWorkspaceDir(taskId), taskId)
+    }
+
+    case '/write_artifact_file': {
+      const taskId = typeof params.task_id === 'string' ? params.task_id : ''
+      if (!taskId || !db.getTask(taskId)) return { error: 'Task not found' }
+      if (typeof params.artifact_id !== 'string' || typeof params.filename !== 'string' || typeof params.content !== 'string') {
+        return { error: 'artifact_id, filename, and content are required' }
+      }
+      const artifact = await writeRegisteredTaskArtifactFile(db.getWorkspaceDir(taskId), taskId, {
+        artifactId: params.artifact_id,
+        filename: params.filename,
+        content: params.content,
+        encoding: params.encoding === 'base64' ? 'base64' : 'utf8',
+        preview: params.preview === true
+      })
+      notifyRenderer?.('artifact:updated', { taskId, artifact })
+      return { artifact }
+    }
+
+    case '/edit_artifact_file': {
+      const taskId = typeof params.task_id === 'string' ? params.task_id : ''
+      if (!taskId || !db.getTask(taskId)) return { error: 'Task not found' }
+      if (
+        typeof params.artifact_id !== 'string'
+        || typeof params.filename !== 'string'
+        || typeof params.text_to_replace !== 'string'
+        || typeof params.replacement !== 'string'
+      ) return { error: 'artifact_id, filename, text_to_replace, and replacement are required' }
+      const artifact = await editRegisteredTaskArtifactFile(db.getWorkspaceDir(taskId), taskId, {
+        artifactId: params.artifact_id,
+        filename: params.filename,
+        textToReplace: params.text_to_replace,
+        replacement: params.replacement
+      })
+      notifyRenderer?.('artifact:updated', { taskId, artifact })
+      return { artifact }
+    }
+
+    case '/read_artifact_file': {
+      const taskId = typeof params.task_id === 'string' ? params.task_id : ''
+      if (!taskId || !db.getTask(taskId)) return { error: 'Task not found' }
+      if (typeof params.artifact_id !== 'string' || typeof params.filename !== 'string') {
+        return { error: 'artifact_id and filename are required' }
+      }
+      return readRegisteredTaskArtifactFile(
+        db.getWorkspaceDir(taskId),
+        taskId,
+        params.artifact_id,
+        params.filename
+      )
+    }
+
     case '/list_tasks': {
       // Exclude recurring parent template tasks — they are not actionable tasks
       let query = 'SELECT * FROM tasks WHERE NOT (is_recurring = 1 AND recurrence_parent_id IS NULL)'

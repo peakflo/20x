@@ -1,8 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { mkdtemp, rm } from 'fs/promises'
+import { tmpdir } from 'os'
+import { join } from 'path'
 import { createTestDb } from '../../test/helpers/db-test-helper'
 import { makeTask, makeAgent } from '../../test/helpers/task-fixtures'
 import type { DatabaseManager } from './database'
-import { setTaskApiAgentController, startTaskApiServer, stopTaskApiServer } from './task-api-server'
+import { setTaskApiAgentController, setTaskApiNotifier, startTaskApiServer, stopTaskApiServer } from './task-api-server'
 import { TaskStatus } from '../shared/constants'
 
 /**
@@ -20,7 +23,57 @@ beforeEach(() => {
 
 afterEach(() => {
   setTaskApiAgentController(null)
+  setTaskApiNotifier(() => undefined)
   stopTaskApiServer()
+})
+
+describe('explicit artifact workpiece routes', () => {
+  it('creates an artifact, writes its owned file, lists it, and emits an update', async () => {
+    const task = db.createTask(makeTask({ title: 'Artifact task' }))!
+    const workspaceDir = await mkdtemp(join(tmpdir(), '20x-task-api-artifacts-'))
+    vi.spyOn(db, 'getWorkspaceDir').mockReturnValue(workspaceDir)
+    const apiPort = await startTaskApiServer(db)
+    const notify = vi.fn()
+    setTaskApiNotifier(notify)
+    const post = async <T>(route: string, body: Record<string, unknown>): Promise<T> => {
+      const response = await fetch(`http://127.0.0.1:${apiPort}${route}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      })
+      return response.json() as Promise<T>
+    }
+
+    const created = await post<{ artifact: { artifactId: string } }>('/create_artifact', {
+      task_id: task.id,
+      title: 'Release notes',
+      type: 'markdown'
+    })
+    expect(created.artifact.artifactId).toMatch(/^artifact_release-notes_/)
+
+    const written = await post<{ artifact: { id: string; taskId: string; title: string; path: string } }>('/write_artifact_file', {
+      task_id: task.id,
+      artifact_id: created.artifact.artifactId,
+      filename: 'README.md',
+      content: '# Ready',
+      preview: true
+    })
+    expect(written.artifact).toEqual(expect.objectContaining({
+      taskId: task.id,
+      title: 'Release notes',
+      path: `artifacts/${created.artifact.artifactId}/README.md`
+    }))
+    expect(notify).toHaveBeenCalledWith('artifact:updated', expect.objectContaining({
+      taskId: task.id,
+      artifact: expect.objectContaining({ id: written.artifact.id })
+    }))
+
+    const listed = await post<Array<{ artifactId: string; files: string[] }>>('/list_artifacts', { task_id: task.id })
+    expect(listed).toEqual([
+      expect.objectContaining({ artifactId: created.artifact.artifactId, files: ['README.md'] })
+    ])
+    await rm(workspaceDir, { recursive: true, force: true })
+  })
 })
 
 describe('/update_task - triage status guard', () => {

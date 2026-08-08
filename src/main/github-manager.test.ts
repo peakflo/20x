@@ -34,6 +34,7 @@ vi.mock('electron', () => ({
 }))
 
 import { GitHubManager } from './github-manager'
+import { PullRequestCheckState, PullRequestReviewDecision, PullRequestState } from '../shared/artifacts'
 
 describe('GitHubManager', () => {
   beforeEach(() => {
@@ -98,5 +99,65 @@ describe('GitHubManager', () => {
       ['api', '/user/orgs', '--jq', '.[].login'],
       expect.anything()
     )
+  })
+
+  it('fetches and normalizes pull request details', async () => {
+    execFileMock.mockImplementation((_file: string, args: string[], _options: unknown, callback: (error: Error | null, stdout?: string, stderr?: string) => void) => {
+      expect(args).toEqual([
+        'pr', 'view', 'https://github.com/peakflo/20x/pull/445',
+        '--json',
+        expect.stringContaining('statusCheckRollup')
+      ])
+      callback(null, JSON.stringify({
+        url: 'https://github.com/peakflo/20x/pull/445',
+        number: 445,
+        title: 'Task artifacts',
+        body: 'Adds artifact previews.',
+        state: 'OPEN',
+        isDraft: false,
+        mergeStateStatus: 'CLEAN',
+        reviewDecision: 'APPROVED',
+        author: { login: 'octocat', avatarUrl: 'https://avatars.example/octocat', url: 'https://github.com/octocat' },
+        baseRefName: 'main',
+        headRefName: 'feature/artifacts',
+        additions: 120,
+        deletions: 15,
+        changedFiles: 8,
+        comments: [{ id: 1 }],
+        reviews: [{ id: 2 }, { id: 3 }],
+        createdAt: '2026-08-01T00:00:00Z',
+        updatedAt: '2026-08-06T00:00:00Z',
+        statusCheckRollup: [
+          { __typename: 'CheckRun', name: 'verify', status: 'COMPLETED', conclusion: 'SUCCESS' },
+          { __typename: 'StatusContext', context: 'deploy', state: 'PENDING' },
+          { __typename: 'CheckRun', name: 'lint', status: 'COMPLETED', conclusion: 'FAILURE' }
+        ]
+      }), '')
+    })
+
+    const details = await new GitHubManager().fetchPullRequestDetails('https://github.com/peakflo/20x/pull/445')
+
+    expect(details).toMatchObject({
+      repository: 'peakflo/20x',
+      number: 445,
+      title: 'Task artifacts',
+      state: PullRequestState.OPEN,
+      reviewDecision: PullRequestReviewDecision.APPROVED,
+      additions: 120,
+      deletions: 15,
+      changedFiles: 8,
+      commentsCount: 1,
+      reviewsCount: 2
+    })
+    expect(details.checks.map((check) => check.state)).toEqual([
+      PullRequestCheckState.PASSED,
+      PullRequestCheckState.PENDING,
+      PullRequestCheckState.FAILED
+    ])
+  })
+
+  it('rejects non-GitHub pull request URLs before invoking the CLI', async () => {
+    await expect(new GitHubManager().fetchPullRequestDetails('https://example.com/pull/1')).rejects.toThrow('valid GitHub pull request URL')
+    expect(execFileMock).not.toHaveBeenCalled()
   })
 })

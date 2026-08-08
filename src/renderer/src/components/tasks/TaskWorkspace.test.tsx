@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, act, fireEvent, screen, waitFor, cleanup } from '@testing-library/react'
-import { TaskWorkspace } from './TaskWorkspace'
+import { clampTranscriptWidth, TaskWorkspace } from './TaskWorkspace'
 import { useAgentStore, SessionStatus } from '@/stores/agent-store'
 import { useSettingsStore } from '@/stores/settings-store'
+import { useArtifactStore } from '@/stores/artifact-store'
 import { TaskStatus } from '@/types'
 import type { WorkfloTask, Agent } from '@/types'
 
@@ -26,6 +27,7 @@ if (!api.onGithubDeviceCode) api.onGithubDeviceCode = vi.fn(() => vi.fn())
 if (!api.onHeartbeatAlert) api.onHeartbeatAlert = vi.fn(() => vi.fn())
 if (!api.onHeartbeatDisabled) api.onHeartbeatDisabled = vi.fn(() => vi.fn())
 if (!api.tasks) api.tasks = { getWorkspaceDir: vi.fn().mockResolvedValue('/tmp') }
+if (!api.artifacts) api.artifacts = { scan: vi.fn().mockResolvedValue([]), read: vi.fn().mockResolvedValue(null) }
 
 // Minimal task factory
 function makeRendererTask(overrides: Partial<WorkfloTask> = {}): WorkfloTask {
@@ -117,10 +119,18 @@ beforeEach(() => {
     gitProvider: 'github',
     isLoading: false
   })
+  useArtifactStore.getState().resetTask('task-1')
   vi.clearAllMocks()
   ;(window.electronAPI.settings.getAll as ReturnType<typeof vi.fn>).mockResolvedValue({
     github_org: 'peakflo',
     git_provider: 'github'
+  })
+})
+
+describe('clampTranscriptWidth', () => {
+  it('keeps both split panes visible when a persisted width exceeds the container', () => {
+    expect(clampTranscriptWidth(1_200, 900)).toBe(576)
+    expect(clampTranscriptWidth(100, 900)).toBe(320)
   })
 })
 
@@ -137,6 +147,7 @@ describe('TaskWorkspace – stale triage session cleanup', () => {
 
     renderWorkspace(task)
 
+    fireEvent.click(screen.getAllByRole('button', { name: 'Details' })[0])
     // Use exact-match regex — loose /add/i would also match the
     // CollapsibleDescription's "Add description..." inline-edit placeholder.
     fireEvent.click(screen.getAllByRole('button', { name: /^add$/i })[0])

@@ -1,8 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, cleanup } from '@testing-library/react'
+import { render, cleanup, fireEvent } from '@testing-library/react'
+import { ArtifactType } from '@shared/artifacts'
 import { TaskDetailPage } from './TaskDetailPage'
 import { useTaskStore, type Task } from '../stores/task-store'
 import { useAgentStore } from '../stores/agent-store'
+import { useArtifactStore } from '../stores/artifact-store'
 
 const mockNavigate = vi.fn()
 
@@ -51,9 +53,39 @@ beforeEach(() => {
     skills: [],
     sessions: new Map()
   })
+  useArtifactStore.setState({ artifactsByTask: new Map(), loadingTaskIds: new Set() })
 })
 
 describe('TaskDetailPage', () => {
+  it('switches to the artifacts segment and opens an artifact viewer', () => {
+    const task = makeTask({ id: 'task-1' })
+    useTaskStore.setState({ tasks: [task], isLoading: false })
+    useArtifactStore.setState({
+      artifactsByTask: new Map([['task-1', [{
+        id: 'task-1:markdown:report.md',
+        taskId: 'task-1',
+        type: ArtifactType.MARKDOWN,
+        title: 'report.md',
+        path: 'report.md',
+        updatedAt: 1,
+        reloadTrigger: 0
+      }]]])
+    })
+
+    const { getByRole, getByText } = render(
+      <TaskDetailPage taskId="task-1" onNavigate={mockNavigate} />
+    )
+
+    fireEvent.click(getByRole('button', { name: /Artifacts \(1\)/ }))
+    fireEvent.click(getByText('report.md'))
+
+    expect(mockNavigate).toHaveBeenCalledWith({
+      page: 'artifact',
+      taskId: 'task-1',
+      artifactId: 'task-1:markdown:report.md'
+    })
+  })
+
   it('renders without error for a task with subtasks', () => {
     const parentTask = makeTask({ id: 'parent-1', title: 'Parent task' })
     const subtask1 = makeTask({

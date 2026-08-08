@@ -1,7 +1,8 @@
 import { execFile } from 'child_process'
 import { promisify } from 'util'
-import { existsSync, mkdirSync, rmSync } from 'fs'
-import { join } from 'path'
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync } from 'fs'
+import { readdir } from 'fs/promises'
+import { isAbsolute, join, relative, resolve, sep, win32 } from 'path'
 import { app, type BrowserWindow } from 'electron'
 
 const execFileAsync = promisify(execFile)
@@ -14,6 +15,37 @@ export interface WorktreeRepo {
   fullName: string
   defaultBranch: string
   cloneUrl?: string
+}
+
+export interface TaskChangesResult {
+  repo: string
+  diff: string
+  allFiles?: string[]
+  workspace?: boolean
+  error?: string
+  noWorktree?: boolean
+  path?: string
+  branch?: string
+  pushed?: boolean
+  prNumber?: number
+  prUrl?: string
+  prState?: string
+  prTitle?: string
+  ciStatus?: 'passing' | 'failing' | 'pending' | 'none'
+}
+
+export interface TaskFileContent {
+  content: string
+  size: number
+  binary: boolean
+  truncated: boolean
+}
+
+const MAX_TASK_FILE_PREVIEW_BYTES = 512 * 1024
+
+function isWithinRoot(rootPath: string, candidatePath: string): boolean {
+  const pathFromRoot = relative(rootPath, candidatePath)
+  return pathFromRoot === '' || (!pathFromRoot.startsWith(`..${sep}`) && pathFromRoot !== '..' && !isAbsolute(pathFromRoot))
 }
 
 export class WorktreeManager {
@@ -35,6 +67,43 @@ export class WorktreeManager {
 
   private worktreePath(taskId: string, repoName: string): string {
     return join(WORKSPACES_DIR, taskId, repoName)
+  }
+
+  /** Read one selected file on demand while keeping renderer-provided paths
+   * inside the task workspace (and inside the selected repository, if any). */
+  readTaskFile(taskId: string, repoFullName: string | null, filePath: string): TaskFileContent | null {
+    if (!filePath || filePath.includes('\0') || isAbsolute(filePath) || win32.isAbsolute(filePath)) return null
+    const normalized = filePath.replace(/\\/g, '/').replace(/^\.\//, '')
+    if (normalized.split('/').some((segment) => !segment || segment === '.' || segment === '..')) return null
+
+    try {
+      const workspacesRoot = realpathSync(WORKSPACES_DIR)
+      const workspaceRoot = realpathSync(join(workspacesRoot, taskId))
+      if (!isWithinRoot(workspacesRoot, workspaceRoot)) return null
+      const repoName = repoFullName?.split('/').pop()
+      if (repoFullName && (!repoName || repoName === '.' || repoName === '..')) return null
+      const requestedRoot = repoName ? join(workspaceRoot, repoName) : workspaceRoot
+      const root = realpathSync(requestedRoot)
+      if (!isWithinRoot(workspaceRoot, root)) return null
+      const candidate = realpathSync(resolve(root, normalized))
+      if (!isWithinRoot(root, candidate)) return null
+
+      const fileStat = statSync(candidate)
+      if (!fileStat.isFile()) return null
+      if (fileStat.size > MAX_TASK_FILE_PREVIEW_BYTES) {
+        return { content: '', size: fileStat.size, binary: false, truncated: true }
+      }
+      const bytes = readFileSync(candidate)
+      const binary = bytes.subarray(0, 8192).includes(0)
+      return {
+        content: binary ? '' : bytes.toString('utf8'),
+        size: fileStat.size,
+        binary,
+        truncated: false
+      }
+    } catch {
+      return null
+    }
   }
 
   async setupWorkspaceForTask(
@@ -258,8 +327,8 @@ export class WorktreeManager {
   }
 
   /**
-   * Collect the working-tree diff for each of a task's repo worktrees.
-   * Returns one raw unified diff per repo — tracked changes vs HEAD plus
+   * Collect the task workspace inventory and the working-tree diff for each
+   * linked repository. Returns one raw unified diff per repo — tracked changes vs HEAD plus
    * untracked files rendered via `git diff --no-index` (read-only; never
    * mutates the index). Repos without a worktree yet are skipped; per-repo
    * failures are reported rather than thrown so one bad repo can't hide the rest.
@@ -267,8 +336,8 @@ export class WorktreeManager {
   async getTaskChanges(
     taskId: string,
     repos: { fullName: string }[]
-  ): Promise<Array<{ repo: string; diff: string; error?: string; noWorktree?: boolean; path?: string; branch?: string; pushed?: boolean; prNumber?: number; prUrl?: string; prState?: string; prTitle?: string; ciStatus?: 'passing' | 'failing' | 'pending' | 'none' }>> {
-    const results: Array<{ repo: string; diff: string; error?: string; noWorktree?: boolean; path?: string; branch?: string; pushed?: boolean; prNumber?: number; prUrl?: string; prState?: string; prTitle?: string; ciStatus?: 'passing' | 'failing' | 'pending' | 'none' }> = []
+  ): Promise<TaskChangesResult[]> {
+    const results: TaskChangesResult[] = []
     const gitOpts = { maxBuffer: 64 * 1024 * 1024 }
 
     for (const repo of repos) {
@@ -281,6 +350,17 @@ export class WorktreeManager {
       }
 
       try {
+        // Complete browsable worktree inventory: tracked + untracked files,
+        // while respecting .gitignore and never traversing .git internals.
+        let allFiles: string[] = []
+        try {
+          const { stdout } = await execFileAsync(
+            'git', ['-c', 'core.quotepath=false', 'ls-files', '--cached', '--others', '--exclude-standard', '-z'],
+            { cwd: wtPath, ...gitOpts }
+          )
+          allFiles = [...new Set(stdout.split('\0').filter(Boolean))].sort((left, right) => left.localeCompare(right))
+        } catch { /* keep diff available if inventory fails */ }
+
         // Agents auto-commit, so "uncommitted only" (git diff HEAD) is usually
         // empty. We want the task's whole diff: base branch → current work
         // (committed + uncommitted). Discover the base branch this worktree
@@ -424,12 +504,42 @@ export class WorktreeManager {
 
         console.log(`[WorktreeManager] getTaskChanges ${repo.fullName}: branch=${branch ?? '(detached)'} pushed=${pushed} pr=${prNumber ?? 'none'} ci=${ciStatus ?? 'n/a'}`)
 
-        results.push({ repo: repo.fullName, diff: tracked + untracked, branch, pushed, prNumber, prUrl, prState, prTitle, ciStatus })
+        results.push({ repo: repo.fullName, diff: tracked + untracked, allFiles, branch, pushed, prNumber, prUrl, prState, prTitle, ciStatus })
       } catch (e) {
         results.push({ repo: repo.fullName, diff: '', error: (e as Error).message })
       }
     }
 
-    return results
+    const workspaceFiles = await this.listNonRepositoryWorkspaceFiles(taskId, repos)
+    return [{ repo: 'Task workspace', diff: '', allFiles: workspaceFiles, workspace: true }, ...results]
+  }
+
+  private async listNonRepositoryWorkspaceFiles(taskId: string, repos: { fullName: string }[]): Promise<string[]> {
+    const workspacePath = join(WORKSPACES_DIR, taskId)
+    if (!existsSync(workspacePath)) return []
+
+    const repositoryDirectories = new Set(repos.map((repo) => repo.fullName.split('/').pop() || repo.fullName))
+    const files: string[] = []
+
+    const visit = async (directory: string, relativeDirectory = ''): Promise<void> => {
+      let entries
+      try {
+        entries = await readdir(directory, { withFileTypes: true })
+      } catch {
+        return
+      }
+
+      entries.sort((left, right) => left.name.localeCompare(right.name))
+      for (const entry of entries) {
+        if (!relativeDirectory && repositoryDirectories.has(entry.name) && entry.isDirectory()) continue
+        if (!relativeDirectory && entry.name === '.opencode') continue
+        const relativePath = relativeDirectory ? `${relativeDirectory}/${entry.name}` : entry.name
+        if (entry.isDirectory()) await visit(join(directory, entry.name), relativePath)
+        else if (entry.isFile() || entry.isSymbolicLink()) files.push(relativePath)
+      }
+    }
+
+    await visit(workspacePath)
+    return files
   }
 }

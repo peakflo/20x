@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
+import type { ArtifactContent, ArtifactFileEntry, PullRequestDetails } from '../shared/artifacts'
 
 contextBridge.exposeInMainWorld('electronAPI', {
   db: {
@@ -15,6 +16,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   tasks: {
     getWorkspaceDir: (taskId: string): Promise<string> =>
       ipcRenderer.invoke('tasks:getWorkspaceDir', taskId)
+  },
+  artifacts: {
+    scan: (taskId: string): Promise<ArtifactFileEntry[]> =>
+      ipcRenderer.invoke('artifacts:scan', taskId),
+    read: (taskId: string, relativePath: string): Promise<ArtifactContent | null> =>
+      ipcRenderer.invoke('artifacts:read', taskId, relativePath)
   },
   attachments: {
     pick: (): Promise<string[]> => ipcRenderer.invoke('attachments:pick'),
@@ -142,6 +149,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('agent:output-batch', handler)
     return () => ipcRenderer.removeListener('agent:output-batch', handler)
   },
+  onArtifactUpdated: (callback: (event: unknown) => void): (() => void) => {
+    const handler = (_: unknown, data: unknown): void => callback(data)
+    ipcRenderer.on('artifact:updated', handler)
+    return () => ipcRenderer.removeListener('artifact:updated', handler)
+  },
   onTranscriptChanged: (callback: (event: unknown) => void): (() => void) => {
     const handler = (_: unknown, data: unknown): void => callback(data)
     ipcRenderer.on('transcript:changed', handler)
@@ -195,7 +207,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     fetchUserRepos: (): Promise<unknown[]> =>
       ipcRenderer.invoke('github:fetchUserRepos'),
     fetchCollaborators: (owner: string, repo: string): Promise<unknown[]> =>
-      ipcRenderer.invoke('github:fetchCollaborators', owner, repo)
+      ipcRenderer.invoke('github:fetchCollaborators', owner, repo),
+    fetchPullRequestDetails: (url: string): Promise<PullRequestDetails> =>
+      ipcRenderer.invoke('github:fetchPullRequestDetails', url)
   },
   gitlab: {
     checkCli: (): Promise<{ installed: boolean; authenticated: boolean; username?: string }> =>
@@ -212,8 +226,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('worktree:setup', taskId, repos, org, provider),
     cleanup: (taskId: string, repos: { fullName: string }[], org: string, removeTaskDir?: boolean): Promise<void> =>
       ipcRenderer.invoke('worktree:cleanup', taskId, repos, org, removeTaskDir),
-    changes: (taskId: string, repos: { fullName: string }[]): Promise<Array<{ repo: string; diff: string; error?: string; noWorktree?: boolean; path?: string; branch?: string; pushed?: boolean; prNumber?: number; prUrl?: string; prState?: string; prTitle?: string; ciStatus?: 'passing' | 'failing' | 'pending' | 'none' }>> =>
+    changes: (taskId: string, repos: { fullName: string }[]): Promise<Array<{ repo: string; diff: string; allFiles?: string[]; workspace?: boolean; error?: string; noWorktree?: boolean; path?: string; branch?: string; pushed?: boolean; prNumber?: number; prUrl?: string; prState?: string; prTitle?: string; ciStatus?: 'passing' | 'failing' | 'pending' | 'none' }>> =>
       ipcRenderer.invoke('worktree:changes', taskId, repos),
+    readFile: (taskId: string, repoFullName: string | null, filePath: string): Promise<{ content: string; size: number; binary: boolean; truncated: boolean } | null> =>
+      ipcRenderer.invoke('worktree:readFile', taskId, repoFullName, filePath),
     runCleanupNow: (): Promise<{ cleaned: number; errors: string[] }> =>
       ipcRenderer.invoke('workspace:runCleanupNow')
   },

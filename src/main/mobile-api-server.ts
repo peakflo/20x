@@ -16,6 +16,8 @@ import type { GitHubManager } from './github-manager'
 import type { GitLabManager } from './gitlab-manager'
 import type { SyncManager } from './sync-manager'
 import type { PluginRegistry } from './plugins/registry'
+import { listTaskArtifactEntries, readTaskArtifact } from './artifacts'
+import type { Artifact, ArtifactFileEntry } from '../shared/artifacts'
 
 // ── State ────────────────────────────────────────────────────
 let server: HttpServer | null = null
@@ -366,6 +368,37 @@ async function routeGet(pathname: string, url: URL): Promise<unknown> {
   if (deltaMatch) {
     const sinceRev = Number(url.searchParams.get('sinceRev') || '0') || 0
     return db.getTranscriptDelta(decodeURIComponent(deltaMatch[1]), sinceRev)
+  }
+
+  // GET /api/tasks/:taskId/artifacts/content?path=... — authenticated artifact
+  // content read constrained to this task's workspace by readTaskArtifact.
+  const artifactContentMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/artifacts\/content$/)
+  if (artifactContentMatch) {
+    const taskId = decodeURIComponent(artifactContentMatch[1])
+    if (!db.getTask(taskId)) throw Object.assign(new Error('Task not found'), { status: 404 })
+    const artifactPath = url.searchParams.get('path')
+    if (!artifactPath) throw Object.assign(new Error('path is required'), { status: 400 })
+    const content = await readTaskArtifact(db.getWorkspaceDir(taskId), artifactPath)
+    if (!content) throw Object.assign(new Error('Artifact not found or cannot be previewed'), { status: 404 })
+    return content
+  }
+
+  // GET /api/tasks/:taskId/artifacts — explicit workpiece registry plus the
+  // bounded legacy import/recovery scan.
+  const artifactsMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/artifacts$/)
+  if (artifactsMatch) {
+    const taskId = decodeURIComponent(artifactsMatch[1])
+    if (!db.getTask(taskId)) throw Object.assign(new Error('Task not found'), { status: 404 })
+    const entries = await listTaskArtifactEntries(db.getWorkspaceDir(taskId), taskId)
+    return entries.map((entry) => artifactFromFileEntry(taskId, entry))
+  }
+
+  // GET /api/github/pull-request?url=... — authenticated, read-only PR details.
+  if (pathname === '/api/github/pull-request') {
+    if (!githubRef) throw Object.assign(new Error('GitHub not configured'), { status: 500 })
+    const pullRequestUrl = url.searchParams.get('url')
+    if (!pullRequestUrl) throw Object.assign(new Error('url is required'), { status: 400 })
+    return githubRef.fetchPullRequestDetails(pullRequestUrl)
   }
 
   // GET /api/tasks/:id
@@ -808,6 +841,21 @@ function stripSensitiveAgentFields(agent: ReturnType<DatabaseManager['getAgent']
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const { api_keys: _keys, secret_ids: _secrets, ...safeConfig } = (agent.config || {}) as Record<string, unknown>
   return { ...agent, config: safeConfig }
+}
+
+function artifactFromFileEntry(taskId: string, entry: ArtifactFileEntry): Artifact {
+  return {
+    id: entry.workpieceKey
+      ? `${taskId}:workpiece:${encodeURIComponent(entry.workpieceKey)}`
+      : `${taskId}:${entry.type}:${encodeURIComponent(entry.path)}`,
+    taskId,
+    type: entry.type,
+    title: entry.title,
+    path: entry.path,
+    workpieceKey: entry.workpieceKey,
+    updatedAt: entry.updatedAt,
+    reloadTrigger: Math.floor(entry.updatedAt)
+  }
 }
 
 function serveMobileSPA(res: ServerResponse, pathname: string): void {

@@ -33,6 +33,8 @@ import type {
   PluginResources,
   HeartbeatLog
 } from './index'
+import type { PullRequestDetails } from '@shared/artifacts'
+import type { ArtifactApi } from '@shared/artifacts'
 
 export interface AgentSessionStartResult {
   sessionId: string
@@ -199,6 +201,7 @@ interface ElectronAPI {
   tasks: {
     getWorkspaceDir: (taskId: string) => Promise<string>
   }
+  artifacts: ArtifactApi
   mcpServers: {
     getAll: () => Promise<McpServer[]>
     get: (id: string) => Promise<McpServer | undefined>
@@ -276,6 +279,7 @@ interface ElectronAPI {
     fetchOrgRepos: (org: string) => Promise<GitHubRepo[]>
     fetchUserRepos: () => Promise<GitHubRepo[]>
     fetchCollaborators: (owner: string, repo: string) => Promise<GitHubCollaborator[]>
+    fetchPullRequestDetails: (url: string) => Promise<PullRequestDetails>
   }
   gitlab: {
     checkCli: () => Promise<GlabCliStatus>
@@ -287,7 +291,8 @@ interface ElectronAPI {
   worktree: {
     setup: (taskId: string, repos: { fullName: string; defaultBranch: string }[], org: string, provider: 'github' | 'gitlab') => Promise<string>
     cleanup: (taskId: string, repos: { fullName: string }[], org: string, removeTaskDir?: boolean) => Promise<void>
-    changes: (taskId: string, repos: { fullName: string }[]) => Promise<Array<{ repo: string; diff: string; error?: string; noWorktree?: boolean; path?: string; branch?: string; pushed?: boolean; prNumber?: number; prUrl?: string; prState?: string; prTitle?: string; ciStatus?: 'passing' | 'failing' | 'pending' | 'none' }>>
+    changes: (taskId: string, repos: { fullName: string }[]) => Promise<Array<{ repo: string; diff: string; allFiles?: string[]; workspace?: boolean; error?: string; noWorktree?: boolean; path?: string; branch?: string; pushed?: boolean; prNumber?: number; prUrl?: string; prState?: string; prTitle?: string; ciStatus?: 'passing' | 'failing' | 'pending' | 'none' }>>
+    readFile: (taskId: string, repoFullName: string | null, filePath: string) => Promise<{ content: string; size: number; binary: boolean; truncated: boolean } | null>
     runCleanupNow: () => Promise<{ cleaned: number; errors: string[] }>
   }
   taskSources: {
@@ -457,6 +462,7 @@ interface ElectronAPI {
   onTasksRefresh: (callback: () => void) => () => void
   onAgentOutput: (callback: (event: AgentOutputEvent) => void) => () => void
   onAgentOutputBatch: (callback: (event: AgentOutputBatchEvent) => void) => () => void
+  onArtifactUpdated: (callback: (event: { taskId: string; artifact: import('@shared/artifacts').Artifact }) => void) => () => void
   onTranscriptChanged: (callback: (event: TranscriptChangedEvent) => void) => () => void
   onAgentStatus: (callback: (event: AgentStatusEvent) => void) => () => void
   onAgentApproval: (callback: (event: AgentApprovalRequest) => void) => () => void

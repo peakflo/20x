@@ -1,5 +1,6 @@
 import type { WorkfloTask, CreateTaskDTO, UpdateTaskDTO, FileAttachment, Agent, CreateAgentDTO, UpdateAgentDTO, McpServer, CreateMcpServerDTO, UpdateMcpServerDTO, Skill, CreateSkillDTO, UpdateSkillDTO, Secret, CreateSecretDTO, UpdateSecretDTO, TaskSource, CreateTaskSourceDTO, UpdateTaskSourceDTO, SyncResult, PluginMeta, ConfigFieldSchema, ConfigFieldOption, PluginAction, ActionResult, SourceUser, ReassignResult, MarketplaceSource, InstalledPlugin, DiscoverablePlugin, MarketplaceCatalog, PluginResources } from '@/types'
 import type { AgentOutputEvent, AgentOutputBatchEvent, AgentStatusEvent, AgentApprovalRequest, GhCliStatus, GlabCliStatus, GitHubRepo, GitHubCollaborator, WorktreeProgressEvent, WorkspaceCleanupProgressEvent, McpTestResult, SkillSyncResult, DepsStatus, AgentMessageAttachment, TranscriptPartRecord, TranscriptChangedEvent } from '@/types/electron'
+import type { ArtifactApi } from '@shared/artifacts'
 
 export const taskApi = {
   getAll: (): Promise<WorkfloTask[]> => {
@@ -29,6 +30,11 @@ export const taskApi = {
   reorderSubtasks: (parentId: string, orderedIds: string[]): Promise<boolean> => {
     return window.electronAPI.db.reorderSubtasks(parentId, orderedIds)
   }
+}
+
+export const artifactApi: ArtifactApi = {
+  scan: (taskId) => window.electronAPI.artifacts.scan(taskId),
+  read: (taskId, relativePath) => window.electronAPI.artifacts.read(taskId, relativePath)
 }
 
 export const mcpServerApi = {
@@ -217,6 +223,10 @@ export const onAgentOutput = (callback: (event: AgentOutputEvent) => void): (() 
 
 export const onAgentOutputBatch = (callback: (event: AgentOutputBatchEvent) => void): (() => void) => {
   return window.electronAPI.onAgentOutputBatch(callback)
+}
+
+export const onArtifactUpdated = (callback: (event: { taskId: string; artifact: import('@shared/artifacts').Artifact }) => void): (() => void) => {
+  return window.electronAPI.onArtifactUpdated(callback)
 }
 
 export const onTranscriptChanged = (callback: (event: TranscriptChangedEvent) => void): (() => void) => {
@@ -533,8 +543,15 @@ export const worktreeApi = {
   cleanup: (taskId: string, repos: { fullName: string }[], org: string, removeTaskDir?: boolean): Promise<void> => {
     return window.electronAPI.worktree.cleanup(taskId, repos, org, removeTaskDir)
   },
-  changes: (taskId: string, repos: { fullName: string }[]): Promise<Array<{ repo: string; diff: string; error?: string; noWorktree?: boolean; path?: string; branch?: string; pushed?: boolean; prNumber?: number; prUrl?: string; prState?: string; prTitle?: string; ciStatus?: 'passing' | 'failing' | 'pending' | 'none' }>> => {
+  changes: (taskId: string, repos: { fullName: string }[]): Promise<Array<{ repo: string; diff: string; allFiles?: string[]; workspace?: boolean; error?: string; noWorktree?: boolean; path?: string; branch?: string; pushed?: boolean; prNumber?: number; prUrl?: string; prState?: string; prTitle?: string; ciStatus?: 'passing' | 'failing' | 'pending' | 'none' }>> => {
     return window.electronAPI.worktree.changes(taskId, repos)
+  },
+  readFile: (taskId: string, repoFullName: string | null, filePath: string): Promise<{ content: string; size: number; binary: boolean; truncated: boolean } | null> => {
+    const readFile = window.electronAPI.worktree.readFile
+    if (typeof readFile !== 'function') {
+      return Promise.reject(new Error('Restart 20x to enable workspace file previews.'))
+    }
+    return readFile(taskId, repoFullName, filePath)
   },
   runCleanupNow: (): Promise<{ cleaned: number; errors: string[] }> => {
     return window.electronAPI.worktree.runCleanupNow()

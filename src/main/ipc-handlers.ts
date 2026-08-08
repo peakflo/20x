@@ -36,6 +36,7 @@ import type { ClaudePluginManager } from './claude-plugin-manager'
 import type { EnterpriseHeartbeat } from './enterprise-heartbeat'
 import type { EnterpriseStateSync } from './enterprise-state-sync'
 import { analytics } from './analytics-service'
+import { listTaskArtifactEntries, readTaskArtifact } from './artifacts'
 
 const MIME_MAP: Record<string, string> = {
   '.pdf': 'application/pdf',
@@ -247,6 +248,14 @@ export function registerIpcHandlers(
 
   ipcMain.handle('tasks:getWorkspaceDir', (_, taskId: string): string => {
     return db.getWorkspaceDir(taskId)
+  })
+
+  ipcMain.handle('artifacts:scan', async (_, taskId: string) => {
+    return listTaskArtifactEntries(db.getWorkspaceDir(taskId), taskId)
+  })
+
+  ipcMain.handle('artifacts:read', async (_, taskId: string, relativePath: string) => {
+    return readTaskArtifact(db.getWorkspaceDir(taskId), relativePath)
   })
 
   ipcMain.handle('attachments:open', (_, taskId: string, attachmentId: string) => {
@@ -540,6 +549,10 @@ export function registerIpcHandlers(
     return await githubManager.fetchRepoCollaborators(owner, repo)
   })
 
+  ipcMain.handle('github:fetchPullRequestDetails', async (_, url: string) => {
+    return await githubManager.fetchPullRequestDetails(url)
+  })
+
   // GitLab handlers
   ipcMain.handle('gitlab:checkCli', async () => {
     if (!gitlabManager) return { installed: false, authenticated: false }
@@ -576,6 +589,10 @@ export function registerIpcHandlers(
 
   ipcMain.handle('worktree:changes', async (_, taskId: string, repos: { fullName: string }[]) => {
     return await worktreeManager.getTaskChanges(taskId, repos)
+  })
+
+  ipcMain.handle('worktree:readFile', (_, taskId: string, repoFullName: string | null, filePath: string) => {
+    return worktreeManager.readTaskFile(taskId, repoFullName, filePath)
   })
 
   ipcMain.handle('worktree:cleanup', async (_, taskId: string, repos: { fullName: string }[], org: string, removeTaskDir?: boolean) => {
