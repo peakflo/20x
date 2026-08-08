@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Markdown } from '@/components/ui/Markdown'
 import {
   ArtifactContentKind,
@@ -50,6 +50,7 @@ export function ArtifactViewerPage({ taskId, artifactId, onNavigate }: { taskId:
   const [error, setError] = useState<string | null>(null)
   const [pullRequest, setPullRequest] = useState<PullRequestDetails | null>(null)
   const [refreshTrigger, setRefreshTrigger] = useState(0)
+  const settledArtifactRef = useRef<string | null>(null)
 
   useEffect(() => {
     if (!artifact) void hydrate(taskId)
@@ -65,18 +66,30 @@ export function ArtifactViewerPage({ taskId, artifactId, onNavigate }: { taskId:
 
   useEffect(() => {
     if (!artifact?.path || artifact.type === ArtifactType.PR) {
-      setLoading(false)
+      if (artifact && artifact.type !== ArtifactType.PR) {
+        settledArtifactRef.current = artifact.id
+        setLoading(false)
+      }
       return
     }
     let cancelled = false
-    setLoading(true)
-    setError(null)
+    const initialLoad = settledArtifactRef.current !== artifact.id
+    if (initialLoad) {
+      setLoading(true)
+      setError(null)
+    }
     void api.artifacts.content(taskId, artifact.path).then((result) => {
-      if (!cancelled) setContent(result)
+      if (!cancelled) {
+        setContent(result)
+        setError(null)
+      }
     }).catch((reason: unknown) => {
-      if (!cancelled) setError(reason instanceof Error ? reason.message : String(reason))
+      if (!cancelled && initialLoad) setError(reason instanceof Error ? reason.message : String(reason))
     }).finally(() => {
-      if (!cancelled) setLoading(false)
+      if (!cancelled) {
+        settledArtifactRef.current = artifact.id
+        if (initialLoad) setLoading(false)
+      }
     })
     return () => { cancelled = true }
   }, [artifact?.path, artifact?.reloadTrigger, artifact?.type, refreshTrigger, taskId])
@@ -84,14 +97,23 @@ export function ArtifactViewerPage({ taskId, artifactId, onNavigate }: { taskId:
   useEffect(() => {
     if (artifact?.type !== ArtifactType.PR || !artifact.url) return
     let cancelled = false
-    setLoading(true)
-    setError(null)
+    const initialLoad = settledArtifactRef.current !== artifact.id
+    if (initialLoad) {
+      setLoading(true)
+      setError(null)
+    }
     void api.github.pullRequest(artifact.url).then((result) => {
-      if (!cancelled) setPullRequest(result)
+      if (!cancelled) {
+        setPullRequest(result)
+        setError(null)
+      }
     }).catch((reason: unknown) => {
-      if (!cancelled) setError(reason instanceof Error ? reason.message : String(reason))
+      if (!cancelled && initialLoad) setError(reason instanceof Error ? reason.message : String(reason))
     }).finally(() => {
-      if (!cancelled) setLoading(false)
+      if (!cancelled) {
+        settledArtifactRef.current = artifact.id
+        if (initialLoad) setLoading(false)
+      }
     })
     return () => { cancelled = true }
   }, [artifact?.reloadTrigger, artifact?.type, artifact?.url, refreshTrigger])
@@ -129,11 +151,11 @@ export function ArtifactViewerPage({ taskId, artifactId, onNavigate }: { taskId:
           <div className="mx-auto max-w-3xl p-5"><Markdown size="sm">{content.content}</Markdown></div>
         )}
         {!loading && !error && artifact?.type === ArtifactType.IMAGE && imageUrl && (
-          <div className="flex min-h-full items-center justify-center p-4"><img key={`${artifact.reloadTrigger}:${refreshTrigger}`} src={imageUrl} alt={artifact.title} className="max-h-full max-w-full object-contain" /></div>
+          <div className="flex min-h-full items-center justify-center p-4"><img key={artifact.reloadTrigger} src={imageUrl} alt={artifact.title} className="max-h-full max-w-full object-contain" /></div>
         )}
         {!loading && !error && artifact?.type === ArtifactType.HTML && content && (
           <iframe
-            key={`${artifact.reloadTrigger}:${refreshTrigger}`}
+            key={artifact.reloadTrigger}
             title={artifact.title}
             srcDoc={hardenHtml(content.content)}
             sandbox="allow-scripts"

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, screen } from '@testing-library/react'
+import { act, cleanup, render, screen } from '@testing-library/react'
 import {
   ArtifactType,
   PullRequestCheckState,
@@ -73,5 +73,21 @@ describe('PrArtifactView', () => {
     expect(screen.getByText('verify')).toBeInTheDocument()
     expect(screen.getByText('1 passed')).toBeInTheDocument()
     expect(screen.getByText('1 pending')).toBeInTheDocument()
+  })
+
+  it('keeps the current PR visible during a background refresh', async () => {
+    const fetchDetails = window.electronAPI.github.fetchPullRequestDetails as ReturnType<typeof vi.fn>
+    const { rerender } = render(<PrArtifactView artifact={artifact} refreshTrigger={0} />)
+    expect(await screen.findByText('Task artifacts')).toBeInTheDocument()
+
+    let resolveRefresh: (value: PullRequestDetails) => void = () => undefined
+    fetchDetails.mockReturnValueOnce(new Promise((resolve) => { resolveRefresh = resolve }))
+    rerender(<PrArtifactView artifact={artifact} refreshTrigger={1} />)
+
+    expect(screen.getByText('Task artifacts')).toBeInTheDocument()
+    expect(screen.queryByText('Loading pull request…')).not.toBeInTheDocument()
+
+    act(() => resolveRefresh({ ...details, title: 'Updated task artifacts', commentsCount: 4 }))
+    expect(await screen.findByText('Updated task artifacts')).toBeInTheDocument()
   })
 })
