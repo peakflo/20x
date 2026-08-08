@@ -3,6 +3,7 @@ import { ArrowLeft, Bot, Check, ChevronDown, ExternalLink, FolderOpen, Layers, M
 import { Button } from '@/components/ui/Button'
 import { TaskPriorityBadge } from './TaskPriorityBadge'
 import { TaskStatusBadge } from './TaskStatusBadge'
+import { TASK_STATUSES, TaskStatus } from '@/types'
 import type { Agent, WorkfloTask } from '@/types'
 
 export enum TaskPrimaryAction {
@@ -26,6 +27,8 @@ interface TaskHeaderBarProps {
   agent?: Agent | null
   action?: TaskPrimaryAction | null
   onAction?: () => void
+  onComplete?: () => void
+  onStatusChange?: (status: TaskStatus) => void | Promise<void>
   onBack?: () => void
   onRename: (title: string) => void | Promise<void>
   detailsOpen: boolean
@@ -44,6 +47,8 @@ export function TaskHeaderBar({
   agent,
   action,
   onAction,
+  onComplete,
+  onStatusChange,
   onBack,
   onRename,
   detailsOpen,
@@ -59,7 +64,9 @@ export function TaskHeaderBar({
   const [editing, setEditing] = useState(false)
   const [title, setTitle] = useState(task.title)
   const [menuOpen, setMenuOpen] = useState(false)
+  const [statusMenuOpen, setStatusMenuOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
+  const statusMenuRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => setTitle(task.title), [task.title])
   useEffect(() => {
@@ -70,6 +77,14 @@ export function TaskHeaderBar({
     window.addEventListener('pointerdown', close)
     return () => window.removeEventListener('pointerdown', close)
   }, [menuOpen])
+  useEffect(() => {
+    if (!statusMenuOpen) return
+    const close = (event: PointerEvent) => {
+      if (!statusMenuRef.current?.contains(event.target as Node)) setStatusMenuOpen(false)
+    }
+    window.addEventListener('pointerdown', close)
+    return () => window.removeEventListener('pointerdown', close)
+  }, [statusMenuOpen])
 
   const commitTitle = async () => {
     const next = title.trim()
@@ -83,6 +98,9 @@ export function TaskHeaderBar({
 
   const actionMeta = action ? ACTION_META[action] : null
   const ActionIcon = actionMeta?.icon
+  const showStandaloneComplete = task.status !== TaskStatus.Completed
+    && !!onComplete
+    && (action !== TaskPrimaryAction.COMPLETE || !onAction)
 
   return (
     <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border/50 bg-background px-3">
@@ -112,8 +130,40 @@ export function TaskHeaderBar({
           </button>
         )}
       </div>
+      <div ref={statusMenuRef} className="relative shrink-0">
+        <button
+          type="button"
+          onClick={() => setStatusMenuOpen((open) => !open)}
+          className="group inline-flex items-center gap-0.5 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1"
+          aria-label="Change task status"
+          aria-haspopup="menu"
+          aria-expanded={statusMenuOpen}
+        >
+          <TaskStatusBadge status={task.status} />
+          <ChevronDown className="h-3 w-3 text-muted-foreground transition-colors group-hover:text-foreground" />
+        </button>
+        {statusMenuOpen && (
+          <div role="menu" aria-label="Task status" className="absolute right-0 top-7 z-50 w-48 overflow-hidden rounded-lg border border-border/50 bg-popover p-1 shadow-xl">
+            {TASK_STATUSES.map((status) => (
+              <button
+                key={status.value}
+                type="button"
+                role="menuitemradio"
+                aria-checked={task.status === status.value}
+                onClick={() => {
+                  setStatusMenuOpen(false)
+                  if (task.status !== status.value) void onStatusChange?.(status.value)
+                }}
+                className="flex w-full items-center justify-between gap-2 rounded-md px-2.5 py-2 text-left text-xs text-foreground hover:bg-accent"
+              >
+                <span>{status.label}</span>
+                {task.status === status.value && <Check className="h-3.5 w-3.5 text-primary" />}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
       <div className="hidden items-center gap-1.5 lg:flex">
-        <TaskStatusBadge status={task.status} />
         <TaskPriorityBadge priority={task.priority} />
         <span className="inline-flex max-w-36 items-center gap-1.5 rounded-full border border-border/50 bg-card px-2 py-1 text-[11px] text-muted-foreground">
           <Bot className="h-3 w-3" />
@@ -124,6 +174,18 @@ export function TaskHeaderBar({
         <Button size="sm" onClick={onAction} className="h-8 gap-1.5 px-3" data-testid={`header-cta-${action}`}>
           {ActionIcon && <ActionIcon className="h-3.5 w-3.5" />}
           {actionMeta.label}
+        </Button>
+      )}
+      {showStandaloneComplete && (
+        <Button
+          variant={actionMeta && onAction ? 'outline' : 'default'}
+          size="sm"
+          onClick={onComplete}
+          className="h-8 gap-1.5 px-3"
+          data-testid="header-cta-complete"
+        >
+          <Check className="h-3.5 w-3.5" />
+          <span className="hidden sm:inline">Complete</span>
         </Button>
       )}
       {showDetailsToggle && (
