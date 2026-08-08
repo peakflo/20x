@@ -547,7 +547,11 @@ export const worktreeApi = {
     return window.electronAPI.worktree.changes(taskId, repos)
   },
   readFile: (taskId: string, repoFullName: string | null, filePath: string): Promise<{ content: string; size: number; binary: boolean; truncated: boolean } | null> => {
-    return window.electronAPI.worktree.readFile(taskId, repoFullName, filePath)
+    const readFile = window.electronAPI.worktree.readFile
+    if (typeof readFile !== 'function') {
+      return Promise.reject(new Error('Restart 20x to enable workspace file previews.'))
+    }
+    return readFile(taskId, repoFullName, filePath)
   },
   runCleanupNow: (): Promise<{ cleaned: number; errors: string[] }> => {
     return window.electronAPI.worktree.runCleanupNow()
