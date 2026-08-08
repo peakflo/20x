@@ -188,10 +188,11 @@ describe('WorktreeManager', () => {
     const directory = (name: string) => ({ name, isDirectory: () => true, isFile: () => false, isSymbolicLink: () => false })
     const file = (name: string) => ({ name, isDirectory: () => false, isFile: () => true, isSymbolicLink: () => false })
     readdirMock.mockImplementation(async (candidate: string) => {
-      if (candidate === workspacePath) return [directory('.agents'), file('AGENTS.md'), directory('attachments'), directory('20x')]
+      if (candidate === workspacePath) return [directory('.agents'), directory('.opencode'), file('AGENTS.md'), directory('attachments'), directory('20x')]
       if (candidate === path.join(workspacePath, '.agents')) return [directory('skills')]
       if (candidate === path.join(workspacePath, '.agents', 'skills')) return [directory('ui')]
       if (candidate === path.join(workspacePath, '.agents', 'skills', 'ui')) return [file('SKILL.md')]
+      if (candidate === path.join(workspacePath, '.opencode')) return [directory('node_modules'), directory('plugins'), file('package.json')]
       if (candidate === path.join(workspacePath, 'attachments')) return [file('spec.pdf')]
       return []
     })
@@ -205,6 +206,7 @@ describe('WorktreeManager', () => {
       'attachments/spec.pdf'
     ])
     expect(workspace?.allFiles).not.toContain('20x')
+    expect(workspace?.allFiles?.some((filePath) => filePath.startsWith('.opencode/')) ?? false).toBe(false)
   })
 
   it('reads selected files lazily and rejects paths resolving outside the task workspace', () => {

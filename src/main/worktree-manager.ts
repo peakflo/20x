@@ -532,6 +532,7 @@ export class WorktreeManager {
       entries.sort((left, right) => left.name.localeCompare(right.name))
       for (const entry of entries) {
         if (!relativeDirectory && repositoryDirectories.has(entry.name) && entry.isDirectory()) continue
+        if (!relativeDirectory && entry.name === '.opencode') continue
         const relativePath = relativeDirectory ? `${relativeDirectory}/${entry.name}` : entry.name
         if (entry.isDirectory()) await visit(join(directory, entry.name), relativePath)
         else if (entry.isFile() || entry.isSymbolicLink()) files.push(relativePath)
