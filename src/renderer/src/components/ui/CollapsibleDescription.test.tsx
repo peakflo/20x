@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, fireEvent, cleanup, screen, waitFor } from '@testing-library/react'
+import { act, render, fireEvent, cleanup, screen, waitFor } from '@testing-library/react'
 import { CollapsibleDescription } from './CollapsibleDescription'
 
 // Mock Markdown to render plain text, making it easy to measure
@@ -51,6 +51,7 @@ describe('CollapsibleDescription', () => {
   afterEach(() => {
     cleanup()
     restoreScrollHeight()
+    vi.unstubAllGlobals()
     vi.restoreAllMocks()
   })
 
@@ -121,6 +122,31 @@ describe('CollapsibleDescription', () => {
     // Expand - maxHeight should be removed
     fireEvent.click(getByText('Show more'))
     expect((contentDiv as HTMLElement).style.maxHeight).toBe('')
+  })
+
+  it('uses a compact line limit and remeasures when its pane width changes', () => {
+    let height = 40
+    Object.defineProperty(HTMLElement.prototype, 'scrollHeight', {
+      configurable: true,
+      get() { return height }
+    })
+    let resizeCallback: (() => void) | undefined
+    vi.stubGlobal('ResizeObserver', class {
+      constructor(callback: () => void) { resizeCallback = callback }
+      observe() {}
+      disconnect() {}
+    })
+
+    const { container } = render(
+      <CollapsibleDescription taskId="task-compact" description={LONG_DESCRIPTION} collapsedLines={3} />
+    )
+    expect(screen.queryByText('Show more')).toBeNull()
+
+    height = 180
+    act(() => resizeCallback?.())
+
+    expect(screen.getByText('Show more')).toBeTruthy()
+    expect((container.querySelector('.overflow-hidden') as HTMLElement).style.maxHeight).toBe('60px')
   })
 
   describe('inline editing', () => {

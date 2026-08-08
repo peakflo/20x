@@ -340,6 +340,7 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
             taskId={task.id}
             description={task.description || ''}
             size="sm"
+            collapsedLines={3}
             onSave={async (description) => {
               await updateTask(task.id, { description })
             }}

@@ -469,6 +469,7 @@ function TaskDetailViewComponent({ task, agents, onEdit, onDelete, onUpdateAttac
                 size="sm"
                 className="mt-3 text-muted-foreground"
                 onSave={onUpdateDescription}
+                collapsedLines={displayMode === 'panel' ? 3 : 5}
               />
             )}
           </div>

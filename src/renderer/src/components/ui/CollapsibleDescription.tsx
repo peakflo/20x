@@ -2,9 +2,7 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import { ChevronDown, ChevronUp, Pencil, Plus } from 'lucide-react'
 import { Markdown } from './Markdown'
 
-const COLLAPSED_LINE_COUNT = 5
 const LINE_HEIGHT_PX = 20 // approximate line height for sm markdown text
-const COLLAPSED_MAX_HEIGHT = COLLAPSED_LINE_COUNT * LINE_HEIGHT_PX
 const STORAGE_KEY_PREFIX = '20x-desc-expanded-'
 
 interface CollapsibleDescriptionProps {
@@ -20,6 +18,8 @@ interface CollapsibleDescriptionProps {
   onSave?: (description: string) => void | Promise<void>
   /** Placeholder shown when description is empty and `onSave` is provided. */
   placeholder?: string
+  /** Maximum preview lines before showing the expand control. */
+  collapsedLines?: number
 }
 
 export function CollapsibleDescription({
@@ -28,7 +28,8 @@ export function CollapsibleDescription({
   size = 'sm',
   className,
   onSave,
-  placeholder = 'Add description...'
+  placeholder = 'Add description...',
+  collapsedLines = 5
 }: CollapsibleDescriptionProps) {
   const contentRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -45,13 +46,14 @@ export function CollapsibleDescription({
   })
 
   const editable = typeof onSave === 'function'
+  const collapsedMaxHeight = Math.max(1, collapsedLines) * LINE_HEIGHT_PX
 
   const measureContent = useCallback(() => {
     if (contentRef.current) {
       const scrollHeight = contentRef.current.scrollHeight
-      setNeedsCollapse(scrollHeight > COLLAPSED_MAX_HEIGHT + 8) // 8px tolerance
+      setNeedsCollapse(scrollHeight > collapsedMaxHeight + 8) // 8px tolerance
     }
-  }, [])
+  }, [collapsedMaxHeight])
 
   useEffect(() => {
     measureContent()
@@ -63,6 +65,16 @@ export function CollapsibleDescription({
     window.addEventListener('resize', measureContent)
     return () => window.removeEventListener('resize', measureContent)
   }, [measureContent])
+
+  // The artifact split can resize without a browser-window resize. Observe the
+  // content itself so newly wrapped lines immediately gain a Show less/more
+  // control as the Details pane narrows.
+  useEffect(() => {
+    if (isEditing || !contentRef.current || typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(measureContent)
+    observer.observe(contentRef.current)
+    return () => observer.disconnect()
+  }, [isEditing, measureContent])
 
   // Keep draft in sync with prop when not editing (e.g., external updates)
   useEffect(() => {
@@ -193,7 +205,7 @@ export function CollapsibleDescription({
         <div
           ref={contentRef}
           className={`overflow-hidden transition-all duration-200 ${editable ? 'cursor-text rounded-md hover:bg-accent/30 -mx-2 px-2 py-1' : ''}`}
-          style={isCollapsed ? { maxHeight: `${COLLAPSED_MAX_HEIGHT}px` } : undefined}
+          style={isCollapsed ? { maxHeight: `${collapsedMaxHeight}px` } : undefined}
           onClick={editable ? beginEdit : undefined}
           role={editable ? 'button' : undefined}
           tabIndex={editable ? 0 : undefined}

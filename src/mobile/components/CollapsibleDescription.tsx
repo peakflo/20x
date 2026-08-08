@@ -1,9 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { Markdown } from '@/components/ui/Markdown'
 
-const COLLAPSED_LINE_COUNT = 5
 const LINE_HEIGHT_PX = 20
-const COLLAPSED_MAX_HEIGHT = COLLAPSED_LINE_COUNT * LINE_HEIGHT_PX
 const STORAGE_KEY_PREFIX = '20x-desc-expanded-'
 
 interface CollapsibleDescriptionProps {
@@ -19,6 +17,7 @@ interface CollapsibleDescriptionProps {
   onSave?: (description: string) => void | Promise<void>
   /** Placeholder shown when description is empty and `onSave` is provided. */
   placeholder?: string
+  collapsedLines?: number
 }
 
 export function CollapsibleDescription({
@@ -27,7 +26,8 @@ export function CollapsibleDescription({
   size = 'sm',
   className,
   onSave,
-  placeholder = 'Add description...'
+  placeholder = 'Add description...',
+  collapsedLines = 5
 }: CollapsibleDescriptionProps) {
   const contentRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -44,13 +44,14 @@ export function CollapsibleDescription({
   })
 
   const editable = typeof onSave === 'function'
+  const collapsedMaxHeight = Math.max(1, collapsedLines) * LINE_HEIGHT_PX
 
   const measureContent = useCallback(() => {
     if (contentRef.current) {
       const scrollHeight = contentRef.current.scrollHeight
-      setNeedsCollapse(scrollHeight > COLLAPSED_MAX_HEIGHT + 8)
+      setNeedsCollapse(scrollHeight > collapsedMaxHeight + 8)
     }
-  }, [])
+  }, [collapsedMaxHeight])
 
   useEffect(() => {
     measureContent()
@@ -61,6 +62,13 @@ export function CollapsibleDescription({
     window.addEventListener('resize', measureContent)
     return () => window.removeEventListener('resize', measureContent)
   }, [measureContent])
+
+  useEffect(() => {
+    if (isEditing || !contentRef.current || typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(measureContent)
+    observer.observe(contentRef.current)
+    return () => observer.disconnect()
+  }, [isEditing, measureContent])
 
   // Keep draft synced with prop when not editing
   useEffect(() => {
@@ -191,7 +199,7 @@ export function CollapsibleDescription({
         <div
           ref={contentRef}
           className={`overflow-hidden transition-all duration-200 ${editable ? 'cursor-text rounded-md active:bg-accent/30' : ''}`}
-          style={isCollapsed ? { maxHeight: `${COLLAPSED_MAX_HEIGHT}px` } : undefined}
+          style={isCollapsed ? { maxHeight: `${collapsedMaxHeight}px` } : undefined}
           onClick={editable ? beginEdit : undefined}
           role={editable ? 'button' : undefined}
           tabIndex={editable ? 0 : undefined}
