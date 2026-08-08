@@ -897,7 +897,7 @@ describe('ClaudeCodeAdapter persistent session input', () => {
     const releasePrompt = vi.fn()
     session.queryIterator = {} as any
     ;(session as any).enqueuePrompt = enqueuePrompt
-    session.releasePrompt = releasePrompt
+    ;(session as any).releasePrompt = releasePrompt
 
     await adapter.sendPrompt(
       's1',
