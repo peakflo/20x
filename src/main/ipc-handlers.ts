@@ -591,6 +591,10 @@ export function registerIpcHandlers(
     return await worktreeManager.getTaskChanges(taskId, repos)
   })
 
+  ipcMain.handle('worktree:files', async (_, taskId: string, repos: { fullName: string }[]) => {
+    return await worktreeManager.getTaskFiles(taskId, repos)
+  })
+
   ipcMain.handle('worktree:readFile', (_, taskId: string, repoFullName: string | null, filePath: string) => {
     return worktreeManager.readTaskFile(taskId, repoFullName, filePath)
   })

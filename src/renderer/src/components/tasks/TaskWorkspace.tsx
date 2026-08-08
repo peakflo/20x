@@ -762,6 +762,21 @@ Update existing skills that were helpful or create new ones for patterns worth r
     }
   }, [onUpdateTask, task?.id, updateTaskInStore])
 
+  const handleStatusChange = useCallback(async (status: TaskStatus) => {
+    if (!task?.id || status === task.status) return
+    // Completing a task has feedback and external-source side effects, so keep
+    // it on the same path as the persistent Complete action.
+    if (status === TaskStatus.Completed) {
+      await handleCompleteTask()
+      return
+    }
+    if (onUpdateTask) await onUpdateTask(task.id, { status })
+    else {
+      await taskApi.update(task.id, { status })
+      updateTaskInStore(task.id, { status })
+    }
+  }, [handleCompleteTask, onUpdateTask, task?.id, task?.status, updateTaskInStore])
+
   const handleOpenFolder = useCallback(async () => {
     if (!task?.id) return
     const workspaceDir = await window.electronAPI.tasks.getWorkspaceDir(task.id)
@@ -917,6 +932,8 @@ Update existing skills that were helpful or create new ones for patterns worth r
           agent={assignedAgent}
           action={primaryAction}
           onAction={handlePrimaryAction}
+          onComplete={() => void handleCompleteTask()}
+          onStatusChange={handleStatusChange}
           onBack={onBack}
           onRename={handleRename}
           detailsOpen={artifactUI.open && artifactUI.activeTabId === PinnedArtifactTabId.DETAILS}

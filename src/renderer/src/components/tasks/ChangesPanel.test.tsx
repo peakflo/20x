@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 
-const { changes, readFile } = vi.hoisted(() => ({ changes: vi.fn(), readFile: vi.fn() }))
-vi.mock('@/lib/ipc-client', () => ({ worktreeApi: { changes, readFile } }))
+const { changes, files, readFile } = vi.hoisted(() => ({ changes: vi.fn(), files: vi.fn(), readFile: vi.fn() }))
+vi.mock('@/lib/ipc-client', () => ({ worktreeApi: { changes, files, readFile } }))
 
 import { ChangesPanel } from './ChangesPanel'
 
@@ -35,15 +35,21 @@ new file mode 100644
 
 beforeEach(() => {
   persisted.clear()
-  changes.mockReset().mockResolvedValue([{
+  const inventory = [{
     repo: 'Task workspace',
-    diff: '',
     allFiles: ['.agents/skills/ui/SKILL.md', 'AGENTS.md', 'attachments/spec.pdf'],
     workspace: true
   }, {
     repo: 'peakflo/20x',
+    allFiles: ['README.md', 'package.json', 'src/components/Button.tsx', 'src/new.ts', 'src/unchanged.ts']
+  }]
+  files.mockReset().mockResolvedValue(inventory)
+  changes.mockReset().mockResolvedValue([{
+    ...inventory[0],
+    diff: ''
+  }, {
+    ...inventory[1],
     diff,
-    allFiles: ['README.md', 'package.json', 'src/components/Button.tsx', 'src/new.ts', 'src/unchanged.ts'],
     branch: 'feature/changes',
     pushed: true
   }])
@@ -56,6 +62,20 @@ beforeEach(() => {
 afterEach(cleanup)
 
 describe('ChangesPanel', () => {
+  it('shows All files before the diff calculation finishes', async () => {
+    let resolveChanges: (value: unknown) => void = () => undefined
+    changes.mockReturnValueOnce(new Promise((resolve) => { resolveChanges = resolve }))
+
+    render(<ChangesPanel taskId="task-1" repos={['peakflo/20x']} />)
+
+    expect(await screen.findByText('AGENTS.md')).toBeInTheDocument()
+    expect(screen.getByText('package.json')).toBeInTheDocument()
+    expect(screen.getByTitle('Refresh')).toBeDisabled()
+
+    resolveChanges([])
+    await waitFor(() => expect(screen.getByTitle('Refresh')).not.toBeDisabled())
+  })
+
   it('shows the repository inventory in All files and preserves the tree in Diff', async () => {
     render(<ChangesPanel taskId="task-1" repos={['peakflo/20x']} />)
 

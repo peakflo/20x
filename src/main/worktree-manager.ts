@@ -34,6 +34,15 @@ export interface TaskChangesResult {
   ciStatus?: 'passing' | 'failing' | 'pending' | 'none'
 }
 
+export interface TaskFileInventoryResult {
+  repo: string
+  allFiles: string[]
+  workspace?: boolean
+  error?: string
+  noWorktree?: boolean
+  path?: string
+}
+
 export interface TaskFileContent {
   content: string
   size: number
@@ -352,14 +361,7 @@ export class WorktreeManager {
       try {
         // Complete browsable worktree inventory: tracked + untracked files,
         // while respecting .gitignore and never traversing .git internals.
-        let allFiles: string[] = []
-        try {
-          const { stdout } = await execFileAsync(
-            'git', ['-c', 'core.quotepath=false', 'ls-files', '--cached', '--others', '--exclude-standard', '-z'],
-            { cwd: wtPath, ...gitOpts }
-          )
-          allFiles = [...new Set(stdout.split('\0').filter(Boolean))].sort((left, right) => left.localeCompare(right))
-        } catch { /* keep diff available if inventory fails */ }
+        const allFiles = await this.listRepositoryFiles(wtPath, gitOpts)
 
         // Agents auto-commit, so "uncommitted only" (git diff HEAD) is usually
         // empty. We want the task's whole diff: base branch → current work
@@ -512,6 +514,42 @@ export class WorktreeManager {
 
     const workspaceFiles = await this.listNonRepositoryWorkspaceFiles(taskId, repos)
     return [{ repo: 'Task workspace', diff: '', allFiles: workspaceFiles, workspace: true }, ...results]
+  }
+
+  /** Fast inventory used to render All files before the more expensive diff,
+   * branch, pull-request, and CI discovery completes. */
+  async getTaskFiles(taskId: string, repos: { fullName: string }[]): Promise<TaskFileInventoryResult[]> {
+    const results: TaskFileInventoryResult[] = []
+    const gitOpts = { maxBuffer: 64 * 1024 * 1024 }
+
+    for (const repo of repos) {
+      const repoName = repo.fullName.split('/').pop() || repo.fullName
+      const wtPath = this.worktreePath(taskId, repoName)
+      if (!existsSync(wtPath)) {
+        results.push({ repo: repo.fullName, allFiles: [], noWorktree: true, path: wtPath })
+        continue
+      }
+      try {
+        results.push({ repo: repo.fullName, allFiles: await this.listRepositoryFiles(wtPath, gitOpts) })
+      } catch (error) {
+        results.push({ repo: repo.fullName, allFiles: [], error: error instanceof Error ? error.message : String(error) })
+      }
+    }
+
+    const workspaceFiles = await this.listNonRepositoryWorkspaceFiles(taskId, repos)
+    return [{ repo: 'Task workspace', allFiles: workspaceFiles, workspace: true }, ...results]
+  }
+
+  private async listRepositoryFiles(wtPath: string, gitOpts: { maxBuffer: number }): Promise<string[]> {
+    try {
+      const { stdout } = await execFileAsync(
+        'git', ['-c', 'core.quotepath=false', 'ls-files', '--cached', '--others', '--exclude-standard', '-z'],
+        { cwd: wtPath, ...gitOpts }
+      )
+      return [...new Set(stdout.split('\0').filter(Boolean))].sort((left, right) => left.localeCompare(right))
+    } catch {
+      return []
+    }
   }
 
   private async listNonRepositoryWorkspaceFiles(taskId: string, repos: { fullName: string }[]): Promise<string[]> {

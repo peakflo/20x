@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { PanelRightClose } from 'lucide-react'
 import { ArtifactType, type Artifact, type ArtifactApi, type ArtifactUIState } from '@shared/artifacts'
 import { PinnedArtifactTabId } from '@/stores/artifact-store'
@@ -9,6 +9,8 @@ import { ImageArtifactView } from './viewers/ImageArtifactView'
 import { HtmlArtifactView } from './viewers/HtmlArtifactView'
 import { PrArtifactView } from './viewers/PrArtifactView'
 import { FileArtifactView } from './viewers/FileArtifactView'
+
+export const ACTIVE_ARTIFACT_REFRESH_INTERVAL_MS = 30_000
 
 export interface ArtifactsPanelProps {
   taskId: string
@@ -30,6 +32,16 @@ export interface ArtifactsPanelProps {
 
 export function ArtifactsPanel({ artifacts, ui, artifactApi, hasChanges, hasOutput, changesCount, onSelectTab, onCloseTab, onToggleOpen, details, changes, output, className }: ArtifactsPanelProps) {
   const active = ui.activeTabId || PinnedArtifactTabId.DETAILS
+  const activeArtifact = artifacts.find((artifact) => artifact.id === active)
+  const [refreshTrigger, setRefreshTrigger] = useState(0)
+
+  useEffect(() => {
+    if (!activeArtifact) return
+    const interval = window.setInterval(() => {
+      setRefreshTrigger((trigger) => trigger + 1)
+    }, ACTIVE_ARTIFACT_REFRESH_INTERVAL_MS)
+    return () => window.clearInterval(interval)
+  }, [activeArtifact?.id])
 
   return (
     <section className={cn('flex h-full min-h-0 min-w-0 flex-col bg-background', className)} data-task-artifacts>
@@ -43,7 +55,7 @@ export function ArtifactsPanel({ artifacts, ui, artifactApi, hasChanges, hasOutp
         {hasOutput && <div className={active === PinnedArtifactTabId.OUTPUT ? 'h-full overflow-y-auto p-4' : 'hidden'}>{output}</div>}
         {artifacts.map((artifact) => (
           <div key={artifact.id} className={active === artifact.id ? 'h-full' : 'hidden'}>
-            {active === artifact.id ? <ArtifactViewer artifact={artifact} artifactApi={artifactApi} /> : null}
+            {active === artifact.id ? <ArtifactViewer artifact={{ ...artifact, reloadTrigger: artifact.reloadTrigger + refreshTrigger }} artifactApi={artifactApi} /> : null}
           </div>
         ))}
       </div>
