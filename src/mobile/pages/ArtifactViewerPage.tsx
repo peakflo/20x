@@ -12,6 +12,8 @@ import { api } from '../api/client'
 import { ArtifactType, useArtifactStore } from '../stores/artifact-store'
 import type { Route } from '../App'
 
+const ACTIVE_ARTIFACT_REFRESH_INTERVAL_MS = 30_000
+
 function hardenHtml(source: string): string {
   const policy = "default-src 'none'; connect-src 'none'; img-src data: blob:; style-src 'unsafe-inline'; script-src 'unsafe-inline'"
   const guard = `<meta http-equiv="Content-Security-Policy" content="${policy}"><base href="about:blank"><script>window.open=function(){return null};</script>`
@@ -47,10 +49,19 @@ export function ArtifactViewerPage({ taskId, artifactId, onNavigate }: { taskId:
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [pullRequest, setPullRequest] = useState<PullRequestDetails | null>(null)
+  const [refreshTrigger, setRefreshTrigger] = useState(0)
 
   useEffect(() => {
     if (!artifact) void hydrate(taskId)
   }, [artifact, hydrate, taskId])
+
+  useEffect(() => {
+    if (!artifact) return
+    const interval = window.setInterval(() => {
+      setRefreshTrigger((trigger) => trigger + 1)
+    }, ACTIVE_ARTIFACT_REFRESH_INTERVAL_MS)
+    return () => window.clearInterval(interval)
+  }, [artifact?.id])
 
   useEffect(() => {
     if (!artifact?.path || artifact.type === ArtifactType.PR) {
@@ -68,7 +79,7 @@ export function ArtifactViewerPage({ taskId, artifactId, onNavigate }: { taskId:
       if (!cancelled) setLoading(false)
     })
     return () => { cancelled = true }
-  }, [artifact?.path, artifact?.reloadTrigger, artifact?.type, taskId])
+  }, [artifact?.path, artifact?.reloadTrigger, artifact?.type, refreshTrigger, taskId])
 
   useEffect(() => {
     if (artifact?.type !== ArtifactType.PR || !artifact.url) return
@@ -83,7 +94,7 @@ export function ArtifactViewerPage({ taskId, artifactId, onNavigate }: { taskId:
       if (!cancelled) setLoading(false)
     })
     return () => { cancelled = true }
-  }, [artifact?.reloadTrigger, artifact?.type, artifact?.url])
+  }, [artifact?.reloadTrigger, artifact?.type, artifact?.url, refreshTrigger])
 
   const imageUrl = useMemo(() => {
     if (artifact?.type !== ArtifactType.IMAGE) return null
@@ -105,6 +116,16 @@ export function ArtifactViewerPage({ taskId, artifactId, onNavigate }: { taskId:
           <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="m15 18-6-6 6-6"/></svg>
         </button>
         <span className="min-w-0 flex-1 truncate text-sm font-medium">{artifact?.title || 'Artifact'}</span>
+        {artifact && (
+          <button
+            type="button"
+            onClick={() => setRefreshTrigger((trigger) => trigger + 1)}
+            className="rounded-md p-1.5 text-muted-foreground active:opacity-60"
+            aria-label={`Refresh ${artifact.title}`}
+          >
+            <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 11a8.1 8.1 0 0 0-15.5-2M4 4v5h5"/><path d="M4 13a8.1 8.1 0 0 0 15.5 2M20 20v-5h-5"/></svg>
+          </button>
+        )}
         {artifact?.type === ArtifactType.PR && externalUrl && (
           <a href={externalUrl} target="_blank" rel="noopener noreferrer" className="text-xs text-primary">Open ↗</a>
         )}
@@ -118,11 +139,11 @@ export function ArtifactViewerPage({ taskId, artifactId, onNavigate }: { taskId:
           <div className="mx-auto max-w-3xl p-5"><Markdown size="sm">{content.content}</Markdown></div>
         )}
         {!loading && !error && artifact?.type === ArtifactType.IMAGE && imageUrl && (
-          <div className="flex min-h-full items-center justify-center p-4"><img src={imageUrl} alt={artifact.title} className="max-h-full max-w-full object-contain" /></div>
+          <div className="flex min-h-full items-center justify-center p-4"><img key={`${artifact.reloadTrigger}:${refreshTrigger}`} src={imageUrl} alt={artifact.title} className="max-h-full max-w-full object-contain" /></div>
         )}
         {!loading && !error && artifact?.type === ArtifactType.HTML && content && (
           <iframe
-            key={artifact.reloadTrigger}
+            key={`${artifact.reloadTrigger}:${refreshTrigger}`}
             title={artifact.title}
             srcDoc={hardenHtml(content.content)}
             sandbox="allow-scripts"

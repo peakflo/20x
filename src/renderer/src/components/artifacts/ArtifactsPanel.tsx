@@ -1,5 +1,5 @@
-import type { ReactNode } from 'react'
-import { PanelRightClose } from 'lucide-react'
+import { useEffect, useState, type ReactNode } from 'react'
+import { PanelRightClose, RefreshCw } from 'lucide-react'
 import { ArtifactType, type Artifact, type ArtifactApi, type ArtifactUIState } from '@shared/artifacts'
 import { PinnedArtifactTabId } from '@/stores/artifact-store'
 import { cn } from '@/lib/utils'
@@ -9,6 +9,8 @@ import { ImageArtifactView } from './viewers/ImageArtifactView'
 import { HtmlArtifactView } from './viewers/HtmlArtifactView'
 import { PrArtifactView } from './viewers/PrArtifactView'
 import { FileArtifactView } from './viewers/FileArtifactView'
+
+export const ACTIVE_ARTIFACT_REFRESH_INTERVAL_MS = 30_000
 
 export interface ArtifactsPanelProps {
   taskId: string
@@ -30,11 +32,32 @@ export interface ArtifactsPanelProps {
 
 export function ArtifactsPanel({ artifacts, ui, artifactApi, hasChanges, hasOutput, changesCount, onSelectTab, onCloseTab, onToggleOpen, details, changes, output, className }: ArtifactsPanelProps) {
   const active = ui.activeTabId || PinnedArtifactTabId.DETAILS
+  const activeArtifact = artifacts.find((artifact) => artifact.id === active)
+  const [refreshTrigger, setRefreshTrigger] = useState(0)
+
+  useEffect(() => {
+    if (!activeArtifact) return
+    const interval = window.setInterval(() => {
+      setRefreshTrigger((trigger) => trigger + 1)
+    }, ACTIVE_ARTIFACT_REFRESH_INTERVAL_MS)
+    return () => window.clearInterval(interval)
+  }, [activeArtifact?.id])
 
   return (
     <section className={cn('flex h-full min-h-0 min-w-0 flex-col bg-background', className)} data-task-artifacts>
       <div className="relative">
-        <ArtifactTabStrip artifacts={artifacts} activeTabId={active} hasChanges={hasChanges} hasOutput={hasOutput} changesCount={changesCount} onSelectTab={onSelectTab} onCloseTab={onCloseTab} className="pr-11" />
+        <ArtifactTabStrip artifacts={artifacts} activeTabId={active} hasChanges={hasChanges} hasOutput={hasOutput} changesCount={changesCount} onSelectTab={onSelectTab} onCloseTab={onCloseTab} className={activeArtifact ? 'pr-20' : 'pr-11'} />
+        {activeArtifact && (
+          <button
+            type="button"
+            aria-label={`Refresh ${activeArtifact.title}`}
+            title="Refresh artifact"
+            onClick={() => setRefreshTrigger((trigger) => trigger + 1)}
+            className="absolute right-10 top-1.5 grid h-7 w-7 place-items-center rounded-md bg-background text-muted-foreground hover:bg-accent hover:text-foreground"
+          >
+            <RefreshCw className="h-3.5 w-3.5" />
+          </button>
+        )}
         <button type="button" aria-label="Close artifacts" onClick={onToggleOpen} className="absolute right-2 top-1.5 grid h-7 w-7 place-items-center rounded-md bg-background text-muted-foreground hover:bg-accent hover:text-foreground"><PanelRightClose className="h-3.5 w-3.5" /></button>
       </div>
       <div className="relative min-h-0 flex-1">
@@ -43,7 +66,7 @@ export function ArtifactsPanel({ artifacts, ui, artifactApi, hasChanges, hasOutp
         {hasOutput && <div className={active === PinnedArtifactTabId.OUTPUT ? 'h-full overflow-y-auto p-4' : 'hidden'}>{output}</div>}
         {artifacts.map((artifact) => (
           <div key={artifact.id} className={active === artifact.id ? 'h-full' : 'hidden'}>
-            {active === artifact.id ? <ArtifactViewer artifact={artifact} artifactApi={artifactApi} /> : null}
+            {active === artifact.id ? <ArtifactViewer artifact={{ ...artifact, reloadTrigger: artifact.reloadTrigger + refreshTrigger }} artifactApi={artifactApi} /> : null}
           </div>
         ))}
       </div>
