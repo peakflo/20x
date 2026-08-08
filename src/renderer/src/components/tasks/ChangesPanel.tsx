@@ -383,7 +383,67 @@ function SelectedFileDiff({ repo, entry, viewMode, wrap }: { repo: RepoChanges; 
   )
 }
 
-function FilesWorkspace({ repos, selectedKey, includeAll, onSelect, viewMode, wrap }: {
+function SelectedFileContent({ taskId, repo, entry, wrap }: {
+  taskId: string
+  repo: RepoChanges
+  entry: ChangeTreeFile
+  wrap: boolean
+}) {
+  const [preview, setPreview] = useState<{ content: string; size: number; binary: boolean; truncated: boolean } | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let active = true
+    setLoading(true)
+    setError(null)
+    setPreview(null)
+    void worktreeApi.readFile(taskId, repo.workspace ? null : repo.repo, entry.path)
+      .then((result) => {
+        if (!active) return
+        if (!result) setError('This file could not be read.')
+        else setPreview(result)
+      })
+      .catch((readError: unknown) => {
+        if (active) setError(readError instanceof Error ? readError.message : 'This file could not be read.')
+      })
+      .finally(() => {
+        if (active) setLoading(false)
+      })
+    return () => { active = false }
+  }, [entry.path, repo.repo, repo.workspace, taskId])
+
+  const change = entry.change
+  const meta = change ? STATUS_META[change.status] : null
+  const Icon = meta?.icon || File
+  return (
+    <div className="flex h-full min-w-0 flex-col bg-background">
+      <div className="flex shrink-0 items-center gap-2 border-b border-border/60 bg-card px-3 py-2">
+        <Icon className={cn('h-3.5 w-3.5 shrink-0', meta?.className || 'text-muted-foreground')} />
+        <div className="min-w-0 flex-1">
+          <div className="truncate font-mono text-xs text-foreground" title={entry.path}>{entry.path}</div>
+          <div className="mt-0.5 flex items-center gap-1.5 text-[10px] text-muted-foreground">
+            <span>{repo.repo}</span><span>·</span><span>File contents</span>
+            {preview && <><span>·</span><span>{preview.size.toLocaleString()} bytes</span></>}
+          </div>
+        </div>
+      </div>
+      <div className="min-h-0 flex-1 overflow-auto bg-background">
+        {loading && <div className="flex h-full items-center justify-center text-sm text-muted-foreground"><Loader2 className="mr-2 h-4 w-4 animate-spin" />Loading file…</div>}
+        {!loading && error && <div className="flex h-full items-center justify-center px-6 text-center text-sm text-muted-foreground">{error}</div>}
+        {!loading && preview?.binary && <div className="flex h-full items-center justify-center px-6 text-center text-sm text-muted-foreground">Binary file preview is unavailable.</div>}
+        {!loading && preview?.truncated && <div className="flex h-full items-center justify-center px-6 text-center text-sm text-muted-foreground">This file is too large to preview ({preview.size.toLocaleString()} bytes).</div>}
+        {!loading && preview && !preview.binary && !preview.truncated && preview.content === '' && <div className="flex h-full items-center justify-center text-sm text-muted-foreground">This file is empty.</div>}
+        {!loading && preview && !preview.binary && !preview.truncated && preview.content !== '' && (
+          <pre className={cn('min-h-full p-4 font-mono text-xs leading-[1.55] text-foreground', wrap ? 'whitespace-pre-wrap break-words' : 'min-w-max whitespace-pre')}>{preview.content}</pre>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function FilesWorkspace({ taskId, repos, selectedKey, includeAll, onSelect, viewMode, wrap }: {
+  taskId: string
   repos: RepoChanges[]
   selectedKey: string | null
   includeAll: boolean
@@ -408,7 +468,9 @@ function FilesWorkspace({ repos, selectedKey, includeAll, onSelect, viewMode, wr
       </aside>
       <main className="min-w-0 flex-1">
         {selected
-          ? <SelectedFileDiff repo={selected.repo} entry={selected.entry} viewMode={viewMode} wrap={wrap} />
+          ? includeAll
+            ? <SelectedFileContent taskId={taskId} repo={selected.repo} entry={selected.entry} wrap={wrap} />
+            : <SelectedFileDiff repo={selected.repo} entry={selected.entry} viewMode={viewMode} wrap={wrap} />
           : <div className="flex h-full items-center justify-center text-sm text-muted-foreground">Select a file to review it.</div>}
       </main>
     </div>
@@ -582,6 +644,7 @@ export function ChangesPanel({ taskId, repos, className, onSummary, onPullReques
         )}
         {data && (displayMode === ChangesDisplayMode.ALL_FILES ? hasWorkspaceFiles : hasChanges) && (
           <FilesWorkspace
+            taskId={taskId}
             repos={data}
             selectedKey={selectedFileKey}
             includeAll={displayMode === ChangesDisplayMode.ALL_FILES}

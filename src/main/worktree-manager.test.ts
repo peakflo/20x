@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import path from 'path'
 
-const { execFileMock, existsSyncMock, mkdirSyncMock, readdirMock } = vi.hoisted(() => {
+const { execFileMock, existsSyncMock, mkdirSyncMock, readFileSyncMock, realpathSyncMock, readdirMock, statSyncMock } = vi.hoisted(() => {
   const execFileMock = vi.fn()
   const existsSyncMock = vi.fn()
   const mkdirSyncMock = vi.fn()
@@ -22,7 +22,15 @@ const { execFileMock, existsSyncMock, mkdirSyncMock, readdirMock } = vi.hoisted(
     })
   }
 
-  return { execFileMock, existsSyncMock, mkdirSyncMock, readdirMock: vi.fn() }
+  return {
+    execFileMock,
+    existsSyncMock,
+    mkdirSyncMock,
+    readFileSyncMock: vi.fn(),
+    realpathSyncMock: vi.fn(),
+    readdirMock: vi.fn(),
+    statSyncMock: vi.fn()
+  }
 })
 
 vi.mock('child_process', () => ({
@@ -32,7 +40,10 @@ vi.mock('child_process', () => ({
 vi.mock('fs', () => ({
   existsSync: existsSyncMock,
   mkdirSync: mkdirSyncMock,
-  rmSync: vi.fn()
+  readFileSync: readFileSyncMock,
+  realpathSync: realpathSyncMock,
+  rmSync: vi.fn(),
+  statSync: statSyncMock
 }))
 
 vi.mock('fs/promises', () => ({
@@ -52,7 +63,10 @@ describe('WorktreeManager', () => {
     execFileMock.mockReset()
     existsSyncMock.mockReset()
     mkdirSyncMock.mockReset()
+    readFileSyncMock.mockReset()
+    realpathSyncMock.mockReset()
     readdirMock.mockReset().mockRejectedValue(new Error('Workspace unavailable'))
+    statSyncMock.mockReset()
     existsSyncMock.mockReturnValue(false)
     execFileMock.mockImplementation((file: string, args: string[], optionsOrCallback: unknown, maybeCallback?: (error: Error | null, stdout?: string, stderr?: string) => void) => {
       const callback = typeof optionsOrCallback === 'function'
@@ -191,5 +205,27 @@ describe('WorktreeManager', () => {
       'attachments/spec.pdf'
     ])
     expect(workspace?.allFiles).not.toContain('20x')
+  })
+
+  it('reads selected files lazily and rejects paths resolving outside the task workspace', () => {
+    const workspacePath = path.join('/tmp/20x-user-data', 'workspaces', 'task-5')
+    const repoPath = path.join(workspacePath, '20x')
+    const filePath = path.join(repoPath, 'src', 'index.ts')
+    realpathSyncMock.mockImplementation((candidate: string) => candidate)
+    statSyncMock.mockReturnValue({ isFile: () => true, size: 18 })
+    readFileSyncMock.mockReturnValue(Buffer.from('export const ok = 1'))
+
+    const manager = new WorktreeManager()
+    expect(manager.readTaskFile('task-5', 'peakflo/20x', 'src/index.ts')).toEqual({
+      content: 'export const ok = 1',
+      size: 18,
+      binary: false,
+      truncated: false
+    })
+    expect(readFileSyncMock).toHaveBeenCalledWith(filePath)
+
+    realpathSyncMock.mockImplementation((candidate: string) => candidate.endsWith('escape.ts') ? '/tmp/outside/escape.ts' : candidate)
+    expect(manager.readTaskFile('task-5', 'peakflo/20x', '../escape.ts')).toBeNull()
+    expect(manager.readTaskFile('task-5', 'peakflo/20x', 'src/escape.ts')).toBeNull()
   })
 })

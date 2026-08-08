@@ -546,6 +546,9 @@ export const worktreeApi = {
   changes: (taskId: string, repos: { fullName: string }[]): Promise<Array<{ repo: string; diff: string; allFiles?: string[]; workspace?: boolean; error?: string; noWorktree?: boolean; path?: string; branch?: string; pushed?: boolean; prNumber?: number; prUrl?: string; prState?: string; prTitle?: string; ciStatus?: 'passing' | 'failing' | 'pending' | 'none' }>> => {
     return window.electronAPI.worktree.changes(taskId, repos)
   },
+  readFile: (taskId: string, repoFullName: string | null, filePath: string): Promise<{ content: string; size: number; binary: boolean; truncated: boolean } | null> => {
+    return window.electronAPI.worktree.readFile(taskId, repoFullName, filePath)
+  },
   runCleanupNow: (): Promise<{ cleaned: number; errors: string[] }> => {
     return window.electronAPI.worktree.runCleanupNow()
   }

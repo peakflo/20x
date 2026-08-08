@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 
-const { changes } = vi.hoisted(() => ({ changes: vi.fn() }))
-vi.mock('@/lib/ipc-client', () => ({ worktreeApi: { changes } }))
+const { changes, readFile } = vi.hoisted(() => ({ changes: vi.fn(), readFile: vi.fn() }))
+vi.mock('@/lib/ipc-client', () => ({ worktreeApi: { changes, readFile } }))
 
 import { ChangesPanel } from './ChangesPanel'
 
@@ -47,6 +47,10 @@ beforeEach(() => {
     branch: 'feature/changes',
     pushed: true
   }])
+  readFile.mockReset().mockImplementation(async (_taskId: string, repo: string | null, path: string) => {
+    const content = `contents of ${repo || 'task workspace'}/${path}`
+    return { content, size: content.length, binary: false, truncated: false }
+  })
 })
 
 afterEach(cleanup)
@@ -63,13 +67,17 @@ describe('ChangesPanel', () => {
     expect(screen.queryByText('Button.tsx')).not.toBeInTheDocument()
     expect(screen.getByText('package.json')).toBeInTheDocument()
     expect(screen.getAllByText('README.md').length).toBeGreaterThan(0)
-    expect(await screen.findByText('This file has no changes in the task branch.')).toBeInTheDocument()
+    expect(await screen.findByText('contents of task workspace/.agents/skills/ui/SKILL.md')).toBeInTheDocument()
 
     fireEvent.click(screen.getByText('src').closest('button')!)
     expect(screen.getByText('components')).toBeInTheDocument()
     expect(screen.getByText('new.ts')).toBeInTheDocument()
     expect(screen.getByText('unchanged.ts')).toBeInTheDocument()
     expect(screen.queryByText('Button.tsx')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByText('unchanged.ts').closest('button')!)
+    expect(await screen.findByText('contents of peakflo/20x/src/unchanged.ts')).toBeInTheDocument()
+    expect(readFile).toHaveBeenCalledWith('task-1', 'peakflo/20x', 'src/unchanged.ts')
 
     fireEvent.click(screen.getByText('components').closest('button')!)
     expect(screen.getByText('Button.tsx')).toBeInTheDocument()
@@ -78,7 +86,7 @@ describe('ChangesPanel', () => {
 
     fireEvent.click(screen.getByText('Button.tsx').closest('button')!)
     expect(screen.getByText('src/components/Button.tsx')).toBeInTheDocument()
-    expect(screen.getByText('Modified')).toBeInTheDocument()
+    expect(await screen.findByText('contents of peakflo/20x/src/components/Button.tsx')).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: 'Diff' }))
     await waitFor(() => expect(screen.queryAllByText('Task workspace')).toHaveLength(0))

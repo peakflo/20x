@@ -1,8 +1,8 @@
 import { execFile } from 'child_process'
 import { promisify } from 'util'
-import { existsSync, mkdirSync, rmSync } from 'fs'
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync } from 'fs'
 import { readdir } from 'fs/promises'
-import { join } from 'path'
+import { isAbsolute, join, relative, resolve, sep, win32 } from 'path'
 import { app, type BrowserWindow } from 'electron'
 
 const execFileAsync = promisify(execFile)
@@ -34,6 +34,20 @@ export interface TaskChangesResult {
   ciStatus?: 'passing' | 'failing' | 'pending' | 'none'
 }
 
+export interface TaskFileContent {
+  content: string
+  size: number
+  binary: boolean
+  truncated: boolean
+}
+
+const MAX_TASK_FILE_PREVIEW_BYTES = 512 * 1024
+
+function isWithinRoot(rootPath: string, candidatePath: string): boolean {
+  const pathFromRoot = relative(rootPath, candidatePath)
+  return pathFromRoot === '' || (!pathFromRoot.startsWith(`..${sep}`) && pathFromRoot !== '..' && !isAbsolute(pathFromRoot))
+}
+
 export class WorktreeManager {
   private mainWindow: BrowserWindow | null = null
 
@@ -53,6 +67,43 @@ export class WorktreeManager {
 
   private worktreePath(taskId: string, repoName: string): string {
     return join(WORKSPACES_DIR, taskId, repoName)
+  }
+
+  /** Read one selected file on demand while keeping renderer-provided paths
+   * inside the task workspace (and inside the selected repository, if any). */
+  readTaskFile(taskId: string, repoFullName: string | null, filePath: string): TaskFileContent | null {
+    if (!filePath || filePath.includes('\0') || isAbsolute(filePath) || win32.isAbsolute(filePath)) return null
+    const normalized = filePath.replace(/\\/g, '/').replace(/^\.\//, '')
+    if (normalized.split('/').some((segment) => !segment || segment === '.' || segment === '..')) return null
+
+    try {
+      const workspacesRoot = realpathSync(WORKSPACES_DIR)
+      const workspaceRoot = realpathSync(join(workspacesRoot, taskId))
+      if (!isWithinRoot(workspacesRoot, workspaceRoot)) return null
+      const repoName = repoFullName?.split('/').pop()
+      if (repoFullName && (!repoName || repoName === '.' || repoName === '..')) return null
+      const requestedRoot = repoName ? join(workspaceRoot, repoName) : workspaceRoot
+      const root = realpathSync(requestedRoot)
+      if (!isWithinRoot(workspaceRoot, root)) return null
+      const candidate = realpathSync(resolve(root, normalized))
+      if (!isWithinRoot(root, candidate)) return null
+
+      const fileStat = statSync(candidate)
+      if (!fileStat.isFile()) return null
+      if (fileStat.size > MAX_TASK_FILE_PREVIEW_BYTES) {
+        return { content: '', size: fileStat.size, binary: false, truncated: true }
+      }
+      const bytes = readFileSync(candidate)
+      const binary = bytes.subarray(0, 8192).includes(0)
+      return {
+        content: binary ? '' : bytes.toString('utf8'),
+        size: fileStat.size,
+        binary,
+        truncated: false
+      }
+    } catch {
+      return null
+    }
   }
 
   async setupWorkspaceForTask(

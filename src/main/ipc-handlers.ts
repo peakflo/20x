@@ -591,6 +591,10 @@ export function registerIpcHandlers(
     return await worktreeManager.getTaskChanges(taskId, repos)
   })
 
+  ipcMain.handle('worktree:readFile', (_, taskId: string, repoFullName: string | null, filePath: string) => {
+    return worktreeManager.readTaskFile(taskId, repoFullName, filePath)
+  })
+
   ipcMain.handle('worktree:cleanup', async (_, taskId: string, repos: { fullName: string }[], org: string, removeTaskDir?: boolean) => {
     await worktreeManager.cleanupTaskWorkspace(taskId, repos, org, removeTaskDir ?? true)
   })
