@@ -503,6 +503,13 @@ export function ChangesPanel({ taskId, repos, className, onSummary, onPullReques
     const list = reposKey ? reposKey.split('|') : []
     setLoading(true)
     try {
+      const inventory = await worktreeApi.files(taskId, list.map((fullName) => ({ fullName })))
+      setData(inventory.map((entry) => ({ ...entry, files: [] })))
+    } catch {
+      // Fall through to the complete changes request. Older preload bridges can
+      // still render once that request returns.
+    }
+    try {
       const res = await worktreeApi.changes(taskId, list.map((fullName) => ({ fullName })))
       const parsed = res.map((r) => {
         const files = r.diff ? parseUnifiedDiff(r.diff) : []

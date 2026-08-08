@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 import { ArtifactContentKind, ArtifactType, type Artifact, type ArtifactApi, type ArtifactUIState } from '@shared/artifacts'
 import { PinnedArtifactTabId } from '@/stores/artifact-store'
 import { ACTIVE_ARTIFACT_REFRESH_INTERVAL_MS, ArtifactsPanel } from './ArtifactsPanel'
@@ -48,7 +48,7 @@ describe('ArtifactsPanel', () => {
     expect(screen.queryByText('Loaded changes')).not.toBeInTheDocument()
   })
 
-  it('manually and periodically refreshes only the selected artifact', async () => {
+  it('refreshes on open and periodically only while the artifact is selected', async () => {
     const dynamicArtifactApi: ArtifactApi = {
       scan: vi.fn().mockResolvedValue([]),
       read: vi.fn().mockResolvedValue({ kind: ArtifactContentKind.TEXT, content: '# Current content' })
@@ -87,14 +87,16 @@ describe('ArtifactsPanel', () => {
     await waitFor(() => expect(dynamicArtifactApi.read).toHaveBeenCalledTimes(1))
     expect(intervalSpy).toHaveBeenCalledWith(expect.any(Function), ACTIVE_ARTIFACT_REFRESH_INTERVAL_MS)
 
-    fireEvent.click(screen.getByRole('button', { name: 'Refresh Review notes' }))
-    await waitFor(() => expect(dynamicArtifactApi.read).toHaveBeenCalledTimes(2))
-
     act(() => intervalCallback?.())
-    await waitFor(() => expect(dynamicArtifactApi.read).toHaveBeenCalledTimes(3))
+    await waitFor(() => expect(dynamicArtifactApi.read).toHaveBeenCalledTimes(2))
 
     rerender(<ArtifactsPanel {...props} ui={baseUi} />)
     expect(clearIntervalSpy).toHaveBeenCalledWith(1)
-    expect(screen.queryByRole('button', { name: 'Refresh Review notes' })).not.toBeInTheDocument()
+
+    rerender(<ArtifactsPanel {...props} ui={{ ...baseUi, activeTabId: artifact.id }} />)
+    await waitFor(() => expect(dynamicArtifactApi.read).toHaveBeenCalledTimes(3))
+
+    rerender(<ArtifactsPanel {...props} artifacts={[{ ...artifact, reloadTrigger: 1 }]} ui={{ ...baseUi, activeTabId: artifact.id }} />)
+    await waitFor(() => expect(dynamicArtifactApi.read).toHaveBeenCalledTimes(4))
   })
 })

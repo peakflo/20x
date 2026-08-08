@@ -209,6 +209,27 @@ describe('WorktreeManager', () => {
     expect(workspace?.allFiles?.some((filePath) => filePath.startsWith('.opencode/')) ?? false).toBe(false)
   })
 
+  it('returns the workspace and repository inventory without computing a diff', async () => {
+    const workspacePath = path.join('/tmp/20x-user-data', 'workspaces', 'task-fast-files')
+    const repoPath = path.join(workspacePath, '20x')
+    existsSyncMock.mockImplementation((candidate: string) => candidate === workspacePath || candidate === repoPath)
+    readdirMock.mockImplementation(async (candidate: string) => candidate === workspacePath
+      ? [{ name: 'AGENTS.md', isDirectory: () => false, isFile: () => true, isSymbolicLink: () => false }]
+      : [])
+    execFileMock.mockImplementation((_file: string, args: string[], _options: unknown, callback: (error: Error | null, stdout?: string, stderr?: string) => void) => {
+      if (args.includes('ls-files')) callback(null, 'README.md\0src/index.ts\0', '')
+      else callback(new Error(`Unexpected command: ${args.join(' ')}`))
+    })
+
+    const result = await new WorktreeManager().getTaskFiles('task-fast-files', [{ fullName: 'peakflo/20x' }])
+
+    expect(result).toEqual([
+      { repo: 'Task workspace', allFiles: ['AGENTS.md'], workspace: true },
+      { repo: 'peakflo/20x', allFiles: ['README.md', 'src/index.ts'] }
+    ])
+    expect(execFileMock).toHaveBeenCalledTimes(1)
+  })
+
   it('reads selected files lazily and rejects paths resolving outside the task workspace', () => {
     const workspacePath = path.join('/tmp/20x-user-data', 'workspaces', 'task-5')
     const repoPath = path.join(workspacePath, '20x')

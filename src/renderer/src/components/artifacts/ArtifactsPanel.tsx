@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react'
-import { PanelRightClose, RefreshCw } from 'lucide-react'
+import { PanelRightClose } from 'lucide-react'
 import { ArtifactType, type Artifact, type ArtifactApi, type ArtifactUIState } from '@shared/artifacts'
 import { PinnedArtifactTabId } from '@/stores/artifact-store'
 import { cn } from '@/lib/utils'
@@ -46,18 +46,7 @@ export function ArtifactsPanel({ artifacts, ui, artifactApi, hasChanges, hasOutp
   return (
     <section className={cn('flex h-full min-h-0 min-w-0 flex-col bg-background', className)} data-task-artifacts>
       <div className="relative">
-        <ArtifactTabStrip artifacts={artifacts} activeTabId={active} hasChanges={hasChanges} hasOutput={hasOutput} changesCount={changesCount} onSelectTab={onSelectTab} onCloseTab={onCloseTab} className={activeArtifact ? 'pr-20' : 'pr-11'} />
-        {activeArtifact && (
-          <button
-            type="button"
-            aria-label={`Refresh ${activeArtifact.title}`}
-            title="Refresh artifact"
-            onClick={() => setRefreshTrigger((trigger) => trigger + 1)}
-            className="absolute right-10 top-1.5 grid h-7 w-7 place-items-center rounded-md bg-background text-muted-foreground hover:bg-accent hover:text-foreground"
-          >
-            <RefreshCw className="h-3.5 w-3.5" />
-          </button>
-        )}
+        <ArtifactTabStrip artifacts={artifacts} activeTabId={active} hasChanges={hasChanges} hasOutput={hasOutput} changesCount={changesCount} onSelectTab={onSelectTab} onCloseTab={onCloseTab} className="pr-11" />
         <button type="button" aria-label="Close artifacts" onClick={onToggleOpen} className="absolute right-2 top-1.5 grid h-7 w-7 place-items-center rounded-md bg-background text-muted-foreground hover:bg-accent hover:text-foreground"><PanelRightClose className="h-3.5 w-3.5" /></button>
       </div>
       <div className="relative min-h-0 flex-1">

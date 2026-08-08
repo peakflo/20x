@@ -116,16 +116,6 @@ export function ArtifactViewerPage({ taskId, artifactId, onNavigate }: { taskId:
           <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="m15 18-6-6 6-6"/></svg>
         </button>
         <span className="min-w-0 flex-1 truncate text-sm font-medium">{artifact?.title || 'Artifact'}</span>
-        {artifact && (
-          <button
-            type="button"
-            onClick={() => setRefreshTrigger((trigger) => trigger + 1)}
-            className="rounded-md p-1.5 text-muted-foreground active:opacity-60"
-            aria-label={`Refresh ${artifact.title}`}
-          >
-            <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 11a8.1 8.1 0 0 0-15.5-2M4 4v5h5"/><path d="M4 13a8.1 8.1 0 0 0 15.5 2M20 20v-5h-5"/></svg>
-          </button>
-        )}
         {artifact?.type === ArtifactType.PR && externalUrl && (
           <a href={externalUrl} target="_blank" rel="noopener noreferrer" className="text-xs text-primary">Open ↗</a>
         )}
