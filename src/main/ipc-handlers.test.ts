@@ -60,6 +60,29 @@ describe('registerIpcHandlers', () => {
     expect(channels).toContain('plugin:list')
     expect(channels).toContain('artifacts:scan')
     expect(channels).toContain('artifacts:read')
+    expect(channels).toContain('voice:startTurn')
+    expect(channels).toContain('voice:pushAudio')
+    expect(channels).toContain('voice:confirm')
+  })
+
+  it('voice handlers stay safe when the voice manager is absent', async () => {
+    const db = {} as unknown as Parameters<typeof registerIpcHandlers>[0]
+    const agentManager = {} as unknown as Parameters<typeof registerIpcHandlers>[1]
+    const githubManager = {} as unknown as Parameters<typeof registerIpcHandlers>[2]
+    const worktreeManager = {} as unknown as Parameters<typeof registerIpcHandlers>[3]
+    const syncManager = {} as unknown as Parameters<typeof registerIpcHandlers>[4]
+    const pluginRegistry = {} as unknown as Parameters<typeof registerIpcHandlers>[5]
+
+    registerIpcHandlers(db, agentManager, githubManager, worktreeManager, syncManager, pluginRegistry)
+
+    const handleCalls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls as [string, (...args: unknown[]) => unknown][]
+    const snapshot = handleCalls.find((call) => call[0] === 'voice:getSnapshot')?.[1]
+    const pushAudio = handleCalls.find((call) => call[0] === 'voice:pushAudio')?.[1]
+    const startTurn = handleCalls.find((call) => call[0] === 'voice:startTurn')?.[1]
+
+    await expect(snapshot!({}, {})).resolves.toMatchObject({ enabled: false, state: 'disabled' })
+    expect(() => pushAudio!({}, { turnId: 't', chunk: new Uint8Array(2) })).not.toThrow()
+    expect(() => startTurn!({}, { mode: 'command' })).toThrow(/not available/i)
   })
 
   it('terminal:kill ignores stale expectedPid and only kills matching process', async () => {

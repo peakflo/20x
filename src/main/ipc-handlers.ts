@@ -83,7 +83,8 @@ export function registerIpcHandlers(
   initialEnterpriseHeartbeat?: EnterpriseHeartbeat,
   initialEnterpriseStateSync?: EnterpriseStateSync,
   gitlabManager?: GitLabManager,
-  workspaceCleanupScheduler?: import('./workspace-cleanup-scheduler').WorkspaceCleanupScheduler
+  workspaceCleanupScheduler?: import('./workspace-cleanup-scheduler').WorkspaceCleanupScheduler,
+  voiceSessionManager?: import('./voice/voice-session-manager').VoiceSessionManager
 ): void {
   // Mutable references — created on selectTenant, cleared on logout
   let enterpriseHeartbeat = initialEnterpriseHeartbeat
@@ -2311,5 +2312,107 @@ else:
     } catch {
       return []
     }
+  })
+
+  // ── Voice control handlers (design §5.1) ────────────────────────────────
+  // The renderer only captures audio and draws state. Every decision — turn
+  // identity, intent validation, target resolution, confirmation policy and
+  // execution — stays in VoiceSessionManager.
+
+  const requireVoice = (): import('./voice/voice-session-manager').VoiceSessionManager => {
+    if (!voiceSessionManager) throw new Error('Voice control is not available in this build.')
+    return voiceSessionManager
+  }
+
+  ipcMain.handle('voice:getSnapshot', async () => {
+    if (!voiceSessionManager) {
+      return {
+        enabled: false,
+        engine: { state: 'engine_missing', message: 'Voice control is not available in this build.' },
+        models: [],
+        shortcut: '',
+        state: 'disabled',
+        turnId: null,
+        partial: '',
+        final: ''
+      }
+    }
+    return voiceSessionManager.snapshot()
+  })
+
+  ipcMain.handle('voice:setEnabled', async (_, payload: { enabled: boolean }) => {
+    return requireVoice().setEnabled(Boolean(payload?.enabled))
+  })
+
+  ipcMain.handle('voice:getPermission', () => {
+    return { status: voiceSessionManager?.getMicrophonePermission() ?? 'unsupported' }
+  })
+
+  ipcMain.handle('voice:requestPermission', async () => {
+    return { status: await requireVoice().requestMicrophonePermission() }
+  })
+
+  ipcMain.handle('voice:startTurn', (_, payload: { mode?: 'dictation' | 'command'; context?: Record<string, unknown> }) => {
+    return requireVoice().startTurn(
+      payload?.mode === 'command' ? 'command' : 'dictation',
+      (payload?.context ?? {}) as Parameters<import('./voice/voice-session-manager').VoiceSessionManager['startTurn']>[1]
+    )
+  })
+
+  // Audio arrives as raw 16-bit PCM in a Uint8Array, never as base64. The
+  // renderer batches about 100 ms per call, so a spoken turn costs ~10 IPC
+  // messages per second instead of one per 20 ms frame.
+  ipcMain.handle('voice:pushAudio', (_, payload: { turnId: string; chunk: Uint8Array }) => {
+    if (!voiceSessionManager || !payload?.turnId || !payload.chunk) return
+    voiceSessionManager.pushAudio(payload.turnId, Buffer.from(payload.chunk))
+  })
+
+  ipcMain.handle('voice:endTurn', (_, payload: { turnId: string }) => {
+    voiceSessionManager?.endTurn(payload?.turnId)
+  })
+
+  ipcMain.handle('voice:cancelTurn', (_, payload: { turnId?: string }) => {
+    voiceSessionManager?.cancelTurn(payload?.turnId)
+  })
+
+  ipcMain.handle('voice:confirm', async (_, payload: { turnId: string; choice?: { taskId?: string; agentName?: string } }) => {
+    await requireVoice().confirm(payload.turnId, payload?.choice)
+    return { success: true }
+  })
+
+  ipcMain.handle('voice:dismiss', (_, payload: { turnId: string }) => {
+    voiceSessionManager?.dismiss(payload?.turnId)
+  })
+
+  ipcMain.handle('voice:listModels', async () => {
+    return voiceSessionManager ? voiceSessionManager.listModels() : []
+  })
+
+  ipcMain.handle('voice:installModel', async (_, payload: { id: string }) => {
+    return requireVoice().installModel(payload.id)
+  })
+
+  ipcMain.handle('voice:removeModel', async (_, payload: { id: string }) => {
+    await requireVoice().removeModel(payload.id)
+    return { success: true }
+  })
+
+  ipcMain.handle('voice:removeAllModels', async () => {
+    await requireVoice().removeAllModels()
+    return { success: true }
+  })
+
+  ipcMain.handle('voice:setCustomModelDir', async (_, payload: { dir: string }) => {
+    return requireVoice().setCustomModelDir(payload?.dir ?? '')
+  })
+
+  ipcMain.handle('voice:pickModelDir', async () => {
+    const result = await dialog.showOpenDialog({ properties: ['openDirectory'] })
+    if (result.canceled || result.filePaths.length === 0) return { dir: null }
+    return { dir: result.filePaths[0] }
+  })
+
+  ipcMain.handle('voice:setShortcut', async (_, payload: { accelerator: string }) => {
+    return requireVoice().setShortcut(payload?.accelerator ?? '')
   })
 }

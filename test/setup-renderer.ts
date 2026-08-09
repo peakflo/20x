@@ -16,7 +16,13 @@ export const eventCallbacks = {
   onOverdueCheck: null as (() => void) | null,
   onTaskUpdated: null as ((event: { taskId: string; updates: Partial<WorkfloTask> }) => void) | null,
   onTaskDeleted: null as ((event: { taskId: string }) => void) | null,
-  onWorktreeProgress: null as ((event: WorktreeProgressEvent) => void) | null
+  onWorktreeProgress: null as ((event: WorktreeProgressEvent) => void) | null,
+  onVoiceState: null as ((event: unknown) => void) | null,
+  onVoicePartial: null as ((event: unknown) => void) | null,
+  onVoiceOutcome: null as ((event: unknown) => void) | null,
+  onVoiceNavigate: null as ((event: unknown) => void) | null,
+  onVoiceDictate: null as ((event: unknown) => void) | null,
+  onVoiceHotkey: null as ((event: unknown) => void) | null
 }
 
 const mockElectronAPI = {
@@ -206,6 +212,70 @@ const mockElectronAPI = {
   },
   app: {
     getVersion: vi.fn().mockResolvedValue('0.0.1')
+  },
+  voice: {
+    getSnapshot: vi.fn().mockResolvedValue({
+      enabled: false,
+      engine: { state: 'model_missing', message: 'No speech model is installed yet.' },
+      models: [],
+      shortcut: 'CommandOrControl+Shift+Space',
+      state: 'disabled',
+      turnId: null,
+      partial: '',
+      final: ''
+    }),
+    setEnabled: vi.fn().mockResolvedValue({
+      enabled: true,
+      engine: { state: 'ready', modelId: 'test', engine: 'fake' },
+      models: [],
+      shortcut: 'CommandOrControl+Shift+Space',
+      state: 'idle',
+      turnId: null,
+      partial: '',
+      final: ''
+    }),
+    getPermission: vi.fn().mockResolvedValue({ status: 'granted' }),
+    requestPermission: vi.fn().mockResolvedValue({ status: 'granted' }),
+    startTurn: vi.fn().mockResolvedValue({ turnId: 'turn-1' }),
+    pushAudio: vi.fn().mockResolvedValue(undefined),
+    endTurn: vi.fn().mockResolvedValue(undefined),
+    cancelTurn: vi.fn().mockResolvedValue(undefined),
+    confirm: vi.fn().mockResolvedValue({ success: true }),
+    dismiss: vi.fn().mockResolvedValue(undefined),
+    listModels: vi.fn().mockResolvedValue([]),
+    installModel: vi.fn().mockResolvedValue({}),
+    removeModel: vi.fn().mockResolvedValue({ success: true }),
+    removeAllModels: vi.fn().mockResolvedValue({ success: true }),
+    setCustomModelDir: vi.fn().mockResolvedValue({}),
+    pickModelDir: vi.fn().mockResolvedValue({ dir: null }),
+    setShortcut: vi.fn().mockResolvedValue({}),
+    onState: vi.fn((cb: (event: unknown) => void) => {
+      eventCallbacks.onVoiceState = cb
+      return vi.fn()
+    }),
+    onPartial: vi.fn((cb: (event: unknown) => void) => {
+      eventCallbacks.onVoicePartial = cb
+      return vi.fn()
+    }),
+    onFinal: vi.fn((_cb: (event: unknown) => void) => vi.fn()),
+    onOutcome: vi.fn((cb: (event: unknown) => void) => {
+      eventCallbacks.onVoiceOutcome = cb
+      return vi.fn()
+    }),
+    onStatus: vi.fn((_cb: (event: unknown) => void) => vi.fn()),
+    onError: vi.fn((_cb: (event: unknown) => void) => vi.fn()),
+    onNavigate: vi.fn((cb: (event: unknown) => void) => {
+      eventCallbacks.onVoiceNavigate = cb
+      return vi.fn()
+    }),
+    onDictate: vi.fn((cb: (event: unknown) => void) => {
+      eventCallbacks.onVoiceDictate = cb
+      return vi.fn()
+    }),
+    onHotkey: vi.fn((cb: (event: unknown) => void) => {
+      eventCallbacks.onVoiceHotkey = cb
+      return vi.fn()
+    })
   },
   updater: {
     check: vi.fn().mockResolvedValue({ success: true }),

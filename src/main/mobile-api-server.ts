@@ -18,6 +18,7 @@ import type { SyncManager } from './sync-manager'
 import type { PluginRegistry } from './plugins/registry'
 import { listTaskArtifactEntries, readTaskArtifact } from './artifacts'
 import type { Artifact, ArtifactFileEntry } from '../shared/artifacts'
+import { MOBILE_VOICE_CAPABILITIES } from '../shared/voice'
 
 // ── State ────────────────────────────────────────────────────
 let server: HttpServer | null = null
@@ -420,6 +421,13 @@ async function routeGet(pathname: string, url: URL): Promise<unknown> {
     const agent = db.getAgent(agentMatch[1])
     if (!agent) throw Object.assign(new Error('Agent not found'), { status: 404 })
     return stripSensitiveAgentFields(agent)
+  }
+
+  // GET /api/capabilities — what this client can and cannot do.
+  // Voice capture is desktop-only in phase 1, so mobile shows a clear note
+  // instead of a button that cannot work (design §5.11).
+  if (pathname === '/api/capabilities') {
+    return { voice: MOBILE_VOICE_CAPABILITIES }
   }
 
   // GET /api/skills

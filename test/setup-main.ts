@@ -28,6 +28,16 @@ vi.mock('electron', () => ({
     openExternal: vi.fn()
   },
   BrowserWindow: vi.fn(),
+  globalShortcut: {
+    register: vi.fn(() => true),
+    unregister: vi.fn(),
+    unregisterAll: vi.fn(),
+    isRegistered: vi.fn(() => false)
+  },
+  systemPreferences: {
+    getMediaAccessStatus: vi.fn(() => 'granted'),
+    askForMediaAccess: vi.fn(async () => true)
+  },
   Notification: vi.fn().mockImplementation(() => ({ show: vi.fn() })),
   powerSaveBlocker: {
     start: vi.fn(() => 1),

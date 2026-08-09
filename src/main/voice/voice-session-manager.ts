@@ -1,0 +1,466 @@
+/**
+ * Owner of the voice session in the main process (design §5.1 and §5.3).
+ *
+ * It holds the state machine, the turn identity, the worker lifecycle, the
+ * model status, the global shortcut and the confirmation queue. The renderer
+ * only captures audio and draws the result; every decision is made here.
+ */
+
+import { app, globalShortcut, systemPreferences } from 'electron'
+import { join } from 'path'
+import { createId } from '@paralleldrive/cuid2'
+import {
+  VOICE_DEFAULT_SHORTCUT,
+  VOICE_EVENTS,
+  VOICE_SETTING_KEYS,
+  canTransition,
+  type VoiceActionOutcome,
+  type VoiceEngineStatus,
+  type VoiceIntent,
+  type VoiceIntentProposal,
+  type VoiceModelState,
+  type VoiceSnapshot,
+  type VoiceState,
+  type VoiceTurnMode,
+  type VoiceUiContext,
+  type MicrophonePermission,
+} from '../../shared/voice'
+import { interpretTranscript } from '../../shared/voice-intent-parser'
+import { VoiceModelManager } from './voice-model-manager'
+import { DEFAULT_VOICE_MODEL_ID } from './voice-model-manifest'
+import { VoiceWorkerClient } from './voice-worker-client'
+import { VoiceActionService, type VoiceActionAgents, type VoiceActionDb } from './voice-action-service'
+
+export interface VoiceSessionManagerOptions {
+  db: VoiceActionDb & { setSetting: (key: string, value: string) => void }
+  agents: VoiceActionAgents
+  /** Broadcasts one event to the desktop renderer and to mobile clients. */
+  notify: (channel: string, data: unknown) => void
+  modelRootDir?: string
+  worker?: VoiceWorkerClient
+}
+
+interface PendingConfirmation {
+  proposal: VoiceIntentProposal
+  context: VoiceUiContext
+}
+
+export class VoiceSessionManager {
+  private state: VoiceState = 'disabled'
+  private turnId: string | null = null
+  private turnMode: VoiceTurnMode = 'dictation'
+  private turnContext: VoiceUiContext = {}
+  private partial = ''
+  private final = ''
+  private engine: VoiceEngineStatus = { state: 'model_missing', message: 'No speech model is installed yet.' }
+  private pending = new Map<string, PendingConfirmation>()
+  private registeredShortcut: string | null = null
+
+  private readonly models: VoiceModelManager
+  private readonly worker: VoiceWorkerClient
+  private readonly actions: VoiceActionService
+
+  constructor(private options: VoiceSessionManagerOptions) {
+    this.models = new VoiceModelManager({
+      rootDir: options.modelRootDir ?? join(app.getPath('userData'), 'voice-models'),
+      onProgress: (state) => this.onModelProgress(state),
+    })
+    this.worker = options.worker ?? new VoiceWorkerClient()
+    this.actions = new VoiceActionService({
+      db: options.db,
+      agents: options.agents,
+      notify: options.notify,
+    })
+
+    this.worker.on('status', (status: VoiceEngineStatus) => this.onEngineStatus(status))
+    this.worker.on('partial', (turnId: string, text: string) => this.onPartial(turnId, text))
+    this.worker.on('final', (turnId: string, text: string) => void this.onFinal(turnId, text))
+    this.worker.on('error', (message: string, code?: string) => this.onWorkerError(message, code))
+  }
+
+  // ── Lifecycle ─────────────────────────────────────────────
+
+  /** Called once at start-up. Never throws: voice must not block the app. */
+  async initialize(): Promise<void> {
+    try {
+      if (!this.isEnabled()) {
+        this.setState('disabled')
+        return
+      }
+      this.registerShortcut(this.shortcut())
+      await this.prepareEngine()
+    } catch (err) {
+      console.error('[voice] initialize failed', err)
+      this.setState('disabled')
+    }
+  }
+
+  shutdown(): void {
+    this.unregisterShortcut()
+    this.worker.stop()
+  }
+
+  isEnabled(): boolean {
+    return this.options.db.getSetting(VOICE_SETTING_KEYS.enabled) === 'true'
+  }
+
+  async setEnabled(enabled: boolean): Promise<VoiceSnapshot> {
+    this.options.db.setSetting(VOICE_SETTING_KEYS.enabled, enabled ? 'true' : 'false')
+    if (!enabled) {
+      this.cancelTurn(this.turnId ?? undefined)
+      this.unregisterShortcut()
+      this.worker.stop()
+      this.setState('disabled')
+      return this.snapshot()
+    }
+    this.registerShortcut(this.shortcut())
+    await this.prepareEngine()
+    return this.snapshot()
+  }
+
+  /** Loads the selected model when one is available. */
+  async prepareEngine(): Promise<void> {
+    const modelId = this.options.db.getSetting(VOICE_SETTING_KEYS.modelId) || DEFAULT_VOICE_MODEL_ID
+    const customDir = this.options.db.getSetting(VOICE_SETTING_KEYS.customModelDir) || undefined
+    const resolved = await this.models.resolve(modelId, customDir)
+    if (!resolved) {
+      this.engine = { state: 'model_missing', message: 'No speech model is installed yet.' }
+      this.setState('model_needed')
+      void this.broadcastStatus()
+      return
+    }
+    await this.worker.load(resolved)
+  }
+
+  // ── Permissions (design §5.9) ─────────────────────────────
+
+  getMicrophonePermission(): MicrophonePermission {
+    if (process.platform !== 'darwin') return 'unsupported'
+    const status = systemPreferences.getMediaAccessStatus('microphone')
+    if (status === 'granted' || status === 'denied' || status === 'not-determined') return status
+    return 'unsupported'
+  }
+
+  async requestMicrophonePermission(): Promise<MicrophonePermission> {
+    if (process.platform !== 'darwin') return 'unsupported'
+    const granted = await systemPreferences.askForMediaAccess('microphone')
+    return granted ? 'granted' : 'denied'
+  }
+
+  // ── Turns ─────────────────────────────────────────────────
+
+  /** Opens a turn and returns its ID. A new turn always cancels the old one. */
+  startTurn(mode: VoiceTurnMode, context: VoiceUiContext): { turnId: string } | { error: string } {
+    if (!this.isEnabled()) return { error: 'Voice is switched off.' }
+    if (this.engine.state !== 'ready') {
+      return { error: engineMessage(this.engine) }
+    }
+    if (this.turnId) this.cancelTurn(this.turnId)
+
+    const turnId = createId()
+    this.turnId = turnId
+    this.turnMode = mode
+    this.turnContext = context ?? {}
+    this.partial = ''
+    this.final = ''
+    this.worker.startTurn(turnId)
+    this.setState('listening')
+    return { turnId }
+  }
+
+  pushAudio(turnId: string, frame: Buffer): void {
+    // Audio from an old turn is dropped, so a late frame cannot pollute a new
+    // transcript.
+    if (turnId !== this.turnId) return
+    this.worker.pushAudio(frame)
+  }
+
+  endTurn(turnId: string): void {
+    if (turnId !== this.turnId) return
+    this.setState('transcribing')
+    this.worker.endTurn(turnId)
+  }
+
+  cancelTurn(turnId?: string): void {
+    const id = turnId ?? this.turnId
+    if (!id) return
+    if (this.turnId === id) {
+      this.turnId = null
+      this.partial = ''
+      this.setState('idle')
+    }
+    this.pending.delete(id)
+    this.worker.cancelTurn(id)
+    this.options.notify(VOICE_EVENTS.outcome, { status: 'cancelled', turnId: id } satisfies VoiceActionOutcome)
+  }
+
+  // ── Worker events ─────────────────────────────────────────
+
+  private onPartial(turnId: string, text: string): void {
+    if (turnId !== this.turnId) return
+    this.partial = text
+    this.options.notify(VOICE_EVENTS.partial, { turnId, text })
+  }
+
+  private async onFinal(turnId: string, text: string): Promise<void> {
+    if (turnId !== this.turnId) return
+    this.final = text
+    this.partial = ''
+    this.options.notify(VOICE_EVENTS.final, { turnId, text })
+
+    const mode = this.turnMode
+    const context = this.turnContext
+    this.turnId = null
+
+    if (!text.trim()) {
+      this.setState('idle')
+      this.options.notify(VOICE_EVENTS.outcome, {
+        status: 'rejected',
+        turnId,
+        reason: 'unrecognized',
+        message: 'Nothing was heard.',
+      } satisfies VoiceActionOutcome)
+      return
+    }
+
+    const interpretation = interpretTranscript(text, mode)
+    if (interpretation.kind === 'dictation') {
+      this.setState('idle')
+      this.options.notify(VOICE_EVENTS.dictate, { turnId, text: interpretation.text })
+      this.options.notify(VOICE_EVENTS.outcome, {
+        status: 'dictation',
+        turnId,
+        text: interpretation.text,
+      } satisfies VoiceActionOutcome)
+      return
+    }
+    if (interpretation.kind === 'unrecognized') {
+      this.setState('idle')
+      this.options.notify(VOICE_EVENTS.outcome, {
+        status: 'rejected',
+        turnId,
+        reason: 'unrecognized',
+        message: `“${interpretation.transcript}” is not a voice command.`,
+      } satisfies VoiceActionOutcome)
+      return
+    }
+
+    await this.runProposal(turnId, interpretation.proposal, context, false)
+  }
+
+  private onEngineStatus(status: VoiceEngineStatus): void {
+    this.engine = status
+    if (status.state === 'ready') {
+      if (this.state === 'disabled' || this.state === 'model_needed' || this.state === 'error') {
+        this.setState('idle')
+      }
+    } else if (status.state === 'engine_missing' || status.state === 'model_missing') {
+      this.setState('model_needed')
+    } else if (status.state === 'error') {
+      this.setState('error')
+    }
+    void this.broadcastStatus()
+  }
+
+  private onWorkerError(message: string, code?: string): void {
+    if (this.turnId) {
+      this.options.notify(VOICE_EVENTS.outcome, {
+        status: 'rejected',
+        turnId: this.turnId,
+        reason: 'failed',
+        message,
+      } satisfies VoiceActionOutcome)
+      this.turnId = null
+    }
+    this.options.notify(VOICE_EVENTS.error, { message, code })
+    this.setState('idle')
+  }
+
+  // ── Confirmation queue ────────────────────────────────────
+
+  private async runProposal(
+    turnId: string,
+    proposal: VoiceIntentProposal,
+    context: VoiceUiContext,
+    confirmed: boolean
+  ): Promise<void> {
+    this.setState(confirmed ? 'executing' : 'transcribing')
+    const outcome = await this.actions.apply(turnId, proposal, context, confirmed)
+
+    if (outcome.status === 'needs_confirmation') {
+      this.pending.set(turnId, { proposal: outcome.proposal, context })
+      this.setState('awaiting_confirmation')
+    } else {
+      this.pending.delete(turnId)
+      this.setState('idle')
+    }
+    this.options.notify(VOICE_EVENTS.outcome, outcome)
+  }
+
+  /**
+   * Runs a proposal the user confirmed on screen. `choice` carries the record
+   * the user picked when the spoken reference matched more than one.
+   */
+  async confirm(turnId: string, choice?: { taskId?: string; agentName?: string }): Promise<void> {
+    const entry = this.pending.get(turnId)
+    if (!entry) {
+      this.options.notify(VOICE_EVENTS.outcome, {
+        status: 'rejected',
+        turnId,
+        reason: 'stale_turn',
+        message: 'That request is no longer active.',
+      } satisfies VoiceActionOutcome)
+      return
+    }
+    this.pending.delete(turnId)
+    const proposal = choice ? applyChoice(entry.proposal, choice) : entry.proposal
+    await this.runProposal(turnId, proposal, entry.context, true)
+  }
+
+  /** The user dismissed the confirmation card. Nothing runs. */
+  dismiss(turnId: string): void {
+    this.pending.delete(turnId)
+    this.setState('idle')
+    this.options.notify(VOICE_EVENTS.outcome, { status: 'cancelled', turnId } satisfies VoiceActionOutcome)
+  }
+
+  // ── Models ────────────────────────────────────────────────
+
+  listModels(): Promise<VoiceModelState[]> {
+    return this.models.list()
+  }
+
+  async installModel(id: string): Promise<VoiceModelState> {
+    const state = await this.models.install(id)
+    this.options.db.setSetting(VOICE_SETTING_KEYS.modelId, id)
+    await this.prepareEngine()
+    return state
+  }
+
+  async removeModel(id: string): Promise<void> {
+    await this.models.remove(id)
+    this.worker.unload()
+    await this.prepareEngine()
+  }
+
+  async removeAllModels(): Promise<void> {
+    await this.models.removeAll()
+    this.worker.stop()
+    this.engine = { state: 'model_missing', message: 'No speech model is installed yet.' }
+    this.setState(this.isEnabled() ? 'model_needed' : 'disabled')
+    await this.broadcastStatus()
+  }
+
+  async setCustomModelDir(dir: string): Promise<VoiceSnapshot> {
+    this.options.db.setSetting(VOICE_SETTING_KEYS.customModelDir, dir)
+    await this.prepareEngine()
+    return this.snapshot()
+  }
+
+  private onModelProgress(state: VoiceModelState): void {
+    this.options.notify(VOICE_EVENTS.status, { model: state })
+  }
+
+  // ── Global shortcut (design §5.8) ─────────────────────────
+
+  shortcut(): string {
+    return this.options.db.getSetting(VOICE_SETTING_KEYS.globalShortcut) || VOICE_DEFAULT_SHORTCUT
+  }
+
+  /**
+   * Registers a toggle accelerator. Electron cannot report a global key
+   * release, so phase 1 uses a toggle here and a true press-and-hold only
+   * inside the app window.
+   */
+  registerShortcut(accelerator: string): boolean {
+    this.unregisterShortcut()
+    if (!accelerator) return false
+    try {
+      const ok = globalShortcut.register(accelerator, () => {
+        this.options.notify(VOICE_EVENTS.hotkey, { action: 'toggle' })
+      })
+      if (ok) this.registeredShortcut = accelerator
+      return ok
+    } catch (err) {
+      console.error('[voice] shortcut registration failed', err)
+      return false
+    }
+  }
+
+  async setShortcut(accelerator: string): Promise<VoiceSnapshot> {
+    this.options.db.setSetting(VOICE_SETTING_KEYS.globalShortcut, accelerator)
+    if (this.isEnabled()) this.registerShortcut(accelerator)
+    return this.snapshot()
+  }
+
+  private unregisterShortcut(): void {
+    if (!this.registeredShortcut) return
+    try {
+      globalShortcut.unregister(this.registeredShortcut)
+    } catch {
+      /* the accelerator was already released */
+    }
+    this.registeredShortcut = null
+  }
+
+  // ── State and snapshots ───────────────────────────────────
+
+  private setState(next: VoiceState, detail?: string): void {
+    if (!canTransition(this.state, next)) {
+      console.warn(`[voice] blocked transition ${this.state} -> ${next}`)
+      return
+    }
+    if (this.state === next) return
+    this.state = next
+    this.options.notify(VOICE_EVENTS.state, { state: next, turnId: this.turnId, detail })
+  }
+
+  getState(): VoiceState {
+    return this.state
+  }
+
+  async snapshot(): Promise<VoiceSnapshot> {
+    return {
+      enabled: this.isEnabled(),
+      engine: this.engine,
+      models: await this.models.list(),
+      shortcut: this.shortcut(),
+      state: this.state,
+      turnId: this.turnId,
+      partial: this.partial,
+      final: this.final,
+    }
+  }
+
+  private async broadcastStatus(): Promise<void> {
+    this.options.notify(VOICE_EVENTS.status, await this.snapshot())
+  }
+}
+
+/** Replaces a spoken reference with the record the user picked. */
+function applyChoice(
+  proposal: VoiceIntentProposal,
+  choice: { taskId?: string; agentName?: string }
+): VoiceIntentProposal {
+  let intent: VoiceIntent = proposal.intent
+  if (choice.taskId && 'taskRef' in intent) {
+    intent = { ...intent, taskRef: { kind: 'id', id: choice.taskId } } as VoiceIntent
+  }
+  if (choice.agentName && intent.type === 'assign_agent') {
+    intent = { ...intent, agentName: choice.agentName }
+  }
+  return { ...proposal, intent, confidence: 1 }
+}
+
+function engineMessage(engine: VoiceEngineStatus): string {
+  switch (engine.state) {
+    case 'engine_missing':
+    case 'model_missing':
+    case 'error':
+      return engine.message
+    case 'loading':
+      return 'The speech model is still loading.'
+    default:
+      return 'Voice is not ready.'
+  }
+}

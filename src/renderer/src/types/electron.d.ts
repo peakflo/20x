@@ -35,6 +35,16 @@ import type {
 } from './index'
 import type { PullRequestDetails } from '@shared/artifacts'
 import type { ArtifactApi } from '@shared/artifacts'
+import type {
+  VoiceActionOutcome,
+  VoiceModelState,
+  VoiceSnapshot,
+  VoiceStateEvent,
+  VoiceTurnMode,
+  VoiceUiContext,
+  VoiceViewName,
+  MicrophonePermission
+} from '@shared/voice'
 
 export interface AgentSessionStartResult {
   sessionId: string
@@ -481,6 +491,37 @@ interface ElectronAPI {
     getTargetId: (webContentsId: number) => Promise<{ targetId: string | null }>
     getCdpTargets: () => Promise<Array<{ id: string; url: string; title: string; type: string; tabId: string }>>
     openExternalAuth: (loginUrl: string) => Promise<{ success: boolean; finalUrl: string; cookieCount: number }>
+  }
+  voice: {
+    getSnapshot: () => Promise<VoiceSnapshot>
+    setEnabled: (enabled: boolean) => Promise<VoiceSnapshot>
+    getPermission: () => Promise<{ status: MicrophonePermission }>
+    requestPermission: () => Promise<{ status: MicrophonePermission }>
+    startTurn: (
+      mode: VoiceTurnMode,
+      context: VoiceUiContext
+    ) => Promise<{ turnId: string } | { error: string }>
+    pushAudio: (turnId: string, chunk: Uint8Array) => Promise<void>
+    endTurn: (turnId: string) => Promise<void>
+    cancelTurn: (turnId?: string) => Promise<void>
+    confirm: (turnId: string, choice?: { taskId?: string; agentName?: string }) => Promise<{ success: boolean }>
+    dismiss: (turnId: string) => Promise<void>
+    listModels: () => Promise<VoiceModelState[]>
+    installModel: (id: string) => Promise<VoiceModelState>
+    removeModel: (id: string) => Promise<{ success: boolean }>
+    removeAllModels: () => Promise<{ success: boolean }>
+    setCustomModelDir: (dir: string) => Promise<VoiceSnapshot>
+    pickModelDir: () => Promise<{ dir: string | null }>
+    setShortcut: (accelerator: string) => Promise<VoiceSnapshot>
+    onState: (callback: (event: VoiceStateEvent) => void) => () => void
+    onPartial: (callback: (event: { turnId: string; text: string }) => void) => () => void
+    onFinal: (callback: (event: { turnId: string; text: string }) => void) => () => void
+    onOutcome: (callback: (event: VoiceActionOutcome) => void) => () => void
+    onStatus: (callback: (event: Partial<VoiceSnapshot> & { model?: VoiceModelState }) => void) => () => void
+    onError: (callback: (event: { message: string; code?: string }) => void) => () => void
+    onNavigate: (callback: (event: { destination: VoiceViewName; taskId: string | null }) => void) => () => void
+    onDictate: (callback: (event: { turnId: string; text: string }) => void) => () => void
+    onHotkey: (callback: (event: { action: string }) => void) => () => void
   }
   onGitlabDeviceCode: (callback: (code: string) => void) => () => void
   onOAuthCallback: (callback: (event: { code: string; state: string }) => void) => () => void

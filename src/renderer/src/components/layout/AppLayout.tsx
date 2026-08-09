@@ -8,6 +8,8 @@ import { UpdateDialog } from '@/components/update/UpdateDialog'
 import { Dialog, DialogContent, DialogHeader, DialogBody, DialogTitle } from '@/components/ui/Dialog'
 import { OnboardingWizard, shouldShowOnboarding } from '@/components/onboarding/OnboardingWizard'
 import { ProgressToastStack } from '@/components/ui/ProgressToastStack'
+import { VoiceOverlay } from '@/components/voice/VoiceOverlay'
+import { useVoiceControl } from '@/hooks/use-voice-control'
 
 // Lazy-load heavy workspace components — only imported when their view is active.
 // This reduces the initial bundle size and speeds up first render significantly.
@@ -279,6 +281,9 @@ export function AppLayout() {
     agents,
     showToast
   })
+
+  // ── Voice control: UI context, navigation events, and the global shortcut ──
+  useVoiceControl()
 
   // ── Track zoom factor so macOS traffic-light margin stays constant in physical pixels ──
   useEffect(() => {
@@ -671,6 +676,9 @@ export function AppLayout() {
 
       {/* Background progress toasts (setup, task progress, etc.) */}
       <ProgressToastStack />
+
+      {/* Voice transcript bubble, audio state, and confirmation cards */}
+      <VoiceOverlay />
     </>
   )
 }

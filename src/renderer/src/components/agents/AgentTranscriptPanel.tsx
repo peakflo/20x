@@ -10,6 +10,8 @@ import { agentSessionApi, artifactApi } from '@/lib/ipc-client'
 import { cn } from '@/lib/utils'
 import { useArtifactStore } from '@/stores/artifact-store'
 import { ArtifactContentKind, ArtifactType, type Artifact } from '@shared/artifacts'
+import { VoiceMicButton } from '@/components/voice/VoiceMicButton'
+import { useVoiceDictation } from '@/hooks/use-voice-dictation'
 
 const EMPTY_ARTIFACTS: Artifact[] = []
 
@@ -938,6 +940,9 @@ export function AgentTranscriptPanel({
     el.style.height = `${Math.min(el.scrollHeight, 128)}px` // max ~6 lines
   }, [])
 
+  // Dictated words go into this composer while it is on screen.
+  useVoiceDictation(inputRef, autoResize)
+
   // Detect if the session ended due to an error (last message is error/retry and status is idle)
   const lastErrorMessage = useMemo(() => {
     if (status !== SessionStatus.IDLE || messages.length === 0) return null
@@ -1435,6 +1440,7 @@ export function AgentTranscriptPanel({
                 }}
                 onInput={autoResize}
               />
+              <VoiceMicButton mode="dictation" />
               {onPickAttachments && (
               <Button
                 type="button"

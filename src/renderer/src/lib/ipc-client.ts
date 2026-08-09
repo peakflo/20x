@@ -1,6 +1,16 @@
 import type { WorkfloTask, CreateTaskDTO, UpdateTaskDTO, FileAttachment, Agent, CreateAgentDTO, UpdateAgentDTO, McpServer, CreateMcpServerDTO, UpdateMcpServerDTO, Skill, CreateSkillDTO, UpdateSkillDTO, Secret, CreateSecretDTO, UpdateSecretDTO, TaskSource, CreateTaskSourceDTO, UpdateTaskSourceDTO, SyncResult, PluginMeta, ConfigFieldSchema, ConfigFieldOption, PluginAction, ActionResult, SourceUser, ReassignResult, MarketplaceSource, InstalledPlugin, DiscoverablePlugin, MarketplaceCatalog, PluginResources } from '@/types'
 import type { AgentOutputEvent, AgentOutputBatchEvent, AgentStatusEvent, AgentApprovalRequest, GhCliStatus, GlabCliStatus, GitHubRepo, GitHubCollaborator, WorktreeProgressEvent, WorkspaceCleanupProgressEvent, McpTestResult, SkillSyncResult, DepsStatus, AgentMessageAttachment, TranscriptPartRecord, TranscriptChangedEvent } from '@/types/electron'
 import type { ArtifactApi } from '@shared/artifacts'
+import type {
+  MicrophonePermission,
+  VoiceActionOutcome,
+  VoiceModelState,
+  VoiceSnapshot,
+  VoiceStateEvent,
+  VoiceTurnMode,
+  VoiceUiContext,
+  VoiceViewName
+} from '@shared/voice'
 
 export const taskApi = {
   getAll: (): Promise<WorkfloTask[]> => {
@@ -661,4 +671,50 @@ export const enterpriseApi = {
   onSyncComplete: (callback: (data: { success: boolean; syncMs?: number; error?: string; syncStats?: { agents: { created: number; updated: number }; skills: { created: number; updated: number; pushed: number }; mcpServers: { created: number; updated: number }; taskSources: { created: number; updated: number }; errors: string[] } }) => void): (() => void) => {
     return window.electronAPI.enterprise.onSyncComplete(callback)
   }
+}
+
+// ── Voice control ───────────────────────────────────────────
+// A thin pass-through. The renderer never decides what a command does; it only
+// captures audio and shows what the main process reports.
+
+export const voiceApi = {
+  getSnapshot: (): Promise<VoiceSnapshot> => window.electronAPI.voice.getSnapshot(),
+  setEnabled: (enabled: boolean): Promise<VoiceSnapshot> => window.electronAPI.voice.setEnabled(enabled),
+  getPermission: (): Promise<{ status: MicrophonePermission }> => window.electronAPI.voice.getPermission(),
+  requestPermission: (): Promise<{ status: MicrophonePermission }> =>
+    window.electronAPI.voice.requestPermission(),
+  startTurn: (mode: VoiceTurnMode, context: VoiceUiContext): Promise<{ turnId: string } | { error: string }> =>
+    window.electronAPI.voice.startTurn(mode, context),
+  pushAudio: (turnId: string, chunk: Uint8Array): Promise<void> =>
+    window.electronAPI.voice.pushAudio(turnId, chunk),
+  endTurn: (turnId: string): Promise<void> => window.electronAPI.voice.endTurn(turnId),
+  cancelTurn: (turnId?: string): Promise<void> => window.electronAPI.voice.cancelTurn(turnId),
+  confirm: (turnId: string, choice?: { taskId?: string; agentName?: string }): Promise<{ success: boolean }> =>
+    window.electronAPI.voice.confirm(turnId, choice),
+  dismiss: (turnId: string): Promise<void> => window.electronAPI.voice.dismiss(turnId),
+  listModels: (): Promise<VoiceModelState[]> => window.electronAPI.voice.listModels(),
+  installModel: (id: string): Promise<VoiceModelState> => window.electronAPI.voice.installModel(id),
+  removeModel: (id: string): Promise<{ success: boolean }> => window.electronAPI.voice.removeModel(id),
+  removeAllModels: (): Promise<{ success: boolean }> => window.electronAPI.voice.removeAllModels(),
+  setCustomModelDir: (dir: string): Promise<VoiceSnapshot> => window.electronAPI.voice.setCustomModelDir(dir),
+  pickModelDir: (): Promise<{ dir: string | null }> => window.electronAPI.voice.pickModelDir(),
+  setShortcut: (accelerator: string): Promise<VoiceSnapshot> => window.electronAPI.voice.setShortcut(accelerator),
+  onState: (callback: (event: VoiceStateEvent) => void): (() => void) =>
+    window.electronAPI.voice.onState(callback),
+  onPartial: (callback: (event: { turnId: string; text: string }) => void): (() => void) =>
+    window.electronAPI.voice.onPartial(callback),
+  onFinal: (callback: (event: { turnId: string; text: string }) => void): (() => void) =>
+    window.electronAPI.voice.onFinal(callback),
+  onOutcome: (callback: (event: VoiceActionOutcome) => void): (() => void) =>
+    window.electronAPI.voice.onOutcome(callback),
+  onStatus: (callback: (event: Partial<VoiceSnapshot> & { model?: VoiceModelState }) => void): (() => void) =>
+    window.electronAPI.voice.onStatus(callback),
+  onError: (callback: (event: { message: string; code?: string }) => void): (() => void) =>
+    window.electronAPI.voice.onError(callback),
+  onNavigate: (callback: (event: { destination: VoiceViewName; taskId: string | null }) => void): (() => void) =>
+    window.electronAPI.voice.onNavigate(callback),
+  onDictate: (callback: (event: { turnId: string; text: string }) => void): (() => void) =>
+    window.electronAPI.voice.onDictate(callback),
+  onHotkey: (callback: (event: { action: string }) => void): (() => void) =>
+    window.electronAPI.voice.onHotkey(callback)
 }
