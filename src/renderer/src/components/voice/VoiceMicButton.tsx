@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef } from 'react'
 import { Mic, MicOff, Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
-import { useVoiceStore } from '@/stores/voice-store'
+import { selectVoiceReady, useVoiceStore } from '@/stores/voice-store'
 import type { VoiceTurnMode } from '@shared/voice'
 
 interface VoiceMicButtonProps {
@@ -20,8 +20,9 @@ interface VoiceMicButtonProps {
  * microphone must not be possible.
  */
 export function VoiceMicButton({ mode = 'dictation', className = '', title }: VoiceMicButtonProps) {
-  const available = useVoiceStore((s) => s.available)
-  const enabled = useVoiceStore((s) => s.enabled)
+  // The runtime is an optional install. Without it there is nothing this
+  // button could do, so it is not drawn at all.
+  const ready = useVoiceStore(selectVoiceReady)
   const state = useVoiceStore((s) => s.state)
   const turnId = useVoiceStore((s) => s.turnId)
   const level = useVoiceStore((s) => s.level)
@@ -53,7 +54,7 @@ export function VoiceMicButton({ mode = 'dictation', className = '', title }: Vo
     }
   }, [stop, cancel, turnId])
 
-  if (!available || !enabled) return null
+  if (!ready) return null
 
   const listening = turnId !== null && state === 'listening'
   const busy = state === 'transcribing' || state === 'executing'

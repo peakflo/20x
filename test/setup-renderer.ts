@@ -22,7 +22,8 @@ export const eventCallbacks = {
   onVoiceOutcome: null as ((event: unknown) => void) | null,
   onVoiceNavigate: null as ((event: unknown) => void) | null,
   onVoiceDictate: null as ((event: unknown) => void) | null,
-  onVoiceHotkey: null as ((event: unknown) => void) | null
+  onVoiceHotkey: null as ((event: unknown) => void) | null,
+  onVoiceRuntimeProgress: null as ((event: unknown) => void) | null
 }
 
 const mockElectronAPI = {
@@ -219,6 +220,7 @@ const mockElectronAPI = {
       engine: { state: 'model_missing', message: 'No speech model is installed yet.' },
       models: [],
       shortcut: 'CommandOrControl+Shift+Space',
+      runtime: { installed: true, version: '1.0.0', modulePath: '/tmp/voice', sizeBytes: 0 },
       state: 'disabled',
       turnId: null,
       partial: '',
@@ -229,6 +231,7 @@ const mockElectronAPI = {
       engine: { state: 'ready', modelId: 'test', engine: 'fake' },
       models: [],
       shortcut: 'CommandOrControl+Shift+Space',
+      runtime: { installed: true, version: '1.0.0', modulePath: '/tmp/voice', sizeBytes: 0 },
       state: 'idle',
       turnId: null,
       partial: '',
@@ -242,6 +245,24 @@ const mockElectronAPI = {
     cancelTurn: vi.fn().mockResolvedValue(undefined),
     confirm: vi.fn().mockResolvedValue({ success: true }),
     dismiss: vi.fn().mockResolvedValue(undefined),
+    getRuntime: vi.fn().mockResolvedValue({
+      installed: true,
+      version: '1.0.0',
+      modulePath: '/tmp/voice',
+      sizeBytes: 188743680
+    }),
+    installRuntime: vi.fn().mockResolvedValue({
+      installed: true,
+      version: '1.0.0',
+      modulePath: '/tmp/voice',
+      sizeBytes: 188743680
+    }),
+    removeRuntime: vi.fn().mockResolvedValue({
+      installed: false,
+      version: null,
+      modulePath: null,
+      sizeBytes: 188743680
+    }),
     listModels: vi.fn().mockResolvedValue([]),
     installModel: vi.fn().mockResolvedValue({}),
     removeModel: vi.fn().mockResolvedValue({ success: true }),
@@ -270,6 +291,10 @@ const mockElectronAPI = {
     }),
     onDictate: vi.fn((cb: (event: unknown) => void) => {
       eventCallbacks.onVoiceDictate = cb
+      return vi.fn()
+    }),
+    onRuntimeProgress: vi.fn((cb: (event: unknown) => void) => {
+      eventCallbacks.onVoiceRuntimeProgress = cb
       return vi.fn()
     }),
     onHotkey: vi.fn((cb: (event: unknown) => void) => {

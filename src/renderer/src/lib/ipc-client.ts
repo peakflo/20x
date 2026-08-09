@@ -5,6 +5,8 @@ import type {
   MicrophonePermission,
   VoiceActionOutcome,
   VoiceModelState,
+  VoiceRuntimeProgressEvent,
+  VoiceRuntimeStatus,
   VoiceSnapshot,
   VoiceStateEvent,
   VoiceTurnMode,
@@ -692,6 +694,9 @@ export const voiceApi = {
   confirm: (turnId: string, choice?: { taskId?: string; agentName?: string }): Promise<{ success: boolean }> =>
     window.electronAPI.voice.confirm(turnId, choice),
   dismiss: (turnId: string): Promise<void> => window.electronAPI.voice.dismiss(turnId),
+  getRuntime: (): Promise<VoiceRuntimeStatus> => window.electronAPI.voice.getRuntime(),
+  installRuntime: (): Promise<VoiceRuntimeStatus> => window.electronAPI.voice.installRuntime(),
+  removeRuntime: (): Promise<VoiceRuntimeStatus> => window.electronAPI.voice.removeRuntime(),
   listModels: (): Promise<VoiceModelState[]> => window.electronAPI.voice.listModels(),
   installModel: (id: string): Promise<VoiceModelState> => window.electronAPI.voice.installModel(id),
   removeModel: (id: string): Promise<{ success: boolean }> => window.electronAPI.voice.removeModel(id),
@@ -715,6 +720,8 @@ export const voiceApi = {
     window.electronAPI.voice.onNavigate(callback),
   onDictate: (callback: (event: { turnId: string; text: string }) => void): (() => void) =>
     window.electronAPI.voice.onDictate(callback),
+  onRuntimeProgress: (callback: (event: VoiceRuntimeProgressEvent) => void): (() => void) =>
+    window.electronAPI.voice.onRuntimeProgress(callback),
   onHotkey: (callback: (event: { action: string }) => void): (() => void) =>
     window.electronAPI.voice.onHotkey(callback)
 }

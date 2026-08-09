@@ -9,6 +9,7 @@ import type {
   VoiceEngineStatus,
   VoiceIntentProposal,
   VoiceModelState,
+  VoiceRuntimeStatus,
   VoiceState,
   VoiceTurnMode,
   VoiceUiContext,
@@ -35,9 +36,20 @@ export interface VoiceResultNotice {
   at: number
 }
 
+export interface VoiceRuntimeInstall {
+  running: boolean
+  percent: number
+  /** The last few npm lines, so a failure is readable. */
+  log: string
+  error: string | null
+}
+
 interface VoiceStoreState {
   available: boolean
   enabled: boolean
+  /** The optional local speech runtime. Voice UI stays hidden without it. */
+  runtime: VoiceRuntimeStatus
+  install: VoiceRuntimeInstall
   state: VoiceState
   engine: VoiceEngineStatus
   models: VoiceModelState[]
@@ -54,6 +66,9 @@ interface VoiceStoreState {
   contextProvider: (() => VoiceUiContext) | null
 
   initialize: () => Promise<void>
+  refreshRuntime: () => Promise<VoiceRuntimeStatus>
+  installRuntime: () => Promise<boolean>
+  removeRuntime: () => Promise<void>
   setEnabled: (enabled: boolean) => Promise<void>
   setContextProvider: (provider: (() => VoiceUiContext) | null) => void
   startTurn: (mode: VoiceTurnMode) => Promise<void>
@@ -74,6 +89,28 @@ interface VoiceStoreState {
 
 const IDLE_ENGINE: VoiceEngineStatus = { state: 'model_missing', message: 'No speech model is installed yet.' }
 
+const RUNTIME_ABSENT: VoiceRuntimeStatus = {
+  installed: false,
+  version: null,
+  modulePath: null,
+  sizeBytes: 0,
+}
+
+const NO_INSTALL: VoiceRuntimeInstall = { running: false, percent: 0, log: '', error: null }
+
+/**
+ * Voice is usable only when the optional runtime is installed, the user turned
+ * voice on, and a model is loaded. Every voice control in the app hides unless
+ * this is true, so nothing is shown that cannot work.
+ */
+export function selectVoiceReady(state: {
+  available: boolean
+  enabled: boolean
+  runtime: VoiceRuntimeStatus
+}): boolean {
+  return state.available && state.enabled && state.runtime.installed
+}
+
 function hasVoiceBridge(): boolean {
   return typeof window !== 'undefined' && typeof window.electronAPI?.voice?.getSnapshot === 'function'
 }
@@ -81,6 +118,8 @@ function hasVoiceBridge(): boolean {
 export const useVoiceStore = create<VoiceStoreState>((set, get) => ({
   available: hasVoiceBridge(),
   enabled: false,
+  runtime: RUNTIME_ABSENT,
+  install: NO_INSTALL,
   state: 'disabled',
   engine: IDLE_ENGINE,
   models: [],
@@ -104,12 +143,40 @@ export const useVoiceStore = create<VoiceStoreState>((set, get) => ({
     set({
       available: true,
       enabled: snapshot.enabled,
+      runtime: snapshot.runtime ?? RUNTIME_ABSENT,
       state: snapshot.state,
       engine: snapshot.engine,
       models: snapshot.models,
       shortcut: snapshot.shortcut,
       permission: permission.status,
     })
+  },
+
+  refreshRuntime: async () => {
+    if (!hasVoiceBridge()) return RUNTIME_ABSENT
+    const runtime = await voiceApi.getRuntime()
+    set({ runtime })
+    return runtime
+  },
+
+  installRuntime: async () => {
+    set({ install: { running: true, percent: 0, log: '', error: null } })
+    try {
+      const runtime = await voiceApi.installRuntime()
+      set({ runtime, install: { ...NO_INSTALL } })
+      await get().refresh()
+      return true
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      set((state) => ({ install: { ...state.install, running: false, error: message } }))
+      return false
+    }
+  },
+
+  removeRuntime: async () => {
+    const runtime = await voiceApi.removeRuntime()
+    set({ runtime, install: { ...NO_INSTALL } })
+    await get().refresh()
   },
 
   setEnabled: async (enabled) => {
@@ -135,6 +202,7 @@ export const useVoiceStore = create<VoiceStoreState>((set, get) => ({
     const snapshot = await voiceApi.setEnabled(enabled)
     set({
       enabled: snapshot.enabled,
+      runtime: snapshot.runtime ?? get().runtime,
       state: snapshot.state,
       engine: snapshot.engine,
       models: snapshot.models,
@@ -215,6 +283,7 @@ export const useVoiceStore = create<VoiceStoreState>((set, get) => ({
     const snapshot = await voiceApi.getSnapshot()
     set({
       enabled: snapshot.enabled,
+      runtime: snapshot.runtime ?? RUNTIME_ABSENT,
       state: snapshot.state,
       engine: snapshot.engine,
       models: snapshot.models,
@@ -312,12 +381,25 @@ if (hasVoiceBridge()) {
       models: event.models ?? state.models,
       enabled: event.enabled ?? state.enabled,
       shortcut: event.shortcut ?? state.shortcut,
+      runtime: event.runtime ?? state.runtime,
     }))
     if (event.model) {
       useVoiceStore.setState((state) => ({
         models: state.models.map((m) => (m.id === event.model?.id ? { ...m, ...event.model } : m)),
       }))
     }
+  })
+
+  voiceApi.onRuntimeProgress((event) => {
+    useVoiceStore.setState((state) => ({
+      install: {
+        running: event.stage !== 'complete' && event.stage !== 'error',
+        percent: event.percent,
+        // Keep the tail only: the log is a hint, not a full transcript.
+        log: `${state.install.log}${event.output}`.slice(-4000),
+        error: event.stage === 'error' ? event.output.trim() : state.install.error,
+      },
+    }))
   })
 
   voiceApi.onError((event) => {

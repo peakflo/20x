@@ -24,6 +24,7 @@ import { useDashboardStore } from '@/stores/dashboard-store'
 import { useProgressToastStore } from '@/stores/progress-toast-store'
 import { EnterpriseLoginModal } from '@/components/settings/tabs/EnterpriseLoginModal'
 import { PresetupWizard } from '@/components/dashboard/PresetupWizard'
+import { VoiceRuntimeRow } from '@/components/voice/VoiceRuntimeRow'
 import { CodingAgentType, CLAUDE_MODELS, CODEX_MODELS } from '@/types'
 import { agentConfigApi } from '@/lib/ipc-client'
 import { AnthropicLogo, OpenCodeLogo, OpenAILogo } from '@/components/icons/AgentLogos'
@@ -705,6 +706,9 @@ export function OnboardingWizard({ open, onOpenChange }: OnboardingWizardProps) 
                 toolStatus={toolStatus}
               />
             )}
+
+            {/* ── Voice control (optional extra download) ── */}
+            <VoiceRuntimeRow variant="compact" />
 
             {/* ── Install prompt (only when selected agent is not installed) ── */}
             {toolStatus && selectedCodingAgent && agentInstalled === false && (

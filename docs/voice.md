@@ -10,6 +10,9 @@ feasibility for 20x desktop"). Section numbers below refer to that document.
 
 ## What phase 1 contains
 
+- An **optional** install of the local speech runtime, offered in the setup
+  dialog and in Voice settings. Nothing voice-related is downloaded until the
+  user asks for it, and every voice control stays hidden until it is present.
 - Microphone capture in the renderer, with push-to-talk.
 - A separate speech worker process with the local runtime.
 - Live partial text and one final transcript for each turn.
@@ -53,11 +56,12 @@ voice worker (separate process)
 | `src/main/voice/voice-action-service.ts` | Target resolution and task actions |
 | `src/main/voice/voice-model-manager.ts` | Download, checksum, delete |
 | `src/main/voice/voice-model-manifest.ts` | Model catalogue |
+| `src/main/voice/voice-runtime-installer.ts` | Optional install of the runtime |
 | `src/main/voice/voice-worker-client.ts` | Worker lifecycle and audio pipe |
 | `src/main/voice/voice-worker.js` | The worker itself (plain CommonJS) |
 | `src/renderer/src/lib/voice-capture.ts` | Microphone capture |
 | `src/renderer/src/stores/voice-store.ts` | Renderer state |
-| `src/renderer/src/components/voice/*` | Microphone button and overlay |
+| `src/renderer/src/components/voice/*` | Microphone button, overlay, runtime row |
 
 ## Commands
 
@@ -124,18 +128,42 @@ Until the checksums are recorded, a user can install a model by hand and set the
 directory in **Settings → Voice → Model directory installed by hand**. The
 directory must hold an encoder, a decoder, a joiner and a `tokens.txt` file.
 
-## The local runtime
+## The local runtime — an optional install
 
-The worker requires `sherpa-onnx-node` by name at run time. It is deliberately
-not a dependency of this package:
+`sherpa-onnx-node` is **not** a dependency of this package and is **not** in the
+application bundle:
 
 - The Phase 0 spike must first prove packaging, signing, memory and latency on
   macOS arm64, macOS x64, Windows x64 and Linux x64 (design §6, Phase 0).
 - A missing runtime must not break `pnpm install` or a release build.
+- A user who never turns voice on must not pay for it in download size.
 
-When the runtime is absent the worker reports `engine_missing`, voice stays off,
-and the app is unaffected. Set `VOICE_ENGINE_MODULE` to load the runtime from a
-different module name during the spike.
+### How a user installs it
+
+Two places offer the same control (`VoiceRuntimeRow`):
+
+1. the setup dialog, as an optional row below the agent choice,
+2. **Settings → Voice**, at the top of the page.
+
+The control names the download size before anything happens.
+`VoiceRuntimeInstaller` then runs `npm install sherpa-onnx-node` inside
+`<userData>/voice-runtime`, never inside the application bundle, which is
+read-only once packaged. A private `package.json` in that directory keeps npm
+from walking up into the app. npm output is streamed to the user, so a failure
+is readable. When npm itself is missing, the installer says so and downloads
+nothing.
+
+`VoiceWorkerClient` then starts the worker with `VOICE_ENGINE_MODULE` set to the
+absolute path of the installed package.
+
+### What the user sees without it
+
+Nothing. `selectVoiceReady()` requires `runtime.installed && enabled`, and both
+the microphone button and the voice overlay return null otherwise. The enable
+switch in Voice settings is disabled, and the speech-model section is hidden,
+because neither can do anything yet.
+
+"Remove" deletes the runtime directory and switches voice off.
 
 For development and for the automated tests, `VOICE_ENGINE=mock` selects a
 deterministic engine that returns `VOICE_MOCK_TEXT`. It never invents words.
@@ -146,6 +174,7 @@ From design §8, these gates are not met yet and must be closed before the
 feature is offered to users:
 
 - [ ] Record a SHA-256 for every catalogue model file (Phase 0 spike).
+- [ ] Pin an exact `sherpa-onnx-node` version in `voice-runtime-installer.ts`.
 - [ ] Package and start `sherpa-onnx-node` on all four desktop targets.
 - [ ] Measure partial and final latency against the §3.5 targets.
 - [ ] Licence review of the runtime, the model and the tokens file.

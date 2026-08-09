@@ -2331,6 +2331,7 @@ else:
         engine: { state: 'engine_missing', message: 'Voice control is not available in this build.' },
         models: [],
         shortcut: '',
+        runtime: { installed: false, version: null, modulePath: null, sizeBytes: 0 },
         state: 'disabled',
         turnId: null,
         partial: '',
@@ -2382,6 +2383,23 @@ else:
 
   ipcMain.handle('voice:dismiss', (_, payload: { turnId: string }) => {
     voiceSessionManager?.dismiss(payload?.turnId)
+  })
+
+  // The local speech runtime is an optional install (see docs/voice.md). Until
+  // it is present, the renderer hides every voice control.
+  ipcMain.handle('voice:getRuntime', async () => {
+    if (!voiceSessionManager) {
+      return { installed: false, version: null, modulePath: null, sizeBytes: 0 }
+    }
+    return voiceSessionManager.refreshRuntime()
+  })
+
+  ipcMain.handle('voice:installRuntime', async () => {
+    return requireVoice().installRuntime()
+  })
+
+  ipcMain.handle('voice:removeRuntime', async () => {
+    return requireVoice().removeRuntime()
   })
 
   ipcMain.handle('voice:listModels', async () => {

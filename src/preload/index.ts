@@ -542,6 +542,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     confirm: (turnId: string, choice?: { taskId?: string; agentName?: string }): Promise<unknown> =>
       ipcRenderer.invoke('voice:confirm', { turnId, choice }),
     dismiss: (turnId: string): Promise<void> => ipcRenderer.invoke('voice:dismiss', { turnId }),
+    getRuntime: (): Promise<unknown> => ipcRenderer.invoke('voice:getRuntime'),
+    installRuntime: (): Promise<unknown> => ipcRenderer.invoke('voice:installRuntime'),
+    removeRuntime: (): Promise<unknown> => ipcRenderer.invoke('voice:removeRuntime'),
     listModels: (): Promise<unknown[]> => ipcRenderer.invoke('voice:listModels'),
     installModel: (id: string): Promise<unknown> => ipcRenderer.invoke('voice:installModel', { id }),
     removeModel: (id: string): Promise<unknown> => ipcRenderer.invoke('voice:removeModel', { id }),
@@ -590,6 +593,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
       const handler = (_: unknown, d: { turnId: string; text: string }): void => callback(d)
       ipcRenderer.on('voice:dictate', handler)
       return () => ipcRenderer.removeListener('voice:dictate', handler)
+    },
+    onRuntimeProgress: (
+      callback: (data: { stage: string; output: string; percent: number }) => void
+    ): (() => void) => {
+      const handler = (_: unknown, d: { stage: string; output: string; percent: number }): void => callback(d)
+      ipcRenderer.on('voice:runtimeProgress', handler)
+      return () => ipcRenderer.removeListener('voice:runtimeProgress', handler)
     },
     onHotkey: (callback: (data: { action: string }) => void): (() => void) => {
       const handler = (_: unknown, d: { action: string }): void => callback(d)

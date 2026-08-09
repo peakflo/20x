@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
 import { settingsApi, voiceApi } from '@/lib/ipc-client'
 import { useVoiceStore } from '@/stores/voice-store'
+import { VoiceRuntimeRow } from '@/components/voice/VoiceRuntimeRow'
 import { VOICE_DEFAULT_SHORTCUT, VOICE_SETTING_KEYS } from '@shared/voice'
 
 function formatSize(bytes: number): string {
@@ -25,6 +26,7 @@ function formatSize(bytes: number): string {
 export function VoiceSettings() {
   const available = useVoiceStore((s) => s.available)
   const enabled = useVoiceStore((s) => s.enabled)
+  const runtime = useVoiceStore((s) => s.runtime)
   const engine = useVoiceStore((s) => s.engine)
   const models = useVoiceStore((s) => s.models)
   const permission = useVoiceStore((s) => s.permission)
@@ -71,6 +73,8 @@ export function VoiceSettings() {
         title="Voice control"
         description="Speech is recognised on this computer. No audio is stored, and no audio leaves the device."
       >
+        <VoiceRuntimeRow />
+
         <div className="flex items-center justify-between rounded-lg border border-border p-3">
           <div className="space-y-0.5">
             <Label className="flex items-center gap-2">
@@ -78,10 +82,16 @@ export function VoiceSettings() {
               Enable voice control
             </Label>
             <p className="text-xs text-muted-foreground">
-              20x asks for the microphone the first time you switch this on.
+              {runtime.installed
+                ? '20x asks for the microphone the first time you switch this on.'
+                : 'Install the local speech runtime above first.'}
             </p>
           </div>
-          <Switch checked={enabled} onCheckedChange={(next) => void setEnabled(next)} />
+          <Switch
+            checked={enabled}
+            disabled={!runtime.installed}
+            onCheckedChange={(next) => void setEnabled(next)}
+          />
         </div>
 
         <div className="rounded-lg border border-border p-3 text-sm">
@@ -142,6 +152,7 @@ export function VoiceSettings() {
         </div>
       </SettingsSection>
 
+      {runtime.installed && (
       <SettingsSection
         title="Speech models"
         description="Models are downloaded on request, checked against a SHA-256 value, and kept in the app data directory."
@@ -234,6 +245,7 @@ export function VoiceSettings() {
           </Button>
         </div>
       </SettingsSection>
+      )}
     </>
   )
 }

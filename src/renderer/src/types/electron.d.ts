@@ -38,6 +38,8 @@ import type { ArtifactApi } from '@shared/artifacts'
 import type {
   VoiceActionOutcome,
   VoiceModelState,
+  VoiceRuntimeProgressEvent,
+  VoiceRuntimeStatus,
   VoiceSnapshot,
   VoiceStateEvent,
   VoiceTurnMode,
@@ -506,6 +508,9 @@ interface ElectronAPI {
     cancelTurn: (turnId?: string) => Promise<void>
     confirm: (turnId: string, choice?: { taskId?: string; agentName?: string }) => Promise<{ success: boolean }>
     dismiss: (turnId: string) => Promise<void>
+    getRuntime: () => Promise<VoiceRuntimeStatus>
+    installRuntime: () => Promise<VoiceRuntimeStatus>
+    removeRuntime: () => Promise<VoiceRuntimeStatus>
     listModels: () => Promise<VoiceModelState[]>
     installModel: (id: string) => Promise<VoiceModelState>
     removeModel: (id: string) => Promise<{ success: boolean }>
@@ -521,6 +526,7 @@ interface ElectronAPI {
     onError: (callback: (event: { message: string; code?: string }) => void) => () => void
     onNavigate: (callback: (event: { destination: VoiceViewName; taskId: string | null }) => void) => () => void
     onDictate: (callback: (event: { turnId: string; text: string }) => void) => () => void
+    onRuntimeProgress: (callback: (event: VoiceRuntimeProgressEvent) => void) => () => void
     onHotkey: (callback: (event: { action: string }) => void) => () => void
   }
   onGitlabDeviceCode: (callback: (code: string) => void) => () => void

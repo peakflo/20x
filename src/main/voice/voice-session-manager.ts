@@ -24,12 +24,19 @@ import {
   type VoiceTurnMode,
   type VoiceUiContext,
   type MicrophonePermission,
+  type VoiceRuntimeStatus,
 } from '../../shared/voice'
 import { interpretTranscript } from '../../shared/voice-intent-parser'
 import { VoiceModelManager } from './voice-model-manager'
 import { DEFAULT_VOICE_MODEL_ID } from './voice-model-manifest'
 import { VoiceWorkerClient } from './voice-worker-client'
 import { VoiceActionService, type VoiceActionAgents, type VoiceActionDb } from './voice-action-service'
+import {
+  VOICE_RUNTIME_APPROX_BYTES,
+  detectVoiceRuntime,
+  installVoiceRuntime,
+  removeVoiceRuntime,
+} from './voice-runtime-installer'
 
 export interface VoiceSessionManagerOptions {
   db: VoiceActionDb & { setSetting: (key: string, value: string) => void }
@@ -37,7 +44,16 @@ export interface VoiceSessionManagerOptions {
   /** Broadcasts one event to the desktop renderer and to mobile clients. */
   notify: (channel: string, data: unknown) => void
   modelRootDir?: string
+  /** Where the optional speech runtime is installed. */
+  runtimeRootDir?: string
   worker?: VoiceWorkerClient
+}
+
+const RUNTIME_ABSENT: VoiceRuntimeStatus = {
+  installed: false,
+  version: null,
+  modulePath: null,
+  sizeBytes: VOICE_RUNTIME_APPROX_BYTES,
 }
 
 interface PendingConfirmation {
@@ -55,6 +71,8 @@ export class VoiceSessionManager {
   private engine: VoiceEngineStatus = { state: 'model_missing', message: 'No speech model is installed yet.' }
   private pending = new Map<string, PendingConfirmation>()
   private registeredShortcut: string | null = null
+  private runtime: VoiceRuntimeStatus = RUNTIME_ABSENT
+  private readonly runtimeRootDir: string
 
   private readonly models: VoiceModelManager
   private readonly worker: VoiceWorkerClient
@@ -65,6 +83,7 @@ export class VoiceSessionManager {
       rootDir: options.modelRootDir ?? join(app.getPath('userData'), 'voice-models'),
       onProgress: (state) => this.onModelProgress(state),
     })
+    this.runtimeRootDir = options.runtimeRootDir ?? join(app.getPath('userData'), 'voice-runtime')
     this.worker = options.worker ?? new VoiceWorkerClient()
     this.actions = new VoiceActionService({
       db: options.db,
@@ -83,6 +102,7 @@ export class VoiceSessionManager {
   /** Called once at start-up. Never throws: voice must not block the app. */
   async initialize(): Promise<void> {
     try {
+      await this.refreshRuntime()
       if (!this.isEnabled()) {
         this.setState('disabled')
         return
@@ -114,12 +134,22 @@ export class VoiceSessionManager {
       return this.snapshot()
     }
     this.registerShortcut(this.shortcut())
+    await this.refreshRuntime()
     await this.prepareEngine()
     return this.snapshot()
   }
 
-  /** Loads the selected model when one is available. */
+  /** Loads the selected model when the runtime and a model are both present. */
   async prepareEngine(): Promise<void> {
+    if (!this.runtime.installed) {
+      this.engine = {
+        state: 'engine_missing',
+        message: 'The local speech runtime is not installed yet.',
+      }
+      this.setState('model_needed')
+      void this.broadcastStatus()
+      return
+    }
     const modelId = this.options.db.getSetting(VOICE_SETTING_KEYS.modelId) || DEFAULT_VOICE_MODEL_ID
     const customDir = this.options.db.getSetting(VOICE_SETTING_KEYS.customModelDir) || undefined
     const resolved = await this.models.resolve(modelId, customDir)
@@ -324,6 +354,62 @@ export class VoiceSessionManager {
     this.options.notify(VOICE_EVENTS.outcome, { status: 'cancelled', turnId } satisfies VoiceActionOutcome)
   }
 
+  // ── Optional runtime ──────────────────────────────────────
+
+  getRuntime(): VoiceRuntimeStatus {
+    return this.runtime
+  }
+
+  /** Reads what is installed and points the worker at it. */
+  async refreshRuntime(): Promise<VoiceRuntimeStatus> {
+    this.runtime = await detectVoiceRuntime(this.runtimeRootDir)
+    this.worker.setRuntimeModulePath(this.runtime.modulePath)
+    return this.runtime
+  }
+
+  /**
+   * Installs the runtime on request. This is the only place that downloads it,
+   * and it only runs after the user agrees to the size.
+   */
+  async installRuntime(): Promise<VoiceRuntimeStatus> {
+    this.runtime = { ...this.runtime, installing: true, progress: 0, error: undefined }
+    this.options.notify(VOICE_EVENTS.runtimeProgress, {
+      stage: 'starting',
+      output: '',
+      percent: 0,
+    })
+    try {
+      await installVoiceRuntime(this.runtimeRootDir, (progress) => {
+        this.runtime = { ...this.runtime, installing: true, progress: progress.percent / 100 }
+        this.options.notify(VOICE_EVENTS.runtimeProgress, progress)
+      })
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      this.runtime = { ...RUNTIME_ABSENT, error: message }
+      await this.broadcastStatus()
+      throw err
+    }
+    await this.refreshRuntime()
+    // A freshly installed runtime can load a model straight away.
+    if (this.isEnabled()) await this.prepareEngine()
+    await this.broadcastStatus()
+    return this.runtime
+  }
+
+  /** Deletes the runtime and switches voice off, because it cannot run. */
+  async removeRuntime(): Promise<VoiceRuntimeStatus> {
+    this.worker.stop()
+    await removeVoiceRuntime(this.runtimeRootDir)
+    await this.refreshRuntime()
+    this.engine = {
+      state: 'engine_missing',
+      message: 'The local speech runtime is not installed yet.',
+    }
+    this.setState(this.isEnabled() ? 'model_needed' : 'disabled')
+    await this.broadcastStatus()
+    return this.runtime
+  }
+
   // ── Models ────────────────────────────────────────────────
 
   listModels(): Promise<VoiceModelState[]> {
@@ -425,6 +511,7 @@ export class VoiceSessionManager {
       engine: this.engine,
       models: await this.models.list(),
       shortcut: this.shortcut(),
+      runtime: this.runtime,
       state: this.state,
       turnId: this.turnId,
       partial: this.partial,

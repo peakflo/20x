@@ -15,6 +15,7 @@ class FakeWorker extends EventEmitter {
   cancelTurn = vi.fn()
   unload = vi.fn()
   stop = vi.fn()
+  setRuntimeModulePath = vi.fn()
   isRunning = true
   isLoaded = true
 }
@@ -47,6 +48,7 @@ function makeManager(settings: Record<string, string> = { voice_enabled: 'true' 
     agents: agents as never,
     notify,
     modelRootDir: '/tmp/voice-models-test',
+    runtimeRootDir: '/tmp/voice-runtime-test-absent',
     worker: worker as unknown as VoiceWorkerClient,
   })
   return { manager, worker, notify, db, agents, store }
@@ -185,6 +187,38 @@ describe('VoiceSessionManager — dictation and commands', () => {
     expect(ctx.db.createTask).not.toHaveBeenCalled()
     await ctx.manager.confirm(turn.turnId)
     expect(ctx.db.createTask).not.toHaveBeenCalled()
+  })
+})
+
+describe('VoiceSessionManager — optional runtime', () => {
+  it('reports the runtime as absent before it is installed', async () => {
+    const ctx = makeManager()
+    const runtime = await ctx.manager.refreshRuntime()
+    expect(runtime.installed).toBe(false)
+    expect(runtime.modulePath).toBeNull()
+  })
+
+  it('loads no model while the runtime is missing', async () => {
+    const ctx = makeManager()
+    await ctx.manager.refreshRuntime()
+    await ctx.manager.prepareEngine()
+    expect(ctx.worker.load).not.toHaveBeenCalled()
+    expect(ctx.manager.getState()).toBe('model_needed')
+  })
+
+  it('refuses a turn while the runtime is missing', async () => {
+    const ctx = makeManager()
+    await ctx.manager.refreshRuntime()
+    await ctx.manager.prepareEngine()
+    const result = ctx.manager.startTurn('command', {})
+    expect('error' in result).toBe(true)
+    expect(ctx.worker.startTurn).not.toHaveBeenCalled()
+  })
+
+  it('reports the runtime in the snapshot the renderer reads', async () => {
+    const ctx = makeManager()
+    const snapshot = await ctx.manager.snapshot()
+    expect(snapshot.runtime).toMatchObject({ installed: false })
   })
 })
 

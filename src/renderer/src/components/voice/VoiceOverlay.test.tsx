@@ -16,6 +16,7 @@ function reset(partial: Partial<ReturnType<typeof useVoiceStore.getState>> = {})
   useVoiceStore.setState({
     available: true,
     enabled: true,
+    runtime: { installed: true, version: '1.0.0', modulePath: '/tmp/voice', sizeBytes: 0 },
     state: 'idle',
     turnId: null,
     partial: '',
@@ -36,6 +37,16 @@ describe('VoiceOverlay', () => {
 
   it('shows nothing while voice is switched off', () => {
     reset({ enabled: false, state: 'listening' })
+    const { container } = render(<VoiceOverlay />)
+    expect(container).toBeEmptyDOMElement()
+  })
+
+  it('shows nothing while the speech runtime is not installed', () => {
+    reset({
+      state: 'listening',
+      partial: 'create a task',
+      runtime: { installed: false, version: null, modulePath: null, sizeBytes: 0 },
+    })
     const { container } = render(<VoiceOverlay />)
     expect(container).toBeEmptyDOMElement()
   })

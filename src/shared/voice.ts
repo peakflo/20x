@@ -206,6 +206,35 @@ export type VoiceEngineStatus =
   | { state: 'ready'; modelId: string; engine: string }
   | { state: 'error'; message: string }
 
+// ── Optional local runtime ──────────────────────────────────
+
+/**
+ * The local speech runtime is an optional install. It is not in the
+ * application bundle, so a user who never turns voice on pays nothing for it,
+ * and a missing runtime can never break the rest of the app.
+ *
+ * Until it is installed, every voice control is hidden.
+ */
+export interface VoiceRuntimeStatus {
+  installed: boolean
+  version: string | null
+  /** Absolute path the worker loads. Null while the runtime is absent. */
+  modulePath: string | null
+  /** Approximate download size, shown before the user agrees. */
+  sizeBytes: number
+  installing?: boolean
+  /** 0..1 */
+  progress?: number
+  error?: string
+}
+
+export interface VoiceRuntimeProgressEvent {
+  stage: 'starting' | 'installing' | 'complete' | 'error'
+  output: string
+  /** 0..100, as npm reports nothing better. */
+  percent: number
+}
+
 export interface VoiceModelFile {
   /** File name on disk inside the model directory. */
   name: string
@@ -288,6 +317,8 @@ export const VOICE_EVENTS = {
   dictate: 'voice:dictate',
   /** Main asks the renderer to start/stop a push-to-talk turn from the hotkey. */
   hotkey: 'voice:hotkey',
+  /** Progress of the optional runtime install. */
+  runtimeProgress: 'voice:runtimeProgress',
 } as const
 
 export interface VoiceStateEvent {
@@ -301,6 +332,7 @@ export interface VoiceStatusEvent {
   engine: VoiceEngineStatus
   models: VoiceModelState[]
   shortcut: string
+  runtime: VoiceRuntimeStatus
 }
 
 /** Every field the renderer needs to draw the voice UI in one payload. */

@@ -41,9 +41,22 @@ export class VoiceWorkerClient extends EventEmitter {
   private loadedModel: ResolvedModel | null = null
   private idleTimer: NodeJS.Timeout | null = null
   private restarts = 0
+  /** Absolute path of the optional runtime the user installed. */
+  private modulePath: string | null = null
 
   constructor(private scriptPath = defaultWorkerScript()) {
     super()
+  }
+
+  /**
+   * Points the worker at the runtime the user installed into the application
+   * data directory. A new path stops the current process, so the next turn
+   * loads the new runtime.
+   */
+  setRuntimeModulePath(modulePath: string | null): void {
+    if (this.modulePath === modulePath) return
+    this.modulePath = modulePath
+    this.stop()
   }
 
   get isRunning(): boolean {
@@ -134,7 +147,13 @@ export class VoiceWorkerClient extends EventEmitter {
       // Electron ships its own Node. `ELECTRON_RUN_AS_NODE` runs the worker as
       // a plain Node process, which is the pattern the MCP servers already use.
       execPath: process.execPath,
-      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+      env: {
+        ...process.env,
+        ELECTRON_RUN_AS_NODE: '1',
+        // The runtime is installed on request into the application data
+        // directory, so the worker loads it by absolute path.
+        ...(this.modulePath ? { VOICE_ENGINE_MODULE: this.modulePath } : {}),
+      },
       stdio: ['pipe', 'pipe', 'pipe', 'ipc'],
       serialization: 'json',
     })

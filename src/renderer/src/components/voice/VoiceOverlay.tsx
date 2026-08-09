@@ -1,7 +1,7 @@
 import { useEffect } from 'react'
 import { AlertTriangle, Check, Mic, X } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
-import { useVoiceStore } from '@/stores/voice-store'
+import { selectVoiceReady, useVoiceStore } from '@/stores/voice-store'
 import type { VoiceCandidate } from '@shared/voice'
 
 const RESULT_VISIBLE_MS = 6000
@@ -16,8 +16,8 @@ const RESULT_VISIBLE_MS = 6000
  * mis-heard word cannot start or approve work on its own.
  */
 export function VoiceOverlay() {
-  const available = useVoiceStore((s) => s.available)
-  const enabled = useVoiceStore((s) => s.enabled)
+  // Hidden until the optional runtime is installed and voice is switched on.
+  const ready = useVoiceStore(selectVoiceReady)
   const state = useVoiceStore((s) => s.state)
   const partial = useVoiceStore((s) => s.partial)
   const level = useVoiceStore((s) => s.level)
@@ -45,7 +45,7 @@ export function VoiceOverlay() {
     return () => clearTimeout(timer)
   }, [result, clearResult])
 
-  if (!available || !enabled) return null
+  if (!ready) return null
 
   const listening = state === 'listening'
   const transcribing = state === 'transcribing'
