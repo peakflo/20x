@@ -168,6 +168,27 @@ which is what the global shortcut does on purpose, and would be a bug here. It
 opens the drawer before it starts listening, so the user watches the words
 arrive in a box they can edit and send rather than into something hidden.
 
+### Mastermind is already running when you speak
+
+Starting an agent takes seconds, and it used to happen on the **first message** —
+so the first thing a user said by voice waited for a process to boot. The
+Mastermind panel is mounted for the whole life of the window, so the agent is
+now started there in the background at launch, with `skipInitialPrompt` so it
+stays quiet until spoken to.
+
+Two consequences had to be handled:
+
+- **A message can arrive while the session is still coming up.** The start is
+  held in one shared promise, and a message awaits it. Without that the message
+  is dropped — there is no session yet, and one is already being made.
+- **A warm session is not a conversation.** The agent selector locks only once
+  something has been said; locking it on a warm session would make the agent
+  unchangeable from the moment the app opens.
+
+It costs one idle agent process, so it can be switched off in
+**Settings → General → Start Mastermind at launch**. Warming failure is silent:
+the first message starts the session exactly as it did before.
+
 The Dashboard box is a **controlled** React field. Its send reads the DOM value,
 not the React state, because dictation writes and sends in the same tick and
 React has not re-rendered by then. A send that read the state would post the

@@ -9,11 +9,13 @@ import { Input } from '@/components/ui/Input'
 import { Select } from '@/components/ui/Select'
 import { OnboardingWizard } from '@/components/onboarding/OnboardingWizard'
 import { settingsApi, mobileApi, updaterApi, worktreeApi, onWorkspaceCleanupProgress } from '@/lib/ipc-client'
+import { MASTERMIND_PREWARM_SETTING } from '@/components/orchestrator/OrchestratorPanel'
 
 export function GeneralSettings() {
   const [setupDialogOpen, setSetupDialogOpen] = useState(false)
   const [launchAtStartup, setLaunchAtStartup] = useState(false)
   const [notificationsEnabled, setNotificationsEnabled] = useState(false)
+  const [mastermindPrewarm, setMastermindPrewarm] = useState(true)
   const [minimizeToTray, setMinimizeToTray] = useState(false)
   const [mobileLanUrl, setMobileLanUrl] = useState('')
   const [mobileTunnelUrl, setMobileTunnelUrl] = useState<string | null>(null)
@@ -100,6 +102,14 @@ const [currentVersion, setCurrentVersion] = useState<string | null>(null)
         console.error('Failed to load app preferences:', error)
       } finally {
         setLoading(false)
+      }
+
+      // Load the Mastermind warm-up preference
+      try {
+        const warm = await settingsApi.get(MASTERMIND_PREWARM_SETTING)
+        setMastermindPrewarm(warm !== 'false')
+      } catch (error) {
+        console.error('Failed to load the Mastermind warm-up setting:', error)
       }
 
       // Load workspace cleanup settings
@@ -201,6 +211,13 @@ const [currentVersion, setCurrentVersion] = useState<string | null>(null)
     }
   }
 
+  const handleMastermindPrewarmChange = async (checked: boolean): Promise<void> => {
+    setMastermindPrewarm(checked)
+    // Takes effect at the next launch: the session it governs is started once,
+    // when the window opens.
+    await settingsApi.set(MASTERMIND_PREWARM_SETTING, checked ? 'true' : 'false')
+  }
+
   const handleNotificationsChange = async (checked: boolean) => {
     try {
       if (checked) {
@@ -257,6 +274,22 @@ const [currentVersion, setCurrentVersion] = useState<string | null>(null)
             id="launch-startup"
             checked={launchAtStartup}
             onCheckedChange={handleLaunchAtStartupChange}
+            disabled={loading}
+          />
+        </div>
+
+        <div className="flex items-center justify-between py-2 border-b border-border">
+          <div className="space-y-0.5">
+            <Label htmlFor="mastermind-prewarm">Start Mastermind at launch</Label>
+            <p className="text-xs text-muted-foreground">
+              Bring the agent up in the background so your first message does not
+              wait for it. Costs one idle agent process. Applies at the next launch.
+            </p>
+          </div>
+          <Switch
+            id="mastermind-prewarm"
+            checked={mastermindPrewarm}
+            onCheckedChange={handleMastermindPrewarmChange}
             disabled={loading}
           />
         </div>
