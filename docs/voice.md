@@ -265,6 +265,27 @@ because neither can do anything yet.
 For development and for the automated tests, `VOICE_ENGINE=mock` selects a
 deterministic engine that returns `VOICE_MOCK_TEXT`. It never invents words.
 
+## A turn must always close
+
+A turn that is never cleared in the renderer is the worst failure this feature
+has, because one stranded turn:
+
+- leaves the microphone open,
+- keeps the Stop control on screen with nothing behind it, and
+- **disables every microphone button in the app**, since each one sees another
+  turn in progress.
+
+Four paths close a turn, and all four are tested:
+
+1. the user stops it — cleared at once, without waiting for main;
+2. the worker ends it at a pause — `voice:final` clears it;
+3. a dictation outcome arrives — cleared;
+4. main reports `idle` — cleared whatever the renderer believed. Main owns the
+   state machine, so this last rule catches any path not foreseen.
+
+Main also cancels an open turn before it installs, selects, or deletes a model,
+or changes the pause length, because the worker swaps the model underneath.
+
 ## Two limits that stop voice after a few turns
 
 Both are handled, and both are easy to reintroduce:

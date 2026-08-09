@@ -182,6 +182,7 @@ export class VoiceSessionManager {
 
   /** Applies a new pause length by reloading the model with it. */
   async setEndpointSilence(seconds: number): Promise<void> {
+    this.cancelTurn()
     this.options.db.setSetting(VOICE_SETTING_KEYS.endpointSilence, String(seconds))
     this.worker.unload()
     await this.prepareEngine()
@@ -513,6 +514,8 @@ export class VoiceSessionManager {
 
   /** Switches the model the worker uses. It must already be downloaded. */
   async selectModel(id: string): Promise<VoiceModelState[]> {
+    // The worker is about to swap models, so any open turn is void.
+    this.cancelTurn()
     this.options.db.setSetting(VOICE_SETTING_KEYS.modelId, id)
     // A hand-installed directory would win over the choice, so it is cleared.
     this.options.db.setSetting(VOICE_SETTING_KEYS.customModelDir, '')
@@ -523,6 +526,7 @@ export class VoiceSessionManager {
   }
 
   async installModel(id: string): Promise<VoiceModelState> {
+    this.cancelTurn()
     const state = await this.models.install(id)
     this.options.db.setSetting(VOICE_SETTING_KEYS.modelId, id)
     await this.prepareEngine()
@@ -530,6 +534,7 @@ export class VoiceSessionManager {
   }
 
   async removeModel(id: string): Promise<VoiceModelState[]> {
+    this.cancelTurn()
     await this.models.remove(id)
     if (this.activeModelId() === id) {
       // Fall back to another model that is on disk, so voice keeps working.

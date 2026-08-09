@@ -290,7 +290,10 @@ export const useVoiceStore = create<VoiceStoreState>((set, get) => ({
     const { turnId } = get()
     if (!turnId) return
     voiceCapture.stop()
-    set({ level: 0 })
+    // The turn is closed here and now. Waiting for an answer from main would
+    // leave the control stuck on "Stop" whenever main has already dropped the
+    // turn — for example after the worker ended it at a pause.
+    set({ turnId: null, level: 0, partial: '' })
     await voiceApi.endTurn(turnId)
   },
 
@@ -384,7 +387,18 @@ export const useVoiceStore = create<VoiceStoreState>((set, get) => ({
 // ── Main-process events ─────────────────────────────────────
 
 if (hasVoiceBridge()) {
-  voiceApi.onState((event) => useVoiceStore.setState({ state: event.state }))
+  voiceApi.onState((event) => {
+    // Main owns the state machine, so it is the authority on whether a turn is
+    // open. When it reports idle, any turn the renderer still holds is gone —
+    // release the microphone and clear it. Without this, one stranded turn
+    // disables every microphone button in the app for ever.
+    if (event.state === 'idle' && useVoiceStore.getState().turnId) {
+      voiceCapture.stop()
+      useVoiceStore.setState({ state: event.state, turnId: null, level: 0, partial: '' })
+      return
+    }
+    useVoiceStore.setState({ state: event.state })
+  })
 
   voiceApi.onPartial((event) => {
     if (event.turnId !== useVoiceStore.getState().turnId) return
@@ -393,6 +407,13 @@ if (hasVoiceBridge()) {
 
   voiceApi.onFinal((event) => {
     useVoiceStore.setState({ final: event.text, partial: '' })
+    // A turn also ends by itself: the worker closes it when the speaker pauses.
+    // Release the microphone here too, or it would stay open with no way to
+    // stop it from the user interface.
+    if (useVoiceStore.getState().turnId === event.turnId) {
+      voiceCapture.stop()
+      useVoiceStore.setState({ turnId: null, level: 0 })
+    }
   })
 
   voiceApi.onOutcome((outcome: VoiceActionOutcome) => {
@@ -422,7 +443,7 @@ if (hasVoiceBridge()) {
       })
       return
     }
-    if (outcome.status === 'cancelled') {
+    if (outcome.status === 'dictation' || outcome.status === 'cancelled') {
       useVoiceStore.setState({ turnId: null, partial: '' })
     }
   })

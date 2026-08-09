@@ -201,3 +201,44 @@ describe('microphone button — click to start, click to stop', () => {
     expect(getDictationTarget()).not.toBe(screen.getByTestId('other'))
   })
 })
+
+describe('the microphone button stays usable', () => {
+  beforeEach(() => {
+    cleanup()
+    vi.clearAllMocks()
+    reset(PRESENT, true)
+    useVoiceStore.setState({ turnId: null, state: 'idle' })
+  })
+
+  it('is enabled again once main reports idle after a stranded turn', () => {
+    // A turn the renderer never cleared used to disable every microphone
+    // button in the app, because each one saw another turn in progress.
+    useVoiceStore.setState({ turnId: 'a-turn-that-main-forgot', state: 'listening' })
+    render(<VoiceMicButton />)
+    expect(screen.getByTestId('voice-mic-button')).toBeDisabled()
+
+    act(() => {
+      useVoiceStore.setState({ turnId: null, state: 'idle' })
+    })
+    expect(screen.getByTestId('voice-mic-button')).toBeEnabled()
+  })
+
+  it('is enabled after a model download finishes', () => {
+    render(<VoiceMicButton />)
+    // Downloading reloads the worker. While it loads the button is hidden, and
+    // it must come back enabled, not stuck.
+    act(() => {
+      useVoiceStore.setState({ engine: { state: 'loading' } })
+    })
+    expect(screen.queryByTestId('voice-mic-button')).not.toBeInTheDocument()
+
+    act(() => {
+      useVoiceStore.setState({
+        engine: { state: 'ready', modelId: MODEL.id, engine: 'sherpa-onnx' },
+        turnId: null,
+        state: 'idle',
+      })
+    })
+    expect(screen.getByTestId('voice-mic-button')).toBeEnabled()
+  })
+})

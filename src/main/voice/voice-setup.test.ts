@@ -213,3 +213,30 @@ describe('choosing a model', () => {
     expect(ctx.store.voice_model_id).toBe('sherpa-streaming-zipformer-en')
   })
 })
+
+describe('a model change never strands an open turn', () => {
+  it('cancels the turn before it swaps the model', async () => {
+    installer.detectVoiceRuntime.mockResolvedValue(PRESENT)
+    const ctx = makeManager(true)
+    await ctx.manager.refreshRuntime()
+    ctx.worker.emit('status', { state: 'ready', modelId: DEFAULT_VOICE_MODEL_ID, engine: 'x' })
+    await ctx.manager.startTurn('dictation', {})
+
+    await ctx.manager.selectModel('nemo-fast-conformer-en-480ms')
+
+    expect(ctx.worker.cancelTurn).toHaveBeenCalled()
+    expect(ctx.manager.getState()).not.toBe('listening')
+  })
+
+  it('cancels the turn before it deletes a model', async () => {
+    installer.detectVoiceRuntime.mockResolvedValue(PRESENT)
+    const ctx = makeManager(true)
+    await ctx.manager.refreshRuntime()
+    ctx.worker.emit('status', { state: 'ready', modelId: DEFAULT_VOICE_MODEL_ID, engine: 'x' })
+    await ctx.manager.startTurn('dictation', {})
+
+    await ctx.manager.removeModel('nemo-fast-conformer-en-480ms')
+
+    expect(ctx.worker.cancelTurn).toHaveBeenCalled()
+  })
+})

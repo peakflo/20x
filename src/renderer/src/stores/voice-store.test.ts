@@ -16,6 +16,8 @@ const { voiceCapture } = await import('@/lib/voice-capture')
 const voiceBridge = window.electronAPI.voice
 const onPartial = vi.mocked(voiceBridge.onPartial).mock.calls[0][0]
 const onOutcome = vi.mocked(voiceBridge.onOutcome).mock.calls[0][0]
+const onFinal = vi.mocked(voiceBridge.onFinal).mock.calls[0][0]
+const onState = vi.mocked(voiceBridge.onState).mock.calls[0][0]
 
 function reset(): void {
   useVoiceStore.setState({
@@ -142,5 +144,60 @@ describe('voice store — events from main', () => {
     await useVoiceStore.getState().confirm({ taskId: 't2' })
     expect(window.electronAPI.voice.confirm).toHaveBeenCalledWith('turn-4', { taskId: 't2' })
     expect(useVoiceStore.getState().confirmation).toBeNull()
+  })
+})
+
+describe('a turn always closes', () => {
+  // A turn that is never cleared leaves the microphone open, keeps the Stop
+  // control on screen with nothing behind it, and disables every microphone
+  // button in the app, because each one sees another turn in progress.
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+  })
+
+  it('closes at once when the user stops, without waiting for main', async () => {
+    await useVoiceStore.getState().startTurn('dictation')
+    expect(useVoiceStore.getState().turnId).toBe('turn-1')
+
+    await useVoiceStore.getState().endTurn()
+
+    expect(useVoiceStore.getState().turnId).toBeNull()
+    expect(voiceCapture.stop).toHaveBeenCalled()
+  })
+
+  it('closes when the worker ended the turn itself at a pause', async () => {
+    await useVoiceStore.getState().startTurn('dictation')
+    onFinal({ turnId: 'turn-1', text: 'what broke the build' })
+
+    expect(useVoiceStore.getState().turnId).toBeNull()
+    expect(voiceCapture.stop).toHaveBeenCalled()
+  })
+
+  it('closes on a dictation outcome', async () => {
+    await useVoiceStore.getState().startTurn('dictation')
+    onOutcome({ status: 'dictation', turnId: 'turn-1', text: 'hello' })
+    expect(useVoiceStore.getState().turnId).toBeNull()
+  })
+
+  it('closes when main reports it is idle, whatever the renderer thinks', () => {
+    useVoiceStore.setState({ turnId: 'a-turn-that-main-forgot', state: 'listening' })
+
+    onState({ state: 'idle' })
+
+    expect(useVoiceStore.getState().turnId).toBeNull()
+    expect(voiceCapture.stop).toHaveBeenCalled()
+  })
+
+  it('keeps the turn while main is still listening', () => {
+    useVoiceStore.setState({ turnId: 'turn-1', state: 'listening' })
+    onState({ state: 'listening' })
+    expect(useVoiceStore.getState().turnId).toBe('turn-1')
+  })
+
+  it('leaves a final from an older turn alone', async () => {
+    await useVoiceStore.getState().startTurn('dictation')
+    onFinal({ turnId: 'an-older-turn', text: 'stale' })
+    expect(useVoiceStore.getState().turnId).toBe('turn-1')
   })
 })
