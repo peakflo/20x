@@ -10,8 +10,9 @@ vi.mock('@/lib/voice-capture', () => ({
   },
 }))
 
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { MASTERMIND_COMPOSER_KEY, TopBarVoiceButton } from './TopBarVoiceButton'
+import { VoiceMicButton } from './VoiceMicButton'
 import { useVoiceStore } from '@/stores/voice-store'
 import { useUIStore } from '@/stores/ui-store'
 import {
@@ -156,5 +157,93 @@ describe('TopBarVoiceButton', () => {
     const replacement = mountMastermindComposer()
     expect(insertDictation('still listening')).toBe(true)
     expect(replacement.field.value).toBe('still listening')
+  })
+
+  /**
+   * The recording state belongs where the words land, not only where the click
+   * happened. Starting from the top bar used to leave the microphone beside the
+   * Mastermind box looking idle — and disabled — while that box was receiving
+   * every word.
+   */
+  it('lights the microphone inside the Mastermind box as well', async () => {
+    mountMastermindComposer()
+    await act(async () => {
+      render(
+        <>
+          <div data-testid="top-bar">
+            <TopBarVoiceButton />
+          </div>
+          <div data-voice-composer={MASTERMIND_COMPOSER_KEY} data-testid="chat">
+            <VoiceMicButton mode="dictation" onSubmit={vi.fn()} />
+          </div>
+        </>
+      )
+    })
+
+    const topBarMic = within(screen.getByTestId('top-bar')).getByTestId('voice-mic-button')
+    const chatMic = within(screen.getByTestId('chat')).getByTestId('voice-mic-button')
+    expect(chatMic).toHaveAttribute('aria-pressed', 'false')
+
+    await act(async () => {
+      fireEvent.click(topBarMic)
+      useVoiceStore.setState({ turnId: 'turn-1', state: 'listening' })
+    })
+
+    expect(topBarMic).toHaveAttribute('aria-pressed', 'true')
+    expect(chatMic).toHaveAttribute('aria-pressed', 'true')
+    // It must be usable, not greyed out: it is the box being dictated into.
+    expect(chatMic).not.toBeDisabled()
+  })
+
+  it('lets the microphone in the box stop a turn the top bar started', async () => {
+    const endTurn = vi.fn(async () => undefined)
+    mountMastermindComposer()
+    await act(async () => {
+      render(
+        <>
+          <div data-testid="top-bar">
+            <TopBarVoiceButton />
+          </div>
+          <div data-voice-composer={MASTERMIND_COMPOSER_KEY} data-testid="chat">
+            <VoiceMicButton mode="dictation" onSubmit={vi.fn()} />
+          </div>
+        </>
+      )
+    })
+
+    await act(async () => {
+      fireEvent.click(within(screen.getByTestId('top-bar')).getByTestId('voice-mic-button'))
+      useVoiceStore.setState({ turnId: 'turn-1', state: 'listening', endTurn: endTurn as never })
+    })
+
+    await act(async () => {
+      fireEvent.click(within(screen.getByTestId('chat')).getByTestId('voice-mic-button'))
+    })
+    expect(endTurn).toHaveBeenCalledTimes(1)
+  })
+
+  it('still greys out a microphone that belongs to another box', async () => {
+    mountMastermindComposer()
+    await act(async () => {
+      render(
+        <>
+          <div data-testid="top-bar">
+            <TopBarVoiceButton />
+          </div>
+          <div data-voice-composer="some-other-task" data-testid="other">
+            <VoiceMicButton mode="dictation" onSubmit={vi.fn()} />
+          </div>
+        </>
+      )
+    })
+
+    await act(async () => {
+      fireEvent.click(within(screen.getByTestId('top-bar')).getByTestId('voice-mic-button'))
+      useVoiceStore.setState({ turnId: 'turn-1', state: 'listening' })
+    })
+
+    const otherMic = within(screen.getByTestId('other')).getByTestId('voice-mic-button')
+    expect(otherMic).toHaveAttribute('aria-pressed', 'false')
+    expect(otherMic).toBeDisabled()
   })
 })

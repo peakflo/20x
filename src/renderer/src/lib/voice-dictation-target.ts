@@ -59,6 +59,16 @@ export function composerCanSubmit(key: string): boolean {
   return Boolean(composers.get(key)?.submit)
 }
 
+/**
+ * The composer the open turn is writing into, if it named one.
+ *
+ * Read by every microphone button, so the one beside that composer can show
+ * that it is listening — even when the turn was started from somewhere else.
+ */
+export function getActiveComposer(): string | null {
+  return activeKey
+}
+
 /** Names the composer that the open turn belongs to. */
 export function setActiveComposer(key: string | null): void {
   activeKey = key

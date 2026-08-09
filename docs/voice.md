@@ -168,6 +168,12 @@ which is what the global shortcut does on purpose, and would be a bug here. It
 opens the drawer before it starts listening, so the user watches the words
 arrive in a box they can edit and send rather than into something hidden.
 
+Both microphones show the same turn. A button lights up when the open turn is
+writing into **its** composer, whoever started it — so starting from the top bar
+also lights the one beside the Mastermind box, and either can stop the turn. A
+microphone belonging to a different box stays greyed out, because it is not the
+one receiving the words.
+
 ### Mastermind is already running when you speak
 
 Starting an agent takes seconds, and it used to happen on the **first message** —

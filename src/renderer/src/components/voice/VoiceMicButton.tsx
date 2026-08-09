@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Mic, Square, Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { selectVoiceReady, useVoiceStore } from '@/stores/voice-store'
@@ -7,6 +7,7 @@ import {
   composerCanSubmit,
   findComposerField,
   findComposerKey,
+  getActiveComposer,
   setActiveComposer,
   setDictationTarget,
 } from '@/lib/voice-dictation-target'
@@ -62,10 +63,31 @@ export function VoiceMicButton({
   // True only for a turn this button started, so a second button never stops it.
   const owns = useRef(false)
 
-  const listening = owns.current && turnId !== null && state === 'listening'
+  // The composer this button belongs to. Resolved after mount for a button that
+  // sits inside one; given outright by a button that sits outside every
+  // composer, like the one in the top bar.
+  const [myKey, setMyKey] = useState<string | null>(composerKey ?? null)
+  useEffect(() => {
+    setMyKey(composerKey ?? findComposerKey(buttonRef.current))
+  }, [composerKey])
+
+  /**
+   * The open turn is writing into this button's composer, whoever started it.
+   *
+   * Without this, starting from the top bar left the microphone beside the
+   * Mastermind box looking idle — and disabled — while it was the box receiving
+   * every word. The recording state belongs where the words land, not only
+   * where the click happened.
+   */
+  const ownsByComposer = Boolean(turnId && myKey && getActiveComposer() === myKey)
+  const mine = owns.current || ownsByComposer
+
+  const listening = mine && turnId !== null && state === 'listening'
 
   const toggle = useCallback(() => {
-    if (owns.current && turnId) {
+    // Either button can stop the turn it shares: the one that started it, and
+    // the one beside the box the words are going into.
+    if (mine && turnId) {
       owns.current = false
       void endTurn()
       return
@@ -88,7 +110,7 @@ export function VoiceMicButton({
     void startTurn(loop ? 'conversation' : mode).then(() => {
       if (!useVoiceStore.getState().turnId) owns.current = false
     })
-  }, [turnId, endTurn, startTurn, mode, conversational, onSubmit, composerKey, onBeforeStart])
+  }, [mine, turnId, endTurn, startTurn, mode, conversational, onSubmit, composerKey, onBeforeStart])
 
   // Escape drops the turn without inserting anything.
   useEffect(() => {
@@ -111,7 +133,7 @@ export function VoiceMicButton({
   if (!ready) return null
 
   const busy = state === 'transcribing' || state === 'executing'
-  const otherIsListening = !owns.current && turnId !== null
+  const otherIsListening = !mine && turnId !== null
 
   return (
     <Button
