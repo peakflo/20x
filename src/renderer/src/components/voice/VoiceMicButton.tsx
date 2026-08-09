@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/Button'
 import { selectVoiceReady, useVoiceStore } from '@/stores/voice-store'
 import {
   clearActiveComposer,
+  composerCanSubmit,
   findComposerField,
   findComposerKey,
   setActiveComposer,
@@ -19,6 +20,14 @@ interface VoiceMicButtonProps {
    * microphone stays open and every sentence is sent after a pause.
    */
   onSubmit?: () => void
+  /**
+   * Names the composer to dictate into, instead of looking for one around the
+   * button. A control that sits outside every composer — the top-bar
+   * microphone — must say where the words go, or they go nowhere.
+   */
+  composerKey?: string
+  /** Runs just before a turn starts, to make that composer visible. */
+  onBeforeStart?: () => void
   className?: string
   title?: string
 }
@@ -36,6 +45,8 @@ interface VoiceMicButtonProps {
 export function VoiceMicButton({
   mode = 'dictation',
   onSubmit,
+  composerKey,
+  onBeforeStart,
   className = '',
   title,
 }: VoiceMicButtonProps) {
@@ -61,20 +72,23 @@ export function VoiceMicButton({
     }
     if (turnId) return // another control is listening
     owns.current = true
+    onBeforeStart?.()
+
     // A composer that can send, plus the conversation setting, gives the
     // hands-free loop: speak, pause, it sends, and it keeps listening.
-    const loop = mode === 'dictation' && conversational && Boolean(onSubmit)
+    const namedCanSubmit = composerKey ? composerCanSubmit(composerKey) : false
+    const loop = mode === 'dictation' && conversational && (Boolean(onSubmit) || namedCanSubmit)
     if (mode === 'dictation') {
       // Prefer the composer key: it survives the panel being rebuilt, which
       // happens as soon as an agent session starts.
-      const key = findComposerKey(buttonRef.current)
+      const key = composerKey ?? findComposerKey(buttonRef.current)
       if (key) setActiveComposer(key)
       else setDictationTarget(findComposerField(buttonRef.current), loop ? onSubmit : undefined)
     }
     void startTurn(loop ? 'conversation' : mode).then(() => {
       if (!useVoiceStore.getState().turnId) owns.current = false
     })
-  }, [turnId, endTurn, startTurn, mode, conversational, onSubmit])
+  }, [turnId, endTurn, startTurn, mode, conversational, onSubmit, composerKey, onBeforeStart])
 
   // Escape drops the turn without inserting anything.
   useEffect(() => {

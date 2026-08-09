@@ -11,6 +11,7 @@ import { ProgressToastStack } from '@/components/ui/ProgressToastStack'
 import { VoiceOverlay } from '@/components/voice/VoiceOverlay'
 import { useVoiceControl } from '@/hooks/use-voice-control'
 import { useUiRemoteControl } from '@/hooks/use-ui-remote-control'
+import { TopBarVoiceButton } from '@/components/voice/TopBarVoiceButton'
 
 // Lazy-load heavy workspace components — only imported when their view is active.
 // This reduces the initial bundle size and speeds up first render significantly.
@@ -410,6 +411,8 @@ export function AppLayout() {
             <Settings className="h-3.5 w-3.5" />
           </button>
           <div className="mx-1 h-3.5 w-px bg-border/70" />
+          {/* Start talking to Mastermind from any view. Hidden until voice is on. */}
+          <TopBarVoiceButton />
           <Button
             variant={showOrchestrator ? 'default' : 'secondary'}
             size="sm"

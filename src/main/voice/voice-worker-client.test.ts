@@ -41,6 +41,15 @@ afterEach(() => {
   client = null
 })
 
+/**
+ * How long a real model may take to become ready.
+ *
+ * Generous on purpose: the largest catalogue model is 662 MB, and these cases
+ * run while the rest of the suite competes for the same disk and cores. A tight
+ * budget here fails on load, not on behaviour, which tells nobody anything.
+ */
+const REAL_MODEL_LOAD_MS = 120_000
+
 function waitFor<T>(register: (resolve: (value: T) => void) => void, ms = 4000): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('the worker did not answer in time')), ms)
@@ -147,7 +156,7 @@ describe.skipIf(!hasRealEngine)('VoiceWorkerClient with the installed runtime', 
         client!.on('status', (s: VoiceEngineStatus) => {
           if (s.state !== 'loading') resolve(s)
         })
-      }, 30000)
+      }, REAL_MODEL_LOAD_MS)
       await client.load({
         id: 'sherpa-streaming-zipformer-en',
         dir: realModelDir,
@@ -162,7 +171,7 @@ describe.skipIf(!hasRealEngine)('VoiceWorkerClient with the installed runtime', 
       process.env.VOICE_ENGINE = 'mock'
       delete process.env.VOICE_ENGINE_MODULE
     }
-  }, 40000)
+  }, 180_000)
 })
 
 /**
@@ -185,7 +194,7 @@ describe.skipIf(!hasRealEngine || installedModelIds.length === 0)('the conversat
         client!.on('status', (s: VoiceEngineStatus) => {
           if (s.state === 'ready') resolve(s)
         })
-      }, 30000)
+      }, REAL_MODEL_LOAD_MS)
       await client.load(
         {
           id: modelId,
@@ -224,7 +233,7 @@ describe.skipIf(!hasRealEngine || installedModelIds.length === 0)('the conversat
       process.env.VOICE_ENGINE = 'mock'
       delete process.env.VOICE_ENGINE_MODULE
     }
-  }, 90000)
+  }, 240_000)
 })
 
 describe.skipIf(!hasRealEngine)('a single-shot turn', () => {
@@ -237,7 +246,7 @@ describe.skipIf(!hasRealEngine)('a single-shot turn', () => {
         client!.on('status', (s: VoiceEngineStatus) => {
           if (s.state === 'ready') resolve(s)
         })
-      }, 30000)
+      }, REAL_MODEL_LOAD_MS)
       await client.load(
         {
           id: 'sherpa-streaming-zipformer-en',
@@ -274,5 +283,5 @@ describe.skipIf(!hasRealEngine)('a single-shot turn', () => {
       process.env.VOICE_ENGINE = 'mock'
       delete process.env.VOICE_ENGINE_MODULE
     }
-  }, 60000)
+  }, 240_000)
 })

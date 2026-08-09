@@ -48,6 +48,17 @@ export function registerComposer(key: string, registration: ComposerRegistration
   }
 }
 
+/**
+ * Whether that composer can send what is dictated into it.
+ *
+ * A control that is not inside a composer — the top-bar microphone — has to ask
+ * before it offers the conversational loop, because it holds no send function
+ * of its own.
+ */
+export function composerCanSubmit(key: string): boolean {
+  return Boolean(composers.get(key)?.submit)
+}
+
 /** Names the composer that the open turn belongs to. */
 export function setActiveComposer(key: string | null): void {
   activeKey = key

@@ -61,11 +61,12 @@ voice worker (separate process)
 | `src/main/voice/voice-worker.js` | The worker itself (plain CommonJS) |
 | `src/renderer/src/lib/voice-capture.ts` | Microphone capture |
 | `src/renderer/src/lib/voice-dictation-target.ts` | The one field that receives words |
+| `src/renderer/src/components/voice/TopBarVoiceButton.tsx` | Talk to Mastermind from any view |
 | `src/shared/ui-commands.ts` | The UI command contract and the published screen |
 | `src/renderer/src/lib/ui-remote-control.ts` | Applies one command; collects the screen |
 | `src/renderer/src/hooks/use-ui-remote-control.ts` | Publishes the screen, receives commands |
 | `src/renderer/src/stores/voice-store.ts` | Renderer state |
-| `src/renderer/src/components/voice/*` | Microphone button, overlay, runtime row |
+| `src/renderer/src/components/voice/*` | Microphone buttons, overlay, runtime row |
 
 ## Commands
 
@@ -150,11 +151,18 @@ names no composer, so the words are inserted nowhere.
 ### Where the microphone button appears
 
 - the agent message box in a task (task workspace, canvas panel, Mastermind);
-- the **Dashboard** command box, where each sentence goes to Mastermind.
+- the **Dashboard** command box, where each sentence goes to Mastermind;
+- the **top bar**, beside the Mastermind button, reachable from every view.
 
-Both boxes name themselves with `data-voice-composer` and register under that
+The first two name themselves with `data-voice-composer` and register under that
 key, so a sentence reaches one box only, and a conversation survives the panel
 being rebuilt.
+
+The top-bar button sits inside no composer, so it **names** one: the Mastermind
+composer, `orchestrator`. A control that names none writes the words nowhere —
+which is what the global shortcut does on purpose, and would be a bug here. It
+opens the drawer before it starts listening, so the user watches the words
+arrive in a box they can edit and send rather than into something hidden.
 
 The Dashboard box is a **controlled** React field. Its send reads the DOM value,
 not the React state, because dictation writes and sends in the same tick and
