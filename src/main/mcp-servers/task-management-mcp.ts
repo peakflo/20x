@@ -352,6 +352,95 @@ const mastermindTools = [
       },
       required: ['parent_task_id']
     }
+  },
+  // ── Live state and control (unscoped agents only) ───────────
+  // These are deliberately absent from the subtask tool set: a scoped agent
+  // must not answer a checkpoint or stop work on a task that is not its own.
+
+  {
+    name: 'get_messages',
+    description:
+      'Read the conversation of a task, newest first. Tool output is left out unless include_tools is true, because it is long and is rarely what a question is about. Page backwards with next_before_seq.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        task_id: { type: 'string', description: 'Task ID' },
+        limit: { type: 'number', description: 'How many messages to return. Default 20, maximum 200.' },
+        before_seq: { type: 'number', description: 'Return messages older than this sequence number. Use next_before_seq from the previous call.' },
+        role: { type: 'string', enum: ['user', 'assistant'], description: 'Return one side of the conversation only' },
+        include_tools: { type: 'boolean', description: 'Include tool calls and their output. Default false.' }
+      },
+      required: ['task_id']
+    }
+  },
+  {
+    name: 'get_session_status',
+    description:
+      'Live state of the agent working on a task. Use this, not get_task, to learn whether a task is waiting for the user: "waiting_approval" is a session state and is never stored on the task record.',
+    inputSchema: {
+      type: 'object',
+      properties: { task_id: { type: 'string', description: 'Task ID' } },
+      required: ['task_id']
+    }
+  },
+  {
+    name: 'list_pending_approvals',
+    description:
+      'Every task whose agent is waiting for the user to approve or reject a step. This is the answer to "what needs me?" and cannot be obtained from list_tasks.',
+    inputSchema: { type: 'object', properties: {} }
+  },
+  {
+    name: 'get_recent_activity',
+    description: 'Tasks that changed recently, newest first, with the live session state of each.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        since: { type: 'string', description: 'ISO timestamp. Only tasks changed after it are returned.' },
+        limit: { type: 'number', description: 'How many tasks to return. Default 20, maximum 100.' }
+      }
+    }
+  },
+  {
+    name: 'get_ui_state',
+    description:
+      'What the user is looking at right now: the open view, the selected task, any open dialog, and the canvas panels. Read this before you act on "this task" or "here".',
+    inputSchema: { type: 'object', properties: {} }
+  },
+  {
+    name: 'send_message',
+    description:
+      'Send a message to the agent of a task, on the user behalf. The message is attributed to the user in the transcript. Use respond_to_checkpoint to answer a checkpoint; a message will not answer one.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        task_id: { type: 'string', description: 'Task ID' },
+        text: { type: 'string', description: 'What to say to the agent' }
+      },
+      required: ['task_id', 'text']
+    }
+  },
+  {
+    name: 'respond_to_checkpoint',
+    description:
+      'Approve or reject the step an agent is waiting on. It fails unless that task really is waiting, so a stale or mistaken call cannot answer an unrelated session. Confirm with the user before you reject.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        task_id: { type: 'string', description: 'Task ID' },
+        approved: { type: 'boolean', description: 'True to approve, false to reject' },
+        message: { type: 'string', description: 'Optional note for the agent' }
+      },
+      required: ['task_id', 'approved']
+    }
+  },
+  {
+    name: 'stop_task',
+    description: 'Stop the agent working on a task. Confirm with the user first: work in progress is lost.',
+    inputSchema: {
+      type: 'object',
+      properties: { task_id: { type: 'string', description: 'Task ID' } },
+      required: ['task_id']
+    }
   }
 ]
 

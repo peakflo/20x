@@ -527,6 +527,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
       return () => ipcRenderer.removeListener('terminal:exit', handler)
     }
   },
+  ui: {
+    publishState: (state: Record<string, unknown>): Promise<void> =>
+      ipcRenderer.invoke('ui:publishState', state)
+  },
   voice: {
     getSnapshot: (): Promise<unknown> => ipcRenderer.invoke('voice:getSnapshot'),
     setEnabled: (enabled: boolean): Promise<unknown> => ipcRenderer.invoke('voice:setEnabled', { enabled }),

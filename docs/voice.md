@@ -77,6 +77,10 @@ voice worker (separate process)
 | "read the last answer" | Last assistant message, as text | No |
 | "cancel" | Ends the turn | No |
 
+The table above is the **built-in** parser. It is small on purpose: it is the
+only path that acts without a language model, so every rule in it must be
+unambiguous. The wider path is the next section.
+
 Two modes keep dictation and commands apart:
 
 - The microphone button in a text composer runs in `dictation` mode. The parser
@@ -153,6 +157,53 @@ The Dashboard box is a **controlled** React field. Its send reads the DOM value,
 not the React state, because dictation writes and sends in the same tick and
 React has not re-rendered by then. A send that read the state would post the
 previous value. A test pins this.
+
+### Controlling 20x through the agent
+
+Speaking into the Dashboard box sends each sentence to Mastermind, which is an
+unscoped agent with the task-management MCP server. That is the general path:
+anything the agent can do with a tool, a user can now ask for by speech, without
+a new rule in the parser.
+
+Eight tools were added for it. They are in `mastermindTools` only — a scoped
+subtask agent must never answer a checkpoint or stop work on a task that is not
+its own.
+
+**Reading**
+
+| Tool | Answers |
+|---|---|
+| `get_messages` | "what did it say?" — newest first, tool output left out, paged with `next_before_seq` |
+| `get_session_status` | "is it still working?" — the live session state |
+| `list_pending_approvals` | "what needs me?" |
+| `get_recent_activity` | "what happened while I was away?" |
+| `get_ui_state` | "what am I looking at?" — the open view, the selected task, the open dialog, the canvas panels |
+
+**Acting**
+
+| Tool | Guard |
+|---|---|
+| `send_message` | The task must exist and the text must not be empty |
+| `respond_to_checkpoint` | Refuses unless that task really reports `waiting_approval` |
+| `stop_task` | Reports `nothing_running` instead of pretending to stop |
+
+Two of these deserve their reason written down:
+
+- `get_session_status` exists because a task row **cannot** answer "is this
+  waiting for me?". `waiting_approval` is a session state and is never written
+  to the task record, so a blocked task looks exactly like a working one in
+  `get_task`.
+- `get_ui_state` exists because "this task" and "here" have no meaning in the
+  database. The renderer publishes what is on screen, at most four times a
+  second, and the value is dropped when the window closes so that a closed
+  window never reports the screen it last showed.
+
+`respond_to_checkpoint` and `stop_task` are guarded by state, not by a question
+on screen: they fail when the premise is false. A user-facing confirmation needs
+`ask_user`, which is not built yet, so an agent should confirm a reject or a
+stop in conversation before it calls them.
+
+`delete_task` was proposed and deliberately left out.
 
 ### Testing the microphone
 
@@ -363,6 +414,7 @@ Voice is off by default, so none of these blocks the rest of the app.
 pnpm test:run --project main src/main/voice
 pnpm test:run --project main src/shared/voice-intent-parser.test.ts
 pnpm test:run --project renderer src/renderer/src/stores/voice-store.test.ts
+pnpm test:run --project main src/main/task-api-voice-tools.test.ts
 ```
 
 `voice-worker-client.test.ts` forks the real worker with the mock engine, so the

@@ -28,7 +28,7 @@ import { WorkspaceCleanupScheduler } from './workspace-cleanup-scheduler'
 import { ClaudePluginManager } from './claude-plugin-manager'
 import { EnterpriseHeartbeat } from './enterprise-heartbeat'
 import { EnterpriseStateSync } from './enterprise-state-sync'
-import { setTaskApiAgentController, setTaskApiNotifier, setTranscriptProvider, stopTaskApiServer } from './task-api-server'
+import { setTaskApiAgentController, setTaskApiNotifier, setTaskApiUiState, setTranscriptProvider, stopTaskApiServer } from './task-api-server'
 import { startSecretBroker, stopSecretBroker, writeSecretShellWrapper } from './secret-broker'
 import { startMcpAuthProxy, stopMcpAuthProxy } from './mcp-auth-proxy'
 import { startMobileApiServer, stopMobileApiServer, broadcastToMobileClients, setMobileApiNotifier } from './mobile-api-server'
@@ -301,6 +301,8 @@ function createWindow(): void {
 
   mainWindow.on('closed', () => {
     mainWindow = null
+    // A closed window must not keep reporting the screen it last showed.
+    setTaskApiUiState(null)
   })
 
   // Set main window for managers

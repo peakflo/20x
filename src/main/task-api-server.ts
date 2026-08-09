@@ -23,7 +23,30 @@ let port: number | null = null
 let startupPromise: Promise<number> | null = null
 let notifyRenderer: ((channel: string, data: unknown) => void) | null = null
 let transcriptProvider: ((taskId: string) => Promise<Array<{ role: string; text: string }>>) | null = null
-let agentController: Pick<AgentManager, 'startTask' | 'notifyParentOfSubtaskCompletion'> | null = null
+type TaskApiAgentController = Pick<
+  AgentManager,
+  | 'startTask'
+  | 'notifyParentOfSubtaskCompletion'
+  | 'sendByTaskId'
+  | 'respondToPermission'
+  | 'stopByTaskId'
+  | 'findSessionByTaskId'
+  | 'getSessionStatus'
+  | 'getActiveSessionsForTask'
+>
+
+let agentController: TaskApiAgentController | null = null
+
+/**
+ * What the renderer is showing. It is pushed on change and cached here, so a
+ * tool call never has to wait for a round trip to the window.
+ */
+let uiState: Record<string, unknown> = { available: false }
+
+export function setTaskApiUiState(state: Record<string, unknown> | null): void {
+  // Null clears it. A closed window must not keep reporting a stale screen.
+  uiState = state ? { ...state, available: true, updatedAt: Date.now() } : { available: false }
+}
 
 export function getTaskApiPort(): number | null {
   return port
@@ -55,9 +78,7 @@ export function setTranscriptProvider(fn: (taskId: string) => Promise<Array<{ ro
   transcriptProvider = fn
 }
 
-export function setTaskApiAgentController(
-  controller: Pick<AgentManager, 'startTask' | 'notifyParentOfSubtaskCompletion'> | null
-): void {
+export function setTaskApiAgentController(controller: TaskApiAgentController | null): void {
   agentController = controller
 }
 
@@ -129,7 +150,8 @@ export function stopTaskApiServer(): void {
 
 // ── Route handler ──────────────────────────────────────────────
 
-async function handleRoute(db: DatabaseManager, route: string, params: Record<string, unknown>): Promise<unknown> {
+/** Exported so the routes can be tested without starting an HTTP server. */
+export async function handleRoute(db: DatabaseManager, route: string, params: Record<string, unknown>): Promise<unknown> {
   const rawDb = (db as unknown as { db: import('better-sqlite3').Database }).db // Access the underlying better-sqlite3 instance
 
   switch (route) {
@@ -573,6 +595,162 @@ async function handleRoute(db: DatabaseManager, route: string, params: Record<st
       ).all(params.parent_task_id) as Record<string, unknown>[]
       subtasks.forEach(parseTask)
       return subtasks
+    }
+
+    // ── Reading the live state ────────────────────────────────
+    // A task row cannot answer these. `waiting_approval` is a session state and
+    // is never written to the task record, so a task blocked on the user looks
+    // exactly like a task that is running.
+
+    case '/get_messages': {
+      if (!params.task_id) return { error: 'task_id is required' }
+      const taskId = String(params.task_id)
+      const limit = Math.min(Number(params.limit) || 20, 200)
+      const includeTools = params.include_tools === true
+      const role = params.role ? String(params.role) : null
+
+      let parts = db.getTranscriptParts(taskId)
+      // Tool output is enormous and is rarely what a question is about, so it
+      // is left out unless it is asked for. This keeps a reply readable.
+      if (!includeTools) {
+        parts = parts.filter((part) => part.role === 'user' || part.role === 'assistant')
+        parts = parts.filter((part) => !part.partType || part.partType === 'text')
+      }
+      if (role) parts = parts.filter((part) => part.role === role)
+
+      // Newest first, and page backwards with the cursor of the oldest row
+      // returned. A sequence number stays correct while the agent keeps writing.
+      const ordered = [...parts].sort((a, b) => b.seq - a.seq)
+      const before = params.before_seq !== undefined ? Number(params.before_seq) : null
+      const page = (before === null ? ordered : ordered.filter((part) => part.seq < before)).slice(0, limit)
+
+      return {
+        task_id: taskId,
+        messages: page.map((part) => ({
+          seq: part.seq,
+          role: part.role,
+          type: part.partType ?? 'text',
+          content: part.content,
+          created_at: new Date(part.createdAt).toISOString()
+        })),
+        next_before_seq: page.length === limit ? page[page.length - 1].seq : null,
+        total_available: ordered.length
+      }
+    }
+
+    case '/get_session_status': {
+      if (!params.task_id) return { error: 'task_id is required' }
+      if (!agentController) return { error: 'Agent controller not available' }
+      const taskId = String(params.task_id)
+      const task = db.getTask(taskId)
+      if (!task) return { error: 'Task not found' }
+
+      const found = agentController.findSessionByTaskId(taskId)
+      const live = found ? agentController.getSessionStatus(found.sessionId) : null
+      return {
+        task_id: taskId,
+        title: task.title,
+        // The stored status of the task, which survives a restart.
+        task_status: task.status,
+        // The live state of the agent session, which does not.
+        session_status: live?.status ?? 'none',
+        session_id: found?.sessionId ?? null,
+        agent_id: task.agent_id,
+        waiting_for_you: live?.status === 'waiting_approval'
+      }
+    }
+
+    case '/list_pending_approvals': {
+      if (!agentController) return { error: 'Agent controller not available' }
+      const waiting = db
+        .getTasks()
+        .map((task) => {
+          const found = agentController!.findSessionByTaskId(task.id)
+          if (!found) return null
+          const live = agentController!.getSessionStatus(found.sessionId)
+          if (live?.status !== 'waiting_approval') return null
+          return { task_id: task.id, title: task.title, session_id: found.sessionId, agent_id: task.agent_id }
+        })
+        .filter(Boolean)
+      return { pending: waiting, count: waiting.length }
+    }
+
+    case '/get_recent_activity': {
+      const limit = Math.min(Number(params.limit) || 20, 100)
+      const since = params.since ? Date.parse(String(params.since)) : 0
+      const active = db
+        .getTasks()
+        .filter((task) => Date.parse(task.updated_at) > since)
+        .sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at))
+        .slice(0, limit)
+        .map((task) => {
+          const found = agentController?.findSessionByTaskId(task.id)
+          const live = found ? agentController?.getSessionStatus(found.sessionId) : null
+          return {
+            task_id: task.id,
+            title: task.title,
+            status: task.status,
+            session_status: live?.status ?? 'none',
+            updated_at: task.updated_at
+          }
+        })
+      return { activity: active, count: active.length }
+    }
+
+    case '/get_ui_state': {
+      // Pushed by the renderer on change, so this never waits for the window.
+      return uiState
+    }
+
+    // ── Acting on a running agent ─────────────────────────────
+
+    case '/send_message': {
+      if (!params.task_id) return { error: 'task_id is required' }
+      if (!params.text || !String(params.text).trim()) return { error: 'text is required' }
+      if (!agentController) return { error: 'Agent controller not available' }
+      const taskId = String(params.task_id)
+      if (!db.getTask(taskId)) return { error: 'Task not found' }
+
+      // The message is attributed to the user, because that is who spoke it.
+      // A transcript that credited the agent would misreport who asked.
+      const result = await agentController.sendByTaskId(taskId, String(params.text))
+      return { success: true, task_id: taskId, session_id: result.sessionId ?? result.newSessionId ?? null }
+    }
+
+    case '/respond_to_checkpoint': {
+      if (!params.task_id) return { error: 'task_id is required' }
+      if (params.approved === undefined) return { error: 'approved is required' }
+      if (!agentController) return { error: 'Agent controller not available' }
+      const taskId = String(params.task_id)
+
+      // Answer only a checkpoint that is really waiting, on the task named.
+      // Without this a mis-heard word could answer an unrelated session, or a
+      // session that has already moved on.
+      const found = agentController.findSessionByTaskId(taskId)
+      if (!found) return { error: 'No agent session for that task' }
+      const live = agentController.getSessionStatus(found.sessionId)
+      if (live?.status !== 'waiting_approval') {
+        return { error: 'That task is not waiting for an answer' }
+      }
+
+      const approved = params.approved === true
+      await agentController.respondToPermission(
+        found.sessionId,
+        approved,
+        params.message ? String(params.message) : undefined
+      )
+      notifyRenderer?.('task:checkpointAnswered', { taskId, approved })
+      return { success: true, task_id: taskId, approved }
+    }
+
+    case '/stop_task': {
+      if (!params.task_id) return { error: 'task_id is required' }
+      if (!agentController) return { error: 'Agent controller not available' }
+      const taskId = String(params.task_id)
+      const running = agentController.getActiveSessionsForTask(taskId)
+      if (running.length === 0) return { success: false, task_id: taskId, reason: 'nothing_running' }
+      const result = await agentController.stopByTaskId(taskId)
+      return { success: true, task_id: taskId, session_id: result.sessionId }
     }
 
     case '/start_task': {

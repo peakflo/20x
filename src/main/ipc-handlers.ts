@@ -7,6 +7,7 @@ import { randomUUID } from 'crypto'
 import WebSocket from 'ws'
 import { startTunnel, stopTunnel, getTunnelUrl, isTunnelActive } from './tunnel-manager'
 import { getPendingPin } from './mobile-api-server'
+import { setTaskApiUiState } from './task-api-server'
 import type {
   DatabaseManager,
   CreateTaskData,
@@ -2312,6 +2313,12 @@ else:
     } catch {
       return []
     }
+  })
+
+  // The renderer publishes what it is showing, throttled, so an agent tool can
+  // read it without waiting for a round trip to the window.
+  ipcMain.handle('ui:publishState', (_, state: Record<string, unknown>) => {
+    setTaskApiUiState(state ?? {})
   })
 
   // ── Voice control handlers (design §5.1) ────────────────────────────────

@@ -494,6 +494,9 @@ interface ElectronAPI {
     getCdpTargets: () => Promise<Array<{ id: string; url: string; title: string; type: string; tabId: string }>>
     openExternalAuth: (loginUrl: string) => Promise<{ success: boolean; finalUrl: string; cookieCount: number }>
   }
+  ui: {
+    publishState: (state: Record<string, unknown>) => Promise<void>
+  }
   voice: {
     getSnapshot: () => Promise<VoiceSnapshot>
     setEnabled: (enabled: boolean) => Promise<VoiceSnapshot>
