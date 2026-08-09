@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef } from 'react'
-import { Mic, MicOff, Loader2 } from 'lucide-react'
+import { Mic, Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { selectVoiceReady, useVoiceStore } from '@/stores/voice-store'
 import type { VoiceTurnMode } from '@shared/voice'
@@ -84,8 +84,6 @@ export function VoiceMicButton({ mode = 'dictation', className = '', title }: Vo
         <Loader2 className="h-4 w-4 animate-spin" />
       ) : listening ? (
         <Mic className="h-4 w-4" style={{ transform: `scale(${1 + Math.min(level, 1) * 0.35})` }} />
-      ) : state === 'model_needed' ? (
-        <MicOff className="h-4 w-4" />
       ) : (
         <Mic className="h-4 w-4" />
       )}

@@ -47,7 +47,13 @@ export interface VoiceSessionManagerOptions {
   /** Where the optional speech runtime is installed. */
   runtimeRootDir?: string
   worker?: VoiceWorkerClient
+  /** Injected in tests so no real download runs. */
+  models?: VoiceModelManager
 }
+
+/** The runtime install is the first part of the combined setup progress. */
+const RUNTIME_PERCENT = 60
+const RUNTIME_SHARE = RUNTIME_PERCENT / 100
 
 const RUNTIME_ABSENT: VoiceRuntimeStatus = {
   installed: false,
@@ -72,6 +78,7 @@ export class VoiceSessionManager {
   private pending = new Map<string, PendingConfirmation>()
   private registeredShortcut: string | null = null
   private runtime: VoiceRuntimeStatus = RUNTIME_ABSENT
+  private setupPhase: 'model' | null = null
   private readonly runtimeRootDir: string
 
   private readonly models: VoiceModelManager
@@ -79,10 +86,12 @@ export class VoiceSessionManager {
   private readonly actions: VoiceActionService
 
   constructor(private options: VoiceSessionManagerOptions) {
-    this.models = new VoiceModelManager({
-      rootDir: options.modelRootDir ?? join(app.getPath('userData'), 'voice-models'),
-      onProgress: (state) => this.onModelProgress(state),
-    })
+    this.models =
+      options.models ??
+      new VoiceModelManager({
+        rootDir: options.modelRootDir ?? join(app.getPath('userData'), 'voice-models'),
+        onProgress: (state) => this.onModelProgress(state),
+      })
     this.runtimeRootDir = options.runtimeRootDir ?? join(app.getPath('userData'), 'voice-runtime')
     this.worker = options.worker ?? new VoiceWorkerClient()
     this.actions = new VoiceActionService({
@@ -150,9 +159,7 @@ export class VoiceSessionManager {
       void this.broadcastStatus()
       return
     }
-    const modelId = this.options.db.getSetting(VOICE_SETTING_KEYS.modelId) || DEFAULT_VOICE_MODEL_ID
-    const customDir = this.options.db.getSetting(VOICE_SETTING_KEYS.customModelDir) || undefined
-    const resolved = await this.models.resolve(modelId, customDir)
+    const resolved = await this.resolveModel()
     if (!resolved) {
       this.engine = { state: 'model_missing', message: 'No speech model is installed yet.' }
       this.setState('model_needed')
@@ -368,32 +375,72 @@ export class VoiceSessionManager {
   }
 
   /**
-   * Installs the runtime on request. This is the only place that downloads it,
-   * and it only runs after the user agrees to the size.
+   * One action installs everything voice needs: the speech runtime and, if none
+   * is present yet, the default speech model. It runs only after the user asks
+   * for it, and the model is loaded at the end, so nothing else is left to do
+   * by hand.
+   *
+   * The runtime is the first 60 % of the reported progress, the model the rest.
    */
   async installRuntime(): Promise<VoiceRuntimeStatus> {
     this.runtime = { ...this.runtime, installing: true, progress: 0, error: undefined }
-    this.options.notify(VOICE_EVENTS.runtimeProgress, {
-      stage: 'starting',
-      output: '',
-      percent: 0,
-    })
+    this.emitSetupProgress('starting', 'Preparing…\n', 0)
+
     try {
-      await installVoiceRuntime(this.runtimeRootDir, (progress) => {
-        this.runtime = { ...this.runtime, installing: true, progress: progress.percent / 100 }
-        this.options.notify(VOICE_EVENTS.runtimeProgress, progress)
-      })
+      if (!(await detectVoiceRuntime(this.runtimeRootDir)).installed) {
+        await installVoiceRuntime(this.runtimeRootDir, (progress) => {
+          // Never report 'complete' here: the model still has to arrive.
+          const stage = progress.stage === 'complete' ? 'installing' : progress.stage
+          this.emitSetupProgress(stage, progress.output, Math.round(progress.percent * RUNTIME_SHARE))
+        })
+      }
+      await this.refreshRuntime()
+
+      // Without a model the runtime can do nothing, so fetch the default one.
+      if (!(await this.resolveModel())) {
+        this.setupPhase = 'model'
+        this.emitSetupProgress('installing', 'Downloading the English speech model…\n', RUNTIME_PERCENT)
+        try {
+          await this.models.install(DEFAULT_VOICE_MODEL_ID)
+          this.options.db.setSetting(VOICE_SETTING_KEYS.modelId, DEFAULT_VOICE_MODEL_ID)
+        } finally {
+          this.setupPhase = null
+        }
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
-      this.runtime = { ...RUNTIME_ABSENT, error: message }
+      this.setupPhase = null
+      this.runtime = { ...(await detectVoiceRuntime(this.runtimeRootDir)), error: message }
+      this.emitSetupProgress('error', `${message}\n`, 100)
       await this.broadcastStatus()
       throw err
     }
-    await this.refreshRuntime()
-    // A freshly installed runtime can load a model straight away.
-    if (this.isEnabled()) await this.prepareEngine()
+
+    await this.prepareEngine()
+    this.emitSetupProgress('complete', 'Voice control is ready.\n', 100)
     await this.broadcastStatus()
     return this.runtime
+  }
+
+  /** Reports one progress line for the combined runtime + model setup. */
+  private emitSetupProgress(
+    stage: 'starting' | 'installing' | 'complete' | 'error',
+    output: string,
+    percent: number
+  ): void {
+    this.runtime = {
+      ...this.runtime,
+      installing: stage !== 'complete' && stage !== 'error',
+      progress: percent / 100,
+    }
+    this.options.notify(VOICE_EVENTS.runtimeProgress, { stage, output, percent })
+  }
+
+  /** The model paths the worker needs, or null when nothing usable is present. */
+  private resolveModel(): ReturnType<VoiceModelManager['resolve']> {
+    const modelId = this.options.db.getSetting(VOICE_SETTING_KEYS.modelId) || DEFAULT_VOICE_MODEL_ID
+    const customDir = this.options.db.getSetting(VOICE_SETTING_KEYS.customModelDir) || undefined
+    return this.models.resolve(modelId, customDir)
   }
 
   /** Deletes the runtime and switches voice off, because it cannot run. */
@@ -445,6 +492,13 @@ export class VoiceSessionManager {
 
   private onModelProgress(state: VoiceModelState): void {
     this.options.notify(VOICE_EVENTS.status, { model: state })
+    if (this.setupPhase !== 'model') return
+    // Fold the model download into the single setup progress bar.
+    this.emitSetupProgress(
+      'installing',
+      '',
+      RUNTIME_PERCENT + Math.round(state.progress * (100 - RUNTIME_PERCENT))
+    )
   }
 
   // ── Global shortcut (design §5.8) ─────────────────────────

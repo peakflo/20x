@@ -99,16 +99,27 @@ const RUNTIME_ABSENT: VoiceRuntimeStatus = {
 const NO_INSTALL: VoiceRuntimeInstall = { running: false, percent: 0, log: '', error: null }
 
 /**
- * Voice is usable only when the optional runtime is installed, the user turned
- * voice on, and a model is loaded. Every voice control in the app hides unless
- * this is true, so nothing is shown that cannot work.
+ * Voice is usable only when the optional runtime is installed, a speech model
+ * is loaded, and the user turned voice on. Every voice control in the app hides
+ * unless this is true, so nothing is shown that cannot work.
  */
 export function selectVoiceReady(state: {
   available: boolean
   enabled: boolean
   runtime: VoiceRuntimeStatus
+  engine: VoiceEngineStatus
 }): boolean {
-  return state.available && state.enabled && state.runtime.installed
+  return state.available && state.enabled && state.runtime.installed && state.engine.state === 'ready'
+}
+
+/** True when the runtime and a speech model are both in place. */
+export function selectVoiceSetupComplete(state: {
+  runtime: VoiceRuntimeStatus
+  models: VoiceModelState[]
+  engine: VoiceEngineStatus
+}): boolean {
+  if (!state.runtime.installed) return false
+  return state.engine.state === 'ready' || state.models.some((m) => m.installed)
 }
 
 function hasVoiceBridge(): boolean {

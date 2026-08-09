@@ -119,14 +119,13 @@ Models are not in the installer. `VoiceModelManager` downloads them on request,
 shows the size, the language list and the licence first, verifies a SHA-256 for
 each file, resumes an interrupted download, and can delete everything.
 
-**The catalogue checksums are empty on purpose.** The Phase 0 packaging spike
-must record them on every supported platform. Until then
-`VoiceModelManager.install()` refuses the download, so an unverified model can
-never reach a user.
+Each URL is pinned to one model revision, never to a branch, so a checksum
+cannot go stale under the app. A model whose checksum is empty is refused, so an
+unverified model can never reach a user.
 
-Until the checksums are recorded, a user can install a model by hand and set the
-directory in **Settings → Voice → Model directory installed by hand**. The
-directory must hold an encoder, a decoder, a joiner and a `tokens.txt` file.
+A model directory installed by hand is still accepted, in
+**Settings → Voice → Use another model directory**, but it is not needed: the
+one-action setup below downloads a verified model.
 
 ## The local runtime — an optional install
 
@@ -138,28 +137,39 @@ application bundle:
 - A missing runtime must not break `pnpm install` or a release build.
 - A user who never turns voice on must not pay for it in download size.
 
-### How a user installs it
+### One action installs everything
 
 Two places offer the same control (`VoiceRuntimeRow`):
 
 1. the setup dialog, as an optional row below the agent choice,
 2. **Settings → Voice**, at the top of the page.
 
-The control names the download size before anything happens.
-`VoiceRuntimeInstaller` then runs `npm install sherpa-onnx-node` inside
-`<userData>/voice-runtime`, never inside the application bundle, which is
-read-only once packaged. A private `package.json` in that directory keeps npm
-from walking up into the app. npm output is streamed to the user, so a failure
-is readable. When npm itself is missing, the installer says so and downloads
-nothing.
+The control names the total download size before anything happens. One press
+then does all of this, and nothing is left to do by hand:
 
-`VoiceWorkerClient` then starts the worker with `VOICE_ENGINE_MODULE` set to the
+1. `npm install sherpa-onnx-node` into `<userData>/voice-runtime` — never into
+   the application bundle, which is read-only once packaged. A private
+   `package.json` there keeps npm from walking up into the app. npm output is
+   streamed to the user, so a failure is readable, and when npm itself is
+   missing the installer says so and downloads nothing.
+2. the default English speech model, if none is present, checksum-verified.
+3. the model is selected and loaded in the worker.
+
+The runtime is the first 60 % of the reported progress, the model the rest. If
+the runtime is already there, only the model is fetched, and the button reads
+**Finish setup**.
+
+`VoiceWorkerClient` starts the worker with `VOICE_ENGINE_MODULE` set to the
 absolute path of the installed package.
+
+After that the user has one thing left: switch **Enable voice control** on. That
+step is separate because it asks for the microphone.
 
 ### What the user sees without it
 
-Nothing. `selectVoiceReady()` requires `runtime.installed && enabled`, and both
-the microphone button and the voice overlay return null otherwise. The enable
+Nothing. `selectVoiceReady()` requires an installed runtime, a loaded model, and
+`enabled`, and both the microphone button and the voice overlay return null
+otherwise. The enable
 switch in Voice settings is disabled, and the speech-model section is hidden,
 because neither can do anything yet.
 
@@ -173,7 +183,7 @@ deterministic engine that returns `VOICE_MOCK_TEXT`. It never invents words.
 From design §8, these gates are not met yet and must be closed before the
 feature is offered to users:
 
-- [ ] Record a SHA-256 for every catalogue model file (Phase 0 spike).
+- [x] Record a SHA-256 for every catalogue model file.
 - [ ] Pin an exact `sherpa-onnx-node` version in `voice-runtime-installer.ts`.
 - [ ] Package and start `sherpa-onnx-node` on all four desktop targets.
 - [ ] Measure partial and final latency against the §3.5 targets.

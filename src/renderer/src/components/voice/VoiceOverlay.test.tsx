@@ -17,6 +17,7 @@ function reset(partial: Partial<ReturnType<typeof useVoiceStore.getState>> = {})
     available: true,
     enabled: true,
     runtime: { installed: true, version: '1.0.0', modulePath: '/tmp/voice', sizeBytes: 0 },
+    engine: { state: 'ready', modelId: 'test', engine: 'sherpa-onnx' },
     state: 'idle',
     turnId: null,
     partial: '',

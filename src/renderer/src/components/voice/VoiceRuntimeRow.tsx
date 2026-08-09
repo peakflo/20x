@@ -1,7 +1,7 @@
 import { useEffect } from 'react'
 import { Check, Download, Loader2, Mic, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
-import { useVoiceStore } from '@/stores/voice-store'
+import { selectVoiceSetupComplete, useVoiceStore } from '@/stores/voice-store'
 
 interface VoiceRuntimeRowProps {
   /** `compact` is the onboarding row. `full` is the settings section. */
@@ -27,19 +27,29 @@ function formatSize(bytes: number): string {
 export function VoiceRuntimeRow({ variant = 'full' }: VoiceRuntimeRowProps) {
   const available = useVoiceStore((s) => s.available)
   const runtime = useVoiceStore((s) => s.runtime)
+  const models = useVoiceStore((s) => s.models)
+  const complete = useVoiceStore(selectVoiceSetupComplete)
   const install = useVoiceStore((s) => s.install)
   const refreshRuntime = useVoiceStore((s) => s.refreshRuntime)
   const installRuntime = useVoiceStore((s) => s.installRuntime)
   const removeRuntime = useVoiceStore((s) => s.removeRuntime)
 
+  const refresh = useVoiceStore((s) => s.refresh)
+
   useEffect(() => {
     void refreshRuntime()
-  }, [refreshRuntime])
+    void refresh()
+  }, [refreshRuntime, refresh])
 
   if (!available) return null
 
   const busy = install.running
   const compact = variant === 'compact'
+  // One action downloads everything voice needs, so the size shown is the total.
+  const pendingModelBytes = models.some((m) => m.installed)
+    ? 0
+    : (models[0]?.sizeBytes ?? 0)
+  const totalBytes = (runtime.installed ? 0 : runtime.sizeBytes) + pendingModelBytes
 
   return (
     <div
@@ -58,11 +68,15 @@ export function VoiceRuntimeRow({ variant = 'full' }: VoiceRuntimeRowProps) {
             <span className="font-normal text-muted-foreground">(optional)</span>
           </p>
           <p className={`mt-0.5 text-muted-foreground ${compact ? 'text-[11px]' : 'text-xs'}`}>
-            {runtime.installed
-              ? `Local speech runtime installed${runtime.version ? ` — v${runtime.version}` : ''}.`
-              : `Dictate and run task commands by speech. The local speech runtime is about ${formatSize(
-                  runtime.sizeBytes
-                )} and is downloaded only if you ask for it.`}
+            {complete
+              ? `Ready to use${runtime.version ? ` — runtime v${runtime.version}` : ''}. Switch it on below.`
+              : runtime.installed
+                ? `The speech runtime is installed. One more step downloads the English speech model (about ${formatSize(
+                    pendingModelBytes
+                  )}).`
+                : `Dictate and run task commands by speech. This downloads the speech runtime and the English model, about ${formatSize(
+                    totalBytes
+                  )} in total, and only if you ask for it.`}
           </p>
           {install.error && (
             <p className="mt-1 text-[11px] text-red-400" data-testid="voice-runtime-error">
@@ -72,7 +86,7 @@ export function VoiceRuntimeRow({ variant = 'full' }: VoiceRuntimeRowProps) {
         </div>
 
         <div className="flex shrink-0 items-center gap-2">
-          {runtime.installed ? (
+          {complete ? (
             <>
               <span className="flex items-center gap-1 text-[11px] text-emerald-400">
                 <Check className="size-3" />
@@ -106,7 +120,7 @@ export function VoiceRuntimeRow({ variant = 'full' }: VoiceRuntimeRowProps) {
               ) : (
                 <>
                   <Download className="mr-1.5 size-3.5" />
-                  Install
+                  {runtime.installed ? 'Finish setup' : 'Install'}
                 </>
               )}
             </Button>

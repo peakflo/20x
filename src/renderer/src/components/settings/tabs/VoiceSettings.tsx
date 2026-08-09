@@ -6,7 +6,7 @@ import { Switch } from '@/components/ui/Switch'
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
 import { settingsApi, voiceApi } from '@/lib/ipc-client'
-import { useVoiceStore } from '@/stores/voice-store'
+import { selectVoiceSetupComplete, useVoiceStore } from '@/stores/voice-store'
 import { VoiceRuntimeRow } from '@/components/voice/VoiceRuntimeRow'
 import { VOICE_DEFAULT_SHORTCUT, VOICE_SETTING_KEYS } from '@shared/voice'
 
@@ -27,6 +27,7 @@ export function VoiceSettings() {
   const available = useVoiceStore((s) => s.available)
   const enabled = useVoiceStore((s) => s.enabled)
   const runtime = useVoiceStore((s) => s.runtime)
+  const setupComplete = useVoiceStore(selectVoiceSetupComplete)
   const engine = useVoiceStore((s) => s.engine)
   const models = useVoiceStore((s) => s.models)
   const permission = useVoiceStore((s) => s.permission)
@@ -82,14 +83,14 @@ export function VoiceSettings() {
               Enable voice control
             </Label>
             <p className="text-xs text-muted-foreground">
-              {runtime.installed
+              {setupComplete
                 ? '20x asks for the microphone the first time you switch this on.'
-                : 'Install the local speech runtime above first.'}
+                : 'Install voice control above first.'}
             </p>
           </div>
           <Switch
             checked={enabled}
-            disabled={!runtime.installed}
+            disabled={!setupComplete}
             onCheckedChange={(next) => void setEnabled(next)}
           />
         </div>
@@ -205,9 +206,10 @@ export function VoiceSettings() {
         ))}
 
         <div className="space-y-2 rounded-lg border border-border p-3">
-          <Label htmlFor="voice-model-dir">Model directory installed by hand</Label>
+          <Label htmlFor="voice-model-dir">Use another model directory (optional)</Label>
           <p className="text-xs text-muted-foreground">
-            Point 20x at a directory that holds an encoder, a decoder, a joiner and a tokens file.
+            Only for a model you installed by hand. The directory must hold an encoder, a decoder, a
+            joiner and a tokens file.
           </p>
           <div className="flex gap-2">
             <Input
