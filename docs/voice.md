@@ -178,6 +178,25 @@ because neither can do anything yet.
 For development and for the automated tests, `VOICE_ENGINE=mock` selects a
 deterministic engine that returns `VOICE_MOCK_TEXT`. It never invents words.
 
+## Proven against the real runtime
+
+The recogniser configuration was verified against `sherpa-onnx-node` 1.13.4 with
+the catalogue model. Real speech through the real worker, over the real
+protocol, produced streaming partials and this final transcript:
+
+```text
+AFTER EARLY NIGHTFALL THE YELLOW LAMPS WOULD LIGHT UP HERE AND THERE THE
+SQUALID QUARTER OF THE BROTHELS
+```
+
+Model load took about 1.1 s; the tail decode after the turn ended took 431 ms.
+
+The model paths, the token file and the thread count must sit inside
+`modelConfig`. A flat configuration is rejected by the library with
+"Errors in config!". `voice-worker-client.test.ts` holds a check that loads the
+real recogniser whenever a machine has the runtime and a model installed, so
+this shape cannot drift again. It skips elsewhere, so CI stays green.
+
 ## Release gates still open
 
 From design §8, these gates are not met yet and must be closed before the
@@ -185,8 +204,9 @@ feature is offered to users:
 
 - [x] Record a SHA-256 for every catalogue model file.
 - [ ] Pin an exact `sherpa-onnx-node` version in `voice-runtime-installer.ts`.
-- [ ] Package and start `sherpa-onnx-node` on all four desktop targets.
-- [ ] Measure partial and final latency against the §3.5 targets.
+- [x] Start `sherpa-onnx-node` on macOS arm64 with real speech.
+- [ ] Package and start `sherpa-onnx-node` on the other three desktop targets.
+- [ ] Measure partial and final latency against the §3.5 targets on each target.
 - [ ] Licence review of the runtime, the model and the tokens file.
 - [ ] Packaged-system tests from §7 (microphone grant, denial, device change,
       8 GB machine, offline start, app update with installed models).

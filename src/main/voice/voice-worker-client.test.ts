@@ -1,4 +1,6 @@
 import { describe, it, expect, afterEach, beforeAll, afterAll } from 'vitest'
+import { existsSync } from 'fs'
+import { homedir } from 'os'
 import { join } from 'path'
 import { VoiceWorkerClient } from './voice-worker-client'
 import type { ResolvedModel } from './voice-model-manager'
@@ -114,4 +116,47 @@ describe('VoiceWorkerClient', () => {
     expect(status.state).toBe('engine_missing')
     expect(client.isRunning).toBe(false)
   })
+})
+
+/**
+ * Runs only on a machine where the user has installed the runtime and a model.
+ * It is the one check that proves the recogniser config shape against the real
+ * library — a flat config is rejected with "Errors in config!", and only a real
+ * load catches that.
+ */
+const realRuntime = join(homedir(), 'Library', 'Application Support', '20x', 'voice-runtime',
+  'node_modules', 'sherpa-onnx-node')
+const realModelDir = join(homedir(), 'Library', 'Application Support', '20x', 'voice-models',
+  'sherpa-streaming-zipformer-en')
+const hasRealEngine =
+  process.platform === 'darwin' &&
+  existsSync(realRuntime) &&
+  existsSync(join(realModelDir, 'tokens.txt'))
+
+describe.skipIf(!hasRealEngine)('VoiceWorkerClient with the installed runtime', () => {
+  it('loads the real recogniser, so the config shape cannot drift', async () => {
+    process.env.VOICE_ENGINE = 'real'
+    process.env.VOICE_ENGINE_MODULE = realRuntime
+    try {
+      client = new VoiceWorkerClient(SCRIPT)
+      const pending = waitFor<VoiceEngineStatus>((resolve) => {
+        client!.on('status', (s: VoiceEngineStatus) => {
+          if (s.state !== 'loading') resolve(s)
+        })
+      }, 30000)
+      await client.load({
+        id: 'sherpa-streaming-zipformer-en',
+        dir: realModelDir,
+        encoder: join(realModelDir, 'encoder.onnx'),
+        decoder: join(realModelDir, 'decoder.onnx'),
+        joiner: join(realModelDir, 'joiner.onnx'),
+        tokens: join(realModelDir, 'tokens.txt'),
+      })
+      const status = await pending
+      expect(status).toMatchObject({ state: 'ready', engine: 'sherpa-onnx' })
+    } finally {
+      process.env.VOICE_ENGINE = 'mock'
+      delete process.env.VOICE_ENGINE_MODULE
+    }
+  }, 40000)
 })

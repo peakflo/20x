@@ -80,21 +80,25 @@ const handlers = {
         return
       }
       const started = Date.now()
+      // The model paths and the thread count belong inside `modelConfig`. A
+      // flat object is rejected by the runtime with "Errors in config!".
       recognizer = new sherpa.OnlineRecognizer({
-        transducer: {
-          encoder: message.model.encoder,
-          decoder: message.model.decoder,
-          joiner: message.model.joiner,
-        },
-        tokens: message.model.tokens,
         featConfig: { sampleRate: SAMPLE_RATE, featureDim: 80 },
-        numThreads: message.numThreads || 2,
-        enableEndpoint: true,
+        modelConfig: {
+          transducer: {
+            encoder: message.model.encoder,
+            decoder: message.model.decoder,
+            joiner: message.model.joiner,
+          },
+          tokens: message.model.tokens,
+          numThreads: message.numThreads || 2,
+          provider: 'cpu',
+        },
+        decodingMethod: 'greedy_search',
+        enableEndpoint: 1,
         rule1MinTrailingSilence: 2.4,
         rule2MinTrailingSilence: 1.2,
         rule3MinUtteranceLength: 20,
-        decodingMethod: 'greedy_search',
-        provider: 'cpu',
       })
       send({
         t: 'status',
