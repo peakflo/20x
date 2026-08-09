@@ -55,7 +55,7 @@ function makeManager(modelPresent: boolean) {
   const notify = vi.fn()
   const worker = new FakeWorker()
   const models = {
-    list: vi.fn(async () => []),
+    list: vi.fn(async () => [] as never[]),
     install: vi.fn(async () => ({ id: DEFAULT_VOICE_MODEL_ID, installed: true })),
     resolve: vi.fn(async () => (modelPresent ? RESOLVED_MODEL : null)),
     remove: vi.fn(async () => undefined),
@@ -161,5 +161,55 @@ describe('one-action voice setup', () => {
     await expect(ctx.manager.installRuntime()).rejects.toThrow(/npm was not found/)
     expect(ctx.models.install).not.toHaveBeenCalled()
     expect(progressStages(ctx.notify).at(-1)).toBe('error')
+  })
+})
+
+describe('choosing a model', () => {
+  it('switches the model the worker uses', async () => {
+    installer.detectVoiceRuntime.mockResolvedValue(PRESENT)
+    const ctx = makeManager(true)
+    await ctx.manager.refreshRuntime()
+
+    await ctx.manager.selectModel('nemotron-streaming-en-560ms')
+
+    expect(ctx.store.voice_model_id).toBe('nemotron-streaming-en-560ms')
+    // The old model is released and the new one is loaded.
+    expect(ctx.worker.unload).toHaveBeenCalled()
+    expect(ctx.worker.load).toHaveBeenCalled()
+  })
+
+  it('clears a hand-installed directory, so the choice is what runs', async () => {
+    installer.detectVoiceRuntime.mockResolvedValue(PRESENT)
+    const ctx = makeManager(true)
+    ctx.store.voice_custom_model_dir = '/somewhere/by-hand'
+
+    await ctx.manager.selectModel('nemo-fast-conformer-en-480ms')
+
+    expect(ctx.store.voice_custom_model_dir).toBe('')
+  })
+
+  it('falls back to another installed model when the one in use is deleted', async () => {
+    installer.detectVoiceRuntime.mockResolvedValue(PRESENT)
+    const ctx = makeManager(true)
+    ctx.store.voice_model_id = 'nemotron-streaming-en-560ms'
+    ctx.models.list.mockResolvedValue([
+      { id: 'nemotron-streaming-en-560ms', installed: true },
+      { id: 'sherpa-streaming-zipformer-en', installed: true },
+    ] as never)
+
+    await ctx.manager.removeModel('nemotron-streaming-en-560ms')
+
+    expect(ctx.models.remove).toHaveBeenCalledWith('nemotron-streaming-en-560ms')
+    expect(ctx.store.voice_model_id).toBe('sherpa-streaming-zipformer-en')
+  })
+
+  it('keeps the choice when a different model is deleted', async () => {
+    installer.detectVoiceRuntime.mockResolvedValue(PRESENT)
+    const ctx = makeManager(true)
+    ctx.store.voice_model_id = 'sherpa-streaming-zipformer-en'
+
+    await ctx.manager.removeModel('nemotron-streaming-en-560ms')
+
+    expect(ctx.store.voice_model_id).toBe('sherpa-streaming-zipformer-en')
   })
 })

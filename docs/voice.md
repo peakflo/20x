@@ -134,17 +134,36 @@ These rules are enforced in code and covered by tests:
 
 ## Models (§5.10)
 
-Models are not in the installer. `VoiceModelManager` downloads them on request,
-shows the size, the language list and the licence first, verifies a SHA-256 for
-each file, resumes an interrupted download, and can delete everything.
+Three English models are offered. **Settings → Voice** downloads, deletes, and
+chooses between them; the one in use is marked, and a second click on **Use**
+switches the worker to another downloaded model.
+
+| Model | Size | Licence | Use it for |
+|---|---:|---|---|
+| English — small (Zipformer) | 73 MB | Apache-2.0 | task commands, short dictation (default) |
+| English — balanced (NeMo FastConformer, 480 ms) | 137 MB | CC-BY-4.0 | free dictation |
+| English — most accurate (Nemotron 0.6B, 560 ms) | 662 MB | NVIDIA Open Model | long dictation; writes normal capitals and punctuation |
+
+All three are streaming transducers with the same four roles — encoder, decoder,
+joiner, tokens — so one code path in the worker loads every one of them. Adding
+a fourth is a manifest entry and four checksums, no code.
+
+Measured on an Apple Silicon machine with the same 6.6 s clip: Zipformer loads
+in 1.1 s and decodes the tail in 0.43 s; FastConformer loads in 2.9 s and
+decodes in 1.4 s; Nemotron loads in 5.7 s and decodes in 5.5 s. Nemotron is
+close to real time on CPU, so it suits dictation more than fast commands.
+
+`VoiceModelManager` downloads on request, shows the size, the language and the
+licence first, verifies a SHA-256 for each file, resumes an interrupted
+download, and can delete one model or all of them. Deleting the model in use
+falls back to another one that is on disk.
 
 Each URL is pinned to one model revision, never to a branch, so a checksum
-cannot go stale under the app. A model whose checksum is empty is refused, so an
-unverified model can never reach a user.
+cannot go stale under the app. A model whose checksum is empty is refused.
 
 A model directory installed by hand is still accepted, in
-**Settings → Voice → Use another model directory**, but it is not needed: the
-one-action setup below downloads a verified model.
+**Settings → Voice → Use another model directory**. Choosing a catalogue model
+clears it, so the choice is always what runs.
 
 ## The local runtime — an optional install
 

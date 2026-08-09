@@ -20,6 +20,7 @@ function verifiedEntry(): VoiceModelManifestEntry {
   return {
     id: 'test-model',
     label: 'Test model',
+    description: 'A stand-in used by the tests.',
     languages: ['en'],
     license: 'Apache-2.0',
     licenseUrl: 'https://example.invalid/license',
@@ -153,6 +154,7 @@ describe('VoiceModelManager', () => {
     const listed = (await manager.list()).find((m) => m.id === entry.id)
     expect(listed).toMatchObject({
       label: 'Test model',
+      description: 'A stand-in used by the tests.',
       license: 'Apache-2.0',
       languages: ['en'],
       installed: false,
@@ -167,5 +169,43 @@ describe('sha256OfFile', () => {
     const path = join(root, 'sample.bin')
     await writeFile(path, CONTENT)
     expect(await sha256OfFile(path)).toBe(DIGEST)
+  })
+})
+
+describe('the shipped catalogue', () => {
+  it('offers a choice of models, each with a verified checksum', () => {
+    expect(VOICE_MODEL_MANIFEST.length).toBeGreaterThanOrEqual(3)
+    for (const entry of VOICE_MODEL_MANIFEST) {
+      expect(isManifestVerified(entry), `${entry.id} has no checksum`).toBe(true)
+      expect(entry.description.length).toBeGreaterThan(10)
+      expect(entry.license).toBeTruthy()
+      expect(entry.licenseUrl).toMatch(/^https:\/\//)
+    }
+  })
+
+  it('pins every download to one revision, never to a branch', () => {
+    for (const entry of VOICE_MODEL_MANIFEST) {
+      for (const file of entry.files) {
+        expect(file.url, `${entry.id}/${file.name}`).not.toMatch(/\/resolve\/(main|master)\//)
+        expect(file.url).toMatch(/\/resolve\/[a-f0-9]{40}\//)
+      }
+    }
+  })
+
+  it('gives every model the same four roles, so one code path loads them all', () => {
+    for (const entry of VOICE_MODEL_MANIFEST) {
+      const names = entry.files.map((f) => f.name)
+      expect(names).toContain(entry.roles.encoder)
+      expect(names).toContain(entry.roles.decoder)
+      expect(names).toContain(entry.roles.joiner)
+      expect(names).toContain(entry.roles.tokens)
+    }
+  })
+
+  it('marks the model in use', async () => {
+    const manager = new VoiceModelManager({ rootDir: root })
+    const listed = await manager.list(VOICE_MODEL_MANIFEST[1].id)
+    expect(listed.filter((m) => m.active)).toHaveLength(1)
+    expect(listed.find((m) => m.active)?.id).toBe(VOICE_MODEL_MANIFEST[1].id)
   })
 })

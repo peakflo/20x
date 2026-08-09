@@ -466,8 +466,24 @@ export class VoiceSessionManager {
 
   // ── Models ────────────────────────────────────────────────
 
+  /** The model the worker uses, whether or not it is downloaded yet. */
+  activeModelId(): string {
+    return this.options.db.getSetting(VOICE_SETTING_KEYS.modelId) || DEFAULT_VOICE_MODEL_ID
+  }
+
   listModels(): Promise<VoiceModelState[]> {
-    return this.models.list()
+    return this.models.list(this.activeModelId())
+  }
+
+  /** Switches the model the worker uses. It must already be downloaded. */
+  async selectModel(id: string): Promise<VoiceModelState[]> {
+    this.options.db.setSetting(VOICE_SETTING_KEYS.modelId, id)
+    // A hand-installed directory would win over the choice, so it is cleared.
+    this.options.db.setSetting(VOICE_SETTING_KEYS.customModelDir, '')
+    this.worker.unload()
+    await this.prepareEngine()
+    await this.broadcastStatus()
+    return this.listModels()
   }
 
   async installModel(id: string): Promise<VoiceModelState> {
@@ -477,10 +493,17 @@ export class VoiceSessionManager {
     return state
   }
 
-  async removeModel(id: string): Promise<void> {
+  async removeModel(id: string): Promise<VoiceModelState[]> {
     await this.models.remove(id)
-    this.worker.unload()
+    if (this.activeModelId() === id) {
+      // Fall back to another model that is on disk, so voice keeps working.
+      const remaining = (await this.models.list()).find((m) => m.installed && m.id !== id)
+      this.options.db.setSetting(VOICE_SETTING_KEYS.modelId, remaining?.id ?? DEFAULT_VOICE_MODEL_ID)
+      this.worker.unload()
+    }
     await this.prepareEngine()
+    await this.broadcastStatus()
+    return this.listModels()
   }
 
   async removeAllModels(): Promise<void> {
@@ -570,7 +593,7 @@ export class VoiceSessionManager {
     return {
       enabled: this.isEnabled(),
       engine: this.engine,
-      models: await this.models.list(),
+      models: await this.listModels(),
       shortcut: this.shortcut(),
       runtime: this.runtime,
       state: this.state,

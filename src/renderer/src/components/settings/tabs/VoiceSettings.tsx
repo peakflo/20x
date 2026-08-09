@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Download, FolderOpen, Loader2, Mic, Square, Trash2 } from 'lucide-react'
+import { Check, Download, FolderOpen, Loader2, Mic, Square, Trash2 } from 'lucide-react'
 import { SettingsSection } from '../SettingsSection'
 import { Label } from '@/components/ui/Label'
 import { Switch } from '@/components/ui/Switch'
@@ -45,6 +45,7 @@ export function VoiceSettings() {
   const installModel = useVoiceStore((s) => s.installModel)
   const removeModel = useVoiceStore((s) => s.removeModel)
   const removeAllModels = useVoiceStore((s) => s.removeAllModels)
+  const selectModel = useVoiceStore((s) => s.selectModel)
   const setCustomModelDir = useVoiceStore((s) => s.setCustomModelDir)
   const setShortcut = useVoiceStore((s) => s.setShortcut)
 
@@ -232,36 +233,74 @@ export function VoiceSettings() {
         {models.length === 0 && <p className="text-sm text-muted-foreground">No model is listed.</p>}
 
         {models.map((model) => (
-          <div key={model.id} className="rounded-lg border border-border p-3">
+          <div
+            key={model.id}
+            className={`rounded-lg border p-3 ${
+              model.active && model.installed ? 'border-primary/60 bg-primary/5' : 'border-border'
+            }`}
+            data-testid={`voice-model-${model.id}`}
+          >
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
-                <p className="text-sm font-medium text-foreground">{model.label}</p>
-                <p className="text-xs text-muted-foreground">
-                  {formatSize(model.sizeBytes)} · {model.languages.join(', ')} · {model.license}
+                <p className="flex items-center gap-2 text-sm font-medium text-foreground">
+                  {model.label}
+                  {model.active && model.installed && (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-primary/15 px-2 py-0.5 text-[10px] font-medium text-primary">
+                      <Check className="size-2.5" />
+                      In use
+                    </span>
+                  )}
+                </p>
+                <p className="mt-0.5 text-xs text-muted-foreground">{model.description}</p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {formatSize(model.sizeBytes)} · {model.languages.join(', ')} ·{' '}
+                  <a
+                    href={model.licenseUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="underline decoration-dotted underline-offset-2 hover:text-foreground"
+                  >
+                    {model.license}
+                  </a>
                 </p>
                 {!model.downloadable && (
                   <p className="mt-1 text-xs text-yellow-500">
-                    The checksum for this model is not recorded yet. Use a model directory below.
+                    The checksum for this model is not recorded yet.
                   </p>
                 )}
                 {model.error && <p className="mt-1 text-xs text-red-400">{model.error}</p>}
               </div>
-              <div className="flex shrink-0 gap-2">
+
+              <div className="flex shrink-0 items-center gap-2">
                 {model.installed ? (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => void removeModel(model.id)}
-                    title="Delete this model"
-                  >
-                    <Trash2 className="mr-1.5 h-3.5 w-3.5" />
-                    Delete
-                  </Button>
+                  <>
+                    {!model.active && (
+                      <Button
+                        size="sm"
+                        onClick={() => void selectModel(model.id)}
+                        data-testid={`voice-model-use-${model.id}`}
+                      >
+                        Use
+                      </Button>
+                    )}
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => void removeModel(model.id)}
+                      title="Delete this model"
+                      data-testid={`voice-model-delete-${model.id}`}
+                    >
+                      <Trash2 className="mr-1.5 h-3.5 w-3.5" />
+                      Delete
+                    </Button>
+                  </>
                 ) : (
                   <Button
                     size="sm"
+                    variant="outline"
                     disabled={!model.downloadable || model.installing}
                     onClick={() => void installModel(model.id)}
+                    data-testid={`voice-model-download-${model.id}`}
                   >
                     {model.installing ? (
                       <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
@@ -273,6 +312,15 @@ export function VoiceSettings() {
                 )}
               </div>
             </div>
+
+            {model.installing && (
+              <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted">
+                <div
+                  className="h-full rounded-full bg-primary transition-all"
+                  style={{ width: `${Math.round(model.progress * 100)}%` }}
+                />
+              </div>
+            )}
           </div>
         ))}
 

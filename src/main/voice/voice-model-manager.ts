@@ -59,14 +59,17 @@ export class VoiceModelManager {
     return join(this.options.rootDir, id)
   }
 
-  async list(): Promise<VoiceModelState[]> {
+  async list(activeId?: string): Promise<VoiceModelState[]> {
     const states: VoiceModelState[] = []
     for (const entry of VOICE_MODEL_MANIFEST) {
       states.push({
         id: entry.id,
         label: entry.label,
+        description: entry.description,
         license: entry.license,
+        licenseUrl: entry.licenseUrl,
         languages: entry.languages,
+        active: entry.id === activeId,
         installed: await this.isInstalled(entry),
         installing: this.installing.has(entry.id),
         progress: this.installing.get(entry.id) ?? 0,
@@ -251,8 +254,11 @@ export class VoiceModelManager {
     this.options.onProgress?.({
       id: entry.id,
       label: entry.label,
+      description: entry.description,
       license: entry.license,
+      licenseUrl: entry.licenseUrl,
       languages: entry.languages,
+      active: false,
       installed: false,
       installing: this.installing.has(entry.id),
       progress: this.installing.get(entry.id) ?? 0,

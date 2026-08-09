@@ -2411,8 +2411,11 @@ else:
   })
 
   ipcMain.handle('voice:removeModel', async (_, payload: { id: string }) => {
-    await requireVoice().removeModel(payload.id)
-    return { success: true }
+    return requireVoice().removeModel(payload.id)
+  })
+
+  ipcMain.handle('voice:selectModel', async (_, payload: { id: string }) => {
+    return requireVoice().selectModel(payload.id)
   })
 
   ipcMain.handle('voice:removeAllModels', async () => {

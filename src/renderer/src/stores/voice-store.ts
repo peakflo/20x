@@ -88,6 +88,7 @@ interface VoiceStoreState {
   requestPermission: () => Promise<MicrophonePermission>
   installModel: (id: string) => Promise<void>
   removeModel: (id: string) => Promise<void>
+  selectModel: (id: string) => Promise<void>
   removeAllModels: () => Promise<void>
   setCustomModelDir: (dir: string) => Promise<void>
   setShortcut: (accelerator: string) => Promise<void>
@@ -336,7 +337,12 @@ export const useVoiceStore = create<VoiceStoreState>((set, get) => ({
   },
 
   removeModel: async (id) => {
-    await voiceApi.removeModel(id)
+    set({ models: await voiceApi.removeModel(id) })
+    await get().refresh()
+  },
+
+  selectModel: async (id) => {
+    set({ models: await voiceApi.selectModel(id) })
     await get().refresh()
   },
 

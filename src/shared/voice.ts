@@ -247,6 +247,8 @@ export interface VoiceModelFile {
 export interface VoiceModelManifestEntry {
   id: string
   label: string
+  /** One line telling the user what this model is good for. */
+  description: string
   /** BCP-47 tags the model covers. */
   languages: string[]
   /** SPDX identifier or a short licence name. Shown before the download. */
@@ -270,9 +272,13 @@ export interface VoiceModelManifestEntry {
 export interface VoiceModelState {
   id: string
   label: string
+  description: string
   license: string
+  licenseUrl: string
   languages: string[]
   installed: boolean
+  /** True for the model the worker uses. */
+  active: boolean
   installing: boolean
   /** 0..1 */
   progress: number

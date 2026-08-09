@@ -513,7 +513,8 @@ interface ElectronAPI {
     removeRuntime: () => Promise<VoiceRuntimeStatus>
     listModels: () => Promise<VoiceModelState[]>
     installModel: (id: string) => Promise<VoiceModelState>
-    removeModel: (id: string) => Promise<{ success: boolean }>
+    removeModel: (id: string) => Promise<VoiceModelState[]>
+    selectModel: (id: string) => Promise<VoiceModelState[]>
     removeAllModels: () => Promise<{ success: boolean }>
     setCustomModelDir: (dir: string) => Promise<VoiceSnapshot>
     pickModelDir: () => Promise<{ dir: string | null }>

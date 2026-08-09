@@ -63,6 +63,7 @@ describe('registerIpcHandlers', () => {
     expect(channels).toContain('voice:startTurn')
     expect(channels).toContain('voice:pushAudio')
     expect(channels).toContain('voice:confirm')
+    expect(channels).toContain('voice:selectModel')
   })
 
   it('voice handlers stay safe when the voice manager is absent', async () => {

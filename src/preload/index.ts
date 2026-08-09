@@ -548,6 +548,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     listModels: (): Promise<unknown[]> => ipcRenderer.invoke('voice:listModels'),
     installModel: (id: string): Promise<unknown> => ipcRenderer.invoke('voice:installModel', { id }),
     removeModel: (id: string): Promise<unknown> => ipcRenderer.invoke('voice:removeModel', { id }),
+    selectModel: (id: string): Promise<unknown> => ipcRenderer.invoke('voice:selectModel', { id }),
     removeAllModels: (): Promise<unknown> => ipcRenderer.invoke('voice:removeAllModels'),
     setCustomModelDir: (dir: string): Promise<unknown> =>
       ipcRenderer.invoke('voice:setCustomModelDir', { dir }),

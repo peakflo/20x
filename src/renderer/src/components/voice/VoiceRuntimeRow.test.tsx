@@ -27,9 +27,12 @@ const PRESENT: VoiceRuntimeStatus = {
 
 const MODEL = {
   id: 'sherpa-streaming-zipformer-en',
-  label: 'Streaming Zipformer — English',
+  label: 'English — small',
+  description: 'Fast and light.',
   license: 'Apache-2.0',
+  licenseUrl: 'https://example.invalid',
   languages: ['en'],
+  active: true,
   installed: false,
   installing: false,
   progress: 0,
