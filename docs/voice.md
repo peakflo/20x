@@ -124,12 +124,21 @@ Guards:
 ### Where dictated words go
 
 The transcript panel is mounted many times at once — the task workspace, each
-canvas panel, and the Mastermind drawer. So there is exactly **one** dictation
-target, and the microphone button that started the turn claims the field of its
-own composer (`data-voice-composer`). Exactly one subscriber writes the words.
+canvas panel, and the Mastermind drawer. So there is exactly **one** active
+composer, and the microphone button that started the turn names it.
+
+A composer is addressed by a stable **key**, never by an element reference.
+Each mount registers under that key (`data-voice-composer="<taskId>"`), and the
+text field and the send function are resolved at the moment a sentence arrives.
+
+That matters because a composer is replaced while a conversation runs: starting
+an agent session rebuilds the whole panel. With an element reference the loop
+kept hearing but wrote into a field that had left the page, which looks exactly
+like it stopped listening. With a key, the sentence lands in the panel that
+replaced it.
 
 A turn started from the global shortcut, or from the test button in settings,
-claims no field, so the words are inserted nowhere.
+names no composer, so the words are inserted nowhere.
 
 ### Testing the microphone
 

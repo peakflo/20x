@@ -2,8 +2,11 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import {
   clearDictationTarget,
   findComposerField,
+  findComposerKey,
   insertAndSubmit,
   insertDictation,
+  registerComposer,
+  setActiveComposer,
   setDictationTarget,
 } from './voice-dictation-target'
 
@@ -145,5 +148,70 @@ describe('insertAndSubmit — the conversational loop', () => {
     insertAndSubmit('one sentence')
 
     expect(b.field.value).toBe('')
+  })
+})
+
+describe('a conversation survives the panel being rebuilt', () => {
+  // Starting an agent session swaps the whole transcript panel. The old field
+  // and the old send function are then dead. A conversation must carry on into
+  // the panel that replaced it, or it looks as if it stopped listening.
+  it('writes into the panel that replaced the first one', () => {
+    const first = composer('first')
+    const firstSubmit = vi.fn()
+    const unregisterFirst = registerComposer('task-1', {
+      getField: () => first.field,
+      submit: firstSubmit,
+    })
+    setActiveComposer('task-1')
+
+    expect(insertAndSubmit('first sentence')).toBe(true)
+    expect(first.field.value).toBe('first sentence')
+
+    // The session starts: the panel is torn down and built again.
+    unregisterFirst()
+    first.root.remove()
+    const second = composer('second')
+    const secondSubmit = vi.fn()
+    registerComposer('task-1', { getField: () => second.field, submit: secondSubmit })
+
+    expect(insertAndSubmit('second sentence')).toBe(true)
+    expect(second.field.value).toBe('second sentence')
+    expect(secondSubmit).toHaveBeenCalledTimes(1)
+    // The dead panel receives nothing more.
+    expect(firstSubmit).toHaveBeenCalledTimes(1)
+  })
+
+  it('always uses the send function of the current render', () => {
+    const a = composer('a')
+    let latest = vi.fn()
+    registerComposer('task-1', { getField: () => a.field, submit: () => latest() })
+    setActiveComposer('task-1')
+
+    const stale = latest
+    latest = vi.fn() // the component re-rendered with a new callback
+
+    insertAndSubmit('a sentence')
+
+    expect(latest).toHaveBeenCalledTimes(1)
+    expect(stale).not.toHaveBeenCalled()
+  })
+
+  it('still writes to one composer only', () => {
+    const mine = composer('mine')
+    const other = composer('other')
+    registerComposer('task-1', { getField: () => mine.field, submit: vi.fn() })
+    registerComposer('task-2', { getField: () => other.field, submit: vi.fn() })
+    setActiveComposer('task-1')
+
+    insertAndSubmit('one sentence')
+
+    expect(mine.field.value).toBe('one sentence')
+    expect(other.field.value).toBe('')
+  })
+
+  it('reads the key a button belongs to', () => {
+    const a = composer('a')
+    a.root.setAttribute('data-voice-composer', 'task-9')
+    expect(findComposerKey(a.button)).toBe('task-9')
   })
 })

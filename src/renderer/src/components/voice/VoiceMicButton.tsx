@@ -2,7 +2,13 @@ import { useCallback, useEffect, useRef } from 'react'
 import { Mic, Square, Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { selectVoiceReady, useVoiceStore } from '@/stores/voice-store'
-import { findComposerField, setDictationTarget } from '@/lib/voice-dictation-target'
+import {
+  clearActiveComposer,
+  findComposerField,
+  findComposerKey,
+  setActiveComposer,
+  setDictationTarget,
+} from '@/lib/voice-dictation-target'
 import type { VoiceTurnMode } from '@shared/voice'
 
 interface VoiceMicButtonProps {
@@ -59,7 +65,11 @@ export function VoiceMicButton({
     // hands-free loop: speak, pause, it sends, and it keeps listening.
     const loop = mode === 'dictation' && conversational && Boolean(onSubmit)
     if (mode === 'dictation') {
-      setDictationTarget(findComposerField(buttonRef.current), loop ? onSubmit : undefined)
+      // Prefer the composer key: it survives the panel being rebuilt, which
+      // happens as soon as an agent session starts.
+      const key = findComposerKey(buttonRef.current)
+      if (key) setActiveComposer(key)
+      else setDictationTarget(findComposerField(buttonRef.current), loop ? onSubmit : undefined)
     }
     void startTurn(loop ? 'conversation' : mode).then(() => {
       if (!useVoiceStore.getState().turnId) owns.current = false
@@ -72,7 +82,7 @@ export function VoiceMicButton({
     const onKeyDown = (event: KeyboardEvent): void => {
       if (event.key !== 'Escape') return
       owns.current = false
-      setDictationTarget(null)
+      clearActiveComposer()
       void cancel()
     }
     window.addEventListener('keydown', onKeyDown)

@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import { settingsApi, voiceApi } from '@/lib/ipc-client'
 import { voiceCapture } from '@/lib/voice-capture'
-import { clearDictationTarget } from '@/lib/voice-dictation-target'
+import { clearActiveComposer } from '@/lib/voice-dictation-target'
 import { VOICE_SETTING_KEYS } from '@shared/voice'
 import type {
   MicrophonePermission,
@@ -273,8 +273,9 @@ export const useVoiceStore = create<VoiceStoreState>((set, get) => ({
   },
 
   startTest: async () => {
-    // No target, so the words are shown in settings and inserted nowhere.
-    clearDictationTarget()
+    // No composer is named, so the words are shown in settings and are
+    // inserted nowhere.
+    clearActiveComposer()
     set({ testTranscript: '' })
     await get().startTurn('dictation')
   },
