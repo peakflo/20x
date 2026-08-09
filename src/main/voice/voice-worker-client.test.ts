@@ -226,3 +226,53 @@ describe.skipIf(!hasRealEngine || installedModelIds.length === 0)('the conversat
     }
   }, 90000)
 })
+
+describe.skipIf(!hasRealEngine)('a single-shot turn', () => {
+  it('reports a final and never a segment, so dictation cannot send by itself', async () => {
+    process.env.VOICE_ENGINE = 'real'
+    process.env.VOICE_ENGINE_MODULE = realRuntime
+    try {
+      client = new VoiceWorkerClient(SCRIPT)
+      const ready = waitFor<VoiceEngineStatus>((resolve) => {
+        client!.on('status', (s: VoiceEngineStatus) => {
+          if (s.state === 'ready') resolve(s)
+        })
+      }, 30000)
+      await client.load(
+        {
+          id: 'sherpa-streaming-zipformer-en',
+          dir: realModelDir,
+          encoder: join(realModelDir, 'encoder.onnx'),
+          decoder: join(realModelDir, 'decoder.onnx'),
+          joiner: join(realModelDir, 'joiner.onnx'),
+          tokens: join(realModelDir, 'tokens.txt'),
+        },
+        1.2
+      )
+      await ready
+
+      const segments: string[] = []
+      const finals: string[] = []
+      client.on('segment', (_turnId: string, text: string) => segments.push(text))
+      client.on('final', (_turnId: string, text: string) => finals.push(text))
+
+      const speech = readFileSync(SPEECH_WAV).subarray(44)
+      const silence = Buffer.alloc(16000 * 2 * 2) // 2 s
+
+      client.startTurn('dictation-1', 'dictation')
+      for (const buffer of [speech, silence]) {
+        for (let i = 0; i < buffer.length; i += 640) {
+          client.pushAudio(buffer.subarray(i, Math.min(i + 640, buffer.length)))
+        }
+      }
+
+      await vi.waitFor(() => expect(finals.length).toBe(1), { timeout: 20000, interval: 100 })
+      // A segment is what makes the renderer send. Dictation must produce none.
+      expect(segments).toHaveLength(0)
+      expect(finals[0]).toMatch(/nightfall/i)
+    } finally {
+      process.env.VOICE_ENGINE = 'mock'
+      delete process.env.VOICE_ENGINE_MODULE
+    }
+  }, 60000)
+})

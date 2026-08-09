@@ -2353,9 +2353,18 @@ else:
     return { status: await requireVoice().requestMicrophonePermission() }
   })
 
-  ipcMain.handle('voice:startTurn', async (_, payload: { mode?: 'dictation' | 'command'; context?: Record<string, unknown> }) => {
+  const VOICE_TURN_MODES = ['dictation', 'command', 'conversation'] as const
+  type VoiceTurnModeName = (typeof VOICE_TURN_MODES)[number]
+
+  ipcMain.handle('voice:startTurn', async (_, payload: { mode?: string; context?: Record<string, unknown> }) => {
+    // Validate against the whole set. Coercing an unknown value to 'dictation'
+    // silently threw away 'conversation', which ended the loop after the first
+    // sentence instead of keeping the microphone open.
+    const mode = VOICE_TURN_MODES.includes(payload?.mode as VoiceTurnModeName)
+      ? (payload.mode as VoiceTurnModeName)
+      : 'dictation'
     return requireVoice().startTurn(
-      payload?.mode === 'command' ? 'command' : 'dictation',
+      mode,
       (payload?.context ?? {}) as Parameters<import('./voice/voice-session-manager').VoiceSessionManager['startTurn']>[1]
     )
   })

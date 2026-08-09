@@ -87,6 +87,40 @@ describe('registerIpcHandlers', () => {
     await expect(startTurn!({}, { mode: 'command' })).rejects.toThrow(/not available/i)
   })
 
+  it('passes every turn mode through, including conversation', async () => {
+    const db = {} as unknown as Parameters<typeof registerIpcHandlers>[0]
+    const agentManager = {} as unknown as Parameters<typeof registerIpcHandlers>[1]
+    const githubManager = {} as unknown as Parameters<typeof registerIpcHandlers>[2]
+    const worktreeManager = {} as unknown as Parameters<typeof registerIpcHandlers>[3]
+    const syncManager = {} as unknown as Parameters<typeof registerIpcHandlers>[4]
+    const pluginRegistry = {} as unknown as Parameters<typeof registerIpcHandlers>[5]
+    const startTurnSpy = vi.fn(async (_mode: string, _context: unknown) => ({ turnId: 't1' }))
+    const voice = { startTurn: startTurnSpy } as unknown as Parameters<typeof registerIpcHandlers>[16]
+
+    registerIpcHandlers(
+      db, agentManager, githubManager, worktreeManager, syncManager, pluginRegistry,
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, voice
+    )
+
+    const handleCalls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls as [string, (...args: unknown[]) => unknown][]
+    const startTurn = handleCalls.filter((call) => call[0] === 'voice:startTurn').pop()?.[1]
+
+    // Coercing an unknown mode to 'dictation' once threw 'conversation' away,
+    // which ended the loop after the first sentence.
+    await startTurn!({}, { mode: 'conversation', context: {} })
+    await startTurn!({}, { mode: 'command', context: {} })
+    await startTurn!({}, { mode: 'dictation', context: {} })
+    await startTurn!({}, { mode: 'nonsense', context: {} })
+
+    expect(startTurnSpy.mock.calls.map((call) => call[0])).toEqual([
+      'conversation',
+      'command',
+      'dictation',
+      'dictation',
+    ])
+  })
+
   it('terminal:kill ignores stale expectedPid and only kills matching process', async () => {
     const db = {} as unknown as Parameters<typeof registerIpcHandlers>[0]
     const agentManager = {} as unknown as Parameters<typeof registerIpcHandlers>[1]

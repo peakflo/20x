@@ -228,15 +228,21 @@ function onAudioFrame(frame) {
     // In a conversation the microphone stays open and the next sentence
     // starts a new segment on the same stream.
     if (recognizer.isEndpoint(stream)) {
-      if (text) {
-        segmentIndex += 1
-        send({ t: 'segment', turnId: currentTurn, text, index: segmentIndex })
-      }
       recognizer.reset(stream)
       lastPartial = ''
-      if (turnMode === 'conversation') armTurnTimer()
-      else if (text) {
-        // A single-shot turn is complete once the speaker stops.
+
+      if (turnMode === 'conversation') {
+        // The conversation carries on: report the sentence and keep listening.
+        // A `segment` is what makes the renderer send, so it must never be
+        // emitted for a single-shot turn.
+        if (text) {
+          segmentIndex += 1
+          send({ t: 'segment', turnId: currentTurn, text, index: segmentIndex })
+        }
+        armTurnTimer()
+      } else if (text) {
+        // A single-shot turn is complete once the speaker stops. The words go
+        // into the text field and the user decides when to send them.
         const turnId = currentTurn
         currentTurn = null
         clearTimeout(turnTimer)
