@@ -365,6 +365,37 @@ export function InfiniteCanvas() {
     })
   }, [canvasPendingTaskId])
 
+  // ── Consume a viewport command asked for from outside ─────
+  // `fitToContent` and `focusPanel` need the container size, which only this
+  // component knows. A caller without an element (an agent tool, a voice
+  // command) leaves the intent in the store and it is carried out here.
+  const pendingViewCommand = useCanvasStore((s) => s.pendingViewCommand)
+  useEffect(() => {
+    if (!pendingViewCommand) return
+    useCanvasStore.getState().clearViewCommand()
+
+    const rect = containerRef.current?.getBoundingClientRect()
+    if (!rect) return
+
+    switch (pendingViewCommand.kind) {
+      case 'fit_all':
+        fitToContent(rect.width, rect.height)
+        return
+      case 'reset':
+        resetViewport()
+        return
+      case 'zoom':
+        zoomTo(pendingViewCommand.zoom, rect.width / 2, rect.height / 2)
+        return
+      case 'focus_task': {
+        const target = useCanvasStore
+          .getState()
+          .panels.find((p) => p.type === 'task' && p.refId === pendingViewCommand.taskId)
+        if (target) focusPanel(target.id, rect.width, rect.height)
+      }
+    }
+  }, [pendingViewCommand, fitToContent, resetViewport, zoomTo, focusPanel])
+
   // ── Consume pending app from "Open in Canvas" button ────
   useEffect(() => {
     if (!canvasPendingApp) return

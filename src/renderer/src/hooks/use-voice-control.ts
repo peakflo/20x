@@ -11,9 +11,13 @@ import type { VoiceUiContext } from '@shared/voice'
  * Connects voice control to the application shell. Mount it once.
  *
  * It does three things:
- *  1. reports what the user is looking at, so main can resolve "this task",
+ *  1. tells the voice session what the user is looking at, so main can
+ *     resolve "this task",
  *  2. applies a navigation event that main has already validated,
  *  3. runs the global shortcut as a command turn.
+ *
+ * Publishing the screen for agent tools is a separate concern and lives in
+ * `useUiRemoteControl`.
  */
 export function useVoiceControl(): void {
   const initialize = useVoiceStore((s) => s.initialize)
@@ -45,47 +49,6 @@ export function useVoiceControl(): void {
     })
     return () => setContextProvider(null)
   }, [setContextProvider])
-
-  // Publish what the user is looking at, so an agent tool can read it without
-  // waiting for the window. Throttled, because an agent must never be able to
-  // make the renderer busy by asking often.
-  useEffect(() => {
-    if (typeof window === 'undefined' || !window.electronAPI?.ui) return undefined
-
-    let timer: ReturnType<typeof setTimeout> | null = null
-    const publish = (): void => {
-      if (timer) return
-      timer = setTimeout(() => {
-        timer = null
-        const ui = useUIStore.getState()
-        const tasks = useTaskStore.getState()
-        const selected = tasks.selectedTaskId
-        const session = selected ? useAgentStore.getState().sessions.get(selected) : undefined
-        void window.electronAPI.ui.publishState({
-          view: ui.sidebarView,
-          modal: ui.activeModal,
-          selectedTaskId: selected,
-          selectedTaskTitle: tasks.tasks.find((task) => task.id === selected)?.title ?? null,
-          dashboardPreviewTaskId: ui.dashboardPreviewTaskId,
-          mastermindOpen: ui.showOrchestrator,
-          settingsTab: ui.activeModal === 'settings' ? ui.settingsTab : null,
-          waitingForYou: Boolean(session?.pendingApproval),
-          visibleTaskIds: tasks.tasks.slice(0, 50).map((task) => task.id)
-        })
-      }, 250)
-    }
-
-    publish()
-    const offUi = useUIStore.subscribe(publish)
-    const offTasks = useTaskStore.subscribe(publish)
-    const offAgents = useAgentStore.subscribe(publish)
-    return () => {
-      if (timer) clearTimeout(timer)
-      offUi()
-      offTasks()
-      offAgents()
-    }
-  }, [])
 
   useEffect(() => {
     if (typeof window === 'undefined' || !window.electronAPI?.voice) return undefined

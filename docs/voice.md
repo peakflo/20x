@@ -61,6 +61,9 @@ voice worker (separate process)
 | `src/main/voice/voice-worker.js` | The worker itself (plain CommonJS) |
 | `src/renderer/src/lib/voice-capture.ts` | Microphone capture |
 | `src/renderer/src/lib/voice-dictation-target.ts` | The one field that receives words |
+| `src/shared/ui-commands.ts` | The UI command contract and the published screen |
+| `src/renderer/src/lib/ui-remote-control.ts` | Applies one command; collects the screen |
+| `src/renderer/src/hooks/use-ui-remote-control.ts` | Publishes the screen, receives commands |
 | `src/renderer/src/stores/voice-store.ts` | Renderer state |
 | `src/renderer/src/components/voice/*` | Microphone button, overlay, runtime row |
 
@@ -187,6 +190,17 @@ its own.
 | `respond_to_checkpoint` | Refuses unless that task really reports `waiting_approval` |
 | `stop_task` | Reports `nothing_running` instead of pretending to stop |
 
+**Driving the window**
+
+| Tool | Does |
+|---|---|
+| `navigate` | Shows a view: dashboard, tasks, canvas, skills, settings (with a tab) |
+| `open_task` | Opens a task where the user already is — see below |
+| `move_task_panel` | Moves the canvas panel of a task to a canvas coordinate |
+| `close_task_panel` | Removes the canvas panel; the task is untouched |
+| `set_canvas_view` | `fit_all`, `reset`, or a zoom between 0.1 and 3 |
+| `open_artifact` | Shows an artifact of a task in the artifact panel |
+
 Two of these deserve their reason written down:
 
 - `get_session_status` exists because a task row **cannot** answer "is this
@@ -204,6 +218,49 @@ on screen: they fail when the premise is false. A user-facing confirmation needs
 stop in conversation before it calls them.
 
 `delete_task` was proposed and deliberately left out.
+
+### One task, three ways to open it
+
+`open_task` follows the screen instead of asking the user to name a surface:
+
+| The user is on | "open the login task" gives them |
+|---|---|
+| the canvas | the panel, centred — added first when it is not there |
+| the dashboard | the preview dialog, so they keep the board |
+| anywhere else | the full task view |
+
+`where` overrides it (`workspace`, `canvas`, `modal`), and the reply says which
+one happened, so the agent can describe it.
+
+### How a command reaches the window
+
+```text
+agent → MCP tool → task API route (validates) → ui:command → renderer
+                                                    ↓
+                                        applyUiCommand(), one command
+                                                    ↓
+                                        the screen is published again
+```
+
+Four rules hold this together:
+
+1. **A command that reaches no window is a failure.** Every route refuses when
+   no window has published a screen. An agent told "done" would otherwise go on
+   to describe a screen the user never saw.
+2. **A command names a task, never a panel.** A panel is rebuilt when a session
+   starts, so a panel ID an agent read a moment ago may already be gone.
+3. **The channel carries intent, not a store mutation.** The renderer stays the
+   only place that knows how a view is assembled.
+4. **The result is published past the throttle.** The next tool call sees the
+   screen this command produced, not the one before it.
+
+Sizing the canvas is the renderer's job: `fit_all` and centring need the
+container rect, which only the canvas component has. So a viewport change is
+left in the store as an intent and the canvas carries it out with its own rect.
+
+`get_ui_state` publishes the canvas — the viewport and up to 50 panels with
+their coordinates — so an agent can move a panel without guessing at the
+coordinate space.
 
 ### Testing the microphone
 
@@ -415,6 +472,8 @@ pnpm test:run --project main src/main/voice
 pnpm test:run --project main src/shared/voice-intent-parser.test.ts
 pnpm test:run --project renderer src/renderer/src/stores/voice-store.test.ts
 pnpm test:run --project main src/main/task-api-voice-tools.test.ts
+pnpm test:run --project main src/main/task-api-ui-tools.test.ts
+pnpm test:run --project renderer src/renderer/src/lib/ui-remote-control.test.ts
 ```
 
 `voice-worker-client.test.ts` forks the real worker with the mock engine, so the

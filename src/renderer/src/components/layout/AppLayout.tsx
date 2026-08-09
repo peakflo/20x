@@ -10,6 +10,7 @@ import { OnboardingWizard, shouldShowOnboarding } from '@/components/onboarding/
 import { ProgressToastStack } from '@/components/ui/ProgressToastStack'
 import { VoiceOverlay } from '@/components/voice/VoiceOverlay'
 import { useVoiceControl } from '@/hooks/use-voice-control'
+import { useUiRemoteControl } from '@/hooks/use-ui-remote-control'
 
 // Lazy-load heavy workspace components — only imported when their view is active.
 // This reduces the initial bundle size and speeds up first render significantly.
@@ -284,6 +285,8 @@ export function AppLayout() {
 
   // ── Voice control: UI context, navigation events, and the global shortcut ──
   useVoiceControl()
+  // Publishes the screen for agent tools, and applies their UI commands.
+  useUiRemoteControl()
 
   // ── Track zoom factor so macOS traffic-light margin stays constant in physical pixels ──
   useEffect(() => {

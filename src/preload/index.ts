@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type { ArtifactContent, ArtifactFileEntry, PullRequestDetails } from '../shared/artifacts'
+import { UI_COMMAND_CHANNEL, type UiCommand } from '../shared/ui-commands'
 
 contextBridge.exposeInMainWorld('electronAPI', {
   db: {
@@ -529,7 +530,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   ui: {
     publishState: (state: Record<string, unknown>): Promise<void> =>
-      ipcRenderer.invoke('ui:publishState', state)
+      ipcRenderer.invoke('ui:publishState', state),
+    onCommand: (callback: (command: UiCommand) => void): (() => void) => {
+      const handler = (_: unknown, command: UiCommand): void => callback(command)
+      ipcRenderer.on(UI_COMMAND_CHANNEL, handler)
+      return () => ipcRenderer.removeListener(UI_COMMAND_CHANNEL, handler)
+    }
   },
   voice: {
     getSnapshot: (): Promise<unknown> => ipcRenderer.invoke('voice:getSnapshot'),

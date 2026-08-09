@@ -1,3 +1,4 @@
+import type { UiCommand } from '@shared/ui-commands'
 import type {
   WorkfloTask,
   CreateTaskDTO,
@@ -496,6 +497,7 @@ interface ElectronAPI {
   }
   ui: {
     publishState: (state: Record<string, unknown>) => Promise<void>
+    onCommand: (callback: (command: UiCommand) => void) => () => void
   }
   voice: {
     getSnapshot: () => Promise<VoiceSnapshot>

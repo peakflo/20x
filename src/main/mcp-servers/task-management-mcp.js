@@ -440,6 +440,84 @@ const mastermindTools = [
       properties: { task_id: { type: 'string', description: 'Task ID' } },
       required: ['task_id']
     }
+  },
+  // ── Driving the window (unscoped agents only) ───────────────
+  // The user is looking at 20x while they ask. These move what they see, so
+  // read get_ui_state first: "this task" and "here" mean whatever is open.
+
+  {
+    name: 'navigate',
+    description:
+      'Show the user a different part of 20x. Views: dashboard (the board), tasks (the full task view), canvas, skills, settings.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        view: { type: 'string', enum: ['dashboard', 'tasks', 'canvas', 'skills', 'settings'], description: 'Where to send the user' },
+        settings_tab: { type: 'string', description: 'Settings tab to open, for example general, agents, voice, secrets. Used only with view=settings.' }
+      },
+      required: ['view']
+    }
+  },
+  {
+    name: 'open_task',
+    description:
+      'Open a task for the user. By default it follows the screen they are on: the canvas centres the panel (adding it when it is not there), the dashboard opens the preview dialog, and anywhere else opens the full task view. Pass where to override that.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        task_id: { type: 'string', description: 'Task ID' },
+        where: { type: 'string', enum: ['auto', 'workspace', 'canvas', 'modal'], description: 'auto (default) follows the open view. workspace is the full task view, canvas is a panel, modal is the dashboard preview dialog.' }
+      },
+      required: ['task_id']
+    }
+  },
+  {
+    name: 'move_task_panel',
+    description:
+      'Move the canvas panel of a task to a canvas coordinate. Read the panel positions and the viewport from get_ui_state first; the coordinates are canvas space, not screen pixels. It fails when that task has no panel.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        task_id: { type: 'string', description: 'Task ID' },
+        x: { type: 'number', description: 'Canvas x coordinate for the top-left corner' },
+        y: { type: 'number', description: 'Canvas y coordinate for the top-left corner' }
+      },
+      required: ['task_id', 'x', 'y']
+    }
+  },
+  {
+    name: 'close_task_panel',
+    description: 'Remove the canvas panel of a task. The task itself is untouched.',
+    inputSchema: {
+      type: 'object',
+      properties: { task_id: { type: 'string', description: 'Task ID' } },
+      required: ['task_id']
+    }
+  },
+  {
+    name: 'set_canvas_view',
+    description: 'Change the canvas viewport: fit_all shows every panel, reset returns to the origin at 100%, zoom sets a level between 0.1 and 3.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        mode: { type: 'string', enum: ['fit_all', 'reset', 'zoom'], description: 'What to do with the viewport' },
+        zoom: { type: 'number', description: 'Zoom level between 0.1 and 3. Required with mode=zoom.' }
+      },
+      required: ['mode']
+    }
+  },
+  {
+    name: 'open_artifact',
+    description:
+      'Show an artifact of a task to the user, in the artifact panel of the task view. Use list_artifacts for the artifact_id. It fails when that artifact does not belong to that task.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        task_id: { type: 'string', description: 'Task ID' },
+        artifact_id: { type: 'string', description: 'Artifact ID from list_artifacts' }
+      },
+      required: ['task_id', 'artifact_id']
+    }
   }
 ]
 
