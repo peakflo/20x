@@ -123,6 +123,10 @@ cd 20x
 pnpm install
 ```
 
+### Windows: Development Setup
+
+Windows requires Visual Studio Build Tools to compile native modules for Electron. For step-by-step setup (pnpm, native rebuild, tests, troubleshooting), see [docs/windows-dev-setup.md](./docs/windows-dev-setup.md).
+
 ### macOS: Signed & Notarized Releases
 
 Release artifacts are signed with an Apple Developer ID certificate and notarized to avoid Gatekeeper install/open warnings.
