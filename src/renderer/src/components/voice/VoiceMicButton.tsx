@@ -8,6 +8,11 @@ import type { VoiceTurnMode } from '@shared/voice'
 interface VoiceMicButtonProps {
   /** `dictation` writes words into the field beside it. `command` runs an action. */
   mode?: VoiceTurnMode
+  /**
+   * Sends the composer. Supplying it turns on the conversational loop: the
+   * microphone stays open and every sentence is sent after a pause.
+   */
+  onSubmit?: () => void
   className?: string
   title?: string
 }
@@ -22,7 +27,13 @@ interface VoiceMicButtonProps {
  * own composer. Without that, one spoken sentence would land in every mounted
  * transcript panel at once.
  */
-export function VoiceMicButton({ mode = 'dictation', className = '', title }: VoiceMicButtonProps) {
+export function VoiceMicButton({
+  mode = 'dictation',
+  onSubmit,
+  className = '',
+  title,
+}: VoiceMicButtonProps) {
+  const conversational = useVoiceStore((s) => s.conversation)
   const ready = useVoiceStore(selectVoiceReady)
   const state = useVoiceStore((s) => s.state)
   const turnId = useVoiceStore((s) => s.turnId)
@@ -44,11 +55,16 @@ export function VoiceMicButton({ mode = 'dictation', className = '', title }: Vo
     }
     if (turnId) return // another control is listening
     owns.current = true
-    if (mode === 'dictation') setDictationTarget(findComposerField(buttonRef.current))
-    void startTurn(mode).then(() => {
+    // A composer that can send, plus the conversation setting, gives the
+    // hands-free loop: speak, pause, it sends, and it keeps listening.
+    const loop = mode === 'dictation' && conversational && Boolean(onSubmit)
+    if (mode === 'dictation') {
+      setDictationTarget(findComposerField(buttonRef.current), loop ? onSubmit : undefined)
+    }
+    void startTurn(loop ? 'conversation' : mode).then(() => {
       if (!useVoiceStore.getState().turnId) owns.current = false
     })
-  }, [turnId, endTurn, startTurn, mode])
+  }, [turnId, endTurn, startTurn, mode, conversational, onSubmit])
 
   // Escape drops the turn without inserting anything.
   useEffect(() => {
@@ -88,7 +104,9 @@ export function VoiceMicButton({ mode = 'dictation', className = '', title }: Vo
           ? 'Click to stop'
           : mode === 'command'
             ? 'Click to speak a command'
-            : 'Click to dictate')
+            : conversational && onSubmit
+              ? 'Click to talk. Each pause sends what you said.'
+              : 'Click to dictate')
       }
       aria-label={listening ? 'Stop listening' : mode === 'command' ? 'Speak a command' : 'Dictate'}
       aria-pressed={listening}

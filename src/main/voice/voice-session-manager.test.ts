@@ -275,3 +275,59 @@ describe('VoiceSessionManager — engine and shutdown', () => {
     expect(ctx.store.voice_enabled).toBe('false')
   })
 })
+
+describe('VoiceSessionManager — the conversational loop', () => {
+  function segments(notify: ReturnType<typeof vi.fn>): Array<{ text: string; index: number }> {
+    return notify.mock.calls
+      .filter(([channel]) => channel === 'voice:segment')
+      .map(([, data]) => data as { text: string; index: number })
+  }
+
+  it('tells the worker to keep the microphone open', async () => {
+    const ctx = makeReadyManager()
+    await ctx.manager.startTurn('conversation', {})
+    expect(ctx.worker.startTurn).toHaveBeenCalledWith(expect.any(String), 'conversation')
+  })
+
+  it('sends each sentence and stays listening', async () => {
+    const ctx = makeReadyManager()
+    const turn = (await ctx.manager.startTurn('conversation', {})) as { turnId: string }
+
+    ctx.worker.emit('segment', turn.turnId, 'what broke the build', 1)
+    ctx.worker.emit('segment', turn.turnId, 'show me the failing test', 2)
+
+    expect(segments(ctx.notify)).toEqual([
+      { turnId: turn.turnId, text: 'what broke the build', index: 1 },
+      { turnId: turn.turnId, text: 'show me the failing test', index: 2 },
+    ])
+    // The turn is still open, so the next sentence needs no new click.
+    expect(ctx.manager.getState()).toBe('listening')
+  })
+
+  it('never runs a task action from a spoken sentence', async () => {
+    const ctx = makeReadyManager()
+    const turn = (await ctx.manager.startTurn('conversation', {})) as { turnId: string }
+
+    ctx.worker.emit('segment', turn.turnId, 'approve this checkpoint', 1)
+
+    expect(ctx.agents.respondToPermission).not.toHaveBeenCalled()
+    expect(ctx.db.createTask).not.toHaveBeenCalled()
+  })
+
+  it('drops noise that is too short to be a sentence', async () => {
+    const ctx = makeReadyManager()
+    const turn = (await ctx.manager.startTurn('conversation', {})) as { turnId: string }
+
+    ctx.worker.emit('segment', turn.turnId, 'a', 1)
+    ctx.worker.emit('segment', turn.turnId, '  ', 2)
+
+    expect(segments(ctx.notify)).toHaveLength(0)
+  })
+
+  it('ignores a sentence from a turn that already ended', async () => {
+    const ctx = makeReadyManager()
+    await ctx.manager.startTurn('conversation', {})
+    ctx.worker.emit('segment', 'an-old-turn', 'stale words', 1)
+    expect(segments(ctx.notify)).toHaveLength(0)
+  })
+})

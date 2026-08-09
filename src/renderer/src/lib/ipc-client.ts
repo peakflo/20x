@@ -704,6 +704,8 @@ export const voiceApi = {
   removeAllModels: (): Promise<{ success: boolean }> => window.electronAPI.voice.removeAllModels(),
   setCustomModelDir: (dir: string): Promise<VoiceSnapshot> => window.electronAPI.voice.setCustomModelDir(dir),
   pickModelDir: (): Promise<{ dir: string | null }> => window.electronAPI.voice.pickModelDir(),
+  setEndpointSilence: (seconds: number): Promise<{ success: boolean }> =>
+    window.electronAPI.voice.setEndpointSilence(seconds),
   setShortcut: (accelerator: string): Promise<VoiceSnapshot> => window.electronAPI.voice.setShortcut(accelerator),
   onState: (callback: (event: VoiceStateEvent) => void): (() => void) =>
     window.electronAPI.voice.onState(callback),
@@ -711,6 +713,9 @@ export const voiceApi = {
     window.electronAPI.voice.onPartial(callback),
   onFinal: (callback: (event: { turnId: string; text: string }) => void): (() => void) =>
     window.electronAPI.voice.onFinal(callback),
+  onSegment: (
+    callback: (event: { turnId: string; text: string; index: number }) => void
+  ): (() => void) => window.electronAPI.voice.onSegment(callback),
   onOutcome: (callback: (event: VoiceActionOutcome) => void): (() => void) =>
     window.electronAPI.voice.onOutcome(callback),
   onStatus: (callback: (event: Partial<VoiceSnapshot> & { model?: VoiceModelState }) => void): (() => void) =>

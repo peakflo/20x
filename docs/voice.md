@@ -86,6 +86,41 @@ Two modes keep dictation and commands apart:
 One click starts listening and a second click stops it. Escape cancels the turn
 and keeps the words out.
 
+### The conversational loop
+
+This is the default in a task composer:
+
+```text
+click → listening → you speak → you pause
+                        ↓
+        end of turn detected (endpoint rule)
+                        ↓
+        sentence written into the box and sent
+                        ↓
+        still listening → you speak again → …
+                        ↓
+                click again to stop
+```
+
+The microphone stays open for the whole conversation. Each pause ends one
+sentence, the sentence is sent at once, and the recogniser is reset for the
+next one — all on the same audio stream, so nothing is missed between
+sentences.
+
+The pause length is the endpoint rule of the recogniser (`rule2`), set in
+**Settings → Voice → A pause this long ends a sentence**: 0.8 s, 1.2 s
+(default), or 2 s. Changing it reloads the model.
+
+Guards:
+
+- A conversation never runs the intent parser, exactly like dictation, so a
+  spoken sentence can never execute a task action.
+- A segment shorter than two characters is noise and is dropped, because the
+  renderer would send it straight away.
+- A conversation stops after ten minutes of one open turn.
+- **Settings → Voice → Keep talking** switches the loop off; the words are then
+  written into the box for you to send yourself.
+
 ### Where dictated words go
 
 The transcript panel is mounted many times at once — the task workspace, each
@@ -143,6 +178,8 @@ switches the worker to another downloaded model.
 | English — small (Zipformer) | 73 MB | Apache-2.0 | task commands, short dictation (default) |
 | English — balanced (NeMo FastConformer, 480 ms) | 137 MB | CC-BY-4.0 | free dictation |
 | English — most accurate (Nemotron 0.6B, 560 ms) | 662 MB | NVIDIA Open Model | long dictation; writes normal capitals and punctuation |
+
+The NVIDIA Open Model License was reviewed and accepted for the Nemotron entry.
 
 All three are streaming transducers with the same four roles — encoder, decoder,
 joiner, tokens — so one code path in the worker loads every one of them. Adding

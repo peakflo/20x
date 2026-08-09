@@ -1,7 +1,8 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import {
   clearDictationTarget,
   findComposerField,
+  insertAndSubmit,
   insertDictation,
   setDictationTarget,
 } from './voice-dictation-target'
@@ -98,5 +99,51 @@ describe('insertDictation', () => {
     setDictationTarget(a.field)
     expect(insertDictation('   ')).toBe(false)
     expect(a.field.value).toBe('')
+  })
+})
+
+describe('insertAndSubmit — the conversational loop', () => {
+  it('writes the sentence and sends it', () => {
+    const a = composer('a')
+    const submit = vi.fn()
+    setDictationTarget(a.field, submit)
+
+    expect(insertAndSubmit('what broke the build')).toBe(true)
+    expect(a.field.value).toBe('what broke the build')
+    expect(submit).toHaveBeenCalledTimes(1)
+  })
+
+  it('sends each sentence separately, so the loop can continue', () => {
+    const a = composer('a')
+    const submit = vi.fn(() => {
+      // The composer clears itself when it sends.
+      a.field.value = ''
+    })
+    setDictationTarget(a.field, submit)
+
+    insertAndSubmit('first sentence')
+    insertAndSubmit('second sentence')
+
+    expect(submit).toHaveBeenCalledTimes(2)
+    expect(a.field.value).toBe('')
+  })
+
+  it('sends nothing when the composer cannot send', () => {
+    const a = composer('a')
+    setDictationTarget(a.field) // no submit — plain dictation
+
+    expect(insertAndSubmit('hello')).toBe(false)
+    expect(a.field.value).toBe('')
+  })
+
+  it('sends nothing into another panel', () => {
+    const a = composer('a')
+    const b = composer('b')
+    const submit = vi.fn()
+    setDictationTarget(a.field, submit)
+
+    insertAndSubmit('one sentence')
+
+    expect(b.field.value).toBe('')
   })
 })

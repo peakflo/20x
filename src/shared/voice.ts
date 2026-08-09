@@ -68,8 +68,12 @@ export function canTransition(from: VoiceState, to: VoiceState): boolean {
  * `dictation` never runs the intent parser: spoken words go to the focused text
  * control verbatim. `command` parses a closed intent set. Keeping the two modes
  * apart is what stops a dictated sentence from executing a task action.
+ *
+ * `conversation` is dictation that does not stop: the microphone stays open,
+ * each pause ends a sentence, and the sentence is sent straight away. It never
+ * runs the parser either, so it cannot execute a task action.
  */
-export type VoiceTurnMode = 'dictation' | 'command'
+export type VoiceTurnMode = 'dictation' | 'command' | 'conversation'
 
 export interface VoiceTurnStart {
   turnId: string
@@ -298,9 +302,20 @@ export const VOICE_SETTING_KEYS = {
   inputDeviceId: 'voice_input_device_id',
   /** Optional path to a speech model the user installed by hand. */
   customModelDir: 'voice_custom_model_dir',
+  /** Keep the microphone open and send each sentence after a pause. */
+  conversation: 'voice_conversation',
+  /** Seconds of silence that end a sentence. */
+  endpointSilence: 'voice_endpoint_silence',
 } as const
 
 export const VOICE_DEFAULT_SHORTCUT = 'CommandOrControl+Shift+Space'
+
+/** Seconds of silence that end a sentence in a conversation. */
+export const VOICE_DEFAULT_ENDPOINT_SILENCE = 1.2
+export const VOICE_ENDPOINT_SILENCE_CHOICES = [0.8, 1.2, 2] as const
+
+/** A sentence shorter than this is treated as noise and is not sent. */
+export const VOICE_MIN_SEGMENT_CHARS = 2
 
 // ── IPC channel names ───────────────────────────────────────
 
@@ -311,6 +326,8 @@ export const VOICE_EVENTS = {
   partial: 'voice:partial',
   /** `{ turnId, text }` */
   final: 'voice:final',
+  /** One finished sentence in a conversation: `{ turnId, text, index }`. */
+  segment: 'voice:segment',
   /** `VoiceActionOutcome` */
   outcome: 'voice:outcome',
   /** `{ message, code? }` */

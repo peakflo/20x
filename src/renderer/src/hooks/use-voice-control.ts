@@ -4,7 +4,7 @@ import { useVoiceStore } from '@/stores/voice-store'
 import { useUIStore } from '@/stores/ui-store'
 import { useTaskStore } from '@/stores/task-store'
 import { useAgentStore } from '@/stores/agent-store'
-import { clearDictationTarget, insertDictation } from '@/lib/voice-dictation-target'
+import { clearDictationTarget, insertAndSubmit, insertDictation } from '@/lib/voice-dictation-target'
 import type { VoiceUiContext } from '@shared/voice'
 
 /**
@@ -80,10 +80,25 @@ export function useVoiceControl(): void {
       if (!inserted) useVoiceStore.setState({ testTranscript: text.trim() })
     })
 
+    // A conversation stays open: each pause finishes one sentence, the sentence
+    // is sent, and the microphone keeps listening for the next one.
+    const offSegment = voiceApi.onSegment(({ text }) => {
+      const sent = insertAndSubmit(text)
+      if (sent) {
+        useVoiceStore.setState((state) => ({
+          sentSentences: [...state.sentSentences, text].slice(-5),
+        }))
+      } else {
+        // No composer to send from — show it instead of losing it.
+        useVoiceStore.setState({ testTranscript: text })
+      }
+    })
+
     return () => {
       offNavigate()
       offHotkey()
       offDictate()
+      offSegment()
     }
   }, [toggleTurn])
 }

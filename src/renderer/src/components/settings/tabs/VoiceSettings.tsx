@@ -8,7 +8,12 @@ import { Input } from '@/components/ui/Input'
 import { settingsApi, voiceApi } from '@/lib/ipc-client'
 import { selectVoiceSetupComplete, useVoiceStore } from '@/stores/voice-store'
 import { VoiceRuntimeRow } from '@/components/voice/VoiceRuntimeRow'
-import { VOICE_DEFAULT_SHORTCUT, VOICE_SETTING_KEYS } from '@shared/voice'
+import {
+  VOICE_DEFAULT_ENDPOINT_SILENCE,
+  VOICE_DEFAULT_SHORTCUT,
+  VOICE_ENDPOINT_SILENCE_CHOICES,
+  VOICE_SETTING_KEYS,
+} from '@shared/voice'
 
 function formatSize(bytes: number): string {
   if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(1)} GB`
@@ -49,6 +54,9 @@ export function VoiceSettings() {
   const setCustomModelDir = useVoiceStore((s) => s.setCustomModelDir)
   const setShortcut = useVoiceStore((s) => s.setShortcut)
 
+  const conversation = useVoiceStore((s) => s.conversation)
+  const setConversation = useVoiceStore((s) => s.setConversation)
+  const [endpointSilence, setEndpointSilence] = useState(VOICE_DEFAULT_ENDPOINT_SILENCE)
   const [quickCreate, setQuickCreate] = useState(false)
   const [customDir, setCustomDir] = useState('')
   const [shortcutDraft, setShortcutDraft] = useState('')
@@ -58,6 +66,9 @@ export function VoiceSettings() {
     void initialize()
     void settingsApi.get(VOICE_SETTING_KEYS.quickCreate).then((v) => setQuickCreate(v === 'true'))
     void settingsApi.get(VOICE_SETTING_KEYS.customModelDir).then((v) => setCustomDir(v ?? ''))
+    void settingsApi
+      .get(VOICE_SETTING_KEYS.endpointSilence)
+      .then((v) => setEndpointSilence(Number(v) || VOICE_DEFAULT_ENDPOINT_SILENCE))
   }, [initialize])
 
   useEffect(() => setShortcutDraft(shortcut || VOICE_DEFAULT_SHORTCUT), [shortcut])
@@ -187,6 +198,49 @@ export function VoiceSettings() {
             <p className="mt-1 text-xs text-red-400">
               Allow the microphone for 20x in the system privacy settings, then restart the app.
             </p>
+          )}
+        </div>
+
+        <div className="space-y-3 rounded-lg border border-border p-3">
+          <div className="flex items-center justify-between gap-3">
+            <div className="space-y-0.5">
+              <Label>Keep talking</Label>
+              <p className="text-xs text-muted-foreground">
+                The microphone stays open. Each time you pause, what you said is sent, and 20x keeps
+                listening for the next sentence. Switch this off to write the words into the box and
+                send them yourself.
+              </p>
+            </div>
+            <Switch
+              checked={conversation}
+              disabled={!setupComplete}
+              onCheckedChange={(next) => void setConversation(next)}
+              data-testid="voice-conversation-switch"
+            />
+          </div>
+
+          {conversation && (
+            <div className="flex items-center justify-between gap-3">
+              <Label htmlFor="voice-endpoint" className="text-xs font-normal text-muted-foreground">
+                A pause this long ends a sentence
+              </Label>
+              <select
+                id="voice-endpoint"
+                className="rounded-md border border-border bg-input px-2 py-1 text-xs text-foreground"
+                value={endpointSilence}
+                onChange={(e) => {
+                  const seconds = Number(e.target.value)
+                  setEndpointSilence(seconds)
+                  void voiceApi.setEndpointSilence(seconds)
+                }}
+              >
+                {VOICE_ENDPOINT_SILENCE_CHOICES.map((seconds) => (
+                  <option key={seconds} value={seconds}>
+                    {seconds} s
+                  </option>
+                ))}
+              </select>
+            </div>
           )}
         </div>
 

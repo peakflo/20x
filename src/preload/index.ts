@@ -553,6 +553,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     setCustomModelDir: (dir: string): Promise<unknown> =>
       ipcRenderer.invoke('voice:setCustomModelDir', { dir }),
     pickModelDir: (): Promise<{ dir: string | null }> => ipcRenderer.invoke('voice:pickModelDir'),
+    setEndpointSilence: (seconds: number): Promise<unknown> =>
+      ipcRenderer.invoke('voice:setEndpointSilence', { seconds }),
     setShortcut: (accelerator: string): Promise<unknown> =>
       ipcRenderer.invoke('voice:setShortcut', { accelerator }),
     onState: (callback: (data: unknown) => void): (() => void) => {
@@ -569,6 +571,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
       const handler = (_: unknown, d: { turnId: string; text: string }): void => callback(d)
       ipcRenderer.on('voice:final', handler)
       return () => ipcRenderer.removeListener('voice:final', handler)
+    },
+    onSegment: (callback: (data: { turnId: string; text: string; index: number }) => void): (() => void) => {
+      const handler = (_: unknown, d: { turnId: string; text: string; index: number }): void => callback(d)
+      ipcRenderer.on('voice:segment', handler)
+      return () => ipcRenderer.removeListener('voice:segment', handler)
     },
     onOutcome: (callback: (data: unknown) => void): (() => void) => {
       const handler = (_: unknown, d: unknown): void => callback(d)

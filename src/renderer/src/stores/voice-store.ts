@@ -1,7 +1,8 @@
 import { create } from 'zustand'
-import { voiceApi } from '@/lib/ipc-client'
+import { settingsApi, voiceApi } from '@/lib/ipc-client'
 import { voiceCapture } from '@/lib/voice-capture'
 import { clearDictationTarget } from '@/lib/voice-dictation-target'
+import { VOICE_SETTING_KEYS } from '@shared/voice'
 import type {
   MicrophonePermission,
   VoiceActionOutcome,
@@ -65,6 +66,10 @@ interface VoiceStoreState {
   result: VoiceResultNotice | null
   /** What the microphone heard during a test in settings. */
   testTranscript: string
+  /** Keep the microphone open and send each sentence after a pause. */
+  conversation: boolean
+  /** Sentences already sent in the open conversation, newest last. */
+  sentSentences: string[]
   /** Set by the component that should receive dictated text. */
   contextProvider: (() => VoiceUiContext) | null
 
@@ -78,6 +83,7 @@ interface VoiceStoreState {
   /** Records one turn and shows the words in settings, changing nothing else. */
   startTest: () => Promise<void>
   clearTest: () => void
+  setConversation: (on: boolean) => Promise<void>
   endTurn: () => Promise<void>
   toggleTurn: (mode: VoiceTurnMode) => Promise<void>
   cancel: () => Promise<void>
@@ -151,6 +157,8 @@ export const useVoiceStore = create<VoiceStoreState>((set, get) => ({
   confirmation: null,
   result: null,
   testTranscript: '',
+  conversation: true,
+  sentSentences: [],
   contextProvider: null,
 
   initialize: async () => {
@@ -158,8 +166,14 @@ export const useVoiceStore = create<VoiceStoreState>((set, get) => ({
       set({ available: false })
       return
     }
-    const [snapshot, permission] = await Promise.all([voiceApi.getSnapshot(), voiceApi.getPermission()])
+    const [snapshot, permission, conversation] = await Promise.all([
+      voiceApi.getSnapshot(),
+      voiceApi.getPermission(),
+      settingsApi.get(VOICE_SETTING_KEYS.conversation),
+    ])
     set({
+      // Conversational is the default; only an explicit 'false' turns it off.
+      conversation: conversation !== 'false',
       available: true,
       enabled: snapshot.enabled,
       runtime: snapshot.runtime ?? RUNTIME_ABSENT,
@@ -239,7 +253,7 @@ export const useVoiceStore = create<VoiceStoreState>((set, get) => ({
       set({ result: { kind: 'error', message: started.error, at: Date.now() } })
       return
     }
-    set({ turnId: started.turnId, mode, partial: '', final: '', result: null })
+    set({ turnId: started.turnId, mode, partial: '', final: '', result: null, sentSentences: [] })
 
     const ok = await voiceCapture.start({
       onAudio: (chunk) => {
@@ -266,6 +280,11 @@ export const useVoiceStore = create<VoiceStoreState>((set, get) => ({
   },
 
   clearTest: () => set({ testTranscript: '' }),
+
+  setConversation: async (on) => {
+    set({ conversation: on })
+    await settingsApi.set(VOICE_SETTING_KEYS.conversation, on ? 'true' : 'false')
+  },
 
   endTurn: async () => {
     const { turnId } = get()

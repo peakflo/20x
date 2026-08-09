@@ -1437,7 +1437,7 @@ export function AgentTranscriptPanel({
                 }}
                 onInput={autoResize}
               />
-              <VoiceMicButton mode="dictation" />
+              <VoiceMicButton mode="dictation" onSubmit={handleSend} />
               {onPickAttachments && (
               <Button
                 type="button"

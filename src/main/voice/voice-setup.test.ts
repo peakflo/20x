@@ -115,7 +115,7 @@ describe('one-action voice setup', () => {
     expect(ctx.models.install).toHaveBeenCalledWith(DEFAULT_VOICE_MODEL_ID)
     expect(ctx.store.voice_model_id).toBe(DEFAULT_VOICE_MODEL_ID)
     // The model is loaded at the end, so the user has nothing left to do.
-    expect(ctx.worker.load).toHaveBeenCalledWith(RESOLVED_MODEL)
+    expect(ctx.worker.load).toHaveBeenCalledWith(RESOLVED_MODEL, expect.any(Number))
     expect(runtime.installed).toBe(true)
     expect(progressStages(ctx.notify).at(-1)).toBe('complete')
   })
@@ -139,7 +139,7 @@ describe('one-action voice setup', () => {
 
     expect(installer.installVoiceRuntime).not.toHaveBeenCalled()
     expect(ctx.models.install).not.toHaveBeenCalled()
-    expect(ctx.worker.load).toHaveBeenCalledWith(RESOLVED_MODEL)
+    expect(ctx.worker.load).toHaveBeenCalledWith(RESOLVED_MODEL, expect.any(Number))
   })
 
   it('reports a failed model download instead of claiming success', async () => {

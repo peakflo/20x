@@ -10,8 +10,10 @@ import { app, globalShortcut, systemPreferences } from 'electron'
 import { join } from 'path'
 import { createId } from '@paralleldrive/cuid2'
 import {
+  VOICE_DEFAULT_ENDPOINT_SILENCE,
   VOICE_DEFAULT_SHORTCUT,
   VOICE_EVENTS,
+  VOICE_MIN_SEGMENT_CHARS,
   VOICE_SETTING_KEYS,
   canTransition,
   type VoiceActionOutcome,
@@ -102,6 +104,9 @@ export class VoiceSessionManager {
 
     this.worker.on('status', (status: VoiceEngineStatus) => this.onEngineStatus(status))
     this.worker.on('partial', (turnId: string, text: string) => this.onPartial(turnId, text))
+    this.worker.on('segment', (turnId: string, text: string, index: number) =>
+      this.onSegment(turnId, text, index)
+    )
     this.worker.on('final', (turnId: string, text: string) => void this.onFinal(turnId, text))
     this.worker.on('error', (message: string, code?: string) => this.onWorkerError(message, code))
   }
@@ -166,7 +171,21 @@ export class VoiceSessionManager {
       void this.broadcastStatus()
       return
     }
-    await this.worker.load(resolved)
+    await this.worker.load(resolved, this.endpointSilenceSeconds())
+  }
+
+  /** How long a pause must be to end a sentence. */
+  private endpointSilenceSeconds(): number {
+    const raw = Number(this.options.db.getSetting(VOICE_SETTING_KEYS.endpointSilence))
+    return Number.isFinite(raw) && raw > 0 ? raw : VOICE_DEFAULT_ENDPOINT_SILENCE
+  }
+
+  /** Applies a new pause length by reloading the model with it. */
+  async setEndpointSilence(seconds: number): Promise<void> {
+    this.options.db.setSetting(VOICE_SETTING_KEYS.endpointSilence, String(seconds))
+    this.worker.unload()
+    await this.prepareEngine()
+    await this.broadcastStatus()
   }
 
   // ── Permissions (design §5.9) ─────────────────────────────
@@ -207,7 +226,7 @@ export class VoiceSessionManager {
     this.turnContext = context ?? {}
     this.partial = ''
     this.final = ''
-    this.worker.startTurn(turnId)
+    this.worker.startTurn(turnId, mode)
     this.setState('listening')
     return { turnId }
   }
@@ -239,6 +258,23 @@ export class VoiceSessionManager {
   }
 
   // ── Worker events ─────────────────────────────────────────
+
+  /**
+   * One finished sentence inside an open conversation. The microphone stays
+   * open, so the state stays `listening` and the next sentence follows.
+   *
+   * A conversation never runs the intent parser, exactly like dictation, so a
+   * spoken sentence cannot execute a task action.
+   */
+  private onSegment(turnId: string, text: string, index: number): void {
+    if (turnId !== this.turnId) return
+    const words = text.trim()
+    // Very short output is noise, not a sentence. Sending it would be worse
+    // than dropping it, because the renderer submits it straight away.
+    if (words.length < VOICE_MIN_SEGMENT_CHARS) return
+    this.partial = ''
+    this.options.notify(VOICE_EVENTS.segment, { turnId, text: words, index })
+  }
 
   private onPartial(turnId: string, text: string): void {
     if (turnId !== this.turnId) return

@@ -27,6 +27,8 @@
 const SAMPLE_RATE = 16000
 /** Stop a turn that never ends, so a stuck renderer cannot grow memory. */
 const MAX_TURN_MS = 60000
+/** A conversation may run longer, but not for ever. */
+const MAX_CONVERSATION_MS = 10 * 60 * 1000
 
 let engine = null
 let recognizer = null
@@ -36,6 +38,8 @@ let turnTimer = null
 let lastPartial = ''
 let turnFrames = 0
 let turnStartedAt = 0
+let turnMode = 'dictation'
+let segmentIndex = 0
 
 function send(message) {
   if (process.send) process.send(message)
@@ -96,8 +100,9 @@ const handlers = {
         },
         decodingMethod: 'greedy_search',
         enableEndpoint: 1,
+        // rule2 is the one that ends a sentence after the speaker pauses.
         rule1MinTrailingSilence: 2.4,
-        rule2MinTrailingSilence: 1.2,
+        rule2MinTrailingSilence: message.endpointSilence || 1.2,
         rule3MinUtteranceLength: 20,
       })
       send({
@@ -123,16 +128,15 @@ const handlers = {
   start(message) {
     if (!recognizer) return fail('not_ready', 'No speech model is loaded.')
     currentTurn = message.turnId
+    turnMode = message.mode || 'dictation'
     lastPartial = ''
     turnFrames = 0
+    segmentIndex = 0
     turnStartedAt = Date.now()
     if (!recognizer.mock) {
       stream = recognizer.createStream()
     }
-    clearTimeout(turnTimer)
-    turnTimer = setTimeout(() => {
-      if (currentTurn) handlers.end({ turnId: currentTurn })
-    }, MAX_TURN_MS)
+    armTurnTimer()
   },
 
   end(message) {
@@ -213,14 +217,44 @@ function onAudioFrame(frame) {
   try {
     stream.acceptWaveform({ sampleRate: SAMPLE_RATE, samples })
     while (recognizer.isReady(stream)) recognizer.decode(stream)
+
     const text = (recognizer.getResult(stream).text || '').trim()
     if (text && text !== lastPartial) {
       lastPartial = text
       send({ t: 'partial', turnId: currentTurn, text })
     }
+
+    // End of turn: the speaker stopped long enough for the endpoint rule.
+    // In a conversation the microphone stays open and the next sentence
+    // starts a new segment on the same stream.
+    if (recognizer.isEndpoint(stream)) {
+      if (text) {
+        segmentIndex += 1
+        send({ t: 'segment', turnId: currentTurn, text, index: segmentIndex })
+      }
+      recognizer.reset(stream)
+      lastPartial = ''
+      if (turnMode === 'conversation') armTurnTimer()
+      else if (text) {
+        // A single-shot turn is complete once the speaker stops.
+        const turnId = currentTurn
+        currentTurn = null
+        clearTimeout(turnTimer)
+        send({ t: 'final', turnId, text, frames: turnFrames, elapsedMs: Date.now() - turnStartedAt })
+      }
+    }
   } catch (err) {
     fail('decode_failed', String((err && err.message) || err))
   }
+}
+
+/** A turn that never ends must not grow memory for ever. */
+function armTurnTimer() {
+  clearTimeout(turnTimer)
+  const limit = turnMode === 'conversation' ? MAX_CONVERSATION_MS : MAX_TURN_MS
+  turnTimer = setTimeout(() => {
+    if (currentTurn) handlers.end({ turnId: currentTurn })
+  }, limit)
 }
 
 process.on('uncaughtException', (err) => {

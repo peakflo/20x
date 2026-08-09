@@ -20,6 +20,8 @@ export function VoiceOverlay() {
   const ready = useVoiceStore(selectVoiceReady)
   const state = useVoiceStore((s) => s.state)
   const partial = useVoiceStore((s) => s.partial)
+  const mode = useVoiceStore((s) => s.mode)
+  const sentSentences = useVoiceStore((s) => s.sentSentences)
   const level = useVoiceStore((s) => s.level)
   const confirmation = useVoiceStore((s) => s.confirmation)
   const result = useVoiceStore((s) => s.result)
@@ -69,10 +71,19 @@ export function VoiceOverlay() {
           </span>
           <div className="min-w-0">
             <p className="text-[11px] uppercase tracking-wide text-muted-foreground">
-              {transcribing ? 'Writing the words' : 'Listening'}
+              {transcribing
+                ? 'Writing the words'
+                : mode === 'conversation'
+                  ? 'Listening — pause to send'
+                  : 'Listening'}
             </p>
             <p className="truncate text-sm text-foreground" data-testid="voice-transcript">
-              {partial || (transcribing ? 'One moment…' : 'Speak now')}
+              {partial ||
+                (transcribing
+                  ? 'One moment…'
+                  : mode === 'conversation' && sentSentences.length > 0
+                    ? `Sent: ${sentSentences[sentSentences.length - 1]}`
+                    : 'Speak now')}
             </p>
           </div>
         </div>

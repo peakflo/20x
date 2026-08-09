@@ -17,7 +17,8 @@ import type { VoiceEngineStatus } from '../../shared/voice'
 export const VOICE_IDLE_UNLOAD_MS = 5 * 60 * 1000
 
 interface WorkerMessage {
-  t: 'status' | 'partial' | 'final' | 'error' | 'pong'
+  t: 'status' | 'partial' | 'segment' | 'final' | 'error' | 'pong'
+  index?: number
   state?: string
   turnId?: string
   text?: string
@@ -32,6 +33,8 @@ interface WorkerMessage {
 export interface VoiceWorkerEvents {
   status: (status: VoiceEngineStatus) => void
   partial: (turnId: string, text: string) => void
+  /** One finished sentence inside an open conversation. */
+  segment: (turnId: string, text: string, index: number) => void
   final: (turnId: string, text: string) => void
   error: (message: string, code?: string) => void
 }
@@ -43,6 +46,8 @@ export class VoiceWorkerClient extends EventEmitter {
   private restarts = 0
   /** Absolute path of the optional runtime the user installed. */
   private modulePath: string | null = null
+  /** Seconds of silence that end a sentence. */
+  private endpointSilence = 1.2
 
   constructor(private scriptPath = defaultWorkerScript()) {
     super()
@@ -68,7 +73,7 @@ export class VoiceWorkerClient extends EventEmitter {
   }
 
   /** Starts the worker if needed and loads a model. Idempotent per model. */
-  async load(model: ResolvedModel): Promise<void> {
+  async load(model: ResolvedModel, endpointSilenceSeconds?: number): Promise<void> {
     if (!existsSync(this.scriptPath)) {
       this.emit('status', {
         state: 'engine_missing',
@@ -77,6 +82,7 @@ export class VoiceWorkerClient extends EventEmitter {
       return
     }
     if (this.loadedModel && this.loadedModel.dir === model.dir && this.isRunning) return
+    this.endpointSilence = endpointSilenceSeconds ?? this.endpointSilence
 
     this.spawn()
     this.loadedModel = model
@@ -90,12 +96,14 @@ export class VoiceWorkerClient extends EventEmitter {
         joiner: model.joiner,
         tokens: model.tokens,
       },
+      endpointSilence: this.endpointSilence,
     })
   }
 
-  startTurn(turnId: string): void {
+  /** `conversation` keeps the microphone open and emits one segment per pause. */
+  startTurn(turnId: string, mode: 'dictation' | 'command' | 'conversation' = 'dictation'): void {
     this.clearIdleTimer()
-    this.child?.send({ t: 'start', turnId })
+    this.child?.send({ t: 'start', turnId, mode })
   }
 
   /** Pushes one 16 kHz mono PCM frame. Frames are length-prefixed on the pipe. */
@@ -203,6 +211,11 @@ export class VoiceWorkerClient extends EventEmitter {
         return
       case 'partial':
         if (message.turnId && message.text) this.emit('partial', message.turnId, message.text)
+        return
+      case 'segment':
+        if (message.turnId && message.text) {
+          this.emit('segment', message.turnId, message.text, message.index ?? 0)
+        }
         return
       case 'final':
         if (message.turnId) this.emit('final', message.turnId, message.text ?? '')

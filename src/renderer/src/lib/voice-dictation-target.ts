@@ -14,10 +14,15 @@
 export type DictationTarget = HTMLTextAreaElement | HTMLInputElement
 
 let target: DictationTarget | null = null
+let submit: (() => void) | null = null
 
-/** Called by the microphone button that starts a dictation turn. */
-export function setDictationTarget(element: DictationTarget | null): void {
+/**
+ * Called by the microphone button that starts a turn. `onSubmit` is supplied
+ * only for a conversation, where each finished sentence is sent at once.
+ */
+export function setDictationTarget(element: DictationTarget | null, onSubmit?: () => void): void {
   target = element
+  submit = onSubmit ?? null
 }
 
 export function getDictationTarget(): DictationTarget | null {
@@ -28,6 +33,18 @@ export function getDictationTarget(): DictationTarget | null {
 
 export function clearDictationTarget(): void {
   target = null
+  submit = null
+}
+
+/**
+ * Writes one finished sentence and sends it.
+ * Returns false when there is nothing to write to, or no way to send.
+ */
+export function insertAndSubmit(text: string): boolean {
+  if (!submit) return false
+  if (!insertDictation(text)) return false
+  submit()
+  return true
 }
 
 /**

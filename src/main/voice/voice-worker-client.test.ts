@@ -1,5 +1,5 @@
-import { describe, it, expect, afterEach, beforeAll, afterAll } from 'vitest'
-import { existsSync } from 'fs'
+import { describe, it, expect, afterEach, beforeAll, afterAll, vi } from 'vitest'
+import { existsSync, readFileSync } from 'fs'
 import { homedir } from 'os'
 import { join } from 'path'
 import { VoiceWorkerClient } from './voice-worker-client'
@@ -128,10 +128,14 @@ const realRuntime = join(homedir(), 'Library', 'Application Support', '20x', 'vo
   'node_modules', 'sherpa-onnx-node')
 const realModelDir = join(homedir(), 'Library', 'Application Support', '20x', 'voice-models',
   'sherpa-streaming-zipformer-en')
+/** A short spoken passage, downloaded next to the model by the developer. */
+const SPEECH_WAV = '/tmp/speech.wav'
+
 const hasRealEngine =
   process.platform === 'darwin' &&
   existsSync(realRuntime) &&
-  existsSync(join(realModelDir, 'tokens.txt'))
+  existsSync(join(realModelDir, 'tokens.txt')) &&
+  existsSync(SPEECH_WAV)
 
 describe.skipIf(!hasRealEngine)('VoiceWorkerClient with the installed runtime', () => {
   it('loads the real recogniser, so the config shape cannot drift', async () => {
@@ -159,4 +163,57 @@ describe.skipIf(!hasRealEngine)('VoiceWorkerClient with the installed runtime', 
       delete process.env.VOICE_ENGINE_MODULE
     }
   }, 40000)
+})
+
+describe.skipIf(!hasRealEngine)('the conversational loop', () => {
+  it('sends one segment per pause and keeps listening', async () => {
+    process.env.VOICE_ENGINE = 'real'
+    process.env.VOICE_ENGINE_MODULE = realRuntime
+    try {
+      client = new VoiceWorkerClient(SCRIPT)
+      const ready = waitFor<VoiceEngineStatus>((resolve) => {
+        client!.on('status', (s: VoiceEngineStatus) => {
+          if (s.state === 'ready') resolve(s)
+        })
+      }, 30000)
+      await client.load(
+        {
+          id: 'sherpa-streaming-zipformer-en',
+          dir: realModelDir,
+          encoder: join(realModelDir, 'encoder.onnx'),
+          decoder: join(realModelDir, 'decoder.onnx'),
+          joiner: join(realModelDir, 'joiner.onnx'),
+          tokens: join(realModelDir, 'tokens.txt'),
+        },
+        1.2
+      )
+      await ready
+
+      const segments: string[] = []
+      client.on('segment', (_turnId: string, text: string) => segments.push(text))
+
+      const speech = readFileSync(SPEECH_WAV).subarray(44)
+      const silence = Buffer.alloc(16000 * 2 * 2) // 2 s
+
+      client.startTurn('conversation-1', 'conversation')
+      for (const buffer of [speech, silence, speech, silence]) {
+        for (let i = 0; i < buffer.length; i += 640) {
+          client.pushAudio(buffer.subarray(i, Math.min(i + 640, buffer.length)))
+        }
+      }
+
+      // Two spoken passages separated by pauses give two sentences, and the
+      // turn is still open afterwards.
+      await vi.waitFor(() => expect(segments.length).toBeGreaterThanOrEqual(2), {
+        timeout: 20000,
+        interval: 100,
+      })
+      expect(segments[0]).toMatch(/NIGHTFALL/i)
+      expect(segments[1]).toMatch(/NIGHTFALL/i)
+      expect(client.isRunning).toBe(true)
+    } finally {
+      process.env.VOICE_ENGINE = 'mock'
+      delete process.env.VOICE_ENGINE_MODULE
+    }
+  }, 60000)
 })

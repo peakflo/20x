@@ -518,10 +518,12 @@ interface ElectronAPI {
     removeAllModels: () => Promise<{ success: boolean }>
     setCustomModelDir: (dir: string) => Promise<VoiceSnapshot>
     pickModelDir: () => Promise<{ dir: string | null }>
+    setEndpointSilence: (seconds: number) => Promise<{ success: boolean }>
     setShortcut: (accelerator: string) => Promise<VoiceSnapshot>
     onState: (callback: (event: VoiceStateEvent) => void) => () => void
     onPartial: (callback: (event: { turnId: string; text: string }) => void) => () => void
     onFinal: (callback: (event: { turnId: string; text: string }) => void) => () => void
+    onSegment: (callback: (event: { turnId: string; text: string; index: number }) => void) => () => void
     onOutcome: (callback: (event: VoiceActionOutcome) => void) => () => void
     onStatus: (callback: (event: Partial<VoiceSnapshot> & { model?: VoiceModelState }) => void) => () => void
     onError: (callback: (event: { message: string; code?: string }) => void) => () => void

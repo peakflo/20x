@@ -2433,6 +2433,11 @@ else:
     return { dir: result.filePaths[0] }
   })
 
+  ipcMain.handle('voice:setEndpointSilence', async (_, payload: { seconds: number }) => {
+    await requireVoice().setEndpointSilence(Number(payload?.seconds) || 1.2)
+    return { success: true }
+  })
+
   ipcMain.handle('voice:setShortcut', async (_, payload: { accelerator: string }) => {
     return requireVoice().setShortcut(payload?.accelerator ?? '')
   })
