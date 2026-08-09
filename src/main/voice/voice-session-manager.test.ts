@@ -330,4 +330,56 @@ describe('VoiceSessionManager — the conversational loop', () => {
     ctx.worker.emit('segment', 'an-old-turn', 'stale words', 1)
     expect(segments(ctx.notify)).toHaveLength(0)
   })
+
+  /**
+   * Stopping a conversation is not a failure. Every sentence has already left
+   * as a segment and the recogniser was reset after each one, so the closing
+   * transcript is empty by design — reporting "Nothing was heard." for it told
+   * the user their speech was lost when it had all been delivered.
+   */
+  it('ends quietly after the sentences it delivered', async () => {
+    const ctx = makeReadyManager()
+    const turn = (await ctx.manager.startTurn('conversation', {})) as { turnId: string }
+
+    ctx.worker.emit('segment', turn.turnId, 'what broke the build', 1)
+    ctx.worker.emit('segment', turn.turnId, 'show me the failing test', 2)
+    ctx.manager.endTurn(turn.turnId)
+    ctx.worker.emit('final', turn.turnId, '')
+    await Promise.resolve()
+
+    expect(outcomes(ctx.notify)).toEqual([{ status: 'completed', turnId: turn.turnId, segments: 2 }])
+    expect(ctx.manager.getState()).toBe('idle')
+  })
+
+  it('still says so when a turn heard nothing at all', async () => {
+    const ctx = makeReadyManager()
+    const turn = (await ctx.manager.startTurn('conversation', {})) as { turnId: string }
+
+    ctx.manager.endTurn(turn.turnId)
+    ctx.worker.emit('final', turn.turnId, '   ')
+    await Promise.resolve()
+
+    expect(outcomes(ctx.notify)).toEqual([
+      expect.objectContaining({ status: 'rejected', message: 'Nothing was heard.' }),
+    ])
+  })
+
+  it('counts sentences per turn, so an earlier conversation cannot mask a silent one', async () => {
+    const ctx = makeReadyManager()
+    const first = (await ctx.manager.startTurn('conversation', {})) as { turnId: string }
+    ctx.worker.emit('segment', first.turnId, 'first sentence', 1)
+    ctx.manager.endTurn(first.turnId)
+    ctx.worker.emit('final', first.turnId, '')
+    await Promise.resolve()
+
+    const second = (await ctx.manager.startTurn('conversation', {})) as { turnId: string }
+    ctx.manager.endTurn(second.turnId)
+    ctx.worker.emit('final', second.turnId, '')
+    await Promise.resolve()
+
+    expect(outcomes(ctx.notify).at(-1)).toMatchObject({
+      status: 'rejected',
+      message: 'Nothing was heard.',
+    })
+  })
 })

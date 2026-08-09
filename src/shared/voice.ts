@@ -173,6 +173,12 @@ export type VoiceActionOutcome =
   | { status: 'executed'; turnId: string; intent: VoiceIntentType; message: string; taskId?: string }
   | { status: 'rejected'; turnId: string; reason: VoiceRejectReason; message: string }
   | { status: 'dictation'; turnId: string; text: string }
+  /**
+   * The turn finished normally with nothing left to report — a conversation
+   * whose sentences were already delivered one by one. It is not a failure and
+   * must not be shown as one.
+   */
+  | { status: 'completed'; turnId: string; segments: number }
   | { status: 'cancelled'; turnId: string }
 
 export interface VoiceCandidate {

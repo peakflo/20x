@@ -76,6 +76,8 @@ export class VoiceSessionManager {
   private turnContext: VoiceUiContext = {}
   private partial = ''
   private final = ''
+  /** Sentences already delivered in the open turn. Reset with every turn. */
+  private segmentsSent = 0
   private engine: VoiceEngineStatus = { state: 'model_missing', message: 'No speech model is installed yet.' }
   private pending = new Map<string, PendingConfirmation>()
   private registeredShortcut: string | null = null
@@ -227,6 +229,7 @@ export class VoiceSessionManager {
     this.turnContext = context ?? {}
     this.partial = ''
     this.final = ''
+    this.segmentsSent = 0
     this.worker.startTurn(turnId, mode)
     this.setState('listening')
     return { turnId }
@@ -251,6 +254,7 @@ export class VoiceSessionManager {
     if (this.turnId === id) {
       this.turnId = null
       this.partial = ''
+      this.segmentsSent = 0
       this.setState('idle')
     }
     this.pending.delete(id)
@@ -274,6 +278,7 @@ export class VoiceSessionManager {
     // than dropping it, because the renderer submits it straight away.
     if (words.length < VOICE_MIN_SEGMENT_CHARS) return
     this.partial = ''
+    this.segmentsSent += 1
     this.options.notify(VOICE_EVENTS.segment, { turnId, text: words, index })
   }
 
@@ -291,10 +296,23 @@ export class VoiceSessionManager {
 
     const mode = this.turnMode
     const context = this.turnContext
+    const delivered = this.segmentsSent
     this.turnId = null
+    this.segmentsSent = 0
 
     if (!text.trim()) {
       this.setState('idle')
+      if (delivered > 0) {
+        // Ending a conversation is not a failure. Every sentence already left
+        // as a segment, and the recogniser was reset after each one, so this
+        // closing transcript is empty by design.
+        this.options.notify(VOICE_EVENTS.outcome, {
+          status: 'completed',
+          turnId,
+          segments: delivered,
+        } satisfies VoiceActionOutcome)
+        return
+      }
       this.options.notify(VOICE_EVENTS.outcome, {
         status: 'rejected',
         turnId,

@@ -126,6 +126,10 @@ Guards:
 - A segment shorter than two characters is noise and is dropped, because the
   renderer would send it straight away.
 - A conversation stops after ten minutes of one open turn.
+- Stopping a conversation reports nothing. Every sentence has already left as a
+  segment and the recogniser was reset after each one, so the closing transcript
+  is empty by design. "Nothing was heard." is kept for a turn that really
+  delivered nothing.
 - **Settings → Voice → Keep talking** switches the loop off; the words are then
   written into the box for you to send yourself.
 

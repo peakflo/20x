@@ -444,7 +444,13 @@ if (hasVoiceBridge()) {
       })
       return
     }
-    if (outcome.status === 'dictation' || outcome.status === 'cancelled') {
+    // `completed` closes a conversation whose sentences were already sent. It
+    // is a normal ending, so it shows nothing.
+    if (
+      outcome.status === 'dictation' ||
+      outcome.status === 'cancelled' ||
+      outcome.status === 'completed'
+    ) {
       useVoiceStore.setState({ turnId: null, partial: '' })
     }
   })
