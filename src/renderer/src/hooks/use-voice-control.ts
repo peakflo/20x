@@ -4,6 +4,7 @@ import { useVoiceStore } from '@/stores/voice-store'
 import { useUIStore } from '@/stores/ui-store'
 import { useTaskStore } from '@/stores/task-store'
 import { useAgentStore } from '@/stores/agent-store'
+import { clearDictationTarget, insertDictation } from '@/lib/voice-dictation-target'
 import type { VoiceUiContext } from '@shared/voice'
 
 /**
@@ -63,12 +64,26 @@ export function useVoiceControl(): void {
     })
 
     const offHotkey = voiceApi.onHotkey(({ action }) => {
-      if (action === 'toggle') void toggleTurn('command')
+      if (action === 'toggle') {
+        // The shortcut is not tied to a text field, so it never dictates.
+        clearDictationTarget()
+        void toggleTurn('command')
+      }
+    })
+
+    // Exactly one subscriber writes dictated words, into the one field the
+    // microphone button claimed. Without this, every mounted transcript panel
+    // would receive the same sentence.
+    const offDictate = voiceApi.onDictate(({ text }) => {
+      const inserted = insertDictation(text)
+      clearDictationTarget()
+      if (!inserted) useVoiceStore.setState({ testTranscript: text.trim() })
     })
 
     return () => {
       offNavigate()
       offHotkey()
+      offDictate()
     }
   }, [toggleTurn])
 }

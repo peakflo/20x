@@ -7,6 +7,11 @@
  *
  * There is one capture object for the whole window, so two components can never
  * hold the microphone at the same time.
+ *
+ * The AudioContext and the worklet are created once and then reused. Chromium
+ * allows only a small number of AudioContexts per document (six), and
+ * `close()` frees the slot asynchronously, so a context per turn stops working
+ * after a few turns. Only the microphone stream is per turn.
  */
 
 import { VOICE_SAMPLE_RATE } from '@shared/voice'
@@ -49,9 +54,12 @@ export interface VoiceCaptureHandlers {
 }
 
 export class VoiceCapture {
+  // Reused for the lifetime of the window.
   private context: AudioContext | null = null
-  private stream: MediaStream | null = null
   private node: AudioWorkletNode | null = null
+  private ready: Promise<void> | null = null
+  // Per turn.
+  private stream: MediaStream | null = null
   private source: MediaStreamAudioSourceNode | null = null
   private pending: number[] = []
   private handlers: VoiceCaptureHandlers | null = null
@@ -60,10 +68,43 @@ export class VoiceCapture {
     return this.stream !== null
   }
 
+  /** Builds the audio graph once. Later turns reuse it. */
+  private async ensureGraph(): Promise<void> {
+    if (this.ready) return this.ready
+    this.ready = (async () => {
+      const context = new AudioContext({ sampleRate: VOICE_SAMPLE_RATE })
+      const blob = new Blob([WORKLET_SOURCE], { type: 'application/javascript' })
+      const url = URL.createObjectURL(blob)
+      try {
+        await context.audioWorklet.addModule(url)
+      } finally {
+        URL.revokeObjectURL(url)
+      }
+      const node = new AudioWorkletNode(context, 'voice-pcm')
+      node.port.onmessage = (event: MessageEvent<{ samples: Int16Array; level: number }>) => {
+        // Frames that arrive between turns are dropped: no handlers, no audio.
+        if (!this.handlers) return
+        this.handlers.onLevel?.(event.data.level)
+        this.collect(event.data.samples)
+      }
+      this.context = context
+      this.node = node
+    })().catch((err) => {
+      // Let the next turn try again rather than fail for ever.
+      this.ready = null
+      throw err
+    })
+    return this.ready
+  }
+
   async start(handlers: VoiceCaptureHandlers, deviceId?: string): Promise<boolean> {
     if (this.stream) return true
-    this.handlers = handlers
     try {
+      await this.ensureGraph()
+      const context = this.context
+      const node = this.node
+      if (!context || !node) throw new Error('The audio graph is not available.')
+
       this.stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           ...(deviceId ? { deviceId: { exact: deviceId } } : {}),
@@ -73,38 +114,18 @@ export class VoiceCapture {
           autoGainControl: true,
         },
       })
-      // Chromium resamples to the requested rate, so no decimation is needed
-      // here and the audio thread stays cheap.
-      this.context = new AudioContext({ sampleRate: VOICE_SAMPLE_RATE })
-      const blob = new Blob([WORKLET_SOURCE], { type: 'application/javascript' })
-      const url = URL.createObjectURL(blob)
-      try {
-        await this.context.audioWorklet.addModule(url)
-      } finally {
-        URL.revokeObjectURL(url)
-      }
+      // A context can be suspended by the browser between turns.
+      if (context.state === 'suspended') await context.resume()
 
-      this.node = new AudioWorkletNode(this.context, 'voice-pcm')
-      this.node.port.onmessage = (event: MessageEvent<{ samples: Int16Array; level: number }>) => {
-        this.handlers?.onLevel?.(event.data.level)
-        this.collect(event.data.samples)
-      }
-      this.source = this.context.createMediaStreamSource(this.stream)
-      this.source.connect(this.node)
+      this.handlers = handlers
+      this.source = context.createMediaStreamSource(this.stream)
+      this.source.connect(node)
       // The worklet emits no audio, so it is not connected to the destination:
       // the user never hears their own microphone.
       return true
     } catch (err) {
       this.stop()
-      const message =
-        err instanceof DOMException && (err.name === 'NotAllowedError' || err.name === 'SecurityError')
-          ? 'Microphone access was refused.'
-          : err instanceof DOMException && err.name === 'NotFoundError'
-            ? 'No microphone was found.'
-            : err instanceof Error
-              ? err.message
-              : 'The microphone could not be opened.'
-      handlers.onError?.(message)
+      handlers.onError?.(describe(err))
       return false
     }
   }
@@ -112,18 +133,25 @@ export class VoiceCapture {
   /** Flushes whatever is buffered and releases the microphone. */
   stop(): void {
     this.flush()
-    this.node?.port.close()
-    this.node?.disconnect()
     this.source?.disconnect()
     this.stream?.getTracks().forEach((track) => track.stop())
-    void this.context?.close().catch(() => undefined)
-    this.node = null
     this.source = null
     this.stream = null
-    this.context = null
     this.pending = []
     this.handlers?.onLevel?.(0)
     this.handlers = null
+    // The context and the worklet stay alive for the next turn.
+  }
+
+  /** Releases the audio graph as well. Used when voice is switched off. */
+  async release(): Promise<void> {
+    this.stop()
+    const context = this.context
+    this.node?.disconnect()
+    this.node = null
+    this.context = null
+    this.ready = null
+    await context?.close().catch(() => undefined)
   }
 
   private collect(samples: Int16Array): void {
@@ -144,6 +172,17 @@ export class VoiceCapture {
     for (let i = 0; i < samples.length; i++) view.setInt16(i * 2, samples[i], true)
     this.handlers?.onAudio(new Uint8Array(buffer))
   }
+}
+
+function describe(err: unknown): string {
+  if (err instanceof DOMException) {
+    if (err.name === 'NotAllowedError' || err.name === 'SecurityError') {
+      return 'Microphone access was refused.'
+    }
+    if (err.name === 'NotFoundError') return 'No microphone was found.'
+    if (err.name === 'NotReadableError') return 'The microphone is in use by another application.'
+  }
+  return err instanceof Error ? err.message : 'The microphone could not be opened.'
 }
 
 /** The single microphone owner for this window. */

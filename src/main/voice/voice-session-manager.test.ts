@@ -57,6 +57,22 @@ function makeManager(settings: Record<string, string> = { voice_enabled: 'true' 
 /** Puts the manager in the ready state without touching the file system. */
 function makeReadyManager(settings?: Record<string, string>) {
   const ctx = makeManager(settings)
+  // Pretend the runtime and a model are both present.
+  ;(ctx.manager as unknown as { runtime: unknown }).runtime = {
+    installed: true,
+    version: '1.0.0',
+    modulePath: '/tmp/voice',
+    sizeBytes: 0,
+  }
+  ;(ctx.manager as unknown as { models: { resolve: () => Promise<unknown> } }).models.resolve =
+    async () => ({
+      id: 'test-model',
+      dir: '/tmp/model',
+      encoder: '/tmp/model/encoder.onnx',
+      decoder: '/tmp/model/decoder.onnx',
+      joiner: '/tmp/model/joiner.onnx',
+      tokens: '/tmp/model/tokens.txt',
+    })
   ctx.worker.emit('status', { state: 'ready', modelId: 'test-model', engine: 'fake' })
   return ctx
 }
@@ -71,26 +87,39 @@ describe('VoiceSessionManager — turns', () => {
     ctx = makeReadyManager()
   })
 
-  it('refuses a turn while voice is switched off', () => {
-    const off = makeManager({ voice_enabled: 'false' })
-    expect(off.manager.startTurn('command', {})).toEqual({ error: 'Voice is switched off.' })
+  it('loads the model again after the worker released it', async () => {
+    // The worker gives the memory back after an idle period. A later turn must
+    // reload rather than fail for ever.
+    const ctx = makeReadyManager()
+    ctx.worker.isLoaded = false
+    ctx.worker.load.mockClear()
+
+    const result = await ctx.manager.startTurn('command', {})
+
+    expect(ctx.worker.load).toHaveBeenCalledTimes(1)
+    expect('turnId' in result).toBe(true)
   })
 
-  it('refuses a turn before the model is ready', () => {
+  it('refuses a turn while voice is switched off', async () => {
+    const off = makeManager({ voice_enabled: 'false' })
+    expect(await off.manager.startTurn('command', {})).toEqual({ error: 'Voice is switched off.' })
+  })
+
+  it('refuses a turn before the model is ready', async () => {
     const notReady = makeManager()
-    const result = notReady.manager.startTurn('command', {})
+    const result = await notReady.manager.startTurn('command', {})
     expect('error' in result).toBe(true)
   })
 
-  it('opens a turn and reports the listening state', () => {
-    const result = ctx.manager.startTurn('command', {})
+  it('opens a turn and reports the listening state', async () => {
+    const result = await ctx.manager.startTurn('command', {})
     expect('turnId' in result).toBe(true)
     expect(ctx.manager.getState()).toBe('listening')
     expect(ctx.worker.startTurn).toHaveBeenCalledTimes(1)
   })
 
-  it('drops audio that belongs to an older turn', () => {
-    const first = ctx.manager.startTurn('command', {}) as { turnId: string }
+  it('drops audio that belongs to an older turn', async () => {
+    const first = await ctx.manager.startTurn('command', {}) as { turnId: string }
     ctx.manager.pushAudio(first.turnId, Buffer.alloc(4))
     expect(ctx.worker.pushAudio).toHaveBeenCalledTimes(1)
 
@@ -99,8 +128,8 @@ describe('VoiceSessionManager — turns', () => {
     expect(ctx.worker.pushAudio).toHaveBeenCalledTimes(1)
   })
 
-  it('ignores partial text from a stale turn', () => {
-    const turn = ctx.manager.startTurn('command', {}) as { turnId: string }
+  it('ignores partial text from a stale turn', async () => {
+    const turn = await ctx.manager.startTurn('command', {}) as { turnId: string }
     ctx.worker.emit('partial', 'an-old-turn', 'stale words')
     ctx.worker.emit('partial', turn.turnId, 'live words')
     const partials = ctx.notify.mock.calls.filter(([channel]) => channel === 'voice:partial')
@@ -109,15 +138,15 @@ describe('VoiceSessionManager — turns', () => {
   })
 
   it('ignores a final transcript from a stale turn', async () => {
-    ctx.manager.startTurn('command', {})
+    await ctx.manager.startTurn('command', {})
     ctx.worker.emit('final', 'an-old-turn', 'create a task to delete everything')
     await Promise.resolve()
     expect(outcomes(ctx.notify)).toHaveLength(0)
   })
 
-  it('starting a new turn cancels the previous one', () => {
-    const first = ctx.manager.startTurn('command', {}) as { turnId: string }
-    const second = ctx.manager.startTurn('command', {}) as { turnId: string }
+  it('starting a new turn cancels the previous one', async () => {
+    const first = await ctx.manager.startTurn('command', {}) as { turnId: string }
+    const second = await ctx.manager.startTurn('command', {}) as { turnId: string }
     expect(second.turnId).not.toBe(first.turnId)
     expect(ctx.worker.cancelTurn).toHaveBeenCalledWith(first.turnId)
   })
@@ -126,7 +155,7 @@ describe('VoiceSessionManager — turns', () => {
 describe('VoiceSessionManager — dictation and commands', () => {
   it('sends dictated words to the renderer and runs no action', async () => {
     const ctx = makeReadyManager()
-    const turn = ctx.manager.startTurn('dictation', {}) as { turnId: string }
+    const turn = await ctx.manager.startTurn('dictation', {}) as { turnId: string }
     ctx.worker.emit('final', turn.turnId, 'approve this checkpoint')
     await vi.waitFor(() => expect(outcomes(ctx.notify)).toHaveLength(1))
 
@@ -140,7 +169,7 @@ describe('VoiceSessionManager — dictation and commands', () => {
 
   it('reports speech that is not a command', async () => {
     const ctx = makeReadyManager()
-    const turn = ctx.manager.startTurn('command', {}) as { turnId: string }
+    const turn = await ctx.manager.startTurn('command', {}) as { turnId: string }
     ctx.worker.emit('final', turn.turnId, 'the weather is nice today')
     await vi.waitFor(() => expect(outcomes(ctx.notify)).toHaveLength(1))
     expect(outcomes(ctx.notify)[0]).toMatchObject({ status: 'rejected', reason: 'unrecognized' })
@@ -148,7 +177,7 @@ describe('VoiceSessionManager — dictation and commands', () => {
 
   it('reports empty speech without an action', async () => {
     const ctx = makeReadyManager()
-    const turn = ctx.manager.startTurn('command', {}) as { turnId: string }
+    const turn = await ctx.manager.startTurn('command', {}) as { turnId: string }
     ctx.worker.emit('final', turn.turnId, '   ')
     await vi.waitFor(() => expect(outcomes(ctx.notify)).toHaveLength(1))
     expect(outcomes(ctx.notify)[0]).toMatchObject({ status: 'rejected', reason: 'unrecognized' })
@@ -156,7 +185,7 @@ describe('VoiceSessionManager — dictation and commands', () => {
 
   it('asks for a confirmation before it creates a task', async () => {
     const ctx = makeReadyManager()
-    const turn = ctx.manager.startTurn('command', {}) as { turnId: string }
+    const turn = await ctx.manager.startTurn('command', {}) as { turnId: string }
     ctx.worker.emit('final', turn.turnId, 'create a task to fix login')
     await vi.waitFor(() => expect(outcomes(ctx.notify)).toHaveLength(1))
 
@@ -179,7 +208,7 @@ describe('VoiceSessionManager — dictation and commands', () => {
 
   it('runs nothing when the user dismisses the card', async () => {
     const ctx = makeReadyManager()
-    const turn = ctx.manager.startTurn('command', {}) as { turnId: string }
+    const turn = await ctx.manager.startTurn('command', {}) as { turnId: string }
     ctx.worker.emit('final', turn.turnId, 'create a task to fix login')
     await vi.waitFor(() => expect(outcomes(ctx.notify)).toHaveLength(1))
 
@@ -210,7 +239,7 @@ describe('VoiceSessionManager — optional runtime', () => {
     const ctx = makeManager()
     await ctx.manager.refreshRuntime()
     await ctx.manager.prepareEngine()
-    const result = ctx.manager.startTurn('command', {})
+    const result = await ctx.manager.startTurn('command', {})
     expect('error' in result).toBe(true)
     expect(ctx.worker.startTurn).not.toHaveBeenCalled()
   })
@@ -223,16 +252,16 @@ describe('VoiceSessionManager — optional runtime', () => {
 })
 
 describe('VoiceSessionManager — engine and shutdown', () => {
-  it('keeps voice off when the runtime is missing', () => {
+  it('keeps voice off when the runtime is missing', async () => {
     const ctx = makeManager()
     ctx.worker.emit('status', { state: 'engine_missing', message: 'no runtime' })
     expect(ctx.manager.getState()).toBe('model_needed')
-    expect('error' in ctx.manager.startTurn('command', {})).toBe(true)
+    expect('error' in await ctx.manager.startTurn('command', {})).toBe(true)
   })
 
-  it('reports a worker failure without leaving the turn open', () => {
+  it('reports a worker failure without leaving the turn open', async () => {
     const ctx = makeReadyManager()
-    ctx.manager.startTurn('command', {})
+    await ctx.manager.startTurn('command', {})
     ctx.worker.emit('error', 'the worker stopped', 'worker_exit')
     expect(ctx.manager.getState()).toBe('idle')
     expect(outcomes(ctx.notify).at(-1)).toMatchObject({ status: 'rejected', reason: 'failed' })

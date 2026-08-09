@@ -187,8 +187,15 @@ export class VoiceSessionManager {
   // ── Turns ─────────────────────────────────────────────────
 
   /** Opens a turn and returns its ID. A new turn always cancels the old one. */
-  startTurn(mode: VoiceTurnMode, context: VoiceUiContext): { turnId: string } | { error: string } {
+  async startTurn(
+    mode: VoiceTurnMode,
+    context: VoiceUiContext
+  ): Promise<{ turnId: string } | { error: string }> {
     if (!this.isEnabled()) return { error: 'Voice is switched off.' }
+    // The worker releases the model after an idle period to give the memory
+    // back. Load it again instead of failing, or voice would stop working
+    // silently after a few minutes of quiet.
+    if (!this.worker.isLoaded) await this.prepareEngine()
     if (this.engine.state !== 'ready') {
       return { error: engineMessage(this.engine) }
     }

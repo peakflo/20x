@@ -60,6 +60,7 @@ voice worker (separate process)
 | `src/main/voice/voice-worker-client.ts` | Worker lifecycle and audio pipe |
 | `src/main/voice/voice-worker.js` | The worker itself (plain CommonJS) |
 | `src/renderer/src/lib/voice-capture.ts` | Microphone capture |
+| `src/renderer/src/lib/voice-dictation-target.ts` | The one field that receives words |
 | `src/renderer/src/stores/voice-store.ts` | Renderer state |
 | `src/renderer/src/components/voice/*` | Microphone button, overlay, runtime row |
 
@@ -81,6 +82,24 @@ Two modes keep dictation and commands apart:
 - The microphone button in a text composer runs in `dictation` mode. The parser
   is not used at all, so spoken words can never run an action.
 - The global shortcut runs in `command` mode.
+
+One click starts listening and a second click stops it. Escape cancels the turn
+and keeps the words out.
+
+### Where dictated words go
+
+The transcript panel is mounted many times at once — the task workspace, each
+canvas panel, and the Mastermind drawer. So there is exactly **one** dictation
+target, and the microphone button that started the turn claims the field of its
+own composer (`data-voice-composer`). Exactly one subscriber writes the words.
+
+A turn started from the global shortcut, or from the test button in settings,
+claims no field, so the words are inserted nowhere.
+
+### Testing the microphone
+
+**Settings → Voice → Test the microphone** records one turn, shows a level meter
+and the words it heard, and writes them nowhere else.
 
 Text after "ask the agent" stays verbatim. A command inside that message is
 never executed.
@@ -177,6 +196,19 @@ because neither can do anything yet.
 
 For development and for the automated tests, `VOICE_ENGINE=mock` selects a
 deterministic engine that returns `VOICE_MOCK_TEXT`. It never invents words.
+
+## Two limits that stop voice after a few turns
+
+Both are handled, and both are easy to reintroduce:
+
+1. **One AudioContext for the window.** Chromium allows about six per document
+   and frees a closed one asynchronously, so a context per turn stops working
+   after a few turns. `VoiceCapture` builds the context and the worklet once and
+   reuses them; only the microphone stream is per turn. `release()` frees the
+   graph when voice is switched off.
+2. **The worker releases the model after five idle minutes** to give the memory
+   back. `startTurn()` reloads it rather than failing, or voice would go quiet
+   with no message.
 
 ## Proven against the real runtime
 

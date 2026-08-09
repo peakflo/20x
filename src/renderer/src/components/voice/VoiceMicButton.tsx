@@ -1,27 +1,28 @@
 import { useCallback, useEffect, useRef } from 'react'
-import { Mic, Loader2 } from 'lucide-react'
+import { Mic, Square, Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { selectVoiceReady, useVoiceStore } from '@/stores/voice-store'
+import { findComposerField, setDictationTarget } from '@/lib/voice-dictation-target'
 import type { VoiceTurnMode } from '@shared/voice'
 
 interface VoiceMicButtonProps {
-  /** `dictation` writes words into the focused field. `command` runs an action. */
+  /** `dictation` writes words into the field beside it. `command` runs an action. */
   mode?: VoiceTurnMode
   className?: string
   title?: string
 }
 
 /**
- * Press-and-hold microphone control (design §5.8, phase 1).
+ * Microphone control (design §5.8, phase 1).
  *
- * Holding the button opens the turn and releasing it closes the turn, so the
- * user always knows when the microphone is open. Releasing the pointer outside
- * the button, or pressing Escape, ends the turn as well — a stuck open
- * microphone must not be possible.
+ * One click starts listening and a second click stops it. Escape cancels the
+ * turn and keeps the words out.
+ *
+ * The button also decides where the words go: it claims the text field of its
+ * own composer. Without that, one spoken sentence would land in every mounted
+ * transcript panel at once.
  */
 export function VoiceMicButton({ mode = 'dictation', className = '', title }: VoiceMicButtonProps) {
-  // The runtime is an optional install. Without it there is nothing this
-  // button could do, so it is not drawn at all.
   const ready = useVoiceStore(selectVoiceReady)
   const state = useVoiceStore((s) => s.state)
   const turnId = useVoiceStore((s) => s.turnId)
@@ -29,61 +30,77 @@ export function VoiceMicButton({ mode = 'dictation', className = '', title }: Vo
   const startTurn = useVoiceStore((s) => s.startTurn)
   const endTurn = useVoiceStore((s) => s.endTurn)
   const cancel = useVoiceStore((s) => s.cancel)
-  const holding = useRef(false)
+  const buttonRef = useRef<HTMLButtonElement>(null)
+  // True only for a turn this button started, so a second button never stops it.
+  const owns = useRef(false)
 
-  const stop = useCallback(() => {
-    if (!holding.current) return
-    holding.current = false
-    void endTurn()
-  }, [endTurn])
+  const listening = owns.current && turnId !== null && state === 'listening'
 
+  const toggle = useCallback(() => {
+    if (owns.current && turnId) {
+      owns.current = false
+      void endTurn()
+      return
+    }
+    if (turnId) return // another control is listening
+    owns.current = true
+    if (mode === 'dictation') setDictationTarget(findComposerField(buttonRef.current))
+    void startTurn(mode).then(() => {
+      if (!useVoiceStore.getState().turnId) owns.current = false
+    })
+  }, [turnId, endTurn, startTurn, mode])
+
+  // Escape drops the turn without inserting anything.
   useEffect(() => {
-    if (!holding.current) return undefined
-    const onPointerUp = (): void => stop()
+    if (!listening) return undefined
     const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') {
-        holding.current = false
-        void cancel()
-      }
+      if (event.key !== 'Escape') return
+      owns.current = false
+      setDictationTarget(null)
+      void cancel()
     }
-    window.addEventListener('pointerup', onPointerUp)
     window.addEventListener('keydown', onKeyDown)
-    return () => {
-      window.removeEventListener('pointerup', onPointerUp)
-      window.removeEventListener('keydown', onKeyDown)
-    }
-  }, [stop, cancel, turnId])
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [listening, cancel])
+
+  // Release ownership when the turn ends for any other reason.
+  useEffect(() => {
+    if (!turnId) owns.current = false
+  }, [turnId])
 
   if (!ready) return null
 
-  const listening = turnId !== null && state === 'listening'
   const busy = state === 'transcribing' || state === 'executing'
+  const otherIsListening = !owns.current && turnId !== null
 
   return (
     <Button
+      ref={buttonRef}
       type="button"
       variant={listening ? 'default' : 'ghost'}
       size="icon"
-      disabled={busy}
-      onPointerDown={(event) => {
-        // Capture the pointer so a small hand movement does not end the turn,
-        // and so the release always reaches this button.
-        event.currentTarget.setPointerCapture?.(event.pointerId)
-        holding.current = true
-        void startTurn(mode)
-      }}
-      onPointerUp={stop}
-      onPointerCancel={stop}
+      disabled={busy || otherIsListening}
+      onClick={toggle}
       className={`h-[32px] w-[32px] shrink-0 rounded-lg ${className}`}
-      title={title ?? (mode === 'command' ? 'Hold to speak a command' : 'Hold to dictate')}
-      aria-label={mode === 'command' ? 'Hold to speak a command' : 'Hold to dictate'}
+      title={
+        title ??
+        (listening
+          ? 'Click to stop'
+          : mode === 'command'
+            ? 'Click to speak a command'
+            : 'Click to dictate')
+      }
+      aria-label={listening ? 'Stop listening' : mode === 'command' ? 'Speak a command' : 'Dictate'}
       aria-pressed={listening}
       data-testid="voice-mic-button"
     >
       {busy ? (
         <Loader2 className="h-4 w-4 animate-spin" />
       ) : listening ? (
-        <Mic className="h-4 w-4" style={{ transform: `scale(${1 + Math.min(level, 1) * 0.35})` }} />
+        <Square
+          className="h-3.5 w-3.5 fill-current"
+          style={{ transform: `scale(${1 + Math.min(level, 1) * 0.3})` }}
+        />
       ) : (
         <Mic className="h-4 w-4" />
       )}

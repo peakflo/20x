@@ -2353,7 +2353,7 @@ else:
     return { status: await requireVoice().requestMicrophonePermission() }
   })
 
-  ipcMain.handle('voice:startTurn', (_, payload: { mode?: 'dictation' | 'command'; context?: Record<string, unknown> }) => {
+  ipcMain.handle('voice:startTurn', async (_, payload: { mode?: 'dictation' | 'command'; context?: Record<string, unknown> }) => {
     return requireVoice().startTurn(
       payload?.mode === 'command' ? 'command' : 'dictation',
       (payload?.context ?? {}) as Parameters<import('./voice/voice-session-manager').VoiceSessionManager['startTurn']>[1]

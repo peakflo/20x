@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Download, FolderOpen, Loader2, Mic, Trash2 } from 'lucide-react'
+import { Download, FolderOpen, Loader2, Mic, Square, Trash2 } from 'lucide-react'
 import { SettingsSection } from '../SettingsSection'
 import { Label } from '@/components/ui/Label'
 import { Switch } from '@/components/ui/Switch'
@@ -32,6 +32,14 @@ export function VoiceSettings() {
   const models = useVoiceStore((s) => s.models)
   const permission = useVoiceStore((s) => s.permission)
   const shortcut = useVoiceStore((s) => s.shortcut)
+  const voiceState = useVoiceStore((s) => s.state)
+  const turnId = useVoiceStore((s) => s.turnId)
+  const partial = useVoiceStore((s) => s.partial)
+  const level = useVoiceStore((s) => s.level)
+  const testTranscript = useVoiceStore((s) => s.testTranscript)
+  const startTest = useVoiceStore((s) => s.startTest)
+  const endTurn = useVoiceStore((s) => s.endTurn)
+  const clearTest = useVoiceStore((s) => s.clearTest)
   const initialize = useVoiceStore((s) => s.initialize)
   const setEnabled = useVoiceStore((s) => s.setEnabled)
   const installModel = useVoiceStore((s) => s.installModel)
@@ -94,6 +102,69 @@ export function VoiceSettings() {
             onCheckedChange={(next) => void setEnabled(next)}
           />
         </div>
+
+        {enabled && setupComplete && (
+          <div className="space-y-2 rounded-lg border border-border p-3" data-testid="voice-test">
+            <div className="flex items-center justify-between gap-3">
+              <div className="space-y-0.5">
+                <Label>Test the microphone</Label>
+                <p className="text-xs text-muted-foreground">
+                  Say a few words. The result is shown here and is written nowhere else.
+                </p>
+              </div>
+              <Button
+                size="sm"
+                variant={turnId ? 'default' : 'outline'}
+                disabled={voiceState === 'transcribing'}
+                onClick={() => (turnId ? void endTurn() : void startTest())}
+                data-testid="voice-test-button"
+              >
+                {voiceState === 'transcribing' ? (
+                  <>
+                    <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                    Writing…
+                  </>
+                ) : turnId ? (
+                  <>
+                    <Square className="mr-1.5 h-3 w-3 fill-current" />
+                    Stop
+                  </>
+                ) : (
+                  <>
+                    <Mic className="mr-1.5 h-3.5 w-3.5" />
+                    Test
+                  </>
+                )}
+              </Button>
+            </div>
+
+            {turnId && (
+              <div className="flex items-center gap-2">
+                <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
+                  <div
+                    className="h-full rounded-full bg-primary transition-all duration-75"
+                    style={{ width: `${Math.min(100, Math.round(level * 140))}%` }}
+                    data-testid="voice-test-level"
+                  />
+                </div>
+                <span className="text-[11px] text-muted-foreground">Listening…</span>
+              </div>
+            )}
+
+            {(partial || testTranscript) && (
+              <div className="flex items-start justify-between gap-2 rounded-md bg-muted/40 p-2">
+                <p className="text-sm text-foreground" data-testid="voice-test-result">
+                  {partial || testTranscript}
+                </p>
+                {testTranscript && !turnId && (
+                  <Button size="sm" variant="ghost" className="h-6 px-1.5 text-[11px]" onClick={clearTest}>
+                    Clear
+                  </Button>
+                )}
+              </div>
+            )}
+          </div>
+        )}
 
         <div className="rounded-lg border border-border p-3 text-sm">
           <p className="font-medium text-foreground">Status</p>

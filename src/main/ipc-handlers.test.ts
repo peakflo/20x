@@ -82,7 +82,8 @@ describe('registerIpcHandlers', () => {
 
     await expect(snapshot!({}, {})).resolves.toMatchObject({ enabled: false, state: 'disabled' })
     expect(() => pushAudio!({}, { turnId: 't', chunk: new Uint8Array(2) })).not.toThrow()
-    expect(() => startTurn!({}, { mode: 'command' })).toThrow(/not available/i)
+    // The handler is async now, so it rejects rather than throwing.
+    await expect(startTurn!({}, { mode: 'command' })).rejects.toThrow(/not available/i)
   })
 
   it('terminal:kill ignores stale expectedPid and only kills matching process', async () => {

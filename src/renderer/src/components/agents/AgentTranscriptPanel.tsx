@@ -11,7 +11,6 @@ import { cn } from '@/lib/utils'
 import { useArtifactStore } from '@/stores/artifact-store'
 import { ArtifactContentKind, ArtifactType, type Artifact } from '@shared/artifacts'
 import { VoiceMicButton } from '@/components/voice/VoiceMicButton'
-import { useVoiceDictation } from '@/hooks/use-voice-dictation'
 
 const EMPTY_ARTIFACTS: Artifact[] = []
 
@@ -940,9 +939,6 @@ export function AgentTranscriptPanel({
     el.style.height = `${Math.min(el.scrollHeight, 128)}px` // max ~6 lines
   }, [])
 
-  // Dictated words go into this composer while it is on screen.
-  useVoiceDictation(inputRef, autoResize)
-
   // Detect if the session ended due to an error (last message is error/retry and status is idle)
   const lastErrorMessage = useMemo(() => {
     if (status !== SessionStatus.IDLE || messages.length === 0) return null
@@ -1391,6 +1387,7 @@ export function AgentTranscriptPanel({
         {onSend && (
           <div
             data-testid="transcript-composer"
+            data-voice-composer=""
             className={`relative px-4 py-3 space-y-2.5 transition-colors ${isDragOverComposer ? 'bg-primary/5' : ''}`}
             onDragOver={handleComposerDragOver}
             onDragEnter={handleComposerDragOver}

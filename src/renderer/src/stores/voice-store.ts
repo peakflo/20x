@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { voiceApi } from '@/lib/ipc-client'
 import { voiceCapture } from '@/lib/voice-capture'
+import { clearDictationTarget } from '@/lib/voice-dictation-target'
 import type {
   MicrophonePermission,
   VoiceActionOutcome,
@@ -62,6 +63,8 @@ interface VoiceStoreState {
   level: number
   confirmation: VoiceConfirmation | null
   result: VoiceResultNotice | null
+  /** What the microphone heard during a test in settings. */
+  testTranscript: string
   /** Set by the component that should receive dictated text. */
   contextProvider: (() => VoiceUiContext) | null
 
@@ -72,6 +75,9 @@ interface VoiceStoreState {
   setEnabled: (enabled: boolean) => Promise<void>
   setContextProvider: (provider: (() => VoiceUiContext) | null) => void
   startTurn: (mode: VoiceTurnMode) => Promise<void>
+  /** Records one turn and shows the words in settings, changing nothing else. */
+  startTest: () => Promise<void>
+  clearTest: () => void
   endTurn: () => Promise<void>
   toggleTurn: (mode: VoiceTurnMode) => Promise<void>
   cancel: () => Promise<void>
@@ -143,6 +149,7 @@ export const useVoiceStore = create<VoiceStoreState>((set, get) => ({
   level: 0,
   confirmation: null,
   result: null,
+  testTranscript: '',
   contextProvider: null,
 
   initialize: async () => {
@@ -208,7 +215,7 @@ export const useVoiceStore = create<VoiceStoreState>((set, get) => ({
         return
       }
     } else {
-      voiceCapture.stop()
+      void voiceCapture.release()
     }
     const snapshot = await voiceApi.setEnabled(enabled)
     set({
@@ -249,6 +256,15 @@ export const useVoiceStore = create<VoiceStoreState>((set, get) => ({
       set({ turnId: null })
     }
   },
+
+  startTest: async () => {
+    // No target, so the words are shown in settings and inserted nowhere.
+    clearDictationTarget()
+    set({ testTranscript: '' })
+    await get().startTurn('dictation')
+  },
+
+  clearTest: () => set({ testTranscript: '' }),
 
   endTurn: async () => {
     const { turnId } = get()
