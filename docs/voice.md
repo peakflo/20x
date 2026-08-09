@@ -185,10 +185,22 @@ All three are streaming transducers with the same four roles — encoder, decode
 joiner, tokens — so one code path in the worker loads every one of them. Adding
 a fourth is a manifest entry and four checksums, no code.
 
-Measured on an Apple Silicon machine with the same 6.6 s clip: Zipformer loads
-in 1.1 s and decodes the tail in 0.43 s; FastConformer loads in 2.9 s and
-decodes in 1.4 s; Nemotron loads in 5.7 s and decodes in 5.5 s. Nemotron is
-close to real time on CPU, so it suits dictation more than fast commands.
+Measured on an Apple Silicon machine, CPU only, feeding 16.4 s of audio in the
+20 ms frames the renderer really sends:
+
+| Model | Load | Processing | Real-time factor | Segments found |
+|---|---:|---:|---:|---:|
+| small | 1.2 s | 0.8 s | 0.05 | 2 |
+| balanced | 0.9 s | 0.7 s | 0.04 | 2 |
+| most accurate (Nemotron) | 2.1 s | 2.5 s | 0.15 | 2 |
+
+All three keep up with a live conversation with room to spare, and all three
+segment correctly. Nemotron is the only one that writes capitals **and**
+punctuation.
+
+An earlier note in this file said Nemotron was close to real time. That was
+wrong: it came from pushing a whole clip in one call, which is not how
+streaming works. Measure with real frame sizes.
 
 `VoiceModelManager` downloads on request, shows the size, the language and the
 licence first, verifies a SHA-256 for each file, resumes an interrupted

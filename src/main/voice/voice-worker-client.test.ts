@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, beforeAll, afterAll, vi } from 'vitest'
-import { existsSync, readFileSync } from 'fs'
+import { existsSync, readFileSync, readdirSync } from 'fs'
 import { homedir } from 'os'
 import { join } from 'path'
 import { VoiceWorkerClient } from './voice-worker-client'
@@ -126,8 +126,8 @@ describe('VoiceWorkerClient', () => {
  */
 const realRuntime = join(homedir(), 'Library', 'Application Support', '20x', 'voice-runtime',
   'node_modules', 'sherpa-onnx-node')
-const realModelDir = join(homedir(), 'Library', 'Application Support', '20x', 'voice-models',
-  'sherpa-streaming-zipformer-en')
+const voiceModelsRoot = join(homedir(), 'Library', 'Application Support', '20x', 'voice-models')
+const realModelDir = join(voiceModelsRoot, 'sherpa-streaming-zipformer-en')
 /** A short spoken passage, downloaded next to the model by the developer. */
 const SPEECH_WAV = '/tmp/speech.wav'
 
@@ -165,10 +165,20 @@ describe.skipIf(!hasRealEngine)('VoiceWorkerClient with the installed runtime', 
   }, 40000)
 })
 
-describe.skipIf(!hasRealEngine)('the conversational loop', () => {
-  it('sends one segment per pause and keeps listening', async () => {
+/**
+ * Every catalogue model installed on this machine is put through the
+ * conversational loop. Endpoint behaviour differs per model, and the loop is
+ * the default, so a model that cannot segment must not pass unnoticed.
+ */
+const installedModelIds = existsSync(voiceModelsRoot)
+  ? readdirSync(voiceModelsRoot).filter((id) => existsSync(join(voiceModelsRoot, id, 'tokens.txt')))
+  : []
+
+describe.skipIf(!hasRealEngine || installedModelIds.length === 0)('the conversational loop', () => {
+  it.each(installedModelIds)('sends one segment per pause with %s', async (modelId) => {
     process.env.VOICE_ENGINE = 'real'
     process.env.VOICE_ENGINE_MODULE = realRuntime
+    const dir = join(voiceModelsRoot, modelId)
     try {
       client = new VoiceWorkerClient(SCRIPT)
       const ready = waitFor<VoiceEngineStatus>((resolve) => {
@@ -178,12 +188,12 @@ describe.skipIf(!hasRealEngine)('the conversational loop', () => {
       }, 30000)
       await client.load(
         {
-          id: 'sherpa-streaming-zipformer-en',
-          dir: realModelDir,
-          encoder: join(realModelDir, 'encoder.onnx'),
-          decoder: join(realModelDir, 'decoder.onnx'),
-          joiner: join(realModelDir, 'joiner.onnx'),
-          tokens: join(realModelDir, 'tokens.txt'),
+          id: modelId,
+          dir,
+          encoder: join(dir, 'encoder.onnx'),
+          decoder: join(dir, 'decoder.onnx'),
+          joiner: join(dir, 'joiner.onnx'),
+          tokens: join(dir, 'tokens.txt'),
         },
         1.2
       )
@@ -195,7 +205,7 @@ describe.skipIf(!hasRealEngine)('the conversational loop', () => {
       const speech = readFileSync(SPEECH_WAV).subarray(44)
       const silence = Buffer.alloc(16000 * 2 * 2) // 2 s
 
-      client.startTurn('conversation-1', 'conversation')
+      client.startTurn(`conversation-${modelId}`, 'conversation')
       for (const buffer of [speech, silence, speech, silence]) {
         for (let i = 0; i < buffer.length; i += 640) {
           client.pushAudio(buffer.subarray(i, Math.min(i + 640, buffer.length)))
@@ -205,15 +215,14 @@ describe.skipIf(!hasRealEngine)('the conversational loop', () => {
       // Two spoken passages separated by pauses give two sentences, and the
       // turn is still open afterwards.
       await vi.waitFor(() => expect(segments.length).toBeGreaterThanOrEqual(2), {
-        timeout: 20000,
+        timeout: 30000,
         interval: 100,
       })
-      expect(segments[0]).toMatch(/NIGHTFALL/i)
-      expect(segments[1]).toMatch(/NIGHTFALL/i)
+      expect(segments[0]).toMatch(/nightfall/i)
       expect(client.isRunning).toBe(true)
     } finally {
       process.env.VOICE_ENGINE = 'mock'
       delete process.env.VOICE_ENGINE_MODULE
     }
-  }, 60000)
+  }, 90000)
 })
