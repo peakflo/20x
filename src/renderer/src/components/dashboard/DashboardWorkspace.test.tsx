@@ -30,6 +30,38 @@ vi.mock('@/lib/ipc-client', () => ({
   taskApi: {
     getAll: vi.fn().mockResolvedValue([])
   },
+  // The command box now offers dictation, so the voice store loads with it.
+  voiceApi: {
+    getSnapshot: vi.fn().mockResolvedValue({
+      enabled: false,
+      engine: { state: 'model_missing', message: '' },
+      models: [],
+      shortcut: '',
+      runtime: { installed: false, version: null, modulePath: null, sizeBytes: 0 },
+      state: 'disabled',
+      turnId: null,
+      partial: '',
+      final: ''
+    }),
+    getPermission: vi.fn().mockResolvedValue({ status: 'not-determined' }),
+    getRuntime: vi.fn().mockResolvedValue({ installed: false, version: null, modulePath: null, sizeBytes: 0 }),
+    listModels: vi.fn().mockResolvedValue([]),
+    startTurn: vi.fn(),
+    endTurn: vi.fn(),
+    cancelTurn: vi.fn(),
+    pushAudio: vi.fn(),
+    onState: vi.fn(() => vi.fn()),
+    onPartial: vi.fn(() => vi.fn()),
+    onFinal: vi.fn(() => vi.fn()),
+    onSegment: vi.fn(() => vi.fn()),
+    onOutcome: vi.fn(() => vi.fn()),
+    onStatus: vi.fn(() => vi.fn()),
+    onError: vi.fn(() => vi.fn()),
+    onNavigate: vi.fn(() => vi.fn()),
+    onDictate: vi.fn(() => vi.fn()),
+    onHotkey: vi.fn(() => vi.fn()),
+    onRuntimeProgress: vi.fn(() => vi.fn())
+  },
   settingsApi: {
     get: vi.fn().mockResolvedValue(null),
     set: vi.fn().mockResolvedValue(undefined),

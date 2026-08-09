@@ -140,6 +140,20 @@ replaced it.
 A turn started from the global shortcut, or from the test button in settings,
 names no composer, so the words are inserted nowhere.
 
+### Where the microphone button appears
+
+- the agent message box in a task (task workspace, canvas panel, Mastermind);
+- the **Dashboard** command box, where each sentence goes to Mastermind.
+
+Both boxes name themselves with `data-voice-composer` and register under that
+key, so a sentence reaches one box only, and a conversation survives the panel
+being rebuilt.
+
+The Dashboard box is a **controlled** React field. Its send reads the DOM value,
+not the React state, because dictation writes and sends in the same tick and
+React has not re-rendered by then. A send that read the state would post the
+previous value. A test pins this.
+
 ### Testing the microphone
 
 **Settings → Voice → Test the microphone** records one turn, shows a level meter
