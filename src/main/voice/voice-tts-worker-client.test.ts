@@ -126,6 +126,44 @@ describe('the speech worker', () => {
     expect(await finished).toBe(true)
   })
 
+  /**
+   * The bug a user hit: speech worked, then stopped with "No voice is loaded".
+   *
+   * The worker gives the memory back after five minutes of quiet, and `speak`
+   * used to be sent regardless — so the common case, read something and read
+   * something else later, was refused. The voice is downloaded and the setting
+   * is on, which makes the message look like a lie.
+   */
+  it('loads the voice again after the worker released it', async () => {
+    client = new VoiceTtsWorkerClient(SCRIPT)
+    client.load({ engine: 'local', model: MODEL })
+    await ready(client)
+    expect((await speakAndCollect(client, 's1', ['first'])).chunks.length).toBe(1)
+
+    // Exactly what the idle timer does after five minutes of quiet.
+    client.unload()
+    await new Promise((resolve) => setTimeout(resolve, 50))
+
+    const second = await speakAndCollect(client, 's2', ['second'])
+    expect(second.chunks.length).toBe(1)
+    expect(second.cancelled).toBe(false)
+  }, 30000)
+
+  it('says so when there is no voice to load again', async () => {
+    client = new VoiceTtsWorkerClient(SCRIPT)
+    // Nothing was ever loaded, so there is nothing to fall back on. The
+    // failure has to name the passage, or the caller waits for a `done` that
+    // never comes.
+    const failure = new Promise<{ message: string; speechId?: string }>((resolve) => {
+      client?.on('error', (message: string, speechId?: string) => resolve({ message, speechId }))
+    })
+    client.speak({ speechId: 's3', sentences: ['hello'], speakerId: 0, speed: 1 })
+
+    const result = await failure
+    expect(result.message).toMatch(/no voice is loaded/i)
+    expect(result.speechId).toBe('s3')
+  }, 20000)
+
   it('refuses to speak before a voice is loaded', async () => {
     client = new VoiceTtsWorkerClient(SCRIPT)
     // `load` starts the process; the speak below arrives before any voice does.
@@ -204,6 +242,30 @@ describe('a passage that is still being written', () => {
     expect(await done).toBe(2)
     expect(chunks.map((c) => c.text)).toEqual(['First.', 'Second.'])
   })
+
+  it('keeps a streaming answer whole while the voice is loaded again', async () => {
+    // The two fixes meet here. A streaming answer opens its passage empty; if
+    // the voice happens to be reloading, sentences appended in the meantime
+    // would reach a worker with no passage open and be dropped — the answer
+    // would simply be silent.
+    client = new VoiceTtsWorkerClient(SCRIPT)
+    client.load({ engine: 'local', model: MODEL })
+    await ready(client)
+    await speakAndCollect(client, 'warm', ['warm up.'])
+
+    client.unload()
+    await new Promise((resolve) => setTimeout(resolve, 50))
+
+    const { chunks, done } = collect(client, 'speech-reload')
+    client.speak({ speechId: 'speech-reload', sentences: [], open: true, speakerId: 0, speed: 1 })
+    // These arrive while the voice is still loading.
+    client.append('speech-reload', ['One.'])
+    client.append('speech-reload', ['Two.'])
+    client.finish('speech-reload')
+
+    expect(await done).toBe(2)
+    expect(chunks.map((c) => c.text)).toEqual(['One.', 'Two.'])
+  }, 30000)
 
   it('ignores sentences meant for a passage that is over', async () => {
     client = new VoiceTtsWorkerClient(SCRIPT)

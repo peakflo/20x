@@ -319,6 +319,23 @@ aborted". The abort was real; the empty delivery was the external-buffer fault
 described above, and it is fixed. The callback still aborts, so the synchronous
 call per sentence stands.
 
+### The voice is loaded again after it is released
+
+The worker gives the model memory back after five minutes of quiet. Speaking
+then arrived with nothing loaded and was refused with "No voice is loaded" —
+which reads as a lie, because the voice is downloaded and the setting is on.
+
+The last voice asked for is now remembered across that release, and a passage
+that finds nothing loaded is held while the voice comes back rather than
+refused. Loading is not instant, so the passage waits for `ready`; if it never
+comes, the passage fails by name instead of leaving the caller waiting for a
+`done` that will never arrive.
+
+A streaming answer opens its passage empty and fills it as the words arrive, so
+sentences appended during that reload are held with it. Otherwise they would
+reach a worker with no passage open and be dropped, and the answer would simply
+be silent.
+
 ### Starting sooner: a short opening
 
 A sentence is produced whole before any of it can be heard, so the opening
