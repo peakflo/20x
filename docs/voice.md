@@ -138,9 +138,10 @@ Guards:
 While a turn is open, a bubble sits at the bottom of the window with three
 things in it:
 
-- a **halo that follows your voice** — it swells and brightens with the level,
-  so you can see the microphone is hearing you before any word appears. Scale
-  alone was too easy to miss;
+- a **halo that follows your voice** — brightness carries the level and the
+  size barely moves, so you can see the microphone is hearing you before any
+  word appears. Light reads better than movement here, and a control that
+  swells is restless to sit beside;
 - the state, in one word: **Listening**, or **Writing the words**. It used to
   say "Listening — pause to send", which read as an instruction to do something
   when it only described what the loop does by itself;
@@ -177,10 +178,14 @@ The first two name themselves with `data-voice-composer` and register under that
 key, so a sentence reaches one box only, and a conversation survives the panel
 being rebuilt.
 
-In the top bar the microphone is the **loud** control — solid, wider, larger
-glyph — and the Mastermind button beside it is quiet. Speaking is the
-invitation there; typing is the fallback. A microphone next to a text box keeps
-the quiet treatment, because there the box is the subject.
+In the top bar the microphone is the **loud** control, and the Mastermind button
+beside it is quiet. Speaking is the invitation there; typing is the fallback.
+
+The emphasis is **colour, never size**: the accent colour and a faint tint of
+it. Every microphone in the app is the same size, because one that grows reads
+as a different control rather than the same one asking to be used. A microphone
+next to a text box keeps the plain treatment, since there the box is the
+subject.
 
 The top-bar button sits inside no composer, so it **names** one: the Mastermind
 composer, `orchestrator`. A control that names none writes the words nowhere —

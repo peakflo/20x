@@ -63,21 +63,22 @@ export function VoiceOverlay() {
     >
       {showBubble && (
         <div className="pointer-events-auto flex max-w-xl items-center gap-3 rounded-2xl border border-border bg-card/95 px-4 py-2.5 shadow-lg backdrop-blur">
-          {/* The halo follows the voice: it swells and brightens with the
-              level, so a user can see the microphone is hearing them before
-              any word appears. Scale alone was too easy to miss. */}
+          {/* The halo follows the voice, mostly by colour. Brightness carries
+              the level and the size barely moves: a control that grows and
+              shrinks is restless to sit next to, and it was the change in
+              light that made it readable anyway. */}
           <span className="relative flex h-6 w-6 items-center justify-center" data-testid="voice-level">
             <span
               className="absolute inset-0 rounded-full bg-primary transition-all duration-75"
               style={{
-                transform: `scale(${listening ? 0.55 + loudness * 0.95 : 0.55})`,
-                opacity: listening ? 0.15 + loudness * 0.55 : 0.15,
+                transform: `scale(${listening ? 0.85 + loudness * 0.25 : 0.85})`,
+                opacity: listening ? 0.12 + loudness * 0.68 : 0.12,
               }}
               aria-hidden
             />
             <Mic
               className="relative h-3.5 w-3.5 text-primary transition-opacity duration-75"
-              style={{ opacity: listening ? 0.55 + loudness * 0.45 : 1 }}
+              style={{ opacity: listening ? 0.5 + loudness * 0.5 : 1 }}
             />
           </span>
           <div className="min-w-0 flex-1">

@@ -32,10 +32,10 @@ export function TopBarVoiceButton(): React.JSX.Element | null {
     <VoiceMicButton
       composerKey={MASTERMIND_COMPOSER_KEY}
       onBeforeStart={revealComposer}
-      // The loudest control in the bar: speaking is the point here, and the
-      // written word beside it is the fallback.
+      // The loudest control in the bar — by colour, not by size. Speaking is
+      // the point here and the written word beside it is the fallback.
       emphasis="strong"
-      className="h-7 w-9"
+      className="h-7 w-7"
       title={
         conversational
           ? 'Talk to Mastermind. Each pause sends what you said.'

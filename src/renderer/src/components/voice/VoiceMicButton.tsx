@@ -35,6 +35,10 @@ interface VoiceMicButtonProps {
    * `quiet` sits beside a text field, where the field is the subject. `strong`
    * is for a place where speaking is the point rather than one option among
    * several — the top bar.
+   *
+   * The difference is colour, never size. A microphone that grows is a
+   * different-looking control; a microphone that carries the accent colour is
+   * the same control, asking to be used.
    */
   emphasis?: 'quiet' | 'strong'
   className?: string
@@ -142,18 +146,23 @@ export function VoiceMicButton({
   if (!ready) return null
 
   const busy = state === 'transcribing' || state === 'executing'
-  const glyph = emphasis === 'strong' ? 'h-[18px] w-[18px]' : 'h-4 w-4'
+  // Idle emphasis is a tint and the accent colour, so the control keeps its
+  // size and only its weight changes.
+  const accent =
+    emphasis === 'strong' && !listening && !busy
+      ? 'text-primary bg-primary/10 hover:bg-primary/20 hover:text-primary'
+      : ''
   const otherIsListening = !mine && turnId !== null
 
   return (
     <Button
       ref={buttonRef}
       type="button"
-      variant={listening ? 'default' : emphasis === 'strong' ? 'secondary' : 'ghost'}
+      variant={listening ? 'default' : 'ghost'}
       size="icon"
       disabled={busy || otherIsListening}
       onClick={toggle}
-      className={`h-[32px] w-[32px] shrink-0 rounded-lg ${className}`}
+      className={`h-[32px] w-[32px] shrink-0 rounded-lg ${accent} ${className}`}
       title={
         title ??
         (listening
@@ -169,14 +178,14 @@ export function VoiceMicButton({
       data-testid="voice-mic-button"
     >
       {busy ? (
-        <Loader2 className={`${glyph} animate-spin`} />
+        <Loader2 className="h-4 w-4 animate-spin" />
       ) : listening ? (
         <Square
-          className={`${emphasis === 'strong' ? 'h-4 w-4' : 'h-3.5 w-3.5'} fill-current`}
+          className="h-3.5 w-3.5 fill-current"
           style={{ transform: `scale(${1 + Math.min(level, 1) * 0.3})` }}
         />
       ) : (
-        <Mic className={glyph} />
+        <Mic className="h-4 w-4" />
       )}
     </Button>
   )

@@ -247,20 +247,37 @@ describe('TopBarVoiceButton', () => {
     expect(otherMic).toBeDisabled()
   })
 
-  it('is the loud control in the bar, and the pressed state stays obvious', async () => {
+  it('stands out by colour, and never by size', async () => {
     mountMastermindComposer()
     await act(async () => {
-      render(<TopBarVoiceButton />)
+      render(
+        <>
+          <div data-testid="top-bar">
+            <TopBarVoiceButton />
+          </div>
+          <div data-voice-composer="a-task" data-testid="chat">
+            <VoiceMicButton mode="dictation" onSubmit={vi.fn()} />
+          </div>
+        </>
+      )
     })
-    const mic = screen.getByTestId('voice-mic-button')
+    const mic = within(screen.getByTestId('top-bar')).getByTestId('voice-mic-button')
+    const quiet = within(screen.getByTestId('chat')).getByTestId('voice-mic-button')
 
-    // Solid while idle, so it reads as an invitation rather than an afterthought.
-    expect(mic.className).toContain('bg-secondary')
+    // Accent tint while idle, so it reads as an invitation.
+    expect(mic.className).toContain('text-primary')
+    expect(mic.className).toContain('bg-primary/10')
+    // A microphone that grows is a different-looking control. Same size.
+    expect(mic.querySelector('svg')?.getAttribute('class')).toBe(
+      quiet.querySelector('svg')?.getAttribute('class')
+    )
 
     await act(async () => {
       fireEvent.click(mic)
       useVoiceStore.setState({ turnId: 'turn-1', state: 'listening' })
     })
-    expect(mic.className).toContain('bg-primary')
+    // Listening is the filled state, and the idle tint gets out of its way.
+    expect(mic.className).toContain('bg-primary text-primary-foreground')
+    expect(mic.className).not.toContain('bg-primary/10')
   })
 })

@@ -45,7 +45,7 @@ describe('VoiceOverlay', () => {
     expect(screen.queryByText(/pause to send/i)).not.toBeInTheDocument()
   })
 
-  it('glows with the voice, so it is visible that it is hearing you', () => {
+  it('brightens with the voice, and barely changes size', () => {
     reset({ state: 'listening', turnId: 'turn-1', level: 0 })
     const { rerender } = render(<VoiceOverlay />)
     const halo = (): HTMLElement => screen.getByTestId('voice-level').firstElementChild as HTMLElement
@@ -56,9 +56,9 @@ describe('VoiceOverlay', () => {
     })
     rerender(<VoiceOverlay />)
 
-    // Brighter and bigger when spoken into: scale alone was too easy to miss.
-    expect(Number(halo().style.opacity)).toBeGreaterThan(Number(quiet))
-    expect(halo().style.transform).toBe('scale(1.5)')
+    // Light carries the level. A control that swells is restless to sit by.
+    expect(Number(halo().style.opacity)).toBeGreaterThan(Number(quiet) * 3)
+    expect(halo().style.transform).toBe('scale(1.1)')
   })
 
   it('offers a cross that stops listening', async () => {
