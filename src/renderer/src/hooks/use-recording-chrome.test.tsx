@@ -157,6 +157,18 @@ describe('the recording surface', () => {
     expect(declarations).not.toMatch(/^\s*--background\s*:/m)
   })
 
+  it('anchors every gradient to the viewport, so the frame has no seams', () => {
+    // Each strip paints its own copy of the gradient in its own box. Without
+    // this the bands met at an angle wherever two surfaces touched, and the
+    // mismatch crawled as they drifted.
+    const field = css.slice(css.indexOf(`[${RECORDING_ATTRIBUTE}="true"] .app-chrome-field`))
+    for (const rule of [chromeRule.slice(0, chromeRule.indexOf('}')), field.slice(0, field.indexOf('}'))]) {
+      expect(rule).toContain('background-attachment: fixed')
+    }
+    // Same geometry on both, or "fixed" would still sample differently.
+    expect(css.match(/background-size: 220% 220%/g)?.length).toBeGreaterThanOrEqual(2)
+  })
+
   it('moves slowly, and holds still when motion is unwelcome', () => {
     expect(css).toContain('@keyframes recording-drift')
     expect(chromeRule).toMatch(/animation: recording-drift \d+s/)

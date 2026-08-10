@@ -423,6 +423,8 @@ input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
       color-mix(in oklab, var(--destructive) 20%, transparent) 100%
     );
   background-size: 220% 220%;
+  /* Anchored to the viewport, not to this box — see the note on the strips. */
+  background-attachment: fixed;
   animation: recording-drift 14s ease-in-out infinite;
   transition: background-color 180ms ease-out;
 }
@@ -449,6 +451,12 @@ input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
       color-mix(in oklab, var(--primary) 16%, transparent) 66%,
       color-mix(in oklab, var(--destructive) 20%, transparent) 100%
     );
+  /* Every strip paints its own copy of this gradient, and each box is a
+     different size and in a different place — so the bands met at an angle
+     wherever two surfaces touched, and the mismatch crawled as they drifted.
+     Anchoring to the viewport makes all of them sample one gradient of the
+     same geometry, so the frame is continuous whatever its parts are doing. */
+  background-attachment: fixed;
   animation: recording-drift 14s ease-in-out infinite;
   transition: background-color 180ms ease-out;
 }
