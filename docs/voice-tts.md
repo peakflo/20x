@@ -17,7 +17,8 @@ Blueprint: the research subtask artifact `design.md`, §5.2 (provider contracts)
 - An answer is read as it is written, not after the agent stops.
 - An isolated synthesis worker. One sentence is produced at a time and is sent
   the moment it exists, so playback starts after the first sentence.
-- Playback in the renderer, scheduled sentence after sentence with no gap.
+- Playback in the renderer: each piece is played the moment it arrives and the
+  next is scheduled where the last one ends, so there is no gap.
 - Barge-in: the moment the user starts to speak, 20x stops.
 - The answer that is read is the answer the user asked for, matched by voice
   turn and task.
@@ -291,15 +292,54 @@ This is worth remembering beyond this feature: a native addon that works in a
 Node script can still fail in the app, so a runtime path has to be proved under
 Electron and not only under Node.
 
-### One finding worth keeping
+### Why the model's own streaming callback is not used
 
-`sherpa-onnx-node` exposes a streaming callback, `generateAsync({ onProgress })`.
-On the version measured here it delivered no chunks at all and then ended the
-process with an out-of-memory abort. The synchronous call per sentence is used
-instead, which is why a sentence is capped and why the worker waits for each
-message to be flushed before it starts the next sentence. Without that flush the
-first sentence only reached the parent after the last one had been produced —
-playback started at the end of the answer instead of at the beginning.
+`sherpa-onnx-node` exposes `generateAsync({ onProgress })`, which looks like the
+way to get audio out of the model as it is produced. It is not used, for two
+measured reasons.
+
+It does not stream below a sentence. On the fast voice, a three-sentence passage
+produced two or three callbacks — one per sentence group — not a steady flow of
+partial audio. Splitting the text here and generating one sentence at a time
+gives the same granularity and gives it sooner, because the split is chosen
+rather than inherited.
+
+And it ends the process. After one or two calls it aborts with
+`v8::ArrayBuffer::New Allocation failed — process out of memory`, with or
+without `enableExternalBuffer: false`:
+
+```text
+call 1: survived, callbacks=3
+call 2: survived, callbacks=2
+FATAL ERROR: v8::ArrayBuffer::New Allocation failed - process out of memory
+```
+
+An earlier note in this file said the callback "delivered no chunks and then
+aborted". The abort was real; the empty delivery was the external-buffer fault
+described above, and it is fixed. The callback still aborts, so the synchronous
+call per sentence stands.
+
+### Starting sooner: a short opening
+
+A sentence is produced whole before any of it can be heard, so the opening
+sentence sets the wait before an answer starts. A long opening is therefore
+broken at a clause. Measured on the natural voice, through the real worker:
+
+| Opening | First sound |
+|---|---|
+| 119 characters | 5.4 s |
+| 84 characters | 4.1 s |
+| 55 characters | 2.9 s |
+| 33 characters | 1.8 s |
+
+Shorter is not simply better. The natural voice produces speech at about the
+speed of speech, so an opening much shorter than the piece behind it is heard
+out before that piece is ready and the answer stalls in the middle — worse than
+a longer wait at the start. Sixty characters is where the opening still covers
+what follows.
+
+Only the opening is shortened. Every later sentence is produced while the
+previous one is still being heard, so its length costs nothing.
 
 ---
 

@@ -6,6 +6,7 @@ import {
   splitIntoSentences,
   splitStreamingSentences,
   toSpokenText,
+  withShortLeadIn,
 } from './voice-tts'
 
 /**
@@ -155,5 +156,57 @@ describe('splitStreamingSentences', () => {
 
   it('treats a closing quotation mark as part of the full stop', () => {
     expect(splitStreamingSentences('He said "no."').sentences).toEqual(['He said "no."'])
+  })
+})
+
+describe('withShortLeadIn', () => {
+  /**
+   * A sentence is produced whole before any of it can be heard, so the opening
+   * one sets the wait before an answer starts. Measured on the natural voice:
+   * a 119-character opening took 5.4 s to first sound, a 55-character one 2.9 s.
+   */
+  it('breaks a long opening at a clause when there is one in reach', () => {
+    const long = 'The login test failed, and the retry after it did not help either at all.'
+    const [first, second] = withShortLeadIn([long])
+
+    expect(first).toBe('The login test failed,')
+    expect(`${first} ${second}`).toBe(long)
+  })
+
+  it('breaks at a word when the clause is out of reach', () => {
+    const long =
+      'The login test failed because the session token expired before the request was sent, and the retry did not help.'
+    const [first, second] = withShortLeadIn([long])
+
+    // The comma sits past the limit, so waiting for it would defeat the point.
+    expect(first.length).toBeLessThanOrEqual(61)
+    expect(`${first} ${second}`).toBe(long)
+  })
+
+  it('leaves a short opening alone', () => {
+    expect(withShortLeadIn(['It passed.', 'Nothing else.'])).toEqual(['It passed.', 'Nothing else.'])
+  })
+
+  it('touches only the opening, because every later sentence is free', () => {
+    const long = 'A short one. ' + 'x'.repeat(200)
+    const sentences = ['A short one.', 'x'.repeat(200)]
+    expect(withShortLeadIn(sentences)).toEqual(sentences)
+    expect(long.length).toBeGreaterThan(0)
+  })
+
+  it('falls back to a word boundary when there is no clause', () => {
+    const long = 'The build finished and every one of the tests in the suite has now passed correctly'
+    const [first] = withShortLeadIn(long ? [long] : [])
+    expect(first.length).toBeLessThan(long.length)
+    expect(long.startsWith(first)).toBe(true)
+  })
+
+  it('gives up rather than cut a word in half', () => {
+    const unbreakable = ['x'.repeat(200)]
+    expect(withShortLeadIn(unbreakable)).toEqual(unbreakable)
+  })
+
+  it('copes with nothing to say', () => {
+    expect(withShortLeadIn([])).toEqual([])
   })
 })

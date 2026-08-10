@@ -26,6 +26,7 @@ import {
   splitIntoSentences,
   splitStreamingSentences,
   toSpokenText,
+  withShortLeadIn,
   type VoiceSpeechEndEvent,
   type VoiceSpeechRequest,
   type VoiceSpeechStartEvent,
@@ -417,7 +418,9 @@ export class VoiceSpeechService {
     this.stop('cancelled')
 
     const speechId = createId()
-    const sentences = splitIntoSentences(prepared.text)
+    // The opening is shortened so the first sound arrives sooner. Everything
+    // after it is produced while the previous sentence is still being heard.
+    const sentences = withShortLeadIn(splitIntoSentences(prepared.text))
     const voice = this.resolveVoice(request.voiceId)
     this.active = { speechId, source: request.source, ...(request.taskId ? { taskId: request.taskId } : {}) }
     this.onSpeakingChange?.(true)
@@ -516,8 +519,16 @@ export class VoiceSpeechService {
 
     const prepared = toSpokenText(text, this.maxChars())
     const { sentences } = splitStreamingSentences(prepared.text, final)
-    const fresh = sentences.slice(streaming.sentencesSent)
+    let fresh = sentences.slice(streaming.sentencesSent)
     if (fresh.length === 0) return
+
+    // Nothing has been said yet, so this is the opening and its length is the
+    // wait before the answer starts.
+    const before = fresh.length
+    if (streaming.sentencesSent === 0) fresh = withShortLeadIn(fresh)
+    // The split adds a piece the transcript does not have, so the counter is
+    // corrected by exactly what was added rather than by a guess.
+    const leadInExtra = fresh.length - before
 
     // The reading limit applies to the whole answer, not to one piece of it.
     const allowed: string[] = []
@@ -530,7 +541,8 @@ export class VoiceSpeechService {
       allowed.push(sentence)
     }
 
-    streaming.sentencesSent += allowed.length
+    // The counter follows the transcript, not what was said aloud.
+    streaming.sentencesSent += Math.max(0, allowed.length - leadInExtra)
     this.options.notifyRenderer(VOICE_TTS_EVENTS.speechStart, {
       speechId: active.speechId,
       source: 'agent_answer',

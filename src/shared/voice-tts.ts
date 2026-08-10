@@ -453,6 +453,60 @@ export function splitIntoSentences(text: string, maxChars = VOICE_TTS_MAX_SENTEN
 }
 
 /**
+ * How long the first thing said may be.
+ *
+ * A sentence is produced whole before any of it can be heard, so the first one
+ * sets the wait before the answer starts. A long opening sentence is therefore
+ * broken at a clause.
+ *
+ * Measured on the natural voice, through the real worker, for one answer:
+ *
+ *   opening  119 chars -> first sound 5.4 s
+ *   opening   84 chars -> first sound 4.1 s
+ *   opening   55 chars -> first sound 2.9 s
+ *   opening   33 chars -> first sound 1.8 s
+ *
+ * Shorter is not simply better. The natural voice produces speech at about the
+ * speed of speech, so an opening much shorter than what follows is heard out
+ * before the next piece is ready, and the answer stalls in the middle — which
+ * is worse than a longer wait at the start. Sixty is the point where the
+ * opening still covers the piece behind it.
+ */
+export const VOICE_TTS_LEAD_IN_CHARS = 60
+
+/** Where a sentence may be broken without sounding cut in half. */
+const CLAUSE_BREAKS = [', ', '; ', ': ', ' — ', ' – ']
+
+/**
+ * Shortens the opening of a passage so speech starts sooner.
+ *
+ * Only the first sentence is touched, and only when it is long: every later
+ * sentence is produced while the previous one is still being heard, so its
+ * length costs nothing.
+ */
+export function withShortLeadIn(
+  sentences: string[],
+  leadInChars = VOICE_TTS_LEAD_IN_CHARS
+): string[] {
+  const first = sentences[0]
+  if (!first || first.length <= leadInChars) return sentences
+
+  let cut = -1
+  for (const marker of CLAUSE_BREAKS) {
+    const at = first.lastIndexOf(marker, leadInChars)
+    if (at > cut) cut = at + marker.length - 1
+  }
+  // No clause to break at: a word boundary still beats waiting for the lot.
+  if (cut < leadInChars / 3) cut = first.lastIndexOf(' ', leadInChars)
+  if (cut < leadInChars / 3) return sentences
+
+  const head = first.slice(0, cut + 1).trim()
+  const tail = first.slice(cut + 1).trim()
+  if (!head || !tail) return sentences
+  return [head, tail, ...sentences.slice(1)]
+}
+
+/**
  * Splits a passage that is still being written.
  *
  * An answer arrives a few words at a time, and speech must start before the

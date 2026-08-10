@@ -30,12 +30,16 @@
  *
  * Speech is produced one sentence at a time and each sentence is sent as soon
  * as it exists. Playback therefore starts after the first sentence instead of
- * after the whole answer. `sherpa-onnx-node` does expose a streaming callback,
- * `generateAsync({ onProgress })`, but on the version measured for this work it
- * delivered no chunks and then ended the process with an out-of-memory abort,
- * so the synchronous call is used per sentence instead. A sentence is capped by
- * the caller at about 240 characters, which keeps the blocking call to roughly
- * one second and keeps cancellation responsive.
+ * after the whole answer, and the caller shortens the opening one so that the
+ * first sound arrives sooner still.
+ *
+ * `sherpa-onnx-node` does expose a streaming callback, `generateAsync({
+ * onProgress })`. It is not used: measured, it does not stream below a sentence
+ * — one callback per sentence group — and it ends the process with an
+ * out-of-memory abort after one or two calls. See `docs/voice-tts.md`.
+ *
+ * A sentence is capped by the caller at about 240 characters, which keeps the
+ * blocking call to roughly one second and keeps cancellation responsive.
  */
 
 'use strict'
