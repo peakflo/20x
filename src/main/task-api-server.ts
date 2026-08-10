@@ -334,8 +334,8 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
       }
 
       rawDb.prepare(`
-        INSERT INTO tasks (id, title, description, type, priority, status, assignee, due_date, labels, attachments, repos, output_fields, source, agent_id, skill_ids, is_recurring, recurrence_pattern, next_occurrence_at, parent_task_id, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', '[]', '[]', 'local', ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO tasks (id, title, description, type, priority, status, assignee, due_date, labels, attachments, repos, output_fields, source, agent_id, skill_ids, is_recurring, recurrence_pattern, next_occurrence_at, parent_task_id, auto_complete_without_review, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', '[]', '[]', 'local', ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         id,
         params.title,
@@ -352,6 +352,7 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
         recurrencePattern,
         nextOccurrenceAt,
         params.parent_task_id || null,
+        params.auto_complete_without_review === true ? 1 : 0,
         now,
         now
       )
@@ -399,6 +400,11 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
       if (params.labels !== undefined) { updates.push('labels = ?'); qParams.push(JSON.stringify(params.labels)) }
       if (params.skill_ids !== undefined) { updates.push('skill_ids = ?'); qParams.push(JSON.stringify(params.skill_ids)) }
       if (params.agent_id !== undefined) { updates.push('agent_id = ?'); qParams.push(params.agent_id) }
+      // Lets a caller with no window make a task finish by itself.
+      if (params.auto_complete_without_review !== undefined) {
+        updates.push('auto_complete_without_review = ?')
+        qParams.push(params.auto_complete_without_review === true ? 1 : 0)
+      }
       if (params.repos !== undefined) {
         const normalizedRepos = Array.isArray(params.repos)
           ? params.repos
@@ -845,7 +851,18 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
       if (!params.text || !String(params.text).trim()) return { error: 'text is required' }
       if (!agentController) return { error: 'Agent controller not available' }
       const taskId = String(params.task_id)
-      if (!db.getTask(taskId)) return { error: 'Task not found' }
+      const target = db.getTask(taskId)
+      if (!target) return { error: 'Task not found' }
+
+      // Waking a stopped agent needs an agent to wake. Without one the send
+      // fails deep inside with "Session not found:", which names neither the
+      // cause nor the cure.
+      if (!target.agent_id && !agentController.findSessionByTaskId(taskId)) {
+        return {
+          error: 'That task has no agent assigned, so there is nobody to send to. Assign one with update_task, or use start_task to triage it.',
+          reason: 'no_agent'
+        }
+      }
 
       // The message is attributed to the user, because that is who spoke it.
       // A transcript that credited the agent would misreport who asked.

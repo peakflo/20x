@@ -66,6 +66,7 @@ voice worker (separate process)
 | `src/renderer/src/lib/voice-capture.ts` | Microphone capture |
 | `src/renderer/src/lib/voice-dictation-target.ts` | The one field that receives words |
 | `src/renderer/src/components/voice/TopBarVoiceButton.tsx` | Talk to Mastermind from any view |
+| `src/renderer/src/hooks/use-recording-chrome.ts` | Turns the window frame red while recording |
 | `src/shared/ui-commands.ts` | The UI command contract and the published screen |
 | `src/renderer/src/lib/ui-remote-control.ts` | Applies one command; collects the screen |
 | `src/renderer/src/hooks/use-ui-remote-control.ts` | Publishes the screen, receives commands |
@@ -171,6 +172,34 @@ find "loading", and refuse, so **the first click after the idle unload, a
 restart, or a model change did nothing at all**. It now waits for the model, up
 to 90 seconds, and the microphone button spins while it does. A load that fails
 or never arrives ends the wait with the reason.
+
+### The chrome shifts while you are heard
+
+While the microphone is live the three chrome strips shift — the top bar, the
+icon rail with the sidebar, and the status bar. **The work itself is left
+alone.** An attempt to tint the whole window turned the task view pink, and a
+signal must not sit on top of what the user is reading.
+
+The colours are the system's own. `--destructive` is the only red in Aperture
+and `--primary` is the brand azure; both are **mixed into the current surface**
+rather than pinned to a hex, so the tint follows the theme and light and dark
+need no separate values. A slow drift between the two keeps the strips from
+reading as a flat fill left switched on, and it stops under
+`prefers-reduced-motion`.
+
+Two details that are easy to get wrong:
+
+- **The scope is the guarantee.** Every recording rule is scoped to
+  `.app-chrome`; a test parses the stylesheet and fails if any of them is not,
+  because a rule at `:root` or on `#root` reaches the workspace and the gutters.
+- The overrides are on `--color-*`, the Tailwind-facing tokens, not the raw
+  `--background`. The bridge resolves `--color-background: var(--background)`
+  once on `:root`, so a deeper override of the raw token is **silently
+  ignored** — it looks like nothing happening rather than like an error.
+
+It follows the **turn**, not the setting. Voice being switched on is not
+recording, and neither is the moment after you stop while the words are written
+up — a red frame then would be a lie about an open microphone.
 
 ### Where dictated words go
 

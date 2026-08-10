@@ -50,6 +50,9 @@ afterEach(() => {
  */
 const REAL_MODEL_LOAD_MS = 120_000
 
+/** How long a real model may take to decode the two passages of the fixture. */
+const REAL_MODEL_DECODE_MS = 120_000
+
 function waitFor<T>(register: (resolve: (value: T) => void) => void, ms = 4000): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('the worker did not answer in time')), ms)
@@ -286,8 +289,15 @@ describe.skipIf(!hasRealEngine || installedModelIds.length === 0)('the conversat
 
       // Two spoken passages separated by pauses give two sentences, and the
       // turn is still open afterwards.
+      //
+      // The budget is generous because decoding speed varies by an order of
+      // magnitude across the catalogue — the largest model is 662 MB and runs
+      // at a real-time factor of about 0.15 on an idle machine, far slower
+      // when the rest of the suite is competing for cores. A cap that fits the
+      // smallest model fails the biggest one on the second sentence, which
+      // reports a timing accident as a behavioural fault.
       await vi.waitFor(() => expect(segments.length).toBeGreaterThanOrEqual(2), {
-        timeout: 30000,
+        timeout: REAL_MODEL_DECODE_MS,
         interval: 100,
       })
       expect(segments[0]).toMatch(/nightfall/i)

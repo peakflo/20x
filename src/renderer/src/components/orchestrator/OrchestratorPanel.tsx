@@ -155,7 +155,10 @@ export function OrchestratorPanel({ onClose }: OrchestratorPanelProps) {
   }, [handleSendMessage])
 
   return (
-    <div className="h-full flex flex-col bg-background border-l border-border">
+    // Floats as a card, like the workspace and the sidebar: same radius,
+    // hairline, fill and shadow. It was the one panel still sitting flush and
+    // square against the work.
+    <div className="flex h-full flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-card">
       {/* Header with agent selector */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-border shrink-0">
         {/* A warm session is not a conversation: the choice stays open until

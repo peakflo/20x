@@ -384,3 +384,98 @@ input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
   background: rgba(var(--canvas-status-rgb), 0.9);
   animation: canvas-status-jump-popup 1.4s ease-in-out infinite;
 }
+
+/* ── Recording ──────────────────────────────────────────────────────────────
+   While the microphone is live the three chrome strips shift — the top bar,
+   the icon rail and the sidebar, and the status bar. **The work itself is left
+   alone.** Tinting the card underneath turned the task window pink, which is
+   not a signal, it is a distraction sitting on top of what the user is reading.
+
+   The colours are the system's own: `--destructive` is the only red in
+   Aperture and `--primary` is the brand azure. Both are mixed into the current
+   surface rather than pinned to a hex, so the tint follows the theme and light
+   and dark need no separate values.
+
+   The overrides are on `--color-*`, the Tailwind-facing tokens, because the
+   bridge resolves `--color-background: var(--background)` once on `:root` — a
+   deeper override of the raw token is silently ignored, which looks like
+   nothing happening at all. */
+.app-chrome {
+  background-size: 220% 220%;
+}
+
+/**
+ * The field the panels float on.
+ *
+ * Only the fill, never the tokens: the cards sit on top of this, and their
+ * contents must not inherit a tinted `--color-background`. Leaving it grey
+ * made the tinted strips look like a stripe laid over the window rather than
+ * the frame of it — the gutters read as a seam.
+ */
+[data-voice-recording="true"] .app-chrome-field {
+  background-color: color-mix(in oklab, var(--destructive) 16%, var(--background));
+  background-image:
+    linear-gradient(
+      115deg,
+      color-mix(in oklab, var(--destructive) 20%, transparent) 0%,
+      transparent 42%,
+      color-mix(in oklab, var(--primary) 16%, transparent) 66%,
+      color-mix(in oklab, var(--destructive) 20%, transparent) 100%
+    );
+  background-size: 220% 220%;
+  /* Anchored to the viewport, not to this box — see the note on the strips. */
+  background-attachment: fixed;
+  animation: recording-drift 14s ease-in-out infinite;
+  transition: background-color 180ms ease-out;
+}
+
+[data-voice-recording="true"] .app-chrome {
+  --color-background: color-mix(in oklab, var(--destructive) 16%, var(--background));
+  --color-sidebar: color-mix(in oklab, var(--destructive) 16%, var(--background));
+  /* The sidebar is a card like the workspace, so it fills from `--card`. Only
+     the strips are reached from here — the workspace is not marked chrome, so
+     its own card is untouched. */
+  --color-card: color-mix(in oklab, var(--destructive) 16%, var(--card));
+  --color-border: color-mix(in oklab, var(--destructive) 34%, var(--border));
+  --color-sidebar-border: color-mix(in oklab, var(--destructive) 34%, var(--border));
+  --color-accent: color-mix(in oklab, var(--destructive) 26%, var(--accent));
+
+  background-color: color-mix(in oklab, var(--destructive) 16%, var(--background));
+  /* A slow drift between the red and the brand azure, so the strips read as
+     alive rather than as a flat fill that has been left switched on. */
+  background-image:
+    linear-gradient(
+      115deg,
+      color-mix(in oklab, var(--destructive) 20%, transparent) 0%,
+      transparent 42%,
+      color-mix(in oklab, var(--primary) 16%, transparent) 66%,
+      color-mix(in oklab, var(--destructive) 20%, transparent) 100%
+    );
+  /* Every strip paints its own copy of this gradient, and each box is a
+     different size and in a different place — so the bands met at an angle
+     wherever two surfaces touched, and the mismatch crawled as they drifted.
+     Anchoring to the viewport makes all of them sample one gradient of the
+     same geometry, so the frame is continuous whatever its parts are doing. */
+  background-attachment: fixed;
+  animation: recording-drift 14s ease-in-out infinite;
+  transition: background-color 180ms ease-out;
+}
+
+@keyframes recording-drift {
+  0%,
+  100% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+}
+
+/* A recording light should not move for anyone who has asked it not to. */
+@media (prefers-reduced-motion: reduce) {
+  [data-voice-recording="true"] .app-chrome,
+  [data-voice-recording="true"] .app-chrome-field {
+    animation: none;
+    transition: none;
+  }
+}

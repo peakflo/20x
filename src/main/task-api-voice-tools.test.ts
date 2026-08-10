@@ -254,6 +254,39 @@ describe('send_message', () => {
     expect(agents.sendByTaskId).toHaveBeenCalledWith('t1', 'why did the test fail')
   })
 
+  /**
+   * Waking a stopped agent needs an agent to wake. Without one the send used
+   * to fail deep inside with "Session not found:", naming neither the cause
+   * nor the cure.
+   */
+  it('names the cause when the task has no agent', async () => {
+    const db = makeDb()
+    ;(db as unknown as { getTask: ReturnType<typeof vi.fn> }).getTask = vi.fn(() =>
+      task('t3', 'Unassigned', { agent_id: null as never })
+    )
+    agents.findSessionByTaskId.mockReturnValue(undefined)
+
+    const result = (await handleTaskApiRoute('/send_message', { task_id: 't3', text: 'hello' }, db)) as {
+      error?: string
+      reason?: string
+    }
+    expect(result.reason).toBe('no_agent')
+    expect(result.error).toMatch(/no agent assigned/i)
+    expect(result.error).toMatch(/update_task|start_task/)
+    expect(agents.sendByTaskId).not.toHaveBeenCalled()
+  })
+
+  it('still sends when a session is running without an assignee on the record', async () => {
+    const db = makeDb()
+    ;(db as unknown as { getTask: ReturnType<typeof vi.fn> }).getTask = vi.fn(() =>
+      task('t1', 'Fix login', { agent_id: null as never })
+    )
+    const result = (await handleTaskApiRoute('/send_message', { task_id: 't1', text: 'hello' }, db)) as {
+      success?: boolean
+    }
+    expect(result.success).toBe(true)
+  })
+
   it('refuses an empty message and an unknown task', async () => {
     const empty = (await handleTaskApiRoute('/send_message', { task_id: 't1', text: '  ' }, makeDb())) as {
       error?: string
