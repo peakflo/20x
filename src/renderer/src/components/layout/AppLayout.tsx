@@ -431,7 +431,7 @@ export function AppLayout() {
       </div>
 
       {/* ── Content area: left rail + optional sidebar + workspace + orchestrator ── */}
-      <div className="flex flex-1 min-h-0 overflow-hidden bg-background">
+      <div className="app-chrome-field flex flex-1 min-h-0 overflow-hidden bg-background">
         {/* Primary navigation — slim vertical icon rail */}
         <nav className="app-chrome no-drag flex w-9 flex-shrink-0 flex-col items-center gap-0.5 bg-background py-1.5">
           {NAV_ITEMS.map(({ key, label, icon: Icon }, i) => {

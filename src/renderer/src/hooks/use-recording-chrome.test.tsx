@@ -93,6 +93,16 @@ describe('the recording surface', () => {
   const css = readFileSync(join(__dirname, '../styles/globals.css'), 'utf-8')
   const chromeRule = css.slice(css.indexOf(`[${RECORDING_ATTRIBUTE}="true"] .app-chrome`))
 
+  it('tints the field the panels float on, so the frame is continuous', () => {
+    // Leaving the gutters grey made the strips look like a stripe laid over
+    // the window rather than the frame of it.
+    const field = css.slice(css.indexOf(`[${RECORDING_ATTRIBUTE}="true"] .app-chrome-field`))
+    expect(field).toContain('background-color: color-mix(')
+    // Fill only. The cards sit on this, and their contents must not inherit a
+    // tinted `--color-background`.
+    expect(field.slice(0, field.indexOf('}'))).not.toContain('--color-')
+  })
+
   it('tints the three chrome strips', () => {
     expect(chromeRule).toContain('--color-background: color-mix(')
     // The sidebar floats as a card, so it fills from `--card` rather than
@@ -191,7 +201,8 @@ describe('the surfaces that carry the mark', () => {
   })
 
   it.each([
-    ['AppLayout.tsx', 2],
+    // Top bar, icon rail, and the field the panels float on.
+    ['AppLayout.tsx', 3],
     ['Sidebar.tsx', 1],
     ['StatusBar.tsx', 1],
   ])('%s marks its chrome', (file, count) => {
