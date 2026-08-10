@@ -71,11 +71,10 @@ export function VoiceOverlay() {
           </span>
           <div className="min-w-0">
             <p className="text-[11px] uppercase tracking-wide text-muted-foreground">
-              {transcribing
-                ? 'Writing the words'
-                : mode === 'conversation'
-                  ? 'Listening — pause to send'
-                  : 'Listening'}
+              {/* One word for one state. "Listening — pause to send" read as
+                  an instruction to do something, when it only described what
+                  happens next by itself. */}
+              {transcribing ? 'Writing the words' : 'Listening'}
             </p>
             <p className="truncate text-sm text-foreground" data-testid="voice-transcript">
               {partial ||

@@ -36,6 +36,15 @@ describe('VoiceOverlay', () => {
     reset()
   })
 
+  it('says only that it is listening, in every mode', () => {
+    // "Listening — pause to send" read as an instruction to do something,
+    // when it only described what happens next by itself.
+    reset({ state: 'listening', turnId: 'turn-1', mode: 'conversation' })
+    render(<VoiceOverlay />)
+    expect(screen.getByText('Listening')).toBeInTheDocument()
+    expect(screen.queryByText(/pause to send/i)).not.toBeInTheDocument()
+  })
+
   it('shows nothing while voice is switched off', () => {
     reset({ enabled: false, state: 'listening' })
     const { container } = render(<VoiceOverlay />)
