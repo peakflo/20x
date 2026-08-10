@@ -431,7 +431,7 @@ export function AppLayout() {
       </div>
 
       {/* ── Content area: left rail + optional sidebar + workspace + orchestrator ── */}
-      <div className="flex flex-1 min-h-0 overflow-hidden">
+      <div className="flex flex-1 min-h-0 overflow-hidden bg-background">
         {/* Primary navigation — slim vertical icon rail */}
         <nav className="app-chrome no-drag flex w-9 flex-shrink-0 flex-col items-center gap-0.5 bg-background py-1.5">
           {NAV_ITEMS.map(({ key, label, icon: Icon }, i) => {
@@ -527,7 +527,7 @@ export function AppLayout() {
             showOrchestrator ? 'w-[340px]' : 'w-0'
           }`}
         >
-          <div className="w-[340px] h-full">
+          <div className="h-full w-[340px] py-2 pr-2">
             <Suspense fallback={null}>
               <OrchestratorPanel onClose={() => setShowOrchestrator(false)} />
             </Suspense>

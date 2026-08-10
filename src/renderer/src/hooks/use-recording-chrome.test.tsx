@@ -158,17 +158,36 @@ describe('the recording surface', () => {
 describe('the surfaces that carry the mark', () => {
   const layout = join(__dirname, '../components/layout')
 
-  it('floats the sidebar exactly as the workspace floats', () => {
+  it('floats every panel the same way', () => {
     const appLayout = readFileSync(join(layout, 'AppLayout.tsx'), 'utf-8')
     const sidebar = readFileSync(join(layout, 'Sidebar.tsx'), 'utf-8')
-    const main = appLayout.slice(appLayout.indexOf('<main'), appLayout.indexOf('</main>'))
-    const aside = sidebar.slice(sidebar.indexOf('<aside'), sidebar.indexOf('>', sidebar.indexOf('<aside')))
+    const drawer = readFileSync(
+      join(layout, '../orchestrator/OrchestratorPanel.tsx'),
+      'utf-8'
+    )
 
-    // Same shape language, or the sidebar reads as unfinished beside the work.
-    for (const shape of ['rounded-2xl', 'border border-border', 'bg-card', 'shadow-card']) {
-      expect(main, `main should carry ${shape}`).toContain(shape)
-      expect(aside, `sidebar should carry ${shape}`).toContain(shape)
+    const panels = {
+      workspace: appLayout.slice(appLayout.indexOf('<main'), appLayout.indexOf('</main>')),
+      sidebar: sidebar.slice(sidebar.indexOf('<aside'), sidebar.indexOf('>', sidebar.indexOf('<aside'))),
+      // The Mastermind drawer was the last one still flush and square.
+      mastermind: drawer.slice(drawer.indexOf('return ('), drawer.indexOf('{/* Header')),
     }
+
+    // One shape language. A panel that opts out reads as unfinished beside
+    // the others.
+    for (const [name, markup] of Object.entries(panels)) {
+      for (const shape of ['rounded-2xl', 'border border-border', 'bg-card', 'shadow-card']) {
+        expect(markup, `${name} should carry ${shape}`).toContain(shape)
+      }
+    }
+  })
+
+  it('paints the field the panels float on', () => {
+    // The gutters between the cards must be the theme surface, not whatever
+    // happens to be behind an unpainted element.
+    const appLayout = readFileSync(join(layout, 'AppLayout.tsx'), 'utf-8')
+    const row = appLayout.slice(appLayout.indexOf('Content area:'))
+    expect(row.slice(0, 300)).toContain('bg-background')
   })
 
   it.each([
