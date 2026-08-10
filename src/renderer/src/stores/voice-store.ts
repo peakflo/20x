@@ -185,12 +185,37 @@ function hasTtsBridge(): boolean {
  * There is one for the window, beside the single microphone and the single
  * speaker, so a turn and an answer can never disagree about who is talking.
  */
+/**
+ * The passage the user stopped.
+ *
+ * Main cannot stop instantly: the voice call blocks its process, so a `cancel`
+ * is only read between sentences. Until then main keeps pushing, and each push
+ * is another `speechStart` and more audio for the same passage. Naming what was
+ * stopped is what makes the silence hold.
+ */
+let stoppedSpeechId: string | null = null
+
+/**
+ * Everything the renderer does when speech is stopped by the user: barge-in,
+ * the stop button, Escape, and opening a turn. It has to be one function,
+ * because a path that forgets one of these steps is a path where 20x carries
+ * on talking.
+ */
+function stopPlaybackForUser(): void {
+  stoppedSpeechId = voicePlayback.currentSpeechId ?? stoppedSpeechId
+  voicePlayback.stop()
+  // The gate is opened here as well. The `speechEnd` that follows names a
+  // passage that is already gone and is dropped, so nothing else would open it,
+  // and a gate left holding swallows every word into the open turn.
+  bargeInGate.setSpeaking(false)
+  useVoiceStore.setState({ speaking: false, speechText: '' })
+}
+
 const bargeInGate = new BargeInGate({
   onBargeIn: () => {
     // Stop in this tick, before the round trip to main: the user is already
     // speaking and every further word of the answer is talking over them.
-    voicePlayback.stop()
-    useVoiceStore.setState({ speaking: false, speechText: '' })
+    stopPlaybackForUser()
     void voiceTtsApi.stop()
   },
 })
@@ -314,13 +339,7 @@ export const useVoiceStore = create<VoiceStoreState>((set, get) => ({
     if (!enabled || turnId) return
     // Barge-in. Playback stops here, in the same tick as the press, instead of
     // waiting for main to answer. Main stops producing the rest.
-    voicePlayback.stop()
-    // The gate has to be told as well. `speechEnd` will arrive, but it is
-    // dropped because the passage it names is already gone, so nothing else
-    // ever clears the gate — and a gate left holding swallows every word the
-    // user says into the open turn.
-    bargeInGate.setSpeaking(false)
-    set({ speaking: false, speechText: '' })
+    stopPlaybackForUser()
     const started = await voiceApi.startTurn(mode, contextProvider?.() ?? {})
     if ('error' in started) {
       set({ result: { kind: 'error', message: started.error, at: Date.now() } })
@@ -507,9 +526,7 @@ export const useVoiceStore = create<VoiceStoreState>((set, get) => ({
   },
 
   stopSpeaking: async () => {
-    voicePlayback.stop()
-    bargeInGate.setSpeaking(false)
-    set({ speaking: false, speechText: '' })
+    stopPlaybackForUser()
     await voiceTtsApi.stop()
   },
 }))
@@ -620,8 +637,20 @@ if (hasVoiceBridge()) {
 
 if (hasTtsBridge()) {
   voiceTtsApi.onSpeechStart((event) => {
+    // The user stopped this passage. Main is still finishing the sentence it
+    // was inside — a `cancel` can only be read between sentences — and its
+    // next push arrives as another `speechStart`. Re-opening the passage here
+    // let that sentence play out in full, which is 20x finishing its sentence
+    // after being told to stop.
+    if (event.speechId === stoppedSpeechId) return
+
     useVoiceStore.setState({ speaking: true, speechText: event.text })
     bargeInGate.setSpeaking(true)
+
+    // Main announces the start on every push, not once per passage. Opening a
+    // passage that is already open does nothing, so the sentence sounding now
+    // is not cut off by the arrival of the next one.
+    //
     // No `onLevel` handler is passed. Nothing draws the loudness of the
     // playback any more, and reporting it ran an analyser read and a store
     // write sixteen times a second for the whole of every answer.
@@ -637,6 +666,7 @@ if (hasTtsBridge()) {
   })
 
   voiceTtsApi.onSpeechChunk((event) => {
+    if (event.speechId === stoppedSpeechId) return
     voicePlayback.play(event.speechId, event.pcm, event.sampleRate)
   })
 

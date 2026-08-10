@@ -53,8 +53,16 @@ export class VoicePlayback {
     return this.pending > 0
   }
 
-  /** Opens a new passage. Any passage still playing is dropped. */
+  /**
+   * Opens a new passage. Any passage still playing is dropped.
+   *
+   * Opening the passage that is already open does nothing. Main announces the
+   * start on every push, not once per passage, and each of those announcements
+   * used to drop what was queued — so every new sentence cut off the sentence
+   * before it whenever the voice produced faster than it played.
+   */
   start(speechId: string, handlers: VoicePlaybackHandlers = {}): void {
+    if (this.speechId === speechId) return
     this.stop()
     this.handlers = handlers
     this.speechId = speechId

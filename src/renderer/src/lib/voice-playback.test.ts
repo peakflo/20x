@@ -137,6 +137,37 @@ describe('VoicePlayback', () => {
     expect(playback.currentSpeechId).toBe('s2')
   })
 
+  /**
+   * Main announces the start of a passage on every push, not once per passage.
+   * Dropping the queue on each announcement cut off the sentence that was
+   * sounding, whenever the voice produced faster than it played.
+   */
+  it('keeps playing when the passage it already has is opened again', () => {
+    const playback = new VoicePlayback()
+    playback.start('s1')
+    playback.play('s1', pcm(1), 24000)
+    playback.play('s1', pcm(1), 24000)
+
+    playback.start('s1')
+
+    expect(sources.some((s) => s.stopped)).toBe(false)
+    expect(playback.hasQueuedAudio).toBe(true)
+    expect(playback.currentSpeechId).toBe('s1')
+  })
+
+  it('keeps the sentences already queued in order when reopened', () => {
+    const playback = new VoicePlayback()
+    playback.start('s1')
+    playback.play('s1', pcm(1), 24000)
+    const firstStart = sources[0].startedAt ?? 0
+
+    playback.start('s1')
+    playback.play('s1', pcm(1), 24000)
+
+    // The second sentence is still scheduled after the first, not on top of it.
+    expect(sources[1].startedAt ?? 0).toBeGreaterThan(firstStart)
+  })
+
   it('reports when everything queued has been heard', () => {
     const playback = new VoicePlayback()
     const drained = vi.fn()

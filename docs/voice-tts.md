@@ -294,6 +294,30 @@ that was never silenced.
 The record is bounded — `VOICE_SILENCED_TASKS` tasks, `VOICE_SILENCED_PARTS_PER_TASK`
 messages each — because it outlives every passage and 20x runs for days.
 
+### And it has to cut the sentence, not finish it
+
+Stopping was still heard as 20x finishing the sentence it was inside. The cause
+was one announcement too many.
+
+Main announces `speechStart` on **every push**, not once per passage — four
+times for a three-sentence answer. The renderer opened a passage on each one,
+and opening a passage drops whatever is queued. So:
+
+- in ordinary playback, every new sentence cut off the sentence before it,
+  whenever the voice produced faster than it played — which the fast voice
+  always does;
+- after barge-in, the next push re-opened the passage the user had just
+  stopped, and the sentence main was still producing played out in full.
+
+Two things fix it. Opening the passage that is already open now does nothing,
+so an announcement can no longer drop the queue. And the renderer remembers the
+passage the user stopped and ignores every later start and sentence for it —
+which it must, because main cannot stop mid-sentence: the voice call blocks its
+process, so a `cancel` is only read between sentences.
+
+Every path that stops speech by hand — barge-in, the stop button, Escape,
+opening a turn — goes through one function, so no path can forget a step.
+
 ### The gate has to be told when playback stops
 
 The gate holds the microphone back while an answer plays, and only two things
