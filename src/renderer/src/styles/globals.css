@@ -384,3 +384,50 @@ input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
   background: rgba(var(--canvas-status-rgb), 0.9);
   animation: canvas-status-jump-popup 1.4s ease-in-out infinite;
 }
+
+/* ── Recording chrome ───────────────────────────────────────────────────────
+   While the microphone is live, the frame around the work turns deep crimson:
+   the top bar, the icon rail, the sidebar and the status bar. The content
+   itself is untouched — the point is a signal at the edge of vision, not a
+   themed application.
+
+   Only `--color-*` is overridden here, never the raw `--background`. The token
+   bridge resolves `--color-background: var(--background)` once, on `:root`, so
+   a deeper override of `--background` would be ignored; utilities inside the
+   subtree read `--color-background`, which is what these rules replace. */
+:root {
+  --recording-chrome: #8b1e3f;
+  --recording-chrome-foreground: #ffffff;
+  --recording-chrome-muted: #f6cdd6;
+  --recording-chrome-border: rgba(255, 255, 255, 0.22);
+  --recording-chrome-hover: rgba(255, 255, 255, 0.14);
+}
+
+.dark {
+  /* Darker against dark chrome, so it reads as a tint and not a lamp. */
+  --recording-chrome: #7a1626;
+  --recording-chrome-muted: #edb9c5;
+  --recording-chrome-border: rgba(255, 255, 255, 0.18);
+  --recording-chrome-hover: rgba(255, 255, 255, 0.12);
+}
+
+[data-voice-recording="true"] .app-chrome {
+  --color-background: var(--recording-chrome);
+  --color-sidebar: var(--recording-chrome);
+  --color-foreground: var(--recording-chrome-foreground);
+  --color-sidebar-foreground: var(--recording-chrome-foreground);
+  --color-muted-foreground: var(--recording-chrome-muted);
+  --color-border: var(--recording-chrome-border);
+  --color-sidebar-border: var(--recording-chrome-border);
+  --color-accent: var(--recording-chrome-hover);
+  --color-accent-foreground: var(--recording-chrome-foreground);
+  background-color: var(--recording-chrome);
+  transition: background-color 180ms ease-out;
+}
+
+/* A recording light should not strobe for anyone who has asked it not to. */
+@media (prefers-reduced-motion: reduce) {
+  [data-voice-recording="true"] .app-chrome {
+    transition: none;
+  }
+}

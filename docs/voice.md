@@ -62,6 +62,7 @@ voice worker (separate process)
 | `src/renderer/src/lib/voice-capture.ts` | Microphone capture |
 | `src/renderer/src/lib/voice-dictation-target.ts` | The one field that receives words |
 | `src/renderer/src/components/voice/TopBarVoiceButton.tsx` | Talk to Mastermind from any view |
+| `src/renderer/src/hooks/use-recording-chrome.ts` | Turns the window frame red while recording |
 | `src/shared/ui-commands.ts` | The UI command contract and the published screen |
 | `src/renderer/src/lib/ui-remote-control.ts` | Applies one command; collects the screen |
 | `src/renderer/src/hooks/use-ui-remote-control.ts` | Publishes the screen, receives commands |
@@ -167,6 +168,26 @@ find "loading", and refuse, so **the first click after the idle unload, a
 restart, or a model change did nothing at all**. It now waits for the model, up
 to 90 seconds, and the microphone button spins while it does. A load that fails
 or never arrives ends the wait with the reason.
+
+### The frame turns red while you are heard
+
+While the microphone is live, the chrome around the work goes deep crimson —
+the top bar, the icon rail, the sidebar and the status bar. The content itself
+is untouched: the point is a signal at the edge of vision, not a themed
+application. `#8b1e3f` in light, `#7a1626` in dark.
+
+It follows the **turn**, not the setting. Voice being switched on is not
+recording, and neither is the moment after you stop while the words are written
+up — a red frame then would be a lie about an open microphone.
+
+One CSS rule does it. `useRecordingChrome` marks `<html>` with
+`data-voice-recording`, and every surface that wants the treatment marks itself
+`app-chrome`; none of those four components knows anything about voice, and a
+fifth surface is a class rather than a subscription. The rule overrides the
+bridged `--color-*` tokens, never the raw `--background`: the bridge resolves
+`--color-background: var(--background)` once, on `:root`, so a deeper override
+of the raw token does nothing. Text and hairlines move with the fill, or they
+would be unreadable on crimson.
 
 ### Where dictated words go
 

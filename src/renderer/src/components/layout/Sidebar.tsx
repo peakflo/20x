@@ -155,7 +155,7 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
 
   return (
     <aside
-      className="relative flex flex-col h-full shrink-0 bg-background text-sidebar-foreground overflow-hidden"
+      className="app-chrome relative flex flex-col h-full shrink-0 bg-background text-sidebar-foreground overflow-hidden"
       style={{ width: sidebarWidth }}
     >
       {sidebarView === 'tasks' ? (

@@ -11,6 +11,7 @@ import { ProgressToastStack } from '@/components/ui/ProgressToastStack'
 import { VoiceOverlay } from '@/components/voice/VoiceOverlay'
 import { useVoiceControl } from '@/hooks/use-voice-control'
 import { useUiRemoteControl } from '@/hooks/use-ui-remote-control'
+import { useRecordingChrome } from '@/hooks/use-recording-chrome'
 import { TopBarVoiceButton } from '@/components/voice/TopBarVoiceButton'
 
 // Lazy-load heavy workspace components — only imported when their view is active.
@@ -288,6 +289,8 @@ export function AppLayout() {
   useVoiceControl()
   // Publishes the screen for agent tools, and applies their UI commands.
   useUiRemoteControl()
+  // Turns the chrome crimson while the microphone is live.
+  useRecordingChrome()
 
   // ── Track zoom factor so macOS traffic-light margin stays constant in physical pixels ──
   useEffect(() => {
@@ -333,7 +336,7 @@ export function AppLayout() {
   return (
     <>
       {/* ── Top bar: drag region with logo (left) + nav switcher (center) + actions (right) ── */}
-      <div className="drag-region bg-background h-8 flex-shrink-0 flex items-center justify-center px-3 pt-2.5 windows-titlebar-pad">
+      <div className="app-chrome drag-region bg-background h-8 flex-shrink-0 flex items-center justify-center px-3 pt-2.5 windows-titlebar-pad">
         {/* Logo + wordmark + update indicator — pinned left. The white logo mark
             always sits on a brand-gradient tile, so it stays visible in both themes. */}
         <div className="no-drag absolute left-3 flex items-center gap-1.5 macos-titlebar-pad">
@@ -430,7 +433,7 @@ export function AppLayout() {
       {/* ── Content area: left rail + optional sidebar + workspace + orchestrator ── */}
       <div className="flex flex-1 min-h-0 overflow-hidden">
         {/* Primary navigation — slim vertical icon rail */}
-        <nav className="no-drag flex w-9 flex-shrink-0 flex-col items-center gap-0.5 bg-background py-1.5">
+        <nav className="app-chrome no-drag flex w-9 flex-shrink-0 flex-col items-center gap-0.5 bg-background py-1.5">
           {NAV_ITEMS.map(({ key, label, icon: Icon }, i) => {
             const active = sidebarView === key && activeModal !== 'settings'
             return (
