@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/Input'
 import { settingsApi, voiceApi } from '@/lib/ipc-client'
 import { selectVoiceSetupComplete, useVoiceStore } from '@/stores/voice-store'
 import { VoiceRuntimeRow } from '@/components/voice/VoiceRuntimeRow'
+import { AdvancedDisclosure } from '../AdvancedDisclosure'
 import { SpokenAnswerSettings } from './SpokenAnswerSettings'
 import {
   VOICE_DEFAULT_ENDPOINT_SILENCE,
@@ -68,12 +69,18 @@ export function VoiceSettings() {
   const [shortcutDraft, setShortcutDraft] = useState('')
   const [busy, setBusy] = useState(false)
   const [advanced, setAdvanced] = useState(false)
+  const [advancedReady, setAdvancedReady] = useState(false)
 
   useEffect(() => {
     void initialize()
     void settingsApi.get(VOICE_SETTING_KEYS.quickCreate).then((v) => setQuickCreate(v === 'true'))
     void settingsApi.get(VOICE_SETTING_KEYS.customModelDir).then((v) => setCustomDir(v ?? ''))
-    void settingsApi.get(VOICE_SETTING_KEYS.advancedSettings).then((v) => setAdvanced(v === 'true'))
+    void settingsApi.get(VOICE_SETTING_KEYS.advancedStt).then((v) => {
+      setAdvanced(v === 'true')
+      // The disclosure keeps its own open state, so it may only be drawn once
+      // the stored answer is known.
+      setAdvancedReady(true)
+    })
     void settingsApi
       .get(VOICE_SETTING_KEYS.endpointSilence)
       .then((v) => setEndpointSilence(Number(v) || VOICE_DEFAULT_ENDPOINT_SILENCE))
@@ -96,9 +103,9 @@ export function VoiceSettings() {
     await setCustomModelDir(dir)
   }
 
-  const toggleAdvanced = (next: boolean): void => {
+  const rememberAdvanced = (next: boolean): void => {
     setAdvanced(next)
-    void settingsApi.set(VOICE_SETTING_KEYS.advancedSettings, next ? 'true' : 'false')
+    void settingsApi.set(VOICE_SETTING_KEYS.advancedStt, next ? 'true' : 'false')
   }
 
   // Say what is wrong, and nothing when nothing is wrong.
@@ -139,8 +146,114 @@ export function VoiceSettings() {
           </p>
         )}
 
-        {advanced && (
-          <>
+        {/* Downloading a recogniser is a normal first step, not an
+            advanced one, so the catalogue stays in view. */}
+        {runtime.installed && (
+          <div className="space-y-3">
+            <Label>Speech models</Label>
+            <p className="-mt-1 text-xs text-muted-foreground">
+              Downloaded on request, checked against a SHA-256 value, and kept in the app data directory.
+            </p>
+            {models.length === 0 && <p className="text-sm text-muted-foreground">No model is listed.</p>}
+            {models.map((model) => (
+              <div
+                key={model.id}
+                className={`rounded-lg border p-3 ${
+                  model.active && model.installed ? 'border-primary/60 bg-primary/5' : 'border-border'
+                }`}
+                data-testid={`voice-model-${model.id}`}
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="flex items-center gap-2 text-sm font-medium text-foreground">
+                      {model.label}
+                      {model.active && model.installed && (
+                        <span className="inline-flex items-center gap-1 rounded-full bg-primary/15 px-2 py-0.5 text-[10px] font-medium text-primary">
+                          <Check className="size-2.5" />
+                          In use
+                        </span>
+                      )}
+                    </p>
+                    <p className="mt-0.5 text-xs text-muted-foreground">{model.description}</p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {formatSize(model.sizeBytes)} · {model.languages.join(', ')} ·{' '}
+                      <a
+                        href={model.licenseUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="underline decoration-dotted underline-offset-2 hover:text-foreground"
+                      >
+                        {model.license}
+                      </a>
+                    </p>
+                    {!model.downloadable && (
+                      <p className="mt-1 text-xs text-yellow-500">The checksum for this model is not recorded yet.</p>
+                    )}
+                    {model.error && <p className="mt-1 text-xs text-red-400">{model.error}</p>}
+                  </div>
+
+                  <div className="flex shrink-0 items-center gap-2">
+                    {model.installed ? (
+                      <>
+                        {!model.active && (
+                          <Button
+                            size="sm"
+                            onClick={() => void selectModel(model.id)}
+                            data-testid={`voice-model-use-${model.id}`}
+                          >
+                            Use
+                          </Button>
+                        )}
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => void removeModel(model.id)}
+                          title="Delete this model"
+                          data-testid={`voice-model-delete-${model.id}`}
+                        >
+                          <Trash2 className="mr-1.5 h-3.5 w-3.5" />
+                          Delete
+                        </Button>
+                      </>
+                    ) : (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={!model.downloadable || model.installing}
+                        onClick={() => void installModel(model.id)}
+                        data-testid={`voice-model-download-${model.id}`}
+                      >
+                        {model.installing ? (
+                          <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <Download className="mr-1.5 h-3.5 w-3.5" />
+                        )}
+                        {model.installing ? `${Math.round(model.progress * 100)}%` : 'Download'}
+                      </Button>
+                    )}
+                  </div>
+                </div>
+
+                {model.installing && (
+                  <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted">
+                    <div
+                      className="h-full rounded-full bg-primary transition-all"
+                      style={{ width: `${Math.round(model.progress * 100)}%` }}
+                    />
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {advancedReady && (
+          <AdvancedDisclosure
+            label="Advanced options (speech to text)"
+            defaultOpen={advanced}
+            onOpenChange={rememberAdvanced}
+            data-testid="voice-advanced-stt"
+          >
             {enabled && setupComplete && (
               <div className="space-y-2 rounded-lg border border-border p-3" data-testid="voice-test">
                 <div className="flex items-center justify-between gap-3">
@@ -293,170 +406,62 @@ export function VoiceSettings() {
                 </Button>
               </div>
             </div>
-          </>
+
+            {runtime.installed && (
+              <>
+                <div className="space-y-2 rounded-lg border border-border p-3">
+                  <Label htmlFor="voice-model-dir">Use another model directory (optional)</Label>
+                  <p className="text-xs text-muted-foreground">
+                    Only for a model you installed by hand. The directory must hold an encoder, a decoder, a joiner and
+                    a tokens file.
+                  </p>
+                  <div className="flex gap-2">
+                    <Input
+                      id="voice-model-dir"
+                      value={customDir}
+                      onChange={(e) => setCustomDir(e.target.value)}
+                      placeholder="/path/to/sherpa-onnx-streaming-model"
+                    />
+                    <Button variant="outline" onClick={() => void pickDir()}>
+                      <FolderOpen className="mr-1.5 h-3.5 w-3.5" />
+                      Browse
+                    </Button>
+                    <Button variant="outline" onClick={() => void setCustomModelDir(customDir)}>
+                      Use
+                    </Button>
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between rounded-lg border border-border p-3">
+                  <div className="space-y-0.5">
+                    <Label>Delete every downloaded model</Label>
+                    <p className="text-xs text-muted-foreground">This gives the disk space back immediately.</p>
+                  </div>
+                  <Button
+                    variant="outline"
+                    disabled={busy}
+                    onClick={async () => {
+                      setBusy(true)
+                      await removeAllModels()
+                      setBusy(false)
+                    }}
+                  >
+                    {busy ? (
+                      <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Trash2 className="mr-1.5 h-3.5 w-3.5" />
+                    )}
+                    Delete all
+                  </Button>
+                </div>
+              </>
+            )}
+          </AdvancedDisclosure>
         )}
       </SettingsSection>
 
       {/* ── What 20x says ────────────────────────────────── */}
-      <SpokenAnswerSettings advanced={advanced} />
-
-      {/* ── The switch that reveals the rest ─────────────── */}
-      <SettingsSection title="Advanced" description="Everything above has a sensible default.">
-        <div className="flex items-center justify-between rounded-lg border border-border p-3">
-          <div className="space-y-0.5">
-            <Label>Show advanced voice settings</Label>
-            <p className="text-xs text-muted-foreground">
-              The microphone test, the pause length, the shortcut, the speech models, and the voice catalogue.
-            </p>
-          </div>
-          <Switch checked={advanced} onCheckedChange={toggleAdvanced} data-testid="voice-advanced-switch" />
-        </div>
-      </SettingsSection>
-
-      {advanced && runtime.installed && (
-        <SettingsSection
-          title="Speech models"
-          description="Models are downloaded on request, checked against a SHA-256 value, and kept in the app data directory."
-        >
-          {models.length === 0 && <p className="text-sm text-muted-foreground">No model is listed.</p>}
-
-          {models.map((model) => (
-            <div
-              key={model.id}
-              className={`rounded-lg border p-3 ${
-                model.active && model.installed ? 'border-primary/60 bg-primary/5' : 'border-border'
-              }`}
-              data-testid={`voice-model-${model.id}`}
-            >
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <p className="flex items-center gap-2 text-sm font-medium text-foreground">
-                    {model.label}
-                    {model.active && model.installed && (
-                      <span className="inline-flex items-center gap-1 rounded-full bg-primary/15 px-2 py-0.5 text-[10px] font-medium text-primary">
-                        <Check className="size-2.5" />
-                        In use
-                      </span>
-                    )}
-                  </p>
-                  <p className="mt-0.5 text-xs text-muted-foreground">{model.description}</p>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    {formatSize(model.sizeBytes)} · {model.languages.join(', ')} ·{' '}
-                    <a
-                      href={model.licenseUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="underline decoration-dotted underline-offset-2 hover:text-foreground"
-                    >
-                      {model.license}
-                    </a>
-                  </p>
-                  {!model.downloadable && (
-                    <p className="mt-1 text-xs text-yellow-500">The checksum for this model is not recorded yet.</p>
-                  )}
-                  {model.error && <p className="mt-1 text-xs text-red-400">{model.error}</p>}
-                </div>
-
-                <div className="flex shrink-0 items-center gap-2">
-                  {model.installed ? (
-                    <>
-                      {!model.active && (
-                        <Button
-                          size="sm"
-                          onClick={() => void selectModel(model.id)}
-                          data-testid={`voice-model-use-${model.id}`}
-                        >
-                          Use
-                        </Button>
-                      )}
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => void removeModel(model.id)}
-                        title="Delete this model"
-                        data-testid={`voice-model-delete-${model.id}`}
-                      >
-                        <Trash2 className="mr-1.5 h-3.5 w-3.5" />
-                        Delete
-                      </Button>
-                    </>
-                  ) : (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={!model.downloadable || model.installing}
-                      onClick={() => void installModel(model.id)}
-                      data-testid={`voice-model-download-${model.id}`}
-                    >
-                      {model.installing ? (
-                        <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-                      ) : (
-                        <Download className="mr-1.5 h-3.5 w-3.5" />
-                      )}
-                      {model.installing ? `${Math.round(model.progress * 100)}%` : 'Download'}
-                    </Button>
-                  )}
-                </div>
-              </div>
-
-              {model.installing && (
-                <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted">
-                  <div
-                    className="h-full rounded-full bg-primary transition-all"
-                    style={{ width: `${Math.round(model.progress * 100)}%` }}
-                  />
-                </div>
-              )}
-            </div>
-          ))}
-
-          <div className="space-y-2 rounded-lg border border-border p-3">
-            <Label htmlFor="voice-model-dir">Use another model directory (optional)</Label>
-            <p className="text-xs text-muted-foreground">
-              Only for a model you installed by hand. The directory must hold an encoder, a decoder, a joiner and a
-              tokens file.
-            </p>
-            <div className="flex gap-2">
-              <Input
-                id="voice-model-dir"
-                value={customDir}
-                onChange={(e) => setCustomDir(e.target.value)}
-                placeholder="/path/to/sherpa-onnx-streaming-model"
-              />
-              <Button variant="outline" onClick={() => void pickDir()}>
-                <FolderOpen className="mr-1.5 h-3.5 w-3.5" />
-                Browse
-              </Button>
-              <Button variant="outline" onClick={() => void setCustomModelDir(customDir)}>
-                Use
-              </Button>
-            </div>
-          </div>
-
-          <div className="flex items-center justify-between rounded-lg border border-border p-3">
-            <div className="space-y-0.5">
-              <Label>Delete every downloaded model</Label>
-              <p className="text-xs text-muted-foreground">This gives the disk space back immediately.</p>
-            </div>
-            <Button
-              variant="outline"
-              disabled={busy}
-              onClick={async () => {
-                setBusy(true)
-                await removeAllModels()
-                setBusy(false)
-              }}
-            >
-              {busy ? (
-                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <Trash2 className="mr-1.5 h-3.5 w-3.5" />
-              )}
-              Delete all
-            </Button>
-          </div>
-        </SettingsSection>
-      )}
+      <SpokenAnswerSettings />
     </>
   )
 }

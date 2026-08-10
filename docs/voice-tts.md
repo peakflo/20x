@@ -35,14 +35,22 @@ OpenAI Realtime, LiveKit, a wake word, and speaking on mobile. The contracts in
 **Settings → Voice**, one page in two parts: "Speech to text — what 20x hears"
 and "Text to speech — what 20x says".
 
-Each part shows only the controls a user needs — switch it on, and pick a voice.
-The engine choice, the reading speed, the length limit, the microphone test, the
-pause length, the shortcut and both model catalogues sit behind one **Advanced**
-switch, because every one of them has a default that works. The choice is
-remembered.
+The main view of each part keeps what a user acts on: switch that half on, pick
+a voice, hear it, and download a model. Both catalogues stay in view, because
+downloading a voice is a normal first step and not an advanced one.
 
-A problem is never hidden: a blocked microphone or a missing voice is stated
-without waiting for Advanced.
+Each part then has its own disclosure — "Advanced options (speech to text)" and
+"Advanced options (text to speech)" — holding only the settings that already
+have a good default: the engine, the reading speed, the length limit, the two
+answer rules, the microphone test, the pause length and the shortcut. Each is
+remembered separately, and opening one leaves the other shut.
+
+It is a disclosure and not a switch on purpose. A switch says "this setting is
+on or off"; nothing here is being switched on, and it only decides what is on
+screen.
+
+A problem is never hidden by either one: a blocked microphone or a missing voice
+is stated in the main view.
 
 ## Processes
 

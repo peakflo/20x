@@ -5,11 +5,11 @@ import { useVoiceStore } from '@/stores/voice-store'
 import type { VoiceTtsSnapshot } from '@shared/voice-tts'
 
 /**
- * One voice page, in two parts, with everything optional behind one switch.
+ * One voice page, in two parts, each with a disclosure of its own.
  *
- * A page of twelve controls hides the two that matter, so only the controls a
- * user needs are shown: switch listening on, switch reading aloud on, and pick
- * a voice. The rest has a default that works.
+ * A page of twelve controls hides the ones that matter, so the main view keeps
+ * what a user acts on — switch each half on, pick a voice, hear it, download a
+ * model — and each half hides its own tuning behind its own named disclosure.
  */
 
 const setSetting = vi.fn(async () => undefined)
@@ -55,7 +55,24 @@ const TTS: VoiceTtsSnapshot = {
   maxChars: 1200,
   speakActionResults: true,
   onlyVoiceTurns: true,
-  models: [],
+  models: [
+    {
+      id: 'kitten-nano-en-v0_2',
+      label: 'English — fast',
+      description: 'Small and quick.',
+      license: 'Apache-2.0',
+      licenseUrl: 'https://example.invalid',
+      languages: ['en'],
+      installed: false,
+      active: false,
+      installing: false,
+      progress: 0,
+      sizeBytes: 26_586_708,
+      unpackedBytes: 41_817_958,
+      downloadable: true,
+      speakerCount: 8,
+    },
+  ],
   speaking: false,
 }
 
@@ -67,7 +84,22 @@ beforeEach(() => {
     enabled: true,
     runtime: { installed: true, version: '1.0.0', modulePath: '/tmp/voice', sizeBytes: 0 },
     engine: { state: 'ready', modelId: 'test', engine: 'sherpa-onnx' },
-    models: [],
+    models: [
+      {
+        id: 'sherpa-streaming-zipformer-en',
+        label: 'English — small',
+        description: 'Fast and light.',
+        license: 'Apache-2.0',
+        licenseUrl: 'https://example.invalid',
+        languages: ['en'],
+        installed: false,
+        active: true,
+        installing: false,
+        progress: 0,
+        sizeBytes: 73_000_000,
+        downloadable: true,
+      },
+    ],
     permission: 'granted',
     shortcut: 'CommandOrControl+Shift+Space',
     state: 'idle',
@@ -91,48 +123,65 @@ describe('Settings → Voice', () => {
     expect(screen.getByText('Text to speech — what 20x says')).toBeInTheDocument()
   })
 
-  it('shows only the controls that matter until Advanced is switched on', () => {
+  it('gives each half its own disclosure, named for that half', async () => {
     render(<VoiceSettings />)
 
-    // Kept: switch each half on, and pick a voice.
-    expect(screen.getByText('Enable voice control')).toBeInTheDocument()
-    expect(screen.getByText('Read agent answers aloud')).toBeInTheDocument()
-    expect(screen.getByTestId('tts-voice-select')).toBeInTheDocument()
+    expect(await screen.findByTestId('voice-advanced-stt')).toHaveTextContent(
+      'Advanced options (speech to text)'
+    )
+    expect(await screen.findByTestId('tts-advanced')).toHaveTextContent(
+      'Advanced options (text to speech)'
+    )
+  })
 
-    // Hidden: everything with a default that works.
+  it('keeps both model catalogues in view, not behind a disclosure', () => {
+    render(<VoiceSettings />)
+
+    expect(screen.getByText('Speech models')).toBeInTheDocument()
+    expect(screen.getByText('Downloaded voices')).toBeInTheDocument()
+    expect(screen.getByTestId('voice-model-sherpa-streaming-zipformer-en')).toBeInTheDocument()
+    expect(screen.getByTestId('tts-model-kitten-nano-en-v0_2')).toBeInTheDocument()
+    // And so is the button that plays a voice.
+    expect(screen.getByTestId('tts-preview')).toBeInTheDocument()
+  })
+
+  it('hides only the tuning of each half', () => {
+    render(<VoiceSettings />)
+
+    // Listening.
     expect(screen.queryByTestId('voice-test')).not.toBeInTheDocument()
     expect(screen.queryByTestId('voice-conversation-switch')).not.toBeInTheDocument()
     expect(screen.queryByText('Global shortcut')).not.toBeInTheDocument()
-    expect(screen.queryByText('Speech models')).not.toBeInTheDocument()
+    // Speaking.
     expect(screen.queryByText('Voice engine')).not.toBeInTheDocument()
     expect(screen.queryByText('Reading speed')).not.toBeInTheDocument()
-    expect(screen.queryByText('Downloaded voices')).not.toBeInTheDocument()
-    expect(screen.queryByTestId('voice-status')).not.toBeInTheDocument()
   })
 
-  it('reveals the rest of both halves from one switch', () => {
+  it('opens each half on its own, not both at once', async () => {
     render(<VoiceSettings />)
 
-    fireEvent.click(screen.getByTestId('voice-advanced-switch'))
+    fireEvent.click(await screen.findByTestId('voice-advanced-stt'))
 
-    // Listening.
     expect(screen.getByTestId('voice-test')).toBeInTheDocument()
-    expect(screen.getByTestId('voice-conversation-switch')).toBeInTheDocument()
     expect(screen.getByText('Global shortcut')).toBeInTheDocument()
-    expect(screen.getByText('Speech models')).toBeInTheDocument()
-    // Speaking.
+    // The speaking half stayed shut.
+    expect(screen.queryByText('Voice engine')).not.toBeInTheDocument()
+
+    fireEvent.click(await screen.findByTestId('tts-advanced'))
     expect(screen.getByText('Voice engine')).toBeInTheDocument()
-    expect(screen.getByText('Reading speed')).toBeInTheDocument()
-    expect(screen.getByText('Downloaded voices')).toBeInTheDocument()
   })
 
-  it('remembers the choice', () => {
+  it('remembers each half separately', async () => {
     render(<VoiceSettings />)
-    fireEvent.click(screen.getByTestId('voice-advanced-switch'))
-    expect(setSetting).toHaveBeenCalledWith('voice_advanced_settings', 'true')
+
+    fireEvent.click(await screen.findByTestId('voice-advanced-stt'))
+    expect(setSetting).toHaveBeenCalledWith('voice_advanced_stt', 'true')
+
+    fireEvent.click(await screen.findByTestId('tts-advanced'))
+    expect(setSetting).toHaveBeenCalledWith('voice_advanced_tts', 'true')
   })
 
-  it('says what is wrong without waiting for Advanced', () => {
+  it('says what is wrong without opening anything', () => {
     useVoiceStore.setState({ permission: 'denied' })
     render(<VoiceSettings />)
 

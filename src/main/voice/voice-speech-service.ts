@@ -243,6 +243,10 @@ export class VoiceSpeechService {
   async selectModel(id: string): Promise<VoiceTtsSnapshot> {
     this.stop('cancelled')
     this.options.db.setSetting(VOICE_TTS_SETTING_KEYS.modelId, id)
+    // Choosing a downloaded voice is choosing the engine that plays it.
+    // Without this, "Use" would change nothing while the system voice is
+    // selected, and the engine picker is not on the main settings view.
+    this.options.db.setSetting(VOICE_TTS_SETTING_KEYS.engine, 'local')
     this.options.db.setSetting(VOICE_TTS_SETTING_KEYS.voiceId, '')
     this.worker.unload()
     await this.prepare()

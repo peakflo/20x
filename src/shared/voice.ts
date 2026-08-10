@@ -314,8 +314,9 @@ export const VOICE_SETTING_KEYS = {
   conversation: 'voice_conversation',
   /** Seconds of silence that end a sentence. */
   endpointSilence: 'voice_endpoint_silence',
-  /** Whether the voice settings page shows everything or only the essentials. */
-  advancedSettings: 'voice_advanced_settings',
+  /** Whether each half of the voice settings page shows its extra controls. */
+  advancedStt: 'voice_advanced_stt',
+  advancedTts: 'voice_advanced_tts',
 } as const
 
 export const VOICE_DEFAULT_SHORTCUT = 'CommandOrControl+Shift+Space'

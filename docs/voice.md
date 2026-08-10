@@ -28,8 +28,8 @@ room for them.
 
 Spoken answers were the other phase 1 exclusion. They are now implemented and
 documented in [`voice-tts.md`](voice-tts.md). Both halves share one settings
-page, **Settings → Voice**, split into what 20x hears and what 20x says, with
-everything optional behind one Advanced switch. Speaking needs neither the
+page, **Settings → Voice**, split into what 20x hears and what 20x says. Each
+half hides only its own tuning behind its own "Advanced options" disclosure. Speaking needs neither the
 microphone nor the optional speech runtime, so it works on its own.
 
 Do not describe this release as ChatGPT voice mode. It is local dictation and
