@@ -4,10 +4,11 @@ import { VoiceOverlay } from './VoiceOverlay'
 import { useVoiceStore } from '@/stores/voice-store'
 
 /**
- * The speaking half of the voice surface (design §5.3 and §5.7).
+ * Reading an answer aloud draws nothing (design §5.3 and §5.7).
  *
- * It has to appear on a machine that has no microphone set up at all, because
- * the system voice needs neither the runtime nor a downloaded model.
+ * The user can hear it. A bubble that says "Reading" repeats what the ears
+ * already know and covers the screen while it does it. What must survive is
+ * the way to stop: Escape, and simply speaking.
  */
 
 const stopSpeaking = vi.fn(async () => undefined)
@@ -27,37 +28,30 @@ function reset(partial: Partial<ReturnType<typeof useVoiceStore.getState>> = {})
     result: null,
     speaking: false,
     speechText: '',
-    speechLevel: 0,
     stopSpeaking,
     ...partial,
   })
 }
 
-describe('the speaking bubble', () => {
+describe('reading an answer aloud', () => {
   beforeEach(() => {
     cleanup()
     vi.clearAllMocks()
     reset()
   })
 
-  it('shows what is being read', () => {
+  it('draws nothing at all', () => {
     reset({ speaking: true, speechText: 'The test failed because the token expired.' })
     render(<VoiceOverlay />)
 
-    expect(screen.getByTestId('voice-speaking')).toBeInTheDocument()
-    expect(screen.getByTestId('voice-speech-text')).toHaveTextContent(
-      'The test failed because the token expired.'
-    )
-  })
-
-  it('stays hidden while nothing is being read', () => {
-    render(<VoiceOverlay />)
     expect(screen.queryByTestId('voice-speaking')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('voice-speech-text')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('voice-overlay')).not.toBeInTheDocument()
   })
 
-  it('appears even when speech to text is not installed', () => {
-    // The runtime is absent, so every microphone control is hidden — but the
-    // system voice still works and 20x can still read an answer.
+  it('draws nothing even when speech to text is not installed', () => {
+    // The runtime is absent, so every microphone control is hidden. Speaking
+    // still works through the system voice, and still shows nothing.
     reset({
       runtime: { installed: false, version: null, modulePath: null, sizeBytes: 0 },
       engine: { state: 'engine_missing', message: 'not installed' },
@@ -66,20 +60,26 @@ describe('the speaking bubble', () => {
     })
     render(<VoiceOverlay />)
 
-    expect(screen.getByTestId('voice-speaking')).toBeInTheDocument()
-  })
-
-  it('stops reading when the indicator is clicked', () => {
-    reset({ speaking: true, speechText: 'A long answer.' })
-    render(<VoiceOverlay />)
-
-    fireEvent.click(screen.getByTestId('voice-speaking'))
-
-    expect(stopSpeaking).toHaveBeenCalledTimes(1)
+    expect(screen.queryByTestId('voice-overlay')).not.toBeInTheDocument()
   })
 
   it('stops reading on Escape', () => {
     reset({ speaking: true, speechText: 'A long answer.' })
+    render(<VoiceOverlay />)
+
+    fireEvent.keyDown(window, { key: 'Escape' })
+
+    expect(stopSpeaking).toHaveBeenCalledTimes(1)
+  })
+
+  it('stops reading on Escape even with no speech runtime installed', () => {
+    // Nothing is drawn, so the key handler is the only way out. It has to be
+    // registered before the component decides it has nothing to draw.
+    reset({
+      runtime: { installed: false, version: null, modulePath: null, sizeBytes: 0 },
+      engine: { state: 'engine_missing', message: 'not installed' },
+      speaking: true,
+    })
     render(<VoiceOverlay />)
 
     fireEvent.keyDown(window, { key: 'Escape' })

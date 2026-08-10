@@ -165,6 +165,11 @@ things in it:
   Escape is the other exit and throws the words away instead; the cross says so
   in its tooltip.
 
+The bubble shows only the words being said now. In conversation mode it used to
+show the sentence it had just sent, which put the same sentence on the screen
+twice: once in the transcript above, once in the bubble below. It now says
+"Speak now" and waits.
+
 ### A click waits for the model
 
 Loading a model takes seconds — the largest is 662 MB — and the worker answers

@@ -80,10 +80,11 @@ interface VoiceStoreState {
   /** Null until the first snapshot arrives. */
   tts: VoiceTtsSnapshot | null
   speaking: boolean
-  /** The passage being spoken, shown in the bubble. */
+  /**
+   * The passage being spoken. Nothing draws it while it plays; the speak
+   * button on a message reads it to know which message is the one being read.
+   */
   speechText: string
-  /** 0..1 loudness of the playback, for the audio state indicator. */
-  speechLevel: number
 
   initialize: () => Promise<void>
   refreshRuntime: () => Promise<VoiceRuntimeStatus>
@@ -189,7 +190,7 @@ const bargeInGate = new BargeInGate({
     // Stop in this tick, before the round trip to main: the user is already
     // speaking and every further word of the answer is talking over them.
     voicePlayback.stop()
-    useVoiceStore.setState({ speaking: false, speechText: '', speechLevel: 0 })
+    useVoiceStore.setState({ speaking: false, speechText: '' })
     void voiceTtsApi.stop()
   },
 })
@@ -223,7 +224,6 @@ export const useVoiceStore = create<VoiceStoreState>((set, get) => ({
   tts: null,
   speaking: false,
   speechText: '',
-  speechLevel: 0,
 
   initialize: async () => {
     if (!hasVoiceBridge()) {
@@ -315,7 +315,7 @@ export const useVoiceStore = create<VoiceStoreState>((set, get) => ({
     // Barge-in. Playback stops here, in the same tick as the press, instead of
     // waiting for main to answer. Main stops producing the rest.
     voicePlayback.stop()
-    set({ speaking: false, speechText: '', speechLevel: 0 })
+    set({ speaking: false, speechText: '' })
     const started = await voiceApi.startTurn(mode, contextProvider?.() ?? {})
     if ('error' in started) {
       set({ result: { kind: 'error', message: started.error, at: Date.now() } })
@@ -504,7 +504,7 @@ export const useVoiceStore = create<VoiceStoreState>((set, get) => ({
   stopSpeaking: async () => {
     voicePlayback.stop()
     bargeInGate.setSpeaking(false)
-    set({ speaking: false, speechText: '', speechLevel: 0 })
+    set({ speaking: false, speechText: '' })
     await voiceTtsApi.stop()
   },
 }))
@@ -617,13 +617,16 @@ if (hasTtsBridge()) {
   voiceTtsApi.onSpeechStart((event) => {
     useVoiceStore.setState({ speaking: true, speechText: event.text })
     bargeInGate.setSpeaking(true)
+    // No `onLevel` handler is passed. Nothing draws the loudness of the
+    // playback any more, and reporting it ran an analyser read and a store
+    // write sixteen times a second for the whole of every answer.
     voicePlayback.start(event.speechId, {
-      onLevel: (speechLevel) => useVoiceStore.setState({ speechLevel }),
       // The worker finishes producing before the last sentence finishes
-      // playing, so the indicator is cleared here and not on the end event.
+      // playing, so the speaking state ends here and not on the end event.
+      // The microphone stays held until this point.
       onDrained: () => {
         bargeInGate.setSpeaking(false)
-        useVoiceStore.setState({ speaking: false, speechText: '', speechLevel: 0 })
+        useVoiceStore.setState({ speaking: false, speechText: '' })
       },
     })
   })
@@ -643,7 +646,7 @@ if (hasTtsBridge()) {
     if (voicePlayback.currentSpeechId !== event.speechId) return
     voicePlayback.stop()
     bargeInGate.setSpeaking(false)
-    useVoiceStore.setState({ speaking: false, speechText: '', speechLevel: 0 })
+    useVoiceStore.setState({ speaking: false, speechText: '' })
     if (event.reason === 'error' && event.message) {
       useVoiceStore.setState({ result: { kind: 'error', message: event.message, at: Date.now() } })
     }

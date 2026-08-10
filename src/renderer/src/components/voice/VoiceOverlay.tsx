@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { AlertTriangle, Check, Mic, Volume2, X } from 'lucide-react'
+import { AlertTriangle, Check, Mic, X } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { selectVoiceReady, useVoiceStore } from '@/stores/voice-store'
 import type { VoiceCandidate } from '@shared/voice'
@@ -8,20 +8,22 @@ const RESULT_VISIBLE_MS = 6000
 
 /**
  * The in-app voice surface (design §5.3 and §5.5):
- *  - an audio state indicator,
+ *  - a listening indicator,
  *  - a live transcript bubble,
  *  - an explicit confirmation card for every action that needs one.
  *
  * Confirmation is always visual. A spoken "yes" never approves anything, so a
  * mis-heard word cannot start or approve work on its own.
+ *
+ * Reading aloud shows nothing. The user hears the answer, so a bubble that says
+ * so tells them what they already know and covers the screen while it does it.
+ * Escape still stops the reading, and so does speaking.
  */
 export function VoiceOverlay() {
   // Hidden until the optional runtime is installed and voice is switched on.
   const ready = useVoiceStore(selectVoiceReady)
   const state = useVoiceStore((s) => s.state)
   const partial = useVoiceStore((s) => s.partial)
-  const mode = useVoiceStore((s) => s.mode)
-  const sentSentences = useVoiceStore((s) => s.sentSentences)
   const level = useVoiceStore((s) => s.level)
   const confirmation = useVoiceStore((s) => s.confirmation)
   const result = useVoiceStore((s) => s.result)
@@ -30,12 +32,8 @@ export function VoiceOverlay() {
   const cancel = useVoiceStore((s) => s.cancel)
   const endTurn = useVoiceStore((s) => s.endTurn)
   const clearResult = useVoiceStore((s) => s.clearResult)
-  // Speaking is shown even when speech to text is not installed: the system
-  // voice needs no runtime and no model, so 20x can read an answer aloud on a
-  // machine that has never downloaded anything.
+  // Nothing is drawn while an answer is read, but Escape must still stop it.
   const speaking = useVoiceStore((s) => s.speaking)
-  const speechText = useVoiceStore((s) => s.speechText)
-  const speechLevel = useVoiceStore((s) => s.speechLevel)
   const stopSpeaking = useVoiceStore((s) => s.stopSpeaking)
 
   // Escape cancels the current turn or the open confirmation.
@@ -58,13 +56,13 @@ export function VoiceOverlay() {
     return () => clearTimeout(timer)
   }, [result, clearResult])
 
-  if (!ready && !speaking) return null
+  if (!ready) return null
 
   const listening = state === 'listening'
   const transcribing = state === 'transcribing'
   const loudness = Math.min(Math.max(level, 0), 1)
-  const showBubble = ready && (listening || transcribing || Boolean(partial))
-  if (!showBubble && !speaking && !confirmation && !result) return null
+  const showBubble = listening || transcribing || Boolean(partial)
+  if (!showBubble && !confirmation && !result) return null
 
   return (
     <div
@@ -97,13 +95,11 @@ export function VoiceOverlay() {
                   happens next by itself. */}
               {transcribing ? 'Writing the words' : 'Listening'}
             </p>
+            {/* Only the words being spoken now. A sentence that was already
+                sent is in the transcript above, and repeating it here says
+                the same thing twice. */}
             <p className="truncate text-sm text-foreground" data-testid="voice-transcript">
-              {partial ||
-                (transcribing
-                  ? 'One moment…'
-                  : mode === 'conversation' && sentSentences.length > 0
-                    ? `Sent: ${sentSentences[sentSentences.length - 1]}`
-                    : 'Speak now')}
+              {partial || (transcribing ? 'One moment…' : 'Speak now')}
             </p>
           </div>
           {listening && (
@@ -120,38 +116,6 @@ export function VoiceOverlay() {
             </Button>
           )}
         </div>
-      )}
-
-      {speaking && (
-        <button
-          type="button"
-          className="pointer-events-auto flex max-w-xl items-center gap-3 rounded-2xl border border-border bg-card/95 px-4 py-2.5 text-left shadow-lg backdrop-blur transition-colors hover:border-primary/50"
-          onClick={() => void stopSpeaking()}
-          title="Stop reading"
-          aria-label="Stop reading"
-          data-testid="voice-speaking"
-        >
-          {/* The halo follows the answer, so the indicator shows one audio
-              state whether 20x is listening or talking. */}
-          <span className="relative flex h-6 w-6 items-center justify-center">
-            <span
-              className="absolute inset-0 rounded-full bg-primary transition-all duration-75"
-              style={{
-                transform: `scale(${0.7 + Math.min(Math.max(speechLevel, 0), 1) * 1.0})`,
-                opacity: 0.12 + Math.min(Math.max(speechLevel, 0), 1) * 0.68,
-              }}
-              aria-hidden
-            />
-            <Volume2 className="relative h-3.5 w-3.5 text-primary" />
-          </span>
-          <div className="min-w-0 flex-1">
-            <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Reading</p>
-            <p className="truncate text-sm text-foreground" data-testid="voice-speech-text">
-              {speechText || 'One moment…'}
-            </p>
-          </div>
-          <span className="shrink-0 text-[11px] text-muted-foreground">Click to stop</span>
-        </button>
       )}
 
       {confirmation && (

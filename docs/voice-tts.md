@@ -22,8 +22,10 @@ Blueprint: the research subtask artifact `design.md`, §5.2 (provider contracts)
 - Barge-in: the moment the user starts to speak, 20x stops.
 - The answer that is read is the answer the user asked for, matched by voice
   turn and task.
-- A speak button on every agent message, a voice sample in settings, and one
-  audio state indicator shared with the microphone.
+- A speak button on every agent message, and a voice sample in settings.
+- Nothing on screen while an answer is read. The user hears it; a bubble that
+  says so repeats what the ears already know and covers the window while it
+  does it. Escape stops the reading, and so does speaking.
 
 ## What is not in it
 
@@ -58,7 +60,7 @@ is stated in the main view.
 
 ```text
 Electron renderer
-  Web Audio playback queue, speaking bubble, speak button
+  Web Audio playback queue, speak button
         ▲  voice:speech:start | chunk | end   (desktop window only)
         │
 Electron main process
