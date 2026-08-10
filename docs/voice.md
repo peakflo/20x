@@ -85,11 +85,16 @@ The table above is the **built-in** parser. It is small on purpose: it is the
 only path that acts without a language model, so every rule in it must be
 unambiguous. The wider path is the next section.
 
-Two modes keep dictation and commands apart:
+**No control in the app runs these rules any more.** Every microphone dictates,
+and the global shortcut talks to Mastermind like the one in the top bar. The
+parser and `VoiceActionService` are still in the tree, and `command` mode still
+works if something asks for it, but nothing does. They are the last of the
+original design's hands-free command idea, kept only until it is decided whether
+to delete them.
 
-- The microphone button in a text composer runs in `dictation` mode. The parser
-  is not used at all, so spoken words can never run an action.
-- The global shortcut runs in `command` mode.
+Why they went: the agent has the whole task-management tool set, so eight
+phrases were both less capable and a way to be told "that is not one of the
+spoken commands" for an ordinary sentence.
 
 One click starts listening and a second click stops it. Escape cancels the turn
 and keeps the words out.

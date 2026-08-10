@@ -19,6 +19,12 @@
  * the moment a sentence arrives — always from the mount that is on screen now.
  */
 
+/**
+ * The Mastermind composer. Named here because two controls outside the drawer
+ * address it: the top-bar microphone and the global shortcut.
+ */
+export const MASTERMIND_COMPOSER_KEY = 'orchestrator'
+
 export type DictationTarget = HTMLTextAreaElement | HTMLInputElement
 
 export interface ComposerRegistration {

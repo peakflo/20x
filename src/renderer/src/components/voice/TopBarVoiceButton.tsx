@@ -2,9 +2,9 @@ import { useCallback } from 'react'
 import { VoiceMicButton } from './VoiceMicButton'
 import { useUIStore } from '@/stores/ui-store'
 import { useVoiceStore } from '@/stores/voice-store'
+import { MASTERMIND_COMPOSER_KEY } from '@/lib/voice-dictation-target'
 
-/** The composer of the Mastermind drawer. Set in `AgentTranscriptPanel`. */
-export const MASTERMIND_COMPOSER_KEY = 'orchestrator'
+export { MASTERMIND_COMPOSER_KEY } from '@/lib/voice-dictation-target'
 
 /**
  * Start talking to Mastermind from anywhere.

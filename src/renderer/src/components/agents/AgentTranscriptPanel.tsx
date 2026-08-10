@@ -11,7 +11,7 @@ import { cn } from '@/lib/utils'
 import { useArtifactStore } from '@/stores/artifact-store'
 import { ArtifactContentKind, ArtifactType, type Artifact } from '@shared/artifacts'
 import { VoiceMicButton } from '@/components/voice/VoiceMicButton'
-import { registerComposer } from '@/lib/voice-dictation-target'
+import { MASTERMIND_COMPOSER_KEY, registerComposer } from '@/lib/voice-dictation-target'
 
 const EMPTY_ARTIFACTS: Artifact[] = []
 
@@ -940,7 +940,7 @@ export function AgentTranscriptPanel({
    * that rebuild, and the callbacks are read through a ref, so a conversation
    * carries on into the panel that replaced this one.
    */
-  const composerKey = taskId ?? 'orchestrator'
+  const composerKey = taskId ?? MASTERMIND_COMPOSER_KEY
   const sendRef = useRef<(() => void) | null>(null)
   useEffect(() => {
     if (!onSend) return undefined

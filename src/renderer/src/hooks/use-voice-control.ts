@@ -4,7 +4,14 @@ import { useVoiceStore } from '@/stores/voice-store'
 import { useUIStore } from '@/stores/ui-store'
 import { useTaskStore } from '@/stores/task-store'
 import { useAgentStore } from '@/stores/agent-store'
-import { clearActiveComposer, insertAndSubmit, insertDictation } from '@/lib/voice-dictation-target'
+import {
+  MASTERMIND_COMPOSER_KEY,
+  clearActiveComposer,
+  composerCanSubmit,
+  insertAndSubmit,
+  insertDictation,
+  setActiveComposer,
+} from '@/lib/voice-dictation-target'
 import type { VoiceUiContext } from '@shared/voice'
 
 /**
@@ -68,11 +75,16 @@ export function useVoiceControl(): void {
     })
 
     const offHotkey = voiceApi.onHotkey(({ action }) => {
-      if (action === 'toggle') {
-        // The shortcut is not tied to a text field, so it never dictates.
-        clearActiveComposer()
-        void toggleTurn('command')
-      }
+      if (action !== 'toggle') return
+      // The shortcut talks to Mastermind, exactly like the microphone in the
+      // top bar. It used to run the built-in command rules instead, which is
+      // the only place a spoken sentence could be rejected for not being one
+      // of eight phrases — and the agent can do far more than those eight.
+      useUIStore.getState().setShowOrchestrator(true)
+      setActiveComposer(MASTERMIND_COMPOSER_KEY)
+      const loop =
+        useVoiceStore.getState().conversation && composerCanSubmit(MASTERMIND_COMPOSER_KEY)
+      void toggleTurn(loop ? 'conversation' : 'dictation')
     })
 
     // Exactly one subscriber writes dictated words, into the one field the
