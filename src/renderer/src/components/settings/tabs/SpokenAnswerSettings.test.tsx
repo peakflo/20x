@@ -5,11 +5,11 @@ import { useVoiceStore } from '@/stores/voice-store'
 import type { VoiceTtsSnapshot } from '@shared/voice-tts'
 
 /**
- * Settings → Voice → Spoken answers.
+ * The speaking half of Settings → Voice.
  *
- * Everything with a privacy or a disk cost is explicit here: the switch that
- * starts reading answers aloud, the engine choice, and the download with its
- * size and licence beside it (design §5.9 and §5.10).
+ * Two controls are shown by default; the rest arrives with the page's Advanced
+ * switch, which this component receives as a prop. Everything with a privacy or
+ * a disk cost stays explicit wherever it appears (design §5.9 and §5.10).
  */
 
 const setTtsEnabled = vi.fn(async () => undefined)
@@ -89,7 +89,7 @@ describe('Settings → Voice → Spoken answers', () => {
   })
 
   it('offers both engines and says what each one costs', () => {
-    render(<SpokenAnswerSettings />)
+    render(<SpokenAnswerSettings advanced />)
 
     expect(screen.getByTestId('tts-engine-system')).toHaveTextContent('No download')
     expect(screen.getByTestId('tts-engine-local')).toHaveTextContent(
@@ -101,7 +101,7 @@ describe('Settings → Voice → Spoken answers', () => {
   })
 
   it('offers the download, with its size and its licence beside it', () => {
-    render(<SpokenAnswerSettings />)
+    render(<SpokenAnswerSettings advanced />)
     const row = screen.getByTestId('tts-model-kitten-nano-en-v0_2')
 
     // The user reads the cost before anything is downloaded.
@@ -116,7 +116,7 @@ describe('Settings → Voice → Spoken answers', () => {
 
   it('refuses a download that has no recorded checksum', () => {
     reset({ models: [{ ...SNAPSHOT.models[0], downloadable: false }] })
-    render(<SpokenAnswerSettings />)
+    render(<SpokenAnswerSettings advanced />)
 
     expect(screen.getByTestId('tts-model-download-kitten-nano-en-v0_2')).toBeDisabled()
     expect(screen.getByText('The checksum for this voice is not recorded yet.')).toBeInTheDocument()
@@ -124,7 +124,7 @@ describe('Settings → Voice → Spoken answers', () => {
 
   it('shows how far a download has got', () => {
     reset({ models: [{ ...SNAPSHOT.models[0], installing: true, progress: 0.42 }] })
-    render(<SpokenAnswerSettings />)
+    render(<SpokenAnswerSettings advanced />)
 
     expect(screen.getByTestId('tts-model-download-kitten-nano-en-v0_2')).toHaveTextContent('42%')
   })
@@ -147,7 +147,16 @@ describe('Settings → Voice → Spoken answers', () => {
     expect(screen.getByTestId('tts-status')).toHaveTextContent(
       'Download “English — fast” to use this voice.'
     )
-    expect(screen.getByText('Download a voice below to choose a speaker.')).toBeInTheDocument()
+    expect(screen.getByText('Switch on Advanced below to download a voice.')).toBeInTheDocument()
+  })
+
+  it('keeps only the switch and the voice until Advanced is on', () => {
+    render(<SpokenAnswerSettings />)
+
+    expect(screen.getByTestId('tts-enabled-switch')).toBeInTheDocument()
+    expect(screen.getByTestId('tts-voice-select')).toBeInTheDocument()
+    expect(screen.queryByText('Voice engine')).not.toBeInTheDocument()
+    expect(screen.queryByText('Downloaded voices')).not.toBeInTheDocument()
   })
 
   it('says so plainly when the build has no spoken answers at all', () => {

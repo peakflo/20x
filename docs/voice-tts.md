@@ -32,9 +32,17 @@ OpenAI Realtime, LiveKit, a wake word, and speaking on mobile. The contracts in
 
 ## Where it lives in the app
 
-**Settings → Spoken answers**, its own page. Listening keeps **Settings → Voice**.
-The two share a name and nothing else: one needs a microphone, a granted
-permission and a downloaded recogniser, and the other needs none of them.
+**Settings → Voice**, one page in two parts: "Speech to text — what 20x hears"
+and "Text to speech — what 20x says".
+
+Each part shows only the controls a user needs — switch it on, and pick a voice.
+The engine choice, the reading speed, the length limit, the microphone test, the
+pause length, the shortcut and both model catalogues sit behind one **Advanced**
+switch, because every one of them has a default that works. The choice is
+remembered.
+
+A problem is never hidden: a blocked microphone or a missing voice is stated
+without waiting for Advanced.
 
 ## Processes
 

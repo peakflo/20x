@@ -1,4 +1,4 @@
-import { Settings, Users, Server, Workflow, Wrench, KeyRound, Building2, Puzzle, Cable, Mic, Volume2, X } from 'lucide-react'
+import { Settings, Users, Server, Workflow, Wrench, KeyRound, Building2, Puzzle, Cable, Mic, X } from 'lucide-react'
 import * as Tabs from '@radix-ui/react-tabs'
 import { useUIStore } from '@/stores/ui-store'
 import { SettingsTab } from '@/types'
@@ -9,7 +9,6 @@ import { AgentsSettings } from './tabs/AgentsSettings'
 import { ToolsMcpSettings } from './tabs/ToolsMcpSettings'
 import { SecretsSettings } from './tabs/SecretsSettings'
 import { VoiceSettings } from './tabs/VoiceSettings'
-import { SpokenAnswerSettings } from './tabs/SpokenAnswerSettings'
 import { IntegrationsSettings } from './tabs/IntegrationsSettings'
 import { EnterpriseSettings } from './tabs/EnterpriseSettings'
 import { AdvancedSettings } from './tabs/AdvancedSettings'
@@ -22,7 +21,6 @@ const ICON_MAP = {
   Server,
   KeyRound,
   Mic,
-  Volume2,
   Workflow,
   Cable,
   Building2,
@@ -39,10 +37,6 @@ export function SettingsWorkspace() {
     { value: SettingsTab.TOOLS_MCP, label: 'Tools & MCP', iconName: 'Server' },
     { value: SettingsTab.SECRETS, label: 'Secrets', iconName: 'KeyRound' },
     { value: SettingsTab.VOICE, label: 'Voice', iconName: 'Mic' },
-    // Listening and speaking are separate pages. They share nothing but a
-    // name: one needs a microphone and a downloaded recogniser, the other
-    // needs neither.
-    { value: SettingsTab.SPOKEN_ANSWERS, label: 'Spoken answers', iconName: 'Volume2' },
     { value: SettingsTab.INTEGRATIONS, label: 'Task sources', iconName: 'Workflow' },
     { value: SettingsTab.CONNECTORS, label: 'Connectors', iconName: 'Cable' },
     { value: SettingsTab.ENTERPRISE, label: 'Enterprise', iconName: 'Building2' },
@@ -116,13 +110,6 @@ export function SettingsWorkspace() {
 
             <Tabs.Content value={SettingsTab.VOICE} className="focus-visible:outline-none space-y-6">
               <VoiceSettings />
-            </Tabs.Content>
-
-            <Tabs.Content
-              value={SettingsTab.SPOKEN_ANSWERS}
-              className="focus-visible:outline-none space-y-6"
-            >
-              <SpokenAnswerSettings />
             </Tabs.Content>
 
             <Tabs.Content value={SettingsTab.INTEGRATIONS} className="focus-visible:outline-none space-y-6">

@@ -26,10 +26,11 @@ There is no wake word, no cloud provider, and no microphone on mobile. Each one
 is a later item in the design, and the contracts in `src/shared/voice.ts` leave
 room for them.
 
-Spoken answers were the other phase 1 exclusion. They are now implemented, on
-their own settings page (**Settings → Spoken answers**) and documented in
-[`voice-tts.md`](voice-tts.md). Speaking needs neither the microphone nor the
-optional speech runtime, so it works on its own.
+Spoken answers were the other phase 1 exclusion. They are now implemented and
+documented in [`voice-tts.md`](voice-tts.md). Both halves share one settings
+page, **Settings → Voice**, split into what 20x hears and what 20x says, with
+everything optional behind one Advanced switch. Speaking needs neither the
+microphone nor the optional speech runtime, so it works on its own.
 
 Do not describe this release as ChatGPT voice mode. It is local dictation and
 local task commands.

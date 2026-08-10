@@ -8,11 +8,12 @@ import { Input } from '@/components/ui/Input'
 import { settingsApi, voiceApi } from '@/lib/ipc-client'
 import { selectVoiceSetupComplete, useVoiceStore } from '@/stores/voice-store'
 import { VoiceRuntimeRow } from '@/components/voice/VoiceRuntimeRow'
+import { SpokenAnswerSettings } from './SpokenAnswerSettings'
 import {
   VOICE_DEFAULT_ENDPOINT_SILENCE,
   VOICE_DEFAULT_SHORTCUT,
   VOICE_ENDPOINT_SILENCE_CHOICES,
-  VOICE_SETTING_KEYS,
+  VOICE_SETTING_KEYS
 } from '@shared/voice'
 
 function formatSize(bytes: number): string {
@@ -22,11 +23,16 @@ function formatSize(bytes: number): string {
 }
 
 /**
- * Voice control settings (design §5.9 and §5.10).
+ * One page for voice, in two parts: what 20x hears, and what 20x says
+ * (design §5.9 and §5.10).
  *
- * Everything with a privacy or a disk cost is explicit here: the microphone
- * request, the model download with its size and licence, the custom model
- * directory, and the controls that delete every downloaded model.
+ * Only the controls a user needs are shown. Everything else — the microphone
+ * test, the pause length, the shortcut, the model catalogue — sits behind one
+ * "Advanced" switch, because a page of twelve controls hides the two that
+ * matter.
+ *
+ * Anything with a privacy or a disk cost stays explicit wherever it appears:
+ * the microphone request, and every download with its size and its licence.
  */
 export function VoiceSettings() {
   const available = useVoiceStore((s) => s.available)
@@ -61,11 +67,13 @@ export function VoiceSettings() {
   const [customDir, setCustomDir] = useState('')
   const [shortcutDraft, setShortcutDraft] = useState('')
   const [busy, setBusy] = useState(false)
+  const [advanced, setAdvanced] = useState(false)
 
   useEffect(() => {
     void initialize()
     void settingsApi.get(VOICE_SETTING_KEYS.quickCreate).then((v) => setQuickCreate(v === 'true'))
     void settingsApi.get(VOICE_SETTING_KEYS.customModelDir).then((v) => setCustomDir(v ?? ''))
+    void settingsApi.get(VOICE_SETTING_KEYS.advancedSettings).then((v) => setAdvanced(v === 'true'))
     void settingsApi
       .get(VOICE_SETTING_KEYS.endpointSilence)
       .then((v) => setEndpointSilence(Number(v) || VOICE_DEFAULT_ENDPOINT_SILENCE))
@@ -75,8 +83,8 @@ export function VoiceSettings() {
 
   if (!available) {
     return (
-      <SettingsSection title="Voice control" description="Voice control is not available in this build.">
-        <p className="text-sm text-muted-foreground">Update the desktop app to use voice control.</p>
+      <SettingsSection title="Voice" description="Voice is not available in this build.">
+        <p className="text-sm text-muted-foreground">Update the desktop app to use voice.</p>
       </SettingsSection>
     )
   }
@@ -88,11 +96,25 @@ export function VoiceSettings() {
     await setCustomModelDir(dir)
   }
 
+  const toggleAdvanced = (next: boolean): void => {
+    setAdvanced(next)
+    void settingsApi.set(VOICE_SETTING_KEYS.advancedSettings, next ? 'true' : 'false')
+  }
+
+  // Say what is wrong, and nothing when nothing is wrong.
+  const listeningProblem =
+    permission === 'denied'
+      ? 'Microphone access is blocked. Allow it in the system privacy settings, then restart 20x.'
+      : engine.state === 'error'
+        ? engine.message
+        : null
+
   return (
     <>
+      {/* ── What 20x hears ───────────────────────────────── */}
       <SettingsSection
-        title="Voice control"
-        description="Speaking to 20x. Speech is recognised on this computer; no audio is stored and none leaves the device. 20x reading an answer back to you is a separate page: Settings → Spoken answers."
+        title="Speech to text — what 20x hears"
+        description="You speak, 20x writes it down. Speech is recognised on this computer; no audio is stored and none leaves the device."
       >
         <VoiceRuntimeRow />
 
@@ -108,330 +130,332 @@ export function VoiceSettings() {
                 : 'Install voice control above first.'}
             </p>
           </div>
-          <Switch
-            checked={enabled}
-            disabled={!setupComplete}
-            onCheckedChange={(next) => void setEnabled(next)}
-          />
+          <Switch checked={enabled} disabled={!setupComplete} onCheckedChange={(next) => void setEnabled(next)} />
         </div>
 
-        {enabled && setupComplete && (
-          <div className="space-y-2 rounded-lg border border-border p-3" data-testid="voice-test">
-            <div className="flex items-center justify-between gap-3">
-              <div className="space-y-0.5">
-                <Label>Test the microphone</Label>
-                <p className="text-xs text-muted-foreground">
-                  Say a few words. The result is shown here and is written nowhere else.
-                </p>
-              </div>
-              <Button
-                size="sm"
-                variant={turnId ? 'default' : 'outline'}
-                disabled={voiceState === 'transcribing'}
-                onClick={() => (turnId ? void endTurn() : void startTest())}
-                data-testid="voice-test-button"
-              >
-                {voiceState === 'transcribing' ? (
-                  <>
-                    <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-                    Writing…
-                  </>
-                ) : turnId ? (
-                  <>
-                    <Square className="mr-1.5 h-3 w-3 fill-current" />
-                    Stop
-                  </>
-                ) : (
-                  <>
-                    <Mic className="mr-1.5 h-3.5 w-3.5" />
-                    Test
-                  </>
-                )}
-              </Button>
-            </div>
-
-            {turnId && (
-              <div className="flex items-center gap-2">
-                <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
-                  <div
-                    className="h-full rounded-full bg-primary transition-all duration-75"
-                    style={{ width: `${Math.min(100, Math.round(level * 140))}%` }}
-                    data-testid="voice-test-level"
-                  />
-                </div>
-                <span className="text-[11px] text-muted-foreground">Listening…</span>
-              </div>
-            )}
-
-            {(partial || testTranscript) && (
-              <div className="flex items-start justify-between gap-2 rounded-md bg-muted/40 p-2">
-                <p className="text-sm text-foreground" data-testid="voice-test-result">
-                  {partial || testTranscript}
-                </p>
-                {testTranscript && !turnId && (
-                  <Button size="sm" variant="ghost" className="h-6 px-1.5 text-[11px]" onClick={clearTest}>
-                    Clear
-                  </Button>
-                )}
-              </div>
-            )}
-          </div>
+        {listeningProblem && (
+          <p className="rounded-lg border border-red-500/40 p-3 text-xs text-red-400" data-testid="voice-problem">
+            {listeningProblem}
+          </p>
         )}
 
-        <div className="rounded-lg border border-border p-3 text-sm">
-          <p className="font-medium text-foreground">Status</p>
-          <p className="mt-1 text-muted-foreground">
-            {engine.state === 'ready'
-              ? `Ready — ${engine.engine}, model ${engine.modelId}.`
-              : engine.state === 'loading'
-                ? 'The speech model is loading.'
-                : engine.state === 'engine_missing'
-                  ? engine.message
-                  : engine.state === 'model_missing'
-                    ? engine.message
-                    : engine.message}
-          </p>
-          <p className="mt-1 text-muted-foreground">
-            Microphone permission: <span className="text-foreground">{permission}</span>
-          </p>
-          {permission === 'denied' && (
-            <p className="mt-1 text-xs text-red-400">
-              Allow the microphone for 20x in the system privacy settings, then restart the app.
-            </p>
-          )}
-        </div>
-
-      </SettingsSection>
-
-      <SettingsSection
-        title="Listening"
-        description="What happens while you speak."
-      >
-        <div className="space-y-3 rounded-lg border border-border p-3">
-          <div className="flex items-center justify-between gap-3">
-            <div className="space-y-0.5">
-              <Label>Keep talking</Label>
-              <p className="text-xs text-muted-foreground">
-                The microphone stays open. Each time you pause, what you said is sent, and 20x keeps
-                listening for the next sentence. Switch this off to write the words into the box and
-                send them yourself.
-              </p>
-            </div>
-            <Switch
-              checked={conversation}
-              disabled={!setupComplete}
-              onCheckedChange={(next) => void setConversation(next)}
-              data-testid="voice-conversation-switch"
-            />
-          </div>
-
-          {conversation && (
-            <div className="flex items-center justify-between gap-3">
-              <Label htmlFor="voice-endpoint" className="text-xs font-normal text-muted-foreground">
-                A pause this long ends a sentence
-              </Label>
-              <select
-                id="voice-endpoint"
-                className="rounded-md border border-border bg-input px-2 py-1 text-xs text-foreground"
-                value={endpointSilence}
-                onChange={(e) => {
-                  const seconds = Number(e.target.value)
-                  setEndpointSilence(seconds)
-                  void voiceApi.setEndpointSilence(seconds)
-                }}
-              >
-                {VOICE_ENDPOINT_SILENCE_CHOICES.map((seconds) => (
-                  <option key={seconds} value={seconds}>
-                    {seconds} s
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
-        </div>
-
-      </SettingsSection>
-
-      <SettingsSection
-        title="Spoken commands"
-        description="The shortcut that opens a turn, and what a command may do without asking."
-      >
-        <div className="flex items-center justify-between rounded-lg border border-border p-3">
-          <div className="space-y-0.5">
-            <Label>Create a task without a confirmation</Label>
-            <p className="text-xs text-muted-foreground">
-              Approve, reject, and assign always keep their confirmation card.
-            </p>
-          </div>
-          <Switch
-            checked={quickCreate}
-            onCheckedChange={(next) => {
-              setQuickCreate(next)
-              void settingsApi.set(VOICE_SETTING_KEYS.quickCreate, next ? 'true' : 'false')
-            }}
-          />
-        </div>
-
-        <div className="space-y-2 rounded-lg border border-border p-3">
-          <Label htmlFor="voice-shortcut">Global shortcut</Label>
-          <p className="text-xs text-muted-foreground">
-            This shortcut starts and stops a command turn. Press-and-hold works inside the app window.
-          </p>
-          <div className="flex gap-2">
-            <Input
-              id="voice-shortcut"
-              value={shortcutDraft}
-              onChange={(e) => setShortcutDraft(e.target.value)}
-              placeholder={VOICE_DEFAULT_SHORTCUT}
-            />
-            <Button variant="outline" onClick={() => void setShortcut(shortcutDraft)}>
-              Save
-            </Button>
-          </div>
-        </div>
-      </SettingsSection>
-
-      {runtime.installed && (
-      <SettingsSection
-        title="Speech models"
-        description="Models are downloaded on request, checked against a SHA-256 value, and kept in the app data directory."
-      >
-        {models.length === 0 && <p className="text-sm text-muted-foreground">No model is listed.</p>}
-
-        {models.map((model) => (
-          <div
-            key={model.id}
-            className={`rounded-lg border p-3 ${
-              model.active && model.installed ? 'border-primary/60 bg-primary/5' : 'border-border'
-            }`}
-            data-testid={`voice-model-${model.id}`}
-          >
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                <p className="flex items-center gap-2 text-sm font-medium text-foreground">
-                  {model.label}
-                  {model.active && model.installed && (
-                    <span className="inline-flex items-center gap-1 rounded-full bg-primary/15 px-2 py-0.5 text-[10px] font-medium text-primary">
-                      <Check className="size-2.5" />
-                      In use
-                    </span>
-                  )}
-                </p>
-                <p className="mt-0.5 text-xs text-muted-foreground">{model.description}</p>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  {formatSize(model.sizeBytes)} · {model.languages.join(', ')} ·{' '}
-                  <a
-                    href={model.licenseUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="underline decoration-dotted underline-offset-2 hover:text-foreground"
+        {advanced && (
+          <>
+            {enabled && setupComplete && (
+              <div className="space-y-2 rounded-lg border border-border p-3" data-testid="voice-test">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="space-y-0.5">
+                    <Label>Test the microphone</Label>
+                    <p className="text-xs text-muted-foreground">
+                      Say a few words. The result is shown here and is written nowhere else.
+                    </p>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant={turnId ? 'default' : 'outline'}
+                    disabled={voiceState === 'transcribing'}
+                    onClick={() => (turnId ? void endTurn() : void startTest())}
+                    data-testid="voice-test-button"
                   >
-                    {model.license}
-                  </a>
-                </p>
-                {!model.downloadable && (
-                  <p className="mt-1 text-xs text-yellow-500">
-                    The checksum for this model is not recorded yet.
-                  </p>
-                )}
-                {model.error && <p className="mt-1 text-xs text-red-400">{model.error}</p>}
-              </div>
+                    {voiceState === 'transcribing' ? (
+                      <>
+                        <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                        Writing…
+                      </>
+                    ) : turnId ? (
+                      <>
+                        <Square className="mr-1.5 h-3 w-3 fill-current" />
+                        Stop
+                      </>
+                    ) : (
+                      <>
+                        <Mic className="mr-1.5 h-3.5 w-3.5" />
+                        Test
+                      </>
+                    )}
+                  </Button>
+                </div>
 
-              <div className="flex shrink-0 items-center gap-2">
-                {model.installed ? (
-                  <>
-                    {!model.active && (
-                      <Button
-                        size="sm"
-                        onClick={() => void selectModel(model.id)}
-                        data-testid={`voice-model-use-${model.id}`}
-                      >
-                        Use
+                {turnId && (
+                  <div className="flex items-center gap-2">
+                    <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
+                      <div
+                        className="h-full rounded-full bg-primary transition-all duration-75"
+                        style={{ width: `${Math.min(100, Math.round(level * 140))}%` }}
+                        data-testid="voice-test-level"
+                      />
+                    </div>
+                    <span className="text-[11px] text-muted-foreground">Listening…</span>
+                  </div>
+                )}
+
+                {(partial || testTranscript) && (
+                  <div className="flex items-start justify-between gap-2 rounded-md bg-muted/40 p-2">
+                    <p className="text-sm text-foreground" data-testid="voice-test-result">
+                      {partial || testTranscript}
+                    </p>
+                    {testTranscript && !turnId && (
+                      <Button size="sm" variant="ghost" className="h-6 px-1.5 text-[11px]" onClick={clearTest}>
+                        Clear
                       </Button>
                     )}
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div className="rounded-lg border border-border p-3 text-sm" data-testid="voice-status">
+              <p className="font-medium text-foreground">Status</p>
+              <p className="mt-1 text-muted-foreground">
+                {engine.state === 'ready'
+                  ? `Ready — ${engine.engine}, model ${engine.modelId}.`
+                  : engine.state === 'loading'
+                    ? 'The speech model is loading.'
+                    : engine.message}
+              </p>
+              <p className="mt-1 text-muted-foreground">
+                Microphone permission: <span className="text-foreground">{permission}</span>
+              </p>
+            </div>
+
+            <div className="space-y-3 rounded-lg border border-border p-3">
+              <div className="flex items-center justify-between gap-3">
+                <div className="space-y-0.5">
+                  <Label>Keep talking</Label>
+                  <p className="text-xs text-muted-foreground">
+                    The microphone stays open. Each time you pause, what you said is sent, and 20x keeps listening for
+                    the next sentence. Switch this off to write the words into the box and send them yourself.
+                  </p>
+                </div>
+                <Switch
+                  checked={conversation}
+                  disabled={!setupComplete}
+                  onCheckedChange={(next) => void setConversation(next)}
+                  data-testid="voice-conversation-switch"
+                />
+              </div>
+
+              {conversation && (
+                <div className="flex items-center justify-between gap-3">
+                  <Label htmlFor="voice-endpoint" className="text-xs font-normal text-muted-foreground">
+                    A pause this long ends a sentence
+                  </Label>
+                  <select
+                    id="voice-endpoint"
+                    className="rounded-md border border-border bg-input px-2 py-1 text-xs text-foreground"
+                    value={endpointSilence}
+                    onChange={(e) => {
+                      const seconds = Number(e.target.value)
+                      setEndpointSilence(seconds)
+                      void voiceApi.setEndpointSilence(seconds)
+                    }}
+                  >
+                    {VOICE_ENDPOINT_SILENCE_CHOICES.map((seconds) => (
+                      <option key={seconds} value={seconds}>
+                        {seconds} s
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+            </div>
+
+            <div className="flex items-center justify-between rounded-lg border border-border p-3">
+              <div className="space-y-0.5">
+                <Label>Create a task without a confirmation</Label>
+                <p className="text-xs text-muted-foreground">
+                  Approve, reject, and assign always keep their confirmation card.
+                </p>
+              </div>
+              <Switch
+                checked={quickCreate}
+                onCheckedChange={(next) => {
+                  setQuickCreate(next)
+                  void settingsApi.set(VOICE_SETTING_KEYS.quickCreate, next ? 'true' : 'false')
+                }}
+              />
+            </div>
+
+            <div className="space-y-2 rounded-lg border border-border p-3">
+              <Label htmlFor="voice-shortcut">Global shortcut</Label>
+              <p className="text-xs text-muted-foreground">
+                This shortcut starts and stops a turn. Press-and-hold works inside the app window.
+              </p>
+              <div className="flex gap-2">
+                <Input
+                  id="voice-shortcut"
+                  value={shortcutDraft}
+                  onChange={(e) => setShortcutDraft(e.target.value)}
+                  placeholder={VOICE_DEFAULT_SHORTCUT}
+                />
+                <Button variant="outline" onClick={() => void setShortcut(shortcutDraft)}>
+                  Save
+                </Button>
+              </div>
+            </div>
+          </>
+        )}
+      </SettingsSection>
+
+      {/* ── What 20x says ────────────────────────────────── */}
+      <SpokenAnswerSettings advanced={advanced} />
+
+      {/* ── The switch that reveals the rest ─────────────── */}
+      <SettingsSection title="Advanced" description="Everything above has a sensible default.">
+        <div className="flex items-center justify-between rounded-lg border border-border p-3">
+          <div className="space-y-0.5">
+            <Label>Show advanced voice settings</Label>
+            <p className="text-xs text-muted-foreground">
+              The microphone test, the pause length, the shortcut, the speech models, and the voice catalogue.
+            </p>
+          </div>
+          <Switch checked={advanced} onCheckedChange={toggleAdvanced} data-testid="voice-advanced-switch" />
+        </div>
+      </SettingsSection>
+
+      {advanced && runtime.installed && (
+        <SettingsSection
+          title="Speech models"
+          description="Models are downloaded on request, checked against a SHA-256 value, and kept in the app data directory."
+        >
+          {models.length === 0 && <p className="text-sm text-muted-foreground">No model is listed.</p>}
+
+          {models.map((model) => (
+            <div
+              key={model.id}
+              className={`rounded-lg border p-3 ${
+                model.active && model.installed ? 'border-primary/60 bg-primary/5' : 'border-border'
+              }`}
+              data-testid={`voice-model-${model.id}`}
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="flex items-center gap-2 text-sm font-medium text-foreground">
+                    {model.label}
+                    {model.active && model.installed && (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-primary/15 px-2 py-0.5 text-[10px] font-medium text-primary">
+                        <Check className="size-2.5" />
+                        In use
+                      </span>
+                    )}
+                  </p>
+                  <p className="mt-0.5 text-xs text-muted-foreground">{model.description}</p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {formatSize(model.sizeBytes)} · {model.languages.join(', ')} ·{' '}
+                    <a
+                      href={model.licenseUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="underline decoration-dotted underline-offset-2 hover:text-foreground"
+                    >
+                      {model.license}
+                    </a>
+                  </p>
+                  {!model.downloadable && (
+                    <p className="mt-1 text-xs text-yellow-500">The checksum for this model is not recorded yet.</p>
+                  )}
+                  {model.error && <p className="mt-1 text-xs text-red-400">{model.error}</p>}
+                </div>
+
+                <div className="flex shrink-0 items-center gap-2">
+                  {model.installed ? (
+                    <>
+                      {!model.active && (
+                        <Button
+                          size="sm"
+                          onClick={() => void selectModel(model.id)}
+                          data-testid={`voice-model-use-${model.id}`}
+                        >
+                          Use
+                        </Button>
+                      )}
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => void removeModel(model.id)}
+                        title="Delete this model"
+                        data-testid={`voice-model-delete-${model.id}`}
+                      >
+                        <Trash2 className="mr-1.5 h-3.5 w-3.5" />
+                        Delete
+                      </Button>
+                    </>
+                  ) : (
                     <Button
                       size="sm"
                       variant="outline"
-                      onClick={() => void removeModel(model.id)}
-                      title="Delete this model"
-                      data-testid={`voice-model-delete-${model.id}`}
+                      disabled={!model.downloadable || model.installing}
+                      onClick={() => void installModel(model.id)}
+                      data-testid={`voice-model-download-${model.id}`}
                     >
-                      <Trash2 className="mr-1.5 h-3.5 w-3.5" />
-                      Delete
+                      {model.installing ? (
+                        <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <Download className="mr-1.5 h-3.5 w-3.5" />
+                      )}
+                      {model.installing ? `${Math.round(model.progress * 100)}%` : 'Download'}
                     </Button>
-                  </>
-                ) : (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    disabled={!model.downloadable || model.installing}
-                    onClick={() => void installModel(model.id)}
-                    data-testid={`voice-model-download-${model.id}`}
-                  >
-                    {model.installing ? (
-                      <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-                    ) : (
-                      <Download className="mr-1.5 h-3.5 w-3.5" />
-                    )}
-                    {model.installing ? `${Math.round(model.progress * 100)}%` : 'Download'}
-                  </Button>
-                )}
+                  )}
+                </div>
               </div>
+
+              {model.installing && (
+                <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted">
+                  <div
+                    className="h-full rounded-full bg-primary transition-all"
+                    style={{ width: `${Math.round(model.progress * 100)}%` }}
+                  />
+                </div>
+              )}
             </div>
+          ))}
 
-            {model.installing && (
-              <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted">
-                <div
-                  className="h-full rounded-full bg-primary transition-all"
-                  style={{ width: `${Math.round(model.progress * 100)}%` }}
-                />
-              </div>
-            )}
+          <div className="space-y-2 rounded-lg border border-border p-3">
+            <Label htmlFor="voice-model-dir">Use another model directory (optional)</Label>
+            <p className="text-xs text-muted-foreground">
+              Only for a model you installed by hand. The directory must hold an encoder, a decoder, a joiner and a
+              tokens file.
+            </p>
+            <div className="flex gap-2">
+              <Input
+                id="voice-model-dir"
+                value={customDir}
+                onChange={(e) => setCustomDir(e.target.value)}
+                placeholder="/path/to/sherpa-onnx-streaming-model"
+              />
+              <Button variant="outline" onClick={() => void pickDir()}>
+                <FolderOpen className="mr-1.5 h-3.5 w-3.5" />
+                Browse
+              </Button>
+              <Button variant="outline" onClick={() => void setCustomModelDir(customDir)}>
+                Use
+              </Button>
+            </div>
           </div>
-        ))}
 
-        <div className="space-y-2 rounded-lg border border-border p-3">
-          <Label htmlFor="voice-model-dir">Use another model directory (optional)</Label>
-          <p className="text-xs text-muted-foreground">
-            Only for a model you installed by hand. The directory must hold an encoder, a decoder, a
-            joiner and a tokens file.
-          </p>
-          <div className="flex gap-2">
-            <Input
-              id="voice-model-dir"
-              value={customDir}
-              onChange={(e) => setCustomDir(e.target.value)}
-              placeholder="/path/to/sherpa-onnx-streaming-model"
-            />
-            <Button variant="outline" onClick={() => void pickDir()}>
-              <FolderOpen className="mr-1.5 h-3.5 w-3.5" />
-              Browse
+          <div className="flex items-center justify-between rounded-lg border border-border p-3">
+            <div className="space-y-0.5">
+              <Label>Delete every downloaded model</Label>
+              <p className="text-xs text-muted-foreground">This gives the disk space back immediately.</p>
+            </div>
+            <Button
+              variant="outline"
+              disabled={busy}
+              onClick={async () => {
+                setBusy(true)
+                await removeAllModels()
+                setBusy(false)
+              }}
+            >
+              {busy ? (
+                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Trash2 className="mr-1.5 h-3.5 w-3.5" />
+              )}
+              Delete all
             </Button>
-            <Button variant="outline" onClick={() => void setCustomModelDir(customDir)}>
-              Use
-            </Button>
           </div>
-        </div>
-
-        <div className="flex items-center justify-between rounded-lg border border-border p-3">
-          <div className="space-y-0.5">
-            <Label>Delete every downloaded model</Label>
-            <p className="text-xs text-muted-foreground">This gives the disk space back immediately.</p>
-          </div>
-          <Button
-            variant="outline"
-            disabled={busy}
-            onClick={async () => {
-              setBusy(true)
-              await removeAllModels()
-              setBusy(false)
-            }}
-          >
-            {busy ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Trash2 className="mr-1.5 h-3.5 w-3.5" />}
-            Delete all
-          </Button>
-        </div>
-      </SettingsSection>
+        </SettingsSection>
       )}
     </>
   )

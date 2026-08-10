@@ -5,11 +5,7 @@ import { Label } from '@/components/ui/Label'
 import { Switch } from '@/components/ui/Switch'
 import { Button } from '@/components/ui/Button'
 import { useVoiceStore } from '@/stores/voice-store'
-import {
-  VOICE_TTS_MAX_CHARS_CHOICES,
-  VOICE_TTS_SPEED_CHOICES,
-  type VoiceTtsEngineId,
-} from '@shared/voice-tts'
+import { VOICE_TTS_MAX_CHARS_CHOICES, VOICE_TTS_SPEED_CHOICES, type VoiceTtsEngineId } from '@shared/voice-tts'
 
 function formatSize(bytes: number): string {
   if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(1)} GB`
@@ -17,15 +13,20 @@ function formatSize(bytes: number): string {
   return `${Math.round(bytes / 1e3)} kB`
 }
 
+interface SpokenAnswerSettingsProps {
+  /** Reveals the controls that have a sensible default. */
+  advanced?: boolean
+}
+
 /**
- * Spoken answers (design §5.7 and §5.10).
+ * Spoken answers — the speaking half of the voice page (design §5.7 and §5.10).
  *
- * Two engines are offered and the difference is stated plainly, because it is
- * a real choice and not a preference: the system voice costs nothing and works
- * at once, and the downloaded voice sounds better but needs the speech runtime
- * and a model on disk.
+ * Only two controls are shown by default: whether 20x reads answers aloud, and
+ * which voice does it. The engine choice, the speed, the length limit and the
+ * voice catalogue are all behind the page's Advanced switch, because each one
+ * has a default that works.
  */
-export function SpokenAnswerSettings() {
+export function SpokenAnswerSettings({ advanced = false }: SpokenAnswerSettingsProps) {
   const tts = useVoiceStore((s) => s.tts)
   const speaking = useVoiceStore((s) => s.speaking)
   const initializeTts = useVoiceStore((s) => s.initializeTts)
@@ -48,7 +49,7 @@ export function SpokenAnswerSettings() {
 
   if (!tts) {
     return (
-      <SettingsSection title="Spoken answers" description="20x can read an agent answer aloud.">
+      <SettingsSection title="Text to speech — what 20x says" description="20x can read an agent answer aloud.">
         <p className="text-sm text-muted-foreground">Spoken answers are not available in this build.</p>
       </SettingsSection>
     )
@@ -67,8 +68,8 @@ export function SpokenAnswerSettings() {
   return (
     <>
       <SettingsSection
-        title="Spoken answers"
-        description="20x reads an agent answer aloud. The speech is produced on this computer, and no text and no audio leave the device."
+        title="Text to speech — what 20x says"
+        description="20x reads an agent answer aloud. The speech is produced on this computer; no text and no audio leave the device."
       >
         <div className="flex items-center justify-between rounded-lg border border-border p-3">
           <div className="space-y-0.5">
@@ -87,45 +88,51 @@ export function SpokenAnswerSettings() {
           />
         </div>
 
-        <div className="rounded-lg border border-border p-3 text-sm">
-          <p className="font-medium text-foreground">Status</p>
-          <p className="mt-1 text-muted-foreground" data-testid="tts-status">
-            {statusLine}
-          </p>
-        </div>
-
-        <div className="space-y-3 rounded-lg border border-border p-3">
-          <Label>Voice engine</Label>
-          <div className="grid gap-2 sm:grid-cols-2">
-            {(
-              [
-                {
-                  id: 'system' as const,
-                  title: 'This system',
-                  detail: 'No download. It uses the voice the operating system already has.',
-                },
-                {
-                  id: 'local' as const,
-                  title: 'Downloaded voice',
-                  detail: 'More natural. It needs the speech runtime and a model on disk.',
-                },
-              ] satisfies Array<{ id: VoiceTtsEngineId; title: string; detail: string }>
-            ).map((option) => (
-              <button
-                key={option.id}
-                type="button"
-                onClick={() => void setTtsEngine(option.id)}
-                className={`rounded-lg border p-3 text-left transition-colors ${
-                  tts.engine === option.id ? 'border-primary/60 bg-primary/5' : 'border-border hover:border-primary/40'
-                }`}
-                data-testid={`tts-engine-${option.id}`}
-              >
-                <p className="text-sm font-medium text-foreground">{option.title}</p>
-                <p className="mt-0.5 text-xs text-muted-foreground">{option.detail}</p>
-              </button>
-            ))}
+        {(advanced || !ready) && (
+          <div className={`rounded-lg border p-3 text-sm ${ready ? 'border-border' : 'border-yellow-500/40'}`}>
+            <p className="font-medium text-foreground">Status</p>
+            <p className="mt-1 text-muted-foreground" data-testid="tts-status">
+              {statusLine}
+            </p>
           </div>
-        </div>
+        )}
+
+        {advanced && (
+          <div className="space-y-3 rounded-lg border border-border p-3">
+            <Label>Voice engine</Label>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {(
+                [
+                  {
+                    id: 'system' as const,
+                    title: 'This system',
+                    detail: 'No download. It uses the voice the operating system already has.'
+                  },
+                  {
+                    id: 'local' as const,
+                    title: 'Downloaded voice',
+                    detail: 'More natural. It needs the speech runtime and a model on disk.'
+                  }
+                ] satisfies Array<{ id: VoiceTtsEngineId; title: string; detail: string }>
+              ).map((option) => (
+                <button
+                  key={option.id}
+                  type="button"
+                  onClick={() => void setTtsEngine(option.id)}
+                  className={`rounded-lg border p-3 text-left transition-colors ${
+                    tts.engine === option.id
+                      ? 'border-primary/60 bg-primary/5'
+                      : 'border-border hover:border-primary/40'
+                  }`}
+                  data-testid={`tts-engine-${option.id}`}
+                >
+                  <p className="text-sm font-medium text-foreground">{option.title}</p>
+                  <p className="mt-0.5 text-xs text-muted-foreground">{option.detail}</p>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
         <div className="space-y-2 rounded-lg border border-border p-3">
           <div className="flex items-center justify-between gap-3">
@@ -156,7 +163,7 @@ export function SpokenAnswerSettings() {
             <p className="text-xs text-muted-foreground">
               {tts.engine === 'system'
                 ? 'This system has no voice that 20x can use.'
-                : 'Download a voice below to choose a speaker.'}
+                : 'Switch on Advanced below to download a voice.'}
             </p>
           ) : (
             <select
@@ -176,150 +183,153 @@ export function SpokenAnswerSettings() {
           )}
         </div>
 
-        <div className="flex items-center justify-between rounded-lg border border-border p-3">
-          <Label htmlFor="tts-speed">Reading speed</Label>
-          <select
-            id="tts-speed"
-            className="rounded-md border border-border bg-input px-2 py-1 text-xs text-foreground"
-            value={tts.speed}
-            onChange={(e) => void setTtsSpeed(Number(e.target.value))}
-          >
-            {VOICE_TTS_SPEED_CHOICES.map((speed) => (
-              <option key={speed} value={speed}>
-                {speed}×
-              </option>
-            ))}
-          </select>
-        </div>
-
-        <div className="flex items-center justify-between rounded-lg border border-border p-3">
-          <div className="space-y-0.5">
-            <Label htmlFor="tts-max-chars">Stop reading after</Label>
-            <p className="text-xs text-muted-foreground">
-              A long answer is cut at the end of a sentence. Use the speak button on the message to hear
-              the rest.
-            </p>
-          </div>
-          <select
-            id="tts-max-chars"
-            className="rounded-md border border-border bg-input px-2 py-1 text-xs text-foreground"
-            value={tts.maxChars}
-            onChange={(e) => void setTtsMaxChars(Number(e.target.value))}
-          >
-            {VOICE_TTS_MAX_CHARS_CHOICES.map((chars) => (
-              <option key={chars} value={chars}>
-                {chars} characters
-              </option>
-            ))}
-          </select>
-        </div>
-
-        <div className="flex items-center justify-between rounded-lg border border-border p-3">
-          <div className="space-y-0.5">
-            <Label>Read only what you asked for by voice</Label>
-            <p className="text-xs text-muted-foreground">
-              Keep this on and 20x reads the answer to a spoken question only. Switch it off and it reads
-              every agent answer, including one from a task running in the background.
-            </p>
-          </div>
-          <Switch
-            checked={tts.onlyVoiceTurns}
-            onCheckedChange={(next) => void setTtsOnlyVoiceTurns(next)}
-            data-testid="tts-only-voice-turns"
-          />
-        </div>
-
-        <div className="flex items-center justify-between rounded-lg border border-border p-3">
-          <div className="space-y-0.5">
-            <Label>Say the result of a command</Label>
-            <p className="text-xs text-muted-foreground">Short lines such as “Task created.”</p>
-          </div>
-          <Switch
-            checked={tts.speakActionResults}
-            onCheckedChange={(next) => void setTtsSpeakActionResults(next)}
-          />
-        </div>
-      </SettingsSection>
-
-      <SettingsSection
-        title="Downloaded voices"
-        description="Each voice is downloaded on request, checked against a SHA-256 value, and kept in the app data directory."
-      >
-        {tts.models.map((model) => (
-          <div
-            key={model.id}
-            className={`rounded-lg border p-3 ${
-              model.active && model.installed ? 'border-primary/60 bg-primary/5' : 'border-border'
-            }`}
-            data-testid={`tts-model-${model.id}`}
-          >
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                <p className="text-sm font-medium text-foreground">{model.label}</p>
-                <p className="mt-0.5 text-xs text-muted-foreground">{model.description}</p>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  {formatSize(model.sizeBytes)} to download, {formatSize(model.unpackedBytes)} on disk ·{' '}
-                  {model.speakerCount} voices ·{' '}
-                  <a
-                    href={model.licenseUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="underline decoration-dotted underline-offset-2 hover:text-foreground"
-                  >
-                    {model.license}
-                  </a>
-                </p>
-                {!model.downloadable && (
-                  <p className="mt-1 text-xs text-yellow-500">
-                    The checksum for this voice is not recorded yet.
-                  </p>
-                )}
-                {model.error && <p className="mt-1 text-xs text-red-400">{model.error}</p>}
-              </div>
-
-              <div className="flex shrink-0 items-center gap-2">
-                {model.installed ? (
-                  <>
-                    {!(model.active && tts.engine === 'local') && (
-                      <Button size="sm" onClick={() => void selectTtsModel(model.id)}>
-                        Use
-                      </Button>
-                    )}
-                    <Button size="sm" variant="outline" onClick={() => void removeTtsModel(model.id)}>
-                      <Trash2 className="mr-1.5 h-3.5 w-3.5" />
-                      Delete
-                    </Button>
-                  </>
-                ) : (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    disabled={!model.downloadable || model.installing}
-                    onClick={() => void installTtsModel(model.id)}
-                    data-testid={`tts-model-download-${model.id}`}
-                  >
-                    {model.installing ? (
-                      <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-                    ) : (
-                      <Download className="mr-1.5 h-3.5 w-3.5" />
-                    )}
-                    {model.installing ? `${Math.round(model.progress * 100)}%` : 'Download'}
-                  </Button>
-                )}
-              </div>
+        {advanced && (
+          <>
+            <div className="flex items-center justify-between rounded-lg border border-border p-3">
+              <Label htmlFor="tts-speed">Reading speed</Label>
+              <select
+                id="tts-speed"
+                className="rounded-md border border-border bg-input px-2 py-1 text-xs text-foreground"
+                value={tts.speed}
+                onChange={(e) => void setTtsSpeed(Number(e.target.value))}
+              >
+                {VOICE_TTS_SPEED_CHOICES.map((speed) => (
+                  <option key={speed} value={speed}>
+                    {speed}×
+                  </option>
+                ))}
+              </select>
             </div>
 
-            {model.installing && (
-              <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted">
-                <div
-                  className="h-full rounded-full bg-primary transition-all"
-                  style={{ width: `${Math.round(model.progress * 100)}%` }}
-                />
+            <div className="flex items-center justify-between rounded-lg border border-border p-3">
+              <div className="space-y-0.5">
+                <Label htmlFor="tts-max-chars">Stop reading after</Label>
+                <p className="text-xs text-muted-foreground">
+                  A long answer is cut at the end of a sentence. Use the speak button on the message to hear the rest.
+                </p>
               </div>
-            )}
-          </div>
-        ))}
+              <select
+                id="tts-max-chars"
+                className="rounded-md border border-border bg-input px-2 py-1 text-xs text-foreground"
+                value={tts.maxChars}
+                onChange={(e) => void setTtsMaxChars(Number(e.target.value))}
+              >
+                {VOICE_TTS_MAX_CHARS_CHOICES.map((chars) => (
+                  <option key={chars} value={chars}>
+                    {chars} characters
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="flex items-center justify-between rounded-lg border border-border p-3">
+              <div className="space-y-0.5">
+                <Label>Read only what you asked for by voice</Label>
+                <p className="text-xs text-muted-foreground">
+                  Keep this on and 20x reads the answer to a spoken question only. Switch it off and it reads every
+                  agent answer, including one from a task running in the background.
+                </p>
+              </div>
+              <Switch
+                checked={tts.onlyVoiceTurns}
+                onCheckedChange={(next) => void setTtsOnlyVoiceTurns(next)}
+                data-testid="tts-only-voice-turns"
+              />
+            </div>
+
+            <div className="flex items-center justify-between rounded-lg border border-border p-3">
+              <div className="space-y-0.5">
+                <Label>Say the result of a command</Label>
+                <p className="text-xs text-muted-foreground">Short lines such as “Task created.”</p>
+              </div>
+              <Switch
+                checked={tts.speakActionResults}
+                onCheckedChange={(next) => void setTtsSpeakActionResults(next)}
+              />
+            </div>
+          </>
+        )}
       </SettingsSection>
+
+      {advanced && (
+        <SettingsSection
+          title="Downloaded voices"
+          description="Each voice is downloaded on request, checked against a SHA-256 value, and kept in the app data directory."
+        >
+          {tts.models.map((model) => (
+            <div
+              key={model.id}
+              className={`rounded-lg border p-3 ${
+                model.active && model.installed ? 'border-primary/60 bg-primary/5' : 'border-border'
+              }`}
+              data-testid={`tts-model-${model.id}`}
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-sm font-medium text-foreground">{model.label}</p>
+                  <p className="mt-0.5 text-xs text-muted-foreground">{model.description}</p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {formatSize(model.sizeBytes)} to download, {formatSize(model.unpackedBytes)} on disk ·{' '}
+                    {model.speakerCount} voices ·{' '}
+                    <a
+                      href={model.licenseUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="underline decoration-dotted underline-offset-2 hover:text-foreground"
+                    >
+                      {model.license}
+                    </a>
+                  </p>
+                  {!model.downloadable && (
+                    <p className="mt-1 text-xs text-yellow-500">The checksum for this voice is not recorded yet.</p>
+                  )}
+                  {model.error && <p className="mt-1 text-xs text-red-400">{model.error}</p>}
+                </div>
+
+                <div className="flex shrink-0 items-center gap-2">
+                  {model.installed ? (
+                    <>
+                      {!(model.active && tts.engine === 'local') && (
+                        <Button size="sm" onClick={() => void selectTtsModel(model.id)}>
+                          Use
+                        </Button>
+                      )}
+                      <Button size="sm" variant="outline" onClick={() => void removeTtsModel(model.id)}>
+                        <Trash2 className="mr-1.5 h-3.5 w-3.5" />
+                        Delete
+                      </Button>
+                    </>
+                  ) : (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={!model.downloadable || model.installing}
+                      onClick={() => void installTtsModel(model.id)}
+                      data-testid={`tts-model-download-${model.id}`}
+                    >
+                      {model.installing ? (
+                        <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <Download className="mr-1.5 h-3.5 w-3.5" />
+                      )}
+                      {model.installing ? `${Math.round(model.progress * 100)}%` : 'Download'}
+                    </Button>
+                  )}
+                </div>
+              </div>
+
+              {model.installing && (
+                <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted">
+                  <div
+                    className="h-full rounded-full bg-primary transition-all"
+                    style={{ width: `${Math.round(model.progress * 100)}%` }}
+                  />
+                </div>
+              )}
+            </div>
+          ))}
+        </SettingsSection>
+      )}
     </>
   )
 }
