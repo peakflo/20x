@@ -39,7 +39,7 @@ import {
   installVoiceRuntime,
   removeVoiceRuntime,
 } from './voice-runtime-installer'
-import { VoiceSpeechService } from './voice-speech-service'
+import { VoiceSpeechService, type VoiceAnswerPart } from './voice-speech-service'
 import type { VoiceTtsEngineId, VoiceTtsSnapshot } from '../../shared/voice-tts'
 
 export interface VoiceSessionManagerOptions {
@@ -539,17 +539,18 @@ export class VoiceSessionManager {
    * Called for every transcript change, so it must be cheap and must decide for
    * itself whether this answer may be spoken at all.
    */
-  async streamAgentAnswer(taskId: string, partId: string, text: string): Promise<void> {
+  async streamAgentAnswer(taskId: string, parts: VoiceAnswerPart[]): Promise<void> {
+    if (parts.length === 0) return
     if (this.speech.streamingTaskId !== taskId) {
       if (!(await this.speech.beginStreamingAnswer(taskId))) return
     }
-    this.speech.pushStreamingAnswer(taskId, partId, text)
+    this.speech.pushStreamingAnswer(taskId, parts)
   }
 
   /** The agent has stopped. Reads out whatever is left of the answer. */
-  finishAgentAnswer(taskId: string, partId: string, text: string): boolean {
+  finishAgentAnswer(taskId: string, parts: VoiceAnswerPart[]): boolean {
     if (this.speech.streamingTaskId !== taskId) return false
-    this.speech.pushStreamingAnswer(taskId, partId, text, true)
+    this.speech.pushStreamingAnswer(taskId, parts, true)
     this.speech.endStreamingAnswer(taskId)
     return true
   }

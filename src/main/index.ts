@@ -21,7 +21,7 @@ import { NotionPlugin } from './plugins/notion-plugin'
 import { YouTrackPlugin } from './plugins/youtrack-plugin'
 import { registerIpcHandlers } from './ipc-handlers'
 import { VoiceSessionManager } from './voice/voice-session-manager'
-import { lastAssistantTextFromTranscript } from './voice/voice-action-service'
+import { assistantTextParts, sinceLastUserMessage } from './voice/voice-answer-parts'
 import { EnterpriseAuth } from './enterprise-auth'
 import { RecurrenceScheduler } from './recurrence-scheduler'
 import { HeartbeatScheduler } from './heartbeat-scheduler'
@@ -120,18 +120,22 @@ function sendVoiceEventToRenderer(channel: string, data: unknown): void {
 function watchAgentAnswersForSpeech(agents: AgentManager, database: DatabaseManager): void {
   const lastStatus = new Map<string, string>()
   /** The newest assistant text of each task, as it is written. */
-  const writing = new Map<string, { partId: string; text: string }>()
+  const writing = new Map<string, true>()
 
   agents.addExternalListener((channel, data) => {
     try {
       if (channel === 'transcript:changed') {
         const event = data as { taskId?: string; parts?: TranscriptPartRecord[] }
         if (!event?.taskId || !event.parts?.length) return
-        const part = newestAssistantText(event.parts)
-        if (!part) return
-        writing.set(event.taskId, { partId: part.partId, text: part.content })
+        // Every message that changed, in order. A turn can hold several: the
+        // agent says something, uses a tool, and says something else. Taking
+        // only the newest skipped the first message entirely whenever both
+        // landed in one flush.
+        const parts = assistantTextParts(event.parts)
+        if (parts.length === 0) return
+        writing.set(event.taskId, true)
         void voiceSessionManager
-          ?.streamAgentAnswer(event.taskId, part.partId, part.content)
+          ?.streamAgentAnswer(event.taskId, parts)
           .catch((err) => console.error('[voice] reading the answer failed:', err))
         return
       }
@@ -145,21 +149,22 @@ function watchAgentAnswersForSpeech(agents: AgentManager, database: DatabaseMana
       else lastStatus.set(event.sessionId, event.status)
       if (event.status !== 'idle' || previous !== 'working') return
 
-      // Close the passage with the last words, which may have arrived after the
-      // final transcript event.
+      // Close the passage with the last words, which may have arrived after
+      // the final transcript event. Only this turn's messages are considered:
+      // everything the agent wrote since the user last spoke.
       const stored = database.getTranscriptParts(event.taskId)
-      const part = newestAssistantText(stored)
+      const parts = assistantTextParts(sinceLastUserMessage(stored))
       const open = writing.get(event.taskId)
       writing.delete(event.taskId)
-      if (part && voiceSessionManager?.finishAgentAnswer(event.taskId, part.partId, part.content)) {
+      if (parts.length > 0 && voiceSessionManager?.finishAgentAnswer(event.taskId, parts)) {
         return
       }
 
       // Nothing was read as it was written — no transcript event reached us —
-      // so the answer is read in one piece instead.
+      // so the answer is read in one piece instead, every message of it.
       if (open) return
-      const text = lastAssistantTextFromTranscript(stored)
-      if (!text) return
+      const text = parts.map((part) => part.content).join('\n\n')
+      if (!text.trim()) return
       void voiceSessionManager?.speakAgentAnswer(event.taskId, text).catch((err) => {
         console.error('[voice] speaking the answer failed:', err)
       })
@@ -168,20 +173,6 @@ function watchAgentAnswersForSpeech(agents: AgentManager, database: DatabaseMana
       console.error('[voice] reading the answer failed:', err)
     }
   })
-}
-
-/** The assistant text part being written, if the newest one is plain text. */
-function newestAssistantText(
-  parts: Array<{ partId?: string; role: string; content: string; partType?: string }>
-): { partId: string; content: string } | null {
-  for (let i = parts.length - 1; i >= 0; i--) {
-    const part = parts[i]
-    if (part.role !== 'assistant') continue
-    if (part.partType && part.partType !== 'text') continue
-    if (!(part.content ?? '').trim()) continue
-    return { partId: part.partId ?? 'assistant', content: part.content }
-  }
-  return null
 }
 
 async function shutdownAppServices(): Promise<void> {

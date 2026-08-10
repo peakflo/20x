@@ -45,6 +45,17 @@ import { VoiceTtsModelManager } from './voice-tts-model-manager'
 import { VoiceTtsWorkerClient, type VoiceTtsChunk } from './voice-tts-worker-client'
 import { listSystemVoices, pickDefaultSystemVoice, systemVoiceName } from './voice-system-voices'
 
+/**
+ * One message of an agent answer.
+ *
+ * A turn can hold several: the agent says something, uses a tool, and says
+ * something else. Each is read, in the order it was written.
+ */
+export interface VoiceAnswerPart {
+  partId: string
+  content: string
+}
+
 export interface VoiceSpeechSettings {
   getSetting: (key: string) => string | undefined
   setSetting: (key: string, value: string) => void
@@ -91,14 +102,21 @@ interface ActiveSpeech {
   taskId?: string
   /** Set while the answer is still being written. */
   streaming?: {
-    /** The transcript part being read. A new part continues the same passage. */
-    partId: string
-    /** How many sentences of that part have been handed to the worker. */
-    sentencesSent: number
+    /**
+     * How many sentences of each message have been handed to the worker.
+     *
+     * One turn can hold several messages: an agent may say something, use a
+     * tool, and say something else. Each is a transcript part of its own and
+     * each is read, so progress is kept per part rather than for "the newest"
+     * one — which is how the first message came to be skipped.
+     */
+    spoken: Map<string, number>
     /** Characters already dispatched, against the reading limit. */
     charsSent: number
     /** True once the limit was reached and the rest is left unread. */
     truncated: boolean
+    /** False until the first sentence of the whole passage has been sent. */
+    started: boolean
   }
 }
 
@@ -474,7 +492,7 @@ export class VoiceSpeechService {
       speechId,
       source: 'agent_answer',
       taskId,
-      streaming: { partId: '', sentencesSent: 0, charsSent: 0, truncated: false },
+      streaming: { spoken: new Map(), charsSent: 0, truncated: false, started: false },
     }
     this.onSpeakingChange?.(true)
 
@@ -505,32 +523,46 @@ export class VoiceSpeechService {
    * `partId` names the piece of the transcript this text belongs to. An agent
    * may write an answer in several pieces, and each one starts from nothing.
    */
-  pushStreamingAnswer(taskId: string, partId: string, text: string, final = false): void {
+  pushStreamingAnswer(taskId: string, parts: VoiceAnswerPart[], final = false): void {
     const active = this.active
     const streaming = active?.streaming
     if (!active || !streaming || active.taskId !== taskId) return
-    if (streaming.truncated) return
 
-    if (streaming.partId !== partId) {
-      // A new piece of the answer. It is read on from here, in the same breath.
-      streaming.partId = partId
-      streaming.sentencesSent = 0
+    for (let i = 0; i < parts.length; i++) {
+      if (streaming.truncated) return
+      const part = parts[i]
+      // Only the last message of the turn can still be growing. Every earlier
+      // one is finished, so its closing sentence is released rather than held.
+      const complete = final || i < parts.length - 1
+      this.pushOnePart(active.speechId, taskId, part, complete)
     }
+  }
 
-    const prepared = toSpokenText(text, this.maxChars())
-    const { sentences } = splitStreamingSentences(prepared.text, final)
-    let fresh = sentences.slice(streaming.sentencesSent)
+  /** One message of the answer. Says whatever of it is new and finished. */
+  private pushOnePart(
+    speechId: string,
+    taskId: string,
+    part: VoiceAnswerPart,
+    complete: boolean
+  ): void {
+    const streaming = this.active?.streaming
+    if (!streaming) return
+
+    const already = streaming.spoken.get(part.partId) ?? 0
+    const prepared = toSpokenText(part.content, this.maxChars())
+    const { sentences } = splitStreamingSentences(prepared.text, complete)
+    let fresh = sentences.slice(already)
     if (fresh.length === 0) return
 
-    // Nothing has been said yet, so this is the opening and its length is the
-    // wait before the answer starts.
+    // Nothing has been said yet, so this is the opening of the whole answer and
+    // its length is the wait before speech starts.
     const before = fresh.length
-    if (streaming.sentencesSent === 0) fresh = withShortLeadIn(fresh)
+    if (!streaming.started) fresh = withShortLeadIn(fresh)
     // The split adds a piece the transcript does not have, so the counter is
     // corrected by exactly what was added rather than by a guess.
     const leadInExtra = fresh.length - before
 
-    // The reading limit applies to the whole answer, not to one piece of it.
+    // The reading limit applies to the whole answer, not to one message of it.
     const allowed: string[] = []
     for (const sentence of fresh) {
       if (streaming.charsSent + sentence.length > this.maxChars()) {
@@ -540,18 +572,20 @@ export class VoiceSpeechService {
       streaming.charsSent += sentence.length + 1
       allowed.push(sentence)
     }
+    if (allowed.length === 0) return
 
+    streaming.started = true
     // The counter follows the transcript, not what was said aloud.
-    streaming.sentencesSent += Math.max(0, allowed.length - leadInExtra)
+    streaming.spoken.set(part.partId, already + Math.max(0, allowed.length - leadInExtra))
     this.options.notifyRenderer(VOICE_TTS_EVENTS.speechStart, {
-      speechId: active.speechId,
+      speechId,
       source: 'agent_answer',
       text: prepared.text,
       taskId,
       sampleRate: this.sampleRate,
       truncated: streaming.truncated,
     } satisfies VoiceSpeechStartEvent)
-    this.worker.append(active.speechId, allowed)
+    this.worker.append(speechId, allowed)
   }
 
   /** No more of this answer is coming. What is queued is still read. */

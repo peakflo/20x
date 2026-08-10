@@ -388,13 +388,13 @@ describe('reading an answer as it is written', () => {
   it('reads each sentence as soon as it is finished', async () => {
     const { service, worker } = await streaming()
 
-    service.pushStreamingAnswer('task-1', 'part-1', 'The build is green')
+    service.pushStreamingAnswer('task-1', [{ partId: 'part-1', content: 'The build is green' }])
     expect(worker.appended).toEqual([])
 
-    service.pushStreamingAnswer('task-1', 'part-1', 'The build is green. Nothing else')
+    service.pushStreamingAnswer('task-1', [{ partId: 'part-1', content: 'The build is green. Nothing else' }])
     expect(worker.appended).toEqual(['The build is green.'])
 
-    service.pushStreamingAnswer('task-1', 'part-1', 'The build is green. Nothing else failed.')
+    service.pushStreamingAnswer('task-1', [{ partId: 'part-1', content: 'The build is green. Nothing else failed.' }])
     expect(worker.appended).toEqual(['The build is green.', 'Nothing else failed.'])
   })
 
@@ -402,7 +402,7 @@ describe('reading an answer as it is written', () => {
     const { service, worker } = await streaming()
 
     for (let i = 0; i < 5; i++) {
-      service.pushStreamingAnswer('task-1', 'part-1', 'One. Two. Three.')
+      service.pushStreamingAnswer('task-1', [{ partId: 'part-1', content: 'One. Two. Three.' }])
     }
 
     expect(worker.appended).toEqual(['One.', 'Two.', 'Three.'])
@@ -411,19 +411,74 @@ describe('reading an answer as it is written', () => {
   it('reads on when the agent starts a new piece of the answer', async () => {
     const { service, worker } = await streaming()
 
-    service.pushStreamingAnswer('task-1', 'part-1', 'First piece.')
-    service.pushStreamingAnswer('task-1', 'part-2', 'Second piece.')
+    service.pushStreamingAnswer('task-1', [{ partId: 'part-1', content: 'First piece.' }])
+    service.pushStreamingAnswer('task-1', [{ partId: 'part-2', content: 'Second piece.' }])
 
     expect(worker.appended).toEqual(['First piece.', 'Second piece.'])
+  })
+
+  /**
+   * The reported bug. An agent says something, uses a tool, and says something
+   * else — all in one turn. Both messages are the answer, and both are read.
+   * Only the last one was, because the reader took "the newest message" and
+   * the two arrived in a single transcript flush.
+   */
+  it('reads every message of one turn, not only the last', async () => {
+    const { service, worker } = await streaming()
+
+    service.pushStreamingAnswer('task-1', [
+      { partId: 'text-1', content: 'Let me look at the test.' },
+      { partId: 'text-2', content: 'It failed because the token expired.' },
+    ])
+
+    expect(worker.appended).toEqual([
+      'Let me look at the test.',
+      'It failed because the token expired.',
+    ])
+  })
+
+  it('finishes an earlier message rather than waiting for its last word', async () => {
+    const { service, worker } = await streaming()
+
+    // "Looking now" has no full stop, but it is not the last message, so it is
+    // complete and must be said rather than held.
+    service.pushStreamingAnswer('task-1', [
+      { partId: 'text-1', content: 'Looking now' },
+      { partId: 'text-2', content: 'The token expired' },
+    ])
+
+    expect(worker.appended).toEqual(['Looking now'])
+  })
+
+  it('says each message once as the turn goes on', async () => {
+    const { service, worker } = await streaming()
+
+    service.pushStreamingAnswer('task-1', [{ partId: 'text-1', content: 'First message.' }])
+    // The tool ran; now the second message arrives and the first is repeated
+    // in the transcript, as it is on every change.
+    service.pushStreamingAnswer('task-1', [
+      { partId: 'text-1', content: 'First message.' },
+      { partId: 'text-2', content: 'Second message.' },
+    ])
+    service.pushStreamingAnswer('task-1', [
+      { partId: 'text-1', content: 'First message.' },
+      { partId: 'text-2', content: 'Second message. And a third sentence.' },
+    ])
+
+    expect(worker.appended).toEqual([
+      'First message.',
+      'Second message.',
+      'And a third sentence.',
+    ])
   })
 
   it('reads the last words and closes when the agent stops', async () => {
     const { service, worker } = await streaming()
 
-    service.pushStreamingAnswer('task-1', 'part-1', 'It is done')
+    service.pushStreamingAnswer('task-1', [{ partId: 'part-1', content: 'It is done' }])
     expect(worker.appended).toEqual([])
 
-    service.pushStreamingAnswer('task-1', 'part-1', 'It is done', true)
+    service.pushStreamingAnswer('task-1', [{ partId: 'part-1', content: 'It is done' }], true)
     service.endStreamingAnswer('task-1')
 
     expect(worker.appended).toEqual(['It is done'])
@@ -433,7 +488,7 @@ describe('reading an answer as it is written', () => {
   it('ignores an answer from a task it is not reading', async () => {
     const { service, worker } = await streaming()
 
-    service.pushStreamingAnswer('task-other', 'part-1', 'A background answer.')
+    service.pushStreamingAnswer('task-other', [{ partId: 'part-1', content: 'A background answer.' }])
 
     expect(worker.appended).toEqual([])
   })
@@ -447,12 +502,12 @@ describe('reading an answer as it is written', () => {
     ctx.service.expectAnswer('task-1', 'turn-1', clock)
     await ctx.service.beginStreamingAnswer('task-1')
 
-    ctx.service.pushStreamingAnswer('task-1', 'part-1', 'One sentence here. Two sentence here. Three sentence here. Four here.')
+    ctx.service.pushStreamingAnswer('task-1', [{ partId: 'part-1', content: 'One sentence here. Two sentence here. Three sentence here. Four here.' }])
 
     const spoken = ctx.worker.appended.join(' ')
     expect(spoken.length).toBeLessThanOrEqual(45)
     // And it stays stopped, however much more arrives.
-    ctx.service.pushStreamingAnswer('task-1', 'part-1', 'One sentence here. Two sentence here. Three sentence here. Four here. Five here.')
+    ctx.service.pushStreamingAnswer('task-1', [{ partId: 'part-1', content: 'One sentence here. Two sentence here. Three sentence here. Four here. Five here.' }])
     expect(ctx.worker.appended.join(' ').length).toBeLessThanOrEqual(45)
   })
 

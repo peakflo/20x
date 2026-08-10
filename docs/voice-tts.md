@@ -184,6 +184,21 @@ of Markdown punctuation are removed before anything is spoken. A code block is
 named — “A code block of 12 lines is in the message.” — rather than read.
 Automatic speech stops at a character limit, and the speak button reads the rest.
 
+### Every message of a turn is read, not only the last
+
+One turn can hold several messages: the agent says something, uses a tool, and
+says something else. All of them are the answer.
+
+Progress is therefore kept per message rather than for "the newest" one. Taking
+the newest skipped the first message entirely whenever both landed in a single
+transcript flush, which is what a quick tool call produces. Every message that
+is not the last one is finished by definition, so its closing sentence is
+released rather than held back for a full stop that will never come.
+
+The turn is bounded by the user's last message. The stored transcript holds the
+whole conversation, and without that bound the close of a turn would replay
+every answer the agent had ever given on the task.
+
 ### It is read as it is written
 
 An agent answer arrives a few words at a time. Waiting for the agent to stop
