@@ -30,6 +30,12 @@ OpenAI Realtime, LiveKit, a wake word, and speaking on mobile. The contracts in
 
 ---
 
+## Where it lives in the app
+
+**Settings → Spoken answers**, its own page. Listening keeps **Settings → Voice**.
+The two share a name and nothing else: one needs a microphone, a granted
+permission and a downloaded recogniser, and the other needs none of them.
+
 ## Processes
 
 ```text
@@ -116,6 +122,21 @@ The withheld speakers stay in `voice-tts-manifest.ts` with the reason beside
 them, so the decision is visible in code and not only in this file.
 
 Source: <https://huggingface.co/hexgrad/Kokoro-82M/blob/main/VOICES.md>.
+
+### A dropped download is expected, and is resumed
+
+Measured in the Electron main process, the 26 MB archive dropped part of the way
+through at 19.5 MB and at 8.8 MB on consecutive attempts, through both the Node
+and the Chromium network stack, while the same request from plain Node
+completed. A single-shot fetch reports that to the user as `TypeError:
+terminated`.
+
+So a drop is treated as ordinary. The bytes already on disk are kept, the next
+attempt asks for the rest with a `Range` header, and six interruptions are
+absorbed before the user is told — in a sentence, not as a `TypeError`. A
+download that arrives whole and still fails its checksum is not retried: those
+are the bytes the server serves, and fetching 100 MB again would reach the same
+answer.
 
 ### Why an archive and not loose files
 

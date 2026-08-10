@@ -18,6 +18,7 @@ import type {
   VoiceSpeechEndEvent,
   VoiceSpeechStartEvent,
   VoiceTtsEngineId,
+  VoiceTtsModelState,
   VoiceTtsSnapshot
 } from '@shared/voice-tts'
 
@@ -768,5 +769,7 @@ export const voiceTtsApi = {
   onSpeechEnd: (callback: (event: VoiceSpeechEndEvent) => void): (() => void) =>
     window.electronAPI.voice.tts.onSpeechEnd(callback),
   onStatus: (callback: (event: VoiceTtsSnapshot) => void): (() => void) =>
-    window.electronAPI.voice.tts.onStatus(callback)
+    window.electronAPI.voice.tts.onStatus(callback),
+  onModelProgress: (callback: (event: { model: VoiceTtsModelState }) => void): (() => void) =>
+    window.electronAPI.voice.tts.onModelProgress(callback)
 }

@@ -672,6 +672,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
         const handler = (_: unknown, d: unknown): void => callback(d)
         ipcRenderer.on('voice:tts:status', handler)
         return () => ipcRenderer.removeListener('voice:tts:status', handler)
+      },
+      onModelProgress: (callback: (data: unknown) => void): (() => void) => {
+        const handler = (_: unknown, d: unknown): void => callback(d)
+        ipcRenderer.on('voice:tts:modelProgress', handler)
+        return () => ipcRenderer.removeListener('voice:tts:modelProgress', handler)
       }
     }
   },

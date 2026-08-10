@@ -616,4 +616,19 @@ if (hasTtsBridge()) {
   })
 
   voiceTtsApi.onStatus((snapshot) => useVoiceStore.setState({ tts: snapshot }))
+
+  // One voice is 26 MB or 103 MB, so its progress arrives on its own and is
+  // merged into the list rather than replacing the whole snapshot.
+  voiceTtsApi.onModelProgress(({ model }) => {
+    useVoiceStore.setState((state) =>
+      state.tts
+        ? {
+            tts: {
+              ...state.tts,
+              models: state.tts.models.map((m) => (m.id === model.id ? { ...m, ...model } : m)),
+            },
+          }
+        : state
+    )
+  })
 }

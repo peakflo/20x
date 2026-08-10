@@ -286,6 +286,13 @@ export const VOICE_TTS_EVENTS = {
   speechEnd: 'voice:speech:end',
   /** `VoiceTtsSnapshot` */
   ttsStatus: 'voice:tts:status',
+  /**
+   * `{ model: VoiceTtsModelState }` while a voice downloads.
+   *
+   * A voice is 26 MB or 103 MB, so the whole snapshot is not rebuilt for every
+   * chunk: one model state goes to the renderer and is merged into the list.
+   */
+  ttsModelProgress: 'voice:tts:modelProgress',
 } as const
 
 // ── Spoken-text preparation (design §5.7) ───────────────────

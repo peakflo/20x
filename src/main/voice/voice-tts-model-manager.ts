@@ -49,10 +49,20 @@ export interface VoiceTtsModelManagerOptions {
   rootDir: string
   fetchImpl?: typeof fetch
   onProgress?: (state: VoiceTtsModelState) => void
+  /** How a dropped download is retried. Narrowed in tests so they stay quick. */
+  retry?: { attempts?: number; baseDelayMs?: number }
 }
 
 /** The download is most of the wait; extraction is the rest. */
 const DOWNLOAD_SHARE = 0.9
+
+/**
+ * How many times a dropped download is resumed before the user is told.
+ *
+ * Each attempt continues from the bytes already on disk, so this is a budget
+ * for interruptions and not for repeated whole downloads.
+ */
+export const VOICE_TTS_DOWNLOAD_ATTEMPTS = 6
 
 export class VoiceTtsModelManager {
   private installing = new Map<string, number>()
@@ -63,6 +73,14 @@ export class VoiceTtsModelManager {
 
   private get fetchImpl(): typeof fetch {
     return this.options.fetchImpl ?? fetch
+  }
+
+  private get attempts(): number {
+    return Math.max(1, this.options.retry?.attempts ?? VOICE_TTS_DOWNLOAD_ATTEMPTS)
+  }
+
+  private get baseDelayMs(): number {
+    return this.options.retry?.baseDelayMs ?? 500
   }
 
   modelDir(id: string): string {
@@ -149,7 +167,10 @@ export class VoiceTtsModelManager {
 
     this.installing.delete(entry.id)
     this.aborts.delete(entry.id)
-    this.emit(entry)
+    // The closing report says the voice is installed. Reporting `false` here
+    // would make a finished download look like one that had gone back to the
+    // beginning.
+    this.emit(entry, true)
     return this.describe(entry, entry.id, true)
   }
 
@@ -175,7 +196,21 @@ export class VoiceTtsModelManager {
 
   // ── Internals ─────────────────────────────────────────────
 
-  /** Fetches the archive, resuming a part file, and checks the SHA-256. */
+  /**
+   * Fetches the archive, resuming a part file, and checks the SHA-256.
+   *
+   * A connection that drops part of the way through is normal on a download
+   * this size, and it is what a single-shot fetch reports to the user as
+   * "TypeError: terminated". Measured in the Electron main process, the same
+   * 26 MB archive dropped at 19.5 MB and at 8.8 MB on consecutive attempts,
+   * through both network stacks, while the same request from plain Node
+   * completed.
+   *
+   * So a drop is treated as ordinary. The bytes already on disk are kept, the
+   * next attempt asks for the rest with a `Range` header, and only a download
+   * that fails repeatedly reaches the user — as a sentence rather than as a
+   * `TypeError`.
+   */
   private async download(
     entry: VoiceTtsModelManifestEntry,
     target: string,
@@ -188,11 +223,66 @@ export class VoiceTtsModelManager {
     }
 
     const partial = `${target}.part`
+    let lastFailure = ''
+
+    for (let attempt = 1; attempt <= this.attempts; attempt++) {
+      if (signal.aborted) throw new Error('The download was cancelled.')
+      try {
+        const resumed = await this.downloadOnce(entry, partial, signal)
+
+        if ((await sha256OfFile(partial)) === entry.archive.sha256) {
+          await rename(partial, target)
+          this.setProgress(entry, DOWNLOAD_SHARE)
+          return
+        }
+        // The assembled bytes are wrong, so they go.
+        await rm(partial, { force: true })
+        // A download taken in one piece that still does not match is not a
+        // network problem: those are the bytes the server serves. Retrying
+        // would download 100 MB again to reach the same answer.
+        if (!resumed) {
+          throw new Error(`The download of "${entry.label}" did not match its checksum.`)
+        }
+        // A resumed one may have been stitched together wrongly, so the next
+        // attempt starts from zero.
+        lastFailure = 'the downloaded bytes did not match the recorded checksum'
+      } catch (err) {
+        if (err instanceof Error && err.message.includes('did not match its checksum')) throw err
+        if (signal.aborted) throw new Error('The download was cancelled.')
+        lastFailure = describeDownloadFailure(err)
+      }
+
+      if (attempt < this.attempts) {
+        // Back off a little, so a server that is refusing is not hammered.
+        await delay(Math.min(8 * this.baseDelayMs, this.baseDelayMs * 2 ** (attempt - 1)), signal)
+      }
+    }
+
+    throw new Error(
+      `“${entry.label}” could not be downloaded after ${this.attempts} attempts: ${lastFailure}. ` +
+        'Check the network connection and try again; what has already been downloaded is kept.'
+    )
+  }
+
+  /**
+   * One attempt. Appends to the part file when the server allows it.
+   *
+   * Returns true when it carried on from bytes that were already on disk.
+   */
+  private async downloadOnce(
+    entry: VoiceTtsModelManifestEntry,
+    partial: string,
+    signal: AbortSignal
+  ): Promise<boolean> {
     const already = (await stat(partial).catch(() => null))?.size ?? 0
+    // Nothing left to ask for: the previous attempt finished the bytes and
+    // only the checksum is outstanding.
+    if (already >= entry.archive.sizeBytes) return already > 0
+
     const headers: Record<string, string> = already > 0 ? { Range: `bytes=${already}-` } : {}
     const response = await this.fetchImpl(entry.archive.url, { headers, signal })
     if (!response.ok || !response.body) {
-      throw new Error(`Download failed (${response.status}) for ${entry.label}.`)
+      throw new Error(`the server answered ${response.status}`)
     }
     // The server ignored the range request, so start again from zero.
     const append = already > 0 && response.status === 206
@@ -205,13 +295,7 @@ export class VoiceTtsModelManager {
       this.setProgress(entry, DOWNLOAD_SHARE * Math.min(1, received / entry.archive.sizeBytes))
     })
     await pipeline(source, createWriteStream(partial, { flags: append ? 'a' : 'w' }))
-
-    if ((await sha256OfFile(partial)) !== entry.archive.sha256) {
-      await rm(partial, { force: true })
-      throw new Error(`The download of "${entry.label}" did not match its checksum.`)
-    }
-    await rename(partial, target)
-    this.setProgress(entry, DOWNLOAD_SHARE)
+    return append
   }
 
   private setProgress(entry: VoiceTtsModelManifestEntry, progress: number): void {
@@ -243,9 +327,39 @@ export class VoiceTtsModelManager {
     }
   }
 
-  private emit(entry: VoiceTtsModelManifestEntry): void {
-    this.options.onProgress?.(this.describe(entry, undefined, false))
+  private emit(entry: VoiceTtsModelManifestEntry, installed = false): void {
+    this.options.onProgress?.(this.describe(entry, undefined, installed))
   }
+}
+
+/**
+ * Turns a network failure into words.
+ *
+ * `fetch` reports a dropped connection as `TypeError: terminated`, which tells
+ * the user nothing at all. The real reason sits in `cause`.
+ */
+export function describeDownloadFailure(err: unknown): string {
+  if (!(err instanceof Error)) return String(err)
+  const cause = (err as { cause?: unknown }).cause
+  const causeText =
+    cause instanceof Error ? cause.message : typeof cause === 'string' ? cause : ''
+  if (err.message === 'terminated' || /terminated|socket|closed|reset|ECONNRESET/i.test(causeText)) {
+    return `the connection closed early${causeText ? ` (${causeText})` : ''}`
+  }
+  return causeText ? `${err.message} (${causeText})` : err.message
+}
+
+/** Waits, and gives up early when the user cancels. */
+function delay(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(finish, ms)
+    function finish(): void {
+      clearTimeout(timer)
+      signal.removeEventListener('abort', finish)
+      resolve()
+    }
+    signal.addEventListener('abort', finish, { once: true })
+  })
 }
 
 // ── Archive extraction ──────────────────────────────────────

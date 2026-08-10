@@ -93,7 +93,15 @@ export class VoiceSpeechService {
   private onSpeakingChange: ((speaking: boolean) => void) | null = null
 
   constructor(private options: VoiceSpeechServiceOptions & { modelRootDir: string }) {
-    this.models = options.models ?? new VoiceTtsModelManager({ rootDir: options.modelRootDir })
+    this.models =
+      options.models ??
+      new VoiceTtsModelManager({
+        rootDir: options.modelRootDir,
+        // A voice is 26 MB or 103 MB. Without this the download bar would sit
+        // at nothing until the whole archive had arrived.
+        onProgress: (model) =>
+          options.notifyRenderer(VOICE_TTS_EVENTS.ttsModelProgress, { model }),
+      })
     this.worker = options.worker ?? new VoiceTtsWorkerClient()
     this.listVoices = options.listVoices ?? listSystemVoices
 

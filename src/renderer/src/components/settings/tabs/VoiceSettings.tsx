@@ -8,7 +8,6 @@ import { Input } from '@/components/ui/Input'
 import { settingsApi, voiceApi } from '@/lib/ipc-client'
 import { selectVoiceSetupComplete, useVoiceStore } from '@/stores/voice-store'
 import { VoiceRuntimeRow } from '@/components/voice/VoiceRuntimeRow'
-import { SpokenAnswerSettings } from './SpokenAnswerSettings'
 import {
   VOICE_DEFAULT_ENDPOINT_SILENCE,
   VOICE_DEFAULT_SHORTCUT,
@@ -93,7 +92,7 @@ export function VoiceSettings() {
     <>
       <SettingsSection
         title="Voice control"
-        description="Speech is recognised on this computer. No audio is stored, and no audio leaves the device."
+        description="Speaking to 20x. Speech is recognised on this computer; no audio is stored and none leaves the device. 20x reading an answer back to you is a separate page: Settings → Spoken answers."
       >
         <VoiceRuntimeRow />
 
@@ -202,6 +201,12 @@ export function VoiceSettings() {
           )}
         </div>
 
+      </SettingsSection>
+
+      <SettingsSection
+        title="Listening"
+        description="What happens while you speak."
+      >
         <div className="space-y-3 rounded-lg border border-border p-3">
           <div className="flex items-center justify-between gap-3">
             <div className="space-y-0.5">
@@ -245,6 +250,12 @@ export function VoiceSettings() {
           )}
         </div>
 
+      </SettingsSection>
+
+      <SettingsSection
+        title="Spoken commands"
+        description="The shortcut that opens a turn, and what a command may do without asking."
+      >
         <div className="flex items-center justify-between rounded-lg border border-border p-3">
           <div className="space-y-0.5">
             <Label>Create a task without a confirmation</Label>
@@ -279,10 +290,6 @@ export function VoiceSettings() {
           </div>
         </div>
       </SettingsSection>
-
-      {/* Spoken answers sit above the speech models on purpose: they need
-          neither the runtime nor a model, so they are usable first. */}
-      <SpokenAnswerSettings />
 
       {runtime.installed && (
       <SettingsSection

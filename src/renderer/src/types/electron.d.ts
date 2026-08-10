@@ -53,6 +53,7 @@ import type {
   VoiceSpeechEndEvent,
   VoiceSpeechStartEvent,
   VoiceTtsEngineId,
+  VoiceTtsModelState,
   VoiceTtsSnapshot
 } from '@shared/voice-tts'
 
@@ -563,6 +564,7 @@ interface ElectronAPI {
       onSpeechChunk: (callback: (event: VoiceSpeechChunkEvent) => void) => () => void
       onSpeechEnd: (callback: (event: VoiceSpeechEndEvent) => void) => () => void
       onStatus: (callback: (event: VoiceTtsSnapshot) => void) => () => void
+      onModelProgress: (callback: (event: { model: VoiceTtsModelState }) => void) => () => void
     }
   }
   onGitlabDeviceCode: (callback: (code: string) => void) => () => void
