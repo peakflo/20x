@@ -7,6 +7,34 @@ function intentOf(transcript: string): VoiceIntent | null {
   return result.kind === 'intent' ? result.proposal.intent : null
 }
 
+/**
+ * A conversation is dictation that keeps the microphone open.
+ *
+ * Every sentence in a conversation leaves as a segment, which never reaches
+ * the parser. But the tail — whatever was still being spoken when the turn was
+ * stopped — arrives as a final, and that used to be handed to the command
+ * rules. Two failures came out of it: a mis-heard sentence was rejected as a
+ * bad command and thrown away, and a sentence meant for an agent could have
+ * run a task action.
+ */
+describe('interpretTranscript — a conversation is never a command', () => {
+  it('dictates the tail of a conversation instead of parsing it', () => {
+    const result = interpretTranscript('approve this checkpoint', 'conversation')
+    expect(result).toEqual({ kind: 'dictation', text: 'approve this checkpoint' })
+  })
+
+  it('keeps mis-heard words instead of rejecting them', () => {
+    // Real transcription noise from a user, reported as a confusing error.
+    const heard = 'Same enable paradise will be adjust'
+    expect(interpretTranscript(heard, 'conversation')).toEqual({ kind: 'dictation', text: heard })
+  })
+
+  it('still parses the same words in command mode', () => {
+    // The rules must keep working where they belong: the global shortcut.
+    expect(interpretTranscript('approve this checkpoint', 'command').kind).toBe('intent')
+  })
+})
+
 describe('interpretTranscript — dictation mode', () => {
   it('never parses a command in dictation mode', () => {
     const result = interpretTranscript('approve this checkpoint', 'dictation')

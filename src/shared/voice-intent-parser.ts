@@ -211,7 +211,13 @@ export function interpretTranscript(
 ): VoiceInterpretation {
   const text = normalize(transcript)
   if (!text) return { kind: 'unrecognized', transcript: transcript.trim() }
-  if (mode === 'dictation') return { kind: 'dictation', text: transcript.trim() }
+  // A conversation is dictation that keeps the microphone open. Only the
+  // command mode may reach the rules below — anything else would let words
+  // meant for an agent run a task action, and would reject the tail of a
+  // conversation as a bad command instead of writing it into the box.
+  if (mode === 'dictation' || mode === 'conversation') {
+    return { kind: 'dictation', text: transcript.trim() }
+  }
 
   for (const rule of RULES) {
     const match = text.match(rule.pattern)

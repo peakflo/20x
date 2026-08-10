@@ -371,6 +371,38 @@ describe('VoiceSessionManager — the conversational loop', () => {
     expect(ctx.db.createTask).not.toHaveBeenCalled()
   })
 
+  /**
+   * The tail of a conversation — whatever was still being spoken when the turn
+   * was stopped — arrives as a final, not a segment. That final used to go to
+   * the command parser, so a sentence meant for an agent could run a task
+   * action, and a mis-heard one was rejected as a bad command and thrown away.
+   */
+  it('dictates the tail of a conversation, and never runs an action from it', async () => {
+    const ctx = makeReadyManager()
+    const turn = (await ctx.manager.startTurn('conversation', {})) as { turnId: string }
+
+    ctx.worker.emit('final', turn.turnId, 'approve this checkpoint')
+    await Promise.resolve()
+
+    expect(ctx.agents.respondToPermission).not.toHaveBeenCalled()
+    expect(outcomes(ctx.notify)).toEqual([
+      { status: 'dictation', turnId: turn.turnId, text: 'approve this checkpoint' },
+    ])
+  })
+
+  it('keeps mis-heard words instead of calling them a bad command', async () => {
+    const ctx = makeReadyManager()
+    const turn = (await ctx.manager.startTurn('conversation', {})) as { turnId: string }
+
+    // Real transcription noise from a user, reported as a confusing error.
+    ctx.worker.emit('final', turn.turnId, 'Same enable paradise will be adjust')
+    await Promise.resolve()
+
+    const outcome = outcomes(ctx.notify)[0]
+    expect(outcome.status).toBe('dictation')
+    expect(JSON.stringify(outcome)).not.toContain('not one of the spoken commands')
+  })
+
   it('drops noise that is too short to be a sentence', async () => {
     const ctx = makeReadyManager()
     const turn = (await ctx.manager.startTurn('conversation', {})) as { turnId: string }

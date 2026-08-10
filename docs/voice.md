@@ -122,7 +122,12 @@ The pause length is the endpoint rule of the recogniser (`rule2`), set in
 Guards:
 
 - A conversation never runs the intent parser, exactly like dictation, so a
-  spoken sentence can never execute a task action.
+  spoken sentence can never execute a task action. This holds for the **tail**
+  too — whatever was still being spoken when the turn was stopped arrives as a
+  final rather than a segment, and it is written into the box like any other
+  dictation. It used to be handed to the command rules, which both rejected
+  mis-heard words as a bad command and would have let a sentence meant for an
+  agent run an action.
 - A segment shorter than two characters is noise and is dropped, because the
   renderer would send it straight away.
 - A conversation stops after ten minutes of one open turn.
