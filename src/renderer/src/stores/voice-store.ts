@@ -1,8 +1,10 @@
 import { create } from 'zustand'
-import { settingsApi, voiceApi } from '@/lib/ipc-client'
+import { settingsApi, voiceApi, voiceTtsApi } from '@/lib/ipc-client'
 import { voiceCapture } from '@/lib/voice-capture'
+import { voicePlayback } from '@/lib/voice-playback'
 import { clearActiveComposer } from '@/lib/voice-dictation-target'
 import { VOICE_SETTING_KEYS } from '@shared/voice'
+import type { VoiceTtsEngineId, VoiceTtsSnapshot } from '@shared/voice-tts'
 import type {
   MicrophonePermission,
   VoiceActionOutcome,
@@ -73,6 +75,15 @@ interface VoiceStoreState {
   /** Set by the component that should receive dictated text. */
   contextProvider: (() => VoiceUiContext) | null
 
+  // ── Spoken answers ──────────────────────────────────────
+  /** Null until the first snapshot arrives. */
+  tts: VoiceTtsSnapshot | null
+  speaking: boolean
+  /** The passage being spoken, shown in the bubble. */
+  speechText: string
+  /** 0..1 loudness of the playback, for the audio state indicator. */
+  speechLevel: number
+
   initialize: () => Promise<void>
   refreshRuntime: () => Promise<VoiceRuntimeStatus>
   installRuntime: () => Promise<boolean>
@@ -98,6 +109,21 @@ interface VoiceStoreState {
   removeAllModels: () => Promise<void>
   setCustomModelDir: (dir: string) => Promise<void>
   setShortcut: (accelerator: string) => Promise<void>
+
+  initializeTts: () => Promise<void>
+  setTtsEnabled: (enabled: boolean) => Promise<void>
+  setTtsEngine: (engine: VoiceTtsEngineId) => Promise<void>
+  setTtsVoice: (voiceId: string) => Promise<void>
+  setTtsSpeed: (speed: number) => Promise<void>
+  setTtsMaxChars: (maxChars: number) => Promise<void>
+  setTtsSpeakActionResults: (on: boolean) => Promise<void>
+  setTtsOnlyVoiceTurns: (on: boolean) => Promise<void>
+  installTtsModel: (id: string) => Promise<void>
+  selectTtsModel: (id: string) => Promise<void>
+  removeTtsModel: (id: string) => Promise<void>
+  previewVoice: (voiceId: string) => Promise<void>
+  speakText: (text: string, taskId?: string) => Promise<void>
+  stopSpeaking: () => Promise<void>
 }
 
 const IDLE_ENGINE: VoiceEngineStatus = { state: 'model_missing', message: 'No speech model is installed yet.' }
@@ -139,6 +165,22 @@ function hasVoiceBridge(): boolean {
   return typeof window !== 'undefined' && typeof window.electronAPI?.voice?.getSnapshot === 'function'
 }
 
+/**
+ * Spoken answers have their own gate.
+ *
+ * They do not need the microphone, the optional speech runtime or a downloaded
+ * model, because the system voice needs none of them. A build with speech to
+ * text switched off can still read an answer aloud.
+ */
+function hasTtsBridge(): boolean {
+  return typeof window !== 'undefined' && typeof window.electronAPI?.voice?.tts?.getSnapshot === 'function'
+}
+
+/** True when a voice is loaded and something can actually be spoken. */
+export function selectSpeechReady(state: { tts: VoiceTtsSnapshot | null }): boolean {
+  return state.tts?.status.state === 'ready'
+}
+
 export const useVoiceStore = create<VoiceStoreState>((set, get) => ({
   available: hasVoiceBridge(),
   enabled: false,
@@ -160,6 +202,10 @@ export const useVoiceStore = create<VoiceStoreState>((set, get) => ({
   conversation: true,
   sentSentences: [],
   contextProvider: null,
+  tts: null,
+  speaking: false,
+  speechText: '',
+  speechLevel: 0,
 
   initialize: async () => {
     if (!hasVoiceBridge()) {
@@ -248,6 +294,10 @@ export const useVoiceStore = create<VoiceStoreState>((set, get) => ({
   startTurn: async (mode) => {
     const { enabled, turnId, contextProvider } = get()
     if (!enabled || turnId) return
+    // Barge-in. Playback stops here, in the same tick as the press, instead of
+    // waiting for main to answer. Main stops producing the rest.
+    voicePlayback.stop()
+    set({ speaking: false, speechText: '', speechLevel: 0 })
     const started = await voiceApi.startTurn(mode, contextProvider?.() ?? {})
     if ('error' in started) {
       set({ result: { kind: 'error', message: started.error, at: Date.now() } })
@@ -383,6 +433,55 @@ export const useVoiceStore = create<VoiceStoreState>((set, get) => ({
     const snapshot = await voiceApi.setShortcut(accelerator)
     set({ shortcut: snapshot.shortcut })
   },
+
+  // ── Spoken answers ────────────────────────────────────────
+
+  initializeTts: async () => {
+    if (!hasTtsBridge()) return
+    set({ tts: await voiceTtsApi.getSnapshot() })
+  },
+
+  setTtsEnabled: async (enabled) => set({ tts: await voiceTtsApi.setEnabled(enabled) }),
+  setTtsEngine: async (engine) => set({ tts: await voiceTtsApi.setEngine(engine) }),
+  setTtsVoice: async (voiceId) => set({ tts: await voiceTtsApi.setVoice(voiceId) }),
+  setTtsSpeed: async (speed) => set({ tts: await voiceTtsApi.setSpeed(speed) }),
+  setTtsMaxChars: async (maxChars) => set({ tts: await voiceTtsApi.setMaxChars(maxChars) }),
+  setTtsSpeakActionResults: async (on) => set({ tts: await voiceTtsApi.setSpeakActionResults(on) }),
+  setTtsOnlyVoiceTurns: async (on) => set({ tts: await voiceTtsApi.setOnlyVoiceTurns(on) }),
+
+  installTtsModel: async (id) => {
+    try {
+      set({ tts: await voiceTtsApi.installModel(id) })
+    } catch (err) {
+      set({
+        result: { kind: 'error', message: err instanceof Error ? err.message : String(err), at: Date.now() },
+      })
+      await get().initializeTts()
+    }
+  },
+
+  selectTtsModel: async (id) => set({ tts: await voiceTtsApi.selectModel(id) }),
+  removeTtsModel: async (id) => set({ tts: await voiceTtsApi.removeModel(id) }),
+
+  previewVoice: async (voiceId) => {
+    const { spoken } = await voiceTtsApi.preview(voiceId)
+    if (spoken) return
+    set({
+      result: { kind: 'error', message: 'That voice is not ready yet.', at: Date.now() },
+    })
+  },
+
+  speakText: async (text, taskId) => {
+    const { spoken } = await voiceTtsApi.speak(text, taskId)
+    if (spoken) return
+    set({ result: { kind: 'error', message: 'No voice is ready to read this.', at: Date.now() } })
+  },
+
+  stopSpeaking: async () => {
+    voicePlayback.stop()
+    set({ speaking: false, speechText: '', speechLevel: 0 })
+    await voiceTtsApi.stop()
+  },
 }))
 
 // ── Main-process events ─────────────────────────────────────
@@ -485,4 +584,36 @@ if (hasVoiceBridge()) {
   voiceApi.onError((event) => {
     useVoiceStore.setState({ result: { kind: 'error', message: event.message, at: Date.now() } })
   })
+}
+
+// ── Spoken answers ──────────────────────────────────────────
+
+if (hasTtsBridge()) {
+  voiceTtsApi.onSpeechStart((event) => {
+    useVoiceStore.setState({ speaking: true, speechText: event.text })
+    voicePlayback.start(event.speechId, {
+      onLevel: (speechLevel) => useVoiceStore.setState({ speechLevel }),
+      // The worker finishes producing before the last sentence finishes
+      // playing, so the indicator is cleared here and not on the end event.
+      onDrained: () => useVoiceStore.setState({ speaking: false, speechText: '', speechLevel: 0 }),
+    })
+  })
+
+  voiceTtsApi.onSpeechChunk((event) => {
+    voicePlayback.play(event.speechId, event.pcm, event.sampleRate)
+  })
+
+  voiceTtsApi.onSpeechEnd((event) => {
+    // `complete` only means that nothing more will arrive. Whatever is queued
+    // still has to be heard, so playback is left alone and `onDrained` ends it.
+    if (event.reason === 'complete') return
+    if (voicePlayback.currentSpeechId !== event.speechId) return
+    voicePlayback.stop()
+    useVoiceStore.setState({ speaking: false, speechText: '', speechLevel: 0 })
+    if (event.reason === 'error' && event.message) {
+      useVoiceStore.setState({ result: { kind: 'error', message: event.message, at: Date.now() } })
+    }
+  })
+
+  voiceTtsApi.onStatus((snapshot) => useVoiceStore.setState({ tts: snapshot }))
 }

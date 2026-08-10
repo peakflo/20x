@@ -623,6 +623,56 @@ contextBridge.exposeInMainWorld('electronAPI', {
       const handler = (_: unknown, d: { action: string }): void => callback(d)
       ipcRenderer.on('voice:hotkey', handler)
       return () => ipcRenderer.removeListener('voice:hotkey', handler)
+    },
+
+    // ── Spoken answers ──────────────────────────────────────
+    // Main decides what may be spoken and produces the samples. The renderer
+    // owns nothing here except playback.
+    tts: {
+      getSnapshot: (): Promise<unknown> => ipcRenderer.invoke('voice:tts:getSnapshot'),
+      setEnabled: (enabled: boolean): Promise<unknown> =>
+        ipcRenderer.invoke('voice:tts:setEnabled', { enabled }),
+      setEngine: (engine: string): Promise<unknown> =>
+        ipcRenderer.invoke('voice:tts:setEngine', { engine }),
+      setVoice: (voiceId: string): Promise<unknown> =>
+        ipcRenderer.invoke('voice:tts:setVoice', { voiceId }),
+      setSpeed: (speed: number): Promise<unknown> => ipcRenderer.invoke('voice:tts:setSpeed', { speed }),
+      setMaxChars: (maxChars: number): Promise<unknown> =>
+        ipcRenderer.invoke('voice:tts:setMaxChars', { maxChars }),
+      setSpeakActionResults: (on: boolean): Promise<unknown> =>
+        ipcRenderer.invoke('voice:tts:setSpeakActionResults', { on }),
+      setOnlyVoiceTurns: (on: boolean): Promise<unknown> =>
+        ipcRenderer.invoke('voice:tts:setOnlyVoiceTurns', { on }),
+      installModel: (id: string): Promise<unknown> => ipcRenderer.invoke('voice:tts:installModel', { id }),
+      selectModel: (id: string): Promise<unknown> => ipcRenderer.invoke('voice:tts:selectModel', { id }),
+      removeModel: (id: string): Promise<unknown> => ipcRenderer.invoke('voice:tts:removeModel', { id }),
+      preview: (voiceId: string): Promise<{ spoken: boolean }> =>
+        ipcRenderer.invoke('voice:tts:preview', { voiceId }),
+      speak: (text: string, taskId?: string): Promise<{ spoken: boolean }> =>
+        ipcRenderer.invoke('voice:tts:speak', { text, taskId }),
+      stop: (): Promise<void> => ipcRenderer.invoke('voice:tts:stop'),
+      onSpeechStart: (callback: (data: unknown) => void): (() => void) => {
+        const handler = (_: unknown, d: unknown): void => callback(d)
+        ipcRenderer.on('voice:speech:start', handler)
+        return () => ipcRenderer.removeListener('voice:speech:start', handler)
+      },
+      // The samples cross as a byte array, never as base64: a structured clone
+      // is both smaller and quicker than a string of the same audio.
+      onSpeechChunk: (callback: (data: unknown) => void): (() => void) => {
+        const handler = (_: unknown, d: unknown): void => callback(d)
+        ipcRenderer.on('voice:speech:chunk', handler)
+        return () => ipcRenderer.removeListener('voice:speech:chunk', handler)
+      },
+      onSpeechEnd: (callback: (data: unknown) => void): (() => void) => {
+        const handler = (_: unknown, d: unknown): void => callback(d)
+        ipcRenderer.on('voice:speech:end', handler)
+        return () => ipcRenderer.removeListener('voice:speech:end', handler)
+      },
+      onStatus: (callback: (data: unknown) => void): (() => void) => {
+        const handler = (_: unknown, d: unknown): void => callback(d)
+        ipcRenderer.on('voice:tts:status', handler)
+        return () => ipcRenderer.removeListener('voice:tts:status', handler)
+      }
     }
   },
   browser: {

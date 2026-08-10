@@ -13,6 +13,13 @@ import type {
   VoiceUiContext,
   VoiceViewName
 } from '@shared/voice'
+import type {
+  VoiceSpeechChunkEvent,
+  VoiceSpeechEndEvent,
+  VoiceSpeechStartEvent,
+  VoiceTtsEngineId,
+  VoiceTtsSnapshot
+} from '@shared/voice-tts'
 
 export const taskApi = {
   getAll: (): Promise<WorkfloTask[]> => {
@@ -730,4 +737,36 @@ export const voiceApi = {
     window.electronAPI.voice.onRuntimeProgress(callback),
   onHotkey: (callback: (event: { action: string }) => void): (() => void) =>
     window.electronAPI.voice.onHotkey(callback)
+}
+
+/** Spoken answers. Main produces the audio; the renderer only plays it. */
+export const voiceTtsApi = {
+  getSnapshot: (): Promise<VoiceTtsSnapshot> => window.electronAPI.voice.tts.getSnapshot(),
+  setEnabled: (enabled: boolean): Promise<VoiceTtsSnapshot> =>
+    window.electronAPI.voice.tts.setEnabled(enabled),
+  setEngine: (engine: VoiceTtsEngineId): Promise<VoiceTtsSnapshot> =>
+    window.electronAPI.voice.tts.setEngine(engine),
+  setVoice: (voiceId: string): Promise<VoiceTtsSnapshot> => window.electronAPI.voice.tts.setVoice(voiceId),
+  setSpeed: (speed: number): Promise<VoiceTtsSnapshot> => window.electronAPI.voice.tts.setSpeed(speed),
+  setMaxChars: (maxChars: number): Promise<VoiceTtsSnapshot> =>
+    window.electronAPI.voice.tts.setMaxChars(maxChars),
+  setSpeakActionResults: (on: boolean): Promise<VoiceTtsSnapshot> =>
+    window.electronAPI.voice.tts.setSpeakActionResults(on),
+  setOnlyVoiceTurns: (on: boolean): Promise<VoiceTtsSnapshot> =>
+    window.electronAPI.voice.tts.setOnlyVoiceTurns(on),
+  installModel: (id: string): Promise<VoiceTtsSnapshot> => window.electronAPI.voice.tts.installModel(id),
+  selectModel: (id: string): Promise<VoiceTtsSnapshot> => window.electronAPI.voice.tts.selectModel(id),
+  removeModel: (id: string): Promise<VoiceTtsSnapshot> => window.electronAPI.voice.tts.removeModel(id),
+  preview: (voiceId: string): Promise<{ spoken: boolean }> => window.electronAPI.voice.tts.preview(voiceId),
+  speak: (text: string, taskId?: string): Promise<{ spoken: boolean }> =>
+    window.electronAPI.voice.tts.speak(text, taskId),
+  stop: (): Promise<void> => window.electronAPI.voice.tts.stop(),
+  onSpeechStart: (callback: (event: VoiceSpeechStartEvent) => void): (() => void) =>
+    window.electronAPI.voice.tts.onSpeechStart(callback),
+  onSpeechChunk: (callback: (event: VoiceSpeechChunkEvent) => void): (() => void) =>
+    window.electronAPI.voice.tts.onSpeechChunk(callback),
+  onSpeechEnd: (callback: (event: VoiceSpeechEndEvent) => void): (() => void) =>
+    window.electronAPI.voice.tts.onSpeechEnd(callback),
+  onStatus: (callback: (event: VoiceTtsSnapshot) => void): (() => void) =>
+    window.electronAPI.voice.tts.onStatus(callback)
 }

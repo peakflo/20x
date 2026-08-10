@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/Input'
 import { settingsApi, voiceApi } from '@/lib/ipc-client'
 import { selectVoiceSetupComplete, useVoiceStore } from '@/stores/voice-store'
 import { VoiceRuntimeRow } from '@/components/voice/VoiceRuntimeRow'
+import { SpokenAnswerSettings } from './SpokenAnswerSettings'
 import {
   VOICE_DEFAULT_ENDPOINT_SILENCE,
   VOICE_DEFAULT_SHORTCUT,
@@ -278,6 +279,10 @@ export function VoiceSettings() {
           </div>
         </div>
       </SettingsSection>
+
+      {/* Spoken answers sit above the speech models on purpose: they need
+          neither the runtime nor a model, so they are usable first. */}
+      <SpokenAnswerSettings />
 
       {runtime.installed && (
       <SettingsSection

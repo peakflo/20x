@@ -26,6 +26,7 @@ import type {
 } from './database'
 import type { AgentManager } from './agent-manager'
 import { TaskStatus } from '../shared/constants'
+import { isVoiceTtsEngineId } from '../shared/voice-tts'
 import type { GitHubManager } from './github-manager'
 import type { GitLabManager } from './gitlab-manager'
 import type { WorktreeManager } from './worktree-manager'
@@ -2456,5 +2457,83 @@ else:
 
   ipcMain.handle('voice:setShortcut', async (_, payload: { accelerator: string }) => {
     return requireVoice().setShortcut(payload?.accelerator ?? '')
+  })
+
+  // ── Spoken answers (design §5.7) ───────────────────────────────────────
+  // Speech is produced in a worker and played by the renderer. Main decides
+  // what may be spoken; the renderer only plays what it is sent.
+
+  ipcMain.handle('voice:tts:getSnapshot', async () => {
+    if (!voiceSessionManager) {
+      return {
+        enabled: false,
+        engine: 'system',
+        status: { state: 'unavailable', message: 'Spoken answers are not available in this build.' },
+        voices: [],
+        voiceId: '',
+        speed: 1,
+        maxChars: 1200,
+        speakActionResults: false,
+        onlyVoiceTurns: true,
+        models: [],
+        speaking: false
+      }
+    }
+    return voiceSessionManager.ttsSnapshot()
+  })
+
+  ipcMain.handle('voice:tts:setEnabled', async (_, payload: { enabled: boolean }) => {
+    return requireVoice().setTtsEnabled(Boolean(payload?.enabled))
+  })
+
+  ipcMain.handle('voice:tts:setEngine', async (_, payload: { engine: string }) => {
+    // A value outside the two known engines is refused rather than coerced, so
+    // a broken renderer cannot leave speech pointing at nothing.
+    if (!isVoiceTtsEngineId(payload?.engine)) throw new Error('Unknown speech engine.')
+    return requireVoice().setTtsEngine(payload.engine)
+  })
+
+  ipcMain.handle('voice:tts:setVoice', async (_, payload: { voiceId: string }) => {
+    return requireVoice().setTtsVoice(String(payload?.voiceId ?? ''))
+  })
+
+  ipcMain.handle('voice:tts:setSpeed', async (_, payload: { speed: number }) => {
+    return requireVoice().setTtsSpeed(Number(payload?.speed))
+  })
+
+  ipcMain.handle('voice:tts:setMaxChars', async (_, payload: { maxChars: number }) => {
+    return requireVoice().setTtsMaxChars(Number(payload?.maxChars))
+  })
+
+  ipcMain.handle('voice:tts:setSpeakActionResults', async (_, payload: { on: boolean }) => {
+    return requireVoice().setTtsSpeakActionResults(Boolean(payload?.on))
+  })
+
+  ipcMain.handle('voice:tts:setOnlyVoiceTurns', async (_, payload: { on: boolean }) => {
+    return requireVoice().setTtsOnlyVoiceTurns(Boolean(payload?.on))
+  })
+
+  ipcMain.handle('voice:tts:installModel', async (_, payload: { id: string }) => {
+    return requireVoice().installTtsModel(String(payload?.id ?? ''))
+  })
+
+  ipcMain.handle('voice:tts:selectModel', async (_, payload: { id: string }) => {
+    return requireVoice().selectTtsModel(String(payload?.id ?? ''))
+  })
+
+  ipcMain.handle('voice:tts:removeModel', async (_, payload: { id: string }) => {
+    return requireVoice().removeTtsModel(String(payload?.id ?? ''))
+  })
+
+  ipcMain.handle('voice:tts:preview', async (_, payload: { voiceId: string }) => {
+    return { spoken: await requireVoice().speakPreview(String(payload?.voiceId ?? '')) }
+  })
+
+  ipcMain.handle('voice:tts:speak', async (_, payload: { text: string; taskId?: string }) => {
+    return { spoken: await requireVoice().speakText(String(payload?.text ?? ''), payload?.taskId) }
+  })
+
+  ipcMain.handle('voice:tts:stop', () => {
+    voiceSessionManager?.stopSpeaking()
   })
 }

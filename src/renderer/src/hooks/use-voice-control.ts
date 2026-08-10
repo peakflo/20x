@@ -28,12 +28,15 @@ import type { VoiceUiContext } from '@shared/voice'
  */
 export function useVoiceControl(): void {
   const initialize = useVoiceStore((s) => s.initialize)
+  const initializeTts = useVoiceStore((s) => s.initializeTts)
   const setContextProvider = useVoiceStore((s) => s.setContextProvider)
   const toggleTurn = useVoiceStore((s) => s.toggleTurn)
 
   useEffect(() => {
     void initialize()
-  }, [initialize])
+    // Spoken answers are read separately: they work without the microphone.
+    void initializeTts()
+  }, [initialize, initializeTts])
 
   useEffect(() => {
     // Read the stores at call time, so the context is always current without

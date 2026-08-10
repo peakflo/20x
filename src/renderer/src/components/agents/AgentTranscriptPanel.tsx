@@ -11,6 +11,7 @@ import { cn } from '@/lib/utils'
 import { useArtifactStore } from '@/stores/artifact-store'
 import { ArtifactContentKind, ArtifactType, type Artifact } from '@shared/artifacts'
 import { VoiceMicButton } from '@/components/voice/VoiceMicButton'
+import { SpeakMessageButton } from '@/components/voice/SpeakMessageButton'
 import { MASTERMIND_COMPOSER_KEY, registerComposer } from '@/lib/voice-dictation-target'
 
 const EMPTY_ARTIFACTS: Artifact[] = []
@@ -709,6 +710,9 @@ function MessageBubble({ message, onAnswer, viewMode, canAnswerQuestion = false,
           {message.stepMeta && (
             <span className="text-[10px] text-muted-foreground">{formatStepMeta(message.stepMeta)}</span>
           )}
+          {/* Only a plain agent answer can be read aloud. An error and a system
+              line are not answers, and a user message is the user's own words. */}
+          {!isUser && !isSystem && !isError && <SpeakMessageButton text={message.content} />}
         </div>
       </div>
     </div>

@@ -39,18 +39,29 @@ import {
   installVoiceRuntime,
   removeVoiceRuntime,
 } from './voice-runtime-installer'
+import { VoiceSpeechService } from './voice-speech-service'
+import type { VoiceTtsEngineId, VoiceTtsSnapshot } from '../../shared/voice-tts'
 
 export interface VoiceSessionManagerOptions {
   db: VoiceActionDb & { setSetting: (key: string, value: string) => void }
   agents: VoiceActionAgents
   /** Broadcasts one event to the desktop renderer and to mobile clients. */
   notify: (channel: string, data: unknown) => void
+  /**
+   * Sends one event to the desktop renderer only. Speech audio uses this:
+   * samples must never go through the mobile text channel (design §5.11).
+   */
+  notifyRenderer?: (channel: string, data: unknown) => void
   modelRootDir?: string
+  /** Where the downloaded speech-synthesis models live. */
+  ttsModelRootDir?: string
   /** Where the optional speech runtime is installed. */
   runtimeRootDir?: string
   worker?: VoiceWorkerClient
   /** Injected in tests so no real download runs. */
   models?: VoiceModelManager
+  /** Injected in tests so no synthesis worker starts. */
+  speech?: VoiceSpeechService
 }
 
 /** The runtime install is the first part of the combined setup progress. */
@@ -77,6 +88,13 @@ interface PendingConfirmation {
  */
 export const VOICE_ENGINE_READY_TIMEOUT_MS = 90_000
 
+/**
+ * How long a spoken question waits for its answer before the indicator returns
+ * to rest. The answer itself is still spoken if it arrives later, because the
+ * expectation lives longer than this timer.
+ */
+export const VOICE_ANSWER_WAIT_MS = 3 * 60 * 1000
+
 export class VoiceSessionManager {
   private state: VoiceState = 'disabled'
   private turnId: string | null = null
@@ -96,6 +114,9 @@ export class VoiceSessionManager {
   private readonly models: VoiceModelManager
   private readonly worker: VoiceWorkerClient
   private readonly actions: VoiceActionService
+  private readonly speech: VoiceSpeechService
+  /** Stops `waiting_for_agent` lasting for ever when no answer arrives. */
+  private answerTimer: NodeJS.Timeout | null = null
 
   constructor(private options: VoiceSessionManagerOptions) {
     this.models =
@@ -119,6 +140,25 @@ export class VoiceSessionManager {
     )
     this.worker.on('final', (turnId: string, text: string) => void this.onFinal(turnId, text))
     this.worker.on('error', (message: string, code?: string) => this.onWorkerError(message, code))
+
+    this.speech =
+      options.speech ??
+      new VoiceSpeechService({
+        db: options.db,
+        modelRootDir: options.ttsModelRootDir ?? join(app.getPath('userData'), 'voice-tts-models'),
+        // Audio goes to the desktop window only.
+        notifyRenderer: options.notifyRenderer ?? options.notify,
+      })
+    // The state machine shows one audio state for the whole feature, so the
+    // speaking indicator is the same indicator the microphone uses.
+    this.speech.setSpeakingListener((speaking) => {
+      if (speaking) {
+        this.clearAnswerTimer()
+        this.setState('speaking')
+      } else if (this.state === 'speaking') {
+        this.setState('idle')
+      }
+    })
   }
 
   // ── Lifecycle ─────────────────────────────────────────────
@@ -127,6 +167,10 @@ export class VoiceSessionManager {
   async initialize(): Promise<void> {
     try {
       await this.refreshRuntime()
+      // Spoken answers do not need the microphone, the speech runtime or a
+      // downloaded model: the system voice needs none of them. So the speech
+      // engine is prepared even when voice control itself is switched off.
+      await this.speech.prepare()
       if (!this.isEnabled()) {
         this.setState('disabled')
         return
@@ -141,7 +185,9 @@ export class VoiceSessionManager {
 
   shutdown(): void {
     this.unregisterShortcut()
+    this.clearAnswerTimer()
     this.worker.stop()
+    this.speech.shutdown()
   }
 
   isEnabled(): boolean {
@@ -247,6 +293,8 @@ export class VoiceSessionManager {
     context: VoiceUiContext
   ): Promise<{ turnId: string } | { error: string }> {
     if (!this.isEnabled()) return { error: 'Voice is switched off.' }
+    // Barge-in (design §5.7). The moment the user speaks, 20x stops speaking.
+    this.speech.stop('cancelled')
     // The worker releases the model after an idle period to give the memory
     // back. Load it again instead of failing, or voice would stop working
     // silently after a few minutes of quiet.
@@ -430,11 +478,71 @@ export class VoiceSessionManager {
     if (outcome.status === 'needs_confirmation') {
       this.pending.set(turnId, { proposal: outcome.proposal, context })
       this.setState('awaiting_confirmation')
-    } else {
-      this.pending.delete(turnId)
-      this.setState('idle')
+      this.options.notify(VOICE_EVENTS.outcome, outcome)
+      return
     }
+    this.pending.delete(turnId)
+    // The card is shown before the speech starts, so the user reads the result
+    // even when nothing is spoken.
     this.options.notify(VOICE_EVENTS.outcome, outcome)
+    await this.afterExecuted(turnId, outcome)
+  }
+
+  /**
+   * What happens to a finished command (design §5.7).
+   *
+   * A question to the agent has no answer yet, so the turn waits. Everything
+   * else has its short result spoken, if the user asked for that.
+   */
+  private async afterExecuted(turnId: string, outcome: VoiceActionOutcome): Promise<void> {
+    if (outcome.status !== 'executed') {
+      this.setState('idle')
+      return
+    }
+
+    if (outcome.intent === 'reply_to_agent' && outcome.taskId) {
+      // Remember which turn asked, so the answer that arrives minutes later is
+      // matched to this turn and no other agent answer is read out.
+      this.speech.expectAnswer(outcome.taskId, turnId)
+      this.setState('waiting_for_agent')
+      this.armAnswerTimer(outcome.taskId)
+      return
+    }
+
+    const source = outcome.intent === 'read_last_answer' ? 'read_last_answer' : 'action_result'
+    const spoken = await this.speech.speak({
+      text: outcome.message,
+      source,
+      voiceTurnId: turnId,
+      ...(outcome.taskId ? { taskId: outcome.taskId } : {}),
+    })
+    // `speak` moves the state to `speaking` itself when it starts.
+    if (!spoken) this.setState('idle')
+  }
+
+  /** Speaks one finished agent answer. Called from the agent status stream. */
+  async speakAgentAnswer(taskId: string, text: string): Promise<boolean> {
+    const spoken = await this.speech.speakAgentAnswer(taskId, text)
+    if (!spoken && this.state === 'waiting_for_agent') this.setState('idle')
+    return spoken
+  }
+
+  /**
+   * A question that is never answered must not leave the indicator waiting for
+   * ever.
+   */
+  private armAnswerTimer(taskId: string): void {
+    this.clearAnswerTimer()
+    this.answerTimer = setTimeout(() => {
+      this.speech.forgetAnswer(taskId)
+      if (this.state === 'waiting_for_agent') this.setState('idle')
+    }, VOICE_ANSWER_WAIT_MS)
+    this.answerTimer.unref?.()
+  }
+
+  private clearAnswerTimer(): void {
+    if (this.answerTimer) clearTimeout(this.answerTimer)
+    this.answerTimer = null
   }
 
   /**
@@ -474,7 +582,74 @@ export class VoiceSessionManager {
   async refreshRuntime(): Promise<VoiceRuntimeStatus> {
     this.runtime = await detectVoiceRuntime(this.runtimeRootDir)
     this.worker.setRuntimeModulePath(this.runtime.modulePath)
+    // The neural voice uses the same runtime. The system voice does not, so it
+    // keeps working whatever this reports.
+    this.speech.setRuntimeModulePath(this.runtime.modulePath)
     return this.runtime
+  }
+
+  // ── Spoken answers (design §5.7) ──────────────────────────
+
+  ttsSnapshot(): Promise<VoiceTtsSnapshot> {
+    return this.speech.snapshot()
+  }
+
+  setTtsEnabled(enabled: boolean): Promise<VoiceTtsSnapshot> {
+    return this.speech.setEnabled(enabled)
+  }
+
+  setTtsEngine(engine: VoiceTtsEngineId): Promise<VoiceTtsSnapshot> {
+    return this.speech.setEngine(engine)
+  }
+
+  setTtsVoice(voiceId: string): Promise<VoiceTtsSnapshot> {
+    return this.speech.setVoice(voiceId)
+  }
+
+  setTtsSpeed(speed: number): Promise<VoiceTtsSnapshot> {
+    return this.speech.setSpeed(speed)
+  }
+
+  setTtsMaxChars(maxChars: number): Promise<VoiceTtsSnapshot> {
+    return this.speech.setMaxChars(maxChars)
+  }
+
+  setTtsSpeakActionResults(on: boolean): Promise<VoiceTtsSnapshot> {
+    return this.speech.setSpeakActionResults(on)
+  }
+
+  setTtsOnlyVoiceTurns(on: boolean): Promise<VoiceTtsSnapshot> {
+    return this.speech.setOnlyVoiceTurns(on)
+  }
+
+  installTtsModel(id: string): Promise<VoiceTtsSnapshot> {
+    return this.speech.installModel(id)
+  }
+
+  selectTtsModel(id: string): Promise<VoiceTtsSnapshot> {
+    return this.speech.selectModel(id)
+  }
+
+  removeTtsModel(id: string): Promise<VoiceTtsSnapshot> {
+    return this.speech.removeModel(id)
+  }
+
+  /** Plays one short sample in the speaker the user is looking at. */
+  speakPreview(voiceId: string): Promise<boolean> {
+    return this.speech.speak({
+      text: 'This is how 20x will read an answer to you.',
+      source: 'preview',
+      voiceId,
+    })
+  }
+
+  /** The speak button on one message. */
+  speakText(text: string, taskId?: string): Promise<boolean> {
+    return this.speech.speak({ text, source: 'manual', ...(taskId ? { taskId } : {}) })
+  }
+
+  stopSpeaking(): void {
+    this.speech.stop('cancelled')
   }
 
   /**

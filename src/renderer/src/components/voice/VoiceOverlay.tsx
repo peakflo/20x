@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { AlertTriangle, Check, Mic, X } from 'lucide-react'
+import { AlertTriangle, Check, Mic, Volume2, X } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { selectVoiceReady, useVoiceStore } from '@/stores/voice-store'
 import type { VoiceCandidate } from '@shared/voice'
@@ -30,6 +30,13 @@ export function VoiceOverlay() {
   const cancel = useVoiceStore((s) => s.cancel)
   const endTurn = useVoiceStore((s) => s.endTurn)
   const clearResult = useVoiceStore((s) => s.clearResult)
+  // Speaking is shown even when speech to text is not installed: the system
+  // voice needs no runtime and no model, so 20x can read an answer aloud on a
+  // machine that has never downloaded anything.
+  const speaking = useVoiceStore((s) => s.speaking)
+  const speechText = useVoiceStore((s) => s.speechText)
+  const speechLevel = useVoiceStore((s) => s.speechLevel)
+  const stopSpeaking = useVoiceStore((s) => s.stopSpeaking)
 
   // Escape cancels the current turn or the open confirmation.
   useEffect(() => {
@@ -37,10 +44,13 @@ export function VoiceOverlay() {
       if (event.key !== 'Escape') return
       if (confirmation) void dismiss()
       else if (state === 'listening') void cancel()
+      // Escape also stops speech. It is the one key a user reaches for when
+      // the app is talking and they want it to stop.
+      else if (speaking) void stopSpeaking()
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [confirmation, state, dismiss, cancel])
+  }, [confirmation, state, dismiss, cancel, speaking, stopSpeaking])
 
   useEffect(() => {
     if (!result) return undefined
@@ -48,13 +58,13 @@ export function VoiceOverlay() {
     return () => clearTimeout(timer)
   }, [result, clearResult])
 
-  if (!ready) return null
+  if (!ready && !speaking) return null
 
   const listening = state === 'listening'
   const transcribing = state === 'transcribing'
   const loudness = Math.min(Math.max(level, 0), 1)
-  const showBubble = listening || transcribing || Boolean(partial)
-  if (!showBubble && !confirmation && !result) return null
+  const showBubble = ready && (listening || transcribing || Boolean(partial))
+  if (!showBubble && !speaking && !confirmation && !result) return null
 
   return (
     <div
@@ -110,6 +120,38 @@ export function VoiceOverlay() {
             </Button>
           )}
         </div>
+      )}
+
+      {speaking && (
+        <button
+          type="button"
+          className="pointer-events-auto flex max-w-xl items-center gap-3 rounded-2xl border border-border bg-card/95 px-4 py-2.5 text-left shadow-lg backdrop-blur transition-colors hover:border-primary/50"
+          onClick={() => void stopSpeaking()}
+          title="Stop reading"
+          aria-label="Stop reading"
+          data-testid="voice-speaking"
+        >
+          {/* The halo follows the answer, so the indicator shows one audio
+              state whether 20x is listening or talking. */}
+          <span className="relative flex h-6 w-6 items-center justify-center">
+            <span
+              className="absolute inset-0 rounded-full bg-primary transition-all duration-75"
+              style={{
+                transform: `scale(${0.7 + Math.min(Math.max(speechLevel, 0), 1) * 1.0})`,
+                opacity: 0.12 + Math.min(Math.max(speechLevel, 0), 1) * 0.68,
+              }}
+              aria-hidden
+            />
+            <Volume2 className="relative h-3.5 w-3.5 text-primary" />
+          </span>
+          <div className="min-w-0 flex-1">
+            <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Reading</p>
+            <p className="truncate text-sm text-foreground" data-testid="voice-speech-text">
+              {speechText || 'One moment…'}
+            </p>
+          </div>
+          <span className="shrink-0 text-[11px] text-muted-foreground">Click to stop</span>
+        </button>
       )}
 
       {confirmation && (

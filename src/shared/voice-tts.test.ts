@@ -1,0 +1,123 @@
+import { describe, it, expect } from 'vitest'
+import {
+  VOICE_TTS_HARD_MAX_CHARS,
+  clampSpeechSpeed,
+  isVoiceTtsEngineId,
+  splitIntoSentences,
+  toSpokenText,
+} from './voice-tts'
+
+/**
+ * The rules in design §5.7 about what may be heard are enforced here, in one
+ * pure function, so they can be checked without a model and without a speaker.
+ */
+
+describe('toSpokenText', () => {
+  it('names a code block instead of reading it', () => {
+    const result = toSpokenText('Here is the fix:\n\n```ts\nconst a = 1\nconst b = 2\n```\n\nIt works.')
+    expect(result.text).toContain('A code block of 2 lines is in the message.')
+    expect(result.text).not.toContain('const a = 1')
+    expect(result.codeBlocks).toBe(1)
+  })
+
+  it('names a single line of code in the singular', () => {
+    expect(toSpokenText('```\nnpm test\n```').text).toBe('One line of code is in the message.')
+  })
+
+  it('closes an unterminated code block', () => {
+    const result = toSpokenText('Run this:\n```bash\nnpm test\nnpm run build')
+    expect(result.text).toContain('A code block of 2 lines is in the message.')
+    expect(result.text).not.toContain('npm test')
+  })
+
+  it('names a table once, not row by row', () => {
+    const result = toSpokenText('| a | b |\n| - | - |\n| 1 | 2 |\nDone.')
+    expect(result.text).toBe('A table is in the message.\nDone.')
+  })
+
+  it('reads a link label and never the address', () => {
+    const result = toSpokenText('See [the pull request](https://github.com/peakflo/20x/pull/452).')
+    expect(result.text).toBe('See the pull request.')
+  })
+
+  it('replaces a bare address', () => {
+    expect(toSpokenText('Open https://example.com/x?y=1 now.').text).toBe('Open a link now.')
+  })
+
+  it('replaces a file path', () => {
+    expect(toSpokenText('Edit src/main/voice/voice-tts-worker.js first.').text).toBe(
+      'Edit a file path first.'
+    )
+    expect(toSpokenText('Edit /Users/me/notes/todo.md first.').text).toBe('Edit a file path first.')
+  })
+
+  it('strips heading, list, quote and emphasis marks', () => {
+    const result = toSpokenText('## Result\n\n- **one** item\n- *two* items\n\n> a quote')
+    expect(result.text).toBe('Result\n\none item\ntwo items\n\na quote')
+  })
+
+  it('keeps the words inside inline code', () => {
+    expect(toSpokenText('The `taskId` is missing.').text).toBe('The taskId is missing.')
+  })
+
+  it('stops at the character limit, at the end of a sentence', () => {
+    const long = `${'This is one sentence. '.repeat(40)}`
+    const result = toSpokenText(long, 120)
+    expect(result.truncated).toBe(true)
+    expect(result.text.length).toBeLessThanOrEqual(120)
+    expect(result.text.endsWith('.')).toBe(true)
+  })
+
+  it('never goes above the hard limit, whatever the setting says', () => {
+    const result = toSpokenText('word '.repeat(4000), 999_999)
+    expect(result.text.length).toBeLessThanOrEqual(VOICE_TTS_HARD_MAX_CHARS)
+  })
+
+  it('returns nothing for an empty answer', () => {
+    expect(toSpokenText('   ').text).toBe('')
+    expect(toSpokenText('').text).toBe('')
+  })
+})
+
+describe('splitIntoSentences', () => {
+  it('splits on sentence punctuation and keeps it', () => {
+    expect(splitIntoSentences('Task created. It is running! Is it done?')).toEqual([
+      'Task created.',
+      'It is running!',
+      'Is it done?',
+    ])
+  })
+
+  it('splits on a blank line', () => {
+    expect(splitIntoSentences('One\n\nTwo')).toEqual(['One', 'Two'])
+  })
+
+  it('breaks a very long sentence so playback is not held up', () => {
+    const long = `${'a'.repeat(100)}, ${'b'.repeat(100)}, ${'c'.repeat(100)}`
+    const parts = splitIntoSentences(long, 120)
+    expect(parts.length).toBeGreaterThan(1)
+    for (const part of parts) expect(part.length).toBeLessThanOrEqual(120)
+    expect(parts.join(' ').replace(/\s+/g, '')).toBe(long.replace(/\s+/g, ''))
+  })
+
+  it('returns an empty list for empty text', () => {
+    expect(splitIntoSentences('')).toEqual([])
+    expect(splitIntoSentences('   ')).toEqual([])
+  })
+})
+
+describe('guards', () => {
+  it('accepts only the two known engines', () => {
+    expect(isVoiceTtsEngineId('system')).toBe(true)
+    expect(isVoiceTtsEngineId('local')).toBe(true)
+    expect(isVoiceTtsEngineId('openai')).toBe(false)
+    expect(isVoiceTtsEngineId(null)).toBe(false)
+  })
+
+  it('keeps the speed inside a range a listener can follow', () => {
+    expect(clampSpeechSpeed(1)).toBe(1)
+    expect(clampSpeechSpeed(9)).toBe(2)
+    expect(clampSpeechSpeed(0.1)).toBe(0.5)
+    expect(clampSpeechSpeed(Number.NaN)).toBe(1)
+  })
+})

@@ -21,6 +21,7 @@ import { NotionPlugin } from './plugins/notion-plugin'
 import { YouTrackPlugin } from './plugins/youtrack-plugin'
 import { registerIpcHandlers } from './ipc-handlers'
 import { VoiceSessionManager } from './voice/voice-session-manager'
+import { lastAssistantTextFromTranscript } from './voice/voice-action-service'
 import { EnterpriseAuth } from './enterprise-auth'
 import { RecurrenceScheduler } from './recurrence-scheduler'
 import { HeartbeatScheduler } from './heartbeat-scheduler'
@@ -85,6 +86,56 @@ function broadcastVoiceEvent(channel: string, data: unknown): void {
     mainWindow.webContents.send(channel, data)
   }
   broadcastToMobileClients(channel, data)
+}
+
+/**
+ * Sends one voice event to the desktop window only.
+ *
+ * Spoken answers use this. The audio is produced on this computer and played by
+ * this window; a phone cannot play a raw sample stream from the local
+ * WebSocket, and sending it would push megabytes of samples through a text
+ * channel for nothing (design §5.11).
+ */
+function sendVoiceEventToRenderer(channel: string, data: unknown): void {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send(channel, data)
+  }
+}
+
+/**
+ * Speaks a finished agent answer (design §5.7).
+ *
+ * The `working -> idle` edge is the only moment at which the whole answer
+ * exists: the agent writes an answer in pieces, and the idle transition happens
+ * after the last piece is stored. The answer is read from the stored transcript
+ * rather than from memory, so it also works after a restart.
+ *
+ * This listener never decides to speak. It hands the passage to the speech
+ * service, which speaks it only when the user asked for it by voice.
+ */
+function watchAgentAnswersForSpeech(agents: AgentManager, database: DatabaseManager): void {
+  const lastStatus = new Map<string, string>()
+  agents.addExternalListener((channel, data) => {
+    if (channel !== 'agent:status') return
+    const event = data as { sessionId?: string; taskId?: string; status?: string }
+    if (!event?.sessionId || !event.taskId || !event.status) return
+
+    const previous = lastStatus.get(event.sessionId)
+    if (event.status === 'idle') lastStatus.delete(event.sessionId)
+    else lastStatus.set(event.sessionId, event.status)
+    if (event.status !== 'idle' || previous !== 'working') return
+
+    try {
+      const text = lastAssistantTextFromTranscript(database.getTranscriptParts(event.taskId))
+      if (!text) return
+      void voiceSessionManager?.speakAgentAnswer(event.taskId, text).catch((err) => {
+        console.error('[voice] speaking the answer failed:', err)
+      })
+    } catch (err) {
+      // Speech must never disturb the agent stream.
+      console.error('[voice] reading the answer failed:', err)
+    }
+  })
 }
 
 async function shutdownAppServices(): Promise<void> {
@@ -798,9 +849,11 @@ app.whenReady().then(async () => {
   voiceSessionManager = new VoiceSessionManager({
     db,
     agents: agentManager,
-    notify: broadcastVoiceEvent
+    notify: broadcastVoiceEvent,
+    notifyRenderer: sendVoiceEventToRenderer
   })
   void voiceSessionManager.initialize()
+  watchAgentAnswersForSpeech(agentManager, db)
 
   // Eagerly restore enterprise connection on startup so sync works immediately
   if (enterpriseAuth) {
