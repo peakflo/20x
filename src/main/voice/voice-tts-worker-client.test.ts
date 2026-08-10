@@ -1,4 +1,6 @@
 import { describe, it, expect, afterEach, beforeAll, afterAll } from 'vitest'
+import { mkdtempSync, rmSync, writeFileSync } from 'fs'
+import { tmpdir } from 'os'
 import { join } from 'path'
 import { VoiceTtsWorkerClient, type VoiceTtsChunk } from './voice-tts-worker-client'
 import type { ResolvedTtsModel } from './voice-tts-model-manager'
@@ -143,5 +145,60 @@ describe('the speech worker', () => {
     expect(status.state).toBe('error')
     // The first client is stopped, so its promise is only kept from leaking.
     void failure
+  })
+})
+
+describe('the local runtime, as Electron sees it', () => {
+  /**
+   * The runtime hands back its samples in memory it owns itself unless it is
+   * told not to. Electron refuses to wrap that memory — "External buffers are
+   * not allowed" — and the whole turn fails, while the identical call from
+   * plain Node succeeds. This test runs a stand-in runtime that records what it
+   * was asked for, so the request cannot quietly lose that flag again.
+   */
+  let runtimeDir = ''
+
+  afterEach(() => {
+    if (runtimeDir) rmSync(runtimeDir, { recursive: true, force: true })
+    runtimeDir = ''
+    process.env.VOICE_TTS_ENGINE = 'mock'
+  })
+
+  function fakeRuntime(): string {
+    runtimeDir = mkdtempSync(join(tmpdir(), '20x-fake-runtime-'))
+    const modulePath = join(runtimeDir, 'index.js')
+    const recordPath = join(runtimeDir, 'request.json')
+    writeFileSync(
+      modulePath,
+      `const { writeFileSync } = require('fs')
+       class OfflineTts {
+         constructor() { this.sampleRate = 24000; this.numSpeakers = 8 }
+         generate(request) {
+           writeFileSync(${JSON.stringify(recordPath)}, JSON.stringify(request))
+           return { samples: new Float32Array(240), sampleRate: 24000 }
+         }
+       }
+       module.exports = { OfflineTts }`
+    )
+    return modulePath
+  }
+
+  it('asks the runtime for samples it is allowed to read', async () => {
+    // The mock engine short-circuits before the runtime is loaded at all.
+    delete process.env.VOICE_TTS_ENGINE
+    const modulePath = fakeRuntime()
+    const recordPath = join(runtimeDir, 'request.json')
+
+    client = new VoiceTtsWorkerClient(SCRIPT)
+    client.setRuntimeModulePath(modulePath)
+    client.load({ engine: 'local', model: MODEL })
+    await ready(client)
+
+    const { chunks } = await speakAndCollect(client, 'speech-buffers', ['One.'])
+
+    expect(chunks).toHaveLength(1)
+    const { readFileSync } = await import('fs')
+    const request = JSON.parse(readFileSync(recordPath, 'utf8'))
+    expect(request.enableExternalBuffer).toBe(false)
   })
 })

@@ -219,6 +219,18 @@ worker protocol.
 | Kokoro v0.19 int8 | 720 ms | 1347 ms | 4.20 s | 4.54 s |
 | macOS `say` | — | 1833 ms | 4.11 s | 4.06 s |
 
+### Electron will not read the runtime's own memory
+
+`sherpa-onnx-node` returns its samples in memory the addon owns, unless the
+request says otherwise. Electron refuses to wrap that memory — "External buffers
+are not allowed" — and the whole turn fails, while the identical call from plain
+Node succeeds. The worker runs inside Electron, so every request sets
+`enableExternalBuffer: false` and takes a copy.
+
+This is worth remembering beyond this feature: a native addon that works in a
+Node script can still fail in the app, so a runtime path has to be proved under
+Electron and not only under Node.
+
 ### One finding worth keeping
 
 `sherpa-onnx-node` exposes a streaming callback, `generateAsync({ onProgress })`.

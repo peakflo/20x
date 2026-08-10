@@ -271,7 +271,16 @@ function synthesizeLocal(speech, sentence) {
     const samples = Math.round(tts.sampleRate * 0.25)
     return { pcm: Buffer.alloc(samples * 2), sampleRate: tts.sampleRate }
   }
-  const audio = tts.generate({ text: sentence, sid: speech.speakerId, speed: speech.speed })
+  const audio = tts.generate({
+    text: sentence,
+    sid: speech.speakerId,
+    speed: speech.speed,
+    // The runtime hands back its samples in memory it owns itself unless this
+    // is off. Electron refuses to wrap that memory — "External buffers are not
+    // allowed" — and the whole turn fails, while the same call from plain Node
+    // succeeds. The worker runs inside Electron, so it must ask for a copy.
+    enableExternalBuffer: false,
+  })
   return { pcm: floatToPcm16(audio.samples), sampleRate: audio.sampleRate }
 }
 
