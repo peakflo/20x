@@ -10,8 +10,13 @@
  *   audio   : the same IPC channel, base64 signed 16-bit little-endian PCM,
  *             one message per sentence
  *
- * Main to worker : load | speak | cancel | unload | ping
+ * Main to worker : load | speak | append | finish | cancel | unload | ping
  * Worker to main : status | chunk | done | error | pong
+ *
+ * A passage can be left open. An agent answer arrives a few words at a time,
+ * and waiting for the last word before saying the first one would put the whole
+ * answer behind the agent. So `speak` may open a passage with nothing in it,
+ * `append` adds sentences as they are finished, and `finish` closes it.
  *
  * Two engines sit behind one protocol:
  *
@@ -155,7 +160,9 @@ const handlers = {
     if (!loaded) return fail('not_ready', 'No voice is loaded.', message.speechId)
     if (currentSpeech) handlers.cancel({ speechId: currentSpeech.speechId })
     const sentences = Array.isArray(message.sentences) ? message.sentences.filter(Boolean) : []
-    if (sentences.length === 0) {
+    // A streaming passage opens with nothing in it and is filled as the answer
+    // is written, so only a closed passage with no words is already finished.
+    if (sentences.length === 0 && !message.open) {
       send({ t: 'done', speechId: message.speechId, chunks: 0, elapsedMs: 0 })
       return
     }
@@ -168,8 +175,30 @@ const handlers = {
       speed: Number(message.speed) || 1,
       systemVoice: message.systemVoice || (loaded && loaded.systemVoice) || '',
       startedAt: Date.now(),
+      // An open passage waits for more instead of finishing when it runs dry.
+      open: Boolean(message.open),
+      running: false,
     }
     step()
+  },
+
+  /** More sentences for the passage that is already being read. */
+  append(message) {
+    const speech = currentSpeech
+    if (!speech || speech.speechId !== message.speechId) return
+    const sentences = Array.isArray(message.sentences) ? message.sentences.filter(Boolean) : []
+    if (sentences.length === 0) return
+    speech.sentences.push(...sentences)
+    // The loop stops when it runs out of sentences, so it has to be restarted.
+    if (!speech.running) step()
+  },
+
+  /** No more sentences are coming. The passage ends when it runs dry. */
+  finish(message) {
+    const speech = currentSpeech
+    if (!speech || speech.speechId !== message.speechId) return
+    speech.open = false
+    if (!speech.running) step()
   },
 
   cancel(message) {
@@ -217,6 +246,10 @@ function step() {
   const speech = currentSpeech
   if (!speech) return
   if (speech.index >= speech.sentences.length) {
+    speech.running = false
+    // An open passage is not finished, it is merely waiting for the next
+    // sentence to be written.
+    if (speech.open) return
     currentSpeech = null
     send({
       t: 'done',
@@ -227,6 +260,7 @@ function step() {
     return
   }
 
+  speech.running = true
   const sentence = speech.sentences[speech.index]
   speech.index += 1
 

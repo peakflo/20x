@@ -14,6 +14,7 @@ Blueprint: the research subtask artifact `design.md`, §5.2 (provider contracts)
 - Two speech engines behind one contract: the voice the operating system
   already has, and a neural model that runs through the same `sherpa-onnx-node`
   runtime speech recognition installs.
+- An answer is read as it is written, not after the agent stops.
 - An isolated synthesis worker. One sentence is produced at a time and is sent
   the moment it exists, so playback starts after the first sentence.
 - Playback in the renderer, scheduled sentence after sentence with no gap.
@@ -181,6 +182,26 @@ A code block, a table, a file path, a link, a heading mark and every other piece
 of Markdown punctuation are removed before anything is spoken. A code block is
 named — “A code block of 12 lines is in the message.” — rather than read.
 Automatic speech stops at a character limit, and the speak button reads the rest.
+
+### It is read as it is written
+
+An agent answer arrives a few words at a time. Waiting for the agent to stop
+before saying the first word would put the whole spoken answer behind the
+agent — on a long answer, minutes behind.
+
+So the passage opens before a single word has arrived, and it is filled as the
+answer is written. The transcript is followed as it changes; each sentence that
+is certainly finished is handed to the worker at once, and the tail is held
+back, because "The test failed" and "The test failed to start" are read very
+differently and the difference is one word that has not arrived yet.
+
+The `working → idle` edge then reads the last words and closes the passage. It
+is also the fallback: an answer that produced no transcript event is read in one
+piece from what was stored.
+
+A sentence is never read twice, an answer written in several pieces is read on
+without a break, and the reading limit applies to the whole answer rather than
+to each piece.
 
 ### The answer that is read is the answer you asked for
 

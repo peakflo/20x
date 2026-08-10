@@ -4,7 +4,7 @@ import { app, BrowserWindow, dialog, net, protocol, session, shell, Tray, Menu, 
 import { join } from 'path'
 import { pathToFileURL } from 'url'
 import { is } from '@electron-toolkit/utils'
-import { DatabaseManager } from './database'
+import { DatabaseManager, type TranscriptPartRecord } from './database'
 import { AgentManager } from './agent-manager'
 import { GitHubManager } from './github-manager'
 import { GitLabManager } from './gitlab-manager'
@@ -103,30 +103,62 @@ function sendVoiceEventToRenderer(channel: string, data: unknown): void {
 }
 
 /**
- * Speaks a finished agent answer (design §5.7).
+ * Reads an agent answer aloud as it is written (design §5.7).
  *
- * The `working -> idle` edge is the only moment at which the whole answer
- * exists: the agent writes an answer in pieces, and the idle transition happens
- * after the last piece is stored. The answer is read from the stored transcript
- * rather than from memory, so it also works after a restart.
+ * The answer arrives a few words at a time. Waiting for the agent to stop
+ * before saying the first word would put the whole spoken answer behind the
+ * agent — on a long answer, minutes behind — so the transcript is followed as
+ * it changes and every finished sentence is read straight away.
+ *
+ * The `working -> idle` edge then closes the passage, and it is also the
+ * fallback: an answer that produced no transcript event this session is read in
+ * one piece from what was stored.
  *
  * This listener never decides to speak. It hands the passage to the speech
  * service, which speaks it only when the user asked for it by voice.
  */
 function watchAgentAnswersForSpeech(agents: AgentManager, database: DatabaseManager): void {
   const lastStatus = new Map<string, string>()
+  /** The newest assistant text of each task, as it is written. */
+  const writing = new Map<string, { partId: string; text: string }>()
+
   agents.addExternalListener((channel, data) => {
-    if (channel !== 'agent:status') return
-    const event = data as { sessionId?: string; taskId?: string; status?: string }
-    if (!event?.sessionId || !event.taskId || !event.status) return
-
-    const previous = lastStatus.get(event.sessionId)
-    if (event.status === 'idle') lastStatus.delete(event.sessionId)
-    else lastStatus.set(event.sessionId, event.status)
-    if (event.status !== 'idle' || previous !== 'working') return
-
     try {
-      const text = lastAssistantTextFromTranscript(database.getTranscriptParts(event.taskId))
+      if (channel === 'transcript:changed') {
+        const event = data as { taskId?: string; parts?: TranscriptPartRecord[] }
+        if (!event?.taskId || !event.parts?.length) return
+        const part = newestAssistantText(event.parts)
+        if (!part) return
+        writing.set(event.taskId, { partId: part.partId, text: part.content })
+        void voiceSessionManager
+          ?.streamAgentAnswer(event.taskId, part.partId, part.content)
+          .catch((err) => console.error('[voice] reading the answer failed:', err))
+        return
+      }
+
+      if (channel !== 'agent:status') return
+      const event = data as { sessionId?: string; taskId?: string; status?: string }
+      if (!event?.sessionId || !event.taskId || !event.status) return
+
+      const previous = lastStatus.get(event.sessionId)
+      if (event.status === 'idle') lastStatus.delete(event.sessionId)
+      else lastStatus.set(event.sessionId, event.status)
+      if (event.status !== 'idle' || previous !== 'working') return
+
+      // Close the passage with the last words, which may have arrived after the
+      // final transcript event.
+      const stored = database.getTranscriptParts(event.taskId)
+      const part = newestAssistantText(stored)
+      const open = writing.get(event.taskId)
+      writing.delete(event.taskId)
+      if (part && voiceSessionManager?.finishAgentAnswer(event.taskId, part.partId, part.content)) {
+        return
+      }
+
+      // Nothing was read as it was written — no transcript event reached us —
+      // so the answer is read in one piece instead.
+      if (open) return
+      const text = lastAssistantTextFromTranscript(stored)
       if (!text) return
       void voiceSessionManager?.speakAgentAnswer(event.taskId, text).catch((err) => {
         console.error('[voice] speaking the answer failed:', err)
@@ -136,6 +168,20 @@ function watchAgentAnswersForSpeech(agents: AgentManager, database: DatabaseMana
       console.error('[voice] reading the answer failed:', err)
     }
   })
+}
+
+/** The assistant text part being written, if the newest one is plain text. */
+function newestAssistantText(
+  parts: Array<{ partId?: string; role: string; content: string; partType?: string }>
+): { partId: string; content: string } | null {
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const part = parts[i]
+    if (part.role !== 'assistant') continue
+    if (part.partType && part.partType !== 'text') continue
+    if (!(part.content ?? '').trim()) continue
+    return { partId: part.partId ?? 'assistant', content: part.content }
+  }
+  return null
 }
 
 async function shutdownAppServices(): Promise<void> {

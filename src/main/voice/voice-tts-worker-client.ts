@@ -30,6 +30,13 @@ export interface VoiceTtsSpeakRequest {
   speakerId: number
   speed: number
   systemVoice?: string
+  /**
+   * Leaves the passage open, so sentences can be added while it is read.
+   *
+   * An agent answer arrives a few words at a time. Waiting for the last word
+   * before saying the first would put the whole spoken answer behind the agent.
+   */
+  open?: boolean
 }
 
 interface WorkerMessage {
@@ -123,6 +130,18 @@ export class VoiceTtsWorkerClient extends EventEmitter {
   speak(request: VoiceTtsSpeakRequest): void {
     this.clearIdleTimer()
     this.send({ t: 'speak', ...request })
+  }
+
+  /** Adds sentences to a passage that was opened with `open`. */
+  append(speechId: string, sentences: string[]): void {
+    if (sentences.length === 0) return
+    this.clearIdleTimer()
+    this.send({ t: 'append', speechId, sentences })
+  }
+
+  /** Closes an open passage. It ends once the queued sentences are read. */
+  finish(speechId: string): void {
+    this.send({ t: 'finish', speechId })
   }
 
   cancel(speechId?: string): void {

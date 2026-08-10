@@ -452,6 +452,35 @@ export function splitIntoSentences(text: string, maxChars = VOICE_TTS_MAX_SENTEN
   return out
 }
 
+/**
+ * Splits a passage that is still being written.
+ *
+ * An answer arrives a few words at a time, and speech must start before the
+ * last word does. Only sentences that are certainly finished are returned; the
+ * tail is held back, because "The test failed" and "The test failed to start"
+ * are read very differently and the difference is one word that has not
+ * arrived yet.
+ *
+ * Pass `final` when nothing more is coming, and the tail is released too.
+ */
+export function splitStreamingSentences(
+  text: string,
+  final = false,
+  maxChars = VOICE_TTS_MAX_SENTENCE_CHARS
+): { sentences: string[]; remainder: string } {
+  const trimmed = String(text ?? '').trim()
+  if (!trimmed) return { sentences: [], remainder: '' }
+
+  const sentences = splitIntoSentences(trimmed, maxChars)
+  if (final || sentences.length === 0) return { sentences, remainder: '' }
+
+  // The writer stopped on a full stop, so even the last one is finished.
+  if (/[.!?…:]["')\]]?$/.test(trimmed)) return { sentences, remainder: '' }
+
+  const remainder = sentences[sentences.length - 1]
+  return { sentences: sentences.slice(0, -1), remainder }
+}
+
 function breakLongSentence(sentence: string, maxChars: number): string[] {
   const parts: string[] = []
   let rest = sentence

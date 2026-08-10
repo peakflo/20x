@@ -533,6 +533,27 @@ export class VoiceSessionManager {
     else this.speech.expectAnyAnswer(turnId)
   }
 
+  /**
+   * The agent is writing an answer. Reads it aloud as it arrives.
+   *
+   * Called for every transcript change, so it must be cheap and must decide for
+   * itself whether this answer may be spoken at all.
+   */
+  async streamAgentAnswer(taskId: string, partId: string, text: string): Promise<void> {
+    if (this.speech.streamingTaskId !== taskId) {
+      if (!(await this.speech.beginStreamingAnswer(taskId))) return
+    }
+    this.speech.pushStreamingAnswer(taskId, partId, text)
+  }
+
+  /** The agent has stopped. Reads out whatever is left of the answer. */
+  finishAgentAnswer(taskId: string, partId: string, text: string): boolean {
+    if (this.speech.streamingTaskId !== taskId) return false
+    this.speech.pushStreamingAnswer(taskId, partId, text, true)
+    this.speech.endStreamingAnswer(taskId)
+    return true
+  }
+
   /** Speaks one finished agent answer. Called from the agent status stream. */
   async speakAgentAnswer(taskId: string, text: string): Promise<boolean> {
     const spoken = await this.speech.speakAgentAnswer(taskId, text)

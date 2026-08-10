@@ -17,7 +17,14 @@ const SYSTEM_VOICES: VoiceTtsVoice[] = [
 ]
 
 class FakeWorker extends EventEmitter {
-  spoken: Array<{ speechId: string; sentences: string[]; speakerId: number; speed: number; systemVoice?: string }> = []
+  spoken: Array<{
+    speechId: string
+    sentences: string[]
+    speakerId: number
+    speed: number
+    systemVoice?: string
+    open?: boolean
+  }> = []
   cancelled: string[] = []
   loads: unknown[] = []
 
@@ -25,8 +32,24 @@ class FakeWorker extends EventEmitter {
     this.loads.push(request)
     this.emit('status', { state: 'ready', engine: 'system', modelId: '', voiceId: '', sampleRate: 24000 })
   }
-  speak(request: { speechId: string; sentences: string[]; speakerId: number; speed: number; systemVoice?: string }): void {
+  appended: string[] = []
+  finished: string[] = []
+
+  speak(request: {
+    speechId: string
+    sentences: string[]
+    speakerId: number
+    speed: number
+    systemVoice?: string
+    open?: boolean
+  }): void {
     this.spoken.push(request)
+  }
+  append(_speechId: string, sentences: string[]): void {
+    this.appended.push(...sentences)
+  }
+  finish(speechId: string): void {
+    this.finished.push(speechId)
   }
   cancel(speechId?: string): void {
     if (speechId) this.cancelled.push(speechId)
@@ -337,5 +360,123 @@ describe('choosing a voice', () => {
     expect(voices).toHaveLength(8)
     expect(voices.map((v) => v.speakerId)).not.toContain(4)
     expect(voices.every((v) => v.engine === 'local')).toBe(true)
+  })
+})
+
+describe('reading an answer as it is written', () => {
+  /**
+   * An agent writes an answer a few words at a time. Waiting for it to stop
+   * before saying the first word puts the whole spoken answer behind the agent.
+   */
+  async function streaming() {
+    const ctx = makeService({ [VOICE_TTS_SETTING_KEYS.enabled]: 'true' })
+    await ctx.service.prepare()
+    ctx.service.expectAnswer('task-1', 'turn-1', clock)
+    expect(await ctx.service.beginStreamingAnswer('task-1')).toBe(true)
+    return ctx
+  }
+
+  it('opens a passage before a single word has arrived', async () => {
+    const { service, worker } = await streaming()
+
+    expect(worker.spoken).toHaveLength(1)
+    expect(worker.spoken[0].sentences).toEqual([])
+    expect(worker.spoken[0].open).toBe(true)
+    expect(service.speaking).toBe(true)
+  })
+
+  it('reads each sentence as soon as it is finished', async () => {
+    const { service, worker } = await streaming()
+
+    service.pushStreamingAnswer('task-1', 'part-1', 'The build is green')
+    expect(worker.appended).toEqual([])
+
+    service.pushStreamingAnswer('task-1', 'part-1', 'The build is green. Nothing else')
+    expect(worker.appended).toEqual(['The build is green.'])
+
+    service.pushStreamingAnswer('task-1', 'part-1', 'The build is green. Nothing else failed.')
+    expect(worker.appended).toEqual(['The build is green.', 'Nothing else failed.'])
+  })
+
+  it('never says the same sentence twice', async () => {
+    const { service, worker } = await streaming()
+
+    for (let i = 0; i < 5; i++) {
+      service.pushStreamingAnswer('task-1', 'part-1', 'One. Two. Three.')
+    }
+
+    expect(worker.appended).toEqual(['One.', 'Two.', 'Three.'])
+  })
+
+  it('reads on when the agent starts a new piece of the answer', async () => {
+    const { service, worker } = await streaming()
+
+    service.pushStreamingAnswer('task-1', 'part-1', 'First piece.')
+    service.pushStreamingAnswer('task-1', 'part-2', 'Second piece.')
+
+    expect(worker.appended).toEqual(['First piece.', 'Second piece.'])
+  })
+
+  it('reads the last words and closes when the agent stops', async () => {
+    const { service, worker } = await streaming()
+
+    service.pushStreamingAnswer('task-1', 'part-1', 'It is done')
+    expect(worker.appended).toEqual([])
+
+    service.pushStreamingAnswer('task-1', 'part-1', 'It is done', true)
+    service.endStreamingAnswer('task-1')
+
+    expect(worker.appended).toEqual(['It is done'])
+    expect(worker.finished).toHaveLength(1)
+  })
+
+  it('ignores an answer from a task it is not reading', async () => {
+    const { service, worker } = await streaming()
+
+    service.pushStreamingAnswer('task-other', 'part-1', 'A background answer.')
+
+    expect(worker.appended).toEqual([])
+  })
+
+  it('stops at the reading limit instead of reading for ever', async () => {
+    const ctx = makeService({
+      [VOICE_TTS_SETTING_KEYS.enabled]: 'true',
+      [VOICE_TTS_SETTING_KEYS.maxChars]: '40',
+    })
+    await ctx.service.prepare()
+    ctx.service.expectAnswer('task-1', 'turn-1', clock)
+    await ctx.service.beginStreamingAnswer('task-1')
+
+    ctx.service.pushStreamingAnswer('task-1', 'part-1', 'One sentence here. Two sentence here. Three sentence here. Four here.')
+
+    const spoken = ctx.worker.appended.join(' ')
+    expect(spoken.length).toBeLessThanOrEqual(45)
+    // And it stays stopped, however much more arrives.
+    ctx.service.pushStreamingAnswer('task-1', 'part-1', 'One sentence here. Two sentence here. Three sentence here. Four here. Five here.')
+    expect(ctx.worker.appended.join(' ').length).toBeLessThanOrEqual(45)
+  })
+
+  it('refuses to read an answer the user did not ask for', async () => {
+    const { service } = makeService({ [VOICE_TTS_SETTING_KEYS.enabled]: 'true' })
+    await service.prepare()
+
+    expect(await service.beginStreamingAnswer('task-1')).toBe(false)
+  })
+
+  it('reads it when the user switched the rule off', async () => {
+    const { service } = makeService({
+      [VOICE_TTS_SETTING_KEYS.enabled]: 'true',
+      [VOICE_TTS_SETTING_KEYS.onlyVoiceTurns]: 'false',
+    })
+    await service.prepare()
+
+    expect(await service.beginStreamingAnswer('task-1')).toBe(true)
+  })
+
+  it('opens the passage once, not on every change', async () => {
+    const { service, worker } = await streaming()
+
+    expect(await service.beginStreamingAnswer('task-1')).toBe(true)
+    expect(worker.spoken).toHaveLength(1)
   })
 })

@@ -148,6 +148,79 @@ describe('the speech worker', () => {
   })
 })
 
+describe('a passage that is still being written', () => {
+  /**
+   * An agent answer arrives a few words at a time. The passage opens with
+   * nothing in it and is filled as sentences are finished, so speech starts
+   * with the first one rather than after the last.
+   */
+  function collect(worker: VoiceTtsWorkerClient, speechId: string) {
+    const chunks: VoiceTtsChunk[] = []
+    const done = new Promise<number>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('the passage never ended')), 20000)
+      worker.on('chunk', (chunk: VoiceTtsChunk) => chunks.push(chunk))
+      worker.on('done', (id: string) => {
+        if (id !== speechId) return
+        clearTimeout(timer)
+        resolve(chunks.length)
+      })
+    })
+    return { chunks, done }
+  }
+
+  it('stays open with nothing in it, then reads what arrives', async () => {
+    client = new VoiceTtsWorkerClient(SCRIPT)
+    client.load({ engine: 'local', model: MODEL })
+    await ready(client)
+
+    const { chunks, done } = collect(client, 'speech-stream')
+    client.speak({ speechId: 'speech-stream', sentences: [], open: true, speakerId: 0, speed: 1 })
+
+    // Nothing has been written yet, so nothing is read and it has not ended.
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(chunks).toHaveLength(0)
+
+    client.append('speech-stream', ['One.'])
+    client.append('speech-stream', ['Two.'])
+    client.finish('speech-stream')
+
+    expect(await done).toBe(2)
+    expect(chunks.map((c) => c.text)).toEqual(['One.', 'Two.'])
+  })
+
+  it('reads a sentence that arrives after the queue has run dry', async () => {
+    client = new VoiceTtsWorkerClient(SCRIPT)
+    client.load({ engine: 'local', model: MODEL })
+    await ready(client)
+
+    const { chunks, done } = collect(client, 'speech-gap')
+    client.speak({ speechId: 'speech-gap', sentences: ['First.'], open: true, speakerId: 0, speed: 1 })
+
+    // Let the first sentence finish, so the loop stops for want of work.
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    client.append('speech-gap', ['Second.'])
+    client.finish('speech-gap')
+
+    expect(await done).toBe(2)
+    expect(chunks.map((c) => c.text)).toEqual(['First.', 'Second.'])
+  })
+
+  it('ignores sentences meant for a passage that is over', async () => {
+    client = new VoiceTtsWorkerClient(SCRIPT)
+    client.load({ engine: 'local', model: MODEL })
+    await ready(client)
+
+    const { chunks, done } = collect(client, 'speech-closed')
+    client.speak({ speechId: 'speech-closed', sentences: ['Only this.'], speakerId: 0, speed: 1 })
+    await done
+
+    client.append('speech-closed', ['Too late.'])
+    await new Promise((resolve) => setTimeout(resolve, 100))
+
+    expect(chunks.map((c) => c.text)).toEqual(['Only this.'])
+  })
+})
+
 describe('the local runtime, as Electron sees it', () => {
   /**
    * The runtime hands back its samples in memory it owns itself unless it is

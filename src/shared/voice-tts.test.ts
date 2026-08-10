@@ -4,6 +4,7 @@ import {
   clampSpeechSpeed,
   isVoiceTtsEngineId,
   splitIntoSentences,
+  splitStreamingSentences,
   toSpokenText,
 } from './voice-tts'
 
@@ -119,5 +120,40 @@ describe('guards', () => {
     expect(clampSpeechSpeed(9)).toBe(2)
     expect(clampSpeechSpeed(0.1)).toBe(0.5)
     expect(clampSpeechSpeed(Number.NaN)).toBe(1)
+  })
+})
+
+describe('splitStreamingSentences', () => {
+  /**
+   * An answer arrives a few words at a time and speech must start before the
+   * last word does. The risk is reading a sentence that is not finished:
+   * "The test failed" and "The test failed to start" are read very differently,
+   * and the difference is one word that has not arrived yet.
+   */
+  it('holds back a sentence that is still being written', () => {
+    const result = splitStreamingSentences('It passed. The test failed')
+    expect(result.sentences).toEqual(['It passed.'])
+    expect(result.remainder).toBe('The test failed')
+  })
+
+  it('releases a sentence the moment it is finished', () => {
+    const result = splitStreamingSentences('It passed. The test failed to start.')
+    expect(result.sentences).toEqual(['It passed.', 'The test failed to start.'])
+    expect(result.remainder).toBe('')
+  })
+
+  it('releases the tail when nothing more is coming', () => {
+    const result = splitStreamingSentences('It passed. And that is all', true)
+    expect(result.sentences).toEqual(['It passed.', 'And that is all'])
+    expect(result.remainder).toBe('')
+  })
+
+  it('says nothing at all from a first half-word', () => {
+    expect(splitStreamingSentences('The').sentences).toEqual([])
+    expect(splitStreamingSentences('').sentences).toEqual([])
+  })
+
+  it('treats a closing quotation mark as part of the full stop', () => {
+    expect(splitStreamingSentences('He said "no."').sentences).toEqual(['He said "no."'])
   })
 })

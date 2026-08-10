@@ -24,6 +24,7 @@ import {
   clampSpeechSpeed,
   isVoiceTtsEngineId,
   splitIntoSentences,
+  splitStreamingSentences,
   toSpokenText,
   type VoiceSpeechEndEvent,
   type VoiceSpeechRequest,
@@ -87,6 +88,17 @@ interface ActiveSpeech {
   speechId: string
   source: VoiceSpeechRequest['source']
   taskId?: string
+  /** Set while the answer is still being written. */
+  streaming?: {
+    /** The transcript part being read. A new part continues the same passage. */
+    partId: string
+    /** How many sentences of that part have been handed to the worker. */
+    sentencesSent: number
+    /** Characters already dispatched, against the reading limit. */
+    charsSent: number
+    /** True once the limit was reached and the rest is left unread. */
+    truncated: boolean
+  }
 }
 
 export class VoiceSpeechService {
@@ -427,6 +439,119 @@ export class VoiceSpeechService {
       ...(voice.engine === 'system' ? { systemVoice: systemVoiceName(voice.id) } : {}),
     })
     return true
+  }
+
+  // ── Reading an answer as it is written (design §5.7) ──────
+
+  /**
+   * The agent has begun an answer to something the user asked by voice.
+   *
+   * The passage opens empty and is filled as the words arrive, so speech starts
+   * with the first finished sentence instead of after the last one. Waiting for
+   * the agent to stop would put the whole spoken answer behind the agent — on a
+   * long answer, minutes behind.
+   *
+   * Returns false when this answer may not be spoken, and then the caller need
+   * not push anything.
+   */
+  async beginStreamingAnswer(taskId: string): Promise<boolean> {
+    if (this.active?.streaming && this.active.taskId === taskId) return true
+
+    const expectation = this.takeExpectation(taskId)
+    if (!expectation && this.onlyVoiceTurns()) return false
+    if (!this.isEnabled()) return false
+
+    if (this.status.state !== 'ready') await this.prepare()
+    if (this.status.state !== 'ready') return false
+
+    this.stop('cancelled')
+    const speechId = createId()
+    const voice = this.resolveVoice()
+    this.active = {
+      speechId,
+      source: 'agent_answer',
+      taskId,
+      streaming: { partId: '', sentencesSent: 0, charsSent: 0, truncated: false },
+    }
+    this.onSpeakingChange?.(true)
+
+    this.options.notifyRenderer(VOICE_TTS_EVENTS.speechStart, {
+      speechId,
+      source: 'agent_answer',
+      text: '',
+      taskId,
+      sampleRate: this.sampleRate,
+      truncated: false,
+    } satisfies VoiceSpeechStartEvent)
+
+    this.worker.speak({
+      speechId,
+      sentences: [],
+      open: true,
+      speakerId: voice.speakerId,
+      speed: this.speed(),
+      ...(voice.engine === 'system' ? { systemVoice: systemVoiceName(voice.id) } : {}),
+    })
+    return true
+  }
+
+  /**
+   * The answer so far. Only sentences that are certainly finished are read;
+   * the tail waits for the next words.
+   *
+   * `partId` names the piece of the transcript this text belongs to. An agent
+   * may write an answer in several pieces, and each one starts from nothing.
+   */
+  pushStreamingAnswer(taskId: string, partId: string, text: string, final = false): void {
+    const active = this.active
+    const streaming = active?.streaming
+    if (!active || !streaming || active.taskId !== taskId) return
+    if (streaming.truncated) return
+
+    if (streaming.partId !== partId) {
+      // A new piece of the answer. It is read on from here, in the same breath.
+      streaming.partId = partId
+      streaming.sentencesSent = 0
+    }
+
+    const prepared = toSpokenText(text, this.maxChars())
+    const { sentences } = splitStreamingSentences(prepared.text, final)
+    const fresh = sentences.slice(streaming.sentencesSent)
+    if (fresh.length === 0) return
+
+    // The reading limit applies to the whole answer, not to one piece of it.
+    const allowed: string[] = []
+    for (const sentence of fresh) {
+      if (streaming.charsSent + sentence.length > this.maxChars()) {
+        streaming.truncated = true
+        break
+      }
+      streaming.charsSent += sentence.length + 1
+      allowed.push(sentence)
+    }
+
+    streaming.sentencesSent += allowed.length
+    this.options.notifyRenderer(VOICE_TTS_EVENTS.speechStart, {
+      speechId: active.speechId,
+      source: 'agent_answer',
+      text: prepared.text,
+      taskId,
+      sampleRate: this.sampleRate,
+      truncated: streaming.truncated,
+    } satisfies VoiceSpeechStartEvent)
+    this.worker.append(active.speechId, allowed)
+  }
+
+  /** No more of this answer is coming. What is queued is still read. */
+  endStreamingAnswer(taskId: string): void {
+    const active = this.active
+    if (!active?.streaming || active.taskId !== taskId) return
+    this.worker.finish(active.speechId)
+  }
+
+  /** True while an answer is being read as it is written. */
+  get streamingTaskId(): string | null {
+    return this.active?.streaming ? (this.active.taskId ?? null) : null
   }
 
   /** Stops the current passage at once. This is barge-in. */
