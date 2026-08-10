@@ -28,6 +28,7 @@ export function VoiceOverlay() {
   const confirm = useVoiceStore((s) => s.confirm)
   const dismiss = useVoiceStore((s) => s.dismiss)
   const cancel = useVoiceStore((s) => s.cancel)
+  const endTurn = useVoiceStore((s) => s.endTurn)
   const clearResult = useVoiceStore((s) => s.clearResult)
 
   // Escape cancels the current turn or the open confirmation.
@@ -51,6 +52,7 @@ export function VoiceOverlay() {
 
   const listening = state === 'listening'
   const transcribing = state === 'transcribing'
+  const loudness = Math.min(Math.max(level, 0), 1)
   const showBubble = listening || transcribing || Boolean(partial)
   if (!showBubble && !confirmation && !result) return null
 
@@ -61,15 +63,24 @@ export function VoiceOverlay() {
     >
       {showBubble && (
         <div className="pointer-events-auto flex max-w-xl items-center gap-3 rounded-2xl border border-border bg-card/95 px-4 py-2.5 shadow-lg backdrop-blur">
-          <span className="relative flex h-6 w-6 items-center justify-center">
+          {/* The halo follows the voice: it swells and brightens with the
+              level, so a user can see the microphone is hearing them before
+              any word appears. Scale alone was too easy to miss. */}
+          <span className="relative flex h-6 w-6 items-center justify-center" data-testid="voice-level">
             <span
-              className="absolute inset-0 rounded-full bg-primary/25 transition-transform duration-75"
-              style={{ transform: `scale(${listening ? 0.6 + Math.min(level, 1) * 0.8 : 0.6})` }}
+              className="absolute inset-0 rounded-full bg-primary transition-all duration-75"
+              style={{
+                transform: `scale(${listening ? 0.55 + loudness * 0.95 : 0.55})`,
+                opacity: listening ? 0.15 + loudness * 0.55 : 0.15,
+              }}
               aria-hidden
             />
-            <Mic className="relative h-3.5 w-3.5 text-primary" />
+            <Mic
+              className="relative h-3.5 w-3.5 text-primary transition-opacity duration-75"
+              style={{ opacity: listening ? 0.55 + loudness * 0.45 : 1 }}
+            />
           </span>
-          <div className="min-w-0">
+          <div className="min-w-0 flex-1">
             <p className="text-[11px] uppercase tracking-wide text-muted-foreground">
               {/* One word for one state. "Listening — pause to send" read as
                   an instruction to do something, when it only described what
@@ -85,6 +96,19 @@ export function VoiceOverlay() {
                     : 'Speak now')}
             </p>
           </div>
+          {listening && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7 shrink-0 rounded-full text-muted-foreground hover:text-foreground"
+              onClick={() => void endTurn()}
+              title="Stop listening. Escape throws the words away instead."
+              aria-label="Stop listening"
+              data-testid="voice-stop"
+            >
+              <X className="h-4 w-4" />
+            </Button>
+          )}
         </div>
       )}
 

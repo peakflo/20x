@@ -45,6 +45,39 @@ describe('VoiceOverlay', () => {
     expect(screen.queryByText(/pause to send/i)).not.toBeInTheDocument()
   })
 
+  it('glows with the voice, so it is visible that it is hearing you', () => {
+    reset({ state: 'listening', turnId: 'turn-1', level: 0 })
+    const { rerender } = render(<VoiceOverlay />)
+    const halo = (): HTMLElement => screen.getByTestId('voice-level').firstElementChild as HTMLElement
+    const quiet = halo().style.opacity
+
+    act(() => {
+      useVoiceStore.setState({ level: 1 })
+    })
+    rerender(<VoiceOverlay />)
+
+    // Brighter and bigger when spoken into: scale alone was too easy to miss.
+    expect(Number(halo().style.opacity)).toBeGreaterThan(Number(quiet))
+    expect(halo().style.transform).toBe('scale(1.5)')
+  })
+
+  it('offers a cross that stops listening', async () => {
+    const endTurn = vi.fn(async () => undefined)
+    reset({ state: 'listening', turnId: 'turn-1', endTurn: endTurn as never })
+    render(<VoiceOverlay />)
+
+    await act(async () => {
+      screen.getByTestId('voice-stop').click()
+    })
+    expect(endTurn).toHaveBeenCalledTimes(1)
+  })
+
+  it('hides the cross when there is nothing to stop', () => {
+    reset({ state: 'transcribing', turnId: 'turn-1', partial: 'half a sentence' })
+    render(<VoiceOverlay />)
+    expect(screen.queryByTestId('voice-stop')).not.toBeInTheDocument()
+  })
+
   it('shows nothing while voice is switched off', () => {
     reset({ enabled: false, state: 'listening' })
     const { container } = render(<VoiceOverlay />)

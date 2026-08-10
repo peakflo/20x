@@ -133,6 +133,21 @@ Guards:
 - **Settings → Voice → Keep talking** switches the loop off; the words are then
   written into the box for you to send yourself.
 
+### The listening bubble
+
+While a turn is open, a bubble sits at the bottom of the window with three
+things in it:
+
+- a **halo that follows your voice** — it swells and brightens with the level,
+  so you can see the microphone is hearing you before any word appears. Scale
+  alone was too easy to miss;
+- the state, in one word: **Listening**, or **Writing the words**. It used to
+  say "Listening — pause to send", which read as an instruction to do something
+  when it only described what the loop does by itself;
+- a **cross that stops listening**, ending the turn and keeping what was heard.
+  Escape is the other exit and throws the words away instead; the cross says so
+  in its tooltip.
+
 ### Where dictated words go
 
 The transcript panel is mounted many times at once — the task workspace, each
