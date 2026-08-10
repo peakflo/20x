@@ -315,6 +315,11 @@ export const useVoiceStore = create<VoiceStoreState>((set, get) => ({
     // Barge-in. Playback stops here, in the same tick as the press, instead of
     // waiting for main to answer. Main stops producing the rest.
     voicePlayback.stop()
+    // The gate has to be told as well. `speechEnd` will arrive, but it is
+    // dropped because the passage it names is already gone, so nothing else
+    // ever clears the gate — and a gate left holding swallows every word the
+    // user says into the open turn.
+    bargeInGate.setSpeaking(false)
     set({ speaking: false, speechText: '' })
     const started = await voiceApi.startTurn(mode, contextProvider?.() ?? {})
     if ('error' in started) {
@@ -643,7 +648,12 @@ if (hasTtsBridge()) {
     // audio at all, and then no sentence will ever end to release the
     // microphone.
     if (event.reason === 'complete' && voicePlayback.hasQueuedAudio) return
-    if (voicePlayback.currentSpeechId !== event.speechId) return
+    if (voicePlayback.currentSpeechId !== event.speechId) {
+      // The event names a passage that is already gone. Nothing is sounding,
+      // so nothing may still be held back from the recogniser.
+      if (!voicePlayback.isPlaying) bargeInGate.setSpeaking(false)
+      return
+    }
     voicePlayback.stop()
     bargeInGate.setSpeaking(false)
     useVoiceStore.setState({ speaking: false, speechText: '' })

@@ -96,6 +96,11 @@ export const VOICE_ANSWER_EXPECTATION_MS = 10 * 60 * 1000
  */
 export const VOICE_ANY_ANSWER_EXPECTATION_MS = 90 * 1000
 
+/** How many tasks keep a record of the messages the user talked over. */
+export const VOICE_SILENCED_TASKS = 32
+/** And how many messages of each. */
+export const VOICE_SILENCED_PARTS_PER_TASK = 64
+
 interface ActiveSpeech {
   speechId: string
   source: VoiceSpeechRequest['source']
@@ -129,6 +134,19 @@ export class VoiceSpeechService {
   private systemVoices: VoiceTtsVoice[] = []
   private active: ActiveSpeech | null = null
   private expectations = new Map<string, AnswerExpectation>()
+  /**
+   * Messages the user talked over, by task.
+   *
+   * Barge-in stops the passage, but the agent is still writing that same
+   * message and the interrupting sentence has just been sent, which registers
+   * a fresh expectation. Without this the next transcript change opened a new
+   * passage against that expectation and read the interrupted message again
+   * from its first word — which is 20x refusing to stop.
+   *
+   * A transcript part id is never reused, so a silenced message stays silenced
+   * and a genuinely new message is unaffected.
+   */
+  private silenced = new Map<string, Set<string>>()
   /** Set when a spoken sentence was sent but the task was not named. */
   private anyExpectation: { voiceTurnId: string; expiresAt: number } | null = null
   /** Sample rate of the loaded engine, learned when it reports ready. */
@@ -475,8 +493,13 @@ export class VoiceSpeechService {
    * Returns false when this answer may not be spoken, and then the caller need
    * not push anything.
    */
-  async beginStreamingAnswer(taskId: string): Promise<boolean> {
+  async beginStreamingAnswer(taskId: string, parts?: VoiceAnswerPart[]): Promise<boolean> {
     if (this.active?.streaming && this.active.taskId === taskId) return true
+
+    // An answer the user talked over must not open a passage. Opening one
+    // consumes the expectation left by the sentence that interrupted it, and
+    // then the interrupted answer is read again from its first word.
+    if (parts && this.audibleParts(taskId, parts).length === 0) return false
 
     const expectation = this.takeExpectation(taskId)
     if (!expectation && this.onlyVoiceTurns()) return false
@@ -523,10 +546,14 @@ export class VoiceSpeechService {
    * `partId` names the piece of the transcript this text belongs to. An agent
    * may write an answer in several pieces, and each one starts from nothing.
    */
-  pushStreamingAnswer(taskId: string, parts: VoiceAnswerPart[], final = false): void {
+  pushStreamingAnswer(taskId: string, allParts: VoiceAnswerPart[], final = false): void {
     const active = this.active
     const streaming = active?.streaming
     if (!active || !streaming || active.taskId !== taskId) return
+
+    // A message the user talked over is dropped before anything else, so the
+    // rest of it is never read and it cannot hold up the messages after it.
+    const parts = this.audibleParts(taskId, allParts)
 
     for (let i = 0; i < parts.length; i++) {
       if (streaming.truncated) return
@@ -600,7 +627,53 @@ export class VoiceSpeechService {
     return this.active?.streaming ? (this.active.taskId ?? null) : null
   }
 
-  /** Stops the current passage at once. This is barge-in. */
+  /**
+   * The user talked over the answer, or pressed stop. This is barge-in.
+   *
+   * It differs from `stop` in one way that matters: the message being read is
+   * remembered as silenced, so the rest of it is never read out. `stop` alone
+   * ends the passage, and the agent's next few words open a new one.
+   */
+  interrupt(): void {
+    const active = this.active
+    if (active?.streaming && active.taskId) {
+      this.silence(active.taskId, active.streaming.spoken.keys())
+    }
+    this.stop('cancelled')
+  }
+
+  /** Marks messages of a task as never to be read again. */
+  private silence(taskId: string, partIds: Iterable<string>): void {
+    let set = this.silenced.get(taskId)
+    if (!set) {
+      set = new Set()
+      // Bounded: this map outlives every passage, so it must not grow for ever
+      // in a session that runs for days.
+      if (this.silenced.size >= VOICE_SILENCED_TASKS) {
+        const oldest = this.silenced.keys().next()
+        if (!oldest.done) this.silenced.delete(oldest.value)
+      }
+      this.silenced.set(taskId, set)
+    }
+    for (const partId of partIds) set.add(partId)
+    while (set.size > VOICE_SILENCED_PARTS_PER_TASK) {
+      const oldest = set.keys().next()
+      if (oldest.done) break
+      set.delete(oldest.value)
+    }
+  }
+
+  /**
+   * The messages of an answer that may still be read: everything except what
+   * the user has already talked over.
+   */
+  audibleParts(taskId: string, parts: VoiceAnswerPart[]): VoiceAnswerPart[] {
+    const silenced = this.silenced.get(taskId)
+    if (!silenced || silenced.size === 0) return parts
+    return parts.filter((part) => !silenced.has(part.partId))
+  }
+
+  /** Stops the current passage at once, without silencing anything. */
   stop(reason: VoiceSpeechEndEvent['reason'] = 'cancelled'): void {
     const active = this.active
     if (!active) return

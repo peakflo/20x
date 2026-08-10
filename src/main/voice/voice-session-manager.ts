@@ -541,8 +541,12 @@ export class VoiceSessionManager {
    */
   async streamAgentAnswer(taskId: string, parts: VoiceAnswerPart[]): Promise<void> {
     if (parts.length === 0) return
+    // A passage must not even be opened for an answer the user talked over.
+    // Opening one consumes the expectation left by the sentence that
+    // interrupted it, and then 20x starts reading the old answer again.
+    if (this.speech.audibleParts(taskId, parts).length === 0) return
     if (this.speech.streamingTaskId !== taskId) {
-      if (!(await this.speech.beginStreamingAnswer(taskId))) return
+      if (!(await this.speech.beginStreamingAnswer(taskId, parts))) return
     }
     this.speech.pushStreamingAnswer(taskId, parts)
   }
@@ -553,6 +557,11 @@ export class VoiceSessionManager {
     this.speech.pushStreamingAnswer(taskId, parts, true)
     this.speech.endStreamingAnswer(taskId)
     return true
+  }
+
+  /** The messages of an answer the user has not already talked over. */
+  audibleAnswerParts(taskId: string, parts: VoiceAnswerPart[]): VoiceAnswerPart[] {
+    return this.speech.audibleParts(taskId, parts)
   }
 
   /** Speaks one finished agent answer. Called from the agent status stream. */
@@ -684,7 +693,9 @@ export class VoiceSessionManager {
   }
 
   stopSpeaking(): void {
-    this.speech.stop('cancelled')
+    // `interrupt`, not `stop`: the message being read must stay unread, or the
+    // agent's next few words open a new passage and start it again.
+    this.speech.interrupt()
   }
 
   /**

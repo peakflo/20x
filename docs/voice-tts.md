@@ -265,6 +265,46 @@ word rather than from its second.
 One short knock does not cut an answer off: the level has to hold, not merely
 peak.
 
+### Stopping has to be final
+
+Stopping the passage is not enough, and user testing found this the hard way:
+20x stopped, then carried straight on reading.
+
+The agent is usually still writing the message it was cut off in, and the
+sentence that interrupted it has just been sent — which registers a fresh
+expectation for an answer. The agent's next few words then arrived as an
+ordinary transcript change, found no passage open, and opened a new one against
+that expectation. Because a new passage starts from nothing, 20x read the
+interrupted message again **from its first word**.
+
+So barge-in does not call `stop`. It calls `interrupt`, which first records
+every message of the passage as silenced. A transcript part id is never reused,
+so:
+
+- the rest of the interrupted message is never read, by any path — as it
+  streams, when the agent stops, or through the one-piece fallback;
+- a passage is not even opened for it, so the expectation left by the
+  interrupting sentence is not consumed;
+- the answer to the sentence that interrupted is a new message with a new id,
+  and it is read normally.
+
+The speak button is unaffected. It asks for one named message out loud, and
+that was never silenced.
+
+The record is bounded — `VOICE_SILENCED_TASKS` tasks, `VOICE_SILENCED_PARTS_PER_TASK`
+messages each — because it outlives every passage and 20x runs for days.
+
+### The gate has to be told when playback stops
+
+The gate holds the microphone back while an answer plays, and only two things
+open it again: barge-in firing, or being told the answer has stopped.
+
+`reset()` does neither — it forgets the held audio and keeps holding. Anything
+that stops playback by hand must therefore call `setSpeaking(false)` as well.
+Opening a turn used to call only `reset()`, and the `speechEnd` that followed
+was dropped because it named a passage that was already gone. The gate then held
+every word the user spoke into the turn it had just opened.
+
 ### And then the loop closes
 
 When that reply is recognised it is sent, exactly as any spoken sentence is, and
@@ -277,8 +317,9 @@ once.
 ## Barge-in by hand
 
 The moment a voice turn opens, playback stops in the renderer in the same tick
-as the press, and main tells the worker to stop producing. Escape stops speech,
-and so does a click on the speaking indicator.
+as the press, and main tells the worker to stop producing. Escape stops speech
+as well. Every one of these paths silences the message, exactly as speaking over
+it does.
 
 The local model call blocks its process for about a second, so a sentence is
 capped at about 240 characters. That is what keeps cancellation quick: a

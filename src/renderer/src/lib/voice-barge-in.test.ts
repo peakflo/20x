@@ -125,6 +125,23 @@ describe('while 20x is talking', () => {
     expect(onBargeIn).toHaveBeenCalledTimes(1)
   })
 
+  /**
+   * `reset` alone leaves the gate holding, and a gate left holding swallows
+   * every word into an open turn. Whoever stops the playback has to say so.
+   */
+  it('is opened again by being told the answer has stopped, not by reset', () => {
+    const gate = new BargeInGate({ onBargeIn: vi.fn(), holdMs: 300 })
+    gate.setSpeaking(true)
+
+    gate.reset()
+    expect(gate.isHolding).toBe(true)
+    expect(gate.push(SILENCE)).toEqual([])
+
+    gate.setSpeaking(false)
+    expect(gate.isHolding).toBe(false)
+    expect(gate.push(SILENCE)).toEqual([SILENCE])
+  })
+
   it('forgets what it held when the turn ends', () => {
     const gate = new BargeInGate({ onBargeIn: vi.fn(), holdMs: 300 })
     gate.setSpeaking(true)

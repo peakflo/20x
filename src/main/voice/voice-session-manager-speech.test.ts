@@ -61,6 +61,15 @@ class FakeSpeech {
     this.stops += 1
     this.listener?.(false)
   }
+  interrupts = 0
+  /** Barge-in. Silences the message being read, then stops. */
+  interrupt(): void {
+    this.interrupts += 1
+    this.stop()
+  }
+  audibleParts<T>(_taskId: string, parts: T[]): T[] {
+    return parts
+  }
   /** Ends the passage, as the worker would when the last sentence is produced. */
   finish(): void {
     this.listener?.(false)
@@ -275,6 +284,33 @@ describe('barge-in', () => {
   it('stops speaking when the user asks it to', () => {
     ctx.manager.stopSpeaking()
     expect(ctx.speech.stops).toBe(1)
+  })
+
+  /**
+   * `interrupt`, not a plain `stop`. A plain stop ends the passage but leaves
+   * the message readable, and the agent's next few words open a new passage
+   * and start it again — which the user hears as 20x refusing to stop.
+   */
+  it('silences the message it was reading, so it cannot start again', () => {
+    ctx.manager.stopSpeaking()
+    expect(ctx.speech.interrupts).toBe(1)
+  })
+
+  /**
+   * An open conversation turn keeps the state at `listening`, because
+   * `listening -> speaking` is not a legal transition. The microphone is
+   * therefore never released while an answer is read, which is what makes
+   * barge-in possible at all. This pins that down.
+   */
+  it('keeps listening while it reads an answer in a conversation', async () => {
+    const started = await ctx.manager.startTurn('conversation', {})
+    if ('error' in started) throw new Error(started.error)
+
+    await ctx.manager.speakAgentAnswer('task-1', 'A long answer.')
+    ctx.speech.finish()
+
+    // Not idle: the renderer releases the microphone when main says idle.
+    expect(ctx.manager.getState()).toBe('listening')
   })
 
   it('stops the speech worker when the app shuts down', () => {

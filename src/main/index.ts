@@ -153,7 +153,11 @@ function watchAgentAnswersForSpeech(agents: AgentManager, database: DatabaseMana
       // the final transcript event. Only this turn's messages are considered:
       // everything the agent wrote since the user last spoke.
       const stored = database.getTranscriptParts(event.taskId)
-      const parts = assistantTextParts(sinceLastUserMessage(stored))
+      const all = assistantTextParts(sinceLastUserMessage(stored))
+      // Whatever the user talked over is left out here too. Otherwise the
+      // one-piece fallback below reads the whole interrupted answer at the
+      // moment the agent stops.
+      const parts = voiceSessionManager?.audibleAnswerParts(event.taskId, all) ?? all
       const open = writing.get(event.taskId)
       writing.delete(event.taskId)
       if (parts.length > 0 && voiceSessionManager?.finishAgentAnswer(event.taskId, parts)) {

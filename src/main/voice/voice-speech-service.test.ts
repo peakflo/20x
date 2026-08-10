@@ -535,3 +535,86 @@ describe('reading an answer as it is written', () => {
     expect(worker.spoken).toHaveLength(1)
   })
 })
+
+/**
+ * Barge-in has to be final.
+ *
+ * The user talks over the answer, so the passage is stopped. But the agent is
+ * still writing that same answer, and the interrupting sentence has just been
+ * sent, which registers a fresh expectation. Without a memory of what was cut
+ * off, the next transcript change opens a new passage against that expectation
+ * and reads the interrupted message again from its first word.
+ *
+ * To the user that is 20x refusing to stop.
+ */
+describe('an answer the user talked over', () => {
+  async function interrupted() {
+    const ctx = makeService({ [VOICE_TTS_SETTING_KEYS.enabled]: 'true' })
+    await ctx.service.prepare()
+    ctx.service.expectAnswer('task-1', 'turn-1', clock)
+    await ctx.service.beginStreamingAnswer('task-1')
+    ctx.service.pushStreamingAnswer('task-1', [
+      { partId: 'part-1', content: 'The build is green. Nothing else failed. ' },
+    ])
+    expect(ctx.worker.appended.length).toBeGreaterThan(0)
+
+    // The user talks over it. This is what barge-in calls.
+    ctx.service.interrupt()
+    ctx.worker.appended = []
+    ctx.worker.spoken = []
+
+    // The interrupting sentence goes to the agent, so a new answer is expected.
+    ctx.service.expectAnswer('task-1', 'turn-2', clock)
+    return ctx
+  }
+
+  it('is not read again when the rest of it arrives', async () => {
+    const { service, worker } = await interrupted()
+
+    // The agent is still writing the message it was cut off in.
+    await service.beginStreamingAnswer('task-1')  // no parts: the older call shape
+    service.pushStreamingAnswer('task-1', [
+      { partId: 'part-1', content: 'The build is green. Nothing else failed. And a third sentence.' },
+    ])
+
+    expect(worker.appended).toEqual([])
+  })
+
+  it('does not open a passage for it at all', async () => {
+    const { service, worker } = await interrupted()
+    const rest = [
+      { partId: 'part-1', content: 'The build is green. Nothing else failed. And a third sentence.' },
+    ]
+
+    // The parts are given, so the service can see there is nothing to say.
+    expect(await service.beginStreamingAnswer('task-1', rest)).toBe(false)
+    service.pushStreamingAnswer('task-1', rest)
+
+    expect(service.speaking).toBe(false)
+    expect(worker.spoken).toEqual([])
+  })
+
+  it('still reads the answer to the question that interrupted it', async () => {
+    const { service, worker } = await interrupted()
+
+    // A new message of the transcript is the answer to the new question.
+    await service.beginStreamingAnswer('task-1')
+    service.pushStreamingAnswer('task-1', [
+      { partId: 'part-1', content: 'The build is green. Nothing else failed. And a third sentence.' },
+      { partId: 'part-2', content: 'Yes, I stopped. ' },
+    ])
+
+    expect(worker.appended).toEqual(['Yes, I stopped.'])
+  })
+
+  it('forgets the silenced message once the task is spoken to again', async () => {
+    const { service, worker } = await interrupted()
+
+    // A plain speak request is the user asking out loud for this message, with
+    // the speak button. It was never silenced.
+    expect(
+      await service.speak({ text: 'The build is green.', source: 'manual', taskId: 'task-1' })
+    ).toBe(true)
+    expect(worker.spoken).toHaveLength(1)
+  })
+})
