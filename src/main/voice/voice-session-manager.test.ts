@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { EventEmitter } from 'events'
-import { VoiceSessionManager } from './voice-session-manager'
+import { VoiceSessionManager, VOICE_ENGINE_READY_TIMEOUT_MS } from './voice-session-manager'
 import type { VoiceWorkerClient } from './voice-worker-client'
 import type { VoiceActionOutcome } from '../../shared/voice'
 
@@ -85,6 +85,63 @@ describe('VoiceSessionManager — turns', () => {
   let ctx: ReturnType<typeof makeReadyManager>
   beforeEach(() => {
     ctx = makeReadyManager()
+  })
+
+  /**
+   * The bug a user hit: click the microphone, and nothing happens at all.
+   *
+   * Loading a model takes seconds and the worker answers late. `startTurn` used
+   * to read the engine state immediately after asking for the load, find
+   * "loading", and refuse — so every first click after the idle unload, a
+   * restart, or a model change was swallowed.
+   */
+  it('waits for a model that is still loading instead of refusing the click', async () => {
+    const ctx = makeReadyManager()
+    ctx.worker.isLoaded = false
+    // The real client reports `loading` when asked, and `ready` later.
+    ctx.worker.load.mockImplementation(async () => {
+      ctx.worker.emit('status', { state: 'loading' })
+      setTimeout(() => {
+        ctx.worker.emit('status', { state: 'ready', modelId: 'test-model', engine: 'fake' })
+      }, 20)
+    })
+
+    const result = await ctx.manager.startTurn('conversation', {})
+
+    expect('turnId' in result).toBe(true)
+    expect(ctx.manager.getState()).toBe('listening')
+  })
+
+  it('gives up on a load that never finishes, rather than hanging the click', async () => {
+    const ctx = makeReadyManager()
+    ctx.worker.isLoaded = false
+    ctx.worker.load.mockImplementation(async () => {
+      ctx.worker.emit('status', { state: 'loading' })
+    })
+
+    vi.useFakeTimers()
+    try {
+      const pending = ctx.manager.startTurn('conversation', {})
+      await vi.advanceTimersByTimeAsync(VOICE_ENGINE_READY_TIMEOUT_MS + 10)
+      const result = await pending
+      expect(result).toEqual({ error: 'The speech model is still loading.' })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('stops waiting when the load fails, and says why', async () => {
+    const ctx = makeReadyManager()
+    ctx.worker.isLoaded = false
+    ctx.worker.load.mockImplementation(async () => {
+      ctx.worker.emit('status', { state: 'loading' })
+      setTimeout(() => {
+        ctx.worker.emit('status', { state: 'error', message: 'The speech model failed to load.' })
+      }, 20)
+    })
+
+    const result = await ctx.manager.startTurn('conversation', {})
+    expect(result).toEqual({ error: 'The speech model failed to load.' })
   })
 
   it('loads the model again after the worker released it', async () => {

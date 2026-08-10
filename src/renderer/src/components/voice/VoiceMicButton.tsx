@@ -67,6 +67,7 @@ export function VoiceMicButton({
   const conversational = useVoiceStore((s) => s.conversation)
   const ready = useVoiceStore(selectVoiceReady)
   const state = useVoiceStore((s) => s.state)
+  const engineState = useVoiceStore((s) => s.engine.state)
   const turnId = useVoiceStore((s) => s.turnId)
   const level = useVoiceStore((s) => s.level)
   const startTurn = useVoiceStore((s) => s.startTurn)
@@ -145,7 +146,9 @@ export function VoiceMicButton({
 
   if (!ready) return null
 
-  const busy = state === 'transcribing' || state === 'executing'
+  // A model can take seconds to load, and the click waits for it. Without
+  // this the button looked idle and the user thought nothing had happened.
+  const busy = state === 'transcribing' || state === 'executing' || engineState === 'loading'
   // Idle emphasis is a tint and the accent colour, so the control keeps its
   // size and only its weight changes.
   const accent =
@@ -165,7 +168,9 @@ export function VoiceMicButton({
       className={`h-[32px] w-[32px] shrink-0 rounded-lg ${accent} ${className}`}
       title={
         title ??
-        (listening
+        (engineState === 'loading'
+          ? 'Loading the speech model…'
+          : listening
           ? 'Click to stop'
           : mode === 'command'
             ? 'Click to speak a command'

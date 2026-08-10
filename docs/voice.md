@@ -138,16 +138,25 @@ Guards:
 While a turn is open, a bubble sits at the bottom of the window with three
 things in it:
 
-- a **halo that follows your voice** — brightness carries the level and the
-  size barely moves, so you can see the microphone is hearing you before any
-  word appears. Light reads better than movement here, and a control that
-  swells is restless to sit beside;
+- a **halo that follows your voice** in both brightness and size, so you can
+  see the microphone is hearing you before any word appears. Both are needed:
+  light alone was hard to read, and the movement was invisible once the scale
+  was damped down;
 - the state, in one word: **Listening**, or **Writing the words**. It used to
   say "Listening — pause to send", which read as an instruction to do something
   when it only described what the loop does by itself;
 - a **cross that stops listening**, ending the turn and keeping what was heard.
   Escape is the other exit and throws the words away instead; the cross says so
   in its tooltip.
+
+### A click waits for the model
+
+Loading a model takes seconds — the largest is 662 MB — and the worker answers
+late. A click used to read the engine state straight after asking for the load,
+find "loading", and refuse, so **the first click after the idle unload, a
+restart, or a model change did nothing at all**. It now waits for the model, up
+to 90 seconds, and the microphone button spins while it does. A load that fails
+or never arrives ends the wait with the reason.
 
 ### Where dictated words go
 

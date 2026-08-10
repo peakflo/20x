@@ -63,15 +63,14 @@ export function VoiceOverlay() {
     >
       {showBubble && (
         <div className="pointer-events-auto flex max-w-xl items-center gap-3 rounded-2xl border border-border bg-card/95 px-4 py-2.5 shadow-lg backdrop-blur">
-          {/* The halo follows the voice, mostly by colour. Brightness carries
-              the level and the size barely moves: a control that grows and
-              shrinks is restless to sit next to, and it was the change in
-              light that made it readable anyway. */}
+          {/* The halo follows the voice in both light and size. The size was
+              damped right down at one point and the movement became
+              invisible, which is worse than restless. */}
           <span className="relative flex h-6 w-6 items-center justify-center" data-testid="voice-level">
             <span
               className="absolute inset-0 rounded-full bg-primary transition-all duration-75"
               style={{
-                transform: `scale(${listening ? 0.85 + loudness * 0.25 : 0.85})`,
+                transform: `scale(${listening ? 0.7 + loudness * 1.0 : 0.7})`,
                 opacity: listening ? 0.12 + loudness * 0.68 : 0.12,
               }}
               aria-hidden

@@ -69,6 +69,14 @@ interface PendingConfirmation {
   context: VoiceUiContext
 }
 
+/**
+ * How long a click waits for a model that is still loading.
+ *
+ * Generous: the largest catalogue model is 662 MB and a cold disk is slow.
+ * Giving up early is what made a click do nothing.
+ */
+export const VOICE_ENGINE_READY_TIMEOUT_MS = 90_000
+
 export class VoiceSessionManager {
   private state: VoiceState = 'disabled'
   private turnId: string | null = null
@@ -206,6 +214,31 @@ export class VoiceSessionManager {
     return granted ? 'granted' : 'denied'
   }
 
+  /**
+   * Waits for a model that is on its way.
+   *
+   * Resolves as soon as the worker reports ready, and gives up on any other
+   * outcome so a broken load cannot hold a click open for ever.
+   */
+  private awaitEngineReady(timeoutMs = VOICE_ENGINE_READY_TIMEOUT_MS): Promise<boolean> {
+    if (this.engine.state === 'ready') return Promise.resolve(true)
+    if (this.engine.state !== 'loading') return Promise.resolve(false)
+
+    return new Promise((resolve) => {
+      const settle = (ready: boolean): void => {
+        clearTimeout(timer)
+        this.worker.off('status', onStatus)
+        resolve(ready)
+      }
+      const onStatus = (status: VoiceEngineStatus): void => {
+        if (status.state === 'loading') return
+        settle(status.state === 'ready')
+      }
+      const timer = setTimeout(() => settle(false), timeoutMs)
+      this.worker.on('status', onStatus)
+    })
+  }
+
   // ── Turns ─────────────────────────────────────────────────
 
   /** Opens a turn and returns its ID. A new turn always cancels the old one. */
@@ -218,6 +251,12 @@ export class VoiceSessionManager {
     // back. Load it again instead of failing, or voice would stop working
     // silently after a few minutes of quiet.
     if (!this.worker.isLoaded) await this.prepareEngine()
+    // Loading a model takes seconds — the largest is 662 MB. `prepareEngine`
+    // only asks for it; the worker answers later. Failing here because the
+    // answer had not arrived yet meant a click did nothing at all, every time
+    // the model had been released: after the idle unload, after a restart,
+    // after a model change.
+    if (this.engine.state === 'loading') await this.awaitEngineReady()
     if (this.engine.state !== 'ready') {
       return { error: engineMessage(this.engine) }
     }
@@ -339,7 +378,9 @@ export class VoiceSessionManager {
         status: 'rejected',
         turnId,
         reason: 'unrecognized',
-        message: `“${interpretation.transcript}” is not a voice command.`,
+        // Naming the mode is the missing half: this only happens on the
+        // global shortcut, and the user has no way to know that.
+        message: `“${interpretation.transcript}” is not one of the spoken commands. To dictate it instead, use the microphone beside a message box.`,
       } satisfies VoiceActionOutcome)
       return
     }
