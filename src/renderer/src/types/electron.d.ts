@@ -534,6 +534,7 @@ interface ElectronAPI {
     setEndpointSilence: (seconds: number) => Promise<{ success: boolean }>
     setShortcut: (accelerator: string) => Promise<VoiceSnapshot>
     expectAnswer: (turnId: string, taskId?: string) => Promise<void>
+    answerNotExpected: (taskId?: string) => Promise<void>
     onState: (callback: (event: VoiceStateEvent) => void) => () => void
     onPartial: (callback: (event: { turnId: string; text: string }) => void) => () => void
     onFinal: (callback: (event: { turnId: string; text: string }) => void) => () => void

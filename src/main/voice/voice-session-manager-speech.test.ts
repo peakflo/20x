@@ -275,6 +275,53 @@ describe('the audio state', () => {
   })
 })
 
+/**
+ * Speaking follows listening (design §5.7).
+ *
+ * An answer read to a closed microphone is read to nobody: it talks over
+ * whatever the user turned their attention to, and it is the reply to
+ * something they typed rather than said.
+ */
+describe('only while the microphone is open', () => {
+  it('says nothing about an answer that arrives after listening stopped', async () => {
+    // No turn is open at all.
+    expect(await ctx.manager.speakAgentAnswer('task-1', 'A late answer.')).toBe(false)
+    expect(ctx.speech.spoken).toEqual([])
+  })
+
+  it('reads the answer while a conversation is open', async () => {
+    const started = await ctx.manager.startTurn('conversation', {})
+    if ('error' in started) throw new Error(started.error)
+
+    expect(await ctx.manager.speakAgentAnswer('task-1', 'It passed.')).toBe(true)
+  })
+
+  it('does not begin reading a written answer once listening has stopped', async () => {
+    await ctx.manager.streamAgentAnswer('task-1', [{ partId: 'p1', content: 'Hello. ' }])
+    expect(ctx.speech.spoken).toEqual([])
+  })
+
+  it('stops reading the moment the user stops listening', async () => {
+    const started = await ctx.manager.startTurn('conversation', {})
+    if ('error' in started) throw new Error(started.error)
+    await ctx.manager.speakAgentAnswer('task-1', 'A long answer.')
+
+    ctx.manager.endTurn(started.turnId)
+
+    expect(ctx.speech.interrupts).toBe(1)
+  })
+
+  it('stops reading when the turn is cancelled', async () => {
+    const started = await ctx.manager.startTurn('conversation', {})
+    if ('error' in started) throw new Error(started.error)
+    await ctx.manager.speakAgentAnswer('task-1', 'A long answer.')
+
+    ctx.manager.cancelTurn(started.turnId)
+
+    expect(ctx.speech.interrupts).toBe(1)
+  })
+})
+
 describe('barge-in', () => {
   it('stops speaking the moment a turn opens', async () => {
     await ctx.manager.startTurn('dictation', {})

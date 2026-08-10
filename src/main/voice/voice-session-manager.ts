@@ -331,6 +331,10 @@ export class VoiceSessionManager {
 
   endTurn(turnId: string): void {
     if (turnId !== this.turnId) return
+    // The user has stopped listening, so 20x stops talking. Speaking follows
+    // listening: an answer read to a closed microphone talks over whatever the
+    // user turned to next.
+    this.stopSpeaking()
     this.setState('transcribing')
     this.worker.endTurn(turnId)
   }
@@ -342,6 +346,7 @@ export class VoiceSessionManager {
       this.turnId = null
       this.partial = ''
       this.segmentsSent = 0
+      this.stopSpeaking()
       this.setState('idle')
     }
     this.pending.delete(id)
@@ -534,13 +539,40 @@ export class VoiceSessionManager {
   }
 
   /**
+   * The user typed a message rather than speaking it.
+   *
+   * An expectation says "an answer from this task is the reply to something
+   * said out loud". A typed message makes that untrue: the answer that comes
+   * back is the reply to the typing. Both the named expectation and the
+   * unnamed one are dropped, because the unnamed one matches any task at all.
+   */
+  forgetSpokenAnswer(taskId?: string): void {
+    if (taskId) this.speech.forgetAnswer(taskId)
+    this.speech.forgetAnyAnswer()
+  }
+
+  /**
    * The agent is writing an answer. Reads it aloud as it arrives.
    *
    * Called for every transcript change, so it must be cheap and must decide for
    * itself whether this answer may be spoken at all.
    */
+  /**
+   * True while the microphone is open.
+   *
+   * Speaking follows listening. If the user has stopped listening, 20x has
+   * stopped being spoken to, and an answer that arrives after that is read to
+   * nobody — it talks over whatever the user turned their attention to.
+   */
+  private isListening(): boolean {
+    return this.turnId !== null
+  }
+
   async streamAgentAnswer(taskId: string, parts: VoiceAnswerPart[]): Promise<void> {
     if (parts.length === 0) return
+    // Not listening, and not already reading this answer: stay quiet. An answer
+    // that began while the microphone was open is allowed to finish.
+    if (!this.isListening() && this.speech.streamingTaskId !== taskId) return
     // A passage must not even be opened for an answer the user talked over.
     // Opening one consumes the expectation left by the sentence that
     // interrupted it, and then 20x starts reading the old answer again.
@@ -566,6 +598,11 @@ export class VoiceSessionManager {
 
   /** Speaks one finished agent answer. Called from the agent status stream. */
   async speakAgentAnswer(taskId: string, text: string): Promise<boolean> {
+    if (!this.isListening()) {
+      this.speech.forgetAnswer(taskId)
+      if (this.state === 'waiting_for_agent') this.setState('idle')
+      return false
+    }
     const spoken = await this.speech.speakAgentAnswer(taskId, text)
     if (!spoken && this.state === 'waiting_for_agent') this.setState('idle')
     return spoken

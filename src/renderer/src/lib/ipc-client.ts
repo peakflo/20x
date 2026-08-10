@@ -717,6 +717,9 @@ export const voiceApi = {
   setShortcut: (accelerator: string): Promise<VoiceSnapshot> => window.electronAPI.voice.setShortcut(accelerator),
   expectAnswer: (turnId: string, taskId?: string): Promise<void> =>
     window.electronAPI.voice.expectAnswer(turnId, taskId),
+  /** The user typed rather than spoke, so no answer is expected by voice. */
+  answerNotExpected: (taskId?: string): Promise<void> =>
+    window.electronAPI?.voice?.answerNotExpected?.(taskId) ?? Promise.resolve(),
   onState: (callback: (event: VoiceStateEvent) => void): (() => void) =>
     window.electronAPI.voice.onState(callback),
   onPartial: (callback: (event: { turnId: string; text: string }) => void): (() => void) =>

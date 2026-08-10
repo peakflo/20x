@@ -396,6 +396,16 @@ export class VoiceSpeechService {
     this.expectations.delete(taskId)
   }
 
+  /**
+   * Drops the expectation that names no task.
+   *
+   * It matches any task at all, so anything that shows the user is no longer
+   * waiting for a spoken answer has to clear it.
+   */
+  forgetAnyAnswer(): void {
+    this.anyExpectation = null
+  }
+
   private takeExpectation(taskId: string, now = Date.now()): AnswerExpectation | null {
     const expectation = this.expectations.get(taskId)
     if (expectation) {

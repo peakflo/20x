@@ -169,6 +169,34 @@ refused.
 
 ---
 
+## Speaking follows listening
+
+An answer is read **only while the microphone is open**. Stop listening and
+20x stops talking, at once — an answer read to a closed microphone is read to
+nobody, and it talks over whatever the user turned to next.
+
+Three rules carry it:
+
+- A written answer does not begin to be read unless a turn is open. One that
+  began while the microphone was open is allowed to finish.
+- Ending or cancelling a turn interrupts whatever is being read.
+- Sending a message by typing drops the expectation of a spoken answer, so the
+  reply to typing stays silent. A spoken sentence goes through the same send
+  and arms a fresh expectation straight afterwards, so the conversation loop is
+  unaffected.
+
+The last of those closed a real hole. An expectation says "an answer from this
+task is the reply to something said out loud" and it lived for ten minutes. A
+message typed into that task within those ten minutes had its reply read aloud.
+The unnamed expectation was worse: it matches **any** task, so speaking into
+the drawer made the next answer from anywhere eligible.
+
+A conversation turn stays open for the whole of an answer, so the voice loop is
+unaffected. A command or a dictation turn closes as soon as the words are
+recognised, so an answer that arrives after it is not read.
+
+---
+
 ## What is read, and what is not
 
 Only these five reasons produce speech, and each has its own condition:

@@ -2543,4 +2543,11 @@ else:
     if (!payload?.turnId) return
     voiceSessionManager?.expectSpokenAnswer(payload.turnId, payload.taskId)
   })
+
+  // The user typed a message instead of speaking it. Whatever answer was
+  // expected by voice is no longer the answer that is coming, so it is
+  // forgotten — otherwise the reply to something typed is read aloud.
+  ipcMain.handle('voice:answerNotExpected', (_, payload: { taskId?: string }) => {
+    voiceSessionManager?.forgetSpokenAnswer(payload?.taskId)
+  })
 }

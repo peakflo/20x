@@ -6,7 +6,7 @@ import { Markdown } from '@/components/ui/Markdown'
 import type { AgentMessage } from '@/hooks/use-agent-session'
 import { SessionStatus } from '@/stores/agent-store'
 import { serializeTranscriptForDebug, type RawTranscriptMessage } from '@/lib/serialize-transcript-debug'
-import { agentSessionApi, artifactApi } from '@/lib/ipc-client'
+import { agentSessionApi, artifactApi, voiceApi } from '@/lib/ipc-client'
 import { cn } from '@/lib/utils'
 import { useArtifactStore } from '@/stores/artifact-store'
 import { ArtifactContentKind, ArtifactType, type Artifact } from '@shared/artifacts'
@@ -1128,6 +1128,11 @@ export function AgentTranscriptPanel({
   const handleSend = () => {
     const value = inputRef.current?.value.trim()
     if (value && onSend) {
+      // Whatever answer was expected by voice is not the answer that is now
+      // coming, so it is dropped and this reply is not read aloud. A spoken
+      // sentence goes through here too and arms a fresh expectation of its own
+      // straight afterwards, so the conversation loop is unaffected.
+      void voiceApi.answerNotExpected(taskId)
       onSend(value, pendingAttachments.length > 0 ? { attachments: pendingAttachments } : undefined)
       inputRef.current!.value = ''
       // Reset textarea height back to single row

@@ -230,6 +230,36 @@ describe('answer correlation', () => {
     expect(await service.speakAgentAnswer('task-9', 'The next one.')).toBe(true)
   })
 
+  /**
+   * An expectation says "an answer from this task is the reply to something
+   * said out loud". Typing a message makes that untrue, and without dropping
+   * it the reply to what was typed is read aloud — for ten minutes after the
+   * user last spoke to that task.
+   */
+  it('says nothing about an answer to a message that was typed', async () => {
+    const { service } = makeService({ [VOICE_TTS_SETTING_KEYS.enabled]: 'true' })
+    await service.prepare()
+    service.expectAnswer('task-1', 'turn-9', clock)
+
+    service.forgetAnswer('task-1')
+
+    expect(await service.speakAgentAnswer('task-1', 'The reply to the typing.')).toBe(false)
+  })
+
+  /**
+   * The unnamed expectation matches ANY task, so typing into one task would
+   * otherwise consume the expectation armed by speaking into the drawer.
+   */
+  it('drops the unnamed expectation too, because it matches any task', async () => {
+    const { service } = makeService({ [VOICE_TTS_SETTING_KEYS.enabled]: 'true' })
+    await service.prepare()
+    service.expectAnyAnswer('turn-9', clock)
+
+    service.forgetAnyAnswer()
+
+    expect(await service.speakAgentAnswer('task-anything', 'A typed reply.')).toBe(false)
+  })
+
   it('forgets a question when the turn is cancelled', async () => {
     const { service } = makeService({ [VOICE_TTS_SETTING_KEYS.enabled]: 'true' })
     await service.prepare()

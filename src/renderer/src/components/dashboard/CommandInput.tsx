@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
 import { Paperclip, Plus, ArrowUp, ChevronDown, Settings } from 'lucide-react'
-import { agentApi } from '@/lib/ipc-client'
+import { agentApi, voiceApi } from '@/lib/ipc-client'
 import { VoiceMicButton } from '@/components/voice/VoiceMicButton'
 import { registerComposer, DASHBOARD_COMPOSER_KEY } from '@/lib/voice-dictation-target'
 import type { Agent } from '@/types'
@@ -60,6 +60,10 @@ export function CommandInput({ onSendToMastermind, onCreateTask }: CommandInputP
   const submitField = useCallback(() => {
     const trimmed = textareaRef.current?.value.trim() ?? ''
     if (!trimmed) return
+    // No answer is expected by voice any more. A spoken sentence arms a fresh
+    // expectation straight after this, so the conversation loop is unaffected;
+    // a typed one does not, and its reply stays silent.
+    void voiceApi.answerNotExpected()
     onSendToMastermind(trimmed)
     setText('')
     if (textareaRef.current) {
