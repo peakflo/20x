@@ -307,6 +307,27 @@ to their own voice and raise the bar above themselves.
 One short knock does not cut an answer off: the level has to hold, not merely
 peak.
 
+### An empty queue is not the end of the answer
+
+This is what actually broke barge-in, and it took a log line from a real
+session to find.
+
+An answer is read as it is written, so the playback queue empties between one
+sentence and the next — every time the voice produces the next sentence more
+slowly than the last one takes to play. The renderer treated an empty queue as
+the end of the answer and opened the microphone gate on it.
+
+From that moment the rest of the answer was read with the microphone wide open.
+Everything the user said went straight to the recogniser: it was heard, sent and
+answered, while the answer they were talking over carried on underneath. No
+barge-in was ever considered, because barge-in only exists while the gate holds.
+
+Main decides when a passage is finished, not the queue. Until `speechEnd`
+arrives, a drained queue is a pause.
+
+That also explains why lowering the barge-in threshold changed nothing. The
+threshold was never consulted.
+
 ### A net under the gate
 
 If a word reaches the recogniser while an answer is being read, 20x stops —

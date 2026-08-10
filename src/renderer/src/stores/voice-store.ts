@@ -196,6 +196,21 @@ function hasTtsBridge(): boolean {
 let stoppedSpeechId: string | null = null
 
 /**
+ * The passage main is still filling.
+ *
+ * An answer is read as it is written, so the playback queue empties between one
+ * sentence and the next — every single time the voice produces a sentence more
+ * slowly than the sentence before it takes to play. An empty queue is therefore
+ * NOT the end of the answer, and treating it as the end opened the microphone
+ * gate in the middle of the answer. Everything the user then said went straight
+ * to the recogniser, no barge-in was ever considered, and 20x read on.
+ *
+ * Main says when a passage is really finished. Until then the queue draining is
+ * just a pause.
+ */
+let openPassageId: string | null = null
+
+/**
  * Everything the renderer does when speech is stopped by the user: barge-in,
  * the stop button, Escape, and opening a turn. It has to be one function,
  * because a path that forgets one of these steps is a path where 20x carries
@@ -203,6 +218,7 @@ let stoppedSpeechId: string | null = null
  */
 function stopPlaybackForUser(): void {
   stoppedSpeechId = voicePlayback.currentSpeechId ?? stoppedSpeechId
+  openPassageId = null
   voicePlayback.stop()
   // The gate is opened here as well. The `speechEnd` that follows names a
   // passage that is already gone and is dropped, so nothing else would open it,
@@ -561,7 +577,7 @@ if (hasVoiceBridge()) {
     if (event.text.trim() && voicePlayback.isPlaying) {
       console.warn(
         '[voice] words recognised while reading — stopping. The gate did not fire:',
-        { holding: bargeInGate.isHolding, threshold: bargeInGate.threshold }
+        JSON.stringify({ holding: bargeInGate.isHolding, threshold: bargeInGate.threshold })
       )
       stopPlaybackForUser()
       // This handler belongs to speech to text, which can be present in a
@@ -669,6 +685,7 @@ if (hasTtsBridge()) {
         microphoneOpen: Boolean(useVoiceStore.getState().turnId),
       })
     }
+    openPassageId = event.speechId
     useVoiceStore.setState({ speaking: true, speechText: event.text })
     bargeInGate.setSpeaking(true)
 
@@ -684,6 +701,9 @@ if (hasTtsBridge()) {
       // playing, so the speaking state ends here and not on the end event.
       // The microphone stays held until this point.
       onDrained: () => {
+        // A pause between sentences, not the end. The gate must keep holding,
+        // or the rest of the answer is read with the microphone wide open.
+        if (openPassageId === event.speechId) return
         bargeInGate.setSpeaking(false)
         useVoiceStore.setState({ speaking: false, speechText: '' })
       },
@@ -702,6 +722,9 @@ if (hasTtsBridge()) {
     // Unless nothing was ever queued: a passage can finish having produced no
     // audio at all, and then no sentence will ever end to release the
     // microphone.
+    // Main will send nothing more for this passage, so the next drain is the
+    // real end of it.
+    if (event.speechId === openPassageId) openPassageId = null
     if (event.reason === 'complete' && voicePlayback.hasQueuedAudio) return
     if (voicePlayback.currentSpeechId !== event.speechId) {
       // The event names a passage that is already gone. Nothing is sounding,

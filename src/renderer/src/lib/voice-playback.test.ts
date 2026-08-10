@@ -181,6 +181,27 @@ describe('VoicePlayback', () => {
     expect(drained).toHaveBeenCalledTimes(1)
   })
 
+  /**
+   * The queue empties between one sentence and the next whenever the voice
+   * produces the next sentence more slowly than the last one takes to play.
+   * That is a pause, not the end of the answer — and the caller has to be able
+   * to tell the two apart, because it opens the microphone gate on the end.
+   */
+  it('drains between sentences, so draining cannot mean the answer is over', () => {
+    const playback = new VoicePlayback()
+    const drained = vi.fn()
+    playback.start('s1', { onDrained: drained })
+
+    playback.play('s1', pcm(1), 24000)
+    sources[0].onended?.()
+    expect(drained).toHaveBeenCalledTimes(1)
+
+    // The answer carries on: the next sentence arrives after the gap.
+    playback.play('s1', pcm(1), 24000)
+    sources[1].onended?.()
+    expect(drained).toHaveBeenCalledTimes(2)
+  })
+
   it('reports a level of zero when it stops', () => {
     const playback = new VoicePlayback()
     const onLevel = vi.fn()
