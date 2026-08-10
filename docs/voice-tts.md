@@ -307,6 +307,24 @@ to their own voice and raise the bar above themselves.
 One short knock does not cut an answer off: the level has to hold, not merely
 peak.
 
+### A net under the gate
+
+If a word reaches the recogniser while an answer is being read, 20x stops —
+whatever the gate did or failed to do.
+
+That is not a second barge-in. It is an admission that the gate can be wrong:
+words only reach the recogniser through the gate, so a recognised word while
+reading proves the gate was not holding, and a gate that is not holding never
+fires. Without the net the user's sentence was heard, sent, answered — and the
+previous answer carried on underneath all of it.
+
+The gate stays the primary mechanism. It keeps 20x's own voice out of the
+recogniser, and it fires about 300 ms before the first word is recognised. The
+net only catches what it drops.
+
+Both paths log one line, so the next report comes with numbers instead of
+guesses: what the measured threshold was, and whether the gate was holding.
+
 ### Stopping has to be final
 
 Stopping the passage is not enough, and user testing found this the hard way:

@@ -215,6 +215,10 @@ const bargeInGate = new BargeInGate({
   onBargeIn: () => {
     // Stop in this tick, before the round trip to main: the user is already
     // speaking and every further word of the answer is talking over them.
+    console.info('[voice] barge-in: the user is talking, stopping', {
+      wasPlaying: voicePlayback.isPlaying,
+      threshold: bargeInGate.threshold,
+    })
     stopPlaybackForUser()
     void voiceTtsApi.stop()
   },
@@ -549,6 +553,21 @@ if (hasVoiceBridge()) {
 
   voiceApi.onPartial((event) => {
     if (event.turnId !== useVoiceStore.getState().turnId) return
+    // Words reached the recogniser while an answer was being read. Whatever
+    // the gate did or failed to do, the user is talking and 20x is talking
+    // over them, so it stops. This is a net under barge-in, not a substitute
+    // for it: the gate is what keeps 20x's own voice out of the recogniser,
+    // and it fires 300 ms earlier than the first recognised word.
+    if (event.text.trim() && voicePlayback.isPlaying) {
+      console.warn(
+        '[voice] words recognised while reading — stopping. The gate did not fire:',
+        { holding: bargeInGate.isHolding, threshold: bargeInGate.threshold }
+      )
+      stopPlaybackForUser()
+      // This handler belongs to speech to text, which can be present in a
+      // build where spoken answers are not.
+      if (hasTtsBridge()) void voiceTtsApi.stop()
+    }
     useVoiceStore.setState({ partial: event.text })
   })
 
@@ -644,6 +663,12 @@ if (hasTtsBridge()) {
     // after being told to stop.
     if (event.speechId === stoppedSpeechId) return
 
+    if (voicePlayback.currentSpeechId !== event.speechId) {
+      console.info('[voice] reading aloud', {
+        speechId: event.speechId,
+        microphoneOpen: Boolean(useVoiceStore.getState().turnId),
+      })
+    }
     useVoiceStore.setState({ speaking: true, speechText: event.text })
     bargeInGate.setSpeaking(true)
 
