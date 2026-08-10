@@ -162,6 +162,11 @@ The first two name themselves with `data-voice-composer` and register under that
 key, so a sentence reaches one box only, and a conversation survives the panel
 being rebuilt.
 
+In the top bar the microphone is the **loud** control — solid, wider, larger
+glyph — and the Mastermind button beside it is quiet. Speaking is the
+invitation there; typing is the fallback. A microphone next to a text box keeps
+the quiet treatment, because there the box is the subject.
+
 The top-bar button sits inside no composer, so it **names** one: the Mastermind
 composer, `orchestrator`. A control that names none writes the words nowhere —
 which is what the global shortcut does on purpose, and would be a bug here. It

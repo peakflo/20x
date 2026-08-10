@@ -29,6 +29,14 @@ interface VoiceMicButtonProps {
   composerKey?: string
   /** Runs just before a turn starts, to make that composer visible. */
   onBeforeStart?: () => void
+  /**
+   * How loudly the button asks to be used.
+   *
+   * `quiet` sits beside a text field, where the field is the subject. `strong`
+   * is for a place where speaking is the point rather than one option among
+   * several — the top bar.
+   */
+  emphasis?: 'quiet' | 'strong'
   className?: string
   title?: string
 }
@@ -48,6 +56,7 @@ export function VoiceMicButton({
   onSubmit,
   composerKey,
   onBeforeStart,
+  emphasis = 'quiet',
   className = '',
   title,
 }: VoiceMicButtonProps) {
@@ -133,13 +142,14 @@ export function VoiceMicButton({
   if (!ready) return null
 
   const busy = state === 'transcribing' || state === 'executing'
+  const glyph = emphasis === 'strong' ? 'h-[18px] w-[18px]' : 'h-4 w-4'
   const otherIsListening = !mine && turnId !== null
 
   return (
     <Button
       ref={buttonRef}
       type="button"
-      variant={listening ? 'default' : 'ghost'}
+      variant={listening ? 'default' : emphasis === 'strong' ? 'secondary' : 'ghost'}
       size="icon"
       disabled={busy || otherIsListening}
       onClick={toggle}
@@ -159,14 +169,14 @@ export function VoiceMicButton({
       data-testid="voice-mic-button"
     >
       {busy ? (
-        <Loader2 className="h-4 w-4 animate-spin" />
+        <Loader2 className={`${glyph} animate-spin`} />
       ) : listening ? (
         <Square
-          className="h-3.5 w-3.5 fill-current"
+          className={`${emphasis === 'strong' ? 'h-4 w-4' : 'h-3.5 w-3.5'} fill-current`}
           style={{ transform: `scale(${1 + Math.min(level, 1) * 0.3})` }}
         />
       ) : (
-        <Mic className="h-4 w-4" />
+        <Mic className={glyph} />
       )}
     </Button>
   )

@@ -246,4 +246,21 @@ describe('TopBarVoiceButton', () => {
     expect(otherMic).toHaveAttribute('aria-pressed', 'false')
     expect(otherMic).toBeDisabled()
   })
+
+  it('is the loud control in the bar, and the pressed state stays obvious', async () => {
+    mountMastermindComposer()
+    await act(async () => {
+      render(<TopBarVoiceButton />)
+    })
+    const mic = screen.getByTestId('voice-mic-button')
+
+    // Solid while idle, so it reads as an invitation rather than an afterthought.
+    expect(mic.className).toContain('bg-secondary')
+
+    await act(async () => {
+      fireEvent.click(mic)
+      useVoiceStore.setState({ turnId: 'turn-1', state: 'listening' })
+    })
+    expect(mic.className).toContain('bg-primary')
+  })
 })

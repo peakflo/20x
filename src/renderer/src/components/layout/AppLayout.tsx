@@ -413,11 +413,13 @@ export function AppLayout() {
           <div className="mx-1 h-3.5 w-px bg-border/70" />
           {/* Start talking to Mastermind from any view. Hidden until voice is on. */}
           <TopBarVoiceButton />
+          {/* Quieter than the microphone beside it: typing to Mastermind is
+              the fallback, speaking to it is the invitation. */}
           <Button
-            variant={showOrchestrator ? 'default' : 'secondary'}
+            variant={showOrchestrator ? 'default' : 'ghost'}
             size="sm"
             onClick={toggleOrchestrator}
-            className="h-7 px-2.5"
+            className="h-7 px-2"
           >
             <MessageSquare className="h-3 w-3" />
             <span className="text-[11px]">Mastermind</span>
