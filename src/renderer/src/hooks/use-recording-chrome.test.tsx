@@ -86,24 +86,51 @@ describe('useRecordingChrome', () => {
 })
 
 /**
- * The colour is applied by CSS to the whole window, so these check the
- * contract rather than a rendered pixel — happy-dom applies no stylesheet.
+ * The colour is applied by CSS, so these check the contract rather than a
+ * rendered pixel — happy-dom applies no stylesheet.
  */
 describe('the recording surface', () => {
   const css = readFileSync(join(__dirname, '../styles/globals.css'), 'utf-8')
-  const rule = css.slice(css.indexOf(`[${RECORDING_ATTRIBUTE}="true"] {`))
+  const chromeRule = css.slice(css.indexOf(`[${RECORDING_ATTRIBUTE}="true"] .app-chrome`))
 
-  it('tints the whole window, not only the frame', () => {
-    // Tinting the chrome alone read as a red border around a grey middle.
-    expect(rule).toContain('--background: color-mix(')
-    expect(rule).toContain('--card: color-mix(')
+  it('tints the three chrome strips', () => {
+    expect(chromeRule).toContain('--color-background: color-mix(')
+    // The sidebar floats as a card, so it fills from `--card` rather than
+    // `--background` and would otherwise be the one strip that stayed grey.
+    expect(chromeRule).toContain('--color-card: color-mix(')
+    // Hairlines and hover have to move with the fill or they disappear.
+    expect(chromeRule).toContain('--color-border: color-mix(')
+    expect(chromeRule).toContain('--color-accent: color-mix(')
+  })
+
+  it('leaves the work alone', () => {
+    // Tinting the card underneath turned the task window pink. A signal must
+    // not sit on top of what the user is reading.
+    //
+    // The guarantee is the selector, not a list of banned properties: every
+    // recording rule has to be scoped to a marked strip, so nothing it sets
+    // can reach the workspace, the gutters or the window field.
+    const recording = css.slice(css.indexOf('── Recording ──'))
+    const withoutComments = recording.replace(/\/\*[\s\S]*?\*\//g, '')
+    const selectors = [...withoutComments.matchAll(/(^|\})\s*([^{}@]+)\{/g)]
+      .map((match) => match[2].trim())
+      .filter((selector) => selector && !/^\d|%$/.test(selector))
+
+    expect(selectors.length).toBeGreaterThan(0)
+    for (const selector of selectors) {
+      expect(selector, `${selector} must be scoped to a chrome strip`).toContain('.app-chrome')
+    }
+
+    // And the theme's own surfaces are exactly what they were.
+    expect(css).toContain('--card: #ffffff')
+    expect(css).toContain('--card: #1e1e1e')
+    expect(css).toContain('--background: #f4f4f5')
+    expect(css).toContain('--background: #141414')
+    expect(css).not.toContain('--card-base')
   })
 
   it('takes its colour from the design tokens, never a new hex', () => {
-    // From the first rule, so the prose above it — which names the token
-    // values — is not mistaken for a declaration.
-    const recording = css.slice(css.indexOf(`[${RECORDING_ATTRIBUTE}="true"] {`))
-    const declarations = recording.replace(/\/\*[\s\S]*?\*\//g, '')
+    const declarations = chromeRule.replace(/\/\*[\s\S]*?\*\//g, '')
     expect(declarations).toContain('var(--destructive)')
     expect(declarations).toContain('var(--primary)')
     // Aperture has one red and one azure. A crimson of our own was the first
@@ -112,32 +139,37 @@ describe('the recording surface', () => {
     expect(css).not.toContain('recording-chrome')
   })
 
-  it('mixes from a base token, because a property cannot refer to itself', () => {
-    // `--background: color-mix(… var(--background) …)` is dropped outright,
-    // which shows up as no tint at all rather than as an error.
-    expect(rule).toContain('var(--background-base)')
-    expect(rule).toContain('var(--card-base)')
-    expect(css).toContain('--background: var(--background-base)')
-    expect(css).toContain('--card: var(--card-base)')
+  it('overrides the bridged tokens, not the raw ones', () => {
+    // `--color-background: var(--background)` resolves once on :root, so a
+    // deeper override of `--background` is silently ignored — it looks like
+    // nothing happening rather than like an error.
+    const declarations = chromeRule.replace(/\/\*[\s\S]*?\*\//g, '')
+    expect(declarations).not.toMatch(/^\s*--background\s*:/m)
   })
 
   it('moves slowly, and holds still when motion is unwelcome', () => {
     expect(css).toContain('@keyframes recording-drift')
-    expect(css).toMatch(/animation: recording-drift \d+s/)
+    expect(chromeRule).toMatch(/animation: recording-drift \d+s/)
     const reduced = css.slice(css.indexOf('prefers-reduced-motion: reduce'))
     expect(reduced).toContain('animation: none')
-  })
-
-  it('lets the one field show through the chrome', () => {
-    // Transparent strips over a single background, rather than four fills
-    // that have to agree with each other.
-    const chrome = css.slice(css.indexOf(`[${RECORDING_ATTRIBUTE}="true"] .app-chrome`))
-    expect(chrome).toContain('background-color: transparent')
   })
 })
 
 describe('the surfaces that carry the mark', () => {
   const layout = join(__dirname, '../components/layout')
+
+  it('floats the sidebar exactly as the workspace floats', () => {
+    const appLayout = readFileSync(join(layout, 'AppLayout.tsx'), 'utf-8')
+    const sidebar = readFileSync(join(layout, 'Sidebar.tsx'), 'utf-8')
+    const main = appLayout.slice(appLayout.indexOf('<main'), appLayout.indexOf('</main>'))
+    const aside = sidebar.slice(sidebar.indexOf('<aside'), sidebar.indexOf('>', sidebar.indexOf('<aside')))
+
+    // Same shape language, or the sidebar reads as unfinished beside the work.
+    for (const shape of ['rounded-2xl', 'border border-border', 'bg-card', 'shadow-card']) {
+      expect(main, `main should carry ${shape}`).toContain(shape)
+      expect(aside, `sidebar should carry ${shape}`).toContain(shape)
+    }
+  })
 
   it.each([
     ['AppLayout.tsx', 2],

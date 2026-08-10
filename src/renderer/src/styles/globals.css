@@ -56,14 +56,9 @@
 
 /* ── Light theme (default) — true-gray neutrals, azure brand ──────────────── */
 :root {
-  /* Base surfaces are held separately so a state tint can mix from them. A
-     custom property cannot refer to itself, so `--background` mixing from
-     `--background` would simply be dropped. */
-  --background-base: #f4f4f5;
-  --background: var(--background-base);
+  --background: #f4f4f5;
   --foreground: #121212;
-  --card-base: #ffffff;
-  --card: var(--card-base);
+  --card: #ffffff;
   --card-foreground: #121212;
   --popover: #ffffff;
   --popover-foreground: #121212;
@@ -115,11 +110,9 @@
 
 /* ── Dark theme — true-gray neutrals (#141414 / #1e1e1e), azure brand ─────── */
 .dark {
-  --background-base: #141414;
-  --background: var(--background-base);
+  --background: #141414;
   --foreground: #eaeaea;
-  --card-base: #1e1e1e;
-  --card: var(--card-base);
+  --card: #1e1e1e;
   --card-foreground: #eaeaea;
   --popover: #1e1e1e;
   --popover-foreground: #eaeaea;
@@ -393,47 +386,48 @@ input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
 }
 
 /* ── Recording ──────────────────────────────────────────────────────────────
-   While the microphone is live the whole window shifts, not just its frame.
-   Tinting only the chrome read as a red border around an untouched grey
-   middle — a patch rather than a state.
+   While the microphone is live the three chrome strips shift — the top bar,
+   the icon rail and the sidebar, and the status bar. **The work itself is left
+   alone.** Tinting the card underneath turned the task window pink, which is
+   not a signal, it is a distraction sitting on top of what the user is reading.
 
-   The colours are the system's own: `--destructive` (#eb4335) is the only red
-   in Aperture, and `--primary` (#1e96eb) is the brand azure. Both are mixed
-   into the current surface, so the tint follows the theme instead of pinning a
-   hex of its own, and light and dark need no separate values.
+   The colours are the system's own: `--destructive` is the only red in
+   Aperture and `--primary` is the brand azure. Both are mixed into the current
+   surface rather than pinned to a hex, so the tint follows the theme and light
+   and dark need no separate values.
 
-   The attribute sits on `<html>`, which is also `:root`, so overriding the raw
-   tokens here is correct and re-resolves the whole `--color-*` bridge in one
-   step: every surface using `bg-background` or `bg-card` moves together,
-   including ones added later. */
-[data-voice-recording="true"] {
-  --background: color-mix(in oklab, var(--destructive) 14%, var(--background-base) 86%);
-  --card: color-mix(in oklab, var(--destructive) 7%, var(--card-base) 93%);
-  --ring: var(--destructive);
-}
-
-/* The single moving field. A slow drift between the red and the brand azure
-   keeps it alive without becoming a light show; the chrome sits transparent on
-   top so the window reads as one surface rather than four tinted strips. */
-#root {
+   The overrides are on `--color-*`, the Tailwind-facing tokens, because the
+   bridge resolves `--color-background: var(--background)` once on `:root` — a
+   deeper override of the raw token is silently ignored, which looks like
+   nothing happening at all. */
+.app-chrome {
   background-size: 220% 220%;
 }
 
-[data-voice-recording="true"] #root {
+[data-voice-recording="true"] .app-chrome {
+  --color-background: color-mix(in oklab, var(--destructive) 16%, var(--background));
+  --color-sidebar: color-mix(in oklab, var(--destructive) 16%, var(--background));
+  /* The sidebar is a card like the workspace, so it fills from `--card`. Only
+     the strips are reached from here — the workspace is not marked chrome, so
+     its own card is untouched. */
+  --color-card: color-mix(in oklab, var(--destructive) 16%, var(--card));
+  --color-border: color-mix(in oklab, var(--destructive) 34%, var(--border));
+  --color-sidebar-border: color-mix(in oklab, var(--destructive) 34%, var(--border));
+  --color-accent: color-mix(in oklab, var(--destructive) 26%, var(--accent));
+
+  background-color: color-mix(in oklab, var(--destructive) 16%, var(--background));
+  /* A slow drift between the red and the brand azure, so the strips read as
+     alive rather than as a flat fill that has been left switched on. */
   background-image:
     linear-gradient(
       115deg,
-      color-mix(in oklab, var(--destructive) 22%, transparent) 0%,
-      transparent 38%,
-      color-mix(in oklab, var(--primary) 16%, transparent) 62%,
-      color-mix(in oklab, var(--destructive) 22%, transparent) 100%
+      color-mix(in oklab, var(--destructive) 20%, transparent) 0%,
+      transparent 42%,
+      color-mix(in oklab, var(--primary) 16%, transparent) 66%,
+      color-mix(in oklab, var(--destructive) 20%, transparent) 100%
     );
   animation: recording-drift 14s ease-in-out infinite;
-}
-
-[data-voice-recording="true"] .app-chrome {
-  /* Transparent, so the one field behind shows through every strip. */
-  background-color: transparent;
+  transition: background-color 180ms ease-out;
 }
 
 @keyframes recording-drift {
@@ -448,7 +442,8 @@ input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
 
 /* A recording light should not move for anyone who has asked it not to. */
 @media (prefers-reduced-motion: reduce) {
-  [data-voice-recording="true"] #root {
+  [data-voice-recording="true"] .app-chrome {
     animation: none;
+    transition: none;
   }
 }

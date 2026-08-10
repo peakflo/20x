@@ -169,35 +169,33 @@ restart, or a model change did nothing at all**. It now waits for the model, up
 to 90 seconds, and the microphone button spins while it does. A load that fails
 or never arrives ends the wait with the reason.
 
-### The window shifts while you are heard
+### The chrome shifts while you are heard
 
-While the microphone is live the **whole window** shifts, not just its frame: a
-slow field that drifts between red and the brand azure, with the chrome sitting
-transparent on top of it and the content card tinted to match. An earlier
-version tinted only the top bar, rail, sidebar and status bar, and it read as a
-red border around an untouched grey middle — a patch rather than a state.
+While the microphone is live the three chrome strips shift — the top bar, the
+icon rail with the sidebar, and the status bar. **The work itself is left
+alone.** An attempt to tint the whole window turned the task view pink, and a
+signal must not sit on top of what the user is reading.
 
 The colours are the system's own. `--destructive` is the only red in Aperture
 and `--primary` is the brand azure; both are **mixed into the current surface**
 rather than pinned to a hex, so the tint follows the theme and light and dark
-need no separate values. The first attempt invented a crimson that belonged to
-nothing.
+need no separate values. A slow drift between the two keeps the strips from
+reading as a flat fill left switched on, and it stops under
+`prefers-reduced-motion`.
 
 Two details that are easy to get wrong:
 
-- A custom property cannot refer to itself, so `--background` mixing from
-  `--background` is dropped outright — which shows up as **no tint at all**
-  rather than as an error. The base values live in `--background-base` and
-  `--card-base`, and the tint mixes from those.
-- The attribute goes on `<html>`, which is also `:root`, so overriding the raw
-  tokens there re-resolves the whole `--color-*` bridge in one step. Every
-  surface using `bg-background` or `bg-card` moves together, including ones
-  added later.
+- **The scope is the guarantee.** Every recording rule is scoped to
+  `.app-chrome`; a test parses the stylesheet and fails if any of them is not,
+  because a rule at `:root` or on `#root` reaches the workspace and the gutters.
+- The overrides are on `--color-*`, the Tailwind-facing tokens, not the raw
+  `--background`. The bridge resolves `--color-background: var(--background)`
+  once on `:root`, so a deeper override of the raw token is **silently
+  ignored** — it looks like nothing happening rather than like an error.
 
 It follows the **turn**, not the setting. Voice being switched on is not
 recording, and neither is the moment after you stop while the words are written
-up — a red window then would be a lie about an open microphone. The drift stops
-under `prefers-reduced-motion`.
+up — a red frame then would be a lie about an open microphone.
 
 ### Where dictated words go
 

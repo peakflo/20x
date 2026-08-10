@@ -154,8 +154,11 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
   }, [sidebarWidth, setSidebarWidth])
 
   return (
+    // Floats as a card beside the workspace, which floats the same way: same
+    // radius, same hairline, same shadow. Sitting flush against the rail while
+    // the work had rounded corners read as unfinished.
     <aside
-      className="app-chrome relative flex flex-col h-full shrink-0 bg-background text-sidebar-foreground overflow-hidden"
+      className="app-chrome relative flex flex-col shrink-0 overflow-hidden rounded-2xl border border-border bg-card text-sidebar-foreground shadow-card my-2 ml-2"
       style={{ width: sidebarWidth }}
     >
       {sidebarView === 'tasks' ? (
