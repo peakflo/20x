@@ -326,6 +326,22 @@ These rules are enforced in code and covered by tests:
    renderer and the mobile clients.
 6. Confirmation is visual. A spoken "yes" confirms nothing.
 
+### A worker that goes away must not take the app with it
+
+The worker is a separate process, so the renderer keeps sending audio for a
+moment after it has gone — the news travels by IPC. Writing to that dead pipe
+raises `EPIPE`, and **an unhandled stream error in the main process is a crash
+and an application restart**. It happened to a user.
+
+So every pipe of the worker gets an error listener at spawn, the child itself
+gets one for a failed spawn, each audio write is guarded, and control messages
+go through one `send` that checks the channel is still connected. Losing a frame
+of audio is not worth a crash.
+
+A test kills the worker and keeps pushing audio. It also asserts the listeners
+exist, because the write failure is asynchronous: without that assertion the
+test passes while the real application dies.
+
 ## Permissions and privacy (§5.9)
 
 - The microphone is requested only after the user switches voice on.

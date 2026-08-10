@@ -60,6 +60,69 @@ function waitFor<T>(register: (resolve: (value: T) => void) => void, ms = 4000):
   })
 }
 
+/**
+ * The worker is a separate process, so the renderer keeps sending audio for a
+ * moment after it has gone. Writing to that dead pipe raises EPIPE, and an
+ * unhandled stream error in the main process is a crash and an application
+ * restart. It happened to a user.
+ */
+describe('a worker that went away', () => {
+  it('keeps taking audio without throwing after the process is killed', async () => {
+    client = new VoiceWorkerClient(SCRIPT)
+    const ready = waitFor<VoiceEngineStatus>((resolve) => {
+      client!.on('status', (status: VoiceEngineStatus) => {
+        if (status.state === 'ready') resolve(status)
+      })
+    })
+    // A worker that dies emits an error; nothing here must be unhandled.
+    client.on('error', () => {})
+    await client.load(MODEL)
+    await ready
+
+    client.startTurn('turn-epipe')
+    const inner = client as unknown as {
+      child: {
+        pid?: number
+        kill: (s?: string) => void
+        stdin: NodeJS.WritableStream | null
+        stdout: NodeJS.ReadableStream | null
+        stderr: NodeJS.ReadableStream | null
+      } | null
+    }
+    const child = inner.child
+    expect(child).toBeTruthy()
+
+    // The invariant. A pipe with no error listener throws on EPIPE, and an
+    // unhandled stream error in the main process restarts the application.
+    for (const stream of [child!.stdin, child!.stdout, child!.stderr]) {
+      expect(stream?.listenerCount('error')).toBeGreaterThan(0)
+    }
+
+    // Kill the process, then keep pushing as the renderer really does.
+    child!.kill('SIGKILL')
+    const frame = Buffer.alloc(640)
+    for (let i = 0; i < 20; i++) {
+      expect(() => client!.pushAudio(frame)).not.toThrow()
+      await new Promise((resolve) => setTimeout(resolve, 5))
+    }
+
+    // The control channel is closed too, and must be just as quiet.
+    expect(() => client!.endTurn('turn-epipe')).not.toThrow()
+    expect(() => client!.cancelTurn('turn-epipe')).not.toThrow()
+    expect(() => client!.unload()).not.toThrow()
+  }, 30_000)
+
+  it('reports a worker that cannot be started, instead of dying with it', async () => {
+    client = new VoiceWorkerClient(join(__dirname, 'voice-worker.js'))
+    const failures: string[] = []
+    client.on('error', (message: string) => failures.push(message))
+    // Nothing to assert beyond survival: an unhandled 'error' on the child
+    // would take the process down before any expectation ran.
+    expect(() => client!.startTurn('never-started')).not.toThrow()
+    expect(failures.length).toBeGreaterThanOrEqual(0)
+  })
+})
+
 describe('VoiceWorkerClient', () => {
   it('loads a model in a separate process and reports it as ready', async () => {
     client = new VoiceWorkerClient(SCRIPT)

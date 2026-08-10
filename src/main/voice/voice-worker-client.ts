@@ -87,7 +87,7 @@ export class VoiceWorkerClient extends EventEmitter {
     this.spawn()
     this.loadedModel = model
     this.emit('status', { state: 'loading' } satisfies VoiceEngineStatus)
-    this.child?.send({
+    this.send({
       t: 'load',
       modelId: model.id,
       model: {
@@ -103,33 +103,46 @@ export class VoiceWorkerClient extends EventEmitter {
   /** `conversation` keeps the microphone open and emits one segment per pause. */
   startTurn(turnId: string, mode: 'dictation' | 'command' | 'conversation' = 'dictation'): void {
     this.clearIdleTimer()
-    this.child?.send({ t: 'start', turnId, mode })
+    this.send({ t: 'start', turnId, mode })
   }
 
-  /** Pushes one 16 kHz mono PCM frame. Frames are length-prefixed on the pipe. */
+  /**
+   * Pushes one 16 kHz mono PCM frame. Frames are length-prefixed on the pipe.
+   *
+   * The renderer keeps sending audio for a moment after the worker has gone —
+   * it is a separate process and the news travels by IPC. Writing to that dead
+   * pipe raises EPIPE, and an unhandled stream error takes the whole
+   * application down. Losing a frame of audio is not worth a crash, so every
+   * failure here is swallowed.
+   */
   pushAudio(frame: Buffer): void {
     const stdin = this.child?.stdin
-    if (!stdin || stdin.destroyed) return
+    if (!stdin || stdin.destroyed || !stdin.writable) return
     const header = Buffer.alloc(4)
     header.writeUInt32LE(frame.length, 0)
-    // Back-pressure is handled by the stream itself; a dropped write only loses
-    // audio, it never blocks the main event loop.
-    stdin.write(Buffer.concat([header, frame]))
+    try {
+      // Back-pressure is handled by the stream itself; a dropped write only
+      // loses audio, it never blocks the main event loop. The callback catches
+      // the failure that arrives after the write returns.
+      stdin.write(Buffer.concat([header, frame]), () => {})
+    } catch {
+      /* the worker went away mid-turn */
+    }
   }
 
   endTurn(turnId: string): void {
-    this.child?.send({ t: 'end', turnId })
+    this.send({ t: 'end', turnId })
     this.scheduleIdleUnload()
   }
 
   cancelTurn(turnId: string): void {
-    this.child?.send({ t: 'cancel', turnId })
+    this.send({ t: 'cancel', turnId })
     this.scheduleIdleUnload()
   }
 
   /** Releases the model but keeps the process, so the next turn starts sooner. */
   unload(): void {
-    this.child?.send({ t: 'unload' })
+    this.send({ t: 'unload' })
     this.loadedModel = null
   }
 
@@ -149,6 +162,23 @@ export class VoiceWorkerClient extends EventEmitter {
 
   // ── Internals ─────────────────────────────────────────────
 
+  /**
+   * One control message to the worker.
+   *
+   * The channel closes as soon as the process exits, and sending on a closed
+   * channel throws. Voice going quiet is acceptable; the application falling
+   * over is not.
+   */
+  private send(message: Record<string, unknown>): void {
+    const child = this.child
+    if (!child || !child.connected) return
+    try {
+      child.send(message, undefined, undefined, () => {})
+    } catch {
+      /* the worker went away */
+    }
+  }
+
   private spawn(): void {
     if (this.isRunning) return
     this.child = fork(this.scriptPath, [], {
@@ -164,6 +194,22 @@ export class VoiceWorkerClient extends EventEmitter {
       },
       stdio: ['pipe', 'pipe', 'pipe', 'ipc'],
       serialization: 'json',
+    })
+
+    // Every pipe needs an error listener. Node throws an unhandled stream
+    // error, which in the main process is a crash and an application restart —
+    // and the audio pipe fails routinely, whenever the worker goes away while
+    // the renderer is still sending.
+    for (const stream of [this.child.stdin, this.child.stdout, this.child.stderr]) {
+      stream?.on('error', (err: NodeJS.ErrnoException) => {
+        if (err.code === 'EPIPE' || err.code === 'ERR_STREAM_DESTROYED') return
+        console.error('[voice-worker] pipe error:', err.message)
+      })
+    }
+    // A process that cannot be spawned emits this. Unhandled, it is fatal.
+    this.child.on('error', (err) => {
+      console.error('[voice-worker] process error:', err.message)
+      this.emit('error', 'The voice worker could not be started.', 'worker_spawn')
     })
 
     this.child.on('message', (raw) => this.onMessage(raw as WorkerMessage))
