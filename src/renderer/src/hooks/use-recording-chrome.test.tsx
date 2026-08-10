@@ -86,35 +86,53 @@ describe('useRecordingChrome', () => {
 })
 
 /**
- * The colour is applied by one CSS rule to anything marked `app-chrome`, so
- * these check the contract between the two halves rather than a rendered
- * pixel — happy-dom does not apply the stylesheet.
+ * The colour is applied by CSS to the whole window, so these check the
+ * contract rather than a rendered pixel — happy-dom applies no stylesheet.
  */
-describe('the chrome contract', () => {
+describe('the recording surface', () => {
   const css = readFileSync(join(__dirname, '../styles/globals.css'), 'utf-8')
+  const rule = css.slice(css.indexOf(`[${RECORDING_ATTRIBUTE}="true"] {`))
 
-  it('tints every surface that marks itself as chrome', () => {
-    const rule = css.slice(css.indexOf(`[${RECORDING_ATTRIBUTE}="true"] .app-chrome`))
-    expect(rule).toContain('--color-background: var(--recording-chrome)')
-    // Text and hairlines have to move with the fill or they become unreadable.
-    expect(rule).toContain('--color-foreground:')
-    expect(rule).toContain('--color-muted-foreground:')
-    expect(rule).toContain('--color-border:')
+  it('tints the whole window, not only the frame', () => {
+    // Tinting the chrome alone read as a red border around a grey middle.
+    expect(rule).toContain('--background: color-mix(')
+    expect(rule).toContain('--card: color-mix(')
   })
 
-  it('uses a deep crimson in both themes', () => {
-    expect(css).toContain('--recording-chrome: #8b1e3f')
-    expect(css).toContain('--recording-chrome: #7a1626')
+  it('takes its colour from the design tokens, never a new hex', () => {
+    // From the first rule, so the prose above it — which names the token
+    // values — is not mistaken for a declaration.
+    const recording = css.slice(css.indexOf(`[${RECORDING_ATTRIBUTE}="true"] {`))
+    const declarations = recording.replace(/\/\*[\s\S]*?\*\//g, '')
+    expect(declarations).toContain('var(--destructive)')
+    expect(declarations).toContain('var(--primary)')
+    // Aperture has one red and one azure. A crimson of our own was the first
+    // attempt and it belonged to nothing.
+    expect(declarations).not.toMatch(/#[0-9a-f]{3,8}\b/i)
+    expect(css).not.toContain('recording-chrome')
   })
 
-  it('overrides the bridged tokens, not the raw ones', () => {
-    // `--color-background: var(--background)` resolves once on :root, so
-    // overriding `--background` deeper in the tree does nothing at all.
-    const rule = css.slice(
-      css.indexOf(`[${RECORDING_ATTRIBUTE}="true"] .app-chrome`),
-      css.indexOf('prefers-reduced-motion')
-    )
-    expect(rule).not.toMatch(/^\s*--background:/m)
+  it('mixes from a base token, because a property cannot refer to itself', () => {
+    // `--background: color-mix(… var(--background) …)` is dropped outright,
+    // which shows up as no tint at all rather than as an error.
+    expect(rule).toContain('var(--background-base)')
+    expect(rule).toContain('var(--card-base)')
+    expect(css).toContain('--background: var(--background-base)')
+    expect(css).toContain('--card: var(--card-base)')
+  })
+
+  it('moves slowly, and holds still when motion is unwelcome', () => {
+    expect(css).toContain('@keyframes recording-drift')
+    expect(css).toMatch(/animation: recording-drift \d+s/)
+    const reduced = css.slice(css.indexOf('prefers-reduced-motion: reduce'))
+    expect(reduced).toContain('animation: none')
+  })
+
+  it('lets the one field show through the chrome', () => {
+    // Transparent strips over a single background, rather than four fills
+    // that have to agree with each other.
+    const chrome = css.slice(css.indexOf(`[${RECORDING_ATTRIBUTE}="true"] .app-chrome`))
+    expect(chrome).toContain('background-color: transparent')
   })
 })
 

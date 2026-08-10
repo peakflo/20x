@@ -169,25 +169,35 @@ restart, or a model change did nothing at all**. It now waits for the model, up
 to 90 seconds, and the microphone button spins while it does. A load that fails
 or never arrives ends the wait with the reason.
 
-### The frame turns red while you are heard
+### The window shifts while you are heard
 
-While the microphone is live, the chrome around the work goes deep crimson —
-the top bar, the icon rail, the sidebar and the status bar. The content itself
-is untouched: the point is a signal at the edge of vision, not a themed
-application. `#8b1e3f` in light, `#7a1626` in dark.
+While the microphone is live the **whole window** shifts, not just its frame: a
+slow field that drifts between red and the brand azure, with the chrome sitting
+transparent on top of it and the content card tinted to match. An earlier
+version tinted only the top bar, rail, sidebar and status bar, and it read as a
+red border around an untouched grey middle — a patch rather than a state.
+
+The colours are the system's own. `--destructive` is the only red in Aperture
+and `--primary` is the brand azure; both are **mixed into the current surface**
+rather than pinned to a hex, so the tint follows the theme and light and dark
+need no separate values. The first attempt invented a crimson that belonged to
+nothing.
+
+Two details that are easy to get wrong:
+
+- A custom property cannot refer to itself, so `--background` mixing from
+  `--background` is dropped outright — which shows up as **no tint at all**
+  rather than as an error. The base values live in `--background-base` and
+  `--card-base`, and the tint mixes from those.
+- The attribute goes on `<html>`, which is also `:root`, so overriding the raw
+  tokens there re-resolves the whole `--color-*` bridge in one step. Every
+  surface using `bg-background` or `bg-card` moves together, including ones
+  added later.
 
 It follows the **turn**, not the setting. Voice being switched on is not
 recording, and neither is the moment after you stop while the words are written
-up — a red frame then would be a lie about an open microphone.
-
-One CSS rule does it. `useRecordingChrome` marks `<html>` with
-`data-voice-recording`, and every surface that wants the treatment marks itself
-`app-chrome`; none of those four components knows anything about voice, and a
-fifth surface is a class rather than a subscription. The rule overrides the
-bridged `--color-*` tokens, never the raw `--background`: the bridge resolves
-`--color-background: var(--background)` once, on `:root`, so a deeper override
-of the raw token does nothing. Text and hairlines move with the fill, or they
-would be unreadable on crimson.
+up — a red window then would be a lie about an open microphone. The drift stops
+under `prefers-reduced-motion`.
 
 ### Where dictated words go
 
