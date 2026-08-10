@@ -24,12 +24,47 @@
 import { VOICE_SAMPLE_RATE } from '@shared/voice'
 
 /**
- * A held passage must be this loud to count as a person speaking.
+ * The quietest a held passage may be and still count as a person speaking.
  *
- * Root-mean-square of the samples, 0..1. Ordinary speech at the microphone sits
- * near 0.05 to 0.2; what the echo canceller leaves behind is well under 0.02.
+ * Root-mean-square of the samples, 0..1. This is only the floor under the
+ * measured threshold below: it stops a silent room from ever counting, and
+ * nothing more.
  */
-export const BARGE_IN_LEVEL = 0.06
+export const BARGE_IN_LEVEL = 0.015
+
+/**
+ * How much louder than the room the user has to be.
+ *
+ * A fixed level cannot work. The old one was 0.06, chosen from "ordinary
+ * speech sits near 0.05 to 0.2" — but the microphone runs with echo
+ * cancellation, noise suppression and automatic gain control all on, and all
+ * three fight the user's voice at exactly the moment it overlaps the
+ * loudspeaker. Two people talking at once is where they are weakest. A quiet
+ * talker, or a talker one metre away, never reached 0.06, so the gate held
+ * every word and 20x carried on as if nothing had been said.
+ *
+ * The level to beat is now measured, not assumed: whatever the echo canceller
+ * leaves behind is the floor, and speech is several times that.
+ */
+export const BARGE_IN_FLOOR_FACTOR = 3
+
+/**
+ * How many recent batches the floor is measured over.
+ *
+ * The quietest of the last second. A window, not an all-time minimum: the room
+ * changes, and a single quiet moment must not set the bar for the rest of the
+ * answer.
+ */
+export const BARGE_IN_FLOOR_WINDOW = 10
+
+/**
+ * How many batches are needed before the measurement is trusted.
+ *
+ * Until then only the absolute minimum applies. Without this, a user who
+ * speaks from the very first batch sets the floor to their own voice and
+ * raises the bar above themselves.
+ */
+export const BARGE_IN_FLOOR_MIN_SAMPLES = 3
 
 /**
  * And it must stay that loud for this long.
@@ -53,6 +88,8 @@ export interface BargeInGateOptions {
   levelThreshold?: number
   holdMs?: number
   preRollMs?: number
+  floorFactor?: number
+  floorWindow?: number
 }
 
 export class BargeInGate {
@@ -60,6 +97,8 @@ export class BargeInGate {
   private held: Uint8Array[] = []
   private heldMs = 0
   private loudMs = 0
+  /** Loudness of the most recent batches, for measuring the room. */
+  private levels: number[] = []
 
   constructor(private options: BargeInGateOptions) {}
 
@@ -71,6 +110,12 @@ export class BargeInGate {
   }
   private get preRollMs(): number {
     return this.options.preRollMs ?? BARGE_IN_PREROLL_MS
+  }
+  private get floorFactor(): number {
+    return this.options.floorFactor ?? BARGE_IN_FLOOR_FACTOR
+  }
+  private get floorWindow(): number {
+    return this.options.floorWindow ?? BARGE_IN_FLOOR_WINDOW
   }
 
   /** True while an answer is being read and audio is being held back. */
@@ -90,6 +135,16 @@ export class BargeInGate {
     this.held = []
     this.heldMs = 0
     this.loudMs = 0
+    this.levels = []
+  }
+
+  /**
+   * What a batch has to beat right now: several times the quietest of the last
+   * second, and never less than the absolute minimum.
+   */
+  get threshold(): number {
+    if (this.levels.length < BARGE_IN_FLOOR_MIN_SAMPLES) return this.levelThreshold
+    return Math.max(this.levelThreshold, Math.min(...this.levels) * this.floorFactor)
   }
 
   /**
@@ -110,13 +165,21 @@ export class BargeInGate {
       if (dropped) this.heldMs -= (dropped.length / 2 / VOICE_SAMPLE_RATE) * 1000
     }
 
-    this.loudMs = rmsOfPcm16(chunk) >= this.levelThreshold ? this.loudMs + ms : 0
+    const level = rmsOfPcm16(chunk)
+    // The threshold is read before this batch joins the window, so a batch
+    // cannot raise the bar it has to clear.
+    const threshold = this.threshold
+    this.levels.push(level)
+    if (this.levels.length > this.floorWindow) this.levels.shift()
+
+    this.loudMs = level >= threshold ? this.loudMs + ms : 0
     if (this.loudMs < this.holdMs) return []
 
     // The user is talking. Stop the answer and hand over what was held, so the
     // reply is recognised from its first word.
     const release = this.held
     this.speaking = false
+    this.levels = []
     this.held = []
     this.heldMs = 0
     this.loudMs = 0

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { BARGE_IN_HOLD_MS, BargeInGate, rmsOfPcm16 } from './voice-barge-in'
+import { BARGE_IN_HOLD_MS, BARGE_IN_LEVEL, BargeInGate, rmsOfPcm16 } from './voice-barge-in'
 import { VOICE_SAMPLE_RATE } from '@shared/voice'
 
 /**
@@ -113,6 +113,58 @@ describe('while 20x is talking', () => {
 
     gate.setSpeaking(false)
     expect(gate.push(SPEECH)).toEqual([SPEECH])
+  })
+
+  /**
+   * The reported failure. The microphone runs with echo cancellation, noise
+   * suppression and automatic gain control all on, and all three fight the
+   * user's voice at the moment it overlaps the loudspeaker. A quiet talker,
+   * or one a metre away, never reached the old fixed level of 0.06 — so the
+   * gate held every word and 20x carried on as if nothing had been said.
+   */
+  it('hears a quiet talker over a loud answer', () => {
+    const onBargeIn = vi.fn()
+    const gate = new BargeInGate({ onBargeIn, holdMs: 300 })
+    gate.setSpeaking(true)
+
+    // The answer is playing; this is the leak the echo canceller leaves.
+    for (let i = 0; i < 10; i++) gate.push(ECHO)
+
+    // The user speaks, but quietly — well under the old fixed threshold.
+    const QUIET_SPEECH = chunk(100, 0.04)
+    for (let i = 0; i < 3; i++) gate.push(QUIET_SPEECH)
+
+    expect(onBargeIn).toHaveBeenCalledTimes(1)
+  })
+
+  it('still refuses to hear the loudspeaker leak itself', () => {
+    const onBargeIn = vi.fn()
+    const gate = new BargeInGate({ onBargeIn, holdMs: 300 })
+    gate.setSpeaking(true)
+
+    // A steady leak, for five seconds. It never counts, however long it runs.
+    for (let i = 0; i < 50; i++) gate.push(ECHO)
+
+    expect(onBargeIn).not.toHaveBeenCalled()
+    expect(gate.isHolding).toBe(true)
+  })
+
+  it('measures the room instead of assuming it', () => {
+    // A hold no passage can reach, so the bar can be read without the gate
+    // firing and resetting what it has measured.
+    const gate = new BargeInGate({ onBargeIn: vi.fn(), holdMs: 1_000_000 })
+    gate.setSpeaking(true)
+
+    // Nothing measured yet: only the absolute minimum applies.
+    expect(gate.threshold).toBeCloseTo(BARGE_IN_LEVEL, 4)
+
+    // A noisy room raises the bar to three times what it measures.
+    for (let i = 0; i < 10; i++) gate.push(chunk(100, 0.05))
+    expect(gate.threshold).toBeCloseTo(0.15, 2)
+
+    // A quiet one lowers it again, never below the absolute minimum.
+    for (let i = 0; i < 10; i++) gate.push(SILENCE)
+    expect(gate.threshold).toBeCloseTo(BARGE_IN_LEVEL, 4)
   })
 
   it('interrupts only once per answer', () => {

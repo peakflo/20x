@@ -283,12 +283,26 @@ make 20x answer itself.
 read, the microphone audio is held back instead of being sent. So an answer
 cannot be transcribed as if the user had said it.
 
-**The user can still interrupt by speaking.** The held audio is measured. Speech
-from a person is far louder than what the echo canceller leaves behind, so a
-passage that stays above `BARGE_IN_LEVEL` for `BARGE_IN_HOLD_MS` means the user
-is talking. The answer stops at once, and the held audio — about half a second
-of it — is released to the recogniser, so the reply is recognised from its first
-word rather than from its second.
+**The user can still interrupt by speaking.** The held audio is measured
+against the room, not against a number chosen in advance: the floor is the
+quietest of the last second, and a passage several times louder than that, held
+for `BARGE_IN_HOLD_MS`, means a person is talking. The answer stops at once and
+the held audio — about half a second of it — is released to the recogniser, so
+the reply is recognised from its first word rather than its second.
+
+The fixed level it replaced did not work. It was 0.06, taken from "ordinary
+speech sits near 0.05 to 0.2". But the microphone runs with echo cancellation,
+noise suppression and automatic gain control all on, and all three fight the
+user's voice at exactly the moment it overlaps the loudspeaker — two people
+talking at once is where they are weakest. A quiet talker, or one a metre from
+the machine, never reached 0.06. The gate held every word and 20x carried on as
+if nothing had been said.
+
+`BARGE_IN_LEVEL` survives as the absolute floor, 0.015, so a silent room can
+never count. Above that the bar is `BARGE_IN_FLOOR_FACTOR` times what is
+measured. The measurement needs `BARGE_IN_FLOOR_MIN_SAMPLES` batches before it
+is trusted, or a user who speaks from the very first batch would set the floor
+to their own voice and raise the bar above themselves.
 
 One short knock does not cut an answer off: the level has to hold, not merely
 peak.
