@@ -715,6 +715,8 @@ export const voiceApi = {
   setEndpointSilence: (seconds: number): Promise<{ success: boolean }> =>
     window.electronAPI.voice.setEndpointSilence(seconds),
   setShortcut: (accelerator: string): Promise<VoiceSnapshot> => window.electronAPI.voice.setShortcut(accelerator),
+  expectAnswer: (turnId: string, taskId?: string): Promise<void> =>
+    window.electronAPI.voice.expectAnswer(turnId, taskId),
   onState: (callback: (event: VoiceStateEvent) => void): (() => void) =>
     window.electronAPI.voice.onState(callback),
   onPartial: (callback: (event: { turnId: string; text: string }) => void): (() => void) =>

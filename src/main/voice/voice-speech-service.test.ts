@@ -159,6 +159,54 @@ describe('answer correlation', () => {
     expect(await service.speakAgentAnswer('task-1', 'Very late.')).toBe(false)
   })
 
+  it('reads the answer to a sentence sent from a task composer', async () => {
+    const { service, worker } = makeService({ [VOICE_TTS_SETTING_KEYS.enabled]: 'true' })
+    await service.prepare()
+    // The renderer sent the spoken sentence to this task's agent.
+    service.expectAnswer('task-7', 'turn-3', clock)
+
+    expect(await service.speakAgentAnswer('task-7', 'It is fixed.')).toBe(true)
+    expect(worker.spoken[0].sentences).toEqual(['It is fixed.'])
+  })
+
+  it('reads the answer when the sender could not name its task', async () => {
+    const { service } = makeService({ [VOICE_TTS_SETTING_KEYS.enabled]: 'true' })
+    await service.prepare()
+    // The Mastermind drawer sends on its own behalf, so no task is known.
+    service.expectAnyAnswer('turn-4', clock)
+
+    expect(await service.speakAgentAnswer('whichever-task', 'Done.')).toBe(true)
+  })
+
+  it('takes an unnamed answer once, not every answer after it', async () => {
+    const { service } = makeService({ [VOICE_TTS_SETTING_KEYS.enabled]: 'true' })
+    await service.prepare()
+    service.expectAnyAnswer('turn-4', clock)
+
+    expect(await service.speakAgentAnswer('task-a', 'First.')).toBe(true)
+    expect(await service.speakAgentAnswer('task-b', 'A background answer.')).toBe(false)
+  })
+
+  it('lets an unnamed answer expire quickly', async () => {
+    const { service } = makeService({ [VOICE_TTS_SETTING_KEYS.enabled]: 'true' })
+    await service.prepare()
+    service.expectAnyAnswer('turn-4', clock)
+    clock += 2 * 60 * 1000
+
+    expect(await service.speakAgentAnswer('task-a', 'Too late.')).toBe(false)
+  })
+
+  it('prefers the named task over an unnamed expectation', async () => {
+    const { service } = makeService({ [VOICE_TTS_SETTING_KEYS.enabled]: 'true' })
+    await service.prepare()
+    service.expectAnswer('task-1', 'turn-1', clock)
+    service.expectAnyAnswer('turn-2', clock)
+
+    expect(await service.speakAgentAnswer('task-1', 'The named one.')).toBe(true)
+    // The unnamed one is still outstanding for whatever comes next.
+    expect(await service.speakAgentAnswer('task-9', 'The next one.')).toBe(true)
+  })
+
   it('forgets a question when the turn is cancelled', async () => {
     const { service } = makeService({ [VOICE_TTS_SETTING_KEYS.enabled]: 'true' })
     await service.prepare()

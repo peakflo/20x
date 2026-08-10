@@ -2536,4 +2536,11 @@ else:
   ipcMain.handle('voice:tts:stop', () => {
     voiceSessionManager?.stopSpeaking()
   })
+
+  // The renderer sent a spoken sentence to an agent. The answer that comes back
+  // is the reply to it, so it may be read aloud.
+  ipcMain.handle('voice:expectAnswer', (_, payload: { turnId: string; taskId?: string }) => {
+    if (!payload?.turnId) return
+    voiceSessionManager?.expectSpokenAnswer(payload.turnId, payload.taskId)
+  })
 }

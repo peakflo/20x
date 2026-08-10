@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { settingsApi, voiceApi, voiceTtsApi } from '@/lib/ipc-client'
 import { voiceCapture } from '@/lib/voice-capture'
 import { voicePlayback } from '@/lib/voice-playback'
+import { BargeInGate } from '@/lib/voice-barge-in'
 import { clearActiveComposer } from '@/lib/voice-dictation-target'
 import { VOICE_SETTING_KEYS } from '@shared/voice'
 import type { VoiceTtsEngineId, VoiceTtsSnapshot } from '@shared/voice-tts'
@@ -176,6 +177,23 @@ function hasTtsBridge(): boolean {
   return typeof window !== 'undefined' && typeof window.electronAPI?.voice?.tts?.getSnapshot === 'function'
 }
 
+/**
+ * Holds the microphone back while an answer is being read, and releases it the
+ * moment the user talks over it (design §5.7).
+ *
+ * There is one for the window, beside the single microphone and the single
+ * speaker, so a turn and an answer can never disagree about who is talking.
+ */
+const bargeInGate = new BargeInGate({
+  onBargeIn: () => {
+    // Stop in this tick, before the round trip to main: the user is already
+    // speaking and every further word of the answer is talking over them.
+    voicePlayback.stop()
+    useVoiceStore.setState({ speaking: false, speechText: '', speechLevel: 0 })
+    void voiceTtsApi.stop()
+  },
+})
+
 /** True when a voice is loaded and something can actually be spoken. */
 export function selectSpeechReady(state: { tts: VoiceTtsSnapshot | null }): boolean {
   return state.tts?.status.state === 'ready'
@@ -305,10 +323,14 @@ export const useVoiceStore = create<VoiceStoreState>((set, get) => ({
     }
     set({ turnId: started.turnId, mode, partial: '', final: '', result: null, sentSentences: [] })
 
+    bargeInGate.reset()
     const ok = await voiceCapture.start({
       onAudio: (chunk) => {
         const id = get().turnId
-        if (id) void voiceApi.pushAudio(id, chunk)
+        if (!id) return
+        // Nothing reaches the recogniser while 20x is talking, so an answer can
+        // never be transcribed as if the user had said it.
+        for (const frame of bargeInGate.push(chunk)) void voiceApi.pushAudio(id, frame)
       },
       onLevel: (level) => set({ level }),
       onError: (message) => {
@@ -341,6 +363,7 @@ export const useVoiceStore = create<VoiceStoreState>((set, get) => ({
     const { turnId } = get()
     if (!turnId) return
     voiceCapture.stop()
+    bargeInGate.reset()
     // The turn is closed here and now. Waiting for an answer from main would
     // leave the control stuck on "Stop" whenever main has already dropped the
     // turn — for example after the worker ended it at a pause.
@@ -359,6 +382,7 @@ export const useVoiceStore = create<VoiceStoreState>((set, get) => ({
   cancel: async () => {
     const { turnId } = get()
     voiceCapture.stop()
+    bargeInGate.reset()
     set({ turnId: null, partial: '', level: 0 })
     if (turnId) await voiceApi.cancelTurn(turnId)
   },
@@ -479,6 +503,7 @@ export const useVoiceStore = create<VoiceStoreState>((set, get) => ({
 
   stopSpeaking: async () => {
     voicePlayback.stop()
+    bargeInGate.setSpeaking(false)
     set({ speaking: false, speechText: '', speechLevel: 0 })
     await voiceTtsApi.stop()
   },
@@ -591,11 +616,15 @@ if (hasVoiceBridge()) {
 if (hasTtsBridge()) {
   voiceTtsApi.onSpeechStart((event) => {
     useVoiceStore.setState({ speaking: true, speechText: event.text })
+    bargeInGate.setSpeaking(true)
     voicePlayback.start(event.speechId, {
       onLevel: (speechLevel) => useVoiceStore.setState({ speechLevel }),
       // The worker finishes producing before the last sentence finishes
       // playing, so the indicator is cleared here and not on the end event.
-      onDrained: () => useVoiceStore.setState({ speaking: false, speechText: '', speechLevel: 0 }),
+      onDrained: () => {
+        bargeInGate.setSpeaking(false)
+        useVoiceStore.setState({ speaking: false, speechText: '', speechLevel: 0 })
+      },
     })
   })
 
@@ -606,9 +635,14 @@ if (hasTtsBridge()) {
   voiceTtsApi.onSpeechEnd((event) => {
     // `complete` only means that nothing more will arrive. Whatever is queued
     // still has to be heard, so playback is left alone and `onDrained` ends it.
-    if (event.reason === 'complete') return
+    //
+    // Unless nothing was ever queued: a passage can finish having produced no
+    // audio at all, and then no sentence will ever end to release the
+    // microphone.
+    if (event.reason === 'complete' && voicePlayback.hasQueuedAudio) return
     if (voicePlayback.currentSpeechId !== event.speechId) return
     voicePlayback.stop()
+    bargeInGate.setSpeaking(false)
     useVoiceStore.setState({ speaking: false, speechText: '', speechLevel: 0 })
     if (event.reason === 'error' && event.message) {
       useVoiceStore.setState({ result: { kind: 'error', message: event.message, at: Date.now() } })

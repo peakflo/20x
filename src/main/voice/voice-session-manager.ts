@@ -520,6 +520,19 @@ export class VoiceSessionManager {
     if (!spoken) this.setState('idle')
   }
 
+  /**
+   * The user spoke a sentence and it was sent to an agent.
+   *
+   * This is what closes the loop in a conversation: the answer that comes back
+   * is read aloud, exactly as it is for a spoken command. `taskId` is absent
+   * when the sender does not know it — the Mastermind drawer sends on its own
+   * behalf — and then the next answer to arrive is taken as the reply.
+   */
+  expectSpokenAnswer(turnId: string, taskId?: string): void {
+    if (taskId) this.speech.expectAnswer(taskId, turnId)
+    else this.speech.expectAnyAnswer(turnId)
+  }
+
   /** Speaks one finished agent answer. Called from the agent status stream. */
   async speakAgentAnswer(taskId: string, text: string): Promise<boolean> {
     const spoken = await this.speech.speakAgentAnswer(taskId, text)

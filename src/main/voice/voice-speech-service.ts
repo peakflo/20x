@@ -73,6 +73,16 @@ interface AnswerExpectation {
 /** An expected answer is forgotten after this long. */
 export const VOICE_ANSWER_EXPECTATION_MS = 10 * 60 * 1000
 
+/**
+ * How long an answer is expected when the task it will come from is not known
+ * yet.
+ *
+ * A sentence spoken into the Mastermind drawer is sent by the drawer itself, so
+ * the renderer has no task to name. The window is short on purpose: it is armed
+ * only by the user speaking, and it is consumed by the first answer to arrive.
+ */
+export const VOICE_ANY_ANSWER_EXPECTATION_MS = 90 * 1000
+
 interface ActiveSpeech {
   speechId: string
   source: VoiceSpeechRequest['source']
@@ -88,6 +98,8 @@ export class VoiceSpeechService {
   private systemVoices: VoiceTtsVoice[] = []
   private active: ActiveSpeech | null = null
   private expectations = new Map<string, AnswerExpectation>()
+  /** Set when a spoken sentence was sent but the task was not named. */
+  private anyExpectation: { voiceTurnId: string; expiresAt: number } | null = null
   /** Sample rate of the loaded engine, learned when it reports ready. */
   private sampleRate = 0
   private onSpeakingChange: ((speaking: boolean) => void) | null = null
@@ -318,6 +330,18 @@ export class VoiceSpeechService {
     })
   }
 
+  /**
+   * The user spoke a sentence and it was sent, but the sender did not name a
+   * task — the Mastermind drawer sends on its own behalf.
+   *
+   * The next answer to arrive is then the answer to that sentence. It is
+   * consumed once and it expires quickly, so a background task finishing later
+   * is still not read out.
+   */
+  expectAnyAnswer(voiceTurnId: string, now = Date.now()): void {
+    this.anyExpectation = { voiceTurnId, expiresAt: now + VOICE_ANY_ANSWER_EXPECTATION_MS }
+  }
+
   /** Drops an expectation, for example when the user cancels the turn. */
   forgetAnswer(taskId: string): void {
     this.expectations.delete(taskId)
@@ -325,9 +349,18 @@ export class VoiceSpeechService {
 
   private takeExpectation(taskId: string, now = Date.now()): AnswerExpectation | null {
     const expectation = this.expectations.get(taskId)
-    if (!expectation) return null
-    this.expectations.delete(taskId)
-    return expectation.expiresAt < now ? null : expectation
+    if (expectation) {
+      this.expectations.delete(taskId)
+      return expectation.expiresAt < now ? null : expectation
+    }
+
+    // No expectation for this task by name. One may still be outstanding for a
+    // sentence whose sender could not be named.
+    const any = this.anyExpectation
+    if (!any) return null
+    this.anyExpectation = null
+    if (any.expiresAt < now) return null
+    return { taskId, voiceTurnId: any.voiceTurnId, expiresAt: any.expiresAt }
   }
 
   // ── Speaking ──────────────────────────────────────────────

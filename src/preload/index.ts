@@ -567,6 +567,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('voice:setEndpointSilence', { seconds }),
     setShortcut: (accelerator: string): Promise<unknown> =>
       ipcRenderer.invoke('voice:setShortcut', { accelerator }),
+    expectAnswer: (turnId: string, taskId?: string): Promise<void> =>
+      ipcRenderer.invoke('voice:expectAnswer', { turnId, taskId }),
     onState: (callback: (data: unknown) => void): (() => void) => {
       const handler = (_: unknown, d: unknown): void => callback(d)
       ipcRenderer.on('voice:state', handler)

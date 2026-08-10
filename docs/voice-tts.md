@@ -204,7 +204,38 @@ hidden reasoning are skipped.
 
 ---
 
-## Barge-in
+## Talking over an answer
+
+In a conversation the microphone stays open while an answer is read, so the
+microphone hears the loudspeaker. Two things have to hold at once, and echo
+cancellation alone is not trusted for either: it is a browser feature whose
+reference signal differs by platform, and one leaked sentence would be enough to
+make 20x answer itself.
+
+**The recogniser is never given 20x's own voice.** While an answer is being
+read, the microphone audio is held back instead of being sent. So an answer
+cannot be transcribed as if the user had said it.
+
+**The user can still interrupt by speaking.** The held audio is measured. Speech
+from a person is far louder than what the echo canceller leaves behind, so a
+passage that stays above `BARGE_IN_LEVEL` for `BARGE_IN_HOLD_MS` means the user
+is talking. The answer stops at once, and the held audio — about half a second
+of it — is released to the recogniser, so the reply is recognised from its first
+word rather than from its second.
+
+One short knock does not cut an answer off: the level has to hold, not merely
+peak.
+
+### And then the loop closes
+
+When that reply is recognised it is sent, exactly as any spoken sentence is, and
+the answer that comes back is read aloud in turn. The renderer names the task it
+sent to, so the right answer is spoken. The Mastermind drawer sends on its own
+behalf and can name no task, so the next answer to arrive within ninety seconds
+is taken as the reply — armed only by the user having just spoken, and consumed
+once.
+
+## Barge-in by hand
 
 The moment a voice turn opens, playback stops in the renderer in the same tick
 as the press, and main tells the worker to stop producing. Escape stops speech,

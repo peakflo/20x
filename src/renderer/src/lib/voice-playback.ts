@@ -42,6 +42,17 @@ export class VoicePlayback {
     return this.speechId
   }
 
+  /**
+   * True while sentences are queued or sounding.
+   *
+   * A passage can open and produce nothing — the worker may fail before its
+   * first sentence. Without this the caller could wait for an end that never
+   * comes.
+   */
+  get hasQueuedAudio(): boolean {
+    return this.pending > 0
+  }
+
   /** Opens a new passage. Any passage still playing is dropped. */
   start(speechId: string, handlers: VoicePlaybackHandlers = {}): void {
     this.stop()

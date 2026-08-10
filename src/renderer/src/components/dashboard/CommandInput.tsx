@@ -2,11 +2,11 @@ import { useState, useRef, useCallback, useEffect } from 'react'
 import { Paperclip, Plus, ArrowUp, ChevronDown, Settings } from 'lucide-react'
 import { agentApi } from '@/lib/ipc-client'
 import { VoiceMicButton } from '@/components/voice/VoiceMicButton'
-import { registerComposer } from '@/lib/voice-dictation-target'
+import { registerComposer, DASHBOARD_COMPOSER_KEY } from '@/lib/voice-dictation-target'
 import type { Agent } from '@/types'
 
 /** Names this composer, so a spoken sentence reaches this box and no other. */
-const VOICE_COMPOSER_KEY = 'dashboard-command'
+const VOICE_COMPOSER_KEY = DASHBOARD_COMPOSER_KEY
 
 interface CommandInputProps {
   onSendToMastermind: (message: string) => void
