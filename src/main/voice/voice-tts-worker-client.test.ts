@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, beforeAll, afterAll } from 'vitest'
-import { mkdtempSync, rmSync, writeFileSync } from 'fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { VoiceTtsWorkerClient, type VoiceTtsChunk } from './voice-tts-worker-client'
@@ -280,6 +280,34 @@ describe('a passage that is still being written', () => {
     await new Promise((resolve) => setTimeout(resolve, 100))
 
     expect(chunks.map((c) => c.text)).toEqual(['Only this.'])
+  })
+})
+
+/**
+ * Thread count is a measured value, not a taste.
+ *
+ * On an Apple Silicon machine, the same sentence, real-time factor:
+ *
+ *   kitten-nano   1 thread 0.37   2 threads 0.88   4 threads 1.11
+ *   kokoro        1 thread 1.56   2 threads 3.29   4 threads 7.47
+ *
+ * Above 1.0 the voice cannot keep up with its own playback. Two threads —
+ * the old default — put kitten within 12% of that cliff and kokoro three
+ * times past it, which a user reported as slow reading and high CPU.
+ */
+describe('the synthesiser configuration', () => {
+  const source = readFileSync(join(__dirname, 'voice-tts-worker.js'), 'utf-8')
+
+  it('asks for one thread, because more is slower here', () => {
+    expect(source).toContain('numThreads: message.numThreads || 1')
+  })
+
+  it('stays on the CPU provider', () => {
+    // 'coreml' aborts the process on these models: the ONNX CoreML builder
+    // fails with "Unable to get shape for output" and raises SIGABRT, which
+    // takes the worker down rather than falling back.
+    expect(source).toContain("provider: 'cpu'")
+    expect(source).not.toMatch(/provider:\s*'coreml'/)
   })
 })
 

@@ -101,7 +101,20 @@ function loadLocal(message) {
       dataDir: message.model.dataDir,
       lengthScale: 1.0,
     },
-    numThreads: message.numThreads || 2,
+    // One thread, measured, not assumed. On an Apple Silicon machine with the
+    // same sentence, the real-time factor was:
+    //
+    //   kitten-nano   1 thread 0.37   2 threads 0.88   4 threads 1.11
+    //   kokoro        1 thread 1.56   2 threads 3.29   4 threads 7.47
+    //
+    // Above 1.0 the voice cannot keep up with its own playback, so the reading
+    // drags and the CPU stays busy. More threads make it worse: these graphs
+    // are small, so the extra threads add synchronisation instead of work, and
+    // the spillover lands on efficiency cores. Do not raise this without
+    // measuring again.
+    numThreads: message.numThreads || 1,
+    // Not 'coreml'. It aborts the process on these models —
+    // "Unable to get shape for output" from the ONNX CoreML builder, SIGABRT.
     provider: 'cpu',
     debug: 0,
   }
