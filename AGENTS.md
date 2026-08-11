@@ -281,6 +281,55 @@ Features:
 |---------|-----------|-------------|
 | `agentConfig:getProviders` | renderer -> main | List available models from backend |
 
+### Voice control
+
+Speech to text runs on the user's computer. The local speech runtime is an
+**optional** install offered in the setup dialog and in Voice settings; until it
+is present, every voice control is hidden. See `docs/voice.md` for the design,
+the safety rules, and the release gates that are still open.
+
+| Channel | Direction | Payload | Response |
+|---------|-----------|---------|----------|
+| `voice:getSnapshot` | renderer -> main | — | `VoiceSnapshot` |
+| `voice:setEnabled` | renderer -> main | `{ enabled }` | `VoiceSnapshot` |
+| `voice:getPermission` | renderer -> main | — | `{ status }` |
+| `voice:requestPermission` | renderer -> main | — | `{ status }` |
+| `voice:startTurn` | renderer -> main | `{ mode, context }` | `{ turnId }` or `{ error }` |
+| `voice:pushAudio` | renderer -> main | `{ turnId, chunk }` — 16 kHz mono PCM | — |
+| `voice:endTurn` | renderer -> main | `{ turnId }` | — |
+| `voice:cancelTurn` | renderer -> main | `{ turnId? }` | — |
+| `voice:confirm` | renderer -> main | `{ turnId, choice? }` | `{ success }` |
+| `voice:dismiss` | renderer -> main | `{ turnId }` | — |
+| `voice:getRuntime` | renderer -> main | — | `VoiceRuntimeStatus` |
+| `voice:installRuntime` | renderer -> main | — | `VoiceRuntimeStatus` |
+| `voice:removeRuntime` | renderer -> main | — | `VoiceRuntimeStatus` |
+| `voice:listModels` | renderer -> main | — | `VoiceModelState[]` |
+| `voice:installModel` | renderer -> main | `{ id }` | `VoiceModelState` |
+| `voice:removeModel` | renderer -> main | `{ id }` | `{ success }` |
+| `voice:removeAllModels` | renderer -> main | — | `{ success }` |
+| `voice:setCustomModelDir` | renderer -> main | `{ dir }` | `VoiceSnapshot` |
+| `voice:pickModelDir` | renderer -> main | — | `{ dir }` |
+| `voice:setShortcut` | renderer -> main | `{ accelerator }` | `VoiceSnapshot` |
+
+### Voice Events (main -> renderer and mobile)
+
+| Channel | Payload |
+|---------|---------|
+| `voice:state` | `{ state, turnId?, detail? }` — state machine transitions |
+| `voice:partial` | `{ turnId, text }` — live transcript |
+| `voice:final` | `{ turnId, text }` — final transcript |
+| `voice:outcome` | `VoiceActionOutcome` — confirm, executed, rejected, cancelled |
+| `voice:status` | engine and model status |
+| `voice:error` | `{ message, code? }` |
+| `voice:navigate` | `{ destination, taskId }` — validated navigation request |
+| `voice:dictate` | `{ turnId, text }` — words for the focused text control |
+| `voice:hotkey` | `{ action }` — the global shortcut fired |
+| `voice:runtimeProgress` | `{ stage, output, percent }` — optional runtime install |
+
+A voice task action calls the same services as the user interface, so it emits
+the normal `task:created` and `task:updated` events. There is no second state
+writer for voice.
+
 ## Agent Manager
 
 `src/main/agent-manager.ts` — the core orchestration layer (1500+ lines).

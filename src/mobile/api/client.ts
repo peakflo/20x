@@ -5,6 +5,7 @@
  */
 import { getAuthToken } from './auth'
 import type { Artifact, ArtifactContent, PullRequestDetails } from '@shared/artifacts'
+import type { VoiceCapabilities } from '@shared/voice'
 
 const MOBILE_API_PORT = '20620'
 // When served via a reverse proxy (Cloudflare tunnel, https with no explicit port),
@@ -92,6 +93,10 @@ export const api = {
       post<Array<{ name: string; fullName: string; defaultBranch: string; cloneUrl: string; description: string; isPrivate: boolean }>>('/api/github/repos', { org, provider }),
     pullRequest: (url: string) =>
       get<PullRequestDetails>(`/api/github/pull-request?url=${encodeURIComponent(url)}`)
+  },
+  capabilities: {
+    /** What this client can do. Voice capture is desktop-only in phase 1. */
+    get: () => get<{ voice: VoiceCapabilities }>('/api/capabilities')
   },
   sessions: {
     list: () => get<unknown[]>('/api/sessions'),

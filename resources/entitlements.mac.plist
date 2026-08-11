@@ -8,5 +8,8 @@
     <true/>
     <key>com.apple.security.cs.disable-library-validation</key>
     <true/>
+    <!-- Voice control: local speech recognition needs microphone input. -->
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
   </dict>
 </plist>

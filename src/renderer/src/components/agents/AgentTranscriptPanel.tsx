@@ -10,6 +10,8 @@ import { agentSessionApi, artifactApi } from '@/lib/ipc-client'
 import { cn } from '@/lib/utils'
 import { useArtifactStore } from '@/stores/artifact-store'
 import { ArtifactContentKind, ArtifactType, type Artifact } from '@shared/artifacts'
+import { VoiceMicButton } from '@/components/voice/VoiceMicButton'
+import { MASTERMIND_COMPOSER_KEY, registerComposer } from '@/lib/voice-dictation-target'
 
 const EMPTY_ARTIFACTS: Artifact[] = []
 
@@ -930,6 +932,24 @@ export function AgentTranscriptPanel({
     return messages[questionIndex].id
   }, [messages, status])
 
+  /**
+   * Announce this composer for as long as it is on screen.
+   *
+   * Starting an agent session rebuilds this panel, so a conversation must find
+   * the new text field and the new send function. The key stays the same across
+   * that rebuild, and the callbacks are read through a ref, so a conversation
+   * carries on into the panel that replaced this one.
+   */
+  const composerKey = taskId ?? MASTERMIND_COMPOSER_KEY
+  const sendRef = useRef<(() => void) | null>(null)
+  useEffect(() => {
+    if (!onSend) return undefined
+    return registerComposer(composerKey, {
+      getField: () => inputRef.current,
+      submit: () => sendRef.current?.(),
+    })
+  }, [composerKey, onSend])
+
   /** Auto-resize the textarea to fit its content, up to a max height */
   const autoResize = useCallback(() => {
     const el = inputRef.current
@@ -1111,6 +1131,9 @@ export function AgentTranscriptPanel({
       setPendingAttachments([])
     }
   }
+  // The registration calls through this ref, so a conversation always uses the
+  // send function of the current render, never one captured earlier.
+  sendRef.current = handleSend
 
   const handleAddAttachments = async () => {
     if (!onPickAttachments) return
@@ -1386,6 +1409,7 @@ export function AgentTranscriptPanel({
         {onSend && (
           <div
             data-testid="transcript-composer"
+            data-voice-composer={composerKey}
             className={`relative px-4 py-3 space-y-2.5 transition-colors ${isDragOverComposer ? 'bg-primary/5' : ''}`}
             onDragOver={handleComposerDragOver}
             onDragEnter={handleComposerDragOver}
@@ -1435,6 +1459,7 @@ export function AgentTranscriptPanel({
                 }}
                 onInput={autoResize}
               />
+              <VoiceMicButton mode="dictation" onSubmit={handleSend} />
               {onPickAttachments && (
               <Button
                 type="button"

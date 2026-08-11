@@ -980,6 +980,113 @@ describe('AgentManager MCP server routing', () => {
   })
 })
 
+/**
+ * A task told to finish without review must finish with no window open.
+ *
+ * This used to be done by the renderer, watching for ready_for_review — so a
+ * task could only self-resolve while a window happened to be open. An agent
+ * driving 20x through MCP would leave it in review for ever.
+ */
+describe('AgentManager transitionToIdle — completing without review', () => {
+  function makeDb(taskOverrides: Record<string, unknown> = {}) {
+    const task = {
+      id: 'task-1',
+      title: 'Self-resolving task',
+      repos: [],
+      skill_ids: [],
+      status: TaskStatus.AgentWorking,
+      source_id: null,
+      output_fields: [],
+      auto_complete_without_review: true,
+      ...taskOverrides,
+    }
+    return {
+      getTask: vi.fn(() => task),
+      getAgent: vi.fn(() => ({ id: 'agent-1', name: 'Test Agent', config: {} })),
+      getWorkspaceDir: vi.fn(() => '/tmp/test-workspace'),
+      getSkills: vi.fn(() => []),
+      getSkillsByIds: vi.fn(() => []),
+      getSkillByName: vi.fn(() => null),
+      getMcpServer: vi.fn(() => null),
+      getSecretsByIds: vi.fn(() => []),
+      getSetting: vi.fn(() => null),
+      updateTask: vi.fn(),
+      getTranscriptParts: vi.fn(() => [] as Array<{ role: string; content: string }>),
+    } as unknown as ConstructorParameters<typeof AgentManager>[0]
+  }
+
+  function setup(mockDb: ReturnType<typeof makeDb>) {
+    const mgr = new AgentManager(mockDb)
+    vi.spyOn(mgr as any, 'sendToRenderer').mockImplementation(() => undefined)
+    vi.spyOn(mgr as any, 'extractOutputValues').mockResolvedValue(undefined)
+    vi.spyOn(mgr as any, 'autoEnableHeartbeat').mockImplementation(() => undefined)
+    const session = {
+      id: 'session-1',
+      agentId: 'agent-1',
+      taskId: 'task-1',
+      status: 'working',
+      createdAt: new Date(),
+      seenMessageIds: new Set<string>(),
+      seenPartIds: new Set<string>(),
+      partContentLengths: new Map<string, string>(),
+    }
+    ;(mgr as any).sessions.set('session-1', session)
+    return { mgr, session }
+  }
+
+  it('completes the task in main, with no renderer involved', async () => {
+    const mockDb = makeDb()
+    const { mgr, session } = setup(mockDb)
+
+    await (mgr as any).transitionToIdle('session-1', session)
+
+    expect(mockDb.updateTask).toHaveBeenCalledWith('task-1', { status: TaskStatus.Completed })
+    expect(mockDb.updateTask).not.toHaveBeenCalledWith('task-1', { status: TaskStatus.ReadyForReview })
+  })
+
+  it('leaves an unflagged task for review, as before', async () => {
+    const mockDb = makeDb({ auto_complete_without_review: false })
+    const { mgr, session } = setup(mockDb)
+
+    await (mgr as any).transitionToIdle('session-1', session)
+
+    expect(mockDb.updateTask).toHaveBeenCalledWith('task-1', { status: TaskStatus.ReadyForReview })
+    expect(mockDb.updateTask).not.toHaveBeenCalledWith('task-1', { status: TaskStatus.Completed })
+  })
+
+  it('tells the source system before completing an enterprise task', async () => {
+    const mockDb = makeDb({ source_id: 'source-1' })
+    const { mgr, session } = setup(mockDb)
+    const syncManager = { executeAction: vi.fn().mockResolvedValue({ success: true }) }
+    mgr.setSyncManager(syncManager as any)
+
+    await (mgr as any).transitionToIdle('session-1', session)
+
+    expect(syncManager.executeAction).toHaveBeenCalledWith(
+      'complete',
+      expect.objectContaining({ id: 'task-1' }),
+      undefined,
+      'source-1'
+    )
+    expect(mockDb.updateTask).toHaveBeenCalledWith('task-1', { status: TaskStatus.Completed })
+  })
+
+  it('never marks it done locally when the source system refuses', async () => {
+    const mockDb = makeDb({ source_id: 'source-1' })
+    const { mgr, session } = setup(mockDb)
+    const syncManager = {
+      executeAction: vi.fn().mockResolvedValue({ success: false, error: 'upstream rejected' }),
+    }
+    mgr.setSyncManager(syncManager as any)
+
+    await (mgr as any).transitionToIdle('session-1', session)
+
+    // Completed there but not here would leave the two systems disagreeing.
+    expect(mockDb.updateTask).toHaveBeenCalledWith('task-1', { status: TaskStatus.ReadyForReview })
+    expect(mockDb.updateTask).not.toHaveBeenCalledWith('task-1', { status: TaskStatus.Completed })
+  })
+})
+
 describe('AgentManager transitionToIdle — enterprise task completion after feedback', () => {
   function createEnterpriseTaskDb(taskOverrides: Record<string, unknown> = {}) {
     const task = {

@@ -20,6 +20,7 @@ import { GitHubIssuesPlugin } from './plugins/github-issues-plugin'
 import { NotionPlugin } from './plugins/notion-plugin'
 import { YouTrackPlugin } from './plugins/youtrack-plugin'
 import { registerIpcHandlers } from './ipc-handlers'
+import { VoiceSessionManager } from './voice/voice-session-manager'
 import { EnterpriseAuth } from './enterprise-auth'
 import { RecurrenceScheduler } from './recurrence-scheduler'
 import { HeartbeatScheduler } from './heartbeat-scheduler'
@@ -27,7 +28,7 @@ import { WorkspaceCleanupScheduler } from './workspace-cleanup-scheduler'
 import { ClaudePluginManager } from './claude-plugin-manager'
 import { EnterpriseHeartbeat } from './enterprise-heartbeat'
 import { EnterpriseStateSync } from './enterprise-state-sync'
-import { setTaskApiAgentController, setTaskApiNotifier, setTranscriptProvider, stopTaskApiServer } from './task-api-server'
+import { setTaskApiAgentController, setTaskApiNotifier, setTaskApiUiState, setTranscriptProvider, stopTaskApiServer } from './task-api-server'
 import { startSecretBroker, stopSecretBroker, writeSecretShellWrapper } from './secret-broker'
 import { startMcpAuthProxy, stopMcpAuthProxy } from './mcp-auth-proxy'
 import { startMobileApiServer, stopMobileApiServer, broadcastToMobileClients, setMobileApiNotifier } from './mobile-api-server'
@@ -71,9 +72,23 @@ let workspaceCleanupScheduler: WorkspaceCleanupScheduler | null = null
 let claudePluginManager: ClaudePluginManager | null = null
 let enterpriseHeartbeatInstance: EnterpriseHeartbeat | null = null
 let enterpriseStateSyncInstance: EnterpriseStateSync | null = null
+let voiceSessionManager: VoiceSessionManager | null = null
 let isShuttingDown = false
 
+/**
+ * Sends one voice event to the desktop renderer and to the mobile clients.
+ * Voice actions reuse the normal task and agent events, so both clients stay in
+ * step without a second state writer (design §5.11).
+ */
+function broadcastVoiceEvent(channel: string, data: unknown): void {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send(channel, data)
+  }
+  broadcastToMobileClients(channel, data)
+}
+
 async function shutdownAppServices(): Promise<void> {
+  voiceSessionManager?.shutdown()
   enterpriseHeartbeatInstance?.stop()
   heartbeatScheduler?.stop()
   workspaceCleanupScheduler?.stop()
@@ -286,6 +301,8 @@ function createWindow(): void {
 
   mainWindow.on('closed', () => {
     mainWindow = null
+    // A closed window must not keep reporting the screen it last showed.
+    setTaskApiUiState(null)
   })
 
   // Set main window for managers
@@ -776,6 +793,15 @@ app.whenReady().then(async () => {
 
   claudePluginManager = new ClaudePluginManager(db)
 
+  // Voice control (design §5.1). It never blocks start-up: when the local
+  // speech runtime or the model is absent, voice simply stays switched off.
+  voiceSessionManager = new VoiceSessionManager({
+    db,
+    agents: agentManager,
+    notify: broadcastVoiceEvent
+  })
+  void voiceSessionManager.initialize()
+
   // Eagerly restore enterprise connection on startup so sync works immediately
   if (enterpriseAuth) {
     try {
@@ -860,7 +886,27 @@ app.whenReady().then(async () => {
     console.log('[EnterpriseAuth] auth_session_restore_result {"status":"skipped","reason":"enterprise_auth_not_initialized"}')
   }
 
-  registerIpcHandlers(db, agentManager, githubManager, worktreeManager, syncManager, pluginRegistry, mcpToolCaller, oauthManager, recurrenceScheduler, enterpriseAuth ?? undefined, claudePluginManager, heartbeatScheduler, enterpriseHeartbeatInstance ?? undefined, enterpriseStateSyncInstance ?? undefined, gitlabManager ?? undefined, workspaceCleanupScheduler ?? undefined)
+  registerIpcHandlers(db, agentManager, githubManager, worktreeManager, syncManager, pluginRegistry, mcpToolCaller, oauthManager, recurrenceScheduler, enterpriseAuth ?? undefined, claudePluginManager, heartbeatScheduler, enterpriseHeartbeatInstance ?? undefined, enterpriseStateSyncInstance ?? undefined, gitlabManager ?? undefined, workspaceCleanupScheduler ?? undefined, voiceSessionManager ?? undefined)
+
+  // ── Media permission handler (design §5.9) ────────────────────────────────
+  // Grant the microphone only to the 20x renderer, and only while voice is on.
+  // Every other media request (camera, screen, and any embedded web content) is
+  // refused. This is the single permission handler for the default session.
+  session.defaultSession.setPermissionRequestHandler((contents, permission, callback, details) => {
+    if (permission !== 'media') {
+      // Everything else keeps the behaviour this app had before the handler
+      // existed, so no embedded content loses a permission it already used.
+      callback(true)
+      return
+    }
+    const mediaTypes = (details as { mediaTypes?: string[] }).mediaTypes ?? []
+    if (mediaTypes.includes('video')) {
+      callback(false)
+      return
+    }
+    const isAppWindow = mainWindow != null && contents === mainWindow.webContents
+    callback(isAppWindow && voiceSessionManager?.isEnabled() === true)
+  })
 
   // Register updater IPC handlers (safe in dev mode — returns no-op results)
   registerUpdaterIpc()

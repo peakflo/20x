@@ -1,4 +1,4 @@
-import { Settings, Users, Server, Workflow, Wrench, KeyRound, Building2, Puzzle, Cable, X } from 'lucide-react'
+import { Settings, Users, Server, Workflow, Wrench, KeyRound, Building2, Puzzle, Cable, Mic, X } from 'lucide-react'
 import * as Tabs from '@radix-ui/react-tabs'
 import { useUIStore } from '@/stores/ui-store'
 import { SettingsTab } from '@/types'
@@ -8,6 +8,7 @@ import { GeneralSettings } from './tabs/GeneralSettings'
 import { AgentsSettings } from './tabs/AgentsSettings'
 import { ToolsMcpSettings } from './tabs/ToolsMcpSettings'
 import { SecretsSettings } from './tabs/SecretsSettings'
+import { VoiceSettings } from './tabs/VoiceSettings'
 import { IntegrationsSettings } from './tabs/IntegrationsSettings'
 import { EnterpriseSettings } from './tabs/EnterpriseSettings'
 import { AdvancedSettings } from './tabs/AdvancedSettings'
@@ -19,6 +20,7 @@ const ICON_MAP = {
   Users,
   Server,
   KeyRound,
+  Mic,
   Workflow,
   Cable,
   Building2,
@@ -34,6 +36,7 @@ export function SettingsWorkspace() {
     { value: SettingsTab.AGENTS, label: 'Agents', iconName: 'Users' },
     { value: SettingsTab.TOOLS_MCP, label: 'Tools & MCP', iconName: 'Server' },
     { value: SettingsTab.SECRETS, label: 'Secrets', iconName: 'KeyRound' },
+    { value: SettingsTab.VOICE, label: 'Voice', iconName: 'Mic' },
     { value: SettingsTab.INTEGRATIONS, label: 'Task sources', iconName: 'Workflow' },
     { value: SettingsTab.CONNECTORS, label: 'Connectors', iconName: 'Cable' },
     { value: SettingsTab.ENTERPRISE, label: 'Enterprise', iconName: 'Building2' },
@@ -103,6 +106,10 @@ export function SettingsWorkspace() {
 
             <Tabs.Content value={SettingsTab.SECRETS} className="focus-visible:outline-none space-y-6">
               <SecretsSettings />
+            </Tabs.Content>
+
+            <Tabs.Content value={SettingsTab.VOICE} className="focus-visible:outline-none space-y-6">
+              <VoiceSettings />
             </Tabs.Content>
 
             <Tabs.Content value={SettingsTab.INTEGRATIONS} className="focus-visible:outline-none space-y-6">

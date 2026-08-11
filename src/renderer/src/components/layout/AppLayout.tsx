@@ -8,6 +8,11 @@ import { UpdateDialog } from '@/components/update/UpdateDialog'
 import { Dialog, DialogContent, DialogHeader, DialogBody, DialogTitle } from '@/components/ui/Dialog'
 import { OnboardingWizard, shouldShowOnboarding } from '@/components/onboarding/OnboardingWizard'
 import { ProgressToastStack } from '@/components/ui/ProgressToastStack'
+import { VoiceOverlay } from '@/components/voice/VoiceOverlay'
+import { useVoiceControl } from '@/hooks/use-voice-control'
+import { useUiRemoteControl } from '@/hooks/use-ui-remote-control'
+import { useRecordingChrome } from '@/hooks/use-recording-chrome'
+import { TopBarVoiceButton } from '@/components/voice/TopBarVoiceButton'
 
 // Lazy-load heavy workspace components — only imported when their view is active.
 // This reduces the initial bundle size and speeds up first render significantly.
@@ -280,6 +285,13 @@ export function AppLayout() {
     showToast
   })
 
+  // ── Voice control: UI context, navigation events, and the global shortcut ──
+  useVoiceControl()
+  // Publishes the screen for agent tools, and applies their UI commands.
+  useUiRemoteControl()
+  // Turns the chrome crimson while the microphone is live.
+  useRecordingChrome()
+
   // ── Track zoom factor so macOS traffic-light margin stays constant in physical pixels ──
   useEffect(() => {
     const update = () => {
@@ -324,7 +336,7 @@ export function AppLayout() {
   return (
     <>
       {/* ── Top bar: drag region with logo (left) + nav switcher (center) + actions (right) ── */}
-      <div className="drag-region bg-background h-8 flex-shrink-0 flex items-center justify-center px-3 pt-2.5 windows-titlebar-pad">
+      <div className="app-chrome drag-region bg-background h-8 flex-shrink-0 flex items-center justify-center px-3 pt-2.5 windows-titlebar-pad">
         {/* Logo + wordmark + update indicator — pinned left. The white logo mark
             always sits on a brand-gradient tile, so it stays visible in both themes. */}
         <div className="no-drag absolute left-3 flex items-center gap-1.5 macos-titlebar-pad">
@@ -402,11 +414,15 @@ export function AppLayout() {
             <Settings className="h-3.5 w-3.5" />
           </button>
           <div className="mx-1 h-3.5 w-px bg-border/70" />
+          {/* Start talking to Mastermind from any view. Hidden until voice is on. */}
+          <TopBarVoiceButton />
+          {/* Quieter than the microphone beside it: typing to Mastermind is
+              the fallback, speaking to it is the invitation. */}
           <Button
-            variant={showOrchestrator ? 'default' : 'secondary'}
+            variant={showOrchestrator ? 'default' : 'ghost'}
             size="sm"
             onClick={toggleOrchestrator}
-            className="h-7 px-2.5"
+            className="h-7 px-2"
           >
             <MessageSquare className="h-3 w-3" />
             <span className="text-[11px]">Mastermind</span>
@@ -415,9 +431,9 @@ export function AppLayout() {
       </div>
 
       {/* ── Content area: left rail + optional sidebar + workspace + orchestrator ── */}
-      <div className="flex flex-1 min-h-0 overflow-hidden">
+      <div className="app-chrome-field flex flex-1 min-h-0 overflow-hidden bg-background">
         {/* Primary navigation — slim vertical icon rail */}
-        <nav className="no-drag flex w-9 flex-shrink-0 flex-col items-center gap-0.5 bg-background py-1.5">
+        <nav className="app-chrome no-drag flex w-9 flex-shrink-0 flex-col items-center gap-0.5 bg-background py-1.5">
           {NAV_ITEMS.map(({ key, label, icon: Icon }, i) => {
             const active = sidebarView === key && activeModal !== 'settings'
             return (
@@ -511,7 +527,7 @@ export function AppLayout() {
             showOrchestrator ? 'w-[340px]' : 'w-0'
           }`}
         >
-          <div className="w-[340px] h-full">
+          <div className="h-full w-[340px] py-2 pr-2">
             <Suspense fallback={null}>
               <OrchestratorPanel onClose={() => setShowOrchestrator(false)} />
             </Suspense>
@@ -671,6 +687,9 @@ export function AppLayout() {
 
       {/* Background progress toasts (setup, task progress, etc.) */}
       <ProgressToastStack />
+
+      {/* Voice transcript bubble, audio state, and confirmation cards */}
+      <VoiceOverlay />
     </>
   )
 }
