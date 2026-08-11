@@ -155,6 +155,16 @@ describe('AgentManager skill file paths', () => {
       expect(AcpAdapter).toHaveBeenCalledWith('codex')
       expect(CodexAppServerAdapter).not.toHaveBeenCalled()
     })
+
+    it('uses ACP for Cursor agents', () => {
+      const mockDb = createMockDb({ coding_agent: 'cursor' })
+      manager = new AgentManager(mockDb)
+
+      const adapter = (manager as any).getAdapter('agent-1')
+
+      expect(adapter).toBeInstanceOf(AcpAdapter)
+      expect(AcpAdapter).toHaveBeenCalledWith('cursor')
+    })
   })
 
   describe('shouldEnableTillDone', () => {

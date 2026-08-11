@@ -89,7 +89,8 @@ describe('OnboardingWizard', () => {
       git: { installed: true, version: '2.40.0' },
       claudeCode: { installed: true, version: '1.0.0' },
       opencode: { installed: false, version: null },
-      codex: { installed: false, version: null }
+      codex: { installed: false, version: null },
+      cursor: { installed: false, version: null }
     })
     mockAgentInstaller.onProgress.mockImplementation(() => vi.fn())
     mockAgents.getAll.mockResolvedValue([])

@@ -29,7 +29,8 @@ export const SETTINGS_TABS: { value: SettingsTab; label: string; icon: string }[
 export enum CodingAgentType {
   OPENCODE = 'opencode',
   CLAUDE_CODE = 'claude-code',
-  CODEX = 'codex'
+  CODEX = 'codex',
+  CURSOR = 'cursor'
 }
 
 export type AgentPermissionMode = 'ask' | 'allow'
@@ -40,7 +41,12 @@ export type ClaudeAuthMethod = 'subscription' | 'api_key'
 export const CODING_AGENTS: { value: CodingAgentType; label: string }[] = [
   { value: CodingAgentType.OPENCODE, label: 'OpenCode' },
   { value: CodingAgentType.CLAUDE_CODE, label: 'Claude Code' },
-  { value: CodingAgentType.CODEX, label: 'Codex' }
+  { value: CodingAgentType.CODEX, label: 'Codex' },
+  { value: CodingAgentType.CURSOR, label: 'Cursor' }
+]
+
+export const CURSOR_MODELS: { id: string; name: string }[] = [
+  { id: 'composer-2.5', name: 'Composer 2.5' }
 ]
 
 export enum ClaudeModel {
@@ -177,6 +183,7 @@ export interface AgentConfig {
   api_keys?: {
     openai?: string  // For Codex
     anthropic?: string  // For Claude Code
+    cursor?: string  // For Cursor
   }
 }
 

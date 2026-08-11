@@ -1,12 +1,12 @@
 import { useState, useEffect } from 'react'
-import { Plus, Loader2, Wifi, WifiOff, RefreshCw, Edit3, Trash2 } from 'lucide-react'
+import { Plus, Loader2, Wifi, WifiOff, RefreshCw, Edit3, Trash2, Terminal } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { SettingsSection } from '../SettingsSection'
 import { AgentFormDialog } from '../forms/AgentFormDialog'
 import { OpenCodeLogo, AnthropicLogo, OpenAILogo } from '@/components/icons/AgentLogos'
 import { useAgentStore } from '@/stores/agent-store'
 import { agentConfigApi } from '@/lib/ipc-client'
-import { CLAUDE_MODELS, CODEX_MODELS, CodingAgentType } from '@/types'
+import { CLAUDE_MODELS, CODEX_MODELS, CURSOR_MODELS, CodingAgentType } from '@/types'
 import type { Agent, CreateAgentDTO, UpdateAgentDTO } from '@/types'
 
 interface ConnectionInfo {
@@ -56,6 +56,16 @@ export function AgentsSettings() {
         status: 'connected',
         providerCount: 1,
         modelCount: CODEX_MODELS.length,
+        testedAt: new Date()
+      }))
+      return
+    }
+
+    if (agent.config.coding_agent === CodingAgentType.CURSOR) {
+      setConnections((prev) => new Map(prev).set(agent.id, {
+        status: 'connected',
+        providerCount: 1,
+        modelCount: CURSOR_MODELS.length,
         testedAt: new Date()
       }))
       return
@@ -134,7 +144,8 @@ export function AgentsSettings() {
               const isOpenCode = agent.config.coding_agent === CodingAgentType.OPENCODE || !agent.config.coding_agent
               const isClaudeCode = agent.config.coding_agent === CodingAgentType.CLAUDE_CODE
               const isCodex = agent.config.coding_agent === CodingAgentType.CODEX
-              const isCliAgent = isClaudeCode || isCodex
+              const isCursor = agent.config.coding_agent === CodingAgentType.CURSOR
+              const isCliAgent = isClaudeCode || isCodex || isCursor
 
               return (
                 <div key={agent.id} className="rounded-lg border border-border bg-card overflow-hidden">
@@ -164,6 +175,11 @@ export function AgentsSettings() {
                         {isCodex && (
                           <span title="Codex">
                             <OpenAILogo className="h-3.5 w-3.5 text-emerald-300/80" />
+                          </span>
+                        )}
+                        {isCursor && (
+                          <span title="Cursor">
+                            <Terminal className="h-3.5 w-3.5 text-violet-300/80" />
                           </span>
                         )}
                       </div>

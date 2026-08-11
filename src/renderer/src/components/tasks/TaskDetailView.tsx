@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react'
-import { Pencil, Trash2, Calendar, User, Tag, Clock, Bot, Play, History, GitBranch, Plus, X, BookOpen, AlarmClockOff, BellRing, Folder, Repeat, Star, Sparkles, ListTree, ArrowLeft, ChevronRight, ChevronDown, GripVertical, Layers, Settings2, AlertCircle, SquareArrowOutUpRight } from 'lucide-react'
+import { Pencil, Trash2, Calendar, User, Tag, Clock, Bot, Play, History, GitBranch, Plus, X, BookOpen, AlarmClockOff, BellRing, Folder, Repeat, Star, Sparkles, ListTree, ArrowLeft, ChevronRight, ChevronDown, GripVertical, Layers, Settings2, AlertCircle, SquareArrowOutUpRight, Terminal } from 'lucide-react'
 import { DndContext, closestCenter, KeyboardSensor, PointerSensor, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core'
 import { arrayMove, SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
@@ -503,9 +503,11 @@ function TaskDetailViewComponent({ task, agents, onEdit, onDelete, onUpdateAttac
                     const codingAgent = agent?.config.coding_agent
                     const agentName = codingAgent === CodingAgentType.CLAUDE_CODE ? 'Claude Code' :
                                      codingAgent === CodingAgentType.OPENCODE ? 'OpenCode' :
+                                     codingAgent === CodingAgentType.CURSOR ? 'Cursor' :
                                      'Codex'
                     const LogoComponent = codingAgent === CodingAgentType.CLAUDE_CODE ? AnthropicLogo :
                                          codingAgent === CodingAgentType.OPENCODE ? OpenCodeLogo :
+                                         codingAgent === CodingAgentType.CURSOR ? Terminal :
                                          OpenAILogo
                     return (
                       <div
