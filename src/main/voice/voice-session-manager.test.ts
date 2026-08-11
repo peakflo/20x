@@ -30,6 +30,7 @@ function makeManager(settings: Record<string, string> = { voice_enabled: 'true' 
     createTask: vi.fn(() => undefined),
     updateTask: vi.fn(() => undefined),
     getAgents: vi.fn(() => []),
+    getTranscriptParts: vi.fn(() => []),
     getSetting: vi.fn((key: string) => store[key]),
     setSetting: vi.fn((key: string, value: string) => {
       store[key] = value

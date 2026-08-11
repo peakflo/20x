@@ -48,6 +48,14 @@ import type {
   VoiceViewName,
   MicrophonePermission
 } from '@shared/voice'
+import type {
+  VoiceSpeechChunkEvent,
+  VoiceSpeechEndEvent,
+  VoiceSpeechStartEvent,
+  VoiceTtsEngineId,
+  VoiceTtsModelState,
+  VoiceTtsSnapshot
+} from '@shared/voice-tts'
 
 export interface AgentSessionStartResult {
   sessionId: string
@@ -525,6 +533,8 @@ interface ElectronAPI {
     pickModelDir: () => Promise<{ dir: string | null }>
     setEndpointSilence: (seconds: number) => Promise<{ success: boolean }>
     setShortcut: (accelerator: string) => Promise<VoiceSnapshot>
+    expectAnswer: (turnId: string, taskId?: string) => Promise<void>
+    answerNotExpected: (taskId?: string) => Promise<void>
     onState: (callback: (event: VoiceStateEvent) => void) => () => void
     onPartial: (callback: (event: { turnId: string; text: string }) => void) => () => void
     onFinal: (callback: (event: { turnId: string; text: string }) => void) => () => void
@@ -536,6 +546,28 @@ interface ElectronAPI {
     onDictate: (callback: (event: { turnId: string; text: string }) => void) => () => void
     onRuntimeProgress: (callback: (event: VoiceRuntimeProgressEvent) => void) => () => void
     onHotkey: (callback: (event: { action: string }) => void) => () => void
+    /** Spoken answers. Main produces the audio; the renderer only plays it. */
+    tts: {
+      getSnapshot: () => Promise<VoiceTtsSnapshot>
+      setEnabled: (enabled: boolean) => Promise<VoiceTtsSnapshot>
+      setEngine: (engine: VoiceTtsEngineId) => Promise<VoiceTtsSnapshot>
+      setVoice: (voiceId: string) => Promise<VoiceTtsSnapshot>
+      setSpeed: (speed: number) => Promise<VoiceTtsSnapshot>
+      setMaxChars: (maxChars: number) => Promise<VoiceTtsSnapshot>
+      setSpeakActionResults: (on: boolean) => Promise<VoiceTtsSnapshot>
+      setOnlyVoiceTurns: (on: boolean) => Promise<VoiceTtsSnapshot>
+      installModel: (id: string) => Promise<VoiceTtsSnapshot>
+      selectModel: (id: string) => Promise<VoiceTtsSnapshot>
+      removeModel: (id: string) => Promise<VoiceTtsSnapshot>
+      preview: (voiceId: string) => Promise<{ spoken: boolean }>
+      speak: (text: string, taskId?: string) => Promise<{ spoken: boolean }>
+      stop: () => Promise<void>
+      onSpeechStart: (callback: (event: VoiceSpeechStartEvent) => void) => () => void
+      onSpeechChunk: (callback: (event: VoiceSpeechChunkEvent) => void) => () => void
+      onSpeechEnd: (callback: (event: VoiceSpeechEndEvent) => void) => () => void
+      onStatus: (callback: (event: VoiceTtsSnapshot) => void) => () => void
+      onModelProgress: (callback: (event: { model: VoiceTtsModelState }) => void) => () => void
+    }
   }
   onGitlabDeviceCode: (callback: (code: string) => void) => () => void
   onOAuthCallback: (callback: (event: { code: string; state: string }) => void) => () => void

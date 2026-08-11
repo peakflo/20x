@@ -32,7 +32,15 @@ import { isVoiceIntent } from '../../shared/voice-intent-parser'
 /** The narrow slices of the managers this service is allowed to touch. */
 export type VoiceActionDb = Pick<
   DatabaseManager,
-  'getTasks' | 'getTask' | 'createTask' | 'updateTask' | 'getAgents' | 'getSetting'
+  | 'getTasks'
+  | 'getTask'
+  | 'createTask'
+  | 'updateTask'
+  | 'getAgents'
+  | 'getSetting'
+  // Reading the last answer must work after the session has been released from
+  // memory, so the durable transcript is the second source.
+  | 'getTranscriptParts'
 >
 
 export type VoiceActionAgents = Pick<
@@ -294,18 +302,32 @@ export class VoiceActionService {
 
       case 'read_last_answer': {
         if (!task) return this.noTarget(turnId)
-        const found = this.deps.agents.findSessionByTaskId(task.id)
-        const text = found ? this.deps.agents.getLastAssistantMessage(found.sessionId) : null
+        const text = this.lastAnswerFor(task.id)
         if (!text) {
           return { status: 'rejected', turnId, reason: 'not_found', message: 'There is no answer to read yet.' }
         }
-        // Phase 1 shows the answer as text. Phase 2 sends it to the TTS worker.
+        // The session manager speaks this message aloud and the renderer also
+        // shows it, so the answer is never only sound.
         return { status: 'executed', turnId, intent: intent.type, message: text, taskId: task.id }
       }
 
       case 'cancel':
         return { status: 'cancelled', turnId }
     }
+  }
+
+  /**
+   * The last thing the agent said on one task.
+   *
+   * The live session is asked first, because it holds the newest text. It is
+   * released from memory after a while and it never survives a restart, so the
+   * stored transcript answers whenever it cannot.
+   */
+  lastAnswerFor(taskId: string): string | null {
+    const found = this.deps.agents.findSessionByTaskId(taskId)
+    const live = found ? this.deps.agents.getLastAssistantMessage(found.sessionId) : null
+    if (live && live.trim()) return live
+    return lastAssistantTextFromTranscript(this.deps.db.getTranscriptParts(taskId))
   }
 
   private noTarget(turnId: string): VoiceActionOutcome {
@@ -399,6 +421,26 @@ export class VoiceActionService {
     if (partial.length === 0) return { ok: false, reason: 'not_found' }
     return { ok: false, reason: 'ambiguous', candidates: agentCandidates(partial) }
   }
+}
+
+/**
+ * The last thing the agent said, taken from the stored transcript.
+ *
+ * Only a plain assistant text part counts. Tool output, a question, an error
+ * and hidden reasoning are all skipped, because design §5.7 forbids speaking
+ * any of them.
+ */
+export function lastAssistantTextFromTranscript(
+  parts: Array<{ role: string; content: string; partType?: string }>
+): string | null {
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const part = parts[i]
+    if (part.role !== 'assistant') continue
+    if (part.partType && part.partType !== 'text') continue
+    const text = (part.content ?? '').trim()
+    if (text) return text
+  }
+  return null
 }
 
 function taskCandidates(tasks: TaskRecord[]): VoiceCandidate[] {

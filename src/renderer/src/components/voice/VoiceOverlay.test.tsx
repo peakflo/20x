@@ -45,6 +45,23 @@ describe('VoiceOverlay', () => {
     expect(screen.queryByText(/pause to send/i)).not.toBeInTheDocument()
   })
 
+  it('does not repeat a sentence it has already sent', () => {
+    // The sent sentence is in the transcript above the composer. Showing it
+    // again in the bubble says the same thing twice, and the bubble is for
+    // what is being said now.
+    reset({
+      state: 'listening',
+      turnId: 'turn-1',
+      mode: 'conversation',
+      sentSentences: ['run the tests again'],
+      partial: '',
+    })
+    render(<VoiceOverlay />)
+
+    expect(screen.getByTestId('voice-transcript')).toHaveTextContent('Speak now')
+    expect(screen.queryByText(/run the tests again/)).not.toBeInTheDocument()
+  })
+
   it('brightens and swells with the voice, visibly', () => {
     reset({ state: 'listening', turnId: 'turn-1', level: 0 })
     const { rerender } = render(<VoiceOverlay />)

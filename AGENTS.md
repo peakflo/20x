@@ -288,6 +288,11 @@ Speech to text runs on the user's computer. The local speech runtime is an
 is present, every voice control is hidden. See `docs/voice.md` for the design,
 the safety rules, and the release gates that are still open.
 
+Spoken answers are the other half. They need neither the microphone nor that
+runtime, because the system voice needs nothing: `voice:tts:*` handlers and the
+`voice:speech:*` events are described in `docs/voice-tts.md`. Speech audio is
+sent to the desktop window only, never to a mobile client.
+
 | Channel | Direction | Payload | Response |
 |---------|-----------|---------|----------|
 | `voice:getSnapshot` | renderer -> main | — | `VoiceSnapshot` |

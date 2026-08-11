@@ -43,9 +43,11 @@ export const VOICE_TRANSITIONS: Record<VoiceState, readonly VoiceState[]> = {
   disabled: ['permission_needed', 'model_needed', 'idle'],
   permission_needed: ['model_needed', 'idle', 'disabled'],
   model_needed: ['idle', 'permission_needed', 'disabled'],
-  idle: ['listening', 'permission_needed', 'model_needed', 'disabled'],
+  // `idle -> speaking` covers the speak button on a message and the voice
+  // sample in settings: both start speech with no turn open.
+  idle: ['listening', 'permission_needed', 'model_needed', 'disabled', 'speaking'],
   listening: ['transcribing', 'idle'],
-  transcribing: ['awaiting_confirmation', 'executing', 'waiting_for_agent', 'idle'],
+  transcribing: ['awaiting_confirmation', 'executing', 'waiting_for_agent', 'speaking', 'idle'],
   awaiting_confirmation: ['executing', 'idle'],
   executing: ['waiting_for_agent', 'speaking', 'idle'],
   waiting_for_agent: ['speaking', 'idle'],
@@ -312,6 +314,9 @@ export const VOICE_SETTING_KEYS = {
   conversation: 'voice_conversation',
   /** Seconds of silence that end a sentence. */
   endpointSilence: 'voice_endpoint_silence',
+  /** Whether each half of the voice settings page shows its extra controls. */
+  advancedStt: 'voice_advanced_stt',
+  advancedTts: 'voice_advanced_tts',
 } as const
 
 export const VOICE_DEFAULT_SHORTCUT = 'CommandOrControl+Shift+Space'
@@ -386,9 +391,21 @@ export interface VoiceCapabilities {
   wakeWord: boolean
 }
 
+/**
+ * Both halves of voice run on the desktop host. The microphone is captured
+ * there and the speech is produced and played there, so a phone is told plainly
+ * instead of being shown controls that cannot work.
+ */
 export const MOBILE_VOICE_CAPABILITIES: VoiceCapabilities = {
   available: false,
-  reason: 'Voice control is available on desktop.',
+  reason: 'Voice control and spoken answers are available on desktop.',
   tts: false,
+  wakeWord: false,
+}
+
+/** What the desktop renderer can do. Kept beside the mobile answer on purpose. */
+export const DESKTOP_VOICE_CAPABILITIES: VoiceCapabilities = {
+  available: true,
+  tts: true,
   wakeWord: false,
 }

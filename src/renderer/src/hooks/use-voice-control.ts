@@ -8,9 +8,11 @@ import {
   MASTERMIND_COMPOSER_KEY,
   clearActiveComposer,
   composerCanSubmit,
+  getActiveComposer,
   insertAndSubmit,
   insertDictation,
   setActiveComposer,
+  taskIdOfComposer
 } from '@/lib/voice-dictation-target'
 import type { VoiceUiContext } from '@shared/voice'
 
@@ -28,12 +30,15 @@ import type { VoiceUiContext } from '@shared/voice'
  */
 export function useVoiceControl(): void {
   const initialize = useVoiceStore((s) => s.initialize)
+  const initializeTts = useVoiceStore((s) => s.initializeTts)
   const setContextProvider = useVoiceStore((s) => s.setContextProvider)
   const toggleTurn = useVoiceStore((s) => s.toggleTurn)
 
   useEffect(() => {
     void initialize()
-  }, [initialize])
+    // Spoken answers are read separately: they work without the microphone.
+    void initializeTts()
+  }, [initialize, initializeTts])
 
   useEffect(() => {
     // Read the stores at call time, so the context is always current without
@@ -46,12 +51,11 @@ export function useVoiceControl(): void {
       return {
         selectedTaskId,
         view,
-        pendingApproval:
-          approval && selectedTaskId ? { taskId: selectedTaskId, sessionId: approval.sessionId } : null,
+        pendingApproval: approval && selectedTaskId ? { taskId: selectedTaskId, sessionId: approval.sessionId } : null,
         visibleTaskIds: useTaskStore
           .getState()
           .tasks.slice(0, 50)
-          .map((task) => task.id),
+          .map((task) => task.id)
       }
     })
     return () => setContextProvider(null)
@@ -82,8 +86,7 @@ export function useVoiceControl(): void {
       // of eight phrases — and the agent can do far more than those eight.
       useUIStore.getState().setShowOrchestrator(true)
       setActiveComposer(MASTERMIND_COMPOSER_KEY)
-      const loop =
-        useVoiceStore.getState().conversation && composerCanSubmit(MASTERMIND_COMPOSER_KEY)
+      const loop = useVoiceStore.getState().conversation && composerCanSubmit(MASTERMIND_COMPOSER_KEY)
       void toggleTurn(loop ? 'conversation' : 'dictation')
     })
 
@@ -98,12 +101,17 @@ export function useVoiceControl(): void {
 
     // A conversation stays open: each pause finishes one sentence, the sentence
     // is sent, and the microphone keeps listening for the next one.
-    const offSegment = voiceApi.onSegment(({ text }) => {
+    const offSegment = voiceApi.onSegment(({ turnId, text }) => {
+      const composer = getActiveComposer()
       const sent = insertAndSubmit(text)
       if (sent) {
         useVoiceStore.setState((state) => ({
-          sentSentences: [...state.sentSentences, text].slice(-5),
+          sentSentences: [...state.sentSentences, text].slice(-5)
         }))
+        // The sentence has gone to an agent, so the answer that comes back is
+        // the reply to it and may be read aloud. Without this the loop stops
+        // after one turn: 20x hears the reply but never speaks the answer.
+        void voiceApi.expectAnswer(turnId, taskIdOfComposer(composer))
       } else {
         // No composer to send from — show it instead of losing it.
         useVoiceStore.setState({ testTranscript: text })

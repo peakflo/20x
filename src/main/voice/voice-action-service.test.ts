@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { VoiceActionService } from './voice-action-service'
+import { VoiceActionService, lastAssistantTextFromTranscript } from './voice-action-service'
 import type { VoiceIntent, VoiceIntentProposal, VoiceUiContext } from '../../shared/voice'
 import type { TaskRecord } from '../database'
 
@@ -68,6 +68,7 @@ function makeService(settings: Record<string, string> = {}) {
     createTask: vi.fn((data: { title: string }) => task({ id: 'new', title: data.title })),
     updateTask: vi.fn((id: string) => TASKS.find((t) => t.id === id)),
     getAgents: vi.fn(() => AGENTS),
+    getTranscriptParts: vi.fn(() => []),
     getSetting: vi.fn((key: string) => settings[key]),
   }
   const agents = {
@@ -380,5 +381,40 @@ describe('VoiceActionService — schema guard', () => {
       {}
     )
     expect(outcome).toMatchObject({ status: 'rejected', reason: 'failed', message: 'the agent is offline' })
+  })
+})
+
+describe('the last answer', () => {
+  it('takes the newest plain assistant text', () => {
+    expect(
+      lastAssistantTextFromTranscript([
+        { role: 'assistant', content: 'An older answer.', partType: 'text' },
+        { role: 'user', content: 'And then?' },
+        { role: 'assistant', content: 'The newest answer.', partType: 'text' },
+      ])
+    ).toBe('The newest answer.')
+  })
+
+  it('never reads tool output, a question, an error or hidden reasoning', () => {
+    expect(
+      lastAssistantTextFromTranscript([
+        { role: 'assistant', content: 'The answer.', partType: 'text' },
+        { role: 'assistant', content: 'ran ls -la', partType: 'tool' },
+        { role: 'assistant', content: 'thinking about it', partType: 'reasoning' },
+        { role: 'assistant', content: 'it broke', partType: 'error' },
+      ])
+    ).toBe('The answer.')
+  })
+
+  it('accepts a part with no type, which is plain text', () => {
+    expect(lastAssistantTextFromTranscript([{ role: 'assistant', content: 'Plain.' }])).toBe('Plain.')
+  })
+
+  it('reports nothing when the agent has said nothing', () => {
+    expect(lastAssistantTextFromTranscript([])).toBeNull()
+    expect(lastAssistantTextFromTranscript([{ role: 'user', content: 'Hello?' }])).toBeNull()
+    expect(
+      lastAssistantTextFromTranscript([{ role: 'assistant', content: '   ', partType: 'text' }])
+    ).toBeNull()
   })
 })

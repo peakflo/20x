@@ -8,20 +8,22 @@ const RESULT_VISIBLE_MS = 6000
 
 /**
  * The in-app voice surface (design §5.3 and §5.5):
- *  - an audio state indicator,
+ *  - a listening indicator,
  *  - a live transcript bubble,
  *  - an explicit confirmation card for every action that needs one.
  *
  * Confirmation is always visual. A spoken "yes" never approves anything, so a
  * mis-heard word cannot start or approve work on its own.
+ *
+ * Reading aloud shows nothing. The user hears the answer, so a bubble that says
+ * so tells them what they already know and covers the screen while it does it.
+ * Escape still stops the reading, and so does speaking.
  */
 export function VoiceOverlay() {
   // Hidden until the optional runtime is installed and voice is switched on.
   const ready = useVoiceStore(selectVoiceReady)
   const state = useVoiceStore((s) => s.state)
   const partial = useVoiceStore((s) => s.partial)
-  const mode = useVoiceStore((s) => s.mode)
-  const sentSentences = useVoiceStore((s) => s.sentSentences)
   const level = useVoiceStore((s) => s.level)
   const confirmation = useVoiceStore((s) => s.confirmation)
   const result = useVoiceStore((s) => s.result)
@@ -30,6 +32,9 @@ export function VoiceOverlay() {
   const cancel = useVoiceStore((s) => s.cancel)
   const endTurn = useVoiceStore((s) => s.endTurn)
   const clearResult = useVoiceStore((s) => s.clearResult)
+  // Nothing is drawn while an answer is read, but Escape must still stop it.
+  const speaking = useVoiceStore((s) => s.speaking)
+  const stopSpeaking = useVoiceStore((s) => s.stopSpeaking)
 
   // Escape cancels the current turn or the open confirmation.
   useEffect(() => {
@@ -37,10 +42,13 @@ export function VoiceOverlay() {
       if (event.key !== 'Escape') return
       if (confirmation) void dismiss()
       else if (state === 'listening') void cancel()
+      // Escape also stops speech. It is the one key a user reaches for when
+      // the app is talking and they want it to stop.
+      else if (speaking) void stopSpeaking()
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [confirmation, state, dismiss, cancel])
+  }, [confirmation, state, dismiss, cancel, speaking, stopSpeaking])
 
   useEffect(() => {
     if (!result) return undefined
@@ -87,13 +95,11 @@ export function VoiceOverlay() {
                   happens next by itself. */}
               {transcribing ? 'Writing the words' : 'Listening'}
             </p>
+            {/* Only the words being spoken now. A sentence that was already
+                sent is in the transcript above, and repeating it here says
+                the same thing twice. */}
             <p className="truncate text-sm text-foreground" data-testid="voice-transcript">
-              {partial ||
-                (transcribing
-                  ? 'One moment…'
-                  : mode === 'conversation' && sentSentences.length > 0
-                    ? `Sent: ${sentSentences[sentSentences.length - 1]}`
-                    : 'Speak now')}
+              {partial || (transcribing ? 'One moment…' : 'Speak now')}
             </p>
           </div>
           {listening && (

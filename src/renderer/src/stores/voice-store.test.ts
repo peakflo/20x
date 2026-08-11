@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 
 vi.mock('@/lib/voice-capture', () => ({
   voiceCapture: {
@@ -32,6 +32,47 @@ function reset(): void {
     result: null,
   })
 }
+
+/**
+ * The reported failure: the words were recognised and sent, and 20x carried on
+ * reading. If words reach the recogniser then the gate was not holding, and a
+ * gate that is not holding never fires barge-in — so nothing stopped the
+ * playback. This is the net under that.
+ */
+describe('voice store — words heard while reading', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+  })
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  async function readingWithTurnOpen() {
+    await useVoiceStore.getState().startTurn('conversation')
+    const { voicePlayback } = await import('@/lib/voice-playback')
+    vi.spyOn(voicePlayback, 'isPlaying', 'get').mockReturnValue(true)
+    // Opening the turn stops any playback of its own, which is not what is
+    // being measured here.
+    return vi.spyOn(voicePlayback, 'stop')
+  }
+
+  it('stops reading as soon as any word is recognised', async () => {
+    const stop = await readingWithTurnOpen()
+
+    onPartial({ turnId: 'turn-1', text: 'stop' })
+
+    expect(stop).toHaveBeenCalled()
+  })
+
+  it('leaves the reading alone when nothing was heard', async () => {
+    const stop = await readingWithTurnOpen()
+
+    onPartial({ turnId: 'turn-1', text: '   ' })
+
+    expect(stop).not.toHaveBeenCalled()
+  })
+})
 
 describe('voice store — turns', () => {
   beforeEach(() => {

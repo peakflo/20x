@@ -25,6 +25,19 @@
  */
 export const MASTERMIND_COMPOSER_KEY = 'orchestrator'
 
+/** The dashboard command box. Named for the same reason. */
+export const DASHBOARD_COMPOSER_KEY = 'dashboard-command'
+
+/**
+ * A transcript composer registers under its task ID, so the key names the task
+ * a spoken sentence was sent to. The two composers above belong to no task and
+ * send on their own behalf.
+ */
+export function taskIdOfComposer(key: string | null): string | undefined {
+  if (!key || key === MASTERMIND_COMPOSER_KEY || key === DASHBOARD_COMPOSER_KEY) return undefined
+  return key
+}
+
 export type DictationTarget = HTMLTextAreaElement | HTMLInputElement
 
 export interface ComposerRegistration {

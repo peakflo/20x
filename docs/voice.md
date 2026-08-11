@@ -22,10 +22,15 @@ feasibility for 20x desktop"). Section numbers below refer to that document.
 
 ## What phase 1 does not contain
 
-Agent answers stay text. There is no spoken answer, no barge-in, no wake word,
-no cloud provider, and no microphone on mobile. Every one of these is a phase 2
-item in the design, and the contracts in `src/shared/voice.ts` leave room for
-them.
+There is no wake word, no cloud provider, and no microphone on mobile. Each one
+is a later item in the design, and the contracts in `src/shared/voice.ts` leave
+room for them.
+
+Spoken answers were the other phase 1 exclusion. They are now implemented and
+documented in [`voice-tts.md`](voice-tts.md). Both halves share one settings
+page, **Settings → Voice**, split into what 20x hears and what 20x says. Each
+half hides only its own tuning behind its own "Advanced options" disclosure. Speaking needs neither the
+microphone nor the optional speech runtime, so it works on its own.
 
 Do not describe this release as ChatGPT voice mode. It is local dictation and
 local task commands.
@@ -159,6 +164,11 @@ things in it:
 - a **cross that stops listening**, ending the turn and keeping what was heard.
   Escape is the other exit and throws the words away instead; the cross says so
   in its tooltip.
+
+The bubble shows only the words being said now. In conversation mode it used to
+show the sentence it had just sent, which put the same sentence on the screen
+twice: once in the transcript above, once in the bubble below. It now says
+"Speak now" and waits.
 
 ### A click waits for the model
 
