@@ -3508,6 +3508,64 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     })
   }
 
+  /**
+   * Marks a task complete once its agent is done, telling the source system
+   * first when there is one.
+   *
+   * Two callers need exactly this: a learning session finishing, and a task
+   * flagged to complete without review. An enterprise task that cannot be
+   * closed upstream falls back to ready_for_review, so it is never marked done
+   * locally while the system of record still shows it open.
+   *
+   * Returns false when the task was left for review instead.
+   */
+  private async completeTaskAfterAgent(
+    session: AgentSession,
+    sessionId: string,
+    task: TaskRecord
+  ): Promise<boolean> {
+    const yieldEventLoop = (): Promise<void> => new Promise((r) => setImmediate(r))
+    if (task.source_id && this.syncManager) {
+      const actionField = task.output_fields?.find((f: OutputFieldRecord) => f.id === 'action')
+      const actionValue = actionField?.value ? String(actionField.value) : PluginActionId.Complete
+      console.log(`[AgentManager] Enterprise task — calling executeAction("${actionValue}") for source ${task.source_id}`)
+      let failure: string | null = null
+      try {
+        const result = await this.syncManager.executeAction(actionValue, task, undefined, task.source_id)
+        if (!result.success) failure = result.error ?? 'unknown error'
+      } catch (err) {
+        failure = err instanceof Error ? err.message : String(err)
+      }
+      if (failure) {
+        console.error(`[AgentManager] executeAction failed, leaving task for review:`, failure)
+        this.db.updateTask(session.taskId, { status: TaskStatus.ReadyForReview })
+        await yieldEventLoop()
+        this.sendToRenderer('task:updated', {
+          taskId: session.taskId,
+          updates: { status: TaskStatus.ReadyForReview }
+        })
+        return false
+      }
+      await yieldEventLoop()
+    }
+
+    this.db.updateTask(session.taskId, { status: TaskStatus.Completed })
+    await yieldEventLoop()
+    this.sendToRenderer('task:updated', {
+      taskId: session.taskId,
+      updates: { status: TaskStatus.Completed }
+    })
+
+    // A subtask that finishes must still wake its parent.
+    if (task.parent_task_id) {
+      this.notifyParentOfSubtaskCompletion(task.parent_task_id, session.taskId).catch((err) => {
+        console.error(`[AgentManager] Failed to wake parent ${task.parent_task_id} after subtask ${session.taskId} completed:`, err)
+      })
+    }
+    void sessionId
+    return true
+  }
+
   private async transitionToIdle(sessionId: string, session: AgentSession): Promise<void> {
     if (session.status === 'idle') {
       console.log(`[AgentManager] transitionToIdle: session ${sessionId} already idle, skipping`)
@@ -3607,54 +3665,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       }
       await yieldEventLoop()
 
-      // For enterprise tasks, call executeAction to notify the backend (e.g. Workflo)
-      // before marking the task as completed locally. This mirrors the completion
-      // path used by the renderer's onCompleteTask / handleFeedbackSkip.
-      if (task.source_id && this.syncManager) {
-        const actionField = task.output_fields?.find((f: OutputFieldRecord) => f.id === 'action')
-        const actionValue = actionField?.value ? String(actionField.value) : PluginActionId.Complete
-        console.log(`[AgentManager] Enterprise task — calling executeAction("${actionValue}") for source ${task.source_id}`)
-        try {
-          const result = await this.syncManager.executeAction(actionValue, task, undefined, task.source_id)
-          if (!result.success) {
-            console.error(`[AgentManager] executeAction failed:`, result.error)
-            // Revert to ReadyForReview so user can retry completion manually
-            this.db.updateTask(session.taskId, { status: TaskStatus.ReadyForReview })
-            await yieldEventLoop()
-            this.sendToRenderer('task:updated', {
-              taskId: session.taskId,
-              updates: { status: TaskStatus.ReadyForReview }
-            })
-            this.sendToRenderer('agent:status', {
-              sessionId, agentId: session.agentId, taskId: session.taskId, status: 'idle'
-            })
-            return
-          }
-        } catch (err) {
-          console.error(`[AgentManager] executeAction threw:`, err)
-          this.db.updateTask(session.taskId, { status: TaskStatus.ReadyForReview })
-          await yieldEventLoop()
-          this.sendToRenderer('task:updated', {
-            taskId: session.taskId,
-            updates: { status: TaskStatus.ReadyForReview }
-          })
-          this.sendToRenderer('agent:status', {
-            sessionId, agentId: session.agentId, taskId: session.taskId, status: 'idle'
-          })
-          return
-        }
-        await yieldEventLoop()
-      }
-
-      // Mark task as completed
-      this.db.updateTask(session.taskId, { status: TaskStatus.Completed })
-      await yieldEventLoop()
-
-      this.sendToRenderer('task:updated', {
-        taskId: session.taskId,
-        updates: { status: TaskStatus.Completed }
-      })
-
+      await this.completeTaskAfterAgent(session, sessionId, task)
       this.sendToRenderer('agent:status', {
         sessionId, agentId: session.agentId, taskId: session.taskId, status: 'idle'
       })
@@ -3676,6 +3687,31 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
 
     if (taskAfterExtract?.status === TaskStatus.AgentLearning || taskAfterExtract?.status === TaskStatus.Completed) {
       console.log(`[AgentManager] Task already in final state (${taskAfterExtract.status}), skipping status update`)
+      this.sendToRenderer('agent:status', {
+        sessionId, agentId: session.agentId, taskId: session.taskId, status: 'idle'
+      })
+      return
+    }
+
+    /**
+     * A task told to finish without review finishes here, in main.
+     *
+     * This used to be done by the renderer, watching for ready_for_review — so
+     * a task could only self-resolve while a window happened to be open. An
+     * agent driving 20x through MCP, or a scheduled run on a machine with the
+     * window closed, would leave the task sitting in review for ever.
+     */
+    if (task.auto_complete_without_review) {
+      console.log(`[AgentManager] Task ${session.taskId} completes without review`)
+      const completed = await this.completeTaskAfterAgent(session, sessionId, task)
+      if (completed) {
+        this.autoEnableHeartbeat(session.taskId)
+        this.sendToRenderer('agent:status', {
+          sessionId, agentId: session.agentId, taskId: session.taskId, status: 'idle'
+        })
+        return
+      }
+      // Completion was refused upstream; it is already back in review.
       this.sendToRenderer('agent:status', {
         sessionId, agentId: session.agentId, taskId: session.taskId, status: 'idle'
       })

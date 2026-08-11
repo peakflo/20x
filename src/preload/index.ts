@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type { ArtifactContent, ArtifactFileEntry, PullRequestDetails } from '../shared/artifacts'
+import { UI_COMMAND_CHANNEL, type UiCommand } from '../shared/ui-commands'
 
 contextBridge.exposeInMainWorld('electronAPI', {
   db: {
@@ -525,6 +526,162 @@ contextBridge.exposeInMainWorld('electronAPI', {
       const handler = (_: unknown, d: { id: string }): void => callback(d)
       ipcRenderer.on('terminal:exit', handler)
       return () => ipcRenderer.removeListener('terminal:exit', handler)
+    }
+  },
+  ui: {
+    publishState: (state: Record<string, unknown>): Promise<void> =>
+      ipcRenderer.invoke('ui:publishState', state),
+    onCommand: (callback: (command: UiCommand) => void): (() => void) => {
+      const handler = (_: unknown, command: UiCommand): void => callback(command)
+      ipcRenderer.on(UI_COMMAND_CHANNEL, handler)
+      return () => ipcRenderer.removeListener(UI_COMMAND_CHANNEL, handler)
+    }
+  },
+  voice: {
+    getSnapshot: (): Promise<unknown> => ipcRenderer.invoke('voice:getSnapshot'),
+    setEnabled: (enabled: boolean): Promise<unknown> => ipcRenderer.invoke('voice:setEnabled', { enabled }),
+    getPermission: (): Promise<{ status: string }> => ipcRenderer.invoke('voice:getPermission'),
+    requestPermission: (): Promise<{ status: string }> => ipcRenderer.invoke('voice:requestPermission'),
+    startTurn: (mode: string, context: Record<string, unknown>): Promise<unknown> =>
+      ipcRenderer.invoke('voice:startTurn', { mode, context }),
+    // Raw 16-bit PCM, batched by the renderer. Never base64.
+    pushAudio: (turnId: string, chunk: Uint8Array): Promise<void> =>
+      ipcRenderer.invoke('voice:pushAudio', { turnId, chunk }),
+    endTurn: (turnId: string): Promise<void> => ipcRenderer.invoke('voice:endTurn', { turnId }),
+    cancelTurn: (turnId?: string): Promise<void> => ipcRenderer.invoke('voice:cancelTurn', { turnId }),
+    confirm: (turnId: string, choice?: { taskId?: string; agentName?: string }): Promise<unknown> =>
+      ipcRenderer.invoke('voice:confirm', { turnId, choice }),
+    dismiss: (turnId: string): Promise<void> => ipcRenderer.invoke('voice:dismiss', { turnId }),
+    getRuntime: (): Promise<unknown> => ipcRenderer.invoke('voice:getRuntime'),
+    installRuntime: (): Promise<unknown> => ipcRenderer.invoke('voice:installRuntime'),
+    removeRuntime: (): Promise<unknown> => ipcRenderer.invoke('voice:removeRuntime'),
+    listModels: (): Promise<unknown[]> => ipcRenderer.invoke('voice:listModels'),
+    installModel: (id: string): Promise<unknown> => ipcRenderer.invoke('voice:installModel', { id }),
+    removeModel: (id: string): Promise<unknown> => ipcRenderer.invoke('voice:removeModel', { id }),
+    selectModel: (id: string): Promise<unknown> => ipcRenderer.invoke('voice:selectModel', { id }),
+    removeAllModels: (): Promise<unknown> => ipcRenderer.invoke('voice:removeAllModels'),
+    setCustomModelDir: (dir: string): Promise<unknown> =>
+      ipcRenderer.invoke('voice:setCustomModelDir', { dir }),
+    pickModelDir: (): Promise<{ dir: string | null }> => ipcRenderer.invoke('voice:pickModelDir'),
+    setEndpointSilence: (seconds: number): Promise<unknown> =>
+      ipcRenderer.invoke('voice:setEndpointSilence', { seconds }),
+    setShortcut: (accelerator: string): Promise<unknown> =>
+      ipcRenderer.invoke('voice:setShortcut', { accelerator }),
+    expectAnswer: (turnId: string, taskId?: string): Promise<void> =>
+      ipcRenderer.invoke('voice:expectAnswer', { turnId, taskId }),
+    answerNotExpected: (taskId?: string): Promise<void> =>
+      ipcRenderer.invoke('voice:answerNotExpected', { taskId }),
+    onState: (callback: (data: unknown) => void): (() => void) => {
+      const handler = (_: unknown, d: unknown): void => callback(d)
+      ipcRenderer.on('voice:state', handler)
+      return () => ipcRenderer.removeListener('voice:state', handler)
+    },
+    onPartial: (callback: (data: { turnId: string; text: string }) => void): (() => void) => {
+      const handler = (_: unknown, d: { turnId: string; text: string }): void => callback(d)
+      ipcRenderer.on('voice:partial', handler)
+      return () => ipcRenderer.removeListener('voice:partial', handler)
+    },
+    onFinal: (callback: (data: { turnId: string; text: string }) => void): (() => void) => {
+      const handler = (_: unknown, d: { turnId: string; text: string }): void => callback(d)
+      ipcRenderer.on('voice:final', handler)
+      return () => ipcRenderer.removeListener('voice:final', handler)
+    },
+    onSegment: (callback: (data: { turnId: string; text: string; index: number }) => void): (() => void) => {
+      const handler = (_: unknown, d: { turnId: string; text: string; index: number }): void => callback(d)
+      ipcRenderer.on('voice:segment', handler)
+      return () => ipcRenderer.removeListener('voice:segment', handler)
+    },
+    onOutcome: (callback: (data: unknown) => void): (() => void) => {
+      const handler = (_: unknown, d: unknown): void => callback(d)
+      ipcRenderer.on('voice:outcome', handler)
+      return () => ipcRenderer.removeListener('voice:outcome', handler)
+    },
+    onStatus: (callback: (data: unknown) => void): (() => void) => {
+      const handler = (_: unknown, d: unknown): void => callback(d)
+      ipcRenderer.on('voice:status', handler)
+      return () => ipcRenderer.removeListener('voice:status', handler)
+    },
+    onError: (callback: (data: { message: string; code?: string }) => void): (() => void) => {
+      const handler = (_: unknown, d: { message: string; code?: string }): void => callback(d)
+      ipcRenderer.on('voice:error', handler)
+      return () => ipcRenderer.removeListener('voice:error', handler)
+    },
+    onNavigate: (callback: (data: { destination: string; taskId: string | null }) => void): (() => void) => {
+      const handler = (_: unknown, d: { destination: string; taskId: string | null }): void => callback(d)
+      ipcRenderer.on('voice:navigate', handler)
+      return () => ipcRenderer.removeListener('voice:navigate', handler)
+    },
+    onDictate: (callback: (data: { turnId: string; text: string }) => void): (() => void) => {
+      const handler = (_: unknown, d: { turnId: string; text: string }): void => callback(d)
+      ipcRenderer.on('voice:dictate', handler)
+      return () => ipcRenderer.removeListener('voice:dictate', handler)
+    },
+    onRuntimeProgress: (
+      callback: (data: { stage: string; output: string; percent: number }) => void
+    ): (() => void) => {
+      const handler = (_: unknown, d: { stage: string; output: string; percent: number }): void => callback(d)
+      ipcRenderer.on('voice:runtimeProgress', handler)
+      return () => ipcRenderer.removeListener('voice:runtimeProgress', handler)
+    },
+    onHotkey: (callback: (data: { action: string }) => void): (() => void) => {
+      const handler = (_: unknown, d: { action: string }): void => callback(d)
+      ipcRenderer.on('voice:hotkey', handler)
+      return () => ipcRenderer.removeListener('voice:hotkey', handler)
+    },
+
+    // ── Spoken answers ──────────────────────────────────────
+    // Main decides what may be spoken and produces the samples. The renderer
+    // owns nothing here except playback.
+    tts: {
+      getSnapshot: (): Promise<unknown> => ipcRenderer.invoke('voice:tts:getSnapshot'),
+      setEnabled: (enabled: boolean): Promise<unknown> =>
+        ipcRenderer.invoke('voice:tts:setEnabled', { enabled }),
+      setEngine: (engine: string): Promise<unknown> =>
+        ipcRenderer.invoke('voice:tts:setEngine', { engine }),
+      setVoice: (voiceId: string): Promise<unknown> =>
+        ipcRenderer.invoke('voice:tts:setVoice', { voiceId }),
+      setSpeed: (speed: number): Promise<unknown> => ipcRenderer.invoke('voice:tts:setSpeed', { speed }),
+      setMaxChars: (maxChars: number): Promise<unknown> =>
+        ipcRenderer.invoke('voice:tts:setMaxChars', { maxChars }),
+      setSpeakActionResults: (on: boolean): Promise<unknown> =>
+        ipcRenderer.invoke('voice:tts:setSpeakActionResults', { on }),
+      setOnlyVoiceTurns: (on: boolean): Promise<unknown> =>
+        ipcRenderer.invoke('voice:tts:setOnlyVoiceTurns', { on }),
+      installModel: (id: string): Promise<unknown> => ipcRenderer.invoke('voice:tts:installModel', { id }),
+      selectModel: (id: string): Promise<unknown> => ipcRenderer.invoke('voice:tts:selectModel', { id }),
+      removeModel: (id: string): Promise<unknown> => ipcRenderer.invoke('voice:tts:removeModel', { id }),
+      preview: (voiceId: string): Promise<{ spoken: boolean }> =>
+        ipcRenderer.invoke('voice:tts:preview', { voiceId }),
+      speak: (text: string, taskId?: string): Promise<{ spoken: boolean }> =>
+        ipcRenderer.invoke('voice:tts:speak', { text, taskId }),
+      stop: (): Promise<void> => ipcRenderer.invoke('voice:tts:stop'),
+      onSpeechStart: (callback: (data: unknown) => void): (() => void) => {
+        const handler = (_: unknown, d: unknown): void => callback(d)
+        ipcRenderer.on('voice:speech:start', handler)
+        return () => ipcRenderer.removeListener('voice:speech:start', handler)
+      },
+      // The samples cross as a byte array, never as base64: a structured clone
+      // is both smaller and quicker than a string of the same audio.
+      onSpeechChunk: (callback: (data: unknown) => void): (() => void) => {
+        const handler = (_: unknown, d: unknown): void => callback(d)
+        ipcRenderer.on('voice:speech:chunk', handler)
+        return () => ipcRenderer.removeListener('voice:speech:chunk', handler)
+      },
+      onSpeechEnd: (callback: (data: unknown) => void): (() => void) => {
+        const handler = (_: unknown, d: unknown): void => callback(d)
+        ipcRenderer.on('voice:speech:end', handler)
+        return () => ipcRenderer.removeListener('voice:speech:end', handler)
+      },
+      onStatus: (callback: (data: unknown) => void): (() => void) => {
+        const handler = (_: unknown, d: unknown): void => callback(d)
+        ipcRenderer.on('voice:tts:status', handler)
+        return () => ipcRenderer.removeListener('voice:tts:status', handler)
+      },
+      onModelProgress: (callback: (data: unknown) => void): (() => void) => {
+        const handler = (_: unknown, d: unknown): void => callback(d)
+        ipcRenderer.on('voice:tts:modelProgress', handler)
+        return () => ipcRenderer.removeListener('voice:tts:modelProgress', handler)
+      }
     }
   },
   browser: {

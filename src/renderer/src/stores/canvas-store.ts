@@ -63,6 +63,17 @@ export interface CanvasEdge {
 export const SNAP_THRESHOLD = 12 // px distance to trigger snap
 export const SNAP_GAP = 8 // px gap between snapped panels
 
+/**
+ * A viewport change asked for from outside the canvas. `focus_task` names the
+ * task, not the panel: a panel is rebuilt when a session starts, so a panel ID
+ * read a moment ago may already be gone.
+ */
+export type CanvasViewCommand =
+  | { kind: 'fit_all' }
+  | { kind: 'reset' }
+  | { kind: 'zoom'; zoom: number }
+  | { kind: 'focus_task'; taskId: string }
+
 export interface SnapGuide {
   axis: 'x' | 'y'
   position: number
@@ -173,6 +184,18 @@ interface CanvasState {
   liveDrag: { id: string; x: number; y: number } | null
   setLiveDrag: (drag: { id: string; x: number; y: number } | null) => void
 
+  /**
+   * A viewport change asked for from outside the canvas (transient).
+   *
+   * `fitToContent` and `focusPanel` need the size of the canvas container, and
+   * only the canvas component knows it. So a caller that has no element —
+   * an agent tool, a voice command — leaves the intent here and the canvas
+   * carries it out with its own rect on the next render.
+   */
+  pendingViewCommand: CanvasViewCommand | null
+  requestViewCommand: (command: CanvasViewCommand) => void
+  clearViewCommand: () => void
+
   // Persistence
   isLoaded: boolean
   loadCanvas: () => Promise<void>
@@ -232,6 +255,7 @@ export const useCanvasStore = create<CanvasState>()(subscribeWithSelector((set, 
   connectingFromId: null,
   proximityEdge: null,
   liveDrag: null,
+  pendingViewCommand: null,
   isLoaded: false,
 
   loadCanvas: async () => {
@@ -427,6 +451,13 @@ export const useCanvasStore = create<CanvasState>()(subscribeWithSelector((set, 
     if (prev === drag) return
     if (prev && drag && prev.id === drag.id && prev.x === drag.x && prev.y === drag.y) return
     set({ liveDrag: drag })
+  },
+
+  // Viewport commands from outside the canvas
+  requestViewCommand: (command) => set({ pendingViewCommand: command }),
+  clearViewCommand: () => {
+    if (!get().pendingViewCommand) return
+    set({ pendingViewCommand: null })
   },
 
   // Edges

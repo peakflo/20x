@@ -91,6 +91,14 @@ Most AI tools make you copy-paste context between tabs. 20x flips it: **your tas
 - **Output fields** — Structured task results
 - **Smart search** — Find anything fast
 
+### 🎙 Voice (desktop, optional)
+- **Local speech to text** — Runs on your machine; no audio is stored or sent anywhere
+- **Talk to Mastermind** — Microphone in the top bar, or `Cmd/Ctrl+Shift+Space`, from any view
+- **Dictate anywhere** — A microphone in every agent message box and the dashboard command box
+- **Keep talking** — Each pause sends a sentence and the microphone stays open
+- **Spoken answers** — 20x reads an agent answer aloud, and stops the moment you speak. It uses the voice your system already has, so it needs no download; a more natural downloaded voice is one click away
+- Off by default: install the runtime and a model in **Settings → Voice**. See [docs/voice.md](docs/voice.md) and [docs/voice-tts.md](docs/voice-tts.md)
+
 ### 💓 Heartbeat Monitoring
 - **Enterprise heartbeat** — Continuous health checks with GitHub preflight
 - **CI failure detection** — Automatically detect CI pipeline failures

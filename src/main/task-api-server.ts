@@ -11,6 +11,16 @@ import { TaskStatus } from '../shared/constants'
 import { ArtifactType } from '../shared/artifacts'
 import type { AgentManager } from './agent-manager'
 import {
+  UI_CANVAS_MAX_ZOOM,
+  UI_CANVAS_MIN_ZOOM,
+  UI_COMMAND_CHANNEL,
+  isUiCanvasViewMode,
+  isUiOpenTaskTarget,
+  isUiViewName,
+  type UiCommand,
+  type UiOpenTaskTarget
+} from '../shared/ui-commands'
+import {
   createRegisteredTaskArtifact,
   editRegisteredTaskArtifactFile,
   listRegisteredTaskArtifacts,
@@ -23,7 +33,69 @@ let port: number | null = null
 let startupPromise: Promise<number> | null = null
 let notifyRenderer: ((channel: string, data: unknown) => void) | null = null
 let transcriptProvider: ((taskId: string) => Promise<Array<{ role: string; text: string }>>) | null = null
-let agentController: Pick<AgentManager, 'startTask' | 'notifyParentOfSubtaskCompletion'> | null = null
+type TaskApiAgentController = Pick<
+  AgentManager,
+  | 'startTask'
+  | 'notifyParentOfSubtaskCompletion'
+  | 'sendByTaskId'
+  | 'respondToPermission'
+  | 'stopByTaskId'
+  | 'findSessionByTaskId'
+  | 'getSessionStatus'
+  | 'getActiveSessionsForTask'
+>
+
+let agentController: TaskApiAgentController | null = null
+
+/**
+ * What the renderer is showing. It is pushed on change and cached here, so a
+ * tool call never has to wait for a round trip to the window.
+ */
+let uiState: Record<string, unknown> = { available: false }
+
+export function setTaskApiUiState(state: Record<string, unknown> | null): void {
+  // Null clears it. A closed window must not keep reporting a stale screen.
+  uiState = state ? { ...state, available: true, updatedAt: Date.now() } : { available: false }
+}
+
+/** The canvas panels the window last published, or none when it published none. */
+function readCanvasPanels(): Array<{ taskId: string | null }> {
+  const canvas = uiState.canvas as { panels?: Array<{ taskId: string | null }> } | undefined
+  return Array.isArray(canvas?.panels) ? canvas.panels : []
+}
+
+/**
+ * Where "open this task" should send the user when the caller did not say.
+ *
+ * It follows the screen: a user looking at the canvas means the canvas, and a
+ * user on the dashboard means the dialog that keeps them there. Anything else
+ * is the full task view.
+ */
+function resolveOpenTaskTarget(): 'workspace' | 'canvas' | 'modal' {
+  const view = typeof uiState.view === 'string' ? uiState.view : null
+  if (view === 'canvas') return 'canvas'
+  if (view === 'dashboard') return 'modal'
+  return 'workspace'
+}
+
+/** Refuses when that task has no panel, so a move cannot silently do nothing. */
+function requireCanvasPanel(taskId: string): { error: string } | null {
+  if (readCanvasPanels().some((panel) => panel.taskId === taskId)) return null
+  return { error: 'That task has no panel on the canvas. Open it there first.' }
+}
+
+/**
+ * Pushes one command to the window.
+ *
+ * A command that reaches no window is a failure, not a success: an agent that
+ * is told "done" would go on to describe a screen the user never saw.
+ */
+function sendUiCommand(command: UiCommand): { success: true; command: string } | { error: string } {
+  if (!uiState.available) return { error: 'No 20x window is open' }
+  if (!notifyRenderer) return { error: 'The window cannot be reached' }
+  notifyRenderer(UI_COMMAND_CHANNEL, command)
+  return { success: true, command: command.kind }
+}
 
 export function getTaskApiPort(): number | null {
   return port
@@ -55,9 +127,7 @@ export function setTranscriptProvider(fn: (taskId: string) => Promise<Array<{ ro
   transcriptProvider = fn
 }
 
-export function setTaskApiAgentController(
-  controller: Pick<AgentManager, 'startTask' | 'notifyParentOfSubtaskCompletion'> | null
-): void {
+export function setTaskApiAgentController(controller: TaskApiAgentController | null): void {
   agentController = controller
 }
 
@@ -129,7 +199,8 @@ export function stopTaskApiServer(): void {
 
 // ── Route handler ──────────────────────────────────────────────
 
-async function handleRoute(db: DatabaseManager, route: string, params: Record<string, unknown>): Promise<unknown> {
+/** Exported so the routes can be tested without starting an HTTP server. */
+export async function handleRoute(db: DatabaseManager, route: string, params: Record<string, unknown>): Promise<unknown> {
   const rawDb = (db as unknown as { db: import('better-sqlite3').Database }).db // Access the underlying better-sqlite3 instance
 
   switch (route) {
@@ -263,8 +334,8 @@ async function handleRoute(db: DatabaseManager, route: string, params: Record<st
       }
 
       rawDb.prepare(`
-        INSERT INTO tasks (id, title, description, type, priority, status, assignee, due_date, labels, attachments, repos, output_fields, source, agent_id, skill_ids, is_recurring, recurrence_pattern, next_occurrence_at, parent_task_id, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', '[]', '[]', 'local', ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO tasks (id, title, description, type, priority, status, assignee, due_date, labels, attachments, repos, output_fields, source, agent_id, skill_ids, is_recurring, recurrence_pattern, next_occurrence_at, parent_task_id, auto_complete_without_review, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', '[]', '[]', 'local', ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         id,
         params.title,
@@ -281,6 +352,7 @@ async function handleRoute(db: DatabaseManager, route: string, params: Record<st
         recurrencePattern,
         nextOccurrenceAt,
         params.parent_task_id || null,
+        params.auto_complete_without_review === true ? 1 : 0,
         now,
         now
       )
@@ -328,6 +400,11 @@ async function handleRoute(db: DatabaseManager, route: string, params: Record<st
       if (params.labels !== undefined) { updates.push('labels = ?'); qParams.push(JSON.stringify(params.labels)) }
       if (params.skill_ids !== undefined) { updates.push('skill_ids = ?'); qParams.push(JSON.stringify(params.skill_ids)) }
       if (params.agent_id !== undefined) { updates.push('agent_id = ?'); qParams.push(params.agent_id) }
+      // Lets a caller with no window make a task finish by itself.
+      if (params.auto_complete_without_review !== undefined) {
+        updates.push('auto_complete_without_review = ?')
+        qParams.push(params.auto_complete_without_review === true ? 1 : 0)
+      }
       if (params.repos !== undefined) {
         const normalizedRepos = Array.isArray(params.repos)
           ? params.repos
@@ -573,6 +650,260 @@ async function handleRoute(db: DatabaseManager, route: string, params: Record<st
       ).all(params.parent_task_id) as Record<string, unknown>[]
       subtasks.forEach(parseTask)
       return subtasks
+    }
+
+    // ── Reading the live state ────────────────────────────────
+    // A task row cannot answer these. `waiting_approval` is a session state and
+    // is never written to the task record, so a task blocked on the user looks
+    // exactly like a task that is running.
+
+    case '/get_messages': {
+      if (!params.task_id) return { error: 'task_id is required' }
+      const taskId = String(params.task_id)
+      const limit = Math.min(Number(params.limit) || 20, 200)
+      const includeTools = params.include_tools === true
+      const role = params.role ? String(params.role) : null
+
+      let parts = db.getTranscriptParts(taskId)
+      // Tool output is enormous and is rarely what a question is about, so it
+      // is left out unless it is asked for. This keeps a reply readable.
+      if (!includeTools) {
+        parts = parts.filter((part) => part.role === 'user' || part.role === 'assistant')
+        parts = parts.filter((part) => !part.partType || part.partType === 'text')
+      }
+      if (role) parts = parts.filter((part) => part.role === role)
+
+      // Newest first, and page backwards with the cursor of the oldest row
+      // returned. A sequence number stays correct while the agent keeps writing.
+      const ordered = [...parts].sort((a, b) => b.seq - a.seq)
+      const before = params.before_seq !== undefined ? Number(params.before_seq) : null
+      const page = (before === null ? ordered : ordered.filter((part) => part.seq < before)).slice(0, limit)
+
+      return {
+        task_id: taskId,
+        messages: page.map((part) => ({
+          seq: part.seq,
+          role: part.role,
+          type: part.partType ?? 'text',
+          content: part.content,
+          created_at: new Date(part.createdAt).toISOString()
+        })),
+        next_before_seq: page.length === limit ? page[page.length - 1].seq : null,
+        total_available: ordered.length
+      }
+    }
+
+    case '/get_session_status': {
+      if (!params.task_id) return { error: 'task_id is required' }
+      if (!agentController) return { error: 'Agent controller not available' }
+      const taskId = String(params.task_id)
+      const task = db.getTask(taskId)
+      if (!task) return { error: 'Task not found' }
+
+      const found = agentController.findSessionByTaskId(taskId)
+      const live = found ? agentController.getSessionStatus(found.sessionId) : null
+      return {
+        task_id: taskId,
+        title: task.title,
+        // The stored status of the task, which survives a restart.
+        task_status: task.status,
+        // The live state of the agent session, which does not.
+        session_status: live?.status ?? 'none',
+        session_id: found?.sessionId ?? null,
+        agent_id: task.agent_id,
+        waiting_for_you: live?.status === 'waiting_approval'
+      }
+    }
+
+    case '/list_pending_approvals': {
+      if (!agentController) return { error: 'Agent controller not available' }
+      const waiting = db
+        .getTasks()
+        .map((task) => {
+          const found = agentController!.findSessionByTaskId(task.id)
+          if (!found) return null
+          const live = agentController!.getSessionStatus(found.sessionId)
+          if (live?.status !== 'waiting_approval') return null
+          return { task_id: task.id, title: task.title, session_id: found.sessionId, agent_id: task.agent_id }
+        })
+        .filter(Boolean)
+      return { pending: waiting, count: waiting.length }
+    }
+
+    case '/get_recent_activity': {
+      const limit = Math.min(Number(params.limit) || 20, 100)
+      const since = params.since ? Date.parse(String(params.since)) : 0
+      const active = db
+        .getTasks()
+        .filter((task) => Date.parse(task.updated_at) > since)
+        .sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at))
+        .slice(0, limit)
+        .map((task) => {
+          const found = agentController?.findSessionByTaskId(task.id)
+          const live = found ? agentController?.getSessionStatus(found.sessionId) : null
+          return {
+            task_id: task.id,
+            title: task.title,
+            status: task.status,
+            session_status: live?.status ?? 'none',
+            updated_at: task.updated_at
+          }
+        })
+      return { activity: active, count: active.length }
+    }
+
+    case '/get_ui_state': {
+      // Pushed by the renderer on change, so this never waits for the window.
+      return uiState
+    }
+
+    // ── Driving the window ────────────────────────────────────
+    // Each of these validates the premise here and then pushes one command.
+    // Nothing is invented: when no window has published a screen, the call
+    // fails rather than reporting an action that reached nobody.
+
+    case '/navigate': {
+      if (!isUiViewName(params.view)) {
+        return { error: 'view must be one of dashboard, tasks, canvas, skills, settings' }
+      }
+      return sendUiCommand({
+        kind: 'navigate',
+        view: params.view,
+        settingsTab: params.settings_tab ? String(params.settings_tab) : undefined
+      })
+    }
+
+    case '/open_task': {
+      if (!params.task_id) return { error: 'task_id is required' }
+      const taskId = String(params.task_id)
+      const task = db.getTask(taskId)
+      if (!task) return { error: 'Task not found' }
+
+      const requested: UiOpenTaskTarget = params.where === undefined ? 'auto' : String(params.where) as UiOpenTaskTarget
+      if (!isUiOpenTaskTarget(requested)) {
+        return { error: 'where must be one of auto, workspace, canvas, modal' }
+      }
+      const where = requested === 'auto' ? resolveOpenTaskTarget() : requested
+      const result = sendUiCommand({ kind: 'open_task', taskId, where })
+      return 'error' in result ? result : { ...result, where, task_title: task.title }
+    }
+
+    case '/move_task_panel': {
+      if (!params.task_id) return { error: 'task_id is required' }
+      const x = Number(params.x)
+      const y = Number(params.y)
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return { error: 'x and y must be numbers' }
+      const taskId = String(params.task_id)
+      if (!db.getTask(taskId)) return { error: 'Task not found' }
+      const missing = requireCanvasPanel(taskId)
+      if (missing) return missing
+      return sendUiCommand({ kind: 'move_task_panel', taskId, x, y })
+    }
+
+    case '/close_task_panel': {
+      if (!params.task_id) return { error: 'task_id is required' }
+      const taskId = String(params.task_id)
+      const missing = requireCanvasPanel(taskId)
+      if (missing) return missing
+      return sendUiCommand({ kind: 'close_task_panel', taskId })
+    }
+
+    case '/set_canvas_view': {
+      if (!isUiCanvasViewMode(params.mode)) {
+        return { error: 'mode must be one of fit_all, reset, zoom' }
+      }
+      let zoom: number | undefined
+      if (params.mode === 'zoom') {
+        zoom = Number(params.zoom)
+        if (!Number.isFinite(zoom) || zoom < UI_CANVAS_MIN_ZOOM || zoom > UI_CANVAS_MAX_ZOOM) {
+          return { error: `zoom must be a number between ${UI_CANVAS_MIN_ZOOM} and ${UI_CANVAS_MAX_ZOOM}` }
+        }
+      }
+      if (params.mode === 'fit_all' && readCanvasPanels().length === 0) {
+        return { error: 'The canvas is empty' }
+      }
+      return sendUiCommand({ kind: 'set_canvas_view', mode: params.mode, zoom })
+    }
+
+    case '/open_artifact': {
+      if (!params.task_id) return { error: 'task_id is required' }
+      if (!params.artifact_id) return { error: 'artifact_id is required' }
+      const taskId = String(params.task_id)
+      if (!db.getTask(taskId)) return { error: 'Task not found' }
+
+      const artifactId = String(params.artifact_id)
+      // A tab that names nothing shows an empty panel, so the artifact has to
+      // exist before the window is told to open it.
+      const known = await listRegisteredTaskArtifacts(db.getWorkspaceDir(taskId), taskId)
+      if (!known.some((artifact) => artifact.artifactId === artifactId)) {
+        return {
+          error: 'Artifact not found for that task',
+          artifacts: known.map((artifact) => ({ artifact_id: artifact.artifactId, title: artifact.title }))
+        }
+      }
+      return sendUiCommand({ kind: 'open_artifact', taskId, artifactId })
+    }
+
+    // ── Acting on a running agent ─────────────────────────────
+
+    case '/send_message': {
+      if (!params.task_id) return { error: 'task_id is required' }
+      if (!params.text || !String(params.text).trim()) return { error: 'text is required' }
+      if (!agentController) return { error: 'Agent controller not available' }
+      const taskId = String(params.task_id)
+      const target = db.getTask(taskId)
+      if (!target) return { error: 'Task not found' }
+
+      // Waking a stopped agent needs an agent to wake. Without one the send
+      // fails deep inside with "Session not found:", which names neither the
+      // cause nor the cure.
+      if (!target.agent_id && !agentController.findSessionByTaskId(taskId)) {
+        return {
+          error: 'That task has no agent assigned, so there is nobody to send to. Assign one with update_task, or use start_task to triage it.',
+          reason: 'no_agent'
+        }
+      }
+
+      // The message is attributed to the user, because that is who spoke it.
+      // A transcript that credited the agent would misreport who asked.
+      const result = await agentController.sendByTaskId(taskId, String(params.text))
+      return { success: true, task_id: taskId, session_id: result.sessionId ?? result.newSessionId ?? null }
+    }
+
+    case '/respond_to_checkpoint': {
+      if (!params.task_id) return { error: 'task_id is required' }
+      if (params.approved === undefined) return { error: 'approved is required' }
+      if (!agentController) return { error: 'Agent controller not available' }
+      const taskId = String(params.task_id)
+
+      // Answer only a checkpoint that is really waiting, on the task named.
+      // Without this a mis-heard word could answer an unrelated session, or a
+      // session that has already moved on.
+      const found = agentController.findSessionByTaskId(taskId)
+      if (!found) return { error: 'No agent session for that task' }
+      const live = agentController.getSessionStatus(found.sessionId)
+      if (live?.status !== 'waiting_approval') {
+        return { error: 'That task is not waiting for an answer' }
+      }
+
+      const approved = params.approved === true
+      await agentController.respondToPermission(
+        found.sessionId,
+        approved,
+        params.message ? String(params.message) : undefined
+      )
+      notifyRenderer?.('task:checkpointAnswered', { taskId, approved })
+      return { success: true, task_id: taskId, approved }
+    }
+
+    case '/stop_task': {
+      if (!params.task_id) return { error: 'task_id is required' }
+      if (!agentController) return { error: 'Agent controller not available' }
+      const taskId = String(params.task_id)
+      const running = agentController.getActiveSessionsForTask(taskId)
+      if (running.length === 0) return { success: false, task_id: taskId, reason: 'nothing_running' }
+      const result = await agentController.stopByTaskId(taskId)
+      return { success: true, task_id: taskId, session_id: result.sessionId }
     }
 
     case '/start_task': {

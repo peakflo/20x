@@ -1,10 +1,35 @@
+import { copyFileSync, mkdirSync } from 'fs'
 import { resolve } from 'path'
 import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
+import type { PluginOption } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 
 function defineEnv(name: string): string {
   return JSON.stringify(process.env[name] ?? '')
+}
+
+/**
+ * Copies the voice workers next to the main bundle instead of bundling them.
+ * Each worker is a plain CommonJS script that requires the local speech runtime
+ * by name at run time, so it must stay unbundled and must exist as a real file
+ * for `child_process.fork`.
+ *
+ * One worker recognises speech, the other produces it.
+ */
+const VOICE_WORKER_FILES = ['voice-worker.js', 'voice-tts-worker.js']
+
+function copyVoiceWorker(): PluginOption {
+  return {
+    name: 'copy-voice-worker',
+    closeBundle() {
+      const outDir = resolve(__dirname, 'out/main/voice')
+      mkdirSync(outDir, { recursive: true })
+      for (const file of VOICE_WORKER_FILES) {
+        copyFileSync(resolve(__dirname, 'src/main/voice', file), resolve(outDir, file))
+      }
+    }
+  }
 }
 
 export default defineConfig({
@@ -27,7 +52,7 @@ export default defineConfig({
         '@opencode-ai/sdk',
         'electron-updater'
       ]
-    })],
+    }), copyVoiceWorker()],
     resolve: {
       extensions: ['.js', '.ts', '.jsx', '.tsx', '.json']
     },

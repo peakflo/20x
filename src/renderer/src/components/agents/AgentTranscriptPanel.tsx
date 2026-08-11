@@ -6,10 +6,13 @@ import { Markdown } from '@/components/ui/Markdown'
 import type { AgentMessage } from '@/hooks/use-agent-session'
 import { SessionStatus } from '@/stores/agent-store'
 import { serializeTranscriptForDebug, type RawTranscriptMessage } from '@/lib/serialize-transcript-debug'
-import { agentSessionApi, artifactApi } from '@/lib/ipc-client'
+import { agentSessionApi, artifactApi, voiceApi } from '@/lib/ipc-client'
 import { cn } from '@/lib/utils'
 import { useArtifactStore } from '@/stores/artifact-store'
 import { ArtifactContentKind, ArtifactType, type Artifact } from '@shared/artifacts'
+import { VoiceMicButton } from '@/components/voice/VoiceMicButton'
+import { SpeakMessageButton } from '@/components/voice/SpeakMessageButton'
+import { MASTERMIND_COMPOSER_KEY, registerComposer } from '@/lib/voice-dictation-target'
 
 const EMPTY_ARTIFACTS: Artifact[] = []
 
@@ -707,6 +710,9 @@ function MessageBubble({ message, onAnswer, viewMode, canAnswerQuestion = false,
           {message.stepMeta && (
             <span className="text-[10px] text-muted-foreground">{formatStepMeta(message.stepMeta)}</span>
           )}
+          {/* Only a plain agent answer can be read aloud. An error and a system
+              line are not answers, and a user message is the user's own words. */}
+          {!isUser && !isSystem && !isError && <SpeakMessageButton text={message.content} />}
         </div>
       </div>
     </div>
@@ -930,6 +936,24 @@ export function AgentTranscriptPanel({
     return messages[questionIndex].id
   }, [messages, status])
 
+  /**
+   * Announce this composer for as long as it is on screen.
+   *
+   * Starting an agent session rebuilds this panel, so a conversation must find
+   * the new text field and the new send function. The key stays the same across
+   * that rebuild, and the callbacks are read through a ref, so a conversation
+   * carries on into the panel that replaced this one.
+   */
+  const composerKey = taskId ?? MASTERMIND_COMPOSER_KEY
+  const sendRef = useRef<(() => void) | null>(null)
+  useEffect(() => {
+    if (!onSend) return undefined
+    return registerComposer(composerKey, {
+      getField: () => inputRef.current,
+      submit: () => sendRef.current?.(),
+    })
+  }, [composerKey, onSend])
+
   /** Auto-resize the textarea to fit its content, up to a max height */
   const autoResize = useCallback(() => {
     const el = inputRef.current
@@ -1104,6 +1128,11 @@ export function AgentTranscriptPanel({
   const handleSend = () => {
     const value = inputRef.current?.value.trim()
     if (value && onSend) {
+      // Whatever answer was expected by voice is not the answer that is now
+      // coming, so it is dropped and this reply is not read aloud. A spoken
+      // sentence goes through here too and arms a fresh expectation of its own
+      // straight afterwards, so the conversation loop is unaffected.
+      void voiceApi.answerNotExpected(taskId)
       onSend(value, pendingAttachments.length > 0 ? { attachments: pendingAttachments } : undefined)
       inputRef.current!.value = ''
       // Reset textarea height back to single row
@@ -1111,6 +1140,9 @@ export function AgentTranscriptPanel({
       setPendingAttachments([])
     }
   }
+  // The registration calls through this ref, so a conversation always uses the
+  // send function of the current render, never one captured earlier.
+  sendRef.current = handleSend
 
   const handleAddAttachments = async () => {
     if (!onPickAttachments) return
@@ -1386,6 +1418,7 @@ export function AgentTranscriptPanel({
         {onSend && (
           <div
             data-testid="transcript-composer"
+            data-voice-composer={composerKey}
             className={`relative px-4 py-3 space-y-2.5 transition-colors ${isDragOverComposer ? 'bg-primary/5' : ''}`}
             onDragOver={handleComposerDragOver}
             onDragEnter={handleComposerDragOver}
@@ -1435,6 +1468,7 @@ export function AgentTranscriptPanel({
                 }}
                 onInput={autoResize}
               />
+              <VoiceMicButton mode="dictation" onSubmit={handleSend} />
               {onPickAttachments && (
               <Button
                 type="button"

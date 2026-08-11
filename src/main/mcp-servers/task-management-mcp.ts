@@ -195,7 +195,8 @@ const mastermindTools = [
         due_date: { type: 'string', description: 'Due date in ISO format' },
         agent_id: { type: 'string', description: 'Assign to an agent by ID (use list_agents to find IDs)' },
         skill_ids: { type: 'array', items: { type: 'string' }, description: 'Skill IDs to assign (use list_skills to find IDs)' },
-        cron: { type: 'string', description: 'Cron expression for recurring tasks (e.g. "0 9 * * 1-5" for weekdays at 9am). Standard 5-field cron syntax: minute hour day-of-month month day-of-week.' }
+        cron: { type: 'string', description: 'Cron expression for recurring tasks (e.g. "0 9 * * 1-5" for weekdays at 9am). Standard 5-field cron syntax: minute hour day-of-month month day-of-week.' },
+        auto_complete_without_review: { type: 'boolean', description: 'Complete the task automatically when its agent finishes, instead of leaving it for review. Needed for a task that must finish with no 20x window open.' },
       },
       required: ['title']
     }
@@ -222,6 +223,7 @@ const mastermindTools = [
         labels: { type: 'array', items: { type: 'string' }, description: 'Set task labels' },
         skill_ids: { type: 'array', items: { type: 'string' }, description: 'Set task skills' },
         agent_id: { type: 'string', description: 'Assign to agent' },
+        auto_complete_without_review: { type: 'boolean', description: 'Complete the task automatically when its agent finishes, instead of leaving it for review. Needed for a task that must finish with no 20x window open.' },
         repos: { type: 'array', items: { type: 'string' }, description: 'Set repository paths/URLs for this task' },
         priority: { type: 'string', enum: ['critical', 'high', 'medium', 'low'] },
         status: { type: 'string', enum: ['not_started', 'triaging', 'agent_working', 'ready_for_review', 'agent_learning', 'completed'] },
@@ -351,6 +353,173 @@ const mastermindTools = [
         parent_task_id: { type: 'string', description: 'The ID of the parent task' }
       },
       required: ['parent_task_id']
+    }
+  },
+  // ── Live state and control (unscoped agents only) ───────────
+  // These are deliberately absent from the subtask tool set: a scoped agent
+  // must not answer a checkpoint or stop work on a task that is not its own.
+
+  {
+    name: 'get_messages',
+    description:
+      'Read the conversation of a task, newest first. Tool output is left out unless include_tools is true, because it is long and is rarely what a question is about. Page backwards with next_before_seq.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        task_id: { type: 'string', description: 'Task ID' },
+        limit: { type: 'number', description: 'How many messages to return. Default 20, maximum 200.' },
+        before_seq: { type: 'number', description: 'Return messages older than this sequence number. Use next_before_seq from the previous call.' },
+        role: { type: 'string', enum: ['user', 'assistant'], description: 'Return one side of the conversation only' },
+        include_tools: { type: 'boolean', description: 'Include tool calls and their output. Default false.' }
+      },
+      required: ['task_id']
+    }
+  },
+  {
+    name: 'get_session_status',
+    description:
+      'Live state of the agent working on a task. Use this, not get_task, to learn whether a task is waiting for the user: "waiting_approval" is a session state and is never stored on the task record.',
+    inputSchema: {
+      type: 'object',
+      properties: { task_id: { type: 'string', description: 'Task ID' } },
+      required: ['task_id']
+    }
+  },
+  {
+    name: 'list_pending_approvals',
+    description:
+      'Every task whose agent is waiting for the user to approve or reject a step. This is the answer to "what needs me?" and cannot be obtained from list_tasks.',
+    inputSchema: { type: 'object', properties: {} }
+  },
+  {
+    name: 'get_recent_activity',
+    description: 'Tasks that changed recently, newest first, with the live session state of each.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        since: { type: 'string', description: 'ISO timestamp. Only tasks changed after it are returned.' },
+        limit: { type: 'number', description: 'How many tasks to return. Default 20, maximum 100.' }
+      }
+    }
+  },
+  {
+    name: 'get_ui_state',
+    description:
+      'What the user is looking at right now: the open view, the selected task, any open dialog, and the canvas panels. Read this before you act on "this task" or "here".',
+    inputSchema: { type: 'object', properties: {} }
+  },
+  {
+    name: 'send_message',
+    description:
+      'Send a message to the agent of a task, on the user behalf. The message is attributed to the user in the transcript. Use respond_to_checkpoint to answer a checkpoint; a message will not answer one.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        task_id: { type: 'string', description: 'Task ID' },
+        text: { type: 'string', description: 'What to say to the agent' }
+      },
+      required: ['task_id', 'text']
+    }
+  },
+  {
+    name: 'respond_to_checkpoint',
+    description:
+      'Approve or reject the step an agent is waiting on. It fails unless that task really is waiting, so a stale or mistaken call cannot answer an unrelated session. Confirm with the user before you reject.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        task_id: { type: 'string', description: 'Task ID' },
+        approved: { type: 'boolean', description: 'True to approve, false to reject' },
+        message: { type: 'string', description: 'Optional note for the agent' }
+      },
+      required: ['task_id', 'approved']
+    }
+  },
+  {
+    name: 'stop_task',
+    description: 'Stop the agent working on a task. Confirm with the user first: work in progress is lost.',
+    inputSchema: {
+      type: 'object',
+      properties: { task_id: { type: 'string', description: 'Task ID' } },
+      required: ['task_id']
+    }
+  },
+  // ── Driving the window (unscoped agents only) ───────────────
+  // The user is looking at 20x while they ask. These move what they see, so
+  // read get_ui_state first: "this task" and "here" mean whatever is open.
+
+  {
+    name: 'navigate',
+    description:
+      'Show the user a different part of 20x. Views: dashboard (the board), tasks (the full task view), canvas, skills, settings.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        view: { type: 'string', enum: ['dashboard', 'tasks', 'canvas', 'skills', 'settings'], description: 'Where to send the user' },
+        settings_tab: { type: 'string', description: 'Settings tab to open, for example general, agents, voice, secrets. Used only with view=settings.' }
+      },
+      required: ['view']
+    }
+  },
+  {
+    name: 'open_task',
+    description:
+      'Open a task for the user. By default it follows the screen they are on: the canvas centres the panel (adding it when it is not there), the dashboard opens the preview dialog, and anywhere else opens the full task view. Pass where to override that.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        task_id: { type: 'string', description: 'Task ID' },
+        where: { type: 'string', enum: ['auto', 'workspace', 'canvas', 'modal'], description: 'auto (default) follows the open view. workspace is the full task view, canvas is a panel, modal is the dashboard preview dialog.' }
+      },
+      required: ['task_id']
+    }
+  },
+  {
+    name: 'move_task_panel',
+    description:
+      'Move the canvas panel of a task to a canvas coordinate. Read the panel positions and the viewport from get_ui_state first; the coordinates are canvas space, not screen pixels. It fails when that task has no panel.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        task_id: { type: 'string', description: 'Task ID' },
+        x: { type: 'number', description: 'Canvas x coordinate for the top-left corner' },
+        y: { type: 'number', description: 'Canvas y coordinate for the top-left corner' }
+      },
+      required: ['task_id', 'x', 'y']
+    }
+  },
+  {
+    name: 'close_task_panel',
+    description: 'Remove the canvas panel of a task. The task itself is untouched.',
+    inputSchema: {
+      type: 'object',
+      properties: { task_id: { type: 'string', description: 'Task ID' } },
+      required: ['task_id']
+    }
+  },
+  {
+    name: 'set_canvas_view',
+    description: 'Change the canvas viewport: fit_all shows every panel, reset returns to the origin at 100%, zoom sets a level between 0.1 and 3.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        mode: { type: 'string', enum: ['fit_all', 'reset', 'zoom'], description: 'What to do with the viewport' },
+        zoom: { type: 'number', description: 'Zoom level between 0.1 and 3. Required with mode=zoom.' }
+      },
+      required: ['mode']
+    }
+  },
+  {
+    name: 'open_artifact',
+    description:
+      'Show an artifact of a task to the user, in the artifact panel of the task view. Use list_artifacts for the artifact_id. It fails when that artifact does not belong to that task.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        task_id: { type: 'string', description: 'Task ID' },
+        artifact_id: { type: 'string', description: 'Artifact ID from list_artifacts' }
+      },
+      required: ['task_id', 'artifact_id']
     }
   }
 ]

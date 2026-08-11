@@ -1,6 +1,26 @@
 import type { WorkfloTask, CreateTaskDTO, UpdateTaskDTO, FileAttachment, Agent, CreateAgentDTO, UpdateAgentDTO, McpServer, CreateMcpServerDTO, UpdateMcpServerDTO, Skill, CreateSkillDTO, UpdateSkillDTO, Secret, CreateSecretDTO, UpdateSecretDTO, TaskSource, CreateTaskSourceDTO, UpdateTaskSourceDTO, SyncResult, PluginMeta, ConfigFieldSchema, ConfigFieldOption, PluginAction, ActionResult, SourceUser, ReassignResult, MarketplaceSource, InstalledPlugin, DiscoverablePlugin, MarketplaceCatalog, PluginResources } from '@/types'
 import type { AgentOutputEvent, AgentOutputBatchEvent, AgentStatusEvent, AgentApprovalRequest, GhCliStatus, GlabCliStatus, GitHubRepo, GitHubCollaborator, WorktreeProgressEvent, WorkspaceCleanupProgressEvent, McpTestResult, SkillSyncResult, DepsStatus, AgentMessageAttachment, TranscriptPartRecord, TranscriptChangedEvent } from '@/types/electron'
 import type { ArtifactApi } from '@shared/artifacts'
+import type {
+  MicrophonePermission,
+  VoiceActionOutcome,
+  VoiceModelState,
+  VoiceRuntimeProgressEvent,
+  VoiceRuntimeStatus,
+  VoiceSnapshot,
+  VoiceStateEvent,
+  VoiceTurnMode,
+  VoiceUiContext,
+  VoiceViewName
+} from '@shared/voice'
+import type {
+  VoiceSpeechChunkEvent,
+  VoiceSpeechEndEvent,
+  VoiceSpeechStartEvent,
+  VoiceTtsEngineId,
+  VoiceTtsModelState,
+  VoiceTtsSnapshot
+} from '@shared/voice-tts'
 
 export const taskApi = {
   getAll: (): Promise<WorkfloTask[]> => {
@@ -661,4 +681,100 @@ export const enterpriseApi = {
   onSyncComplete: (callback: (data: { success: boolean; syncMs?: number; error?: string; syncStats?: { agents: { created: number; updated: number }; skills: { created: number; updated: number; pushed: number }; mcpServers: { created: number; updated: number }; taskSources: { created: number; updated: number }; errors: string[] } }) => void): (() => void) => {
     return window.electronAPI.enterprise.onSyncComplete(callback)
   }
+}
+
+// ── Voice control ───────────────────────────────────────────
+// A thin pass-through. The renderer never decides what a command does; it only
+// captures audio and shows what the main process reports.
+
+export const voiceApi = {
+  getSnapshot: (): Promise<VoiceSnapshot> => window.electronAPI.voice.getSnapshot(),
+  setEnabled: (enabled: boolean): Promise<VoiceSnapshot> => window.electronAPI.voice.setEnabled(enabled),
+  getPermission: (): Promise<{ status: MicrophonePermission }> => window.electronAPI.voice.getPermission(),
+  requestPermission: (): Promise<{ status: MicrophonePermission }> =>
+    window.electronAPI.voice.requestPermission(),
+  startTurn: (mode: VoiceTurnMode, context: VoiceUiContext): Promise<{ turnId: string } | { error: string }> =>
+    window.electronAPI.voice.startTurn(mode, context),
+  pushAudio: (turnId: string, chunk: Uint8Array): Promise<void> =>
+    window.electronAPI.voice.pushAudio(turnId, chunk),
+  endTurn: (turnId: string): Promise<void> => window.electronAPI.voice.endTurn(turnId),
+  cancelTurn: (turnId?: string): Promise<void> => window.electronAPI.voice.cancelTurn(turnId),
+  confirm: (turnId: string, choice?: { taskId?: string; agentName?: string }): Promise<{ success: boolean }> =>
+    window.electronAPI.voice.confirm(turnId, choice),
+  dismiss: (turnId: string): Promise<void> => window.electronAPI.voice.dismiss(turnId),
+  getRuntime: (): Promise<VoiceRuntimeStatus> => window.electronAPI.voice.getRuntime(),
+  installRuntime: (): Promise<VoiceRuntimeStatus> => window.electronAPI.voice.installRuntime(),
+  removeRuntime: (): Promise<VoiceRuntimeStatus> => window.electronAPI.voice.removeRuntime(),
+  listModels: (): Promise<VoiceModelState[]> => window.electronAPI.voice.listModels(),
+  installModel: (id: string): Promise<VoiceModelState> => window.electronAPI.voice.installModel(id),
+  removeModel: (id: string): Promise<VoiceModelState[]> => window.electronAPI.voice.removeModel(id),
+  selectModel: (id: string): Promise<VoiceModelState[]> => window.electronAPI.voice.selectModel(id),
+  removeAllModels: (): Promise<{ success: boolean }> => window.electronAPI.voice.removeAllModels(),
+  setCustomModelDir: (dir: string): Promise<VoiceSnapshot> => window.electronAPI.voice.setCustomModelDir(dir),
+  pickModelDir: (): Promise<{ dir: string | null }> => window.electronAPI.voice.pickModelDir(),
+  setEndpointSilence: (seconds: number): Promise<{ success: boolean }> =>
+    window.electronAPI.voice.setEndpointSilence(seconds),
+  setShortcut: (accelerator: string): Promise<VoiceSnapshot> => window.electronAPI.voice.setShortcut(accelerator),
+  expectAnswer: (turnId: string, taskId?: string): Promise<void> =>
+    window.electronAPI.voice.expectAnswer(turnId, taskId),
+  /** The user typed rather than spoke, so no answer is expected by voice. */
+  answerNotExpected: (taskId?: string): Promise<void> =>
+    window.electronAPI?.voice?.answerNotExpected?.(taskId) ?? Promise.resolve(),
+  onState: (callback: (event: VoiceStateEvent) => void): (() => void) =>
+    window.electronAPI.voice.onState(callback),
+  onPartial: (callback: (event: { turnId: string; text: string }) => void): (() => void) =>
+    window.electronAPI.voice.onPartial(callback),
+  onFinal: (callback: (event: { turnId: string; text: string }) => void): (() => void) =>
+    window.electronAPI.voice.onFinal(callback),
+  onSegment: (
+    callback: (event: { turnId: string; text: string; index: number }) => void
+  ): (() => void) => window.electronAPI.voice.onSegment(callback),
+  onOutcome: (callback: (event: VoiceActionOutcome) => void): (() => void) =>
+    window.electronAPI.voice.onOutcome(callback),
+  onStatus: (callback: (event: Partial<VoiceSnapshot> & { model?: VoiceModelState }) => void): (() => void) =>
+    window.electronAPI.voice.onStatus(callback),
+  onError: (callback: (event: { message: string; code?: string }) => void): (() => void) =>
+    window.electronAPI.voice.onError(callback),
+  onNavigate: (callback: (event: { destination: VoiceViewName; taskId: string | null }) => void): (() => void) =>
+    window.electronAPI.voice.onNavigate(callback),
+  onDictate: (callback: (event: { turnId: string; text: string }) => void): (() => void) =>
+    window.electronAPI.voice.onDictate(callback),
+  onRuntimeProgress: (callback: (event: VoiceRuntimeProgressEvent) => void): (() => void) =>
+    window.electronAPI.voice.onRuntimeProgress(callback),
+  onHotkey: (callback: (event: { action: string }) => void): (() => void) =>
+    window.electronAPI.voice.onHotkey(callback)
+}
+
+/** Spoken answers. Main produces the audio; the renderer only plays it. */
+export const voiceTtsApi = {
+  getSnapshot: (): Promise<VoiceTtsSnapshot> => window.electronAPI.voice.tts.getSnapshot(),
+  setEnabled: (enabled: boolean): Promise<VoiceTtsSnapshot> =>
+    window.electronAPI.voice.tts.setEnabled(enabled),
+  setEngine: (engine: VoiceTtsEngineId): Promise<VoiceTtsSnapshot> =>
+    window.electronAPI.voice.tts.setEngine(engine),
+  setVoice: (voiceId: string): Promise<VoiceTtsSnapshot> => window.electronAPI.voice.tts.setVoice(voiceId),
+  setSpeed: (speed: number): Promise<VoiceTtsSnapshot> => window.electronAPI.voice.tts.setSpeed(speed),
+  setMaxChars: (maxChars: number): Promise<VoiceTtsSnapshot> =>
+    window.electronAPI.voice.tts.setMaxChars(maxChars),
+  setSpeakActionResults: (on: boolean): Promise<VoiceTtsSnapshot> =>
+    window.electronAPI.voice.tts.setSpeakActionResults(on),
+  setOnlyVoiceTurns: (on: boolean): Promise<VoiceTtsSnapshot> =>
+    window.electronAPI.voice.tts.setOnlyVoiceTurns(on),
+  installModel: (id: string): Promise<VoiceTtsSnapshot> => window.electronAPI.voice.tts.installModel(id),
+  selectModel: (id: string): Promise<VoiceTtsSnapshot> => window.electronAPI.voice.tts.selectModel(id),
+  removeModel: (id: string): Promise<VoiceTtsSnapshot> => window.electronAPI.voice.tts.removeModel(id),
+  preview: (voiceId: string): Promise<{ spoken: boolean }> => window.electronAPI.voice.tts.preview(voiceId),
+  speak: (text: string, taskId?: string): Promise<{ spoken: boolean }> =>
+    window.electronAPI.voice.tts.speak(text, taskId),
+  stop: (): Promise<void> => window.electronAPI.voice.tts.stop(),
+  onSpeechStart: (callback: (event: VoiceSpeechStartEvent) => void): (() => void) =>
+    window.electronAPI.voice.tts.onSpeechStart(callback),
+  onSpeechChunk: (callback: (event: VoiceSpeechChunkEvent) => void): (() => void) =>
+    window.electronAPI.voice.tts.onSpeechChunk(callback),
+  onSpeechEnd: (callback: (event: VoiceSpeechEndEvent) => void): (() => void) =>
+    window.electronAPI.voice.tts.onSpeechEnd(callback),
+  onStatus: (callback: (event: VoiceTtsSnapshot) => void): (() => void) =>
+    window.electronAPI.voice.tts.onStatus(callback),
+  onModelProgress: (callback: (event: { model: VoiceTtsModelState }) => void): (() => void) =>
+    window.electronAPI.voice.tts.onModelProgress(callback)
 }

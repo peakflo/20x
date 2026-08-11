@@ -1,6 +1,6 @@
 {
   "name": "20x",
-  "version": "0.0.127",
+  "version": "0.0.128",
   "packageManager": "pnpm@9.15.2",
   "description": "20x — AI-powered desktop task manager",
   "main": "./out/main/index.js",
@@ -47,6 +47,8 @@
     "node-pty": "^1.1.0",
     "posthog-js": "^1.404.1",
     "qrcode": "^1.5.4",
+    "tar-stream": "^3.2.0",
+    "unbzip2-stream": "^1.4.3",
     "undici": "^7.21.0",
     "ws": "^8.19.0"
   },
@@ -125,6 +127,7 @@
       "node_modules/better-sqlite3/**/*.node",
       "node_modules/cloudflared/**",
       "out/main/mcp-servers/**",
+      "out/main/voice/**",
       "out/main/chunks/**"
     ],
     "extraResources": [
@@ -136,6 +139,9 @@
     "afterPack": "./scripts/after-pack.js",
     "afterSign": "./scripts/notarize.js",
     "mac": {
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "20x uses the microphone for voice dictation and voice task commands. Speech is recognised on this computer and no audio is stored."
+      },
       "target": [
         "dmg",
         "zip"

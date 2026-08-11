@@ -1,7 +1,12 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
 import { Paperclip, Plus, ArrowUp, ChevronDown, Settings } from 'lucide-react'
-import { agentApi } from '@/lib/ipc-client'
+import { agentApi, voiceApi } from '@/lib/ipc-client'
+import { VoiceMicButton } from '@/components/voice/VoiceMicButton'
+import { registerComposer, DASHBOARD_COMPOSER_KEY } from '@/lib/voice-dictation-target'
 import type { Agent } from '@/types'
+
+/** Names this composer, so a spoken sentence reaches this box and no other. */
+const VOICE_COMPOSER_KEY = DASHBOARD_COMPOSER_KEY
 
 interface CommandInputProps {
   onSendToMastermind: (message: string) => void
@@ -45,15 +50,38 @@ export function CommandInput({ onSendToMastermind, onCreateTask }: CommandInputP
     el.style.height = Math.min(el.scrollHeight, 120) + 'px'
   }, [])
 
-  const handleSend = useCallback(() => {
-    const trimmed = text.trim()
+  /**
+   * Sends what is in the field right now.
+   *
+   * It reads the DOM, not the React state, because dictation writes into the
+   * field and sends in the same tick. React has not re-rendered by then, so a
+   * send that read `text` would send the previous value — usually nothing.
+   */
+  const submitField = useCallback(() => {
+    const trimmed = textareaRef.current?.value.trim() ?? ''
     if (!trimmed) return
+    // No answer is expected by voice any more. A spoken sentence arms a fresh
+    // expectation straight after this, so the conversation loop is unaffected;
+    // a typed one does not, and its reply stays silent.
+    void voiceApi.answerNotExpected()
     onSendToMastermind(trimmed)
     setText('')
     if (textareaRef.current) {
+      textareaRef.current.value = ''
       textareaRef.current.style.height = 'auto'
     }
-  }, [text, onSendToMastermind])
+  }, [onSendToMastermind])
+
+  const handleSend = submitField
+
+  // Announce this box for as long as it is on screen, so a conversation keeps
+  // working even after the dashboard re-renders.
+  useEffect(() => {
+    return registerComposer(VOICE_COMPOSER_KEY, {
+      getField: () => textareaRef.current,
+      submit: submitField,
+    })
+  }, [submitField])
 
   const handleCreateTask = useCallback(() => {
     onCreateTask(text.trim())
@@ -73,7 +101,10 @@ export function CommandInput({ onSendToMastermind, onCreateTask }: CommandInputP
   const selectedAgent = agents.find((a) => a.id === selectedAgentId)
 
   return (
-    <div className="rounded-lg border border-border/80 bg-muted overflow-hidden shadow-sm transition-all duration-200 focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/30">
+    <div
+      className="rounded-lg border border-border/80 bg-muted overflow-hidden shadow-sm transition-all duration-200 focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/30"
+      data-voice-composer={VOICE_COMPOSER_KEY}
+    >
       {/* Text area */}
       <div className="px-4 pt-3 pb-2">
         <textarea
@@ -132,6 +163,9 @@ export function CommandInput({ onSendToMastermind, onCreateTask }: CommandInputP
         >
           <Paperclip className="h-4 w-4" />
         </button>
+
+        {/* Dictate. With "Keep talking" on, each pause sends to Mastermind. */}
+        <VoiceMicButton mode="dictation" onSubmit={submitField} className="h-[30px] w-[30px]" />
 
         {/* Spacer */}
         <div className="flex-1" />
