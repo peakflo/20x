@@ -46,7 +46,8 @@ export const CODING_AGENTS: { value: CodingAgentType; label: string }[] = [
 ]
 
 export const CURSOR_MODELS: { id: string; name: string }[] = [
-  { id: 'composer-2.5', name: 'Composer 2.5' }
+  { id: 'composer-2.5', name: 'Composer 2.5' },
+  { id: 'grok-4.5', name: 'Grok 4.5' }
 ]
 
 export enum ClaudeModel {

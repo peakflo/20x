@@ -2392,7 +2392,10 @@ describe('AcpAdapter process spawning for packaged Electron apps', () => {
     expect(config.args).toEqual(['acp'])
   })
 
-  it('maps Composer 2.5 to Cursor ACP model configuration', async () => {
+  it.each([
+    ['composer-2.5', 'composer-2.5[fast=true]'],
+    ['grok-4.5', 'grok-4.5[effort=high,fast=true]']
+  ])('maps %s to Cursor ACP model configuration', async (model, value) => {
     const adapter = new AcpAdapter('cursor')
     const priv = adapterPrivate(adapter)
     const sendRpcRequestSpy = vi.spyOn(priv, 'sendRpcRequest')
@@ -2404,14 +2407,14 @@ describe('AcpAdapter process spawning for packaged Electron apps', () => {
       agentId: 'agent-1',
       taskId: 'task-1',
       workspaceDir: '/tmp/workspace',
-      model: 'composer-2.5',
+      model,
       authMethod: 'subscription'
     })
 
     expect(sendRpcRequestSpy).toHaveBeenNthCalledWith(3, expect.anything(), 'session/set_config_option', {
       sessionId: 'cursor-session',
       configId: 'model',
-      value: 'composer-2.5[fast=true]'
+      value
     })
   })
 

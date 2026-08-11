@@ -27,6 +27,11 @@ export type AcpAgentType = 'codex' | 'cursor'
 
 const execFileAsync = promisify(execFile)
 
+const CURSOR_ACP_MODEL_VALUES: Record<string, string> = {
+  'composer-2.5': 'composer-2.5[fast=true]',
+  'grok-4.5': 'grok-4.5[effort=high,fast=true]'
+}
+
 // ACP Agent Process Configuration
 interface AcpAgentConfig {
   command: string  // e.g., 'codex-acp'
@@ -510,8 +515,8 @@ export class AcpAdapter implements CodingAgentAdapter {
     // Set model if specified
     if (config.model && acpSessionId) {
       try {
-        const modelValue = this.agentType === 'cursor' && config.model === 'composer-2.5'
-          ? 'composer-2.5[fast=true]'
+        const modelValue = this.agentType === 'cursor'
+          ? CURSOR_ACP_MODEL_VALUES[config.model] ?? config.model
           : config.model
         await this.sendRpcRequest(session, 'session/set_config_option', {
           sessionId: acpSessionId,
