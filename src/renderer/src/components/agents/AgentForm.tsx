@@ -15,7 +15,7 @@ import { SecretSelector } from '@/components/secrets/SecretSelector'
 import { CLAUDE_REASONING_EFFORT_VALUES, CODEX_REASONING_EFFORT_VALUES } from '@shared/reasoning-effort'
 import type { Agent, CreateAgentDTO, UpdateAgentDTO, AgentMcpServerEntry, ClaudeAuthMethod, AgentPermissionMode, AgentSandboxMode } from '@/types'
 import type { ReasoningEffort } from '@/types'
-import { CodingAgentType, CODING_AGENTS, CLAUDE_MODELS, CODEX_MODELS } from '@/types'
+import { CodingAgentType, CODING_AGENTS, CLAUDE_MODELS, CODEX_MODELS, CURSOR_MODELS } from '@/types'
 
 interface AgentFormProps {
   agent?: Agent
@@ -72,10 +72,12 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
   // API keys state
   const [openaiApiKey, setOpenaiApiKey] = useState(agent?.config.api_keys?.openai ?? '')
   const [anthropicApiKey, setAnthropicApiKey] = useState(agent?.config.api_keys?.anthropic ?? '')
+  const [cursorApiKey, setCursorApiKey] = useState(agent?.config.api_keys?.cursor ?? '')
 
   // Environment variable detection state
   const [hasOpenaiEnv, setHasOpenaiEnv] = useState(false)
   const [hasAnthropicEnv, setHasAnthropicEnv] = useState(false)
+  const [hasCursorEnv, setHasCursorEnv] = useState(false)
 
   const { servers: globalMcpServers, fetchServers: fetchMcpServers } = useMcpStore()
   const { skills, fetchSkills } = useSkillStore()
@@ -96,6 +98,9 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
     window.electronAPI.env.get('ANTHROPIC_API_KEY').then(value => {
       setHasAnthropicEnv(!!value)
     })
+    window.electronAPI.env.get('CURSOR_API_KEY').then(value => {
+      setHasCursorEnv(!!value)
+    })
   }, [])
 
   // Model fetching state
@@ -113,6 +118,9 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
     } else if (codingAgent === CodingAgentType.CODEX) {
       // For Codex, fetch models dynamically from Codex CLI
       fetchCodexModels()
+    } else if (codingAgent === CodingAgentType.CURSOR) {
+      setAvailableModels(CURSOR_MODELS)
+      setModel(CURSOR_MODELS[0].id)
     } else {
       setAvailableModels([])
       setModel('')
@@ -127,8 +135,10 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
         : CODEX_REASONING_EFFORT_VALUES
     )
 
-    if (codingAgent !== CodingAgentType.CLAUDE_CODE && codingAgent !== CodingAgentType.CODEX) {
+    if (codingAgent !== CodingAgentType.CLAUDE_CODE && codingAgent !== CodingAgentType.CODEX && codingAgent !== CodingAgentType.CURSOR) {
       setAuthMethod('subscription')
+      setReasoningEffort('')
+    } else if (codingAgent === CodingAgentType.CURSOR) {
       setReasoningEffort('')
     } else if (reasoningEffort && !currentReasoningEfforts.has(reasoningEffort)) {
       setReasoningEffort('')
@@ -229,7 +239,7 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
         reasoning_effort: supportsReasoningEffort && supportedReasoningEfforts.has(reasoningEffort)
           ? reasoningEffort || undefined
           : undefined,
-        auth_method: (codingAgent === CodingAgentType.CLAUDE_CODE || codingAgent === CodingAgentType.CODEX)
+        auth_method: (codingAgent === CodingAgentType.CLAUDE_CODE || codingAgent === CodingAgentType.CODEX || codingAgent === CodingAgentType.CURSOR)
           ? authMethod
           : undefined,
         permission_mode: permissionMode,
@@ -247,6 +257,9 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
           // Only save anthropic key when in api_key mode
           anthropic: (codingAgent === CodingAgentType.CLAUDE_CODE && authMethod === 'api_key')
             ? (anthropicApiKey.trim() || undefined)
+            : undefined,
+          cursor: (codingAgent === CodingAgentType.CURSOR && authMethod === 'api_key')
+            ? (cursorApiKey.trim() || undefined)
             : undefined
         }
       }
@@ -320,7 +333,7 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
       </div>
 
       {/* Only show Server URL for OpenCode */}
-      {codingAgent !== CodingAgentType.CLAUDE_CODE && codingAgent !== CodingAgentType.CODEX && (
+      {codingAgent !== CodingAgentType.CLAUDE_CODE && codingAgent !== CodingAgentType.CODEX && codingAgent !== CodingAgentType.CURSOR && (
         <div className="space-y-1.5">
           <Label htmlFor="agent-url">Server URL</Label>
           <Input
@@ -343,6 +356,11 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
           Codex runs locally via CLI and doesn't require a server URL
         </p>
       )}
+      {codingAgent === CodingAgentType.CURSOR && (
+        <p className="text-sm text-muted-foreground">
+          Cursor runs locally via CLI and doesn't require a server URL
+        </p>
+      )}
 
       <div className="space-y-1.5">
         <Label htmlFor="coding-agent">Coding Agent</Label>
@@ -359,7 +377,7 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
         </select>
       </div>
 
-      {(codingAgent === CodingAgentType.OPENCODE || codingAgent === CodingAgentType.CLAUDE_CODE || codingAgent === CodingAgentType.CODEX) && (
+      {(codingAgent === CodingAgentType.OPENCODE || codingAgent === CodingAgentType.CLAUDE_CODE || codingAgent === CodingAgentType.CODEX || codingAgent === CodingAgentType.CURSOR) && (
         <>
           <div className="space-y-1.5">
             <Label htmlFor="agent-permission-mode">Permissions</Label>
@@ -373,8 +391,8 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
               <option value="allow">Allow automatically</option>
             </select>
             <p className="text-xs text-muted-foreground">
-              {codingAgent === CodingAgentType.CODEX
-                ? 'Allow automatically auto-approves Codex permission requests for this agent.'
+              {codingAgent === CodingAgentType.CODEX || codingAgent === CodingAgentType.CURSOR
+                ? `Allow automatically auto-approves ${codingAgent === CodingAgentType.CURSOR ? 'Cursor' : 'Codex'} permission requests for this agent.`
                 : 'Controls how this agent handles tool and command approval prompts.'}
             </p>
           </div>
@@ -516,6 +534,58 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
               {!openaiApiKey && !hasOpenaiEnv && (
                 <p className="text-xs text-destructive">
                   Required: Enter your API key or set OPENAI_API_KEY environment variable
+                </p>
+              )}
+            </div>
+          )}
+        </>
+      )}
+
+      {/* Auth Method & API Key Configuration for Cursor */}
+      {codingAgent === CodingAgentType.CURSOR && (
+        <>
+          <div className="space-y-1.5">
+            <Label htmlFor="cursor-auth-method">Authentication Method</Label>
+            <select
+              id="cursor-auth-method"
+              value={authMethod}
+              onChange={(e) => setAuthMethod(e.target.value as ClaudeAuthMethod)}
+              className="w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm cursor-pointer"
+            >
+              <option value="subscription">Cursor CLI Login (default)</option>
+              <option value="api_key">API Key</option>
+            </select>
+            {authMethod === 'subscription' && (
+              <p className="text-xs text-muted-foreground">
+                Uses your existing Cursor CLI login, exactly like running <code>cursor-agent</code> in a terminal.
+                {hasCursorEnv && (
+                  <span className="block mt-1 text-yellow-500">
+                    Note: CURSOR_API_KEY found in environment but will be ignored in CLI login mode.
+                  </span>
+                )}
+              </p>
+            )}
+          </div>
+
+          {authMethod === 'api_key' && (
+            <div className="space-y-1.5">
+              <Label htmlFor="cursor-api-key">Cursor API Key</Label>
+              <Input
+                id="cursor-api-key"
+                type="password"
+                value={cursorApiKey}
+                onChange={(e) => setCursorApiKey(e.target.value)}
+                placeholder={hasCursorEnv ? '••••••••' : 'cursor_...'}
+              />
+              {cursorApiKey && (
+                <p className="text-xs text-muted-foreground">Using provided API key</p>
+              )}
+              {!cursorApiKey && hasCursorEnv && (
+                <p className="text-xs text-muted-foreground">✓ Using CURSOR_API_KEY from environment</p>
+              )}
+              {!cursorApiKey && !hasCursorEnv && (
+                <p className="text-xs text-destructive">
+                  Required: Enter your API key or set CURSOR_API_KEY
                 </p>
               )}
             </div>

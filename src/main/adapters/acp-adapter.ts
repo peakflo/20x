@@ -6,11 +6,12 @@
  * Spec: https://github.com/agentclientprotocol/typescript-sdk
  */
 
-import { spawn, ChildProcess } from 'child_process'
+import { spawn, execFile, ChildProcess } from 'child_process'
 import { randomUUID } from 'crypto'
 import { mkdtempSync } from 'fs'
 import { homedir, tmpdir } from 'os'
 import { dirname, join } from 'path'
+import { promisify } from 'util'
 import type {
   CodingAgentAdapter,
   SessionConfig,
@@ -22,7 +23,14 @@ import type {
 import { SessionStatusType, MessagePartType, MessageRole } from './coding-agent-adapter'
 
 // ACP Agent Types
-export type AcpAgentType = 'codex'
+export type AcpAgentType = 'codex' | 'cursor'
+
+const execFileAsync = promisify(execFile)
+
+const CURSOR_ACP_MODEL_VALUES: Record<string, string> = {
+  'composer-2.5': 'composer-2.5[fast=true]',
+  'grok-4.5': 'grok-4.5[effort=high,fast=true]'
+}
 
 // ACP Agent Process Configuration
 interface AcpAgentConfig {
@@ -229,6 +237,12 @@ export class AcpAdapter implements CodingAgentAdapter {
           // here — that previously hijacked subscription users into API-key auth.
           env: {}
         }
+      case 'cursor':
+        return {
+          command: 'cursor-agent',
+          args: ['acp'],
+          env: {}
+        }
       default:
         throw new Error(`Unsupported ACP agent type: ${agentType}`)
     }
@@ -287,6 +301,31 @@ export class AcpAdapter implements CodingAgentAdapter {
     }
     console.log(`[AcpAdapter/codex] Auth: ChatGPT subscription / Codex CLI login (authMethod=${config.authMethod ?? 'legacy'}, CODEX_HOME=${env.CODEX_HOME})`)
     return false
+  }
+
+  private configureCursorAuthEnv(env: Record<string, string | undefined>, config: SessionConfig): void {
+    if (this.agentType !== 'cursor') return
+
+    const explicitApiKey = config.apiKeys?.cursor
+    const useApiKey = config.authMethod === 'api_key'
+      || (config.authMethod !== 'subscription' && !!explicitApiKey)
+
+    if (useApiKey) {
+      const key = explicitApiKey || env.CURSOR_API_KEY
+      if (!key) {
+        throw new Error('Cursor API-key authentication requires a configured key or CURSOR_API_KEY')
+      }
+      env.CURSOR_API_KEY = key
+      delete env.CURSOR_AUTH_TOKEN
+      console.log('[AcpAdapter/cursor] Auth: API key')
+      return
+    }
+
+    // CLI login is authoritative in subscription mode; ambient keys must not
+    // silently switch billing/authentication away from the logged-in account.
+    delete env.CURSOR_API_KEY
+    delete env.CURSOR_AUTH_TOKEN
+    console.log('[AcpAdapter/cursor] Auth: Cursor CLI login')
   }
 
   async initialize(): Promise<void> {
@@ -378,6 +417,7 @@ export class AcpAdapter implements CodingAgentAdapter {
     // stripped it, re-hijacking Codex into API-key auth (stale "out of rate
     // limits" that survives restarts because the secret lives in the DB).
     const codexUseApiKey = this.configureCodexAuthEnv(env, config)
+    this.configureCursorAuthEnv(env, config)
     const codexAuthSummary = this.agentType === 'codex'
       ? `${codexUseApiKey ? 'API key' : 'subscription'} (authMethod=${config.authMethod ?? 'legacy'}, CODEX_HOME=${env.CODEX_HOME ?? 'default'})`
       : ''
@@ -442,6 +482,10 @@ export class AcpAdapter implements CodingAgentAdapter {
     // Initialize ACP protocol
     const initResult = await this.sendRpcRequest(session, 'initialize', {
       protocolVersion: 1,
+      clientCapabilities: {
+        fs: { readTextFile: false, writeTextFile: false },
+        terminal: false
+      },
       clientInfo: {
         name: 'pf-desktop',
         version: '0.0.1'
@@ -471,10 +515,13 @@ export class AcpAdapter implements CodingAgentAdapter {
     // Set model if specified
     if (config.model && acpSessionId) {
       try {
+        const modelValue = this.agentType === 'cursor'
+          ? CURSOR_ACP_MODEL_VALUES[config.model] ?? config.model
+          : config.model
         await this.sendRpcRequest(session, 'session/set_config_option', {
           sessionId: acpSessionId,
           configId: 'model',
-          value: config.model
+          value: modelValue
         })
         console.log(`[AcpAdapter/${this.agentType}] Model set to: ${config.model}`)
       } catch (error: unknown) {
@@ -534,6 +581,7 @@ export class AcpAdapter implements CodingAgentAdapter {
     // Decide Codex auth (subscription vs API key) LAST so it is authoritative —
     // see createSession for why this must run after secret-env injection.
     const codexUseApiKey = this.configureCodexAuthEnv(env, config)
+    this.configureCursorAuthEnv(env, config)
     const codexAuthSummary = this.agentType === 'codex'
       ? `${codexUseApiKey ? 'API key' : 'subscription'} (authMethod=${config.authMethod ?? 'legacy'}, CODEX_HOME=${env.CODEX_HOME ?? 'default'})`
       : ''
@@ -604,6 +652,10 @@ export class AcpAdapter implements CodingAgentAdapter {
     // Initialize ACP protocol
     const initResult = await this.sendRpcRequest(session, 'initialize', {
       protocolVersion: 1,
+      clientCapabilities: {
+        fs: { readTextFile: false, writeTextFile: false },
+        terminal: false
+      },
       clientInfo: {
         name: 'pf-desktop',
         version: '0.0.1'
@@ -944,6 +996,15 @@ export class AcpAdapter implements CodingAgentAdapter {
 
   async checkHealth(): Promise<{ available: boolean; reason?: string }> {
     try {
+      if (this.agentType === 'cursor') {
+        await execFileAsync(this.agentConfig.command, ['--version'], {
+          timeout: 10000,
+          windowsHide: true,
+          shell: process.platform === 'win32'
+        })
+        return { available: true }
+      }
+
       // Verify the ACP agent package is installed
       const packageName = '@zed-industries/codex-acp'
 
@@ -964,7 +1025,12 @@ export class AcpAdapter implements CodingAgentAdapter {
       return { available: true }
     } catch (error: unknown) {
       const errMsg = error instanceof Error ? error.message : String(error)
-      return { available: false, reason: errMsg }
+      return {
+        available: false,
+        reason: this.agentType === 'cursor'
+          ? `Cursor Agent CLI is unavailable. Install it and run cursor-agent login. (${errMsg})`
+          : errMsg
+      }
     }
   }
 
@@ -993,10 +1059,13 @@ export class AcpAdapter implements CodingAgentAdapter {
     const approval = session.pendingApproval
 
     // Determine the outcome based on user choice
-    let selectedOptionId = optionId
+    let selectedOptionId = approval.options.some((option) => option.optionId === optionId)
+      ? optionId
+      : undefined
     if (!selectedOptionId) {
-      // If no specific option, use approved/abort
-      selectedOptionId = approved ? 'approved' : 'abort'
+      selectedOptionId = approved
+        ? approval.options.find((option) => option.optionId === 'allow-once')?.optionId || 'approved'
+        : approval.options.find((option) => option.optionId === 'reject-once')?.optionId || 'abort'
     }
 
     console.log(`[AcpAdapter/${this.agentType}] Responding to approval with: ${selectedOptionId}`)
@@ -1114,6 +1183,20 @@ export class AcpAdapter implements CodingAgentAdapter {
 
       if (request.method === 'session/request_permission') {
         this.handlePermissionRequest(session, request)
+        return
+      }
+
+      if (this.agentType === 'cursor' && request.method === 'cursor/ask_question') {
+        this.sendRpcResponse(session, request.id, {
+          result: { outcome: { outcome: 'skipped', reason: 'Cursor questions are not supported by 20x yet' } }
+        })
+        return
+      }
+
+      if (this.agentType === 'cursor' && request.method === 'cursor/create_plan') {
+        this.sendRpcResponse(session, request.id, {
+          result: { outcome: { outcome: 'cancelled' } }
+        })
         return
       }
 
@@ -1469,8 +1552,10 @@ export class AcpAdapter implements CodingAgentAdapter {
 
     if (session.config.permissionMode === 'allow') {
       const autoApprovedOptionId = approvalOptions.find((option) => option.optionId === 'approved-for-session')?.optionId
+        || approvalOptions.find((option) => option.optionId === 'allow-always')?.optionId
         || approvalOptions.find((option) => option.optionId === 'approved')?.optionId
-        || 'approved'
+        || approvalOptions.find((option) => option.optionId === 'allow-once')?.optionId
+        || (this.agentType === 'cursor' ? 'allow-once' : 'approved')
 
       console.log(`[AcpAdapter/${this.agentType}] Auto-approving permission with: ${autoApprovedOptionId}`)
       this.sendRpcResponse(session, request.id, {

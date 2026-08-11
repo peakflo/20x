@@ -28,7 +28,8 @@ import { ArtifactType, pullRequestUrlFromTool, type Artifact } from '../shared/a
 enum CodingAgentType {
   OPENCODE = 'opencode',
   CLAUDE_CODE = 'claude-code',
-  CODEX = 'codex'
+  CODEX = 'codex',
+  CURSOR = 'cursor'
 }
 
 const ARTIFACT_WORKSPACE_INSTRUCTIONS = `
@@ -659,6 +660,10 @@ export class AgentManager extends EventEmitter {
           console.log('[AgentManager] Creating new CodexAppServerAdapter for Codex')
           adapter = new CodexAppServerAdapter()
         }
+        break
+      case CodingAgentType.CURSOR:
+        console.log('[AgentManager] Creating new AcpAdapter for Cursor')
+        adapter = new AcpAdapter('cursor')
         break
       default:
         console.warn(`[AgentManager] Unknown coding agent type: ${backendType}`)

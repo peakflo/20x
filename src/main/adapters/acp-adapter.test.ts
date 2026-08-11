@@ -9,6 +9,7 @@ import { SessionStatusType, MessagePartType, MessagePart } from './coding-agent-
 
 // Mock child_process
 vi.mock('child_process', () => ({
+  execFile: vi.fn(),
   spawn: vi.fn(() => ({
     stdout: {
       on: vi.fn()
@@ -57,9 +58,14 @@ interface AcpAdapterPrivate {
   sendRpcRequest(session: AcpSessionForTest, method: string, params?: unknown): Promise<unknown>
   configureCodexAuthEnv(
     env: Record<string, string | undefined>,
-    config: { apiKeys?: { openai?: string }; authMethod?: 'subscription' | 'api_key' }
+    config: { apiKeys?: { openai?: string; cursor?: string }; authMethod?: 'subscription' | 'api_key' }
   ): boolean
+  configureCursorAuthEnv(
+    env: Record<string, string | undefined>,
+    config: { apiKeys?: { cursor?: string }; authMethod?: 'subscription' | 'api_key' }
+  ): void
   agentType: string
+  agentConfig: { command: string; args: string[]; env?: Record<string, string> }
 }
 
 interface JsonRpcRequestForTest {
@@ -217,6 +223,31 @@ describe('AcpAdapter - Turn Detection', () => {
         }
       })
     })
+
+    it('auto-approves Cursor permissions with allow-always', () => {
+      const cursor = adapterPrivate(new AcpAdapter('cursor'))
+      const session = createMockSession('cursor-session')
+      session.config.permissionMode = 'allow'
+      const sendRpcResponseSpy = vi.spyOn(cursor, 'sendRpcResponse')
+
+      cursor.handlePermissionRequest(session, {
+        jsonrpc: '2.0',
+        id: 'cursor-permission',
+        method: 'session/request_permission',
+        params: {
+          toolCall: { toolCallId: 'tool-1', title: 'Run tests', kind: 'shell' },
+          options: [
+            { optionId: 'allow-always', name: 'Always', kind: 'allow_always' },
+            { optionId: 'allow-once', name: 'Allow once', kind: 'allow_once' },
+            { optionId: 'reject-once', name: 'Reject', kind: 'reject_once' }
+          ]
+        }
+      })
+
+      expect(sendRpcResponseSpy).toHaveBeenCalledWith(session, 'cursor-permission', {
+        result: { outcome: { outcome: 'selected', optionId: 'allow-always' } }
+      })
+    })
   })
 
   describe('Authentication selection', () => {
@@ -261,7 +292,69 @@ describe('AcpAdapter - Turn Detection', () => {
         methodId: 'codex-api-key'
       })
     })
+
+    it('uses Cursor CLI login without ambient credentials', async () => {
+      const cursor = adapterPrivate(new AcpAdapter('cursor'))
+      const env: Record<string, string | undefined> = {
+        CURSOR_API_KEY: 'ambient-key',
+        CURSOR_AUTH_TOKEN: 'ambient-token'
+      }
+      const session = createMockSession('cursor-auth')
+      const sendRpcRequestSpy = vi.spyOn(cursor, 'sendRpcRequest').mockResolvedValue({})
+
+      cursor.configureCursorAuthEnv(env, { authMethod: 'subscription' })
+      await cursor.authenticateSession(session, { authMethods: [{ id: 'cursor_login' }] })
+
+      expect(env.CURSOR_API_KEY).toBeUndefined()
+      expect(env.CURSOR_AUTH_TOKEN).toBeUndefined()
+      expect(sendRpcRequestSpy).toHaveBeenCalledWith(session, 'authenticate', {
+        methodId: 'cursor_login'
+      })
+    })
+
+    it('uses the configured Cursor API key and rejects missing key auth', () => {
+      const cursor = adapterPrivate(new AcpAdapter('cursor'))
+      const env: Record<string, string | undefined> = { CURSOR_API_KEY: 'ambient-key' }
+
+      cursor.configureCursorAuthEnv(env, {
+        authMethod: 'api_key',
+        apiKeys: { cursor: 'configured-key' }
+      })
+      expect(env.CURSOR_API_KEY).toBe('configured-key')
+
+      expect(() => cursor.configureCursorAuthEnv({}, { authMethod: 'api_key' }))
+        .toThrow('Cursor API-key authentication requires a configured key or CURSOR_API_KEY')
+    })
   })
+
+  describe('Cursor extension requests', () => {
+    it('returns non-blocking outcomes for unsupported questions and plans', () => {
+      const cursor = adapterPrivate(new AcpAdapter('cursor'))
+      const session = createMockSession('cursor-extensions')
+      const sendRpcResponseSpy = vi.spyOn(cursor, 'sendRpcResponse')
+
+      cursor.handleRpcMessage(session, {
+        jsonrpc: '2.0',
+        id: 'question-1',
+        method: 'cursor/ask_question',
+        params: {}
+      })
+      cursor.handleRpcMessage(session, {
+        jsonrpc: '2.0',
+        id: 'plan-1',
+        method: 'cursor/create_plan',
+        params: {}
+      })
+
+      expect(sendRpcResponseSpy).toHaveBeenNthCalledWith(1, session, 'question-1', {
+        result: { outcome: { outcome: 'skipped', reason: 'Cursor questions are not supported by 20x yet' } }
+      })
+      expect(sendRpcResponseSpy).toHaveBeenNthCalledWith(2, session, 'plan-1', {
+        result: { outcome: { outcome: 'cancelled' } }
+      })
+    })
+  })
+
   describe('Time-based turn detection', () => {
     it('should use same turn ID for messages arriving within 2 seconds', async () => {
       const sessionId = 'test-session'
@@ -2292,6 +2385,39 @@ describe('AcpAdapter - Non-content events must not fragment assistant messages',
 })
 
 describe('AcpAdapter process spawning for packaged Electron apps', () => {
+  it('cursor should run the installed CLI in ACP mode', () => {
+    const config = adapterPrivate(new AcpAdapter('cursor')).agentConfig
+
+    expect(config.command).toBe('cursor-agent')
+    expect(config.args).toEqual(['acp'])
+  })
+
+  it.each([
+    ['composer-2.5', 'composer-2.5[fast=true]'],
+    ['grok-4.5', 'grok-4.5[effort=high,fast=true]']
+  ])('maps %s to Cursor ACP model configuration', async (model, value) => {
+    const adapter = new AcpAdapter('cursor')
+    const priv = adapterPrivate(adapter)
+    const sendRpcRequestSpy = vi.spyOn(priv, 'sendRpcRequest')
+      .mockResolvedValueOnce({ authMethods: [] })
+      .mockResolvedValueOnce({ sessionId: 'cursor-session' })
+      .mockResolvedValueOnce({})
+
+    await adapter.createSession({
+      agentId: 'agent-1',
+      taskId: 'task-1',
+      workspaceDir: '/tmp/workspace',
+      model,
+      authMethod: 'subscription'
+    })
+
+    expect(sendRpcRequestSpy).toHaveBeenNthCalledWith(3, expect.anything(), 'session/set_config_option', {
+      sessionId: 'cursor-session',
+      configId: 'model',
+      value
+    })
+  })
+
   it('codex should spawn the native binary directly, not via the JS wrapper', () => {
     const adapter = new AcpAdapter('codex')
     const config = (adapter as any).agentConfig

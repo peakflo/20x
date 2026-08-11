@@ -24,8 +24,8 @@ import { useDashboardStore } from '@/stores/dashboard-store'
 import { useProgressToastStore } from '@/stores/progress-toast-store'
 import { EnterpriseLoginModal } from '@/components/settings/tabs/EnterpriseLoginModal'
 import { PresetupWizard } from '@/components/dashboard/PresetupWizard'
+import { CodingAgentType, CLAUDE_MODELS, CODEX_MODELS, CURSOR_MODELS } from '@/types'
 import { VoiceRuntimeRow } from '@/components/voice/VoiceRuntimeRow'
-import { CodingAgentType, CLAUDE_MODELS, CODEX_MODELS } from '@/types'
 import { agentConfigApi } from '@/lib/ipc-client'
 import { AnthropicLogo, OpenCodeLogo, OpenAILogo } from '@/components/icons/AgentLogos'
 import type { ToolStatus } from '@/types/electron'
@@ -46,6 +46,7 @@ enum DetectKey {
   CLAUDE_CODE = 'claudeCode',
   OPENCODE = 'opencode',
   CODEX = 'codex',
+  CURSOR = 'cursor',
   GH = 'gh',
   GLAB = 'glab'
 }
@@ -124,6 +125,8 @@ function getAgentToolKey(type: CodingAgentType): DetectKey {
       return DetectKey.OPENCODE
     case CodingAgentType.CODEX:
       return DetectKey.CODEX
+    case CodingAgentType.CURSOR:
+      return DetectKey.CURSOR
   }
 }
 
@@ -169,6 +172,9 @@ async function getDefaultModel(type: CodingAgentType): Promise<string> {
   }
   if (type === CodingAgentType.CODEX) {
     return CODEX_MODELS[0]?.id || ''
+  }
+  if (type === CodingAgentType.CURSOR) {
+    return CURSOR_MODELS[0]?.id || ''
   }
   // OpenCode — try to fetch providers, prefer Peakflo gateway if authenticated
   try {

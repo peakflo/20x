@@ -56,6 +56,7 @@ export interface SessionConfig {
   apiKeys?: {
     openai?: string
     anthropic?: string
+    cursor?: string
   }
   /** Port of the local secret broker HTTP server */
   secretBrokerPort?: number
