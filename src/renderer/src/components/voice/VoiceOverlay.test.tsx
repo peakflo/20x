@@ -62,6 +62,16 @@ describe('VoiceOverlay', () => {
     expect(screen.queryByText(/run the tests again/)).not.toBeInTheDocument()
   })
 
+  it('shows nothing once the sentence has been sent', () => {
+    // The words are in the transcript now. Leaving them in the bubble shows
+    // the user something they have already sent, as though it were still
+    // being heard.
+    reset({ state: 'listening', turnId: 'turn-1', mode: 'conversation', partial: '' })
+    render(<VoiceOverlay />)
+
+    expect(screen.getByTestId('voice-transcript')).toHaveTextContent('Speak now')
+  })
+
   it('brightens and swells with the voice, visibly', () => {
     reset({ state: 'listening', turnId: 'turn-1', level: 0 })
     const { rerender } = render(<VoiceOverlay />)

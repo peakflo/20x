@@ -106,7 +106,11 @@ export function useVoiceControl(): void {
       const sent = insertAndSubmit(text)
       if (sent) {
         useVoiceStore.setState((state) => ({
-          sentSentences: [...state.sentSentences, text].slice(-5)
+          sentSentences: [...state.sentSentences, text].slice(-5),
+          // The sentence has gone. Leaving it in the bubble shows the user
+          // words they have already sent, as though 20x were still hearing
+          // them.
+          partial: ''
         }))
         // The sentence has gone to an agent, so the answer that comes back is
         // the reply to it and may be read aloud. Without this the loop stops
