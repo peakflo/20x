@@ -380,6 +380,14 @@ export class VoiceSpeechService {
   }
 
   /**
+   * DEPRECATED — no caller arms this any more, and none should.
+   *
+   * It matched the first answer from ANY task, so speaking to the Mastermind
+   * drawer made 20x read out whatever the open task wrote next. Speech in and
+   * speech out are tied to one session: the drawer names the Mastermind
+   * session, a task names itself. Kept only so an older renderer cannot crash
+   * main by calling it.
+   *
    * The user spoke a sentence and it was sent, but the sender did not name a
    * task — the Mastermind drawer sends on its own behalf.
    *
