@@ -1,14 +1,16 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { createTestDb } from '../../test/helpers/db-test-helper'
 import { makeTask } from '../../test/helpers/task-fixtures'
+import { buildSimilarTasksMatchExpression } from './task-search'
 import type { DatabaseManager } from './database'
 
 /**
  * Tests for the /find_similar_tasks FTS5-based search.
  *
- * Since handleRoute is not exported, we replicate its query logic
- * directly against rawDb — the same approach used in the existing
- * task-api-server tests.
+ * Since handleRoute is not exported, we replicate its SQL directly against
+ * rawDb — the same approach used in the existing task-api-server tests. The
+ * MATCH expression itself is imported rather than copied, so these tests
+ * exercise the real query builder instead of a drifting duplicate of it.
  */
 
 let db: DatabaseManager
@@ -44,35 +46,9 @@ function parseTask(task: Record<string, unknown>) {
 function findSimilarTasks(params: FindSimilarParams): Record<string, unknown>[] {
   const limit = params.limit || 10
 
-  const matchTerms: string[] = []
+  const matchExpr = buildSimilarTasksMatchExpression(params)
 
-  const tokenize = (s: unknown): string[] =>
-    typeof s === 'string'
-      ? s.split(/\s+/).filter((w) => w.length > 2).map((w) => w.replace(/[^a-zA-Z0-9_]/g, ''))
-          .filter(Boolean)
-      : []
-
-  const titleWords = tokenize(params.title_keywords)
-  const descWords = tokenize(params.description_keywords)
-
-  if (titleWords.length) {
-    matchTerms.push(...titleWords.map((w) => `title:${w}*`))
-  }
-  if (descWords.length) {
-    matchTerms.push(...descWords.map((w) => `description:${w}*`))
-  }
-  if (params.type) {
-    matchTerms.push(`type:${params.type}`)
-  }
-  if (params.labels) {
-    params.labels.forEach((l: string) => {
-      const cleaned = l.replace(/[^a-zA-Z0-9_]/g, '')
-      if (cleaned) matchTerms.push(`labels:${cleaned}`)
-    })
-  }
-
-  if (matchTerms.length > 0) {
-    const matchExpr = matchTerms.join(' OR ')
+  if (matchExpr) {
     let ftsQuery = `
       SELECT t.*, bm25(tasks_fts, 10.0, 5.0, 2.0, 1.0) AS rank
       FROM tasks_fts
@@ -163,6 +139,111 @@ describe('/find_similar_tasks - FTS5 search', () => {
       // "auth" is 4 chars, passes >2 filter, and auth* matches authentication
       expect(results.length).toBe(1)
       expect(results[0].title).toBe('Authentication system overhaul')
+    })
+  })
+
+  describe('stemming (porter tokenizer)', () => {
+    it('matches other inflections of the searched word', () => {
+      db.createTask(makeTask({ title: 'Fixing the auth bug' }))
+      db.createTask(makeTask({ title: 'Add payment gateway' }))
+
+      // "fix" and "fixing" share a stem, so either wording finds the other.
+      expect(findSimilarTasks({ title_keywords: 'fix' }).map((t) => t.title))
+        .toEqual(['Fixing the auth bug'])
+      expect(findSimilarTasks({ title_keywords: 'fixed' }).map((t) => t.title))
+        .toEqual(['Fixing the auth bug'])
+    })
+
+    it('matches a plural keyword against a singular title', () => {
+      db.createTask(makeTask({ title: 'Gateway timeout on upload' }))
+
+      // Prefix matching alone cannot do this: "timeouts" is longer than the
+      // indexed "timeout", so only a shared stem connects them.
+      const results = findSimilarTasks({ title_keywords: 'timeouts' })
+      expect(results.map((t) => t.title)).toEqual(['Gateway timeout on upload'])
+    })
+
+    it('stems description text as well as titles', () => {
+      db.createTask(makeTask({ title: 'Task A', description: 'The runner keeps crashing' }))
+
+      const results = findSimilarTasks({ description_keywords: 'crashed' })
+      expect(results.map((t) => t.title)).toEqual(['Task A'])
+    })
+
+    it('still supports prefix matching after stemming', () => {
+      db.createTask(makeTask({ title: 'Authentication system overhaul' }))
+
+      // Stemming must not break the shorter-prefix case: "auth" -> "authentication".
+      const results = findSimilarTasks({ title_keywords: 'auth' })
+      expect(results.map((t) => t.title)).toEqual(['Authentication system overhaul'])
+    })
+  })
+
+  describe('synonym expansion', () => {
+    it('finds a differently-worded task describing the same problem', () => {
+      db.createTask(makeTask({ title: 'Login issue on checkout' }))
+      db.createTask(makeTask({ title: 'Update the pricing page copy' }))
+
+      // "bug" must reach "issue" — stemming alone cannot bridge these.
+      const results = findSimilarTasks({ title_keywords: 'bug' })
+      expect(results.map((t) => t.title)).toEqual(['Login issue on checkout'])
+    })
+
+    it('expands synonyms symmetrically', () => {
+      db.createTask(makeTask({ title: 'Payment bug in gateway' }))
+
+      // The reverse direction of the group must work too.
+      const results = findSimilarTasks({ title_keywords: 'error' })
+      expect(results.map((t) => t.title)).toEqual(['Payment bug in gateway'])
+    })
+
+    it('expands a plural keyword through the synonym table', () => {
+      db.createTask(makeTask({ title: 'Checkout error on submit' }))
+
+      // "bugs" -> "bug" -> {issue, error, ...}: singularisation feeds expansion.
+      const results = findSimilarTasks({ title_keywords: 'bugs' })
+      expect(results.map((t) => t.title)).toEqual(['Checkout error on submit'])
+    })
+
+    it('finds auth tasks when searching for login', () => {
+      db.createTask(makeTask({ title: 'Rotate authentication tokens' }))
+      db.createTask(makeTask({ title: 'Redesign the dashboard' }))
+
+      const results = findSimilarTasks({ title_keywords: 'login' })
+      expect(results.map((t) => t.title)).toEqual(['Rotate authentication tokens'])
+    })
+
+    it('does not expand unrelated words', () => {
+      db.createTask(makeTask({ title: 'Kubernetes node draining' }))
+
+      const results = findSimilarTasks({ title_keywords: 'invoice' })
+      expect(results).toEqual([])
+    })
+
+    it('does not expand labels or type, which are exact filters', () => {
+      db.createTask(makeTask({ title: 'Task A', labels: ['issue'] }))
+      db.createTask(makeTask({ title: 'Task B', labels: ['bug'] }))
+
+      // Widening a label filter would defeat its purpose, so "bug" stays "bug".
+      const results = findSimilarTasks({ labels: ['bug'] })
+      expect(results.map((t) => t.title)).toEqual(['Task B'])
+    })
+  })
+
+  describe('query safety', () => {
+    it('does not fail when a keyword is an FTS5 operator', () => {
+      db.createTask(makeTask({ title: 'Search AND replace in editor' }))
+
+      // Unquoted, a bare AND/OR/NOT/NEAR is a syntax error in the FTS5 grammar.
+      expect(() => findSimilarTasks({ title_keywords: 'AND replace' })).not.toThrow()
+      expect(findSimilarTasks({ title_keywords: 'AND replace' }).map((t) => t.title))
+        .toEqual(['Search AND replace in editor'])
+    })
+
+    it('does not fail when the type filter is an FTS5 operator', () => {
+      db.createTask(makeTask({ title: 'Task A', type: 'coding' }))
+
+      expect(() => findSimilarTasks({ type: 'NOT' })).not.toThrow()
     })
   })
 

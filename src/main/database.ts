@@ -1712,6 +1712,13 @@ export class DatabaseManager {
 
       -- Content-sync FTS5 table.  content= keeps it linked to tasks;
       -- content_rowid= maps the FTS rowid to tasks.rowid.
+      --
+      -- The porter stemmer reduces each word to its root at both index and
+      -- query time, so "fix" also finds "fixed" and "fixing".  Without it a
+      -- search only matches the exact form the author happened to type, which
+      -- costs recall on the similar-task lookup.  Changing the tokenizer needs
+      -- the index rebuilt against it — the DROP + re-CREATE above does that on
+      -- the next launch, so existing installs upgrade with no extra migration.
       CREATE VIRTUAL TABLE tasks_fts USING fts5(
         title,
         description,
@@ -1719,7 +1726,7 @@ export class DatabaseManager {
         type,
         content='tasks',
         content_rowid='rowid',
-        tokenize='unicode61 remove_diacritics 2'
+        tokenize='porter unicode61 remove_diacritics 2'
       );
 
       -- Populate from existing rows

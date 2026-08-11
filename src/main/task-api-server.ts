@@ -20,6 +20,7 @@ import {
   type UiCommand,
   type UiOpenTaskTarget
 } from '../shared/ui-commands'
+import { buildSimilarTasksMatchExpression } from './task-search'
 import {
   createRegisteredTaskArtifact,
   editRegisteredTaskArtifactFile,
@@ -511,39 +512,12 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
       const limit = (params.limit as number) || 10
 
       // ── Build FTS5 MATCH expression from provided keywords ──
-      const matchTerms: string[] = []
-
-      // Tokenise keywords into individual words for broad matching
-      const tokenize = (s: unknown): string[] =>
-        typeof s === 'string'
-          ? s.split(/\s+/).filter((w) => w.length > 2).map((w) => w.replace(/[^a-zA-Z0-9_]/g, ''))
-              .filter(Boolean)
-          : []
-
-      const titleWords = tokenize(params.title_keywords)
-      const descWords = tokenize(params.description_keywords)
-
-      // Weight title matches higher by boosting with column filter
-      if (titleWords.length) {
-        matchTerms.push(...titleWords.map((w) => `title:${w}*`))
-      }
-      if (descWords.length) {
-        matchTerms.push(...descWords.map((w) => `description:${w}*`))
-      }
-      if (params.type) {
-        matchTerms.push(`type:${params.type}`)
-      }
-      if (params.labels) {
-        const labels = params.labels as string[]
-        labels.forEach((l: string) => {
-          const cleaned = l.replace(/[^a-zA-Z0-9_]/g, '')
-          if (cleaned) matchTerms.push(`labels:${cleaned}`)
-        })
-      }
+      // Stemming (porter tokenizer) plus synonym expansion happen in here, so
+      // near-miss wording still finds the relevant history. See task-search.ts.
+      const matchExpr = buildSimilarTasksMatchExpression(params)
 
       // If we have search terms, use FTS5 with bm25 ranking
-      if (matchTerms.length > 0) {
-        const matchExpr = matchTerms.join(' OR ')
+      if (matchExpr) {
         let ftsQuery = `
           SELECT t.*, bm25(tasks_fts, 10.0, 5.0, 2.0, 1.0) AS rank
           FROM tasks_fts

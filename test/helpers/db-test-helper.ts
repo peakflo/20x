@@ -109,7 +109,10 @@ export function createTestDb(): { db: DatabaseManager; rawDb: InstanceType<typeo
     CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_source_external ON tasks(source_id, external_id) WHERE external_id IS NOT NULL;
     CREATE INDEX IF NOT EXISTS idx_tasks_next_occurrence ON tasks(next_occurrence_at) WHERE is_recurring = 1;
 
-    -- FTS5 full-text search index for similar task search
+    -- FTS5 full-text search index for similar task search.
+    -- Keep the tokenizer in step with DatabaseManager.initializeTasksFts —
+    -- a mismatch would let stemming-dependent tests pass against a schema
+    -- production never uses.
     CREATE VIRTUAL TABLE IF NOT EXISTS tasks_fts USING fts5(
       title,
       description,
@@ -117,7 +120,7 @@ export function createTestDb(): { db: DatabaseManager; rawDb: InstanceType<typeo
       type,
       content='tasks',
       content_rowid='rowid',
-      tokenize='unicode61 remove_diacritics 2'
+      tokenize='porter unicode61 remove_diacritics 2'
     );
 
     CREATE TRIGGER IF NOT EXISTS tasks_fts_insert AFTER INSERT ON tasks BEGIN
