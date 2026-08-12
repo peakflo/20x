@@ -1,14 +1,16 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { createTestDb } from '../../test/helpers/db-test-helper'
 import { makeTask } from '../../test/helpers/task-fixtures'
+import { buildSimilarTasksQuery } from './task-search'
 import type { DatabaseManager } from './database'
 
 /**
  * Tests for the /find_similar_tasks FTS5-based search.
  *
- * Since handleRoute is not exported, we replicate its query logic
- * directly against rawDb — the same approach used in the existing
- * task-api-server tests.
+ * Since handleRoute is not exported, we replicate its SQL directly against
+ * rawDb — the same approach used in the existing task-api-server tests. The
+ * MATCH expression itself is imported rather than copied, so these tests
+ * exercise the real query builder instead of a drifting duplicate of it.
  */
 
 let db: DatabaseManager
@@ -44,60 +46,38 @@ function parseTask(task: Record<string, unknown>) {
 function findSimilarTasks(params: FindSimilarParams): Record<string, unknown>[] {
   const limit = params.limit || 10
 
-  const matchTerms: string[] = []
+  const query = buildSimilarTasksQuery(params)
 
-  const tokenize = (s: unknown): string[] =>
-    typeof s === 'string'
-      ? s.split(/\s+/).filter((w) => w.length > 2).map((w) => w.replace(/[^a-zA-Z0-9_]/g, ''))
-          .filter(Boolean)
-      : []
-
-  const titleWords = tokenize(params.title_keywords)
-  const descWords = tokenize(params.description_keywords)
-
-  if (titleWords.length) {
-    matchTerms.push(...titleWords.map((w) => `title:${w}*`))
-  }
-  if (descWords.length) {
-    matchTerms.push(...descWords.map((w) => `description:${w}*`))
-  }
-  if (params.type) {
-    matchTerms.push(`type:${params.type}`)
-  }
-  if (params.labels) {
-    params.labels.forEach((l: string) => {
-      const cleaned = l.replace(/[^a-zA-Z0-9_]/g, '')
-      if (cleaned) matchTerms.push(`labels:${cleaned}`)
-    })
-  }
-
-  if (matchTerms.length > 0) {
-    const matchExpr = matchTerms.join(' OR ')
-    let ftsQuery = `
-      SELECT t.*, bm25(tasks_fts, 10.0, 5.0, 2.0, 1.0) AS rank
+  if (query) {
+    const tier = query.exactMatch
+      ? `CASE WHEN tasks_fts.rowid IN
+           (SELECT rowid FROM tasks_fts WHERE tasks_fts MATCH ?) THEN 0 ELSE 1 END`
+      : '0'
+    const selectClause = `
+      SELECT t.*, bm25(tasks_fts, 10.0, 5.0, 2.0, 1.0) AS rank, ${tier} AS exact_tier
       FROM tasks_fts
       JOIN tasks t ON tasks_fts.rowid = t.rowid
       WHERE tasks_fts MATCH ?`
-    const qParams: unknown[] = [matchExpr]
+    const baseParams: unknown[] = query.exactMatch
+      ? [query.exactMatch, query.match]
+      : [query.match]
+
+    let ftsQuery = selectClause
+    const qParams: unknown[] = [...baseParams]
 
     if (params.completed_only) {
       ftsQuery += ' AND t.status = ?'
       qParams.push('completed')
     }
 
-    ftsQuery += ' ORDER BY rank LIMIT ?'
+    ftsQuery += ' ORDER BY exact_tier, rank LIMIT ?'
     qParams.push(limit)
 
     let tasks = rawDb.prepare(ftsQuery).all(...qParams) as Record<string, unknown>[]
 
     if (tasks.length === 0 && params.completed_only) {
-      const fallbackQuery = `
-        SELECT t.*, bm25(tasks_fts, 10.0, 5.0, 2.0, 1.0) AS rank
-        FROM tasks_fts
-        JOIN tasks t ON tasks_fts.rowid = t.rowid
-        WHERE tasks_fts MATCH ?
-        ORDER BY rank LIMIT ?`
-      tasks = rawDb.prepare(fallbackQuery).all(matchExpr, limit) as Record<string, unknown>[]
+      const fallbackQuery = `${selectClause} ORDER BY exact_tier, rank LIMIT ?`
+      tasks = rawDb.prepare(fallbackQuery).all(...baseParams, limit) as Record<string, unknown>[]
     }
 
     tasks.forEach(parseTask)
@@ -163,6 +143,165 @@ describe('/find_similar_tasks - FTS5 search', () => {
       // "auth" is 4 chars, passes >2 filter, and auth* matches authentication
       expect(results.length).toBe(1)
       expect(results[0].title).toBe('Authentication system overhaul')
+    })
+  })
+
+  describe('stemming (porter tokenizer)', () => {
+    it('matches other inflections of the searched word', () => {
+      db.createTask(makeTask({ title: 'Fixing the auth bug' }))
+      db.createTask(makeTask({ title: 'Add payment gateway' }))
+
+      // "fix" and "fixing" share a stem, so either wording finds the other.
+      expect(findSimilarTasks({ title_keywords: 'fix' }).map((t) => t.title))
+        .toEqual(['Fixing the auth bug'])
+      expect(findSimilarTasks({ title_keywords: 'fixed' }).map((t) => t.title))
+        .toEqual(['Fixing the auth bug'])
+    })
+
+    it('matches a plural keyword against a singular title', () => {
+      db.createTask(makeTask({ title: 'Gateway timeout on upload' }))
+
+      // Prefix matching alone cannot do this: "timeouts" is longer than the
+      // indexed "timeout", so only a shared stem connects them.
+      const results = findSimilarTasks({ title_keywords: 'timeouts' })
+      expect(results.map((t) => t.title)).toEqual(['Gateway timeout on upload'])
+    })
+
+    it('stems description text as well as titles', () => {
+      db.createTask(makeTask({ title: 'Task A', description: 'The runner keeps crashing' }))
+
+      const results = findSimilarTasks({ description_keywords: 'crashed' })
+      expect(results.map((t) => t.title)).toEqual(['Task A'])
+    })
+
+    it('still supports prefix matching after stemming', () => {
+      db.createTask(makeTask({ title: 'Authentication system overhaul' }))
+
+      // Stemming must not break the shorter-prefix case: "auth" -> "authentication".
+      const results = findSimilarTasks({ title_keywords: 'auth' })
+      expect(results.map((t) => t.title)).toEqual(['Authentication system overhaul'])
+    })
+  })
+
+  describe('synonym expansion', () => {
+    it('finds a differently-worded task describing the same problem', () => {
+      db.createTask(makeTask({ title: 'Login issue on checkout' }))
+      db.createTask(makeTask({ title: 'Update the pricing page copy' }))
+
+      // "bug" must reach "issue" — stemming alone cannot bridge these.
+      const results = findSimilarTasks({ title_keywords: 'bug' })
+      expect(results.map((t) => t.title)).toEqual(['Login issue on checkout'])
+    })
+
+    it('expands synonyms symmetrically', () => {
+      db.createTask(makeTask({ title: 'Payment bug in gateway' }))
+
+      // The reverse direction of the group must work too.
+      const results = findSimilarTasks({ title_keywords: 'error' })
+      expect(results.map((t) => t.title)).toEqual(['Payment bug in gateway'])
+    })
+
+    it('expands a plural keyword through the synonym table', () => {
+      db.createTask(makeTask({ title: 'Checkout error on submit' }))
+
+      // "bugs" -> "bug" -> {issue, error, ...}: singularisation feeds expansion.
+      const results = findSimilarTasks({ title_keywords: 'bugs' })
+      expect(results.map((t) => t.title)).toEqual(['Checkout error on submit'])
+    })
+
+    it('finds auth tasks when searching for login', () => {
+      db.createTask(makeTask({ title: 'Rotate authentication tokens' }))
+      db.createTask(makeTask({ title: 'Redesign the dashboard' }))
+
+      const results = findSimilarTasks({ title_keywords: 'login' })
+      expect(results.map((t) => t.title)).toEqual(['Rotate authentication tokens'])
+    })
+
+    it('does not expand unrelated words', () => {
+      db.createTask(makeTask({ title: 'Kubernetes node draining' }))
+
+      const results = findSimilarTasks({ title_keywords: 'invoice' })
+      expect(results).toEqual([])
+    })
+
+    it('does not expand labels or type, which are exact filters', () => {
+      db.createTask(makeTask({ title: 'Task A', labels: ['issue'] }))
+      db.createTask(makeTask({ title: 'Task B', labels: ['bug'] }))
+
+      // Widening a label filter would defeat its purpose, so "bug" stays "bug".
+      const results = findSimilarTasks({ labels: ['bug'] })
+      expect(results.map((t) => t.title)).toEqual(['Task B'])
+    })
+  })
+
+  describe('exact matches outrank synonym matches', () => {
+    it('ranks the literal wording first even when its title is longer', () => {
+      // BM25 alone would put the shorter synonym titles on top, because it
+      // scores a synonym hit exactly like the word the caller typed.
+      db.createTask(makeTask({ title: 'Resolve payment gateway timeout' }))
+      db.createTask(makeTask({ title: 'Repairing flaky CI runner' }))
+      db.createTask(makeTask({ title: 'Patch auth' }))
+      db.createTask(makeTask({ title: 'Fix the login bug on the checkout page' }))
+
+      const results = findSimilarTasks({ title_keywords: 'fix' })
+      expect(results[0].title).toBe('Fix the login bug on the checkout page')
+      expect(results.length).toBe(4)
+    })
+
+    it('keeps the exact match when the limit would otherwise cut it off', () => {
+      // The whole point: a widened search must not push a real match out.
+      db.createTask(makeTask({ title: 'Resolve a' }))
+      db.createTask(makeTask({ title: 'Repair b' }))
+      db.createTask(makeTask({ title: 'Patch c' }))
+      db.createTask(makeTask({ title: 'Fix the checkout page bug today' }))
+
+      const results = findSimilarTasks({ title_keywords: 'fix', limit: 1 })
+      expect(results.map((t) => t.title)).toEqual(['Fix the checkout page bug today'])
+    })
+
+    it('still ranks by relevance within the exact tier', () => {
+      db.createTask(makeTask({ title: 'Fix login and fix checkout and fix payment' }))
+      db.createTask(makeTask({ title: 'Fix' }))
+      db.createTask(makeTask({ title: 'Resolve something else entirely' }))
+
+      const results = findSimilarTasks({ title_keywords: 'fix' })
+      // Both literal matches lead; the synonym match is last.
+      expect(results[2].title).toBe('Resolve something else entirely')
+    })
+
+    it('applies the same ordering on the completed_only fallback path', () => {
+      db.createTask(makeTask({ title: 'Resolve payment gateway timeout', status: 'not_started' }))
+      db.createTask(makeTask({ title: 'Fix the login bug on the checkout page', status: 'not_started' }))
+
+      // No completed tasks exist, so this falls back to all statuses.
+      const results = findSimilarTasks({ title_keywords: 'fix', completed_only: true })
+      expect(results[0].title).toBe('Fix the login bug on the checkout page')
+    })
+
+    it('ranks normally when no synonym was involved', () => {
+      db.createTask(makeTask({ title: 'Kubernetes node draining' }))
+      db.createTask(makeTask({ title: 'Kubernetes upgrade plan for the staging cluster' }))
+
+      // Nothing to expand, so BM25 order stands: the shorter title wins.
+      const results = findSimilarTasks({ title_keywords: 'kubernetes' })
+      expect(results[0].title).toBe('Kubernetes node draining')
+    })
+  })
+
+  describe('query safety', () => {
+    it('does not fail when a keyword is an FTS5 operator', () => {
+      db.createTask(makeTask({ title: 'Search AND replace in editor' }))
+
+      // Unquoted, a bare AND/OR/NOT/NEAR is a syntax error in the FTS5 grammar.
+      expect(() => findSimilarTasks({ title_keywords: 'AND replace' })).not.toThrow()
+      expect(findSimilarTasks({ title_keywords: 'AND replace' }).map((t) => t.title))
+        .toEqual(['Search AND replace in editor'])
+    })
+
+    it('does not fail when the type filter is an FTS5 operator', () => {
+      db.createTask(makeTask({ title: 'Task A', type: 'coding' }))
+
+      expect(() => findSimilarTasks({ type: 'NOT' })).not.toThrow()
     })
   })
 
