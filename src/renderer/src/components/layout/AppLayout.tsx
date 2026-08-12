@@ -23,14 +23,13 @@ const OrchestratorPanel = lazy(() => import('@/components/orchestrator/Orchestra
 import { useTasks } from '@/hooks/use-tasks'
 import { useUIStore } from '@/stores/ui-store'
 import { useAgentStore } from '@/stores/agent-store'
-import { useTaskStore } from '@/stores/task-store'
 import { useAgentAutoStart } from '@/hooks/use-agent-auto-start'
 import { useOverdueNotifications } from '@/hooks/use-overdue-notifications'
+import { useTaskCompletion } from '@/hooks/use-task-completion'
 import { attachmentApi, worktreeApi, settingsApi, updaterApi } from '@/lib/ipc-client'
-import { useTaskSourceStore } from '@/stores/task-source-store'
 import { isOverdue, isSnoozed } from '@/lib/utils'
 import { captureAnalyticsEvent, capturePageView } from '@/lib/analytics'
-import { TaskStatus, PluginActionId } from '@/types'
+import { TaskStatus } from '@/types'
 import type { FileAttachment, OutputField, UpdateTaskDTO } from '@/types'
 import { MessageSquare, LayoutDashboard, CheckSquare, Zap, Settings, Layers, PanelLeftClose, PanelLeftOpen, Search } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
@@ -58,7 +57,6 @@ export function AppLayout() {
   const agents = useAgentStore((s) => s.agents)
   const fetchAgents = useAgentStore((s) => s.fetchAgents)
   const stopAndRemoveSessionForTask = useAgentStore((s) => s.stopAndRemoveSessionForTask)
-  const executeAction = useTaskSourceStore((s) => s.executeAction)
   // Use individual selectors for UI store to prevent full-tree re-renders
   const sidebarView = useUIStore((s) => s.sidebarView)
   const setSidebarView = useUIStore((s) => s.setSidebarView)
@@ -148,42 +146,29 @@ export function AppLayout() {
     setTimeout(() => setToast(null), isError ? 5000 : 3000)
   }, [])
 
-  const getLatestTask = useCallback(
-    (taskId: string | null | undefined) => (
-      taskId ? useTaskStore.getState().tasks.find((t) => t.id === taskId) : undefined
-    ),
-    []
+  // Source-backed tasks ask the user whether to close the task in the source
+  // system or only in 20x. `completionDialog` renders that question.
+  const { requestComplete, completionDialog } = useTaskCompletion({ onToast: showToast })
+
+  const selectNextActiveTask = useCallback(
+    (completedTaskId: string) => {
+      const activeTasks = filteredTasksRef.current.filter(
+        (t) => t.id !== completedTaskId && t.status !== TaskStatus.Completed
+      )
+      selectTask(activeTasks.length > 0 ? activeTasks[0].id : null)
+    },
+    [selectTask]
   )
 
   const completeTask = useCallback(
     async (taskId: string, options?: { selectNextTask?: boolean }) => {
-      const task = getLatestTask(taskId)
-      if (!task) return
-      const taskTitle = task.title
-      try {
-        if (task.source_id) {
-          const actionField = task.output_fields.find((f) => f.id === 'action')
-          const actionValue = actionField?.value ? String(actionField.value) : PluginActionId.Complete
-          const result = await executeAction(actionValue, task.id, task.source_id)
-          if (!result.success) {
-            showToast(result.error || 'Failed to complete task', true)
-            return
-          }
-        }
-        await updateTask(task.id, { status: TaskStatus.Completed })
-      } catch (err) {
-        console.error('Failed to complete task:', err)
-        showToast('Failed to complete task', true)
-        return
-      }
-
-      if (options?.selectNextTask) {
-        const activeTasks = filteredTasksRef.current.filter((t) => t.id !== task.id && t.status !== TaskStatus.Completed)
-        selectTask(activeTasks.length > 0 ? activeTasks[0].id : null)
-      }
-      showToast(`"${taskTitle}" completed`)
+      await requestComplete(taskId, {
+        onCompleted: options?.selectNextTask
+          ? (task) => selectNextActiveTask(task.id)
+          : undefined
+      })
     },
-    [executeAction, getLatestTask, selectTask, showToast, updateTask]
+    [requestComplete, selectNextActiveTask]
   )
 
   const selectedTaskId = selectedTask?.id
@@ -599,6 +584,9 @@ export function AppLayout() {
           </DialogBody>
         </DialogContent>
       </Dialog>
+
+      {/* Complete at source or manually */}
+      {completionDialog}
 
       {/* Delete Confirmation */}
       <DeleteConfirmDialog
