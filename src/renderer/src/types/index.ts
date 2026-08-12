@@ -337,6 +337,8 @@ export interface CreateTaskDTO {
   attachments?: FileAttachment[]
   repos?: string[]
   output_fields?: OutputField[]
+  agent_id?: string | null
+  skill_ids?: string[] | null
   is_recurring?: boolean
   recurrence_pattern?: RecurrencePattern | null
   recurrence_parent_id?: string | null

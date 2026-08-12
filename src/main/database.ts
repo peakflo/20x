@@ -393,6 +393,8 @@ export interface CreateTaskData {
   attachments?: FileAttachmentRecord[]
   repos?: string[]
   output_fields?: OutputFieldRecord[]
+  agent_id?: string | null
+  skill_ids?: string[] | null
   external_id?: string
   source_id?: string
   source?: string
@@ -2274,13 +2276,13 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
     this.db.prepare(`
       INSERT INTO tasks (
         id, title, description, type, priority, status, assignee, due_date,
-        labels, attachments, repos, output_fields, external_id, source_id, source,
+        labels, attachments, repos, output_fields, agent_id, skill_ids, external_id, source_id, source,
         is_recurring, recurrence_pattern, recurrence_parent_id,
         auto_start_agent, auto_complete_without_review,
         parent_task_id, sort_order,
         created_at, updated_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id,
       data.title,
@@ -2294,6 +2296,8 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
       JSON.stringify(data.attachments ?? []),
       JSON.stringify(data.repos ?? []),
       JSON.stringify(data.output_fields ?? []),
+      data.agent_id ?? null,
+      data.skill_ids === undefined ? null : JSON.stringify(data.skill_ids),
       data.external_id ?? null,
       data.source_id ?? null,
       data.source ?? 'local',

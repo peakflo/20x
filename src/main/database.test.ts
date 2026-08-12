@@ -21,6 +21,16 @@ describe('Task CRUD', () => {
     expect(fetched).toEqual(task)
   })
 
+  it('creates a task with its agent and skills atomically', () => {
+    const agent = db.createAgent(makeAgent({ name: 'Watchtower' }))!
+    const skill = db.createSkill(makeSkill({ name: 'alerts-prod-monitor' }))!
+
+    const task = db.createTask(makeTask({ agent_id: agent.id, skill_ids: [skill.id] }))!
+
+    expect(task.agent_id).toBe(agent.id)
+    expect(task.skill_ids).toEqual([skill.id])
+  })
+
   it('returns all tasks', () => {
     db.createTask(makeTask({ title: 'Task 1' }))
     db.createTask(makeTask({ title: 'Task 2' }))

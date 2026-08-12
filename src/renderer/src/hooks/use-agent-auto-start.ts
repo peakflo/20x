@@ -172,6 +172,7 @@ export function useAgentAutoStart({ tasks, agents, showToast }: UseAgentAutoStar
         .filter((task) => {
           // Skip recurring parent template tasks — they are templates, not actionable tasks
           if (isRecurringTemplate(task)) return false
+          if (task.recurrence_parent_id && !task.auto_start_agent) return false
 
           // Skip subtasks — they are managed by sequential subtask orchestration
           if (task.parent_task_id) return false
@@ -245,6 +246,7 @@ export function useAgentAutoStart({ tasks, agents, showToast }: UseAgentAutoStar
       allTasks.forEach((task) => {
         // Skip recurring parent template tasks — they are templates, not actionable tasks
         if (isRecurringTemplate(task)) return
+        if (task.recurrence_parent_id && !task.auto_start_agent) return
 
         // Skip parent tasks that have subtasks — subtasks will run sequentially instead
         const hasChildren = allTasks.some((t) => t.parent_task_id === task.id)

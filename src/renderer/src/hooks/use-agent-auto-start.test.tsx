@@ -179,12 +179,13 @@ describe('useAgentAutoStart', () => {
     expect(mockElectronAPI.agentSession.start).not.toHaveBeenCalled()
   })
 
-  it('still triages recurring instances (tasks with recurrence_parent_id)', async () => {
+  it('triages recurring instances when their template enables auto-start', async () => {
     const instanceTask = makeTask({
       id: 'instance-1',
       title: 'Daily standup - 2026-04-09',
       is_recurring: false,
-      recurrence_parent_id: 'template-1'
+      recurrence_parent_id: 'template-1',
+      auto_start_agent: true
     })
     const triageAgent = makeAgent({ id: 'agent-triage', is_default: true })
 
@@ -205,6 +206,38 @@ describe('useAgentAutoStart', () => {
     // Should triage the instance normally
     expect(mockElectronAPI.db.updateTask).toHaveBeenCalledWith(instanceTask.id, { status: TaskStatus.Triaging })
     expect(mockElectronAPI.agentSession.start).toHaveBeenCalledWith(triageAgent.id, instanceTask.id, undefined, undefined)
+  })
+
+  it('does not triage or start recurring instances when auto-start is disabled', async () => {
+    const triageInstance = makeTask({
+      id: 'instance-unassigned',
+      recurrence_parent_id: 'template-1',
+      auto_start_agent: false
+    })
+    const assignedInstance = makeTask({
+      id: 'instance-assigned',
+      recurrence_parent_id: 'template-1',
+      auto_start_agent: false,
+      agent_id: 'agent-1'
+    })
+    const agent = makeAgent({ id: 'agent-1', is_default: true })
+
+    renderHook(() =>
+      useAgentAutoStart({
+        tasks: [triageInstance, assignedInstance],
+        agents: [agent],
+        sessions: new Map(),
+        showToast: vi.fn()
+      })
+    )
+
+    await act(async () => {
+      vi.advanceTimersByTime(350)
+      await Promise.resolve()
+    })
+
+    expect(mockElectronAPI.db.updateTask).not.toHaveBeenCalled()
+    expect(mockElectronAPI.agentSession.start).not.toHaveBeenCalled()
   })
 
   it('starts assigned agent immediately after successful triage completion', async () => {

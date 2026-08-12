@@ -188,6 +188,7 @@ interface MessageAttachmentRef {
 
 export class AgentManager extends EventEmitter {
   private sessions: Map<string, AgentSession> = new Map()
+  private startingSessionsByTask: Map<string, Promise<string>> = new Map()
   /** Maps old (temp) session IDs to their re-keyed (real) IDs so that
    *  stale IDs from the renderer still resolve after pollSingleSession re-keys. */
   private sessionIdRedirects: Map<string, string> = new Map()
@@ -1121,7 +1122,7 @@ export class AgentManager extends EventEmitter {
         console.log(`[AgentManager] Wrote ${skills.length} SKILL.md file(s) to ${skillsDir}`)
       }
 
-      // Generate AGENTS.md and CLAUDE.md with skill directory
+      // Generate the documentation file consumed by this coding agent.
       await this.writeAgentsDocumentation(workspaceDir, skills, task?.repos || [], agentId)
     } catch (error) {
       console.error('[AgentManager] Error writing skill files:', error)
@@ -1129,8 +1130,7 @@ export class AgentManager extends EventEmitter {
   }
 
   /**
-   * Generates AGENTS.md and CLAUDE.md with skill directory and metadata.
-   * Both files are written to the workspace root directory.
+   * Generates the documentation file consumed by the selected coding agent.
    */
   private async writeAgentsDocumentation(
     workspaceDir: string,
@@ -1142,15 +1142,15 @@ export class AgentManager extends EventEmitter {
       // Sort skills by confidence (high to low)
       const sortedSkills = [...skills].sort((a, b) => b.confidence - a.confidence)
 
-      // Generate AGENTS.md — write to workspace root (async to avoid blocking)
-      const agentsMd = this.generateAgentsMd(sortedSkills, repos, workspaceDir, agentId)
-      await writeFile(join(workspaceDir, 'AGENTS.md'), agentsMd, 'utf-8')
+      const agent = agentId ? this.db.getAgent(agentId) : undefined
+      const isClaudeCode = agent?.config?.coding_agent === CodingAgentType.CLAUDE_CODE
+      const filename = isClaudeCode ? 'CLAUDE.md' : 'AGENTS.md'
+      const content = isClaudeCode
+        ? this.generateClaudeMd(sortedSkills, repos, workspaceDir, agentId)
+        : this.generateAgentsMd(sortedSkills, repos, workspaceDir, agentId)
+      await writeFile(join(workspaceDir, filename), content, 'utf-8')
 
-      // Generate CLAUDE.md — write to workspace root
-      const claudeMd = this.generateClaudeMd(sortedSkills, repos, workspaceDir, agentId)
-      await writeFile(join(workspaceDir, 'CLAUDE.md'), claudeMd, 'utf-8')
-
-      console.log('[AgentManager] Generated AGENTS.md and CLAUDE.md in workspace root')
+      console.log(`[AgentManager] Generated ${filename} in workspace root`)
     } catch (error) {
       console.error('[AgentManager] Error writing agent documentation:', error)
     }
@@ -1160,11 +1160,7 @@ export class AgentManager extends EventEmitter {
    * Generates AGENTS.md content with skill directory.
    */
   private generateAgentsMd(skills: SkillRecord[], repos: string[], workspaceDir: string, agentId?: string): string {
-    const now = new Date().toISOString()
-
     let md = `# Agent Session Configuration\n\n`
-    md += `**Generated:** ${now}\n`
-    md += `---\n\n`
 
     // Add MCP Servers section
     if (agentId) {
@@ -1279,11 +1275,7 @@ export class AgentManager extends EventEmitter {
    * Generates CLAUDE.md content with skill directory.
    */
   private generateClaudeMd(skills: SkillRecord[], repos: string[], workspaceDir: string, agentId?: string): string {
-    const now = new Date().toISOString()
-
     let md = `# Claude Code Configuration\n\n`
-    md += `**Session Started:** ${now}\n`
-    md += `---\n\n`
 
     // Add MCP Servers section
     if (agentId) {
@@ -1640,12 +1632,11 @@ export class AgentManager extends EventEmitter {
             }
             promptText += '\n\nThis task has subtasks. Each subtask has its own agent. Focus on coordination and any work not covered by subtasks.'
             promptText += '\nUse `list_subtasks` or `get_task` via MCP tools to check live subtask status and outputs.'
+            promptText += '\n\nYou can use the `task-management` MCP server to orchestrate execution instead of doing everything yourself.'
+            promptText += '\n- Use `create_subtask` to break work down.'
+            promptText += '\n- Use `start_task` to triage+start an unassigned task, start an assigned task, or start a specific subtask by ID.'
+            promptText += '\n- Use `wait_for_subtasks` to block until subtasks reach `ready_for_review` or `completed` before continuing coordination.'
           }
-
-          promptText += '\n\nYou can use the `task-management` MCP server to orchestrate execution instead of doing everything yourself.'
-          promptText += '\n- Use `create_subtask` to break work down.'
-          promptText += '\n- Use `start_task` to triage+start an unassigned task, start an assigned task, or start a specific subtask by ID.'
-          promptText += '\n- Use `wait_for_subtasks` to block until subtasks reach `ready_for_review` or `completed` before continuing coordination.'
         }
 
         // Append output field instructions
@@ -1660,8 +1651,9 @@ export class AgentManager extends EventEmitter {
         }
       }
 
-      // Append heartbeat monitoring instructions
-      promptText += `\n\n## Heartbeat Monitoring (Optional)
+      // Append heartbeat instructions only for tasks that opted into monitoring.
+      if (task?.heartbeat_enabled) {
+        promptText += `\n\n## Heartbeat Monitoring
 
 If this task involves something that should be monitored after your work is done (e.g., a PR awaiting review, a deployment to verify, an issue to track), create a \`heartbeat.md\` file in the working directory.
 
@@ -1673,7 +1665,8 @@ Example heartbeat.md:
 - [ ] Check if linked issue #456 has new updates
 \`\`\`
 
-Only create this file when there's genuinely useful monitoring to do. Do not create it for tasks that are fully self-contained.`
+Keep this file current while monitoring is useful.`
+      }
 
       // Append memory file read instruction to user message
       // (user messages are more reliably followed than system prompt instructions)
@@ -2866,21 +2859,30 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
    * Uses promptAsync to send the initial prompt without blocking.
    */
   async startSession(agentId: string, taskId: string, workspaceDir?: string, skipInitialPrompt?: boolean): Promise<string> {
-    const agent = this.db.getAgent(agentId)
-    if (!agent) {
-      throw new Error(`Agent not found: ${agentId}`)
-    }
+    const existing = this.findSessionByTaskId(taskId)
+    if (existing && existing.session.status !== 'error') return existing.sessionId
 
-    // Auto-setup worktrees if caller didn't provide a workspaceDir
-    if (!workspaceDir) {
-      workspaceDir = await this.setupWorktreeIfNeeded(taskId)
-    }
+    const pending = this.startingSessionsByTask.get(taskId)
+    if (pending) return pending
 
-    const adapter = this.getAdapter(agentId)
-    if (!adapter) {
-      throw new Error(`No adapter available for agent ${agentId}`)
+    const start = (async () => {
+      const agent = this.db.getAgent(agentId)
+      if (!agent) throw new Error(`Agent not found: ${agentId}`)
+
+      const resolvedWorkspaceDir = workspaceDir ?? await this.setupWorktreeIfNeeded(taskId)
+      const adapter = this.getAdapter(agentId)
+      if (!adapter) throw new Error(`No adapter available for agent ${agentId}`)
+      return this.startAdapterSession(adapter, agentId, taskId, resolvedWorkspaceDir, skipInitialPrompt)
+    })()
+
+    this.startingSessionsByTask.set(taskId, start)
+    try {
+      return await start
+    } finally {
+      if (this.startingSessionsByTask.get(taskId) === start) {
+        this.startingSessionsByTask.delete(taskId)
+      }
     }
-    return this.startAdapterSession(adapter, agentId, taskId, workspaceDir, skipInitialPrompt)
   }
 
   async startTask(taskId: string, opts?: { preferSubtasks?: boolean; allowTriage?: boolean }): Promise<{

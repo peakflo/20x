@@ -121,6 +121,7 @@ function createMockDb(agentConfig: Record<string, unknown> = {}) {
     getSetting: vi.fn(() => null),
     getWorkspaceDir: vi.fn(() => '/tmp/test-workspace'),
     updateTask: vi.fn(),
+    upsertTranscriptParts: vi.fn(() => ({ maxRev: 1, changedPartIds: [] })),
   } as unknown as ConstructorParameters<typeof AgentManager>[0]
 }
 
@@ -289,7 +290,7 @@ describe('AgentManager skill file paths', () => {
   })
 
   describe('writeAgentsDocumentation', () => {
-    it('writes AGENTS.md and CLAUDE.md to workspace root, not .agents/', async () => {
+    it('writes only CLAUDE.md for Claude Code', async () => {
       const mockDb = createMockDb({ coding_agent: 'claude-code' })
       manager = new AgentManager(mockDb)
 
@@ -301,15 +302,29 @@ describe('AgentManager skill file paths', () => {
 
       const writeFilePaths = mockedWriteFileAsync.mock.calls.map(c => c[0] as string)
 
-      // Both files should be written to workspace root
-      expect(writeFilePaths).toContain('/tmp/test-workspace/AGENTS.md')
       expect(writeFilePaths).toContain('/tmp/test-workspace/CLAUDE.md')
+      expect(writeFilePaths).not.toContain('/tmp/test-workspace/AGENTS.md')
+
+      const content = mockedWriteFileAsync.mock.calls[0][1] as string
+      expect(content).not.toContain('Session Started:')
 
       // Neither should be written inside .agents/
       const agentsDirWrites = writeFilePaths.filter(
         p => p.includes('.agents/AGENTS.md') || p.includes('.agents/CLAUDE.md')
       )
       expect(agentsDirWrites).toHaveLength(0)
+    })
+
+    it('writes only AGENTS.md for non-Claude agents', async () => {
+      const mockDb = createMockDb({ coding_agent: 'cursor' })
+      manager = new AgentManager(mockDb)
+
+      await (manager as any).writeAgentsDocumentation('/tmp/test-workspace', [], [], 'agent-1')
+
+      const writeFilePaths = mockedWriteFileAsync.mock.calls.map(c => c[0] as string)
+      expect(writeFilePaths).toContain('/tmp/test-workspace/AGENTS.md')
+      expect(writeFilePaths).not.toContain('/tmp/test-workspace/CLAUDE.md')
+      expect(mockedWriteFileAsync.mock.calls[0][1] as string).not.toContain('Generated:')
     })
 
     it('does not create .agents/ directory for documentation files', async () => {
@@ -323,6 +338,74 @@ describe('AgentManager skill file paths', () => {
       const mkdirCalls = mockedMkdirAsync.mock.calls.map(c => c[0] as string)
       const agentsDirCreates = mkdirCalls.filter(p => p.endsWith('.agents'))
       expect(agentsDirCreates).toHaveLength(0)
+    })
+  })
+
+  describe('startSession', () => {
+    it('returns an existing non-error session for the task', async () => {
+      const mockDb = createMockDb({ coding_agent: 'cursor' })
+      manager = new AgentManager(mockDb)
+      ;(manager as any).sessions.set('session-existing', { taskId: 'task-1', status: 'idle' })
+      const getAdapter = vi.spyOn(manager as any, 'getAdapter')
+
+      await expect(manager.startSession('agent-1', 'task-1', '/tmp/ws')).resolves.toBe('session-existing')
+      expect(getAdapter).not.toHaveBeenCalled()
+    })
+
+    it('shares one in-flight start for concurrent calls on the same task', async () => {
+      const mockDb = createMockDb({ coding_agent: 'cursor' })
+      manager = new AgentManager(mockDb)
+      let resolveStart!: (sessionId: string) => void
+      const deferred = new Promise<string>((resolve) => { resolveStart = resolve })
+      vi.spyOn(manager as any, 'getAdapter').mockReturnValue({})
+      const startAdapterSession = vi.spyOn(manager as any, 'startAdapterSession').mockReturnValue(deferred)
+
+      const starts = [
+        manager.startSession('agent-1', 'task-1', '/tmp/ws'),
+        manager.startSession('agent-1', 'task-1', '/tmp/ws'),
+        manager.startSession('agent-1', 'task-1', '/tmp/ws')
+      ]
+      resolveStart('session-1')
+
+      await expect(Promise.all(starts)).resolves.toEqual(['session-1', 'session-1', 'session-1'])
+      expect(startAdapterSession).toHaveBeenCalledOnce()
+    })
+
+    it('clears a failed in-flight start so it can be retried', async () => {
+      const mockDb = createMockDb({ coding_agent: 'cursor' })
+      manager = new AgentManager(mockDb)
+      vi.spyOn(manager as any, 'getAdapter').mockReturnValue({})
+      const startAdapterSession = vi.spyOn(manager as any, 'startAdapterSession')
+        .mockRejectedValueOnce(new Error('failed'))
+        .mockResolvedValueOnce('session-2')
+
+      await expect(manager.startSession('agent-1', 'task-1', '/tmp/ws')).rejects.toThrow('failed')
+      await expect(manager.startSession('agent-1', 'task-1', '/tmp/ws')).resolves.toBe('session-2')
+      expect(startAdapterSession).toHaveBeenCalledTimes(2)
+    })
+  })
+
+  describe('initial prompt', () => {
+    it('starts a heartbeat-enabled task without a scope error', async () => {
+      const mockDb = createMockDb({ coding_agent: 'cursor' }) as any
+      mockDb.getTask = vi.fn(() => ({
+        id: 'task-1', title: 'Monitor task', description: 'Check production',
+        status: TaskStatus.NotStarted, agent_id: 'agent-1', parent_task_id: null,
+        heartbeat_enabled: true, attachments: [], output_fields: []
+      }))
+      manager = new AgentManager(mockDb)
+      vi.spyOn(manager as any, 'writeSkillFiles').mockResolvedValue(undefined)
+      vi.spyOn(manager as any, 'buildMcpServersForAdapter').mockResolvedValue([])
+      vi.spyOn(manager as any, 'startAdapterPolling').mockImplementation(() => undefined)
+      const adapter = {
+        initialize: vi.fn().mockResolvedValue(undefined),
+        createSession: vi.fn().mockResolvedValue('session-1'),
+        sendPrompt: vi.fn().mockResolvedValue(undefined)
+      }
+
+      await expect((manager as any).startAdapterSession(adapter, 'agent-1', 'task-1', '/tmp/ws')).resolves.toBe('session-1')
+      expect(adapter.sendPrompt).toHaveBeenCalledOnce()
+      expect(adapter.sendPrompt.mock.calls[0][1][0].text).toContain('## Heartbeat Monitoring')
     })
   })
 
