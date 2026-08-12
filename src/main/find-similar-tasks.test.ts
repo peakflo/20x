@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { createTestDb } from '../../test/helpers/db-test-helper'
 import { makeTask } from '../../test/helpers/task-fixtures'
-import { buildSimilarTasksMatchExpression } from './task-search'
+import { buildSimilarTasksQuery } from './task-search'
 import type { DatabaseManager } from './database'
 
 /**
@@ -46,34 +46,38 @@ function parseTask(task: Record<string, unknown>) {
 function findSimilarTasks(params: FindSimilarParams): Record<string, unknown>[] {
   const limit = params.limit || 10
 
-  const matchExpr = buildSimilarTasksMatchExpression(params)
+  const query = buildSimilarTasksQuery(params)
 
-  if (matchExpr) {
-    let ftsQuery = `
-      SELECT t.*, bm25(tasks_fts, 10.0, 5.0, 2.0, 1.0) AS rank
+  if (query) {
+    const tier = query.exactMatch
+      ? `CASE WHEN tasks_fts.rowid IN
+           (SELECT rowid FROM tasks_fts WHERE tasks_fts MATCH ?) THEN 0 ELSE 1 END`
+      : '0'
+    const selectClause = `
+      SELECT t.*, bm25(tasks_fts, 10.0, 5.0, 2.0, 1.0) AS rank, ${tier} AS exact_tier
       FROM tasks_fts
       JOIN tasks t ON tasks_fts.rowid = t.rowid
       WHERE tasks_fts MATCH ?`
-    const qParams: unknown[] = [matchExpr]
+    const baseParams: unknown[] = query.exactMatch
+      ? [query.exactMatch, query.match]
+      : [query.match]
+
+    let ftsQuery = selectClause
+    const qParams: unknown[] = [...baseParams]
 
     if (params.completed_only) {
       ftsQuery += ' AND t.status = ?'
       qParams.push('completed')
     }
 
-    ftsQuery += ' ORDER BY rank LIMIT ?'
+    ftsQuery += ' ORDER BY exact_tier, rank LIMIT ?'
     qParams.push(limit)
 
     let tasks = rawDb.prepare(ftsQuery).all(...qParams) as Record<string, unknown>[]
 
     if (tasks.length === 0 && params.completed_only) {
-      const fallbackQuery = `
-        SELECT t.*, bm25(tasks_fts, 10.0, 5.0, 2.0, 1.0) AS rank
-        FROM tasks_fts
-        JOIN tasks t ON tasks_fts.rowid = t.rowid
-        WHERE tasks_fts MATCH ?
-        ORDER BY rank LIMIT ?`
-      tasks = rawDb.prepare(fallbackQuery).all(matchExpr, limit) as Record<string, unknown>[]
+      const fallbackQuery = `${selectClause} ORDER BY exact_tier, rank LIMIT ?`
+      tasks = rawDb.prepare(fallbackQuery).all(...baseParams, limit) as Record<string, unknown>[]
     }
 
     tasks.forEach(parseTask)
@@ -227,6 +231,60 @@ describe('/find_similar_tasks - FTS5 search', () => {
       // Widening a label filter would defeat its purpose, so "bug" stays "bug".
       const results = findSimilarTasks({ labels: ['bug'] })
       expect(results.map((t) => t.title)).toEqual(['Task B'])
+    })
+  })
+
+  describe('exact matches outrank synonym matches', () => {
+    it('ranks the literal wording first even when its title is longer', () => {
+      // BM25 alone would put the shorter synonym titles on top, because it
+      // scores a synonym hit exactly like the word the caller typed.
+      db.createTask(makeTask({ title: 'Resolve payment gateway timeout' }))
+      db.createTask(makeTask({ title: 'Repairing flaky CI runner' }))
+      db.createTask(makeTask({ title: 'Patch auth' }))
+      db.createTask(makeTask({ title: 'Fix the login bug on the checkout page' }))
+
+      const results = findSimilarTasks({ title_keywords: 'fix' })
+      expect(results[0].title).toBe('Fix the login bug on the checkout page')
+      expect(results.length).toBe(4)
+    })
+
+    it('keeps the exact match when the limit would otherwise cut it off', () => {
+      // The whole point: a widened search must not push a real match out.
+      db.createTask(makeTask({ title: 'Resolve a' }))
+      db.createTask(makeTask({ title: 'Repair b' }))
+      db.createTask(makeTask({ title: 'Patch c' }))
+      db.createTask(makeTask({ title: 'Fix the checkout page bug today' }))
+
+      const results = findSimilarTasks({ title_keywords: 'fix', limit: 1 })
+      expect(results.map((t) => t.title)).toEqual(['Fix the checkout page bug today'])
+    })
+
+    it('still ranks by relevance within the exact tier', () => {
+      db.createTask(makeTask({ title: 'Fix login and fix checkout and fix payment' }))
+      db.createTask(makeTask({ title: 'Fix' }))
+      db.createTask(makeTask({ title: 'Resolve something else entirely' }))
+
+      const results = findSimilarTasks({ title_keywords: 'fix' })
+      // Both literal matches lead; the synonym match is last.
+      expect(results[2].title).toBe('Resolve something else entirely')
+    })
+
+    it('applies the same ordering on the completed_only fallback path', () => {
+      db.createTask(makeTask({ title: 'Resolve payment gateway timeout', status: 'not_started' }))
+      db.createTask(makeTask({ title: 'Fix the login bug on the checkout page', status: 'not_started' }))
+
+      // No completed tasks exist, so this falls back to all statuses.
+      const results = findSimilarTasks({ title_keywords: 'fix', completed_only: true })
+      expect(results[0].title).toBe('Fix the login bug on the checkout page')
+    })
+
+    it('ranks normally when no synonym was involved', () => {
+      db.createTask(makeTask({ title: 'Kubernetes node draining' }))
+      db.createTask(makeTask({ title: 'Kubernetes upgrade plan for the staging cluster' }))
+
+      // Nothing to expand, so BM25 order stands: the shorter title wins.
+      const results = findSimilarTasks({ title_keywords: 'kubernetes' })
+      expect(results[0].title).toBe('Kubernetes node draining')
     })
   })
 

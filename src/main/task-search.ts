@@ -131,25 +131,33 @@ export interface FindSimilarTasksParams {
   labels?: unknown
 }
 
+export interface SimilarTasksQuery {
+  /** Widest expression: stemmed, prefix-matched and synonym-expanded. */
+  match: string
+  /**
+   * The same expression with synonym expansion switched off, or `null` when
+   * expansion added nothing. The caller ranks rows matching this above the
+   * rest — see the note on buildSimilarTasksQuery.
+   */
+  exactMatch: string | null
+}
+
 /**
- * Builds the FTS5 MATCH expression for `/find_similar_tasks`.
+ * Collects the MATCH terms for one search.
  *
- * Keyword terms are prefix-matched and synonym-expanded; `type` and `labels`
- * are exact filters, so they are neither expanded nor prefixed — they narrow
- * the search rather than widen it.
- *
- * Returns `null` when nothing searchable was supplied, which tells the caller
- * to fall back to listing recent tasks instead of running an empty query.
+ * `type` and `labels` are exact filters, so they are neither expanded nor
+ * prefixed — they narrow the search rather than widen it.
  */
-export function buildSimilarTasksMatchExpression(params: FindSimilarTasksParams): string | null {
+function collectTerms(params: FindSimilarTasksParams, expand: boolean): Set<string> {
   // A Set collapses the duplicates that synonym expansion inevitably creates,
   // e.g. searching "bug error" expands both words onto the same group.
   const matchTerms = new Set<string>()
 
   const addKeywords = (column: 'title' | 'description', value: unknown): void => {
     for (const word of tokenizeKeywords(value)) {
-      for (const synonym of expandSynonyms(word)) {
-        matchTerms.add(ftsTerm(column, synonym, true))
+      const words = expand ? expandSynonyms(word) : [word]
+      for (const candidate of words) {
+        matchTerms.add(ftsTerm(column, candidate, true))
       }
     }
   }
@@ -170,7 +178,34 @@ export function buildSimilarTasksMatchExpression(params: FindSimilarTasksParams)
     }
   }
 
-  if (matchTerms.size === 0) return null
+  return matchTerms
+}
 
-  return Array.from(matchTerms).join(' OR ')
+/**
+ * Builds the FTS5 expressions for `/find_similar_tasks`.
+ *
+ * Two are returned because BM25 scores a synonym hit exactly like the word the
+ * caller actually typed: relevance then comes down to title length, which can
+ * rank "Resolve payment timeout" above a literal "Fix payment" for the query
+ * "fix". Left alone, a genuine match can be pushed past the result limit and
+ * disappear. The caller therefore sorts `exactMatch` rows into a first tier and
+ * ranks by BM25 inside each tier, so widening recall can only ever append
+ * results below the literal ones — never displace them.
+ *
+ * `exactMatch` is `null` when no synonym was added, since the two expressions
+ * would be identical and the extra ranking work would be wasted.
+ *
+ * Returns `null` when nothing searchable was supplied, which tells the caller
+ * to fall back to listing recent tasks instead of running an empty query.
+ */
+export function buildSimilarTasksQuery(params: FindSimilarTasksParams): SimilarTasksQuery | null {
+  const expanded = collectTerms(params, true)
+  if (expanded.size === 0) return null
+
+  const exact = collectTerms(params, false)
+
+  return {
+    match: Array.from(expanded).join(' OR '),
+    exactMatch: exact.size === expanded.size ? null : Array.from(exact).join(' OR ')
+  }
 }
