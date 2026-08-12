@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { TaskPanelContent } from './TaskPanelContent'
 
 const {
@@ -9,6 +9,7 @@ const {
   addPanelMock,
   addEdgeMock,
   bringToFrontMock,
+  executeActionMock,
   canvasState,
   taskList,
 } = vi.hoisted(() => ({
@@ -18,6 +19,7 @@ const {
   addPanelMock: vi.fn(() => 'panel-new'),
   addEdgeMock: vi.fn(),
   bringToFrontMock: vi.fn(),
+  executeActionMock: vi.fn(async () => ({ success: true })),
   canvasState: {
     panels: [
       { id: 'panel-1', type: 'task', refId: 'task-1', x: 100, y: 200, width: 1020, height: 780 },
@@ -29,7 +31,7 @@ const {
       title: 'Current Task',
       parent_task_id: null,
       output_fields: [],
-      source_id: null,
+      source_id: null as string | null,
       repos: [],
       priority: 'medium',
       type: 'general',
@@ -40,7 +42,7 @@ const {
       title: 'Child Task',
       parent_task_id: 'task-1',
       output_fields: [],
-      source_id: null,
+      source_id: null as string | null,
       repos: [],
       priority: 'medium',
       type: 'general',
@@ -53,9 +55,11 @@ vi.mock('@/components/tasks/TaskWorkspace', () => ({
   TaskWorkspace: ({
     onNavigateToTask,
     onOpenSubtaskInWindow,
+    onCompleteTask,
   }: {
     onNavigateToTask?: (taskId: string) => void
     onOpenSubtaskInWindow?: (taskId: string) => void
+    onCompleteTask?: () => void
   }) => (
     <>
       <button type="button" onClick={() => onNavigateToTask?.('child-1')}>
@@ -63,6 +67,9 @@ vi.mock('@/components/tasks/TaskWorkspace', () => ({
       </button>
       <button type="button" onClick={() => onOpenSubtaskInWindow?.('child-1')}>
         Open child in window
+      </button>
+      <button type="button" onClick={() => onCompleteTask?.()}>
+        Complete task
       </button>
     </>
   ),
@@ -110,11 +117,12 @@ vi.mock('@/stores/ui-store', () => ({
   }),
 }))
 
-vi.mock('@/stores/task-source-store', () => ({
-  useTaskSourceStore: () => ({
-    executeAction: vi.fn(),
-  }),
-}))
+vi.mock('@/stores/task-source-store', () => {
+  const state = { sources: [], executeAction: executeActionMock }
+  const useTaskSourceStore = (selector: (value: typeof state) => unknown) => selector(state)
+  useTaskSourceStore.getState = () => state
+  return { useTaskSourceStore }
+})
 
 describe('TaskPanelContent', () => {
   afterEach(() => {
@@ -123,6 +131,7 @@ describe('TaskPanelContent', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    taskList[0].source_id = null
     canvasState.panels = [
       { id: 'panel-1', type: 'task', refId: 'task-1', x: 100, y: 200, width: 1020, height: 780 },
     ]
@@ -172,5 +181,27 @@ describe('TaskPanelContent', () => {
     expect(bringToFrontMock).toHaveBeenCalledWith('panel-2')
     expect(addPanelMock).not.toHaveBeenCalled()
     expect(addEdgeMock).not.toHaveBeenCalled()
+  })
+
+  it('completes a task with no source directly from the canvas panel', async () => {
+    render(<TaskPanelContent panelId="panel-1" taskId="task-1" panelLayout="both" />)
+
+    fireEvent.click(screen.getByText('Complete task'))
+
+    await waitFor(() =>
+      expect(updateTaskMock).toHaveBeenCalledWith('task-1', { status: 'completed' })
+    )
+    expect(screen.queryByTestId('complete-at-source-dialog')).toBeNull()
+  })
+
+  it('asks how to complete a source-backed task from the canvas panel', async () => {
+    taskList[0].source_id = 'src-1'
+    render(<TaskPanelContent panelId="panel-1" taskId="task-1" panelLayout="both" />)
+
+    fireEvent.click(screen.getByText('Complete task'))
+
+    expect(await screen.findByTestId('complete-at-source-dialog')).toBeTruthy()
+    expect(updateTaskMock).not.toHaveBeenCalled()
+    expect(executeActionMock).not.toHaveBeenCalled()
   })
 })

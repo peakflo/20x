@@ -4,8 +4,7 @@ import { useCanvasStore, DEFAULT_PANEL_WIDTH, DEFAULT_PANEL_HEIGHT } from '@/sto
 import { useTaskStore } from '@/stores/task-store'
 import { useAgentStore } from '@/stores/agent-store'
 import { useUIStore } from '@/stores/ui-store'
-import { useTaskSourceStore } from '@/stores/task-source-store'
-import { TaskStatus, PluginActionId } from '@/types'
+import { useTaskCompletion } from '@/hooks/use-task-completion'
 import type { FileAttachment } from '@/types'
 
 interface TaskPanelContentProps {
@@ -30,9 +29,10 @@ export function TaskPanelContent({ panelId, taskId, panelLayout = 'both' }: Task
   // Per-action selectors: a selector-less useStore() subscribes to the whole
   // store, so every ui-store change (modals, filters, sidebar) would re-render
   // every canvas task panel's entire TaskWorkspace tree.
-  const executeAction = useTaskSourceStore((s) => s.executeAction)
   const openEditModal = useUIStore((s) => s.openEditModal)
   const openDeleteModal = useUIStore((s) => s.openDeleteModal)
+  // Source-backed tasks ask whether to close the task in the source system.
+  const { requestComplete, completionDialog } = useTaskCompletion()
 
   const handleEdit = useCallback(() => {
     if (task) openEditModal(task.id)
@@ -57,19 +57,8 @@ export function TaskPanelContent({ panelId, taskId, panelLayout = 'both' }: Task
   )
 
   const handleCompleteTask = useCallback(async () => {
-    if (!task) return
-    try {
-      if (task.source_id) {
-        const actionField = task.output_fields.find((f) => f.id === 'action')
-        const actionValue = actionField?.value ? String(actionField.value) : PluginActionId.Complete
-        const result = await executeAction(actionValue, task.id, task.source_id)
-        if (!result.success) return
-      }
-      await updateTask(task.id, { status: TaskStatus.Completed })
-    } catch (err) {
-      console.error('Failed to complete task:', err)
-    }
-  }, [task, updateTask, executeAction])
+    if (task) await requestComplete(task.id)
+  }, [task, requestComplete])
 
   const handleAssignAgent = useCallback(
     async (tid: string, agentId: string | null) => {
@@ -160,6 +149,7 @@ export function TaskPanelContent({ panelId, taskId, panelLayout = 'both' }: Task
         onOpenSubtaskInWindow={handleOpenSubtaskInWindow}
         panelLayout={panelLayout}
       />
+      {completionDialog}
     </div>
   )
 }
