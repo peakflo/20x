@@ -119,6 +119,24 @@ Both flags can be set from the desktop UI, the mobile UI, the HTTP API, and the
 > window-dependent — an occurrence created while the window was closed was
 > never started, and never retried.
 
+### Flags and subtasks
+
+A task that works through subtasks obeys these rules:
+
+- A parent is **never completed while a child is unfinished**. Its agent can
+  create children and then stop; completing there would mark the occurrence
+  done with none of the work run. The parent is parked in `ready_for_review`
+  and completes once every child is terminal.
+- A child is started **through its parent**, one at a time, in `sort_order`.
+  Only a genuinely running child (`agent_working`, `triaging`,
+  `agent_learning`) blocks the next one. A child in `ready_for_review` has
+  finished its agent run and does not block, because a subtask cannot set
+  itself to `completed`.
+- `/create_subtask` passes `auto_complete_without_review` down from the
+  parent, so an unattended chain does not park in review at its first step.
+  `auto_start_agent` is **not** passed down — children are started through the
+  parent, which is what keeps them in order.
+
 ## Auto-Triage
 
 When auto-run is enabled and a new task has no `agent_id`, the system automatically triages it using the default agent.

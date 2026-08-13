@@ -1022,6 +1022,9 @@ describe('AgentManager transitionToIdle — completing without review', () => {
       getSetting: vi.fn(() => null),
       updateTask: vi.fn(),
       getTranscriptParts: vi.fn(() => [] as Array<{ role: string; content: string }>),
+      // A parent is never completed while a child is unfinished, so the
+      // completion path always asks for subtasks.
+      getSubtasks: vi.fn(() => [] as unknown[]),
     } as unknown as ConstructorParameters<typeof AgentManager>[0]
   }
 
@@ -1167,6 +1170,9 @@ describe('AgentManager transitionToIdle — enterprise task completion after fee
       getSetting: vi.fn(() => null),
       updateTask: vi.fn(),
       getTranscriptParts: vi.fn(() => [] as Array<{ role: string; content: string }>),
+      // A parent is never completed while a child is unfinished, so the
+      // completion path always asks for subtasks.
+      getSubtasks: vi.fn(() => [] as unknown[]),
     } as unknown as ConstructorParameters<typeof AgentManager>[0]
   }
 

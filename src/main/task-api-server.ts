@@ -951,7 +951,7 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
       if (!params.title) return { error: 'title is required' }
 
       // Verify parent task exists
-      const parentTask = rawDb.prepare('SELECT id, repos, priority FROM tasks WHERE id = ?').get(params.parent_task_id) as Record<string, unknown> | undefined
+      const parentTask = rawDb.prepare('SELECT id, repos, priority, auto_complete_without_review FROM tasks WHERE id = ?').get(params.parent_task_id) as Record<string, unknown> | undefined
       if (!parentTask) return { error: 'Parent task not found' }
 
       const subtaskId = `task_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`
@@ -969,8 +969,8 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
       const outputFields = params.output_fields ? JSON.stringify(params.output_fields) : '[]'
 
       rawDb.prepare(`
-        INSERT INTO tasks (id, title, description, type, priority, status, assignee, due_date, labels, attachments, repos, output_fields, source, agent_id, skill_ids, parent_task_id, sort_order, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, 'not_started', '', NULL, ?, '[]', ?, ?, 'local', ?, ?, ?, ?, ?, ?)
+        INSERT INTO tasks (id, title, description, type, priority, status, assignee, due_date, labels, attachments, repos, output_fields, source, agent_id, skill_ids, parent_task_id, sort_order, auto_complete_without_review, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, 'not_started', '', NULL, ?, '[]', ?, ?, 'local', ?, ?, ?, ?, ?, ?, ?)
       `).run(
         subtaskId,
         params.title,
@@ -984,6 +984,13 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
         params.skill_ids ? JSON.stringify(params.skill_ids) : null,
         params.parent_task_id,
         nextSortOrder,
+        // A child of a parent told to finish without review must not stop for
+        // one either, or an unattended chain parks in review at the first step.
+        // auto_start_agent is deliberately NOT inherited: children are started
+        // through their parent, one at a time, in sort_order.
+        params.auto_complete_without_review === undefined
+          ? (parentTask.auto_complete_without_review ? 1 : 0)
+          : (params.auto_complete_without_review === true ? 1 : 0),
         now,
         now
       )
@@ -998,6 +1005,10 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
           notifyRenderer('task:created', { task: properTask })
         }
       }
+
+      // A coordinator that creates children and then stops leaves them for
+      // the automation loop. Poke it now so the first child starts at once.
+      triggerTaskAutomation()
 
       return { success: true, task: parsedSubtask }
     }

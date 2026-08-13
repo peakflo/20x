@@ -867,3 +867,82 @@ describe('auto_start_agent over the task API', () => {
     setTaskAutomationTrigger(null)
   })
 })
+
+describe('/create_subtask automation inheritance', () => {
+  const post = async <T>(port: number, route: string, body: Record<string, unknown>): Promise<T> => {
+    const response = await fetch(`http://127.0.0.1:${port}${route}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    })
+    return (await response.json()) as T
+  }
+
+  const flagsOf = (id: string): { auto_start_agent: number; auto_complete_without_review: number } =>
+    rawDb.prepare('SELECT auto_start_agent, auto_complete_without_review FROM tasks WHERE id = ?')
+      .get(id) as { auto_start_agent: number; auto_complete_without_review: number }
+
+  it('passes the parent auto-complete intent to its child', async () => {
+    // A subtask cannot set itself to completed (the scoped MCP tools forbid it),
+    // so without this a child of a self-resolving parent parks in review and
+    // stalls the whole chain.
+    const parent = db.createTask(makeTask({ title: 'Parent', auto_complete_without_review: true }))!
+    const port = await startTaskApiServer(db)
+
+    const created = await post<{ task: { id: string } }>(port, '/create_subtask', {
+      parent_task_id: parent.id,
+      title: 'Child'
+    })
+
+    expect(flagsOf(created.task.id).auto_complete_without_review).toBe(1)
+  })
+
+  it('does not pass auto_start_agent down — children run through their parent, in order', async () => {
+    const parent = db.createTask(makeTask({ title: 'Parent', auto_start_agent: true }))!
+    const port = await startTaskApiServer(db)
+
+    const created = await post<{ task: { id: string } }>(port, '/create_subtask', {
+      parent_task_id: parent.id,
+      title: 'Child'
+    })
+
+    expect(flagsOf(created.task.id).auto_start_agent).toBe(0)
+  })
+
+  it('leaves a child of an ordinary parent with both flags off', async () => {
+    const parent = db.createTask(makeTask({ title: 'Parent' }))!
+    const port = await startTaskApiServer(db)
+
+    const created = await post<{ task: { id: string } }>(port, '/create_subtask', {
+      parent_task_id: parent.id,
+      title: 'Child'
+    })
+
+    expect(flagsOf(created.task.id)).toEqual({ auto_start_agent: 0, auto_complete_without_review: 0 })
+  })
+
+  it('lets an explicit value beat the inherited one', async () => {
+    const parent = db.createTask(makeTask({ title: 'Parent', auto_complete_without_review: true }))!
+    const port = await startTaskApiServer(db)
+
+    const created = await post<{ task: { id: string } }>(port, '/create_subtask', {
+      parent_task_id: parent.id,
+      title: 'Child',
+      auto_complete_without_review: false
+    })
+
+    expect(flagsOf(created.task.id).auto_complete_without_review).toBe(0)
+  })
+
+  it('asks the automation loop to start the new child straight away', async () => {
+    const parent = db.createTask(makeTask({ title: 'Parent', auto_start_agent: true }))!
+    const port = await startTaskApiServer(db)
+    const trigger = vi.fn()
+    setTaskAutomationTrigger(trigger)
+
+    await post(port, '/create_subtask', { parent_task_id: parent.id, title: 'Child' })
+
+    expect(trigger).toHaveBeenCalled()
+    setTaskAutomationTrigger(null)
+  })
+})

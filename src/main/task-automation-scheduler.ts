@@ -141,22 +141,89 @@ export class TaskAutomationScheduler {
     }
   }
 
-  /** Tasks flagged for auto-start that are still waiting to run. */
+  /**
+   * Tasks flagged for auto-start that are still waiting to run, plus the next
+   * subtask of any such task.
+   *
+   * The subtask half matters because a coordinator can create children and
+   * then stop. Its own status is then agent_working or ready_for_review, so
+   * neither it nor its children match the flag query — and a subtask never
+   * carries `auto_start_agent` itself, because `/create_subtask` does not set
+   * it. Without this the children sit in not_started for ever.
+   */
   private getAutoStartCandidates(): TaskRecord[] {
     const now = new Date().toISOString()
-    const rows = this.dbManager.db.prepare(`
-      SELECT id FROM tasks
+    // Subtasks are driven through their parent, never directly, so that they
+    // keep running one at a time in sort_order. Picking a flagged subtask up
+    // here would start the whole set at once.
+    const flagged = this.dbManager.db.prepare(`
+      SELECT id, status FROM tasks
       WHERE auto_start_agent = 1
-        AND status = ?
+        AND parent_task_id IS NULL
         AND NOT (is_recurring = 1 AND recurrence_parent_id IS NULL)
         AND (snoozed_until IS NULL OR snoozed_until <= ?)
       ORDER BY created_at ASC
-    `).all(TaskStatus.NotStarted, now) as { id: string }[]
+    `).all(now) as { id: string; status: string }[]
 
-    return rows
-      .filter((row) => (this.failedStarts.get(row.id) ?? 0) < this.MAX_START_ATTEMPTS)
-      .map((row) => this.dbManager.getTask(row.id))
+    const candidateIds: string[] = []
+    for (const row of flagged) {
+      // A parent with children hands over to them — starting it again would
+      // run the coordinator a second time.
+      const nextSubtaskId = this.getNextStartableSubtaskId(row.id)
+      if (nextSubtaskId) {
+        candidateIds.push(nextSubtaskId)
+        continue
+      }
+      if (row.status === TaskStatus.NotStarted && !this.hasSubtasks(row.id)) {
+        candidateIds.push(row.id)
+      }
+    }
+
+    return candidateIds
+      .filter((id) => (this.failedStarts.get(id) ?? 0) < this.MAX_START_ATTEMPTS)
+      .map((id) => this.dbManager.getTask(id))
       .filter((task): task is TaskRecord => !!task)
+  }
+
+  private hasSubtasks(taskId: string): boolean {
+    return this.dbManager.getSubtasks(taskId).length > 0
+  }
+
+  /** Subtasks that still have work left before their parent can finish. */
+  private hasPendingSubtasks(taskId: string): boolean {
+    return this.dbManager.getSubtasks(taskId).some(
+      (subtask) =>
+        subtask.status !== TaskStatus.Completed && subtask.status !== TaskStatus.ReadyForReview
+    )
+  }
+
+  /**
+   * The one subtask that should run next, or null.
+   *
+   * Subtasks run strictly in `sort_order`, one at a time. Only a genuinely
+   * running state blocks the next one.
+   *
+   * The renderer also blocked on `ready_for_review`, which deadlocks an
+   * unattended chain: a child that finishes stops there (a subtask does not
+   * carry `auto_complete_without_review`), so nothing would ever start the
+   * child after it. A child in review has finished its agent run, and
+   * notifyParentOfSubtaskCompletion already counts that state as terminal.
+   */
+  private getNextStartableSubtaskId(parentId: string): string | null {
+    const subtasks = this.dbManager.getSubtasks(parentId)
+      .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
+    if (subtasks.length === 0) return null
+
+    const active = subtasks.some(
+      (subtask) =>
+        subtask.status === TaskStatus.AgentWorking ||
+        subtask.status === TaskStatus.Triaging ||
+        subtask.status === TaskStatus.AgentLearning
+    )
+    if (active) return null
+
+    const next = subtasks.find((subtask) => subtask.status === TaskStatus.NotStarted && !!subtask.agent_id)
+    return next?.id ?? null
   }
 
   // ── Auto-complete ───────────────────────────────────────────
@@ -189,6 +256,13 @@ export class TaskAutomationScheduler {
       if (this.inFlight.has(row.id)) continue
       if (this.agentManager.hasActiveSessionForTask(row.id)) {
         console.log(`[TaskAutomation] Skipping auto-complete of ${row.id} — agent session still active`)
+        continue
+      }
+      // Waiting for children is not a failure, so it must not burn an attempt.
+      // AgentManager refuses this too; skipping here keeps the retry counter
+      // for genuine refusals only.
+      if (this.hasPendingSubtasks(row.id)) {
+        console.log(`[TaskAutomation] Skipping auto-complete of ${row.id} — subtasks have not finished`)
         continue
       }
 

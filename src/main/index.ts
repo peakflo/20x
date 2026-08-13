@@ -33,7 +33,7 @@ import { EnterpriseStateSync } from './enterprise-state-sync'
 import { setTaskApiAgentController, setTaskApiNotifier, setTaskApiUiState, setTaskAutomationTrigger, setTranscriptProvider, stopTaskApiServer } from './task-api-server'
 import { startSecretBroker, stopSecretBroker, writeSecretShellWrapper } from './secret-broker'
 import { startMcpAuthProxy, stopMcpAuthProxy } from './mcp-auth-proxy'
-import { startMobileApiServer, stopMobileApiServer, broadcastToMobileClients, setMobileApiNotifier } from './mobile-api-server'
+import { startMobileApiServer, stopMobileApiServer, broadcastToMobileClients, setMobileApiNotifier, setMobileApiTaskAutomationTrigger } from './mobile-api-server'
 import { registerUpdaterIpc, initAutoUpdater, isUpdateDownloaded, getPendingVersion } from './auto-updater'
 import { initCrashLogger } from './crash-logger'
 import { installProcessStreamErrorHandlers } from './process-stream-errors'
@@ -419,6 +419,9 @@ function createWindow(): void {
   // An MCP caller has no window, so the main-process loop is what honours the
   // auto-start / auto-complete flags it sets.
   setTaskAutomationTrigger(() => {
+    void taskAutomationScheduler?.runNow()
+  })
+  setMobileApiTaskAutomationTrigger(() => {
     void taskAutomationScheduler?.runNow()
   })
 
