@@ -145,6 +145,26 @@ export function startMobileApiServer(
  * Set a callback to notify the desktop (Electron renderer) of events
  * originating from the mobile API (e.g. task created/updated).
  */
+/**
+ * Runs one auto-start / auto-complete reconciliation pass.
+ *
+ * Mobile writes go straight to `db.updateTask`, which emits nothing, so
+ * without this a flag set from a phone waits for the next 60s sweep.
+ */
+let taskAutomationTrigger: (() => void) | null = null
+
+export function setMobileApiTaskAutomationTrigger(fn: (() => void) | null): void {
+  taskAutomationTrigger = fn
+}
+
+function triggerTaskAutomation(): void {
+  try {
+    taskAutomationTrigger?.()
+  } catch (err) {
+    console.error('[MobileAPI] Task automation trigger failed:', err)
+  }
+}
+
 export function setMobileApiNotifier(fn: (channel: string, data: unknown) => void): void {
   notifyDesktop = fn
 }
@@ -701,6 +721,7 @@ async function routePost(pathname: string, params: Record<string, unknown>, req?
     if (!task) throw Object.assign(new Error('Failed to create task'), { status: 500 })
     broadcastToMobileClients('task:created', { task })
     if (notifyDesktop) notifyDesktop('task:created', { task })
+    if (task.auto_start_agent) triggerTaskAutomation()
     return task
   }
 
@@ -714,6 +735,14 @@ async function routePost(pathname: string, params: Record<string, unknown>, req?
     if (updated) {
       broadcastToMobileClients('task:updated', { taskId, updates: updated })
       if (notifyDesktop) notifyDesktop('task:updated', { taskId, updates: updated })
+      const changed = params as Record<string, unknown>
+      if (
+        changed.status !== undefined ||
+        changed.auto_start_agent !== undefined ||
+        changed.auto_complete_without_review !== undefined
+      ) {
+        triggerTaskAutomation()
+      }
     }
     return updated
   }

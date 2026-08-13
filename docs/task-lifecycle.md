@@ -91,6 +91,52 @@ A task is eligible for auto-start when ALL conditions are true:
 - When an agent goes idle, the next queued task starts
 - A periodic check (60s) catches any stuck tasks
 
+## Per-Task Automation Flags
+
+Two flags on a task drive it without any human, and without any window:
+
+| Flag | Effect |
+|------|--------|
+| `auto_start_agent` | The task is handed to its agent as soon as it exists or becomes due. Set it on a recurring task and every occurrence runs by itself. |
+| `auto_complete_without_review` | The task goes straight to `completed` when its agent finishes, instead of stopping at `ready_for_review`. |
+
+Both are owned by the **main process**, not the renderer, and both are
+independent of the sidebar auto-run toggle:
+
+- `src/main/task-automation-scheduler.ts` reconciles them against SQLite every
+  60 seconds, and on demand whenever a task is created or its status changes.
+  Because it reconciles durable state rather than reacting to an event, a
+  missed event costs latency, never correctness.
+- `src/main/agent-manager.ts` (`transitionToIdle` →
+  `completeTaskWithoutReview`) applies `auto_complete_without_review`
+  immediately when a session goes idle.
+
+Both flags can be set from the desktop UI, the mobile UI, the HTTP API, and the
+`create_task` / `update_task` MCP tools.
+
+> These used to live in `use-agent-auto-start.ts`, driven by one-shot
+> `task:created` / `task:updated` events. That made them silently
+> window-dependent — an occurrence created while the window was closed was
+> never started, and never retried.
+
+### Flags and subtasks
+
+A task that works through subtasks obeys these rules:
+
+- A parent is **never completed while a child is unfinished**. Its agent can
+  create children and then stop; completing there would mark the occurrence
+  done with none of the work run. The parent is parked in `ready_for_review`
+  and completes once every child is terminal.
+- A child is started **through its parent**, one at a time, in `sort_order`.
+  Only a genuinely running child (`agent_working`, `triaging`,
+  `agent_learning`) blocks the next one. A child in `ready_for_review` has
+  finished its agent run and does not block, because a subtask cannot set
+  itself to `completed`.
+- `/create_subtask` passes `auto_complete_without_review` down from the
+  parent, so an unattended chain does not park in review at its first step.
+  `auto_start_agent` is **not** passed down — children are started through the
+  parent, which is what keeps them in order.
+
 ## Auto-Triage
 
 When auto-run is enabled and a new task has no `agent_id`, the system automatically triages it using the default agent.
@@ -179,6 +225,7 @@ Uses SQL `LIKE` substring matching — not semantic search:
 | `src/main/agent-manager.ts` | Session lifecycle, `buildTriagePrompt`, `transitionToIdle` |
 | `src/main/task-api-server.ts` | HTTP API routes (`/update_task` status guard, `/list_repos`) |
 | `src/main/mcp-servers/task-management-mcp.ts` | MCP tool definitions |
+| `src/main/task-automation-scheduler.ts` | `auto_start_agent` / `auto_complete_without_review` reconciliation |
 | `src/renderer/src/hooks/use-agent-auto-start.ts` | Auto-run scheduler + triage trigger |
 | `src/renderer/src/components/tasks/TaskWorkspace.tsx` | Manual triage button wiring |
 | `src/renderer/src/components/tasks/TaskDetailView.tsx` | Triage button UI |

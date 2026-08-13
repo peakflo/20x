@@ -823,4 +823,66 @@ describe('useAgentAutoStart', () => {
     // Should also NOT mark parent as ReadyForReview
     expect(mockElectronAPI.db.updateTask).not.toHaveBeenCalledWith('parent-changed', { status: TaskStatus.ReadyForReview })
   })
+  /**
+   * Ownership of the two automation flags moved to the main process. These
+   * tests pin that boundary: if the renderer starts acting on them again the
+   * old failure returns — a duplicate session per occurrence, and a per-agent
+   * running count that is incremented here but only decremented behind the
+   * `isEnabled` gate, so every agent ends up looking permanently full.
+   */
+  describe('automation flags are owned by the main process', () => {
+    it('does not start a recurring instance flagged auto_start_agent', async () => {
+      const agent = makeAgent()
+      renderHook(() =>
+        useAgentAutoStart({ tasks: [], agents: [agent], sessions: new Map(), showToast: vi.fn() })
+      )
+
+      // Fan out to EVERY registered listener, not just the last one — a
+      // re-added auto-start listener would otherwise hide behind whichever
+      // effect happened to subscribe last.
+      const createdCallbacks = (mockElectronAPI.onTaskCreated as unknown as Mock).mock.calls
+        .map((call: unknown[]) => call[0] as (event: { task: WorkfloTask }) => void)
+      expect(createdCallbacks.length).toBeGreaterThan(0)
+
+      await act(async () => {
+        for (const cb of createdCallbacks) {
+          cb({
+            task: makeTask({
+              id: 'instance-1',
+              agent_id: agent.id,
+              auto_start_agent: true,
+              recurrence_parent_id: 'template-1'
+            })
+          })
+        }
+        await vi.advanceTimersByTimeAsync(1000)
+      })
+
+      const startedTaskIds = (mockElectronAPI.agentSession.start as unknown as Mock).mock.calls
+        .map((call: unknown[]) => call[1])
+      expect(startedTaskIds).not.toContain('instance-1')
+    })
+
+    it('does not auto-complete a task that reaches ready_for_review', async () => {
+      const task = makeTask({ id: 'task-ac', auto_complete_without_review: true })
+      renderHook(() =>
+        useAgentAutoStart({ tasks: [task], agents: [makeAgent()], sessions: new Map(), showToast: vi.fn() })
+      )
+
+      const updatedCallbacks = (mockElectronAPI.onTaskUpdated as unknown as Mock).mock.calls
+        .map((call: unknown[]) => call[0] as (event: { taskId: string; updates: Partial<WorkfloTask> }) => void)
+      expect(updatedCallbacks.length).toBeGreaterThan(0)
+
+      await act(async () => {
+        for (const cb of updatedCallbacks) {
+          cb({ taskId: 'task-ac', updates: { status: TaskStatus.ReadyForReview } })
+        }
+        await vi.advanceTimersByTimeAsync(1000)
+      })
+
+      expect(mockElectronAPI.db.updateTask).not.toHaveBeenCalledWith('task-ac', {
+        status: TaskStatus.Completed
+      })
+    })
+  })
 })

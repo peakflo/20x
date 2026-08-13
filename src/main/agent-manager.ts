@@ -3525,7 +3525,55 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     sessionId: string,
     task: TaskRecord
   ): Promise<boolean> {
+    void sessionId
+    return this.completeTaskWithoutReview(session.taskId, task)
+  }
+
+  /**
+   * Completes a task that must not wait for a human review, telling the source
+   * system first when there is one.
+   *
+   * This is deliberately session-independent: a task can reach this point
+   * without a live agent session — a coordinator marked its parent
+   * ready_for_review, an MCP client set the status, or the periodic
+   * reconciliation sweep found a task that was left in review while its
+   * auto_complete_without_review flag was set. Every one of those routes must
+   * honour the flag, not just the one that runs inside transitionToIdle.
+   *
+   * Returns false when the task was left for review instead.
+   */
+  async completeTaskWithoutReview(taskId: string, knownTask?: TaskRecord): Promise<boolean> {
+    const task = knownTask ?? this.db.getTask(taskId)
+    if (!task) return false
+
     const yieldEventLoop = (): Promise<void> => new Promise((r) => setImmediate(r))
+
+    // A coordinator is not finished while its children are still to run.
+    //
+    // An agent that creates subtasks and then stops leaves them in
+    // not_started. Completing the parent there would mark the whole recurring
+    // occurrence done while none of the actual work had run. Park it in review
+    // instead; the parent is woken again by notifyParentOfSubtaskCompletion
+    // once every child reaches a terminal state, and completes then.
+    const pendingSubtasks = this.db.getSubtasks(taskId).filter(
+      (subtask) =>
+        subtask.status !== TaskStatus.Completed && subtask.status !== TaskStatus.ReadyForReview
+    )
+    if (pendingSubtasks.length > 0) {
+      console.log(
+        `[AgentManager] Task ${taskId} completes without review, but ${pendingSubtasks.length} ` +
+        `subtask(s) have not finished — leaving it for review`
+      )
+      if (task.status !== TaskStatus.ReadyForReview) {
+        this.db.updateTask(taskId, { status: TaskStatus.ReadyForReview })
+        await yieldEventLoop()
+        this.sendToRenderer('task:updated', {
+          taskId,
+          updates: { status: TaskStatus.ReadyForReview }
+        })
+      }
+      return false
+    }
 
     /**
      * The user answers this in the feedback dialog before the learning session
@@ -3549,16 +3597,16 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       }
       if (failure) {
         console.error(`[AgentManager] executeAction failed, leaving task for review:`, failure)
-        this.db.updateTask(session.taskId, { status: TaskStatus.ReadyForReview })
+        this.db.updateTask(taskId, { status: TaskStatus.ReadyForReview })
         await yieldEventLoop()
         this.sendToRenderer('task:updated', {
-          taskId: session.taskId,
+          taskId,
           updates: { status: TaskStatus.ReadyForReview }
         })
         // Without this the task silently returns to review and the user is
         // never told that the source system refused the completion.
         this.sendToRenderer('task:source-action-failed', {
-          taskId: session.taskId,
+          taskId,
           taskTitle: task.title,
           error: failure
         })
@@ -3566,23 +3614,22 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       }
       await yieldEventLoop()
     } else if (task.source_id && !pushToSource) {
-      console.log(`[AgentManager] Task ${session.taskId} completes locally — the user updates the source`)
+      console.log(`[AgentManager] Task ${taskId} completes locally — the user updates the source`)
     }
 
-    this.db.updateTask(session.taskId, { status: TaskStatus.Completed })
+    this.db.updateTask(taskId, { status: TaskStatus.Completed })
     await yieldEventLoop()
     this.sendToRenderer('task:updated', {
-      taskId: session.taskId,
+      taskId,
       updates: { status: TaskStatus.Completed }
     })
 
     // A subtask that finishes must still wake its parent.
     if (task.parent_task_id) {
-      this.notifyParentOfSubtaskCompletion(task.parent_task_id, session.taskId).catch((err) => {
-        console.error(`[AgentManager] Failed to wake parent ${task.parent_task_id} after subtask ${session.taskId} completed:`, err)
+      this.notifyParentOfSubtaskCompletion(task.parent_task_id, taskId).catch((err) => {
+        console.error(`[AgentManager] Failed to wake parent ${task.parent_task_id} after subtask ${taskId} completed:`, err)
       })
     }
-    void sessionId
     return true
   }
 

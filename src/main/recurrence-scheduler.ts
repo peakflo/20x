@@ -72,10 +72,26 @@ export class RecurrenceScheduler {
   private mainWindow: BrowserWindow | null = null
   private readonly CHECK_INTERVAL = 60 * 1000 // 60 seconds
   private timezone: string
+  /**
+   * Called once per tick that produced at least one instance.
+   *
+   * Creating the row is only half the job — an instance flagged
+   * `auto_start_agent` still has to be handed to an agent. That is owned by
+   * TaskAutomationScheduler, and this hook lets it run straight away instead
+   * of waiting for its own tick.
+   */
+  private onInstancesCreated: (() => void) | null = null
+  /** Instances created during the current tick. */
+  private createdInstanceCount = 0
 
   constructor(dbManager: DatabaseManager, timezone?: string) {
     this.dbManager = dbManager
     this.timezone = timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone
+  }
+
+  /** Register the callback fired after a tick creates one or more instances. */
+  setOnInstancesCreated(callback: (() => void) | null): void {
+    this.onInstancesCreated = callback
   }
 
   start(mainWindow: BrowserWindow): void {
@@ -177,6 +193,18 @@ export class RecurrenceScheduler {
       if (this.mainWindow && !this.mainWindow.isDestroyed()) {
         this.mainWindow.webContents.send('tasks:refresh')
       }
+
+      // Hand the new instances to whoever owns auto-start. This is a
+      // notification, never a dependency: if nothing is registered the
+      // automation sweep picks the instances up on its own tick.
+      if (this.createdInstanceCount > 0) {
+        this.createdInstanceCount = 0
+        try {
+          this.onInstancesCreated?.()
+        } catch (err) {
+          console.error('[RecurrenceScheduler] onInstancesCreated callback failed:', err)
+        }
+      }
     } catch (err) {
       console.error('[RecurrenceScheduler] Error in checkAndCreateDueInstances:', err)
     }
@@ -275,6 +303,8 @@ export class RecurrenceScheduler {
       occurrenceTime, // Use occurrence time as created_at
       now
     )
+
+    this.createdInstanceCount += 1
 
     console.log(`[RecurrenceScheduler] Created instance ${id} from template ${template.id}`, {
       auto_start_agent: template.auto_start_agent,

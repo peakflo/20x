@@ -25,14 +25,15 @@ import { assistantTextParts, sinceLastUserMessage } from './voice/voice-answer-p
 import { EnterpriseAuth } from './enterprise-auth'
 import { RecurrenceScheduler } from './recurrence-scheduler'
 import { HeartbeatScheduler } from './heartbeat-scheduler'
+import { TaskAutomationScheduler } from './task-automation-scheduler'
 import { WorkspaceCleanupScheduler } from './workspace-cleanup-scheduler'
 import { ClaudePluginManager } from './claude-plugin-manager'
 import { EnterpriseHeartbeat } from './enterprise-heartbeat'
 import { EnterpriseStateSync } from './enterprise-state-sync'
-import { setTaskApiAgentController, setTaskApiNotifier, setTaskApiUiState, setTranscriptProvider, stopTaskApiServer } from './task-api-server'
+import { setTaskApiAgentController, setTaskApiNotifier, setTaskApiUiState, setTaskAutomationTrigger, setTranscriptProvider, stopTaskApiServer } from './task-api-server'
 import { startSecretBroker, stopSecretBroker, writeSecretShellWrapper } from './secret-broker'
 import { startMcpAuthProxy, stopMcpAuthProxy } from './mcp-auth-proxy'
-import { startMobileApiServer, stopMobileApiServer, broadcastToMobileClients, setMobileApiNotifier } from './mobile-api-server'
+import { startMobileApiServer, stopMobileApiServer, broadcastToMobileClients, setMobileApiNotifier, setMobileApiTaskAutomationTrigger } from './mobile-api-server'
 import { registerUpdaterIpc, initAutoUpdater, isUpdateDownloaded, getPendingVersion } from './auto-updater'
 import { initCrashLogger } from './crash-logger'
 import { installProcessStreamErrorHandlers } from './process-stream-errors'
@@ -69,6 +70,7 @@ let oauthManager: OAuthManager | null = null
 let enterpriseAuth: EnterpriseAuth | null = null
 let recurrenceScheduler: RecurrenceScheduler | null = null
 let heartbeatScheduler: HeartbeatScheduler | null = null
+let taskAutomationScheduler: TaskAutomationScheduler | null = null
 let workspaceCleanupScheduler: WorkspaceCleanupScheduler | null = null
 let claudePluginManager: ClaudePluginManager | null = null
 let enterpriseHeartbeatInstance: EnterpriseHeartbeat | null = null
@@ -183,6 +185,7 @@ async function shutdownAppServices(): Promise<void> {
   voiceSessionManager?.shutdown()
   enterpriseHeartbeatInstance?.stop()
   heartbeatScheduler?.stop()
+  taskAutomationScheduler?.stop()
   workspaceCleanupScheduler?.stop()
 
   await agentManager?.stopAllSessions()
@@ -262,6 +265,10 @@ function createWindow(): void {
     if (heartbeatScheduler && mainWindow) {
       heartbeatScheduler.start(mainWindow)
     }
+
+    // Start task automation scheduler (auto-start / auto-complete reconciliation).
+    // Deliberately window-independent: the flags must hold with no window open.
+    taskAutomationScheduler?.start()
 
     // Start workspace cleanup scheduler
     if (workspaceCleanupScheduler && mainWindow) {
@@ -407,6 +414,15 @@ function createWindow(): void {
       mainWindow.webContents.send(channel, data)
     }
     broadcastToMobileClients(channel, data)
+  })
+
+  // An MCP caller has no window, so the main-process loop is what honours the
+  // auto-start / auto-complete flags it sets.
+  setTaskAutomationTrigger(() => {
+    void taskAutomationScheduler?.runNow()
+  })
+  setMobileApiTaskAutomationTrigger(() => {
+    void taskAutomationScheduler?.runNow()
   })
 
   // Wire up transcript provider for subtask MCP agents to access sibling transcripts
@@ -874,6 +890,11 @@ app.whenReady().then(async () => {
 
   recurrenceScheduler = new RecurrenceScheduler(db)
   heartbeatScheduler = new HeartbeatScheduler(db, agentManager)
+  taskAutomationScheduler = new TaskAutomationScheduler(db, agentManager)
+  // A brand-new recurring instance must not wait up to a minute to start.
+  recurrenceScheduler.setOnInstancesCreated(() => {
+    void taskAutomationScheduler?.runNow()
+  })
   workspaceCleanupScheduler = new WorkspaceCleanupScheduler(db, worktreeManager)
 
   // Initialize enterprise auth (gracefully — missing env vars just disable the feature)
@@ -980,7 +1001,7 @@ app.whenReady().then(async () => {
     console.log('[EnterpriseAuth] auth_session_restore_result {"status":"skipped","reason":"enterprise_auth_not_initialized"}')
   }
 
-  registerIpcHandlers(db, agentManager, githubManager, worktreeManager, syncManager, pluginRegistry, mcpToolCaller, oauthManager, recurrenceScheduler, enterpriseAuth ?? undefined, claudePluginManager, heartbeatScheduler, enterpriseHeartbeatInstance ?? undefined, enterpriseStateSyncInstance ?? undefined, gitlabManager ?? undefined, workspaceCleanupScheduler ?? undefined, voiceSessionManager ?? undefined)
+  registerIpcHandlers(db, agentManager, githubManager, worktreeManager, syncManager, pluginRegistry, mcpToolCaller, oauthManager, recurrenceScheduler, enterpriseAuth ?? undefined, claudePluginManager, heartbeatScheduler, enterpriseHeartbeatInstance ?? undefined, enterpriseStateSyncInstance ?? undefined, gitlabManager ?? undefined, workspaceCleanupScheduler ?? undefined, voiceSessionManager ?? undefined, taskAutomationScheduler ?? undefined)
 
   // ── Media permission handler (design §5.9) ────────────────────────────────
   // Grant the microphone only to the 20x renderer, and only while voice is on.
