@@ -8,6 +8,7 @@
 
 import { spawn, execFile, ChildProcess } from 'child_process'
 import { randomUUID } from 'crypto'
+import { guardChildStreams } from '../child-stream-guards'
 import { mkdtempSync } from 'fs'
 import { homedir, tmpdir } from 'os'
 import { dirname, join } from 'path'
@@ -436,6 +437,11 @@ export class AcpAdapter implements CodingAgentAdapter {
       }
     )
 
+    // Every pipe needs an error listener before the first write. The agent can
+    // exit at any moment, and an unhandled EPIPE on its stdin takes the whole
+    // main process down with a crash dialog.
+    guardChildStreams(acpProcess, `AcpAdapter/${this.agentType}`)
+
     const session: AcpSession = {
       sessionId,
       acpSessionId: null,
@@ -605,6 +611,11 @@ export class AcpAdapter implements CodingAgentAdapter {
         ...(needsShell ? { shell: true } : {})
       }
     )
+
+    // Every pipe needs an error listener before the first write. The agent can
+    // exit at any moment, and an unhandled EPIPE on its stdin takes the whole
+    // main process down with a crash dialog.
+    guardChildStreams(acpProcess, `AcpAdapter/${this.agentType}`)
 
     const session: AcpSession = {
       sessionId,

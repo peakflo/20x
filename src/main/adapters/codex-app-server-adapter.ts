@@ -8,6 +8,7 @@
 
 import { spawn, type ChildProcess } from 'child_process'
 import { existsSync, mkdtempSync, readFileSync } from 'fs'
+import { guardChildStreams, writeToChildStdin } from '../child-stream-guards'
 import { homedir, tmpdir } from 'os'
 import { basename, isAbsolute, join, relative, resolve } from 'path'
 import { promisify } from 'util'
@@ -611,6 +612,11 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
       stdio: ['pipe', 'pipe', 'pipe'],
       ...(needsShell ? { shell: true } : {})
     })
+
+    // Every pipe needs an error listener before the first write. The app server
+    // can exit at any moment, and an unhandled EPIPE on its stdin crashes the
+    // main process.
+    guardChildStreams(child, 'CodexAppServerAdapter')
 
     const session: AppServerSession = {
       sessionId,
@@ -1497,7 +1503,8 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
   }
 
   private writeJson(session: AppServerSession, payload: unknown): void {
-    session.process.stdin?.write(`${JSON.stringify(payload)}\n`)
+    // A dead app server must not take the application with it.
+    writeToChildStdin(session.process, `${JSON.stringify(payload)}\n`, 'CodexAppServerAdapter')
   }
 
   private requireSession(sessionId: string): AppServerSession {

@@ -1,4 +1,5 @@
 import { spawn } from 'child_process'
+import { guardChildStreams, writeToChildStdin } from './child-stream-guards'
 import type { McpServerRecord } from './database'
 import { getTaskApiPort } from './task-api-server'
 
@@ -107,6 +108,10 @@ export class McpToolCaller {
       }
     })
 
+    // Every pipe needs an error listener before the first write. An MCP server
+    // that exits mid-handshake must not crash the main process with EPIPE.
+    guardChildStreams(proc, 'mcp')
+
     const session: LocalMcpSession = {
       proc,
       alive: true,
@@ -154,7 +159,7 @@ export class McpToolCaller {
         resolve: (result) => {
           clearTimeout(timer)
           if (result.success) {
-            proc.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n')
+            writeToChildStdin(proc, JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n', 'mcp')
             resolve(true)
           } else {
             resolve(false)
@@ -163,7 +168,7 @@ export class McpToolCaller {
         timer
       })
 
-      proc.stdin.write(JSON.stringify({
+      writeToChildStdin(proc, JSON.stringify({
         jsonrpc: '2.0',
         id: 1,
         method: 'initialize',
@@ -172,7 +177,7 @@ export class McpToolCaller {
           capabilities: {},
           clientInfo: { name: 'pf-desktop', version: '1.0.0' }
         }
-      }) + '\n')
+      }) + '\n', 'mcp')
     })
 
     if (!initResult) {
@@ -200,12 +205,12 @@ export class McpToolCaller {
 
       session.pending.set(id, { resolve, timer })
 
-      session.proc.stdin!.write(JSON.stringify({
+      writeToChildStdin(session.proc, JSON.stringify({
         jsonrpc: '2.0',
         id,
         method: 'tools/call',
         params: { name: toolName, arguments: toolArgs }
-      }) + '\n')
+      }) + '\n', 'mcp')
     })
   }
 

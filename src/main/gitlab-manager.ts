@@ -2,6 +2,7 @@ import { execFile, spawn, type ChildProcess } from 'child_process'
 import { promisify } from 'util'
 import { shell } from 'electron'
 import type { GitHubRepo } from './github-manager'
+import { guardChildStreams, writeToChildStdin } from './child-stream-guards'
 
 const execFileAsync = promisify(execFile)
 
@@ -100,6 +101,10 @@ export class GitLabManager {
         { stdio: ['pipe', 'pipe', 'pipe'] }
       )
 
+      // Every pipe needs an error listener before the first write; a CLI that
+      // exits early must not crash the main process with EPIPE.
+      guardChildStreams(this.authProcess, 'GitLabManager')
+
       let completed = false
       let browserOpened = false
       let output = ''
@@ -148,8 +153,9 @@ export class GitLabManager {
         reject(err)
       })
 
-      // Write newline for any potential prompts
-      this.authProcess.stdin?.write('\n')
+      // Write newline for any potential prompts. `glab` may have already
+      // exited, so the write must never throw.
+      writeToChildStdin(this.authProcess, '\n', 'GitLabManager')
     })
   }
 

@@ -1,6 +1,7 @@
 import { app, dialog } from 'electron'
 import { appendFileSync, mkdirSync, existsSync } from 'fs'
 import { join } from 'path'
+import { isBenignStreamError } from './child-stream-guards'
 
 let logPath: string
 
@@ -54,6 +55,21 @@ export function initCrashLogger(): void {
 
   // Uncaught exceptions in main process
   process.on('uncaughtException', (error) => {
+    // Last line of defence for pipe teardown. Every pipe should carry its own
+    // error listener (see child-stream-guards.ts), but one missed listener must
+    // not put a crash dialog in front of the user: the application keeps
+    // running, so the report is only noise. The event is still logged, so a
+    // missing guard stays visible in the crash log.
+    if (isBenignStreamError(error)) {
+      logCrash(
+        Object.assign(new Error(`[non-fatal stream error] ${error.message}`), {
+          name: error.name,
+          stack: error.stack
+        })
+      )
+      return
+    }
+
     logCrash(error)
 
     // Show a user-friendly dialog

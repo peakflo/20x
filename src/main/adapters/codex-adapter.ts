@@ -11,6 +11,7 @@
 
 import { spawn, type ChildProcess } from 'child_process'
 import { existsSync } from 'fs'
+import { guardChildStreams } from '../child-stream-guards'
 import type {
   CodingAgentAdapter,
   SessionConfig,
@@ -209,6 +210,11 @@ export class CodexAdapter implements CodingAgentAdapter {
       }
     )
 
+    // Every pipe needs an error listener before the first write. Codex can exit
+    // at any moment, and an unhandled EPIPE on its stdin crashes the main
+    // process.
+    guardChildStreams(codexProcess, 'CodexAdapter')
+
     // Create session state
     const session: CodexSession = {
       sessionId: '', // Will be set to threadId after thread.create
@@ -297,6 +303,11 @@ export class CodexAdapter implements CodingAgentAdapter {
         ...(needsShellResume ? { shell: true } : {}),
       }
     )
+
+    // Every pipe needs an error listener before the first write. Codex can exit
+    // at any moment, and an unhandled EPIPE on its stdin crashes the main
+    // process.
+    guardChildStreams(codexProcess, 'CodexAdapter')
 
     // Create session state
     const session: CodexSession = {

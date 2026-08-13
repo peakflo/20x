@@ -19,6 +19,7 @@ import type { PluginRegistry } from './plugins/registry'
 import { listTaskArtifactEntries, readTaskArtifact } from './artifacts'
 import type { Artifact, ArtifactFileEntry } from '../shared/artifacts'
 import { MOBILE_VOICE_CAPABILITIES } from '../shared/voice'
+import { guardStream } from './child-stream-guards'
 
 // ── State ────────────────────────────────────────────────────
 let server: HttpServer | null = null
@@ -89,7 +90,12 @@ export function startMobileApiServer(
       const url = new URL(req.url || '/', `http://localhost`)
       const token = url.searchParams.get('token')
       if (!validateSession(token)) {
-        socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n')
+        // A client that has already hung up turns this write into an
+        // unhandled ECONNRESET/EPIPE, which would crash the main process.
+        guardStream(socket, 'MobileAPI/upgrade')
+        try {
+          socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n')
+        } catch { /* the client went away */ }
         socket.destroy()
         return
       }
