@@ -17,6 +17,7 @@ import { CodexAppServerAdapter } from './adapters/codex-app-server-adapter'
 import type { CodingAgentAdapter, SessionConfig, MessagePart, SessionMessage, McpServerConfig } from './adapters/coding-agent-adapter'
 import { SessionStatusType, MessagePartType, MessageRole } from './adapters/coding-agent-adapter'
 import { getTaskApiPort, waitForTaskApiServer } from './task-api-server'
+import { guardChildStreams, writeToChildStdin } from './child-stream-guards'
 import { randomUUID } from 'crypto'
 import { registerSecretSession, unregisterSecretSession, getSecretBrokerPort, writeSecretShellWrapper } from './secret-broker'
 import { registerMcpProxyTarget, getMcpAuthProxyPort } from './mcp-auth-proxy'
@@ -4335,6 +4336,10 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
         env: { ...process.env, npm_config_yes: 'true', ...(serverData.environment || {}), ...extraEnv }
       })
 
+      // Every pipe needs an error listener before the first write. A server that
+      // exits mid-probe must not crash the main process with EPIPE.
+      guardChildStreams(proc, 'mcp-probe')
+
       let buffer = ''
       let stderrBuf = ''
       let phase: 'init' | 'tools' = 'init'
@@ -4352,8 +4357,8 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
         if (phase === 'init' && msg.id === 1 && msg.result) {
           phase = 'tools'
           // Send initialized notification + tools/list request
-          proc.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n')
-          proc.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list' }) + '\n')
+          writeToChildStdin(proc, JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n', 'mcp-probe')
+          writeToChildStdin(proc, JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list' }) + '\n', 'mcp-probe')
         } else if (phase === 'tools' && msg.id === 2 && msg.result) {
           const rawTools = Array.isArray(msg.result.tools) ? msg.result.tools : []
           const tools = rawTools.map((t) => ({ name: t.name || '', description: t.description || '' }))
@@ -4395,7 +4400,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       })
 
       // Send initialize
-      proc.stdin.write(JSON.stringify({
+      writeToChildStdin(proc, JSON.stringify({
         jsonrpc: '2.0',
         id: 1,
         method: 'initialize',
@@ -4404,7 +4409,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
           capabilities: {},
           clientInfo: { name: 'pf-desktop', version: '1.0.0' }
         }
-      }) + '\n')
+      }) + '\n', 'mcp-probe')
     })
   }
 

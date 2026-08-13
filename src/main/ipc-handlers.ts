@@ -39,6 +39,7 @@ import type { EnterpriseHeartbeat } from './enterprise-heartbeat'
 import type { EnterpriseStateSync } from './enterprise-state-sync'
 import { analytics } from './analytics-service'
 import { listTaskArtifactEntries, readTaskArtifact } from './artifacts'
+import { guardChildStreams, writeToChildStdin } from './child-stream-guards'
 
 const MIME_MAP: Record<string, string> = {
   '.pdf': 'application/pdf',
@@ -1739,7 +1740,11 @@ export function registerIpcHandlers(
 
     return {
       write: (data: string) => {
-        ptyProcess.write(data)
+        // node-pty throws once the pty is gone. Losing keystrokes to a dead
+        // terminal is acceptable; crashing the application is not.
+        try {
+          ptyProcess.write(data)
+        } catch { /* the pty went away */ }
       },
       resize: (cols: number, rows: number) => {
         ptyProcess.resize(cols, rows)
@@ -1851,6 +1856,11 @@ else:
       env: { ...process.env } as Record<string, string>,
     })
 
+    // Every pipe needs an error listener before the first write. The shell can
+    // exit at any moment, and an unhandled EPIPE on its stdin crashes the main
+    // process.
+    guardChildStreams(child, 'Terminal')
+
     const outputBuffer: string[] = []
 
     /** Append raw PTY output to the line buffer, stripping ANSI escape codes */
@@ -1900,7 +1910,9 @@ else:
 
     return {
       write: (data: string) => {
-        if (child.stdin?.writable) child.stdin.write(data)
+        // A `writable` check alone races the child's exit; the write itself
+        // must not throw either.
+        writeToChildStdin(child, data, 'Terminal')
       },
       kill: () => {
         try { child.kill('SIGTERM') } catch { /* ignore */ }

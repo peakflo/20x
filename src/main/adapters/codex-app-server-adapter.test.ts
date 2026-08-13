@@ -738,8 +738,11 @@ describe('CodexAppServerAdapter', () => {
 
     await adapterInstance.respondToApproval('thread-1', true)
 
+    // The second argument is the guard callback that keeps a dead pipe from
+    // crashing the main process (see child-stream-guards.ts).
     expect(session.process.stdin.write).toHaveBeenCalledWith(
-      `${JSON.stringify({ jsonrpc: '2.0', id: 7, result: { decision: 'accept' } })}\n`
+      `${JSON.stringify({ jsonrpc: '2.0', id: 7, result: { decision: 'accept' } })}\n`,
+      expect.any(Function)
     )
     expect(session.pendingApproval).toBeNull()
   })
@@ -788,7 +791,8 @@ describe('CodexAppServerAdapter', () => {
     })
 
     expect(session.process.stdin.write).toHaveBeenCalledWith(
-      `${JSON.stringify({ jsonrpc: '2.0', id: 9, result: { action: 'accept', content: {} } })}\n`
+      `${JSON.stringify({ jsonrpc: '2.0', id: 9, result: { action: 'accept', content: {} } })}\n`,
+      expect.any(Function)
     )
   })
 

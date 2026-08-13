@@ -1,6 +1,7 @@
 import { execFile, spawn, type ChildProcess } from 'child_process'
 import { promisify } from 'util'
 import { shell } from 'electron'
+import { guardChildStreams, writeToChildStdin } from './child-stream-guards'
 import {
   PullRequestCheckState,
   PullRequestReviewDecision,
@@ -180,6 +181,10 @@ export class GitHubManager {
         { stdio: ['pipe', 'pipe', 'pipe'] }
       )
 
+      // Every pipe needs an error listener before the first write; a CLI that
+      // exits early must not crash the main process with EPIPE.
+      guardChildStreams(this.authProcess, 'GitHubManager')
+
       let completed = false
       let browserOpened = false
       let codeEmitted = false
@@ -229,8 +234,9 @@ export class GitHubManager {
         reject(err)
       })
 
-      // Write newline for any potential "Press Enter" prompts
-      this.authProcess.stdin?.write('\n')
+      // Write newline for any potential "Press Enter" prompts. `gh` may have
+      // already exited, so the write must never throw.
+      writeToChildStdin(this.authProcess, '\n', 'GitHubManager')
     })
   }
 

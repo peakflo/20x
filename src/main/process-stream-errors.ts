@@ -1,10 +1,12 @@
-const IGNORED_PROCESS_STREAM_ERROR_CODES = new Set(['EPIPE', 'EIO'])
+import { isBenignStreamError } from './child-stream-guards'
 
 export function handleProcessStreamError(
   streamName: 'stdout' | 'stderr',
   err: NodeJS.ErrnoException
 ): void {
-  if (err.code && IGNORED_PROCESS_STREAM_ERROR_CODES.has(err.code)) {
+  // One shared list of benign codes, so this handler and the child-process
+  // pipe guards can never disagree about what counts as a crash.
+  if (isBenignStreamError(err)) {
     return
   }
 
