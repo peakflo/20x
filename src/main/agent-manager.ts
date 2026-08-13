@@ -1077,8 +1077,9 @@ export class AgentManager extends EventEmitter {
   }
 
   /**
-   * Resolves and writes SKILL.md files to the workspace directory.
-   * Priority: task.skill_ids > agent.config.skill_ids > all skills.
+   * Writes only selected SKILL.md files to the workspace directory.
+   * Merges task and agent selections, removes duplicates, and never falls back
+   * to all skills.
    * Also generates AGENTS.md and CLAUDE.md with skill directory.
    */
   private async writeSkillFiles(taskId: string, agentId: string, workspaceDir: string): Promise<void> {
@@ -1086,19 +1087,11 @@ export class AgentManager extends EventEmitter {
       const task = this.db.getTask(taskId)
       const agent = this.db.getAgent(agentId)
       const agentConfig = agent?.config
-
-      // Resolve which skill IDs to use
-      let skillIds: string[] | undefined
-      if (task?.skill_ids !== null && task?.skill_ids !== undefined) {
-        skillIds = task.skill_ids
-      } else if (agentConfig?.skill_ids !== undefined) {
-        skillIds = agentConfig.skill_ids
-      }
-      // undefined = all skills
-
-      const skills = skillIds === undefined
-        ? this.db.getSkills()
-        : this.db.getSkillsByIds(skillIds)
+      const skillIds = [...new Set([
+        ...(task?.skill_ids ?? []),
+        ...(agentConfig?.skill_ids ?? []),
+      ])]
+      const skills = skillIds.length > 0 ? this.db.getSkillsByIds(skillIds) : []
 
       // Write individual SKILL.md files using async I/O so the event loop
       // can process IPC/rendering between writes (avoids startup UI freeze).
