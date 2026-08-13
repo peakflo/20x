@@ -1095,6 +1095,52 @@ describe('AgentManager transitionToIdle — completing without review', () => {
     expect(mockDb.updateTask).toHaveBeenCalledWith('task-1', { status: TaskStatus.ReadyForReview })
     expect(mockDb.updateTask).not.toHaveBeenCalledWith('task-1', { status: TaskStatus.Completed })
   })
+
+  /**
+   * The same completion has to be reachable without a session.
+   *
+   * A task can land in ready_for_review by routes that never run
+   * transitionToIdle — a coordinator marking its parent once every subtask is
+   * done, an MCP client setting the status, the mobile API. Those routes used
+   * to ignore auto_complete_without_review entirely, which is why a recurring
+   * task could reach review and then sit there for ever.
+   */
+  describe('completeTaskWithoutReview — no session required', () => {
+    it('completes a task that no session is attached to', async () => {
+      const mockDb = makeDb({ status: TaskStatus.ReadyForReview })
+      const mgr = new AgentManager(mockDb)
+      vi.spyOn(mgr as any, 'sendToRenderer').mockImplementation(() => undefined)
+
+      await expect(mgr.completeTaskWithoutReview('task-1')).resolves.toBe(true)
+
+      expect(mockDb.updateTask).toHaveBeenCalledWith('task-1', { status: TaskStatus.Completed })
+    })
+
+    it('reports failure and leaves the task in review when the source refuses', async () => {
+      const mockDb = makeDb({ status: TaskStatus.ReadyForReview, source_id: 'source-1' })
+      const mgr = new AgentManager(mockDb)
+      vi.spyOn(mgr as any, 'sendToRenderer').mockImplementation(() => undefined)
+      mgr.setSyncManager({
+        executeAction: vi.fn().mockResolvedValue({ success: false, error: 'upstream rejected' }),
+      } as any)
+
+      await expect(mgr.completeTaskWithoutReview('task-1')).resolves.toBe(false)
+
+      expect(mockDb.updateTask).toHaveBeenCalledWith('task-1', { status: TaskStatus.ReadyForReview })
+      expect(mockDb.updateTask).not.toHaveBeenCalledWith('task-1', { status: TaskStatus.Completed })
+    })
+
+    it('does nothing for a task that no longer exists', async () => {
+      const mockDb = makeDb()
+      ;(mockDb.getTask as any).mockReturnValue(undefined)
+      const mgr = new AgentManager(mockDb)
+      vi.spyOn(mgr as any, 'sendToRenderer').mockImplementation(() => undefined)
+
+      await expect(mgr.completeTaskWithoutReview('task-gone')).resolves.toBe(false)
+
+      expect(mockDb.updateTask).not.toHaveBeenCalled()
+    })
+  })
 })
 
 describe('AgentManager transitionToIdle — enterprise task completion after feedback', () => {

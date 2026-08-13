@@ -1,5 +1,8 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { RecurrenceScheduler } from './recurrence-scheduler'
+import { createTestDb } from '../../test/helpers/db-test-helper'
+import { makeTask } from '../../test/helpers/task-fixtures'
+import type { CreateTaskData, DatabaseManager } from './database'
 
 // Minimal mock — we only need calculateNextOccurrence (no DB access)
 // Pass 'UTC' timezone explicitly so tests produce deterministic results regardless of machine timezone
@@ -194,5 +197,86 @@ describe('RecurrenceScheduler.calculateNextOccurrence', () => {
       expect(new Date(next!).toISOString()).toBe('2024-01-19T09:00:00.000Z')
       expect(iterations).toBe(4) // Mon→Tue→Wed→Thu→Fri
     })
+  })
+})
+
+describe('RecurrenceScheduler — handing new instances to auto-start', () => {
+  /**
+   * Creating the instance row is only half the job. An instance flagged
+   * `auto_start_agent` still has to be given to an agent, and that owner lives
+   * in the main process now — this hook is how it hears about a new occurrence
+   * straight away instead of waiting for its own tick.
+   */
+  const runTick = async (scheduler: RecurrenceScheduler): Promise<void> => {
+    await (scheduler as unknown as { checkAndCreateDueInstances(): Promise<void> })
+      .checkAndCreateDueInstances()
+  }
+
+  function dueTemplate(db: DatabaseManager, overrides: Partial<CreateTaskData> = {}): string {
+    const template = db.createTask(makeTask({
+      title: 'Nightly report',
+      is_recurring: true,
+      recurrence_pattern: '0 9 * * *',
+      ...overrides
+    }))!
+    db.updateTask(template.id, { next_occurrence_at: new Date(Date.now() - 60_000).toISOString() })
+    return template.id
+  }
+
+  it('fires the callback once after a tick that created instances', async () => {
+    const { db } = createTestDb()
+    dueTemplate(db)
+    const scheduler = new RecurrenceScheduler(db, 'UTC')
+    const onInstancesCreated = vi.fn()
+    scheduler.setOnInstancesCreated(onInstancesCreated)
+
+    await runTick(scheduler)
+
+    expect(onInstancesCreated).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not fire when no template was due', async () => {
+    const { db } = createTestDb()
+    const scheduler = new RecurrenceScheduler(db, 'UTC')
+    const onInstancesCreated = vi.fn()
+    scheduler.setOnInstancesCreated(onInstancesCreated)
+
+    await runTick(scheduler)
+
+    expect(onInstancesCreated).not.toHaveBeenCalled()
+  })
+
+  it('copies auto_start_agent onto the instance so the automation loop can find it', async () => {
+    const { db } = createTestDb()
+    const templateId = dueTemplate(db, { auto_start_agent: true, auto_complete_without_review: true })
+    const scheduler = new RecurrenceScheduler(db, 'UTC')
+
+    await runTick(scheduler)
+
+    const instance = db.getTasks().find((t) => t.recurrence_parent_id === templateId)
+    expect(instance).toBeDefined()
+    expect(instance!.auto_start_agent).toBe(true)
+    expect(instance!.auto_complete_without_review).toBe(true)
+    expect(instance!.status).toBe('not_started')
+  })
+
+  it('still creates the instance when no callback is registered', async () => {
+    const { db } = createTestDb()
+    const templateId = dueTemplate(db)
+    const scheduler = new RecurrenceScheduler(db, 'UTC')
+
+    await runTick(scheduler)
+
+    expect(db.getTasks().some((t) => t.recurrence_parent_id === templateId)).toBe(true)
+  })
+
+  it('a throwing callback never stops the scheduler', async () => {
+    const { db } = createTestDb()
+    const templateId = dueTemplate(db)
+    const scheduler = new RecurrenceScheduler(db, 'UTC')
+    scheduler.setOnInstancesCreated(() => { throw new Error('automation is down') })
+
+    await expect(runTick(scheduler)).resolves.toBeUndefined()
+    expect(db.getTasks().some((t) => t.recurrence_parent_id === templateId)).toBe(true)
   })
 })

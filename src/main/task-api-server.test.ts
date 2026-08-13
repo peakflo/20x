@@ -5,7 +5,7 @@ import { join } from 'path'
 import { createTestDb } from '../../test/helpers/db-test-helper'
 import { makeTask, makeAgent } from '../../test/helpers/task-fixtures'
 import type { DatabaseManager } from './database'
-import { setTaskApiAgentController, setTaskApiNotifier, startTaskApiServer, stopTaskApiServer } from './task-api-server'
+import { setTaskApiAgentController, setTaskApiNotifier, setTaskAutomationTrigger, startTaskApiServer, stopTaskApiServer } from './task-api-server'
 import { TaskStatus } from '../shared/constants'
 
 /**
@@ -24,6 +24,7 @@ beforeEach(() => {
 afterEach(() => {
   setTaskApiAgentController(null)
   setTaskApiNotifier(() => undefined)
+  setTaskAutomationTrigger(null)
   stopTaskApiServer()
 })
 
@@ -777,5 +778,92 @@ describe('agent_workload statistics - uses agent_working status', () => {
     expect(stats.completed).toBe(1)
     expect(stats.in_progress).toBe(1) // agent_working mapped to in_progress key
     expect(stats.not_started).toBe(1)
+  })
+})
+
+describe('auto_start_agent over the task API', () => {
+  /**
+   * A caller reaching this server (MCP, a scheduled run) has no window. Before
+   * this, `auto_start_agent` was simply dropped here — only
+   * `auto_complete_without_review` was accepted — so a recurring task created
+   * through MCP could never start itself, and every occurrence sat in
+   * not_started.
+   */
+  const post = async <T>(port: number, route: string, body: Record<string, unknown>): Promise<T> => {
+    const response = await fetch(`http://127.0.0.1:${port}${route}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    })
+    return (await response.json()) as T
+  }
+
+  it('persists auto_start_agent from /create_task', async () => {
+    const port = await startTaskApiServer(db)
+    const trigger = vi.fn()
+    setTaskAutomationTrigger(trigger)
+
+    const created = await post<{ task: { id: string } }>(port, '/create_task', {
+      title: 'Nightly report',
+      cron: '0 9 * * *',
+      auto_start_agent: true
+    })
+
+    const row = rawDb.prepare('SELECT auto_start_agent FROM tasks WHERE id = ?')
+      .get(created.task.id) as { auto_start_agent: number }
+    expect(row.auto_start_agent).toBe(1)
+    expect(trigger).toHaveBeenCalled()
+    setTaskAutomationTrigger(null)
+  })
+
+  it('defaults auto_start_agent to off when the caller does not ask for it', async () => {
+    const port = await startTaskApiServer(db)
+    const trigger = vi.fn()
+    setTaskAutomationTrigger(trigger)
+
+    const created = await post<{ task: { id: string } }>(port, '/create_task', { title: 'Plain task' })
+
+    const row = rawDb.prepare('SELECT auto_start_agent FROM tasks WHERE id = ?')
+      .get(created.task.id) as { auto_start_agent: number }
+    expect(row.auto_start_agent).toBe(0)
+    expect(trigger).not.toHaveBeenCalled()
+    setTaskAutomationTrigger(null)
+  })
+
+  it('toggles auto_start_agent through /update_task', async () => {
+    const task = db.createTask(makeTask({ title: 'Existing' }))!
+    const port = await startTaskApiServer(db)
+
+    await post(port, '/update_task', { task_id: task.id, auto_start_agent: true })
+    expect((rawDb.prepare('SELECT auto_start_agent FROM tasks WHERE id = ?')
+      .get(task.id) as { auto_start_agent: number }).auto_start_agent).toBe(1)
+
+    await post(port, '/update_task', { task_id: task.id, auto_start_agent: false })
+    expect((rawDb.prepare('SELECT auto_start_agent FROM tasks WHERE id = ?')
+      .get(task.id) as { auto_start_agent: number }).auto_start_agent).toBe(0)
+  })
+
+  it('reconciles the automation flags when /update_task moves a task into review', async () => {
+    const task = db.createTask(makeTask({ title: 'Finishing' }))!
+    const port = await startTaskApiServer(db)
+    const trigger = vi.fn()
+    setTaskAutomationTrigger(trigger)
+
+    await post(port, '/update_task', { task_id: task.id, status: TaskStatus.ReadyForReview })
+
+    expect(trigger).toHaveBeenCalled()
+    setTaskAutomationTrigger(null)
+  })
+
+  it('does not reconcile for an unrelated field change', async () => {
+    const task = db.createTask(makeTask({ title: 'Finishing' }))!
+    const port = await startTaskApiServer(db)
+    const trigger = vi.fn()
+    setTaskAutomationTrigger(trigger)
+
+    await post(port, '/update_task', { task_id: task.id, description: 'just a note' })
+
+    expect(trigger).not.toHaveBeenCalled()
+    setTaskAutomationTrigger(null)
   })
 })

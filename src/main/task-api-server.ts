@@ -124,6 +124,28 @@ export function setTaskApiNotifier(fn: (channel: string, data: unknown) => void)
   notifyRenderer = fn
 }
 
+/**
+ * Runs one auto-start / auto-complete reconciliation pass.
+ *
+ * A caller reaching this server has no window, so nothing in the renderer will
+ * act on the `auto_start_agent` / `auto_complete_without_review` flags it just
+ * set. Poking the main-process scheduler keeps those flags immediate rather
+ * than leaving them until its next 60s tick.
+ */
+let taskAutomationTrigger: (() => void) | null = null
+
+export function setTaskAutomationTrigger(fn: (() => void) | null): void {
+  taskAutomationTrigger = fn
+}
+
+function triggerTaskAutomation(): void {
+  try {
+    taskAutomationTrigger?.()
+  } catch (err) {
+    console.error('[TaskAPI] Task automation trigger failed:', err)
+  }
+}
+
 export function setTranscriptProvider(fn: (taskId: string) => Promise<Array<{ role: string; text: string }>>): void {
   transcriptProvider = fn
 }
@@ -335,8 +357,8 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
       }
 
       rawDb.prepare(`
-        INSERT INTO tasks (id, title, description, type, priority, status, assignee, due_date, labels, attachments, repos, output_fields, source, agent_id, skill_ids, is_recurring, recurrence_pattern, next_occurrence_at, parent_task_id, auto_complete_without_review, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', '[]', '[]', 'local', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO tasks (id, title, description, type, priority, status, assignee, due_date, labels, attachments, repos, output_fields, source, agent_id, skill_ids, is_recurring, recurrence_pattern, next_occurrence_at, parent_task_id, auto_start_agent, auto_complete_without_review, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', '[]', '[]', 'local', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         id,
         params.title,
@@ -353,6 +375,7 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
         recurrencePattern,
         nextOccurrenceAt,
         params.parent_task_id || null,
+        params.auto_start_agent === true ? 1 : 0,
         params.auto_complete_without_review === true ? 1 : 0,
         now,
         now
@@ -368,6 +391,8 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
           notifyRenderer('task:created', { task: properTask })
         }
       }
+
+      if (params.auto_start_agent === true) triggerTaskAutomation()
 
       return { success: true, task: parsed }
     }
@@ -401,6 +426,11 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
       if (params.labels !== undefined) { updates.push('labels = ?'); qParams.push(JSON.stringify(params.labels)) }
       if (params.skill_ids !== undefined) { updates.push('skill_ids = ?'); qParams.push(JSON.stringify(params.skill_ids)) }
       if (params.agent_id !== undefined) { updates.push('agent_id = ?'); qParams.push(params.agent_id) }
+      // Lets a caller with no window hand the task straight to its agent.
+      if (params.auto_start_agent !== undefined) {
+        updates.push('auto_start_agent = ?')
+        qParams.push(params.auto_start_agent === true ? 1 : 0)
+      }
       // Lets a caller with no window make a task finish by itself.
       if (params.auto_complete_without_review !== undefined) {
         updates.push('auto_complete_without_review = ?')
@@ -433,6 +463,16 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
         if (properTask) {
           notifyRenderer('task:updated', { taskId: params.task_id, updates: properTask })
         }
+      }
+
+      // A status move — most importantly into ready_for_review — is exactly
+      // when an auto-complete flag has to be honoured.
+      if (
+        params.status !== undefined ||
+        params.auto_start_agent !== undefined ||
+        params.auto_complete_without_review !== undefined
+      ) {
+        triggerTaskAutomation()
       }
 
       // Event-driven coordinator wake-up: when a subtask is moved to a terminal

@@ -87,7 +87,8 @@ export function registerIpcHandlers(
   initialEnterpriseStateSync?: EnterpriseStateSync,
   gitlabManager?: GitLabManager,
   workspaceCleanupScheduler?: import('./workspace-cleanup-scheduler').WorkspaceCleanupScheduler,
-  voiceSessionManager?: import('./voice/voice-session-manager').VoiceSessionManager
+  voiceSessionManager?: import('./voice/voice-session-manager').VoiceSessionManager,
+  taskAutomationScheduler?: import('./task-automation-scheduler').TaskAutomationScheduler
 ): void {
   // Mutable references — created on selectTenant, cleared on logout
   let enterpriseHeartbeat = initialEnterpriseHeartbeat
@@ -105,6 +106,11 @@ export function registerIpcHandlers(
     // Initialize recurring task if it has a recurrence pattern
     if (task && task.is_recurring && recurrenceScheduler) {
       recurrenceScheduler.initializeRecurringTask(task.id)
+    }
+    // Hand a self-starting task straight to the main-process automation loop
+    // instead of relying on a renderer listener seeing this one event.
+    if (task?.auto_start_agent) {
+      void taskAutomationScheduler?.runNow()
     }
     // Notify renderer so auto-start hook can trigger triage for UI-created tasks
     if (task) {
@@ -168,6 +174,14 @@ export function registerIpcHandlers(
         hasSource: !!updated.source_id,
         isSubtask: !!updated.parent_task_id
       })
+    }
+
+    // A task that just landed in ready_for_review (or had a flag flipped) must
+    // be re-checked against auto_complete_without_review / auto_start_agent.
+    // The renderer used to own this, so it only worked with a window open and
+    // only for the one route that emitted an event.
+    if (updated && (data.status !== undefined || data.auto_start_agent !== undefined || data.auto_complete_without_review !== undefined)) {
+      void taskAutomationScheduler?.runNow()
     }
 
     // Record feedback event for enterprise sync

@@ -196,6 +196,7 @@ const mastermindTools = [
         agent_id: { type: 'string', description: 'Assign to an agent by ID (use list_agents to find IDs)' },
         skill_ids: { type: 'array', items: { type: 'string' }, description: 'Skill IDs to assign (use list_skills to find IDs)' },
         cron: { type: 'string', description: 'Cron expression for recurring tasks (e.g. "0 9 * * 1-5" for weekdays at 9am). Standard 5-field cron syntax: minute hour day-of-month month day-of-week.' },
+        auto_start_agent: { type: 'boolean', description: 'Hand the task to its assigned agent automatically as soon as it is created or becomes due, instead of waiting for someone to press start. Set this on a recurring task so every occurrence runs by itself.' },
         auto_complete_without_review: { type: 'boolean', description: 'Complete the task automatically when its agent finishes, instead of leaving it for review. Needed for a task that must finish with no 20x window open.' },
       },
       required: ['title']
@@ -223,6 +224,7 @@ const mastermindTools = [
         labels: { type: 'array', items: { type: 'string' }, description: 'Set task labels' },
         skill_ids: { type: 'array', items: { type: 'string' }, description: 'Set task skills' },
         agent_id: { type: 'string', description: 'Assign to agent' },
+        auto_start_agent: { type: 'boolean', description: 'Hand the task to its assigned agent automatically as soon as it is created or becomes due, instead of waiting for someone to press start. Set this on a recurring task so every occurrence runs by itself.' },
         auto_complete_without_review: { type: 'boolean', description: 'Complete the task automatically when its agent finishes, instead of leaving it for review. Needed for a task that must finish with no 20x window open.' },
         repos: { type: 'array', items: { type: 'string' }, description: 'Set repository paths/URLs for this task' },
         priority: { type: 'string', enum: ['critical', 'high', 'medium', 'low'] },
