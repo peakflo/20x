@@ -194,6 +194,66 @@ describe('AgentManager skill file paths', () => {
   })
 
   describe('writeSkillFiles', () => {
+    it('writes and documents only the skills selected for the task', async () => {
+      const selectedSkill = makeSkillRecord({ id: 'selected', name: 'selected-skill' })
+      const unselectedSkill = makeSkillRecord({ id: 'unselected', name: 'unselected-skill' })
+      const mockDb = {
+        ...createMockDb({ coding_agent: 'codex', skill_ids: ['selected'] }),
+        getTask: vi.fn(() => ({
+          id: 'task-1',
+          title: 'Test Task',
+          repos: ['org/repo'],
+          skill_ids: ['selected'],
+        })),
+        getSkills: vi.fn(() => [selectedSkill, unselectedSkill]),
+        getSkillsByIds: vi.fn(() => [selectedSkill]),
+      } as unknown as ConstructorParameters<typeof AgentManager>[0]
+      manager = new AgentManager(mockDb)
+
+      await (manager as any).writeSkillFiles('task-1', 'agent-1', '/tmp/test-workspace')
+
+      const writes = mockedWriteFileAsync.mock.calls
+      const writeFilePaths = writes.map(c => c[0] as string)
+      expect(writeFilePaths).toContain('/tmp/test-workspace/.agents/skills/selected-skill/SKILL.md')
+      expect(writeFilePaths).not.toContain('/tmp/test-workspace/.agents/skills/unselected-skill/SKILL.md')
+      expect((mockDb as any).getSkillsByIds).toHaveBeenCalledWith(['selected'])
+      expect((mockDb as any).getSkills).not.toHaveBeenCalled()
+
+      const agentsMd = writes.find(c => c[0] === '/tmp/test-workspace/AGENTS.md')?.[1] as string
+      const claudeMd = writes.find(c => c[0] === '/tmp/test-workspace/CLAUDE.md')?.[1] as string
+      expect(agentsMd).toContain('selected-skill')
+      expect(agentsMd).not.toContain('unselected-skill')
+      expect(claudeMd).toContain('selected-skill')
+      expect(claudeMd).not.toContain('unselected-skill')
+    })
+
+    it('does not write or document any skills when none are selected', async () => {
+      const mockDb = {
+        ...createMockDb({ coding_agent: 'codex' }),
+        getTask: vi.fn(() => ({
+          id: 'task-1',
+          title: 'Test Task',
+          repos: ['org/repo'],
+          skill_ids: null,
+        })),
+        getSkills: vi.fn(() => [makeSkillRecord()]),
+        getSkillsByIds: vi.fn(() => [makeSkillRecord()]),
+      } as unknown as ConstructorParameters<typeof AgentManager>[0]
+      manager = new AgentManager(mockDb)
+
+      await (manager as any).writeSkillFiles('task-1', 'agent-1', '/tmp/test-workspace')
+
+      const writes = mockedWriteFileAsync.mock.calls
+      expect(writes.some(c => (c[0] as string).endsWith('/SKILL.md'))).toBe(false)
+      expect((mockDb as any).getSkills).not.toHaveBeenCalled()
+      expect((mockDb as any).getSkillsByIds).not.toHaveBeenCalled()
+
+      const agentsMd = writes.find(c => c[0] === '/tmp/test-workspace/AGENTS.md')?.[1] as string
+      const claudeMd = writes.find(c => c[0] === '/tmp/test-workspace/CLAUDE.md')?.[1] as string
+      expect(agentsMd).toContain('No skills configured for this session.')
+      expect(claudeMd).toContain('No skills are available for this session.')
+    })
+
     it('writes SKILL.md files to .claude/skills/ for Claude Code agents', async () => {
       const mockDb = createMockDb({ coding_agent: 'claude-code' })
       manager = new AgentManager(mockDb)
