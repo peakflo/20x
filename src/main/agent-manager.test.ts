@@ -194,19 +194,24 @@ describe('AgentManager skill file paths', () => {
   })
 
   describe('writeSkillFiles', () => {
-    it('writes and documents only the skills selected for the task', async () => {
-      const selectedSkill = makeSkillRecord({ id: 'selected', name: 'selected-skill' })
+    it('merges task and agent skill selections, removes duplicates, and excludes unselected skills', async () => {
+      const taskSkill = makeSkillRecord({ id: 'task-skill', name: 'task-skill' })
+      const sharedSkill = makeSkillRecord({ id: 'shared-skill', name: 'shared-skill' })
+      const agentSkill = makeSkillRecord({ id: 'agent-skill', name: 'agent-skill' })
       const unselectedSkill = makeSkillRecord({ id: 'unselected', name: 'unselected-skill' })
       const mockDb = {
-        ...createMockDb({ coding_agent: 'codex', skill_ids: ['selected'] }),
+        ...createMockDb({
+          coding_agent: 'codex',
+          skill_ids: ['shared-skill', 'agent-skill'],
+        }),
         getTask: vi.fn(() => ({
           id: 'task-1',
           title: 'Test Task',
           repos: ['org/repo'],
-          skill_ids: ['selected'],
+          skill_ids: ['task-skill', 'shared-skill'],
         })),
-        getSkills: vi.fn(() => [selectedSkill, unselectedSkill]),
-        getSkillsByIds: vi.fn(() => [selectedSkill]),
+        getSkills: vi.fn(() => [taskSkill, sharedSkill, agentSkill, unselectedSkill]),
+        getSkillsByIds: vi.fn(() => [taskSkill, sharedSkill, agentSkill]),
       } as unknown as ConstructorParameters<typeof AgentManager>[0]
       manager = new AgentManager(mockDb)
 
@@ -214,16 +219,26 @@ describe('AgentManager skill file paths', () => {
 
       const writes = mockedWriteFileAsync.mock.calls
       const writeFilePaths = writes.map(c => c[0] as string)
-      expect(writeFilePaths).toContain('/tmp/test-workspace/.agents/skills/selected-skill/SKILL.md')
+      expect(writeFilePaths).toContain('/tmp/test-workspace/.agents/skills/task-skill/SKILL.md')
+      expect(writeFilePaths).toContain('/tmp/test-workspace/.agents/skills/shared-skill/SKILL.md')
+      expect(writeFilePaths).toContain('/tmp/test-workspace/.agents/skills/agent-skill/SKILL.md')
       expect(writeFilePaths).not.toContain('/tmp/test-workspace/.agents/skills/unselected-skill/SKILL.md')
-      expect((mockDb as any).getSkillsByIds).toHaveBeenCalledWith(['selected'])
+      expect((mockDb as any).getSkillsByIds).toHaveBeenCalledWith([
+        'task-skill',
+        'shared-skill',
+        'agent-skill',
+      ])
       expect((mockDb as any).getSkills).not.toHaveBeenCalled()
 
       const agentsMd = writes.find(c => c[0] === '/tmp/test-workspace/AGENTS.md')?.[1] as string
       const claudeMd = writes.find(c => c[0] === '/tmp/test-workspace/CLAUDE.md')?.[1] as string
-      expect(agentsMd).toContain('selected-skill')
+      expect(agentsMd).toContain('task-skill')
+      expect(agentsMd).toContain('shared-skill')
+      expect(agentsMd).toContain('agent-skill')
       expect(agentsMd).not.toContain('unselected-skill')
-      expect(claudeMd).toContain('selected-skill')
+      expect(claudeMd).toContain('task-skill')
+      expect(claudeMd).toContain('shared-skill')
+      expect(claudeMd).toContain('agent-skill')
       expect(claudeMd).not.toContain('unselected-skill')
     })
 
