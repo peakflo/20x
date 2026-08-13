@@ -269,6 +269,13 @@ export const onTaskUpdated = (callback: (event: { taskId: string; updates: Parti
   return window.electronAPI.onTaskUpdated(callback)
 }
 
+/** Fires when the main process could not push a completion to the task's source. */
+export const onTaskSourceActionFailed = (
+  callback: (event: { taskId: string; taskTitle: string; error: string }) => void
+): (() => void) => {
+  return window.electronAPI.onTaskSourceActionFailed(callback)
+}
+
 export const onTaskCreated = (callback: (event: { task: WorkfloTask }) => void): (() => void) => {
   return window.electronAPI.onTaskCreated(callback)
 }

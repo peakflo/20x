@@ -46,6 +46,7 @@ function makeTask(overrides: Partial<WorkfloTask> = {}): WorkfloTask {
     next_occurrence_at: null,
     auto_start_agent: false,
     auto_complete_without_review: false,
+    complete_at_source: null,
     parent_task_id: null,
     sort_order: 0,
     created_at: '2026-01-01T00:00:00Z',

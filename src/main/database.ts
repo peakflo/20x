@@ -271,6 +271,7 @@ export interface TaskRow {
   heartbeat_next_check_at: string | null
   auto_start_agent: number
   auto_complete_without_review: number
+  complete_at_source: number | null
   parent_task_id: string | null
   sort_order: number
   created_at: string
@@ -362,6 +363,12 @@ export interface TaskRecord {
   heartbeat_next_check_at: string | null
   auto_start_agent: boolean
   auto_complete_without_review: boolean
+  /**
+   * How the user chose to complete a task that came from an external source.
+   * null = not answered yet, true = close it at the source, false = the user
+   * updates the source themselves.
+   */
+  complete_at_source: boolean | null
   parent_task_id: string | null
   sort_order: number
   created_at: string
@@ -401,6 +408,7 @@ export interface CreateTaskData {
   recurrence_parent_id?: string | null
   auto_start_agent?: boolean
   auto_complete_without_review?: boolean
+  complete_at_source?: boolean | null
   parent_task_id?: string | null
   /** Cron expression — if provided, sets is_recurring=true and stores as recurrence_pattern */
   cron?: string
@@ -435,6 +443,7 @@ export interface UpdateTaskData {
   heartbeat_next_check_at?: string | null
   auto_start_agent?: boolean
   auto_complete_without_review?: boolean
+  complete_at_source?: boolean | null
   parent_task_id?: string | null
   sort_order?: number
 }
@@ -469,6 +478,7 @@ const UPDATABLE_COLUMNS = new Set([
   'heartbeat_next_check_at',
   'auto_start_agent',
   'auto_complete_without_review',
+  'complete_at_source',
   'parent_task_id',
   'sort_order'
 ])
@@ -518,7 +528,8 @@ function deserializeTask(row: TaskRow): TaskRecord {
     heartbeat_last_check_at: row.heartbeat_last_check_at ?? null,
     heartbeat_next_check_at: row.heartbeat_next_check_at ?? null,
     auto_start_agent: (row.auto_start_agent ?? 0) === 1,
-    auto_complete_without_review: (row.auto_complete_without_review ?? 0) === 1
+    auto_complete_without_review: (row.auto_complete_without_review ?? 0) === 1,
+    complete_at_source: row.complete_at_source == null ? null : row.complete_at_source === 1
   }
 }
 
@@ -1038,6 +1049,7 @@ export class DatabaseManager {
         heartbeat_next_check_at TEXT DEFAULT NULL,
         auto_start_agent INTEGER NOT NULL DEFAULT 0,
         auto_complete_without_review INTEGER NOT NULL DEFAULT 0,
+        complete_at_source INTEGER DEFAULT NULL,
         parent_task_id TEXT REFERENCES tasks(id) ON DELETE CASCADE,
         sort_order INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL,
@@ -1274,6 +1286,7 @@ export class DatabaseManager {
         heartbeat_next_check_at TEXT DEFAULT NULL,
         auto_start_agent INTEGER NOT NULL DEFAULT 0,
         auto_complete_without_review INTEGER NOT NULL DEFAULT 0,
+        complete_at_source INTEGER DEFAULT NULL,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       )
@@ -1624,6 +1637,9 @@ export class DatabaseManager {
     // Add auto_start_agent and auto_complete_without_review columns for recurring tasks
     if (!columnNames.has('auto_start_agent')) {
       this.db.exec(`ALTER TABLE tasks ADD COLUMN auto_start_agent INTEGER NOT NULL DEFAULT 0`)
+    }
+    if (!columnNames.has('complete_at_source')) {
+      this.db.exec(`ALTER TABLE tasks ADD COLUMN complete_at_source INTEGER DEFAULT NULL`)
     }
     if (!columnNames.has('auto_complete_without_review')) {
       this.db.exec(`ALTER TABLE tasks ADD COLUMN auto_complete_without_review INTEGER NOT NULL DEFAULT 0`)

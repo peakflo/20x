@@ -3526,7 +3526,17 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     task: TaskRecord
   ): Promise<boolean> {
     const yieldEventLoop = (): Promise<void> => new Promise((r) => setImmediate(r))
-    if (task.source_id && this.syncManager) {
+
+    /**
+     * The user answers this in the feedback dialog before the learning session
+     * starts, and the answer is stored on the task. `false` means the user
+     * closes the task in the source system themselves, so 20x must not do it.
+     * `null` means nobody was asked — an unattended run (auto-complete without
+     * review, a scheduled run, an MCP caller) — which keeps pushing, as before.
+     */
+    const pushToSource = task.complete_at_source !== false
+
+    if (task.source_id && this.syncManager && pushToSource) {
       const actionField = task.output_fields?.find((f: OutputFieldRecord) => f.id === 'action')
       const actionValue = actionField?.value ? String(actionField.value) : PluginActionId.Complete
       console.log(`[AgentManager] Enterprise task — calling executeAction("${actionValue}") for source ${task.source_id}`)
@@ -3545,9 +3555,18 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
           taskId: session.taskId,
           updates: { status: TaskStatus.ReadyForReview }
         })
+        // Without this the task silently returns to review and the user is
+        // never told that the source system refused the completion.
+        this.sendToRenderer('task:source-action-failed', {
+          taskId: session.taskId,
+          taskTitle: task.title,
+          error: failure
+        })
         return false
       }
       await yieldEventLoop()
+    } else if (task.source_id && !pushToSource) {
+      console.log(`[AgentManager] Task ${session.taskId} completes locally — the user updates the source`)
     }
 
     this.db.updateTask(session.taskId, { status: TaskStatus.Completed })

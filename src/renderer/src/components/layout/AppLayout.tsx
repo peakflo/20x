@@ -26,7 +26,7 @@ import { useAgentStore } from '@/stores/agent-store'
 import { useAgentAutoStart } from '@/hooks/use-agent-auto-start'
 import { useOverdueNotifications } from '@/hooks/use-overdue-notifications'
 import { useTaskCompletion } from '@/hooks/use-task-completion'
-import { attachmentApi, worktreeApi, settingsApi, updaterApi } from '@/lib/ipc-client'
+import { attachmentApi, worktreeApi, settingsApi, updaterApi, onTaskSourceActionFailed } from '@/lib/ipc-client'
 import { isOverdue, isSnoozed } from '@/lib/utils'
 import { captureAnalyticsEvent, capturePageView } from '@/lib/analytics'
 import { TaskStatus } from '@/types'
@@ -149,6 +149,15 @@ export function AppLayout() {
   // Source-backed tasks ask the user whether to close the task in the source
   // system or only in 20x. `completionDialog` renders that question.
   const { requestComplete, completionDialog } = useTaskCompletion({ onToast: showToast })
+
+  // A completion that the main process could not push to the source sends the
+  // task back to review. Without this the user sees the task reappear with no
+  // reason given.
+  useEffect(() => {
+    return onTaskSourceActionFailed(({ taskTitle, error }) => {
+      showToast(`Could not complete "${taskTitle}" at its source: ${error}`, true)
+    })
+  }, [showToast])
 
   const selectNextActiveTask = useCallback(
     (completedTaskId: string) => {

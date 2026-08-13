@@ -319,6 +319,8 @@ export interface WorkfloTask {
   heartbeat_next_check_at?: string | null
   auto_start_agent: boolean
   auto_complete_without_review: boolean
+  /** null = the user has not been asked yet; true = close it at the source; false = manual. */
+  complete_at_source: boolean | null
   parent_task_id: string | null
   sort_order: number
   created_at: string
@@ -342,6 +344,7 @@ export interface CreateTaskDTO {
   recurrence_parent_id?: string | null
   auto_start_agent?: boolean
   auto_complete_without_review?: boolean
+  complete_at_source?: boolean | null
   parent_task_id?: string | null
 }
 
@@ -373,6 +376,7 @@ export interface UpdateTaskDTO {
   heartbeat_next_check_at?: string | null
   auto_start_agent?: boolean
   auto_complete_without_review?: boolean
+  complete_at_source?: boolean | null
   parent_task_id?: string | null
   sort_order?: number
 }

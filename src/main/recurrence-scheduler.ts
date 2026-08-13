@@ -45,6 +45,7 @@ interface RawTaskRow {
   heartbeat_next_check_at: string | null
   auto_start_agent: number
   auto_complete_without_review: number
+  complete_at_source: number | null
   parent_task_id: string | null
   sort_order: number
   created_at: string
@@ -432,6 +433,8 @@ export class RecurrenceScheduler {
       heartbeat_next_check_at: row.heartbeat_next_check_at ?? null,
       auto_start_agent: (row.auto_start_agent ?? 0) === 1,
       auto_complete_without_review: (row.auto_complete_without_review ?? 0) === 1,
+      // A new occurrence must not inherit the answer given on a past one.
+      complete_at_source: row.complete_at_source == null ? null : row.complete_at_source === 1,
       parent_task_id: row.parent_task_id ?? null,
       sort_order: row.sort_order ?? 0,
     }

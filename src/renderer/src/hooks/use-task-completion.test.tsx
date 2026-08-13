@@ -61,6 +61,7 @@ function makeTask(overrides: Partial<WorkfloTask> = {}): WorkfloTask {
     next_occurrence_at: null,
     auto_start_agent: false,
     auto_complete_without_review: false,
+    complete_at_source: null,
     parent_task_id: null,
     sort_order: 0,
     created_at: '2026-01-01T00:00:00Z',
@@ -198,6 +199,33 @@ describe('useTaskCompletion', () => {
     await waitFor(() => expect(screen.queryByTestId('complete-at-source-dialog')).toBeNull())
     expect(executeActionMock).not.toHaveBeenCalled()
     expect(updateTaskMock).not.toHaveBeenCalled()
+  })
+
+  it('does not ask again when the feedback dialog already recorded the answer', async () => {
+    storeState.tasks = [makeTask({ source_id: 'src-1', complete_at_source: false })]
+    storeState.sources = [{ id: 'src-1', name: 'Notion' }]
+    render(<Harness />)
+
+    fireEvent.click(screen.getByText('Complete'))
+
+    await waitFor(() =>
+      expect(updateTaskMock).toHaveBeenCalledWith('task-1', { status: TaskStatus.Completed })
+    )
+    expect(screen.queryByTestId('complete-at-source-dialog')).toBeNull()
+    expect(executeActionMock).not.toHaveBeenCalled()
+  })
+
+  it('honours a recorded "close it at the source" answer without asking', async () => {
+    storeState.tasks = [makeTask({ source_id: 'src-1', complete_at_source: true })]
+    storeState.sources = [{ id: 'src-1', name: 'Notion' }]
+    render(<Harness />)
+
+    fireEvent.click(screen.getByText('Complete'))
+
+    await waitFor(() =>
+      expect(executeActionMock).toHaveBeenCalledWith(PluginActionId.Complete, 'task-1', 'src-1')
+    )
+    expect(screen.queryByTestId('complete-at-source-dialog')).toBeNull()
   })
 
   it('falls back to the task source label when the source record is not loaded', async () => {
