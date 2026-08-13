@@ -54,6 +54,7 @@ function makeTask(overrides: Partial<WorkfloTask> = {}): WorkfloTask {
     next_occurrence_at: null,
     auto_start_agent: false,
     auto_complete_without_review: false,
+    complete_at_source: null,
     created_at: '2026-01-01T00:00:00Z',
     updated_at: '2026-01-01T00:00:00Z',
     parent_task_id: null,
@@ -490,7 +491,8 @@ describe('TaskDetailView – recurring task auto-start/auto-complete toggles', (
         recurrence_pattern: '0 9 * * 1-5',
         agent_id: 'agent-1',
         auto_start_agent: false,
-        auto_complete_without_review: false
+        auto_complete_without_review: false,
+        complete_at_source: null
       },
       agents: [makeAgent()],
       onUpdateAutoFlags
@@ -569,7 +571,8 @@ describe('TaskDetailView – recurring task auto-start/auto-complete toggles', (
         recurrence_pattern: '0 9 * * 1-5',
         agent_id: 'agent-1',
         auto_start_agent: false,
-        auto_complete_without_review: false
+        auto_complete_without_review: false,
+        complete_at_source: null
       },
       agents: [makeAgent()],
       onUpdateAutoFlags
@@ -590,7 +593,8 @@ describe('TaskDetailView – recurring task auto-start/auto-complete toggles', (
         recurrence_pattern: '0 9 * * 1-5',
         agent_id: 'agent-1',
         auto_start_agent: false,
-        auto_complete_without_review: false
+        auto_complete_without_review: false,
+        complete_at_source: null
       },
       agents: [makeAgent()],
       onUpdateAutoFlags
@@ -610,7 +614,8 @@ describe('TaskDetailView – recurring task auto-start/auto-complete toggles', (
         recurrence_pattern: '0 9 * * 1-5',
         agent_id: 'agent-1',
         auto_start_agent: true,
-        auto_complete_without_review: true
+        auto_complete_without_review: true,
+        complete_at_source: null
       },
       agents: [makeAgent()],
       onUpdateAutoFlags: vi.fn()

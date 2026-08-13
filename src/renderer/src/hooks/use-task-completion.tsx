@@ -101,6 +101,13 @@ export function useTaskCompletion({ onToast }: UseTaskCompletionOptions = {}) {
       const task = useTaskStore.getState().tasks.find((t) => t.id === taskId)
       if (!task) return
       if (task.source_id) {
+        // The feedback dialog asks the same question for tasks that ran an
+        // agent, and records the answer on the task. Honour it instead of
+        // asking a second time.
+        if (task.complete_at_source != null) {
+          await runCompletion(task, options, task.complete_at_source)
+          return
+        }
         setPending({ taskId, options })
         return
       }

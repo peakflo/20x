@@ -1251,6 +1251,73 @@ describe('AgentManager transitionToIdle — enterprise task completion after fee
     expect(mockDb.updateTask).toHaveBeenCalledWith('task-1', { status: TaskStatus.Completed })
   })
 
+  // ── complete_at_source: the user's answer from the feedback dialog ──
+
+  it('skips executeAction when the user chose to update the source themselves', async () => {
+    const mockDb = createEnterpriseTaskDb({ complete_at_source: false })
+    const { mgr, session } = setupManager(mockDb)
+
+    const mockSyncManager = {
+      executeAction: vi.fn().mockResolvedValue({ success: true }),
+    }
+    mgr.setSyncManager(mockSyncManager as any)
+
+    await (mgr as any).transitionToIdle('session-1', session)
+
+    // The user closes it in the source system, so 20x must not.
+    expect(mockSyncManager.executeAction).not.toHaveBeenCalled()
+    // The task still completes locally.
+    expect(mockDb.updateTask).toHaveBeenCalledWith('task-1', { status: TaskStatus.Completed })
+  })
+
+  it('calls executeAction when the user chose to close it at the source', async () => {
+    const mockDb = createEnterpriseTaskDb({ complete_at_source: true })
+    const { mgr, session } = setupManager(mockDb)
+
+    const mockSyncManager = {
+      executeAction: vi.fn().mockResolvedValue({ success: true }),
+    }
+    mgr.setSyncManager(mockSyncManager as any)
+
+    await (mgr as any).transitionToIdle('session-1', session)
+
+    expect(mockSyncManager.executeAction).toHaveBeenCalled()
+    expect(mockDb.updateTask).toHaveBeenCalledWith('task-1', { status: TaskStatus.Completed })
+  })
+
+  it('still pushes to the source when nobody was asked (unattended run)', async () => {
+    const mockDb = createEnterpriseTaskDb({ complete_at_source: null })
+    const { mgr, session } = setupManager(mockDb)
+
+    const mockSyncManager = {
+      executeAction: vi.fn().mockResolvedValue({ success: true }),
+    }
+    mgr.setSyncManager(mockSyncManager as any)
+
+    await (mgr as any).transitionToIdle('session-1', session)
+
+    expect(mockSyncManager.executeAction).toHaveBeenCalled()
+  })
+
+  it('tells the renderer when the source refuses the completion', async () => {
+    const mockDb = createEnterpriseTaskDb()
+    const { mgr, session } = setupManager(mockDb)
+
+    const mockSyncManager = {
+      executeAction: vi.fn().mockResolvedValue({ success: false, error: 'API unavailable' }),
+    }
+    mgr.setSyncManager(mockSyncManager as any)
+
+    const sendSpy = vi.spyOn(mgr as any, 'sendToRenderer')
+
+    await (mgr as any).transitionToIdle('session-1', session)
+
+    // Without this event the task silently returns to review.
+    const failureCall = sendSpy.mock.calls.find((call) => call[0] === 'task:source-action-failed')
+    expect(failureCall).toBeDefined()
+    expect(failureCall?.[1]).toMatchObject({ taskId: 'task-1', error: 'API unavailable' })
+  })
+
   it('skips executeAction when syncManager is not set', async () => {
     const mockDb = createEnterpriseTaskDb()
     const { mgr, session } = setupManager(mockDb)

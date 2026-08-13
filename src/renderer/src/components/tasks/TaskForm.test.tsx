@@ -37,6 +37,7 @@ function makeTask(overrides: Partial<WorkfloTask> = {}): WorkfloTask {
     next_occurrence_at: null,
     auto_start_agent: false,
     auto_complete_without_review: false,
+    complete_at_source: null,
     parent_task_id: null,
     sort_order: 0,
     created_at: '2026-01-01T00:00:00Z',
@@ -73,7 +74,8 @@ describe('TaskForm – auto-start / auto-complete toggles', () => {
       recurrence_pattern: '0 9 * * 1-5',
       agent_id: 'agent-1',
       auto_start_agent: true,
-      auto_complete_without_review: true
+      auto_complete_without_review: true,
+      complete_at_source: null
     })
 
     render(<TaskForm task={task} onSubmit={vi.fn()} onCancel={vi.fn()} />)
@@ -90,7 +92,8 @@ describe('TaskForm – auto-start / auto-complete toggles', () => {
       is_recurring: true,
       recurrence_pattern: '0 9 * * 1-5',
       auto_start_agent: false,
-      auto_complete_without_review: false
+      auto_complete_without_review: false,
+      complete_at_source: null
     })
 
     render(<TaskForm task={task} onSubmit={vi.fn()} onCancel={vi.fn()} />)

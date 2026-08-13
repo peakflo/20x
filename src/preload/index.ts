@@ -180,6 +180,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('task:updated', handler)
     return () => ipcRenderer.removeListener('task:updated', handler)
   },
+  onTaskSourceActionFailed: (callback: (event: unknown) => void): (() => void) => {
+    const handler = (_: unknown, data: unknown): void => callback(data)
+    ipcRenderer.on('task:source-action-failed', handler)
+    return () => ipcRenderer.removeListener('task:source-action-failed', handler)
+  },
   onTaskCreated: (callback: (event: unknown) => void): (() => void) => {
     const handler = (_: unknown, data: unknown): void => callback(data)
     ipcRenderer.on('task:created', handler)

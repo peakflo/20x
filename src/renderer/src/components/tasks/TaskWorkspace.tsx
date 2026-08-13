@@ -20,6 +20,7 @@ import { useAgentSession } from '@/hooks/use-agent-session'
 import { useAgentStore, SessionStatus } from '@/stores/agent-store'
 import { useSettingsStore, type GitProvider } from '@/stores/settings-store'
 import { useTaskStore } from '@/stores/task-store'
+import { useTaskSourceStore } from '@/stores/task-source-store'
 import { taskApi, worktreeApi, taskSourceApi, onAgentIncompatibleSession, onWorktreeProgress, attachmentApi } from '@/lib/ipc-client'
 import { subscribe } from '@/lib/shared-ipc-listeners'
 import { memo, useEffect, useLayoutEffect, useCallback, useRef, useState, useMemo, type PointerEvent as ReactPointerEvent } from 'react'
@@ -132,6 +133,14 @@ function TaskWorkspaceComponent({
 
   const fetchTasks = useTaskStore((s) => s.fetchTasks)
   const updateTaskInStore = useTaskStore((s) => s.updateTask)
+  const taskSources = useTaskSourceStore((s) => s.sources)
+
+  // Undefined for a local task, which hides the completion choice in the
+  // feedback dialog.
+  const feedbackSourceName = useMemo(() => {
+    if (!task?.source_id) return undefined
+    return taskSources.find((s) => s.id === task.source_id)?.name || task.source || 'the task source'
+  }, [task?.source_id, task?.source, taskSources])
 
   // Derive subtasks reactively from the task store so status changes (e.g., from
   // mobile-initiated sessions) update immediately without needing a re-fetch.
@@ -582,16 +591,19 @@ function TaskWorkspaceComponent({
     }
   }, [session.sessionId, session.messages.length, task?.session_id, onCompleteTask])
 
-  const handleFeedbackSubmit = useCallback(async (rating: number, comment: string) => {
+  const handleFeedbackSubmit = useCallback(async (rating: number, comment: string, completeAtSource: boolean) => {
     if (!task?.agent_id || !task?.id) return
     setShowFeedback(false)
 
-    // Persist feedback + set task to Learning status - prevents auto-stop useEffect
+    // Persist feedback + set task to Learning status - prevents auto-stop useEffect.
+    // `complete_at_source` records the user's answer here, because the learning
+    // session finishes in the main process, where no dialog can be shown.
     console.log('[TaskWorkspace] Setting task status to AgentLearning:', task.id)
     const updatedTask = await taskApi.update(task.id, {
       status: TaskStatus.AgentLearning,
       feedback_rating: rating,
-      feedback_comment: comment || null
+      feedback_comment: comment || null,
+      ...(task.source_id ? { complete_at_source: completeAtSource } : {})
     })
     console.log('[TaskWorkspace] Task status set to AgentLearning, verified:', updatedTask?.status)
 
@@ -659,14 +671,17 @@ Update existing skills that were helpful or create new ones for patterns worth r
     }
   }, [ensureChatSession, sendMessage, session.sessionId, task?.id])
 
-  const handleFeedbackSkip = useCallback(async () => {
+  const handleFeedbackSkip = useCallback(async (completeAtSource: boolean) => {
     if (!task?.id) return
     setShowFeedback(false)
-    // Use the main completion path which calls executeAction for
-    // enterprise tasks (notifying the Workflo backend) before setting
-    // the local status to Completed.
+    // Record the answer first so the completion path does not ask a second
+    // time, then use the main completion path which calls executeAction for
+    // source-backed tasks before setting the local status to Completed.
+    // updateTaskInStore persists through the API and syncs the store, so the
+    // completion path below reads the answer back.
+    if (task.source_id) await updateTaskInStore(task.id, { complete_at_source: completeAtSource })
     await onCompleteTask()
-  }, [task?.id, onCompleteTask])
+  }, [task?.id, task?.source_id, onCompleteTask, updateTaskInStore])
 
   const handleSnooze = useCallback(async (isoString: string) => {
     if (!task) return
@@ -1061,6 +1076,7 @@ Update existing skills that were helpful or create new ones for patterns worth r
 
       <FeedbackDialog
         open={showFeedback}
+        sourceName={feedbackSourceName}
         onSubmit={handleFeedbackSubmit}
         onSkip={handleFeedbackSkip}
         onCancel={() => setShowFeedback(false)}

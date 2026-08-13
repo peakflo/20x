@@ -49,6 +49,7 @@ export interface Task {
   heartbeat_next_check_at?: string | null
   auto_start_agent: boolean
   auto_complete_without_review: boolean
+  complete_at_source: boolean | null
   parent_task_id: string | null
   sort_order: number
   created_at: string
