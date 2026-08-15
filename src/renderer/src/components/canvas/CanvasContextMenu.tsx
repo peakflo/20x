@@ -1,13 +1,15 @@
 import { useCallback, useEffect, useRef } from 'react'
 import { useShallow } from 'zustand/react/shallow'
-import { CheckSquare, MessageSquare, Monitor, AppWindow, Globe, TerminalSquare, Plus, X } from 'lucide-react'
+import { CheckSquare, MessageSquare, Monitor, AppWindow, Globe, TerminalSquare, Plus, X, Square, Circle, Minus, MoveUpRight, Type, Image } from 'lucide-react'
 import { useTaskStore } from '@/stores/task-store'
 import { useAgentStore } from '@/stores/agent-store'
 import { useDashboardStore } from '@/stores/dashboard-store'
 import { useCanvasStore, DEFAULT_PANEL_WIDTH, DEFAULT_PANEL_HEIGHT } from '@/stores/canvas-store'
+import { useDrawingStore } from '@/stores/drawing-store'
 import { useUIStore } from '@/stores/ui-store'
 import { TaskStatus } from '@/types'
 import type { CanvasPanelType } from '@/stores/canvas-store'
+import type { DrawingTool } from '@/components/canvas/drawing/types'
 
 interface ContextMenuPosition {
   clientX: number
@@ -20,6 +22,16 @@ interface CanvasContextMenuProps {
   position: ContextMenuPosition
   onClose: () => void
 }
+
+/** Figure tools offered in the "Draw" section of the canvas context menu. */
+const DRAW_TOOLS: Array<{ tool: DrawingTool; label: string; icon: typeof Square }> = [
+  { tool: 'rectangle', label: 'Rectangle', icon: Square },
+  { tool: 'ellipse', label: 'Ellipse', icon: Circle },
+  { tool: 'line', label: 'Line', icon: Minus },
+  { tool: 'arrow', label: 'Arrow', icon: MoveUpRight },
+  { tool: 'text', label: 'Text', icon: Type },
+  { tool: 'image', label: 'Image', icon: Image },
+]
 
 export function CanvasContextMenu({ position, onClose }: CanvasContextMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null)
@@ -42,6 +54,7 @@ export function CanvasContextMenu({ position, onClose }: CanvasContextMenuProps)
   const addPanel = useCanvasStore((s) => s.addPanel)
   const panels = useCanvasStore((s) => s.panels)
   const openCreateModal = useUIStore((s) => s.openCreateModal)
+  const setDrawingTool = useDrawingStore((s) => s.setTool)
 
   // Close on click outside
   useEffect(() => {
@@ -145,6 +158,22 @@ export function CanvasContextMenu({ position, onClose }: CanvasContextMenuProps)
             sublabel="Interactive shell session"
             onClick={() => handleAddPanel('terminal', 'Terminal')}
           />
+        </MenuSection>
+
+        {/* Draw — figure tools (shapes, text, images) */}
+        <MenuSection title="Draw">
+          {DRAW_TOOLS.map(({ tool, label, icon: Icon }) => (
+            <MenuItem
+              key={tool}
+              icon={<Icon className="h-3.5 w-3.5 text-sky-400" />}
+              label={label}
+              sublabel="Add a figure to the canvas"
+              onClick={() => {
+                setDrawingTool(tool)
+                onClose()
+              }}
+            />
+          ))}
         </MenuSection>
 
         {/* Applications section */}
