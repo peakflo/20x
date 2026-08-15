@@ -21,6 +21,7 @@ import { useAgentStore, SessionStatus } from '@/stores/agent-store'
 import { useSettingsStore, type GitProvider } from '@/stores/settings-store'
 import { useTaskStore } from '@/stores/task-store'
 import { useTaskSourceStore } from '@/stores/task-source-store'
+import { useProgressToastStore } from '@/stores/progress-toast-store'
 import { taskApi, worktreeApi, taskSourceApi, onAgentIncompatibleSession, onWorktreeProgress, attachmentApi } from '@/lib/ipc-client'
 import { subscribe } from '@/lib/shared-ipc-listeners'
 import { memo, useEffect, useLayoutEffect, useCallback, useRef, useState, useMemo, type PointerEvent as ReactPointerEvent } from 'react'
@@ -134,6 +135,8 @@ function TaskWorkspaceComponent({
   const fetchTasks = useTaskStore((s) => s.fetchTasks)
   const updateTaskInStore = useTaskStore((s) => s.updateTask)
   const taskSources = useTaskSourceStore((s) => s.sources)
+  const showProgressToast = useProgressToastStore((s) => s.show)
+  const failProgressToast = useProgressToastStore((s) => s.fail)
 
   // Undefined for a local task, which hides the completion choice in the
   // feedback dialog.
@@ -599,12 +602,29 @@ function TaskWorkspaceComponent({
     // `complete_at_source` records the user's answer here, because the learning
     // session finishes in the main process, where no dialog can be shown.
     console.log('[TaskWorkspace] Setting task status to AgentLearning:', task.id)
-    const updatedTask = await taskApi.update(task.id, {
-      status: TaskStatus.AgentLearning,
-      feedback_rating: rating,
-      feedback_comment: comment || null,
-      ...(task.source_id ? { complete_at_source: completeAtSource } : {})
-    })
+    let updatedTask: WorkfloTask | null | undefined
+    try {
+      updatedTask = await taskApi.update(task.id, {
+        status: TaskStatus.AgentLearning,
+        feedback_rating: rating,
+        feedback_comment: comment || null,
+        ...(task.source_id ? { complete_at_source: completeAtSource } : {})
+      })
+    } catch (error) {
+      // The dialog is already closed at this point, so a rejected write left the
+      // task untouched with nothing on screen — the user just saw the dialog
+      // vanish and nothing happen. Say so and let them retry.
+      console.error('[TaskWorkspace] Failed to record feedback:', error)
+      // `fail` is a no-op unless the toast already exists, so show it first.
+      const toastId = `feedback-${task.id}`
+      showProgressToast(toastId, 'Feedback not saved')
+      failProgressToast(
+        toastId,
+        `Could not save feedback for "${task.title}": ${error instanceof Error ? error.message : String(error)}`
+      )
+      setShowFeedback(true)
+      return
+    }
     console.log('[TaskWorkspace] Task status set to AgentLearning, verified:', updatedTask?.status)
 
     // Build feedback prompt

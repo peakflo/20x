@@ -936,9 +936,19 @@ function deserializeInstalledPlugin(row: InstalledPluginRow): InstalledPluginRec
   }
 }
 
-// Bump this whenever new migrations are added so returning users skip
-// the full migration check on startup.
-const SCHEMA_VERSION = 8
+/**
+ * Bump this whenever new migrations are added so returning users skip
+ * the full migration check on startup.
+ *
+ * ⚠️ `runMigrations()` is ONLY called when the stored version is LOWER than
+ * this number (see `initialize()`). Adding an `ALTER TABLE` to `runMigrations()`
+ * without bumping this leaves the column missing on every existing install, and
+ * every write to it fails with "no such column" at runtime. Tests pass, because
+ * they build the schema from `CREATE TABLE`, not from the migration path.
+ *
+ * 8 → 9: tasks.complete_at_source
+ */
+const SCHEMA_VERSION = 9
 
 export class DatabaseManager {
   public db!: Database.Database
