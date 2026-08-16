@@ -4,6 +4,7 @@ import { DrawingLayer, pasteImageAt } from './DrawingLayer'
 import { readClipboardImage, downscaleImageToDataUrl } from './image-paste'
 import { useDrawingStore } from '@/stores/drawing-store'
 import { useCanvasStore } from '@/stores/canvas-store'
+import { useThemeStore } from '@/stores/theme-store'
 import type { DrawingObject } from './types'
 
 vi.mock('./image-paste', () => ({
@@ -70,6 +71,9 @@ describe('DrawingLayer', () => {
       liveObject: null,
     })
     useCanvasStore.setState({ viewport: { x: 0, y: 0, zoom: 1 } })
+    // Light theme by default so the factory stroke (#1e1e1e) is the expected
+    // one; individual tests switch to dark where relevant.
+    useThemeStore.getState().setMode('light')
   })
 
   afterEach(cleanup)
@@ -201,6 +205,35 @@ describe('DrawingLayer', () => {
     expect(activeTool).toBe('select')
   })
 
+  it('defaults new figures to a stroke visible on the dark theme', async () => {
+    useThemeStore.getState().setMode('dark')
+    useDrawingStore.getState().setTool('rectangle')
+    const { container } = render(<DrawingLayer />)
+    const capture = container.querySelector('[data-drawing-capture="true"]') as Element
+
+    fireEvent.mouseDown(capture, { button: 0, clientX: 100, clientY: 100 })
+    fireEvent.mouseMove(window, { clientX: 200, clientY: 160 })
+    await flushFrames()
+    fireEvent.mouseUp(window)
+
+    expect(useDrawingStore.getState().objects[0]).toMatchObject({ stroke: '#ffffff' })
+  })
+
+  it('keeps a user-chosen stroke even when the theme is dark', async () => {
+    useThemeStore.getState().setMode('dark')
+    useDrawingStore.getState().setToolOption('stroke', '#ef4444')
+    useDrawingStore.getState().setTool('rectangle')
+    const { container } = render(<DrawingLayer />)
+    const capture = container.querySelector('[data-drawing-capture="true"]') as Element
+
+    fireEvent.mouseDown(capture, { button: 0, clientX: 100, clientY: 100 })
+    fireEvent.mouseMove(window, { clientX: 200, clientY: 160 })
+    await flushFrames()
+    fireEvent.mouseUp(window)
+
+    expect(useDrawingStore.getState().objects[0]).toMatchObject({ stroke: '#ef4444' })
+  })
+
   it('cancels creation when liveObject is cleared (Escape)', async () => {
     useDrawingStore.getState().setTool('rectangle')
     const { container } = render(<DrawingLayer />)
@@ -257,6 +290,56 @@ describe('DrawingLayer', () => {
     fireEvent.blur(editing)
     expect(useDrawingStore.getState().objects[0]).toMatchObject({ text: 'Hello World' })
     expect(useDrawingStore.getState().editingTextId).toBeNull()
+  })
+
+  it('re-clicking a selected text figure (no drag) opens it for editing', () => {
+    const id = useDrawingStore.getState().addObject({
+      type: 'text',
+      x: 10,
+      y: 10,
+      width: 200,
+      height: 60,
+      stroke: '#1e1e1e',
+      strokeWidth: 2,
+      fill: null,
+      opacity: 1,
+      text: 'Hi',
+      fontSize: 18,
+      fontFamily: 'sans',
+      fontWeight: 400,
+      textAlign: 'left',
+    })
+    useDrawingStore.getState().select([id])
+    const { container } = render(<DrawingLayer />)
+    const figure = container.querySelector(`[data-figure-id="${id}"]`) as Element
+
+    fireEvent.mouseDown(figure, { button: 0, clientX: 50, clientY: 30 })
+    fireEvent.mouseUp(window)
+
+    expect(useDrawingStore.getState().editingTextId).toBe(id)
+  })
+
+  it('shows a visible editing box while a text figure is being edited', () => {
+    const id = useDrawingStore.getState().addObject({
+      type: 'text',
+      x: 10,
+      y: 10,
+      width: 200,
+      height: 60,
+      stroke: '#1e1e1e',
+      strokeWidth: 2,
+      fill: null,
+      opacity: 1,
+      text: '',
+      fontSize: 18,
+      fontFamily: 'sans',
+      fontWeight: 400,
+      textAlign: 'left',
+    })
+    useDrawingStore.getState().setEditingTextId(id)
+    const { container } = render(<DrawingLayer />)
+    const figure = container.querySelector(`[data-figure-id="${id}"]`) as HTMLElement
+    expect(figure.getAttribute('style') ?? '').toContain('dashed')
   })
 
   // ── Move ──────────────────────────────────────────────────

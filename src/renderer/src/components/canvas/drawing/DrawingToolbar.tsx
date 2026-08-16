@@ -130,6 +130,7 @@ export function DrawingToolbar() {
   return (
     <div
       ref={rootRef}
+      data-drawing-toolbar="true"
       className="absolute bottom-4 left-1/2 -translate-x-1/2 z-10 flex items-center gap-1 bg-[var(--canvas-toolbar)] backdrop-blur-sm border border-border/40 rounded-xl p-1 shadow-lg"
       onPointerDown={(e) => e.stopPropagation()}
     >

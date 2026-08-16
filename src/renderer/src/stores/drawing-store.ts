@@ -6,7 +6,8 @@ import type {
   DrawingTool,
   DrawingToolOptions,
 } from '@/components/canvas/drawing/types'
-import { DEFAULT_TOOL_OPTIONS } from '@/components/canvas/drawing/types'
+import { DEFAULT_STROKE, DEFAULT_TOOL_OPTIONS } from '@/components/canvas/drawing/types'
+import { useThemeStore } from '@/stores/theme-store'
 
 const DRAWING_STORAGE_KEY = 'drawing_state'
 const SAVE_DEBOUNCE_MS = 1000
@@ -105,7 +106,9 @@ export const useDrawingStore = create<DrawingState>()(subscribeWithSelector((set
   nextZIndex: 1,
   isLoaded: false,
   activeTool: 'select',
-  toolOptions: { ...DEFAULT_TOOL_OPTIONS },
+  // Default stroke follows the current theme so new figures are visible on
+  // the canvas (see DEFAULT_STROKE).
+  toolOptions: { ...DEFAULT_TOOL_OPTIONS, stroke: DEFAULT_STROKE[useThemeStore.getState().resolved] },
   selectedIds: [],
   editingTextId: null,
   liveObject: null,

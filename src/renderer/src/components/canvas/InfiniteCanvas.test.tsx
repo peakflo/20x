@@ -503,6 +503,36 @@ describe('InfiniteCanvas', () => {
   })
 
   describe('drawing integration', () => {
+    it('hides the drawing toolbar by default', () => {
+      const { container } = render(<InfiniteCanvas />)
+      expect(container.querySelector('[data-drawing-toolbar="true"]')).toBeNull()
+    })
+
+    it('shows the drawing toolbar when a figure is selected', () => {
+      const id = useDrawingStore
+        .getState()
+        .addObject({
+          type: 'rectangle',
+          x: 0,
+          y: 0,
+          width: 100,
+          height: 50,
+          stroke: '#1e1e1e',
+          strokeWidth: 2,
+          fill: null,
+          opacity: 1,
+        })
+      useDrawingStore.getState().select([id])
+      const { container } = render(<InfiniteCanvas />)
+      expect(container.querySelector('[data-drawing-toolbar="true"]')).toBeTruthy()
+    })
+
+    it('shows the drawing toolbar when a drawing tool is active', () => {
+      useDrawingStore.getState().setTool('rectangle')
+      const { container } = render(<InfiniteCanvas />)
+      expect(container.querySelector('[data-drawing-toolbar="true"]')).toBeTruthy()
+    })
+
     it('switches drawing tools with the V/R/O/L/A/T/I shortcuts', () => {
       render(<InfiniteCanvas />)
       fireEvent.keyDown(window, { code: 'KeyR' })

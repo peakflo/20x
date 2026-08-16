@@ -67,7 +67,12 @@ export const FigureText = memo(function FigureText({
         height: obj.height,
         opacity: obj.opacity,
         pointerEvents: interactive ? 'auto' : 'none',
-        cursor: 'move',
+        cursor: isEditing ? 'text' : 'move',
+        // While editing, show a visible box so an (empty) text figure is
+        // obvious even when the text color is close to the canvas background.
+        border: isEditing ? '1.5px dashed rgba(30,150,235,0.9)' : '1.5px solid transparent',
+        background: isEditing ? 'rgba(30,150,235,0.06)' : 'transparent',
+        borderRadius: 4,
       }}
     >
       <div

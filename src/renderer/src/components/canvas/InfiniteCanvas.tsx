@@ -235,6 +235,15 @@ export function InfiniteCanvas() {
   const loadCanvas = useCanvasStore((s) => s.loadCanvas)
   const loadDrawings = useDrawingStore((s) => s.loadDrawings)
 
+  // Drawing HUD visibility: hidden by default, appears when the user engages
+  // with drawing — a tool is active, a figure is selected, or a text figure
+  // is being edited.
+  const drawingTool = useDrawingStore((s) => s.activeTool)
+  const drawingSelectedCount = useDrawingStore((s) => s.selectedIds.length)
+  const drawingEditingTextId = useDrawingStore((s) => s.editingTextId)
+  const drawingUiVisible =
+    drawingTool !== 'select' || drawingSelectedCount > 0 || drawingEditingTextId !== null
+
   // ── Load persisted canvas state on mount ────────────────
   useEffect(() => {
     if (!isLoaded) {
@@ -1106,9 +1115,11 @@ export function InfiniteCanvas() {
         containerHeight={containerSize.height}
       />
 
-      {/* ── Drawing: toolbar (bottom-center) + selection properties (top-center) ── */}
-      <DrawingToolbar />
-      <DrawingProperties />
+      {/* ── Drawing: toolbar (bottom-center) + selection properties (top-center) ──
+          Hidden until the user engages with drawing (tool active, figure
+          selected, or a text figure being edited). */}
+      {drawingUiVisible && <DrawingToolbar />}
+      {drawingSelectedCount > 0 && <DrawingProperties />}
 
       {/* ── Empty state ── */}
       {panels.length === 0 && (

@@ -1,9 +1,11 @@
 import { useCallback, useMemo, useRef } from 'react'
 import { useDrawingStore, type NewFigure } from '@/stores/drawing-store'
 import { useCanvasStore } from '@/stores/canvas-store'
+import { useThemeStore } from '@/stores/theme-store'
 import { getLiveViewport } from '@/stores/canvas-live-viewport'
 import {
   DEFAULT_FIGURE_SIZE,
+  DEFAULT_STROKE,
   MIN_FIGURE_SIZE,
   type DrawingObject,
   type DrawingTool,
@@ -80,7 +82,7 @@ export function DrawingLayer() {
           y: start.y - size.height / 2,
           width: size.width,
           height: size.height,
-          stroke: toolOptions.stroke,
+          stroke: strokeForNewFigure(toolOptions),
           strokeWidth: toolOptions.strokeWidth,
           fill: null,
           opacity: 1,
@@ -163,6 +165,13 @@ export function DrawingLayer() {
     const store = useDrawingStore.getState()
     const { selectedIds } = store
 
+    // Clicking a text figure that is *already* selected (no drag) re-enters
+    // editing — discoverable without knowing the double-click gesture.
+    const reClickEditsText =
+      !e.shiftKey &&
+      selectedIds.includes(hitId) &&
+      store.objects.find((o) => o.id === hitId)?.type === 'text'
+
     let nextSelected: string[]
     if (e.shiftKey) {
       nextSelected = selectedIds.includes(hitId) ? selectedIds : [...selectedIds, hitId]
@@ -227,6 +236,10 @@ export function DrawingLayer() {
         for (const item of items) {
           updateObject(item.id, { x: item.obj.x + dx, y: item.obj.y + dy })
         }
+      }
+      // A plain re-click (no drag) on a selected text figure opens it for editing.
+      if (dx === 0 && dy === 0 && reClickEditsText) {
+        useDrawingStore.getState().setEditingTextId(hitId)
       }
       for (const item of items) {
         if (item.node instanceof HTMLElement) item.node.style.transform = ''
@@ -470,7 +483,7 @@ export async function pasteImageAt(x: number, y: number): Promise<string | null>
     y: y - img.height / 2,
     width: img.width,
     height: img.height,
-    stroke: '#1e1e1e',
+    stroke: DEFAULT_STROKE[useThemeStore.getState().resolved],
     strokeWidth: 2,
     fill: null,
     opacity: 1,
@@ -479,6 +492,17 @@ export async function pasteImageAt(x: number, y: number): Promise<string | null>
 }
 
 // ── Pure helpers ────────────────────────────────────────────
+
+/**
+ * Stroke for new figures: while the user hasn't explicitly picked a color,
+ * follow the current theme (the factory defaults are theme-specific — dark
+ * text is invisible on the dark canvas).
+ */
+function strokeForNewFigure(options: DrawingToolOptions): string {
+  const { stroke } = options
+  if (stroke !== DEFAULT_STROKE.light && stroke !== DEFAULT_STROKE.dark) return stroke
+  return DEFAULT_STROKE[useThemeStore.getState().resolved]
+}
 
 /** Build a figure (minus id/zIndex) from a tool, a box and the tool options. */
 function buildFigure(
@@ -492,7 +516,7 @@ function buildFigure(
     y: box.y,
     width: box.width,
     height: box.height,
-    stroke: options.stroke,
+    stroke: strokeForNewFigure(options),
     strokeWidth: options.strokeWidth,
     fill: tool === 'rectangle' || tool === 'ellipse' ? options.fill : null,
     opacity: 1,

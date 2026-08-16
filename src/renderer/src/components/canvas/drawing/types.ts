@@ -140,9 +140,20 @@ export const FILL_OPTIONS: Array<string | null> = [
   'rgba(236,72,153,0.18)',
 ]
 
+/**
+ * Default stroke per theme — the canvas background is near-black in dark mode
+ * (#0f0f0f) and near-white in light mode (#ededee), so new figures must
+ * default to a stroke visible on the current canvas (dark text on a dark
+ * canvas is invisible, including text figures and the editing caret).
+ */
+export const DEFAULT_STROKE: Record<'light' | 'dark', string> = {
+  light: '#1e1e1e',
+  dark: '#ffffff',
+}
+
 /** Default style for new figures. */
 export const DEFAULT_TOOL_OPTIONS: DrawingToolOptions = {
-  stroke: '#1e1e1e',
+  stroke: DEFAULT_STROKE.light,
   strokeWidth: 2,
   fill: null,
   fontSize: 18,
