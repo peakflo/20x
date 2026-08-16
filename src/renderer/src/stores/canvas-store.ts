@@ -206,7 +206,16 @@ interface CanvasState {
   zoomTo: (zoom: number, centerX?: number, centerY?: number) => void
   zoomAtPoint: (delta: number, clientX: number, clientY: number, containerRect: DOMRect) => void
   resetViewport: () => void
-  fitToContent: (containerWidth: number, containerHeight: number) => void
+  /**
+   * Fit the viewport to all panels. `contentBounds` (e.g. the union box of
+   * drawing figures, in canvas space) is merged into the fitted area so
+   * content without panels can still be fitted.
+   */
+  fitToContent: (
+    containerWidth: number,
+    containerHeight: number,
+    contentBounds?: { minX: number; minY: number; maxX: number; maxY: number }
+  ) => void
   focusPanel: (id: string, containerWidth: number, containerHeight: number) => void
 
   // Panel actions
@@ -322,13 +331,13 @@ export const useCanvasStore = create<CanvasState>()(subscribeWithSelector((set, 
     scheduleSave()
   },
 
-  fitToContent: (containerWidth: number, containerHeight: number) => {
+  fitToContent: (containerWidth: number, containerHeight: number, contentBounds) => {
     const { panels } = get()
-    if (panels.length === 0) return
+    if (panels.length === 0 && !contentBounds) return
     // Guard against zero-size container (window minimized, being dragged, not laid out yet)
     if (!containerWidth || !containerHeight || containerWidth < 10 || containerHeight < 10) return
 
-    // Calculate bounding box of all panels
+    // Calculate bounding box of all panels (plus any extra content, e.g. figures)
     const PAD = 60
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
     for (const p of panels) {
@@ -337,6 +346,13 @@ export const useCanvasStore = create<CanvasState>()(subscribeWithSelector((set, 
       maxX = Math.max(maxX, p.x + p.width)
       maxY = Math.max(maxY, p.y + p.height)
     }
+    if (contentBounds) {
+      minX = Math.min(minX, contentBounds.minX)
+      minY = Math.min(minY, contentBounds.minY)
+      maxX = Math.max(maxX, contentBounds.maxX)
+      maxY = Math.max(maxY, contentBounds.maxY)
+    }
+    if (!isFinite(minX) || !isFinite(minY) || !isFinite(maxX) || !isFinite(maxY)) return
 
     const contentW = maxX - minX + PAD * 2
     const contentH = maxY - minY + PAD * 2

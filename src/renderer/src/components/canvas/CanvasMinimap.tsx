@@ -2,6 +2,9 @@ import { memo, useCallback, useRef, useState, useMemo, useEffect } from 'react'
 import { useCanvasStore, type CanvasPanelData, type CanvasEdge, type Viewport, MIN_ZOOM, MAX_ZOOM } from '@/stores/canvas-store'
 import { getLiveViewport, subscribeLiveViewport } from '@/stores/canvas-live-viewport'
 import { useTaskStore } from '@/stores/task-store'
+import { useDrawingStore } from '@/stores/drawing-store'
+import { lineEndpoints, unionBox } from './drawing/figure-geometry'
+import type { DrawingObject } from './drawing/types'
 import { Minus, Plus, Maximize2, ChevronDown, ChevronUp } from 'lucide-react'
 import { getCanvasTaskStatusStyle } from './canvas-status-style'
 
@@ -54,12 +57,14 @@ function getClampedViewportRect(
 const MinimapContent = memo(function MinimapContent({
   panels,
   edges,
+  figures,
   bounds,
   scale,
   taskStatusMap,
 }: {
   panels: CanvasPanelData[]
   edges: CanvasEdge[]
+  figures: DrawingObject[]
   bounds: MinimapBounds
   scale: number
   taskStatusMap: Map<string, ReturnType<typeof useTaskStore.getState>['tasks'][number]['status']>
@@ -92,6 +97,84 @@ const MinimapContent = memo(function MinimapContent({
             y2={toMiniY(to.y + to.height / 2)}
             stroke={edgeColor}
             strokeWidth="1"
+          />
+        )
+      })}
+
+      {/* Drawing figures — below panels (figures render below panels on the
+          canvas too), keeping their real stroke/fill colors. */}
+      {figures.map((f) => {
+        const px = toMiniX(f.x)
+        const py = toMiniY(f.y)
+        const pw = Math.max(2, f.width * scale)
+        const ph = Math.max(2, f.height * scale)
+        if (f.type === 'line' || f.type === 'arrow') {
+          const { from, to } = lineEndpoints(
+            { x: f.x, y: f.y, width: f.width, height: f.height },
+            f.direction
+          )
+          return (
+            <line
+              key={f.id}
+              x1={toMiniX(from.x)}
+              y1={toMiniY(from.y)}
+              x2={toMiniX(to.x)}
+              y2={toMiniY(to.y)}
+              stroke={f.stroke}
+              strokeWidth="1"
+              opacity={0.8}
+            />
+          )
+        }
+        if (f.type === 'ellipse') {
+          return (
+            <ellipse
+              key={f.id}
+              cx={px + pw / 2}
+              cy={py + ph / 2}
+              rx={pw / 2}
+              ry={ph / 2}
+              fill={f.fill ?? 'none'}
+              stroke={f.stroke}
+              strokeWidth="1"
+              opacity={0.8}
+            />
+          )
+        }
+        if (f.type === 'text') {
+          // A faint block in the text color — readable at minimap scale.
+          return (
+            <rect key={f.id} x={px} y={py} width={pw} height={ph} rx="1" fill={f.stroke} opacity={0.3} />
+          )
+        }
+        if (f.type === 'image') {
+          return (
+            <rect
+              key={f.id}
+              x={px}
+              y={py}
+              width={pw}
+              height={ph}
+              rx="1"
+              fill="rgba(148,163,184,0.45)"
+              stroke="rgba(255,255,255,0.15)"
+              strokeWidth="0.5"
+            />
+          )
+        }
+        // rectangle
+        return (
+          <rect
+            key={f.id}
+            x={px}
+            y={py}
+            width={pw}
+            height={ph}
+            rx="1"
+            fill={f.fill ?? 'none'}
+            stroke={f.stroke}
+            strokeWidth="1"
+            opacity={0.8}
           />
         )
       })}
@@ -143,6 +226,7 @@ function CanvasMinimapComponent({
   const panels = useCanvasStore((s) => s.panels)
   const viewport = useCanvasStore((s) => s.viewport)
   const edges = useCanvasStore((s) => s.edges)
+  const figures = useDrawingStore((s) => s.objects)
   const tasks = useTaskStore((s) => s.tasks)
   const setViewport = useCanvasStore((s) => s.setViewport)
   const zoomTo = useCanvasStore((s) => s.zoomTo)
@@ -152,9 +236,9 @@ function CanvasMinimapComponent({
   const [isDragging, setIsDragging] = useState(false)
   const svgRef = useRef<SVGSVGElement>(null)
 
-  // ── Compute bounding box of all panels ──────────────────
+  // ── Compute bounding box of all panels + drawing figures ──
   const bounds = useMemo(() => {
-    if (panels.length === 0) {
+    if (panels.length === 0 && figures.length === 0) {
       return { minX: 0, minY: 0, maxX: 1000, maxY: 800 }
     }
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
@@ -164,10 +248,16 @@ function CanvasMinimapComponent({
       maxX = Math.max(maxX, p.x + p.width)
       maxY = Math.max(maxY, p.y + p.height)
     }
+    for (const f of figures) {
+      minX = Math.min(minX, f.x)
+      minY = Math.min(minY, f.y)
+      maxX = Math.max(maxX, f.x + f.width)
+      maxY = Math.max(maxY, f.y + f.height)
+    }
     // Add padding
     const pad = 100
     return { minX: minX - pad, minY: minY - pad, maxX: maxX + pad, maxY: maxY + pad }
-  }, [panels])
+  }, [panels, figures])
 
   // ── Scale factor: canvas space → minimap space ──────────
   const canvasW = bounds.maxX - bounds.minX
@@ -242,6 +332,14 @@ function CanvasMinimapComponent({
 
   const zoomPercent = Math.round(viewport.zoom * 100)
 
+  // Union box of the drawing figures (canvas space) — merged into the
+  // fit-to-content so figures are fitted along with the panels.
+  const figuresBounds = useMemo(() => {
+    const box = unionBox(figures)
+    if (!box) return undefined
+    return { minX: box.x, minY: box.y, maxX: box.x + box.width, maxY: box.y + box.height }
+  }, [figures])
+
   // ── Follow the viewport during a gesture, imperatively ──
   // The canvas doesn't write the viewport to the store while the user is
   // panning/zooming (see InfiniteCanvas), so the minimap can't re-render its
@@ -274,7 +372,7 @@ function CanvasMinimapComponent({
     return subscribeLiveViewport(applyLiveViewport)
   }, [containerWidth, containerHeight, collapsed])
 
-  if (panels.length === 0) return null
+  if (panels.length === 0 && figures.length === 0) return null
 
   return (
     <div
@@ -322,6 +420,7 @@ function CanvasMinimapComponent({
             <MinimapContent
               panels={panels}
               edges={edges}
+              figures={figures}
               bounds={bounds}
               scale={scale}
               taskStatusMap={taskStatusMap}
@@ -380,8 +479,8 @@ function CanvasMinimapComponent({
 
             <button
               className="h-5 w-5 rounded flex items-center justify-center text-muted-foreground/40 hover:text-muted-foreground hover:bg-white/5 transition-colors"
-              onClick={(e) => { e.stopPropagation(); fitToContent(containerWidth, containerHeight) }}
-              title="Fit all panels"
+              onClick={(e) => { e.stopPropagation(); fitToContent(containerWidth, containerHeight, figuresBounds) }}
+              title="Fit all content"
             >
               <Maximize2 className="h-3 w-3" />
             </button>
