@@ -451,6 +451,67 @@ describe('DrawingLayer', () => {
     expect(useDrawingStore.getState().objects[0]).toMatchObject({ x: 10, y: 10, text: 'Hi' })
   })
 
+  it('clicking a different figure commits the text edit and selects the new figure', () => {
+    const idText = useDrawingStore.getState().addObject({
+      type: 'text',
+      x: 10,
+      y: 10,
+      width: 200,
+      height: 60,
+      stroke: '#1e1e1e',
+      strokeWidth: 2,
+      fill: null,
+      opacity: 1,
+      text: 'Hello',
+      fontSize: 18,
+      fontFamily: 'sans',
+      fontWeight: 400,
+      textAlign: 'left',
+    })
+    const idRect = useDrawingStore.getState().addObject(toNewFigure(makeRect({ id: 'figure-2-2', x: 300, y: 300 })))
+    useDrawingStore.getState().setEditingTextId(idText)
+    const { container } = render(<DrawingLayer />)
+    const figureRect = container.querySelector(`[data-figure-id="${idRect}"]`) as Element
+
+    fireEvent.mouseDown(figureRect, { button: 0, clientX: 350, clientY: 350 })
+
+    // The edit is committed (text saved, editing ended) and the clicked
+    // figure is selected.
+    expect(useDrawingStore.getState().editingTextId).toBeNull()
+    expect(useDrawingStore.getState().objects.find((o) => o.id === idText)).toMatchObject({
+      text: 'Hello',
+    })
+    expect(useDrawingStore.getState().selectedIds).toContain(idRect)
+  })
+
+  it('clicking outside the edited figure (canvas background) commits the text', () => {
+    const id = useDrawingStore.getState().addObject({
+      type: 'text',
+      x: 10,
+      y: 10,
+      width: 200,
+      height: 60,
+      stroke: '#1e1e1e',
+      strokeWidth: 2,
+      fill: null,
+      opacity: 1,
+      text: 'Note',
+      fontSize: 18,
+      fontFamily: 'sans',
+      fontWeight: 400,
+      textAlign: 'left',
+    })
+    useDrawingStore.getState().setEditingTextId(id)
+    const { container } = render(<DrawingLayer />)
+
+    // The render container stands in for the canvas background — a mousedown
+    // whose target is outside every figure must end the edit.
+    fireEvent.mouseDown(container, { button: 0, clientX: 500, clientY: 500 })
+
+    expect(useDrawingStore.getState().editingTextId).toBeNull()
+    expect(useDrawingStore.getState().objects[0]).toMatchObject({ text: 'Note' })
+  })
+
   it('removes a text figure committed with empty text', () => {
     const id = useDrawingStore.getState().addObject({
       type: 'text',

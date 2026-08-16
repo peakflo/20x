@@ -80,6 +80,27 @@ export function DrawingLayer() {
     }
   }, [])
 
+  // ── Commit text editing when the user clicks outside the edited figure ──
+  // Figures are non-focusable divs (and the canvas preventDefaults its
+  // mousedowns), so the browser never blurs the contentEditable on its own —
+  // clicking another figure, the background, a panel or the minimap would
+  // otherwise leave the text in editing mode. A capture-phase window listener
+  // commits the edit (blur → onBlur → onCommitText) before the canvas' own
+  // mousedown handlers run. Clicks inside the edited figure (caret placement)
+  // and focus on non-figure elements (terminals, inputs) are left alone.
+  useEffect(() => {
+    const handleMouseDown = (e: MouseEvent) => {
+      const editingId = useDrawingStore.getState().editingTextId
+      if (!editingId) return
+      const target = e.target as HTMLElement | null
+      if (target?.closest?.(`[data-figure-id="${editingId}"]`)) return
+      const el = document.activeElement
+      if (el instanceof HTMLElement && el.closest?.('[data-figure-id]')) el.blur()
+    }
+    window.addEventListener('mousedown', handleMouseDown, true)
+    return () => window.removeEventListener('mousedown', handleMouseDown, true)
+  }, [])
+
   const selectMode = activeTool === 'select'
 
   /** Screen → canvas-space conversion via the layer's own (transformed) rect. */
