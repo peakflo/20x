@@ -98,6 +98,43 @@ describe('canvas-store', () => {
       const { viewport } = useCanvasStore.getState()
       expect(viewport.zoom).toBeGreaterThan(1)
     })
+
+    it('fitToContent fits the passed content bounds when there are no panels', () => {
+      useCanvasStore.getState().fitToContent(800, 600, {
+        minX: 1000,
+        minY: 1000,
+        maxX: 1100,
+        maxY: 1060,
+      })
+      const { viewport } = useCanvasStore.getState()
+      // Content 100×60 + 2×60 padding = 220×180 → fits at 100% (capped at 1x)
+      expect(viewport.zoom).toBe(1)
+      // Content center (1050, 1030) centered in the 800×600 container
+      expect(viewport.x).toBe(400 - 1050)
+      expect(viewport.y).toBe(300 - 1030)
+    })
+
+    it('fitToContent merges content bounds with panels', () => {
+      useCanvasStore.getState().addPanel({
+        type: 'task',
+        title: 'Test Task',
+        x: 0,
+        y: 0,
+        width: 100,
+        height: 100,
+      })
+      useCanvasStore.getState().fitToContent(800, 600, {
+        minX: 1000,
+        minY: 0,
+        maxX: 1100,
+        maxY: 100,
+      })
+      const { viewport } = useCanvasStore.getState()
+      // Union of panel (0..100) and content (1000..1100) = 0..1100 wide
+      // Content center x = 550
+      expect(viewport.x).toBeCloseTo(400 - 550 * viewport.zoom)
+      expect(viewport.y).toBeCloseTo(300 - 50 * viewport.zoom)
+    })
   })
 
   // ── Panels ────────────────────────────────────────────────
