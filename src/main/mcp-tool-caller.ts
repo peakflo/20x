@@ -1,6 +1,11 @@
 import { spawn } from 'child_process'
 import { guardChildStreams, writeToChildStdin } from './child-stream-guards'
 import type { McpServerRecord } from './database'
+import {
+  FULL_ACCESS_SCOPE,
+  callToolForScope,
+  type TaskApiInvoke
+} from './mcp-servers/task-management-core'
 import { getTaskApiPort } from './task-api-server'
 
 export interface McpToolCallResult {
@@ -12,9 +17,21 @@ export interface McpToolCallResult {
 export class McpToolCaller {
   private sessions = new Map<string, LocalMcpSession>()
   private oauthManager?: import('./oauth/oauth-manager').OAuthManager
+  private taskManagementInvoke?: TaskApiInvoke
 
   setOAuthManager(manager: import('./oauth/oauth-manager').OAuthManager): void {
     this.oauthManager = manager
+  }
+
+  /**
+   * Lets task-management tool calls run in this process.
+   *
+   * Without this the caller spawns a task-management-mcp.js child, keeps it for
+   * the whole app lifetime, and that child only forwards calls back to the Task
+   * API server in this same process.
+   */
+  setTaskManagementInvoker(invoke: TaskApiInvoke): void {
+    this.taskManagementInvoke = invoke
   }
 
   async callTool(
@@ -23,6 +40,11 @@ export class McpToolCaller {
     toolArgs: Record<string, unknown> = {}
   ): Promise<McpToolCallResult> {
     console.log('[mcp] callTool:', toolName, '| server:', server.name, '| type:', server.type)
+
+    if (server.name === 'task-management' && this.taskManagementInvoke) {
+      return this.callTaskManagementTool(toolName, toolArgs, this.taskManagementInvoke)
+    }
+
     const result = server.type === 'remote'
       ? await this.callRemoteTool(server, toolName, toolArgs)
       : await this.callLocalTool(server, toolName, toolArgs)
@@ -48,6 +70,25 @@ export class McpToolCaller {
     for (const [id, session] of this.sessions) {
       try { session.proc.kill('SIGTERM') } catch {}
       this.sessions.delete(id)
+    }
+  }
+
+  /** Runs one task-management tool in this process, with full access. */
+  private async callTaskManagementTool(
+    toolName: string,
+    toolArgs: Record<string, unknown>,
+    invoke: TaskApiInvoke
+  ): Promise<McpToolCallResult> {
+    const result = await callToolForScope(toolName, toolArgs, FULL_ACCESS_SCOPE, invoke)
+    const text = result.content[0]?.text ?? ''
+    if (result.isError) {
+      return { success: false, error: text }
+    }
+    // Callers expect the parsed payload; the MCP content wrapper carries JSON text.
+    try {
+      return { success: true, result: JSON.parse(text) }
+    } catch {
+      return { success: true, result: text }
     }
   }
 

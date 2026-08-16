@@ -17,6 +17,7 @@ import { CodexAppServerAdapter } from './adapters/codex-app-server-adapter'
 import type { CodingAgentAdapter, SessionConfig, MessagePart, SessionMessage, McpServerConfig } from './adapters/coding-agent-adapter'
 import { SessionStatusType, MessagePartType, MessageRole } from './adapters/coding-agent-adapter'
 import { getTaskApiPort, waitForTaskApiServer } from './task-api-server'
+import { buildTaskMcpUrl } from './task-mcp-endpoint'
 import { guardChildStreams, writeToChildStdin } from './child-stream-guards'
 import { randomUUID } from 'crypto'
 import { registerSecretSession, unregisterSecretSession, getSecretBrokerPort, writeSecretShellWrapper } from './secret-broker'
@@ -185,6 +186,16 @@ interface MessageAttachmentRef {
   filename: string
   size: number
   mime_type: string
+}
+
+/**
+ * One MCP server as the session documentation describes it.
+ * `injected` is the config the session really received, when it is known.
+ */
+interface DocumentedMcpServer {
+  server: McpServerRecord
+  enabledTools?: string[]
+  injected?: McpServerConfig
 }
 
 export class AgentManager extends EventEmitter {
@@ -697,28 +708,17 @@ export class AgentManager extends EventEmitter {
       const mcpServer = this.db.getMcpServer(serverId)
       if (!mcpServer) continue
 
-      if (mcpServer.type === 'local') {
-        // Inject TASK_API_URL for the task-management MCP server
-        let env = { ...mcpServer.environment }
-        if (mcpServer.name === 'task-management') {
-          const apiPort = getTaskApiPort()
-          if (apiPort) {
-            env = { ...env, TASK_API_URL: `http://127.0.0.1:${apiPort}` }
-          } else {
-            console.warn(`[AgentManager] buildMcpServersForAdapter - task API port is null for task-management server`)
-          }
-          // Inject task scope for subtask agents (restricts access to parent + siblings only)
-          if (opts?.taskScope) {
-            env = { ...env, TASK_SCOPE_PARENT_ID: opts.taskScope.parentTaskId, TASK_SCOPE_TASK_ID: opts.taskScope.taskId }
-          }
-          if (opts?.artifactTaskId) env = { ...env, TASK_ARTIFACT_SCOPE_ID: opts.artifactTaskId }
-        }
-
+      if (mcpServer.name === 'task-management') {
+        // Served in process over HTTP, so no child process is spawned. The scope
+        // travels in the URL, which keeps the config identical across resumes.
+        const taskManagement = this.buildTaskManagementMcpConfig(opts)
+        if (taskManagement) result[mcpServer.name] = taskManagement
+      } else if (mcpServer.type === 'local') {
         result[mcpServer.name] = {
           type: 'stdio',
           command: mcpServer.command,
           args: mcpServer.args,
-          env
+          env: { ...mcpServer.environment }
         }
       } else if (mcpServer.type === 'remote') {
         // Inject OAuth Bearer token if the server has one
@@ -766,32 +766,38 @@ export class AgentManager extends EventEmitter {
 
     // Always include task-management for mastermind/triage sessions
     if (opts?.ensureTaskManagement && !result['task-management']) {
-      const allServers = this.db.getMcpServers()
-      const tmServer = allServers.find(s => s.name === 'task-management')
-      if (tmServer && tmServer.type === 'local') {
-        const apiPort = getTaskApiPort()
-        if (!apiPort) {
-          console.warn('[AgentManager] buildMcpServersForAdapter - task API port is null! MCP server may fail to start')
-        }
-        const env: Record<string, string> = { ...tmServer.environment, ...(apiPort ? { TASK_API_URL: `http://127.0.0.1:${apiPort}` } : {}) }
-        if (opts?.taskScope) {
-          env.TASK_SCOPE_PARENT_ID = opts.taskScope.parentTaskId
-          env.TASK_SCOPE_TASK_ID = opts.taskScope.taskId
-        }
-        if (opts?.artifactTaskId) env.TASK_ARTIFACT_SCOPE_ID = opts.artifactTaskId
-        result['task-management'] = {
-          type: 'stdio',
-          command: tmServer.command,
-          args: tmServer.args,
-          env
-        }
-        // force-included task-management MCP
-      } else {
-        console.warn(`[AgentManager] buildMcpServersForAdapter - task-management server not found in DB`)
-      }
+      const taskManagement = this.buildTaskManagementMcpConfig(opts)
+      if (taskManagement) result['task-management'] = taskManagement
     }
 
     return result
+  }
+
+  /**
+   * Config for the task-management MCP server.
+   *
+   * The server runs inside this process, on the Task API server, and it is
+   * reached over HTTP. Nothing is spawned, so there is no command, no
+   * TASK_API_URL to inject into a child environment, and no process to leak. The
+   * scope is part of the URL, which means every call for the same session builds
+   * the same config, including after a resume.
+   */
+  private buildTaskManagementMcpConfig(
+    opts?: { taskScope?: { taskId: string; parentTaskId: string }; artifactTaskId?: string }
+  ): McpServerConfig | null {
+    const apiPort = getTaskApiPort()
+    if (!apiPort) {
+      console.warn('[AgentManager] buildTaskManagementMcpConfig - task API port is null; task-management tools unavailable')
+      return null
+    }
+    return {
+      type: 'http',
+      url: buildTaskMcpUrl(apiPort, {
+        taskId: opts?.taskScope?.taskId,
+        parentTaskId: opts?.taskScope?.parentTaskId,
+        artifactTaskId: opts?.artifactTaskId
+      })
+    }
   }
 
   private async buildSessionConfig(agentId: string, taskId: string, workspaceDir?: string): Promise<SessionConfig> {
@@ -1086,7 +1092,7 @@ export class AgentManager extends EventEmitter {
     taskId: string,
     agentId: string,
     workspaceDir: string,
-    injectedMcpServerNames?: string[]
+    injectedMcpServers?: Record<string, McpServerConfig>
   ): Promise<void> {
     try {
       const task = this.db.getTask(taskId)
@@ -1121,7 +1127,7 @@ export class AgentManager extends EventEmitter {
       }
 
       // Generate AGENTS.md and CLAUDE.md with skill directory
-      await this.writeAgentsDocumentation(workspaceDir, skills, task?.repos || [], agentId, injectedMcpServerNames)
+      await this.writeAgentsDocumentation(workspaceDir, skills, task?.repos || [], agentId, injectedMcpServers)
     } catch (error) {
       console.error('[AgentManager] Error writing skill files:', error)
     }
@@ -1136,18 +1142,18 @@ export class AgentManager extends EventEmitter {
     skills: SkillRecord[],
     repos: string[],
     agentId?: string,
-    injectedMcpServerNames?: string[]
+    injectedMcpServers?: Record<string, McpServerConfig>
   ): Promise<void> {
     try {
       // Sort skills by confidence (high to low)
       const sortedSkills = [...skills].sort((a, b) => b.confidence - a.confidence)
 
       // Generate AGENTS.md — write to workspace root (async to avoid blocking)
-      const agentsMd = this.generateAgentsMd(sortedSkills, repos, workspaceDir, agentId, injectedMcpServerNames)
+      const agentsMd = this.generateAgentsMd(sortedSkills, repos, workspaceDir, agentId, injectedMcpServers)
       await writeFile(join(workspaceDir, 'AGENTS.md'), agentsMd, 'utf-8')
 
       // Generate CLAUDE.md — write to workspace root
-      const claudeMd = this.generateClaudeMd(sortedSkills, repos, workspaceDir, agentId, injectedMcpServerNames)
+      const claudeMd = this.generateClaudeMd(sortedSkills, repos, workspaceDir, agentId, injectedMcpServers)
       await writeFile(join(workspaceDir, 'CLAUDE.md'), claudeMd, 'utf-8')
 
       console.log('[AgentManager] Generated AGENTS.md and CLAUDE.md in workspace root')
@@ -1187,13 +1193,13 @@ export class AgentManager extends EventEmitter {
    */
   private resolveDocumentedMcpServers(
     agentId: string | undefined,
-    injectedServerNames?: string[]
-  ): Array<{ server: McpServerRecord; enabledTools?: string[] }> {
+    injectedServers?: Record<string, McpServerConfig>
+  ): DocumentedMcpServer[] {
     if (!agentId) return []
     const agent = this.db.getAgent(agentId)
     const entries = agent?.config?.mcp_servers || []
 
-    const configured = new Map<string, { server: McpServerRecord; enabledTools?: string[] }>()
+    const configured = new Map<string, DocumentedMcpServer>()
     for (const entry of entries) {
       const serverId = typeof entry === 'string' ? entry : (entry as AgentMcpServerEntry).serverId
       const enabledTools = typeof entry === 'string' ? undefined : (entry as AgentMcpServerEntry).enabledTools
@@ -1202,21 +1208,42 @@ export class AgentManager extends EventEmitter {
       configured.set(server.name, { server, enabledTools })
     }
 
-    if (!injectedServerNames) return [...configured.values()]
+    if (!injectedServers) return [...configured.values()]
 
-    const documented: Array<{ server: McpServerRecord; enabledTools?: string[] }> = []
-    for (const name of injectedServerNames) {
+    const documented: DocumentedMcpServer[] = []
+    for (const [name, injected] of Object.entries(injectedServers)) {
       const fromConfig = configured.get(name)
       if (fromConfig) {
-        documented.push(fromConfig)
+        documented.push({ ...fromConfig, injected })
         continue
       }
       // Force-added server (task-management): present in the session but absent
       // from the agent configuration, so it must be looked up by name.
       const server = this.db.getMcpServers().find(s => s.name === name)
-      if (server) documented.push({ server })
+      if (server) documented.push({ server, injected })
     }
     return documented
+  }
+
+  /**
+   * How the session reaches a server, as one line of documentation.
+   *
+   * It reads the config the session really received, because the stored record
+   * can disagree with it. task-management is the case that matters: the record
+   * still describes a command, but sessions now reach it over HTTP in this
+   * process, and no command runs at all.
+   */
+  private static describeMcpTransport(entry: DocumentedMcpServer): { type: string; detail: string } {
+    const injected = entry.injected
+    if (injected?.type === 'http' || injected?.type === 'sse') {
+      return { type: 'Local (HTTP, in-process)', detail: `**Endpoint:** \`${injected.url}\`` }
+    }
+    if (injected?.type === 'stdio') {
+      return { type: 'Local (stdio)', detail: `**Command:** \`${injected.command} ${(injected.args || []).join(' ')}\`` }
+    }
+    return entry.server.type === 'local'
+      ? { type: 'Local (stdio)', detail: `**Command:** \`${entry.server.command} ${entry.server.args.join(' ')}\`` }
+      : { type: 'Remote (HTTP)', detail: `**URL:** \`${entry.server.url}\`` }
   }
 
   /**
@@ -1227,7 +1254,7 @@ export class AgentManager extends EventEmitter {
     repos: string[],
     workspaceDir: string,
     agentId?: string,
-    injectedMcpServerNames?: string[]
+    injectedMcpServers?: Record<string, McpServerConfig>
   ): string {
     const now = new Date().toISOString()
 
@@ -1237,20 +1264,17 @@ export class AgentManager extends EventEmitter {
 
     // Add MCP Servers section
     {
-      const documentedServers = this.resolveDocumentedMcpServers(agentId, injectedMcpServerNames)
+      const documentedServers = this.resolveDocumentedMcpServers(agentId, injectedMcpServers)
       if (documentedServers.length > 0) {
         md += `## Available MCP Servers & Tools\n\n`
         md += `This session has access to the following Model Context Protocol (MCP) servers and their tools:\n\n`
 
-        for (const { server: mcpServer, enabledTools } of documentedServers) {
+        for (const entry of documentedServers) {
+          const { server: mcpServer, enabledTools } = entry
+          const transport = AgentManager.describeMcpTransport(entry)
           md += `### ${mcpServer.name}\n\n`
-          md += `**Type:** ${mcpServer.type === 'local' ? 'Local (stdio)' : 'Remote (HTTP)'}\n\n`
-
-          if (mcpServer.type === 'local') {
-            md += `**Command:** \`${mcpServer.command} ${mcpServer.args.join(' ')}\`\n\n`
-          } else {
-            md += `**URL:** \`${mcpServer.url}\`\n\n`
-          }
+          md += `**Type:** ${transport.type}\n\n`
+          md += `${transport.detail}\n\n`
 
           if (mcpServer.tools && mcpServer.tools.length > 0) {
             const toolsToShow = enabledTools
@@ -1347,7 +1371,7 @@ export class AgentManager extends EventEmitter {
     repos: string[],
     workspaceDir: string,
     agentId?: string,
-    injectedMcpServerNames?: string[]
+    injectedMcpServers?: Record<string, McpServerConfig>
   ): string {
     const now = new Date().toISOString()
 
@@ -1357,7 +1381,7 @@ export class AgentManager extends EventEmitter {
 
     // Add MCP Servers section
     {
-      const documentedServers = this.resolveDocumentedMcpServers(agentId, injectedMcpServerNames)
+      const documentedServers = this.resolveDocumentedMcpServers(agentId, injectedMcpServers)
       if (documentedServers.length > 0) {
         md += `## MCP Tools Available\n\n`
         md += `You have access to the following tools through Model Context Protocol (MCP) servers:\n\n`
@@ -1517,7 +1541,7 @@ export class AgentManager extends EventEmitter {
     // blocking the event loop). This runs AFTER the MCP map is built so the
     // documentation describes the servers this session really gets, instead of
     // the agent configuration, which both over- and under-reports them.
-    await this.writeSkillFiles(taskId, agentId, workspaceDir, Object.keys(mcpServers))
+    await this.writeSkillFiles(taskId, agentId, workspaceDir, mcpServers)
     await yieldEL()
 
     // Build session config
@@ -1599,8 +1623,10 @@ export class AgentManager extends EventEmitter {
         `[AgentManager] MCP servers NOT attached for session ${adapterSessionId}: ${attachFailures.join(', ')} — ` +
         `rewriting session documentation without them`
       )
-      const attachedNames = Object.keys(mcpServers).filter((name) => !attachFailures.includes(name))
-      await this.writeSkillFiles(taskId, agentId, workspaceDir, attachedNames)
+      const attached = Object.fromEntries(
+        Object.entries(mcpServers).filter(([name]) => !attachFailures.includes(name))
+      )
+      await this.writeSkillFiles(taskId, agentId, workspaceDir, attached)
     }
 
     analytics()?.record('provider.session.started', {

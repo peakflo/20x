@@ -1,12 +1,19 @@
 /**
- * Lightweight HTTP API server for the task-management MCP server.
+ * Lightweight HTTP API server for task-management tools.
  * Runs inside the Electron main process so it can use better-sqlite3.
- * The MCP server (spawned by OpenCode with system Node.js) calls these
- * endpoints via fetch, avoiding the native module version mismatch.
+ *
+ * It serves two things:
+ *   - one plain JSON route per tool, and
+ *   - the MCP endpoint at /mcp, which agent sessions connect to directly.
+ *
+ * Sessions no longer spawn a task-management-mcp.js child process. That child
+ * only forwarded calls to this same server, so it was pure overhead, and one
+ * copy per session stayed alive for as long as the agent CLI did.
  */
 import { createServer, type Server as HttpServer } from 'http'
 import { CronExpressionParser } from 'cron-parser'
 import type { DatabaseManager } from './database'
+import { TASK_MCP_PATH, handleTaskMcpRequest } from './task-mcp-endpoint'
 import { TaskStatus } from '../shared/constants'
 import { ArtifactType } from '../shared/artifacts'
 import type { AgentManager } from './agent-manager'
@@ -160,15 +167,25 @@ export function startTaskApiServer(db: DatabaseManager): Promise<number> {
 
   startupPromise = new Promise((resolve, reject) => {
     server = createServer((req, res) => {
-      // CORS not needed — local only
-      res.setHeader('Content-Type', 'application/json')
-
       let body = ''
       req.on('data', (chunk) => { body += chunk })
       req.on('end', async () => {
         try {
           const url = new URL(req.url || '/', `http://localhost`)
           const route = url.pathname
+
+          // The MCP endpoint speaks JSON-RPC and sets its own headers, so it
+          // must be served before anything below assumes a plain JSON route.
+          // It replaces the per-session task-management-mcp.js child process.
+          if (route === TASK_MCP_PATH) {
+            await handleTaskMcpRequest(req, res, url, body, (mcpRoute, params) =>
+              handleRoute(db, mcpRoute, params)
+            )
+            return
+          }
+
+          // CORS not needed — local only
+          res.setHeader('Content-Type', 'application/json')
 
           // Parse body if present
           let params: Record<string, unknown> = {}
@@ -184,6 +201,12 @@ export function startTaskApiServer(db: DatabaseManager): Promise<number> {
           res.end(resultStr)
         } catch (err: unknown) {
           console.error(`[TaskApiServer] ERROR ${req.url}:`, (err as Error).message)
+          // The MCP endpoint may have written its headers already; writing them
+          // twice throws and would take the whole server down.
+          if (res.headersSent) {
+            res.end()
+            return
+          }
           res.writeHead(500)
           res.end(JSON.stringify({ error: (err as Error).message }))
         }

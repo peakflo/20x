@@ -1,43 +1,46 @@
-import { Server } from '@modelcontextprotocol/sdk/server/index.js'
-import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
-import {
-  CallToolRequestSchema,
-  ListToolsRequestSchema
-} from '@modelcontextprotocol/sdk/types.js'
+/**
+ * Task-management MCP tool definitions and dispatch, with no transport and no
+ * environment of its own.
+ *
+ * Two callers share this module:
+ *   - the in-process HTTP endpoint on the Task API server, which calls
+ *     handleRoute directly (no child process starts), and
+ *   - the stdio entry point, kept for a direct `node task-management-mcp.js`
+ *     run, which forwards over HTTP.
+ *
+ * The scope decides which tools exist. A subtask agent gets the subtask set and
+ * reaches only its parent and its siblings. Any other session gets the full
+ * orchestration set. Artifact calls are always pinned to one task, so an agent
+ * cannot change the workpieces of another task.
+ */
 
-// Get API URL from environment (points to Electron main process HTTP server)
-const apiUrl = process.env.TASK_API_URL
-if (!apiUrl) {
-  throw new Error('TASK_API_URL environment variable is required')
+/** Which task a session may act on. All fields null means full access. */
+export type TaskMcpScope = {
+  parentTaskId: string | null
+  taskId: string | null
+  /** Task that owns any artifact this session writes. */
+  artifactTaskId: string | null
 }
 
-// Scope: if set, this MCP server is running for a subtask agent
-// and can only access the parent task + its subtasks
-const scopeParentId = process.env.TASK_SCOPE_PARENT_ID || null
-const scopeTaskId = process.env.TASK_SCOPE_TASK_ID || null
-const isScoped = !!(scopeParentId && scopeTaskId)
-// Artifact access is always pinned to the current task, even when the agent
-// retains broader task orchestration tools.
-const artifactScopeTaskId = process.env.TASK_ARTIFACT_SCOPE_ID || scopeTaskId
+/** Calls one Task API route. In process this is handleRoute; over stdio it is fetch. */
+export type TaskApiInvoke = (route: string, params: Record<string, unknown>) => Promise<unknown>
 
-async function callApi(route, params = {}) {
-  const url = `${apiUrl}${route}`
-  try {
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(params)
-    })
-    return res.json()
-  } catch (err) {
-    const cause = err.cause
-    const causeMsg = cause instanceof Error ? cause.message : (cause ? String(cause) : '')
-    return { error: `fetch failed: ${err.message}${causeMsg ? ` (cause: ${causeMsg})` : ''} | url=${url} | scope=${isScoped ? `task=${scopeTaskId} parent=${scopeParentId}` : 'full'}` }
-  }
+/** Result shape of an MCP tools/call. */
+export type ToolCallResult = {
+  content: Array<{ type: 'text'; text: string }>
+  isError?: boolean
+}
+
+export const FULL_ACCESS_SCOPE: TaskMcpScope = { parentTaskId: null, taskId: null, artifactTaskId: null }
+
+/** A session is scoped only when it has both a parent and its own task. */
+export function isScopedSession(scope: TaskMcpScope): boolean {
+  return !!(scope.parentTaskId && scope.taskId)
 }
 
 // ── Tool definitions ──────────────────────────────────────────
 
+// Tools available in BOTH modes
 const artifactTools = [
   {
     name: 'create_artifact',
@@ -108,7 +111,6 @@ const artifactTools = [
 
 const artifactToolNames = new Set(artifactTools.map((tool) => tool.name))
 
-// Tools available in BOTH modes
 const sharedTools = [
   ...artifactTools,
   {
@@ -661,54 +663,45 @@ const subtaskTools = [
   }
 ]
 
-// ── Initialize MCP server ─────────────────────────────────────
+// ── Scoped dispatch (subtask mode) ────────────────────────────
 
-const server = new Server(
-  { name: 'task-management', version: '1.0.0' },
-  { capabilities: { tools: {} } }
-)
-
-// Register tool list based on mode
-server.setRequestHandler(ListToolsRequestSchema, async () => ({
-  tools: isScoped
-    ? [...subtaskTools, ...sharedTools]
-    : [...mastermindTools, ...sharedTools]
-}))
-
-// ── Scoped route handlers (subtask mode) ──────────────────────
-
-async function handleScopedCall(name, args) {
+async function handleScopedCall(
+  name: string,
+  args: Record<string, unknown>,
+  scope: TaskMcpScope,
+  invoke: TaskApiInvoke
+): Promise<unknown> {
   switch (name) {
     case 'get_parent_task':
-      return callApi('/get_task', { task_id: scopeParentId })
+      return invoke('/get_task', { task_id: scope.parentTaskId })
 
     case 'get_own_task':
-      return callApi('/get_task', { task_id: scopeTaskId })
+      return invoke('/get_task', { task_id: scope.taskId })
 
     case 'list_sibling_subtasks':
-      return callApi('/list_subtasks', { parent_task_id: scopeParentId })
+      return invoke('/list_subtasks', { parent_task_id: scope.parentTaskId })
 
     case 'get_sibling_task': {
       // Verify the requested task is actually a sibling
-      const siblings = await callApi('/list_subtasks', { parent_task_id: scopeParentId })
+      const siblings = await invoke('/list_subtasks', { parent_task_id: scope.parentTaskId }) as Record<string, unknown>[]
       const siblingIds = Array.isArray(siblings) ? siblings.map((s) => s.id) : []
       if (!siblingIds.includes(args.task_id)) {
         return { error: 'Access denied: task is not a sibling subtask' }
       }
-      return callApi('/get_task', { task_id: args.task_id })
+      return invoke('/get_task', { task_id: args.task_id })
     }
 
     case 'update_own_task': {
       // Subtasks cannot self-complete or self-cancel — enforce ready_for_review ceiling
       const blockedStatuses = ['completed', 'cancelled']
-      if (args.status && blockedStatuses.includes(args.status)) {
+      if (args.status && blockedStatuses.includes(args.status as string)) {
         return { error: `Subtasks cannot set status to "${args.status}". Use "ready_for_review" when done.` }
       }
       // Normalize legacy status value
       if (args.status === 'in_progress') args.status = 'agent_working'
       // Normalize MCP-style attachments ({name, path, type}) to FileAttachmentRecord format
       if (Array.isArray(args.attachments)) {
-        args.attachments = args.attachments.map((a) => ({
+        args.attachments = (args.attachments as Record<string, unknown>[]).map((a) => ({
           id: a.id || crypto.randomUUID(),
           filename: a.name || a.filename || 'unknown',
           size: typeof a.size === 'number' ? a.size : 0,
@@ -717,22 +710,22 @@ async function handleScopedCall(name, args) {
           ...(a.path ? { workflo_path: a.path } : {})
         }))
       }
-      return callApi('/update_task', { ...args, task_id: scopeTaskId })
+      return invoke('/update_task', { ...args, task_id: scope.taskId })
     }
 
     case 'update_sibling_task': {
       // Verify the target is a sibling, and only allow description + attachments
-      const sibs = await callApi('/list_subtasks', { parent_task_id: scopeParentId })
+      const sibs = await invoke('/list_subtasks', { parent_task_id: scope.parentTaskId }) as Record<string, unknown>[]
       const sibIds = Array.isArray(sibs) ? sibs.map((s) => s.id) : []
       if (!sibIds.includes(args.task_id)) {
         return { error: 'Access denied: task is not a sibling subtask' }
       }
       // Only allow description and attachments updates on siblings
-      const allowed = { task_id: args.task_id }
+      const allowed: Record<string, unknown> = { task_id: args.task_id }
       if (args.description !== undefined) allowed.description = args.description
       if (args.attachments !== undefined) {
         // Normalize MCP-style attachments to FileAttachmentRecord format
-        allowed.attachments = args.attachments.map((a) => ({
+        allowed.attachments = (args.attachments as Record<string, unknown>[]).map((a) => ({
           id: a.id || crypto.randomUUID(),
           filename: a.name || a.filename || 'unknown',
           size: typeof a.size === 'number' ? a.size : 0,
@@ -741,32 +734,32 @@ async function handleScopedCall(name, args) {
           ...(a.path ? { workflo_path: a.path } : {})
         }))
       }
-      return callApi('/update_task', allowed)
+      return invoke('/update_task', allowed)
     }
 
     case 'create_sibling_subtask':
-      return callApi('/create_subtask', { ...args, parent_task_id: scopeParentId })
+      return invoke('/create_subtask', { ...args, parent_task_id: scope.parentTaskId })
 
     case 'start_sibling_subtask': {
-      const sibsForStart = await callApi('/list_subtasks', { parent_task_id: scopeParentId })
+      const sibsForStart = await invoke('/list_subtasks', { parent_task_id: scope.parentTaskId }) as Record<string, unknown>[]
       const sibIdsForStart = Array.isArray(sibsForStart) ? sibsForStart.map((s) => s.id) : []
       if (!sibIdsForStart.includes(args.task_id)) {
         return { error: 'Access denied: task is not a sibling subtask' }
       }
-      return callApi('/start_task', { task_id: args.task_id, prefer_subtasks: false })
+      return invoke('/start_task', { task_id: args.task_id, prefer_subtasks: false })
     }
 
     case 'wait_for_sibling_subtasks': {
       if (Array.isArray(args.task_ids) && args.task_ids.length > 0) {
-        const sibsForWait = await callApi('/list_subtasks', { parent_task_id: scopeParentId })
+        const sibsForWait = await invoke('/list_subtasks', { parent_task_id: scope.parentTaskId }) as Record<string, unknown>[]
         const sibIdsForWait = new Set(Array.isArray(sibsForWait) ? sibsForWait.map((s) => s.id) : [])
-        const invalidId = args.task_ids.find((id) => !sibIdsForWait.has(id))
+        const invalidId = (args.task_ids as unknown[]).find((id) => !sibIdsForWait.has(id))
         if (invalidId) {
           return { error: 'Access denied: one or more task_ids are not sibling subtasks' }
         }
       }
-      return callApi('/wait_for_subtasks', {
-        parent_task_id: scopeParentId,
+      return invoke('/wait_for_subtasks', {
+        parent_task_id: scope.parentTaskId,
         subtask_ids: args.task_ids,
         timeout_ms: args.timeout_ms,
         return_when: args.return_when,
@@ -776,58 +769,69 @@ async function handleScopedCall(name, args) {
 
     case 'get_sibling_transcript': {
       // Verify the requested task is actually a sibling
-      const sibsForTranscript = await callApi('/list_subtasks', { parent_task_id: scopeParentId })
+      const sibsForTranscript = await invoke('/list_subtasks', { parent_task_id: scope.parentTaskId }) as Record<string, unknown>[]
       const sibIdsForTranscript = Array.isArray(sibsForTranscript) ? sibsForTranscript.map((s) => s.id) : []
       if (!sibIdsForTranscript.includes(args.task_id)) {
         return { error: 'Access denied: task is not a sibling subtask' }
       }
-      return callApi('/get_session_transcript', { task_id: args.task_id })
+      return invoke('/get_session_transcript', { task_id: args.task_id })
     }
 
     // Shared tools pass through directly
     default:
-      return callApi(`/${name}`, args)
+      return invoke(`/${name}`, args)
   }
 }
 
-// ── Tool call handler ─────────────────────────────────────────
+/** The tools a session may see. This is the whole answer to "which tools to serve". */
+export function listToolsForScope(scope: TaskMcpScope) {
+  return isScopedSession(scope)
+    ? [...subtaskTools, ...sharedTools]
+    : [...mastermindTools, ...sharedTools]
+}
 
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
-  const { name, arguments: args } = request.params
-
+/**
+ * Runs one tool call for a scope.
+ * Returns an MCP tools/call result, and never throws.
+ */
+export async function callToolForScope(
+  name: string,
+  args: Record<string, unknown> | undefined,
+  scope: TaskMcpScope,
+  invoke: TaskApiInvoke
+): Promise<ToolCallResult> {
   try {
-    // Normalize legacy 'in_progress' status to 'agent_working' for any task update
-    const normalizedArgs = args ? { ...args } : {}
-    if (normalizedArgs.status === 'in_progress') normalizedArgs.status = 'agent_working'
-    if (artifactToolNames.has(name) && artifactScopeTaskId) normalizedArgs.task_id = artifactScopeTaskId
-
-    const result = isScoped
-      ? await handleScopedCall(name, normalizedArgs)
-      : await callApi(`/${name}`, normalizedArgs)
-
-    if (result?.error) {
+    // Serve only the tools this scope advertises.
+    //
+    // The scoped dispatch below ends in a pass-through for the shared tools. A
+    // client that asked for a tool which is not in its list, for example
+    // `update_task` instead of `update_own_task`, used to reach that
+    // pass-through and act on any task at all. The tool list is the boundary, so
+    // it must be enforced here and not only advertised.
+    if (!listToolsForScope(scope).some((tool) => tool.name === name)) {
       return {
-        content: [{ type: 'text', text: JSON.stringify(result) }],
+        content: [{ type: 'text', text: JSON.stringify({ error: `Unknown tool: ${name}` }) }],
         isError: true
       }
     }
 
-    return {
-      content: [{ type: 'text', text: JSON.stringify(result, null, 2) }]
+    // Normalize legacy 'in_progress' status to 'agent_working' for any task update
+    const normalizedArgs: Record<string, unknown> = args ? { ...args } : {}
+    if (normalizedArgs.status === 'in_progress') normalizedArgs.status = 'agent_working'
+    if (artifactToolNames.has(name) && scope.artifactTaskId) normalizedArgs.task_id = scope.artifactTaskId
+
+    const result = isScopedSession(scope)
+      ? await handleScopedCall(name, normalizedArgs, scope, invoke) as Record<string, unknown> | null
+      : await invoke(`/${name}`, normalizedArgs) as Record<string, unknown> | null
+
+    if (result?.error) {
+      return { content: [{ type: 'text', text: JSON.stringify(result) }], isError: true }
     }
-  } catch (error) {
+    return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] }
+  } catch (error: unknown) {
     return {
-      content: [{ type: 'text', text: JSON.stringify({ error: error.message }) }],
+      content: [{ type: 'text', text: JSON.stringify({ error: (error as Error).message }) }],
       isError: true
     }
   }
-})
-
-// Start server
-async function main() {
-  const transport = new StdioServerTransport()
-  await server.connect(transport)
-  console.error(`Task Management MCP server started${isScoped ? ` (scoped: task=${scopeTaskId}, parent=${scopeParentId})` : ' (full access)'}`)
 }
-
-main().catch(console.error)

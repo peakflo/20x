@@ -31,7 +31,7 @@ import { ClaudePluginManager } from './claude-plugin-manager'
 import { parseProcessTable, selectKillableMcpPids } from './mcp-process-cleanup'
 import { EnterpriseHeartbeat } from './enterprise-heartbeat'
 import { EnterpriseStateSync } from './enterprise-state-sync'
-import { setTaskApiAgentController, setTaskApiNotifier, setTaskApiUiState, setTaskAutomationTrigger, setTranscriptProvider, stopTaskApiServer } from './task-api-server'
+import { handleRoute, setTaskApiAgentController, setTaskApiNotifier, setTaskApiUiState, setTaskAutomationTrigger, setTranscriptProvider, stopTaskApiServer } from './task-api-server'
 import { startSecretBroker, stopSecretBroker, writeSecretShellWrapper } from './secret-broker'
 import { startMcpAuthProxy, stopMcpAuthProxy } from './mcp-auth-proxy'
 import { startMobileApiServer, stopMobileApiServer, broadcastToMobileClients, setMobileApiNotifier, setMobileApiTaskAutomationTrigger } from './mobile-api-server'
@@ -898,6 +898,9 @@ app.whenReady().then(async () => {
   agentManager.setManagers(githubManager, worktreeManager, gitlabManager ?? undefined)
 
   mcpToolCaller = new McpToolCaller()
+  // Run task-management tools in this process instead of spawning a child that
+  // would only forward them back here.
+  mcpToolCaller.setTaskManagementInvoker((route, params) => handleRoute(db!, route, params))
 
   oauthManager = new OAuthManager(db)
 
