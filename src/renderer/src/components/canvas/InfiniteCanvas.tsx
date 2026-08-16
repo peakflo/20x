@@ -10,6 +10,11 @@ import type { CanvasPanelData, Viewport } from '@/stores/canvas-store'
 import { getLiveViewport, setLiveViewport } from '@/stores/canvas-live-viewport'
 import { useUIStore } from '@/stores/ui-store'
 import { useTaskStore } from '@/stores/task-store'
+import { useDrawingStore } from '@/stores/drawing-store'
+import type { DrawingTool } from './drawing/types'
+import { DrawingLayer, pasteImageAt } from './drawing/DrawingLayer'
+import { DrawingToolbar } from './drawing/DrawingToolbar'
+import { DrawingProperties } from './drawing/DrawingProperties'
 import { CanvasPanel } from './CanvasPanel'
 import { CanvasConnections } from './CanvasConnections'
 import { CanvasContextMenu } from './CanvasContextMenu'
@@ -61,6 +66,17 @@ const GRID_SIZE = 40
  * store this long after the last wheel event.
  */
 const WHEEL_IDLE_MS = 150
+
+/** Drawing tool shortcuts (plain keypresses, guarded by isInputFocused). */
+const TOOL_SHORTCUTS: Record<string, DrawingTool> = {
+  KeyV: 'select',
+  KeyR: 'rectangle',
+  KeyO: 'ellipse',
+  KeyL: 'line',
+  KeyA: 'arrow',
+  KeyT: 'text',
+  KeyI: 'image',
+}
 const STATUS_HIGHLIGHT_MS = 5_000
 const STATUS_POPUP_EDGE_PAD = 28
 const STATUS_POPUP_TOP_SAFE = 70
@@ -217,10 +233,13 @@ export function InfiniteCanvas() {
   const focusPanel = useCanvasStore((s) => s.focusPanel)
   const addPanel = useCanvasStore((s) => s.addPanel)
   const loadCanvas = useCanvasStore((s) => s.loadCanvas)
+  const loadDrawings = useDrawingStore((s) => s.loadDrawings)
 
   // ── Load persisted canvas state on mount ────────────────
   useEffect(() => {
     if (!isLoaded) {
+      // Figures load in parallel with the canvas (same settings table).
+      void loadDrawings()
       loadCanvas().then(() => {
         // After loading, fit the viewport to show all panels
         const container = containerRef.current
@@ -233,7 +252,7 @@ export function InfiniteCanvas() {
         }
       })
     }
-  }, [isLoaded, loadCanvas, fitToContent])
+  }, [isLoaded, loadCanvas, fitToContent, loadDrawings])
 
   // Panning state
   const [isPanning, setIsPanning] = useState(false)
@@ -662,12 +681,25 @@ export function InfiniteCanvas() {
         }
       }
 
+      // A drawing tool is active: background mousedowns belong to the drawing
+      // layer (figure creation), not to panning. Space+drag and middle-button
+      // pan still take precedence. (Imperative read — same pattern as the
+      // connectingFromId check above.)
+      const { activeTool } = useDrawingStore.getState()
+      if (e.button === 0 && !spaceHeld && activeTool !== 'select') return
+
       const isMiddle = e.button === 1
       const isLeftOnCanvas =
         e.button === 0 &&
         (e.target === containerRef.current ||
           (e.target as HTMLElement).dataset?.canvasBg === 'true')
       const isSpacePan = e.button === 0 && spaceHeld
+
+      // Clicking empty canvas with the select tool drops the figure selection.
+      if (isLeftOnCanvas) {
+        const drawing = useDrawingStore.getState()
+        if (drawing.selectedIds.length > 0) drawing.clearSelection()
+      }
 
       if (isMiddle || isLeftOnCanvas || isSpacePan) {
         e.preventDefault()
@@ -740,9 +772,10 @@ export function InfiniteCanvas() {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       // Ignore shortcuts when typing in an input/textarea or xterm terminal
-      const tag = (e.target as HTMLElement)?.tagName?.toLowerCase()
-      const isXtermFocused = !!(e.target as HTMLElement)?.closest('.xterm')
-      const isInputFocused = tag === 'input' || tag === 'textarea' || (e.target as HTMLElement)?.isContentEditable || isXtermFocused
+      const target = e.target as Element | null
+      const tag = (target as HTMLElement | null)?.tagName?.toLowerCase()
+      const isXtermFocused = !!target?.closest?.('.xterm')
+      const isInputFocused = tag === 'input' || tag === 'textarea' || (target as HTMLElement | null)?.isContentEditable || isXtermFocused
 
       // Track Ctrl held state — shows panel index badges (Ctrl only, not Cmd)
       if (e.key === 'Control' && !e.repeat) {
@@ -814,14 +847,54 @@ export function InfiniteCanvas() {
         }
       }
 
-      // Escape: cancel connecting or close context menu
+      // Escape: cancel connecting, cancel figure creation, drop figure
+      // selection, or close context menu. (Text editing handles its own
+      // Escape while the contentEditable div is focused — isInputFocused.)
       if (e.code === 'Escape') {
         const { connectingFromId: cid } = useCanvasStore.getState()
         if (cid) {
           setConnectingFromId(null)
           setMouseCanvasPos(null)
         }
+        const drawing = useDrawingStore.getState()
+        if (drawing.liveObject) drawing.setLiveObject(null)
+        if (drawing.selectedIds.length > 0) drawing.clearSelection()
         setContextMenu(null)
+      }
+
+      // Delete/Backspace: remove selected figures.
+      if ((e.code === 'Delete' || e.code === 'Backspace') && !isInputFocused) {
+        const drawing = useDrawingStore.getState()
+        if (drawing.selectedIds.length > 0) {
+          e.preventDefault()
+          drawing.removeObjects(drawing.selectedIds)
+        }
+      }
+
+      // Ctrl/Cmd+V: paste an image from the clipboard at the viewport center
+      // (suppressed while typing or editing a text figure).
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.code === 'KeyV' && !isInputFocused) {
+        const drawing = useDrawingStore.getState()
+        if (drawing.editingTextId) return
+        e.preventDefault()
+        const container = containerRef.current
+        if (container) {
+          commitViewport()
+          const rect = container.getBoundingClientRect()
+          const vp = getLiveViewport()
+          const cx = (rect.width / 2 - vp.x) / vp.zoom
+          const cy = (rect.height / 2 - vp.y) / vp.zoom
+          void pasteImageAt(cx, cy)
+        }
+      }
+
+      // Drawing tool shortcuts: V/R/O/L/A/T/I
+      if (!isInputFocused && !e.ctrlKey && !e.metaKey && !e.altKey && !e.repeat) {
+        const tool = TOOL_SHORTCUTS[e.code]
+        if (tool) {
+          e.preventDefault()
+          useDrawingStore.getState().setTool(tool)
+        }
       }
     }
     const handleKeyUp = (e: KeyboardEvent) => {
@@ -895,6 +968,9 @@ export function InfiniteCanvas() {
 
           {/* Connection lines */}
           <CanvasConnections mouseCanvasPos={mouseCanvasPos} />
+
+          {/* Drawing layer — figures above edges, below panels */}
+          <DrawingLayer />
 
           {/* Render panels — off-viewport panels are frozen (content hidden) */}
           {panels.map((panel, index) => (
@@ -1029,6 +1105,10 @@ export function InfiniteCanvas() {
         containerWidth={containerSize.width}
         containerHeight={containerSize.height}
       />
+
+      {/* ── Drawing: toolbar (bottom-center) + selection properties (top-center) ── */}
+      <DrawingToolbar />
+      <DrawingProperties />
 
       {/* ── Empty state ── */}
       {panels.length === 0 && (

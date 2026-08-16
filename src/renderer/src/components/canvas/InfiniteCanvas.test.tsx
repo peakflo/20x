@@ -2,8 +2,17 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, screen, cleanup, fireEvent, waitFor, act } from '@testing-library/react'
 import { InfiniteCanvas } from './InfiniteCanvas'
 import { useCanvasStore } from '@/stores/canvas-store'
+import { useDrawingStore } from '@/stores/drawing-store'
+import { DEFAULT_TOOL_OPTIONS } from './drawing/types'
 import { TaskStatus } from '@/types'
 import type { WorkfloTask } from '@/types'
+
+// Mock only the clipboard paste (no real clipboard in happy-dom) — the
+// DrawingLayer component itself stays real.
+vi.mock('./drawing/DrawingLayer', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./drawing/DrawingLayer')>()
+  return { ...actual, pasteImageAt: vi.fn().mockResolvedValue(null) }
+})
 
 const taskStoreState = vi.hoisted(() => ({
   tasks: [] as WorkfloTask[],
@@ -103,6 +112,17 @@ describe('InfiniteCanvas', () => {
     taskStoreState.selectedTaskId = null
     taskStoreState.isLoading = false
     taskStoreState.error = null
+
+    useDrawingStore.setState({
+      objects: [],
+      nextZIndex: 1,
+      isLoaded: true,
+      activeTool: 'select',
+      toolOptions: { ...DEFAULT_TOOL_OPTIONS },
+      selectedIds: [],
+      editingTextId: null,
+      liveObject: null,
+    })
   })
 
   afterEach(cleanup)
@@ -480,5 +500,74 @@ describe('InfiniteCanvas', () => {
 
     expect(panel).toBeTruthy()
     expect(panel?.className).not.toContain('select-none')
+  })
+
+  describe('drawing integration', () => {
+    it('switches drawing tools with the V/R/O/L/A/T/I shortcuts', () => {
+      render(<InfiniteCanvas />)
+      fireEvent.keyDown(window, { code: 'KeyR' })
+      expect(useDrawingStore.getState().activeTool).toBe('rectangle')
+      fireEvent.keyDown(window, { code: 'KeyT' })
+      expect(useDrawingStore.getState().activeTool).toBe('text')
+      fireEvent.keyDown(window, { code: 'KeyV' })
+      expect(useDrawingStore.getState().activeTool).toBe('select')
+    })
+
+    it('ignores tool shortcuts while typing in an input', () => {
+      render(<InfiniteCanvas />)
+      const input = document.createElement('input')
+      document.body.appendChild(input)
+      input.focus()
+      fireEvent.keyDown(input, { code: 'KeyR' })
+      expect(useDrawingStore.getState().activeTool).toBe('select')
+      input.remove()
+    })
+
+    it('removes selected figures with Delete', () => {
+      const id = useDrawingStore
+        .getState()
+        .addObject({
+          type: 'rectangle',
+          x: 0,
+          y: 0,
+          width: 100,
+          height: 50,
+          stroke: '#1e1e1e',
+          strokeWidth: 2,
+          fill: null,
+          opacity: 1,
+        })
+      useDrawingStore.getState().select([id])
+      render(<InfiniteCanvas />)
+      fireEvent.keyDown(window, { code: 'Delete' })
+      expect(useDrawingStore.getState().objects).toHaveLength(0)
+    })
+
+    it('cancels an in-progress figure creation with Escape', () => {
+      useDrawingStore.getState().setLiveObject({
+        type: 'rectangle',
+        x: 0,
+        y: 0,
+        width: 10,
+        height: 10,
+        stroke: '#1e1e1e',
+        strokeWidth: 2,
+        fill: null,
+        opacity: 1,
+        id: 'live-preview',
+        zIndex: 0,
+      })
+      render(<InfiniteCanvas />)
+      fireEvent.keyDown(window, { code: 'Escape' })
+      expect(useDrawingStore.getState().liveObject).toBeNull()
+    })
+
+    it('pastes a clipboard image at the viewport center on Ctrl+V', async () => {
+      render(<InfiniteCanvas />)
+      fireEvent.keyDown(window, { code: 'KeyV', ctrlKey: true })
+      await act(async () => {})
+      const { pasteImageAt } = await import('./drawing/DrawingLayer')
+      expect(vi.mocked(pasteImageAt)).toHaveBeenCalledTimes(1)
+    })
   })
 })

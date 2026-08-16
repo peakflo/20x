@@ -1,0 +1,572 @@
+import { useCallback, useMemo, useRef } from 'react'
+import { useDrawingStore, type NewFigure } from '@/stores/drawing-store'
+import { useCanvasStore } from '@/stores/canvas-store'
+import { getLiveViewport } from '@/stores/canvas-live-viewport'
+import {
+  DEFAULT_FIGURE_SIZE,
+  MIN_FIGURE_SIZE,
+  type DrawingObject,
+  type DrawingTool,
+  type DrawingToolOptions,
+  type FigureDirection,
+} from './types'
+import {
+  arrowPath,
+  figureDirection,
+  lineEndpoints,
+  normalizeBox,
+  unionBox,
+  type Box,
+} from './figure-geometry'
+import { FigureShape } from './FigureShape'
+import { FigureText } from './FigureText'
+import { downscaleImageToDataUrl, readClipboardImage } from './image-paste'
+
+/**
+ * The drawing layer — figures (shapes, text, images) rendered inside the
+ * existing CSS-transformed canvas layer (docs/drawing.md §3).
+ *
+ * Follows the CanvasConnections pattern: a 0×0 absolute root with overflow
+ * visible, an SVG that is pointer-events-none at the root with
+ * pointer-events-auto interactive children. Pan/zoom scale everything for
+ * free — zero redraws, no DPR handling.
+ *
+ * Gestures (create/move/resize) follow the CanvasPanel imperative pattern:
+ * direct DOM writes inside rAF during the gesture, a single store commit on
+ * mouseup.
+ */
+export function DrawingLayer() {
+  const objects = useDrawingStore((s) => s.objects)
+  const selectedIds = useDrawingStore((s) => s.selectedIds)
+  const liveObject = useDrawingStore((s) => s.liveObject)
+  const activeTool = useDrawingStore((s) => s.activeTool)
+  const editingTextId = useDrawingStore((s) => s.editingTextId)
+  const zoom = useCanvasStore((s) => s.viewport.zoom)
+
+  const rootRef = useRef<HTMLDivElement>(null)
+  const captureRectRef = useRef<SVGRectElement>(null)
+  const selectionGroupRef = useRef<SVGGElement>(null)
+
+  const selectMode = activeTool === 'select'
+
+  /** Screen → canvas-space conversion via the layer's own (transformed) rect. */
+  const toCanvasPoint = useCallback((clientX: number, clientY: number) => {
+    const root = rootRef.current
+    if (!root) return { x: 0, y: 0 }
+    const rect = root.getBoundingClientRect()
+    const vp = getLiveViewport()
+    return {
+      x: (clientX - rect.left) / vp.zoom,
+      y: (clientY - rect.top) / vp.zoom,
+    }
+  }, [])
+
+  // ── Create gesture ────────────────────────────────────────
+  const startCreation = useCallback(
+    (e: React.MouseEvent) => {
+      const { activeTool, toolOptions, setLiveObject, addObject, setTool, setEditingTextId } =
+        useDrawingStore.getState()
+      const start = toCanvasPoint(e.clientX, e.clientY)
+
+      // Defensive: the capture rect is only hit-testable in tool mode.
+      if (activeTool === 'select') return
+
+      if (activeTool === 'text') {
+        // Click = default-size text figure, immediately in editing mode.
+        const size = DEFAULT_FIGURE_SIZE.text
+        const id = addObject({
+          type: 'text',
+          x: start.x - size.width / 2,
+          y: start.y - size.height / 2,
+          width: size.width,
+          height: size.height,
+          stroke: toolOptions.stroke,
+          strokeWidth: toolOptions.strokeWidth,
+          fill: null,
+          opacity: 1,
+          text: '',
+          fontSize: toolOptions.fontSize,
+          fontFamily: toolOptions.fontFamily,
+          fontWeight: toolOptions.fontWeight,
+          textAlign: 'left',
+        })
+        setTool('select')
+        setEditingTextId(id)
+        return
+      }
+
+      if (activeTool === 'image') {
+        void pasteImageAt(start.x, start.y)
+        return
+      }
+
+      // Shape drag creation: rAF preview via liveObject, single addObject on
+      // mouseup. Escape (or a tool switch) clears liveObject — that cancels.
+      let cancelled = false
+      let hasPublished = false
+      let rafId: number | null = null
+      let lastEvent: MouseEvent | null = null
+      let finalBox: Box | null = null
+      let finalDir: FigureDirection | null = null
+
+      const unsub = useDrawingStore.subscribe((s) => s.liveObject, (lo) => {
+        if (lo === null && hasPublished) cancelled = true
+      })
+
+      const publish = () => {
+        rafId = null
+        const ev = lastEvent
+        if (!ev || cancelled) return
+        const cur = toCanvasPoint(ev.clientX, ev.clientY)
+        finalBox = normalizeBox(start.x, start.y, cur.x, cur.y)
+        finalDir = figureDirection(start.x, start.y, cur.x, cur.y)
+        hasPublished = true
+        setLiveObject({ ...buildFigure(activeTool, finalBox, finalDir, toolOptions), id: 'live-preview', zIndex: 0 })
+      }
+
+      const handleMove = (ev: MouseEvent) => {
+        lastEvent = ev
+        if (rafId == null) rafId = requestAnimationFrame(publish)
+      }
+
+      const handleUp = () => {
+        window.removeEventListener('mousemove', handleMove)
+        window.removeEventListener('mouseup', handleUp)
+        unsub()
+        if (rafId != null) {
+          cancelAnimationFrame(rafId)
+          rafId = null
+        }
+        if (cancelled) {
+          setLiveObject(null)
+          return
+        }
+        if (lastEvent) publish()
+        setLiveObject(null)
+        const box = finalBox
+        const dir = finalDir
+        if (!box || !dir) return
+        // A click without a real drag is discarded for shapes (text/image use
+        // default sizes instead).
+        if (box.width < MIN_FIGURE_SIZE && box.height < MIN_FIGURE_SIZE) return
+        addObject(buildFigure(activeTool, box, dir, toolOptions))
+      }
+
+      window.addEventListener('mousemove', handleMove)
+      window.addEventListener('mouseup', handleUp)
+    },
+    [toCanvasPoint]
+  )
+
+  // ── Move gesture (select tool) ────────────────────────────
+  const startSelectMove = useCallback((e: React.MouseEvent, hitId: string) => {
+    const store = useDrawingStore.getState()
+    const { selectedIds } = store
+
+    let nextSelected: string[]
+    if (e.shiftKey) {
+      nextSelected = selectedIds.includes(hitId) ? selectedIds : [...selectedIds, hitId]
+      store.select(nextSelected)
+    } else if (!selectedIds.includes(hitId)) {
+      nextSelected = [hitId]
+      store.select(nextSelected)
+    } else {
+      nextSelected = selectedIds
+    }
+
+    const root = rootRef.current
+    if (!root) return
+    const items = nextSelected
+      .map((id) => {
+        const obj = useDrawingStore.getState().objects.find((o) => o.id === id)
+        const node = root.querySelector(`[data-figure-id="${id}"]`)
+        return obj && node ? { id, obj, node } : null
+      })
+      .filter((item): item is { id: string; obj: DrawingObject; node: Element } => item !== null)
+    if (items.length === 0) return
+
+    let rafId: number | null = null
+    let lastEvent: MouseEvent | null = null
+    let dx = 0
+    let dy = 0
+    const overlay = selectionGroupRef.current
+
+    const apply = () => {
+      rafId = null
+      const ev = lastEvent
+      if (!ev) return
+      const vp = getLiveViewport()
+      dx = (ev.clientX - e.clientX) / vp.zoom
+      dy = (ev.clientY - e.clientY) / vp.zoom
+      for (const item of items) {
+        if (item.node instanceof HTMLElement) {
+          item.node.style.transform = `translate(${dx}px, ${dy}px)`
+        } else {
+          item.node.setAttribute('transform', `translate(${dx}, ${dy})`)
+        }
+      }
+      if (overlay) overlay.setAttribute('transform', `translate(${dx}, ${dy})`)
+    }
+
+    const handleMove = (ev: MouseEvent) => {
+      lastEvent = ev
+      if (rafId == null) rafId = requestAnimationFrame(apply)
+    }
+
+    const handleUp = () => {
+      window.removeEventListener('mousemove', handleMove)
+      window.removeEventListener('mouseup', handleUp)
+      if (rafId != null) {
+        cancelAnimationFrame(rafId)
+        rafId = null
+      }
+      if (lastEvent) apply()
+      // Single store commit for the whole move.
+      if (dx !== 0 || dy !== 0) {
+        const { updateObject } = useDrawingStore.getState()
+        for (const item of items) {
+          updateObject(item.id, { x: item.obj.x + dx, y: item.obj.y + dy })
+        }
+      }
+      for (const item of items) {
+        if (item.node instanceof HTMLElement) item.node.style.transform = ''
+        else item.node.removeAttribute('transform')
+      }
+      if (overlay) overlay.removeAttribute('transform')
+    }
+
+    window.addEventListener('mousemove', handleMove)
+    window.addEventListener('mouseup', handleUp)
+  }, [])
+
+  // ── Resize gesture (single selection, bottom-right handle) ──
+  const startResize = useCallback(() => {
+    const { selectedIds, objects } = useDrawingStore.getState()
+    if (selectedIds.length !== 1) return
+    const id = selectedIds[0]
+    const obj = objects.find((o) => o.id === id)
+    const root = rootRef.current
+    const node = root?.querySelector(`[data-figure-id="${id}"]`)
+    if (!obj || !node) return
+
+    const origin = { x: obj.x, y: obj.y }
+    let rafId: number | null = null
+    let lastEvent: MouseEvent | null = null
+    let finalBox: Box = { x: obj.x, y: obj.y, width: obj.width, height: obj.height }
+    const overlay = selectionGroupRef.current
+    const outline = overlay?.querySelector('[data-figure-outline="true"]') as SVGRectElement | null
+    const handle = overlay?.querySelector('[data-figure-resize="true"]') as SVGRectElement | null
+    const handleSize = handle ? parseFloat(handle.getAttribute('width') ?? '10') : 10
+
+    const apply = () => {
+      rafId = null
+      const ev = lastEvent
+      if (!ev) return
+      const cur = toCanvasPoint(ev.clientX, ev.clientY)
+      const box = normalizeBox(origin.x, origin.y, cur.x, cur.y)
+      box.width = Math.max(MIN_FIGURE_SIZE, box.width)
+      box.height = Math.max(MIN_FIGURE_SIZE, box.height)
+      finalBox = box
+      applyBoxToDom(node, obj, box)
+      if (outline) {
+        outline.setAttribute('x', String(box.x))
+        outline.setAttribute('y', String(box.y))
+        outline.setAttribute('width', String(box.width))
+        outline.setAttribute('height', String(box.height))
+      }
+      if (handle) {
+        handle.setAttribute('x', String(box.x + box.width - handleSize / 2))
+        handle.setAttribute('y', String(box.y + box.height - handleSize / 2))
+      }
+    }
+
+    const handleMove = (ev: MouseEvent) => {
+      lastEvent = ev
+      if (rafId == null) rafId = requestAnimationFrame(apply)
+    }
+
+    const handleUp = () => {
+      window.removeEventListener('mousemove', handleMove)
+      window.removeEventListener('mouseup', handleUp)
+      if (rafId != null) {
+        cancelAnimationFrame(rafId)
+        rafId = null
+      }
+      if (lastEvent) apply()
+      if (finalBox.width !== obj.width || finalBox.height !== obj.height) {
+        useDrawingStore.getState().updateObject(id, finalBox)
+      }
+    }
+
+    window.addEventListener('mousemove', handleMove)
+    window.addEventListener('mouseup', handleUp)
+  }, [toCanvasPoint])
+
+  // ── Event delegation ──────────────────────────────────────
+  const handleLayerMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      if (e.button !== 0) return
+      const target = e.target as Element
+
+      // Creation: the full-area capture rect (only hit-testable in tool mode).
+      if (target === captureRectRef.current) {
+        e.preventDefault()
+        e.stopPropagation()
+        startCreation(e)
+        return
+      }
+
+      // Resize handle (select mode, single selection).
+      if (target.closest?.('[data-figure-resize="true"]')) {
+        e.preventDefault()
+        e.stopPropagation()
+        startResize()
+        return
+      }
+
+      // Figure hit (select mode).
+      const figureEl = target.closest?.('[data-figure-id]')
+      if (figureEl) {
+        const id = figureEl.getAttribute('data-figure-id') ?? ''
+        // Don't hijack caret clicks inside a text figure being edited.
+        if (useDrawingStore.getState().editingTextId === id) return
+        e.preventDefault()
+        e.stopPropagation()
+        startSelectMove(e, id)
+        return
+      }
+    },
+    [startCreation, startResize, startSelectMove]
+  )
+
+  const handleLayerDoubleClick = useCallback((e: React.MouseEvent) => {
+    const target = e.target as Element
+    const figureEl = target.closest?.('[data-figure-id]')
+    if (!figureEl) return
+    const id = figureEl.getAttribute('data-figure-id')
+    if (!id) return
+    const { objects, setEditingTextId } = useDrawingStore.getState()
+    const obj = objects.find((o) => o.id === id)
+    if (obj?.type === 'text') {
+      e.stopPropagation()
+      setEditingTextId(id)
+    }
+  }, [])
+
+  const handleCommitText = useCallback((id: string, text: string) => {
+    const { updateObject, setEditingTextId } = useDrawingStore.getState()
+    updateObject(id, { text })
+    setEditingTextId(null)
+  }, [])
+
+  // ── Render ────────────────────────────────────────────────
+  const sortedObjects = useMemo(
+    () => [...objects].sort((a, b) => a.zIndex - b.zIndex),
+    [objects]
+  )
+
+  const selectionBox = useMemo(() => {
+    if (selectedIds.length === 0) return null
+    const selected = objects.filter((o) => selectedIds.includes(o.id))
+    return selected.length > 0 ? unionBox(selected) : null
+  }, [objects, selectedIds])
+
+  const handleSize = 10 / zoom
+  const outlineStroke = 1.5 / zoom
+
+  return (
+    <div
+      ref={rootRef}
+      data-drawing-layer="true"
+      className="absolute inset-0"
+      style={{ overflow: 'visible', pointerEvents: 'none' }}
+      onMouseDown={handleLayerMouseDown}
+      onDoubleClick={handleLayerDoubleClick}
+    >
+      <svg className="absolute inset-0" style={{ overflow: 'visible', pointerEvents: 'none' }}>
+        {/* Shape/image figures, z-sorted */}
+        {sortedObjects.map((obj) =>
+          obj.type === 'text' ? null : <FigureShape key={obj.id} obj={obj} />
+        )}
+
+        {/* Selection overlay: dashed outline + bottom-right resize handle */}
+        {selectMode && selectionBox && (
+          <g ref={selectionGroupRef}>
+            <rect
+              data-figure-outline="true"
+              x={selectionBox.x}
+              y={selectionBox.y}
+              width={selectionBox.width}
+              height={selectionBox.height}
+              fill="none"
+              stroke="rgba(30,150,235,0.9)"
+              strokeWidth={outlineStroke}
+              strokeDasharray={`${6 / zoom} ${4 / zoom}`}
+            />
+            {selectedIds.length === 1 && (
+              <rect
+                data-figure-resize="true"
+                x={selectionBox.x + selectionBox.width - handleSize / 2}
+                y={selectionBox.y + selectionBox.height - handleSize / 2}
+                width={handleSize}
+                height={handleSize}
+                fill="var(--canvas-panel, #1e1e1e)"
+                stroke="rgba(30,150,235,0.9)"
+                strokeWidth={outlineStroke}
+                className="pointer-events-auto cursor-nwse-resize"
+              />
+            )}
+          </g>
+        )}
+
+        {/* Creation preview (liveObject while dragging a new figure) */}
+        {liveObject && <FigureShape obj={liveObject} />}
+
+        {/* Full-area capture rect — topmost of the SVG, active in tool mode */}
+        <rect
+          ref={captureRectRef}
+          data-drawing-capture="true"
+          x={-100_000}
+          y={-100_000}
+          width={200_000}
+          height={200_000}
+          fill="none"
+          pointerEvents={selectMode ? 'none' : 'all'}
+          style={{ cursor: 'crosshair' }}
+        />
+      </svg>
+
+      {/* Text figures — DOM divs above the SVG (contentEditable while editing) */}
+      {sortedObjects.map((obj) =>
+        obj.type === 'text' ? (
+          <FigureText
+            key={obj.id}
+            obj={obj}
+            isEditing={editingTextId === obj.id}
+            interactive={selectMode}
+            onCommitText={handleCommitText}
+          />
+        ) : null
+      )}
+    </div>
+  )
+}
+
+// ── Paste (Ctrl/Cmd+V in InfiniteCanvas, or a click with the image tool) ──
+
+/**
+ * Paste the clipboard image as a figure centered on canvas point (x, y).
+ * Returns the new figure id, or null when the clipboard holds no image.
+ */
+export async function pasteImageAt(x: number, y: number): Promise<string | null> {
+  const file = await readClipboardImage()
+  if (!file) return null
+  const img = await downscaleImageToDataUrl(file)
+  if (!img) return null
+  const { addObject } = useDrawingStore.getState()
+  return addObject({
+    type: 'image',
+    x: x - img.width / 2,
+    y: y - img.height / 2,
+    width: img.width,
+    height: img.height,
+    stroke: '#1e1e1e',
+    strokeWidth: 2,
+    fill: null,
+    opacity: 1,
+    src: img.src,
+  })
+}
+
+// ── Pure helpers ────────────────────────────────────────────
+
+/** Build a figure (minus id/zIndex) from a tool, a box and the tool options. */
+function buildFigure(
+  tool: Exclude<DrawingTool, 'select' | 'text' | 'image'>,
+  box: Box,
+  dir: FigureDirection,
+  options: DrawingToolOptions
+): NewFigure {
+  const base = {
+    x: box.x,
+    y: box.y,
+    width: box.width,
+    height: box.height,
+    stroke: options.stroke,
+    strokeWidth: options.strokeWidth,
+    fill: tool === 'rectangle' || tool === 'ellipse' ? options.fill : null,
+    opacity: 1,
+  }
+  if (tool === 'line' || tool === 'arrow') {
+    return { type: tool, direction: dir, ...base }
+  }
+  return { type: tool, ...base }
+}
+
+/**
+ * Imperatively resize one figure's DOM to `box` during a resize gesture
+ * (no React render — the store is committed once on mouseup).
+ */
+function applyBoxToDom(node: Element, obj: DrawingObject, box: Box) {
+  switch (obj.type) {
+    case 'rectangle': {
+      const rect = node.querySelector('rect')
+      if (rect) {
+        rect.setAttribute('x', String(box.x))
+        rect.setAttribute('y', String(box.y))
+        rect.setAttribute('width', String(box.width))
+        rect.setAttribute('height', String(box.height))
+      }
+      return
+    }
+    case 'ellipse': {
+      const el = node.querySelector('ellipse')
+      if (el) {
+        el.setAttribute('cx', String(box.x + box.width / 2))
+        el.setAttribute('cy', String(box.y + box.height / 2))
+        el.setAttribute('rx', String(box.width / 2))
+        el.setAttribute('ry', String(box.height / 2))
+      }
+      return
+    }
+    case 'line': {
+      const { from, to } = lineEndpoints(box, obj.direction)
+      for (const line of node.querySelectorAll('line')) {
+        line.setAttribute('x1', String(from.x))
+        line.setAttribute('y1', String(from.y))
+        line.setAttribute('x2', String(to.x))
+        line.setAttribute('y2', String(to.y))
+      }
+      return
+    }
+    case 'arrow': {
+      const { from, to } = lineEndpoints(box, obj.direction)
+      const geo = arrowPath(from, to, obj.strokeWidth)
+      node.querySelector('path')?.setAttribute('d', geo.shaftD)
+      node.querySelector('polygon')?.setAttribute('points', geo.headPoints)
+      for (const line of node.querySelectorAll('line')) {
+        line.setAttribute('x1', String(from.x))
+        line.setAttribute('y1', String(from.y))
+        line.setAttribute('x2', String(to.x))
+        line.setAttribute('y2', String(to.y))
+      }
+      return
+    }
+    case 'image': {
+      const img = node.querySelector('image')
+      if (img) {
+        img.setAttribute('x', String(box.x))
+        img.setAttribute('y', String(box.y))
+        img.setAttribute('width', String(box.width))
+        img.setAttribute('height', String(box.height))
+      }
+      return
+    }
+    case 'text': {
+      const div = node as HTMLElement
+      div.style.width = `${box.width}px`
+      div.style.height = `${box.height}px`
+      return
+    }
+  }
+}
