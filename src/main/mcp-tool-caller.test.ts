@@ -28,6 +28,44 @@ describe('McpToolCaller', () => {
     caller = new McpToolCaller()
   })
 
+  describe('task-management tools in process', () => {
+    it('answers from the injected invoker and spawns nothing', async () => {
+      const invoke = vi.fn(async () => ([{ id: 'task-1', title: 'Real task' }]))
+      caller.setTaskManagementInvoker(invoke)
+
+      const result = await caller.callTool(
+        makeServer({ name: 'task-management', command: '/should/not/run' }),
+        'list_tasks',
+        { status: 'not_started' }
+      )
+
+      expect(result.success).toBe(true)
+      expect(result.result).toEqual([{ id: 'task-1', title: 'Real task' }])
+      expect(invoke).toHaveBeenCalledWith('/list_tasks', { status: 'not_started' })
+    })
+
+    it('reports a tool that does not exist as a failure', async () => {
+      caller.setTaskManagementInvoker(async () => ({ ok: true }))
+
+      const result = await caller.callTool(
+        makeServer({ name: 'task-management' }),
+        'no_such_tool',
+        {}
+      )
+
+      expect(result.success).toBe(false)
+      expect(result.error).toContain('no_such_tool')
+    })
+
+    it('falls back to the stdio path when no invoker is set', async () => {
+      // Guards the ordering in callTool: without an invoker it must not swallow
+      // the call, or a server configured before wiring would answer nothing.
+      const server = makeServer({ name: 'task-management', type: 'remote', url: '' })
+      const result = await caller.callTool(server, 'list_tasks', {})
+      expect(result.success).toBe(false)
+    })
+  })
+
   describe('callRemoteTool', () => {
     it('returns error when no URL', async () => {
       const server = makeServer({ type: 'remote', url: '' })

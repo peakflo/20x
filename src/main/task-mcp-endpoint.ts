@@ -32,7 +32,7 @@ import {
   listToolsForScope,
   type TaskApiInvoke,
   type TaskMcpScope
-} from './mcp-servers/task-management-core.js'
+} from './mcp-servers/task-management-core'
 
 /** Path that serves MCP on the Task API server. */
 export const TASK_MCP_PATH = '/mcp'

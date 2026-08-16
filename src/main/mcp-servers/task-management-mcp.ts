@@ -20,7 +20,7 @@ import {
   isScopedSession,
   listToolsForScope,
   type TaskMcpScope
-} from './task-management-core.js'
+} from './task-management-core'
 
 // Get API URL from environment (points to Electron main process HTTP server)
 const apiUrl = process.env.TASK_API_URL
