@@ -83,6 +83,33 @@ describe('DrawingLayer', () => {
     expect(container.querySelector('[data-figure-id]')).toBeNull()
   })
 
+  it('gives the capture surface explicit pointer-events (root is pointer-events:none)', () => {
+    useDrawingStore.getState().setTool('rectangle')
+    const { container } = render(<DrawingLayer />)
+    const capture = container.querySelector('[data-drawing-capture="true"]') as HTMLElement
+    expect(capture).toBeTruthy()
+    // The layer root sets pointer-events:none and the property is inherited:
+    // without an explicit override the capture surface is invisible to real
+    // browser hit-testing and no creation gesture can ever start.
+    expect(capture.style.pointerEvents).toBe('auto')
+  })
+
+  it('lets space+drag through the capture surface (pan gesture)', () => {
+    useDrawingStore.getState().setTool('rectangle')
+    const { container } = render(<DrawingLayer />)
+    const capture = container.querySelector('[data-drawing-capture="true"]') as Element
+
+    fireEvent.keyDown(window, { code: 'Space' })
+    fireEvent.mouseDown(capture, { button: 0, clientX: 100, clientY: 100 })
+    fireEvent.mouseMove(window, { clientX: 150, clientY: 150 })
+    fireEvent.mouseUp(window)
+    fireEvent.keyUp(window, { code: 'Space' })
+
+    // Space+drag is a pan, not a creation: nothing is added.
+    expect(useDrawingStore.getState().objects).toHaveLength(0)
+    expect(useDrawingStore.getState().liveObject).toBeNull()
+  })
+
   it('renders text figures as DOM divs with the figure text', () => {
     useDrawingStore.getState().addObject({
       type: 'text',

@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useRef } from 'react'
 import { useDrawingStore, type NewFigure } from '@/stores/drawing-store'
 import { useCanvasStore } from '@/stores/canvas-store'
 import { useThemeStore } from '@/stores/theme-store'
@@ -55,6 +55,30 @@ export function DrawingLayer() {
   const rootRef = useRef<HTMLDivElement>(null)
   const captureRectRef = useRef<HTMLDivElement>(null)
   const selectionGroupRef = useRef<SVGGElement>(null)
+
+  // Space+drag pans the canvas even while a tool is active (InfiniteCanvas
+  // owns the pan gesture) — track Space so the capture surface lets those
+  // mousedowns bubble through instead of starting a creation gesture.
+  const spaceHeldRef = useRef(false)
+  useEffect(() => {
+    const down = (e: KeyboardEvent) => {
+      if (e.code === 'Space' && !e.repeat) spaceHeldRef.current = true
+    }
+    const up = (e: KeyboardEvent) => {
+      if (e.code === 'Space') spaceHeldRef.current = false
+    }
+    const blur = () => {
+      spaceHeldRef.current = false
+    }
+    window.addEventListener('keydown', down)
+    window.addEventListener('keyup', up)
+    window.addEventListener('blur', blur)
+    return () => {
+      window.removeEventListener('keydown', down)
+      window.removeEventListener('keyup', up)
+      window.removeEventListener('blur', blur)
+    }
+  }, [])
 
   const selectMode = activeTool === 'select'
 
@@ -437,6 +461,8 @@ export function DrawingLayer() {
 
       // Creation: the full-area capture rect (only hit-testable in tool mode).
       if (target === captureRectRef.current) {
+        // Space+drag is a pan gesture — let it reach the canvas container.
+        if (spaceHeldRef.current) return
         e.preventDefault()
         e.stopPropagation()
         startCreation(e)
@@ -577,7 +603,10 @@ export function DrawingLayer() {
 
       {/* Full-area capture surface — a real HTML element (reliable browser
           hit-testing, unlike SVG content in a 0×0 overflow-visible svg),
-          topmost of the layer, mounted only in tool mode. */}
+          topmost of the layer, mounted only in tool mode. pointer-events must
+          be set explicitly: the layer root is pointer-events:none and the
+          property is inherited — without this the div is invisible to the
+          browser's hit-testing and no creation gesture ever starts. */}
       {!selectMode && (
         <div
           ref={captureRectRef}
@@ -589,6 +618,7 @@ export function DrawingLayer() {
             width: 200_000,
             height: 200_000,
             cursor: 'crosshair',
+            pointerEvents: 'auto',
           }}
         />
       )}
