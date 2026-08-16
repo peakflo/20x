@@ -96,7 +96,7 @@ export interface DrawingToolOptions {
 export const STROKE_WIDTHS = [1, 2, 4, 8] as const
 
 /** Font size presets (canvas px). */
-export const FONT_SIZES = [14, 18, 24, 32, 48] as const
+export const FONT_SIZES = [14, 18, 24, 32, 48, 64, 96, 128] as const
 
 /** Font family presets. */
 export const FONT_FAMILIES = [
