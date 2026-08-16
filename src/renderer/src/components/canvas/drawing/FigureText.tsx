@@ -1,4 +1,5 @@
 import { memo, useEffect, useRef } from 'react'
+import { useDrawingStore } from '@/stores/drawing-store'
 import type { TextFigure } from './types'
 import { fontCssFor } from './types'
 
@@ -42,11 +43,17 @@ export const FigureText = memo(function FigureText({
     sel?.addRange(range)
 
     return () => {
-      // Editing ended externally (tool switch, figure removed) while this div
-      // still holds focus — commit what the user typed instead of losing it.
-      if (document.activeElement === el) {
-        onCommitText(obj.id, readEditableText(el))
-      }
+      // Editing ended externally (e.g. the figure was removed — the store
+      // clears editingTextId) while this div still holds focus: commit what
+      // the user typed instead of losing it.
+      //
+      // Crucially, do NOT commit while editing is still active: React
+      // StrictMode (dev) simulates a remount by running this cleanup and
+      // re-running the effect. Committing there would destroy a freshly
+      // created (empty) text figure before the user can type anything.
+      if (document.activeElement !== el) return
+      if (useDrawingStore.getState().editingTextId === obj.id) return
+      onCommitText(obj.id, readEditableText(el))
     }
   }, [isEditing])
 

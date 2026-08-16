@@ -1,3 +1,4 @@
+import { StrictMode } from 'react'
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, screen, cleanup, fireEvent, act } from '@testing-library/react'
 import { DrawingLayer, pasteImageAt } from './DrawingLayer'
@@ -499,6 +500,38 @@ describe('DrawingLayer', () => {
     const { container } = render(<DrawingLayer />)
     const figure = container.querySelector(`[data-figure-id="${id}"]`) as HTMLElement
     expect(figure.getAttribute('style') ?? '').toContain('dashed')
+  })
+
+  it('survives StrictMode double-mount (no empty-text commit on simulated remount)', () => {
+    const id = useDrawingStore.getState().addObject({
+      type: 'text',
+      x: 10,
+      y: 10,
+      width: 200,
+      height: 60,
+      stroke: '#1e1e1e',
+      strokeWidth: 2,
+      fill: null,
+      opacity: 1,
+      text: '',
+      fontSize: 18,
+      fontFamily: 'sans',
+      fontWeight: 400,
+      textAlign: 'left',
+    })
+    useDrawingStore.getState().setEditingTextId(id)
+    // The app renders under React.StrictMode: in dev it runs the editing
+    // effect setup → cleanup → setup on mount. The simulated cleanup must not
+    // commit the (empty) text, or the freshly created figure is destroyed
+    // before the user can type.
+    render(
+      <StrictMode>
+        <DrawingLayer />
+      </StrictMode>
+    )
+
+    expect(useDrawingStore.getState().objects).toHaveLength(1)
+    expect(useDrawingStore.getState().editingTextId).toBe(id)
   })
 
   // ── Move ──────────────────────────────────────────────────
