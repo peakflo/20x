@@ -28,6 +28,7 @@ import { HeartbeatScheduler } from './heartbeat-scheduler'
 import { TaskAutomationScheduler } from './task-automation-scheduler'
 import { WorkspaceCleanupScheduler } from './workspace-cleanup-scheduler'
 import { ClaudePluginManager } from './claude-plugin-manager'
+import { parseProcessTable, selectKillableMcpPids } from './mcp-process-cleanup'
 import { EnterpriseHeartbeat } from './enterprise-heartbeat'
 import { EnterpriseStateSync } from './enterprise-state-sync'
 import { setTaskApiAgentController, setTaskApiNotifier, setTaskApiUiState, setTaskAutomationTrigger, setTranscriptProvider, stopTaskApiServer } from './task-api-server'
@@ -181,6 +182,38 @@ function watchAgentAnswersForSpeech(agents: AgentManager, database: DatabaseMana
   })
 }
 
+/**
+ * Kills stdio MCP server processes that this instance leaked.
+ *
+ * Scoped to our own descendants and to processes that already lost their parent,
+ * so a second 20x instance keeps the MCP children of its running agents. Called
+ * at shutdown, and at startup to collect what a previous crash left behind.
+ */
+function sweepLeakedMcpProcesses(): void {
+  try {
+    if (process.platform === 'win32') {
+      // No cheap ancestry query on Windows; keep the previous image-name filter.
+      execSync('taskkill /F /FI "IMAGENAME eq node.exe" /FI "WINDOWTITLE eq task-management-mcp*"', { stdio: 'ignore' })
+      return
+    }
+
+    const psOutput = execSync('ps -eo pid=,ppid=,command=', { encoding: 'utf-8', maxBuffer: 8 * 1024 * 1024 })
+    const pids = selectKillableMcpPids(parseProcessTable(psOutput), process.pid)
+    for (const pid of pids) {
+      try {
+        process.kill(pid, 'SIGTERM')
+      } catch {
+        // Already gone between the listing and the signal.
+      }
+    }
+    if (pids.length > 0) {
+      console.log(`[Cleanup] Terminated ${pids.length} leaked MCP server process(es): ${pids.join(', ')}`)
+    }
+  } catch (err) {
+    console.warn('[Cleanup] Could not sweep leaked MCP server processes:', err)
+  }
+}
+
 async function shutdownAppServices(): Promise<void> {
   voiceSessionManager?.shutdown()
   enterpriseHeartbeatInstance?.stop()
@@ -199,17 +232,7 @@ async function shutdownAppServices(): Promise<void> {
   stopMobileApiServer()
   stopTaskApiServer()
 
-  // Kill orphaned task-management-mcp processes (spawned by opencode, not cleaned up on exit)
-  try {
-    if (process.platform === 'win32') {
-      execSync('taskkill /F /FI "IMAGENAME eq node.exe" /FI "WINDOWTITLE eq task-management-mcp*"', { stdio: 'ignore' })
-    } else {
-      execSync('pkill -f "task-management-mcp\\.js"', { stdio: 'ignore' })
-    }
-    console.log('[Shutdown] Killed orphaned task-management-mcp processes')
-  } catch {
-    // pkill/taskkill exits non-zero if no processes matched — that's fine
-  }
+  sweepLeakedMcpProcesses()
 
   db?.close()
 
@@ -824,6 +847,11 @@ installProcessStreamErrorHandlers()
 
 app.whenReady().then(async () => {
   const analytics = initAnalytics()
+
+  // Collect MCP server processes that a previous crash or force-quit orphaned.
+  // Safe for a second live instance: only parentless processes match here,
+  // because this instance has no descendants yet.
+  sweepLeakedMcpProcesses()
   // Register protocol handler: app-attachment://taskId/attachmentId
   // Serves local attachment files from the attachments directory.
   protocol.handle('app-attachment', (request) => {

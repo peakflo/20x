@@ -457,6 +457,84 @@ describe('AgentManager skill file paths', () => {
     })
   })
 
+  describe('MCP server documentation', () => {
+    // The session documentation must describe the servers the session really
+    // gets. The agent configuration is wrong in both directions: task-management
+    // is force-added for every real task, and a configured server can be absent
+    // from the session.
+    function makeMcpDb() {
+      const configured = {
+        id: 'srv-configured',
+        name: 'configured-server',
+        type: 'local',
+        command: '/bin/configured',
+        args: ['a.js'],
+        tools: [{ name: 'configured_tool', description: 'From the agent config' }]
+      }
+      const forced = {
+        id: 'srv-task-management',
+        name: 'task-management',
+        type: 'local',
+        command: '/bin/Electron',
+        args: ['task-management-mcp.js'],
+        tools: [{ name: 'list_tasks', description: 'List all tasks' }]
+      }
+      const mockDb = createMockDb({ mcp_servers: ['srv-configured'] }) as any
+      mockDb.getMcpServer = vi.fn((id: string) => (id === 'srv-configured' ? configured : undefined))
+      mockDb.getMcpServers = vi.fn(() => [configured, forced])
+      return mockDb
+    }
+
+    it('documents a force-added server that the agent config does not list', () => {
+      manager = new AgentManager(makeMcpDb())
+
+      const md: string = (manager as any).generateAgentsMd([], [], '/tmp/ws', 'agent-1', [
+        'configured-server',
+        'task-management'
+      ])
+
+      expect(md).toContain('### task-management')
+      expect(md).toContain('`list_tasks`')
+      expect(md).toContain('### configured-server')
+    })
+
+    it('omits a configured server that is not attached to the session', () => {
+      manager = new AgentManager(makeMcpDb())
+
+      const md: string = (manager as any).generateAgentsMd([], [], '/tmp/ws', 'agent-1', ['task-management'])
+
+      expect(md).toContain('### task-management')
+      expect(md).not.toContain('configured-server')
+      expect(md).not.toContain('configured_tool')
+    })
+
+    it('omits the MCP section when no server is attached', () => {
+      manager = new AgentManager(makeMcpDb())
+
+      const md: string = (manager as any).generateAgentsMd([], [], '/tmp/ws', 'agent-1', [])
+
+      expect(md).not.toContain('Available MCP Servers & Tools')
+    })
+
+    it('falls back to the agent config when the caller gives no server list', () => {
+      manager = new AgentManager(makeMcpDb())
+
+      const md: string = (manager as any).generateAgentsMd([], [], '/tmp/ws', 'agent-1')
+
+      expect(md).toContain('### configured-server')
+      expect(md).not.toContain('### task-management')
+    })
+
+    it('applies the same rule to CLAUDE.md', () => {
+      manager = new AgentManager(makeMcpDb())
+
+      const md: string = (manager as any).generateClaudeMd([], [], '/tmp/ws', 'agent-1', ['task-management'])
+
+      expect(md).toContain('task-management (1 tools)')
+      expect(md).not.toContain('configured-server')
+    })
+  })
+
   describe('getMemoryFileName', () => {
     it('returns CLAUDE.md for Claude Code agents', () => {
       const mockDb = createMockDb({ coding_agent: 'claude-code' })

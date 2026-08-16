@@ -5,7 +5,7 @@ import { existsSync, copyFileSync, mkdirSync, readFileSync, readdirSync, statSyn
 import { mkdir, writeFile } from 'fs/promises'
 import { Notification, powerSaveBlocker } from 'electron'
 import type { BrowserWindow } from 'electron'
-import type { DatabaseManager, AgentMcpServerEntry, McpServerSource, OutputFieldRecord, SecretRecord, SkillRecord, TaskRecord } from './database'
+import type { DatabaseManager, AgentMcpServerEntry, McpServerRecord, McpServerSource, OutputFieldRecord, SecretRecord, SkillRecord, TaskRecord } from './database'
 import { TaskStatus, SessionStatus, PluginActionId } from '../shared/constants'
 import type { WorktreeManager } from './worktree-manager'
 import type { GitHubManager } from './github-manager'
@@ -1082,7 +1082,12 @@ export class AgentManager extends EventEmitter {
    * to all skills.
    * Also generates AGENTS.md and CLAUDE.md with skill directory.
    */
-  private async writeSkillFiles(taskId: string, agentId: string, workspaceDir: string): Promise<void> {
+  private async writeSkillFiles(
+    taskId: string,
+    agentId: string,
+    workspaceDir: string,
+    injectedMcpServerNames?: string[]
+  ): Promise<void> {
     try {
       const task = this.db.getTask(taskId)
       const agent = this.db.getAgent(agentId)
@@ -1116,7 +1121,7 @@ export class AgentManager extends EventEmitter {
       }
 
       // Generate AGENTS.md and CLAUDE.md with skill directory
-      await this.writeAgentsDocumentation(workspaceDir, skills, task?.repos || [], agentId)
+      await this.writeAgentsDocumentation(workspaceDir, skills, task?.repos || [], agentId, injectedMcpServerNames)
     } catch (error) {
       console.error('[AgentManager] Error writing skill files:', error)
     }
@@ -1130,18 +1135,19 @@ export class AgentManager extends EventEmitter {
     workspaceDir: string,
     skills: SkillRecord[],
     repos: string[],
-    agentId?: string
+    agentId?: string,
+    injectedMcpServerNames?: string[]
   ): Promise<void> {
     try {
       // Sort skills by confidence (high to low)
       const sortedSkills = [...skills].sort((a, b) => b.confidence - a.confidence)
 
       // Generate AGENTS.md — write to workspace root (async to avoid blocking)
-      const agentsMd = this.generateAgentsMd(sortedSkills, repos, workspaceDir, agentId)
+      const agentsMd = this.generateAgentsMd(sortedSkills, repos, workspaceDir, agentId, injectedMcpServerNames)
       await writeFile(join(workspaceDir, 'AGENTS.md'), agentsMd, 'utf-8')
 
       // Generate CLAUDE.md — write to workspace root
-      const claudeMd = this.generateClaudeMd(sortedSkills, repos, workspaceDir, agentId)
+      const claudeMd = this.generateClaudeMd(sortedSkills, repos, workspaceDir, agentId, injectedMcpServerNames)
       await writeFile(join(workspaceDir, 'CLAUDE.md'), claudeMd, 'utf-8')
 
       console.log('[AgentManager] Generated AGENTS.md and CLAUDE.md in workspace root')
@@ -1151,9 +1157,78 @@ export class AgentManager extends EventEmitter {
   }
 
   /**
+   * Names of MCP servers that a session was given but that are not attached to
+   * the backend. Only the OpenCode adapter can report this: the Claude Code
+   * adapter passes the server map on every CLI spawn, so it cannot drift.
+   */
+  private static getAdapterMcpAttachFailures(adapter: CodingAgentAdapter, sessionId: string): string[] {
+    const reporter = adapter as unknown as { getMcpAttachFailures?: (id: string) => string[] }
+    if (typeof reporter.getMcpAttachFailures !== 'function') return []
+    try {
+      return reporter.getMcpAttachFailures(sessionId) ?? []
+    } catch {
+      return []
+    }
+  }
+
+  /**
+   * Resolves which MCP servers the session documentation must describe.
+   *
+   * The list has to come from the servers that are really injected into the
+   * session (see buildMcpServersForAdapter), not from the agent configuration
+   * alone. The agent configuration is wrong in both directions: task-management
+   * is force-added for every real task, so a session that has it is not listed,
+   * and a configured server whose DB row is gone is listed but never injected.
+   * That is how AGENTS.md came to advertise 35 task-management tools to sessions
+   * that had none of them.
+   *
+   * When the caller gives no injected names, fall back to the agent
+   * configuration, which keeps standalone documentation generation working.
+   */
+  private resolveDocumentedMcpServers(
+    agentId: string | undefined,
+    injectedServerNames?: string[]
+  ): Array<{ server: McpServerRecord; enabledTools?: string[] }> {
+    if (!agentId) return []
+    const agent = this.db.getAgent(agentId)
+    const entries = agent?.config?.mcp_servers || []
+
+    const configured = new Map<string, { server: McpServerRecord; enabledTools?: string[] }>()
+    for (const entry of entries) {
+      const serverId = typeof entry === 'string' ? entry : (entry as AgentMcpServerEntry).serverId
+      const enabledTools = typeof entry === 'string' ? undefined : (entry as AgentMcpServerEntry).enabledTools
+      const server = this.db.getMcpServer(serverId)
+      if (!server) continue
+      configured.set(server.name, { server, enabledTools })
+    }
+
+    if (!injectedServerNames) return [...configured.values()]
+
+    const documented: Array<{ server: McpServerRecord; enabledTools?: string[] }> = []
+    for (const name of injectedServerNames) {
+      const fromConfig = configured.get(name)
+      if (fromConfig) {
+        documented.push(fromConfig)
+        continue
+      }
+      // Force-added server (task-management): present in the session but absent
+      // from the agent configuration, so it must be looked up by name.
+      const server = this.db.getMcpServers().find(s => s.name === name)
+      if (server) documented.push({ server })
+    }
+    return documented
+  }
+
+  /**
    * Generates AGENTS.md content with skill directory.
    */
-  private generateAgentsMd(skills: SkillRecord[], repos: string[], workspaceDir: string, agentId?: string): string {
+  private generateAgentsMd(
+    skills: SkillRecord[],
+    repos: string[],
+    workspaceDir: string,
+    agentId?: string,
+    injectedMcpServerNames?: string[]
+  ): string {
     const now = new Date().toISOString()
 
     let md = `# Agent Session Configuration\n\n`
@@ -1161,18 +1236,13 @@ export class AgentManager extends EventEmitter {
     md += `---\n\n`
 
     // Add MCP Servers section
-    if (agentId) {
-      const agent = this.db.getAgent(agentId)
-      if (agent?.config?.mcp_servers && agent.config.mcp_servers.length > 0) {
+    {
+      const documentedServers = this.resolveDocumentedMcpServers(agentId, injectedMcpServerNames)
+      if (documentedServers.length > 0) {
         md += `## Available MCP Servers & Tools\n\n`
         md += `This session has access to the following Model Context Protocol (MCP) servers and their tools:\n\n`
 
-        for (const entry of agent.config.mcp_servers) {
-          const serverId = typeof entry === 'string' ? entry : (entry as AgentMcpServerEntry).serverId
-          const enabledTools = typeof entry === 'string' ? undefined : (entry as AgentMcpServerEntry).enabledTools
-          const mcpServer = this.db.getMcpServer(serverId)
-          if (!mcpServer) continue
-
+        for (const { server: mcpServer, enabledTools } of documentedServers) {
           md += `### ${mcpServer.name}\n\n`
           md += `**Type:** ${mcpServer.type === 'local' ? 'Local (stdio)' : 'Remote (HTTP)'}\n\n`
 
@@ -1272,7 +1342,13 @@ export class AgentManager extends EventEmitter {
   /**
    * Generates CLAUDE.md content with skill directory.
    */
-  private generateClaudeMd(skills: SkillRecord[], repos: string[], workspaceDir: string, agentId?: string): string {
+  private generateClaudeMd(
+    skills: SkillRecord[],
+    repos: string[],
+    workspaceDir: string,
+    agentId?: string,
+    injectedMcpServerNames?: string[]
+  ): string {
     const now = new Date().toISOString()
 
     let md = `# Claude Code Configuration\n\n`
@@ -1280,18 +1356,13 @@ export class AgentManager extends EventEmitter {
     md += `---\n\n`
 
     // Add MCP Servers section
-    if (agentId) {
-      const agent = this.db.getAgent(agentId)
-      if (agent?.config?.mcp_servers && agent.config.mcp_servers.length > 0) {
+    {
+      const documentedServers = this.resolveDocumentedMcpServers(agentId, injectedMcpServerNames)
+      if (documentedServers.length > 0) {
         md += `## MCP Tools Available\n\n`
         md += `You have access to the following tools through Model Context Protocol (MCP) servers:\n\n`
 
-        for (const entry of agent.config.mcp_servers) {
-          const serverId = typeof entry === 'string' ? entry : (entry as AgentMcpServerEntry).serverId
-          const enabledTools = typeof entry === 'string' ? undefined : (entry as AgentMcpServerEntry).enabledTools
-          const mcpServer = this.db.getMcpServer(serverId)
-          if (!mcpServer) continue
-
+        for (const { server: mcpServer, enabledTools } of documentedServers) {
           if (mcpServer.tools && mcpServer.tools.length > 0) {
             const toolsToShow = enabledTools
               ? mcpServer.tools.filter(t => enabledTools.includes(t.name))
@@ -1427,9 +1498,6 @@ export class AgentManager extends EventEmitter {
       workspaceDir = this.db.getWorkspaceDir(taskId)
     }
 
-    // Write SKILL.md files to workspace (async to avoid blocking the event loop)
-    await this.writeSkillFiles(taskId, agentId, workspaceDir)
-
     // Check if this is a triage session or subtask
     const task = this.db.getTask(taskId)
     const isTriageSession = this.isTriageSessionTask(taskId, task)
@@ -1444,6 +1512,13 @@ export class AgentManager extends EventEmitter {
     const isMastermind = taskId === 'mastermind-session'
     const ensureTaskManagement = isMastermind || isTriageSession || isSubtask || !!task
     const mcpServers = await this.buildMcpServersForAdapter(agentId, { ensureTaskManagement, taskScope, artifactTaskId: task ? taskId : undefined })
+
+    // Write SKILL.md files and the session documentation (async to avoid
+    // blocking the event loop). This runs AFTER the MCP map is built so the
+    // documentation describes the servers this session really gets, instead of
+    // the agent configuration, which both over- and under-reports them.
+    await this.writeSkillFiles(taskId, agentId, workspaceDir, Object.keys(mcpServers))
+    await yieldEL()
 
     // Build session config
     const sessionConfig: SessionConfig = {
@@ -1512,6 +1587,22 @@ export class AgentManager extends EventEmitter {
     // Create session via adapter
     const adapterSessionId = await adapter.createSession(sessionConfig)
     console.log(`[AgentManager] Session created: ${adapterSessionId}, workspaceDir=${workspaceDir}`)
+
+    // OpenCode receives its MCP servers through runtime calls, so attachment can
+    // still fail after the documentation was written. Rewrite the documentation
+    // without the servers that are not attached: an agent that is told it has 35
+    // task-management tools it cannot call behaves far worse than one that knows
+    // it has none.
+    const attachFailures = AgentManager.getAdapterMcpAttachFailures(adapter, adapterSessionId)
+    if (attachFailures.length > 0) {
+      console.error(
+        `[AgentManager] MCP servers NOT attached for session ${adapterSessionId}: ${attachFailures.join(', ')} — ` +
+        `rewriting session documentation without them`
+      )
+      const attachedNames = Object.keys(mcpServers).filter((name) => !attachFailures.includes(name))
+      await this.writeSkillFiles(taskId, agentId, workspaceDir, attachedNames)
+    }
+
     analytics()?.record('provider.session.started', {
       provider: getAgentProvider(agent),
       runtimeMode: sessionConfig.sandboxMode,
@@ -3661,7 +3752,10 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
         sessionId, agentId: session.agentId, taskId: session.taskId, status: 'idle'
       })
 
-      // Clean up backend session — triage is done, no need to keep it
+      // Clean up backend session — triage is done, no need to keep it.
+      // Release it through the adapter first: otherwise the agent CLI process and
+      // its task-management MCP child stay alive with no handle left to stop them.
+      await this.releaseAdapterSession(sessionId, 'triage_completed')
       this.sessions.delete(sessionId)
       this.schedulePowerSaveBlockerUpdate()
       console.log(`[SessionTracker] DESTROYED session=${sessionId} task=${session.taskId} reason=triage_completed`)
@@ -3873,6 +3967,31 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       taskId: session.taskId,
       status: 'idle'
     })
+  }
+
+  /**
+   * Releases the backend session behind a tracked session, without touching task
+   * status or renderer state.
+   *
+   * Dropping a session from `this.sessions` is not enough: the backend session
+   * owns the agent CLI process and its MCP stdio children, and after the drop no
+   * handle to them is left, so they run until the app quits. Callers that finish
+   * a session on their own terms (triage, learning) use this to release it.
+   */
+  private async releaseAdapterSession(sessionId: string, reason: string): Promise<void> {
+    const session = this.sessions.get(sessionId)
+    if (!session) return
+
+    this.stopAdapterPolling(sessionId)
+    const adapter = session.adapter ?? this.getAdapter(session.agentId)
+    if (!adapter) return
+    try {
+      const sessionConfig = await this.buildSessionConfig(session.agentId, session.taskId, session.workspaceDir)
+      await adapter.destroySession(sessionId, sessionConfig)
+      console.log(`[AgentManager] Released backend session ${sessionId} (${reason})`)
+    } catch (error) {
+      console.error(`[AgentManager] Error releasing backend session ${sessionId} (${reason}):`, error)
+    }
   }
 
   /**
@@ -5059,7 +5178,10 @@ Important:
     // Sync skills from workspace
     const result = this.syncSkillsFromWorkspace(sessionId)
 
-    // Clean up session without changing task status
+    // Clean up session without changing task status. Release the backend session
+    // too, so the agent CLI process and its MCP stdio children stop instead of
+    // running on untracked until the app quits.
+    await this.releaseAdapterSession(sessionId, 'learn_from_session')
     this.sessions.delete(sessionId)
     this.schedulePowerSaveBlockerUpdate()
     console.log(`[AgentManager] Learning complete for session ${sessionId}:`, result)
