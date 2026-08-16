@@ -183,12 +183,13 @@ describe('DrawingLayer', () => {
     expect(useDrawingStore.getState().objects).toHaveLength(0)
   })
 
-  it('click with the text tool creates a text figure and enters editing', () => {
+  it('click with the text tool creates a default-size text figure and enters editing', () => {
     useDrawingStore.getState().setTool('text')
     render(<DrawingLayer />)
     const capture = document.querySelector('[data-drawing-capture="true"]') as Element
 
     fireEvent.mouseDown(capture, { button: 0, clientX: 150, clientY: 120 })
+    fireEvent.mouseUp(window)
 
     const { objects, editingTextId, activeTool } = useDrawingStore.getState()
     expect(objects).toHaveLength(1)
@@ -203,6 +204,39 @@ describe('DrawingLayer', () => {
     expect(editingTextId).toBe(objects[0].id)
     // The tool drops back to select so typing goes into the new figure.
     expect(activeTool).toBe('select')
+  })
+
+  it('drag with the text tool creates a text figure at the drag box', async () => {
+    useDrawingStore.getState().setTool('text')
+    const { container } = render(<DrawingLayer />)
+    const capture = container.querySelector('[data-drawing-capture="true"]') as Element
+
+    fireEvent.mouseDown(capture, { button: 0, clientX: 100, clientY: 100 })
+    fireEvent.mouseMove(window, { clientX: 200, clientY: 160 })
+    await flushFrames()
+
+    // Live preview while dragging
+    expect(useDrawingStore.getState().liveObject).toMatchObject({
+      type: 'text',
+      x: 100,
+      y: 100,
+      width: 100,
+      height: 60,
+    })
+
+    fireEvent.mouseUp(window)
+    const { objects, liveObject, editingTextId } = useDrawingStore.getState()
+    expect(liveObject).toBeNull()
+    expect(objects).toHaveLength(1)
+    expect(objects[0]).toMatchObject({
+      type: 'text',
+      x: 100,
+      y: 100,
+      width: 100,
+      height: 60,
+      text: '',
+    })
+    expect(editingTextId).toBe(objects[0].id)
   })
 
   it('defaults new figures to a stroke visible on the dark theme', async () => {
@@ -317,6 +351,104 @@ describe('DrawingLayer', () => {
     fireEvent.mouseUp(window)
 
     expect(useDrawingStore.getState().editingTextId).toBe(id)
+  })
+
+  it('drags a text figure that is being edited (commits the text first)', async () => {
+    const id = useDrawingStore.getState().addObject({
+      type: 'text',
+      x: 10,
+      y: 10,
+      width: 200,
+      height: 60,
+      stroke: '#1e1e1e',
+      strokeWidth: 2,
+      fill: null,
+      opacity: 1,
+      text: 'Hi',
+      fontSize: 18,
+      fontFamily: 'sans',
+      fontWeight: 400,
+      textAlign: 'left',
+    })
+    useDrawingStore.getState().setEditingTextId(id)
+    const { container } = render(<DrawingLayer />)
+    const figure = container.querySelector(`[data-figure-id="${id}"]`) as HTMLElement
+    const editable = figure.querySelector('[contenteditable="true"]') as HTMLElement
+    // The editing effect focused the editable div.
+    expect(document.activeElement).toBe(editable)
+
+    fireEvent.mouseDown(figure, { button: 0, clientX: 100, clientY: 100 })
+    // First move crosses the threshold: commits the text, starts the gesture.
+    fireEvent.mouseMove(window, { clientX: 140, clientY: 130 })
+    // Gesture moves are measured from the original mousedown point.
+    fireEvent.mouseMove(window, { clientX: 150, clientY: 140 })
+    await flushFrames()
+    fireEvent.mouseUp(window)
+
+    // Text committed, editing ended, figure moved.
+    expect(useDrawingStore.getState().editingTextId).toBeNull()
+    expect(useDrawingStore.getState().objects[0]).toMatchObject({
+      text: 'Hi',
+      x: 60,
+      y: 50,
+    })
+  })
+
+  it('keeps editing a text figure on a plain caret click (no drag)', () => {
+    const id = useDrawingStore.getState().addObject({
+      type: 'text',
+      x: 10,
+      y: 10,
+      width: 200,
+      height: 60,
+      stroke: '#1e1e1e',
+      strokeWidth: 2,
+      fill: null,
+      opacity: 1,
+      text: 'Hi',
+      fontSize: 18,
+      fontFamily: 'sans',
+      fontWeight: 400,
+      textAlign: 'left',
+    })
+    useDrawingStore.getState().setEditingTextId(id)
+    const { container } = render(<DrawingLayer />)
+    const figure = container.querySelector(`[data-figure-id="${id}"]`) as Element
+
+    fireEvent.mouseDown(figure, { button: 0, clientX: 100, clientY: 100 })
+    fireEvent.mouseUp(window)
+
+    // No drag → still editing, figure untouched.
+    expect(useDrawingStore.getState().editingTextId).toBe(id)
+    expect(useDrawingStore.getState().objects[0]).toMatchObject({ x: 10, y: 10, text: 'Hi' })
+  })
+
+  it('removes a text figure committed with empty text', () => {
+    const id = useDrawingStore.getState().addObject({
+      type: 'text',
+      x: 10,
+      y: 10,
+      width: 200,
+      height: 60,
+      stroke: '#1e1e1e',
+      strokeWidth: 2,
+      fill: null,
+      opacity: 1,
+      text: '',
+      fontSize: 18,
+      fontFamily: 'sans',
+      fontWeight: 400,
+      textAlign: 'left',
+    })
+    useDrawingStore.getState().setEditingTextId(id)
+    const { container } = render(<DrawingLayer />)
+    const figure = container.querySelector(`[data-figure-id="${id}"]`) as HTMLElement
+    const editable = figure.querySelector('[contenteditable="true"]') as HTMLElement
+
+    fireEvent.blur(editable)
+
+    expect(useDrawingStore.getState().objects).toHaveLength(0)
+    expect(useDrawingStore.getState().editingTextId).toBeNull()
   })
 
   it('shows a visible editing box while a text figure is being edited', () => {

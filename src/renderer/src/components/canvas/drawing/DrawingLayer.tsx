@@ -25,6 +25,13 @@ import { FigureText } from './FigureText'
 import { downscaleImageToDataUrl, readClipboardImage } from './image-paste'
 
 /**
+ * How far (px, screen space) the pointer must move after a mousedown on a
+ * text figure being edited before the gesture is treated as a drag (which
+ * commits the text and moves the figure) rather than a caret click.
+ */
+const EDIT_DRAG_THRESHOLD = 3
+
+/**
  * The drawing layer — figures (shapes, text, images) rendered inside the
  * existing CSS-transformed canvas layer (docs/drawing.md §3).
  *
@@ -46,7 +53,7 @@ export function DrawingLayer() {
   const zoom = useCanvasStore((s) => s.viewport.zoom)
 
   const rootRef = useRef<HTMLDivElement>(null)
-  const captureRectRef = useRef<SVGRectElement>(null)
+  const captureRectRef = useRef<HTMLDivElement>(null)
   const selectionGroupRef = useRef<SVGGElement>(null)
 
   const selectMode = activeTool === 'select'
@@ -74,26 +81,95 @@ export function DrawingLayer() {
       if (activeTool === 'select') return
 
       if (activeTool === 'text') {
-        // Click = default-size text figure, immediately in editing mode.
+        // Drag = text figure at the drag box (like the shape tools); a plain
+        // click = default-size figure at the click point. Either way the new
+        // figure opens in editing mode on mouseup.
         const size = DEFAULT_FIGURE_SIZE.text
-        const id = addObject({
-          type: 'text',
-          x: start.x - size.width / 2,
-          y: start.y - size.height / 2,
-          width: size.width,
-          height: size.height,
-          stroke: strokeForNewFigure(toolOptions),
-          strokeWidth: toolOptions.strokeWidth,
-          fill: null,
-          opacity: 1,
-          text: '',
-          fontSize: toolOptions.fontSize,
-          fontFamily: toolOptions.fontFamily,
-          fontWeight: toolOptions.fontWeight,
-          textAlign: 'left',
+        let cancelled = false
+        let hasPublished = false
+        let rafId: number | null = null
+        let lastEvent: MouseEvent | null = null
+        let finalBox: Box | null = null
+
+        const unsub = useDrawingStore.subscribe((s) => s.liveObject, (lo) => {
+          if (lo === null && hasPublished) cancelled = true
         })
-        setTool('select')
-        setEditingTextId(id)
+
+        const publish = () => {
+          rafId = null
+          const ev = lastEvent
+          if (!ev || cancelled) return
+          const cur = toCanvasPoint(ev.clientX, ev.clientY)
+          const box = normalizeBox(start.x, start.y, cur.x, cur.y)
+          if (box.width < MIN_FIGURE_SIZE && box.height < MIN_FIGURE_SIZE) return
+          finalBox = box
+          hasPublished = true
+          setLiveObject({
+            type: 'text',
+            ...box,
+            stroke: strokeForNewFigure(toolOptions),
+            strokeWidth: toolOptions.strokeWidth,
+            fill: null,
+            opacity: 1,
+            text: '',
+            fontSize: toolOptions.fontSize,
+            fontFamily: toolOptions.fontFamily,
+            fontWeight: toolOptions.fontWeight,
+            textAlign: 'left',
+            id: 'live-preview',
+            zIndex: 0,
+          })
+        }
+
+        const handleMove = (ev: MouseEvent) => {
+          lastEvent = ev
+          if (rafId == null) rafId = requestAnimationFrame(publish)
+        }
+
+        const handleUp = () => {
+          window.removeEventListener('mousemove', handleMove)
+          window.removeEventListener('mouseup', handleUp)
+          unsub()
+          if (rafId != null) {
+            cancelAnimationFrame(rafId)
+            rafId = null
+          }
+          if (cancelled) {
+            setLiveObject(null)
+            return
+          }
+          if (lastEvent) publish()
+          setLiveObject(null)
+          const box =
+            finalBox ??
+            ({
+              x: start.x - size.width / 2,
+              y: start.y - size.height / 2,
+              width: size.width,
+              height: size.height,
+            } as Box)
+          const id = addObject({
+            type: 'text',
+            x: box.x,
+            y: box.y,
+            width: box.width,
+            height: box.height,
+            stroke: strokeForNewFigure(toolOptions),
+            strokeWidth: toolOptions.strokeWidth,
+            fill: null,
+            opacity: 1,
+            text: '',
+            fontSize: toolOptions.fontSize,
+            fontFamily: toolOptions.fontFamily,
+            fontWeight: toolOptions.fontWeight,
+            textAlign: 'left',
+          })
+          setTool('select')
+          setEditingTextId(id)
+        }
+
+        window.addEventListener('mousemove', handleMove)
+        window.addEventListener('mouseup', handleUp)
         return
       }
 
@@ -252,6 +328,44 @@ export function DrawingLayer() {
     window.addEventListener('mouseup', handleUp)
   }, [])
 
+  // ── Drag start on a figure being edited ───────────────────
+  // A text figure in editing mode must still be movable: plain clicks place
+  // the caret (no preventDefault), but a drag past a small threshold commits
+  // the text (blur) and turns into a regular move gesture.
+  const startEditDrag = useCallback(
+    (e: React.MouseEvent, hitId: string) => {
+      const startX = e.clientX
+      const startY = e.clientY
+      let started = false
+
+      const handleMove = (ev: MouseEvent) => {
+        if (started) return
+        if (
+          Math.abs(ev.clientX - startX) < EDIT_DRAG_THRESHOLD &&
+          Math.abs(ev.clientY - startY) < EDIT_DRAG_THRESHOLD
+        )
+          return
+        started = true
+        window.removeEventListener('mousemove', handleMove)
+        window.removeEventListener('mouseup', handleUp)
+        // Commit the in-progress text so the figure behaves like a normal
+        // figure during the drag (blur triggers the commit + ends editing).
+        const el = document.activeElement
+        if (el instanceof HTMLElement) el.blur()
+        startSelectMove(e, hitId)
+      }
+
+      const handleUp = () => {
+        window.removeEventListener('mousemove', handleMove)
+        window.removeEventListener('mouseup', handleUp)
+      }
+
+      window.addEventListener('mousemove', handleMove)
+      window.addEventListener('mouseup', handleUp)
+    },
+    [startSelectMove]
+  )
+
   // ── Resize gesture (single selection, bottom-right handle) ──
   const startResize = useCallback(() => {
     const { selectedIds, objects } = useDrawingStore.getState()
@@ -341,15 +455,19 @@ export function DrawingLayer() {
       const figureEl = target.closest?.('[data-figure-id]')
       if (figureEl) {
         const id = figureEl.getAttribute('data-figure-id') ?? ''
-        // Don't hijack caret clicks inside a text figure being edited.
-        if (useDrawingStore.getState().editingTextId === id) return
+        // A text figure being edited: plain clicks place the caret, drags
+        // commit the text and move the figure.
+        if (useDrawingStore.getState().editingTextId === id) {
+          startEditDrag(e, id)
+          return
+        }
         e.preventDefault()
         e.stopPropagation()
         startSelectMove(e, id)
         return
       }
     },
-    [startCreation, startResize, startSelectMove]
+    [startCreation, startResize, startSelectMove, startEditDrag]
   )
 
   const handleLayerDoubleClick = useCallback((e: React.MouseEvent) => {
@@ -367,8 +485,14 @@ export function DrawingLayer() {
   }, [])
 
   const handleCommitText = useCallback((id: string, text: string) => {
-    const { updateObject, setEditingTextId } = useDrawingStore.getState()
-    updateObject(id, { text })
+    const { updateObject, removeObjects, setEditingTextId } = useDrawingStore.getState()
+    if (text.trim() === '') {
+      // An empty text figure is invisible and useless — remove it instead of
+      // leaving a ghost box on the canvas.
+      removeObjects([id])
+    } else {
+      updateObject(id, { text })
+    }
     setEditingTextId(null)
   }, [])
 
@@ -432,22 +556,42 @@ export function DrawingLayer() {
           </g>
         )}
 
-        {/* Creation preview (liveObject while dragging a new figure) */}
-        {liveObject && <FigureShape obj={liveObject} />}
+        {/* Creation preview (liveObject while dragging a new figure). Text
+            previews render as a dashed rect — FigureShape has no text body. */}
+        {liveObject &&
+          (liveObject.type === 'text' ? (
+            <rect
+              x={liveObject.x}
+              y={liveObject.y}
+              width={liveObject.width}
+              height={liveObject.height}
+              fill="none"
+              stroke="rgba(30,150,235,0.9)"
+              strokeWidth={outlineStroke}
+              strokeDasharray={`${6 / zoom} ${4 / zoom}`}
+            />
+          ) : (
+            <FigureShape obj={liveObject} />
+          ))}
+      </svg>
 
-        {/* Full-area capture rect — topmost of the SVG, active in tool mode */}
-        <rect
+      {/* Full-area capture surface — a real HTML element (reliable browser
+          hit-testing, unlike SVG content in a 0×0 overflow-visible svg),
+          topmost of the layer, mounted only in tool mode. */}
+      {!selectMode && (
+        <div
           ref={captureRectRef}
           data-drawing-capture="true"
-          x={-100_000}
-          y={-100_000}
-          width={200_000}
-          height={200_000}
-          fill="none"
-          pointerEvents={selectMode ? 'none' : 'all'}
-          style={{ cursor: 'crosshair' }}
+          className="absolute"
+          style={{
+            left: -100_000,
+            top: -100_000,
+            width: 200_000,
+            height: 200_000,
+            cursor: 'crosshair',
+          }}
         />
-      </svg>
+      )}
 
       {/* Text figures — DOM divs above the SVG (contentEditable while editing) */}
       {sortedObjects.map((obj) =>
