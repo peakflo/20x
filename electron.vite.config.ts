@@ -61,7 +61,10 @@ export default defineConfig({
         external: ['better-sqlite3', 'node-pty'],
         input: {
           index: resolve(__dirname, 'src/main/index.ts'),
-          'mcp-servers/task-management-mcp': resolve(__dirname, 'src/main/mcp-servers/task-management-mcp.js')
+          // Built from the TypeScript entry, which shares every tool definition
+          // with the in-process endpoint. A duplicate hand-maintained .js copy
+          // used to be the build input, and the two copies could drift apart.
+          'mcp-servers/task-management-mcp': resolve(__dirname, 'src/main/mcp-servers/task-management-mcp.ts')
         },
         output: {
           entryFileNames: '[name].js'

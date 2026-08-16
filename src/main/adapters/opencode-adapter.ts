@@ -39,6 +39,9 @@ const quickTimeoutFetch = (req: unknown) => (globalThis as unknown as Record<str
 
 const DEFAULT_SERVER_URL = 'http://localhost:4096'
 
+/** Outcome of attaching MCP servers to an OpenCode session. */
+type McpAttachResult = { attached: string[]; failed: string[] }
+
 /**
  * Adapter for OpenCode backend
  */
@@ -88,6 +91,10 @@ export class OpencodeAdapter implements CodingAgentAdapter {
   /** Per-session MCP server configs — retained for re-registration on session resume
    *  (e.g. after 20x restart when stdio MCP server processes are dead). */
   private sessionMcpConfigs: Map<string, Record<string, { type: string; url?: string; headers?: Record<string, string>; command?: string; args?: string[]; env?: Record<string, string> }>> = new Map()
+  /** Per-session names of MCP servers that could not be attached. Read by the
+   *  agent-manager so the session documentation does not advertise tools that
+   *  are not there. */
+  private sessionMcpAttachFailures: Map<string, string[]> = new Map()
 
   constructor(private db?: Pick<DatabaseManager, 'getSetting'>) {
     this.sdkLoading = this.loadSDK()
@@ -243,13 +250,20 @@ export class OpencodeAdapter implements CodingAgentAdapter {
    * Register MCP servers with the OpenCode backend (mcp.add + mcp.connect).
    * Called from both createSession (initial setup) and resumeSession (after 20x
    * restart when stdio MCP server processes are dead and need re-registration).
+   *
+   * Returns which servers are attached and which are not. The caller MUST act on
+   * the failures: OpenCode receives its MCP servers only through these runtime
+   * calls, so a swallowed failure produces a session that silently has no tools
+   * while AGENTS.md still advertises them.
    */
   private async registerMcpServers(
     ocClient: OpencodeClient,
     mcpServers: Record<string, McpServerConfig>,
     workspaceDir?: string
-  ): Promise<void> {
+  ): Promise<McpAttachResult> {
     const connectCandidates: string[] = []
+    const attached: string[] = []
+    const failed: string[] = []
 
     for (const [name, mcpConfig] of Object.entries(mcpServers)) {
       try {
@@ -266,6 +280,7 @@ export class OpencodeAdapter implements CodingAgentAdapter {
 
         if (addResult.error) {
           console.error(`[OpencodeAdapter] mcp.add error for ${name}:`, addResult.error)
+          failed.push(name)
           continue
         }
 
@@ -275,10 +290,12 @@ export class OpencodeAdapter implements CodingAgentAdapter {
           console.log(`[OpencodeAdapter] mcp.add status for '${name}': ${addStatus.status}${addStatus.error ? ` - ${addStatus.error}` : ''}`)
           if (addStatus.status === 'failed') {
             console.error(`[OpencodeAdapter] MCP server '${name}' failed immediately after add: ${addStatus.error}`)
+            failed.push(name)
             continue
           }
           if (addStatus.status === 'connected') {
             console.log(`[OpencodeAdapter] Successfully registered MCP server: ${name} (connected via mcp.add)`)
+            attached.push(name)
             continue
           }
         }
@@ -291,17 +308,20 @@ export class OpencodeAdapter implements CodingAgentAdapter {
 
         if (connectResult.error) {
           console.error(`[OpencodeAdapter] mcp.connect error for ${name}:`, connectResult.error)
+          failed.push(name)
           continue
         }
 
         // Check connect result (returns boolean)
         if (connectResult.data === false) {
           console.error(`[OpencodeAdapter] mcp.connect returned false for ${name} — server failed to connect`)
+          failed.push(name)
           continue
         }
         connectCandidates.push(name)
       } catch (mcpError) {
         console.error(`[OpencodeAdapter] Failed to register MCP server ${name}:`, mcpError)
+        failed.push(name)
       }
     }
 
@@ -311,11 +331,121 @@ export class OpencodeAdapter implements CodingAgentAdapter {
         const state = readiness.get(name)
         if (state === 'connected') {
           console.log(`[OpencodeAdapter] Successfully registered MCP server: ${name}`)
+          attached.push(name)
         } else if (state === 'failed') {
           console.error(`[OpencodeAdapter] MCP server '${name}' failed to connect`)
+          failed.push(name)
         } else {
           console.error(`[OpencodeAdapter] MCP server '${name}' did not reach connected status — tools may not work`)
+          failed.push(name)
         }
+      }
+    }
+
+    return { attached, failed }
+  }
+
+  /**
+   * Attach the MCP servers of a session and verify the result.
+   *
+   * OpenCode keeps MCP servers only in the memory of the `opencode serve`
+   * process, so an attach failure is invisible in the session itself: the agent
+   * simply has no task-management tools while AGENTS.md advertises them. This
+   * helper therefore retries the failures once, and reports what is still
+   * missing so the caller can escalate instead of continuing silently.
+   */
+  private async attachAndVerifyMcpServers(
+    ocClient: OpencodeClient,
+    mcpServers: Record<string, McpServerConfig>,
+    workspaceDir: string | undefined,
+    context: string
+  ): Promise<McpAttachResult> {
+    const first = await this.registerMcpServers(ocClient, mcpServers, workspaceDir)
+    if (first.failed.length === 0) return first
+
+    console.warn(
+      `[OpencodeAdapter] ${context}: MCP servers not attached on first try (${first.failed.join(', ')}) — retrying once`
+    )
+    const retryTargets: Record<string, McpServerConfig> = {}
+    for (const name of first.failed) {
+      const cfg = mcpServers[name]
+      if (cfg) retryTargets[name] = cfg
+    }
+
+    const second = await this.registerMcpServers(ocClient, retryTargets, workspaceDir)
+    const result: McpAttachResult = {
+      attached: [...first.attached, ...second.attached],
+      failed: second.failed
+    }
+
+    if (result.failed.length > 0) {
+      // Loud, single-line marker: this is the failure mode where an agent runs
+      // with no task-management tools while its own AGENTS.md lists 35 of them.
+      console.error(
+        `[OpencodeAdapter] MCP ATTACH FAILED — ${context}: ${result.failed.join(', ')} not attached. ` +
+        `Agent tools from these servers are NOT available in this session.`
+      )
+    }
+    return result
+  }
+
+  private setMcpAttachFailures(sessionId: string, failed: string[]): void {
+    if (failed.length > 0) {
+      this.sessionMcpAttachFailures.set(sessionId, [...failed])
+    } else {
+      this.sessionMcpAttachFailures.delete(sessionId)
+    }
+  }
+
+  /**
+   * Names of MCP servers that are configured for the session but are NOT
+   * attached to the OpenCode backend, so none of their tools can be called.
+   */
+  getMcpAttachFailures(sessionId: string): string[] {
+    return this.sessionMcpAttachFailures.get(sessionId) ?? []
+  }
+
+  /**
+   * Disconnect the MCP servers that were attached for a session.
+   *
+   * Each attached stdio server is a child process of the shared `opencode serve`
+   * process, and it lives as long as that server does — which is days, because
+   * the server is shared and often adopted rather than spawned. Without this the
+   * stdio children accumulate one per session (the task-management-mcp leak).
+   * Servers still needed by another live session are kept.
+   */
+  private async disconnectSessionMcpServers(sessionId: string): Promise<void> {
+    const ownConfig = this.sessionMcpConfigs.get(sessionId)
+    if (!ownConfig) return
+
+    const stillNeeded = new Set<string>()
+    for (const [otherSessionId, otherConfig] of this.sessionMcpConfigs.entries()) {
+      if (otherSessionId === sessionId) continue
+      for (const name of Object.keys(otherConfig)) stillNeeded.add(name)
+    }
+
+    const client = this.clients.get(sessionId)
+    if (!client) return
+    const workspaceDir = this.sessionWorkspaceDirs.get(sessionId)
+    const mcpClient = client.mcp as unknown as {
+      disconnect?: (args: unknown) => Promise<{ error?: unknown }>
+    }
+    if (typeof mcpClient.disconnect !== 'function') return
+
+    for (const name of Object.keys(ownConfig)) {
+      if (stillNeeded.has(name)) continue
+      try {
+        const result = await mcpClient.disconnect({
+          path: { name },
+          ...(workspaceDir && { query: { directory: workspaceDir } })
+        })
+        if (result?.error) {
+          console.warn(`[OpencodeAdapter] mcp.disconnect error for ${name}:`, result.error)
+        } else {
+          console.log(`[OpencodeAdapter] Disconnected MCP server '${name}' for session ${sessionId}`)
+        }
+      } catch (err) {
+        console.warn(`[OpencodeAdapter] mcp.disconnect failed for ${name}:`, err instanceof Error ? err.message : err)
       }
     }
   }
@@ -809,8 +939,14 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     }
 
     // Register MCP servers BEFORE creating session so the session picks them up
+    let attachResult: McpAttachResult = { attached: [], failed: [] }
     if (config.mcpServers) {
-      await this.registerMcpServers(ocClient, config.mcpServers, config.workspaceDir)
+      attachResult = await this.attachAndVerifyMcpServers(
+        ocClient,
+        config.mcpServers,
+        config.workspaceDir,
+        `createSession task=${config.taskId}`
+      )
     }
 
     // Create OpenCode session
@@ -834,6 +970,7 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     this.sessionPermissionModes.set(ocSessionId, config.permissionMode || 'ask')
     if (config.workspaceDir) this.sessionWorkspaceDirs.set(ocSessionId, config.workspaceDir)
     if (config.mcpServers) this.sessionMcpConfigs.set(ocSessionId, config.mcpServers as Record<string, { type: string; url?: string; headers?: Record<string, string>; command?: string; args?: string[]; env?: Record<string, string> }>)
+    this.setMcpAttachFailures(ocSessionId, attachResult.failed)
 
     return ocSessionId
   }
@@ -870,7 +1007,13 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     // OpenCode handles transient mid-session reconnections internally, so this
     // is only needed on resume, not during normal operation.
     if (config.mcpServers) {
-      await this.registerMcpServers(ocClient, config.mcpServers, config.workspaceDir)
+      const attachResult = await this.attachAndVerifyMcpServers(
+        ocClient,
+        config.mcpServers,
+        config.workspaceDir,
+        `resumeSession session=${sessionId}`
+      )
+      this.setMcpAttachFailures(sessionId, attachResult.failed)
     }
 
     // Validate session exists
@@ -1523,12 +1666,17 @@ export class OpencodeAdapter implements CodingAgentAdapter {
 
   async destroySession(sessionId: string, _config: SessionConfig): Promise<void> {
     await this.abortPrompt(sessionId, _config)
+    // Release the stdio MCP children of this session before dropping the client.
+    // They are children of the long-lived `opencode serve` process, so nothing
+    // else would ever stop them.
+    await this.disconnectSessionMcpServers(sessionId)
     this.clients.delete(sessionId)
     this.promptClients.delete(sessionId)
     this.pendingPermissions.delete(sessionId)
     this.sessionPermissionModes.delete(sessionId)
     this.sessionWorkspaceDirs.delete(sessionId)
     this.sessionMcpConfigs.delete(sessionId)
+    this.sessionMcpAttachFailures.delete(sessionId)
     this.removeTillDoneSessionConfig(sessionId)
 
     if (this.clients.size > 0) {
@@ -2288,12 +2436,23 @@ export class OpencodeAdapter implements CodingAgentAdapter {
       } catch (error) {
         console.error('[OpencodeAdapter] Error stopping server:', error)
       }
-      this.serverInstance = null
-      this.serverUrl = null
-      this.sharedClient = null
-      this.quickClient = null
-      this.v2Client = null
-      this.configPushed = false
+    } else if (this.serverUrl) {
+      // The server was adopted, not spawned by this app instance (see
+      // findAccessibleServer), so it is not ours to close. Say so: an adopted
+      // server outlives the app and keeps every MCP stdio child it ever
+      // attached, which is how those children pile up over days.
+      console.log(
+        `[OpencodeAdapter] Not closing adopted opencode server at ${this.serverUrl} (not spawned by this instance)`
+      )
     }
+    // Reset client state in both cases — the adopted-server branch used to skip
+    // this and leave stale clients pointing at a server the app no longer uses.
+    this.serverInstance = null
+    this.serverUrl = null
+    this.sharedClient = null
+    this.quickClient = null
+    this.v2Client = null
+    this.serverStarting = null
+    this.configPushed = false
   }
 }

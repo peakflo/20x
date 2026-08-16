@@ -62,6 +62,7 @@ import { mkdir as mkdirAsync, writeFile as writeFileAsync } from 'fs/promises'
 import { existsSync, copyFileSync, mkdirSync, readFileSync } from 'fs'
 import { AcpAdapter } from './adapters/acp-adapter'
 import { CodexAppServerAdapter } from './adapters/codex-app-server-adapter'
+import { getTaskApiPort } from './task-api-server'
 
 const mockedMkdirAsync = vi.mocked(mkdirAsync)
 const mockedWriteFileAsync = vi.mocked(writeFileAsync)
@@ -454,6 +455,104 @@ describe('AgentManager skill file paths', () => {
       expect(result).toContain('No skills configured for this session.')
       expect(result).not.toContain('.agents/skills/')
       expect(result).not.toContain('.claude/skills/')
+    })
+  })
+
+  describe('MCP server documentation', () => {
+    // The session documentation must describe the servers the session really
+    // gets. The agent configuration is wrong in both directions: task-management
+    // is force-added for every real task, and a configured server can be absent
+    // from the session.
+    function makeMcpDb() {
+      const configured = {
+        id: 'srv-configured',
+        name: 'configured-server',
+        type: 'local',
+        command: '/bin/configured',
+        args: ['a.js'],
+        tools: [{ name: 'configured_tool', description: 'From the agent config' }]
+      }
+      const forced = {
+        id: 'srv-task-management',
+        name: 'task-management',
+        type: 'local',
+        command: '/bin/Electron',
+        args: ['task-management-mcp.js'],
+        tools: [{ name: 'list_tasks', description: 'List all tasks' }]
+      }
+      const mockDb = createMockDb({ mcp_servers: ['srv-configured'] }) as any
+      mockDb.getMcpServer = vi.fn((id: string) => (id === 'srv-configured' ? configured : undefined))
+      mockDb.getMcpServers = vi.fn(() => [configured, forced])
+      return mockDb
+    }
+
+    it('documents a force-added server that the agent config does not list', () => {
+      manager = new AgentManager(makeMcpDb())
+
+      const md: string = (manager as any).generateAgentsMd([], [], '/tmp/ws', 'agent-1', {
+        'configured-server': { type: 'stdio', command: '/bin/configured', args: ['a.js'] },
+        'task-management': { type: 'http', url: 'http://127.0.0.1:5555/mcp?task=t1&parent=p1' }
+      })
+
+      expect(md).toContain('### task-management')
+      expect(md).toContain('`list_tasks`')
+      expect(md).toContain('### configured-server')
+    })
+
+    it('omits a configured server that is not attached to the session', () => {
+      manager = new AgentManager(makeMcpDb())
+
+      const md: string = (manager as any).generateAgentsMd([], [], '/tmp/ws', 'agent-1', {
+        'task-management': { type: 'http', url: 'http://127.0.0.1:5555/mcp' }
+      })
+
+      expect(md).toContain('### task-management')
+      expect(md).not.toContain('configured-server')
+      expect(md).not.toContain('configured_tool')
+    })
+
+    it('omits the MCP section when no server is attached', () => {
+      manager = new AgentManager(makeMcpDb())
+
+      const md: string = (manager as any).generateAgentsMd([], [], '/tmp/ws', 'agent-1', {})
+
+      expect(md).not.toContain('Available MCP Servers & Tools')
+    })
+
+    it('documents the in-process HTTP endpoint, not a command that never runs', () => {
+      // The stored record still describes an Electron command, because the stdio
+      // entry point survives for a direct run. A session reaches the server over
+      // HTTP in this process, so the documentation must say that instead.
+      manager = new AgentManager(makeMcpDb())
+
+      const md: string = (manager as any).generateAgentsMd([], [], '/tmp/ws', 'agent-1', {
+        'task-management': { type: 'http', url: 'http://127.0.0.1:5555/mcp?task=t1&parent=p1' }
+      })
+
+      expect(md).toContain('**Type:** Local (HTTP, in-process)')
+      expect(md).toContain('http://127.0.0.1:5555/mcp?task=t1&parent=p1')
+      expect(md).not.toContain('/bin/Electron')
+      expect(md).not.toContain('**Command:**')
+    })
+
+    it('falls back to the agent config when the caller gives no server list', () => {
+      manager = new AgentManager(makeMcpDb())
+
+      const md: string = (manager as any).generateAgentsMd([], [], '/tmp/ws', 'agent-1')
+
+      expect(md).toContain('### configured-server')
+      expect(md).not.toContain('### task-management')
+    })
+
+    it('applies the same rule to CLAUDE.md', () => {
+      manager = new AgentManager(makeMcpDb())
+
+      const md: string = (manager as any).generateClaudeMd([], [], '/tmp/ws', 'agent-1', {
+        'task-management': { type: 'http', url: 'http://127.0.0.1:5555/mcp' }
+      })
+
+      expect(md).toContain('task-management (1 tools)')
+      expect(md).not.toContain('configured-server')
     })
   })
 
@@ -925,8 +1024,8 @@ describe('AgentManager MCP server routing', () => {
     vi.clearAllMocks()
   })
 
-  it('pins artifact MCP tools to the current task without restricting task orchestration', async () => {
-    const mockDb = {
+  function makeTaskManagementDb(): ConstructorParameters<typeof AgentManager>[0] {
+    return {
       getAgent: vi.fn(() => ({ id: 'agent-1', name: 'Agent', config: { mcp_servers: ['task-management-id'] } })),
       getMcpServer: vi.fn(() => ({
         id: 'task-management-id',
@@ -935,18 +1034,72 @@ describe('AgentManager MCP server routing', () => {
         command: 'node',
         args: ['task-management-mcp.js'],
         environment: {}
-      }))
+      })),
+      getMcpServers: vi.fn(() => ([{
+        id: 'task-management-id',
+        name: 'task-management',
+        type: 'local',
+        command: 'node',
+        args: ['task-management-mcp.js'],
+        environment: {}
+      }]))
     } as unknown as ConstructorParameters<typeof AgentManager>[0]
-    const manager = new AgentManager(mockDb)
+  }
+
+  it('pins artifact MCP tools to the current task without restricting task orchestration', async () => {
+    vi.mocked(getTaskApiPort).mockReturnValue(4321)
+    const manager = new AgentManager(makeTaskManagementDb())
 
     const mcpServers = await (manager as any).buildMcpServersForAdapter('agent-1', {
       artifactTaskId: 'task-current'
     })
 
-    expect(mcpServers['task-management'].env).toEqual(expect.objectContaining({
-      TASK_ARTIFACT_SCOPE_ID: 'task-current'
-    }))
-    expect(mcpServers['task-management'].env).not.toHaveProperty('TASK_SCOPE_TASK_ID')
+    // The scope now travels in the URL. No child process is spawned, so there is
+    // no command and no environment to carry it.
+    const entry = mcpServers['task-management']
+    expect(entry.type).toBe('http')
+    expect(entry.command).toBeUndefined()
+    const url = new URL(entry.url)
+    expect(url.pathname).toBe('/mcp')
+    expect(url.searchParams.get('artifact')).toBe('task-current')
+    expect(url.searchParams.get('task')).toBeNull()
+    expect(url.searchParams.get('parent')).toBeNull()
+  })
+
+  it('puts the subtask scope in the URL of a scoped session', async () => {
+    vi.mocked(getTaskApiPort).mockReturnValue(4321)
+    const manager = new AgentManager(makeTaskManagementDb())
+
+    const mcpServers = await (manager as any).buildMcpServersForAdapter('agent-1', {
+      taskScope: { taskId: 'task-child', parentTaskId: 'task-parent' },
+      artifactTaskId: 'task-child'
+    })
+
+    const url = new URL(mcpServers['task-management'].url)
+    expect(url.searchParams.get('task')).toBe('task-child')
+    expect(url.searchParams.get('parent')).toBe('task-parent')
+    // Redundant when it equals the task, so it is left out.
+    expect(url.searchParams.get('artifact')).toBeNull()
+  })
+
+  it('builds the identical config on every call, so a resume does not change it', async () => {
+    vi.mocked(getTaskApiPort).mockReturnValue(4321)
+    const manager = new AgentManager(makeTaskManagementDb())
+    const opts = { taskScope: { taskId: 'task-child', parentTaskId: 'task-parent' } }
+
+    const first = await (manager as any).buildMcpServersForAdapter('agent-1', opts)
+    const second = await (manager as any).buildMcpServersForAdapter('agent-1', opts)
+
+    expect(first['task-management']).toEqual(second['task-management'])
+  })
+
+  it('omits task-management when the task API has no port, instead of offering a broken server', async () => {
+    vi.mocked(getTaskApiPort).mockReturnValue(undefined as unknown as number)
+    const manager = new AgentManager(makeTaskManagementDb())
+
+    const mcpServers = await (manager as any).buildMcpServersForAdapter('agent-1', { ensureTaskManagement: true })
+
+    expect(mcpServers['task-management']).toBeUndefined()
   })
 
   it('canonicalizes Workflo MCP dev server URLs to the active enterprise API URL for enterprise-sourced servers', async () => {
