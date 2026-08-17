@@ -135,10 +135,20 @@ export class SyncManager {
     const plugin = this.pluginRegistry.get(source.plugin_id)
     if (!plugin) return
 
+    // The user picked "I'll do it manually", meaning they close the task in the
+    // source system themselves. A status change in 20x must then stay local —
+    // pushing it (e.g. marking the Notion page done) would complete the ticket
+    // at the source against their explicit choice. Other edits still sync.
+    const fields = { ...changedFields }
+    if (task.complete_at_source === false && 'status' in fields) {
+      delete fields.status
+    }
+    if (Object.keys(fields).length === 0) return
+
     const ctx = this.buildContext(source.mcp_server_id || undefined, task.source_id || undefined)
     const config = this.getConfig(source)
 
-    await plugin.exportUpdate(task, changedFields, config, ctx)
+    await plugin.exportUpdate(task, fields, config, ctx)
   }
 
   async executeAction(
