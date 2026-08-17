@@ -19,6 +19,7 @@ import type { PluginRegistry } from './plugins/registry'
 import { listTaskArtifactEntries, readTaskArtifact } from './artifacts'
 import type { Artifact, ArtifactFileEntry } from '../shared/artifacts'
 import { MOBILE_VOICE_CAPABILITIES } from '../shared/voice'
+import { TaskStatus } from '../shared/constants'
 import { guardStream } from './child-stream-guards'
 
 // ── State ────────────────────────────────────────────────────
@@ -742,6 +743,12 @@ async function routePost(pathname: string, params: Record<string, unknown>, req?
         changed.auto_complete_without_review !== undefined
       ) {
         triggerTaskAutomation()
+      }
+      if (
+        updated.parent_task_id &&
+        (changed.status === TaskStatus.ReadyForReview || changed.status === TaskStatus.Completed)
+      ) {
+        void agent.notifyParentOfSubtaskCompletion(updated.parent_task_id, taskId)
       }
     }
     return updated

@@ -273,6 +273,7 @@ export interface TaskRow {
   auto_complete_without_review: number
   complete_at_source: number | null
   parent_task_id: string | null
+  next_subtask_ids: string
   sort_order: number
   created_at: string
   updated_at: string
@@ -370,6 +371,7 @@ export interface TaskRecord {
    */
   complete_at_source: boolean | null
   parent_task_id: string | null
+  next_subtask_ids: string[]
   sort_order: number
   created_at: string
   updated_at: string
@@ -410,6 +412,7 @@ export interface CreateTaskData {
   auto_complete_without_review?: boolean
   complete_at_source?: boolean | null
   parent_task_id?: string | null
+  next_subtask_ids?: string[]
   /** Cron expression — if provided, sets is_recurring=true and stores as recurrence_pattern */
   cron?: string
 }
@@ -445,6 +448,7 @@ export interface UpdateTaskData {
   auto_complete_without_review?: boolean
   complete_at_source?: boolean | null
   parent_task_id?: string | null
+  next_subtask_ids?: string[]
   sort_order?: number
 }
 
@@ -480,10 +484,11 @@ const UPDATABLE_COLUMNS = new Set([
   'auto_complete_without_review',
   'complete_at_source',
   'parent_task_id',
+  'next_subtask_ids',
   'sort_order'
 ])
 
-const JSON_COLUMNS = new Set(['labels', 'attachments', 'repos', 'output_fields', 'skill_ids'])
+const JSON_COLUMNS = new Set(['labels', 'attachments', 'repos', 'output_fields', 'skill_ids', 'next_subtask_ids'])
 
 /** Ensure a parsed JSON value is always an array (guards against double-stringified or scalar values) */
 function ensureArray<T = string>(value: unknown): T[] {
@@ -529,7 +534,8 @@ function deserializeTask(row: TaskRow): TaskRecord {
     heartbeat_next_check_at: row.heartbeat_next_check_at ?? null,
     auto_start_agent: (row.auto_start_agent ?? 0) === 1,
     auto_complete_without_review: (row.auto_complete_without_review ?? 0) === 1,
-    complete_at_source: row.complete_at_source == null ? null : row.complete_at_source === 1
+    complete_at_source: row.complete_at_source == null ? null : row.complete_at_source === 1,
+    next_subtask_ids: parseJsonArray(row.next_subtask_ids)
   }
 }
 
@@ -947,8 +953,9 @@ function deserializeInstalledPlugin(row: InstalledPluginRow): InstalledPluginRec
  * they build the schema from `CREATE TABLE`, not from the migration path.
  *
  * 8 → 9: tasks.complete_at_source
+ * 9 → 10: tasks.next_subtask_ids
  */
-const SCHEMA_VERSION = 9
+const SCHEMA_VERSION = 10
 
 export class DatabaseManager {
   public db!: Database.Database
@@ -1061,6 +1068,7 @@ export class DatabaseManager {
         auto_complete_without_review INTEGER NOT NULL DEFAULT 0,
         complete_at_source INTEGER DEFAULT NULL,
         parent_task_id TEXT REFERENCES tasks(id) ON DELETE CASCADE,
+        next_subtask_ids TEXT NOT NULL DEFAULT '[]',
         sort_order INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
@@ -1642,6 +1650,9 @@ export class DatabaseManager {
     // Add sort_order column for explicit subtask ordering (supports drag-and-drop)
     if (!columnNames.has('sort_order')) {
       this.db.exec(`ALTER TABLE tasks ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0`)
+    }
+    if (!columnNames.has('next_subtask_ids')) {
+      this.db.exec(`ALTER TABLE tasks ADD COLUMN next_subtask_ids TEXT NOT NULL DEFAULT '[]'`)
     }
 
     // Add auto_start_agent and auto_complete_without_review columns for recurring tasks
@@ -2303,10 +2314,10 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
         labels, attachments, repos, output_fields, external_id, source_id, source,
         is_recurring, recurrence_pattern, recurrence_parent_id,
         auto_start_agent, auto_complete_without_review,
-        parent_task_id, sort_order,
+        parent_task_id, next_subtask_ids, sort_order,
         created_at, updated_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id,
       data.title,
@@ -2329,15 +2340,28 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
       data.auto_start_agent ? 1 : 0,
       data.auto_complete_without_review ? 1 : 0,
       data.parent_task_id ?? null,
+      JSON.stringify(data.next_subtask_ids ?? []),
       sortOrder,
       now,
       now
     )
 
+    if (data.next_subtask_ids !== undefined) {
+      try {
+        this.validateNextSubtaskIds(id, data.next_subtask_ids)
+      } catch (err) {
+        this.db.prepare('DELETE FROM tasks WHERE id = ?').run(id)
+        throw err
+      }
+    }
+
     return this.getTask(id)
   }
 
   updateTask(id: string, data: UpdateTaskData): TaskRecord | undefined {
+    if (data.next_subtask_ids !== undefined) {
+      this.validateNextSubtaskIds(id, data.next_subtask_ids)
+    }
     const setClauses: string[] = []
     const values: (string | number | null)[] = []
 
@@ -2376,6 +2400,27 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
     ).run(...values)
 
     return this.getTask(id)
+  }
+
+  validateNextSubtaskIds(taskId: string, nextSubtaskIds: string[]): void {
+    if (!Array.isArray(nextSubtaskIds)) throw new Error('next_subtask_ids must be an array')
+    if (new Set(nextSubtaskIds).size !== nextSubtaskIds.length) {
+      throw new Error('next_subtask_ids must not contain duplicates')
+    }
+    if (nextSubtaskIds.includes(taskId)) throw new Error('A subtask cannot start itself')
+
+    const task = this.getTask(taskId)
+    if (!task) throw new Error(`Task not found: ${taskId}`)
+    if (!task.parent_task_id && nextSubtaskIds.length > 0) {
+      throw new Error('Only subtasks can define next subtasks')
+    }
+
+    for (const nextId of nextSubtaskIds) {
+      const nextTask = this.getTask(nextId)
+      if (!nextTask || nextTask.parent_task_id !== task.parent_task_id) {
+        throw new Error(`Next subtask must be a sibling: ${nextId}`)
+      }
+    }
   }
 
   deleteTask(id: string): boolean {

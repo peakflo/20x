@@ -154,6 +154,12 @@ function TaskWorkspaceComponent({
       .filter((t) => t.parent_task_id === task.id)
       .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.created_at.localeCompare(b.created_at))
   }, [allTasks, task?.id])
+  const siblingSubtasks = useMemo(() => {
+    if (!task?.parent_task_id) return []
+    return allTasks
+      .filter((candidate) => candidate.parent_task_id === task.parent_task_id && candidate.id !== task.id)
+      .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
+  }, [allTasks, task?.id, task?.parent_task_id])
 
   useEffect(() => {
     if (!task?.id) return
@@ -787,6 +793,11 @@ Update existing skills that were helpful or create new ones for patterns worth r
       updateTaskInStore(task.id, updates)
     }
   }, [onUpdateTask, task?.id, updateTaskInStore])
+  const handleUpdateNextSubtaskIds = useCallback(async (nextSubtaskIds: string[]) => {
+    if (!task?.id) return
+    if (onUpdateTask) await onUpdateTask(task.id, { next_subtask_ids: nextSubtaskIds })
+    else await updateTaskInStore(task.id, { next_subtask_ids: nextSubtaskIds })
+  }, [onUpdateTask, task?.id, updateTaskInStore])
 
   const handleRename = useCallback(async (title: string) => {
     if (!task?.id) return
@@ -921,7 +932,9 @@ Update existing skills that were helpful or create new ones for patterns worth r
       onEditAgent={handleEditAgent}
       onUpdateAutoFlags={handleUpdateAutoFlags}
       subtasks={subtasks}
+      siblingSubtasks={siblingSubtasks}
       parentTask={parentTask}
+      onUpdateNextSubtaskIds={handleUpdateNextSubtaskIds}
       onNavigateToTask={onNavigateToTask}
       onOpenSubtaskInWindow={onOpenSubtaskInWindow}
       onAddSubtask={handleAddSubtask}

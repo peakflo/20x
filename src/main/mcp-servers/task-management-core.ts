@@ -245,7 +245,8 @@ const mastermindTools = [
             },
             required: ['id', 'name', 'type']
           }
-        }
+        },
+        next_subtask_ids: { type: 'array', items: { type: 'string' }, description: 'Sibling subtask IDs to start automatically when this subtask completes. Leave empty to let the parent orchestrator decide.' }
       },
       required: ['task_id']
     }
@@ -314,7 +315,8 @@ const mastermindTools = [
             },
             required: ['id', 'name', 'type']
           }
-        }
+        },
+        next_subtask_ids: { type: 'array', items: { type: 'string' }, description: 'Sibling subtask IDs to start automatically when this subtask completes. Leave empty to let the parent orchestrator decide.' }
       },
       required: ['parent_task_id', 'title']
     }
@@ -566,7 +568,7 @@ const subtaskTools = [
   },
   {
     name: 'update_own_task',
-    description: 'Update this subtask\'s own metadata (description, resolution, attachments, status, labels, agent assignment, repos, skills, output fields, priority).',
+    description: 'Update this subtask\'s own metadata, including which sibling subtasks start after completion.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -579,6 +581,7 @@ const subtaskTools = [
         repos: { type: 'array', items: { type: 'string' }, description: 'Set repository paths/URLs for this task' },
         priority: { type: 'string', enum: ['critical', 'high', 'medium', 'low'] },
         status: { type: 'string', enum: ['not_started', 'agent_working', 'ready_for_review'], description: 'Subtasks cannot self-complete; set ready_for_review when done so the parent task owner can verify.' },
+        next_subtask_ids: { type: 'array', items: { type: 'string' }, description: 'Sibling subtask IDs to start automatically after completion. Leave empty to let the parent orchestrator decide.' },
         output_fields: {
           type: 'array',
           description: 'Define expected output fields for this task. Each field describes a piece of structured data the agent should produce.',
@@ -621,7 +624,8 @@ const subtaskTools = [
         description: { type: 'string', description: 'Subtask description with context and instructions' },
         agent_id: { type: 'string', description: 'Agent ID to assign (use list_agents to find available agents)' },
         skill_ids: { type: 'array', items: { type: 'string' }, description: 'Skill IDs to assign' },
-        labels: { type: 'array', items: { type: 'string' }, description: 'Labels for the subtask' }
+        labels: { type: 'array', items: { type: 'string' }, description: 'Labels for the subtask' },
+        next_subtask_ids: { type: 'array', items: { type: 'string' }, description: 'Existing sibling subtask IDs to start automatically after this new subtask completes.' }
       },
       required: ['title']
     }

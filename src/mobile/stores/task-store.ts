@@ -51,6 +51,7 @@ export interface Task {
   auto_complete_without_review: boolean
   complete_at_source: boolean | null
   parent_task_id: string | null
+  next_subtask_ids: string[]
   sort_order: number
   created_at: string
   updated_at: string

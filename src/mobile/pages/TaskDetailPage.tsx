@@ -246,6 +246,13 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
     return allTasks.find((t) => t.id === task.parent_task_id) || null
   }, [allTasks, task?.parent_task_id])
 
+  const siblingSubtasks = useMemo(() => {
+    if (!task?.parent_task_id) return []
+    return allTasks
+      .filter((candidate) => candidate.parent_task_id === task.parent_task_id && candidate.id !== task.id)
+      .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
+  }, [allTasks, task?.id, task?.parent_task_id])
+
   if (!task) {
     return (
       <div className="flex flex-col h-full">
@@ -430,6 +437,44 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
                 </div>
               )}
             </div>
+
+            {task.parent_task_id && (
+              <>
+                <span className="text-muted-foreground flex items-start gap-1.5 pt-1">
+                  <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="6" cy="6" r="3"/><circle cx="18" cy="6" r="3"/><circle cx="18" cy="18" r="3"/><path d="M9 6h3a6 6 0 0 1 6 6v3"/></svg>
+                  Next subtasks
+                </span>
+                <div className="space-y-2" data-testid="next-subtasks-field">
+                  {siblingSubtasks.length > 0 ? (
+                    <div className="flex flex-wrap gap-2">
+                      {siblingSubtasks.map((sibling) => {
+                        const nextSubtaskIds = task.next_subtask_ids ?? []
+                        const selected = nextSubtaskIds.includes(sibling.id)
+                        return (
+                          <label key={sibling.id} className="inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs">
+                            <input
+                              type="checkbox"
+                              checked={selected}
+                              onChange={() => updateTask(task.id, {
+                                next_subtask_ids: selected
+                                  ? nextSubtaskIds.filter((id) => id !== sibling.id)
+                                  : [...nextSubtaskIds, sibling.id]
+                              })}
+                            />
+                            {sibling.title}
+                          </label>
+                        )
+                      })}
+                    </div>
+                  ) : <span className="text-xs text-muted-foreground">No sibling subtasks</span>}
+                  <p className="text-[11px] text-muted-foreground">
+                    {(task.next_subtask_ids ?? []).length > 0
+                      ? 'Selected subtasks start automatically when this task is completed.'
+                      : 'The parent orchestrator decides what to do next.'}
+                  </p>
+                </div>
+              </>
+            )}
 
             {/* Repos — always visible, with add/remove */}
             <span className="text-muted-foreground flex items-center gap-1.5">

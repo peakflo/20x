@@ -273,6 +273,8 @@ export class AgentManager extends EventEmitter {
   /** Parents currently being woken after subtask completion (dedupe guard so
    *  several subtasks finishing at once produce a single wake-up). */
   private wakingParents: Set<string> = new Set()
+  /** Completed subtasks whose explicit successor edges are being followed. */
+  private routingCompletedSubtasks: Set<string> = new Set()
 
   /** Sessions currently being re-registered for polling after late adapter data
    *  (dedupe guard so a burst of buffered messages produces a single wake-up). */
@@ -3215,6 +3217,51 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     if (!parentTask) return
     if (parentTask.status === TaskStatus.Completed) return
 
+    const completedSubtask = this.db.getTask(subtaskId)
+    const nextSubtaskIds = completedSubtask?.status === TaskStatus.Completed
+      ? completedSubtask.next_subtask_ids ?? []
+      : []
+    let routingIssue: string | null = null
+
+    if (nextSubtaskIds.length > 0) {
+      if (this.routingCompletedSubtasks.has(subtaskId)) return
+      this.routingCompletedSubtasks.add(subtaskId)
+      try {
+        const siblings = new Map(this.db.getSubtasks(parentTaskId).map((task) => [task.id, task]))
+        let hasPendingSuccessor = false
+        for (const nextSubtaskId of nextSubtaskIds) {
+          const nextSubtask = siblings.get(nextSubtaskId)
+          if (!nextSubtask) {
+            routingIssue = `Selected successor ${nextSubtaskId} no longer exists.`
+            continue
+          }
+          if (nextSubtask.status === TaskStatus.Completed) continue
+          if (nextSubtask.status !== TaskStatus.NotStarted) {
+            hasPendingSuccessor = true
+            continue
+          }
+          if (!nextSubtask.agent_id) {
+            routingIssue = `Selected successor "${nextSubtask.title}" has no agent assigned.`
+            continue
+          }
+          try {
+            const result = await this.startTask(nextSubtaskId, { preferSubtasks: false, allowTriage: false })
+            if (result.action === 'no_action') routingIssue = `Selected successor "${nextSubtask.title}" could not start.`
+            else hasPendingSuccessor = true
+          } catch (err) {
+            console.error(`[AgentManager] Failed to start successor ${nextSubtaskId} after subtask ${subtaskId}:`, err)
+            routingIssue = `Selected successor "${nextSubtask.title}" failed to start.`
+          }
+        }
+        if (!hasPendingSuccessor && !routingIssue) {
+          routingIssue = 'All selected successors are already completed.'
+        }
+      } finally {
+        this.routingCompletedSubtasks.delete(subtaskId)
+      }
+      if (!routingIssue) return
+    }
+
     const live = this.findSessionByTaskId(parentTaskId)
     if (live && live.session.status !== 'idle') {
       console.log(
@@ -3224,10 +3271,11 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     }
 
     const subtasks = this.db.getSubtasks(parentTaskId)
+    const needsDecision = completedSubtask?.status === TaskStatus.Completed && (nextSubtaskIds.length === 0 || !!routingIssue)
     const allTerminal = subtasks.length > 0 && subtasks.every(
       (s) => s.status === TaskStatus.ReadyForReview || s.status === TaskStatus.Completed
     )
-    if (!allTerminal) {
+    if (!needsDecision && !allTerminal) {
       console.log(
         `[AgentManager] Subtask ${subtaskId} terminal, but parent ${parentTaskId} still has active subtasks — deferring wake-up`
       )
@@ -3240,12 +3288,16 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       const summary = subtasks
         .map((s) => `- "${s.title}" (id: ${s.id}) → ${s.status}`)
         .join('\n')
-      const message =
-        `All subtasks of this task have reached a terminal state:\n${summary}\n\n` +
-        `Use \`get_task\` / \`list_subtasks\` via the task-management MCP server to review their outputs, ` +
-        `then continue coordination: consolidate results, fill in the parent task's output fields, ` +
-        `and complete the task — or create follow-up subtasks if more work is needed.`
-      console.log(`[AgentManager] Waking parent coordinator ${parentTaskId}: all ${subtasks.length} subtasks terminal`)
+      const message = needsDecision
+        ? `Subtask "${completedSubtask?.title ?? subtaskId}" (id: ${subtaskId}) completed. ` +
+          `${routingIssue ?? 'No next subtasks are selected.'}\n\n` +
+          `Use the task-management MCP server to review the current agenda and decide which sibling subtask to start next, ` +
+          `or complete the parent task if no more work is needed.`
+        : `All subtasks of this task have reached a terminal state:\n${summary}\n\n` +
+          `Use \`get_task\` / \`list_subtasks\` via the task-management MCP server to review their outputs, ` +
+          `then continue coordination: consolidate results, fill in the parent task's output fields, ` +
+          `and complete the task — or create follow-up subtasks if more work is needed.`
+      console.log(`[AgentManager] Waking parent coordinator ${parentTaskId} after subtask ${subtaskId}`)
       await this.sendByTaskId(parentTaskId, message)
     } finally {
       this.wakingParents.delete(parentTaskId)
