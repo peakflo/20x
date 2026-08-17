@@ -3206,8 +3206,12 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
    * - If the parent session is live and NOT idle (e.g. blocked inside a
    *   wait_for_subtasks call), nothing is injected — it will observe the
    *   subtask state itself.
-   * - The wake-up fires only once ALL subtasks are terminal, so a parent with
-   *   many children gets a single wake-up instead of one per child.
+   * - The wake-up fires once no subtask is still in agent_working (all
+   *   terminal, or a mix where the last working child just finished), so a
+   *   coordinator that went idle while creating children is resumed the moment
+   *   the pipeline drains — it can start the next child or consolidate. A
+   *   parent with several children still gets a single wake-up instead of one
+   *   per child.
    * - A dedupe set prevents double-wakes when several children finish at once.
    */
   async notifyParentOfSubtaskCompletion(parentTaskId: string, subtaskId: string): Promise<void> {
@@ -3224,12 +3228,19 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     }
 
     const subtasks = this.db.getSubtasks(parentTaskId)
-    const allTerminal = subtasks.length > 0 && subtasks.every(
-      (s) => s.status === TaskStatus.ReadyForReview || s.status === TaskStatus.Completed
+    if (subtasks.length === 0) return
+
+    // Wake the parent once no subtask is still actively being worked on —
+    // not only when every child is terminal. A coordinator that created
+    // children and then went idle must be told the pipeline drained so it can
+    // start the next not_started child, spawn follow-ups, or consolidate,
+    // instead of being left suspended while work sits in not_started.
+    const stillWorking = subtasks.some(
+      (s) => s.status === TaskStatus.AgentWorking || s.status === TaskStatus.Triaging
     )
-    if (!allTerminal) {
+    if (stillWorking) {
       console.log(
-        `[AgentManager] Subtask ${subtaskId} terminal, but parent ${parentTaskId} still has active subtasks — deferring wake-up`
+        `[AgentManager] Subtask ${subtaskId} terminal, but parent ${parentTaskId} still has a subtask being worked on — deferring wake-up`
       )
       return
     }
@@ -3240,12 +3251,19 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       const summary = subtasks
         .map((s) => `- "${s.title}" (id: ${s.id}) → ${s.status}`)
         .join('\n')
-      const message =
-        `All subtasks of this task have reached a terminal state:\n${summary}\n\n` +
-        `Use \`get_task\` / \`list_subtasks\` via the task-management MCP server to review their outputs, ` +
-        `then continue coordination: consolidate results, fill in the parent task's output fields, ` +
-        `and complete the task — or create follow-up subtasks if more work is needed.`
-      console.log(`[AgentManager] Waking parent coordinator ${parentTaskId}: all ${subtasks.length} subtasks terminal`)
+      const allTerminal = subtasks.every(
+        (s) => s.status === TaskStatus.ReadyForReview || s.status === TaskStatus.Completed
+      )
+      const message = allTerminal
+        ? `All subtasks of this task have reached a terminal state:\n${summary}\n\n` +
+          `Use \`get_task\` / \`list_subtasks\` via the task-management MCP server to review their outputs, ` +
+          `then continue coordination: consolidate results, fill in the parent task's output fields, ` +
+          `and complete the task — or create follow-up subtasks if more work is needed.`
+        : `No subtask of this task is in agent_working anymore — the last one reached ready_for_review:\n${summary}\n\n` +
+          `Use \`get_task\` / \`list_subtasks\` via the task-management MCP server to review the ready subtask's outputs, ` +
+          `then continue coordination: start the next not_started subtask, create follow-up subtasks if more work ` +
+          `is needed, or consolidate results and complete the task.`
+      console.log(`[AgentManager] Waking parent coordinator ${parentTaskId}: no subtask in agent_working (${subtasks.length} subtask(s))`)
       await this.sendByTaskId(parentTaskId, message)
     } finally {
       this.wakingParents.delete(parentTaskId)
