@@ -10,6 +10,21 @@ beforeEach(() => {
   ;({ db } = createTestDb())
 })
 
+describe('subtask successor links', () => {
+  it('persists valid sibling links and rejects invalid graph edges', () => {
+    const parent = db.createTask(makeTask({ title: 'Parent' }))!
+    const first = db.createTask(makeTask({ title: 'First', parent_task_id: parent.id }))!
+    const second = db.createTask(makeTask({ title: 'Second', parent_task_id: parent.id }))!
+    const otherParent = db.createTask(makeTask({ title: 'Other parent' }))!
+    const outsider = db.createTask(makeTask({ title: 'Outsider', parent_task_id: otherParent.id }))!
+
+    expect(db.updateTask(first.id, { next_subtask_ids: [second.id] })?.next_subtask_ids).toEqual([second.id])
+    expect(() => db.updateTask(first.id, { next_subtask_ids: [first.id] })).toThrow('cannot start itself')
+    expect(() => db.updateTask(first.id, { next_subtask_ids: [second.id, second.id] })).toThrow('duplicates')
+    expect(() => db.updateTask(first.id, { next_subtask_ids: [outsider.id] })).toThrow('must be a sibling')
+  })
+})
+
 describe('Task CRUD', () => {
   it('creates and retrieves a task', () => {
     const task = db.createTask(makeTask({ title: 'Hello World' }))

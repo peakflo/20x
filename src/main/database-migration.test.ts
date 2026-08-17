@@ -72,6 +72,26 @@ describe('DatabaseManager migrations on an existing install', () => {
     after.close()
   })
 
+  it('adds next_subtask_ids for a database from schema version 9', () => {
+    const first = new DatabaseManager()
+    first.initialize()
+    first.close?.()
+
+    const raw = openRaw()
+    raw.exec('ALTER TABLE tasks DROP COLUMN next_subtask_ids')
+    raw.prepare("UPDATE settings SET value = ? WHERE key = '__schema_version'").run('9')
+    expect(taskColumns(raw)).not.toContain('next_subtask_ids')
+    raw.close()
+
+    const second = new DatabaseManager()
+    second.initialize()
+    second.close?.()
+
+    const after = openRaw()
+    expect(taskColumns(after)).toContain('next_subtask_ids')
+    after.close()
+  })
+
   /**
    * Guards the gate itself. If someone adds an `ALTER TABLE` to
    * `runMigrations()` but leaves `SCHEMA_VERSION` alone, a returning user whose

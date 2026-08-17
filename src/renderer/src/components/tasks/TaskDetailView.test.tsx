@@ -58,6 +58,7 @@ function makeTask(overrides: Partial<WorkfloTask> = {}): WorkfloTask {
     created_at: '2026-01-01T00:00:00Z',
     updated_at: '2026-01-01T00:00:00Z',
     parent_task_id: null,
+    next_subtask_ids: [],
     sort_order: 0,
     ...overrides
   }
@@ -98,6 +99,8 @@ function renderDetailView(overrides: {
   onCompleteTask?: () => void
   onUpdateDescription?: (description: string) => void | Promise<void>
   onUpdateAutoFlags?: (updates: { auto_start_agent?: boolean; auto_complete_without_review?: boolean }) => void
+  siblingSubtasks?: WorkfloTask[]
+  onUpdateNextSubtaskIds?: (taskIds: string[]) => void
 } = {}) {
   const task = makeTask(overrides.task)
   return render(
@@ -113,6 +116,8 @@ function renderDetailView(overrides: {
       onUpdateRepos={noopFn}
       onAddRepos={noopFn}
       parentTask={overrides.parentTask ?? null}
+      siblingSubtasks={overrides.siblingSubtasks}
+      onUpdateNextSubtaskIds={overrides.onUpdateNextSubtaskIds}
       onNavigateToTask={overrides.onNavigateToTask}
       onEditAgent={overrides.onEditAgent}
       onTriage={overrides.onTriage}
@@ -135,6 +140,22 @@ afterEach(() => {
 
 beforeEach(() => {
   vi.clearAllMocks()
+})
+
+describe('TaskDetailView – successor field', () => {
+  it('selects sibling subtasks and explains the orchestrator fallback', () => {
+    const onUpdateNextSubtaskIds = vi.fn()
+    const sibling = makeTask({ id: 'sub-2', title: 'Verify result', parent_task_id: 'parent-1' })
+    renderDetailView({
+      task: { id: 'sub-1', parent_task_id: 'parent-1', next_subtask_ids: [] },
+      siblingSubtasks: [sibling],
+      onUpdateNextSubtaskIds
+    })
+
+    expect(screen.getByText('The parent orchestrator decides what to do next.')).toBeInTheDocument()
+    fireEvent.click(screen.getByLabelText('Verify result'))
+    expect(onUpdateNextSubtaskIds).toHaveBeenCalledWith(['sub-2'])
+  })
 })
 
 describe('TaskDetailView – parent task context panel', () => {

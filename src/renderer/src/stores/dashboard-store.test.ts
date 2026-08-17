@@ -102,6 +102,7 @@ function makeTask(overrides: Partial<WorkfloTask> = {}): WorkfloTask {
     auto_complete_without_review: false,
     complete_at_source: null,
     parent_task_id: null,
+    next_subtask_ids: [],
     sort_order: 0,
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),

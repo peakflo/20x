@@ -897,7 +897,7 @@ describe('/create_subtask automation inheritance', () => {
     expect(flagsOf(created.task.id).auto_complete_without_review).toBe(1)
   })
 
-  it('does not pass auto_start_agent down — children run through their parent, in order', async () => {
+  it('does not pass auto_start_agent down — the parent and successor graph start children', async () => {
     const parent = db.createTask(makeTask({ title: 'Parent', auto_start_agent: true }))!
     const port = await startTaskApiServer(db)
 

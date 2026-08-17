@@ -48,6 +48,7 @@ function makeTask(overrides: Partial<WorkfloTask> = {}): WorkfloTask {
     auto_complete_without_review: false,
     complete_at_source: null,
     parent_task_id: null,
+    next_subtask_ids: [],
     sort_order: 0,
     created_at: '2026-01-01T00:00:00Z',
     updated_at: '2026-01-01T00:00:00Z',
@@ -495,7 +496,7 @@ describe('useAgentAutoStart', () => {
     expect(parentStartCalls).toHaveLength(0)
   })
 
-  it('starts next subtask when previous subtask is completed via task update', async () => {
+  it('does not use list order after completion because the main process follows successor edges', async () => {
     const parentTask = makeTask({
       id: 'parent-next',
       title: 'Parent task',
@@ -556,7 +557,7 @@ describe('useAgentAutoStart', () => {
     const latestTaskUpdatedCb = taskUpdatedCalls[taskUpdatedCalls.length - 1]?.[0]
     expect(latestTaskUpdatedCb).toBeDefined()
 
-    // Simulate subtask 1 being completed → triggers startNextSubtask via 300ms setTimeout
+    // Simulate subtask 1 being completed.
     await act(async () => {
       latestTaskUpdatedCb?.({
         taskId: 'sub-next-1',
@@ -566,13 +567,13 @@ describe('useAgentAutoStart', () => {
       await vi.advanceTimersByTimeAsync(400)
     })
 
-    // Should start subtask 2 after subtask 1 is completed
+    // The renderer must not infer an edge from sort order.
     const startCalls = (mockElectronAPI.agentSession.start as unknown as Mock).mock.calls
     const startedTaskIds = startCalls.map((call: unknown[]) => call[1])
-    expect(startedTaskIds).toContain('sub-next-2')
+    expect(startedTaskIds).not.toContain('sub-next-2')
   })
 
-  it('marks parent as ready for review when all subtasks are completed', async () => {
+  it('does not finalize the parent in the renderer after subtask completion', async () => {
     const parentTask = makeTask({
       id: 'parent-1',
       title: 'Parent task',
@@ -633,8 +634,7 @@ describe('useAgentAutoStart', () => {
       await Promise.resolve()
     })
 
-    // Should mark parent as ReadyForReview
-    expect(mockElectronAPI.db.updateTask).toHaveBeenCalledWith('parent-1', { status: TaskStatus.ReadyForReview })
+    expect(mockElectronAPI.db.updateTask).not.toHaveBeenCalled()
   })
 
   // ── Parent status guard tests ──

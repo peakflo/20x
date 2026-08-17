@@ -3365,6 +3365,43 @@ describe('AgentManager event-driven parent wake-up', () => {
 
     expect(wakeSpy).not.toHaveBeenCalled()
   })
+
+  it('starts each selected sibling when a subtask completes', async () => {
+    const completed = {
+      id: 'sub-1', title: 'Child A', status: TaskStatus.Completed,
+      parent_task_id: 'parent-1', next_subtask_ids: ['sub-2', 'sub-3']
+    }
+    const successorA = { id: 'sub-2', title: 'Child B', status: TaskStatus.NotStarted, parent_task_id: 'parent-1', agent_id: 'agent-2' }
+    const successorB = { id: 'sub-3', title: 'Child C', status: TaskStatus.NotStarted, parent_task_id: 'parent-1', agent_id: 'agent-3' }
+    const { mgr, wakeSpy } = buildManager({
+      'parent-1': parentTask,
+      'sub-1': completed,
+      'sub-2': successorA,
+      'sub-3': successorB,
+    }, [completed, successorA, successorB])
+    const startSpy = vi.spyOn(mgr, 'startTask').mockResolvedValue({ action: 'task_started' })
+
+    await mgr.notifyParentOfSubtaskCompletion('parent-1', 'sub-1')
+
+    expect(startSpy).toHaveBeenCalledTimes(2)
+    expect(startSpy).toHaveBeenCalledWith('sub-2', { preferSubtasks: false, allowTriage: false })
+    expect(startSpy).toHaveBeenCalledWith('sub-3', { preferSubtasks: false, allowTriage: false })
+    expect(wakeSpy).not.toHaveBeenCalled()
+  })
+
+  it('wakes the parent immediately when a completed subtask has no selected successor', async () => {
+    const completed = {
+      id: 'sub-1', title: 'Child A', status: TaskStatus.Completed,
+      parent_task_id: 'parent-1', next_subtask_ids: []
+    }
+    const pending = { id: 'sub-2', title: 'Child B', status: TaskStatus.NotStarted, parent_task_id: 'parent-1', agent_id: 'agent-2' }
+    const { mgr, wakeSpy } = buildManager({ 'parent-1': parentTask, 'sub-1': completed }, [completed, pending])
+
+    await mgr.notifyParentOfSubtaskCompletion('parent-1', 'sub-1')
+
+    expect(wakeSpy).toHaveBeenCalledOnce()
+    expect(wakeSpy.mock.calls[0][1]).toContain('No next subtasks are selected')
+  })
 })
 
 describe('AgentManager durable transcript write-through', () => {

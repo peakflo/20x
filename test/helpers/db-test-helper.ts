@@ -97,6 +97,7 @@ export function createTestDb(): { db: DatabaseManager; rawDb: InstanceType<typeo
       auto_complete_without_review INTEGER NOT NULL DEFAULT 0,
       complete_at_source INTEGER DEFAULT NULL,
       parent_task_id TEXT REFERENCES tasks(id) ON DELETE CASCADE,
+      next_subtask_ids TEXT NOT NULL DEFAULT '[]',
       sort_order INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL

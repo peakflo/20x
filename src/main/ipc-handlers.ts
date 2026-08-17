@@ -183,6 +183,12 @@ export function registerIpcHandlers(
     if (updated && (data.status !== undefined || data.auto_start_agent !== undefined || data.auto_complete_without_review !== undefined)) {
       void taskAutomationScheduler?.runNow()
     }
+    if (
+      updated?.parent_task_id &&
+      (data.status === TaskStatus.ReadyForReview || data.status === TaskStatus.Completed)
+    ) {
+      void agentManager.notifyParentOfSubtaskCompletion(updated.parent_task_id, id)
+    }
 
     // Record feedback event for enterprise sync
     if (enterpriseStateSync && data.feedback_rating && updated) {

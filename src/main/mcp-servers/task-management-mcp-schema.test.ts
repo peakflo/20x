@@ -30,13 +30,22 @@ const propertiesOf = (scope: TaskMcpScope, name: string): Record<string, unknown
 
 describe('update_own_task schema', () => {
   // The triaging agent needs these to fully configure a task.
-  const requiredFields = ['agent_id', 'repos', 'skill_ids', 'output_fields', 'priority']
+  const requiredFields = ['agent_id', 'repos', 'skill_ids', 'output_fields', 'priority', 'next_subtask_ids']
 
   for (const field of requiredFields) {
     it(`accepts ${field}`, () => {
       expect(Object.keys(propertiesOf(SCOPED, 'update_own_task'))).toContain(field)
     })
   }
+})
+
+describe('successor graph schemas', () => {
+  it('lets both full-access and scoped agents define successor edges', () => {
+    expect(propertiesOf(FULL_ACCESS_SCOPE, 'update_task')).toHaveProperty('next_subtask_ids')
+    expect(propertiesOf(FULL_ACCESS_SCOPE, 'create_subtask')).toHaveProperty('next_subtask_ids')
+    expect(propertiesOf(SCOPED, 'update_own_task')).toHaveProperty('next_subtask_ids')
+    expect(propertiesOf(SCOPED, 'create_sibling_subtask')).toHaveProperty('next_subtask_ids')
+  })
 })
 
 describe('artifact workpiece tools', () => {

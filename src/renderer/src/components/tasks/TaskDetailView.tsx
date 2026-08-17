@@ -381,7 +381,9 @@ interface TaskDetailViewProps {
   /** Update auto-start / auto-complete flags for recurring templates */
   onUpdateAutoFlags?: (updates: { auto_start_agent?: boolean; auto_complete_without_review?: boolean }) => void
   subtasks?: WorkfloTask[]
+  siblingSubtasks?: WorkfloTask[]
   parentTask?: WorkfloTask | null
+  onUpdateNextSubtaskIds?: (taskIds: string[]) => void | Promise<void>
   onNavigateToTask?: (taskId: string) => void
   /** When provided, each subtask shows an action to open it as a separate window/panel. */
   onOpenSubtaskInWindow?: (taskId: string) => void
@@ -395,7 +397,7 @@ interface TaskDetailViewProps {
   showPrimaryActions?: boolean
 }
 
-function TaskDetailViewComponent({ task, agents, onEdit, onDelete, onUpdateAttachments, onUpdateOutputFields, onCompleteTask, onAssignAgent, onUpdateRepos, onAddRepos, onUpdateSkillIds, onAddSkills, onStartAgent, canStartAgent, onResumeAgent, canResumeAgent, onRestartAgent, canRestartAgent, onSnooze, onUnsnooze, onReassign, onTriage, canTriage, onEditAgent, onUpdateDescription, onUpdateAutoFlags, subtasks, parentTask, onNavigateToTask, onOpenSubtaskInWindow, onAddSubtask, onReorderSubtasks, displayMode = 'full', showOutputFields = true, showPrimaryActions = true }: TaskDetailViewProps) {
+function TaskDetailViewComponent({ task, agents, onEdit, onDelete, onUpdateAttachments, onUpdateOutputFields, onCompleteTask, onAssignAgent, onUpdateRepos, onAddRepos, onUpdateSkillIds, onAddSkills, onStartAgent, canStartAgent, onResumeAgent, canResumeAgent, onRestartAgent, canRestartAgent, onSnooze, onUnsnooze, onReassign, onTriage, canTriage, onEditAgent, onUpdateDescription, onUpdateAutoFlags, subtasks, siblingSubtasks, parentTask, onUpdateNextSubtaskIds, onNavigateToTask, onOpenSubtaskInWindow, onAddSubtask, onReorderSubtasks, displayMode = 'full', showOutputFields = true, showPrimaryActions = true }: TaskDetailViewProps) {
   // Per-field selectors — a selector-less useSkillStore() re-renders this
   // large view on every skill-store mutation.
   const skills = useSkillStore((s) => s.skills)
@@ -475,6 +477,40 @@ function TaskDetailViewComponent({ task, agents, onEdit, onDelete, onUpdateAttac
           </div>
 
           <div className="grid grid-cols-[auto_1fr] gap-x-10 gap-y-4 text-sm">
+            {task.parent_task_id && (
+              <>
+                <span className="text-muted-foreground flex items-start gap-2 pt-1"><GitBranch className="h-3.5 w-3.5" /> Next subtasks</span>
+                <div className="space-y-2" data-testid="next-subtasks-field">
+                  {(siblingSubtasks || []).length > 0 ? (
+                    <div className="flex flex-wrap gap-2">
+                      {(siblingSubtasks || []).map((sibling) => {
+                        const nextSubtaskIds = task.next_subtask_ids ?? []
+                        const selected = nextSubtaskIds.includes(sibling.id)
+                        return (
+                          <label key={sibling.id} className="inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs cursor-pointer hover:bg-accent">
+                            <input
+                              type="checkbox"
+                              checked={selected}
+                              onChange={() => onUpdateNextSubtaskIds?.(
+                                selected
+                                  ? nextSubtaskIds.filter((id) => id !== sibling.id)
+                                  : [...nextSubtaskIds, sibling.id]
+                              )}
+                            />
+                            {sibling.title}
+                          </label>
+                        )
+                      })}
+                    </div>
+                  ) : <span className="text-xs text-muted-foreground">No sibling subtasks</span>}
+                  <p className="text-[11px] text-muted-foreground">
+                    {(task.next_subtask_ids ?? []).length > 0
+                      ? 'Selected subtasks start automatically when this task is completed.'
+                      : 'The parent orchestrator decides what to do next.'}
+                  </p>
+                </div>
+              </>
+            )}
             <>
               <span className="text-muted-foreground flex items-center gap-2"><User className="h-3.5 w-3.5" /> Assignee</span>
               <AssigneeSelect

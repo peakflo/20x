@@ -322,6 +322,7 @@ export interface WorkfloTask {
   /** null = the user has not been asked yet; true = close it at the source; false = manual. */
   complete_at_source: boolean | null
   parent_task_id: string | null
+  next_subtask_ids: string[]
   sort_order: number
   created_at: string
   updated_at: string
@@ -346,6 +347,7 @@ export interface CreateTaskDTO {
   auto_complete_without_review?: boolean
   complete_at_source?: boolean | null
   parent_task_id?: string | null
+  next_subtask_ids?: string[]
 }
 
 export interface UpdateTaskDTO {
@@ -378,6 +380,7 @@ export interface UpdateTaskDTO {
   auto_complete_without_review?: boolean
   complete_at_source?: boolean | null
   parent_task_id?: string | null
+  next_subtask_ids?: string[]
   sort_order?: number
 }
 

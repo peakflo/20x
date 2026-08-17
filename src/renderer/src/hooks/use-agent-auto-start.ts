@@ -78,9 +78,8 @@ export function useAgentAutoStart({ tasks, agents, showToast }: UseAgentAutoStar
     return task.is_recurring && !task.recurrence_parent_id
   }, [])
 
-  // Helper: Start the next eligible subtask for a parent task.
-  // Fetches fresh subtask data from DB, enforces sequential execution,
-  // and marks parent as ReadyForReview when all subtasks are completed.
+  // Helper: Start the first eligible subtask for a parent task.
+  // After that, the main process follows explicit successor edges.
   const startNextSubtask = useCallback(
     async (parentId: string) => {
       // Prevent concurrent launches for the same parent
@@ -173,7 +172,7 @@ export function useAgentAutoStart({ tasks, agents, showToast }: UseAgentAutoStar
           // Skip recurring parent template tasks — they are templates, not actionable tasks
           if (isRecurringTemplate(task)) return false
 
-          // Skip subtasks — they are managed by sequential subtask orchestration
+          // Skip subtasks — their parent or an explicit successor edge starts them.
           if (task.parent_task_id) return false
 
           const isNotStarted = task.status === TaskStatus.NotStarted
@@ -246,14 +245,14 @@ export function useAgentAutoStart({ tasks, agents, showToast }: UseAgentAutoStar
         // Skip recurring parent template tasks — they are templates, not actionable tasks
         if (isRecurringTemplate(task)) return
 
-        // Skip parent tasks that have subtasks — subtasks will run sequentially instead
+        // Skip parent tasks that have subtasks — start their first child instead.
         const hasChildren = allTasks.some((t) => t.parent_task_id === task.id)
         if (hasChildren) {
-          console.log(`[AutoStart] Task "${task.title}" skipped: has subtasks (will run sequentially)`)
+          console.log(`[AutoStart] Task "${task.title}" skipped: has subtasks`)
           return
         }
 
-        // For subtasks, enforce sequential execution within parent
+        // Only list order can choose the initial subtask. Later starts use edges.
         if (task.parent_task_id) {
           // Check parent task status — only start subtasks if parent is NotStarted
           const parentTask = allTasks.find((t) => t.id === task.parent_task_id)
@@ -265,6 +264,10 @@ export function useAgentAutoStart({ tasks, agents, showToast }: UseAgentAutoStar
           const siblings = allTasks
             .filter((t) => t.parent_task_id === task.parent_task_id)
             .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
+
+          // The main process follows explicit successor edges after the first
+          // subtask. An empty edge wakes the parent orchestrator instead.
+          if (siblings.some((s) => s.status === TaskStatus.Completed)) return
 
           // Don't start if any sibling is actively being worked on or awaiting review
           const hasActiveSibling = siblings.some(
@@ -402,7 +405,7 @@ export function useAgentAutoStart({ tasks, agents, showToast }: UseAgentAutoStar
         return
       }
 
-      // For subtasks, enforce sequential execution within parent
+      // Only list order can choose the initial subtask. Later starts use edges.
       if (task.parent_task_id) {
         // Check parent task status — only start subtasks if parent is NotStarted
         const currentTasks = tasksRef.current
@@ -413,6 +416,10 @@ export function useAgentAutoStart({ tasks, agents, showToast }: UseAgentAutoStar
         }
 
         const siblings = currentTasks.filter((t) => t.parent_task_id === task.parent_task_id)
+        if (siblings.some((s) => s.status === TaskStatus.Completed)) {
+          removeFromQueue(agentId, nextTaskId)
+          return
+        }
         const hasActiveSibling = siblings.some(
           (s) =>
             s.id !== task.id &&
@@ -619,7 +626,7 @@ export function useAgentAutoStart({ tasks, agents, showToast }: UseAgentAutoStar
       const task = event.task as WorkfloTask
       // Skip recurring parent template tasks
       if (task.is_recurring && !task.recurrence_parent_id) return
-      // Skip subtasks — they are managed by sequential subtask orchestration
+      // Skip subtasks — their parent or an explicit successor edge starts them.
       if (task.parent_task_id) return
       if (
         task.status === TaskStatus.NotStarted &&
@@ -673,10 +680,9 @@ export function useAgentAutoStart({ tasks, agents, showToast }: UseAgentAutoStar
       // Skip recurring parent template tasks
       if (task.is_recurring && !task.recurrence_parent_id) return
 
-      // Handle subtask completion — trigger next subtask or mark parent as done
+      // The main process owns successor routing and parent wake-up. It must
+      // work even when this renderer is closed.
       if (task.parent_task_id && task.status === TaskStatus.Completed) {
-        console.log(`[AutoStart] Subtask "${task.title}" completed, checking for next subtask`)
-        setTimeout(() => startNextSubtask(task.parent_task_id!), 300)
         return
       }
 
