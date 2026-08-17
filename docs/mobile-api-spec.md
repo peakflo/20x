@@ -1,5 +1,54 @@
 # 20x Mobile API Specification
 
+> [!CAUTION]
+> **THIS DOCUMENT IS STALE. DO NOT BUILD AGAINST IT.**
+>
+> **The source of truth is [`src/main/mobile-api-server.ts`](../src/main/mobile-api-server.ts).**
+> Read it first. For the client side of the transcript contract, read
+> [`src/mobile/stores/agent-store.ts`](../src/mobile/stores/agent-store.ts).
+>
+> This file was last updated on **2026-03-02**. `mobile-api-server.ts` has
+> changed many times since. Two kinds of error are known:
+>
+> **1. It documents a transcript model that no longer exists.** The document
+> says a resumed session "replays its full message history via WebSocket
+> `agent:output` events", and tells the client to clear its dedup set and
+> message array before processing the replay. **That model is gone.** The
+> mobile client now reads a durable, event-sourced projection:
+>
+> - `GET /api/tasks/:taskId/transcript` — full snapshot
+> - `GET /api/tasks/:taskId/transcript/delta?sinceRev=N` — delta by a
+>   monotonic `rev` cursor
+> - the `transcript:changed` WebSocket event — idempotent deltas
+>
+> Parts are keyed on `(task_id, part_id)` and upserted, so applying the same
+> delta twice is a no-op and a `rev` gap is repaired by one delta call. There
+> is nothing to clear and nothing to deduplicate. `agent:output` still exists,
+> but it goes to the **Electron renderer only** — it is not part of the mobile
+> API. See the note at `mobile-api-server.ts:795`.
+>
+> **2. It documents 16 routes; about 39 exist.** Missing entirely, among
+> others:
+>
+> | Missing route | Purpose |
+> | --- | --- |
+> | `GET /api/tasks/:taskId/transcript` | transcript snapshot |
+> | `GET /api/tasks/:taskId/transcript/delta` | transcript delta by `rev` |
+> | `GET /api/tasks/:taskId/artifacts`, `.../artifacts/content` | artifacts |
+> | `GET /api/capabilities` | feature negotiation |
+> | `GET /api/plugins`, `/api/plugins/:id/schema`, `/api/plugins/:id/documentation`, `POST /api/plugins/:id/resolve-options` | plugins |
+> | `GET`/`POST /api/task-sources`, `POST /api/task-sources/:id`, `.../sync`, `.../sync-all` | task sources |
+> | `POST /api/auth/pair/initiate`, `POST /api/auth/pair/verify`, `GET /api/auth/sessions` | device pairing |
+> | `POST /api/tasks` | create a task |
+> | `POST /api/tasks/reorder-subtasks` | reorder subtasks |
+> | `GET /api/git/provider`, `GET /api/github/orgs`, `GET /api/github/pull-request` | git and GitHub |
+>
+> Treat every section below as a historical note, not a contract. Anything
+> written here that disagrees with `mobile-api-server.ts` is wrong.
+>
+> _Staleness recorded by Phase 0 of "bring coding agents to workflow-builder UI"
+> (defect G9)._
+
 > HTTP + WebSocket API served by the Electron main process for mobile clients.
 > Default port: `20620`, bound to `0.0.0.0` for Tailscale/LAN access.
 
@@ -421,6 +470,9 @@ Resume an existing agent session (reconnect to a previously started session).
 }
 ```
 
+> [!WARNING]
+> **OBSOLETE.** The replay model described here no longer exists. Use `GET /api/tasks/:taskId/transcript`, `GET /api/tasks/:taskId/transcript/delta?sinceRev=N` and the idempotent `transcript:changed` event instead. See the caution at the top of this file.
+
 The resumed session replays its full message history via WebSocket `agent:output` events.
 
 **Error:** `404` — Session not found or expired.
@@ -553,6 +605,9 @@ This is how the three user interactions map to API calls:
 
 #### `POST /api/sessions/:sessionId/sync`
 
+> [!WARNING]
+> **OBSOLETE.** The replay model described here no longer exists. Use `GET /api/tasks/:taskId/transcript`, `GET /api/tasks/:taskId/transcript/delta?sinceRev=N` and the idempotent `transcript:changed` event instead. See the caution at the top of this file.
+
 Replay messages from a running session. Used to re-sync the client transcript after a reconnect.
 
 **Path Parameters:**
@@ -574,6 +629,9 @@ Replay messages from a running session. Used to re-sync the client transcript af
 |-----------|-----------------|-------------|
 | `success` | `boolean`       | Always true on success |
 | `status`  | `SessionStatus` | Current session status |
+
+> [!WARNING]
+> **OBSOLETE.** The replay model described here no longer exists. Use `GET /api/tasks/:taskId/transcript`, `GET /api/tasks/:taskId/transcript/delta?sinceRev=N` and the idempotent `transcript:changed` event instead. See the caution at the top of this file.
 
 The server replays the full message history via WebSocket `agent:output` events.
 
@@ -1021,6 +1079,9 @@ Clients MUST implement message deduplication using the `data.id` field:
 3. If `data.update === false` (or absent) and `id` is already seen → **ignore** (duplicate).
 4. `step-start` events: Record timestamp, do not render as a message.
 5. `step-finish` events: Compute duration from last `step-start`, annotate last assistant message with `{ durationMs, tokens }`.
+> [!WARNING]
+> **OBSOLETE.** The replay model described here no longer exists. Use `GET /api/tasks/:taskId/transcript`, `GET /api/tasks/:taskId/transcript/delta?sinceRev=N` and the idempotent `transcript:changed` event instead. See the caution at the top of this file.
+
 6. When a session is resumed, the server replays the full message history. The client should clear its dedup set and message array before processing replayed messages.
 
 ---
