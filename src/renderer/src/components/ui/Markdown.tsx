@@ -10,6 +10,7 @@ import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { Check, Copy } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { MermaidDiagram } from './MermaidDiagram'
 
 /** Allow the default safe protocols plus our local app-attachment:// scheme */
 function urlTransform(url: string): string {
@@ -38,6 +39,17 @@ function extractText(node: React.ReactNode): string {
     return extractText((node as React.ReactElement<{ children?: React.ReactNode }>).props.children)
   }
   return ''
+}
+
+// Extracts the fenced block language (e.g. "mermaid") from the rendered
+// <code> child of a <pre> element, if any.
+function getBlockLanguage(children: React.ReactNode): string | undefined {
+  const child = Array.isArray(children) ? children[0] : children
+  if (!React.isValidElement(child)) return undefined
+  const className = (child as React.ReactElement<{ className?: unknown }>).props.className
+  if (typeof className !== 'string') return undefined
+  const match = className.match(/language-([\w+-]+)/)
+  return match?.[1]
 }
 
 function CopyCodeButton({ text }: { text: string }) {
@@ -227,6 +239,15 @@ export const Markdown = memo(function Markdown({ children, size = 'sm', classNam
     // Pre (wraps code blocks) — sole scroll container for fenced code
     pre: ({ children, ...props }: React.ComponentPropsWithoutRef<'pre'>) => {
       const text = extractText(children).replace(/\n$/, '')
+      const language = getBlockLanguage(children)
+      if (language === 'mermaid') {
+        return (
+          <div className="group relative">
+            <CopyCodeButton text={text} />
+            <MermaidDiagram code={text} className={classes.codeBlock} />
+          </div>
+        )
+      }
       return (
         <div className="group relative">
           <CopyCodeButton text={text} />

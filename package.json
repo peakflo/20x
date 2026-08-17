@@ -44,6 +44,7 @@
     "cron-parser": "^5.5.0",
     "electron-updater": "^6.8.3",
     "js-yaml": "^4.1.1",
+    "mermaid": "^11.16.1",
     "node-pty": "^1.1.0",
     "posthog-js": "^1.404.1",
     "qrcode": "^1.5.4",

@@ -6,6 +6,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import '@testing-library/jest-dom/vitest'
 import { Markdown } from './Markdown'
+import mermaid from 'mermaid'
+
+vi.mock('mermaid', () => {
+  const initialize = vi.fn()
+  const render = vi.fn().mockResolvedValue({ svg: '<svg data-testid="mermaid-svg"><rect /></svg>' })
+  return { default: { initialize, render } }
+})
 
 describe('Markdown', () => {
   beforeEach(() => {
@@ -177,6 +184,43 @@ Second paragraph.`
       // Both should be inline (not block)
       codeElements.forEach(code => {
         expect(code.className).not.toContain('block')
+      })
+    })
+  })
+
+  describe('Mermaid diagrams', () => {
+    const mermaidCode = 'graph TD\n  A[Start] --> B[End]'
+
+    it('renders a mermaid diagram for language-mermaid blocks', async () => {
+      const { container } = render(<Markdown>{`\`\`\`mermaid\n${mermaidCode}\n\`\`\` `}</Markdown>)
+
+      await waitFor(() => {
+        expect(container.querySelector('svg')).toBeInTheDocument()
+      })
+
+      expect(vi.mocked(mermaid).initialize).toHaveBeenCalledWith(
+        expect.objectContaining({ startOnLoad: false, securityLevel: 'strict' })
+      )
+      expect(vi.mocked(mermaid).render).toHaveBeenCalledWith(expect.any(String), mermaidCode)
+    })
+
+    it('falls back to raw source when the diagram fails to parse', async () => {
+      vi.mocked(mermaid).render.mockRejectedValueOnce(new Error('Parse error on line 1'))
+      const { container } = render(<Markdown>{`\`\`\`mermaid\n${mermaidCode}\n\`\`\` `}</Markdown>)
+
+      await waitFor(() => {
+        expect(container.querySelector('pre')).toBeInTheDocument()
+      })
+      expect(container.querySelector('pre')).toHaveTextContent('A[Start] --> B[End]')
+    })
+
+    it('keeps the copy button for mermaid blocks', async () => {
+      const { container } = render(<Markdown>{`\`\`\`mermaid\n${mermaidCode}\n\`\`\` `}</Markdown>)
+
+      fireEvent.click(within(container).getByLabelText('Copy code'))
+
+      await waitFor(() => {
+        expect(navigator.clipboard.writeText).toHaveBeenCalledWith(mermaidCode)
       })
     })
   })
