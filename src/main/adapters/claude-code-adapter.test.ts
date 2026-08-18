@@ -1206,3 +1206,92 @@ describe('ClaudeCodeAdapter background-task system messages', () => {
     expect(session.backgroundTasks.get('a').startedAt).toBe(oldStart)
   })
 })
+
+/**
+ * DEFECTS G10 AND G2 — the options the adapter builds for the SDK.
+ *
+ * These assert the OBJECT THE ADAPTER PRODUCES, by calling the builder the
+ * options literal spreads. The alternative — driving `sendPrompt` and capturing
+ * the argument to `query` — passes when the file is run alone and SPAWNS THE
+ * REAL CLAUDE BINARY in a full run, because the module-level SDK handle is
+ * shared across the file and the mock does not survive it. A test that only
+ * works in isolation is worse than no test: it goes green in CI for the wrong
+ * reason.
+ */
+describe('ClaudeCodeAdapter MCP isolation and tool limits', () => {
+  function isolationOptions(mcpServers: Record<string, any>): any {
+    const adapter = new ClaudeCodeAdapter()
+    return (adapter as any).buildIsolationOptions({
+      agentId: 'a-1',
+      taskId: 't-1',
+      workspaceDir: '/tmp/ws',
+      mcpServers,
+    })
+  }
+
+  it('passes strictMcpConfig so an on-disk .mcp.json cannot add a server (G10)', () => {
+    const options = isolationOptions({
+      chat: { type: 'http', url: 'https://chat.example/mcp', headers: {} },
+    })
+    expect(options.strictMcpConfig).toBe(true)
+  })
+
+  it("passes settingSources: ['project'] — isolated, but CLAUDE.md still loads (G10)", () => {
+    const options = isolationOptions({
+      chat: { type: 'http', url: 'https://chat.example/mcp', headers: {} },
+    })
+    /*
+     * NOT `[]`. 20x writes CLAUDE.md into the workspace on every session start,
+     * carrying the skills and the MCP tool documentation, and `[]` stops the
+     * SDK loading it. `strictMcpConfig` above is what actually closes the MCP
+     * side-channel; this drops user and local settings without deleting the
+     * agent's memory file as a side effect.
+     */
+    expect(options.settingSources).toEqual(['project'])
+  })
+
+  it('turns a per-agent tool limit into disallowedTools (G2)', () => {
+    const options = isolationOptions({
+      chat: {
+        type: 'http',
+        url: 'https://chat.example/mcp',
+        headers: {},
+        enabledTools: ['list_channels', 'send_message'],
+        knownTools: ['list_channels', 'send_message', 'delete_channel'],
+      },
+    })
+    expect(options.disallowedTools).toEqual(['mcp__chat__delete_channel'])
+  })
+
+  it('sends NO disallowedTools for an unrestricted server (G2)', () => {
+    const options = isolationOptions({
+      chat: { type: 'http', url: 'https://chat.example/mcp', headers: {} },
+    })
+    // Absent, not empty-and-present: an unrestricted server must behave
+    // exactly as it did before this change.
+    expect(options.disallowedTools).toBeUndefined()
+  })
+
+  it('strips 20x bookkeeping fields before handing servers to the SDK', () => {
+    const adapter = new ClaudeCodeAdapter()
+    const cleaned = (adapter as any).buildClaudeMcpServers({
+      mcpServers: {
+        chat: {
+          type: 'http',
+          url: 'https://chat.example/mcp',
+          headers: {},
+          enabledTools: ['list_channels'],
+          knownTools: ['list_channels', 'delete_channel'],
+        },
+      },
+    })
+    /*
+     * `enabledTools` / `knownTools` are 20x fields. The SDK validates its
+     * server configs, so they are translated into `disallowedTools` and never
+     * travel onward.
+     */
+    expect(cleaned.chat.enabledTools).toBeUndefined()
+    expect(cleaned.chat.knownTools).toBeUndefined()
+    expect(cleaned.chat.url).toBe('https://chat.example/mcp')
+  })
+})

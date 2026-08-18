@@ -18,6 +18,11 @@ import type { CodingAgentAdapter, SessionConfig, MessagePart, SessionMessage, Mc
 import { SessionStatusType, MessagePartType, MessageRole } from './adapters/coding-agent-adapter'
 import { getTaskApiPort, waitForTaskApiServer } from './task-api-server'
 import { buildTaskMcpUrl } from './task-mcp-endpoint'
+import {
+  opencodeDisallowedToolMap,
+  readServerToolLimits,
+  resolveAllowedToolNames
+} from './mcp-tool-limits'
 import { guardChildStreams, writeToChildStdin } from './child-stream-guards'
 import { randomUUID } from 'crypto'
 import { registerSecretSession, unregisterSecretSession, getSecretBrokerPort, writeSecretShellWrapper } from './secret-broker'
@@ -688,6 +693,26 @@ export class AgentManager extends EventEmitter {
   }
 
   /**
+   * The per-tool limit for one server, in the shape an adapter config carries.
+   *
+   * Returns NOTHING when the server is unrestricted, so an unrestricted server
+   * produces exactly the config it always did — the `enabledTools` key is
+   * absent rather than present-and-empty. That matters because an adapter
+   * reading `enabledTools: []` as "deny everything" would silently disable
+   * every unrestricted server, which is how a security fix becomes an outage.
+   */
+  private toolLimitFor(
+    mcpServer: McpServerRecord,
+    limit: string[] | undefined
+  ): { enabledTools?: string[]; knownTools?: string[] } {
+    if (!limit || limit.length === 0) return {}
+    return {
+      enabledTools: resolveAllowedToolNames({ serverTools: mcpServer.tools, limit }),
+      knownTools: (mcpServer.tools || []).map(tool => tool.name).filter(Boolean)
+    }
+  }
+
+  /**
    * Builds MCP servers config for adapters (Claude Code, etc.)
    * Converts from database format to adapter format
    */
@@ -695,6 +720,20 @@ export class AgentManager extends EventEmitter {
     const agent = this.db.getAgent(agentId)
     const mcpEntries = agent?.config?.mcp_servers || []
     const result: Record<string, McpServerConfig> = {}
+    /*
+     * DEFECT G2: THE LIMIT IS READ HERE NOW, NOT ONLY WHERE AGENTS.md IS
+     * WRITTEN.
+     *
+     * `enabledTools` was parsed by `resolveDocumentedMcpServers` — which
+     * decides what the memory file PRINTS — and dropped by this function, which
+     * decides what the session actually RECEIVES. An agent restricted to two
+     * tools was handed all six and told it had two.
+     *
+     * Both readers now call `readServerToolLimits`, so they cannot disagree
+     * again. Parsing it a second time here, inline, would have fixed today's
+     * bug and left tomorrow's.
+     */
+    const toolLimits = readServerToolLimits(mcpEntries)
     // Ensure the task API server is ready before building MCP configs
     // (startTaskApiServer is fire-and-forget during DB init, may not be done yet)
     await waitForTaskApiServer()
@@ -718,7 +757,8 @@ export class AgentManager extends EventEmitter {
           type: 'stdio',
           command: mcpServer.command,
           args: mcpServer.args,
-          env: { ...mcpServer.environment }
+          env: { ...mcpServer.environment },
+          ...this.toolLimitFor(mcpServer, toolLimits.get(serverId))
         }
       } else if (mcpServer.type === 'remote') {
         // Inject OAuth Bearer token if the server has one
@@ -759,7 +799,8 @@ export class AgentManager extends EventEmitter {
         result[mcpServer.name] = {
           type: 'http',
           url: finalUrl,
-          headers: finalHeaders
+          headers: finalHeaders,
+          ...this.toolLimitFor(mcpServer, toolLimits.get(serverId))
         }
       }
     }
@@ -829,6 +870,19 @@ export class AgentManager extends EventEmitter {
       reasoningEffort: agent.config?.reasoning_effort,
       systemPrompt: baseSystemPrompt + taskContext,
       mcpServers,
+      /*
+       * DEFECT G2, OPENCODE HALF — and `SessionConfig.tools` was a live socket
+       * with nothing plugged in.
+       *
+       * The field is declared on `SessionConfig`, read by the OpenCode adapter
+       * and passed straight to `session.prompt`, and was set by NONE of the
+       * nine `SessionConfig` literals in this file. OpenCode's only per-tool
+       * lever was therefore permanently unused.
+       *
+       * A DENY map, not an allow map: an allow map would have to enumerate
+       * every built-in tool as well, and one omission would disable it.
+       */
+      tools: opencodeDisallowedToolMap(mcpServers),
       authMethod: agent.config?.auth_method,
       permissionMode: agent.config?.permission_mode,
       sandboxMode: agent.config?.sandbox_mode,
@@ -1199,13 +1253,14 @@ export class AgentManager extends EventEmitter {
     const agent = this.db.getAgent(agentId)
     const entries = agent?.config?.mcp_servers || []
 
+    // ONE PARSER, shared with buildMcpServersForAdapter. See defect G2 there:
+    // these two readers disagreeing is the whole bug.
+    const limits = readServerToolLimits(entries)
     const configured = new Map<string, DocumentedMcpServer>()
-    for (const entry of entries) {
-      const serverId = typeof entry === 'string' ? entry : (entry as AgentMcpServerEntry).serverId
-      const enabledTools = typeof entry === 'string' ? undefined : (entry as AgentMcpServerEntry).enabledTools
+    for (const serverId of limits.keys()) {
       const server = this.db.getMcpServer(serverId)
       if (!server) continue
-      configured.set(server.name, { server, enabledTools })
+      configured.set(server.name, { server, enabledTools: limits.get(serverId) })
     }
 
     if (!injectedServers) return [...configured.values()]
@@ -1553,6 +1608,19 @@ export class AgentManager extends EventEmitter {
       reasoningEffort: agent.config?.reasoning_effort,
       systemPrompt: agent.config?.system_prompt,
       mcpServers,
+      /*
+       * DEFECT G2, OPENCODE HALF — and `SessionConfig.tools` was a live socket
+       * with nothing plugged in.
+       *
+       * The field is declared on `SessionConfig`, read by the OpenCode adapter
+       * and passed straight to `session.prompt`, and was set by NONE of the
+       * nine `SessionConfig` literals in this file. OpenCode's only per-tool
+       * lever was therefore permanently unused.
+       *
+       * A DENY map, not an allow map: an allow map would have to enumerate
+       * every built-in tool as well, and one omission would disable it.
+       */
+      tools: opencodeDisallowedToolMap(mcpServers),
       authMethod: agent.config?.auth_method,
       permissionMode: agent.config?.permission_mode,
       sandboxMode: agent.config?.sandbox_mode,
@@ -2798,6 +2866,19 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       reasoningEffort: agent.config?.reasoning_effort,
       systemPrompt: baseSystemPrompt + taskContext,
       mcpServers,
+      /*
+       * DEFECT G2, OPENCODE HALF — and `SessionConfig.tools` was a live socket
+       * with nothing plugged in.
+       *
+       * The field is declared on `SessionConfig`, read by the OpenCode adapter
+       * and passed straight to `session.prompt`, and was set by NONE of the
+       * nine `SessionConfig` literals in this file. OpenCode's only per-tool
+       * lever was therefore permanently unused.
+       *
+       * A DENY map, not an allow map: an allow map would have to enumerate
+       * every built-in tool as well, and one omission would disable it.
+       */
+      tools: opencodeDisallowedToolMap(mcpServers),
       authMethod: agent.config?.auth_method,
       permissionMode: agent.config?.permission_mode,
       sandboxMode: agent.config?.sandbox_mode,

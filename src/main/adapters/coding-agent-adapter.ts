@@ -36,6 +36,28 @@ export interface McpServerConfig {
   env?: Record<string, string>
   url?: string
   headers?: Record<string, string>
+  /**
+   * THE TOOLS THIS AGENT MAY USE FROM THIS SERVER — defect G2.
+   *
+   * `undefined` means every tool, which is what an entry with no configured
+   * limit has always meant. An EMPTY ARRAY means no tools, and the two are not
+   * interchangeable.
+   *
+   * This field did not exist, and that absence WAS the defect. The per-agent
+   * limit was parsed out of the agent config in one place — the one that
+   * decides what AGENTS.md prints — and dropped in the other, the one that
+   * decides what the session actually receives. There was nowhere on this type
+   * for the limit to travel, so it could not have been honoured even by
+   * accident. Every adapter that can enforce a per-tool limit now reads it
+   * from here.
+   */
+  enabledTools?: string[]
+  /**
+   * Every tool the server advertises, so an adapter that can only express a
+   * DENY list can compute one. Populated alongside `enabledTools`; ignored
+   * when that is undefined.
+   */
+  knownTools?: string[]
 }
 
 export interface SessionConfig {
@@ -46,6 +68,16 @@ export interface SessionConfig {
   model?: string
   reasoningEffort?: ReasoningEffort
   systemPrompt?: string
+  /**
+   * Per-tool enable map, by tool name. Consumed by the OpenCode adapter, which
+   * passes it straight through to `session.prompt`.
+   *
+   * IT WAS DECLARED HERE AND SET BY NOTHING — a live socket with nothing
+   * plugged in. `agent-manager.ts` builds nine `SessionConfig` literals and
+   * none of them populated it, so OpenCode's only per-tool lever was
+   * permanently unused. The three full literals now fill it from the agent's
+   * MCP tool limits (defect G2).
+   */
   tools?: Record<string, boolean>
   promptAbort?: AbortController
   mcpServers?: Record<string, McpServerConfig>
