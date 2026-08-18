@@ -3335,6 +3335,33 @@ describe('AgentManager event-driven parent wake-up', () => {
     expect(wakeSpy).not.toHaveBeenCalled()
   })
 
+  it('wakes an idle parent when the last working subtask reaches ready_for_review and a sibling is still not_started', async () => {
+    const { mgr, wakeSpy } = buildManager({ 'parent-1': parentTask }, [
+      { id: 'sub-1', title: 'Child A', status: TaskStatus.ReadyForReview },
+      { id: 'sub-2', title: 'Child B', status: TaskStatus.NotStarted },
+    ])
+
+    await mgr.notifyParentOfSubtaskCompletion('parent-1', 'sub-1')
+
+    expect(wakeSpy).toHaveBeenCalledOnce()
+    const [taskId, message] = wakeSpy.mock.calls[0]
+    expect(taskId).toBe('parent-1')
+    expect(message).toContain('Child A')
+    expect(message).toContain('Child B')
+    expect(message).toContain('agent_working')
+  })
+
+  it('does not wake the parent while a sibling subtask is still triaging', async () => {
+    const { mgr, wakeSpy } = buildManager({ 'parent-1': parentTask }, [
+      { id: 'sub-1', title: 'Child A', status: TaskStatus.ReadyForReview },
+      { id: 'sub-2', title: 'Child B', status: TaskStatus.Triaging },
+    ])
+
+    await mgr.notifyParentOfSubtaskCompletion('parent-1', 'sub-1')
+
+    expect(wakeSpy).not.toHaveBeenCalled()
+  })
+
   it('does not inject a message while the parent session is actively working', async () => {
     const { mgr, wakeSpy } = buildManager({ 'parent-1': parentTask }, [
       { id: 'sub-1', title: 'Child A', status: TaskStatus.ReadyForReview },
