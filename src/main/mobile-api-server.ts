@@ -725,6 +725,27 @@ async function routePost(pathname: string, params: Record<string, unknown>, req?
     return task
   }
 
+  // POST /api/tasks/:id/complete — complete a task, closing it at its source
+  // when the user chooses to (matches the desktop completion flow). Reuses
+  // completeTaskWithoutReview, which honours the recorded complete_at_source
+  // answer and leaves a task the source refuses in review.
+  const taskCompleteMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/complete$/)
+  if (taskCompleteMatch) {
+    const taskId = taskCompleteMatch[1]
+    const task = db.getTask(taskId)
+    if (!task) throw Object.assign(new Error('Task not found'), { status: 404 })
+    const { completeAtSource } = params as { completeAtSource?: boolean }
+    if (task.source_id && completeAtSource !== undefined) {
+      db.updateTask(taskId, { complete_at_source: completeAtSource })
+    }
+    const completed = await agent.completeTaskWithoutReview(taskId)
+    const fresh = db.getTask(taskId)
+    if (fresh) {
+      broadcastToMobileClients('task:updated', { taskId, updates: fresh })
+    }
+    return { completed, status: fresh?.status }
+  }
+
   // POST /api/tasks/:id — update task
   const taskUpdateMatch = pathname.match(/^\/api\/tasks\/([^/]+)$/)
   if (taskUpdateMatch) {

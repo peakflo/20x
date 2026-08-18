@@ -99,6 +99,16 @@ describe('mobile-api-server: route matching', () => {
     expect(updateRegex.test('/api/tasks/')).toBe(false)
     expect(updateRegex.test('/api/tasks/some-id')).toBe(true)
   })
+
+  it('POST /api/tasks/:id/complete is distinct from the update route', () => {
+    const completeRegex = /^\/api\/tasks\/([^/]+)\/complete$/
+    const updateRegex = /^\/api\/tasks\/([^/]+)$/
+    expect(completeRegex.test('/api/tasks/some-id/complete')).toBe(true)
+    // The update route must NOT swallow the /complete path
+    expect(updateRegex.test('/api/tasks/some-id/complete')).toBe(false)
+    // And the base path must not match the complete route
+    expect(completeRegex.test('/api/tasks/some-id')).toBe(false)
+  })
 })
 
 describe('mobile-api-server: auth', () => {

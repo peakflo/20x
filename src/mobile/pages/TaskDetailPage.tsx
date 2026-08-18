@@ -85,6 +85,7 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
   const endSession = useAgentStore((s) => s.endSession)
 
   const [showFeedback, setShowFeedback] = useState(false)
+  const [showCompleteChoice, setShowCompleteChoice] = useState(false)
   const [activeSection, setActiveSection] = useState<'details' | 'artifacts'>('details')
   const artifactsByTask = useArtifactStore((s) => s.artifactsByTask)
   const hydrateArtifacts = useArtifactStore((s) => s.hydrate)
@@ -156,26 +157,62 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
     if (session?.sessionId) _stopSession(session.sessionId)
   }, [session?.sessionId, _stopSession])
 
+  // Display name of the source this task came from, when it has one. Shown in
+  // the completion choice, mirroring the desktop dialog.
+  const completeSourceName = useMemo(() => {
+    if (!task?.source_id) return undefined
+    return task.source || 'the task source'
+  }, [task?.source_id, task?.source])
+
+  // Completes a task the way the desktop does: a source-backed task honours
+  // the recorded answer — closing the ticket at the source when the user chose
+  // to, local-only otherwise. Tasks without a source just mark Completed.
+  const completeTaskNow = useCallback(
+    async (t: Task, completeAtSource: boolean) => {
+      if (t.source_id) {
+        await api.tasks.complete(t.id, completeAtSource)
+      } else {
+        await updateTask(t.id, { status: TaskStatus.Completed })
+      }
+    },
+    [updateTask]
+  )
+
   const handleCompleteTask = useCallback(async () => {
     if (!task) return
     // Always show feedback when an agent is assigned (there may be a session to learn from)
     if (task.agent_id) {
       setShowFeedback(true)
+    } else if (task.source_id && task.complete_at_source == null) {
+      // A source-backed task with no recorded answer asks which to use, like
+      // the desktop "Complete in {source}?" dialog.
+      setShowCompleteChoice(true)
     } else {
-      // No agent — complete directly
-      await updateTask(task.id, { status: TaskStatus.Completed })
+      await completeTaskNow(task, task.complete_at_source !== false)
     }
-  }, [task, updateTask])
+  }, [task, completeTaskNow])
 
-  const handleFeedbackSubmit = useCallback(async (rating: number, comment: string) => {
+  const handleCompleteChoice = useCallback(
+    async (completeAtSource: boolean) => {
+      if (!task) return
+      setShowCompleteChoice(false)
+      await completeTaskNow(task, completeAtSource)
+    },
+    [task, completeTaskNow]
+  )
+
+  const handleFeedbackSubmit = useCallback(async (rating: number, comment: string, completeAtSource: boolean) => {
     if (!task || !task.agent_id) return
     setShowFeedback(false)
 
-    // 1. Set task to AgentLearning status with feedback (matches desktop flow)
+    // 1. Set task to AgentLearning status with feedback (matches desktop flow).
+    //    complete_at_source records the answer for the backend completion, which
+    //    honours it when the learning session finishes.
     await updateTask(task.id, {
       status: TaskStatus.AgentLearning,
       feedback_rating: rating,
-      feedback_comment: comment || null
+      feedback_comment: comment || null,
+      ...(task.source_id ? { complete_at_source: completeAtSource } : {})
     })
 
     // 2. Build the same feedback prompt as desktop
@@ -197,21 +234,21 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
         // Backend agent-manager will sync skills and auto-transition to Completed
         // when the session becomes idle (via transitionToIdle AgentLearning check)
       } else {
-        // No session at all — just mark as completed with feedback
-        await updateTask(task.id, { status: TaskStatus.Completed })
+        // No session at all — just complete, honouring the source choice
+        await completeTaskNow(task, completeAtSource)
       }
     } catch (e) {
       console.error('Failed to send feedback to agent:', e)
       // Fallback: complete the task even if learning session fails
-      await updateTask(task.id, { status: TaskStatus.Completed })
+      await completeTaskNow(task, completeAtSource)
     }
-  }, [task, session, updateTask, initSession])
+  }, [task, session, updateTask, initSession, completeTaskNow])
 
-  const handleFeedbackSkip = useCallback(async () => {
+  const handleFeedbackSkip = useCallback(async (completeAtSource: boolean) => {
     if (!task) return
     setShowFeedback(false)
-    await updateTask(task.id, { status: TaskStatus.Completed })
-  }, [task, updateTask])
+    await completeTaskNow(task, completeAtSource)
+  }, [task, completeTaskNow])
 
   // Skills available for this agent — must be before conditional return (Rules of Hooks)
   const agentSkills = useMemo(() => {
@@ -775,9 +812,21 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
       {/* Feedback modal */}
       {showFeedback && (
         <FeedbackModal
+          sourceName={completeSourceName}
           onSubmit={handleFeedbackSubmit}
           onSkip={handleFeedbackSkip}
           onCancel={() => setShowFeedback(false)}
+        />
+      )}
+
+      {/* Complete-at-source choice (mirrors desktop CompleteAtSourceDialog) */}
+      {showCompleteChoice && (
+        <CompleteChoiceModal
+          taskTitle={task?.title || ''}
+          sourceName={completeSourceName || 'the task source'}
+          onCompleteAtSource={() => handleCompleteChoice(true)}
+          onCompleteManually={() => handleCompleteChoice(false)}
+          onCancel={() => setShowCompleteChoice(false)}
         />
       )}
     </div>
@@ -900,9 +949,22 @@ function SubtasksSection({ subtasks, onNavigateToTask, onReorderSubtasks }: { su
   )
 }
 
-function FeedbackModal({ onSubmit, onSkip, onCancel }: { onSubmit: (rating: number, comment: string) => void; onSkip: () => void; onCancel: () => void }) {
+function FeedbackModal({
+  sourceName,
+  onSubmit,
+  onSkip,
+  onCancel
+}: {
+  sourceName?: string | null
+  onSubmit: (rating: number, comment: string, completeAtSource: boolean) => void
+  onSkip: (completeAtSource: boolean) => void
+  onCancel: () => void
+}) {
   const [rating, setRating] = useState(0)
   const [comment, setComment] = useState('')
+  // Defaults to closing the task at the source, which is what 20x did before
+  // the choice existed (matches desktop FeedbackDialog).
+  const [completeAtSource, setCompleteAtSource] = useState(true)
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center">
@@ -954,20 +1016,117 @@ function FeedbackModal({ onSubmit, onSkip, onCancel }: { onSubmit: (rating: numb
           />
         </div>
 
+        {/* Source completion choice (mirrors desktop FeedbackDialog) */}
+        {sourceName && (
+          <div className="mx-5 rounded-lg border border-border/50 p-3 space-y-2">
+            <span className="block text-xs font-medium text-foreground">
+              This task came from {sourceName}
+            </span>
+            <div className="flex gap-2">
+              <ChoiceButton
+                selected={completeAtSource}
+                onClick={() => setCompleteAtSource(true)}
+                label={`Close it in ${sourceName}`}
+              />
+              <ChoiceButton
+                selected={!completeAtSource}
+                onClick={() => setCompleteAtSource(false)}
+                label="I'll do it manually"
+              />
+            </div>
+          </div>
+        )}
+
         {/* Actions */}
         <div className="flex gap-2 justify-end px-5 py-4">
           <button
-            onClick={onSkip}
+            onClick={() => onSkip(completeAtSource)}
             className="h-9 px-4 text-sm text-muted-foreground hover:text-foreground hover:bg-accent rounded-md transition-colors"
           >
             Skip
           </button>
           <button
-            onClick={() => { if (rating > 0) onSubmit(rating, comment) }}
+            onClick={() => { if (rating > 0) onSubmit(rating, comment, completeAtSource) }}
             disabled={rating === 0}
             className="h-9 px-4 text-sm font-medium bg-primary text-primary-foreground rounded-md hover:bg-primary/90 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
           >
             Submit
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function ChoiceButton({
+  selected,
+  onClick,
+  label
+}: {
+  selected: boolean
+  onClick: () => void
+  label: string
+}) {
+  return (
+    <button
+      type="button"
+      role="radio"
+      aria-checked={selected}
+      onClick={onClick}
+      className={cn(
+        'flex-1 rounded-md border px-2.5 py-1.5 text-[11px] transition-colors',
+        selected
+          ? 'border-ring bg-accent/60 text-foreground'
+          : 'border-border/50 text-muted-foreground active:bg-accent/30'
+      )}
+    >
+      {label}
+    </button>
+  )
+}
+
+function CompleteChoiceModal({
+  taskTitle,
+  sourceName,
+  onCompleteAtSource,
+  onCompleteManually,
+  onCancel
+}: {
+  taskTitle: string
+  sourceName: string
+  onCompleteAtSource: () => void
+  onCompleteManually: () => void
+  onCancel: () => void
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center">
+      <div className="fixed inset-0 bg-black/60" onClick={onCancel} />
+      <div className="relative z-50 w-full max-w-md mx-4 mb-4 bg-card border border-border rounded-xl shadow-xl p-5 space-y-4 animate-in slide-in-from-bottom-4 duration-200">
+        <div className="space-y-1">
+          <h2 className="text-base font-semibold text-foreground">Complete in {sourceName}?</h2>
+          <p className="text-xs text-muted-foreground">
+            "{taskTitle}" came from {sourceName}. 20x can close it there for you, or you can
+            mark it complete here only and update {sourceName} yourself.
+          </p>
+        </div>
+        <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2">
+          <button
+            onClick={onCancel}
+            className="h-9 px-4 text-sm text-muted-foreground hover:text-foreground rounded-md transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={onCompleteManually}
+            className="h-9 px-4 text-sm font-medium border border-border text-foreground rounded-md hover:bg-accent/60 transition-colors"
+          >
+            I'll do it manually
+          </button>
+          <button
+            onClick={onCompleteAtSource}
+            className="h-9 px-4 text-sm font-medium bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors"
+          >
+            Complete at source
           </button>
         </div>
       </div>
