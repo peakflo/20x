@@ -143,7 +143,7 @@ describe('SyncManager', () => {
       ;(registry.get as unknown as ReturnType<typeof vi.fn>).mockReturnValue(plugin)
       ;(db.getMcpServer as unknown as ReturnType<typeof vi.fn>).mockReturnValue({ id: 'srv-1' })
 
-      await syncManager.exportTaskUpdate('t1', { status: 'completed' })
+      await syncManager.exportTaskUpdate('t1', { status: 'completed', complete_at_source: false })
       expect(plugin.exportUpdate).not.toHaveBeenCalled()
     })
 
@@ -178,8 +178,13 @@ describe('SyncManager', () => {
       ;(registry.get as unknown as ReturnType<typeof vi.fn>).mockReturnValue(plugin)
       ;(db.getMcpServer as unknown as ReturnType<typeof vi.fn>).mockReturnValue({ id: 'srv-1' })
 
-      await syncManager.exportTaskUpdate('t1', { status: 'completed' })
-      expect(plugin.exportUpdate).toHaveBeenCalled()
+      await syncManager.exportTaskUpdate('t1', { status: 'completed', complete_at_source: true })
+      expect(plugin.exportUpdate).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 't1' }),
+        { status: 'completed' },
+        {},
+        expect.anything()
+      )
     })
   })
 

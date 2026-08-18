@@ -143,6 +143,8 @@ export class SyncManager {
     if (task.complete_at_source === false && 'status' in fields) {
       delete fields.status
     }
+    // Internal completion control — never a source field.
+    delete fields.complete_at_source
     if (Object.keys(fields).length === 0) return
 
     const ctx = this.buildContext(source.mcp_server_id || undefined, task.source_id || undefined)
