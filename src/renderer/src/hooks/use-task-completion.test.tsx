@@ -134,7 +134,10 @@ describe('useTaskCompletion', () => {
     await waitFor(() =>
       expect(executeActionMock).toHaveBeenCalledWith(PluginActionId.Complete, 'task-1', 'src-1')
     )
-    expect(updateTaskMock).toHaveBeenCalledWith('task-1', { status: TaskStatus.Completed })
+    expect(updateTaskMock).toHaveBeenCalledWith('task-1', {
+      status: TaskStatus.Completed,
+      complete_at_source: true
+    })
     await waitFor(() => expect(screen.queryByTestId('complete-at-source-dialog')).toBeNull())
   })
 
@@ -147,7 +150,10 @@ describe('useTaskCompletion', () => {
     fireEvent.click(await screen.findByTestId('complete-manually'))
 
     await waitFor(() =>
-      expect(updateTaskMock).toHaveBeenCalledWith('task-1', { status: TaskStatus.Completed })
+      expect(updateTaskMock).toHaveBeenCalledWith('task-1', {
+        status: TaskStatus.Completed,
+        complete_at_source: false
+      })
     )
     expect(executeActionMock).not.toHaveBeenCalled()
     expect(onToast).toHaveBeenCalledWith('"Fix the login bug" completed in 20x only')
@@ -209,7 +215,10 @@ describe('useTaskCompletion', () => {
     fireEvent.click(screen.getByText('Complete'))
 
     await waitFor(() =>
-      expect(updateTaskMock).toHaveBeenCalledWith('task-1', { status: TaskStatus.Completed })
+      expect(updateTaskMock).toHaveBeenCalledWith('task-1', {
+        status: TaskStatus.Completed,
+        complete_at_source: false
+      })
     )
     expect(screen.queryByTestId('complete-at-source-dialog')).toBeNull()
     expect(executeActionMock).not.toHaveBeenCalled()
@@ -225,6 +234,10 @@ describe('useTaskCompletion', () => {
     await waitFor(() =>
       expect(executeActionMock).toHaveBeenCalledWith(PluginActionId.Complete, 'task-1', 'src-1')
     )
+    expect(updateTaskMock).toHaveBeenCalledWith('task-1', {
+      status: TaskStatus.Completed,
+      complete_at_source: true
+    })
     expect(screen.queryByTestId('complete-at-source-dialog')).toBeNull()
   })
 

@@ -74,7 +74,12 @@ export function useTaskCompletion({ onToast }: UseTaskCompletionOptions = {}) {
             return false
           }
         }
-        await updateTask(task.id, { status: TaskStatus.Completed })
+        await updateTask(task.id, {
+          status: TaskStatus.Completed,
+          // Record the user's completion choice so a later update does not push
+          // a source completion against it (see SyncManager.exportTaskUpdate).
+          ...(task.source_id ? { complete_at_source: atSource } : {})
+        })
       } catch (err) {
         console.error('Failed to complete task:', err)
         onToast?.('Failed to complete task', true)

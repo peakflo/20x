@@ -131,6 +131,61 @@ describe('SyncManager', () => {
       await syncManager.exportTaskUpdate('t1', { title: 'New' })
       expect(plugin.exportUpdate).toHaveBeenCalled()
     })
+
+    it('does not push a status change when the user chose "I\'ll do it manually"', async () => {
+      const plugin = makeMockPlugin()
+      ;(db.getTask as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
+        id: 't1', source_id: 'src-1', external_id: 'ext-1', complete_at_source: false
+      })
+      ;(db.getTaskSource as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
+        id: 'src-1', plugin_id: 'test', mcp_server_id: 'srv-1', config: {}
+      })
+      ;(registry.get as unknown as ReturnType<typeof vi.fn>).mockReturnValue(plugin)
+      ;(db.getMcpServer as unknown as ReturnType<typeof vi.fn>).mockReturnValue({ id: 'srv-1' })
+
+      await syncManager.exportTaskUpdate('t1', { status: 'completed', complete_at_source: false })
+      expect(plugin.exportUpdate).not.toHaveBeenCalled()
+    })
+
+    it('still syncs non-status edits when the user chose "I\'ll do it manually"', async () => {
+      const plugin = makeMockPlugin()
+      ;(db.getTask as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
+        id: 't1', source_id: 'src-1', external_id: 'ext-1', complete_at_source: false
+      })
+      ;(db.getTaskSource as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
+        id: 'src-1', plugin_id: 'test', mcp_server_id: 'srv-1', config: {}
+      })
+      ;(registry.get as unknown as ReturnType<typeof vi.fn>).mockReturnValue(plugin)
+      ;(db.getMcpServer as unknown as ReturnType<typeof vi.fn>).mockReturnValue({ id: 'srv-1' })
+
+      await syncManager.exportTaskUpdate('t1', { title: 'New', status: 'in_progress' })
+      expect(plugin.exportUpdate).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 't1' }),
+        { title: 'New' },
+        {},
+        expect.anything()
+      )
+    })
+
+    it('pushes a status change when the user chose to close it at the source', async () => {
+      const plugin = makeMockPlugin()
+      ;(db.getTask as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
+        id: 't1', source_id: 'src-1', external_id: 'ext-1', complete_at_source: true
+      })
+      ;(db.getTaskSource as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
+        id: 'src-1', plugin_id: 'test', mcp_server_id: 'srv-1', config: {}
+      })
+      ;(registry.get as unknown as ReturnType<typeof vi.fn>).mockReturnValue(plugin)
+      ;(db.getMcpServer as unknown as ReturnType<typeof vi.fn>).mockReturnValue({ id: 'srv-1' })
+
+      await syncManager.exportTaskUpdate('t1', { status: 'completed', complete_at_source: true })
+      expect(plugin.exportUpdate).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 't1' }),
+        { status: 'completed' },
+        {},
+        expect.anything()
+      )
+    })
   })
 
   describe('executeAction', () => {
