@@ -25,6 +25,7 @@ import { registerMcpProxyTarget, getMcpAuthProxyPort } from './mcp-auth-proxy'
 import { analytics } from './analytics-service'
 import { inspectTaskArtifact } from './artifacts'
 import { ArtifactType, pullRequestUrlFromTool, type Artifact } from '../shared/artifacts'
+import { buildSystemMessage, computeDeliveryId, SystemMessageOrigin } from '../shared/system-authority'
 
 // Coding agent backend type enum
 enum CodingAgentType {
@@ -3254,15 +3255,29 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       const allTerminal = subtasks.every(
         (s) => s.status === TaskStatus.ReadyForReview || s.status === TaskStatus.Completed
       )
-      const message = allTerminal
-        ? `All subtasks of this task have reached a terminal state:\n${summary}\n\n` +
-          `Use \`get_task\` / \`list_subtasks\` via the task-management MCP server to review their outputs, ` +
+      const instructions = allTerminal
+        ? `Use \`get_task\` / \`list_subtasks\` via the task-management MCP server to review their outputs, ` +
           `then continue coordination: consolidate results, fill in the parent task's output fields, ` +
           `and complete the task — or create follow-up subtasks if more work is needed.`
-        : `No subtask of this task is in agent_working anymore — the last one reached ready_for_review:\n${summary}\n\n` +
-          `Use \`get_task\` / \`list_subtasks\` via the task-management MCP server to review the ready subtask's outputs, ` +
+        : `Use \`get_task\` / \`list_subtasks\` via the task-management MCP server to review the ready subtask's outputs, ` +
           `then continue coordination: start the next not_started subtask, create follow-up subtasks if more work ` +
           `is needed, or consolidate results and complete the task.`
+      const header = allTerminal
+        ? 'All subtasks of this task have reached a terminal state.'
+        : 'No subtask of this task is in agent_working anymore — the last one reached ready_for_review.'
+      // Subtask titles are agent-authored text. Fencing them and stating the authority
+      // boundary keeps a wake-up from reading as a human go-ahead for privileged work.
+      const message = buildSystemMessage(
+        {
+          origin: SystemMessageOrigin.Coordinator,
+          taskId: parentTaskId,
+          deliveryId: computeDeliveryId(parentTaskId, `${header}\n${summary}`),
+          generatedAt: new Date().toISOString()
+        },
+        header,
+        summary,
+        instructions
+      )
       console.log(`[AgentManager] Waking parent coordinator ${parentTaskId}: no subtask in agent_working (${subtasks.length} subtask(s))`)
       await this.sendByTaskId(parentTaskId, message)
     } finally {
