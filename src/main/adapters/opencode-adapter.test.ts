@@ -834,6 +834,44 @@ describe('OpencodeAdapter', () => {
       }
     })
 
+    it('sends selected question labels as ordered answer arrays to OpenCode', async () => {
+      const adapter = new OpencodeAdapter()
+      await (adapter as any).sdkLoading
+      const mockReply = vi.fn().mockResolvedValue({ data: true, error: null })
+      ;(adapter as any).v2Client = {
+        question: {
+          list: vi.fn().mockResolvedValue({
+            data: [{
+              id: 'que_123',
+              sessionID: 'ses_abc',
+              questions: [{
+                header: 'Commit strategy',
+                question: 'How should I commit?',
+                options: [
+                  { label: 'Commit with --no-verify (Recommended)', description: 'Skip the hook' },
+                  { label: 'Install functions deps first', description: 'Install dependencies' }
+                ]
+              }]
+            }],
+            error: null
+          }),
+          reply: mockReply
+        }
+      }
+
+      await adapter.respondToQuestion(
+        'ses_abc',
+        { answer: 'Commit with --no-verify (Recommended)' },
+        { workspaceDir: '/workspace/task_1' } as any
+      )
+
+      expect(mockReply).toHaveBeenCalledWith({
+        requestID: 'que_123',
+        answers: [['Commit with --no-verify (Recommended)']],
+        directory: '/workspace/task_1'
+      })
+    })
+
     it('autoApprovePermission falls back to raw fetch when V2 SDK is not loaded', async () => {
       const adapter = new OpencodeAdapter()
       ;(adapter as any).v2Client = null

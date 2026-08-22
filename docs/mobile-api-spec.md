@@ -477,7 +477,7 @@ The agent's response streams via WebSocket `agent:output` events.
 
 Respond to an agent's permission request OR answer an agent's question.
 
-This single endpoint handles **two distinct interaction types** — the backend dispatches to the correct adapter method automatically:
+This single endpoint handles **two distinct interaction types**. Set `responseType` for a question so an adapter that supports both interactions uses its question endpoint:
 
 1. **Permission requests** (ACP/Codex adapters) — agent needs approval for a risky action (e.g., running a bash command). These arrive via `agent:status` with `status: "waiting_approval"` and may include a `pendingApproval` object.
 2. **Questions** (Claude Code / all adapters) — agent asks the user a structured question with options. These arrive as `agent:output` events with `partType: "question"` and `data.tool.questions` array rendered inline in the transcript.
@@ -493,25 +493,27 @@ This single endpoint handles **two distinct interaction types** — the backend 
 ```json
 {
   "approved": true,
-  "message": "JWT"
+  "message": "JWT",
+  "responseType": "question"
 }
 ```
 
-| Field      | Type      | Required | Description |
-|------------|-----------|----------|-------------|
-| `approved` | `boolean` | Yes      | `true` to approve/answer, `false` to reject |
-| `message`  | `string`  | No       | The answer text (for questions) or optional context (for permissions) |
+| Field          | Type                         | Required | Description |
+|----------------|------------------------------|----------|-------------|
+| `approved`     | `boolean`                    | Yes      | `true` to approve/answer, `false` to reject |
+| `message`      | `string`                     | No       | The answer text (for questions) or optional context (for permissions) |
+| `responseType` | `"permission" \| "question"` | No       | Use `"question"` when the user answers a structured question |
 
 **For single-question answers**, pass the selected option label directly:
 
 ```json
-{ "approved": true, "message": "JWT" }
+{ "approved": true, "message": "JWT", "responseType": "question" }
 ```
 
 **For multi-question answers**, format as `"Header: Answer"` pairs separated by newlines:
 
 ```json
-{ "approved": true, "message": "Auth Method: JWT\nToken Storage: HttpOnly Cookie" }
+{ "approved": true, "message": "Auth Method: JWT\nToken Storage: HttpOnly Cookie", "responseType": "question" }
 ```
 
 **For permission rejections:**

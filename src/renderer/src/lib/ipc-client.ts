@@ -154,8 +154,10 @@ export const agentSessionApi = {
     return window.electronAPI.agentSession.sendByTaskId(taskId, message, attachments)
   },
 
-  approve: (sessionId: string, approved: boolean, message?: string): Promise<{ success: boolean }> => {
-    return window.electronAPI.agentSession.approve(sessionId, approved, message)
+  approve: (sessionId: string, approved: boolean, message?: string, responseType?: 'permission' | 'question'): Promise<{ success: boolean }> => {
+    return responseType
+      ? window.electronAPI.agentSession.approve(sessionId, approved, message, responseType)
+      : window.electronAPI.agentSession.approve(sessionId, approved, message)
   },
 
   syncSkills: (sessionId: string): Promise<SkillSyncResult> => {

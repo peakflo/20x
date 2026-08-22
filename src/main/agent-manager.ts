@@ -4338,7 +4338,13 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     }
   }
 
-  async respondToPermission(sessionId: string, approved: boolean, message?: string, optionId?: string): Promise<void> {
+  async respondToPermission(
+    sessionId: string,
+    approved: boolean,
+    message?: string,
+    optionId?: string,
+    responseType?: 'permission' | 'question'
+  ): Promise<void> {
     let session = this.sessions.get(sessionId)
 
     // Fallback: session ID may have been re-keyed (temp → real) by pollSingleSession.
@@ -4360,38 +4366,14 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
 
     const adapter = this.getAdapter(session.agentId)
 
-    // --- ACP adapters: use respondToApproval (permission-style options) ---
-    if (adapter && 'respondToApproval' in adapter && typeof (adapter as unknown as AcpAdapter).respondToApproval === 'function') {
-      let selectedOption = optionId
-      if (!selectedOption && message) {
-        const answerMap: Record<string, string> = {
-          'Always': 'approved-for-session',
-          'Yes': 'approved',
-          'No, provide feedback': 'abort',
-          'No': 'abort'
-        }
-        selectedOption = answerMap[message] || (approved ? 'approved' : 'abort')
-      }
-      console.log(`[AgentManager] Responding to ACP adapter approval with: ${selectedOption}`)
-      // OpenCode adapter returns boolean (true=handled, false=no permission found).
-      // AcpAdapter returns void. Cast to boolean|void to handle both.
-      const handled = await (adapter as unknown as { respondToApproval: (sid: string, approved: boolean, opt?: string) => Promise<boolean | void> }).respondToApproval(sessionId, approved, selectedOption)
+    const approvalAdapter = adapter && 'respondToApproval' in adapter
+      && typeof (adapter as unknown as AcpAdapter).respondToApproval === 'function'
 
-      // If no pending permission was found (stale prompt after watchdog abort
-      // or app restart), send a continuation message so the session recovers.
-      // AcpAdapter returns void (undefined), which won't match === false.
-      if (handled === false && approved) {
-        console.log(`[AgentManager] No pending permission found for ${sessionId}, sending continuation message to recover session`)
-        this.doSendAdapterMessage(session, sessionId, 'continue').catch((err) => {
-          console.error(`[AgentManager] Continuation message failed for session ${sessionId}:`, err)
-          this.handleSessionError(sessionId, session!, err)
-        })
-      }
-      return
-    }
-
-    // --- Adapters with respondToQuestion: pass structured answers ---
-    if (adapter && typeof adapter.respondToQuestion === 'function') {
+    // --- Question responses: pass structured answers ---
+    // OpenCode implements both response methods. The renderer must identify a
+    // question response so it does not go to the permission endpoint first.
+    if (adapter && typeof adapter.respondToQuestion === 'function'
+      && (responseType === 'question' || !approvalAdapter)) {
       if (!approved) {
         console.log(`[AgentManager] Question rejected for session ${sessionId}`)
         session.status = 'idle'
@@ -4451,6 +4433,36 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
         console.log(`[AgentManager] Restarting polling after question answer for session ${sessionId}`)
         session.pollingStarted = true
         this.startAdapterPolling(sessionId, session.adapter, adapterConfig)
+      }
+      return
+    }
+
+    // --- ACP/OpenCode permission responses: use permission-style options ---
+    if (approvalAdapter) {
+      let selectedOption = optionId
+      if (!selectedOption && message) {
+        const answerMap: Record<string, string> = {
+          'Always': 'approved-for-session',
+          'Yes': 'approved',
+          'No, provide feedback': 'abort',
+          'No': 'abort'
+        }
+        selectedOption = answerMap[message] || (approved ? 'approved' : 'abort')
+      }
+      console.log(`[AgentManager] Responding to ACP adapter approval with: ${selectedOption}`)
+      // OpenCode adapter returns boolean (true=handled, false=no permission found).
+      // AcpAdapter returns void. Cast to boolean|void to handle both.
+      const handled = await (adapter as unknown as { respondToApproval: (sid: string, approved: boolean, opt?: string) => Promise<boolean | void> }).respondToApproval(sessionId, approved, selectedOption)
+
+      // If no pending permission was found (stale prompt after watchdog abort
+      // or app restart), send a continuation message so the session recovers.
+      // AcpAdapter returns void (undefined), which won't match === false.
+      if (handled === false && approved) {
+        console.log(`[AgentManager] No pending permission found for ${sessionId}, sending continuation message to recover session`)
+        this.doSendAdapterMessage(session, sessionId, 'continue').catch((err) => {
+          console.error(`[AgentManager] Continuation message failed for session ${sessionId}:`, err)
+          this.handleSessionError(sessionId, session!, err)
+        })
       }
       return
     }

@@ -232,7 +232,7 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
       if (!currentSession?.sessionId) return
       try {
         if (isQuestion) {
-          await api.sessions.approve(currentSession.sessionId, true, message)
+          await api.sessions.approve(currentSession.sessionId, true, message, 'question')
           captureAnalyticsEvent('agent_approval_responded', {
             task_id: taskId,
             agent_id: currentSession.agentId,
@@ -281,7 +281,7 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
       const currentSession = useAgentStore.getState().sessions.get(taskId)
       if (!currentSession?.sessionId || !activeQuestionId) return
       try {
-        await api.sessions.approve(currentSession.sessionId, true, answer)
+        await api.sessions.approve(currentSession.sessionId, true, answer, 'question')
         captureAnalyticsEvent('agent_approval_responded', {
           task_id: taskId,
           agent_id: currentSession.agentId,

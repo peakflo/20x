@@ -63,7 +63,7 @@ export function TranscriptPanelContent({ taskId }: TranscriptPanelContentProps) 
         questionIndex >= 0 &&
         !currentMessages.slice(questionIndex + 1).some((m) => m.role === 'user')
       if (hasActiveQuestion) {
-        await approve(true, message)
+        await approve(true, message, 'question')
         return
       }
 

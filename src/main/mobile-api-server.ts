@@ -805,9 +805,13 @@ async function routePost(pathname: string, params: Record<string, unknown>, req?
   const approveMatch = pathname.match(/^\/api\/sessions\/([^/]+)\/approve$/)
   if (approveMatch) {
     const sessionId = approveMatch[1]
-    const { approved, message } = params as { approved: boolean; message?: string }
+    const { approved, message, responseType } = params as {
+      approved: boolean
+      message?: string
+      responseType?: 'permission' | 'question'
+    }
     if (typeof approved !== 'boolean') throw Object.assign(new Error('approved (boolean) is required'), { status: 400 })
-    await agent.respondToPermission(sessionId, approved, message)
+    await agent.respondToPermission(sessionId, approved, message, undefined, responseType)
     return { success: true }
   }
 
