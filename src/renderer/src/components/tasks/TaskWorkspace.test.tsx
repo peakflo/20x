@@ -304,7 +304,7 @@ describe('TaskWorkspace – stale triage session cleanup', () => {
     fireEvent.click(screen.getByTestId('mock-send'))
 
     await waitFor(() => {
-      expect(window.electronAPI.agentSession.approve).toHaveBeenCalledWith('session-1', true, 'approved')
+      expect(window.electronAPI.agentSession.approve).toHaveBeenCalledWith('session-1', true, 'approved', 'question')
     })
     expect(window.electronAPI.agentSession.send).not.toHaveBeenCalled()
   })

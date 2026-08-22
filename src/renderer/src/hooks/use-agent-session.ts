@@ -214,10 +214,10 @@ export function useAgentSession(taskId: string | undefined) {
   )
 
   const approve = useCallback(
-    async (approved: boolean, message?: string) => {
+    async (approved: boolean, message?: string, responseType?: 'permission' | 'question') => {
       const currentSession = useAgentStore.getState().sessions.get(taskId!)
       if (!currentSession?.sessionId) throw new Error('No active session')
-      await agentSessionApi.approve(currentSession.sessionId, approved, message)
+      await agentSessionApi.approve(currentSession.sessionId, approved, message, responseType)
       captureAnalyticsEvent('agent_approval_responded', {
         task_id: taskId,
         agent_id: currentSession.agentId,

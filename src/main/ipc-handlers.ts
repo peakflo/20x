@@ -448,8 +448,8 @@ export function registerIpcHandlers(
     }
   )
 
-  ipcMain.handle('agentSession:approve', async (_, sessionId: string, approved: boolean, message?: string) => {
-    await agentManager.respondToPermission(sessionId, approved, message)
+  ipcMain.handle('agentSession:approve', async (_, sessionId: string, approved: boolean, message?: string, responseType?: 'permission' | 'question') => {
+    await agentManager.respondToPermission(sessionId, approved, message, undefined, responseType)
     return { success: true }
   })
 

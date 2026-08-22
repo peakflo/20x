@@ -1950,6 +1950,43 @@ describe('AgentManager session ID re-keying redirect', () => {
     await expect(mgr.respondToPermission('unknown-id', true)).rejects.toThrow('Session not found: unknown-id')
   })
 
+  it('routes an explicit question response to the question method when the adapter also handles permissions', async () => {
+    const { mgr, session } = createManagerWithSession()
+    const dualAdapter = {
+      ...session.adapter,
+      respondToQuestion: vi.fn(async () => undefined),
+      respondToApproval: vi.fn(async () => true),
+    }
+    session.adapter = dualAdapter
+    vi.spyOn(mgr as any, 'getAdapter').mockReturnValue(dualAdapter)
+    vi.spyOn(mgr as any, 'buildSessionConfig').mockResolvedValue({ workspaceDir: '/tmp/ws' })
+
+    await mgr.respondToPermission('temp-id', true, 'Deployment: Staging', undefined, 'question')
+
+    expect(dualAdapter.respondToQuestion).toHaveBeenCalledWith(
+      'temp-id',
+      { Deployment: 'Staging' },
+      { workspaceDir: '/tmp/ws' }
+    )
+    expect(dualAdapter.respondToApproval).not.toHaveBeenCalled()
+  })
+
+  it('keeps an untyped response on the permission method for a dual-purpose adapter', async () => {
+    const { mgr, session } = createManagerWithSession()
+    const dualAdapter = {
+      ...session.adapter,
+      respondToQuestion: vi.fn(async () => undefined),
+      respondToApproval: vi.fn(async () => true),
+    }
+    session.adapter = dualAdapter
+    vi.spyOn(mgr as any, 'getAdapter').mockReturnValue(dualAdapter)
+
+    await mgr.respondToPermission('temp-id', true, 'Yes')
+
+    expect(dualAdapter.respondToApproval).toHaveBeenCalledWith('temp-id', true, 'approved')
+    expect(dualAdapter.respondToQuestion).not.toHaveBeenCalled()
+  })
+
   it('abortSession resolves re-keyed session via redirect map', async () => {
     const { mgr, session } = createManagerWithSession()
 
