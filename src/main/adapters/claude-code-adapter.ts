@@ -17,6 +17,7 @@ import type {
   MessagePart,
 } from './coding-agent-adapter'
 import { SessionStatusType, MessagePartType, MessageRole } from './coding-agent-adapter'
+import { claudeToolId, resolveDisallowedToolNames } from '../mcp-tool-limits'
 
 type ClaudeSDK = typeof import('@anthropic-ai/claude-agent-sdk')
 type Query = import('@anthropic-ai/claude-agent-sdk').Query
@@ -279,6 +280,88 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
    * The LLM never sees the modified command — only the original tool call and
    * the output appear in conversation context.
    */
+  /**
+   * The MCP servers handed to the SDK, with our own bookkeeping stripped.
+   *
+   * `enabledTools` / `knownTools` are 20x fields. The SDK validates its server
+   * configs, and an unknown key on an stdio entry is at best ignored and at
+   * worst a rejection — so the limit is TRANSLATED into `disallowedTools` and
+   * the fields themselves never leave this adapter.
+   */
+  private buildClaudeMcpServers(config: SessionConfig): Record<string, McpServerConfig> | undefined {
+    if (!config.mcpServers) return undefined
+    const cleaned: Record<string, unknown> = {}
+    for (const [name, server] of Object.entries(config.mcpServers)) {
+      const rest: Record<string, unknown> = { ...server }
+      delete rest.enabledTools
+      delete rest.knownTools
+      cleaned[name] = rest
+    }
+    return cleaned as Record<string, McpServerConfig>
+  }
+
+  /**
+   * Every MCP tool this agent may NOT use, as `mcp__<server>__<tool>`.
+   *
+   * Built from the servers' own advertised tool lists, so it names only tools
+   * that actually exist. A server with no configured limit contributes nothing.
+   */
+  private buildDisallowedTools(config: SessionConfig): string[] {
+    const disallowed: string[] = []
+    for (const [name, server] of Object.entries(config.mcpServers || {})) {
+      for (const tool of resolveDisallowedToolNames({
+        serverTools: (server.knownTools || []).map(toolName => ({ name: toolName })),
+        limit: server.enabledTools
+      })) {
+        disallowed.push(claudeToolId(name, tool))
+      }
+    }
+    return disallowed
+  }
+
+  /**
+   * THE MCP ISOLATION AND TOOL-LIMIT OPTIONS — defects G10 and G2.
+   *
+   * A METHOD RATHER THAN INLINE KEYS, so it can be asserted directly. Driving
+   * `sendPrompt` to read these back means going through the real SDK, which
+   * spawns the Claude binary and is not available in CI — a test written that
+   * way passes in isolation and spawns a child process in a full run.
+   *
+   * G10 — Neither `strictMcpConfig` nor `settingSources` was passed ANYWHERE in
+   * this repository. The SDK's documented default is to LAYER project
+   * `.mcp.json`, user settings, plugins and on-disk agent frontmatter ON TOP of
+   * the servers passed in `mcpServers`. Combined with the hardcoded
+   * `bypassPermissions` in the caller, that meant an org-node MCP restriction
+   * could be lifted by a file on disk — and in a shared tenant sandbox, by a
+   * file any session could write.
+   *
+   * `strictMcpConfig` is the option that actually closes it: the SDK then uses
+   * ONLY the servers passed to it and ignores every other source.
+   *
+   * `settingSources: ['project']` RATHER THAN `[]`, deliberately, and this is a
+   * considered departure from the literal instruction. `[]` is full isolation
+   * and ALSO stops `CLAUDE.md` being loaded — and 20x WRITES `CLAUDE.md` into
+   * the workspace on every session start, carrying the skills and the MCP tool
+   * documentation. `[]` would therefore have silently deleted the agent's
+   * memory file in order to close a hole `strictMcpConfig` closes on its own.
+   * `['project']` keeps the memory file and still drops user and local
+   * settings.
+   *
+   * G2 — `disallowedTools` removes a tool from the model's CONTEXT, so a
+   * disabled tool is never offered and cannot be named. That is
+   * reject-before-dispatch expressed in the only vocabulary this SDK has for
+   * it. The key is OMITTED when nothing is restricted, so an unrestricted agent
+   * behaves exactly as it did before this change.
+   */
+  private buildIsolationOptions(config: SessionConfig): Partial<Options> {
+    const disallowedTools = this.buildDisallowedTools(config)
+    return {
+      strictMcpConfig: true,
+      settingSources: ['project'],
+      ...(disallowedTools.length > 0 ? { disallowedTools } : {})
+    } as Partial<Options>
+  }
+
   private buildSecretHooks(config: SessionConfig): Partial<Record<string, HookCallbackMatcher[]>> | undefined {
     const secretEnvVars = config.secretEnvVars
     if (!secretEnvVars || Object.keys(secretEnvVars).length === 0) {
@@ -756,13 +839,14 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
       cwd: config.workspaceDir,
       pathToClaudeCodeExecutable: claudePath,
       env: this.buildClaudeEnvironment(),
-      mcpServers: config.mcpServers as Record<string, McpServerConfig> | undefined,
+      mcpServers: this.buildClaudeMcpServers(config),
       model: config.model,
       effort,
       systemPrompt: config.systemPrompt,
       abortController,
       permissionMode: 'bypassPermissions', // Auto-approve all actions (user has already chosen to run agent)
       allowDangerouslySkipPermissions: true, // Required for bypassPermissions mode
+      ...this.buildIsolationOptions(config),
       ...(secretHooks ? { hooks: secretHooks } : {}),
     }
 

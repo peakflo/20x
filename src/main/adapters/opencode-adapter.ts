@@ -354,6 +354,86 @@ export class OpencodeAdapter implements CodingAgentAdapter {
    * helper therefore retries the failures once, and reports what is still
    * missing so the caller can escalate instead of continuing silently.
    */
+  /**
+   * DEFECT G10, OPENCODE HALF — DISCONNECT ANY SERVER WE DID NOT GRANT.
+   *
+   * OpenCode has no `strictMcpConfig`. It reads `opencode.json` from disk and
+   * merges the `mcp` section into its own configuration, so a server written to
+   * a file was silently added to the session ON TOP of the ones the agent
+   * definition granted. `buildMergedOpencodeConfig` now strips that section
+   * from the config 20x hands over, but the SDK also picks up an
+   * `opencode.json` next to the workspace on its own — so stripping our copy
+   * is necessary and not sufficient.
+   *
+   * This is the sufficient half: ASK THE SERVER WHAT IT ACTUALLY HAS, and
+   * disconnect everything the control plane did not name. Verifying the
+   * outcome rather than the input is the only check that survives a config
+   * source we did not know about.
+   *
+   * Failures here are logged and not fatal: a stale `mcp.status` shape must not
+   * stop a session from running, but it must never pass unnoticed either.
+   */
+  private async disconnectUngrantedMcpServers(
+    ocClient: OpencodeClient,
+    granted: Record<string, McpServerConfig>,
+    workspaceDir: string | undefined,
+    context: string
+  ): Promise<string[]> {
+    const grantedNames = new Set(Object.keys(granted))
+    const removed: string[] = []
+
+    try {
+      const status = await ocClient.mcp.status(
+        workspaceDir ? { query: { directory: workspaceDir } } : undefined
+      )
+      const present = Object.keys((status?.data as Record<string, unknown>) || {})
+      const ungranted = present.filter(name => !grantedNames.has(name))
+      if (ungranted.length === 0) return removed
+
+      console.warn(
+        `[OpencodeAdapter] ${context}: ${ungranted.length} MCP server(s) present that the agent ` +
+          `definition did not grant (${ungranted.join(', ')}) — disconnecting. See defect G10.`
+      )
+
+      const mcpClient = ocClient.mcp as unknown as {
+        disconnect?: (args: unknown) => Promise<{ error?: unknown }>
+      }
+      if (typeof mcpClient.disconnect !== 'function') {
+        console.error(
+          `[OpencodeAdapter] ${context}: cannot disconnect ungranted MCP servers — ` +
+            'this OpenCode SDK has no mcp.disconnect. Their tools remain reachable.'
+        )
+        return removed
+      }
+
+      for (const name of ungranted) {
+        try {
+          const result = await mcpClient.disconnect({
+            path: { name },
+            ...(workspaceDir && { query: { directory: workspaceDir } })
+          })
+          if (result?.error) {
+            console.error(`[OpencodeAdapter] failed to disconnect ungranted MCP server '${name}':`, result.error)
+          } else {
+            removed.push(name)
+          }
+        } catch (err) {
+          console.error(
+            `[OpencodeAdapter] failed to disconnect ungranted MCP server '${name}':`,
+            err instanceof Error ? err.message : err
+          )
+        }
+      }
+    } catch (err) {
+      console.error(
+        `[OpencodeAdapter] ${context}: could not read MCP status to reconcile granted servers:`,
+        err instanceof Error ? err.message : err
+      )
+    }
+
+    return removed
+  }
+
   private async attachAndVerifyMcpServers(
     ocClient: OpencodeClient,
     mcpServers: Record<string, McpServerConfig>,
@@ -361,7 +441,10 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     context: string
   ): Promise<McpAttachResult> {
     const first = await this.registerMcpServers(ocClient, mcpServers, workspaceDir)
-    if (first.failed.length === 0) return first
+    if (first.failed.length === 0) {
+      await this.disconnectUngrantedMcpServers(ocClient, mcpServers, workspaceDir, context)
+      return first
+    }
 
     console.warn(
       `[OpencodeAdapter] ${context}: MCP servers not attached on first try (${first.failed.join(', ')}) — retrying once`
@@ -386,6 +469,7 @@ export class OpencodeAdapter implements CodingAgentAdapter {
         `Agent tools from these servers are NOT available in this session.`
       )
     }
+    await this.disconnectUngrantedMcpServers(ocClient, mcpServers, workspaceDir, context)
     return result
   }
 
