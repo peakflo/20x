@@ -126,16 +126,21 @@ export interface SnapshotResult {
   elements: SnapshotElement[]
 }
 
-/** Parses the stringified-JSON payload returned by buildSnapshotScript(). */
+/** Parses the payload returned by buildSnapshotScript() — object or JSON string. */
 export function parseSnapshotResult(raw: unknown): SnapshotResult | { error: string } {
-  if (typeof raw !== 'string') return { error: 'Unexpected snapshot result shape' }
-  try {
-    const parsed = JSON.parse(raw) as SnapshotResult
-    if (!parsed || !Array.isArray(parsed.elements)) return { error: 'Malformed snapshot payload' }
-    return parsed
-  } catch {
+  let parsed: unknown = raw
+  if (typeof raw === 'string') {
+    try {
+      parsed = JSON.parse(raw)
+    } catch {
+      return { error: 'Malformed snapshot payload' }
+    }
+  }
+  const snap = parsed as SnapshotResult | null
+  if (!snap || typeof snap !== 'object' || !Array.isArray(snap.elements)) {
     return { error: 'Malformed snapshot payload' }
   }
+  return snap
 }
 
 function queryFor(refOrSelector: string): string {
@@ -421,7 +426,9 @@ export class PanelBrowserBroker {
   async snapshot(taskId: string, panelId?: string | null): Promise<Record<string, unknown>> {
     const resolved = this.resolve(taskId, panelId)
     if (!resolved.ok) return resolved
-    const result = parseSnapshotResult((await this.eval(resolved.wc, buildSnapshotScript())).value)
+    const evalResult = await this.eval(resolved.wc, buildSnapshotScript())
+    if (evalResult.error) return evalResult
+    const result = parseSnapshotResult(evalResult)
     if ('error' in result) return result
     return result as unknown as Record<string, unknown>
   }

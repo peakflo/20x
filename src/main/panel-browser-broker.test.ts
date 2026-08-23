@@ -83,6 +83,10 @@ describe('snapshot script + parser round-trip', () => {
     expect(parseSnapshotResult(payload)).toMatchObject({ url: 'https://x.io', title: 'X' })
   })
 
+  it('accepts an already-parsed object (executeJavaScript may return it unwrapped)', () => {
+    expect(parseSnapshotResult({ url: 'https://x.io', title: 'X', elements: [] })).toMatchObject({ url: 'https://x.io' })
+  })
+
   it('rejects malformed payloads', () => {
     expect(parseSnapshotResult(null)).toHaveProperty('error')
     expect(parseSnapshotResult('not json')).toHaveProperty('error')
