@@ -20,6 +20,7 @@ import { GitHubIssuesPlugin } from './plugins/github-issues-plugin'
 import { NotionPlugin } from './plugins/notion-plugin'
 import { YouTrackPlugin } from './plugins/youtrack-plugin'
 import { registerIpcHandlers } from './ipc-handlers'
+import { panelBrowserBroker } from './panel-browser-broker'
 import { VoiceSessionManager } from './voice/voice-session-manager'
 import { assistantTextParts, sinceLastUserMessage } from './voice/voice-answer-parts'
 import { EnterpriseAuth } from './enterprise-auth'
@@ -365,8 +366,9 @@ function createWindow(): void {
   })
 
   // SAFETY: Prevent the main window from ever navigating away from the app.
-  // This guards against agent-browser or CDP accidentally targeting the main
-  // window instead of a webview panel.
+  // Defense in depth for the panel browser broker: only registered canvas
+  // browser panels are addressable by agents, so this should never fire —
+  // but if anything ever drives the main window off-app, block it here.
   //
   // Layer 1: will-navigate (catches user-initiated navigations — NOT CDP)
   mainWindow.webContents.on('will-navigate', (event, url) => {
@@ -378,10 +380,8 @@ function createWindow(): void {
     }
   })
 
-  // Layer 2: Recovery — if CDP Page.navigate bypasses will-navigate and the main
-  // window ends up on a non-app URL, detect it and reload the app immediately.
-  // This is a safety net, not prevention — the window briefly shows the wrong page
-  // then snaps back to the app.
+  // Layer 2: Recovery — snap the app back if the main window ever ends up on a
+  // non-app URL despite the guard above. Safety net, not prevention.
   const appUrl = is.dev && process.env['ELECTRON_RENDERER_URL']
     ? process.env['ELECTRON_RENDERER_URL']
     : null // file:// URL set after loadFile
@@ -807,11 +807,12 @@ protocol.registerSchemesAsPrivileged([
 // Initialize crash logger as early as possible
 initCrashLogger()
 
-// Enable Chrome DevTools Protocol (CDP) on a fixed port so that agent-browser
-// (and other CDP clients) can connect to webview tabs embedded in the canvas.
-// Port 0 lets Chromium pick a free port; we read it back via the /json endpoint.
-const CDP_PORT = 19222
-app.commandLine.appendSwitch('remote-debugging-port', String(CDP_PORT))
+// NOTE: The app intentionally does NOT expose a --remote-debugging-port.
+// Canvas browser panels are driven by agents through the in-app panel browser
+// broker (panel-browser-broker.ts) via browser_* MCP tools — only registered
+// panels are addressable, so the main window can never be reached or
+// navigated away by an agent. A global debug port would expose every target
+// (main window = first page target) to any local process.
 
 // ── Anti-bot-detection for embedded browser panels ─────────────────────────
 // Some sites (Xero, banking portals) use Akamai's WAF which fingerprints
@@ -1223,6 +1224,8 @@ app.on('before-quit', async (event) => {
   if (isShuttingDown) {
     return
   }
+
+  panelBrowserBroker.stopAll()
 
   event.preventDefault()
 

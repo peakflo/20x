@@ -527,6 +527,125 @@ const mastermindTools = [
   }
 ]
 
+// Browser-panel tools. They drive canvas "Agent Browser" panels through the
+// in-app broker — no external CLI, no global debug port, and only panels
+// edge-connected to the calling task are addressable.
+const taskParam = { type: 'string', description: 'Task ID' }
+const panelIdParam = { type: 'string', description: 'Optional canvas panel ID from browser_list_panels. Omit when exactly one browser panel is linked to the task.' }
+const browserTools = [
+  {
+    name: 'browser_list_panels',
+    description: 'List the canvas browser panels linked to this task. Returns panel_id, url and title for each.',
+    inputSchema: { type: 'object', properties: { task_id: taskParam }, required: ['task_id'] }
+  },
+  {
+    name: 'browser_navigate',
+    description: 'Navigate a browser panel to a URL.',
+    inputSchema: {
+      type: 'object',
+      properties: { task_id: taskParam, url: { type: 'string', description: 'URL to load' }, panel_id: panelIdParam },
+      required: ['task_id', 'url']
+    }
+  },
+  {
+    name: 'browser_snapshot',
+    description: 'Capture interactive elements of a browser panel as @e1…@eN refs (role, name, value). Refs are used by browser_click/browser_type/browser_scroll.',
+    inputSchema: { type: 'object', properties: { task_id: taskParam, panel_id: panelIdParam }, required: ['task_id'] }
+  },
+  {
+    name: 'browser_click',
+    description: 'Click an element by snapshot ref (@e3) or CSS selector.',
+    inputSchema: {
+      type: 'object',
+      properties: { task_id: taskParam, target: { type: 'string', description: '@ref from browser_snapshot or a CSS selector' }, panel_id: panelIdParam },
+      required: ['task_id', 'target']
+    }
+  },
+  {
+    name: 'browser_type',
+    description: 'Type text into an input/textarea/select by ref or CSS selector. Set submit=true to press Enter afterwards.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        task_id: taskParam,
+        target: { type: 'string', description: '@ref from browser_snapshot or a CSS selector' },
+        text: { type: 'string' },
+        submit: { type: 'boolean', description: 'Press Enter / submit the form after typing' },
+        panel_id: panelIdParam
+      },
+      required: ['task_id', 'target', 'text']
+    }
+  },
+  {
+    name: 'browser_press_key',
+    description: 'Press a key on the focused element: Enter, Tab, Escape, Backspace, Delete, Space, ArrowUp/Down/Left/Right, Home, End, PageUp, PageDown or a single character.',
+    inputSchema: {
+      type: 'object',
+      properties: { task_id: taskParam, key: { type: 'string' }, panel_id: panelIdParam },
+      required: ['task_id', 'key']
+    }
+  },
+  {
+    name: 'browser_scroll',
+    description: 'Scroll the page (direction up/down/left/right, optional amount in px) or bring an element into view via target.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        task_id: taskParam,
+        direction: { type: 'string', enum: ['up', 'down', 'left', 'right'] },
+        amount: { type: 'number', description: 'Pixels to scroll (default 600)' },
+        target: { type: 'string', description: '@ref or CSS selector to scroll into view instead' },
+        panel_id: panelIdParam
+      },
+      required: ['task_id']
+    }
+  },
+  {
+    name: 'browser_get',
+    description: 'Read page facts: what=url | title | text.',
+    inputSchema: {
+      type: 'object',
+      properties: { task_id: taskParam, what: { type: 'string', enum: ['url', 'title', 'text'] }, panel_id: panelIdParam },
+      required: ['task_id', 'what']
+    }
+  },
+  {
+    name: 'browser_wait',
+    description: 'Wait until a CSS selector exists, text appears in the page, or the URL contains a fragment.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        task_id: taskParam,
+        mode: { type: 'string', enum: ['selector', 'text', 'url'] },
+        value: { type: 'string' },
+        timeout_ms: { type: 'number', description: 'Default 10000, max 60000' },
+        panel_id: panelIdParam
+      },
+      required: ['task_id', 'mode', 'value']
+    }
+  },
+  {
+    name: 'browser_screenshot',
+    description: 'Capture a PNG screenshot of a browser panel; returns the saved file path.',
+    inputSchema: { type: 'object', properties: { task_id: taskParam, panel_id: panelIdParam }, required: ['task_id'] }
+  },
+  {
+    name: 'browser_back',
+    description: 'Go back in a browser panel history.',
+    inputSchema: { type: 'object', properties: { task_id: taskParam, panel_id: panelIdParam }, required: ['task_id'] }
+  },
+  {
+    name: 'browser_forward',
+    description: 'Go forward in a browser panel history.',
+    inputSchema: { type: 'object', properties: { task_id: taskParam, panel_id: panelIdParam }, required: ['task_id'] }
+  },
+  {
+    name: 'browser_reload',
+    description: 'Reload a browser panel page.',
+    inputSchema: { type: 'object', properties: { task_id: taskParam, panel_id: panelIdParam }, required: ['task_id'] }
+  }
+]
+
 // Subtask-scoped tools (can only access parent task + sibling subtasks)
 const subtaskTools = [
   {
@@ -786,8 +905,8 @@ async function handleScopedCall(
 /** The tools a session may see. This is the whole answer to "which tools to serve". */
 export function listToolsForScope(scope: TaskMcpScope) {
   return isScopedSession(scope)
-    ? [...subtaskTools, ...sharedTools]
-    : [...mastermindTools, ...sharedTools]
+    ? [...subtaskTools, ...browserTools, ...sharedTools]
+    : [...mastermindTools, ...browserTools, ...sharedTools]
 }
 
 /**

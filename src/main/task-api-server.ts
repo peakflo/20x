@@ -35,6 +35,7 @@ import {
   readRegisteredTaskArtifactFile,
   writeRegisteredTaskArtifactFile
 } from './artifacts'
+import { panelBrowserBroker } from './panel-browser-broker'
 
 let server: HttpServer | null = null
 let port: number | null = null
@@ -1118,6 +1119,97 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
       }
     }
 
+    // ── Browser-panel tools (panel-scoped broker; see panel-browser-broker.ts) ──
+    case '/browser_list_panels': {
+      const taskId = typeof params.task_id === 'string' ? params.task_id : ''
+      if (!taskId || !db.getTask(taskId)) return { error: 'Task not found' }
+      return { panels: panelBrowserBroker.listPanels(taskId) }
+    }
+
+    case '/browser_navigate': {
+      const taskId = typeof params.task_id === 'string' ? params.task_id : ''
+      if (!taskId || !db.getTask(taskId)) return { error: 'Task not found' }
+      if (typeof params.url !== 'string' || !params.url.trim()) return { error: 'url is required' }
+      return panelBrowserBroker.navigate(taskId, params.url, str(params.panel_id))
+    }
+
+    case '/browser_snapshot': {
+      const taskId = typeof params.task_id === 'string' ? params.task_id : ''
+      if (!taskId || !db.getTask(taskId)) return { error: 'Task not found' }
+      return panelBrowserBroker.snapshot(taskId, str(params.panel_id))
+    }
+
+    case '/browser_click': {
+      const taskId = typeof params.task_id === 'string' ? params.task_id : ''
+      if (!taskId || !db.getTask(taskId)) return { error: 'Task not found' }
+      if (typeof params.target !== 'string' || !params.target) return { error: 'target (@ref or CSS selector) is required' }
+      return panelBrowserBroker.click(taskId, params.target, str(params.panel_id))
+    }
+
+    case '/browser_type': {
+      const taskId = typeof params.task_id === 'string' ? params.task_id : ''
+      if (!taskId || !db.getTask(taskId)) return { error: 'Task not found' }
+      if (typeof params.target !== 'string' || !params.target) return { error: 'target (@ref or CSS selector) is required' }
+      if (typeof params.text !== 'string') return { error: 'text is required' }
+      return panelBrowserBroker.type(taskId, params.target, params.text, params.submit === true, str(params.panel_id))
+    }
+
+    case '/browser_press_key': {
+      const taskId = typeof params.task_id === 'string' ? params.task_id : ''
+      if (!taskId || !db.getTask(taskId)) return { error: 'Task not found' }
+      if (typeof params.key !== 'string' || !params.key) return { error: 'key is required' }
+      return panelBrowserBroker.pressKey(taskId, params.key, str(params.panel_id))
+    }
+
+    case '/browser_scroll': {
+      const taskId = typeof params.task_id === 'string' ? params.task_id : ''
+      if (!taskId || !db.getTask(taskId)) return { error: 'Task not found' }
+      const direction = typeof params.direction === 'string' ? params.direction : undefined
+      const amount = typeof params.amount === 'number' ? params.amount : undefined
+      const target = typeof params.target === 'string' ? params.target : undefined
+      return panelBrowserBroker.scroll(taskId, direction, amount, target, str(params.panel_id))
+    }
+
+    case '/browser_get': {
+      const taskId = typeof params.task_id === 'string' ? params.task_id : ''
+      if (!taskId || !db.getTask(taskId)) return { error: 'Task not found' }
+      const what = typeof params.what === 'string' ? params.what : ''
+      if (what !== 'url' && what !== 'title' && what !== 'text') return { error: 'what must be url | title | text' }
+      return panelBrowserBroker.get(taskId, what, str(params.panel_id))
+    }
+
+    case '/browser_wait': {
+      const taskId = typeof params.task_id === 'string' ? params.task_id : ''
+      if (!taskId || !db.getTask(taskId)) return { error: 'Task not found' }
+      const mode = params.mode
+      if (mode !== 'selector' && mode !== 'text' && mode !== 'url') return { error: 'mode must be selector | text | url' }
+      if (typeof params.value !== 'string' || !params.value) return { error: 'value is required' }
+      return panelBrowserBroker.wait(
+        taskId,
+        mode,
+        params.value,
+        typeof params.timeout_ms === 'number' ? params.timeout_ms : undefined,
+        str(params.panel_id)
+      )
+    }
+
+    case '/browser_screenshot': {
+      const taskId = typeof params.task_id === 'string' ? params.task_id : ''
+      if (!taskId || !db.getTask(taskId)) return { error: 'Task not found' }
+      return panelBrowserBroker.screenshot(taskId, str(params.panel_id))
+    }
+
+    case '/browser_back':
+    case '/browser_forward':
+    case '/browser_reload': {
+      const taskId = typeof params.task_id === 'string' ? params.task_id : ''
+      if (!taskId || !db.getTask(taskId)) return { error: 'Task not found' }
+      const panelId = str(params.panel_id)
+      if (route === '/browser_back') return panelBrowserBroker.back(taskId, panelId)
+      if (route === '/browser_forward') return panelBrowserBroker.forward(taskId, panelId)
+      return panelBrowserBroker.reload(taskId, panelId)
+    }
+
     default:
       return { error: 'Unknown route' }
   }
@@ -1126,6 +1218,10 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
 function safeParseArray(raw: string | null | undefined): unknown[] {
   const parsed = JSON.parse((raw as string) || '[]')
   return Array.isArray(parsed) ? parsed : (parsed != null && parsed !== '' ? [parsed] : [])
+}
+
+function str(value: unknown): string | undefined {
+  return typeof value === 'string' && value ? value : undefined
 }
 
 function parseTask(task: Record<string, unknown>) {

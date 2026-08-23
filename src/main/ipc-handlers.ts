@@ -1,4 +1,4 @@
-import { ipcMain, dialog, shell, Notification, app, session, webContents } from 'electron'
+import { ipcMain, dialog, shell, Notification, app, session } from 'electron'
 import * as childProcess from 'child_process'
 import { copyFileSync, existsSync, unlinkSync, readdirSync, statSync, readFileSync, rmSync } from 'fs'
 import { join, basename, extname } from 'path'
@@ -8,6 +8,7 @@ import WebSocket from 'ws'
 import { startTunnel, stopTunnel, getTunnelUrl, isTunnelActive } from './tunnel-manager'
 import { getPendingPin } from './mobile-api-server'
 import { setTaskApiUiState } from './task-api-server'
+import { panelBrowserBroker } from './panel-browser-broker'
 import type {
   DatabaseManager,
   CreateTaskData,
@@ -2061,43 +2062,25 @@ else:
     }
   })
 
-  // ── Browser CDP ─────────────────────────────────────────
-  // Returns the CDP (Chrome DevTools Protocol) port that agent-browser
-  // can use to connect to webview tabs on the canvas.
-  ipcMain.handle('browser:getCdpPort', () => {
-    return { port: 19222 }
+  // ── Browser panel broker ────────────────────────────────
+  // Canvas browser panels register themselves here so agents can drive them
+  // through browser_* MCP tools. Only registered panels are addressable; the
+  // main app window is never registered and there is no global debug port.
+  ipcMain.handle('browser:registerBrokerPanel', (_event, payload: { panelId: string; webContentsId: number; taskIds: string[] }) => {
+    if (!payload || typeof payload.panelId !== 'string' || typeof payload.webContentsId !== 'number') {
+      return { success: false }
+    }
+    const taskIds = Array.isArray(payload.taskIds) ? payload.taskIds.filter((t): t is string => typeof t === 'string') : []
+    if (!panelBrowserBroker.setPanelTasks(payload.panelId, taskIds)) {
+      panelBrowserBroker.registerPanel(payload.panelId, payload.webContentsId, taskIds)
+    }
+    return { success: true }
   })
 
-  // Returns the CDP target ID for a webview given its webContentsId.
-  // This allows the renderer to store the target ID on the panel data,
-  // so agent-browser can connect directly via ws://localhost:19222/devtools/page/<targetId>
-  ipcMain.handle('browser:getTargetId', async (_event, webContentsId: number) => {
-    try {
-      const wc = webContents.fromId(webContentsId)
-      if (!wc) return { targetId: null }
-
-      // Use the debugger API to get the CDP target info
-      try {
-        wc.debugger.attach('1.3')
-        const { targetInfo } = await wc.debugger.sendCommand('Target.getTargetInfo')
-        const targetId = targetInfo?.targetId || null
-        wc.debugger.detach()
-        return { targetId }
-      } catch {
-        try { wc.debugger.detach() } catch { /* already detached */ }
-        // Fallback: query CDP /json/list and match by URL
-        const wcUrl = wc.getURL()
-        if (!wcUrl) return { targetId: null }
-        const res = await fetch(`http://localhost:19222/json/list`)
-        const targets = await res.json()
-        const match = targets.find((t: { url: string; type: string }) =>
-          t.type === 'webview' && t.url === wcUrl
-        )
-        return { targetId: match?.id || null }
-      }
-    } catch {
-      return { targetId: null }
-    }
+  ipcMain.handle('browser:unregisterBrokerPanel', (_event, panelId: string) => {
+    if (typeof panelId !== 'string') return { success: false }
+    panelBrowserBroker.unregisterPanel(panelId)
+    return { success: true }
   })
 
   // ── External Chrome auth flow ──────────────────────────────────────────
@@ -2310,35 +2293,6 @@ else:
       // Kill Chrome if still running
       try { chromeProc.kill() } catch { /* */ }
       throw err
-    }
-  })
-
-  // Returns all webview CDP targets. Called from the renderer to resolve
-  // CDP target IDs without CORS issues (renderer can't fetch localhost:19222).
-  ipcMain.handle('browser:getCdpTargets', async () => {
-    try {
-      const res = await fetch('http://localhost:19222/json/list')
-      const targets = (await res.json()) as Array<{ id: string; url: string; type: string; title: string }>
-      // agent-browser's `tab` command shows only page + webview targets (not iframes,
-      // service workers, etc.) and sorts them: pages first, then webviews.
-      // We replicate that ordering so the renderer can compute the exact tab ID.
-      const tabTargets = targets
-        .filter((t) => t.type === 'page' || t.type === 'webview')
-        .sort((a, b) => {
-          // page before webview (matches agent-browser ordering)
-          if (a.type === 'page' && b.type !== 'page') return -1
-          if (a.type !== 'page' && b.type === 'page') return 1
-          return 0
-        })
-      return tabTargets.map((t, i) => ({
-        id: t.id,
-        url: t.url,
-        title: t.title,
-        type: t.type,
-        tabId: `t${i + 1}`,
-      }))
-    } catch {
-      return []
     }
   })
 
