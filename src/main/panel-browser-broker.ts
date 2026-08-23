@@ -169,17 +169,26 @@ export function buildTypeScript(refOrSelector: string, text: string, submit?: bo
   return `(async () => {
   const el = document.querySelector(${queryFor(refOrSelector)});
   if (!el) return JSON.stringify({ error: 'Stale or unknown target — run browser_snapshot again.' });
-  el.focus();
-  if (el.tagName === 'SELECT') {
+  const tag = el.tagName;
+  if (tag === 'SELECT') {
     el.value = ${JSON.stringify(text)};
     el.dispatchEvent(new Event('change', { bubbles: true }));
-  } else {
-    const proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+  } else if ((tag === 'INPUT' || tag === 'TEXTAREA') && !el.readOnly) {
+    el.focus();
+    const proto = tag === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
     const setter = Object.getOwnPropertyDescriptor(proto, 'value').set;
     if (setter) setter.call(el, ${JSON.stringify(text)});
-    else el.textContent = ${JSON.stringify(text)};
+    else el.value = ${JSON.stringify(text)};
     el.dispatchEvent(new Event('input', { bubbles: true }));
     el.dispatchEvent(new Event('change', { bubbles: true }));
+  } else if (el.isContentEditable) {
+    el.focus();
+    el.textContent = ${JSON.stringify(text)};
+    el.dispatchEvent(new InputEvent('input', { bubbles: true }));
+  } else {
+    // Not an editable element (e.g. a link or button was passed): report
+    // instead of throwing "Illegal invocation" from the native value setter.
+    return JSON.stringify({ error: 'Target "${refOrSelector.replace(/"/g, '')}" is not an editable element (role: ' + (el.getAttribute('role') || tag.toLowerCase()) + '). Pick an input/textarea ref from browser_snapshot.' });
   }
   if (${submit ? 'true' : 'false'}) {
     el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
@@ -297,6 +306,23 @@ export function unwrapEval(raw: unknown): Record<string, unknown> {
   }
   if (raw && typeof raw === 'object') return raw as Record<string, unknown>
   return { ok: true }
+}
+
+/**
+ * Guarantees a command settles even when the page cannot answer — e.g. an
+ * in-page polling loop starved by background timer throttling, or a renderer
+ * busy in a modal loop. Without this a tool call could hang forever.
+ */
+export function withTimeout<T>(
+  promise: Promise<T>,
+  ms: number,
+  fallback: T
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<T>((resolve) => {
+    timer = setTimeout(() => resolve(fallback), Math.max(ms, 0))
+  })
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer))
 }
 
 // ── Broker ───────────────────────────────────────────────────────────────────
@@ -453,14 +479,35 @@ export class PanelBrowserBroker {
     return this.evalOnResolved(taskId, panelId, buildGetScript(what))
   }
 
-  wait(taskId: string, mode: 'selector' | 'text' | 'url', value: string, timeoutMs?: number, panelId?: string | null): Promise<Record<string, unknown>> {
-    return this.evalOnResolved(taskId, panelId, buildWaitScript(mode, value, timeoutMs ?? 10000))
+  async wait(taskId: string, mode: 'selector' | 'text' | 'url', value: string, timeoutMs?: number, panelId?: string | null): Promise<Record<string, unknown>> {
+    const resolved = this.resolve(taskId, panelId)
+    if (!resolved.ok) return resolved
+    const budget = Math.max(500, Math.min(timeoutMs ?? 10000, 60000))
+    if (mode === 'url') {
+      // Poll from the Node side: background/hidden panels throttle in-page
+      // timers, so a page-side polling loop can miss its own deadline.
+      const started = Date.now()
+      const deadline = started + budget
+      for (;;) {
+        const url = resolved.wc.getURL()
+        if (url.includes(value)) return { ok: true, waitedMs: Date.now() - started, url }
+        if (Date.now() >= deadline) {
+          return { error: `Timed out after ${budget}ms waiting for url: ${value}`, url }
+        }
+        await new Promise((r) => setTimeout(r, 250))
+      }
+    }
+    return withTimeout(
+      this.evalOnResolved(taskId, panelId, buildWaitScript(mode, value, budget)),
+      budget + 5000,
+      { error: `Timed out after ${budget + 5000}ms waiting for ${mode}: ${value}` }
+    )
   }
 
   private async evalOnResolved(taskId: string, panelId: string | null | undefined, script: string): Promise<Record<string, unknown>> {
     const resolved = this.resolve(taskId, panelId)
     if (!resolved.ok) return resolved
-    return this.eval(resolved.wc, script)
+    return withTimeout(this.eval(resolved.wc, script), 30000, { error: 'Timed out after 30s — the page did not answer (it may be navigating or throttled in the background).' })
   }
 
   async screenshot(taskId: string, panelId?: string | null): Promise<Record<string, unknown>> {
