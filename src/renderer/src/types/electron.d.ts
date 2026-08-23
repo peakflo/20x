@@ -500,9 +500,8 @@ interface ElectronAPI {
   onWorkspaceCleanupProgress: (callback: (event: WorkspaceCleanupProgressEvent) => void) => () => void
   onGithubDeviceCode: (callback: (code: string) => void) => () => void
   browser: {
-    getCdpPort: () => Promise<{ port: number }>
-    getTargetId: (webContentsId: number) => Promise<{ targetId: string | null }>
-    getCdpTargets: () => Promise<Array<{ id: string; url: string; title: string; type: string; tabId: string }>>
+    registerBrokerPanel: (payload: { panelId: string; webContentsId: number; taskIds: string[] }) => Promise<{ success: boolean }>
+    unregisterBrokerPanel: (panelId: string) => Promise<{ success: boolean }>
     openExternalAuth: (loginUrl: string) => Promise<{ success: boolean; finalUrl: string; cookieCount: number }>
   }
   ui: {

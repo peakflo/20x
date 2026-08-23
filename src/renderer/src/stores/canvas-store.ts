@@ -3,7 +3,6 @@ import { subscribeWithSelector } from 'zustand/middleware'
 import { settingsApi } from '@/lib/ipc-client'
 
 const CANVAS_STORAGE_KEY = 'canvas_state'
-const CDP_PORT = 19222
 let saveTimer: ReturnType<typeof setTimeout> | null = null
 const SAVE_DEBOUNCE_MS = 1000
 
@@ -15,6 +14,19 @@ const CANVAS_DEBUG =
 
 function clog(...args: unknown[]): void {
   if (CANVAS_DEBUG) console.log(...args)
+}
+
+/**
+ * Fire-and-forget release of a browser panel from the agent-facing broker
+ * when its canvas panel goes away. Safe to call for any panel type — only
+ * registered panels are affected.
+ */
+function releaseBrokerPanel(panelId: string): void {
+  try {
+    void window.electronAPI?.browser?.unregisterBrokerPanel(panelId)?.catch(() => {})
+  } catch {
+    // IPC bridge unavailable (tests) — ignore
+  }
 }
 
 // ── Panel types ────────────────────────────────────────────
@@ -32,9 +44,7 @@ export interface CanvasPanelData {
   browserSessionId?: string
   /** WebSocket streaming port (for browser panels) */
   streamPort?: number
-  /** CDP target ID for this webview — used to connect agent-browser directly */
-  cdpTargetId?: string
-  /** Electron webContentsId for this webview — used to resolve CDP target via IPC */
+  /** Electron webContentsId for this webview — used to register the panel with the broker */
   webContentsId?: number
   title: string
   x: number
@@ -413,6 +423,7 @@ export const useCanvasStore = create<CanvasState>()(subscribeWithSelector((set, 
   },
 
   removePanel: (id) => {
+    releaseBrokerPanel(id)
     get().removeEdgesForPanel(id)
     set((s) => ({ panels: s.panels.filter((p) => p.id !== id) }))
     scheduleSave()
@@ -422,6 +433,7 @@ export const useCanvasStore = create<CanvasState>()(subscribeWithSelector((set, 
     const { panels } = get()
     const panelsToRemove = panels.filter((p) => p.refId === refId)
     for (const p of panelsToRemove) {
+      releaseBrokerPanel(p.id)
       get().removeEdgesForPanel(p.id)
     }
     set((s) => ({
@@ -449,6 +461,9 @@ export const useCanvasStore = create<CanvasState>()(subscribeWithSelector((set, 
   },
 
   clearPanels: () => {
+    for (const p of get().panels) {
+      releaseBrokerPanel(p.id)
+    }
     set({ panels: [], edges: [], nextZIndex: 1 })
     scheduleSave()
   },
@@ -690,21 +705,6 @@ function notifyAgentOfBrowserConnection(
   const taskPanel = fromPanel?.type === 'task' ? fromPanel : toPanel?.type === 'task' ? toPanel : null
   const browserPanel = fromPanel?.type === 'browser' ? fromPanel : toPanel?.type === 'browser' ? toPanel : null
 
-  // Read fresh panel data from store — the `panels` parameter is a snapshot from
-  // edge creation and may have stale webContentsId from localStorage persistence.
-  const freshBrowserPanel = browserPanel
-    ? useCanvasStore.getState().panels.find((p) => p.id === browserPanel.id) || browserPanel
-    : browserPanel
-
-  clog('[BrowserEdge] notifyAgentOfBrowserConnection called', {
-    fromPanelId, toPanelId,
-    fromType: fromPanel?.type, toType: toPanel?.type,
-    taskRefId: taskPanel?.refId, browserPanelId: freshBrowserPanel?.id,
-    browserUrl: freshBrowserPanel?.url, browserTitle: freshBrowserPanel?.title,
-    browserCdpTargetId: freshBrowserPanel?.cdpTargetId,
-    browserWebContentsId: freshBrowserPanel?.webContentsId,
-  })
-
   if (!taskPanel?.refId || !browserPanel) {
     clog('[BrowserEdge] BAIL: no taskPanel.refId or no browserPanel')
     return
@@ -714,17 +714,15 @@ function notifyAgentOfBrowserConnection(
     const [{ useAgentStore }, { agentSessionApi }, { useTaskStore }] = await Promise.all([
       import('./agent-store'),
       import('@/lib/ipc-client'),
-      import('./task-store'),
+      import('./task-store')
     ])
 
     const taskId = taskPanel.refId!
     let session = useAgentStore.getState().getSession(taskId)
-    clog('[BrowserEdge] session state', { taskId, sessionId: session?.sessionId, agentId: session?.agentId })
 
     // If no active session, auto-start or resume the task
     if (!session?.sessionId) {
       const task = useTaskStore.getState().tasks.find((t) => t.id === taskId)
-      clog('[BrowserEdge] no session, looking up task', { taskId, agentId: task?.agent_id, sessionId: task?.session_id })
       if (!task?.agent_id) {
         clog('[BrowserEdge] BAIL: no agent_id on task')
         return
@@ -750,7 +748,6 @@ function notifyAgentOfBrowserConnection(
           initSession(taskId, sessionId, task.agent_id)
         }
         session = useAgentStore.getState().getSession(taskId)
-        clog('[BrowserEdge] session after auto-start', { sessionId: session?.sessionId })
       } catch (err) {
         console.error('[BrowserEdge] Failed to auto-start/resume task:', err)
         return
@@ -762,98 +759,23 @@ function notifyAgentOfBrowserConnection(
       return
     }
 
-    // Re-read fresh panel data — webContentsId may have been updated since edge creation
-    const bp = useCanvasStore.getState().panels.find((p) => p.id === browserPanel.id) || browserPanel
-    const browserTitle = bp.title || 'Browser'
-    const browserUrl = bp.url || ''
+    const browserTitle = browserPanel.title || 'Browser'
 
-    // Resolve which agent-browser tab ID (t1, t2, t3...) corresponds to this
-    // browser panel's webview. Uses webContentsId for reliable direct lookup.
-    let tabId: string | null = null
-    const resolveTab = async (attempt: number): Promise<string | null> => {
-      const allTargets = await window.electronAPI.browser.getCdpTargets()
-      const webviews = allTargets.filter((t) => t.type === 'webview')
-      clog(`[BrowserEdge] resolveTab attempt=${attempt}`, {
-        allTargets: allTargets.map((t) => ({ tabId: t.tabId, type: t.type, url: t.url?.slice(0, 60) })),
-        webviewsCount: webviews.length,
-        browserUrl,
-        webContentsId: bp.webContentsId,
-      })
-      if (webviews.length === 0) return null
-
-      let match: typeof webviews[0] | null = null
-
-      // 1. Best: use webContentsId → getTargetId for exact CDP target, then find its tabId
-      if (!match && bp.webContentsId) {
-        try {
-          const result = await window.electronAPI.browser.getTargetId(bp.webContentsId)
-          if (result.targetId) {
-            match = allTargets.find((t) => t.id === result.targetId) || null
-            if (match) clog('[BrowserEdge] matched by webContentsId→getTargetId', match.tabId)
-          }
-        } catch { /* debugger API failed */ }
-      }
-
-      // 2. Match by URL
-      if (!match && browserUrl) {
-        const urlBase = browserUrl.split('?')[0].split('#')[0]
-        match = webviews.find((t) => t.url.startsWith(urlBase)) || null
-        if (match) clog('[BrowserEdge] matched by URL', { tabId: match.tabId, matchUrl: match.url?.slice(0, 60) })
-      }
-
-      // 3. Last resort — first available webview
-      if (!match) {
-        match = webviews[0] || null
-        if (match) clog('[BrowserEdge] fallback to first webview', match.tabId)
-      }
-
-      return match?.tabId || null
-    }
-
-    try {
-      for (let attempt = 0; attempt < 3; attempt++) {
-        tabId = await resolveTab(attempt)
-        if (tabId) break
-        clog(`[BrowserEdge] no tab found, retrying in 1s (attempt ${attempt + 1}/3)`)
-        await new Promise((r) => setTimeout(r, 1000))
-      }
-    } catch (err) {
-      console.error('[BrowserEdge] resolveTab error:', err)
-    }
-
-    clog('[BrowserEdge] final result', { tabId, browserTitle, browserUrl })
-
-    if (!tabId) {
-      agentSessionApi.send(
+    agentSessionApi
+      .send(
         session.sessionId,
-        `[System] A browser panel "${browserTitle}" has been connected to your task on the canvas.\n\n` +
-        `The browser panel is loading. To connect once ready:\n` +
-        `  agent-browser connect ${CDP_PORT}\n` +
-        `  agent-browser tab    # find the [webview] target\n` +
-        `  agent-browser tab <tN>   # switch to the webview\n\n` +
-        `Then use commands normally (open, snapshot, click, etc.).\n` +
-        `Do NOT interact with the [page] target — that is the main app window.`,
+        `[System] A browser panel "${browserTitle}" has been connected to your task on the canvas. You now control it directly.\n\n` +
+        `Use the browser_* tools (served through your task-management MCP connection):\n` +
+        `  browser_list_panels   # see the linked panel\n` +
+        `  browser_snapshot      # get @e1..@eN element refs\n` +
+        `  browser_navigate <url>\n` +
+        `  browser_click @ref / browser_type @ref <text> / browser_get url|title|text\n\n` +
+        `Refs come from browser_snapshot and stay valid until the page navigates.\n` +
+        `The user sees everything you do in real time on the canvas.`,
         taskPanel.refId!,
         session.agentId
-      ).catch((err: unknown) => console.error('[Canvas] Failed to notify agent of browser connection:', err))
-      return
-    }
-
-    agentSessionApi.send(
-      session.sessionId,
-      `[System] A browser panel "${browserTitle}" has been connected to your task on the canvas. You now have access to control it.\n\n` +
-      `To use the browser, run these commands:\n` +
-      `  agent-browser connect ${CDP_PORT}\n` +
-      `  agent-browser tab ${tabId}\n\n` +
-      `Then use commands normally:\n` +
-      `  agent-browser open <url>\n` +
-      `  agent-browser snapshot -i\n` +
-      `  agent-browser click <ref>\n\n` +
-      `Do NOT use "agent-browser tab t1" — that is the main app window.\n` +
-      `The user can see everything you do in the browser in real time on the canvas.`,
-      taskPanel.refId!,
-      session.agentId
-    ).catch((err: unknown) => console.error('[Canvas] Failed to notify agent of browser connection:', err))
+      )
+      .catch((err: unknown) => console.error('[Canvas] Failed to notify agent of browser connection:', err))
   }
 
   resolveAndNotify().catch(() => {

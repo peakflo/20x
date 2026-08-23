@@ -18,9 +18,6 @@ interface BrowserPanelContentProps {
   streamPort?: number
 }
 
-/** CDP port exposed by the Electron app for agent-browser to connect to */
-const CDP_PORT = 19222
-
 /**
  * Build a real Chrome user-agent.  We replace the entire UA rather than
  * stripping tokens — a hardcoded real-Chrome string is the safest way to
@@ -42,9 +39,10 @@ function getChromeUserAgent(): string {
 /**
  * Canvas panel with a real Electron <webview> — a fully interactive browser.
  *
- * The agent can control this browser via CDP (connecting to the webview's
- * debugger port), and the user sees + interacts with the same page live
- * on the canvas.
+ * The panel registers itself (webContentsId + linked task ids) with the
+ * in-app panel browser broker, so agents can drive it through browser_* MCP
+ * tools. Only registered panels are addressable — the main app window never
+ * is. The user sees + interacts with the same page live on the canvas.
  */
 export function BrowserPanelContent({
   panelId,
@@ -105,53 +103,81 @@ export function BrowserPanelContent({
     return unsub
   }, [panelId])
 
-  // ── Resolve CDP target ID once the webview is ready ──────
-  // The webview exposes getWebContentsId() which we send to main process
-  // to get the CDP target ID — stored on the panel for agent-browser to use.
-  const cdpTargetResolved = useRef(false)
+  // ── Broker registration ──────────────────────────────────
+  // The panel is registered with the in-app broker together with the task ids
+  // it is edge-connected to, so browser_* MCP tools can address exactly this
+  // panel for those tasks. Re-registered whenever edges or the webContentsId
+  // change; released when the panel unmounts.
+  const [linkedTaskIds, setLinkedTaskIds] = useState<string[]>([])
+
+  useEffect(() => {
+    function computeLinkedTasks(): string[] {
+      const { edges, panels } = useCanvasStore.getState()
+      const ids: string[] = []
+      for (const e of edges) {
+        if (e.edgeType !== 'browser') continue
+        if (e.fromPanelId !== panelId && e.toPanelId !== panelId) continue
+        const otherId = e.fromPanelId === panelId ? e.toPanelId : e.fromPanelId
+        const other = panels.find((p) => p.id === otherId)
+        if (other?.type === 'task' && other.refId) ids.push(other.refId)
+      }
+      return ids
+    }
+
+    setLinkedTaskIds(computeLinkedTasks())
+    // Only re-compute when edges change, not on every panel position change.
+    const unsub = useCanvasStore.subscribe(
+      (state) => state.edges,
+      () => {
+        setLinkedTaskIds(computeLinkedTasks())
+      }
+    )
+    return unsub
+  }, [panelId])
+
+  const registerWithBroker = useCallback(() => {
+    let wcId: number | undefined
+    try {
+      wcId = webviewRef.current?.getWebContentsId?.()
+    } catch {
+      return
+    }
+    if (!wcId || wcId <= 0) return
+    updatePanel(panelId, { webContentsId: wcId })
+    try {
+      void window.electronAPI?.browser
+        ?.registerBrokerPanel({ panelId, webContentsId: wcId, taskIds: linkedTaskIds })
+        ?.catch(() => {})
+    } catch {
+      // IPC bridge unavailable (tests) — ignore
+    }
+  }, [panelId, linkedTaskIds, updatePanel])
+
+  useEffect(() => {
+    registerWithBroker()
+  }, [registerWithBroker])
+
   useEffect(() => {
     const wv = webviewRef.current
-    if (!wv || cdpTargetResolved.current) return
+    if (!wv) return
+    wv.addEventListener('dom-ready', registerWithBroker)
+    wv.addEventListener('did-navigate', registerWithBroker)
+    return () => {
+      wv.removeEventListener('dom-ready', registerWithBroker)
+      wv.removeEventListener('did-navigate', registerWithBroker)
+    }
+  }, [registerWithBroker])
 
-    const resolveTargetId = async () => {
+  useEffect(() => {
+    const pid = panelId
+    return () => {
       try {
-        // First try via IPC (uses debugger API or CDP match in main process)
-        const wcId = wv.getWebContentsId?.()
-        console.log(`[BrowserPanel:${panelId}] webContentsId=${wcId}, url=${wv.getURL?.()?.slice(0, 60)}`)
-        if (wcId) {
-          // Store webContentsId on panel for reliable CDP target resolution
-          updatePanel(panelId, { webContentsId: wcId })
-          const result = await window.electronAPI.browser.getTargetId(wcId)
-          if (result.targetId) {
-            cdpTargetResolved.current = true
-            updatePanel(panelId, { cdpTargetId: result.targetId, webContentsId: wcId })
-            return
-          }
-        }
-
-        // Fallback: query CDP targets via IPC (avoids CORS) and match by webview URL
-        const wvUrl = wv.getURL?.()
-        if (!wvUrl) return
-        const targets = await window.electronAPI.browser.getCdpTargets()
-        const match = targets.find((t) => t.url === wvUrl)
-        if (match) {
-          cdpTargetResolved.current = true
-          updatePanel(panelId, { cdpTargetId: match.id })
-        }
+        void window.electronAPI?.browser?.unregisterBrokerPanel(pid)?.catch(() => {})
       } catch {
-        // Silently ignore — webview may not be ready yet
+        // IPC bridge unavailable (tests) — ignore
       }
     }
-
-    wv.addEventListener('did-navigate', resolveTargetId)
-    wv.addEventListener('dom-ready', resolveTargetId)
-    // Also try immediately in case it's already loaded
-    resolveTargetId()
-    return () => {
-      wv.removeEventListener('did-navigate', resolveTargetId)
-      wv.removeEventListener('dom-ready', resolveTargetId)
-    }
-  }, [panelId, updatePanel])
+  }, [panelId])
 
   // ── Webview event wiring ──────────────────────────────────
   // Debounce store updates to avoid re-render storms from SPA sites (e.g. Google Maps)
@@ -458,11 +484,11 @@ function BrowserUrlBar({
       {connectedTaskName && (
         <div
           className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-orange-500/10 border border-orange-500/20 flex-shrink-0"
-          title={`Connected to "${connectedTaskName}" — agent can control this browser via CDP port ${CDP_PORT}`}
+          title={`Connected to "${connectedTaskName}" — agent controls this panel via browser_* tools (in-app broker)`}
         >
           <Zap className="h-2.5 w-2.5 text-orange-400" />
           <span className="text-[9px] font-medium text-orange-400/80 whitespace-nowrap">
-            CDP
+            AGENT
           </span>
         </div>
       )}

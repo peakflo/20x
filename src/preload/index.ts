@@ -690,12 +690,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     }
   },
   browser: {
-    getCdpPort: (): Promise<{ port: number }> =>
-      ipcRenderer.invoke('browser:getCdpPort'),
-    getTargetId: (webContentsId: number): Promise<{ targetId: string | null }> =>
-      ipcRenderer.invoke('browser:getTargetId', webContentsId),
-    getCdpTargets: (): Promise<Array<{ id: string; url: string; title: string }>> =>
-      ipcRenderer.invoke('browser:getCdpTargets'),
+    registerBrokerPanel: (payload: { panelId: string; webContentsId: number; taskIds: string[] }): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke('browser:registerBrokerPanel', payload),
+    unregisterBrokerPanel: (panelId: string): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke('browser:unregisterBrokerPanel', panelId),
     openExternalAuth: (loginUrl: string): Promise<{ success: boolean; finalUrl: string; cookieCount: number }> =>
       ipcRenderer.invoke('browser:openExternalAuth', loginUrl)
   }
