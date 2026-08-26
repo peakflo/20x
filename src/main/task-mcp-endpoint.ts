@@ -22,6 +22,10 @@
  * Each request is handled statelessly: one transport and one Server per request.
  * That needs no session table, so a resumed agent keeps working with the same
  * URL, and nothing accumulates between calls.
+ *
+ * The endpoint answers on POST only. A GET asks for the standalone stream of
+ * server-initiated messages, and these tools never send one, so the GET is
+ * refused with 405 before a transport exists. See handleTaskMcpRequest.
  */
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { Server, WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/server'
@@ -134,6 +138,33 @@ export async function handleTaskMcpRequest(
   body: string,
   invoke: TaskApiInvoke
 ): Promise<void> {
+  // Refuse the standalone SSE stream before a transport is ever built.
+  //
+  // A client opens `GET /mcp` to listen for server-initiated messages. These
+  // tools never send any: every reply belongs to the request that asked for it,
+  // which is why `enableJsonResponse` is on. The MCP spec lets a server that has
+  // nothing to push answer such a GET with 405, and it must.
+  //
+  // Left to itself the SDK does the opposite. In stateless mode
+  // `handleGetRequest` still hands back a `text/event-stream` body that stays
+  // open for ever, so the copy loop below never reaches `done`, the `finally`
+  // never runs, and the request keeps one transport, one Server and one socket
+  // alive for the life of the process — one set per client reconnect. Since
+  // @modelcontextprotocol/server v2 that stream also arms a keep-alive interval,
+  // so a leaked one now holds a live timer too. That idle socket is also what
+  // makes a dropped session look healthy from the outside: the connection is
+  // still ESTABLISHED long after the client stopped using it.
+  const method = req.method || 'GET'
+  if (method === 'GET' || method === 'DELETE') {
+    res.writeHead(405, { 'Content-Type': 'application/json', Allow: 'POST' })
+    res.end(JSON.stringify({
+      jsonrpc: '2.0',
+      error: { code: -32000, message: 'Method Not Allowed: this endpoint answers on POST only' },
+      id: null
+    }))
+    return
+  }
+
   const scope = parseScopeFromUrl(url)
   const transport = new WebStandardStreamableHTTPServerTransport({
     // Stateless: no session table, so a resumed agent keeps the same URL.
