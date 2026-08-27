@@ -31,6 +31,33 @@ import { MessagePartType, MessageRole, SessionStatusType } from './coding-agent-
 const execFileAsync = promisify(execFile)
 const RPC_TIMEOUT_MS = 15_000
 const MAX_BUFFERED_PARTS = 1_000
+const MINIMUM_PI_VERSION = [0, 80, 5] as const
+const PI_PERMISSION_MODE_ENV = 'TWENTYX_PI_PERMISSION_MODE'
+
+const PI_PERMISSION_EXTENSION_SOURCE = `\
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+
+const READ_ONLY_TOOLS = new Set(["read", "grep", "find", "ls"]);
+
+function inputSummary(input: unknown): string {
+  try {
+    return JSON.stringify(input, null, 2).slice(0, 4000);
+  } catch {
+    return String(input).slice(0, 4000);
+  }
+}
+
+export default function permissions(pi: ExtensionAPI) {
+  pi.on("tool_call", async (event, ctx) => {
+    if (process.env.${PI_PERMISSION_MODE_ENV} === "allow" || READ_ONLY_TOOLS.has(event.toolName)) return;
+    const approved = await ctx.ui.confirm(
+      \`Allow \${event.toolName}?\`,
+      inputSummary(event.input),
+    );
+    if (!approved) return { block: true, reason: \`\${event.toolName} was declined in 20x.\` };
+  });
+}
+`
 
 interface PiRpcResponse {
   id?: string
@@ -60,8 +87,20 @@ interface PiSession {
   textByBlock: Map<string, string>
   reasoningByBlock: Map<string, string>
   toolParts: Map<string, MessagePart>
+  pendingUiRequests: Map<string, PiUiRequest>
   turn: number
+  sawAgentActivity: boolean
+  promptMayBeCommandOnly: boolean
+  closing: boolean
   mcpConfigPath?: string
+}
+
+interface PiUiRequest {
+  id: string
+  method: 'confirm' | 'select' | 'input' | 'editor'
+  title: string
+  message: string
+  options: string[]
 }
 
 type PiMessage = {
@@ -193,50 +232,44 @@ export class PiAdapter implements CodingAgentAdapter {
     return path
   }
 
-  private splitModel(model?: string): { provider?: string; modelId?: string } {
-    if (!model) return {}
-    const separator = model.indexOf('/')
-    if (separator < 0) return { modelId: model }
-    return { provider: model.slice(0, separator), modelId: model.slice(separator + 1) }
+  private installPermissionExtension(): string {
+    const dir = join(homedir(), '.20x', 'pi')
+    const path = join(dir, 'permissions.ts')
+    mkdirSync(dir, { recursive: true })
+    const current = existsSync(path) ? readFileSync(path, 'utf8') : ''
+    if (current !== PI_PERMISSION_EXTENSION_SOURCE) {
+      const temporaryPath = `${path}.${process.pid}.tmp`
+      writeFileSync(temporaryPath, PI_PERMISSION_EXTENSION_SOURCE, { mode: 0o600 })
+      chmodSync(temporaryPath, 0o600)
+      renameSync(temporaryPath, path)
+    }
+    chmodSync(path, 0o600)
+    return path
   }
 
-  private async spawnSession(config: SessionConfig, resumeId?: string): Promise<PiSession> {
-    const executable = await this.findPiExecutable()
-    const gateway = this.installPeakfloGateway()
-    const mcpConfigPath = this.buildMcpConfig(config)
-    const sessionDir = join(homedir(), '.20x', 'pi-sessions')
-    mkdirSync(sessionDir, { recursive: true })
-
-    const args = ['--mode', 'rpc', '--approve', '--session-dir', sessionDir, '--name', config.taskId]
-    if (config.systemPrompt?.trim()) {
-      args.push('--append-system-prompt', config.systemPrompt.trim())
-    }
-    if (resumeId) args.push('--session', resumeId)
-    const { provider, modelId } = this.splitModel(config.model)
-    if (provider) args.push('--provider', provider)
-    if (modelId) args.push('--model', modelId)
-    if (config.reasoningEffort) args.push('--thinking', config.reasoningEffort)
-    if (mcpConfigPath) args.push('--mcp-config', mcpConfigPath)
-
+  private processEnv(
+    config: SessionConfig,
+    gateway: { apiKey: string } | null,
+  ): NodeJS.ProcessEnv {
     const env = {
       ...process.env,
       ...(config.secretEnvVars ?? {}),
       ...(gateway ? { PEAKFLO_AI_GATEWAY_API_KEY: gateway.apiKey } : {}),
+      [PI_PERMISSION_MODE_ENV]: config.permissionMode ?? 'ask',
     } as NodeJS.ProcessEnv
     delete env.AI_AGENT
     delete env.PI_CODING_AGENT
+    return env
+  }
 
-    const child = spawn(executable, args, {
-      cwd: config.workspaceDir,
-      env,
-      stdio: ['pipe', 'pipe', 'pipe'],
-      windowsHide: true,
-      shell: process.platform === 'win32',
-    })
-
-    const tempId = resumeId || randomUUID()
-    const session: PiSession = {
-      id: tempId,
+  private createSessionState(
+    id: string,
+    child: ChildProcessWithoutNullStreams,
+    config: SessionConfig,
+    mcpConfigPath?: string,
+  ): PiSession {
+    return {
+      id,
       process: child,
       config,
       status: 'idle',
@@ -248,20 +281,81 @@ export class PiAdapter implements CodingAgentAdapter {
       textByBlock: new Map(),
       reasoningByBlock: new Map(),
       toolParts: new Map(),
+      pendingUiRequests: new Map(),
       turn: 0,
+      sawAgentActivity: false,
+      promptMayBeCommandOnly: false,
+      closing: false,
       mcpConfigPath,
     }
+  }
+
+  private splitModel(model?: string): { provider?: string; modelId?: string } {
+    if (!model) return {}
+    const separator = model.indexOf('/')
+    if (separator < 0) return { modelId: model }
+    return { provider: model.slice(0, separator), modelId: model.slice(separator + 1) }
+  }
+
+  private async applySelection(session: PiSession, config: SessionConfig): Promise<void> {
+    if (config.model && config.model !== 'default') {
+      const { provider, modelId } = this.splitModel(config.model)
+      if (!provider || !modelId) {
+        throw new Error(`Pi model must use provider/model format: ${config.model}`)
+      }
+      await this.command(session, { type: 'set_model', provider, modelId })
+    }
+    if (config.reasoningEffort) {
+      await this.command(session, { type: 'set_thinking_level', level: config.reasoningEffort })
+    }
+  }
+
+  private async spawnSession(config: SessionConfig, resumeId?: string): Promise<PiSession> {
+    const executable = await this.findPiExecutable()
+    const gateway = this.installPeakfloGateway()
+    const mcpConfigPath = this.buildMcpConfig(config)
+    const permissionExtension = this.installPermissionExtension()
+
+    const args = ['--mode', 'rpc', '--approve', '--name', config.taskId, '--extension', permissionExtension]
+    if (config.systemPrompt?.trim()) {
+      args.push('--append-system-prompt', config.systemPrompt.trim())
+    }
+    if (resumeId) args.push('--session', resumeId)
+    if (mcpConfigPath) args.push('--mcp-config', mcpConfigPath)
+
+    const child = spawn(executable, args, {
+      cwd: config.workspaceDir,
+      env: this.processEnv(config, gateway),
+      stdio: ['pipe', 'pipe', 'pipe'],
+      windowsHide: true,
+      shell: process.platform === 'win32',
+      detached: process.platform !== 'win32',
+    })
+
+    const tempId = resumeId || randomUUID()
+    const session = this.createSessionState(tempId, child, config, mcpConfigPath)
     this.sessions.set(tempId, session)
     this.attachProcess(session)
 
-    const state = await this.command(session, { type: 'get_state' })
-    const realId = typeof state.data?.sessionId === 'string' ? state.data.sessionId : tempId
-    session.id = realId
-    if (realId !== tempId) {
+    try {
+      const state = await this.command(session, { type: 'get_state' })
+      const realId = typeof state.data?.sessionFile === 'string'
+        ? state.data.sessionFile
+        : typeof state.data?.sessionId === 'string' ? state.data.sessionId : tempId
+      session.id = realId
+      if (realId !== tempId) {
+        this.sessions.delete(tempId)
+        this.sessions.set(realId, session)
+      }
+      await this.applySelection(session, config)
+      return session
+    } catch (error) {
       this.sessions.delete(tempId)
-      this.sessions.set(realId, session)
+      this.sessions.delete(session.id)
+      await this.terminateProcess(session)
+      if (mcpConfigPath && existsSync(mcpConfigPath)) unlinkSync(mcpConfigPath)
+      throw error
     }
-    return session
   }
 
   async createSession(config: SessionConfig): Promise<string> {
@@ -295,8 +389,8 @@ export class PiAdapter implements CodingAgentAdapter {
       }
     })
     session.process.stderr.on('data', (chunk: Buffer | string) => {
-      const text = chunk.toString().trim()
-      if (text) console.warn(`[PiAdapter/${session.id}] ${text.slice(0, 2_000)}`)
+      const length = chunk.toString().trim().length
+      if (length > 0) console.warn(`[PiAdapter/${session.id}] Pi wrote ${length} character(s) to stderr`)
     })
     session.process.on('error', (error) => {
       session.status = 'error'
@@ -305,11 +399,11 @@ export class PiAdapter implements CodingAgentAdapter {
       this.onDataAvailable?.(session.id)
     })
     session.process.on('exit', (code, signal) => {
-      if (session.status === 'busy') {
+      if (!session.closing && session.status === 'busy') {
         session.status = 'error'
         session.lastError = `Pi exited before the turn completed (${signal || `code ${code}`})`
       }
-      this.rejectPending(session, new Error(session.lastError || 'Pi process exited'))
+      this.rejectPending(session, new Error(session.lastError || (session.closing ? 'Pi process closed' : 'Pi process exited')))
       this.onDataAvailable?.(session.id)
     })
   }
@@ -332,8 +426,26 @@ export class PiAdapter implements CodingAgentAdapter {
           session.pending.delete(response.id)
           if (response.success) pending.resolve(response)
           else pending.reject(new Error(response.error || `Pi ${response.command} failed`))
+          return
         }
       }
+      if (response.command === 'prompt' && !response.success) {
+        session.status = 'error'
+        session.lastError = response.error || 'Pi rejected the prompt'
+      } else if (
+        response.command === 'prompt'
+        && response.success
+        && session.promptMayBeCommandOnly
+        && !session.sawAgentActivity
+      ) {
+        void this.command(session, { type: 'get_state' }).then((state) => {
+          if (state.data?.isStreaming !== true && !session.sawAgentActivity) {
+            session.status = session.pendingUiRequests.size > 0 ? 'busy' : 'idle'
+            this.onDataAvailable?.(session.id)
+          }
+        }).catch(() => undefined)
+      }
+      this.onDataAvailable?.(session.id)
       return
     }
 
@@ -342,9 +454,11 @@ export class PiAdapter implements CodingAgentAdapter {
         session.status = 'busy'
         session.lastError = null
         session.turn++
+        session.sawAgentActivity = true
         break
       case 'agent_settled':
-        session.status = 'idle'
+        session.status = session.pendingUiRequests.size > 0 ? 'busy' : 'idle'
+        session.promptMayBeCommandOnly = false
         break
       case 'message_update':
         this.handleMessageUpdate(session, event.assistantMessageEvent as Record<string, unknown> | undefined)
@@ -382,12 +496,65 @@ export class PiAdapter implements CodingAgentAdapter {
           text: String(event.error || 'Pi extension failed'),
         })
         break
+      case 'extension_ui_request':
+        this.handleExtensionUiRequest(session, event)
+        break
     }
 
     if (session.parts.length > MAX_BUFFERED_PARTS) {
       session.parts.splice(0, session.parts.length - MAX_BUFFERED_PARTS)
     }
     this.onDataAvailable?.(session.id)
+  }
+
+  private handleExtensionUiRequest(session: PiSession, event: Record<string, unknown>): void {
+    const method = event.method
+    const id = event.id
+    if (method === 'notify') {
+      const message = String(event.message || event.title || 'Pi notification')
+      session.parts.push({
+        id: `pi-notify-${randomUUID()}`,
+        type: MessagePartType.TEXT,
+        text: message,
+      })
+      return
+    }
+    if (
+      typeof id !== 'string'
+      || (method !== 'confirm' && method !== 'select' && method !== 'input' && method !== 'editor')
+    ) return
+
+    const request: PiUiRequest = {
+      id,
+      method,
+      title: String(event.title || (method === 'confirm' ? 'Permission Required' : 'Input Required')),
+      message: String(event.message || event.placeholder || event.title || 'Pi needs your response'),
+      options: Array.isArray(event.options) ? event.options.filter((option): option is string => typeof option === 'string') : [],
+    }
+
+    if (method === 'confirm' && session.config.permissionMode === 'allow') {
+      this.sendRecord(session, { type: 'extension_ui_response', id, confirmed: true })
+      return
+    }
+
+    session.pendingUiRequests.set(id, request)
+    session.status = 'busy'
+    if (method !== 'confirm') {
+      session.parts.push({
+        id: `pi-question-${id}`,
+        type: MessagePartType.TOOL,
+        tool: {
+          name: 'question',
+          status: 'running',
+          title: request.title,
+          questions: [{
+            header: request.title,
+            question: request.message,
+            options: request.options.map((label) => ({ label, description: label })),
+          }],
+        },
+      })
+    }
   }
 
   private handleMessageUpdate(session: PiSession, update?: Record<string, unknown>): void {
@@ -442,6 +609,18 @@ export class PiAdapter implements CodingAgentAdapter {
     })
   }
 
+  private sendRecord(session: PiSession, record: Record<string, unknown>): void {
+    if (session.process.exitCode !== null || !session.process.stdin.writable) {
+      throw new Error('Pi process is not running')
+    }
+    session.process.stdin.write(`${JSON.stringify(record)}\n`, (error) => {
+      if (!error) return
+      session.status = 'error'
+      session.lastError = error.message
+      this.onDataAvailable?.(session.id)
+    })
+  }
+
   async sendPrompt(sessionId: string, parts: MessagePart[], _config: SessionConfig): Promise<void> {
     const session = this.sessions.get(sessionId)
     if (!session) throw new Error(`Session not found: ${sessionId}`)
@@ -449,7 +628,10 @@ export class PiAdapter implements CodingAgentAdapter {
     if (!message) throw new Error('No text content in prompt parts')
     const wasBusy = session.status === 'busy'
     session.status = 'busy'
-    await this.command(session, {
+    session.lastError = null
+    session.sawAgentActivity = false
+    session.promptMayBeCommandOnly = message.trimStart().startsWith('/')
+    this.sendRecord(session, {
       type: 'prompt',
       message,
       ...(wasBusy ? { streamingBehavior: 'followUp' } : {}),
@@ -460,6 +642,9 @@ export class PiAdapter implements CodingAgentAdapter {
     const session = this.sessions.get(sessionId)
     if (!session) return { type: SessionStatusType.ERROR, message: 'Session not found' }
     if (session.lastError) return { type: SessionStatusType.ERROR, message: session.lastError }
+    if (session.pendingUiRequests.size > 0) {
+      return { type: SessionStatusType.WAITING_APPROVAL, message: 'Pi is waiting for input' }
+    }
     return { type: session.status === 'busy' ? SessionStatusType.BUSY : SessionStatusType.IDLE }
   }
 
@@ -467,6 +652,94 @@ export class PiAdapter implements CodingAgentAdapter {
     const session = this.sessions.get(sessionId)
     if (!session) return []
     return session.parts.splice(0)
+  }
+
+  getPendingApproval(sessionId: string): {
+    requestId: string
+    toolCallId: string
+    question: string
+    options: Array<{ optionId: string; name: string; kind: string }>
+  } | null {
+    const session = this.sessions.get(sessionId)
+    const request = session
+      ? Array.from(session.pendingUiRequests.values()).find((item) => item.method === 'confirm')
+      : undefined
+    if (!request) return null
+    return {
+      requestId: request.id,
+      toolCallId: request.id,
+      question: [request.title, request.message].filter(Boolean).join('\n\n'),
+      options: [
+        { optionId: 'approved', name: 'Yes', kind: 'allow_once' },
+        { optionId: 'abort', name: 'No', kind: 'reject_once' },
+      ],
+    }
+  }
+
+  async respondToApproval(sessionId: string, approved: boolean): Promise<boolean> {
+    const session = this.sessions.get(sessionId)
+    if (!session) throw new Error(`Session not found: ${sessionId}`)
+    const request = Array.from(session.pendingUiRequests.values()).find((item) => item.method === 'confirm')
+    if (!request) return false
+    this.sendRecord(session, {
+      type: 'extension_ui_response',
+      id: request.id,
+      confirmed: approved,
+    })
+    session.pendingUiRequests.delete(request.id)
+    session.status = 'busy'
+    this.onDataAvailable?.(session.id)
+    return true
+  }
+
+  async respondToQuestion(
+    sessionId: string,
+    answers: Record<string, string>,
+    _config: SessionConfig,
+  ): Promise<void> {
+    const session = this.sessions.get(sessionId)
+    if (!session) throw new Error(`Session not found: ${sessionId}`)
+    const request = Array.from(session.pendingUiRequests.values()).find((item) => item.method !== 'confirm')
+    if (!request) throw new Error('Pi has no pending question')
+    const value = answers[request.title] ?? answers[request.message] ?? answers.answer ?? Object.values(answers)[0] ?? ''
+    this.sendRecord(session, {
+      type: 'extension_ui_response',
+      id: request.id,
+      value,
+    })
+    session.pendingUiRequests.delete(request.id)
+    session.parts.push({
+      id: `pi-question-${request.id}`,
+      type: MessagePartType.TOOL,
+      update: true,
+      tool: {
+        name: 'question',
+        status: 'completed',
+        title: request.title,
+        output: value,
+      },
+    })
+    session.status = 'busy'
+    this.onDataAvailable?.(session.id)
+  }
+
+  async getRunningTools(sessionId: string): Promise<Array<{
+    partId: string
+    toolName: string
+    input?: Record<string, unknown>
+  }>> {
+    const session = this.sessions.get(sessionId)
+    if (!session) return []
+    return Array.from(session.toolParts.values()).flatMap((part) => {
+      if (part.tool?.status !== 'running') return []
+      return [{
+        partId: part.id || `pi-tool-${part.tool.name}`,
+        toolName: part.tool.name,
+        ...(part.tool.input && typeof part.tool.input === 'object'
+          ? { input: part.tool.input as Record<string, unknown> }
+          : {}),
+      }]
+    })
   }
 
   private convertMessages(messages: PiMessage[]): SessionMessage[] {
@@ -502,10 +775,45 @@ export class PiAdapter implements CodingAgentAdapter {
     session.status = 'idle'
   }
 
+  private async terminateProcess(session: PiSession): Promise<void> {
+    session.closing = true
+    if (session.process.exitCode !== null || !session.process.pid) return
+    if (process.platform === 'win32') {
+      await execFileAsync('taskkill', ['/PID', String(session.process.pid), '/T', '/F'], {
+        timeout: 5_000,
+        windowsHide: true,
+      }).catch(() => session.process.kill())
+      return
+    }
+
+    const processGroup = -session.process.pid
+    try {
+      process.kill(processGroup, 'SIGTERM')
+    } catch {
+      session.process.kill()
+      return
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1_000))
+    if (session.process.exitCode !== null) return
+    try {
+      process.kill(processGroup, 'SIGKILL')
+    } catch {
+      // The process group exited during the grace period.
+    }
+  }
+
   async destroySession(sessionId: string): Promise<void> {
     const session = this.sessions.get(sessionId)
     if (!session) return
-    session.process.kill()
+    for (const request of session.pendingUiRequests.values()) {
+      try {
+        this.sendRecord(session, { type: 'extension_ui_response', id: request.id, cancelled: true })
+      } catch {
+        break
+      }
+    }
+    session.pendingUiRequests.clear()
+    await this.terminateProcess(session)
     this.sessions.delete(sessionId)
     if (session.mcpConfigPath && existsSync(session.mcpConfigPath)) {
       unlinkSync(session.mcpConfigPath)
@@ -523,23 +831,102 @@ export class PiAdapter implements CodingAgentAdapter {
   async checkHealth(): Promise<{ available: boolean; reason?: string }> {
     try {
       const executable = await this.findPiExecutable()
-      await execFileAsync(executable, ['--version'], { timeout: 10_000, windowsHide: true })
+      const { stdout, stderr } = await execFileAsync(executable, ['--version'], {
+        timeout: 10_000,
+        windowsHide: true,
+      })
+      const match = `${stdout}\n${stderr}`.match(/(\d+)\.(\d+)\.(\d+)/)
+      if (!match) return { available: false, reason: 'Could not determine the Pi version' }
+      const installed = match.slice(1, 4).map(Number)
+      for (let index = 0; index < MINIMUM_PI_VERSION.length; index++) {
+        if (installed[index] > MINIMUM_PI_VERSION[index]) break
+        if (installed[index] < MINIMUM_PI_VERSION[index]) {
+          return {
+            available: false,
+            reason: `Pi ${MINIMUM_PI_VERSION.join('.')} or newer is required`,
+          }
+        }
+      }
       return { available: true }
     } catch (error) {
       return { available: false, reason: error instanceof Error ? error.message : String(error) }
     }
   }
 
-  async getProviders(): Promise<{ providers: Array<{ id: string; name: string; models: Array<{ id: string; name: string }> }>; default: Record<string, string> }> {
-    const gateway = readEnterpriseAiGatewayConfig(this.db)
-    if (!gateway) return { providers: [], default: {} }
-    return {
-      providers: [{
-        id: ENTERPRISE_AI_GATEWAY_PROVIDER_ID,
-        name: ENTERPRISE_AI_GATEWAY_PROVIDER_NAME,
-        models: gateway.models ?? [],
-      }],
-      default: {},
+  async getProviders(
+    _serverUrl?: string,
+    directory?: string,
+  ): Promise<{ providers: Array<{ id: string; name: string; models: Array<{ id: string; name: string }> }>; default: Record<string, string> }> {
+    const executable = await this.findPiExecutable()
+    const gateway = this.installPeakfloGateway()
+    const config: SessionConfig = {
+      agentId: 'pi-discovery',
+      taskId: 'pi-discovery',
+      workspaceDir: directory || process.cwd(),
+      permissionMode: 'allow',
+    }
+    const child = spawn(executable, ['--mode', 'rpc', '--no-session', '--approve'], {
+      cwd: config.workspaceDir,
+      env: this.processEnv(config, gateway),
+      stdio: ['pipe', 'pipe', 'pipe'],
+      windowsHide: true,
+      shell: process.platform === 'win32',
+      detached: process.platform !== 'win32',
+    })
+    const session = this.createSessionState(`pi-discovery-${randomUUID()}`, child, config)
+    this.attachProcess(session)
+
+    try {
+      const [state, available] = await Promise.all([
+        this.command(session, { type: 'get_state' }),
+        this.command(session, { type: 'get_available_models' }),
+      ])
+      const models = Array.isArray(available.data?.models) ? available.data.models : []
+      const providers = new Map<string, { id: string; name: string; models: Array<{ id: string; name: string }> }>()
+      for (const model of models) {
+        if (!model || typeof model !== 'object') continue
+        const record = model as Record<string, unknown>
+        if (typeof record.provider !== 'string' || typeof record.id !== 'string') continue
+        const provider = providers.get(record.provider) ?? {
+          id: record.provider,
+          name: record.provider === ENTERPRISE_AI_GATEWAY_PROVIDER_ID
+            ? ENTERPRISE_AI_GATEWAY_PROVIDER_NAME
+            : record.provider,
+          models: [],
+        }
+        if (!provider.models.some((item) => item.id === record.id)) {
+          provider.models.push({
+            id: record.id,
+            name: typeof record.name === 'string' ? record.name : record.id,
+          })
+        }
+        providers.set(record.provider, provider)
+      }
+      const defaultModel = state.data?.model
+      const defaultProvider = defaultModel && typeof defaultModel === 'object'
+        ? (defaultModel as Record<string, unknown>).provider
+        : undefined
+      const defaultModelId = defaultModel && typeof defaultModel === 'object'
+        ? (defaultModel as Record<string, unknown>).id
+        : undefined
+      return {
+        providers: Array.from(providers.values()),
+        default: typeof defaultProvider === 'string' && typeof defaultModelId === 'string'
+          ? { [defaultProvider]: defaultModelId }
+          : {},
+      }
+    } catch (error) {
+      if (!gateway) throw error
+      return {
+        providers: [{
+          id: ENTERPRISE_AI_GATEWAY_PROVIDER_ID,
+          name: ENTERPRISE_AI_GATEWAY_PROVIDER_NAME,
+          models: gateway.providerModels,
+        }],
+        default: {},
+      }
+    } finally {
+      await this.terminateProcess(session)
     }
   }
 }

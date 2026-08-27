@@ -379,7 +379,7 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
         </select>
       </div>
 
-      {(codingAgent === CodingAgentType.OPENCODE || codingAgent === CodingAgentType.CLAUDE_CODE || codingAgent === CodingAgentType.CODEX || codingAgent === CodingAgentType.CURSOR) && (
+      {(codingAgent === CodingAgentType.OPENCODE || codingAgent === CodingAgentType.CLAUDE_CODE || codingAgent === CodingAgentType.CODEX || codingAgent === CodingAgentType.CURSOR || codingAgent === CodingAgentType.PI) && (
         <>
           <div className="space-y-1.5">
             <Label htmlFor="agent-permission-mode">Permissions</Label>
@@ -393,8 +393,8 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
               <option value="allow">Allow automatically</option>
             </select>
             <p className="text-xs text-muted-foreground">
-              {codingAgent === CodingAgentType.CODEX || codingAgent === CodingAgentType.CURSOR
-                ? `Allow automatically auto-approves ${codingAgent === CodingAgentType.CURSOR ? 'Cursor' : 'Codex'} permission requests for this agent.`
+              {codingAgent === CodingAgentType.CODEX || codingAgent === CodingAgentType.CURSOR || codingAgent === CodingAgentType.PI
+                ? `Allow automatically auto-approves ${codingAgent === CodingAgentType.CURSOR ? 'Cursor' : codingAgent === CodingAgentType.PI ? 'Pi' : 'Codex'} permission requests for this agent.`
                 : 'Controls how this agent handles tool and command approval prompts.'}
             </p>
           </div>
