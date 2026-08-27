@@ -1999,6 +1999,28 @@ describe('AgentManager session ID re-keying redirect', () => {
     expect(dualAdapter.respondToQuestion).not.toHaveBeenCalled()
   })
 
+  it('does not publish an answer when the adapter rejects a stale question request', async () => {
+    const { mgr, session } = createManagerWithSession()
+    const adapter = {
+      ...session.adapter,
+      respondToQuestion: vi.fn(async () => false),
+    }
+    ;(session as any).adapter = adapter
+    const sendToRenderer = vi.spyOn(mgr as any, 'sendToRenderer')
+    vi.spyOn(mgr as any, 'getAdapter').mockReturnValue(adapter)
+    vi.spyOn(mgr as any, 'buildSessionConfig').mockResolvedValue({ workspaceDir: '/tmp/ws' })
+
+    await mgr.respondToPermission('temp-id', true, 'Yes', undefined, 'question', 'stale-request')
+
+    expect(adapter.respondToQuestion).toHaveBeenCalledWith(
+      'temp-id',
+      { answer: 'Yes' },
+      { workspaceDir: '/tmp/ws' },
+      'stale-request'
+    )
+    expect(sendToRenderer).not.toHaveBeenCalled()
+  })
+
   it('abortSession resolves re-keyed session via redirect map', async () => {
     const { mgr, session } = createManagerWithSession()
 

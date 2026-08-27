@@ -96,6 +96,7 @@ export interface MessagePart {
     input?: unknown
     output?: unknown
     error?: string
+    requestId?: string
     questions?: unknown
     todos?: unknown
   }
@@ -248,8 +249,9 @@ export interface CodingAgentAdapter {
   respondToQuestion?(
     sessionId: string,
     answers: Record<string, string>,
-    config: SessionConfig
-  ): Promise<void>
+    config: SessionConfig,
+    requestId?: string
+  ): Promise<boolean | void>
 
   /**
    * List available providers and their models from the backend.

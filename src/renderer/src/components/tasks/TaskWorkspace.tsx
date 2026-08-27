@@ -540,7 +540,7 @@ function TaskWorkspaceComponent({
       const hasActiveQuestion = questionIndex >= 0
         && !messages.slice(questionIndex + 1).some((m) => m.role === 'user')
       if (hasActiveQuestion) {
-        await approve(true, message, 'question')
+        await approve(true, message, 'question', messages[questionIndex].tool?.requestId)
         return
       }
 

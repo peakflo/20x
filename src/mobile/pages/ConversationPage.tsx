@@ -232,7 +232,8 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
       if (!currentSession?.sessionId) return
       try {
         if (isQuestion) {
-          await api.sessions.approve(currentSession.sessionId, true, message, 'question')
+          const requestId = currentSession.messages.find((item) => item.id === activeQuestionId)?.tool?.requestId
+          await api.sessions.approve(currentSession.sessionId, true, message, 'question', requestId)
           captureAnalyticsEvent('agent_approval_responded', {
             task_id: taskId,
             agent_id: currentSession.agentId,
@@ -271,7 +272,7 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
         endSend(taskId)
       }
     },
-    [taskId, isQuestion, initSession, beginSend, endSend]
+    [taskId, isQuestion, activeQuestionId, initSession, beginSend, endSend]
   )
 
   // Handle question answer from QuestionMessage options
@@ -281,7 +282,8 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
       const currentSession = useAgentStore.getState().sessions.get(taskId)
       if (!currentSession?.sessionId || !activeQuestionId) return
       try {
-        await api.sessions.approve(currentSession.sessionId, true, answer, 'question')
+        const requestId = currentSession.messages.find((item) => item.id === activeQuestionId)?.tool?.requestId
+        await api.sessions.approve(currentSession.sessionId, true, answer, 'question', requestId)
         captureAnalyticsEvent('agent_approval_responded', {
           task_id: taskId,
           agent_id: currentSession.agentId,

@@ -547,6 +547,7 @@ export class PiAdapter implements CodingAgentAdapter {
           name: 'question',
           status: 'running',
           title: request.title,
+          requestId: request.id,
           questions: [{
             header: request.title,
             question: request.message,
@@ -696,11 +697,16 @@ export class PiAdapter implements CodingAgentAdapter {
     sessionId: string,
     answers: Record<string, string>,
     _config: SessionConfig,
-  ): Promise<void> {
+    requestId?: string,
+  ): Promise<boolean> {
     const session = this.sessions.get(sessionId)
     if (!session) throw new Error(`Session not found: ${sessionId}`)
-    const request = Array.from(session.pendingUiRequests.values()).find((item) => item.method !== 'confirm')
-    if (!request) throw new Error('Pi has no pending question')
+    const request = requestId
+      ? session.pendingUiRequests.get(requestId)
+      : Array.from(session.pendingUiRequests.values()).find((item) => item.method !== 'confirm')
+    // A restored transcript or another client can submit a response after Pi
+    // has already consumed the request. Treat that response as stale.
+    if (!request || request.method === 'confirm') return false
     const value = answers[request.title] ?? answers[request.message] ?? answers.answer ?? Object.values(answers)[0] ?? ''
     this.sendRecord(session, {
       type: 'extension_ui_response',
@@ -721,6 +727,7 @@ export class PiAdapter implements CodingAgentAdapter {
     })
     session.status = 'busy'
     this.onDataAvailable?.(session.id)
+    return true
   }
 
   async getRunningTools(sessionId: string): Promise<Array<{

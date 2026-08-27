@@ -201,10 +201,19 @@ describe('PiAdapter', () => {
       { label: 'Stage', description: 'Stage' },
       { label: 'Production', description: 'Production' },
     ])
-    await adapter.respondToQuestion(session.id, { Environment: 'Stage' }, session.config)
+    expect(session.parts[0].tool.requestId).toBe('request-2')
+    await expect(
+      adapter.respondToQuestion(session.id, { Environment: 'Stage' }, session.config, 'request-2'),
+    ).resolves.toBe(true)
     expect(process.stdin.write).toHaveBeenCalledWith(
       `${JSON.stringify({ type: 'extension_ui_response', id: 'request-2', value: 'Stage' })}\n`,
       expect.any(Function),
     )
+
+    vi.mocked(process.stdin.write).mockClear()
+    await expect(
+      adapter.respondToQuestion(session.id, { Environment: 'Production' }, session.config, 'request-2'),
+    ).resolves.toBe(false)
+    expect(process.stdin.write).not.toHaveBeenCalled()
   })
 })

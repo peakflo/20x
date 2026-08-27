@@ -284,6 +284,7 @@ describe('TaskWorkspace – stale triage session cleanup', () => {
               tool: {
                 name: 'permission',
                 status: 'pending',
+                requestId: 'pi-request-1',
                 questions: [
                   {
                     header: 'Permission',
@@ -304,7 +305,13 @@ describe('TaskWorkspace – stale triage session cleanup', () => {
     fireEvent.click(screen.getByTestId('mock-send'))
 
     await waitFor(() => {
-      expect(window.electronAPI.agentSession.approve).toHaveBeenCalledWith('session-1', true, 'approved', 'question')
+      expect(window.electronAPI.agentSession.approve).toHaveBeenCalledWith(
+        'session-1',
+        true,
+        'approved',
+        'question',
+        'pi-request-1'
+      )
     })
     expect(window.electronAPI.agentSession.send).not.toHaveBeenCalled()
   })

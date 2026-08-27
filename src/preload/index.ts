@@ -111,10 +111,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('agentSession:send', sessionId, message, taskId, agentId, attachments),
     sendByTaskId: (taskId: string, message: string, attachments?: Array<{ id: string; filename: string; size: number; mime_type: string }>): Promise<{ success: boolean; sessionId: string | null; newSessionId?: string }> =>
       ipcRenderer.invoke('agentSession:sendByTaskId', taskId, message, attachments),
-    approve: (sessionId: string, approved: boolean, message?: string, responseType?: 'permission' | 'question'): Promise<{ success: boolean }> =>
-      responseType
-        ? ipcRenderer.invoke('agentSession:approve', sessionId, approved, message, responseType)
-        : ipcRenderer.invoke('agentSession:approve', sessionId, approved, message),
+    approve: (sessionId: string, approved: boolean, message?: string, responseType?: 'permission' | 'question', requestId?: string): Promise<{ success: boolean }> =>
+      requestId
+        ? ipcRenderer.invoke('agentSession:approve', sessionId, approved, message, responseType, requestId)
+        : responseType
+          ? ipcRenderer.invoke('agentSession:approve', sessionId, approved, message, responseType)
+          : ipcRenderer.invoke('agentSession:approve', sessionId, approved, message),
     syncSkills: (sessionId: string): Promise<{ created: string[]; updated: string[]; unchanged: string[] }> =>
       ipcRenderer.invoke('agentSession:syncSkills', sessionId),
     syncSkillsForTask: (taskId: string): Promise<{ created: string[]; updated: string[]; unchanged: string[] }> =>

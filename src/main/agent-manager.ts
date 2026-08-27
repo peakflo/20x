@@ -4349,7 +4349,8 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     approved: boolean,
     message?: string,
     optionId?: string,
-    responseType?: 'permission' | 'question'
+    responseType?: 'permission' | 'question',
+    requestId?: string
   ): Promise<void> {
     let session = this.sessions.get(sessionId)
 
@@ -4404,9 +4405,18 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
         }
       }
 
-      console.log(`[AgentManager] Responding to question via adapter for session ${sessionId}:`, answers)
+      console.log(`[AgentManager] Responding to question via adapter for session ${sessionId}`)
 
-      // Update session and task state before sending
+      const adapterConfig = await this.buildSessionConfig(session.agentId, session.taskId, session.workspaceDir)
+      const handled = requestId
+        ? await adapter.respondToQuestion(sessionId, answers, adapterConfig, requestId)
+        : await adapter.respondToQuestion(sessionId, answers, adapterConfig)
+      if (handled === false) {
+        console.log(`[AgentManager] Ignored stale question response for session ${sessionId}`)
+        return
+      }
+
+      // Update session and task state after the adapter accepts the response.
       session.status = 'working'
       const currentTask = this.db.getTask(session.taskId)
       if (currentTask?.status !== TaskStatus.AgentLearning) {
@@ -4430,9 +4440,6 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
           }
         })
       }
-
-      const adapterConfig = await this.buildSessionConfig(session.agentId, session.taskId, session.workspaceDir)
-      await adapter.respondToQuestion(sessionId, answers, adapterConfig)
 
       // Restart polling if it was stopped (session may have gone idle before answer)
       if (!session.pollingStarted && session.adapter) {

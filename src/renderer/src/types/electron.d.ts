@@ -255,7 +255,7 @@ interface ElectronAPI {
     stopByTaskId: (taskId: string) => Promise<AgentSessionSuccessResult & { sessionId: string | null }>
     send: (sessionId: string, message: string, taskId?: string, agentId?: string, attachments?: AgentMessageAttachment[]) => Promise<AgentSessionSuccessResult & { newSessionId?: string }>
     sendByTaskId: (taskId: string, message: string, attachments?: AgentMessageAttachment[]) => Promise<AgentSessionSuccessResult & { sessionId: string | null; newSessionId?: string }>
-    approve: (sessionId: string, approved: boolean, message?: string, responseType?: 'permission' | 'question') => Promise<AgentSessionSuccessResult>
+    approve: (sessionId: string, approved: boolean, message?: string, responseType?: 'permission' | 'question', requestId?: string) => Promise<AgentSessionSuccessResult>
     syncSkills: (sessionId: string) => Promise<SkillSyncResult>
     syncSkillsForTask: (taskId: string) => Promise<SkillSyncResult>
     learnFromSession: (sessionId: string, message: string) => Promise<SkillSyncResult>
