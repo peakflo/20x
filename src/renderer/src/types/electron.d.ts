@@ -189,6 +189,8 @@ export interface WorkspaceCleanupProgressEvent {
 export interface ToolStatus {
   installed: boolean
   version: string | null
+  supported?: boolean
+  reason?: string | null
 }
 
 export interface DepsStatus {

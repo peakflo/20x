@@ -2,7 +2,7 @@ import { spawn, execFile } from 'child_process'
 import { createWriteStream, mkdirSync, existsSync, unlinkSync, rmSync, symlinkSync, copyFileSync, chmodSync } from 'fs'
 import { join } from 'path'
 import { tmpdir, homedir } from 'os'
-import { detectInstalledAgents } from './detect.js'
+import { detectInstalledAgents, getPiCommandCandidates } from './detect.js'
 
 /**
  * Ensure a directory is on the running process's PATH so subsequently
@@ -752,7 +752,15 @@ export async function installAgent(agentName, onProgress) {
     )
     if (!piResult.success) return piResult
 
-    const piCommand = isWin ? 'pi.cmd' : 'pi'
+    const piStatus = await detectInstalledAgents()
+    if (!piStatus.pi?.installed) {
+      const error = 'Pi was installed, but the Pi executable could not be found.'
+      onProgress({ stage: 'error', output: `${error}\n`, percent: 100 })
+      return { success: false, error, newStatus: piStatus }
+    }
+
+    const piCandidates = await getPiCommandCandidates()
+    const piCommand = piCandidates.find((candidate) => existsSync(candidate)) || (isWin ? 'pi.cmd' : 'pi')
     return spawnInstall(
       piCommand,
       ['install', 'npm:pi-mcp-adapter'],

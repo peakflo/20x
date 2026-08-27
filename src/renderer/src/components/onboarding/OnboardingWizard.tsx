@@ -356,6 +356,7 @@ export function OnboardingWizard({ open, onOpenChange }: OnboardingWizardProps) 
   }, [open])
 
   const handleInstall = useCallback(async (toolKey: string) => {
+    setError(null)
     setInstalling(toolKey)
     try {
       const result = (await window.electronAPI.agentInstaller.install(toolKey)) as {
@@ -369,9 +370,21 @@ export function OnboardingWizard({ open, onOpenChange }: OnboardingWizardProps) 
         const fresh = await window.electronAPI.agentInstaller.detect()
         setToolStatus(fresh)
       }
+      if (!result?.success) {
+        setError(result?.error || 'Installation failed. Try again or install the agent manually.')
+        return false
+      }
+      const status = result.newStatus?.[toolKey]
+      if (!status?.installed || status.supported === false) {
+        setError(status?.reason || 'The agent executable is not ready after installation.')
+        return false
+      }
+      return true
     } catch {
       const fresh = await window.electronAPI.agentInstaller.detect()
       setToolStatus(fresh)
+      setError('Installation failed. Try again or install the agent manually.')
+      return false
     } finally {
       setInstalling(null)
     }
@@ -519,13 +532,20 @@ export function OnboardingWizard({ open, onOpenChange }: OnboardingWizardProps) 
       return
     }
 
-    // BYO agent path — create default agent and close
+    // BYO agent path — install or update the selected runtime before creating
+    // an agent that depends on it.
     setCreating(true)
     try {
+      const toolKey = getAgentToolKey(selectedAgent)
+      const status = toolStatus?.[toolKey]
+      if (status && (!status.installed || status.supported === false)) {
+        const ready = await handleInstall(toolKey)
+        if (!ready) return
+      }
       await createDefaultAgent(selectedAgent)
       onOpenChange(false)
-    } catch {
-      setError('Failed to set up agent. You can configure it later in Settings.')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to set up agent. You can configure it later in Settings.')
     } finally {
       setCreating(false)
     }
@@ -547,10 +567,13 @@ export function OnboardingWizard({ open, onOpenChange }: OnboardingWizardProps) 
   const selectedCodingAgent =
     selectedAgent && selectedAgent !== AgentChoiceType.PEAKFLO ? selectedAgent : null
 
-  const agentInstalled =
+  const selectedAgentStatus =
     selectedCodingAgent && toolStatus
-      ? toolStatus[getAgentToolKey(selectedCodingAgent)]?.installed
+      ? toolStatus[getAgentToolKey(selectedCodingAgent)]
       : null
+  const agentReady = selectedAgentStatus
+    ? selectedAgentStatus.installed && selectedAgentStatus.supported !== false
+    : null
 
   /* ─── Render: Templates screen ─── */
 
@@ -664,6 +687,7 @@ export function OnboardingWizard({ open, onOpenChange }: OnboardingWizardProps) 
                   const toolKey = getAgentToolKey(agent.type as CodingAgentType)
                   const detected = toolStatus?.[toolKey]
                   const isInstalled = detected?.installed === true
+                  const isReady = isInstalled && detected.supported !== false
                   return (
                     <button
                       key={agent.type}
@@ -691,13 +715,15 @@ export function OnboardingWizard({ open, onOpenChange }: OnboardingWizardProps) 
                       {/* Detected status */}
                       {toolStatus && (
                         <span className={`text-[10px] flex items-center gap-0.5 ${
-                          isInstalled ? 'text-emerald-400' : 'text-muted-foreground/50'
+                          isReady ? 'text-emerald-400' : detected?.supported === false ? 'text-amber-400' : 'text-muted-foreground/50'
                         }`}>
-                          {isInstalled ? (
+                          {isReady ? (
                             <>
                               <Check className="size-2.5" />
                               {detected?.version ? `v${detected.version}` : 'Installed'}
                             </>
+                          ) : isInstalled ? (
+                            'Update required'
                           ) : (
                             'Not installed'
                           )}
@@ -727,11 +753,11 @@ export function OnboardingWizard({ open, onOpenChange }: OnboardingWizardProps) 
             <VoiceRuntimeRow variant="compact" />
 
             {/* ── Install prompt (only when selected agent is not installed) ── */}
-            {toolStatus && selectedCodingAgent && agentInstalled === false && (
+            {toolStatus && selectedCodingAgent && agentReady === false && (
               <div className="flex items-center gap-2.5 px-3 py-2 rounded-lg border border-border bg-muted/20 text-xs">
                 <AlertTriangle className="size-4 text-amber-400 shrink-0" />
                 <span className="text-muted-foreground flex-1">
-                  {AGENT_OPTIONS.find((a) => a.type === selectedCodingAgent)?.label} will be installed automatically
+                  {selectedAgentStatus?.reason || `${AGENT_OPTIONS.find((a) => a.type === selectedCodingAgent)?.label} will be installed automatically`}
                 </span>
                 <Button
                   size="sm"
@@ -771,7 +797,7 @@ export function OnboardingWizard({ open, onOpenChange }: OnboardingWizardProps) 
                 )}
                 {selectedAgent === AgentChoiceType.PEAKFLO
                   ? (isAuthenticated ? 'Get Started' : 'Sign up / Log in')
-                  : 'Get Started'}
+                  : agentReady === false ? 'Install & Get Started' : 'Get Started'}
                 {!creating && <ArrowRight className="size-4 ml-1.5" />}
               </Button>
               <Button
