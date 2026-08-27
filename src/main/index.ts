@@ -30,7 +30,7 @@ import { TaskAutomationScheduler } from './task-automation-scheduler'
 import { WorkspaceCleanupScheduler } from './workspace-cleanup-scheduler'
 import { ClaudePluginManager } from './claude-plugin-manager'
 import { parseProcessTable, selectKillableMcpPids } from './mcp-process-cleanup'
-import { buildWorkspaceStates, sweepLeakedWorkspaceProcesses, SHUTDOWN_GRACE_MS, WORKSPACE_COUNT_WARN_THRESHOLD } from './workspace-process-cleanup'
+import { buildWorkspaceStates, sweepLeakedWorkspaceProcesses, readDiskSpace, workspacePressureWarning, SHUTDOWN_GRACE_MS } from './workspace-process-cleanup'
 import { WORKSPACES_DIR, listWorkspaceDirs } from './workspace-paths'
 import { EnterpriseHeartbeat } from './enterprise-heartbeat'
 import { EnterpriseStateSync } from './enterprise-state-sync'
@@ -260,11 +260,11 @@ async function sweepLeakedWorkspaces(graceMs?: number, orphansIgnoreTaskState = 
       orphansIgnoreTaskState
     })
 
-    // Nothing bounds the workspace count today. Report it, so the disk and
-    // inode cost of one clone per agent run is visible before it bites.
-    if (dirs.length >= WORKSPACE_COUNT_WARN_THRESHOLD) {
-      console.warn(`[Cleanup] ${dirs.length} task workspaces on disk, each with its own node_modules. Enable workspace auto-cleanup in Settings.`)
-    }
+    // Nothing bounds the workspace count today. Report it with the free space
+    // beside it, so the disk cost of one clone per agent run is visible before
+    // it bites — the count alone does not say whether the next run will fit.
+    const pressure = workspacePressureWarning({ count: dirs.length, disk: readDiskSpace(WORKSPACES_DIR) })
+    if (pressure) console.warn(`[Cleanup] ${pressure}`)
   } catch (err) {
     console.warn('[Cleanup] Could not sweep leaked workspace processes:', err)
   }

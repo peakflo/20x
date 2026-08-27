@@ -36,7 +36,7 @@
  */
 
 import { execFileSync } from 'child_process'
-import { existsSync, readlinkSync, realpathSync } from 'fs'
+import { existsSync, readlinkSync, realpathSync, statfsSync } from 'fs'
 import { isAbsolute, normalize, resolve, sep } from 'path'
 import { collectDescendantPids, parseProcessTable, type ProcessRow } from './mcp-process-cleanup'
 
@@ -452,6 +452,17 @@ export function resolveWorkspacesRoot(workspacesRoot: string): string {
   }
 }
 
+/** Free and total bytes on the volume holding `path`, or undefined if unreadable. */
+export function readDiskSpace(path: string): DiskSpace | undefined {
+  try {
+    const stats = statfsSync(path)
+    return { freeBytes: stats.bsize * stats.bavail, totalBytes: stats.bsize * stats.blocks }
+  } catch {
+    // A missing directory or an unsupported filesystem. The count still warns.
+    return undefined
+  }
+}
+
 /** True on platforms where a process's cwd can be read. Windows has no cheap query. */
 export function canReadProcessCwd(): boolean {
   return process.platform !== 'win32'
@@ -538,3 +549,49 @@ export function buildWorkspaceStates(
  * own right, independent of the process leak.
  */
 export const WORKSPACE_COUNT_WARN_THRESHOLD = 100
+
+/**
+ * Warn below this share of the volume free, whatever the workspace count says.
+ *
+ * A count is a weak signal on its own. Measured on the affected machine over
+ * one day: 397 workspaces / 313 GB, then 398 / 315 GB — roughly 2 GB per agent
+ * run, against 39 GiB free on a 926 GiB volume, 96% full. "398 workspaces" does
+ * not convey that; "39 GiB free, 4% of the volume" does, and it is the number
+ * that decides whether the next run succeeds.
+ */
+export const WORKSPACE_FREE_SPACE_WARN_FRACTION = 0.1
+
+/** Volume capacity, when it could be read. */
+export type DiskSpace = { freeBytes: number; totalBytes: number }
+
+function formatGiB(bytes: number): string {
+  return `${(bytes / 1024 ** 3).toFixed(1)} GiB`
+}
+
+/**
+ * The line to log about workspace pressure, or null when there is nothing to
+ * say. Pure, so the thresholds are testable without a filesystem.
+ *
+ * Deliberately REPORTS and does not BOUND. Bounding means deleting a user's
+ * checkouts on a rule nobody chose; the retention setting that already exists
+ * (`workspace_autocleanup_enabled`) is the place for that decision, and it
+ * defaults to off. Turning it on silently is not this change's to make.
+ */
+export function workspacePressureWarning(input: { count: number; disk?: DiskSpace }): string | null {
+  const { count, disk } = input
+  const countHigh = count >= WORKSPACE_COUNT_WARN_THRESHOLD
+  // No zero-guard needed on the division: 0/0 is NaN and x/0 is Infinity, and
+  // neither is `< WORKSPACE_FREE_SPACE_WARN_FRACTION`. A guard here would be
+  // dead code that reads as a guard. The one in the message body below is NOT
+  // dead — without it an unreadable volume prints "NaN%".
+  const spaceLow = disk !== undefined && disk.freeBytes / disk.totalBytes < WORKSPACE_FREE_SPACE_WARN_FRACTION
+  if (!countHigh && !spaceLow) return null
+
+  const parts = [`${count} task workspaces on disk, each with its own node_modules`]
+  if (disk !== undefined && disk.totalBytes > 0) {
+    const percent = ((disk.freeBytes / disk.totalBytes) * 100).toFixed(0)
+    parts.push(`${formatGiB(disk.freeBytes)} free of ${formatGiB(disk.totalBytes)} (${percent}%)`)
+  }
+  parts.push('Enable workspace auto-cleanup in Settings')
+  return `${spaceLow ? 'DISK NEARLY FULL. ' : ''}${parts.join('. ')}.`
+}

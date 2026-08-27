@@ -5,6 +5,8 @@ import {
   workspaceIdForCwd,
   collectAncestorPids,
   buildWorkspaceStates,
+  workspacePressureWarning,
+  WORKSPACE_COUNT_WARN_THRESHOLD,
   selectLeakedWorkspaceRoots,
   selectLeakedWorkspacePids,
   selectPidsRootedInWorkspaces,
@@ -359,5 +361,55 @@ describe('selectPidsRootedInWorkspaces', () => {
     const tree = parseProcessTable([' 10 1 20x-main', ' 900 1 tmux', ' 901 900 nvim'].join('\n'))
     const treeCwds = cwds([[900, WS('task_A')], [901, '/Users/dev/Documents/mynotes']])
     expect(selectPidsRootedInWorkspaces({ rows: tree, cwdRows: treeCwds, workspacesRoot: ROOT, ownPid: 10, workspaceIds: ['task_A'] })).toEqual([900])
+  })
+})
+
+
+describe('workspacePressureWarning', () => {
+  const GiB = 1024 ** 3
+  const roomy = { freeBytes: 500 * GiB, totalBytes: 926 * GiB }
+  // The affected machine on 28 Aug: 39 GiB free of 926 GiB, 96% full.
+  const nearlyFull = { freeBytes: 39 * GiB, totalBytes: 926 * GiB }
+
+  it('says nothing when the count is low and the disk is roomy', () => {
+    expect(workspacePressureWarning({ count: 3, disk: roomy })).toBeNull()
+  })
+
+  it('warns on the count alone, even with plenty of space', () => {
+    const message = workspacePressureWarning({ count: WORKSPACE_COUNT_WARN_THRESHOLD, disk: roomy })
+    expect(message).toContain('100 task workspaces')
+    expect(message).not.toContain('DISK NEARLY FULL')
+  })
+
+  it('warns on low free space even when the count is small', () => {
+    // The count is a weak signal on its own: a handful of very large checkouts
+    // fills a disk just as well as four hundred small ones.
+    const message = workspacePressureWarning({ count: 4, disk: nearlyFull })
+    expect(message).toContain('DISK NEARLY FULL')
+  })
+
+  it('reports the free space beside the count, because the count alone does not say whether the next run fits', () => {
+    const message = workspacePressureWarning({ count: 398, disk: nearlyFull })
+    expect(message).toContain('398 task workspaces')
+    expect(message).toContain('39.0 GiB free of 926.0 GiB (4%)')
+    expect(message).toContain('DISK NEARLY FULL')
+  })
+
+  it('still warns on the count when the disk could not be read', () => {
+    const message = workspacePressureWarning({ count: 398 })
+    expect(message).toContain('398 task workspaces')
+    expect(message).not.toContain('GiB')
+  })
+
+  it('never prints NaN when the volume reports nothing', () => {
+    // My first version of this asserted a low count with a zero total returns
+    // null — which it does whatever the code says, because 0/0 is NaN and the
+    // comparison is false either way. It passed against a deliberately broken
+    // version, so it was replaced with the case that can actually go wrong: a
+    // high count, where the message IS built and must not contain "NaN%".
+    const message = workspacePressureWarning({ count: 398, disk: { freeBytes: 0, totalBytes: 0 } })
+    expect(message).toContain('398 task workspaces')
+    expect(message).not.toContain('NaN')
+    expect(message).not.toContain('DISK NEARLY FULL')
   })
 })

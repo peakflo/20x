@@ -5,7 +5,7 @@ import type { DatabaseManager } from './database'
 import type { WorktreeManager } from './worktree-manager'
 import { TaskStatus } from '../shared/constants'
 import { WORKSPACES_DIR, listWorkspaceDirs } from './workspace-paths'
-import { terminateProcessesInWorkspaces, WORKSPACE_COUNT_WARN_THRESHOLD } from './workspace-process-cleanup'
+import { terminateProcessesInWorkspaces, readDiskSpace, workspacePressureWarning } from './workspace-process-cleanup'
 
 /**
  * WorkspaceCleanupScheduler - Automatic cleanup of old completed task workspaces
@@ -278,14 +278,16 @@ export class WorkspaceCleanupScheduler {
    */
   private reportWorkspaceCount(): void {
     const dirs = listWorkspaceDirs()
-    if (dirs === null || dirs.length < WORKSPACE_COUNT_WARN_THRESHOLD) return
+    if (dirs === null) return
+    const pressure = workspacePressureWarning({ count: dirs.length, disk: readDiskSpace(WORKSPACES_DIR) })
+    if (!pressure) return
     // Console only. An earlier version also sent `workspace:count-warning` to
     // the renderer, which was dead code: no preload bridge carries it and no
     // component listens, so it reached nobody while looking like it reached
     // someone. Surfacing this in the UI is a real change — a preload channel, a
     // component, and a decision about how insistent it should be — and it wants
     // to be made deliberately rather than smuggled in with a process fix.
-    console.warn(`[WorkspaceCleanup] ${dirs.length} task workspaces remain on disk (threshold ${WORKSPACE_COUNT_WARN_THRESHOLD}). Enable workspace auto-cleanup in Settings.`)
+    console.warn(`[WorkspaceCleanup] ${pressure}`)
   }
 
   private getRetentionDays(): number {
