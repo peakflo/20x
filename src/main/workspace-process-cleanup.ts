@@ -123,22 +123,49 @@ function protectedPids(rows: ProcessRow[], ownPid: number): Set<number> {
 }
 
 /**
- * Adds every descendant of each selected pid, so a whole leaked tree goes.
+ * Adds the descendants of each selected pid THAT ARE THEMSELVES ROOTED IN THE
+ * WORKSPACES ROOT, so a whole leaked tree goes but nothing else does.
  *
- * This matters more than it reads: the orphan measured on the machine was a
- * 49-fd `node`, but the `firefox` it had spawned held 449 more. Killing only
- * the matched process leaves the file descriptors behind.
+ * Taking the descendants matters: the orphan measured on the machine was a
+ * 49-fd `node`, but the `firefox` it had spawned held 449 more, and killing
+ * only the matched process leaves 90% of the leak behind.
+ *
+ * Requiring the descendant's OWN cwd to be in the root matters just as much,
+ * and this originally did not. A `tmux` or `screen` server started once inside
+ * a workspace is `ppid 1` by design and is selected when that task finishes —
+ * but its panes are its descendants, and their cwds are wherever the user put
+ * them. Without this check, one finished task took down the user's editor,
+ * their dev server in their own checkout, and any 20x instance launched from
+ * that session, with its running agents. That is the exact catastrophe this
+ * module exists to avoid, arrived at from the other direction.
+ *
+ * A descendant with no readable cwd is left alone: not readable is not leaked.
  */
-function withDescendants(rows: ProcessRow[], roots: Iterable<number>, guarded: Set<number>): number[] {
+function withDescendants(
+  rows: ProcessRow[],
+  roots: Iterable<number>,
+  guarded: Set<number>,
+  isRootedInWorkspaces: (pid: number) => boolean
+): number[] {
   const selected = new Set<number>()
   for (const root of roots) {
     if (guarded.has(root)) continue
     selected.add(root)
     for (const child of collectDescendantPids(rows, root)) {
-      if (!guarded.has(child)) selected.add(child)
+      if (guarded.has(child) || !isRootedInWorkspaces(child)) continue
+      selected.add(child)
     }
   }
   return [...selected].sort((a, b) => a - b)
+}
+
+/** "Is this pid's cwd inside the workspaces root?", as a reusable predicate. */
+function rootedInWorkspaces(cwdRows: readonly CwdRow[], workspacesRoot: string): (pid: number) => boolean {
+  const cwdByPid = new Map(cwdRows.map((row) => [row.pid, row.cwd]))
+  return (pid) => {
+    const cwd = cwdByPid.get(pid)
+    return cwd !== undefined && workspaceIdForCwd(cwd, workspacesRoot) !== null
+  }
 }
 
 /** How the caller answers "is this workspace still in use?". */
@@ -156,6 +183,24 @@ export type LeakSelection = {
   ownPid: number
   /** Looks up the task behind a workspace directory name. */
   workspaceState: (workspaceId: string) => WorkspaceState
+  /**
+   * Whether a parentless process is leaked WHATEVER its task's status says.
+   *
+   * True only for the BOOT sweep, and it is what makes the reported bug
+   * actually get fixed. `stopAllSessions` deliberately preserves task status
+   * across a quit (`agent-manager.ts`: "Don't reset task status during app
+   * shutdown"), and nothing repairs it at startup — so a task that was
+   * force-quit mid-run stays `agent_working` in SQLite FOREVER. Without this,
+   * the watcher it leaked is vetoed by its own stale status on every boot from
+   * then on, and the headline case — "20x is force-quit" — is the one case the
+   * sweep could never collect.
+   *
+   * Sound only at boot, and only for `ppid 1`: this instance has no descendants
+   * yet, so no agent of ours can own the process; and another live instance's
+   * agent children are parented to that instance, not to launchd. Our own
+   * descendants are still judged on task state, so a live session is safe.
+   */
+  orphansIgnoreTaskState?: boolean
 }
 
 /** A leaked process, kept with its reason so the log can say why it went. */
@@ -185,10 +230,18 @@ export function selectLeakedWorkspaceRoots(input: LeakSelection): LeakedProcess[
     if (!workspaceId) continue
 
     const state = workspaceState(workspaceId)
+    const active = state.status !== undefined && ACTIVE_TASK_STATUSES.includes(state.status)
+
     let reason: string | null = null
-    if (!state.exists) reason = 'workspace directory removed'
+    if (active) {
+      // An agent is working here. Nothing else may override that — including a
+      // missing directory, which is far more likely to be a failed listing than
+      // a deleted workspace. The one exception is a parentless process at boot,
+      // where the status itself cannot be trusted (see `orphansIgnoreTaskState`).
+      if (!ours && input.orphansIgnoreTaskState) reason = `task ${state.status} but parentless at startup`
+    } else if (!state.exists) reason = 'workspace directory removed'
     else if (state.status === undefined) reason = 'no task for this workspace'
-    else if (!ACTIVE_TASK_STATUSES.includes(state.status)) reason = `task ${state.status}`
+    else reason = `task ${state.status}`
     if (!reason) continue
 
     leaked.push({ pid: row.pid, workspaceId, reason: `${reason}, ${ours ? 'our descendant' : 'orphaned (ppid 1)'}`, command: row.command })
@@ -197,13 +250,20 @@ export function selectLeakedWorkspaceRoots(input: LeakSelection): LeakedProcess[
 }
 
 /** Adds the descendants of already-selected roots, keeping the same guards. */
-export function expandToProcessTrees(rows: ProcessRow[], roots: readonly number[], ownPid: number): number[] {
-  return withDescendants(rows, roots, protectedPids(rows, ownPid))
+export function expandToProcessTrees(
+  rows: ProcessRow[],
+  cwdRows: readonly CwdRow[],
+  workspacesRoot: string,
+  roots: readonly number[],
+  ownPid: number
+): number[] {
+  return withDescendants(rows, roots, protectedPids(rows, ownPid), rootedInWorkspaces(cwdRows, workspacesRoot))
 }
 
 /** Every pid to kill: the leaked roots plus their descendants. */
 export function selectLeakedWorkspacePids(input: LeakSelection): number[] {
-  return expandToProcessTrees(input.rows, selectLeakedWorkspaceRoots(input).map((leak) => leak.pid), input.ownPid)
+  const roots = selectLeakedWorkspaceRoots(input).map((leak) => leak.pid)
+  return expandToProcessTrees(input.rows, input.cwdRows, input.workspacesRoot, roots, input.ownPid)
 }
 
 /**
@@ -223,6 +283,16 @@ export function selectPidsRootedInWorkspaces(input: {
 }): number[] {
   const wanted = new Set(input.workspaceIds)
   const guarded = protectedPids(input.rows, input.ownPid)
+  // OUR OWN DESCENDANTS ARE PROTECTED HERE, and that is not a detail.
+  // A dev build of 20x is normally checked out INSIDE a task workspace, so the
+  // main process's cwd is that workspace and every child inherits it — the
+  // shared `opencode serve`, the stdio MCP children, git. Protecting only self
+  // and ancestors meant that when that task finally passed the retention
+  // window, the daily cleanup killed the running app's entire subprocess tree,
+  // every live agent session with it, and then deleted the directory underneath.
+  // Whatever we own is the sweep's business, judged on task state; this path
+  // exists for processes we do NOT own.
+  for (const pid of collectDescendantPids(input.rows, input.ownPid)) guarded.add(pid)
   const known = new Set(input.rows.map((row) => row.pid))
 
   const roots: number[] = []
@@ -231,7 +301,7 @@ export function selectPidsRootedInWorkspaces(input: {
     const workspaceId = workspaceIdForCwd(cwd, input.workspacesRoot)
     if (workspaceId && wanted.has(workspaceId)) roots.push(pid)
   }
-  return withDescendants(input.rows, roots, guarded)
+  return withDescendants(input.rows, roots, guarded, rootedInWorkspaces(input.cwdRows, input.workspacesRoot))
 }
 
 // ── Runtime ─────────────────────────────────────────────────
@@ -246,6 +316,16 @@ export function selectPidsRootedInWorkspaces(input: {
  */
 const LSOF_CANDIDATES = ['/usr/sbin/lsof', '/usr/bin/lsof', 'lsof'] as const
 
+/**
+ * Both reads are bounded. The boot sweep is awaited BEFORE the window is
+ * created and the shutdown sweep runs inside a `preventDefault`ed `before-quit`,
+ * so a hang means an app that never appears or never exits. `lsof` in
+ * particular blocks on an unresponsive network mount; `-w` suppresses its
+ * warnings, it does not bound its time. A `try/catch` catches a throw, never a
+ * hang. Healthy cost measured on the affected machine: 0.34 s.
+ */
+const SUBPROCESS_TIMEOUT_MS = 20_000
+
 function readCwdsWithLsof(): CwdRow[] {
   // `-w` suppresses the warnings lsof prints for directories it cannot read;
   // without it an ordinary permission notice looks like a failure. `-n` and
@@ -254,7 +334,7 @@ function readCwdsWithLsof(): CwdRow[] {
   let lastError: unknown = new Error('lsof not found')
   for (const binary of LSOF_CANDIDATES) {
     try {
-      return parseLsofCwd(execFileSync(binary, args, { encoding: 'utf-8', maxBuffer: 16 * 1024 * 1024 }))
+      return parseLsofCwd(execFileSync(binary, args, { encoding: 'utf-8', maxBuffer: 16 * 1024 * 1024, timeout: SUBPROCESS_TIMEOUT_MS }))
     } catch (err) {
       // lsof exits non-zero when any process refused inspection, but still
       // prints everything it could read. Use that rather than losing the scan.
@@ -283,10 +363,26 @@ function readCwdsFromProc(pids: readonly number[]): CwdRow[] {
 export function readProcessSnapshot(): { rows: ProcessRow[]; cwdRows: CwdRow[] } {
   const ps = execFileSync('ps', ['-eo', 'pid=,ppid=,command='], {
     encoding: 'utf-8',
-    maxBuffer: 16 * 1024 * 1024
+    maxBuffer: 16 * 1024 * 1024,
+    timeout: SUBPROCESS_TIMEOUT_MS
   })
   const rows = parseProcessTable(ps)
-  const cwdRows = existsSync('/proc/self/cwd') ? readCwdsFromProc(rows.map((row) => row.pid)) : readCwdsWithLsof()
+  // On Linux `/proc` answers directly. But `hidepid=2`, a container, or another
+  // uid can make every entry unreadable, and an EMPTY cwd table is
+  // indistinguishable from "nothing is leaked" — the sweep would report success
+  // having looked at nothing. Fall back to lsof, and say so if both come back
+  // empty against a non-empty process table.
+  let cwdRows = existsSync('/proc/self/cwd') ? readCwdsFromProc(rows.map((row) => row.pid)) : []
+  if (cwdRows.length === 0) {
+    try {
+      cwdRows = readCwdsWithLsof()
+    } catch (err) {
+      console.warn('[WorkspaceProcessCleanup] Could not read any process cwd:', err)
+    }
+  }
+  if (cwdRows.length === 0 && rows.length > 0) {
+    console.warn(`[WorkspaceProcessCleanup] Read ${rows.length} processes but no cwd for any of them — the sweep can see nothing and is a no-op.`)
+  }
   return { rows, cwdRows }
 }
 
@@ -371,16 +467,26 @@ export async function sweepLeakedWorkspaceProcesses(input: {
   workspaceState: (workspaceId: string) => WorkspaceState
   ownPid?: number
   graceMs?: number
+  /** See `LeakSelection.orphansIgnoreTaskState`. Boot sweep only. */
+  orphansIgnoreTaskState?: boolean
 }): Promise<LeakedProcess[]> {
   if (!canReadProcessCwd()) return []
   const ownPid = input.ownPid ?? process.pid
   const { rows, cwdRows } = readProcessSnapshot()
-  const selection: LeakSelection = { rows, cwdRows, workspacesRoot: resolveWorkspacesRoot(input.workspacesRoot), ownPid, workspaceState: input.workspaceState }
+  const workspacesRoot = resolveWorkspacesRoot(input.workspacesRoot)
+  const selection: LeakSelection = {
+    rows,
+    cwdRows,
+    workspacesRoot,
+    ownPid,
+    workspaceState: input.workspaceState,
+    orphansIgnoreTaskState: input.orphansIgnoreTaskState
+  }
 
   const leaked = selectLeakedWorkspaceRoots(selection)
   if (leaked.length === 0) return []
 
-  const pids = expandToProcessTrees(rows, leaked.map((leak) => leak.pid), ownPid)
+  const pids = expandToProcessTrees(rows, cwdRows, workspacesRoot, leaked.map((leak) => leak.pid), ownPid)
   for (const leak of leaked) {
     console.log(`[WorkspaceProcessCleanup] Killing pid ${leak.pid} in workspace ${leak.workspaceId} — ${leak.reason}: ${leak.command.slice(0, 160)}`)
   }

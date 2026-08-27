@@ -232,17 +232,32 @@ function sweepLeakedMcpProcesses(): void {
  * The boot call is the one that matters. These orphans reparent to launchd, so
  * a shutdown hook alone never sees a machine that was force-quit or rebooted.
  */
-async function sweepLeakedWorkspaces(graceMs?: number): Promise<void> {
+async function sweepLeakedWorkspaces(graceMs?: number, orphansIgnoreTaskState = false): Promise<void> {
   try {
     // A workspace with no task row is as leaked as a finished one, so the two
-    // sources are paired rather than either alone.
+    // sources are paired rather than either alone. BOTH must be trustworthy: a
+    // failed read of either one would classify healthy workspaces as leaked, so
+    // each is checked and the sweep declines rather than guesses.
     const dirs = listWorkspaceDirs()
+    if (dirs === null) {
+      console.warn('[Cleanup] Skipping the workspace sweep: the workspaces directory could not be read.')
+      return
+    }
     const tasks = db ? db.getTasks().map((task) => ({ id: task.id, status: String(task.status) })) : []
+    if (tasks.length === 0 && dirs.length > 0) {
+      // Not credible: workspaces exist but the task table is empty. Far more
+      // likely a closed or damaged database than a genuinely empty one — and
+      // believing it would mark every workspace "no task for this workspace"
+      // and kill everything in all of them.
+      console.warn(`[Cleanup] Skipping the workspace sweep: ${dirs.length} workspaces on disk but no tasks in the database.`)
+      return
+    }
     const states = buildWorkspaceStates(tasks, dirs)
     await sweepLeakedWorkspaceProcesses({
       workspacesRoot: WORKSPACES_DIR,
       workspaceState: (workspaceId) => states.get(workspaceId) ?? { exists: false },
-      graceMs
+      graceMs,
+      orphansIgnoreTaskState
     })
 
     // Nothing bounds the workspace count today. Report it, so the disk and
@@ -934,7 +949,12 @@ app.whenReady().then(async () => {
   // that was force-quit or rebooted: those orphans reparent to launchd, so no
   // shutdown hook ever sees them. Awaited — on a machine that has hit EMFILE
   // the descriptors must come back before this instance opens its own.
-  await sweepLeakedWorkspaces()
+  // `orphansIgnoreTaskState` is true HERE AND ONLY HERE. Task status is
+  // deliberately preserved across a quit and nothing repairs it at startup, so
+  // a force-quit task stays `agent_working` forever — and without this the
+  // watcher it leaked would be vetoed by its own stale status on every boot,
+  // making the reported case the one case that could never be collected.
+  await sweepLeakedWorkspaces(undefined, true)
   analytics.record('server.boot.heartbeat', {
     taskCount: db.getTasks().length,
     agentCount: db.getAgents().length

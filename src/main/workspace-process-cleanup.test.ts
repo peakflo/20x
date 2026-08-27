@@ -164,9 +164,23 @@ describe('selectLeakedWorkspaceRoots', () => {
     const input = base(
       [' 10 1 20x-main', ' 500 1 ' + TSX_WATCH],
       cwds([[500, WS('task_gone', '/repo')]]),
-      { task_gone: { status: 'agent_working', exists: false } }
+      { task_gone: { status: 'completed', exists: false } }
     )
     expect(selectLeakedWorkspaceRoots(input)[0].reason).toContain('workspace directory removed')
+  })
+
+  it('but a missing directory does NOT override an active task', () => {
+    // This assertion is the reverse of what this file first said. A missing
+    // directory is far more often a failed listing than a deleted workspace —
+    // `readdirSync` needs a descriptor and so fails early under EMFILE, the
+    // very condition this feature relieves. Letting it outrank the active-task
+    // guard made the sweep most destructive on exactly the machine it is for.
+    const input = base(
+      [' 10 1 20x-main', ' 500 1 ' + TSX_WATCH],
+      cwds([[500, WS('task_live', '/repo')]]),
+      { task_live: { status: 'agent_working', exists: false } }
+    )
+    expect(selectLeakedWorkspaceRoots(input)).toEqual([])
   })
 
   it('keeps a workspace process held by ANOTHER live 20x instance', () => {
@@ -206,6 +220,83 @@ describe('selectLeakedWorkspaceRoots', () => {
   })
 })
 
+describe('descendants of a leaked root', () => {
+  const rows = parseProcessTable(
+    [' 10 1 20x-main', ' 900 1 tmux-server', ' 901 900 nvim', ' 902 900 ' + USER_TSX_WATCH, ' 903 900 node'].join('\n')
+  )
+  const input = {
+    rows,
+    cwdRows: cwds([
+      [900, WS('task_done')],
+      [901, '/Users/dev/Documents/mynotes'],
+      [902, '/Users/dev/Documents/codes/peakflo/sources/other/pf-workflo/packages/workflow-api'],
+      [903, WS('task_done', '/repo')]
+    ]),
+    workspacesRoot: ROOT,
+    ownPid: 10,
+    workspaceState: () => ({ status: 'completed', exists: true })
+  }
+
+  it('takes a descendant that is itself inside the workspace', () => {
+    // The measured shape: the matched orphan held 49 descriptors, the browser
+    // it started held 449. Stopping at the root leaves the leak behind.
+    expect(selectLeakedWorkspacePids(input)).toContain(903)
+  })
+
+  it("NEVER takes a descendant whose own cwd is outside the root", () => {
+    // A `tmux` or `screen` server started inside a workspace is ppid 1 by
+    // DESIGN, so a finished task selects it. Its panes are its descendants and
+    // their cwds are wherever the user put them. Without this rule one finished
+    // task took down the user's editor and their dev server in their own
+    // checkout — the catastrophe this module exists to avoid, from the other
+    // direction.
+    const selected = selectLeakedWorkspacePids(input)
+    expect(selected).not.toContain(901)
+    expect(selected).not.toContain(902)
+    expect(selected).toEqual([900, 903])
+  })
+
+  it('leaves a descendant with no readable cwd alone — not readable is not leaked', () => {
+    const noCwd = { ...input, cwdRows: cwds([[900, WS('task_done')]]) }
+    expect(selectLeakedWorkspacePids(noCwd)).toEqual([900])
+  })
+})
+
+describe('an active task is an absolute veto', () => {
+  const base = (ppid: number, state: { status?: string; exists: boolean }, orphansIgnoreTaskState = false) => ({
+    rows: parseProcessTable([' 10 1 20x-main', ` 500 ${ppid} ` + TSX_WATCH].join('\n')),
+    cwdRows: cwds([[500, WS('task_A', '/repo')]]),
+    workspacesRoot: ROOT,
+    ownPid: 10,
+    workspaceState: () => state,
+    orphansIgnoreTaskState
+  })
+
+  it('outranks a missing directory, which is far more likely a failed listing', () => {
+    // If this loses, one unreadable directory listing kills the workspace of
+    // every task an agent is working on right now.
+    expect(selectLeakedWorkspaceRoots(base(1, { status: 'agent_working', exists: false }))).toEqual([])
+  })
+
+  it('protects our own descendant even at boot', () => {
+    expect(selectLeakedWorkspaceRoots(base(10, { status: 'agent_working', exists: true }, true))).toEqual([])
+  })
+
+  it('does NOT protect a parentless process at boot — the force-quit case', () => {
+    // `stopAllSessions` preserves task status across a quit and nothing repairs
+    // it at startup, so a force-quit task stays `agent_working` forever. If the
+    // status wins here, the leaked watcher is vetoed on every boot from then on
+    // and the reported bug is never fixed.
+    const leaked = selectLeakedWorkspaceRoots(base(1, { status: 'agent_working', exists: true }, true))
+    expect(leaked.map((entry) => entry.pid)).toEqual([500])
+    expect(leaked[0].reason).toContain('parentless at startup')
+  })
+
+  it('still protects a parentless process when that flag is off — the shutdown sweep', () => {
+    expect(selectLeakedWorkspaceRoots(base(1, { status: 'agent_working', exists: true }, false))).toEqual([])
+  })
+})
+
 describe('selectLeakedWorkspacePids', () => {
   it('takes the whole tree, because the descendants hold the descriptors', () => {
     // Measured shape: a 49-fd orphaned `node` whose `firefox` child held 449 more.
@@ -233,8 +324,12 @@ describe('selectPidsRootedInWorkspaces', () => {
     [42, '/Users/dev/Documents/codes/peakflo/sources/other/pf-workflo']
   ])
 
-  it('takes every process in the workspace whatever its parent, because the directory is going', () => {
-    expect(selectPidsRootedInWorkspaces({ rows, cwdRows, workspacesRoot: ROOT, ownPid: 10, workspaceIds: ['task_A'] })).toEqual([12, 21])
+  it("takes a process held by ANOTHER instance, because that directory is going", () => {
+    // The scope rule does not apply on this path and must not: the directory is
+    // being deleted, so a process still running in it cannot be left behind,
+    // and whose child it is does not change that. pid 12 is OUR child and is
+    // excluded — the sweep owns what we own, judged on task state.
+    expect(selectPidsRootedInWorkspaces({ rows, cwdRows, workspacesRoot: ROOT, ownPid: 10, workspaceIds: ['task_A'] })).toEqual([21])
   })
 
   it('still leaves a process outside the root alone', () => {
@@ -245,9 +340,24 @@ describe('selectPidsRootedInWorkspaces', () => {
     expect(selectPidsRootedInWorkspaces({ rows, cwdRows, workspacesRoot: ROOT, ownPid: 10, workspaceIds: ['task_B'] })).toEqual([])
   })
 
-  it('never selects itself or an ancestor', () => {
-    const own = parseProcessTable([' 5 1 shell', ' 10 5 20x-dev', ' 12 10 child'].join('\n'))
-    const ownCwds = cwds([[5, WS('task_A')], [10, WS('task_A')], [12, WS('task_A')]])
-    expect(selectPidsRootedInWorkspaces({ rows: own, cwdRows: ownCwds, workspacesRoot: ROOT, ownPid: 10, workspaceIds: ['task_A'] })).toEqual([12])
+  it('never selects itself, an ancestor, OR ANY OF OUR OWN CHILDREN', () => {
+    // A dev build of 20x lives inside a task workspace, so the main process's
+    // cwd IS that workspace and every child inherits it — `opencode serve`, the
+    // stdio MCP children, git. Protecting only self and ancestors meant that
+    // once that task passed the retention window the daily cleanup killed the
+    // running app's whole subprocess tree, every live agent session with it,
+    // and then deleted the directory underneath.
+    const own = parseProcessTable(
+      [' 5 1 shell', ' 10 5 20x-dev', ' 12 10 opencode-serve', ' 13 12 mcp-child', ' 99 1 stranger'].join('\n')
+    )
+    const ownCwds = cwds([[5, WS('task_A')], [10, WS('task_A')], [12, WS('task_A')], [13, WS('task_A')], [99, WS('task_A')]])
+    const selected = selectPidsRootedInWorkspaces({ rows: own, cwdRows: ownCwds, workspacesRoot: ROOT, ownPid: 10, workspaceIds: ['task_A'] })
+    expect(selected).toEqual([99])
+  })
+
+  it('does not follow a tree out of the workspaces root', () => {
+    const tree = parseProcessTable([' 10 1 20x-main', ' 900 1 tmux', ' 901 900 nvim'].join('\n'))
+    const treeCwds = cwds([[900, WS('task_A')], [901, '/Users/dev/Documents/mynotes']])
+    expect(selectPidsRootedInWorkspaces({ rows: tree, cwdRows: treeCwds, workspacesRoot: ROOT, ownPid: 10, workspaceIds: ['task_A'] })).toEqual([900])
   })
 })

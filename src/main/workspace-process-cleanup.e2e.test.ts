@@ -16,6 +16,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import {
+  collectAncestorPids,
   readProcessSnapshot,
   selectLeakedWorkspacePids,
   selectPidsRootedInWorkspaces,
@@ -87,6 +88,36 @@ async function settle(ms = 400): Promise<void> {
   await new Promise((done) => setTimeout(done, ms))
 }
 
+/**
+ * Starts a watcher in `cwd` through a launcher that is then SIGKILLed, so the
+ * watcher survives with no parent — the force-quit shape, and a process this
+ * test process does NOT own.
+ */
+async function startOrphanedWatcher(root: string, script: string, cwd: string): Promise<number> {
+  const launcherPath = join(root, `launcher-${cwd.length}-${spawned.length}.cjs`)
+  writeFileSync(launcherPath, LAUNCHER)
+  const launcher = spawn(process.execPath, [launcherPath, script, cwd], { cwd: root, stdio: ['ignore', 'pipe', 'ignore'] })
+  spawned.push(launcher)
+
+  const watcherPid = await new Promise<number>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('launcher never reported')), 20000)
+    let buffer = ''
+    launcher.stdout!.on('data', (chunk: Buffer) => {
+      buffer += chunk.toString()
+      const match = /launched (\d+)/.exec(buffer)
+      if (match && buffer.includes('ready')) {
+        clearTimeout(timer)
+        resolve(Number(match[1]))
+      }
+    })
+    launcher.on('error', reject)
+  })
+
+  process.kill(launcher.pid!, 'SIGKILL')
+  await settle(1500)
+  return watcherPid
+}
+
 afterEach(() => {
   for (const child of spawned.splice(0)) {
     try {
@@ -155,48 +186,26 @@ describe.skipIf(!canReadProcessCwd())('workspace process cleanup, end to end', (
     // survives and launchd adopts it. A shutdown hook never runs in this case,
     // so only a boot sweep can ever collect it.
     const fx = fixture()
-    const workDir = fx.workspaceDir('task_force_quit')
-    const launcherPath = join(fx.root, 'launcher.cjs')
-    writeFileSync(launcherPath, LAUNCHER)
-
-    const launcher = spawn(process.execPath, [launcherPath, fx.script, workDir], {
-      cwd: fx.root,
-      stdio: ['ignore', 'pipe', 'ignore']
-    })
-    spawned.push(launcher)
-
-    const watcherPid = await new Promise<number>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error('launcher never reported')), 20000)
-      let buffer = ''
-      launcher.stdout!.on('data', (chunk: Buffer) => {
-        buffer += chunk.toString()
-        const match = /launched (\d+)/.exec(buffer)
-        if (match && buffer.includes('ready')) {
-          clearTimeout(timer)
-          resolve(Number(match[1]))
-        }
-      })
-      launcher.on('error', reject)
-    })
-
     // Force-quit the parent, the way SIGKILL on 20x kills `pnpm` and `turbo`.
-    process.kill(launcher.pid!, 'SIGKILL')
-    await settle(1500)
+    const watcherPid = await startOrphanedWatcher(fx.root, fx.script, fx.workspaceDir('task_force_quit'))
 
     // BEFORE: the watcher is alive and has lost its parent.
     expect(alive(watcherPid), 'the watcher survives its parent').toBe(true)
     const before = readProcessSnapshot()
     const orphan = before.rows.find((row) => row.pid === watcherPid)
     expect(orphan, 'the watcher is still in the process table').toBeDefined()
-    expect(orphan!.ppid, 'its parent is really gone').not.toBe(launcher.pid)
+    // Its launcher is dead, so its parent must now be either init or a
+    // subreaper — and a subreaper is by definition one of OUR ancestors. Any
+    // third answer would mean it is still owned by a live process, and the
+    // whole premise of the test would be wrong.
+    const reparentedToInit = orphan!.ppid === 1
+    const adopters = collectAncestorPids(before.rows, process.pid)
+    expect(reparentedToInit || adopters.has(orphan!.ppid) || orphan!.ppid === process.pid, `unexpected new parent ${orphan!.ppid}`).toBe(true)
 
     // macOS and an ordinary Linux session reparent to pid 1, which is the case
     // the sweep is built for. A Linux host with a subreaper in the session
-    // (systemd --user, a container init) hands the child to that instead — and
-    // a subreaper is by definition one of OUR ancestors, so the same process is
-    // then caught by the descendant branch. Both are asserted; which one
-    // applies is the host's business, not this test's.
-    const reparentedToInit = orphan!.ppid === 1
+    // hands the child to that instead, and it is then caught by the descendant
+    // branch. Both are asserted; which one applies is the host's business.
     console.log(`watcher ${watcherPid} reparented to ppid ${orphan!.ppid}`)
 
     // The boot sweep, as `app.whenReady` runs it.
@@ -237,10 +246,13 @@ describe.skipIf(!canReadProcessCwd())('workspace process cleanup, end to end', (
 
   it('EXIT TEST 3 — removing a workspace takes the process rooted in it', async () => {
     const fx = fixture()
-    const workDir = fx.workspaceDir('task_to_remove')
-    const child = await startWatcher(workDir, fx.script)
-    child.unref()
-    const pid = child.pid!
+    // Orphaned first, deliberately. This path protects our OWN descendants —
+    // a dev build of 20x lives inside a workspace and every child of it
+    // inherits that cwd, so killing our own tree here would take the running
+    // app's live agent sessions with it. What this path is for is a process
+    // nobody owns, left in a directory that is about to be deleted.
+    const pid = await startOrphanedWatcher(fx.root, fx.script, fx.workspaceDir('task_to_remove'))
+    expect(alive(pid)).toBe(true)
 
     const killed = await terminateProcessesInWorkspaces({
       workspacesRoot: fx.workspaces,

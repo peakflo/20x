@@ -277,10 +277,15 @@ export class WorkspaceCleanupScheduler {
    * honest thing to do about it.
    */
   private reportWorkspaceCount(): void {
-    const count = listWorkspaceDirs().length
-    if (count < WORKSPACE_COUNT_WARN_THRESHOLD) return
-    console.warn(`[WorkspaceCleanup] ${count} task workspaces remain on disk (threshold ${WORKSPACE_COUNT_WARN_THRESHOLD}).`)
-    this.sendToRenderer('workspace:count-warning', { count, threshold: WORKSPACE_COUNT_WARN_THRESHOLD })
+    const dirs = listWorkspaceDirs()
+    if (dirs === null || dirs.length < WORKSPACE_COUNT_WARN_THRESHOLD) return
+    // Console only. An earlier version also sent `workspace:count-warning` to
+    // the renderer, which was dead code: no preload bridge carries it and no
+    // component listens, so it reached nobody while looking like it reached
+    // someone. Surfacing this in the UI is a real change — a preload channel, a
+    // component, and a decision about how insistent it should be — and it wants
+    // to be made deliberately rather than smuggled in with a process fix.
+    console.warn(`[WorkspaceCleanup] ${dirs.length} task workspaces remain on disk (threshold ${WORKSPACE_COUNT_WARN_THRESHOLD}). Enable workspace auto-cleanup in Settings.`)
   }
 
   private getRetentionDays(): number {
