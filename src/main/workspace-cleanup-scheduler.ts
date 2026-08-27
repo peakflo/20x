@@ -92,7 +92,14 @@ export class WorkspaceCleanupScheduler {
     try {
       // Check if auto-cleanup is enabled
       const enabled = this.dbManager.getSetting('workspace_autocleanup_enabled')
-      if (enabled !== 'true') return
+      if (enabled !== 'true') {
+        // Auto-cleanup defaults to OFF, and that is exactly the machine where
+        // the count grows without bound — 397 workspaces holding 313 GB on the
+        // one this was found on. Reporting it only inside `doCleanup` would
+        // mean the warning never reached the person who needs it.
+        this.reportWorkspaceCount()
+        return
+      }
 
       // Check if we already ran today
       const lastRun = this.dbManager.getSetting('workspace_autocleanup_last_run')
