@@ -188,10 +188,14 @@ export function selectLeakedWorkspaceRoots(input: LeakSelection): LeakedProcess[
   return leaked
 }
 
+/** Adds the descendants of already-selected roots, keeping the same guards. */
+export function expandToProcessTrees(rows: ProcessRow[], roots: readonly number[], ownPid: number): number[] {
+  return withDescendants(rows, roots, protectedPids(rows, ownPid))
+}
+
 /** Every pid to kill: the leaked roots plus their descendants. */
 export function selectLeakedWorkspacePids(input: LeakSelection): number[] {
-  const roots = selectLeakedWorkspaceRoots(input)
-  return withDescendants(input.rows, roots.map((leak) => leak.pid), protectedPids(input.rows, input.ownPid))
+  return expandToProcessTrees(input.rows, selectLeakedWorkspaceRoots(input).map((leak) => leak.pid), input.ownPid)
 }
 
 /**
@@ -278,12 +282,23 @@ export function readProcessSnapshot(): { rows: ProcessRow[]; cwdRows: CwdRow[] }
   return { rows, cwdRows }
 }
 
+/** How long a process gets to honour SIGTERM before SIGKILL. */
+export const DEFAULT_GRACE_MS = 1500
+
+/**
+ * The grace used while quitting. Shorter, because quit latency is visible to
+ * the user and the BOOT sweep is the backstop: anything that ignores SIGTERM
+ * here is collected on the next start, which is the path that has to work
+ * anyway for a force-quit.
+ */
+export const SHUTDOWN_GRACE_MS = 300
+
 /**
  * SIGTERM, a short grace period, then SIGKILL for whatever ignored it.
  * A watcher that traps SIGTERM and keeps its file descriptors is exactly the
  * process this whole module exists to remove.
  */
-export async function terminateProcessTree(pids: readonly number[], graceMs = 2000): Promise<void> {
+export async function terminateProcessTree(pids: readonly number[], graceMs = DEFAULT_GRACE_MS): Promise<void> {
   if (pids.length === 0) return
   for (const pid of pids) {
     try {
@@ -339,6 +354,7 @@ export async function sweepLeakedWorkspaceProcesses(input: {
   workspacesRoot: string
   workspaceState: (workspaceId: string) => WorkspaceState
   ownPid?: number
+  graceMs?: number
 }): Promise<LeakedProcess[]> {
   if (!canReadProcessCwd()) return []
   const ownPid = input.ownPid ?? process.pid
@@ -348,11 +364,11 @@ export async function sweepLeakedWorkspaceProcesses(input: {
   const leaked = selectLeakedWorkspaceRoots(selection)
   if (leaked.length === 0) return []
 
-  const pids = selectLeakedWorkspacePids(selection)
+  const pids = expandToProcessTrees(rows, leaked.map((leak) => leak.pid), ownPid)
   for (const leak of leaked) {
     console.log(`[WorkspaceProcessCleanup] Killing pid ${leak.pid} in workspace ${leak.workspaceId} — ${leak.reason}: ${leak.command.slice(0, 160)}`)
   }
-  await terminateProcessTree(pids)
+  await terminateProcessTree(pids, input.graceMs)
   console.log(`[WorkspaceProcessCleanup] Terminated ${pids.length} process(es) across ${leaked.length} leaked workspace root(s)`)
   return leaked
 }

@@ -30,7 +30,7 @@ import { TaskAutomationScheduler } from './task-automation-scheduler'
 import { WorkspaceCleanupScheduler } from './workspace-cleanup-scheduler'
 import { ClaudePluginManager } from './claude-plugin-manager'
 import { parseProcessTable, selectKillableMcpPids } from './mcp-process-cleanup'
-import { buildWorkspaceStates, sweepLeakedWorkspaceProcesses, WORKSPACE_COUNT_WARN_THRESHOLD } from './workspace-process-cleanup'
+import { buildWorkspaceStates, sweepLeakedWorkspaceProcesses, SHUTDOWN_GRACE_MS, WORKSPACE_COUNT_WARN_THRESHOLD } from './workspace-process-cleanup'
 import { WORKSPACES_DIR, listWorkspaceDirs } from './workspace-paths'
 import { EnterpriseHeartbeat } from './enterprise-heartbeat'
 import { EnterpriseStateSync } from './enterprise-state-sync'
@@ -232,7 +232,7 @@ function sweepLeakedMcpProcesses(): void {
  * The boot call is the one that matters. These orphans reparent to launchd, so
  * a shutdown hook alone never sees a machine that was force-quit or rebooted.
  */
-async function sweepLeakedWorkspaces(): Promise<void> {
+async function sweepLeakedWorkspaces(graceMs?: number): Promise<void> {
   try {
     // A workspace with no task row is as leaked as a finished one, so the two
     // sources are paired rather than either alone.
@@ -241,7 +241,8 @@ async function sweepLeakedWorkspaces(): Promise<void> {
     const states = buildWorkspaceStates(tasks, dirs)
     await sweepLeakedWorkspaceProcesses({
       workspacesRoot: WORKSPACES_DIR,
-      workspaceState: (workspaceId) => states.get(workspaceId) ?? { exists: false }
+      workspaceState: (workspaceId) => states.get(workspaceId) ?? { exists: false },
+      graceMs
     })
 
     // Nothing bounds the workspace count today. Report it, so the disk and
@@ -273,7 +274,9 @@ async function shutdownAppServices(): Promise<void> {
   stopTaskApiServer()
 
   sweepLeakedMcpProcesses()
-  await sweepLeakedWorkspaces()
+  // A short grace here: quitting must stay quick, and anything that ignores
+  // SIGTERM is collected by the boot sweep on the next start.
+  await sweepLeakedWorkspaces(SHUTDOWN_GRACE_MS)
 
   db?.close()
 
