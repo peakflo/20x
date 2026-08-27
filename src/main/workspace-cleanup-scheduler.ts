@@ -1,11 +1,11 @@
-import { BrowserWindow, app } from 'electron'
+import { BrowserWindow } from 'electron'
 import { existsSync, readdirSync, statSync, rmSync } from 'fs'
 import { join } from 'path'
 import type { DatabaseManager } from './database'
 import type { WorktreeManager } from './worktree-manager'
 import { TaskStatus } from '../shared/constants'
-
-const WORKSPACES_DIR = join(app.getPath('userData'), 'workspaces')
+import { WORKSPACES_DIR, listWorkspaceDirs } from './workspace-paths'
+import { terminateProcessesInWorkspaces, WORKSPACE_COUNT_WARN_THRESHOLD } from './workspace-process-cleanup'
 
 /**
  * WorkspaceCleanupScheduler - Automatic cleanup of old completed task workspaces
@@ -168,6 +168,27 @@ export class WorkspaceCleanupScheduler {
     const total = eligibleTasks.length + orphanDirs.length
     let processed = 0
 
+    // A process must not outlive its workspace. Removing the directory under a
+    // running watcher leaves it holding several thousand descriptors on files
+    // that no longer exist — the exact leak this cleanup is supposed to end.
+    // Killed BEFORE any removal, and by cwd only, so a watcher the user started
+    // in their own checkout is never a candidate.
+    if (total > 0) {
+      try {
+        const killed = await terminateProcessesInWorkspaces({
+          workspacesRoot: WORKSPACES_DIR,
+          workspaceIds: [...eligibleTasks.map((t) => t.id), ...orphanDirs]
+        })
+        if (killed.length > 0) {
+          console.log(`[WorkspaceCleanup] Terminated ${killed.length} process(es) rooted in workspaces being removed`)
+        }
+      } catch (err) {
+        const message = `Failed to terminate processes in workspaces being removed: ${err instanceof Error ? err.message : String(err)}`
+        console.warn(`[WorkspaceCleanup] ${message}`)
+        errors.push(message)
+      }
+    }
+
     if (reportProgress) {
       this.sendToRenderer('workspace:cleanup-progress', {
         phase: 'scanning',
@@ -236,7 +257,23 @@ export class WorkspaceCleanupScheduler {
       processed++
     }
 
+    this.reportWorkspaceCount()
+
     return { cleaned, errors }
+  }
+
+  /**
+   * Reports how many workspaces are left. Nothing bounds this count: every agent
+   * run makes another clone with its own `node_modules`. On the machine the
+   * process leak was diagnosed on there were 397 of them holding 313 GB, which
+   * is a disk and inode problem in its own right. Counting it is the smallest
+   * honest thing to do about it.
+   */
+  private reportWorkspaceCount(): void {
+    const count = listWorkspaceDirs().length
+    if (count < WORKSPACE_COUNT_WARN_THRESHOLD) return
+    console.warn(`[WorkspaceCleanup] ${count} task workspaces remain on disk (threshold ${WORKSPACE_COUNT_WARN_THRESHOLD}).`)
+    this.sendToRenderer('workspace:count-warning', { count, threshold: WORKSPACE_COUNT_WARN_THRESHOLD })
   }
 
   private getRetentionDays(): number {
