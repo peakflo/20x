@@ -15,7 +15,7 @@ interface TranscriptPanelContentProps {
  * full stop/restart/send capabilities.
  */
 export function TranscriptPanelContent({ taskId }: TranscriptPanelContentProps) {
-  const { session, stop, start, sendMessage, approve } = useAgentSession(taskId)
+  const { session, stop, start, resume, sendMessage, approve } = useAgentSession(taskId)
   // Select the single action instead of subscribing to the whole store — a
   // selector-less useAgentStore() re-renders this panel on every streamed
   // delta of every task's session.
@@ -44,6 +44,14 @@ export function TranscriptPanelContent({ taskId }: TranscriptPanelContentProps) 
     }
   }, [task?.agent_id, session?.sessionId, stop, removeSession, taskId, start])
 
+  const ensureChatSession = useCallback(async (): Promise<string | null> => {
+    if (!task?.agent_id) return null
+    const currentSession = useAgentStore.getState().sessions.get(taskId)
+    if (currentSession?.sessionId) return currentSession.sessionId
+    if (task.session_id) return resume(task.agent_id, taskId, task.session_id)
+    return start(task.agent_id, taskId)
+  }, [resume, start, task?.agent_id, task?.session_id, taskId])
+
   const handleSend = useCallback(
     async (message: string) => {
       // Read messages from the store at call time instead of closing over the
@@ -63,13 +71,15 @@ export function TranscriptPanelContent({ taskId }: TranscriptPanelContentProps) 
         questionIndex >= 0 &&
         !currentMessages.slice(questionIndex + 1).some((m) => m.role === 'user')
       if (hasActiveQuestion) {
+        const readySessionId = await ensureChatSession()
+        if (!readySessionId) return
         await approve(true, message, 'question', currentMessages[questionIndex].tool?.requestId)
         return
       }
 
       await sendMessage(message)
     },
-    [taskId, approve, sendMessage]
+    [taskId, approve, ensureChatSession, sendMessage]
   )
 
   if (!session || (status === SessionStatus.IDLE && messages.length === 0)) {

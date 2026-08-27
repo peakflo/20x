@@ -540,6 +540,8 @@ function TaskWorkspaceComponent({
       const hasActiveQuestion = questionIndex >= 0
         && !messages.slice(questionIndex + 1).some((m) => m.role === 'user')
       if (hasActiveQuestion) {
+        const readySessionId = await ensureChatSession()
+        if (!readySessionId) return
         await approve(true, message, 'question', messages[questionIndex].tool?.requestId)
         return
       }

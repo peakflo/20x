@@ -215,5 +215,13 @@ describe('PiAdapter', () => {
       adapter.respondToQuestion(session.id, { Environment: 'Production' }, session.config, 'request-2'),
     ).resolves.toBe(false)
     expect(process.stdin.write).not.toHaveBeenCalled()
+    expect(session.parts.at(-1)).toMatchObject({
+      id: 'pi-question-request-2',
+      update: true,
+      tool: {
+        name: 'question',
+        status: 'cancelled',
+      },
+    })
   })
 })

@@ -316,6 +316,58 @@ describe('TaskWorkspace – stale triage session cleanup', () => {
     expect(window.electronAPI.agentSession.send).not.toHaveBeenCalled()
   })
 
+  it('resumes a lost session before it answers a persisted Pi question', async () => {
+    const taskId = 'task-1'
+    const agentId = 'agent-1'
+    useAgentStore.setState({
+      sessions: new Map([[taskId, {
+        sessionId: null,
+        agentId,
+        taskId,
+        status: SessionStatus.IDLE,
+        messages: [{
+          id: 'pi-question-request-3',
+          role: 'assistant',
+          content: 'Choose an environment',
+          timestamp: new Date(),
+          partType: 'question',
+          tool: {
+            name: 'question',
+            status: 'running',
+            requestId: 'request-3',
+            questions: [{
+              header: 'Environment',
+              question: 'Choose an environment',
+              options: [{ label: 'Stage', description: 'Stage' }]
+            }]
+          }
+        }],
+        pendingApproval: null
+      }]])
+    })
+    vi.mocked(window.electronAPI.agentSession.resume).mockResolvedValue({ sessionId: 'resumed-session-3' })
+    const task = makeRendererTask({
+      id: taskId,
+      status: TaskStatus.AgentWorking,
+      agent_id: agentId,
+      session_id: 'persisted-session-3'
+    })
+
+    renderWorkspace(task)
+    fireEvent.click(screen.getByTestId('mock-send'))
+
+    await waitFor(() => {
+      expect(window.electronAPI.agentSession.resume).toHaveBeenCalledWith(agentId, taskId, 'persisted-session-3')
+      expect(window.electronAPI.agentSession.approve).toHaveBeenCalledWith(
+        'resumed-session-3',
+        true,
+        'approved',
+        'question',
+        'request-3'
+      )
+    })
+  })
+
   it('resumes a persisted session before sending a follow-up message', async () => {
     const taskId = 'task-1'
     const agentId = 'agent-1'

@@ -706,7 +706,22 @@ export class PiAdapter implements CodingAgentAdapter {
       : Array.from(session.pendingUiRequests.values()).find((item) => item.method !== 'confirm')
     // A restored transcript or another client can submit a response after Pi
     // has already consumed the request. Treat that response as stale.
-    if (!request || request.method === 'confirm') return false
+    if (!request || request.method === 'confirm') {
+      if (!request && requestId) {
+        session.parts.push({
+          id: `pi-question-${requestId}`,
+          type: MessagePartType.TOOL,
+          update: true,
+          tool: {
+            name: 'question',
+            status: 'cancelled',
+            output: 'This Pi question expired when the session ended.',
+          },
+        })
+        this.onDataAvailable?.(session.id)
+      }
+      return false
+    }
     const value = answers[request.title] ?? answers[request.message] ?? answers.answer ?? Object.values(answers)[0] ?? ''
     this.sendRecord(session, {
       type: 'extension_ui_response',

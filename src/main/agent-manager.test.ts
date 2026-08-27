@@ -2006,7 +2006,9 @@ describe('AgentManager session ID re-keying redirect', () => {
       respondToQuestion: vi.fn(async () => false),
     }
     ;(session as any).adapter = adapter
+    session.pollingStarted = false
     const sendToRenderer = vi.spyOn(mgr as any, 'sendToRenderer')
+    const startAdapterPolling = vi.spyOn(mgr as any, 'startAdapterPolling').mockImplementation(() => undefined)
     vi.spyOn(mgr as any, 'getAdapter').mockReturnValue(adapter)
     vi.spyOn(mgr as any, 'buildSessionConfig').mockResolvedValue({ workspaceDir: '/tmp/ws' })
 
@@ -2019,6 +2021,11 @@ describe('AgentManager session ID re-keying redirect', () => {
       'stale-request'
     )
     expect(sendToRenderer).not.toHaveBeenCalled()
+    expect(startAdapterPolling).toHaveBeenCalledWith(
+      'temp-id',
+      adapter,
+      { workspaceDir: '/tmp/ws' }
+    )
   })
 
   it('abortSession resolves re-keyed session via redirect map', async () => {

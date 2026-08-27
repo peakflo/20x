@@ -4413,6 +4413,10 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
         : await adapter.respondToQuestion(sessionId, answers, adapterConfig)
       if (handled === false) {
         console.log(`[AgentManager] Ignored stale question response for session ${sessionId}`)
+        if (!session.pollingStarted && session.adapter) {
+          session.pollingStarted = true
+          this.startAdapterPolling(sessionId, session.adapter, adapterConfig)
+        }
         return
       }
 
