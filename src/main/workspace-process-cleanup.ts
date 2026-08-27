@@ -25,6 +25,14 @@
  * Rule 3 is copied from `selectKillableMcpPids` for the same reason: two 20x
  * instances on one machine (a packaged app and a dev build) are normal, and
  * quitting one must not kill the live children of the other.
+ *
+ * ONE CONSEQUENCE, STATED SO IT IS NOT A SURPRISE: some processes are `ppid 1`
+ * BY DESIGN, `screen -dm` and `tmux` among them. One started inside a task
+ * workspace whose task has finished is selected. That is intended and follows
+ * from a policy that already exists — 20x deletes those directories on a
+ * schedule, so a service living in one was going to lose its files anyway. This
+ * only makes the process policy agree with the directory policy. A long-lived
+ * service belongs outside the workspaces root.
  */
 
 import { execFileSync } from 'child_process'
@@ -297,6 +305,14 @@ export const SHUTDOWN_GRACE_MS = 300
  * SIGTERM, a short grace period, then SIGKILL for whatever ignored it.
  * A watcher that traps SIGTERM and keeps its file descriptors is exactly the
  * process this whole module exists to remove.
+ *
+ * There is a pid-reuse window of roughly a second between reading the table and
+ * signalling: a selected process could exit and its number be handed to
+ * something else. `kill(pid, 0)` proves a process exists, never that it is the
+ * same one. The exposure is identical to the MCP sweep this copies, it is not
+ * closable without a pidfd (Linux) or a kqueue handle per process, and a second
+ * of window against days of leaked descriptors is the right trade. Written down
+ * rather than engineered around.
  */
 export async function terminateProcessTree(pids: readonly number[], graceMs = DEFAULT_GRACE_MS): Promise<void> {
   if (pids.length === 0) return
