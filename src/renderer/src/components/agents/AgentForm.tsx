@@ -121,6 +121,8 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
     } else if (codingAgent === CodingAgentType.CURSOR) {
       setAvailableModels(CURSOR_MODELS)
       setModel(CURSOR_MODELS[0].id)
+    } else if (codingAgent === CodingAgentType.PI) {
+      fetchModels()
     } else {
       setAvailableModels([])
       setModel('')

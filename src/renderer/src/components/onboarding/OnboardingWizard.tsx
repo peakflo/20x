@@ -6,7 +6,8 @@ import {
   ArrowRight,
   Download,
   Sparkles,
-  Zap
+  Zap,
+  Terminal
 } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import {
@@ -47,6 +48,7 @@ enum DetectKey {
   OPENCODE = 'opencode',
   CODEX = 'codex',
   CURSOR = 'cursor',
+  PI = 'pi',
   GH = 'gh',
   GLAB = 'glab'
 }
@@ -112,6 +114,12 @@ const AGENT_OPTIONS: AgentOption[] = [
     label: 'Codex',
     tagline: 'OpenAI',
     Logo: OpenAILogo
+  },
+  {
+    type: CodingAgentType.PI,
+    label: 'Pi',
+    tagline: 'Open-source coding agent',
+    Logo: Terminal
   }
 ]
 
@@ -127,6 +135,8 @@ function getAgentToolKey(type: CodingAgentType): DetectKey {
       return DetectKey.CODEX
     case CodingAgentType.CURSOR:
       return DetectKey.CURSOR
+    case CodingAgentType.PI:
+      return DetectKey.PI
   }
 }
 
@@ -176,9 +186,9 @@ async function getDefaultModel(type: CodingAgentType): Promise<string> {
   if (type === CodingAgentType.CURSOR) {
     return CURSOR_MODELS[0]?.id || ''
   }
-  // OpenCode — try to fetch providers, prefer Peakflo gateway if authenticated
+  // OpenCode and Pi — prefer the Peakflo gateway when it is available.
   try {
-    const result = await agentConfigApi.getProviders(undefined, CodingAgentType.OPENCODE)
+    const result = await agentConfigApi.getProviders(undefined, type)
     if (result?.providers) {
       const providers = Array.isArray(result.providers) ? result.providers : []
 
@@ -648,7 +658,7 @@ export function OnboardingWizard({ open, onOpenChange }: OnboardingWizardProps) 
               <p className="text-xs text-muted-foreground mb-2">
                 Or bring your own agent:
               </p>
-              <div className="grid grid-cols-3 gap-2.5">
+              <div className="grid grid-cols-4 gap-2.5">
                 {AGENT_OPTIONS.map((agent) => {
                   const isSelected = selectedAgent === agent.type
                   const toolKey = getAgentToolKey(agent.type as CodingAgentType)

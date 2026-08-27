@@ -26,6 +26,7 @@ const INSTALL_COMMANDS = {
   claudeCode: { cmd: 'npm', args: ['install', '-g', '@anthropic-ai/claude-code'] },
   opencode: { cmd: 'npm', args: ['install', '-g', 'opencode-ai'] },
   codex: { cmd: 'npm', args: ['install', '-g', '@openai/codex'] },
+  pi: { cmd: 'npm', args: ['install', '-g', '--ignore-scripts', '@earendil-works/pi-coding-agent'] },
   pnpm: { cmd: 'npm', args: ['install', '-g', 'pnpm'] },
   gh: null,
   glab: null,
@@ -65,6 +66,9 @@ export function getInstallCommand(agentName) {
     if (isMac) return 'Triggers Xcode Command Line Tools install (includes Git)'
     if (isLinux) return 'Installs git via system package manager (admin prompt)'
     return 'Install Git from https://git-scm.com/'
+  }
+  if (agentName === 'pi') {
+    return 'npm install -g --ignore-scripts @earendil-works/pi-coding-agent && pi install npm:pi-mcp-adapter'
   }
   const info = INSTALL_COMMANDS[agentName]
   if (!info) return `Unknown agent: ${agentName}`
@@ -632,7 +636,7 @@ async function installGit(onProgress) {
 
 /**
  * Install an agent CLI tool.
- * @param {string} agentName - One of 'claudeCode', 'opencode', 'codex', 'pnpm', 'gh', 'nodejs', 'git'
+ * @param {string} agentName - One of 'claudeCode', 'opencode', 'codex', 'pi', 'pnpm', 'gh', 'nodejs', 'git'
  * @param {(progress: { stage: string, output: string, percent: number }) => void} onProgress
  * @returns {Promise<{ success: boolean, error: string | null, newStatus: object }>}
  */
@@ -736,6 +740,25 @@ export async function installAgent(agentName, onProgress) {
       successMsg: 'Codex installed successfully!\n',
       detectKey: 'codex'
     }, onProgress)
+  }
+
+  if (agentName === 'pi') {
+    const npmCommand = isWin ? 'npm.cmd' : 'npm'
+    const piResult = await spawnInstall(
+      npmCommand,
+      ['install', '-g', '--ignore-scripts', '@earendil-works/pi-coding-agent'],
+      agentName,
+      (progress) => onProgress({ ...progress, percent: Math.min(70, Math.round(progress.percent * 0.7)) })
+    )
+    if (!piResult.success) return piResult
+
+    const piCommand = isWin ? 'pi.cmd' : 'pi'
+    return spawnInstall(
+      piCommand,
+      ['install', 'npm:pi-mcp-adapter'],
+      agentName,
+      (progress) => onProgress({ ...progress, percent: Math.min(100, 70 + Math.round(progress.percent * 0.3)) })
+    )
   }
 
   const info = INSTALL_COMMANDS[agentName]

@@ -162,6 +162,8 @@ function getAgentDisplay(agent: Agent | undefined): { name: string; Logo: React.
       return { name, Logo: OpenAILogo }
     case CodingAgentType.CURSOR:
       return { name, Logo: Terminal }
+    case CodingAgentType.PI:
+      return { name, Logo: Terminal }
     default:
       return { name, Logo: ({ className }: { className?: string }) => <Bot className={className} /> }
   }

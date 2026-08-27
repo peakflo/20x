@@ -50,6 +50,7 @@ vi.mock('./adapters/opencode-adapter', () => ({ OpencodeAdapter: vi.fn() }))
 vi.mock('./adapters/claude-code-adapter', () => ({ ClaudeCodeAdapter: vi.fn() }))
 vi.mock('./adapters/acp-adapter', () => ({ AcpAdapter: vi.fn() }))
 vi.mock('./adapters/codex-app-server-adapter', () => ({ CodexAppServerAdapter: vi.fn() }))
+vi.mock('./adapters/pi-adapter', () => ({ PiAdapter: vi.fn() }))
 vi.mock('./task-api-server', () => ({ getTaskApiPort: vi.fn(), waitForTaskApiServer: vi.fn() }))
 vi.mock('./secret-broker', () => ({
   registerSecretSession: vi.fn(),
@@ -62,6 +63,7 @@ import { mkdir as mkdirAsync, writeFile as writeFileAsync } from 'fs/promises'
 import { existsSync, copyFileSync, mkdirSync, readFileSync } from 'fs'
 import { AcpAdapter } from './adapters/acp-adapter'
 import { CodexAppServerAdapter } from './adapters/codex-app-server-adapter'
+import { PiAdapter } from './adapters/pi-adapter'
 import { getTaskApiPort } from './task-api-server'
 
 const mockedMkdirAsync = vi.mocked(mkdirAsync)
@@ -165,6 +167,16 @@ describe('AgentManager skill file paths', () => {
 
       expect(adapter).toBeInstanceOf(AcpAdapter)
       expect(AcpAdapter).toHaveBeenCalledWith('cursor')
+    })
+
+    it('uses the Pi RPC adapter for Pi agents', () => {
+      const mockDb = createMockDb({ coding_agent: 'pi' })
+      manager = new AgentManager(mockDb)
+
+      const adapter = (manager as any).getAdapter('agent-1')
+
+      expect(adapter).toBeInstanceOf(PiAdapter)
+      expect(PiAdapter).toHaveBeenCalledOnce()
     })
   })
 

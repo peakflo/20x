@@ -504,10 +504,12 @@ function TaskDetailViewComponent({ task, agents, onEdit, onDelete, onUpdateAttac
                     const agentName = codingAgent === CodingAgentType.CLAUDE_CODE ? 'Claude Code' :
                                      codingAgent === CodingAgentType.OPENCODE ? 'OpenCode' :
                                      codingAgent === CodingAgentType.CURSOR ? 'Cursor' :
+                                     codingAgent === CodingAgentType.PI ? 'Pi' :
                                      'Codex'
                     const LogoComponent = codingAgent === CodingAgentType.CLAUDE_CODE ? AnthropicLogo :
                                          codingAgent === CodingAgentType.OPENCODE ? OpenCodeLogo :
                                          codingAgent === CodingAgentType.CURSOR ? Terminal :
+                                         codingAgent === CodingAgentType.PI ? Terminal :
                                          OpenAILogo
                     return (
                       <div

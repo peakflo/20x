@@ -202,6 +202,7 @@ export interface DepsStatus {
   opencode: ToolStatus
   codex: ToolStatus
   cursor: ToolStatus
+  pi: ToolStatus
 }
 
 export interface GlabCliStatus {

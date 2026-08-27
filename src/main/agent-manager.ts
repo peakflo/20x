@@ -14,6 +14,7 @@ import { OpencodeAdapter } from './adapters/opencode-adapter'
 import { ClaudeCodeAdapter } from './adapters/claude-code-adapter'
 import { AcpAdapter } from './adapters/acp-adapter'
 import { CodexAppServerAdapter } from './adapters/codex-app-server-adapter'
+import { PiAdapter } from './adapters/pi-adapter'
 import type { CodingAgentAdapter, SessionConfig, MessagePart, SessionMessage, McpServerConfig } from './adapters/coding-agent-adapter'
 import { SessionStatusType, MessagePartType, MessageRole } from './adapters/coding-agent-adapter'
 import { getTaskApiPort, waitForTaskApiServer } from './task-api-server'
@@ -31,7 +32,8 @@ enum CodingAgentType {
   OPENCODE = 'opencode',
   CLAUDE_CODE = 'claude-code',
   CODEX = 'codex',
-  CURSOR = 'cursor'
+  CURSOR = 'cursor',
+  PI = 'pi'
 }
 
 const ARTIFACT_WORKSPACE_INSTRUCTIONS = `
@@ -676,6 +678,10 @@ export class AgentManager extends EventEmitter {
       case CodingAgentType.CURSOR:
         console.log('[AgentManager] Creating new AcpAdapter for Cursor')
         adapter = new AcpAdapter('cursor')
+        break
+      case CodingAgentType.PI:
+        console.log('[AgentManager] Creating new PiAdapter')
+        adapter = new PiAdapter(this.db)
         break
       default:
         console.warn(`[AgentManager] Unknown coding agent type: ${backendType}`)
@@ -4731,9 +4737,8 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
         return (defaultAgent?.config?.coding_agent as string) || CodingAgentType.OPENCODE
       })()
 
-      // Only the OpenCode adapter exposes configurable providers/models.
-      // For other backends (claude-code, codex), provider listing isn't supported.
-      if (resolvedBackend !== CodingAgentType.OPENCODE) {
+      // OpenCode and Pi expose configurable providers/models.
+      if (resolvedBackend !== CodingAgentType.OPENCODE && resolvedBackend !== CodingAgentType.PI) {
         console.log(`[AgentManager] Backend "${resolvedBackend}" does not support provider listing, skipping`)
         return null
       }
@@ -4792,6 +4797,9 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
         break
       case CodingAgentType.CLAUDE_CODE:
         adapter = new ClaudeCodeAdapter()
+        break
+      case CodingAgentType.PI:
+        adapter = new PiAdapter(this.db)
         break
     }
 

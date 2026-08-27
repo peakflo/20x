@@ -17,6 +17,7 @@ export { ClaudeCodeAdapter } from './claude-code-adapter'
 export { CodexAdapter } from './codex-adapter'
 export { AcpAdapter, type AcpAgentType } from './acp-adapter'
 export { CodexAppServerAdapter } from './codex-app-server-adapter'
+export { PiAdapter } from './pi-adapter'
 
 // TODO: Extract OpencodeAdapter from AgentManager once ready
 // export { OpencodeAdapter } from './opencode-adapter'

@@ -120,3 +120,28 @@ export function buildEnterpriseAiGatewayProviderConfig(
     }
   }
 }
+
+/** Build the equivalent provider entry for Pi's ~/.pi/agent/models.json. */
+export function buildPiAiGatewayProviderConfig(
+  stored: StoredEnterpriseAiGatewayConfig
+): Record<string, unknown> {
+  return {
+    name: ENTERPRISE_AI_GATEWAY_PROVIDER_NAME,
+    baseUrl: stored.baseUrl,
+    api: 'openai-completions',
+    // Keep the virtual key out of models.json. Pi resolves this value from the
+    // environment of the child process for every request.
+    apiKey: '$PEAKFLO_AI_GATEWAY_API_KEY',
+    models: (stored.models ?? []).map((model) => ({
+      id: model.id,
+      name: model.name,
+      // The LiteLLM catalog does not expose reasoning-parameter support. Keep
+      // the compatible default so OpenRouter-backed models do not reject an
+      // unsupported reasoning_effort field.
+      reasoning: false,
+      input: ['text', 'image'],
+      contextWindow: 200000,
+      maxTokens: 32768
+    }))
+  }
+}

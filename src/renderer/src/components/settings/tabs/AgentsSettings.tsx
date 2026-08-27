@@ -145,7 +145,8 @@ export function AgentsSettings() {
               const isClaudeCode = agent.config.coding_agent === CodingAgentType.CLAUDE_CODE
               const isCodex = agent.config.coding_agent === CodingAgentType.CODEX
               const isCursor = agent.config.coding_agent === CodingAgentType.CURSOR
-              const isCliAgent = isClaudeCode || isCodex || isCursor
+              const isPi = agent.config.coding_agent === CodingAgentType.PI
+              const isCliAgent = isClaudeCode || isCodex || isCursor || isPi
 
               return (
                 <div key={agent.id} className="rounded-lg border border-border bg-card overflow-hidden">
@@ -179,6 +180,11 @@ export function AgentsSettings() {
                         )}
                         {isCursor && (
                           <span title="Cursor">
+                            <Terminal className="h-3.5 w-3.5 text-violet-300/80" />
+                          </span>
+                        )}
+                        {isPi && (
+                          <span title="Pi">
                             <Terminal className="h-3.5 w-3.5 text-violet-300/80" />
                           </span>
                         )}
