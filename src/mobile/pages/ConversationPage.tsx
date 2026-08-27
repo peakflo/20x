@@ -232,8 +232,9 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
       if (!currentSession?.sessionId) return
       try {
         if (isQuestion) {
-          const requestId = currentSession.messages.find((item) => item.id === activeQuestionId)?.tool?.requestId
-          await api.sessions.approve(currentSession.sessionId, true, message, 'question', requestId)
+          const activeQuestion = currentSession.messages.find((item) => item.id === activeQuestionId)
+          const responseType = activeQuestion?.tool?.name === 'permission' ? 'permission' : 'question'
+          await api.sessions.approve(currentSession.sessionId, true, message, responseType, activeQuestion?.tool?.requestId)
           captureAnalyticsEvent('agent_approval_responded', {
             task_id: taskId,
             agent_id: currentSession.agentId,
@@ -282,8 +283,9 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
       const currentSession = useAgentStore.getState().sessions.get(taskId)
       if (!currentSession?.sessionId || !activeQuestionId) return
       try {
-        const requestId = currentSession.messages.find((item) => item.id === activeQuestionId)?.tool?.requestId
-        await api.sessions.approve(currentSession.sessionId, true, answer, 'question', requestId)
+        const activeQuestion = currentSession.messages.find((item) => item.id === activeQuestionId)
+        const responseType = activeQuestion?.tool?.name === 'permission' ? 'permission' : 'question'
+        await api.sessions.approve(currentSession.sessionId, true, answer, responseType, activeQuestion?.tool?.requestId)
         captureAnalyticsEvent('agent_approval_responded', {
           task_id: taskId,
           agent_id: currentSession.agentId,

@@ -1,4 +1,4 @@
-import { useCallback } from 'react'
+import { useCallback, useRef } from 'react'
 import { AgentTranscriptPanel } from '@/components/agents/AgentTranscriptPanel'
 import { useAgentSession } from '@/hooks/use-agent-session'
 import { useAgentStore, SessionStatus } from '@/stores/agent-store'
@@ -21,6 +21,7 @@ export function TranscriptPanelContent({ taskId }: TranscriptPanelContentProps) 
   // delta of every task's session.
   const removeSession = useAgentStore((s) => s.removeSession)
   const task = useTaskStore((s) => s.tasks.find((t) => t.id === taskId))
+  const submittedQuestionIdsRef = useRef(new Set<string>())
 
   const messages = session?.messages ?? []
   const status = session?.status ?? SessionStatus.IDLE
@@ -71,9 +72,22 @@ export function TranscriptPanelContent({ taskId }: TranscriptPanelContentProps) 
         questionIndex >= 0 &&
         !currentMessages.slice(questionIndex + 1).some((m) => m.role === 'user')
       if (hasActiveQuestion) {
-        const readySessionId = await ensureChatSession()
-        if (!readySessionId) return
-        await approve(true, message, 'question', currentMessages[questionIndex].tool?.requestId)
+        const question = currentMessages[questionIndex]
+        const questionKey = question.tool?.requestId || question.id
+        if (submittedQuestionIdsRef.current.has(questionKey)) return
+        submittedQuestionIdsRef.current.add(questionKey)
+        try {
+          const readySessionId = await ensureChatSession()
+          if (!readySessionId) {
+            submittedQuestionIdsRef.current.delete(questionKey)
+            return
+          }
+          const responseType = question.tool?.name === 'permission' ? 'permission' : 'question'
+          await approve(true, message, responseType, question.tool?.requestId)
+        } catch (error) {
+          submittedQuestionIdsRef.current.delete(questionKey)
+          throw error
+        }
         return
       }
 

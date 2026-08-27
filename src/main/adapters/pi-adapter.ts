@@ -542,7 +542,7 @@ export class PiAdapter implements CodingAgentAdapter {
     if (method !== 'confirm') {
       session.parts.push({
         id: `pi-question-${id}`,
-        type: MessagePartType.TOOL,
+        type: MessagePartType.QUESTION,
         tool: {
           name: 'question',
           status: 'running',
@@ -677,11 +677,18 @@ export class PiAdapter implements CodingAgentAdapter {
     }
   }
 
-  async respondToApproval(sessionId: string, approved: boolean): Promise<boolean> {
+  async respondToApproval(
+    sessionId: string,
+    approved: boolean,
+    _optionId?: string,
+    requestId?: string,
+  ): Promise<boolean> {
     const session = this.sessions.get(sessionId)
     if (!session) throw new Error(`Session not found: ${sessionId}`)
-    const request = Array.from(session.pendingUiRequests.values()).find((item) => item.method === 'confirm')
-    if (!request) return false
+    const request = requestId
+      ? session.pendingUiRequests.get(requestId)
+      : Array.from(session.pendingUiRequests.values()).find((item) => item.method === 'confirm')
+    if (request?.method !== 'confirm') return false
     this.sendRecord(session, {
       type: 'extension_ui_response',
       id: request.id,
@@ -698,7 +705,7 @@ export class PiAdapter implements CodingAgentAdapter {
     answers: Record<string, string>,
     _config: SessionConfig,
     requestId?: string,
-  ): Promise<boolean> {
+  ): Promise<boolean | { handled: false; resolutionPart: MessagePart }> {
     const session = this.sessions.get(sessionId)
     if (!session) throw new Error(`Session not found: ${sessionId}`)
     const request = requestId
@@ -708,17 +715,20 @@ export class PiAdapter implements CodingAgentAdapter {
     // has already consumed the request. Treat that response as stale.
     if (!request || request.method === 'confirm') {
       if (!request && requestId) {
-        session.parts.push({
-          id: `pi-question-${requestId}`,
-          type: MessagePartType.TOOL,
-          update: true,
-          tool: {
-            name: 'question',
-            status: 'cancelled',
-            output: 'This Pi question expired when the session ended.',
+        return {
+          handled: false,
+          resolutionPart: {
+            id: `pi-question-${requestId}`,
+            type: MessagePartType.QUESTION,
+            update: true,
+            tool: {
+              name: 'question',
+              status: 'cancelled',
+              requestId,
+              output: 'This request expired when the session ended. Restart the turn to continue.',
+            },
           },
-        })
-        this.onDataAvailable?.(session.id)
+        }
       }
       return false
     }

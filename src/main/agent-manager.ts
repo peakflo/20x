@@ -2347,6 +2347,8 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
             partType: 'question',
             tool: {
               name: 'permission',
+              status: 'running',
+              requestId: approval.requestId,
               questions: [{
                 header: 'Permission Required',
                 question: approval.question,
@@ -4408,14 +4410,27 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       console.log(`[AgentManager] Responding to question via adapter for session ${sessionId}`)
 
       const adapterConfig = await this.buildSessionConfig(session.agentId, session.taskId, session.workspaceDir)
-      const handled = requestId
+      const response = requestId
         ? await adapter.respondToQuestion(sessionId, answers, adapterConfig, requestId)
         : await adapter.respondToQuestion(sessionId, answers, adapterConfig)
+      const handled = typeof response === 'object' ? response.handled : response
       if (handled === false) {
         console.log(`[AgentManager] Ignored stale question response for session ${sessionId}`)
-        if (!session.pollingStarted && session.adapter) {
-          session.pollingStarted = true
-          this.startAdapterPolling(sessionId, session.adapter, adapterConfig)
+        if (typeof response === 'object' && response.resolutionPart) {
+          const part = response.resolutionPart
+          this.sendToRenderer('agent:output', {
+            sessionId,
+            taskId: session.taskId,
+            type: 'message',
+            data: {
+              id: part.id,
+              role: part.role || 'assistant',
+              content: part.content || part.text || '',
+              partType: part.type,
+              tool: part.tool,
+              update: part.update,
+            },
+          })
         }
         return
       }
@@ -4469,7 +4484,35 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       console.log(`[AgentManager] Responding to ACP adapter approval with: ${selectedOption}`)
       // OpenCode adapter returns boolean (true=handled, false=no permission found).
       // AcpAdapter returns void. Cast to boolean|void to handle both.
-      const handled = await (adapter as unknown as { respondToApproval: (sid: string, approved: boolean, opt?: string) => Promise<boolean | void> }).respondToApproval(sessionId, approved, selectedOption)
+      const handled = await (adapter as unknown as {
+        respondToApproval: (sid: string, approved: boolean, opt?: string, requestId?: string) => Promise<boolean | void>
+      }).respondToApproval(sessionId, approved, selectedOption, requestId)
+
+      // Provider callbacks do not survive a restored session. Resolve the old
+      // card immediately instead of approving a newer request or sending a
+      // continuation into a session that is already idle.
+      if (handled === false && requestId) {
+        console.log(`[AgentManager] Ignored stale approval response for session ${sessionId}`)
+        this.sendToRenderer('agent:output', {
+          sessionId,
+          taskId: session.taskId,
+          type: 'message',
+          data: {
+            id: `question-${requestId}`,
+            role: 'assistant',
+            content: '',
+            partType: 'question',
+            tool: {
+              name: 'permission',
+              status: 'cancelled',
+              requestId,
+              output: 'This request expired when the session ended. Restart the turn to continue.'
+            },
+            update: true
+          }
+        })
+        return
+      }
 
       // If no pending permission was found (stale prompt after watchdog abort
       // or app restart), send a continuation message so the session recovers.

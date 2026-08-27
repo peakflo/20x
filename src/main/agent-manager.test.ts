@@ -1995,20 +1995,59 @@ describe('AgentManager session ID re-keying redirect', () => {
 
     await mgr.respondToPermission('temp-id', true, 'Yes')
 
-    expect(dualAdapter.respondToApproval).toHaveBeenCalledWith('temp-id', true, 'approved')
+    expect(dualAdapter.respondToApproval).toHaveBeenCalledWith('temp-id', true, 'approved', undefined)
     expect(dualAdapter.respondToQuestion).not.toHaveBeenCalled()
+  })
+
+  it('closes a stale request-scoped approval without sending a continuation', async () => {
+    const { mgr, session } = createManagerWithSession()
+    const dualAdapter = {
+      ...session.adapter,
+      respondToQuestion: vi.fn(async () => undefined),
+      respondToApproval: vi.fn(async () => false),
+    }
+    session.adapter = dualAdapter
+    const sendToRenderer = vi.spyOn(mgr as any, 'sendToRenderer')
+    const doSendAdapterMessage = vi.spyOn(mgr as any, 'doSendAdapterMessage')
+    vi.spyOn(mgr as any, 'getAdapter').mockReturnValue(dualAdapter)
+
+    await mgr.respondToPermission('temp-id', true, 'Yes', undefined, 'permission', 'stale-request')
+
+    expect(dualAdapter.respondToApproval).toHaveBeenCalledWith(
+      'temp-id',
+      true,
+      'approved',
+      'stale-request'
+    )
+    expect(sendToRenderer).toHaveBeenCalledWith('agent:output', expect.objectContaining({
+      data: expect.objectContaining({
+        id: 'question-stale-request',
+        partType: 'question',
+        update: true,
+        tool: expect.objectContaining({
+          name: 'permission',
+          status: 'cancelled',
+          requestId: 'stale-request'
+        })
+      })
+    }))
+    expect(doSendAdapterMessage).not.toHaveBeenCalled()
   })
 
   it('does not publish an answer when the adapter rejects a stale question request', async () => {
     const { mgr, session } = createManagerWithSession()
+    const resolutionPart = {
+      id: 'pi-question-stale-request',
+      type: 'tool',
+      update: true,
+      tool: { name: 'question', status: 'cancelled' },
+    }
     const adapter = {
       ...session.adapter,
-      respondToQuestion: vi.fn(async () => false),
+      respondToQuestion: vi.fn(async () => ({ handled: false, resolutionPart })),
     }
     ;(session as any).adapter = adapter
-    session.pollingStarted = false
     const sendToRenderer = vi.spyOn(mgr as any, 'sendToRenderer')
-    const startAdapterPolling = vi.spyOn(mgr as any, 'startAdapterPolling').mockImplementation(() => undefined)
     vi.spyOn(mgr as any, 'getAdapter').mockReturnValue(adapter)
     vi.spyOn(mgr as any, 'buildSessionConfig').mockResolvedValue({ workspaceDir: '/tmp/ws' })
 
@@ -2020,12 +2059,19 @@ describe('AgentManager session ID re-keying redirect', () => {
       { workspaceDir: '/tmp/ws' },
       'stale-request'
     )
-    expect(sendToRenderer).not.toHaveBeenCalled()
-    expect(startAdapterPolling).toHaveBeenCalledWith(
-      'temp-id',
-      adapter,
-      { workspaceDir: '/tmp/ws' }
-    )
+    expect(sendToRenderer).toHaveBeenCalledWith('agent:output', {
+      sessionId: 'temp-id',
+      taskId: 'task-1',
+      type: 'message',
+      data: {
+        id: 'pi-question-stale-request',
+        role: 'assistant',
+        content: '',
+        partType: 'tool',
+        tool: { name: 'question', status: 'cancelled' },
+        update: true,
+      },
+    })
   })
 
   it('abortSession resolves re-keyed session via redirect map', async () => {

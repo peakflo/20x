@@ -23,6 +23,7 @@ export enum MessagePartType {
   TEXT = 'text',
   REASONING = 'reasoning',
   TOOL = 'tool',
+  QUESTION = 'question',
   IMAGE = 'image',
   ERROR = 'error',
   TASK_PROGRESS = 'task_progress'
@@ -251,7 +252,7 @@ export interface CodingAgentAdapter {
     answers: Record<string, string>,
     config: SessionConfig,
     requestId?: string
-  ): Promise<boolean | void>
+  ): Promise<boolean | void | { handled: boolean; resolutionPart?: MessagePart }>
 
   /**
    * List available providers and their models from the backend.
