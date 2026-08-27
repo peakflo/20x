@@ -6,8 +6,7 @@ import {
   ArrowRight,
   Download,
   Sparkles,
-  Zap,
-  Terminal
+  Zap
 } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import {
@@ -28,7 +27,7 @@ import { PresetupWizard } from '@/components/dashboard/PresetupWizard'
 import { CodingAgentType, CLAUDE_MODELS, CODEX_MODELS, CURSOR_MODELS } from '@/types'
 import { VoiceRuntimeRow } from '@/components/voice/VoiceRuntimeRow'
 import { agentConfigApi } from '@/lib/ipc-client'
-import { AnthropicLogo, OpenCodeLogo, OpenAILogo } from '@/components/icons/AgentLogos'
+import { AnthropicLogo, OpenCodeLogo, OpenAILogo, PiLogo } from '@/components/icons/AgentLogos'
 import type { ToolStatus } from '@/types/electron'
 import type { PresetupTemplate } from '@/stores/dashboard-store'
 
@@ -119,7 +118,7 @@ const AGENT_OPTIONS: AgentOption[] = [
     type: CodingAgentType.PI,
     label: 'Pi',
     tagline: 'Open-source coding agent',
-    Logo: Terminal
+    Logo: PiLogo
   }
 ]
 

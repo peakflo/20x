@@ -3,7 +3,7 @@ import { Plus, Loader2, Wifi, WifiOff, RefreshCw, Edit3, Trash2, Terminal } from
 import { Button } from '@/components/ui/Button'
 import { SettingsSection } from '../SettingsSection'
 import { AgentFormDialog } from '../forms/AgentFormDialog'
-import { OpenCodeLogo, AnthropicLogo, OpenAILogo } from '@/components/icons/AgentLogos'
+import { OpenCodeLogo, AnthropicLogo, OpenAILogo, PiLogo } from '@/components/icons/AgentLogos'
 import { useAgentStore } from '@/stores/agent-store'
 import { agentConfigApi } from '@/lib/ipc-client'
 import { CLAUDE_MODELS, CODEX_MODELS, CURSOR_MODELS, CodingAgentType } from '@/types'
@@ -185,7 +185,7 @@ export function AgentsSettings() {
                         )}
                         {isPi && (
                           <span title="Pi">
-                            <Terminal className="h-3.5 w-3.5 text-violet-300/80" />
+                            <PiLogo className="h-3.5 w-3.5 text-foreground/80" />
                           </span>
                         )}
                       </div>
