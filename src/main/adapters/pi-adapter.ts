@@ -11,6 +11,7 @@ import { randomUUID } from 'crypto'
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'fs'
 import { homedir } from 'os'
 import { dirname, join } from 'path'
+import { StringDecoder } from 'string_decoder'
 import { promisify } from 'util'
 import type { DatabaseManager } from '../database'
 import {
@@ -84,11 +85,14 @@ interface PiSession {
   parts: MessagePart[]
   allMessages: SessionMessage[]
   stdoutBuffer: string
+  stdoutDecoder: StringDecoder
   textByBlock: Map<string, string>
   reasoningByBlock: Map<string, string>
   toolParts: Map<string, MessagePart>
   pendingUiRequests: Map<string, PiUiRequest>
   turn: number
+  assistantMessageOrdinal: number
+  pendingTurnError: string | null
   sawAgentActivity: boolean
   promptMayBeCommandOnly: boolean
   closing: boolean
@@ -278,11 +282,14 @@ export class PiAdapter implements CodingAgentAdapter {
       parts: [],
       allMessages: [],
       stdoutBuffer: '',
+      stdoutDecoder: new StringDecoder('utf8'),
       textByBlock: new Map(),
       reasoningByBlock: new Map(),
       toolParts: new Map(),
       pendingUiRequests: new Map(),
       turn: 0,
+      assistantMessageOrdinal: 0,
+      pendingTurnError: null,
       sawAgentActivity: false,
       promptMayBeCommandOnly: false,
       closing: false,
@@ -373,20 +380,10 @@ export class PiAdapter implements CodingAgentAdapter {
 
   private attachProcess(session: PiSession): void {
     session.process.stdout.on('data', (chunk: Buffer | string) => {
-      session.stdoutBuffer += chunk.toString()
-      while (true) {
-        const newline = session.stdoutBuffer.indexOf('\n')
-        if (newline < 0) break
-        let line = session.stdoutBuffer.slice(0, newline)
-        session.stdoutBuffer = session.stdoutBuffer.slice(newline + 1)
-        if (line.endsWith('\r')) line = line.slice(0, -1)
-        if (!line.trim()) continue
-        try {
-          this.handleEvent(session, JSON.parse(line) as Record<string, unknown>)
-        } catch (error) {
-          console.warn('[PiAdapter] Invalid RPC output:', error)
-        }
-      }
+      this.consumeStdout(session, typeof chunk === 'string' ? chunk : session.stdoutDecoder.write(chunk))
+    })
+    session.process.stdout.on('end', () => {
+      this.consumeStdout(session, session.stdoutDecoder.end(), true)
     })
     session.process.stderr.on('data', (chunk: Buffer | string) => {
       const length = chunk.toString().trim().length
@@ -406,6 +403,32 @@ export class PiAdapter implements CodingAgentAdapter {
       this.rejectPending(session, new Error(session.lastError || (session.closing ? 'Pi process closed' : 'Pi process exited')))
       this.onDataAvailable?.(session.id)
     })
+  }
+
+  private consumeStdout(session: PiSession, chunk: string, flush = false): void {
+    session.stdoutBuffer += chunk
+    while (true) {
+      const newline = session.stdoutBuffer.indexOf('\n')
+      if (newline < 0) break
+      const line = session.stdoutBuffer.slice(0, newline)
+      session.stdoutBuffer = session.stdoutBuffer.slice(newline + 1)
+      this.handleJsonlLine(session, line)
+    }
+    if (flush && session.stdoutBuffer.length > 0) {
+      const line = session.stdoutBuffer
+      session.stdoutBuffer = ''
+      this.handleJsonlLine(session, line)
+    }
+  }
+
+  private handleJsonlLine(session: PiSession, rawLine: string): void {
+    const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine
+    if (!line.trim()) return
+    try {
+      this.handleEvent(session, JSON.parse(line) as Record<string, unknown>)
+    } catch (error) {
+      console.warn('[PiAdapter] Invalid RPC output:', error)
+    }
   }
 
   private rejectPending(session: PiSession, error: Error): void {
@@ -439,7 +462,10 @@ export class PiAdapter implements CodingAgentAdapter {
         && !session.sawAgentActivity
       ) {
         void this.command(session, { type: 'get_state' }).then((state) => {
-          if (state.data?.isStreaming !== true && !session.sawAgentActivity) {
+          const pendingMessageCount = typeof state.data?.pendingMessageCount === 'number'
+            ? state.data.pendingMessageCount
+            : 0
+          if (state.data?.isStreaming !== true && pendingMessageCount === 0 && !session.sawAgentActivity) {
             session.status = session.pendingUiRequests.size > 0 ? 'busy' : 'idle'
             this.onDataAvailable?.(session.id)
           }
@@ -453,22 +479,38 @@ export class PiAdapter implements CodingAgentAdapter {
       case 'agent_start':
         session.status = 'busy'
         session.lastError = null
+        session.pendingTurnError = null
         session.turn++
+        session.assistantMessageOrdinal = 0
         session.sawAgentActivity = true
         break
-      case 'agent_settled':
-        session.status = session.pendingUiRequests.size > 0 ? 'busy' : 'idle'
+      case 'agent_settled': {
+        this.cancelPendingUiRequests(session, 'This request is no longer active.')
+        if (session.pendingTurnError) {
+          session.lastError = session.pendingTurnError
+          session.parts.push({
+            id: `pi-error-${session.turn}`,
+            type: MessagePartType.ERROR,
+            text: session.pendingTurnError,
+          })
+        }
+        session.status = 'idle'
         session.promptMayBeCommandOnly = false
         break
+      }
+      case 'message_start': {
+        const message = event.message as PiMessage | undefined
+        if (message?.role === 'assistant') session.assistantMessageOrdinal++
+        break
+      }
       case 'message_update':
         this.handleMessageUpdate(session, event.assistantMessageEvent as Record<string, unknown> | undefined)
         break
       case 'message_end': {
         const message = event.message as PiMessage | undefined
+        this.reconcileAssistantMessage(session, message)
         if (message?.role === 'assistant' && message.stopReason === 'error') {
-          const text = message.errorMessage || 'Pi model request failed'
-          session.parts.push({ id: `pi-error-${session.turn}`, type: MessagePartType.ERROR, text })
-          session.lastError = text
+          session.pendingTurnError = message.errorMessage || 'Pi model request failed'
         }
         break
       }
@@ -485,8 +527,18 @@ export class PiAdapter implements CodingAgentAdapter {
         session.status = 'busy'
         break
       case 'auto_retry_end':
-        if (event.success === false) {
-          session.lastError = String(event.finalError || 'Pi retry failed')
+        session.pendingTurnError = event.success === true
+          ? null
+          : String(event.finalError || 'Pi retry failed')
+        break
+      case 'compaction_end':
+        if (event.result) session.pendingTurnError = null
+        else if (event.aborted !== true && event.errorMessage) {
+          session.parts.push({
+            id: `pi-compaction-error-${session.turn}-${randomUUID()}`,
+            type: MessagePartType.ERROR,
+            text: String(event.errorMessage),
+          })
         }
         break
       case 'extension_error':
@@ -528,7 +580,7 @@ export class PiAdapter implements CodingAgentAdapter {
       id,
       method,
       title: String(event.title || (method === 'confirm' ? 'Permission Required' : 'Input Required')),
-      message: String(event.message || event.placeholder || event.title || 'Pi needs your response'),
+      message: this.uiRequestMessage(method, event),
       options: Array.isArray(event.options) ? event.options.filter((option): option is string => typeof option === 'string') : [],
     }
 
@@ -558,20 +610,78 @@ export class PiAdapter implements CodingAgentAdapter {
     }
   }
 
+  private uiRequestMessage(method: PiUiRequest['method'], event: Record<string, unknown>): string {
+    const message = String(event.message || event.placeholder || event.title || 'Pi needs your response')
+    const prefill = method === 'editor' && typeof event.prefill === 'string'
+      ? event.prefill.slice(0, 2_000)
+      : ''
+    return prefill ? `${message}\n\nCurrent value:\n${prefill}` : message
+  }
+
+  private cancelPendingUiRequests(session: PiSession, output: string, notifyPi = false): void {
+    for (const request of session.pendingUiRequests.values()) {
+      if (notifyPi) {
+        try {
+          this.sendRecord(session, { type: 'extension_ui_response', id: request.id, cancelled: true })
+        } catch {
+          // The process may have closed while the turn was being stopped.
+        }
+      }
+      session.parts.push({
+        id: request.method === 'confirm' ? `question-${request.id}` : `pi-question-${request.id}`,
+        type: MessagePartType.QUESTION,
+        update: true,
+        tool: {
+          name: request.method === 'confirm' ? 'permission' : 'question',
+          status: 'cancelled',
+          requestId: request.id,
+          output,
+        },
+      })
+    }
+    session.pendingUiRequests.clear()
+  }
+
   private handleMessageUpdate(session: PiSession, update?: Record<string, unknown>): void {
     if (!update) return
     const index = String(update.contentIndex ?? 0)
+    const key = `${session.turn}:${session.assistantMessageOrdinal}:${index}`
     if (update.type === 'text_delta') {
-      const key = `${session.turn}:${index}`
       const text = (session.textByBlock.get(key) || '') + String(update.delta || '')
       session.textByBlock.set(key, text)
       session.parts.push({ id: `pi-text-${key}`, type: MessagePartType.TEXT, text, update: true })
+    } else if (update.type === 'text_end') {
+      const text = String(update.content ?? session.textByBlock.get(key) ?? '')
+      session.textByBlock.set(key, text)
+      session.parts.push({ id: `pi-text-${key}`, type: MessagePartType.TEXT, text, update: true })
     } else if (update.type === 'thinking_delta') {
-      const key = `${session.turn}:${index}`
       const text = (session.reasoningByBlock.get(key) || '') + String(update.delta || '')
       session.reasoningByBlock.set(key, text)
       session.parts.push({ id: `pi-reasoning-${key}`, type: MessagePartType.REASONING, text, update: true })
+    } else if (update.type === 'thinking_end') {
+      const text = String(update.content ?? update.thinking ?? session.reasoningByBlock.get(key) ?? '')
+      session.reasoningByBlock.set(key, text)
+      session.parts.push({ id: `pi-reasoning-${key}`, type: MessagePartType.REASONING, text, update: true })
     }
+  }
+
+  private reconcileAssistantMessage(session: PiSession, message?: PiMessage): void {
+    if (message?.role !== 'assistant') return
+    const blocks = typeof message.content === 'string'
+      ? [{ type: 'text', text: message.content }]
+      : Array.isArray(message.content) ? message.content : []
+    blocks.forEach((block, index) => {
+      const key = `${session.turn}:${session.assistantMessageOrdinal}:${index}`
+      if (block.type === 'text') {
+        const text = String(block.text ?? '')
+        session.textByBlock.set(key, text)
+        session.parts.push({ id: `pi-text-${key}`, type: MessagePartType.TEXT, text, update: true })
+      } else if (block.type === 'thinking') {
+        const text = String(block.thinking ?? '')
+        session.reasoningByBlock.set(key, text)
+        session.parts.push({ id: `pi-reasoning-${key}`, type: MessagePartType.REASONING, text, update: true })
+      }
+    })
   }
 
   private handleToolEvent(session: PiSession, event: Record<string, unknown>, status: string): void {
@@ -695,6 +805,17 @@ export class PiAdapter implements CodingAgentAdapter {
       confirmed: approved,
     })
     session.pendingUiRequests.delete(request.id)
+    session.parts.push({
+      id: `question-${request.id}`,
+      type: MessagePartType.QUESTION,
+      update: true,
+      tool: {
+        name: 'permission',
+        status: approved ? 'completed' : 'cancelled',
+        requestId: request.id,
+        output: approved ? 'Approved' : 'Declined',
+      },
+    })
     session.status = 'busy'
     this.onDataAvailable?.(session.id)
     return true
@@ -741,12 +862,13 @@ export class PiAdapter implements CodingAgentAdapter {
     session.pendingUiRequests.delete(request.id)
     session.parts.push({
       id: `pi-question-${request.id}`,
-      type: MessagePartType.TOOL,
+      type: MessagePartType.QUESTION,
       update: true,
       tool: {
         name: 'question',
         status: 'completed',
         title: request.title,
+        requestId: request.id,
         output: value,
       },
     })
@@ -803,6 +925,8 @@ export class PiAdapter implements CodingAgentAdapter {
   async abortPrompt(sessionId: string): Promise<void> {
     const session = this.sessions.get(sessionId)
     if (!session) return
+    this.cancelPendingUiRequests(session, 'This request was cancelled when the turn stopped.', true)
+    await this.command(session, { type: 'clear_queue' }).catch(() => undefined)
     await this.command(session, { type: 'abort' })
     session.status = 'idle'
   }
