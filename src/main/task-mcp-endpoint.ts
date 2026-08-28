@@ -24,9 +24,7 @@
  * URL, and nothing accumulates between calls.
  */
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { Server } from '@modelcontextprotocol/sdk/server/index.js'
-import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js'
-import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js'
+import { Server, WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/server'
 import {
   callToolForScope,
   listToolsForScope,
@@ -72,8 +70,8 @@ function createScopedServer(scope: TaskMcpScope, invoke: TaskApiInvoke): Server 
     { name: 'task-management', version: '1.0.0' },
     { capabilities: { tools: {} } }
   )
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: listToolsForScope(scope) }))
-  server.setRequestHandler(CallToolRequestSchema, async (request) => {
+  server.setRequestHandler('tools/list', async () => ({ tools: listToolsForScope(scope) }))
+  server.setRequestHandler('tools/call', async (request) => {
     const { name, arguments: args } = request.params as { name: string; arguments?: Record<string, unknown> }
     return callToolForScope(name, args, scope, invoke)
   })

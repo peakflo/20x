@@ -45,7 +45,8 @@ export default defineConfig({
       exclude: [
         '@electron-toolkit/utils',
         '@paralleldrive/cuid2',
-        '@modelcontextprotocol/sdk',
+        '@modelcontextprotocol/client',
+        '@modelcontextprotocol/server',
         // Bundle pure-JS deps to enable tree-shaking and avoid shipping them in node_modules
         'js-yaml',
         'cron-parser',
