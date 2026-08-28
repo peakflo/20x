@@ -13,6 +13,7 @@
  * orchestration set. Artifact calls are always pinned to one task, so an agent
  * cannot change the workpieces of another task.
  */
+import type { Tool } from '@modelcontextprotocol/server'
 
 /** Which task a session may act on. All fields null means full access. */
 export type TaskMcpScope = {
@@ -41,7 +42,7 @@ export function isScopedSession(scope: TaskMcpScope): boolean {
 // ── Tool definitions ──────────────────────────────────────────
 
 // Tools available in BOTH modes
-const artifactTools = [
+const artifactTools: Tool[] = [
   {
     name: 'create_artifact',
     description: 'Create a durable task-scoped artifact workpiece before writing its files. Returns a stable artifact_id for subsequent file calls.',
@@ -111,7 +112,7 @@ const artifactTools = [
 
 const artifactToolNames = new Set(artifactTools.map((tool) => tool.name))
 
-const sharedTools = [
+const sharedTools: Tool[] = [
   ...artifactTools,
   {
     name: 'list_agents',
@@ -164,7 +165,7 @@ const sharedTools = [
 ]
 
 // Mastermind-only tools (full access to all tasks)
-const mastermindTools = [
+const mastermindTools: Tool[] = [
   {
     name: 'list_tasks',
     description:
@@ -532,7 +533,7 @@ const mastermindTools = [
 // edge-connected to the calling task are addressable.
 const taskParam = { type: 'string', description: 'Task ID' }
 const panelIdParam = { type: 'string', description: 'Optional canvas panel ID from browser_list_panels. Omit when exactly one browser panel is linked to the task.' }
-const browserTools = [
+const browserTools: Tool[] = [
   {
     name: 'browser_list_panels',
     description: 'List the canvas browser panels linked to this task. Returns panel_id, url and title for each.',
@@ -647,7 +648,7 @@ const browserTools = [
 ]
 
 // Subtask-scoped tools (can only access parent task + sibling subtasks)
-const subtaskTools = [
+const subtaskTools: Tool[] = [
   {
     name: 'get_parent_task',
     description: 'Get the parent task details including description, resolution, and output fields.',

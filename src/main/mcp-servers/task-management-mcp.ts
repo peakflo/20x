@@ -9,12 +9,8 @@
  * `TASK_API_URL=... node task-management-mcp.js`. All tool definitions and all
  * scope rules live in task-management-core.ts, so both paths behave the same.
  */
-import { Server } from '@modelcontextprotocol/sdk/server/index.js'
-import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
-import {
-  CallToolRequestSchema,
-  ListToolsRequestSchema
-} from '@modelcontextprotocol/sdk/types.js'
+import { Server } from '@modelcontextprotocol/server'
+import { StdioServerTransport } from '@modelcontextprotocol/server/stdio'
 import {
   callToolForScope,
   isScopedSession,
@@ -61,11 +57,11 @@ const server = new Server(
   { capabilities: { tools: {} } }
 )
 
-server.setRequestHandler(ListToolsRequestSchema, async () => ({
+server.setRequestHandler('tools/list', async () => ({
   tools: listToolsForScope(scope)
 }))
 
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
+server.setRequestHandler('tools/call', async (request) => {
   const { name, arguments: args } = request.params as { name: string; arguments?: Record<string, unknown> }
   return callToolForScope(name, args, scope, callApi)
 })
