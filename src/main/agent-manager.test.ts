@@ -3269,6 +3269,31 @@ describe('AgentManager delegation-aware watchdogs', () => {
     expect(entry.watchdogFired).toBe(true)
   })
 
+  it('stuck-tool detector allows a long-running tool with recent output', async () => {
+    const { mgr } = buildManager()
+    const adapter = {
+      pollMessages: vi.fn(async () => []),
+      getStatus: vi.fn(async () => ({ type: SessionStatusType.BUSY })),
+      getRunningTools: vi.fn(async () => [
+        {
+          partId: 'p1',
+          toolName: 'commandExecution',
+          startTime: Date.now() - 10 * 60_000,
+          lastActivityTime: Date.now() - 1_000,
+        },
+      ]),
+      abortPrompt: vi.fn(async () => undefined),
+    }
+    const { entry } = buildBusySession(mgr, adapter)
+    entry.createdAt = Date.now() - 60_000
+    entry.lastPartReceivedAt = Date.now() - 1_000
+
+    await (mgr as any).pollSingleSession(entry)
+
+    expect(adapter.abortPrompt).not.toHaveBeenCalled()
+    expect(entry.watchdogFired).toBeFalsy()
+  })
+
   it('stuck-session watchdog stands down while a delegation tool is running', async () => {
     const { mgr } = buildManager()
     const adapter = {

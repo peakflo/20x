@@ -97,6 +97,7 @@ interface AppServerSession {
     partId: string
     toolName: string
     startTime?: number
+    lastActivityTime?: number
     input?: Record<string, unknown>
   }>
   codexUseApiKey: boolean
@@ -518,6 +519,9 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
       threadId: session.threadId,
       turnId: session.activeTurnId
     })
+    // An interrupted turn may never emit item/completed for its active tools.
+    // Drop them here so the watchdog cannot repeatedly act on stale state.
+    session.runningTools.clear()
     session.status = SessionStatusType.IDLE
   }
 
@@ -596,6 +600,7 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
     partId: string
     toolName: string
     startTime?: number
+    lastActivityTime?: number
     input?: Record<string, unknown>
   }>> {
     return Array.from(this.sessions.get(sessionId)?.runningTools.values() || [])
@@ -1302,6 +1307,8 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
     const previous = session.streamedTextByItemId.get(partId) || ''
     const next = truncateForIpc(previous + extractText(params), MAX_IPC_TOOL_OUTPUT_CHARS)
     const update = seenPartIds.has(partId)
+    const runningTool = session.runningTools.get(partId)
+    if (runningTool) runningTool.lastActivityTime = Date.now()
     seenPartIds.add(partId)
     session.streamedTextByItemId.set(partId, next)
     partContentLengths.set(partId, `${next.length}:${toolName}`)
@@ -1407,10 +1414,12 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
     if (isCompleted) {
       session.runningTools.delete(partId)
     } else {
+      const startedAt = typeof params.startedAtMs === 'number' ? params.startedAtMs : Date.now()
       session.runningTools.set(partId, {
         partId,
         toolName,
-        startTime: typeof params.startedAtMs === 'number' ? params.startedAtMs : Date.now(),
+        startTime: startedAt,
+        lastActivityTime: Date.now(),
         input: item
       })
     }

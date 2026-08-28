@@ -2243,10 +2243,10 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       if (newParts.length > 0) {
         entry.lastPartReceivedAt = Date.now()
         activeSession.lastActivityAt = Date.now()
-        // Reset watchdog flag — new data means the session is alive again.
-        // If a follow-up message also gets stuck, the watchdog can re-fire.
+        // Reset the polling-entry watchdog because new data means this polling
+        // cycle is alive. Keep the session-level one-shot guard intact: late
+        // output from an interrupted turn must not re-arm the same abort.
         entry.watchdogFired = false
-        activeSession.autoAbortNotified = false
       }
 
       // ── Garbled output detection ──
@@ -2493,7 +2493,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
 
           // Fetch currently running tools once — shared by the stuck-tool
           // detector and the stuck-session watchdog's delegation check below.
-          let runningTools: Array<{ partId: string; toolName: string; startTime?: number; input?: Record<string, unknown> }> = []
+          let runningTools: Array<{ partId: string; toolName: string; startTime?: number; lastActivityTime?: number; input?: Record<string, unknown> }> = []
           if ('getRunningTools' in adapter && typeof adapter.getRunningTools === 'function') {
             try {
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -2508,7 +2508,9 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
           // Some tools (notably `read` on cross-workspace files) silently hang
           // without producing any output or asking for permission. The general
           // watchdog below waits 5 minutes, which is far too long for a single
-          // tool. Here we check for tools stuck in "running" state for >90s.
+          // tool. Here we check for tools that have produced no activity for
+          // >90s. Total runtime alone is not a hang signal: commands such as
+          // test and CI watchers can legitimately stream output for minutes.
           //
           // Delegation tools (subagent spawns, subtask waits) are exempt: they
           // run for minutes by design, and aborting them kills the child work.
@@ -2519,9 +2521,10 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
                 if (!tool.startTime) continue
                 if (AgentManager.isDelegationTool(tool.toolName)) continue
                 const elapsed = now - tool.startTime
-                if (elapsed > AgentManager.STUCK_TOOL_TIMEOUT_MS) {
+                const inactiveFor = now - (tool.lastActivityTime ?? tool.startTime)
+                if (inactiveFor > AgentManager.STUCK_TOOL_TIMEOUT_MS) {
                   // Build a descriptive reason
-                  let reason = `Tool "${tool.toolName}" has been running for ${Math.round(elapsed / 1000)}s with no output`
+                  let reason = `Tool "${tool.toolName}" has been running for ${Math.round(elapsed / 1000)}s with no activity for ${Math.round(inactiveFor / 1000)}s`
                   const filePath = tool.input?.filePath as string | undefined
                   if (filePath && config.workspaceDir && !filePath.startsWith(config.workspaceDir)) {
                     reason = `Tool "${tool.toolName}" stuck trying to access file outside workspace: ${filePath}`
