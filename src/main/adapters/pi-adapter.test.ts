@@ -18,6 +18,7 @@ vi.mock('../enterprise-ai-gateway', () => ({
 }))
 
 import { PiAdapter } from './pi-adapter'
+import { MessagePartType } from './coding-agent-adapter'
 
 function fakeProcess() {
   const process = new EventEmitter() as EventEmitter & Record<string, any>
@@ -157,6 +158,39 @@ describe('PiAdapter', () => {
 
     ;(adapter as any).handleEvent(session, { type: 'agent_settled' })
     expect(session.status).toBe('idle')
+  })
+
+  it('steers an active Pi turn instead of queueing a follow-up', async () => {
+    const adapter = new PiAdapter({ getSetting: vi.fn(() => null) } as any)
+    const process = fakeProcess()
+    const session = fakeSession(process)
+    ;(adapter as any).sessions.set(session.id, session)
+
+    await adapter.sendPrompt(session.id, [{ type: MessagePartType.TEXT, text: 'Stop and do this instead' }], session.config)
+
+    expect(process.stdin.write).toHaveBeenCalledWith(
+      `${JSON.stringify({
+        type: 'prompt',
+        message: 'Stop and do this instead',
+        streamingBehavior: 'steer',
+      })}\n`,
+      expect.any(Function),
+    )
+  })
+
+  it('sends a normal prompt when Pi is idle', async () => {
+    const adapter = new PiAdapter({ getSetting: vi.fn(() => null) } as any)
+    const process = fakeProcess()
+    const session = fakeSession(process)
+    session.status = 'idle'
+    ;(adapter as any).sessions.set(session.id, session)
+
+    await adapter.sendPrompt(session.id, [{ type: MessagePartType.TEXT, text: 'Start work' }], session.config)
+
+    expect(process.stdin.write).toHaveBeenCalledWith(
+      `${JSON.stringify({ type: 'prompt', message: 'Start work' })}\n`,
+      expect.any(Function),
+    )
   })
 
   it('routes Pi confirmation requests through the approval API', async () => {

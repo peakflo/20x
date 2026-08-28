@@ -745,7 +745,11 @@ export class PiAdapter implements CodingAgentAdapter {
     this.sendRecord(session, {
       type: 'prompt',
       message,
-      ...(wasBusy ? { streamingBehavior: 'followUp' } : {}),
+      // A message sent from the task composer while Pi is already running is
+      // user steering, not deferred work. Pi delivers `steer` after the current
+      // tool finishes and before the next model call; `followUp` would wait for
+      // the whole run to settle and lets a misdirected turn continue unchecked.
+      ...(wasBusy ? { streamingBehavior: 'steer' } : {}),
     })
   }
 
