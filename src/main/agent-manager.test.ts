@@ -402,6 +402,77 @@ describe('AgentManager skill file paths', () => {
     })
   })
 
+  describe('memory file system prompt injection', () => {
+    it('embeds the agent settings system prompt in AGENTS.md for OpenCode agents', async () => {
+      const mockDb = createMockDb({
+        coding_agent: 'opencode',
+        system_prompt: 'Always reply in English. Prefer small pull requests.',
+      })
+      manager = new AgentManager(mockDb)
+
+      await (manager as any).writeAgentsDocumentation('/tmp/test-workspace', [], [], 'agent-1')
+
+      const writes = mockedWriteFileAsync.mock.calls
+      const agentsMd = writes.find(c => c[0] === '/tmp/test-workspace/AGENTS.md')?.[1] as string
+      const claudeMd = writes.find(c => c[0] === '/tmp/test-workspace/CLAUDE.md')?.[1] as string
+      expect(agentsMd).toContain('## Agent Instructions')
+      expect(agentsMd).toContain('Always reply in English. Prefer small pull requests.')
+      expect(claudeMd).not.toContain('## Agent Instructions')
+    })
+
+    it('does not duplicate the system prompt for Claude Code agents (SDK channel)', async () => {
+      const mockDb = createMockDb({
+        coding_agent: 'claude-code',
+        system_prompt: 'Persona instructions from settings.',
+      })
+      manager = new AgentManager(mockDb)
+
+      await (manager as any).writeAgentsDocumentation('/tmp/test-workspace', [], [], 'agent-1')
+
+      const writes = mockedWriteFileAsync.mock.calls
+      const agentsMd = writes.find(c => c[0] === '/tmp/test-workspace/AGENTS.md')?.[1] as string
+      const claudeMd = writes.find(c => c[0] === '/tmp/test-workspace/CLAUDE.md')?.[1] as string
+      expect(agentsMd).not.toContain('## Agent Instructions')
+      expect(claudeMd).not.toContain('## Agent Instructions')
+    })
+
+    it('does not duplicate the system prompt for Codex agents (developerInstructions channel)', async () => {
+      const mockDb = createMockDb({
+        coding_agent: 'codex',
+        system_prompt: 'Persona instructions from settings.',
+      })
+      manager = new AgentManager(mockDb)
+
+      await (manager as any).writeAgentsDocumentation('/tmp/test-workspace', [], [], 'agent-1')
+
+      const writes = mockedWriteFileAsync.mock.calls
+      const agentsMd = writes.find(c => c[0] === '/tmp/test-workspace/AGENTS.md')?.[1] as string
+      expect(agentsMd).not.toContain('## Agent Instructions')
+    })
+
+    it('omits the section when no system prompt is configured', async () => {
+      const mockDb = createMockDb({ coding_agent: 'opencode' })
+      manager = new AgentManager(mockDb)
+
+      await (manager as any).writeAgentsDocumentation('/tmp/test-workspace', [], [], 'agent-1')
+
+      const writes = mockedWriteFileAsync.mock.calls
+      const agentsMd = writes.find(c => c[0] === '/tmp/test-workspace/AGENTS.md')?.[1] as string
+      expect(agentsMd).not.toContain('## Agent Instructions')
+    })
+
+    it('omits the section when the system prompt is only whitespace', async () => {
+      const mockDb = createMockDb({ coding_agent: 'opencode', system_prompt: '   \n  ' })
+      manager = new AgentManager(mockDb)
+
+      await (manager as any).writeAgentsDocumentation('/tmp/test-workspace', [], [], 'agent-1')
+
+      const writes = mockedWriteFileAsync.mock.calls
+      const agentsMd = writes.find(c => c[0] === '/tmp/test-workspace/AGENTS.md')?.[1] as string
+      expect(agentsMd).not.toContain('## Agent Instructions')
+    })
+  })
+
   describe('generateClaudeMd', () => {
     it('generates skill links with .claude/skills/ paths', () => {
       const mockDb = createMockDb({})

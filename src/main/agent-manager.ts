@@ -926,6 +926,40 @@ export class AgentManager extends EventEmitter {
     return backendType === CodingAgentType.CLAUDE_CODE ? 'CLAUDE.md' : 'AGENTS.md'
   }
 
+  /**
+   * Backends that receive the agent settings system prompt through a native
+   * programmatic channel, so a copy inside the generated memory file would be
+   * pure duplication:
+   * - claude-code: SDK Options.systemPrompt (claude-code-adapter.ts)
+   * - codex: developerInstructions (codex-app-server-adapter.ts)
+   * OpenCode has no such channel — its adapter never forwards
+   * config.systemPrompt (session.create only carries a title) — so the
+   * generated AGENTS.md, which OpenCode auto-ingests, is the only way the
+   * prompt reaches the model.
+   */
+  private static hasProgrammaticSystemPromptChannel(backendType: string): boolean {
+    return backendType === CodingAgentType.CLAUDE_CODE || backendType === CodingAgentType.CODEX
+  }
+
+  /**
+   * The agent settings system prompt to embed in a generated memory file, or
+   * '' when it must not be embedded. Injection is scoped to the memory file
+   * the agent's backend consumes (see getMemoryFileName) and to backends
+   * without a programmatic system prompt channel, so no backend ever sees
+   * the prompt twice. Only the raw base prompt is embedded here — dynamic
+   * suffixes ([Task Context], secrets awareness) are handled elsewhere, and
+   * the memory files already carry their own live secrets section.
+   */
+  private getMemoryFileSystemPrompt(agentId: string | undefined, targetFile: 'AGENTS.md' | 'CLAUDE.md'): string {
+    if (!agentId) return ''
+    const agent = this.db.getAgent(agentId)
+    const backendType = getAgentProvider(agent)
+    if (AgentManager.hasProgrammaticSystemPromptChannel(backendType)) return ''
+    const memoryFile = backendType === CodingAgentType.CLAUDE_CODE ? 'CLAUDE.md' : 'AGENTS.md'
+    if (targetFile !== memoryFile) return ''
+    return agent?.config?.system_prompt?.trim() || ''
+  }
+
   private formatAttachmentSize(bytes: number): string {
     if (!Number.isFinite(bytes) || bytes <= 0) return 'unknown size'
     if (bytes < 1024) return `${bytes} B`
@@ -1262,6 +1296,13 @@ export class AgentManager extends EventEmitter {
     md += `**Generated:** ${now}\n`
     md += `---\n\n`
 
+    // Agent settings system prompt for backends with no programmatic channel
+    // (e.g. OpenCode). See getMemoryFileSystemPrompt for the scoping rules.
+    const agentInstructions = this.getMemoryFileSystemPrompt(agentId, 'AGENTS.md')
+    if (agentInstructions) {
+      md += `## Agent Instructions\n\n${agentInstructions}\n\n---\n\n`
+    }
+
     // Add MCP Servers section
     {
       const documentedServers = this.resolveDocumentedMcpServers(agentId, injectedMcpServers)
@@ -1378,6 +1419,14 @@ export class AgentManager extends EventEmitter {
     let md = `# Claude Code Configuration\n\n`
     md += `**Session Started:** ${now}\n`
     md += `---\n\n`
+
+    // Agent settings system prompt, scoped the same way as in AGENTS.md.
+    // Claude Code already receives it via the SDK, so this stays empty today;
+    // the gate keeps both generators symmetric if that ever changes.
+    const agentInstructions = this.getMemoryFileSystemPrompt(agentId, 'CLAUDE.md')
+    if (agentInstructions) {
+      md += `## Agent Instructions\n\n${agentInstructions}\n\n---\n\n`
+    }
 
     // Add MCP Servers section
     {
