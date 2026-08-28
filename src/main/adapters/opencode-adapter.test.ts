@@ -206,6 +206,54 @@ describe('OpencodeAdapter', () => {
     })
   })
 
+  describe('buildPromptBody', () => {
+    const parts = [{ type: 'text', text: 'do the thing' }] as any
+
+    it('sends the agent settings system prompt as the body system field', () => {
+      const body = (OpencodeAdapter as any).buildPromptBody(
+        parts,
+        { providerID: 'anthropic', modelID: 'claude-x' },
+        { agentId: 'agent-1', taskId: 'task-1', workspaceDir: '/tmp/ws', systemPrompt: 'You are a backend specialist.' }
+      )
+
+      expect(body.system).toBe('You are a backend specialist.')
+      expect(body.parts).toEqual(parts)
+      expect(body.model).toEqual({ providerID: 'anthropic', modelID: 'claude-x' })
+    })
+
+    it('omits the system field when no system prompt is configured', () => {
+      const body = (OpencodeAdapter as any).buildPromptBody(
+        parts,
+        undefined,
+        { agentId: 'agent-1', taskId: 'task-1', workspaceDir: '/tmp/ws' }
+      )
+
+      expect('system' in body).toBe(false)
+      expect('model' in body).toBe(false)
+    })
+
+    it('omits the system field when the system prompt is only whitespace', () => {
+      const body = (OpencodeAdapter as any).buildPromptBody(
+        parts,
+        undefined,
+        { agentId: 'agent-1', taskId: 'task-1', workspaceDir: '/tmp/ws', systemPrompt: '   \n  ' }
+      )
+
+      expect('system' in body).toBe(false)
+    })
+
+    it('keeps the tools passthrough alongside the system prompt', () => {
+      const body = (OpencodeAdapter as any).buildPromptBody(
+        parts,
+        undefined,
+        { agentId: 'agent-1', taskId: 'task-1', workspaceDir: '/tmp/ws', systemPrompt: 'p', tools: { bash: true } }
+      )
+
+      expect(body.system).toBe('p')
+      expect(body.tools).toEqual({ bash: true })
+    })
+  })
+
   describe('waitForMcpServersReady', () => {
     it('prefers SDK mcp.list when available', async () => {
       const adapter = new OpencodeAdapter()
