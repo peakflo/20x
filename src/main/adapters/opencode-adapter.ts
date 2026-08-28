@@ -1229,6 +1229,32 @@ export class OpencodeAdapter implements CodingAgentAdapter {
   }
 
   /**
+   * Builds the body for session.prompt().
+   *
+   * The optional `system` field is OpenCode's programmatic channel for the
+   * agent settings system prompt. The server APPENDS it to its built-in
+   * system prompt (packages/opencode/src/session/llm/request.ts:
+   * `...(input.user.system ? [input.user.system] : [])`) — it does not
+   * replace OpenCode's own harness prompt. Without it the system prompt
+   * configured in 20x settings never reaches OpenCode sessions: the adapter
+   * had no other delivery path. OpenCode reads it from the LAST user
+   * message of the call, so it must be sent on every prompt, not just the
+   * first.
+   */
+  private static buildPromptBody(
+    parts: MessagePart[],
+    modelParam: { providerID: string; modelID: string } | undefined,
+    config: SessionConfig
+  ): Record<string, unknown> {
+    return {
+      parts: parts as unknown as Array<import('@opencode-ai/sdk').TextPartInput>,
+      ...(modelParam && { model: modelParam }),
+      ...(config.tools && { tools: config.tools }),
+      ...(config.systemPrompt?.trim() && { system: config.systemPrompt.trim() })
+    }
+  }
+
+  /**
    * Executes a prompt with automatic retry for transient errors.
    * Keeps the AbortController in promptAborts alive during retries so
    * getStatus() continues to report BUSY.
@@ -1255,11 +1281,7 @@ export class OpencodeAdapter implements CodingAgentAdapter {
       try {
         const result: unknown = await ocClient.session.prompt({
           path: { id: sessionId },
-          body: {
-            parts: parts as unknown as Array<import('@opencode-ai/sdk').TextPartInput>,
-            ...(modelParam && { model: modelParam }),
-            ...(config.tools && { tools: config.tools })
-          },
+          body: OpencodeAdapter.buildPromptBody(parts, modelParam, config) as import('@opencode-ai/sdk').SessionPromptData['body'],
           ...(config.workspaceDir && { query: { directory: config.workspaceDir } }),
           signal: promptAbort.signal
         })
