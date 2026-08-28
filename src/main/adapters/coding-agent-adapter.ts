@@ -217,6 +217,7 @@ export interface CodingAgentAdapter {
     toolName: string
     startTime?: number // Unix ms when the tool started
     lastActivityTime?: number // Unix ms when the tool most recently produced output
+    lastActivityMonotonicTime?: number // Monotonic ms when output was last observed
     input?: Record<string, unknown> // Tool input (e.g. { filePath: "..." })
   }>>
 

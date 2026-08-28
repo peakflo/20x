@@ -98,6 +98,7 @@ interface AppServerSession {
     toolName: string
     startTime?: number
     lastActivityTime?: number
+    lastActivityMonotonicTime?: number
     input?: Record<string, unknown>
   }>
   codexUseApiKey: boolean
@@ -522,7 +523,9 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
     // An interrupted turn may never emit item/completed for its active tools.
     // Drop them here so the watchdog cannot repeatedly act on stale state.
     session.runningTools.clear()
-    session.status = SessionStatusType.IDLE
+    // Keep the session BUSY until Codex confirms settlement via turn/completed
+    // or thread/status/changed. Marking it idle here races those notifications
+    // and can make follow-up UI actions target a turn that is still settling.
   }
 
   async destroySession(sessionId: string, _config: SessionConfig): Promise<void> {
@@ -601,6 +604,7 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
     toolName: string
     startTime?: number
     lastActivityTime?: number
+    lastActivityMonotonicTime?: number
     input?: Record<string, unknown>
   }>> {
     return Array.from(this.sessions.get(sessionId)?.runningTools.values() || [])
@@ -1308,7 +1312,10 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
     const next = truncateForIpc(previous + extractText(params), MAX_IPC_TOOL_OUTPUT_CHARS)
     const update = seenPartIds.has(partId)
     const runningTool = session.runningTools.get(partId)
-    if (runningTool) runningTool.lastActivityTime = Date.now()
+    if (runningTool) {
+      runningTool.lastActivityTime = Date.now()
+      runningTool.lastActivityMonotonicTime = performance.now()
+    }
     seenPartIds.add(partId)
     session.streamedTextByItemId.set(partId, next)
     partContentLengths.set(partId, `${next.length}:${toolName}`)
@@ -1415,11 +1422,13 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
       session.runningTools.delete(partId)
     } else {
       const startedAt = typeof params.startedAtMs === 'number' ? params.startedAtMs : Date.now()
+      const observedAt = performance.now()
       session.runningTools.set(partId, {
         partId,
         toolName,
         startTime: startedAt,
         lastActivityTime: Date.now(),
+        lastActivityMonotonicTime: observedAt,
         input: item
       })
     }

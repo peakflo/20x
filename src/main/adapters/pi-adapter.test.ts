@@ -60,6 +60,7 @@ function fakeSession(process = fakeProcess()): any {
     turn: 1,
     assistantMessageOrdinal: 0,
     pendingTurnError: null,
+    pendingTurnErrorMonotonicTime: null,
     sawAgentActivity: true,
     promptMayBeCommandOnly: false,
     closing: false,
@@ -346,6 +347,41 @@ describe('PiAdapter', () => {
     ;(adapter as any).handleEvent(session, { type: 'agent_settled' })
     await expect(adapter.getStatus(session.id, session.config)).resolves.toEqual({ type: 'idle' })
     expect((await adapter.pollMessages(session.id)).some((part) => part.type === 'error')).toBe(false)
+  })
+
+  it('settles a terminal model error when Pi omits agent_settled', async () => {
+    const adapter = new PiAdapter({ getSetting: vi.fn(() => null) } as any)
+    const session = fakeSession()
+    ;(adapter as any).sessions.set(session.id, session)
+    vi.spyOn(adapter as any, 'command').mockResolvedValue({
+      type: 'response',
+      command: 'get_state',
+      success: true,
+      data: { isStreaming: false },
+    })
+
+    const monotonicSpy = vi.spyOn(performance, 'now').mockReturnValue(100)
+    ;(adapter as any).handleEvent(session, {
+      type: 'message_end',
+      message: {
+        role: 'assistant',
+        content: [],
+        stopReason: 'error',
+        errorMessage: 'Provider unavailable',
+      },
+    })
+    monotonicSpy.mockReturnValue(1_101)
+
+    await expect(adapter.getStatus(session.id, session.config)).resolves.toEqual({
+      type: 'error',
+      message: 'Provider unavailable',
+    })
+    expect((await adapter.pollMessages(session.id)).at(-1)).toMatchObject({
+      id: 'pi-error-1',
+      type: 'error',
+      text: 'Provider unavailable',
+    })
+    monotonicSpy.mockRestore()
   })
 
   it('closes timed-out dialogs when the Pi run settles', async () => {

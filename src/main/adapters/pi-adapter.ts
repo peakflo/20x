@@ -34,6 +34,7 @@ const RPC_TIMEOUT_MS = 15_000
 const MAX_BUFFERED_PARTS = 1_000
 const MINIMUM_PI_VERSION = [0, 80, 5] as const
 const PI_PERMISSION_MODE_ENV = 'TWENTYX_PI_PERMISSION_MODE'
+const TERMINAL_ERROR_SETTLE_GRACE_MS = 1_000
 
 const PI_PERMISSION_EXTENSION_SOURCE = `\
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -93,6 +94,7 @@ interface PiSession {
   turn: number
   assistantMessageOrdinal: number
   pendingTurnError: string | null
+  pendingTurnErrorMonotonicTime: number | null
   sawAgentActivity: boolean
   promptMayBeCommandOnly: boolean
   closing: boolean
@@ -290,6 +292,7 @@ export class PiAdapter implements CodingAgentAdapter {
       turn: 0,
       assistantMessageOrdinal: 0,
       pendingTurnError: null,
+      pendingTurnErrorMonotonicTime: null,
       sawAgentActivity: false,
       promptMayBeCommandOnly: false,
       closing: false,
@@ -480,21 +483,15 @@ export class PiAdapter implements CodingAgentAdapter {
         session.status = 'busy'
         session.lastError = null
         session.pendingTurnError = null
+        session.pendingTurnErrorMonotonicTime = null
         session.turn++
         session.assistantMessageOrdinal = 0
         session.sawAgentActivity = true
         break
       case 'agent_settled': {
         this.cancelPendingUiRequests(session, 'This request is no longer active.')
-        if (session.pendingTurnError) {
-          session.lastError = session.pendingTurnError
-          session.parts.push({
-            id: `pi-error-${session.turn}`,
-            type: MessagePartType.ERROR,
-            text: session.pendingTurnError,
-          })
-        }
-        session.status = 'idle'
+        if (session.pendingTurnError) this.settlePendingTurnError(session)
+        else session.status = 'idle'
         session.promptMayBeCommandOnly = false
         break
       }
@@ -511,6 +508,7 @@ export class PiAdapter implements CodingAgentAdapter {
         this.reconcileAssistantMessage(session, message)
         if (message?.role === 'assistant' && message.stopReason === 'error') {
           session.pendingTurnError = message.errorMessage || 'Pi model request failed'
+          session.pendingTurnErrorMonotonicTime = performance.now()
         }
         break
       }
@@ -525,11 +523,13 @@ export class PiAdapter implements CodingAgentAdapter {
         break
       case 'auto_retry_start':
         session.status = 'busy'
+        session.pendingTurnErrorMonotonicTime = null
         break
       case 'auto_retry_end':
         session.pendingTurnError = event.success === true
           ? null
           : String(event.finalError || 'Pi retry failed')
+        session.pendingTurnErrorMonotonicTime = event.success === true ? null : performance.now()
         break
       case 'compaction_end':
         if (event.result) session.pendingTurnError = null
@@ -752,11 +752,47 @@ export class PiAdapter implements CodingAgentAdapter {
   async getStatus(sessionId: string, _config: SessionConfig): Promise<SessionStatus> {
     const session = this.sessions.get(sessionId)
     if (!session) return { type: SessionStatusType.ERROR, message: 'Session not found' }
+    // Some providers end the model stream with stopReason=error but omit the
+    // final agent_settled event. Confirm Pi is no longer streaming so that a
+    // terminal provider error cannot leave the task BUSY forever. A retry keeps
+    // isStreaming=true (and auto_retry_start clears/replaces the pending error).
+    if (
+      session.pendingTurnError
+      && session.pendingTurnErrorMonotonicTime !== null
+      && performance.now() - session.pendingTurnErrorMonotonicTime >= TERMINAL_ERROR_SETTLE_GRACE_MS
+      && session.status === 'busy'
+    ) {
+      try {
+        const state = await this.command(session, { type: 'get_state' })
+        const pendingMessageCount = typeof state.data?.pendingMessageCount === 'number'
+          ? state.data.pendingMessageCount
+          : 0
+        if (state.data?.isStreaming !== true && pendingMessageCount === 0) {
+          this.settlePendingTurnError(session)
+        }
+      } catch {
+        // Keep polling; process exit/error handling remains authoritative.
+      }
+    }
     if (session.lastError) return { type: SessionStatusType.ERROR, message: session.lastError }
     if (session.pendingUiRequests.size > 0) {
       return { type: SessionStatusType.WAITING_APPROVAL, message: 'Pi is waiting for input' }
     }
     return { type: session.status === 'busy' ? SessionStatusType.BUSY : SessionStatusType.IDLE }
+  }
+
+  private settlePendingTurnError(session: PiSession): void {
+    if (!session.pendingTurnError) return
+    const error = session.pendingTurnError
+    session.pendingTurnError = null
+    session.pendingTurnErrorMonotonicTime = null
+    session.lastError = error
+    session.status = 'error'
+    session.parts.push({
+      id: `pi-error-${session.turn}`,
+      type: MessagePartType.ERROR,
+      text: error,
+    })
   }
 
   async pollMessages(sessionId: string): Promise<MessagePart[]> {

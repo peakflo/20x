@@ -2583,7 +2583,7 @@ describe('AgentManager startAdapterPolling — IDLE grace period for follow-up m
 
   it('does not spam auto-abort messages when a stuck running tool remains visible after polling restarts', async () => {
     const mgr = buildManager()
-    const startedAt = Date.now() - 240_000
+    const startedAt = Date.now() - 31 * 60_000
     const abortPrompt = vi.fn(async () => undefined)
     const adapter = {
       pollMessages: vi.fn(async () => [] as any[]),
@@ -2662,7 +2662,7 @@ describe('AgentManager startAdapterPolling — IDLE grace period for follow-up m
       getRunningTools: vi.fn(async () => [{
         partId: 'tool-call-1',
         toolName: 'commandExecution',
-        startTime: Date.now() - 240_000,
+        startTime: Date.now() - 31 * 60_000,
         input: {}
       }]),
       abortPrompt,
@@ -3287,6 +3287,52 @@ describe('AgentManager delegation-aware watchdogs', () => {
     const { entry } = buildBusySession(mgr, adapter)
     entry.createdAt = Date.now() - 60_000
     entry.lastPartReceivedAt = Date.now() - 1_000
+
+    await (mgr as any).pollSingleSession(entry)
+
+    expect(adapter.abortPrompt).not.toHaveBeenCalled()
+    expect(entry.watchdogFired).toBeFalsy()
+  })
+
+  it('uses monotonic activity when the wall clock timestamp is stale', async () => {
+    const { mgr } = buildManager()
+    const monotonicNow = performance.now()
+    const adapter = {
+      pollMessages: vi.fn(async () => []),
+      getStatus: vi.fn(async () => ({ type: SessionStatusType.BUSY })),
+      getRunningTools: vi.fn(async () => [{
+        partId: 'p1',
+        toolName: 'commandExecution',
+        startTime: Date.now() - 10 * 60_000,
+        lastActivityTime: Date.now() - 10 * 60_000,
+        lastActivityMonotonicTime: monotonicNow - 1_000,
+      }]),
+      abortPrompt: vi.fn(async () => undefined),
+    }
+    const { entry } = buildBusySession(mgr, adapter)
+    entry.lastPartReceivedAt = Date.now() - 1_000
+
+    await (mgr as any).pollSingleSession(entry)
+
+    expect(adapter.abortPrompt).not.toHaveBeenCalled()
+  })
+
+  it('does not apply the session timeout while a command is actively running', async () => {
+    const { mgr } = buildManager()
+    const adapter = {
+      pollMessages: vi.fn(async () => []),
+      getStatus: vi.fn(async () => ({ type: SessionStatusType.BUSY })),
+      getRunningTools: vi.fn(async () => [{
+        partId: 'p1',
+        toolName: 'commandExecution',
+        startTime: Date.now() - 10 * 60_000,
+        lastActivityTime: Date.now() - 10 * 60_000,
+      }]),
+      abortPrompt: vi.fn(async () => undefined),
+    }
+    const { entry } = buildBusySession(mgr, adapter)
+    entry.createdAt = Date.now() - 10 * 60_000
+    entry.lastPartReceivedAt = Date.now() - 6 * 60_000
 
     await (mgr as any).pollSingleSession(entry)
 

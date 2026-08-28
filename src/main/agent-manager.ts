@@ -242,11 +242,15 @@ export class AgentManager extends EventEmitter {
    *  the agent process (20x is just a spectator on the HTTP prompt call). */
   private static readonly STUCK_SESSION_TIMEOUT_MS = 5 * 60 * 1000 // 5 minutes
 
-  /** Maximum time (ms) a single tool can stay in "running" state before it's
-   *  considered stuck. This is much shorter than the session watchdog because
-   *  a single hung tool (e.g. cross-workspace file read that OpenCode silently
-   *  blocks) should be aborted quickly so the agent can recover. */
+  /** Fast inactivity deadline for known local read operations. These should
+   *  complete quickly; a blocked cross-workspace read should recover without
+   *  waiting for the longer active-tool deadline. */
   private static readonly STUCK_TOOL_TIMEOUT_MS = 90 * 1000 // 90 seconds
+
+  /** Long-running tools can legitimately remain quiet while an external
+   * command works. Give them a separate inactivity deadline; the 90-second
+   * detector remains only for known fast local operations such as file reads. */
+  private static readonly ACTIVE_TOOL_INACTIVITY_TIMEOUT_MS = 30 * 60 * 1000 // 30 minutes
 
   /** Tool names that delegate work to subagents or block on subtask progress.
    *  These are long-running BY DESIGN (a coordinator waiting on child agents can
@@ -2493,7 +2497,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
 
           // Fetch currently running tools once — shared by the stuck-tool
           // detector and the stuck-session watchdog's delegation check below.
-          let runningTools: Array<{ partId: string; toolName: string; startTime?: number; lastActivityTime?: number; input?: Record<string, unknown> }> = []
+          let runningTools: Array<{ partId: string; toolName: string; startTime?: number; lastActivityTime?: number; lastActivityMonotonicTime?: number; input?: Record<string, unknown> }> = []
           if ('getRunningTools' in adapter && typeof adapter.getRunningTools === 'function') {
             try {
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -2517,12 +2521,19 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
           if (!peBusy.watchdogFired && runningTools.length > 0) {
             try {
               const now = Date.now()
+              const monotonicNow = performance.now()
               for (const tool of runningTools) {
                 if (!tool.startTime) continue
                 if (AgentManager.isDelegationTool(tool.toolName)) continue
                 const elapsed = now - tool.startTime
-                const inactiveFor = now - (tool.lastActivityTime ?? tool.startTime)
-                if (inactiveFor > AgentManager.STUCK_TOOL_TIMEOUT_MS) {
+                const inactiveFor = tool.lastActivityMonotonicTime !== undefined
+                  ? monotonicNow - tool.lastActivityMonotonicTime
+                  : now - (tool.lastActivityTime ?? tool.startTime)
+                const normalizedToolName = tool.toolName.toLowerCase().replace(/[^a-z]/g, '')
+                const timeout = normalizedToolName === 'read' || normalizedToolName === 'readfile'
+                  ? AgentManager.STUCK_TOOL_TIMEOUT_MS
+                  : AgentManager.ACTIVE_TOOL_INACTIVITY_TIMEOUT_MS
+                if (inactiveFor > timeout) {
                   // Build a descriptive reason
                   let reason = `Tool "${tool.toolName}" has been running for ${Math.round(elapsed / 1000)}s with no activity for ${Math.round(inactiveFor / 1000)}s`
                   const filePath = tool.input?.filePath as string | undefined
@@ -2626,6 +2637,10 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
             } else if (hasActiveDelegation) {
               console.log(
                 `[AgentManager] Session ${sessionId} BUSY for ${Math.round(silentDuration / 1000)}s but has active delegation (subagents/subtasks in progress) — not aborting`
+              )
+            } else if (runningTools.length > 0) {
+              console.log(
+                `[AgentManager] Session ${sessionId} BUSY for ${Math.round(silentDuration / 1000)}s but has an active tool — using the tool-specific inactivity deadline`
               )
             } else {
               // Mark the watchdog as fired BEFORE sending the message/abort.
