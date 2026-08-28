@@ -33,7 +33,7 @@ export interface AgentMcpServerEntry {
 }
 
 export interface AgentConfigRecord {
-  coding_agent?: 'opencode' | 'claude-code' | 'codex' | 'cursor'
+  coding_agent?: 'opencode' | 'claude-code' | 'codex' | 'cursor' | 'pi'
   model?: string
   reasoning_effort?: ReasoningEffort
   auth_method?: 'subscription' | 'api_key'

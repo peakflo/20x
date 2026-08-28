@@ -30,11 +30,11 @@ Most AI tools make you copy-paste context between tabs. 20x flips it: **your tas
 ## How It Works
 
 <p align="center">
-  <img src="resources/process.png" alt="20x process: Hubspot, YouTrack, Linear, Github issues, Peakflo Workflo → triage agent → Agent (Claude Code, Opencode, OpenAI Codex) → HITL review → Feedback" />
+  <img src="resources/process.png" alt="20x process: Hubspot, YouTrack, Linear, Github issues, Peakflo Workflo → triage agent → Agent (Claude Code, Opencode, OpenAI Codex, Pi) → HITL review → Feedback" />
 </p>
 
 1. **Tasks flow in** — from Linear, YouTrack, HubSpot, GitHub Issues, Notion, Peakflo Workflo, or created manually
-2. **Triage agent** — Assigns priority, coding agent (Claude Code, OpenCode, or Codex), relevant skills, and git repos
+2. **Triage agent** — Assigns priority, coding agent (Claude Code, OpenCode, Codex, or Pi), relevant skills, and git repos
 3. **Agent works the task** — reads skills, git worktrees, and MCP servers; streams output in real time
 4. **HITL review** — Agents pause for human approval before risky actions
 5. **Feedback loop** — Skills and confidence levels are automatically updated after completion
@@ -42,7 +42,7 @@ Most AI tools make you copy-paste context between tabs. 20x flips it: **your tas
 ## Features
 
 <p align="center">
-  <img src="resources/integrations.png" alt="20x integrations: Hubspot, YouTrack, Linear, Github issues, Peakflo Workflo → 20x ↔ GitLab, Github, MCP → Claude Code, Opencode, OpenAI Codex; Skills automatically improved" />
+  <img src="resources/integrations.png" alt="20x integrations: Hubspot, YouTrack, Linear, Github issues, Peakflo Workflo → 20x ↔ GitLab, Github, MCP → Claude Code, Opencode, OpenAI Codex, Pi; Skills automatically improved" />
 </p>
 
 ### 📊 Dashboard Workspace
@@ -55,6 +55,7 @@ Most AI tools make you copy-paste context between tabs. 20x flips it: **your tas
 - **Claude Code** — Anthropic's official agent SDK (Claude Sonnet 4.6)
 - **OpenCode** — Open-source coding agent
 - **Codex** — OpenAI's agent framework (GPT-5.6 Sol)
+- **Pi** — Open-source coding agent with Peakflo AI Gateway models
 - **Live transcripts** — Watch agents think and work in real time with message counts
 - **Human-in-the-loop** — Approve risky actions before execution
 - **Task progress tracking** — Real-time progress events during agent execution
@@ -268,7 +269,7 @@ We welcome contributions! Here's how:
 - ✅ Heartbeat monitoring with CI failure detection
 - ✅ Presetup wizard and dashboard templates
 - ✅ Claude Sonnet 4.6 and GPT-5.6 model family support
-- ✅ Multi-agent support (OpenCode, Claude Code, Codex)
+- ✅ Multi-agent support (OpenCode, Claude Code, Codex, Pi)
 - ✅ Skills system with auto-learning
 - ✅ Recurring tasks
 - ✅ Linear, HubSpot, Peakflo integrations

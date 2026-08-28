@@ -14,6 +14,7 @@ import { OpencodeAdapter } from './adapters/opencode-adapter'
 import { ClaudeCodeAdapter } from './adapters/claude-code-adapter'
 import { AcpAdapter } from './adapters/acp-adapter'
 import { CodexAppServerAdapter } from './adapters/codex-app-server-adapter'
+import { PiAdapter } from './adapters/pi-adapter'
 import type { CodingAgentAdapter, SessionConfig, MessagePart, SessionMessage, McpServerConfig } from './adapters/coding-agent-adapter'
 import { SessionStatusType, MessagePartType, MessageRole } from './adapters/coding-agent-adapter'
 import { getTaskApiPort, waitForTaskApiServer } from './task-api-server'
@@ -31,7 +32,8 @@ enum CodingAgentType {
   OPENCODE = 'opencode',
   CLAUDE_CODE = 'claude-code',
   CODEX = 'codex',
-  CURSOR = 'cursor'
+  CURSOR = 'cursor',
+  PI = 'pi'
 }
 
 const ARTIFACT_WORKSPACE_INSTRUCTIONS = `
@@ -240,11 +242,15 @@ export class AgentManager extends EventEmitter {
    *  the agent process (20x is just a spectator on the HTTP prompt call). */
   private static readonly STUCK_SESSION_TIMEOUT_MS = 5 * 60 * 1000 // 5 minutes
 
-  /** Maximum time (ms) a single tool can stay in "running" state before it's
-   *  considered stuck. This is much shorter than the session watchdog because
-   *  a single hung tool (e.g. cross-workspace file read that OpenCode silently
-   *  blocks) should be aborted quickly so the agent can recover. */
+  /** Fast inactivity deadline for known local read operations. These should
+   *  complete quickly; a blocked cross-workspace read should recover without
+   *  waiting for the longer active-tool deadline. */
   private static readonly STUCK_TOOL_TIMEOUT_MS = 90 * 1000 // 90 seconds
+
+  /** Long-running tools can legitimately remain quiet while an external
+   * command works. Give them a separate inactivity deadline; the 90-second
+   * detector remains only for known fast local operations such as file reads. */
+  private static readonly ACTIVE_TOOL_INACTIVITY_TIMEOUT_MS = 30 * 60 * 1000 // 30 minutes
 
   /** Tool names that delegate work to subagents or block on subtask progress.
    *  These are long-running BY DESIGN (a coordinator waiting on child agents can
@@ -676,6 +682,10 @@ export class AgentManager extends EventEmitter {
       case CodingAgentType.CURSOR:
         console.log('[AgentManager] Creating new AcpAdapter for Cursor')
         adapter = new AcpAdapter('cursor')
+        break
+      case CodingAgentType.PI:
+        console.log('[AgentManager] Creating new PiAdapter')
+        adapter = new PiAdapter(this.db)
         break
       default:
         console.warn(`[AgentManager] Unknown coding agent type: ${backendType}`)
@@ -2237,10 +2247,10 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       if (newParts.length > 0) {
         entry.lastPartReceivedAt = Date.now()
         activeSession.lastActivityAt = Date.now()
-        // Reset watchdog flag — new data means the session is alive again.
-        // If a follow-up message also gets stuck, the watchdog can re-fire.
+        // Reset the polling-entry watchdog because new data means this polling
+        // cycle is alive. Keep the session-level one-shot guard intact: late
+        // output from an interrupted turn must not re-arm the same abort.
         entry.watchdogFired = false
-        activeSession.autoAbortNotified = false
       }
 
       // ── Garbled output detection ──
@@ -2341,6 +2351,8 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
             partType: 'question',
             tool: {
               name: 'permission',
+              status: 'running',
+              requestId: approval.requestId,
               questions: [{
                 header: 'Permission Required',
                 question: approval.question,
@@ -2485,7 +2497,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
 
           // Fetch currently running tools once — shared by the stuck-tool
           // detector and the stuck-session watchdog's delegation check below.
-          let runningTools: Array<{ partId: string; toolName: string; startTime?: number; input?: Record<string, unknown> }> = []
+          let runningTools: Array<{ partId: string; toolName: string; startTime?: number; lastActivityTime?: number; lastActivityMonotonicTime?: number; input?: Record<string, unknown> }> = []
           if ('getRunningTools' in adapter && typeof adapter.getRunningTools === 'function') {
             try {
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -2500,20 +2512,30 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
           // Some tools (notably `read` on cross-workspace files) silently hang
           // without producing any output or asking for permission. The general
           // watchdog below waits 5 minutes, which is far too long for a single
-          // tool. Here we check for tools stuck in "running" state for >90s.
+          // tool. Here we check for tools that have produced no activity for
+          // >90s. Total runtime alone is not a hang signal: commands such as
+          // test and CI watchers can legitimately stream output for minutes.
           //
           // Delegation tools (subagent spawns, subtask waits) are exempt: they
           // run for minutes by design, and aborting them kills the child work.
           if (!peBusy.watchdogFired && runningTools.length > 0) {
             try {
               const now = Date.now()
+              const monotonicNow = performance.now()
               for (const tool of runningTools) {
                 if (!tool.startTime) continue
                 if (AgentManager.isDelegationTool(tool.toolName)) continue
                 const elapsed = now - tool.startTime
-                if (elapsed > AgentManager.STUCK_TOOL_TIMEOUT_MS) {
+                const inactiveFor = tool.lastActivityMonotonicTime !== undefined
+                  ? monotonicNow - tool.lastActivityMonotonicTime
+                  : now - (tool.lastActivityTime ?? tool.startTime)
+                const normalizedToolName = tool.toolName.toLowerCase().replace(/[^a-z]/g, '')
+                const timeout = normalizedToolName === 'read' || normalizedToolName === 'readfile'
+                  ? AgentManager.STUCK_TOOL_TIMEOUT_MS
+                  : AgentManager.ACTIVE_TOOL_INACTIVITY_TIMEOUT_MS
+                if (inactiveFor > timeout) {
                   // Build a descriptive reason
-                  let reason = `Tool "${tool.toolName}" has been running for ${Math.round(elapsed / 1000)}s with no output`
+                  let reason = `Tool "${tool.toolName}" has been running for ${Math.round(elapsed / 1000)}s with no activity for ${Math.round(inactiveFor / 1000)}s`
                   const filePath = tool.input?.filePath as string | undefined
                   if (filePath && config.workspaceDir && !filePath.startsWith(config.workspaceDir)) {
                     reason = `Tool "${tool.toolName}" stuck trying to access file outside workspace: ${filePath}`
@@ -2615,6 +2637,10 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
             } else if (hasActiveDelegation) {
               console.log(
                 `[AgentManager] Session ${sessionId} BUSY for ${Math.round(silentDuration / 1000)}s but has active delegation (subagents/subtasks in progress) — not aborting`
+              )
+            } else if (runningTools.length > 0) {
+              console.log(
+                `[AgentManager] Session ${sessionId} BUSY for ${Math.round(silentDuration / 1000)}s but has an active tool — using the tool-specific inactivity deadline`
               )
             } else {
               // Mark the watchdog as fired BEFORE sending the message/abort.
@@ -4343,7 +4369,8 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     approved: boolean,
     message?: string,
     optionId?: string,
-    responseType?: 'permission' | 'question'
+    responseType?: 'permission' | 'question',
+    requestId?: string
   ): Promise<void> {
     let session = this.sessions.get(sessionId)
 
@@ -4398,9 +4425,35 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
         }
       }
 
-      console.log(`[AgentManager] Responding to question via adapter for session ${sessionId}:`, answers)
+      console.log(`[AgentManager] Responding to question via adapter for session ${sessionId}`)
 
-      // Update session and task state before sending
+      const adapterConfig = await this.buildSessionConfig(session.agentId, session.taskId, session.workspaceDir)
+      const response = requestId
+        ? await adapter.respondToQuestion(sessionId, answers, adapterConfig, requestId)
+        : await adapter.respondToQuestion(sessionId, answers, adapterConfig)
+      const handled = typeof response === 'object' ? response.handled : response
+      if (handled === false) {
+        console.log(`[AgentManager] Ignored stale question response for session ${sessionId}`)
+        if (typeof response === 'object' && response.resolutionPart) {
+          const part = response.resolutionPart
+          this.sendToRenderer('agent:output', {
+            sessionId,
+            taskId: session.taskId,
+            type: 'message',
+            data: {
+              id: part.id,
+              role: part.role || 'assistant',
+              content: part.content || part.text || '',
+              partType: part.type,
+              tool: part.tool,
+              update: part.update,
+            },
+          })
+        }
+        return
+      }
+
+      // Update session and task state after the adapter accepts the response.
       session.status = 'working'
       const currentTask = this.db.getTask(session.taskId)
       if (currentTask?.status !== TaskStatus.AgentLearning) {
@@ -4424,9 +4477,6 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
           }
         })
       }
-
-      const adapterConfig = await this.buildSessionConfig(session.agentId, session.taskId, session.workspaceDir)
-      await adapter.respondToQuestion(sessionId, answers, adapterConfig)
 
       // Restart polling if it was stopped (session may have gone idle before answer)
       if (!session.pollingStarted && session.adapter) {
@@ -4452,7 +4502,35 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       console.log(`[AgentManager] Responding to ACP adapter approval with: ${selectedOption}`)
       // OpenCode adapter returns boolean (true=handled, false=no permission found).
       // AcpAdapter returns void. Cast to boolean|void to handle both.
-      const handled = await (adapter as unknown as { respondToApproval: (sid: string, approved: boolean, opt?: string) => Promise<boolean | void> }).respondToApproval(sessionId, approved, selectedOption)
+      const handled = await (adapter as unknown as {
+        respondToApproval: (sid: string, approved: boolean, opt?: string, requestId?: string) => Promise<boolean | void>
+      }).respondToApproval(sessionId, approved, selectedOption, requestId)
+
+      // Provider callbacks do not survive a restored session. Resolve the old
+      // card immediately instead of approving a newer request or sending a
+      // continuation into a session that is already idle.
+      if (handled === false && requestId) {
+        console.log(`[AgentManager] Ignored stale approval response for session ${sessionId}`)
+        this.sendToRenderer('agent:output', {
+          sessionId,
+          taskId: session.taskId,
+          type: 'message',
+          data: {
+            id: `question-${requestId}`,
+            role: 'assistant',
+            content: '',
+            partType: 'question',
+            tool: {
+              name: 'permission',
+              status: 'cancelled',
+              requestId,
+              output: 'This request expired when the session ended. Restart the turn to continue.'
+            },
+            update: true
+          }
+        })
+        return
+      }
 
       // If no pending permission was found (stale prompt after watchdog abort
       // or app restart), send a continuation message so the session recovers.
@@ -4731,9 +4809,8 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
         return (defaultAgent?.config?.coding_agent as string) || CodingAgentType.OPENCODE
       })()
 
-      // Only the OpenCode adapter exposes configurable providers/models.
-      // For other backends (claude-code, codex), provider listing isn't supported.
-      if (resolvedBackend !== CodingAgentType.OPENCODE) {
+      // OpenCode and Pi expose configurable providers/models.
+      if (resolvedBackend !== CodingAgentType.OPENCODE && resolvedBackend !== CodingAgentType.PI) {
         console.log(`[AgentManager] Backend "${resolvedBackend}" does not support provider listing, skipping`)
         return null
       }
@@ -4792,6 +4869,9 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
         break
       case CodingAgentType.CLAUDE_CODE:
         adapter = new ClaudeCodeAdapter()
+        break
+      case CodingAgentType.PI:
+        adapter = new PiAdapter(this.db)
         break
     }
 

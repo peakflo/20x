@@ -86,6 +86,8 @@ interface AppServerSessionForTest {
     partId: string
     toolName: string
     startTime?: number
+    lastActivityTime?: number
+    lastActivityMonotonicTime?: number
     input?: Record<string, unknown>
   }>
   codexUseApiKey: boolean
@@ -691,6 +693,18 @@ describe('CodexAppServerAdapter', () => {
       startTime: 123
     })
 
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(456)
+    const monotonicSpy = vi.spyOn(performance, 'now').mockReturnValue(789)
+    adapter.convertEventToMessageParts({
+      method: 'item/commandExecution/outputDelta',
+      params: { itemId: 'tool-1', delta: 'still running\n' }
+    }, seenMessageIds, seenPartIds, lengths, session)
+    nowSpy.mockRestore()
+    monotonicSpy.mockRestore()
+
+    expect(session.runningTools.get('tool-tool-1')?.lastActivityTime).toBe(456)
+    expect(session.runningTools.get('tool-tool-1')?.lastActivityMonotonicTime).toBe(789)
+
     const completed = adapter.convertEventToMessageParts({
       method: 'item/completed',
       params: {
@@ -707,6 +721,39 @@ describe('CodexAppServerAdapter', () => {
       tool: { name: 'commandExecution', status: 'completed' }
     })
     expect(session.runningTools.has('tool-tool-1')).toBe(false)
+  })
+
+  it('clears running tools on interrupt and waits for provider-confirmed idle', async () => {
+    const adapterInstance = new CodexAppServerAdapter()
+    const adapter = adapterPrivate(adapterInstance)
+    const session = createSession()
+    session.activeTurnId = 'turn-1'
+    session.status = SessionStatusType.BUSY
+    session.runningTools.set('tool-cmd-1', {
+      partId: 'tool-cmd-1',
+      toolName: 'commandExecution',
+      startTime: 123
+    })
+    adapter.sessions.set('thread-1', session)
+    adapter.sendRpcRequest = vi.fn().mockResolvedValue({})
+
+    await adapterInstance.abortPrompt('thread-1', {} as never)
+
+    expect(adapter.sendRpcRequest).toHaveBeenCalledWith(session, 'turn/interrupt', {
+      threadId: 'thread-1',
+      turnId: 'turn-1'
+    })
+    expect(session.runningTools.size).toBe(0)
+    expect(session.activeTurnId).toBe('turn-1')
+    expect(session.status).toBe(SessionStatusType.BUSY)
+
+    adapter.handleRpcMessage(session, {
+      jsonrpc: '2.0',
+      method: 'thread/status/changed',
+      params: { threadId: 'thread-1', status: { type: 'idle' } }
+    })
+
+    expect(session.status).toBe(SessionStatusType.IDLE)
   })
 
   it('stores command approval requests and responds with app-server decision shape', async () => {

@@ -36,6 +36,7 @@ export interface AgentMessage {
     input?: string
     output?: string
     error?: string
+    requestId?: string
     questions?: Array<{
       header: string
       question: string

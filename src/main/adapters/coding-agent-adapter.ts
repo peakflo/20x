@@ -23,6 +23,7 @@ export enum MessagePartType {
   TEXT = 'text',
   REASONING = 'reasoning',
   TOOL = 'tool',
+  QUESTION = 'question',
   IMAGE = 'image',
   ERROR = 'error',
   TASK_PROGRESS = 'task_progress'
@@ -96,6 +97,7 @@ export interface MessagePart {
     input?: unknown
     output?: unknown
     error?: string
+    requestId?: string
     questions?: unknown
     todos?: unknown
   }
@@ -214,6 +216,8 @@ export interface CodingAgentAdapter {
     partId: string
     toolName: string
     startTime?: number // Unix ms when the tool started
+    lastActivityTime?: number // Unix ms when the tool most recently produced output
+    lastActivityMonotonicTime?: number // Monotonic ms when output was last observed
     input?: Record<string, unknown> // Tool input (e.g. { filePath: "..." })
   }>>
 
@@ -248,8 +252,9 @@ export interface CodingAgentAdapter {
   respondToQuestion?(
     sessionId: string,
     answers: Record<string, string>,
-    config: SessionConfig
-  ): Promise<void>
+    config: SessionConfig,
+    requestId?: string
+  ): Promise<boolean | void | { handled: boolean; resolutionPart?: MessagePart }>
 
   /**
    * List available providers and their models from the backend.

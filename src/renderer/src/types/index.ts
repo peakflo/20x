@@ -32,7 +32,8 @@ export enum CodingAgentType {
   OPENCODE = 'opencode',
   CLAUDE_CODE = 'claude-code',
   CODEX = 'codex',
-  CURSOR = 'cursor'
+  CURSOR = 'cursor',
+  PI = 'pi'
 }
 
 export type AgentPermissionMode = 'ask' | 'allow'
@@ -44,7 +45,8 @@ export const CODING_AGENTS: { value: CodingAgentType; label: string }[] = [
   { value: CodingAgentType.OPENCODE, label: 'OpenCode' },
   { value: CodingAgentType.CLAUDE_CODE, label: 'Claude Code' },
   { value: CodingAgentType.CODEX, label: 'Codex' },
-  { value: CodingAgentType.CURSOR, label: 'Cursor' }
+  { value: CodingAgentType.CURSOR, label: 'Cursor' },
+  { value: CodingAgentType.PI, label: 'Pi' }
 ]
 
 export const CURSOR_MODELS: { id: string; name: string }[] = [

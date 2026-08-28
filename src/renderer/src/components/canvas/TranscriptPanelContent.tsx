@@ -1,4 +1,4 @@
-import { useCallback } from 'react'
+import { useCallback, useRef } from 'react'
 import { AgentTranscriptPanel } from '@/components/agents/AgentTranscriptPanel'
 import { useAgentSession } from '@/hooks/use-agent-session'
 import { useAgentStore, SessionStatus } from '@/stores/agent-store'
@@ -15,12 +15,13 @@ interface TranscriptPanelContentProps {
  * full stop/restart/send capabilities.
  */
 export function TranscriptPanelContent({ taskId }: TranscriptPanelContentProps) {
-  const { session, stop, start, sendMessage, approve } = useAgentSession(taskId)
+  const { session, stop, start, resume, sendMessage, approve } = useAgentSession(taskId)
   // Select the single action instead of subscribing to the whole store — a
   // selector-less useAgentStore() re-renders this panel on every streamed
   // delta of every task's session.
   const removeSession = useAgentStore((s) => s.removeSession)
   const task = useTaskStore((s) => s.tasks.find((t) => t.id === taskId))
+  const submittedQuestionIdsRef = useRef(new Set<string>())
 
   const messages = session?.messages ?? []
   const status = session?.status ?? SessionStatus.IDLE
@@ -44,6 +45,14 @@ export function TranscriptPanelContent({ taskId }: TranscriptPanelContentProps) 
     }
   }, [task?.agent_id, session?.sessionId, stop, removeSession, taskId, start])
 
+  const ensureChatSession = useCallback(async (): Promise<string | null> => {
+    if (!task?.agent_id) return null
+    const currentSession = useAgentStore.getState().sessions.get(taskId)
+    if (currentSession?.sessionId) return currentSession.sessionId
+    if (task.session_id) return resume(task.agent_id, taskId, task.session_id)
+    return start(task.agent_id, taskId)
+  }, [resume, start, task?.agent_id, task?.session_id, taskId])
+
   const handleSend = useCallback(
     async (message: string) => {
       // Read messages from the store at call time instead of closing over the
@@ -63,13 +72,28 @@ export function TranscriptPanelContent({ taskId }: TranscriptPanelContentProps) 
         questionIndex >= 0 &&
         !currentMessages.slice(questionIndex + 1).some((m) => m.role === 'user')
       if (hasActiveQuestion) {
-        await approve(true, message, 'question')
+        const question = currentMessages[questionIndex]
+        const questionKey = question.tool?.requestId || question.id
+        if (submittedQuestionIdsRef.current.has(questionKey)) return
+        submittedQuestionIdsRef.current.add(questionKey)
+        try {
+          const readySessionId = await ensureChatSession()
+          if (!readySessionId) {
+            submittedQuestionIdsRef.current.delete(questionKey)
+            return
+          }
+          const responseType = question.tool?.name === 'permission' ? 'permission' : 'question'
+          await approve(true, message, responseType, question.tool?.requestId)
+        } catch (error) {
+          submittedQuestionIdsRef.current.delete(questionKey)
+          throw error
+        }
         return
       }
 
       await sendMessage(message)
     },
-    [taskId, approve, sendMessage]
+    [taskId, approve, ensureChatSession, sendMessage]
   )
 
   if (!session || (status === SessionStatus.IDLE && messages.length === 0)) {

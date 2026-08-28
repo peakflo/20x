@@ -449,8 +449,8 @@ export function registerIpcHandlers(
     }
   )
 
-  ipcMain.handle('agentSession:approve', async (_, sessionId: string, approved: boolean, message?: string, responseType?: 'permission' | 'question') => {
-    await agentManager.respondToPermission(sessionId, approved, message, undefined, responseType)
+  ipcMain.handle('agentSession:approve', async (_, sessionId: string, approved: boolean, message?: string, responseType?: 'permission' | 'question', requestId?: string) => {
+    await agentManager.respondToPermission(sessionId, approved, message, undefined, responseType, requestId)
     return { success: true }
   })
 

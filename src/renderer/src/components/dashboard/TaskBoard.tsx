@@ -1,7 +1,7 @@
 import { useMemo, useCallback, memo } from 'react'
 import { Clock, AlertCircle, CheckCircle2, ExternalLink, Bot, Terminal } from 'lucide-react'
 import { Badge } from '@/components/ui/Badge'
-import { OpenCodeLogo, AnthropicLogo, OpenAILogo } from '@/components/icons/AgentLogos'
+import { OpenCodeLogo, AnthropicLogo, OpenAILogo, PiLogo } from '@/components/icons/AgentLogos'
 import { useTaskStore } from '@/stores/task-store'
 import { useAgentStore } from '@/stores/agent-store'
 import { useUIStore } from '@/stores/ui-store'
@@ -162,6 +162,8 @@ function getAgentDisplay(agent: Agent | undefined): { name: string; Logo: React.
       return { name, Logo: OpenAILogo }
     case CodingAgentType.CURSOR:
       return { name, Logo: Terminal }
+    case CodingAgentType.PI:
+      return { name, Logo: PiLogo }
     default:
       return { name, Logo: ({ className }: { className?: string }) => <Bot className={className} /> }
   }

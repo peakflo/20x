@@ -113,6 +113,7 @@ function TaskWorkspaceComponent({
   const [incompatibleSessionError, setIncompatibleSessionError] = useState<string>()
   const [parentTask, setParentTask] = useState<WorkfloTask | null>(null)
   const startingRef = useRef(false)
+  const submittedQuestionIdsRef = useRef(new Set<string>())
   const workspaceBodyRef = useRef<HTMLDivElement>(null)
   const resizingRef = useRef(false)
   const [transcriptWidth, setTranscriptWidth] = useState(() => {
@@ -540,7 +541,22 @@ function TaskWorkspaceComponent({
       const hasActiveQuestion = questionIndex >= 0
         && !messages.slice(questionIndex + 1).some((m) => m.role === 'user')
       if (hasActiveQuestion) {
-        await approve(true, message, 'question')
+        const question = messages[questionIndex]
+        const questionKey = question.tool?.requestId || question.id
+        if (submittedQuestionIdsRef.current.has(questionKey)) return
+        submittedQuestionIdsRef.current.add(questionKey)
+        try {
+          const readySessionId = await ensureChatSession()
+          if (!readySessionId) {
+            submittedQuestionIdsRef.current.delete(questionKey)
+            return
+          }
+          const responseType = question.tool?.name === 'permission' ? 'permission' : 'question'
+          await approve(true, message, responseType, question.tool?.requestId)
+        } catch (error) {
+          submittedQuestionIdsRef.current.delete(questionKey)
+          throw error
+        }
         return
       }
 

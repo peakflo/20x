@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   buildEnterpriseAiGatewayProviderConfig,
+  buildPiAiGatewayProviderConfig,
   ENTERPRISE_AI_GATEWAY_PROVIDER_ID,
   readEnterpriseAiGatewayConfig,
   storeEnterpriseAiGatewayConfig
@@ -71,5 +72,26 @@ describe('enterprise AI gateway helpers', () => {
         }
       }
     })
+  })
+
+  it('builds a Pi provider without writing the virtual key', () => {
+    const provider = buildPiAiGatewayProviderConfig({
+      apiKey: 'sk-virtual-must-not-be-written',
+      baseUrl: 'https://litellm.example.com/v1',
+      models: [{ id: 'gpt-5.6-terra', name: 'GPT-5.6 Terra' }]
+    })
+
+    expect(provider).toMatchObject({
+      name: 'Peakflo',
+      baseUrl: 'https://litellm.example.com/v1',
+      api: 'openai-completions',
+      apiKey: '$PEAKFLO_AI_GATEWAY_API_KEY',
+      models: [{
+        id: 'gpt-5.6-terra',
+        name: 'GPT-5.6 Terra',
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+      }]
+    })
+    expect(JSON.stringify(provider)).not.toContain('sk-virtual-must-not-be-written')
   })
 })

@@ -16,7 +16,7 @@ import { useSkillStore } from '@/stores/skill-store'
 import { AssigneeSelect } from './AssigneeSelect'
 import { TaskStatus, CodingAgentType } from '@/types'
 import type { WorkfloTask, FileAttachment, OutputField, Agent, RecurrencePattern, RecurrencePatternObject } from '@/types'
-import { AnthropicLogo, OpenCodeLogo, OpenAILogo } from '@/components/icons/AgentLogos'
+import { AnthropicLogo, OpenCodeLogo, OpenAILogo, PiLogo } from '@/components/icons/AgentLogos'
 import { HeartbeatSection } from './HeartbeatSection'
 import { useUIStore } from '@/stores/ui-store'
 import { isAgentConfigured, getAgentConfigIssue } from '@shared/agent-utils'
@@ -504,10 +504,12 @@ function TaskDetailViewComponent({ task, agents, onEdit, onDelete, onUpdateAttac
                     const agentName = codingAgent === CodingAgentType.CLAUDE_CODE ? 'Claude Code' :
                                      codingAgent === CodingAgentType.OPENCODE ? 'OpenCode' :
                                      codingAgent === CodingAgentType.CURSOR ? 'Cursor' :
+                                     codingAgent === CodingAgentType.PI ? 'Pi' :
                                      'Codex'
                     const LogoComponent = codingAgent === CodingAgentType.CLAUDE_CODE ? AnthropicLogo :
                                          codingAgent === CodingAgentType.OPENCODE ? OpenCodeLogo :
                                          codingAgent === CodingAgentType.CURSOR ? Terminal :
+                                         codingAgent === CodingAgentType.PI ? PiLogo :
                                          OpenAILogo
                     return (
                       <div

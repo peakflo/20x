@@ -50,6 +50,7 @@ vi.mock('./adapters/opencode-adapter', () => ({ OpencodeAdapter: vi.fn() }))
 vi.mock('./adapters/claude-code-adapter', () => ({ ClaudeCodeAdapter: vi.fn() }))
 vi.mock('./adapters/acp-adapter', () => ({ AcpAdapter: vi.fn() }))
 vi.mock('./adapters/codex-app-server-adapter', () => ({ CodexAppServerAdapter: vi.fn() }))
+vi.mock('./adapters/pi-adapter', () => ({ PiAdapter: vi.fn() }))
 vi.mock('./task-api-server', () => ({ getTaskApiPort: vi.fn(), waitForTaskApiServer: vi.fn() }))
 vi.mock('./secret-broker', () => ({
   registerSecretSession: vi.fn(),
@@ -62,6 +63,7 @@ import { mkdir as mkdirAsync, writeFile as writeFileAsync } from 'fs/promises'
 import { existsSync, copyFileSync, mkdirSync, readFileSync } from 'fs'
 import { AcpAdapter } from './adapters/acp-adapter'
 import { CodexAppServerAdapter } from './adapters/codex-app-server-adapter'
+import { PiAdapter } from './adapters/pi-adapter'
 import { getTaskApiPort } from './task-api-server'
 
 const mockedMkdirAsync = vi.mocked(mkdirAsync)
@@ -165,6 +167,16 @@ describe('AgentManager skill file paths', () => {
 
       expect(adapter).toBeInstanceOf(AcpAdapter)
       expect(AcpAdapter).toHaveBeenCalledWith('cursor')
+    })
+
+    it('uses the Pi RPC adapter for Pi agents', () => {
+      const mockDb = createMockDb({ coding_agent: 'pi' })
+      manager = new AgentManager(mockDb)
+
+      const adapter = (manager as any).getAdapter('agent-1')
+
+      expect(adapter).toBeInstanceOf(PiAdapter)
+      expect(PiAdapter).toHaveBeenCalledOnce()
     })
   })
 
@@ -1983,8 +1995,83 @@ describe('AgentManager session ID re-keying redirect', () => {
 
     await mgr.respondToPermission('temp-id', true, 'Yes')
 
-    expect(dualAdapter.respondToApproval).toHaveBeenCalledWith('temp-id', true, 'approved')
+    expect(dualAdapter.respondToApproval).toHaveBeenCalledWith('temp-id', true, 'approved', undefined)
     expect(dualAdapter.respondToQuestion).not.toHaveBeenCalled()
+  })
+
+  it('closes a stale request-scoped approval without sending a continuation', async () => {
+    const { mgr, session } = createManagerWithSession()
+    const dualAdapter = {
+      ...session.adapter,
+      respondToQuestion: vi.fn(async () => undefined),
+      respondToApproval: vi.fn(async () => false),
+    }
+    session.adapter = dualAdapter
+    const sendToRenderer = vi.spyOn(mgr as any, 'sendToRenderer')
+    const doSendAdapterMessage = vi.spyOn(mgr as any, 'doSendAdapterMessage')
+    vi.spyOn(mgr as any, 'getAdapter').mockReturnValue(dualAdapter)
+
+    await mgr.respondToPermission('temp-id', true, 'Yes', undefined, 'permission', 'stale-request')
+
+    expect(dualAdapter.respondToApproval).toHaveBeenCalledWith(
+      'temp-id',
+      true,
+      'approved',
+      'stale-request'
+    )
+    expect(sendToRenderer).toHaveBeenCalledWith('agent:output', expect.objectContaining({
+      data: expect.objectContaining({
+        id: 'question-stale-request',
+        partType: 'question',
+        update: true,
+        tool: expect.objectContaining({
+          name: 'permission',
+          status: 'cancelled',
+          requestId: 'stale-request'
+        })
+      })
+    }))
+    expect(doSendAdapterMessage).not.toHaveBeenCalled()
+  })
+
+  it('does not publish an answer when the adapter rejects a stale question request', async () => {
+    const { mgr, session } = createManagerWithSession()
+    const resolutionPart = {
+      id: 'pi-question-stale-request',
+      type: 'tool',
+      update: true,
+      tool: { name: 'question', status: 'cancelled' },
+    }
+    const adapter = {
+      ...session.adapter,
+      respondToQuestion: vi.fn(async () => ({ handled: false, resolutionPart })),
+    }
+    ;(session as any).adapter = adapter
+    const sendToRenderer = vi.spyOn(mgr as any, 'sendToRenderer')
+    vi.spyOn(mgr as any, 'getAdapter').mockReturnValue(adapter)
+    vi.spyOn(mgr as any, 'buildSessionConfig').mockResolvedValue({ workspaceDir: '/tmp/ws' })
+
+    await mgr.respondToPermission('temp-id', true, 'Yes', undefined, 'question', 'stale-request')
+
+    expect(adapter.respondToQuestion).toHaveBeenCalledWith(
+      'temp-id',
+      { answer: 'Yes' },
+      { workspaceDir: '/tmp/ws' },
+      'stale-request'
+    )
+    expect(sendToRenderer).toHaveBeenCalledWith('agent:output', {
+      sessionId: 'temp-id',
+      taskId: 'task-1',
+      type: 'message',
+      data: {
+        id: 'pi-question-stale-request',
+        role: 'assistant',
+        content: '',
+        partType: 'tool',
+        tool: { name: 'question', status: 'cancelled' },
+        update: true,
+      },
+    })
   })
 
   it('abortSession resolves re-keyed session via redirect map', async () => {
@@ -2496,7 +2583,7 @@ describe('AgentManager startAdapterPolling — IDLE grace period for follow-up m
 
   it('does not spam auto-abort messages when a stuck running tool remains visible after polling restarts', async () => {
     const mgr = buildManager()
-    const startedAt = Date.now() - 240_000
+    const startedAt = Date.now() - 31 * 60_000
     const abortPrompt = vi.fn(async () => undefined)
     const adapter = {
       pollMessages: vi.fn(async () => [] as any[]),
@@ -2575,7 +2662,7 @@ describe('AgentManager startAdapterPolling — IDLE grace period for follow-up m
       getRunningTools: vi.fn(async () => [{
         partId: 'tool-call-1',
         toolName: 'commandExecution',
-        startTime: Date.now() - 240_000,
+        startTime: Date.now() - 31 * 60_000,
         input: {}
       }]),
       abortPrompt,
@@ -3180,6 +3267,77 @@ describe('AgentManager delegation-aware watchdogs', () => {
 
     expect(adapter.abortPrompt).toHaveBeenCalledOnce()
     expect(entry.watchdogFired).toBe(true)
+  })
+
+  it('stuck-tool detector allows a long-running tool with recent output', async () => {
+    const { mgr } = buildManager()
+    const adapter = {
+      pollMessages: vi.fn(async () => []),
+      getStatus: vi.fn(async () => ({ type: SessionStatusType.BUSY })),
+      getRunningTools: vi.fn(async () => [
+        {
+          partId: 'p1',
+          toolName: 'commandExecution',
+          startTime: Date.now() - 10 * 60_000,
+          lastActivityTime: Date.now() - 1_000,
+        },
+      ]),
+      abortPrompt: vi.fn(async () => undefined),
+    }
+    const { entry } = buildBusySession(mgr, adapter)
+    entry.createdAt = Date.now() - 60_000
+    entry.lastPartReceivedAt = Date.now() - 1_000
+
+    await (mgr as any).pollSingleSession(entry)
+
+    expect(adapter.abortPrompt).not.toHaveBeenCalled()
+    expect(entry.watchdogFired).toBeFalsy()
+  })
+
+  it('uses monotonic activity when the wall clock timestamp is stale', async () => {
+    const { mgr } = buildManager()
+    const monotonicNow = performance.now()
+    const adapter = {
+      pollMessages: vi.fn(async () => []),
+      getStatus: vi.fn(async () => ({ type: SessionStatusType.BUSY })),
+      getRunningTools: vi.fn(async () => [{
+        partId: 'p1',
+        toolName: 'commandExecution',
+        startTime: Date.now() - 10 * 60_000,
+        lastActivityTime: Date.now() - 10 * 60_000,
+        lastActivityMonotonicTime: monotonicNow - 1_000,
+      }]),
+      abortPrompt: vi.fn(async () => undefined),
+    }
+    const { entry } = buildBusySession(mgr, adapter)
+    entry.lastPartReceivedAt = Date.now() - 1_000
+
+    await (mgr as any).pollSingleSession(entry)
+
+    expect(adapter.abortPrompt).not.toHaveBeenCalled()
+  })
+
+  it('does not apply the session timeout while a command is actively running', async () => {
+    const { mgr } = buildManager()
+    const adapter = {
+      pollMessages: vi.fn(async () => []),
+      getStatus: vi.fn(async () => ({ type: SessionStatusType.BUSY })),
+      getRunningTools: vi.fn(async () => [{
+        partId: 'p1',
+        toolName: 'commandExecution',
+        startTime: Date.now() - 10 * 60_000,
+        lastActivityTime: Date.now() - 10 * 60_000,
+      }]),
+      abortPrompt: vi.fn(async () => undefined),
+    }
+    const { entry } = buildBusySession(mgr, adapter)
+    entry.createdAt = Date.now() - 10 * 60_000
+    entry.lastPartReceivedAt = Date.now() - 6 * 60_000
+
+    await (mgr as any).pollSingleSession(entry)
+
+    expect(adapter.abortPrompt).not.toHaveBeenCalled()
+    expect(entry.watchdogFired).toBeFalsy()
   })
 
   it('stuck-session watchdog stands down while a delegation tool is running', async () => {

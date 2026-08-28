@@ -3,7 +3,7 @@ import { Plus, Loader2, Wifi, WifiOff, RefreshCw, Edit3, Trash2, Terminal } from
 import { Button } from '@/components/ui/Button'
 import { SettingsSection } from '../SettingsSection'
 import { AgentFormDialog } from '../forms/AgentFormDialog'
-import { OpenCodeLogo, AnthropicLogo, OpenAILogo } from '@/components/icons/AgentLogos'
+import { OpenCodeLogo, AnthropicLogo, OpenAILogo, PiLogo } from '@/components/icons/AgentLogos'
 import { useAgentStore } from '@/stores/agent-store'
 import { agentConfigApi } from '@/lib/ipc-client'
 import { CLAUDE_MODELS, CODEX_MODELS, CURSOR_MODELS, CodingAgentType } from '@/types'
@@ -145,7 +145,8 @@ export function AgentsSettings() {
               const isClaudeCode = agent.config.coding_agent === CodingAgentType.CLAUDE_CODE
               const isCodex = agent.config.coding_agent === CodingAgentType.CODEX
               const isCursor = agent.config.coding_agent === CodingAgentType.CURSOR
-              const isCliAgent = isClaudeCode || isCodex || isCursor
+              const isPi = agent.config.coding_agent === CodingAgentType.PI
+              const isCliAgent = isClaudeCode || isCodex || isCursor || isPi
 
               return (
                 <div key={agent.id} className="rounded-lg border border-border bg-card overflow-hidden">
@@ -180,6 +181,11 @@ export function AgentsSettings() {
                         {isCursor && (
                           <span title="Cursor">
                             <Terminal className="h-3.5 w-3.5 text-violet-300/80" />
+                          </span>
+                        )}
+                        {isPi && (
+                          <span title="Pi">
+                            <PiLogo className="h-3.5 w-3.5 text-foreground/80" />
                           </span>
                         )}
                       </div>

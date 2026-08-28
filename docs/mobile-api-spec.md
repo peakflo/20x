@@ -975,7 +975,7 @@ interface Agent {
 }
 
 interface AgentConfig {
-  coding_agent?: "opencode" | "claude-code" | "codex"
+  coding_agent?: "opencode" | "claude-code" | "codex" | "cursor" | "pi"
   model?: string
   system_prompt?: string
   mcp_servers?: Array<string | AgentMcpServerEntry>

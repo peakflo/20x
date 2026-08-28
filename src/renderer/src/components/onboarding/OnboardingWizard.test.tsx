@@ -1,6 +1,7 @@
-import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from 'vitest'
+import { cleanup, render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { OnboardingWizard, shouldShowOnboarding, isForceOnboarding } from './OnboardingWizard'
+import { CodingAgentType } from '@/types'
 
 // Access mock electronAPI from test/setup-renderer.ts
 const mockAgentInstaller = window.electronAPI.agentInstaller as unknown as {
@@ -79,6 +80,8 @@ describe('isForceOnboarding', () => {
 })
 
 describe('OnboardingWizard', () => {
+  afterEach(() => cleanup())
+
   beforeEach(() => {
     vi.clearAllMocks()
     localStorage.clear()
@@ -90,7 +93,15 @@ describe('OnboardingWizard', () => {
       claudeCode: { installed: true, version: '1.0.0' },
       opencode: { installed: false, version: null },
       codex: { installed: false, version: null },
-      cursor: { installed: false, version: null }
+      cursor: { installed: false, version: null },
+      pi: { installed: false, version: null, supported: false, reason: 'Pi CLI is not installed.' }
+    })
+    mockAgentInstaller.install.mockResolvedValue({
+      success: true,
+      error: null,
+      newStatus: {
+        pi: { installed: true, version: '0.84.3', supported: true, reason: null }
+      }
     })
     mockAgentInstaller.onProgress.mockImplementation(() => vi.fn())
     mockAgents.getAll.mockResolvedValue([])
@@ -120,11 +131,12 @@ describe('OnboardingWizard', () => {
     expect(screen.getAllByText(/Managed agents, workflows/i).length).toBeGreaterThan(0)
   })
 
-  it('should display all three BYO coding agent options', () => {
+  it('should display all BYO coding agent options', () => {
     render(<OnboardingWizard open={true} onOpenChange={vi.fn()} />)
     expect(screen.getAllByText('Claude Code').length).toBeGreaterThan(0)
     expect(screen.getAllByText('OpenCode').length).toBeGreaterThan(0)
     expect(screen.getAllByText('Codex').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('Pi').length).toBeGreaterThan(0)
   })
 
   it('should show button disabled when no agent is selected', () => {
@@ -152,6 +164,24 @@ describe('OnboardingWizard', () => {
       // Button contains "Get Started" text alongside icon elements
       const btns = screen.getAllByText('Get Started')
       expect(btns.length).toBeGreaterThan(0)
+    })
+  })
+
+  it('installs Pi before creating the selected agent', async () => {
+    const onOpenChange = vi.fn()
+    render(<OnboardingWizard open={true} onOpenChange={onOpenChange} />)
+
+    await screen.findAllByText('Not installed')
+    const piTaglines = screen.getAllByText('Open-source coding agent')
+    fireEvent.click(piTaglines[piTaglines.length - 1].closest('button')!)
+    fireEvent.click(await screen.findByRole('button', { name: /install & get started/i }))
+
+    await waitFor(() => {
+      expect(mockAgentInstaller.install).toHaveBeenCalledWith('pi')
+      expect(mockAgents.create).toHaveBeenCalledWith(expect.objectContaining({
+        config: expect.objectContaining({ coding_agent: CodingAgentType.PI })
+      }))
+      expect(onOpenChange).toHaveBeenCalledWith(false)
     })
   })
 
