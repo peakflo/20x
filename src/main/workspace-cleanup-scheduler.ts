@@ -1,11 +1,11 @@
-import { BrowserWindow, app } from 'electron'
+import { BrowserWindow } from 'electron'
 import { existsSync, readdirSync, statSync, rmSync } from 'fs'
 import { join } from 'path'
 import type { DatabaseManager } from './database'
 import type { WorktreeManager } from './worktree-manager'
 import { TaskStatus } from '../shared/constants'
-
-const WORKSPACES_DIR = join(app.getPath('userData'), 'workspaces')
+import { WORKSPACES_DIR, listWorkspaceDirs } from './workspace-paths'
+import { terminateProcessesInWorkspaces, readDiskSpace, workspacePressureWarning } from './workspace-process-cleanup'
 
 /**
  * WorkspaceCleanupScheduler - Automatic cleanup of old completed task workspaces
@@ -92,7 +92,14 @@ export class WorkspaceCleanupScheduler {
     try {
       // Check if auto-cleanup is enabled
       const enabled = this.dbManager.getSetting('workspace_autocleanup_enabled')
-      if (enabled !== 'true') return
+      if (enabled !== 'true') {
+        // Auto-cleanup defaults to OFF, and that is exactly the machine where
+        // the count grows without bound — 397 workspaces holding 313 GB on the
+        // one this was found on. Reporting it only inside `doCleanup` would
+        // mean the warning never reached the person who needs it.
+        this.reportWorkspaceCount()
+        return
+      }
 
       // Check if we already ran today
       const lastRun = this.dbManager.getSetting('workspace_autocleanup_last_run')
@@ -168,6 +175,27 @@ export class WorkspaceCleanupScheduler {
     const total = eligibleTasks.length + orphanDirs.length
     let processed = 0
 
+    // A process must not outlive its workspace. Removing the directory under a
+    // running watcher leaves it holding several thousand descriptors on files
+    // that no longer exist — the exact leak this cleanup is supposed to end.
+    // Killed BEFORE any removal, and by cwd only, so a watcher the user started
+    // in their own checkout is never a candidate.
+    if (total > 0) {
+      try {
+        const killed = await terminateProcessesInWorkspaces({
+          workspacesRoot: WORKSPACES_DIR,
+          workspaceIds: [...eligibleTasks.map((t) => t.id), ...orphanDirs]
+        })
+        if (killed.length > 0) {
+          console.log(`[WorkspaceCleanup] Terminated ${killed.length} process(es) rooted in workspaces being removed`)
+        }
+      } catch (err) {
+        const message = `Failed to terminate processes in workspaces being removed: ${err instanceof Error ? err.message : String(err)}`
+        console.warn(`[WorkspaceCleanup] ${message}`)
+        errors.push(message)
+      }
+    }
+
     if (reportProgress) {
       this.sendToRenderer('workspace:cleanup-progress', {
         phase: 'scanning',
@@ -236,7 +264,30 @@ export class WorkspaceCleanupScheduler {
       processed++
     }
 
+    this.reportWorkspaceCount()
+
     return { cleaned, errors }
+  }
+
+  /**
+   * Reports how many workspaces are left. Nothing bounds this count: every agent
+   * run makes another clone with its own `node_modules`. On the machine the
+   * process leak was diagnosed on there were 397 of them holding 313 GB, which
+   * is a disk and inode problem in its own right. Counting it is the smallest
+   * honest thing to do about it.
+   */
+  private reportWorkspaceCount(): void {
+    const dirs = listWorkspaceDirs()
+    if (dirs === null) return
+    const pressure = workspacePressureWarning({ count: dirs.length, disk: readDiskSpace(WORKSPACES_DIR) })
+    if (!pressure) return
+    // Console only. An earlier version also sent `workspace:count-warning` to
+    // the renderer, which was dead code: no preload bridge carries it and no
+    // component listens, so it reached nobody while looking like it reached
+    // someone. Surfacing this in the UI is a real change — a preload channel, a
+    // component, and a decision about how insistent it should be — and it wants
+    // to be made deliberately rather than smuggled in with a process fix.
+    console.warn(`[WorkspaceCleanup] ${pressure}`)
   }
 
   private getRetentionDays(): number {

@@ -30,6 +30,8 @@ import { TaskAutomationScheduler } from './task-automation-scheduler'
 import { WorkspaceCleanupScheduler } from './workspace-cleanup-scheduler'
 import { ClaudePluginManager } from './claude-plugin-manager'
 import { parseProcessTable, selectKillableMcpPids } from './mcp-process-cleanup'
+import { buildWorkspaceStates, sweepLeakedWorkspaceProcesses, readDiskSpace, workspacePressureWarning, SHUTDOWN_GRACE_MS } from './workspace-process-cleanup'
+import { WORKSPACES_DIR, listWorkspaceDirs } from './workspace-paths'
 import { EnterpriseHeartbeat } from './enterprise-heartbeat'
 import { EnterpriseStateSync } from './enterprise-state-sync'
 import { handleRoute, setTaskApiAgentController, setTaskApiNotifier, setTaskApiUiState, setTaskAutomationTrigger, setTranscriptProvider, stopTaskApiServer } from './task-api-server'
@@ -215,6 +217,59 @@ function sweepLeakedMcpProcesses(): void {
   }
 }
 
+/**
+ * Kills processes still running inside a task workspace that nobody is driving.
+ *
+ * The same defect as the MCP sweep above, one level out: a watcher started by
+ * `pnpm dev` inside a workspace survives its parents, is reparented to launchd,
+ * and goes on watching several thousand files for days. Two such processes were
+ * measured holding 43% of every open file descriptor on the owner's machine.
+ *
+ * Selection is by CWD AND TASK STATE, never by process name — `node`, `tsx` and
+ * `next` are also how the user runs their own work, and a name match would kill
+ * a dev server running in their own checkout.
+ *
+ * The boot call is the one that matters. These orphans reparent to launchd, so
+ * a shutdown hook alone never sees a machine that was force-quit or rebooted.
+ */
+async function sweepLeakedWorkspaces(graceMs?: number, orphansIgnoreTaskState = false): Promise<void> {
+  try {
+    // A workspace with no task row is as leaked as a finished one, so the two
+    // sources are paired rather than either alone. BOTH must be trustworthy: a
+    // failed read of either one would classify healthy workspaces as leaked, so
+    // each is checked and the sweep declines rather than guesses.
+    const dirs = listWorkspaceDirs()
+    if (dirs === null) {
+      console.warn('[Cleanup] Skipping the workspace sweep: the workspaces directory could not be read.')
+      return
+    }
+    const tasks = db ? db.getTasks().map((task) => ({ id: task.id, status: String(task.status) })) : []
+    if (tasks.length === 0 && dirs.length > 0) {
+      // Not credible: workspaces exist but the task table is empty. Far more
+      // likely a closed or damaged database than a genuinely empty one — and
+      // believing it would mark every workspace "no task for this workspace"
+      // and kill everything in all of them.
+      console.warn(`[Cleanup] Skipping the workspace sweep: ${dirs.length} workspaces on disk but no tasks in the database.`)
+      return
+    }
+    const states = buildWorkspaceStates(tasks, dirs)
+    await sweepLeakedWorkspaceProcesses({
+      workspacesRoot: WORKSPACES_DIR,
+      workspaceState: (workspaceId) => states.get(workspaceId) ?? { exists: false },
+      graceMs,
+      orphansIgnoreTaskState
+    })
+
+    // Nothing bounds the workspace count today. Report it with the free space
+    // beside it, so the disk cost of one clone per agent run is visible before
+    // it bites — the count alone does not say whether the next run will fit.
+    const pressure = workspacePressureWarning({ count: dirs.length, disk: readDiskSpace(WORKSPACES_DIR) })
+    if (pressure) console.warn(`[Cleanup] ${pressure}`)
+  } catch (err) {
+    console.warn('[Cleanup] Could not sweep leaked workspace processes:', err)
+  }
+}
+
 async function shutdownAppServices(): Promise<void> {
   voiceSessionManager?.shutdown()
   enterpriseHeartbeatInstance?.stop()
@@ -234,6 +289,9 @@ async function shutdownAppServices(): Promise<void> {
   stopTaskApiServer()
 
   sweepLeakedMcpProcesses()
+  // A short grace here: quitting must stay quick, and anything that ignores
+  // SIGTERM is collected by the boot sweep on the next start.
+  await sweepLeakedWorkspaces(SHUTDOWN_GRACE_MS)
 
   db?.close()
 
@@ -884,6 +942,19 @@ app.whenReady().then(async () => {
 
   db = new DatabaseManager()
   db.initialize()
+
+  // The BOOT sweep for workspace processes. It runs here rather than beside the
+  // MCP sweep above because it needs the task table to tell a leaked workspace
+  // from one an agent is working in. This is the call that catches a machine
+  // that was force-quit or rebooted: those orphans reparent to launchd, so no
+  // shutdown hook ever sees them. Awaited — on a machine that has hit EMFILE
+  // the descriptors must come back before this instance opens its own.
+  // `orphansIgnoreTaskState` is true HERE AND ONLY HERE. Task status is
+  // deliberately preserved across a quit and nothing repairs it at startup, so
+  // a force-quit task stays `agent_working` forever — and without this the
+  // watcher it leaked would be vetoed by its own stale status on every boot,
+  // making the reported case the one case that could never be collected.
+  await sweepLeakedWorkspaces(undefined, true)
   analytics.record('server.boot.heartbeat', {
     taskCount: db.getTasks().length,
     agentCount: db.getAgents().length
