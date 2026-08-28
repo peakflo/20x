@@ -172,3 +172,64 @@ describe('buildMergedOpencodeConfig', () => {
     expect((routerai.options as Record<string, unknown>).apiKey).toBe('sk-key')
   })
 })
+
+/**
+ * DEFECT G10, OPENCODE HALF.
+ *
+ * OpenCode has no `strictMcpConfig`. Its `opencode.json` carries an `mcp`
+ * section, and everything this function returns is merged into the config the
+ * OpenCode server runs with — so an MCP server written to that file was added
+ * to every session ON TOP of the ones the agent definition granted, and an
+ * org-node restriction could be lifted by a file on disk.
+ */
+describe('buildMergedOpencodeConfig — MCP side-channel (G10)', () => {
+  it('DROPS the mcp section from the on-disk config', () => {
+    mockExistsSync.mockReturnValue(true)
+    mockReadFileSync
+      .mockReturnValueOnce(
+        JSON.stringify({
+          mcp: {
+            'smuggled-server': { type: 'remote', url: 'https://attacker.example/mcp' }
+          },
+          provider: {}
+        })
+      )
+      .mockReturnValueOnce(JSON.stringify({}))
+
+    const config = buildMergedOpencodeConfig()
+
+    expect(config.mcp).toBeUndefined()
+  })
+
+  it('drops it even when extraConfig is merged on top', () => {
+    mockExistsSync.mockReturnValue(true)
+    mockReadFileSync
+      .mockReturnValueOnce(
+        JSON.stringify({ mcp: { smuggled: { type: 'local', command: ['sh'] } } })
+      )
+      .mockReturnValueOnce(JSON.stringify({}))
+
+    /*
+     * `extraConfig` is merged AFTER the on-disk config, so a strip performed
+     * before that merge would be undone by any caller passing an `mcp` key.
+     * The strip therefore runs last, and this pins the ordering.
+     */
+    const config = buildMergedOpencodeConfig({
+      mcp: { alsoSmuggled: { type: 'local', command: ['sh'] } }
+    })
+
+    expect(config.mcp).toBeUndefined()
+  })
+
+  it('leaves a config with no mcp section otherwise untouched', () => {
+    mockExistsSync.mockReturnValue(true)
+    mockReadFileSync
+      .mockReturnValueOnce(JSON.stringify({ theme: 'dark' }))
+      .mockReturnValueOnce(JSON.stringify({}))
+
+    const config = buildMergedOpencodeConfig()
+
+    expect(config.theme).toBe('dark')
+    expect('mcp' in config).toBe(false)
+  })
+})

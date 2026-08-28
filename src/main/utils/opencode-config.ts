@@ -156,5 +156,35 @@ export function buildMergedOpencodeConfig(
     }
   }
 
+  /*
+   * DEFECT G10, OPENCODE HALF — ON-DISK CONFIG MAY NOT ADD MCP SERVERS.
+   *
+   * `~/.config/opencode/opencode.json` has an `mcp` section, and everything in
+   * this function is merged straight into the config handed to the OpenCode
+   * server. So a server written to that file was silently added to every
+   * session, ON TOP of the ones the agent definition granted — the same hole
+   * `strictMcpConfig` closes on the Claude side, which OpenCode has no option
+   * for.
+   *
+   * The section is therefore DROPPED here. 20x registers its servers
+   * explicitly through `mcp.add`, so nothing legitimate travels this way, and
+   * anything that does is by definition a server the control plane did not
+   * grant. Dropped LOUDLY, because a user with a personal server in that file
+   * will otherwise conclude the feature is broken.
+   *
+   * This matters far more in a shared tenant sandbox than on a laptop: with no
+   * per-session unix user, one session writing that file would have widened
+   * every other session in the tenant.
+   */
+  if (config.mcp !== undefined) {
+    const dropped = Object.keys((config.mcp as Record<string, unknown>) || {})
+    delete config.mcp
+    console.warn(
+      `[opencode-config] Ignored ${dropped.length} MCP server(s) from on-disk opencode.json ` +
+        `(${dropped.join(', ') || 'none named'}). MCP servers come from the agent definition only. ` +
+        'See defect G10.'
+    )
+  }
+
   return config
 }
