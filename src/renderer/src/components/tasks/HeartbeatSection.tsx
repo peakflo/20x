@@ -138,6 +138,8 @@ export function HeartbeatSection({ task, onTaskUpdated }: HeartbeatSectionProps)
       alert('No heartbeat.md file found. Save instructions first.')
     } else if (result === 'no_agent') {
       alert('No agent assigned to this task.')
+    } else if (result === 'in_progress') {
+      alert('A heartbeat check is already running for this task.')
     } else {
       alert('Failed to run heartbeat check.')
     }
