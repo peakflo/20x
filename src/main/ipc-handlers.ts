@@ -900,8 +900,7 @@ export function registerIpcHandlers(
 
   ipcMain.handle('app:setLoginItemSettings', (_, openAtLogin: boolean) => {
     app.setLoginItemSettings({
-      openAtLogin,
-      openAsHidden: false
+      openAtLogin
     })
     return app.getLoginItemSettings()
   })
