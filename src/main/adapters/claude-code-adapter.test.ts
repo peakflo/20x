@@ -4,6 +4,9 @@ import { describe, it, expect, vi } from 'vitest'
 // Mock the SDK before importing the adapter
 vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
   query: vi.fn(),
+  // The real module exports this; the adapter uses it to tell a deliberate
+  // abort apart from a genuine stream failure.
+  AbortError: class AbortError extends Error {},
 }))
 
 // Mock child_process and fs to avoid real filesystem operations
@@ -1204,5 +1207,83 @@ describe('ClaudeCodeAdapter background-task system messages', () => {
     })
 
     expect(session.backgroundTasks.get('a').startedAt).toBe(oldStart)
+  })
+})
+
+describe('ClaudeCodeAdapter abort classification (regression)', () => {
+  /**
+   * The agent SDK declares `class AbortError extends Error {}` with no `name`
+   * override, so a deliberate abort surfaces as `name: 'Error'` /
+   * `message: 'Operation aborted'`. The old classifier matched neither, so a
+   * normal stop was recorded as a session error.
+   */
+  function sessionThatThrows(err: unknown, opts?: { aborted?: boolean }) {
+    const abortController = new AbortController()
+    if (opts?.aborted !== false) abortController.abort()
+    return {
+      sessionId: 's1',
+      queryIterator: {
+        [Symbol.asyncIterator]() { return this },
+        async next() { throw err },
+      },
+      backgroundTasks: new Map(),
+      sawResult: false,
+      releasePrompt: null,
+      enqueuePrompt: null,
+      abortController,
+      status: 'busy',
+      messageBuffer: [],
+      messageCursor: 0,
+      streamTask: null,
+      lastError: null,
+      config: {} as any,
+      isResumed: false,
+    } as any
+  }
+
+  it('treats the SDK "Operation aborted" error as a normal abort, not a session error', async () => {
+    const adapter = new ClaudeCodeAdapter()
+    const err = new Error('Operation aborted') // name stays 'Error', as the SDK emits it
+    const session = sessionThatThrows(err)
+    ;(adapter as any).sessions.set('s1', session)
+
+    await (adapter as any).consumeStream('s1', session)
+
+    expect(session.status).toBe('idle')
+    expect(session.lastError).toBeNull()
+  })
+
+  it('keeps getStatus IDLE after an abort so polling and the task are not failed', async () => {
+    const adapter = new ClaudeCodeAdapter()
+    const session = sessionThatThrows(new Error('Operation aborted'))
+    ;(adapter as any).sessions.set('s1', session)
+
+    await (adapter as any).consumeStream('s1', session)
+    const status = await adapter.getStatus('s1', {} as any)
+
+    expect(status.type).toBe('idle')
+  })
+
+  it('classifies any stream failure as an abort once the signal is aborted', async () => {
+    const adapter = new ClaudeCodeAdapter()
+    // waitForExit can also reject with the process-exit error during teardown.
+    const session = sessionThatThrows(new Error('Claude Code process terminated by signal SIGTERM'))
+    ;(adapter as any).sessions.set('s1', session)
+
+    await (adapter as any).consumeStream('s1', session)
+
+    expect(session.status).toBe('idle')
+    expect(session.lastError).toBeNull()
+  })
+
+  it('still records a real failure when no abort was requested', async () => {
+    const adapter = new ClaudeCodeAdapter()
+    const session = sessionThatThrows(new Error('socket hang up'), { aborted: false })
+    ;(adapter as any).sessions.set('s1', session)
+
+    await (adapter as any).consumeStream('s1', session)
+
+    expect(session.status).toBe('error')
+    expect(session.lastError).toBe('socket hang up')
   })
 })
