@@ -1151,6 +1151,41 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
   }
 
   /**
+   * Tells a deliberate abort apart from a real stream failure.
+   *
+   * The SDK's own abort error is `class AbortError extends Error {}` with **no
+   * `name` override**, so `error.name` is the plain string `'Error'`, and the
+   * message it throws from `waitForExit()` is `'Operation aborted'` — neither
+   * `name === 'AbortError'` nor `message.includes('aborted by user')` matches it.
+   * Every user stop, watchdog abort and session teardown therefore fell through
+   * to the generic branch, which set `lastError` and made `getStatus()` report
+   * ERROR forever: the transcript showed a red "Operation aborted" message, the
+   * task flipped to `error`, polling stopped and a false "agent run failed"
+   * event was recorded.
+   *
+   * The signal is the authoritative source: if we asked for the abort, the
+   * failure is expected. The constructor and string checks stay as a safety net
+   * for the case where a new query already replaced the controller.
+   */
+  private isAbortError(error: unknown, session: ClaudeSession): boolean {
+    if (session.abortController?.signal.aborted) return true
+
+    let AbortErrorCtor: (new (msg?: string) => Error) | undefined
+    try {
+      AbortErrorCtor = (ClaudeAgentSDK as { AbortError?: new (msg?: string) => Error } | null)
+        ?.AbortError
+    } catch {
+      // Older SDK builds do not export the class; fall through to the string checks.
+      AbortErrorCtor = undefined
+    }
+    if (AbortErrorCtor && error instanceof AbortErrorCtor) return true
+
+    if (!(error instanceof Error)) return false
+    if (error.name === 'AbortError') return true
+    return error.message.includes('aborted by user') || error.message.includes('Operation aborted')
+  }
+
+  /**
    * Consumes the query stream in the background and buffers messages
    */
   private async consumeStream(sessionId: string, session: ClaudeSession): Promise<void> {
@@ -1321,10 +1356,9 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
       }
       console.log('[ClaudeCodeAdapter] Stream consumption completed normally')
     } catch (error: unknown) {
-      const errName = error instanceof Error ? error.name : ''
       const errMsg = error instanceof Error ? error.message : String(error)
       const errStack = error instanceof Error ? error.stack : undefined
-      if (errName === 'AbortError' || errMsg.includes('aborted by user')) {
+      if (this.isAbortError(error, session)) {
         console.log('[ClaudeCodeAdapter] Stream aborted by user')
         // Don't set error status - this is normal when sending a new message
       } else if (errMsg.includes('INCOMPATIBLE_SESSION_ID')) {
