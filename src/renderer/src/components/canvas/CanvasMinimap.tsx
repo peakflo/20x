@@ -330,6 +330,21 @@ function CanvasMinimapComponent({
     return map
   }, [tasks])
 
+  // Zoom toward the center of the canvas container so step-zooms and slider
+  // drags keep the content the user is looking at fixed instead of anchoring
+  // the canvas to its top-left corner. Skipped before the container has been
+  // measured (0×0) — the store keeps x/y then.
+  const zoomAroundCenter = useCallback(
+    (zoom: number) => {
+      if (containerWidth > 0 && containerHeight > 0) {
+        zoomTo(zoom, containerWidth / 2, containerHeight / 2)
+      } else {
+        zoomTo(zoom)
+      }
+    },
+    [containerWidth, containerHeight, zoomTo]
+  )
+
   const zoomPercent = Math.round(viewport.zoom * 100)
 
   // Union box of the drawing figures (canvas space) — merged into the
@@ -445,7 +460,13 @@ function CanvasMinimapComponent({
           <div className="flex items-center justify-between px-1.5 py-1 border-t border-border/20">
             <button
               className="h-5 w-5 rounded flex items-center justify-center text-muted-foreground/40 hover:text-muted-foreground hover:bg-white/5 transition-colors"
-              onClick={(e) => { e.stopPropagation(); zoomTo(viewport.zoom / 1.2) }}
+              onClick={(e) => {
+                e.stopPropagation()
+                // Live zoom — a wheel gesture may still be in flight and not
+                // yet committed to the store.
+                const liveZoom = getLiveViewport().zoom || viewport.zoom
+                zoomAroundCenter(liveZoom / 1.2)
+              }}
               title="Zoom out (Ctrl+-)"
             >
               <Minus className="h-3 w-3" />
@@ -460,7 +481,7 @@ function CanvasMinimapComponent({
               value={viewport.zoom * 100}
               onChange={(e) => {
                 e.stopPropagation()
-                zoomTo(Number(e.target.value) / 100)
+                zoomAroundCenter(Number(e.target.value) / 100)
               }}
               className="flex-1 mx-1.5 h-1 accent-indigo-500 cursor-pointer"
               style={{ opacity: 0.5 }}
@@ -469,7 +490,11 @@ function CanvasMinimapComponent({
 
             <button
               className="h-5 w-5 rounded flex items-center justify-center text-muted-foreground/40 hover:text-muted-foreground hover:bg-white/5 transition-colors"
-              onClick={(e) => { e.stopPropagation(); zoomTo(viewport.zoom * 1.2) }}
+              onClick={(e) => {
+                e.stopPropagation()
+                const liveZoom = getLiveViewport().zoom || viewport.zoom
+                zoomAroundCenter(liveZoom * 1.2)
+              }}
               title="Zoom in (Ctrl+=)"
             >
               <Plus className="h-3 w-3" />

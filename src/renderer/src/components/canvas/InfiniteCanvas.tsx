@@ -576,6 +576,28 @@ export function InfiniteCanvas() {
     viewportRafRef.current = requestAnimationFrame(flushViewportUpdate)
   }, [flushViewportUpdate])
 
+  /**
+   * Step-zoom in/out by `factor` around the center of the visible canvas area.
+   * Used by the HUD zoom buttons and the Ctrl/Cmd = / − shortcuts: zooming
+   * without an anchor point keeps the top-left corner fixed, which makes the
+   * content the user is looking at jump across the screen instead of zooming
+   * in place.
+   */
+  const zoomStep = useCallback(
+    (factor: number) => {
+      // Flush any in-flight wheel gesture so we zoom from what's on screen.
+      commitViewport()
+      const zoom = liveViewportRef.current.zoom * factor
+      const { width, height } = containerSize
+      if (width > 0 && height > 0) {
+        zoomTo(zoom, width / 2, height / 2)
+      } else {
+        zoomTo(zoom)
+      }
+    },
+    [commitViewport, containerSize, zoomTo]
+  )
+
   const queuePan = useCallback(
     (dx: number, dy: number) => {
       pendingPanRef.current.dx += dx
@@ -804,13 +826,11 @@ export function InfiniteCanvas() {
       // first so we zoom from the value the user is actually looking at.
       if (e.code === 'Equal' && (e.ctrlKey || e.metaKey) && !isInputFocused) {
         e.preventDefault()
-        commitViewport()
-        zoomTo(liveViewportRef.current.zoom * 1.2)
+        zoomStep(1.2)
       }
       if (e.code === 'Minus' && (e.ctrlKey || e.metaKey) && !isInputFocused) {
         e.preventDefault()
-        commitViewport()
-        zoomTo(liveViewportRef.current.zoom / 1.2)
+        zoomStep(1 / 1.2)
       }
       if (e.code === 'Digit0' && (e.ctrlKey || e.metaKey) && !isInputFocused) {
         e.preventDefault()
@@ -927,7 +947,7 @@ export function InfiniteCanvas() {
       window.removeEventListener('keyup', handleKeyUp)
       window.removeEventListener('blur', handleBlur)
     }
-  }, [zoomTo, resetViewport, focusedPanelIndex, commitViewport, setConnectingFromId])
+  }, [zoomStep, resetViewport, focusedPanelIndex, commitViewport, setConnectingFromId])
 
   const zoomPercent = Math.round(viewport.zoom * 100)
 
@@ -1047,7 +1067,7 @@ export function InfiniteCanvas() {
           variant="ghost"
           size="sm"
           className="h-7 w-7 p-0"
-          onClick={() => zoomTo(viewport.zoom / 1.2)}
+          onClick={() => zoomStep(1 / 1.2)}
           title="Zoom out"
         >
           <ZoomOut className="h-3.5 w-3.5" />
@@ -1059,7 +1079,7 @@ export function InfiniteCanvas() {
           variant="ghost"
           size="sm"
           className="h-7 w-7 p-0"
-          onClick={() => zoomTo(viewport.zoom * 1.2)}
+          onClick={() => zoomStep(1.2)}
           title="Zoom in"
         >
           <ZoomIn className="h-3.5 w-3.5" />

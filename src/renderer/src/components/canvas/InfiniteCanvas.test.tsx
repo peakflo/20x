@@ -318,6 +318,81 @@ describe('InfiniteCanvas', () => {
     expect(viewport).toEqual({ x: 0, y: 0, zoom: 1 })
   })
 
+  /** ResizeObserver mock that reports an 800×600 canvas container. */
+  const mockMeasuredContainer = () => {
+    const originalResizeObserver = globalThis.ResizeObserver
+    globalThis.ResizeObserver = class {
+      private callback: ResizeObserverCallback
+      constructor(callback: ResizeObserverCallback) {
+        this.callback = callback
+      }
+      observe() {
+        this.callback([{ contentRect: { width: 800, height: 600 } } as ResizeObserverEntry], this as ResizeObserver)
+      }
+      unobserve() {}
+      disconnect() {}
+    }
+    return () => {
+      globalThis.ResizeObserver = originalResizeObserver
+    }
+  }
+
+  /** Canvas-space point displayed at the container center for a viewport. */
+  const canvasPointAtCenter = (vp: { x: number; y: number; zoom: number }) => ({
+    x: (400 - vp.x) / vp.zoom,
+    y: (300 - vp.y) / vp.zoom,
+  })
+
+  it('zoom buttons keep the screen center fixed instead of anchoring the top-left corner', () => {
+    const restore = mockMeasuredContainer()
+    try {
+      // Pan so the canvas origin is nowhere near the screen center.
+      useCanvasStore.getState().setViewport({ x: 120, y: 90, zoom: 1 })
+      render(<InfiniteCanvas />)
+
+      const before = useCanvasStore.getState().viewport
+      const point = canvasPointAtCenter(before)
+      expect(point).toEqual({ x: 280, y: 210 })
+
+      fireEvent.click(screen.getByTitle('Zoom in'))
+      const afterIn = useCanvasStore.getState().viewport
+      expect(afterIn.zoom).toBeCloseTo(1.2)
+      // The canvas point under the screen center must not move.
+      expect(canvasPointAtCenter(afterIn).x).toBeCloseTo(point.x)
+      expect(canvasPointAtCenter(afterIn).y).toBeCloseTo(point.y)
+
+      fireEvent.click(screen.getByTitle('Zoom out'))
+      const afterOut = useCanvasStore.getState().viewport
+      expect(afterOut.zoom).toBeCloseTo(1)
+      expect(canvasPointAtCenter(afterOut).x).toBeCloseTo(point.x)
+      expect(canvasPointAtCenter(afterOut).y).toBeCloseTo(point.y)
+    } finally {
+      restore()
+    }
+  })
+
+  it('Ctrl+= / Ctrl+- zoom around the screen center', () => {
+    const restore = mockMeasuredContainer()
+    try {
+      useCanvasStore.getState().setViewport({ x: 120, y: 90, zoom: 1 })
+      render(<InfiniteCanvas />)
+
+      fireEvent.keyDown(window, { code: 'Equal', ctrlKey: true })
+      const afterIn = useCanvasStore.getState().viewport
+      expect(afterIn.zoom).toBeCloseTo(1.2)
+      expect(canvasPointAtCenter(afterIn).x).toBeCloseTo(280)
+      expect(canvasPointAtCenter(afterIn).y).toBeCloseTo(210)
+
+      fireEvent.keyDown(window, { code: 'Minus', ctrlKey: true })
+      const afterOut = useCanvasStore.getState().viewport
+      expect(afterOut.zoom).toBeCloseTo(1)
+      expect(canvasPointAtCenter(afterOut).x).toBeCloseTo(280)
+      expect(canvasPointAtCenter(afterOut).y).toBeCloseTo(210)
+    } finally {
+      restore()
+    }
+  })
+
   it('should render panels with close buttons', () => {
     useCanvasStore.getState().addPanel({
       type: 'task',

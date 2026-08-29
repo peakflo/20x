@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { render, cleanup } from '@testing-library/react'
+import { render, cleanup, fireEvent } from '@testing-library/react'
 import { CanvasMinimap } from './CanvasMinimap'
 import { useCanvasStore, type CanvasPanelData } from '@/stores/canvas-store'
+import { setLiveViewport } from '@/stores/canvas-live-viewport'
 import { useDrawingStore } from '@/stores/drawing-store'
 import type { DrawingObject } from './drawing/types'
 
@@ -109,5 +110,50 @@ describe('CanvasMinimap', () => {
     expect(x).toBeLessThanOrEqual(180 - 12)
     expect(y).toBeGreaterThanOrEqual(12)
     expect(y).toBeLessThanOrEqual(120 - 12)
+  })
+
+  /** Emulate InfiniteCanvas re-publishing the live viewport after a store write. */
+  const syncLiveViewport = () => setLiveViewport(useCanvasStore.getState().viewport)
+
+  it('zoom buttons zoom around the container center, keeping it fixed', () => {
+    // Pan so the canvas origin is nowhere near the container center.
+    useCanvasStore.setState({ panels: [makePanel()], viewport: { x: 120, y: 90, zoom: 1 } })
+    syncLiveViewport()
+    const { container } = render(<CanvasMinimap containerWidth={800} containerHeight={600} />)
+
+    const clickZoom = (title: string) => {
+      const btn = [...container.querySelectorAll('button')].find(
+        (b) => b.getAttribute('title') === title
+      )
+      expect(btn).toBeTruthy()
+      fireEvent.click(btn!)
+      syncLiveViewport()
+    }
+
+    clickZoom('Zoom in (Ctrl+=)')
+    let vp = useCanvasStore.getState().viewport
+    expect(vp.zoom).toBeCloseTo(1.2)
+    // The canvas point under the container center (400, 300) must not move.
+    expect((400 - vp.x) / vp.zoom).toBeCloseTo(280)
+    expect((300 - vp.y) / vp.zoom).toBeCloseTo(210)
+
+    clickZoom('Zoom out (Ctrl+-)')
+    vp = useCanvasStore.getState().viewport
+    expect(vp.zoom).toBeCloseTo(1)
+    expect((400 - vp.x) / vp.zoom).toBeCloseTo(280)
+    expect((300 - vp.y) / vp.zoom).toBeCloseTo(210)
+  })
+
+  it('zoom slider keeps the container center fixed', () => {
+    useCanvasStore.setState({ panels: [makePanel()], viewport: { x: 120, y: 90, zoom: 1 } })
+    const { container } = render(<CanvasMinimap containerWidth={800} containerHeight={600} />)
+    const slider = container.querySelector('input[type="range"]') as HTMLInputElement
+    expect(slider).toBeTruthy()
+
+    fireEvent.change(slider, { target: { value: '200' } })
+    const vp = useCanvasStore.getState().viewport
+    expect(vp.zoom).toBe(2)
+    expect((400 - vp.x) / vp.zoom).toBeCloseTo(280)
+    expect((300 - vp.y) / vp.zoom).toBeCloseTo(210)
   })
 })
