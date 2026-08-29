@@ -9,9 +9,29 @@
 
 import { execSync } from 'child_process'
 import { createRequire } from 'module'
-import { dirname } from 'path'
+import { dirname, join } from 'path'
+import { existsSync, readFileSync } from 'fs'
 
 const require = createRequire(import.meta.url)
+
+// Electron >= 42 no longer downloads its binary via a postinstall script; it
+// self-installs lazily the first time the `electron` binary runs (and only then
+// writes path.txt). electron-vite, by contrast, reads electron's path.txt
+// straight off disk and throws "Electron uninstall" when the binary is missing
+// — so `pnpm install`/CI must materialize the binary here or the dev server and
+// the test runner fail before anything runs.
+const electronRoot = dirname(require.resolve('electron/package.json'))
+const electronPathFile = join(electronRoot, 'path.txt')
+const electronBinary = existsSync(electronPathFile) ? readFileSync(electronPathFile, 'utf-8').trim() : null
+const electronBinaryPath = electronBinary ? join(electronRoot, 'dist', electronBinary) : null
+
+if (!electronBinaryPath || !existsSync(electronBinaryPath)) {
+  console.log('Electron binary missing — downloading...')
+  execSync(process.execPath + ' ' + JSON.stringify(join(electronRoot, 'install.js')), { stdio: 'inherit' })
+  console.log('Electron binary installed')
+} else {
+  console.log(`Electron binary present (${electronBinary})`)
+}
 
 const electronVersion = require('electron/package.json').version
 
