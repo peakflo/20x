@@ -643,7 +643,15 @@ const browserTools: Tool[] = [
   {
     name: 'browser_reload',
     description: 'Reload a browser panel page.',
-    inputSchema: { type: 'object', properties: { task_id: taskParam, panel_id: panelIdParam }, required: ['task_id'] }
+    inputSchema: {
+      type: 'object',
+      properties: {
+        task_id: taskParam,
+        hard: { type: 'boolean', description: 'Hard refresh: bypass the cache and refetch everything from the network (default false = normal reload).' },
+        panel_id: panelIdParam
+      },
+      required: ['task_id']
+    }
   }
 ]
 

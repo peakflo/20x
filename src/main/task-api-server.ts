@@ -1207,7 +1207,7 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
       const panelId = str(params.panel_id)
       if (route === '/browser_back') return panelBrowserBroker.back(taskId, panelId)
       if (route === '/browser_forward') return panelBrowserBroker.forward(taskId, panelId)
-      return panelBrowserBroker.reload(taskId, panelId)
+      return panelBrowserBroker.reload(taskId, panelId, params.hard === true)
     }
 
     default:
