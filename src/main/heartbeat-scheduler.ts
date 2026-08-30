@@ -12,6 +12,19 @@ import { buildSystemMessage, computeDeliveryId, evaluateAuthorityGate, SystemMes
 const execFileAsync = promisify(execFile)
 
 /**
+ * Matches a GitHub PR/issue URL. Non-global so it is safe for repeated `.test()`
+ * calls (a global regex would carry `lastIndex` between calls).
+ */
+const GITHUB_URL_PATTERN = /https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/(?:pull|issues)\/\d+/
+
+/**
+ * Headings whose body is context the agent wrote for itself (status logs, past
+ * findings, notes) rather than instructions to run. Lines under these headings
+ * are not treated as checks when deciding whether pre-flight covers the file.
+ */
+const INFORMATIONAL_HEADING_PATTERN = /(status|finding|note|context|history|summary|progress|log|result)/i
+
+/**
  * HeartbeatScheduler - Periodic monitoring of tasks in ready_for_review status
  *
  * Inspired by OpenClaw's heartbeat pattern, this scheduler:
@@ -773,6 +786,15 @@ export class HeartbeatScheduler {
       return 'inconclusive' // No URLs to check — need LLM
     }
 
+    // Pre-flight can only clear a heartbeat when EVERY check in the file is a
+    // GitHub check it knows how to verify with `gh api`. A file that mixes PR
+    // links with free-text instructions (e.g. "Monitor if any new transactions
+    // appeared in the profiler") would otherwise be marked 'no_changes' purely
+    // because GitHub was quiet, and the free-text checks would silently never run.
+    if (!this.preflightCoversAllChecks(heartbeatContent)) {
+      return 'inconclusive'
+    }
+
     const lastCheck = task.heartbeat_last_check_at
     if (!lastCheck) {
       return 'inconclusive' // First check — need LLM to establish baseline
@@ -839,6 +861,51 @@ export class HeartbeatScheduler {
 
   private requiresLlmCurrentStateChecks(heartbeatContent: string): boolean {
     return /(requested changes|request changes)/i.test(heartbeatContent)
+  }
+
+  /**
+   * Whether every check in heartbeat.md is a GitHub check that pre-flight can
+   * verify on its own. Only then may pre-flight report 'no_changes' and skip the
+   * LLM entirely.
+   *
+   * A "check line" is any non-empty line that is not a heading, horizontal rule,
+   * blockquote, or fenced code — minus the bodies of purely informational
+   * sections (`## Current Status`, `## Latest Finding`, …), which agents use to
+   * record context rather than instructions.
+   *
+   * Returns false when there are no check lines at all: an instruction-free file
+   * gives pre-flight nothing to reason about, so the LLM should look at it.
+   */
+  private preflightCoversAllChecks(heartbeatContent: string): boolean {
+    let inCodeFence = false
+    let inInformationalSection = false
+    let checkLines = 0
+
+    for (const rawLine of heartbeatContent.split('\n')) {
+      const line = rawLine.trim()
+      if (!line) continue
+
+      if (/^(```|~~~)/.test(line)) {
+        inCodeFence = !inCodeFence
+        continue
+      }
+      if (inCodeFence) continue
+
+      // Horizontal rules — `---`/`***`/`___` only, never a `- [ ]` list item
+      if (/^(-{3,}|\*{3,}|_{3,})$/.test(line)) continue
+      if (line.startsWith('>')) continue
+
+      if (line.startsWith('#')) {
+        inInformationalSection = INFORMATIONAL_HEADING_PATTERN.test(line)
+        continue
+      }
+      if (inInformationalSection) continue
+
+      checkLines++
+      if (!GITHUB_URL_PATTERN.test(line)) return false
+    }
+
+    return checkLines > 0
   }
 
   private hasMergeConflicts(prState: { mergeable: boolean | null; mergeable_state?: string | null }): boolean {
