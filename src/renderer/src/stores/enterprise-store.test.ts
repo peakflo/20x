@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { enterpriseApi } from '@/lib/ipc-client'
 import { useEnterpriseStore, type EnterpriseSyncStats } from './enterprise-store'
 import { enterpriseApi } from '@/lib/ipc-client'
 
@@ -8,6 +9,7 @@ vi.mock('@/lib/ipc-client', () => ({
     apiRequest: vi.fn().mockResolvedValue({}),
     getSession: vi.fn().mockResolvedValue({ isAuthenticated: false }),
     login: vi.fn(),
+    signupInBrowser: vi.fn(),
     selectTenant: vi.fn(),
     logout: vi.fn(),
     refreshToken: vi.fn(),
@@ -17,6 +19,7 @@ vi.mock('@/lib/ipc-client', () => ({
 
 describe('useEnterpriseStore — sync stats', () => {
   beforeEach(() => {
+    vi.clearAllMocks()
     // Reset store to initial state
     useEnterpriseStore.setState({
       isAuthenticated: false,
@@ -112,6 +115,22 @@ describe('useEnterpriseStore — sync stats', () => {
     const state = useEnterpriseStore.getState()
     expect(state.lastSyncStats).toEqual(stats)
     expect(state.lastSyncMs).toBe(999)
+  })
+
+  it('passes the AI subscription preference to browser signup', async () => {
+    vi.mocked(enterpriseApi.signupInBrowser).mockResolvedValue({
+      userId: 'user-1',
+      email: 'new@example.com',
+      companies: []
+    })
+
+    await useEnterpriseStore.getState().signupInBrowser('register', {
+      includeAiSubscription: true
+    })
+
+    expect(enterpriseApi.signupInBrowser).toHaveBeenCalledWith('register', {
+      includeAiSubscription: true
+    })
   })
 })
 
