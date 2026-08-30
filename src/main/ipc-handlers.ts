@@ -185,6 +185,24 @@ export function registerIpcHandlers(
       void taskAutomationScheduler?.runNow()
     }
 
+    // Event-driven coordinator wake-up: a subtask moved into a terminal state
+    // from the UI (Kanban drag, status dropdown, feedback dialog) must wake its
+    // parent coordinator exactly like the agent / MCP / auto-complete routes do.
+    // Without this, a coordinator reviewing children never learns that the last
+    // one was reviewed from the board and sits idle until a human nudges it.
+    if (
+      updated &&
+      updated.parent_task_id &&
+      previousStatus !== undefined &&
+      (data.status === TaskStatus.ReadyForReview || data.status === TaskStatus.Completed)
+    ) {
+      agentManager
+        .notifyParentOfSubtaskCompletion(updated.parent_task_id, id)
+        .catch((err) => {
+          console.error(`[IPC] Failed to wake parent ${updated.parent_task_id} after subtask ${id} update:`, err)
+        })
+    }
+
     // Record feedback event for enterprise sync
     if (enterpriseStateSync && data.feedback_rating && updated) {
       enterpriseStateSync.recordFeedbackSubmitted(updated, data.feedback_rating)
