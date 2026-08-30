@@ -254,6 +254,219 @@ describe('OpencodeAdapter', () => {
     })
   })
 
+  describe('MCP tools survive an OpenCode instance restart', () => {
+    afterEach(() => {
+      vi.restoreAllMocks()
+    })
+
+    const TASK_MCP = {
+      'task-management': { type: 'http' as const, url: 'http://127.0.0.1:53945/mcp?task=t1&parent=p1' },
+      'gcp-logs': { type: 'stdio' as const, command: 'node', args: ['gcp.js'], env: { TOKEN: 'x' } }
+    }
+
+    it('declares the MCP servers in .opencode/opencode.json so a re-created instance rebuilds them', () => {
+      const adapter = new OpencodeAdapter()
+      const workspaceDir = mkdtempSync(join(tmpdir(), 'opencode-adapter-test-'))
+
+      try {
+        ;(adapter as any).writeRuntimePluginFiles({
+          agentId: 'agent-1',
+          taskId: 'task-1',
+          workspaceDir,
+          mcpServers: TASK_MCP
+        })
+
+        // OpenCode reads `<dir>/.opencode/opencode.json` every time it creates the
+        // instance of a directory. A server that lives only in the memory of the
+        // instance (mcp.add) is lost when that instance is disposed.
+        const configPath = join(workspaceDir, '.opencode', 'opencode.json')
+        expect(existsSync(configPath)).toBe(true)
+
+        const written = JSON.parse(readFileSync(configPath, 'utf-8'))
+        expect(written.mcp['task-management']).toEqual({
+          type: 'remote',
+          url: 'http://127.0.0.1:53945/mcp?task=t1&parent=p1',
+          enabled: true
+        })
+        expect(written.mcp['gcp-logs']).toEqual({
+          type: 'local',
+          command: ['node', 'gcp.js'],
+          environment: { TOKEN: 'x' },
+          enabled: true
+        })
+        expect(written.plugin).toEqual((adapter as any).pluginFilePaths)
+      } finally {
+        rmSync(workspaceDir, { recursive: true, force: true })
+      }
+    })
+
+    it('keeps the file free of an mcp key when the session has no MCP servers', () => {
+      const adapter = new OpencodeAdapter()
+      const workspaceDir = mkdtempSync(join(tmpdir(), 'opencode-adapter-test-'))
+
+      try {
+        ;(adapter as any).writeRuntimePluginFiles({ agentId: 'a', taskId: 't', workspaceDir })
+        const written = JSON.parse(readFileSync(join(workspaceDir, '.opencode', 'opencode.json'), 'utf-8'))
+        expect(written.mcp).toBeUndefined()
+      } finally {
+        rmSync(workspaceDir, { recursive: true, force: true })
+      }
+    })
+
+    /**
+     * The reported failure: several tool calls succeed, then minutes later the
+     * model is told the tool does not exist, while the TCP connection to the MCP
+     * server is still established. The cause is OpenCode disposing the instance of
+     * the directory, which drops every runtime-registered MCP server without an
+     * error. A call after that hiccup must still work.
+     */
+    it('re-attaches the MCP servers of a live session after N calls and an instance dispose', async () => {
+      const adapter = new OpencodeAdapter()
+      const workspaceDir = '/tmp/ws-a'
+      const add = vi.fn().mockImplementation(async ({ body }: any) => ({
+        data: { [body.name]: { status: 'connected' } }
+      }))
+      const ocClient = { mcp: { add } }
+
+      ;(adapter as any).clients.set('ses_a', ocClient)
+      ;(adapter as any).sessionWorkspaceDirs.set('ses_a', workspaceDir)
+      ;(adapter as any).sessionMcpConfigs.set('ses_a', TASK_MCP)
+
+      // N consecutive tool calls before the hiccup — none of them re-registers.
+      for (let i = 0; i < 5; i++) {
+        expect(adapter.getMcpAttachFailures('ses_a')).toEqual([])
+      }
+      expect(add).not.toHaveBeenCalled()
+
+      const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+      await (adapter as any).handleServerEvent({
+        payload: {
+          type: 'server.instance.disposed',
+          properties: { directory: workspaceDir }
+        }
+      })
+      await (adapter as any).handleInstanceDisposed(workspaceDir, 'server.instance.disposed')
+
+      const registered = add.mock.calls.map(call => call[0].body.name)
+      expect(registered).toContain('task-management')
+      expect(registered).toContain('gcp-logs')
+      expect(add.mock.calls.every(call => call[0].query.directory === workspaceDir)).toBe(true)
+      expect(adapter.getMcpAttachFailures('ses_a')).toEqual([])
+
+      // The drop must be loud. It used to be completely silent.
+      expect(errorLog.mock.calls.some(call => String(call[0]).includes('MCP DROPPED'))).toBe(true)
+    })
+
+    it('leaves sessions in other directories alone', async () => {
+      const adapter = new OpencodeAdapter()
+      const add = vi.fn().mockImplementation(async ({ body }: any) => ({
+        data: { [body.name]: { status: 'connected' } }
+      }))
+
+      ;(adapter as any).clients.set('ses_a', { mcp: { add } })
+      ;(adapter as any).sessionWorkspaceDirs.set('ses_a', '/tmp/ws-a')
+      ;(adapter as any).sessionMcpConfigs.set('ses_a', TASK_MCP)
+
+      vi.spyOn(console, 'error').mockImplementation(() => {})
+      await (adapter as any).handleInstanceDisposed('/tmp/ws-other', 'server.instance.disposed')
+
+      expect(add).not.toHaveBeenCalled()
+    })
+
+    it('re-attaches every session when OpenCode disposes all instances', async () => {
+      const adapter = new OpencodeAdapter()
+      const addA = vi.fn().mockImplementation(async ({ body }: any) => ({
+        data: { [body.name]: { status: 'connected' } }
+      }))
+      const addB = vi.fn().mockImplementation(async ({ body }: any) => ({
+        data: { [body.name]: { status: 'connected' } }
+      }))
+
+      ;(adapter as any).clients.set('ses_a', { mcp: { add: addA } })
+      ;(adapter as any).sessionWorkspaceDirs.set('ses_a', '/tmp/ws-a')
+      ;(adapter as any).sessionMcpConfigs.set('ses_a', TASK_MCP)
+      ;(adapter as any).clients.set('ses_b', { mcp: { add: addB } })
+      ;(adapter as any).sessionWorkspaceDirs.set('ses_b', '/tmp/ws-b')
+      ;(adapter as any).sessionMcpConfigs.set('ses_b', TASK_MCP)
+
+      vi.spyOn(console, 'error').mockImplementation(() => {})
+      await (adapter as any).handleInstanceDisposed(undefined, 'global.disposed')
+
+      expect(addA).toHaveBeenCalled()
+      expect(addB).toHaveBeenCalled()
+    })
+
+    /**
+     * mcp.add throws the current client away before it builds the replacement, and
+     * the registry it writes to is shared by every session in the directory. So a
+     * re-add for a starting session can strip the tools from a session that is
+     * still talking. An unchanged, connected server must be left alone.
+     */
+    it('does not re-add a server that is already connected with the same config', async () => {
+      const adapter = new OpencodeAdapter()
+      const workspaceDir = '/tmp/ws-a'
+      const add = vi.fn().mockImplementation(async ({ body }: any) => ({
+        data: { [body.name]: { status: 'connected' } }
+      }))
+      const status = vi.fn().mockResolvedValue({ data: {} })
+      const ocClient = { mcp: { add, status } }
+      const servers = { 'task-management': TASK_MCP['task-management'] }
+
+      const first = await (adapter as any).registerMcpServers(ocClient, servers, workspaceDir)
+      expect(first.attached).toEqual(['task-management'])
+      expect(add).toHaveBeenCalledTimes(1)
+
+      // Second session starts in the same directory; OpenCode already has it.
+      status.mockResolvedValue({ data: { 'task-management': { status: 'connected' } } })
+      const second = await (adapter as any).registerMcpServers(ocClient, servers, workspaceDir)
+
+      expect(second.attached).toEqual(['task-management'])
+      expect(second.failed).toEqual([])
+      expect(add).toHaveBeenCalledTimes(1)
+    })
+
+    it('re-adds a connected server whose config changed, such as a new task API port', async () => {
+      const adapter = new OpencodeAdapter()
+      const workspaceDir = '/tmp/ws-a'
+      const add = vi.fn().mockImplementation(async ({ body }: any) => ({
+        data: { [body.name]: { status: 'connected' } }
+      }))
+      const status = vi.fn().mockResolvedValue({ data: {} })
+      const ocClient = { mcp: { add, status } }
+
+      await (adapter as any).registerMcpServers(
+        ocClient,
+        { 'task-management': { type: 'http', url: 'http://127.0.0.1:1111/mcp' } },
+        workspaceDir
+      )
+      status.mockResolvedValue({ data: { 'task-management': { status: 'connected' } } })
+      await (adapter as any).registerMcpServers(
+        ocClient,
+        { 'task-management': { type: 'http', url: 'http://127.0.0.1:2222/mcp' } },
+        workspaceDir
+      )
+
+      expect(add).toHaveBeenCalledTimes(2)
+      expect(add.mock.calls[1][0].body.config.url).toBe('http://127.0.0.1:2222/mcp')
+    })
+
+    it('records the failure so the session reports missing tools instead of hiding them', async () => {
+      const adapter = new OpencodeAdapter()
+      const add = vi.fn().mockResolvedValue({ error: { name: 'ConnectionRefused' } })
+
+      ;(adapter as any).clients.set('ses_a', { mcp: { add } })
+      ;(adapter as any).sessionWorkspaceDirs.set('ses_a', '/tmp/ws-a')
+      ;(adapter as any).sessionMcpConfigs.set('ses_a', { 'task-management': TASK_MCP['task-management'] })
+
+      vi.spyOn(console, 'error').mockImplementation(() => {})
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+      await (adapter as any).handleInstanceDisposed('/tmp/ws-a', 'server.instance.disposed')
+
+      expect(adapter.getMcpAttachFailures('ses_a')).toEqual(['task-management'])
+    })
+  })
+
   describe('waitForMcpServersReady', () => {
     it('prefers SDK mcp.list when available', async () => {
       const adapter = new OpencodeAdapter()

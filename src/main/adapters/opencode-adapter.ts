@@ -95,6 +95,10 @@ export class OpencodeAdapter implements CodingAgentAdapter {
    *  agent-manager so the session documentation does not advertise tools that
    *  are not there. */
   private sessionMcpAttachFailures: Map<string, string[]> = new Map()
+  /** Per-directory record of the MCP config that is already registered, as
+   *  `directory -> name -> serialized config`. Used to skip a re-add that would
+   *  rebuild a server another session is currently using. See registerMcpServers. */
+  private directoryMcpConfigs: Map<string, Map<string, string>> = new Map()
 
   constructor(private db?: Pick<DatabaseManager, 'getSetting'>) {
     this.sdkLoading = this.loadSDK()
@@ -265,12 +269,32 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     const attached: string[] = []
     const failed: string[] = []
 
+    // What OpenCode already has for this directory, so an unchanged server is not
+    // rebuilt. mcp.add is destructive: it discards the current client and its
+    // cached tool list before it builds the replacement, and if the new one fails
+    // to connect the server is left with no tools at all. The registry is shared
+    // by every session in the directory, so that would strip the tools from a
+    // session that is in the middle of a conversation.
+    const known = this.getDirectoryMcpConfigs(workspaceDir)
+    const statusMap = Object.keys(mcpServers).length > 0
+      ? await this.getMcpStatusMap(ocClient, workspaceDir).catch(() => undefined)
+      : undefined
+
     for (const [name, mcpConfig] of Object.entries(mcpServers)) {
       try {
         const mcpAddConfig = mcpConfig.type === 'http'
           ? { type: 'remote' as const, url: mcpConfig.url ?? '', headers: mcpConfig.headers }
           : { type: 'local' as const, command: [mcpConfig.command ?? '', ...(mcpConfig.args ?? [])], environment: mcpConfig.env }
-        console.log(`[OpencodeAdapter] Registering MCP server: ${name}`, JSON.stringify(mcpAddConfig))
+        const serialized = JSON.stringify(mcpAddConfig)
+
+        if (statusMap?.[name]?.status === 'connected' && known.get(name) === serialized) {
+          console.log(`[OpencodeAdapter] MCP server '${name}' is already connected with the same config — not re-adding`)
+          attached.push(name)
+          continue
+        }
+
+        console.log(`[OpencodeAdapter] Registering MCP server: ${name}`, serialized)
+        known.set(name, serialized)
 
         // Add MCP server
         const addResult = await ocClient.mcp.add({
@@ -389,6 +413,74 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     return result
   }
 
+  /** The MCP config OpenCode is known to hold for a directory, created on demand. */
+  private getDirectoryMcpConfigs(workspaceDir: string | undefined): Map<string, string> {
+    const key = workspaceDir ?? ''
+    let entry = this.directoryMcpConfigs.get(key)
+    if (!entry) {
+      entry = new Map<string, string>()
+      this.directoryMcpConfigs.set(key, entry)
+    }
+    return entry
+  }
+
+  /**
+   * Re-attach the MCP servers of every live session after OpenCode threw away the
+   * instance that held them.
+   *
+   * OpenCode disposes and re-creates the instance of a directory on its own — a
+   * config patch on that directory is enough. The new instance starts from the
+   * config files, so it keeps only the servers declared in
+   * `.opencode/opencode.json`, and the running session loses the rest from its tool
+   * list without any error. This handler is the second line of defence behind that
+   * file: it re-registers the servers and, above all, it makes the drop visible.
+   * Without it the first sign of trouble is the model calling a tool that the
+   * session no longer has.
+   */
+  private async handleInstanceDisposed(directory: string | undefined, eventType: string): Promise<void> {
+    // `global.disposed` carries no directory: every instance is gone, so every
+    // session has to be re-attached.
+    const affected: string[] = []
+    for (const [sessionId, mcpServers] of this.sessionMcpConfigs.entries()) {
+      if (Object.keys(mcpServers).length === 0) continue
+      const sessionDir = this.sessionWorkspaceDirs.get(sessionId)
+      if (directory && sessionDir !== directory) continue
+      affected.push(sessionId)
+    }
+
+    if (affected.length === 0) return
+
+    console.error(
+      `[OpencodeAdapter] MCP DROPPED — OpenCode ${eventType}` +
+      `${directory ? ` for ${directory}` : ' (all directories)'}. ` +
+      `${affected.length} live session(s) lost their MCP tools mid-conversation; re-attaching: ${affected.join(', ')}`
+    )
+
+    for (const sessionId of affected) {
+      const mcpServers = this.sessionMcpConfigs.get(sessionId)
+      const ocClient = this.clients.get(sessionId)
+      if (!mcpServers || !ocClient) continue
+
+      try {
+        const result = await this.attachAndVerifyMcpServers(
+          ocClient,
+          mcpServers as unknown as Record<string, McpServerConfig>,
+          this.sessionWorkspaceDirs.get(sessionId),
+          `instanceDisposed session=${sessionId}`
+        )
+        this.setMcpAttachFailures(sessionId, result.failed)
+        if (result.failed.length === 0) {
+          console.log(`[OpencodeAdapter] MCP re-attached after ${eventType} for session ${sessionId}`)
+        }
+      } catch (err) {
+        console.error(
+          `[OpencodeAdapter] MCP re-attach failed for session ${sessionId}:`,
+          err instanceof Error ? err.message : err
+        )
+      }
+    }
+  }
+
   private setMcpAttachFailures(sessionId: string, failed: string[]): void {
     if (failed.length > 0) {
       this.sessionMcpAttachFailures.set(sessionId, [...failed])
@@ -442,6 +534,8 @@ export class OpencodeAdapter implements CodingAgentAdapter {
         if (result?.error) {
           console.warn(`[OpencodeAdapter] mcp.disconnect error for ${name}:`, result.error)
         } else {
+          // OpenCode no longer holds it, so neither may our record of it.
+          this.getDirectoryMcpConfigs(workspaceDir).delete(name)
           console.log(`[OpencodeAdapter] Disconnected MCP server '${name}' for session ${sessionId}`)
         }
       } catch (err) {
@@ -922,21 +1016,12 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     // Separate client with no timeout — used ONLY for session.prompt() which runs indefinitely
     const promptClient = OpenCodeSDK!.createOpencodeClient({ baseUrl, fetch: noTimeoutFetch as unknown as (request: Request) => ReturnType<typeof fetch> })
 
-    // Register runtime plugins via directory-scoped config.update().
-    // Using the directory scope avoids side-effects on other sessions — unscoped
-    // config patches can trigger disposeAllInstances on the OpenCode server,
-    // which kills MCP connections for every running session.
-    if (this.pluginFilePaths.length > 0) {
-      try {
-        await ocClient.config.update({
-          body: { plugin: [...this.pluginFilePaths] } as Record<string, unknown>,
-          ...(config.workspaceDir && { query: { directory: config.workspaceDir } })
-        })
-        console.log('[OpencodeAdapter] Registered runtime plugins via config.update:', this.pluginFilePaths)
-      } catch (err) {
-        console.warn('[OpencodeAdapter] config.update for runtime plugins failed (will rely on startup loading):', err)
-      }
-    }
+    // Runtime plugins and MCP servers are declared in
+    // `<workspaceDir>/.opencode/opencode.json`, written by writeRuntimePluginFiles()
+    // above. Do NOT push them with config.update() — see the comment on
+    // writeWorkspaceOpencodeConfig(): that call rewrites `<dir>/config.json`, which
+    // makes OpenCode dispose and re-create the whole instance for that directory and
+    // silently drop every MCP server that was registered at runtime.
 
     // Register MCP servers BEFORE creating session so the session picks them up
     let attachResult: McpAttachResult = { attached: [], failed: [] }
@@ -987,25 +1072,15 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     // Separate client with no timeout for session.prompt() only
     const promptClient = OpenCodeSDK!.createOpencodeClient({ baseUrl, fetch: noTimeoutFetch as unknown as (request: Request) => ReturnType<typeof fetch> })
 
-    // Register runtime plugins via directory-scoped config.update() to avoid
-    // side-effects on other sessions (see createSession comment).
-    if (this.pluginFilePaths.length > 0) {
-      try {
-        await ocClient.config.update({
-          body: { plugin: [...this.pluginFilePaths] } as Record<string, unknown>,
-          ...(config.workspaceDir && { query: { directory: config.workspaceDir } })
-        })
-        console.log('[OpencodeAdapter] Registered runtime plugins via config.update:', this.pluginFilePaths)
-      } catch (err) {
-        console.warn('[OpencodeAdapter] config.update for runtime plugins failed:', err)
-      }
-    }
+    // Plugins and MCP servers come from `<workspaceDir>/.opencode/opencode.json`
+    // (written by writeRuntimePluginFiles above), not from config.update() — see
+    // createSession for why that call must not run.
 
     // Re-register MCP servers — after a 20x restart, stdio MCP server
     // processes (task-management, GCP logs) are dead and need re-registration.
     // Remote MCP servers may also have lost their SSE connections.
-    // OpenCode handles transient mid-session reconnections internally, so this
-    // is only needed on resume, not during normal operation.
+    // Mid-session drops are handled by the `server.instance.disposed` listener in
+    // handleServerEvent(), which re-attaches and logs the drop.
     if (config.mcpServers) {
       const attachResult = await this.attachAndVerifyMcpServers(
         ocClient,
@@ -1742,6 +1817,77 @@ export class OpencodeAdapter implements CodingAgentAdapter {
 
     this.writeTillDonePlugin(openCodeDir, pluginsDir, config.tillDone !== false)
     this.writeSecretPlugin(config, openCodeDir, pluginsDir)
+    this.writeWorkspaceOpencodeConfig(openCodeDir, config)
+  }
+
+  /**
+   * Declares the plugins and the MCP servers of a session in
+   * `<workspaceDir>/.opencode/opencode.json`.
+   *
+   * This file is the only place where an MCP server survives a restart of the
+   * OpenCode instance, and that is the point of writing it.
+   *
+   * OpenCode keeps one instance per directory. Every MCP server added at runtime
+   * with `mcp.add` lives in the memory of that instance and nowhere else. When the
+   * instance is disposed and re-created — which OpenCode does whenever the config
+   * of the directory is patched, and also on its own — the new instance builds its
+   * MCP registry from the config files alone, so every runtime-added server is
+   * gone. The session keeps running with a tool list that no longer holds
+   * `task-management_*`, and the next tool call fails with "Model tried to call
+   * unavailable tool". Nothing is logged: the instance finalizer clears its client
+   * table before closing the clients, so the "MCP connection closed" warning is
+   * skipped, and the HTTP keep-alive socket to the task API stays established.
+   *
+   * Declaring the servers here makes the re-created instance rebuild them.
+   */
+  private writeWorkspaceOpencodeConfig(openCodeDir: string, config: SessionConfig): void {
+    const configPath = join(openCodeDir, 'opencode.json')
+
+    const mcp: Record<string, unknown> = {}
+    for (const [name, server] of Object.entries(config.mcpServers ?? {})) {
+      mcp[name] = server.type === 'http' || server.type === 'sse'
+        ? { type: 'remote', url: server.url ?? '', ...(server.headers && { headers: server.headers }), enabled: true }
+        : {
+            type: 'local',
+            command: [server.command ?? '', ...(server.args ?? [])],
+            ...(server.env && { environment: server.env }),
+            enabled: true
+          }
+    }
+
+    const body: Record<string, unknown> = {
+      $schema: 'https://opencode.ai/config.json',
+      plugin: [...this.pluginFilePaths]
+    }
+    if (Object.keys(mcp).length > 0) body.mcp = mcp
+
+    const serialized = JSON.stringify(body, null, 2)
+
+    try {
+      // Rewriting the file makes OpenCode re-create the instance of this directory,
+      // which is exactly the event that drops the MCP tools of a running session. So
+      // write only when the content really changed — a resume with the same servers
+      // must not disturb a session that is already working.
+      if (existsSync(configPath) && readFileSync(configPath, 'utf-8') === serialized) {
+        this.runtimeSupportFilePaths.push(configPath)
+        return
+      }
+
+      // MCP headers and stdio environments can carry credentials, so the file is
+      // owner-only. `.20x-secrets` in the same directory is written the same way.
+      writeFileSync(configPath, serialized, { encoding: 'utf-8', mode: 0o600 })
+      this.runtimeSupportFilePaths.push(configPath)
+      console.log(
+        `[OpencodeAdapter] Wrote ${configPath}: ${this.pluginFilePaths.length} plugin(s), ` +
+        `MCP servers [${Object.keys(mcp).join(', ') || 'none'}]`
+      )
+    } catch (err) {
+      console.error(
+        `[OpencodeAdapter] Failed to write ${configPath} — MCP servers will NOT survive an ` +
+        `OpenCode instance restart and may disappear mid-session:`,
+        err instanceof Error ? err.message : err
+      )
+    }
   }
 
   private writeSecretPlugin(config: SessionConfig, openCodeDir: string, pluginsDir: string): void {
@@ -2354,6 +2500,14 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     // Unwrap /global/event payload envelope if present
     const inner = (event.payload || event) as Record<string, unknown>
     const type = inner.type as string | undefined
+
+    if (type === 'server.instance.disposed' || type === 'global.disposed') {
+      const props = (inner.properties || {}) as Record<string, unknown>
+      const directory = (props.directory || event.directory) as string | undefined
+      void this.handleInstanceDisposed(directory, type)
+      return
+    }
+
     if (type !== 'permission.asked') return
 
     const props = (inner.properties || inner) as Record<string, unknown>
