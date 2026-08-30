@@ -13,7 +13,7 @@ describe('ChatInput attachments', () => {
 
     render(<ChatInput onSend={onSend} attachments={attachments} />)
 
-    fireEvent.change(screen.getByPlaceholderText('Send a message...'), { target: { value: 'Please review' } })
+    fireEvent.change(screen.getByPlaceholderText('Write a message...'), { target: { value: 'Please review' } })
     fireEvent.click(screen.getByLabelText('Send message'))
 
     expect(onSend).toHaveBeenCalledWith('Please review', { attachments })

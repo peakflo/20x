@@ -69,7 +69,7 @@ describe('AgentTranscriptPanel drag and drop attachments', () => {
     })
     expect(await screen.findByText('spec.md')).toBeInTheDocument()
 
-    fireEvent.change(screen.getByPlaceholderText('Send a message... (Shift+Enter for new line)'), {
+    fireEvent.change(screen.getByPlaceholderText('Write a message...'), {
       target: { value: 'Please use this file' }
     })
     fireEvent.click(screen.getByLabelText('Send message'))

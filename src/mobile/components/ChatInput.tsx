@@ -27,7 +27,7 @@ function formatFileSize(bytes: number): string {
 export function ChatInput({
   onSend,
   disabled,
-  placeholder = 'Send a message...',
+  placeholder = 'Write a message...',
   attachments = [],
   onRemoveAttachment,
   onOpenAttachmentPicker
