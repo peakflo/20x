@@ -111,6 +111,21 @@ describe('tool sets per scope', () => {
   })
 })
 
+describe('browser_reload schema', () => {
+  it('exposes an optional hard-refresh flag for both scopes', () => {
+    for (const scope of [FULL_ACCESS_SCOPE, SCOPED]) {
+      const hard = propertiesOf(scope, 'browser_reload').hard as { type?: string } | undefined
+      expect(hard, 'browser_reload must accept a hard flag').toBeDefined()
+      expect(hard!.type).toBe('boolean')
+    }
+  })
+
+  it('keeps hard optional and task_id required', () => {
+    const tool = toolByName(FULL_ACCESS_SCOPE, 'browser_reload')
+    expect(tool!.inputSchema.required).toEqual(['task_id'])
+  })
+})
+
 describe('subtask status ceiling', () => {
   it('refuses a self-completion and points at ready_for_review', async () => {
     const invoke = async (): Promise<unknown> => ({ ok: true })

@@ -445,8 +445,8 @@ export class PanelBrowserBroker {
     return this.historyStep(taskId, (wc) => wc.goForward(), panelId)
   }
 
-  reload(taskId: string, panelId?: string | null): Promise<Record<string, unknown>> {
-    return this.historyStep(taskId, (wc) => wc.reload(), panelId)
+  reload(taskId: string, panelId?: string | null, hard = false): Promise<Record<string, unknown>> {
+    return this.historyStep(taskId, (wc) => (hard ? wc.reloadIgnoringCache() : wc.reload()), panelId)
   }
 
   async snapshot(taskId: string, panelId?: string | null): Promise<Record<string, unknown>> {

@@ -1,10 +1,13 @@
 import { describe, expect, it, vi } from 'vitest'
 
 // The broker only touches Electron APIs inside its command methods; the pure
-// helpers under test here need nothing from it.
+// helpers under test here need nothing from it. `fromId` is configurable so
+// reload/navigation tests can hand the broker a fake WebContents.
+const electronMocks = vi.hoisted(() => ({ fromId: vi.fn((): unknown => null) }))
+
 vi.mock('electron', () => ({
   app: {},
-  webContents: { fromId: () => null }
+  webContents: { fromId: electronMocks.fromId }
 }))
 
 import {
@@ -159,5 +162,53 @@ describe('registry lifecycle', () => {
     expect(panelBrowserBroker.unregisterPanel('px')).toBe(true)
     expect(panelBrowserBroker.unregisterPanel('px')).toBe(false)
     panelBrowserBroker.stopAll()
+  })
+})
+
+describe('reload hard flag', () => {
+  function fakeWebContents(url: string) {
+    let settle: (() => void) | null = null
+    const settleSoon = (): void => {
+      queueMicrotask(() => settle?.())
+    }
+    const wc = {
+      reload: vi.fn(settleSoon),
+      reloadIgnoringCache: vi.fn(settleSoon),
+      isDestroyed: vi.fn(() => false),
+      once: vi.fn((_event: string, cb: () => void) => {
+        settle = cb
+      }),
+      removeListener: vi.fn(),
+      getURL: vi.fn(() => url)
+    }
+    return wc
+  }
+
+  it('bypasses the cache when hard is set', async () => {
+    const wc = fakeWebContents('https://x.io/after-hard')
+    electronMocks.fromId.mockReturnValue(wc)
+    panelBrowserBroker.registerPanel('p-hard', 42, ['task-hard'])
+    try {
+      const result = await panelBrowserBroker.reload('task-hard', 'p-hard', true)
+      expect(wc.reloadIgnoringCache).toHaveBeenCalledTimes(1)
+      expect(wc.reload).not.toHaveBeenCalled()
+      expect(result).toEqual({ ok: true, url: 'https://x.io/after-hard' })
+    } finally {
+      panelBrowserBroker.unregisterPanel('p-hard')
+    }
+  })
+
+  it('defaults to a normal cached reload', async () => {
+    const wc = fakeWebContents('https://x.io/after-soft')
+    electronMocks.fromId.mockReturnValue(wc)
+    panelBrowserBroker.registerPanel('p-soft', 43, ['task-soft'])
+    try {
+      const result = await panelBrowserBroker.reload('task-soft', 'p-soft')
+      expect(wc.reload).toHaveBeenCalledTimes(1)
+      expect(wc.reloadIgnoringCache).not.toHaveBeenCalled()
+      expect(result).toEqual({ ok: true, url: 'https://x.io/after-soft' })
+    } finally {
+      panelBrowserBroker.unregisterPanel('p-soft')
+    }
   })
 })

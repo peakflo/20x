@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import {
   Globe,
   RefreshCw,
+  ChevronDown,
   ArrowLeft,
   ArrowRight,
   Loader2,
@@ -312,6 +313,12 @@ export function BrowserPanelContent({
     webviewRef.current?.reload()
   }, [])
 
+  // Hard refresh — bypasses the HTTP cache and refetches everything from the
+  // network (same as Electron's webContents.reloadIgnoringCache / Cmd+Shift+R).
+  const handleHardRefresh = useCallback(() => {
+    webviewRef.current?.reloadIgnoringCache()
+  }, [])
+
   const handleOpenInBrowser = useCallback(async () => {
     if (!blockedUrl) return
 
@@ -358,6 +365,7 @@ export function BrowserPanelContent({
         onBack={handleBack}
         onForward={handleForward}
         onRefresh={handleRefresh}
+        onHardRefresh={handleHardRefresh}
         connectedTaskName={connectedTaskName}
       />
 
@@ -414,6 +422,7 @@ function BrowserUrlBar({
   onBack,
   onForward,
   onRefresh,
+  onHardRefresh,
   connectedTaskName,
   autoFocus,
 }: {
@@ -426,9 +435,11 @@ function BrowserUrlBar({
   onBack: () => void
   onForward: () => void
   onRefresh: () => void
+  onHardRefresh: () => void
   connectedTaskName?: string | null
   autoFocus?: boolean
 }) {
+  const [refreshMenuOpen, setRefreshMenuOpen] = useState(false)
   return (
     <form
       onSubmit={onSubmit}
@@ -453,18 +464,63 @@ function BrowserUrlBar({
       >
         <ArrowRight className="h-3 w-3" />
       </button>
-      <button
-        type="button"
-        onClick={onRefresh}
-        className="h-5 w-5 rounded flex items-center justify-center text-muted-foreground/40 hover:text-muted-foreground hover:bg-white/5 transition-colors"
-        title="Refresh"
-      >
-        {isLoading ? (
-          <Loader2 className="h-3 w-3 animate-spin" />
-        ) : (
-          <RefreshCw className="h-3 w-3" />
+      {/* Refresh + refresh-mode dropdown */}
+      <div className="relative flex-shrink-0">
+        <div className="flex items-center">
+          <button
+            type="button"
+            onClick={onRefresh}
+            className="h-5 w-5 rounded flex items-center justify-center text-muted-foreground/40 hover:text-muted-foreground hover:bg-white/5 transition-colors"
+            title="Refresh"
+          >
+            {isLoading ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : (
+              <RefreshCw className="h-3 w-3" />
+            )}
+          </button>
+          <button
+            type="button"
+            onClick={() => setRefreshMenuOpen((o) => !o)}
+            className="h-5 w-2.5 rounded flex items-center justify-center text-muted-foreground/40 hover:text-muted-foreground hover:bg-white/5 transition-colors"
+            title="Refresh options"
+          >
+            <ChevronDown className="h-2 w-2" />
+          </button>
+        </div>
+        {refreshMenuOpen && (
+          <>
+            {/* Invisible backdrop to close the menu on outside click */}
+            <div className="fixed inset-0 z-40" onClick={() => setRefreshMenuOpen(false)} />
+            <div className="absolute left-0 top-full mt-1 z-50 w-44 rounded-md border border-border/40 bg-[#161b22] shadow-lg py-1">
+              <button
+                type="button"
+                onClick={() => {
+                  setRefreshMenuOpen(false)
+                  onRefresh()
+                }}
+                className="w-full flex items-center gap-2 px-2.5 py-1.5 text-[11px] text-foreground hover:bg-white/5 text-left transition-colors"
+              >
+                <RefreshCw className="h-3 w-3 text-muted-foreground" />
+                Refresh
+                <span className="ml-auto text-[9px] text-muted-foreground/50">cache OK</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setRefreshMenuOpen(false)
+                  onHardRefresh()
+                }}
+                className="w-full flex items-center gap-2 px-2.5 py-1.5 text-[11px] text-foreground hover:bg-white/5 text-left transition-colors"
+              >
+                <Zap className="h-3 w-3 text-orange-400" />
+                Hard refresh
+                <span className="ml-auto text-[9px] text-muted-foreground/50">ignore cache</span>
+              </button>
+            </div>
+          </>
         )}
-      </button>
+      </div>
 
       {/* URL input */}
       <div className="flex-1 flex items-center gap-1.5 bg-[var(--canvas-panel)] rounded-md px-2 py-1 border border-border/20 focus-within:border-orange-500/30 transition-colors">
