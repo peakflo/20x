@@ -221,7 +221,7 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
     if (isStarting) return 'Starting agent…'
     if (isQuestion) return 'Type your answer...'
     if (isWaitingApproval) return 'Approve or provide feedback...'
-    return 'Send a message... (Shift+Enter for new line)'
+    return 'Write a message...'
   }, [hasSession, isStarting, isQuestion, isWaitingApproval])
 
   // Smart send handler — mirrors desktop TaskWorkspace.handleSend logic

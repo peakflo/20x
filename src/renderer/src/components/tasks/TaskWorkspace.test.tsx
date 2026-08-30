@@ -135,6 +135,74 @@ describe('clampTranscriptWidth', () => {
   })
 })
 
+describe('TaskWorkspace – artifacts/details sidebar default width', () => {
+  const LEGACY_KEY = '20x:task:transcriptWidth'
+  const V2_KEY = '20x:task:transcriptWidth:v2'
+
+  beforeEach(() => {
+    window.localStorage.removeItem(LEGACY_KEY)
+    window.localStorage.removeItem(V2_KEY)
+    // jsdom reports zero-sized rects; give the workspace body a fixed width so
+    // the layout effect's applyWidth() computes a deterministic default split.
+    vi.spyOn(HTMLDivElement.prototype, 'getBoundingClientRect').mockReturnValue({
+      width: 1_000, height: 800, top: 0, left: 0, bottom: 800, right: 1_000, x: 0, y: 0,
+      toJSON: () => ({})
+    } as DOMRect)
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  const renderWorkingTask = () => {
+    const task = makeRendererTask({
+      status: TaskStatus.AgentWorking,
+      session_id: 'persisted-session-1'
+    })
+    renderWorkspace(task)
+  }
+
+  const openDetailsPanel = () => {
+    fireEvent.click(screen.getAllByRole('button', { name: 'Details' })[0])
+  }
+
+  it('gives the artifacts/details sidebar ~40% of the workspace by default', () => {
+    renderWorkingTask()
+    openDetailsPanel()
+
+    // 60% of the 1000px workspace body goes to the transcript; the remaining
+    // ~396px (minus the resizer) is the artifacts/details sidebar.
+    expect(screen.getByTestId('transcript-pane').style.width).toBe('600px')
+  })
+
+  it('ignores stale widths persisted under the legacy storage key', () => {
+    window.localStorage.setItem(LEGACY_KEY, '340')
+    renderWorkingTask()
+    openDetailsPanel()
+
+    expect(screen.getByTestId('transcript-pane').style.width).toBe('600px')
+  })
+
+  it('respects a user-dragged width persisted under the v2 key', () => {
+    window.localStorage.setItem(V2_KEY, '340')
+    renderWorkingTask()
+    openDetailsPanel()
+
+    expect(screen.getByTestId('transcript-pane').style.width).toBe('340px')
+  })
+
+  it('does not persist system clamps back to storage as user preferences', () => {
+    // Width far beyond the 1000px container must be clamped on screen...
+    window.localStorage.setItem(V2_KEY, '1200')
+    renderWorkingTask()
+    openDetailsPanel()
+
+    expect(screen.getByTestId('transcript-pane').style.width).toBe('676px')
+    // ...but the stored preference keeps its original value.
+    expect(window.localStorage.getItem(V2_KEY)).toBe('1200')
+  })
+})
+
 describe('TaskWorkspace – stale triage session cleanup', () => {
   it('sets up worktrees when adding repos to a task with only a persisted session_id', async () => {
     ;(window.electronAPI.github.checkCli as ReturnType<typeof vi.fn>).mockResolvedValue({ installed: true, authenticated: true })

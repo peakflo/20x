@@ -41,10 +41,26 @@ const EMPTY_ARTIFACTS: Artifact[] = []
 const DEFAULT_ARTIFACT_UI: ArtifactUIState = { open: false, activeTabId: null, railExpanded: false }
 const MIN_WORKSPACE_PANE_WIDTH = 320
 const WORKSPACE_RESIZER_WIDTH = 4
+/** Fraction of the workspace body given to the transcript by default. Leaves ~40% for the artifacts/details sidebar. */
+const DEFAULT_TRANSCRIPT_WIDTH_FRACTION = 0.6
+// v2 key: the legacy key stored widths derived from transient window sizes, which
+// permanently shrank the transcript and blew the details sidebar up to ~70%.
+const TRANSCRIPT_WIDTH_STORAGE_KEY = '20x:task:transcriptWidth:v2'
 
 export function clampTranscriptWidth(width: number, containerWidth: number): number {
   const maximum = Math.max(MIN_WORKSPACE_PANE_WIDTH, containerWidth - MIN_WORKSPACE_PANE_WIDTH - WORKSPACE_RESIZER_WIDTH)
   return Math.min(Math.max(MIN_WORKSPACE_PANE_WIDTH, width), maximum)
+}
+
+/** User-persisted transcript width, or null when the default 60/40 split should apply. */
+function readStoredTranscriptWidth(): number | null {
+  const stored = Number(window.localStorage.getItem(TRANSCRIPT_WIDTH_STORAGE_KEY))
+  return Number.isFinite(stored) && stored >= MIN_WORKSPACE_PANE_WIDTH ? stored : null
+}
+
+/** Default split: transcript takes its fraction of the actual workspace body. */
+function defaultTranscriptWidth(containerWidth: number): number {
+  return clampTranscriptWidth(Math.round(containerWidth * DEFAULT_TRANSCRIPT_WIDTH_FRACTION), containerWidth)
 }
 
 /** Controls which columns are visible in the TaskWorkspace grid */
@@ -117,12 +133,12 @@ function TaskWorkspaceComponent({
   const workspaceBodyRef = useRef<HTMLDivElement>(null)
   const resizingRef = useRef(false)
   const [transcriptWidth, setTranscriptWidth] = useState(() => {
-    const stored = Number(window.localStorage.getItem('20x:task:transcriptWidth'))
-    const preferred = Number.isFinite(stored) && stored >= MIN_WORKSPACE_PANE_WIDTH
-      ? stored
-      : Math.max(MIN_WORKSPACE_PANE_WIDTH, Math.round(window.innerWidth * 0.44))
-    return clampTranscriptWidth(preferred, window.innerWidth)
+    const stored = readStoredTranscriptWidth()
+    return stored ?? Math.max(MIN_WORKSPACE_PANE_WIDTH, Math.round(window.innerWidth * DEFAULT_TRANSCRIPT_WIDTH_FRACTION))
   })
+  // Whether the user actively resized the panes. While false, the transcript
+  // tracks the default 60/40 split as the workspace resizes.
+  const hasCustomTranscriptWidthRef = useRef(readStoredTranscriptWidth() !== null)
   const openTaskOnCanvas = useUIStore((s) => s.openTaskOnCanvas)
   const artifacts = useArtifactStore((s) => task?.id ? (s.artifactsByTask[task.id] || EMPTY_ARTIFACTS) : EMPTY_ARTIFACTS)
   const artifactUI = useArtifactStore((s) => task?.id ? (s.uiByTask[task.id] || DEFAULT_ARTIFACT_UI) : DEFAULT_ARTIFACT_UI)
@@ -166,18 +182,20 @@ function TaskWorkspaceComponent({
   useLayoutEffect(() => {
     if (!artifactUI.open || !workspaceBodyRef.current) return
     const container = workspaceBodyRef.current
-    const clampToContainer = () => {
+    const applyWidth = () => {
       const containerWidth = container.getBoundingClientRect().width
       if (containerWidth <= 0) return
       setTranscriptWidth((current) => {
-        const next = clampTranscriptWidth(current, containerWidth)
-        if (next !== current) window.localStorage.setItem('20x:task:transcriptWidth', String(next))
-        return next
+        // Default mode keeps the artifacts/details sidebar at ~40% of the
+        // workspace as it resizes; once the user drags, their width wins
+        // (clamped only, never persisted as a system-side effect).
+        if (!hasCustomTranscriptWidthRef.current) return defaultTranscriptWidth(containerWidth)
+        return clampTranscriptWidth(current, containerWidth)
       })
     }
-    clampToContainer()
+    applyWidth()
     if (typeof ResizeObserver === 'undefined') return
-    const observer = new ResizeObserver(clampToContainer)
+    const observer = new ResizeObserver(applyWidth)
     observer.observe(container)
     return () => observer.disconnect()
   }, [artifactUI.open])
@@ -186,6 +204,7 @@ function TaskWorkspaceComponent({
     if (!resizingRef.current || !workspaceBodyRef.current) return
     const rect = workspaceBodyRef.current.getBoundingClientRect()
     const next = clampTranscriptWidth(event.clientX - rect.left, rect.width)
+    hasCustomTranscriptWidthRef.current = true
     setTranscriptWidth(next)
   }, [])
 
@@ -193,7 +212,7 @@ function TaskWorkspaceComponent({
     if (!resizingRef.current) return
     resizingRef.current = false
     event.currentTarget.releasePointerCapture?.(event.pointerId)
-    window.localStorage.setItem('20x:task:transcriptWidth', String(transcriptWidth))
+    window.localStorage.setItem(TRANSCRIPT_WIDTH_STORAGE_KEY, String(transcriptWidth))
   }, [transcriptWidth])
 
   // Fetch settings on mount
@@ -1026,7 +1045,7 @@ Update existing skills that were helpful or create new ones for patterns worth r
             <div className="min-h-0 min-w-0 flex-1">{transcriptView}</div>
           ) : (
             <>
-              <div className="min-h-0 min-w-0 shrink-0" style={{ width: artifactUI.open ? transcriptWidth : 'auto', flex: artifactUI.open ? undefined : 1 }}>
+              <div data-testid="transcript-pane" className="min-h-0 min-w-0 shrink-0" style={{ width: artifactUI.open ? transcriptWidth : 'auto', flex: artifactUI.open ? undefined : 1 }}>
                 {transcriptView}
               </div>
               {artifactUI.open ? (

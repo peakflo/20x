@@ -1458,7 +1458,7 @@ export function AgentTranscriptPanel({
                 ref={inputRef}
                 rows={1}
                 disabled={isStarting}
-                placeholder={isStarting ? 'Starting agent…' : 'Send a message... (Shift+Enter for new line)'}
+                placeholder={isStarting ? 'Starting agent…' : 'Write a message...'}
                 className="flex-1 bg-input border border-border rounded-lg px-3 py-1.5 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/30 resize-none overflow-hidden max-h-32 min-h-[32px] disabled:opacity-60"
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' && !e.shiftKey) {
