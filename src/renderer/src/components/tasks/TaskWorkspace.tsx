@@ -43,9 +43,10 @@ const MIN_WORKSPACE_PANE_WIDTH = 320
 const WORKSPACE_RESIZER_WIDTH = 4
 /** Fraction of the workspace body given to the transcript by default. Leaves ~40% for the artifacts/details sidebar. */
 const DEFAULT_TRANSCRIPT_WIDTH_FRACTION = 0.6
-// v2 key: the legacy key stored widths derived from transient window sizes, which
-// permanently shrank the transcript and blew the details sidebar up to ~70%.
-const TRANSCRIPT_WIDTH_STORAGE_KEY = '20x:task:transcriptWidth:v2'
+// v3 key: v2 values could be poisoned by drags performed inside scaled canvas
+// panels (screen px persisted as if they were local px), pinning the details
+// sidebar at ~70% until re-dragged. Bump to give everyone a clean default.
+const TRANSCRIPT_WIDTH_STORAGE_KEY = '20x:task:transcriptWidth:v3'
 
 export function clampTranscriptWidth(width: number, containerWidth: number): number {
   const maximum = Math.max(MIN_WORKSPACE_PANE_WIDTH, containerWidth - MIN_WORKSPACE_PANE_WIDTH - WORKSPACE_RESIZER_WIDTH)
@@ -183,7 +184,11 @@ function TaskWorkspaceComponent({
     if (!artifactUI.open || !workspaceBodyRef.current) return
     const container = workspaceBodyRef.current
     const applyWidth = () => {
-      const containerWidth = container.getBoundingClientRect().width
+      // offsetWidth is the LAYOUT width in local px. getBoundingClientRect()
+      // would return scaled screen px on the canvas, where task panels render
+      // under a scale(zoom) transform — mixing the two spaces is what pinned
+      // the details sidebar at ~70% regardless of dragging.
+      const containerWidth = container.offsetWidth
       if (containerWidth <= 0) return
       setTranscriptWidth((current) => {
         // Default mode keeps the artifacts/details sidebar at ~40% of the
@@ -202,8 +207,15 @@ function TaskWorkspaceComponent({
 
   const handleResizeMove = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
     if (!resizingRef.current || !workspaceBodyRef.current) return
-    const rect = workspaceBodyRef.current.getBoundingClientRect()
-    const next = clampTranscriptWidth(event.clientX - rect.left, rect.width)
+    const container = workspaceBodyRef.current
+    // clientX/rect are in screen px and include any ancestor transform scale
+    // (canvas zoom); the width style is applied in layout px. Convert the
+    // pointer position to local px so the pane tracks the cursor and the
+    // clamp operates in the same space as the applied width.
+    const rect = container.getBoundingClientRect()
+    const layoutWidth = container.offsetWidth
+    const scale = rect.width > 0 && layoutWidth > 0 ? rect.width / layoutWidth : 1
+    const next = clampTranscriptWidth((event.clientX - rect.left) / scale, layoutWidth)
     hasCustomTranscriptWidthRef.current = true
     setTranscriptWidth(next)
   }, [])

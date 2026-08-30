@@ -136,21 +136,53 @@ describe('clampTranscriptWidth', () => {
 })
 
 describe('TaskWorkspace – artifacts/details sidebar default width', () => {
-  const LEGACY_KEY = '20x:task:transcriptWidth'
-  const V2_KEY = '20x:task:transcriptWidth:v2'
+  // Keys older than the current one must all be ignored as stale.
+  const STALE_KEYS = [
+    '20x:task:transcriptWidth', // v1: pre-redesign widths
+    '20x:task:transcriptWidth:v2' // v2: poisoned by scaled-canvas drags
+  ]
+  const V3_KEY = '20x:task:transcriptWidth:v3'
+
+  let layoutWidth: number
+  let screenScale: number
 
   beforeEach(() => {
-    window.localStorage.removeItem(LEGACY_KEY)
-    window.localStorage.removeItem(V2_KEY)
-    // jsdom reports zero-sized rects; give the workspace body a fixed width so
-    // the layout effect's applyWidth() computes a deterministic default split.
-    vi.spyOn(HTMLDivElement.prototype, 'getBoundingClientRect').mockReturnValue({
-      width: 1_000, height: 800, top: 0, left: 0, bottom: 800, right: 1_000, x: 0, y: 0,
+    STALE_KEYS.forEach((key) => window.localStorage.removeItem(key))
+    window.localStorage.removeItem(V3_KEY)
+    // jsdom reports zero-sized rects and offsetWidth 0; give the workspace
+    // body a deterministic layout width, optionally scaled by a canvas-style
+    // ancestor transform: offsetWidth is LAYOUT px, getBoundingClientRect()
+    // is SCREEN px (scaled) — exactly how canvas task panels behave.
+    // offsetWidth lives on Element.prototype in jsdom, so shadow it directly
+    // on HTMLDivElement.prototype rather than spyOn.
+    layoutWidth = 1_000
+    screenScale = 1
+    Object.defineProperty(HTMLDivElement.prototype, 'offsetWidth', {
+      configurable: true,
+      get: () => layoutWidth
+    })
+    vi.spyOn(HTMLDivElement.prototype, 'getBoundingClientRect').mockImplementation(() => ({
+      width: layoutWidth * screenScale, height: 800, top: 0, left: 0,
+      bottom: 800, right: layoutWidth * screenScale, x: 0, y: 0,
       toJSON: () => ({})
-    } as DOMRect)
+    } as DOMRect))
+    // jsdom may throw "no active pointer" on pointer capture; the drag tests
+    // only need the pointermove/pointerup handlers to fire. Define the stubs
+    // (rather than spyOn) since this jsdom build may not implement them.
+    for (const capture of ['setPointerCapture', 'releasePointerCapture'] as const) {
+      Object.defineProperty(HTMLDivElement.prototype, capture, {
+        configurable: true,
+        writable: true,
+        value: vi.fn()
+      })
+    }
   })
 
   afterEach(() => {
+    delete (HTMLDivElement.prototype as unknown as Record<string, unknown>).offsetWidth
+    for (const capture of ['setPointerCapture', 'releasePointerCapture'] as const) {
+      delete (HTMLDivElement.prototype as unknown as Record<string, unknown>)[capture]
+    }
     vi.restoreAllMocks()
   })
 
@@ -175,16 +207,16 @@ describe('TaskWorkspace – artifacts/details sidebar default width', () => {
     expect(screen.getByTestId('transcript-pane').style.width).toBe('600px')
   })
 
-  it('ignores stale widths persisted under the legacy storage key', () => {
-    window.localStorage.setItem(LEGACY_KEY, '340')
+  it('ignores stale widths persisted under legacy storage keys', () => {
+    STALE_KEYS.forEach((key) => window.localStorage.setItem(key, '340'))
     renderWorkingTask()
     openDetailsPanel()
 
     expect(screen.getByTestId('transcript-pane').style.width).toBe('600px')
   })
 
-  it('respects a user-dragged width persisted under the v2 key', () => {
-    window.localStorage.setItem(V2_KEY, '340')
+  it('respects a user-dragged width persisted under the current key', () => {
+    window.localStorage.setItem(V3_KEY, '340')
     renderWorkingTask()
     openDetailsPanel()
 
@@ -193,13 +225,44 @@ describe('TaskWorkspace – artifacts/details sidebar default width', () => {
 
   it('does not persist system clamps back to storage as user preferences', () => {
     // Width far beyond the 1000px container must be clamped on screen...
-    window.localStorage.setItem(V2_KEY, '1200')
+    window.localStorage.setItem(V3_KEY, '1200')
     renderWorkingTask()
     openDetailsPanel()
 
     expect(screen.getByTestId('transcript-pane').style.width).toBe('676px')
     // ...but the stored preference keeps its original value.
-    expect(window.localStorage.getItem(V2_KEY)).toBe('1200')
+    expect(window.localStorage.getItem(V3_KEY)).toBe('1200')
+  })
+
+  it('computes the default split in layout px inside scaled canvas panels', () => {
+    // Canvas task panels render under scale(zoom): rect measurements come
+    // back scaled while width styles apply in local px. A 1020px panel at
+    // zoom 0.5 must default to 60% of its LOCAL width (612px), not collapse
+    // to the 320px floor and leave the sidebar at ~70%.
+    layoutWidth = 1_020
+    screenScale = 0.5
+    renderWorkingTask()
+    openDetailsPanel()
+
+    expect(screen.getByTestId('transcript-pane').style.width).toBe('612px')
+  })
+
+  it('converts drag positions to layout px so the sidebar can shrink in scaled panels', () => {
+    layoutWidth = 1_020
+    screenScale = 0.5
+    renderWorkingTask()
+    openDetailsPanel()
+
+    const resizer = screen.getByRole('separator', { name: 'Resize transcript' })
+    fireEvent.pointerDown(resizer, { pointerId: 1, clientX: 300 })
+    // Pointer at screen x=400 → local x=800 (scale 0.5) → clamped to 696.
+    // The sidebar can now go down to ~31% instead of being stuck at ~70%.
+    fireEvent.pointerMove(resizer, { pointerId: 1, clientX: 400 })
+    fireEvent.pointerUp(resizer, { pointerId: 1 })
+
+    expect(screen.getByTestId('transcript-pane').style.width).toBe('696px')
+    // The drag persists a LOCAL px value under the current key.
+    expect(window.localStorage.getItem(V3_KEY)).toBe('696')
   })
 })
 
