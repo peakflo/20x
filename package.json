@@ -186,6 +186,6 @@
       "include": "resources/installer.nsh"
     },
     "nativeRebuilder": "sequential",
-    "npmRebuild": true
+    "npmRebuild": false
   }
 }
