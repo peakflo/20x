@@ -11,7 +11,7 @@ import { TaskStatus } from '@/types'
 // related error messages and re-loading the session ensures the UI shows
 // the login prompt instead of a stale error.
 
-const AUTH_ERROR_PATTERNS = ['sign in again', 'refresh token', 'session expired']
+const AUTH_ERROR_PATTERNS = ['sign in again', 'refresh token', 'session expired', 'no tenant selected', 'select an organization']
 
 function isAuthError(err: unknown): boolean {
   const msg = err instanceof Error ? err.message.toLowerCase() : String(err).toLowerCase()
