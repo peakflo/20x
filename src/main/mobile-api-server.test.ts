@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { createHash } from 'crypto'
 import { createTestDb } from '../../test/helpers/db-test-helper'
 import { makeTask } from '../../test/helpers/task-fixtures'
 import type { DatabaseManager } from './database'
@@ -138,5 +139,77 @@ describe('mobile-api-server: auth', () => {
 
     const logs = logSpy.mock.calls.map((call) => call.map(String).join(' ')).join('\n')
     expect(logs).toContain('[MobileAPI] Started on port')
+  })
+})
+
+describe('mobile-api-server: POST /api/tasks/:id coordinator wake-up', () => {
+  afterEach(() => {
+    stopMobileApiServer()
+    vi.restoreAllMocks()
+  })
+
+  function startServer(agentManager: unknown) {
+    const { db } = createTestDb()
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+    // The server resolves the requested port, so pick a free-ish high port
+    // instead of 0 (which would make the caller resolve port 0).
+    const port = 21000 + Math.floor(Math.random() * 40000)
+    return { db, logSpy, portPromise: startMobileApiServer(db, agentManager as never, {} as never, port) }
+  }
+
+  function pairToken(db: DatabaseManager): string {
+    const token = 'test-pairing-token'
+    const hash = createHash('sha256').update(token).digest('hex')
+    db.createMobileSession('sess-1', hash, 'test-device')
+    return token
+  }
+
+  it('wakes the parent coordinator when a phone moves a subtask to ready_for_review', async () => {
+    const notifyParent = vi.fn().mockResolvedValue(undefined)
+    const agentManager = { notifyParentOfSubtaskCompletion: notifyParent }
+    const { db, portPromise } = startServer(agentManager)
+    const port = await portPromise
+
+    const parent = db.createTask(makeTask({ title: 'Parent' }))!
+    const subtask = db.createTask(makeTask({ title: 'Child', parent_task_id: parent.id }))!
+    db.updateTask(subtask.id, { status: 'agent_working' })
+
+    const token = pairToken(db)
+    const res = await fetch(`http://127.0.0.1:${port}/api/tasks/${subtask.id}`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'ready_for_review' })
+    })
+    expect(res.status).toBe(200)
+
+    expect(notifyParent).toHaveBeenCalledWith(parent.id, subtask.id)
+  })
+
+  it('does not wake the parent for a non-terminal or unchanged status from a phone', async () => {
+    const notifyParent = vi.fn().mockResolvedValue(undefined)
+    const agentManager = { notifyParentOfSubtaskCompletion: notifyParent }
+    const { db, portPromise } = startServer(agentManager)
+    const port = await portPromise
+
+    const parent = db.createTask(makeTask({ title: 'Parent' }))!
+    const subtask = db.createTask(makeTask({ title: 'Child', parent_task_id: parent.id }))!
+
+    const token = pairToken(db)
+
+    // Non-terminal transition
+    await fetch(`http://127.0.0.1:${port}/api/tasks/${subtask.id}`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'agent_working' })
+    })
+    expect(notifyParent).not.toHaveBeenCalled()
+
+    // Title-only update
+    await fetch(`http://127.0.0.1:${port}/api/tasks/${subtask.id}`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'renamed' })
+    })
+    expect(notifyParent).not.toHaveBeenCalled()
   })
 })

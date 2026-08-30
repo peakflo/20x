@@ -19,6 +19,7 @@ import type { PluginRegistry } from './plugins/registry'
 import { listTaskArtifactEntries, readTaskArtifact } from './artifacts'
 import type { Artifact, ArtifactFileEntry } from '../shared/artifacts'
 import { MOBILE_VOICE_CAPABILITIES } from '../shared/voice'
+import { TaskStatus } from '../shared/constants'
 import { guardStream } from './child-stream-guards'
 
 // ── State ────────────────────────────────────────────────────
@@ -763,6 +764,18 @@ async function routePost(pathname: string, params: Record<string, unknown>, req?
         changed.auto_complete_without_review !== undefined
       ) {
         triggerTaskAutomation()
+      }
+      // Event-driven coordinator wake-up: a subtask moved into a terminal state
+      // from a phone must wake its parent coordinator, same as every other
+      // status-changing route.
+      if (
+        updated.parent_task_id &&
+        existing.status !== updated.status &&
+        (updated.status === TaskStatus.ReadyForReview || updated.status === TaskStatus.Completed)
+      ) {
+        agent.notifyParentOfSubtaskCompletion(updated.parent_task_id, taskId).catch((err) => {
+          console.error(`[MobileAPI] Failed to wake parent ${updated.parent_task_id} after subtask ${taskId} update:`, err)
+        })
       }
     }
     return updated
