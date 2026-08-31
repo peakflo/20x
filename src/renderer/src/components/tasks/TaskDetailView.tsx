@@ -755,15 +755,15 @@ function TaskDetailViewComponent({ task, agents, onEdit, onDelete, onUpdateAttac
             />
           )}
 
-          {task.attachments.length > 0 && (
-            <div className="rounded-md border p-4">
-              <TaskAttachments
-                items={task.attachments}
-                onChange={onUpdateAttachments}
-                taskId={task.id}
-              />
-            </div>
-          )}
+          {/* Always render the attachments section so users can add files directly
+              from the task view modal, even when the task has no attachments yet. */}
+          <div className="rounded-md border p-4">
+            <TaskAttachments
+              items={task.attachments}
+              onChange={onUpdateAttachments}
+              taskId={task.id}
+            />
+          </div>
 
           {/* Heartbeat monitoring — handled inside the properties grid above */}
 

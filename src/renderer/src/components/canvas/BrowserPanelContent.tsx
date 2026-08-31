@@ -492,14 +492,14 @@ function BrowserUrlBar({
           <>
             {/* Invisible backdrop to close the menu on outside click */}
             <div className="fixed inset-0 z-40" onClick={() => setRefreshMenuOpen(false)} />
-            <div className="absolute left-0 top-full mt-1 z-50 w-44 rounded-md border border-border/40 bg-[#161b22] shadow-lg py-1">
+            <div className="absolute left-0 top-full mt-1 z-50 w-44 rounded-md border border-border/40 bg-popover shadow-lg py-1">
               <button
                 type="button"
                 onClick={() => {
                   setRefreshMenuOpen(false)
                   onRefresh()
                 }}
-                className="w-full flex items-center gap-2 px-2.5 py-1.5 text-[11px] text-foreground hover:bg-white/5 text-left transition-colors"
+                className="w-full flex items-center gap-2 px-2.5 py-1.5 text-[11px] text-foreground hover:bg-accent text-left transition-colors"
               >
                 <RefreshCw className="h-3 w-3 text-muted-foreground" />
                 Refresh
@@ -511,7 +511,7 @@ function BrowserUrlBar({
                   setRefreshMenuOpen(false)
                   onHardRefresh()
                 }}
-                className="w-full flex items-center gap-2 px-2.5 py-1.5 text-[11px] text-foreground hover:bg-white/5 text-left transition-colors"
+                className="w-full flex items-center gap-2 px-2.5 py-1.5 text-[11px] text-foreground hover:bg-accent text-left transition-colors"
               >
                 <Zap className="h-3 w-3 text-orange-400" />
                 Hard refresh
