@@ -173,18 +173,12 @@ export class EnterpriseSyncManager {
     try {
       const skillSyncStart = Date.now()
 
-      // Step 0: Clean up server-side duplicates (one-time fix for prior sync bugs)
-      try {
-        const cleanup = await this.apiClient.cleanupDuplicateSkills()
-        if (cleanup.deleted > 0) {
-          console.log(
-            `[EnterpriseSyncManager] Cleaned up ${cleanup.deleted} duplicate server skills, kept ${cleanup.kept}`
-          )
-        }
-      } catch (cleanupErr) {
-        // Non-fatal — endpoint may not exist yet on older servers
-        console.log('[EnterpriseSyncManager] Cleanup endpoint not available, skipping')
-      }
+      // NOTE: this used to call POST /api/skills/cleanup-duplicates on every
+      // single sync. That endpoint deletes tenant rows, needs an admin
+      // permission (so it 403s for ordinary users on every run), and was only
+      // ever a mop-up for duplicates created by name-based identity. Skills are
+      // now pushed with their server id, so duplicates are not created in the
+      // first place. Cleanup stays available as an explicit admin action.
 
       // Step A0: Collect locally-deleted skill IDs (to exclude from node assignment)
       const removedSkillIds = this.getLocallyRemovedSkillIds()
@@ -200,7 +194,7 @@ export class EnterpriseSyncManager {
         )
       } else {
         for (const node of targetNodes) {
-          await this.assignSkillsToNode(node.id, pushedSkillIds, removedSkillIds, result)
+          await this.assignSkillsToNode(node, pushedSkillIds, removedSkillIds, result)
         }
       }
 
@@ -210,7 +204,7 @@ export class EnterpriseSyncManager {
         allServerSkills.map((s) => ({ id: s.id, name: s.name }))
       )
       if (allServerSkills.length > 0) {
-        await this.pullServerSkills(allServerSkills, result)
+        await this.pullServerSkills(allServerSkills, result, removedSkillIds)
       } else {
         console.log('[EnterpriseSyncManager] No server skills to pull (batch-sync returned empty)')
       }
@@ -314,8 +308,14 @@ export class EnterpriseSyncManager {
 
   /**
    * Collect enterprise skill IDs that were soft-deleted locally.
-   * These should be unassigned from the node (but NOT deleted from server).
-   * Hard-deletes the local rows after collecting.
+   * These are unassigned from the node, but NOT deleted from the server —
+   * one user removing a skill from their machine must not destroy it for the
+   * whole tenant.
+   *
+   * The soft-deleted rows are kept as TOMBSTONES. They are what tells the pull
+   * phase "I deleted this on purpose, do not re-create it". Hard-deleting them
+   * here would make the very next pull re-create the skill, because the server
+   * still returns it in the tenant skill set.
    */
   private getLocallyRemovedSkillIds(): Set<string> {
     const deletedSkills = this.db.getDeletedEnterpriseSkills()
@@ -325,13 +325,11 @@ export class EnterpriseSyncManager {
       if (skill.enterprise_skill_id) {
         removedIds.add(skill.enterprise_skill_id)
       }
-      // Hard-delete locally — the skill stays on server but won't be assigned to this node
-      this.db.hardDeleteSkill(skill.id)
     }
 
     if (removedIds.size > 0) {
       console.log(
-        `[EnterpriseSyncManager] ${removedIds.size} locally-deleted skills will be unassigned from node`
+        `[EnterpriseSyncManager] ${removedIds.size} locally-deleted skills will be unassigned from the node and skipped on pull`
       )
     }
 
@@ -375,12 +373,14 @@ export class EnterpriseSyncManager {
     const skillsToSync: Array<{
       localId: string
       payload: {
+        id?: string
         name: string
         description: string
         content: string
         confidence?: number
         uses?: number
         lastUsed?: string | null
+        updatedAt?: string
         tags?: string[]
       }
     }> = []
@@ -389,8 +389,13 @@ export class EnterpriseSyncManager {
       // Skip built-in system skills
       if (this.isBuiltInSkill(skill)) continue
 
-      // Skip [Workflo]-prefixed skills — these were pulled from the server
-      if (skill.name.startsWith(WORKFLO_SKILL_PREFIX)) continue
+      // A [Workflo]-prefixed skill came from the server. It is still pushed
+      // back when it is linked, so that a local edit to an enterprise skill
+      // reaches the server instead of silently diverging. The server decides
+      // who wins from the timestamps below. An UNLINKED prefixed skill is
+      // skipped — it has no identity yet and would create a duplicate.
+      const isPrefixed = skill.name.startsWith(WORKFLO_SKILL_PREFIX)
+      if (isPrefixed && !skill.enterprise_skill_id) continue
 
       const localName = this.stripWorkfloPrefix(skill.name)
 
@@ -408,11 +413,15 @@ export class EnterpriseSyncManager {
         continue
       }
 
-      // Include the skill in the batch — server does upsert by name
+      // Include the skill in the batch. The server resolves identity from `id`
+      // when we have one (so a local rename stays a rename), and uses
+      // `updatedAt` to refuse a stale overwrite.
       skillsToSync.push({
         localId: skill.id,
         payload: {
+          id: skill.enterprise_skill_id ?? undefined,
           name: localName,
+          updatedAt: this.normalizeDateTime(skill.updated_at) ?? undefined,
           // Truncate description to server max (1024 chars)
           description: skill.description.slice(0, 1024),
           // Truncate content to server max (500KB)
@@ -500,20 +509,28 @@ export class EnterpriseSyncManager {
 
     result.skills.pushed = totalCreated + totalUpdated
 
-    // Build a name→server skill map for linking local skills
+    // Build id→ and name→server skill maps for linking local skills
+    const serverSkillById = new Map<string, WorkfloSkill>()
     const serverSkillByName = new Map<string, WorkfloSkill>()
     for (const s of allServerSkills) {
+      serverSkillById.set(s.id, s)
       if (!serverSkillByName.has(s.name)) {
         serverSkillByName.set(s.name, s)
       }
     }
 
-    // Link local skills to their server counterparts and collect IDs for node assignment
+    // Link local skills to their server counterparts and collect IDs for node
+    // assignment. Resolve by id first so that a renamed skill stays linked to
+    // the same server row instead of adopting a same-named stranger.
     const pushedSkillIds: string[] = []
     for (const { localId, payload } of skillsToSync) {
-      const serverSkill = serverSkillByName.get(payload.name)
+      const serverSkill =
+        (payload.id ? serverSkillById.get(payload.id) : undefined) ??
+        serverSkillByName.get(payload.name)
       if (serverSkill) {
-        // Update local record with server ID and sync baseline
+        // Update local record with server ID and sync baseline. This is a
+        // metadata-only write, so it must not disturb `updated_at` — that
+        // timestamp is the conflict token for the next sync.
         const localSkill = localSkills.find((s) => s.id === localId)
         if (localSkill) {
           this.db.updateSkill(localId, {
@@ -590,26 +607,47 @@ export class EnterpriseSyncManager {
    * Merges the pushed skill IDs with any existing node skill IDs.
    */
   private async assignSkillsToNode(
-    nodeId: string,
+    node: WorkfloOrgNode,
     pushedSkillIds: string[],
     removedSkillIds: Set<string>,
     result: EnterpriseSyncResult
   ): Promise<void> {
+    const nodeId = node.id
     try {
-      // pushedSkillIds already represents ALL skills this node should have
-      // (every local skill that was pushed or already linked).
-      // Just exclude locally-deleted ones and deduplicate.
-      const finalIds = [...new Set(
-        pushedSkillIds.filter((id) => !removedSkillIds.has(id))
-      )]
+      // The org node is shared by every member of the node, and the API replaces
+      // `skillIds` wholesale. This client only knows about its OWN skills, so it
+      // must MERGE into the node's current set — sending only what this client
+      // pushed would delete every skill that another member or an admin added.
+      const currentIds = Array.isArray(node.skillIds) ? node.skillIds : []
+
+      const finalIds = [...new Set([...currentIds, ...pushedSkillIds])].filter(
+        (id) => !removedSkillIds.has(id)
+      )
+
+      // Nothing to add and nothing to remove — don't write at all. This keeps
+      // the sync idempotent and avoids pointless writes on every run.
+      const unchanged =
+        finalIds.length === currentIds.length &&
+        finalIds.every((id) => currentIds.includes(id))
+
+      if (unchanged) {
+        console.log(
+          `[EnterpriseSyncManager] assignSkillsToNode: node=${nodeId} already up to date (${currentIds.length} skills)`
+        )
+        return
+      }
 
       console.log(
-        `[EnterpriseSyncManager] assignSkillsToNode: node=${nodeId}, skills=${finalIds.length}, removed=${removedSkillIds.size}`
+        `[EnterpriseSyncManager] assignSkillsToNode: node=${nodeId}, current=${currentIds.length}, final=${finalIds.length}, removed=${removedSkillIds.size}`
       )
 
       await this.apiClient.updateOrgNode(nodeId, {
         skillIds: finalIds
       })
+
+      // Keep the in-memory node consistent with what the server now holds so a
+      // second pass in the same run does not re-send the same write.
+      node.skillIds = finalIds
 
       console.log(
         `[EnterpriseSyncManager] Assigned ${finalIds.length} skills to node ${nodeId}`
@@ -627,10 +665,15 @@ export class EnterpriseSyncManager {
    */
   private async pullServerSkills(
     serverSkills: WorkfloSkill[],
-    result: EnterpriseSyncResult
+    result: EnterpriseSyncResult,
+    tombstonedSkillIds: Set<string> = new Set()
   ): Promise<void> {
     for (const skill of serverSkills) {
       try {
+        // Respect a local delete. Without this the skill is re-created on the
+        // very next pull and the user's delete silently undoes itself.
+        if (tombstonedSkillIds.has(skill.id)) continue
+
         // First, check if we already have this skill linked by enterprise_skill_id
         const linkedSkill = this.db.getSkillByEnterpriseId(skill.id)
 

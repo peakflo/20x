@@ -1590,6 +1590,13 @@ export class DatabaseManager {
       this.db.exec(`ALTER TABLE skills ADD COLUMN uses_at_last_sync INTEGER NOT NULL DEFAULT 0`)
     }
 
+    // Enterprise sync looks skills up by name and by server id on every run.
+    // Created after the ALTER TABLE above so the column is guaranteed to exist.
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_skills_name ON skills(name);
+      CREATE INDEX IF NOT EXISTS idx_skills_enterprise_id ON skills(enterprise_skill_id);
+    `)
+
     // Seed default agent if none exist
     const agentCount = this.db.prepare('SELECT COUNT(*) as count FROM agents').get() as { count: number }
     if (agentCount.count === 0) {
@@ -2468,8 +2475,14 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
     if (isContentChange) {
       setClauses.push('version = version + 1')
     }
-    setClauses.push('updated_at = ?')
-    values.push(new Date().toISOString())
+    // `updated_at` is the conflict token used by enterprise sync: it must mean
+    // "when the content last changed". Bumping it for a metadata-only write
+    // (enterprise_skill_id / uses_at_last_sync linking) would make every local
+    // copy look newer than the server and defeat conflict resolution.
+    if (isContentChange) {
+      setClauses.push('updated_at = ?')
+      values.push(new Date().toISOString())
+    }
     values.push(id)
 
     this.db.prepare(
