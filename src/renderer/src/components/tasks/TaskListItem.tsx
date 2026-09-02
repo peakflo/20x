@@ -113,6 +113,7 @@ export const TaskListItem = memo(function TaskListItem({ task, isSelected, onSel
 
   return (
     <button
+      data-keyboard-task-id={task.id}
       onClick={onSelect}
       aria-current={isSelected ? 'true' : undefined}
       className={cn(

@@ -197,6 +197,7 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
             <div className="relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
               <input
+                data-keyboard-shortcut-search="tasks"
                 type="search"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
@@ -322,6 +323,7 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
             <div className="relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
               <input
+                data-keyboard-shortcut-search="skills"
                 type="search"
                 value={skillSearchQuery}
                 onChange={(e) => setSkillSearchQuery(e.target.value)}

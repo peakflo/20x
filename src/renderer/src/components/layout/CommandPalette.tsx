@@ -2,7 +2,9 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import * as DialogPrimitive from '@radix-ui/react-dialog'
 import {
   Search, LayoutDashboard, Layers, CheckSquare, Zap, Settings, MessageSquare,
-  Plus, Sun, Moon, CornerDownLeft, LayoutGrid, type LucideIcon
+  Plus, Sun, Moon, CornerDownLeft, LayoutGrid, ArrowDown, ArrowUp, ExternalLink,
+  PanelRightOpen, FileDiff, PackageOpen, Copy, GitBranch, Mic, CircleHelp,
+  CircleCheck, Clock3, Play, Trash2, LogOut, type LucideIcon
 } from 'lucide-react'
 import { useUIStore } from '@/stores/ui-store'
 import { useThemeStore } from '@/stores/theme-store'
@@ -24,7 +26,30 @@ interface CommandItem {
 const isMac = navigator.platform.toLowerCase().includes('mac')
 const mod = isMac ? '⌘' : 'Ctrl'
 
-export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boolean) => void }) {
+export interface CommandPaletteActions {
+  nextTask: () => void
+  previousTask: () => void
+  openTask: () => void
+  clearSelection: () => void
+  focusSearch: () => void
+  completeTask: () => void
+  whipTask: () => void
+  snoozeTask: () => void
+  runTask: () => void
+  deleteTask: () => void
+  showShortcuts: () => void
+  openDetails: () => void
+  openChanges: () => void
+  openOutput: () => void
+  openArtifact: () => void
+  openPullRequest: () => void
+  copyPullRequestUrl: () => void
+  copyPullRequestBranch: () => void
+  toggleTaskAudio: () => void
+  toggleMastermindAudio: () => void
+}
+
+export function CommandPalette({ open, onOpenChange, actions }: { open: boolean; onOpenChange: (v: boolean) => void; actions: CommandPaletteActions }) {
   const [query, setQuery] = useState('')
   const [active, setActive] = useState(0)
   const listRef = useRef<HTMLDivElement>(null)
@@ -59,11 +84,31 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
   const items = useMemo<CommandItem[]>(() => {
     const goto = (view: 'dashboard' | 'canvas' | 'tasks' | 'skills') => () => { closeModal(); setSidebarView(view); close() }
     const base: CommandItem[] = [
-      { id: 'nav-dashboard', group: 'Navigation', label: 'Go to Dashboard', icon: LayoutDashboard, keywords: 'home overview', shortcut: `${mod}1`, run: goto('dashboard') },
-      { id: 'nav-canvas', group: 'Navigation', label: 'Go to Canvas', icon: Layers, keywords: 'board panels', shortcut: `${mod}2`, run: goto('canvas') },
-      { id: 'nav-tasks', group: 'Navigation', label: 'Go to Tasks', icon: CheckSquare, keywords: 'todo list', shortcut: `${mod}3`, run: goto('tasks') },
-      { id: 'nav-skills', group: 'Navigation', label: 'Go to Skills', icon: Zap, keywords: 'abilities', shortcut: `${mod}4`, run: goto('skills') },
-      { id: 'act-new-task', group: 'Actions', label: 'New Task', icon: Plus, keywords: 'create add', run: () => { openCreateModal(); close() } },
+      { id: 'nav-dashboard', group: 'Navigation', label: 'Go to Dashboard', icon: LayoutDashboard, keywords: 'home overview', shortcut: `G D · ${mod}1`, run: goto('dashboard') },
+      { id: 'nav-canvas', group: 'Navigation', label: 'Go to Canvas', icon: Layers, keywords: 'board panels', shortcut: `G C · ${mod}2`, run: goto('canvas') },
+      { id: 'nav-tasks', group: 'Navigation', label: 'Go to Tasks', icon: CheckSquare, keywords: 'todo list', shortcut: `G T · ${mod}3`, run: goto('tasks') },
+      { id: 'nav-skills', group: 'Navigation', label: 'Go to Skills', icon: Zap, keywords: 'abilities', shortcut: `G S · ${mod}4`, run: goto('skills') },
+      { id: 'nav-next-task', group: 'Navigation', label: 'Next visible task', icon: ArrowDown, shortcut: 'J', run: () => { actions.nextTask(); close() } },
+      { id: 'nav-previous-task', group: 'Navigation', label: 'Previous visible task', icon: ArrowUp, shortcut: 'K', run: () => { actions.previousTask(); close() } },
+      { id: 'nav-open-task', group: 'Navigation', label: 'Open selected task', icon: ExternalLink, shortcut: 'Enter', run: () => { actions.openTask(); close() } },
+      { id: 'nav-clear-task', group: 'Navigation', label: 'Clear task selection', icon: LogOut, shortcut: 'Esc', run: () => { actions.clearSelection(); close() } },
+      { id: 'nav-focus-search', group: 'Navigation', label: 'Focus search', icon: Search, shortcut: '/', run: () => { close(); window.setTimeout(actions.focusSearch, 0) } },
+      { id: 'act-new-task', group: 'Task actions', label: 'New Task', icon: Plus, keywords: 'create add', shortcut: 'C', run: () => { openCreateModal(); close() } },
+      { id: 'act-complete-task', group: 'Task actions', label: 'Complete selected task', icon: CircleCheck, shortcut: 'E', run: () => { actions.completeTask(); close() } },
+      { id: 'act-snooze-task', group: 'Task actions', label: 'Snooze selected task', icon: Clock3, shortcut: 'H', run: () => { actions.snoozeTask(); close() } },
+      { id: 'act-run-task', group: 'Task actions', label: 'Run or resume selected task', icon: Play, shortcut: 'R', run: () => { actions.runTask(); close() } },
+      { id: 'act-whip-task', group: 'Task actions', label: 'Whip agent to continue', icon: Zap, shortcut: 'W', run: () => { actions.whipTask(); close() } },
+      { id: 'act-delete-task', group: 'Task actions', label: 'Delete selected task', icon: Trash2, shortcut: '#', run: () => { actions.deleteTask(); close() } },
+      { id: 'act-shortcuts', group: 'Actions', label: 'Keyboard shortcuts', icon: CircleHelp, shortcut: '?', run: () => { close(); actions.showShortcuts() } },
+      { id: 'panel-details', group: 'Task panels', label: 'Open Details', icon: PanelRightOpen, shortcut: 'O D', run: () => { actions.openDetails(); close() } },
+      { id: 'panel-changes', group: 'Task panels', label: 'Open Changes', icon: FileDiff, shortcut: 'O C', run: () => { actions.openChanges(); close() } },
+      { id: 'panel-output', group: 'Task panels', label: 'Open Output', icon: PackageOpen, shortcut: 'O O', run: () => { actions.openOutput(); close() } },
+      { id: 'panel-artifact', group: 'Task panels', label: 'Open newest artifact', icon: LayoutGrid, shortcut: 'O A', run: () => { actions.openArtifact(); close() } },
+      { id: 'panel-pr', group: 'Task panels', label: 'Open newest pull request', icon: ExternalLink, shortcut: 'O P', run: () => { actions.openPullRequest(); close() } },
+      { id: 'copy-pr-url', group: 'Pull request', label: 'Copy pull-request URL', icon: Copy, shortcut: 'Y P', run: () => { actions.copyPullRequestUrl(); close() } },
+      { id: 'copy-pr-branch', group: 'Pull request', label: 'Copy pull-request branch', icon: GitBranch, shortcut: 'Y B', run: () => { actions.copyPullRequestBranch(); close() } },
+      { id: 'audio-task', group: 'Audio', label: 'Toggle task audio', icon: Mic, shortcut: 'V T', run: () => { actions.toggleTaskAudio(); close() } },
+      { id: 'audio-mastermind', group: 'Audio', label: 'Toggle Mastermind audio', icon: Mic, shortcut: 'V M', run: () => { actions.toggleMastermindAudio(); close() } },
       { id: 'act-mastermind', group: 'Actions', label: 'Toggle Mastermind', icon: MessageSquare, keywords: 'orchestrator chat', run: () => { toggleOrchestrator(); close() } },
       { id: 'act-settings', group: 'Actions', label: 'Open Settings', icon: Settings, keywords: 'preferences config', run: () => { openSettings(); close() } },
       { id: 'act-theme', group: 'Actions', label: themeResolved === 'dark' ? 'Switch to Light mode' : 'Switch to Dark mode', icon: themeResolved === 'dark' ? Sun : Moon, keywords: 'theme dark light appearance', run: () => { toggleTheme(); close() } },
@@ -115,7 +160,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
       : []
 
     return [...filteredBase, ...appItems, ...taskItems, ...skillItems]
-  }, [query, tasks, skills, applications, themeResolved, closeModal, setSidebarView, openCreateModal, toggleOrchestrator, openSettings, toggleTheme, selectTask, selectSkill, openApplication])
+  }, [query, tasks, skills, applications, themeResolved, closeModal, setSidebarView, openCreateModal, toggleOrchestrator, openSettings, toggleTheme, selectTask, selectSkill, openApplication, actions])
 
   // Keep highlight within bounds when the list shrinks.
   useEffect(() => { setActive((a) => Math.min(a, Math.max(0, items.length - 1))) }, [items.length])
