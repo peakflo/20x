@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readdir, readFile, rm, symlink, writeFile } from 'fs/promises'
+import { mkdtemp, mkdir, readdir, readFile, realpath, rm, symlink, writeFile } from 'fs/promises'
 import { join } from 'path'
 import { tmpdir } from 'os'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -12,6 +12,7 @@ import {
   listTaskArtifactEntries,
   readRegisteredTaskArtifactFile,
   readTaskArtifact,
+  resolveTaskArtifactFilePath,
   scanTaskArtifacts,
   writeRegisteredTaskArtifactFile
 } from './artifacts'
@@ -269,6 +270,25 @@ describe('task artifact files', () => {
     await expect(readTaskArtifact(workspaceDir, 'archive.zip')).resolves.toBeNull()
     await expect(readTaskArtifact(workspaceDir, 'missing.md')).resolves.toBeNull()
     await expect(readTaskArtifact(workspaceDir, 'large.md')).resolves.toBeNull()
+  })
+
+  it('resolves an artifact file path for the clipboard only inside the workspace', async () => {
+    const outsideFile = join(testRoot, 'outside.md')
+    await writeFile(outsideFile, 'secret')
+    await symlink(outsideFile, join(workspaceDir, 'linked.md'))
+    await mkdir(join(workspaceDir, 'reports'))
+    await writeFile(join(workspaceDir, 'reports', 'summary.md'), '# Summary')
+    await writeFile(join(workspaceDir, 'archive.zip'), 'zip')
+
+    await expect(resolveTaskArtifactFilePath(workspaceDir, 'reports/summary.md')).resolves.toBe(
+      join(await realpath(workspaceDir), 'reports', 'summary.md')
+    )
+    await expect(resolveTaskArtifactFilePath(workspaceDir, '../outside.md')).resolves.toBeNull()
+    await expect(resolveTaskArtifactFilePath(workspaceDir, outsideFile)).resolves.toBeNull()
+    await expect(resolveTaskArtifactFilePath(workspaceDir, 'linked.md')).resolves.toBeNull()
+    await expect(resolveTaskArtifactFilePath(workspaceDir, 'archive.zip')).resolves.toBeNull()
+    await expect(resolveTaskArtifactFilePath(workspaceDir, 'reports')).resolves.toBeNull()
+    await expect(resolveTaskArtifactFilePath(workspaceDir, 'missing.md')).resolves.toBeNull()
   })
 
   it('returns an empty scan for a missing workspace', async () => {

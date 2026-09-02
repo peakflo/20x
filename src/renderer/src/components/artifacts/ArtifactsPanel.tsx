@@ -3,6 +3,7 @@ import { PanelRightClose } from 'lucide-react'
 import { ArtifactType, type Artifact, type ArtifactApi, type ArtifactUIState } from '@shared/artifacts'
 import { PinnedArtifactTabId } from '@/stores/artifact-store'
 import { cn } from '@/lib/utils'
+import { ArtifactCopyActions } from './ArtifactCopyActions'
 import { ArtifactTabStrip } from './ArtifactTabStrip'
 import { MarkdownArtifactView } from './viewers/MarkdownArtifactView'
 import { ImageArtifactView } from './viewers/ImageArtifactView'
@@ -46,8 +47,11 @@ export function ArtifactsPanel({ artifacts, ui, artifactApi, hasChanges, hasOutp
   return (
     <section className={cn('flex h-full min-h-0 min-w-0 flex-col bg-background', className)} data-task-artifacts>
       <div className="relative">
-        <ArtifactTabStrip artifacts={artifacts} activeTabId={active} hasChanges={hasChanges} hasOutput={hasOutput} changesCount={changesCount} onSelectTab={onSelectTab} onCloseTab={onCloseTab} className="pr-11" />
-        <button type="button" aria-label="Close artifacts" onClick={onToggleOpen} className="absolute right-2 top-1.5 grid h-7 w-7 place-items-center rounded-md bg-background text-muted-foreground hover:bg-accent hover:text-foreground"><PanelRightClose className="h-3.5 w-3.5" /></button>
+        <ArtifactTabStrip artifacts={artifacts} activeTabId={active} hasChanges={hasChanges} hasOutput={hasOutput} changesCount={changesCount} onSelectTab={onSelectTab} onCloseTab={onCloseTab} className={activeArtifact ? 'pr-52' : 'pr-11'} />
+        <div className="absolute right-2 top-1.5 flex items-center gap-1 bg-background">
+          {activeArtifact && <ArtifactCopyActions key={activeArtifact.id} artifact={activeArtifact} artifactApi={artifactApi} />}
+          <button type="button" aria-label="Close artifacts" onClick={onToggleOpen} className="grid h-7 w-7 place-items-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"><PanelRightClose className="h-3.5 w-3.5" /></button>
+        </div>
       </div>
       <div className="relative min-h-0 flex-1">
         <div className={active === PinnedArtifactTabId.DETAILS ? 'h-full' : 'hidden'}>{details}</div>

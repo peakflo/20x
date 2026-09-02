@@ -226,7 +226,9 @@ interface ElectronAPI {
   tasks: {
     getWorkspaceDir: (taskId: string) => Promise<string>
   }
-  artifacts: ArtifactApi
+  /** The preload bridge always exposes every artifact capability, including
+   * the desktop-only file clipboard action. */
+  artifacts: Required<ArtifactApi>
   mcpServers: {
     getAll: () => Promise<McpServer[]>
     get: (id: string) => Promise<McpServer | undefined>
