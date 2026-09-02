@@ -39,7 +39,9 @@ import type { ClaudePluginManager } from './claude-plugin-manager'
 import type { EnterpriseHeartbeat } from './enterprise-heartbeat'
 import type { EnterpriseStateSync } from './enterprise-state-sync'
 import { analytics } from './analytics-service'
-import { listTaskArtifactEntries, readTaskArtifact } from './artifacts'
+import { listTaskArtifactEntries, readTaskArtifact, resolveTaskArtifactFilePath } from './artifacts'
+import { writeArtifactFileToClipboard } from './artifact-clipboard'
+import { ArtifactClipboardMode, type ArtifactCopyFileResult } from '../shared/artifacts'
 import { guardChildStreams, writeToChildStdin } from './child-stream-guards'
 
 const MIME_MAP: Record<string, string> = {
@@ -293,6 +295,12 @@ export function registerIpcHandlers(
 
   ipcMain.handle('artifacts:read', async (_, taskId: string, relativePath: string) => {
     return readTaskArtifact(db.getWorkspaceDir(taskId), relativePath)
+  })
+
+  ipcMain.handle('artifacts:copyFile', async (_, taskId: string, relativePath: string): Promise<ArtifactCopyFileResult> => {
+    const filePath = await resolveTaskArtifactFilePath(db.getWorkspaceDir(taskId), relativePath)
+    if (!filePath) return { mode: ArtifactClipboardMode.UNAVAILABLE }
+    return writeArtifactFileToClipboard(filePath)
   })
 
   ipcMain.handle('attachments:open', (_, taskId: string, attachmentId: string) => {

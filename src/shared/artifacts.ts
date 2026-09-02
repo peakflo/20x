@@ -93,9 +93,28 @@ export interface ArtifactContent {
   mimeType?: string
 }
 
+/** How a "copy the file" request landed on the OS clipboard. Platforms differ
+ * in what they accept, so the caller reports the outcome to the user. */
+export enum ArtifactClipboardMode {
+  /** The file itself is on the clipboard and pastes into a file manager. */
+  FILE = 'file',
+  /** The file was copied as an image (Windows has no file-list clipboard API). */
+  IMAGE = 'image',
+  /** Only the file path was copied. */
+  PATH = 'path',
+  /** The file could not be resolved inside the task workspace. */
+  UNAVAILABLE = 'unavailable'
+}
+
+export interface ArtifactCopyFileResult {
+  mode: ArtifactClipboardMode
+}
+
 export interface ArtifactApi {
   scan: (taskId: string) => Promise<ArtifactFileEntry[]>
   read: (taskId: string, relativePath: string) => Promise<ArtifactContent | null>
+  /** Desktop only. Absent when the viewer runs outside Electron. */
+  copyFile?: (taskId: string, relativePath: string) => Promise<ArtifactCopyFileResult>
 }
 
 export interface Artifact {

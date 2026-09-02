@@ -494,6 +494,19 @@ export async function scanTaskArtifacts(workspaceDir: string): Promise<ArtifactF
   return [...artifacts.values()].sort((a, b) => b.updatedAt - a.updatedAt || a.path.localeCompare(b.path))
 }
 
+/** Resolve a previewable artifact to its absolute path while enforcing
+ * task-workspace containment. Used by the "copy the file" clipboard action. */
+export async function resolveTaskArtifactFilePath(workspaceDir: string, artifactPath: string): Promise<string | null> {
+  const filePath = await resolveArtifactPath(workspaceDir, artifactPath)
+  if (!filePath) return null
+  if (!artifactTypeForPath(filePath)) return null
+  try {
+    return (await stat(filePath)).isFile() ? filePath : null
+  } catch {
+    return null
+  }
+}
+
 /** Read a previewable artifact while enforcing task-workspace containment. */
 export async function readTaskArtifact(workspaceDir: string, artifactPath: string): Promise<ArtifactContent | null> {
   const filePath = await resolveArtifactPath(workspaceDir, artifactPath)

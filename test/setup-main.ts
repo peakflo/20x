@@ -27,6 +27,18 @@ vi.mock('electron', () => ({
     showItemInFolder: vi.fn(),
     openExternal: vi.fn()
   },
+  clipboard: {
+    write: vi.fn(async () => undefined),
+    writeText: vi.fn(async () => undefined),
+    readText: vi.fn(async () => ''),
+    clear: vi.fn()
+  },
+  ClipboardItem: class {
+    constructor(public readonly items: Record<string, unknown>) {}
+  },
+  nativeImage: {
+    createFromPath: vi.fn(() => ({ isEmpty: () => true, toPNG: () => Buffer.alloc(0) }))
+  },
   BrowserWindow: vi.fn(),
   globalShortcut: {
     register: vi.fn(() => true),

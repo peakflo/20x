@@ -4,6 +4,11 @@ vi.mock('electron', () => ({
   ipcMain: { handle: vi.fn() },
   dialog: { showOpenDialog: vi.fn() },
   shell: { openPath: vi.fn(), showItemInFolder: vi.fn() },
+  clipboard: { write: vi.fn(async () => undefined), writeText: vi.fn(async () => undefined) },
+  ClipboardItem: class {
+    constructor(public readonly items: Record<string, unknown>) {}
+  },
+  nativeImage: { createFromPath: vi.fn(() => ({ isEmpty: () => true, toPNG: () => Buffer.alloc(0) })) },
   Notification: vi.fn().mockImplementation(() => ({ show: vi.fn() })),
   app: { isPackaged: false }
 }))

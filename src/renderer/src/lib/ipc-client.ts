@@ -54,7 +54,8 @@ export const taskApi = {
 
 export const artifactApi: ArtifactApi = {
   scan: (taskId) => window.electronAPI.artifacts.scan(taskId),
-  read: (taskId, relativePath) => window.electronAPI.artifacts.read(taskId, relativePath)
+  read: (taskId, relativePath) => window.electronAPI.artifacts.read(taskId, relativePath),
+  copyFile: (taskId, relativePath) => window.electronAPI.artifacts.copyFile(taskId, relativePath)
 }
 
 export const mcpServerApi = {

@@ -8,8 +8,16 @@ import {
   type ArtifactContent,
   type PullRequestDetails
 } from '@shared/artifacts'
+import {
+  ARTIFACT_COPY_LABELS,
+  ArtifactCopyOutcome,
+  artifactFileName,
+  copyArtifactContent,
+  copyText,
+  shareOrDownloadArtifactFile
+} from '@/lib/artifact-clipboard'
 import { api } from '../api/client'
-import { ArtifactType, useArtifactStore } from '../stores/artifact-store'
+import { ArtifactType, useArtifactStore, type Artifact } from '../stores/artifact-store'
 import type { Route } from '../App'
 
 const ACTIVE_ARTIFACT_REFRESH_INTERVAL_MS = 30_000
@@ -138,6 +146,7 @@ export function ArtifactViewerPage({ taskId, artifactId, onNavigate }: { taskId:
           <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="m15 18-6-6 6-6"/></svg>
         </button>
         <span className="min-w-0 flex-1 truncate text-sm font-medium">{artifact?.title || 'Artifact'}</span>
+        {artifact && <ArtifactCopyActions artifact={artifact} content={content} />}
         {artifact?.type === ArtifactType.PR && externalUrl && (
           <a href={externalUrl} target="_blank" rel="noopener noreferrer" className="text-xs text-primary">Open ↗</a>
         )}
@@ -171,6 +180,77 @@ export function ArtifactViewerPage({ taskId, artifactId, onNavigate }: { taskId:
         )}
       </div>
     </div>
+  )
+}
+
+const COPY_FEEDBACK_MS = 2000
+
+enum CopyAction {
+  CONTENT = 'content',
+  FILE = 'file'
+}
+
+/** Copy what the artifact contains, or take the file itself: a phone has no
+ * file clipboard, so the file is shared or downloaded instead. */
+function ArtifactCopyActions({ artifact, content }: { artifact: Artifact; content: ArtifactContent | null }) {
+  const [outcome, setOutcome] = useState<{ action: CopyAction; result: ArtifactCopyOutcome } | null>(null)
+  const timerRef = useRef<number | null>(null)
+
+  useEffect(() => {
+    setOutcome(null)
+  }, [artifact.id])
+
+  useEffect(() => () => {
+    if (timerRef.current !== null) window.clearTimeout(timerRef.current)
+  }, [])
+
+  const report = (action: CopyAction, result: ArtifactCopyOutcome) => {
+    setOutcome({ action, result })
+    if (timerRef.current !== null) window.clearTimeout(timerRef.current)
+    timerRef.current = window.setTimeout(() => setOutcome(null), COPY_FEEDBACK_MS)
+  }
+
+  const handleCopy = () => {
+    void (async () => {
+      if (!artifact.path) {
+        const done = artifact.url ? await copyText(artifact.url) : false
+        report(CopyAction.CONTENT, done ? ArtifactCopyOutcome.COPIED_CONTENT : ArtifactCopyOutcome.FAILED)
+        return
+      }
+      report(CopyAction.CONTENT, await copyArtifactContent(content))
+    })()
+  }
+
+  const handleFile = () => {
+    void (async () => {
+      report(CopyAction.FILE, await shareOrDownloadArtifactFile(artifactFileName(artifact.path, artifact.title), content))
+    })()
+  }
+
+  const label = (action: CopyAction, fallback: string): string =>
+    outcome?.action === action ? ARTIFACT_COPY_LABELS[outcome.result] : fallback
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={handleCopy}
+        aria-label={artifact.path ? 'Copy content' : 'Copy link'}
+        className="rounded-md px-2 py-1 text-xs text-muted-foreground active:opacity-60"
+      >
+        {label(CopyAction.CONTENT, 'Copy')}
+      </button>
+      {artifact.path && (
+        <button
+          type="button"
+          onClick={handleFile}
+          aria-label="Save file"
+          className="rounded-md px-2 py-1 text-xs text-muted-foreground active:opacity-60"
+        >
+          {label(CopyAction.FILE, 'File')}
+        </button>
+      )}
+    </>
   )
 }
 

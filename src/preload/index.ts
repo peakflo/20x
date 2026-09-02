@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
-import type { ArtifactContent, ArtifactFileEntry, PullRequestDetails } from '../shared/artifacts'
+import type { ArtifactContent, ArtifactCopyFileResult, ArtifactFileEntry, PullRequestDetails } from '../shared/artifacts'
 import { UI_COMMAND_CHANNEL, type UiCommand } from '../shared/ui-commands'
 
 contextBridge.exposeInMainWorld('electronAPI', {
@@ -22,7 +22,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     scan: (taskId: string): Promise<ArtifactFileEntry[]> =>
       ipcRenderer.invoke('artifacts:scan', taskId),
     read: (taskId: string, relativePath: string): Promise<ArtifactContent | null> =>
-      ipcRenderer.invoke('artifacts:read', taskId, relativePath)
+      ipcRenderer.invoke('artifacts:read', taskId, relativePath),
+    copyFile: (taskId: string, relativePath: string): Promise<ArtifactCopyFileResult> =>
+      ipcRenderer.invoke('artifacts:copyFile', taskId, relativePath)
   },
   attachments: {
     pick: (): Promise<string[]> => ipcRenderer.invoke('attachments:pick'),

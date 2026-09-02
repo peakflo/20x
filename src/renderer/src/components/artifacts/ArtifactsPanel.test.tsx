@@ -1,12 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
-import { ArtifactContentKind, ArtifactType, type Artifact, type ArtifactApi, type ArtifactUIState } from '@shared/artifacts'
+import { ArtifactClipboardMode, ArtifactContentKind, ArtifactType, type Artifact, type ArtifactApi, type ArtifactUIState } from '@shared/artifacts'
 import { PinnedArtifactTabId } from '@/stores/artifact-store'
 import { ACTIVE_ARTIFACT_REFRESH_INTERVAL_MS, ArtifactsPanel } from './ArtifactsPanel'
 
 const artifactApi: ArtifactApi = {
   scan: vi.fn().mockResolvedValue([]),
-  read: vi.fn().mockResolvedValue(null)
+  read: vi.fn().mockResolvedValue(null),
+  copyFile: vi.fn().mockResolvedValue({ mode: ArtifactClipboardMode.FILE })
 }
 
 const baseUi: ArtifactUIState = {
@@ -98,5 +99,38 @@ describe('ArtifactsPanel', () => {
 
     rerender(<ArtifactsPanel {...props} artifacts={[{ ...artifact, reloadTrigger: 1 }]} ui={{ ...baseUi, activeTabId: artifact.id }} />)
     await waitFor(() => expect(dynamicArtifactApi.read).toHaveBeenCalledTimes(4))
+  })
+
+  it('offers the copy options only while an artifact tab is selected', () => {
+    const artifact: Artifact = {
+      id: 'artifact-1',
+      taskId: 'task-1',
+      type: ArtifactType.MARKDOWN,
+      title: 'Review notes',
+      path: 'review.md',
+      updatedAt: 1,
+      reloadTrigger: 0
+    }
+    const props = {
+      taskId: 'task-1',
+      artifacts: [artifact],
+      artifactApi,
+      hasChanges: false,
+      hasOutput: false,
+      onSelectTab: vi.fn(),
+      onCloseTab: vi.fn(),
+      onToggleOpen: vi.fn(),
+      onToggleRail: vi.fn(),
+      details: <div>Task details</div>,
+      changes: null,
+      output: null
+    }
+    const { rerender } = render(<ArtifactsPanel {...props} ui={baseUi} />)
+
+    expect(screen.queryByRole('button', { name: 'Copy content' })).not.toBeInTheDocument()
+
+    rerender(<ArtifactsPanel {...props} ui={{ ...baseUi, activeTabId: artifact.id }} />)
+    expect(screen.getByRole('button', { name: 'Copy content' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Copy file' })).toBeInTheDocument()
   })
 })
