@@ -55,6 +55,7 @@ export const CURSOR_MODELS: { id: string; name: string }[] = [
 ]
 
 export enum ClaudeModel {
+  FABLE_5_1 = 'claude-fable-5-1',
   FABLE_5 = 'claude-fable-5',
   OPUS_5 = 'claude-opus-5',
   SONNET_5 = 'claude-sonnet-5',
@@ -70,6 +71,7 @@ export enum ClaudeModel {
 }
 
 export const CLAUDE_MODELS: { id: ClaudeModel; name: string }[] = [
+  { id: ClaudeModel.FABLE_5_1, name: 'Claude Fable 5.1' },
   { id: ClaudeModel.FABLE_5, name: 'Claude Fable 5' },
   { id: ClaudeModel.OPUS_5, name: 'Claude Opus 5' },
   { id: ClaudeModel.SONNET_5, name: 'Claude Sonnet 5' },
